@@ -2,6 +2,8 @@ import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createOpenCodeClient } from '@/api/opencode'
 import { useCreateSession } from '@/hooks/useOpenCode'
+import { useCommandRuns } from '@/stores/commandRunsStore'
+import { showToast } from '@/lib/toast'
 import type { components } from '@/api/opencode-types'
 
 type CommandType = components['schemas']['Command']
@@ -31,7 +33,9 @@ export function useCommandHandler({
     if (!opcodeUrl) return
 
     setLoading(true)
-    
+    const args = (command as CommandType & { arguments?: string }).arguments ?? ''
+    useCommandRuns.getState().startRun(sessionID, command.name, args)
+
     try {
       const client = createOpenCodeClient(opcodeUrl, directory)
       
@@ -95,11 +99,10 @@ case 'new':
         case 'details':
         case 'editor':
         case 'init':
-          // These commands will be sent to the server and appear as messages
-          await client.sendCommand(sessionID, {
-            command: command.name,
-            arguments: ''
-          })
+          // TUI-only commands that the web HTTP API cannot execute
+          showToast.warning(
+            `"/${command.name}" is not supported in the web UI. This command runs only in the terminal (TUI).`
+          )
           break
           
         default:

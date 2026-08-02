@@ -1,4 +1,3 @@
-import { settingsApi } from "./settings";
 import axios from "axios";
 import { API_BASE_URL } from "@/config";
 
@@ -51,144 +50,32 @@ export interface ProviderWithModels {
   models: Model[];
 }
 
-// Default providers for common OpenCode setups
-const DEFAULT_PROVIDERS: Provider[] = [
-  {
-    id: "anthropic",
-    name: "Anthropic",
-    api: "https://api.anthropic.com",
-    env: ["ANTHROPIC_API_KEY"],
-    npm: "@anthropic-ai/sdk",
-    models: {
-      "claude-3-5-sonnet-20241022": {
-        id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3.5 Sonnet (October 2024)",
-        release_date: "2024-10-22",
-        attachment: true,
-        reasoning: false,
-        temperature: true,
-        tool_call: true,
-        cost: { input: 3, output: 15 },
-        limit: { context: 200000, output: 8192 },
-        modalities: { input: ["text", "image"], output: ["text"] },
-        experimental: false,
-      },
-      "claude-3-5-haiku-20241022": {
-        id: "claude-3-5-haiku-20241022",
-        name: "Claude 3.5 Haiku (October 2024)",
-        release_date: "2024-10-22",
-        attachment: true,
-        reasoning: false,
-        temperature: true,
-        tool_call: true,
-        cost: { input: 1, output: 5 },
-        limit: { context: 200000, output: 8192 },
-        modalities: { input: ["text", "image"], output: ["text"] },
-        experimental: false,
-      },
-    },
-  },
-  {
-    id: "openai",
-    name: "OpenAI",
-    api: "https://api.openai.com/v1",
-    env: ["OPENAI_API_KEY"],
-    npm: "openai",
-    models: {
-      "gpt-4o": {
-        id: "gpt-4o",
-        name: "GPT-4o",
-        release_date: "2024-05-13",
-        attachment: true,
-        reasoning: false,
-        temperature: true,
-        tool_call: true,
-        cost: { input: 5, output: 15 },
-        limit: { context: 128000, output: 4096 },
-        modalities: {
-          input: ["text", "image", "audio"],
-          output: ["text", "audio"],
-        },
-        experimental: false,
-      },
-      "gpt-4o-mini": {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        release_date: "2024-07-18",
-        attachment: true,
-        reasoning: false,
-        temperature: true,
-        tool_call: true,
-        cost: { input: 0.15, output: 0.6 },
-        limit: { context: 128000, output: 16384 },
-        modalities: { input: ["text", "image"], output: ["text"] },
-        experimental: false,
-      },
-    },
-  },
-  {
-    id: "google",
-    name: "Google",
-    api: "https://generativelanguage.googleapis.com/v1beta",
-    env: ["GOOGLE_API_KEY"],
-    npm: "@google/generative-ai",
-    models: {
-      "gemini-1.5-pro": {
-        id: "gemini-1.5-pro",
-        name: "Gemini 1.5 Pro",
-        release_date: "2024-02-15",
-        attachment: true,
-        reasoning: false,
-        temperature: true,
-        tool_call: true,
-        cost: { input: 3.5, output: 10.5 },
-        limit: { context: 2000000, output: 8192 },
-        modalities: {
-          input: ["text", "image", "audio", "video"],
-          output: ["text"],
-        },
-        experimental: false,
-      },
-      "gemini-1.5-flash": {
-        id: "gemini-1.5-flash",
-        name: "Gemini 1.5 Flash",
-        release_date: "2024-02-15",
-        attachment: true,
-        reasoning: false,
-        temperature: true,
-        tool_call: true,
-        cost: { input: 0.075, output: 0.3 },
-        limit: { context: 1000000, output: 8192 },
-        modalities: {
-          input: ["text", "image", "audio", "video"],
-          output: ["text"],
-        },
-        experimental: false,
-      },
-    },
-  },
-];
-
-async function getProvidersFromConfig(): Promise<Provider[]> {
+async function getProvidersFromOpenCode(): Promise<Provider[] | null> {
   try {
-    const configResponse = await settingsApi.getDefaultOpenCodeConfig();
-    if (configResponse?.content?.provider) {
-      const providerRecord = configResponse.content.provider as Record<string, Provider>;
-      const providers = Object.entries(providerRecord).map(([id, provider]) => ({
-        ...provider,
-        id: provider.id || id,
+    const response = await axios.get(`${API_BASE_URL}/api/opencode/config/providers`);
+    const data = response.data as { providers?: Provider[] };
+    if (data?.providers?.length) {
+      return data.providers.map((provider) => ({
+        id: provider.id,
+        name: provider.name ?? provider.id,
+        api: provider.api,
+        env: provider.env ?? [],
+        npm: provider.npm,
+        models: (provider.models ?? {}) as Record<string, Model>,
       }));
-      return providers;
     }
   } catch (error) {
-    console.warn("Failed to load OpenCode config", error);
+    console.warn("Failed to load OpenCode providers", error);
   }
 
-  return DEFAULT_PROVIDERS;
+  return null;
 }
 
 export async function getProviders(): Promise<Provider[]> {
-  return await getProvidersFromConfig();
+  const fromOpenCode = await getProvidersFromOpenCode();
+  if (fromOpenCode && fromOpenCode.length > 0) return fromOpenCode;
+
+  return [];
 }
 
 export async function getProvidersWithModels(): Promise<ProviderWithModels[]> {

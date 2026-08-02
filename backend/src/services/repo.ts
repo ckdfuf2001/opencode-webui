@@ -8,6 +8,16 @@ import { SettingsService } from './settings'
 import { getReposPath } from '@opencode-webui/shared'
 import path from 'path'
 
+async function directoryExists(dir: string): Promise<boolean> {
+  const fs = await import('fs/promises')
+  return fs.stat(dir).then(() => true).catch(() => false)
+}
+
+async function removeDirectory(dir: string): Promise<void> {
+  const fs = await import('fs/promises')
+  await fs.rm(dir, { recursive: true, force: true })
+}
+
 async function hasCommits(repoPath: string): Promise<boolean> {
   try {
     await executeCommand(['git', '-C', repoPath, 'rev-parse', 'HEAD'], { silent: true })
@@ -104,7 +114,7 @@ export async function initLocalRepo(
     
     if (directoryCreated) {
       try {
-        await executeCommand(['rm', '-rf', normalizedPath], getReposPath())
+        await removeDirectory(path.resolve(getReposPath(), normalizedPath))
         logger.info(`Rolled back directory: ${normalizedPath}`)
       } catch (fsError: any) {
         logger.error(`Failed to rollback directory ${normalizedPath}:`, fsError)
@@ -134,7 +144,7 @@ export async function cloneRepo(
   }
   
   await ensureDirectoryExists(getReposPath())
-  const baseRepoExists = await executeCommand(['bash', '-c', `test -d ${baseRepoDirName} && echo exists || echo missing`], path.resolve(getReposPath()))
+  const baseRepoExists = (await directoryExists(path.resolve(getReposPath(), baseRepoDirName))) ? 'exists' : 'missing'
   
   const shouldUseWorktree = useWorktree && branch && baseRepoExists.trim() === 'exists'
   
@@ -185,12 +195,12 @@ export async function cloneRepo(
     } else if (branch && baseRepoExists.trim() === 'exists' && useWorktree) {
       logger.info(`Base repo exists but worktree creation failed, cloning branch separately`)
       
-      const worktreeExists = await executeCommand(['bash', '-c', `test -d ${worktreeDirName} && echo exists || echo missing`], path.resolve(getReposPath()))
+      const worktreeExists = (await directoryExists(path.resolve(getReposPath(), worktreeDirName))) ? 'exists' : 'missing'
       if (worktreeExists.trim() === 'exists') {
         logger.info(`Workspace directory exists, removing it: ${worktreeDirName}`)
         try {
-          await executeCommand(['rm', '-rf', worktreeDirName], getReposPath())
-          const verifyRemoved = await executeCommand(['bash', '-c', `test -d ${worktreeDirName} && echo exists || echo removed`], getReposPath())
+          await removeDirectory(path.resolve(getReposPath(), worktreeDirName))
+          const verifyRemoved = (await directoryExists(path.resolve(getReposPath(), worktreeDirName))) ? 'exists' : 'removed'
           if (verifyRemoved.trim() === 'exists') {
             throw new Error(`Failed to remove existing directory: ${worktreeDirName}`)
           }
@@ -269,18 +279,18 @@ export async function cloneRepo(
           return { ...repo, cloneStatus: 'ready' }
         } else {
           logger.warn(`Invalid repository directory found, removing and recloning: ${baseRepoDirName}`)
-          await executeCommand(['rm', '-rf', baseRepoDirName], getReposPath())
+          await removeDirectory(path.resolve(getReposPath(), baseRepoDirName))
         }
       }
       
       logger.info(`Cloning repo: ${repoUrl}${branch ? ` to branch ${branch}` : ''}`)
       
-      const worktreeExists = await executeCommand(['bash', '-c', `test -d ${worktreeDirName} && echo exists || echo missing`], getReposPath())
+      const worktreeExists = (await directoryExists(path.resolve(getReposPath(), worktreeDirName))) ? 'exists' : 'missing'
       if (worktreeExists.trim() === 'exists') {
         logger.info(`Workspace directory exists, removing it: ${worktreeDirName}`)
         try {
-          await executeCommand(['rm', '-rf', worktreeDirName], getReposPath())
-          const verifyRemoved = await executeCommand(['bash', '-c', `test -d ${worktreeDirName} && echo exists || echo removed`], getReposPath())
+          await removeDirectory(path.resolve(getReposPath(), worktreeDirName))
+          const verifyRemoved = (await directoryExists(path.resolve(getReposPath(), worktreeDirName))) ? 'exists' : 'removed'
           if (verifyRemoved.trim() === 'exists') {
             throw new Error(`Failed to remove existing directory: ${worktreeDirName}`)
           }
@@ -462,7 +472,7 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
     logger.info(`Deleting repo files: ${repoIdentifier}`)
     
     // Extract just the directory name from the localPath
-    const dirName = repo.localPath.split('/').pop() || repo.localPath
+    const dirName = path.basename(repo.localPath)
     const fullPath = path.resolve(getReposPath(), dirName)
     
     // If this is a worktree, properly remove it from git first
@@ -500,11 +510,13 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
     }
     
     // Remove the directory
+    const dir = path.resolve(getReposPath(), dirName)
     logger.info(`Removing directory: ${dirName} from ${getReposPath()}`)
-    await executeCommand(['rm', '-rf', dirName], getReposPath())
-    
-    const checkExists = await executeCommand(['bash', '-c', `test -d ${dirName} && echo exists || echo deleted`], getReposPath())
-    if (checkExists.trim() === 'exists') {
+    const fs = await import('fs/promises')
+    await fs.rm(dir, { recursive: true, force: true })
+
+    const stillExists = await fs.stat(dir).then(() => true).catch(() => false)
+    if (stillExists) {
       logger.error(`Directory still exists after deletion: ${dirName}`)
       throw new Error(`Failed to delete workspace directory: ${dirName}`)
     }
@@ -540,8 +552,8 @@ export async function cleanupOrphanedDirectories(database: Database): Promise<vo
     const reposPath = getReposPath()
     await ensureDirectoryExists(reposPath)
     
-    const dirResult = await executeCommand(['ls', '-1'], reposPath).catch(() => '')
-    const directories = dirResult.split('\n').filter(d => d.trim())
+    const fs = await import('fs/promises')
+    const directories = await fs.readdir(reposPath)
     
     if (directories.length === 0) {
       return
@@ -558,7 +570,7 @@ export async function cleanupOrphanedDirectories(database: Database): Promise<vo
       for (const dir of orphanedDirs) {
         try {
           logger.info(`Removing orphaned directory: ${dir}`)
-          await executeCommand(['rm', '-rf', dir], reposPath)
+          await fs.rm(path.join(reposPath, dir), { recursive: true, force: true })
         } catch (error) {
           logger.warn(`Failed to remove orphaned directory ${dir}:`, error)
         }

@@ -51,11 +51,13 @@ const CreateCustomCommandSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().min(1).max(1000),
   promptTemplate: z.string().min(1).max(10000),
+  steps: z.array(z.string()).default([]),
 })
 
 const UpdateCustomCommandSchema = z.object({
   description: z.string().min(1).max(1000),
   promptTemplate: z.string().min(1).max(10000),
+  steps: z.array(z.string()).default([]),
 })
 
 export function createSettingsRoutes(db: Database) {
@@ -300,7 +302,8 @@ export function createSettingsRoutes(db: Database) {
       updatedCommands[commandIndex] = {
         name: commandName,
         description: validated.description,
-        promptTemplate: validated.promptTemplate
+        promptTemplate: validated.promptTemplate,
+        steps: validated.steps,
       }
       
       settingsService.updateSettings({

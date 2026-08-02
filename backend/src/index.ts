@@ -8,6 +8,7 @@ import { createSettingsRoutes } from './routes/settings'
 import { createHealthRoutes } from './routes/health'
 import { createTTSRoutes, cleanupExpiredCache } from './routes/tts'
 import { createFileRoutes } from './routes/files'
+import { createRegistryRoutes } from './routes/registry'
 import { createProvidersRoutes } from './routes/providers'
 import { ensureDirectoryExists, writeFileContent } from './services/file-operations'
 import { SettingsService } from './services/settings'
@@ -147,6 +148,7 @@ app.route('/api/health', createHealthRoutes(db))
 app.route('/api/files', createFileRoutes(db))
 app.route('/api/providers', createProvidersRoutes())
 app.route('/api/tts', createTTSRoutes(db))
+app.route('/api/registry', createRegistryRoutes())
 
 app.all('/api/opencode/*', async (c) => {
   const request = c.req.raw

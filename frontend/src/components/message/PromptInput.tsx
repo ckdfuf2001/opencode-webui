@@ -33,6 +33,8 @@ interface PromptInputProps {
   onShowSessionsDialog?: () => void
   onShowModelsDialog?: () => void
   onShowHelpDialog?: () => void
+  injectedCommand?: { token: number; text: string; run?: boolean } | null
+  onInjectedConsumed?: () => void
 }
 
 export function PromptInput({ 
@@ -44,7 +46,9 @@ export function PromptInput({
   onScrollToBottom,
   onShowSessionsDialog,
   onShowModelsDialog,
-  onShowHelpDialog
+  onShowHelpDialog,
+  injectedCommand,
+  onInjectedConsumed
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -61,6 +65,8 @@ export function PromptInput({
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pendingRunRef = useRef<string | null>(null)
+  const handleSubmitRef = useRef<() => void>(() => {})
   const sendPrompt = useSendPrompt(opcodeUrl, directory)
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
@@ -389,7 +395,7 @@ export function PromptInput({
   const sessionModel = lastAssistantMessage?.info.role === 'assistant' 
     ? `${lastAssistantMessage.info.providerID}/${lastAssistantMessage.info.modelID}`
     : null
-  const currentModel = sessionModel || config?.model || ''
+  const currentModel = sessionModel || config?.model || preferences?.defaultModel || ''
 
   useEffect(() => {
     const loadModelName = async () => {
@@ -423,6 +429,34 @@ export function PromptInput({
     }
   }, [disabled, hasActiveStream])
 
+  useEffect(() => {
+    if (!injectedCommand) return
+    setPrompt(injectedCommand.text)
+    const el = textareaRef.current
+    if (el) {
+      el.focus()
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+      const pos = injectedCommand.text.length
+      el.setSelectionRange(pos, pos)
+    }
+    if (injectedCommand.run) {
+      pendingRunRef.current = injectedCommand.text
+    }
+    onInjectedConsumed?.()
+  }, [injectedCommand, onInjectedConsumed])
+
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit
+  }, [handleSubmit])
+
+  useEffect(() => {
+    if (pendingRunRef.current && prompt === pendingRunRef.current) {
+      pendingRunRef.current = null
+      handleSubmitRef.current()
+    }
+  }, [prompt])
+
   
 
   return (
@@ -440,9 +474,9 @@ export function PromptInput({
             : "Send a message..."
         }
         disabled={disabled || hasActiveStream}
-        className={`w-full bg-background/90 px-2 md:px-3 py-2 text-[16px] text-foreground placeholder-muted-foreground focus:outline-none focus:bg-black resize-none min-h-[40px] max-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed md:text-sm rounded-lg ${
+        className={`w-full bg-background/90 px-2 md:px-3 py-2 text-[16px] text-foreground placeholder-muted-foreground focus:outline-none focus:bg-background resize-none min-h-[40px] max-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed md:text-sm rounded-lg ${
           isBashMode 
-            ? 'border-purple-500/50 bg-purple-500/5 focus:bg-black' 
+            ? 'border-purple-500/50 bg-purple-500/5' 
             : ''
         }`}
         rows={1}

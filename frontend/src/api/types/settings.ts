@@ -2,6 +2,7 @@ export interface CustomCommand {
   name: string
   description: string
   promptTemplate: string
+  steps: string[]
 }
 
 export interface TTSConfig {

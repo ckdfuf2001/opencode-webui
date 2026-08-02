@@ -1,3 +1,8 @@
+This repository is clone of threehymns/opencode-webui. 
+Some architecture are changed. (later upload with md file)
+
+https://github.com/threehymns/opencode-webui
+
 # OpenCode Web Manager
 
 A full-stack web application for running [OpenCode](https://github.com/sst/opencode) in local processes, controllable via a modern web interface. Designed to allow users to run and control OpenCode from their phone or any device with a web browser.  

@@ -5,7 +5,8 @@ import type {
   OpenCodeConfig,
   OpenCodeConfigResponse,
   CreateOpenCodeConfigRequest,
-  UpdateOpenCodeConfigRequest
+  UpdateOpenCodeConfigRequest,
+  CustomCommand,
 } from './types/settings'
 import { API_BASE_URL } from '@/config'
 
@@ -96,6 +97,44 @@ export const settingsApi = {
     } catch {
       return null
     }
+  },
+
+  getCustomCommands: async (userId = 'default'): Promise<CustomCommand[]> => {
+    const { data } = await axios.get(`${API_BASE_URL}/api/settings/custom-commands`, {
+      params: { userId },
+    })
+    return data
+  },
+
+  createCustomCommand: async (
+    command: CustomCommand,
+    userId = 'default'
+  ): Promise<CustomCommand> => {
+    const { data } = await axios.post(`${API_BASE_URL}/api/settings/custom-commands`, command, {
+      params: { userId },
+    })
+    return data
+  },
+
+  updateCustomCommand: async (
+    name: string,
+    command: CustomCommand,
+    userId = 'default'
+  ): Promise<CustomCommand> => {
+    const { data } = await axios.put(
+      `${API_BASE_URL}/api/settings/custom-commands/${encodeURIComponent(name)}`,
+      command,
+      { params: { userId } }
+    )
+    return data
+  },
+
+  deleteCustomCommand: async (name: string, userId = 'default'): Promise<boolean> => {
+    await axios.delete(
+      `${API_BASE_URL}/api/settings/custom-commands/${encodeURIComponent(name)}`,
+      { params: { userId } }
+    )
+    return true
   },
 
   restartOpenCodeServer: async (): Promise<{ success: boolean; message: string }> => {
