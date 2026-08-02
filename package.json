@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.0",
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
   "scripts": {
     "predev": "bash scripts/setup-dev.sh",
     "dev": "concurrently \"pnpm:dev:backend\" \"pnpm:dev:frontend\"",

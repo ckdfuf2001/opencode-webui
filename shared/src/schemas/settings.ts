@@ -4,6 +4,7 @@ export const CustomCommandSchema = z.object({
   name: z.string(),
   description: z.string(),
   promptTemplate: z.string(),
+  steps: z.array(z.string()).default([]),
 });
 
 export const TTSConfigSchema = z.object({

@@ -8,7 +8,8 @@ import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
 import { SessionList } from "@/components/session/SessionList";
 import { PermissionRequestDialog } from "@/components/session/PermissionRequestDialog";
-import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
+import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
+import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT } from "@/config";
@@ -21,6 +22,7 @@ import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useEffect, useRef, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
+import type { CommandWithScope } from "@/hooks/useCommands";
 
 export function SessionDetail() {
   const { id, sessionId } = useParams<{ id: string; sessionId: string }>();
@@ -31,8 +33,12 @@ export function SessionDetail() {
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
+  const [commandsOpen, setCommandsOpen] = useState(false);
+  const [injectedCommand, setInjectedCommand] = useState<{ token: number; text: string; run?: boolean } | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [filePanelWidth, setFilePanelWidth] = useState(380);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
 
   const { data: repo, isLoading: repoLoading } = useQuery({
     queryKey: ["repo", repoId],
@@ -122,6 +128,30 @@ export function SessionDetail() {
     setSelectedFilePath(undefined)
   }, []);
 
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const container = splitContainerRef.current
+    if (!container) return
+
+    const onMove = (ev: MouseEvent) => {
+      const rect = container.getBoundingClientRect()
+      const nextWidth = Math.min(Math.max(rect.right - ev.clientX, 260), rect.width * 0.6)
+      setFilePanelWidth(nextWidth)
+    }
+
+    const onUp = () => {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, []);
+
   const handlePermissionResponse = useCallback(async (
     permissionID: string, 
     permissionSessionID: string, 
@@ -130,6 +160,20 @@ export function SessionDetail() {
     if (!openCodeClient) return
     await openCodeClient.respondToPermission(permissionSessionID, permissionID, response)
   }, [openCodeClient]);
+
+  const handleExecuteCommand = useCallback(async (command: CommandWithScope, run: boolean, args: string) => {
+    if (!sessionId) return
+    const text = args ? `/${command.name} ${args}` : `/${command.name}`
+    setInjectedCommand((prev) => ({
+      token: (prev?.token ?? 0) + 1,
+      text,
+      run,
+    }))
+  }, [sessionId]);
+
+  const handleInjectedConsumed = useCallback(() => {
+    setInjectedCommand(null)
+  }, []);
 
   if (repoLoading || sessionLoading) {
     return (
@@ -169,37 +213,60 @@ export function SessionDetail() {
         repoDirectory={repoDirectory}
         onFileBrowserOpen={() => setFileBrowserOpen(true)}
         onSettingsOpen={openSettings}
+        onCommandsOpen={() => setCommandsOpen(true)}
         onSessionTitleUpdate={handleSessionTitleUpdate}
       />
 
-      <div className="flex-1 overflow-hidden flex flex-col relative">
-        <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
+      <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
+        <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
+          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
+            {opcodeUrl && repoDirectory && (
+              <MessageThread 
+                opcodeUrl={opcodeUrl} 
+                sessionID={sessionId} 
+                directory={repoDirectory}
+                messages={messages}
+                onFileClick={handleFileClick}
+              />
+            )}
+          </div>
           {opcodeUrl && repoDirectory && (
-            <MessageThread 
-              opcodeUrl={opcodeUrl} 
-              sessionID={sessionId} 
-              directory={repoDirectory}
-              messages={messages}
-              onFileClick={handleFileClick}
-            />
+            <div className="absolute bottom-0 left-0 right-0 flex justify-center">
+              <PromptInput
+                opcodeUrl={opcodeUrl}
+                directory={repoDirectory}
+                sessionID={sessionId}
+                disabled={!isConnected}
+                showScrollButton={showScrollButton}
+                onScrollToBottom={scrollToBottom}
+                onShowModelsDialog={() => setModelDialogOpen(true)}
+                onShowSessionsDialog={() => setSessionsDialogOpen(true)}
+                onShowHelpDialog={() => {
+                  openSettings()
+                }}
+                injectedCommand={injectedCommand}
+                onInjectedConsumed={handleInjectedConsumed}
+              />
+            </div>
           )}
         </div>
-        {opcodeUrl && repoDirectory && (
-          <div className="absolute bottom-0 left-0 right-0 flex justify-center">
-            <PromptInput
-              opcodeUrl={opcodeUrl}
-              directory={repoDirectory}
-              sessionID={sessionId}
-              disabled={!isConnected}
-              showScrollButton={showScrollButton}
-              onScrollToBottom={scrollToBottom}
-              onShowModelsDialog={() => setModelDialogOpen(true)}
-              onShowSessionsDialog={() => setSessionsDialogOpen(true)}
-              onShowHelpDialog={() => {
-                openSettings()
-              }}
-            />
-          </div>
+
+        {fileBrowserOpen && (
+          <div
+            className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors"
+            onMouseDown={handleResizeStart}
+            title="Drag to resize"
+          />
+        )}
+
+        {fileBrowserOpen && (
+          <SessionFilePanel
+            basePath={repo.localPath}
+            repoName={repo.repoUrl?.split("/").pop()?.replace(".git", "") || repo.localPath || "Repository"}
+            initialSelectedFile={selectedFilePath}
+            width={filePanelWidth}
+            onClose={handleFileBrowserClose}
+          />
         )}
       </div>
 
@@ -238,19 +305,20 @@ export function SessionDetail() {
         </DialogContent>
       </Dialog>
 
-      <FileBrowserSheet
-        isOpen={fileBrowserOpen}
-        onClose={handleFileBrowserClose}
-        basePath={repo.localPath}
-        repoName={repo.repoUrl?.split("/").pop()?.replace(".git", "") || repo.localPath || "Repository"}
-        initialSelectedFile={selectedFilePath}
-      />
-
       <PermissionRequestDialog
         permission={currentPermission}
         pendingCount={pendingCount}
         onRespond={handlePermissionResponse}
         onDismiss={dismissPermission}
+      />
+
+      <CommandsPanel
+        open={commandsOpen}
+        onClose={() => setCommandsOpen(false)}
+        opcodeUrl={opcodeUrl}
+        sessionID={sessionId}
+        directory={repoDirectory}
+        onExecuteCommand={handleExecuteCommand}
       />
     </div>
   );

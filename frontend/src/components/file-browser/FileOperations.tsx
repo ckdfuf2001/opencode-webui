@@ -33,18 +33,22 @@ export const FileOperations = memo(function FileOperations({ onUpload, onCreate 
 
   return (
     <div className="flex items-center gap-2">
-      <div className="relative">
+      <div className="relative group">
         <input
           type="file"
           id="file-upload"
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
           onChange={handleFileSelect}
           multiple
         />
-        <Button variant="outline" size="sm" asChild>
-          <label htmlFor="file-upload" className="cursor-pointer flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          asChild
+          className="group-hover:bg-accent group-hover:text-accent-foreground dark:group-hover:bg-input/50"
+        >
+          <label htmlFor="file-upload" className="cursor-pointer flex items-center">
             <Upload className="w-4 h-4" />
-            <span className='hidden sm:inline'>Upload</span>
           </label>
         </Button>
       </div>

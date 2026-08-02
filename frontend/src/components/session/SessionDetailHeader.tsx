@@ -2,7 +2,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
-import { Loader2, Settings, FolderOpen } from "lucide-react";
+import { Loader2, Settings, FolderOpen, Terminal } from "lucide-react";
 import { useState } from "react";
 
 interface Repo {
@@ -27,6 +27,7 @@ interface SessionDetailHeaderProps {
   repoDirectory: string | undefined;
   onFileBrowserOpen: () => void;
   onSettingsOpen: () => void;
+  onCommandsOpen: () => void;
   onSessionTitleUpdate: (newTitle: string) => void;
 }
 
@@ -41,6 +42,7 @@ export function SessionDetailHeader({
   repoDirectory,
   onFileBrowserOpen,
   onSettingsOpen,
+  onCommandsOpen,
   onSessionTitleUpdate,
 }: SessionDetailHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
@@ -158,6 +160,15 @@ export function SessionDetailHeader({
             className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
           >
             <FolderOpen className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onCommandsOpen}
+            className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
+            title="Commands"
+          >
+            <Terminal className="w-4 h-4" />
           </Button>
           <Button
             variant="ghost"

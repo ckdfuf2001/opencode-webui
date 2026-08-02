@@ -1,18 +1,31 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createOpenCodeClient } from '@/api/opencode'
+import { settingsApi } from '@/api/settings'
 import type { components } from '@/api/opencode-types'
 
-type CommandType = components['schemas']['Command']
+export type CommandScope = 'builtin' | 'global' | 'project' | 'custom'
+
+export type CommandWithScope = components['schemas']['Command'] & {
+  scope?: CommandScope
+  source?: string
+  // Declarative built-in commands (e.g. /help, /models) return immediately
+  // without producing a streamed assistant response.
+  oneshot?: boolean
+  // Custom commands: ordered skill names to execute.
+  steps?: string[]
+}
 
 // Built-in OpenCode commands
-const BUILTIN_COMMANDS: CommandType[] = [
+const BUILTIN_COMMANDS: CommandWithScope[] = [
   {
     name: 'help',
     description: 'Show the help dialog',
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'init',
@@ -20,7 +33,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'new',
@@ -28,7 +43,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'clear',
@@ -36,7 +53,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'sessions',
@@ -44,7 +63,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'resume',
@@ -52,7 +73,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'continue',
@@ -60,7 +83,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'models',
@@ -68,7 +93,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'themes',
@@ -76,7 +103,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'share',
@@ -84,7 +113,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'unshare',
@@ -92,7 +123,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'export',
@@ -100,7 +133,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'compact',
@@ -108,7 +143,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'summarize',
@@ -116,7 +153,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'undo',
@@ -124,7 +163,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'redo',
@@ -132,7 +173,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'details',
@@ -140,7 +183,9 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin',
+    oneshot: true
   },
   {
     name: 'editor',
@@ -148,41 +193,72 @@ const BUILTIN_COMMANDS: CommandType[] = [
     template: '',
     agent: '',
     model: '',
-    subtask: false
+    subtask: false,
+    scope: 'builtin'
   }
 ]
 
-export function useCommands(opcodeUrl: string | null) {
-  const [commands, setCommands] = useState<CommandType[]>(BUILTIN_COMMANDS)
+export function useCommands(opcodeUrl: string | null, directory?: string) {
+  const [commands, setCommands] = useState<CommandWithScope[]>(BUILTIN_COMMANDS)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!opcodeUrl) return
+  const fetchCommands = useCallback(async () => {
+    setLoading(true)
+    setError(null)
 
-    const fetchCommands = async () => {
-      setLoading(true)
-      setError(null)
-      
-      try {
-        const client = createOpenCodeClient(opcodeUrl)
-        const commandList = await client.listCommands()
-        const allCommands = [...BUILTIN_COMMANDS, ...commandList]
-        const uniqueCommands = allCommands.filter((command, index, self) =>
-          index === self.findIndex((c) => c.name === command.name)
-        )
-        setCommands(uniqueCommands)
-      } catch (err) {
-        console.error('Failed to fetch commands:', err)
-        setError('Failed to load commands')
-        setCommands(BUILTIN_COMMANDS)
-      } finally {
-        setLoading(false)
+    const base = [...BUILTIN_COMMANDS]
+
+    try {
+      let openCodeCommands: CommandWithScope[] = []
+      if (opcodeUrl) {
+        const client = createOpenCodeClient(opcodeUrl, directory)
+        openCodeCommands = (await client.listCommands()) as CommandWithScope[]
       }
-    }
 
+      let customCommands: CommandWithScope[] = []
+      try {
+        const customs = await settingsApi.getCustomCommands()
+        customCommands = customs.map((c) => ({
+          name: c.name,
+          description: c.description,
+          promptTemplate: c.promptTemplate,
+          template: c.promptTemplate,
+          agent: '',
+          model: '',
+          subtask: false,
+          steps: c.steps,
+          scope: 'custom' as CommandScope,
+        }))
+      } catch (err) {
+        console.error('Failed to fetch custom commands:', err)
+      }
+
+      const merged = [...base, ...openCodeCommands, ...customCommands]
+      const unique = merged.filter((command, index, self) =>
+        index === self.findIndex((c) => c.name === command.name)
+      )
+      setCommands(unique)
+    } catch (err) {
+      console.error('Failed to fetch commands:', err)
+      setError('Failed to load commands')
+      setCommands(base)
+    } finally {
+      setLoading(false)
+    }
+  }, [opcodeUrl, directory])
+
+  useEffect(() => {
     fetchCommands()
-  }, [opcodeUrl])
+  }, [fetchCommands])
+
+  const refresh = useCallback(() => {
+    fetchCommands()
+  }, [fetchCommands])
+
+  const removeCustomCommand = useCallback((name: string) => {
+    setCommands((prev) => prev.filter((c) => c.name !== name))
+  }, [])
 
   const filterCommands = (query: string) => {
     if (!query.trim()) return commands
@@ -198,6 +274,8 @@ export function useCommands(opcodeUrl: string | null) {
     commands,
     loading,
     error,
-    filterCommands
+    filterCommands,
+    refresh,
+    removeCustomCommand
   }
 }

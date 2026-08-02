@@ -136,24 +136,24 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       return <ToolCallPart part={part} onFileClick={onFileClick} />
     case 'reasoning':
       return (
-        <details className="border border-zinc-800 rounded-lg my-2">
-          <summary className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 cursor-pointer text-sm font-medium">
+        <details className="border border-border rounded-lg my-2">
+          <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
             Reasoning
           </summary>
-          <div className="p-4 bg-zinc-950 text-sm text-zinc-300 whitespace-pre-wrap">
+          <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
             {part.text}
           </div>
         </details>
       )
     case 'snapshot':
       return (
-        <div className="border border-zinc-800 rounded-lg p-4 my-2 bg-zinc-950">
-          <div className="text-xs text-zinc-500 font-mono">Snapshot: {part.snapshot}</div>
+        <div className="border border-border rounded-lg p-4 my-2 bg-muted/50">
+          <div className="text-xs text-muted-foreground font-mono">Snapshot: {part.snapshot}</div>
         </div>
       )
     case 'agent':
       return (
-        <div className="border border-zinc-800 rounded-lg p-4 my-2 bg-zinc-950">
+        <div className="border border-border rounded-lg p-4 my-2 bg-muted/50">
           <div className="text-sm font-medium text-blue-400">Agent: {part.name}</div>
         </div>
       )

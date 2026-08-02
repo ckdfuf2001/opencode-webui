@@ -275,14 +275,14 @@ useEffect(() => {
         {/* Mobile: Full width file listing, Desktop: Split view */}
         <div className="flex-1 flex overflow-hidden min-h-0 h-full">
           <div className={`${isMobile ? 'w-full' : 'w-[30%]'} border-r border-border px-4 flex flex-col min-h-0 h-full`}>
-            <div className="flex items-center gap-2 mb-4 mt-4 flex-shrink-0">
+            <div className="sticky top-0 z-20 bg-background flex items-center gap-2 py-3 flex-shrink-0 pointer-events-auto">
               <Input
                 placeholder="Search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="flex-1"
               />
-              <Button variant="outline" size="sm" onClick={handleRefresh}>
+              <Button variant="outline" size="sm" onClick={handleRefresh} className="pointer-events-auto">
                 <RefreshCw className="w-4 h-4" />
               </Button>
               <FileOperations
