@@ -1,4 +1,4 @@
-This repository is clone of threehymns/opencode-webui. 
+This repository is clone of threehymns/opencode-webui. not related with opencode.
 Some architecture are changed. (later upload with md file)
 
 https://github.com/threehymns/opencode-webui
