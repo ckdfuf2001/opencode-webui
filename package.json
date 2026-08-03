@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "predev": "node scripts/predev.js",
+    "opencode:install": "node scripts/install-opencode.js",
     "dev": "concurrently \"pnpm:dev:backend\" \"pnpm:dev:frontend\"",
     "dev:backend": "bun --watch backend/src/index.ts",
     "dev:frontend": "pnpm --filter frontend dev",

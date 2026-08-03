@@ -31,14 +31,31 @@ if %errorlevel%==0 (
 )
 
 REM OpenCode
+if defined OPENCODE_BIN (
+  if exist "%OPENCODE_BIN%" (
+    echo   [+] OpenCode executable found via OPENCODE_BIN: %OPENCODE_BIN%
+    goto :opencode_ok
+  )
+)
 where opencode >nul 2>nul
 if %errorlevel%==0 (
   echo   [+] OpenCode is installed
-) else (
-  echo   [x] OpenCode TUI is NOT installed.
-  echo       Install it with: curl -fsSL https://opencode.ai/install
-  exit /b 1
+  goto :opencode_ok
 )
+if exist "bin\opencode.exe" (
+  echo   [+] OpenCode executable found at .\bin\opencode.exe
+  goto :opencode_ok
+)
+echo   [.] OpenCode executable not found, attempting standalone download...
+node scripts\install-opencode.js
+if exist "bin\opencode.exe" (
+  echo   [+] Installed OpenCode executable at .\bin\opencode.exe
+  goto :opencode_ok
+)
+echo   [x] Could not obtain the OpenCode executable (this machine appears offline).
+echo       Place a standalone binary at .\bin\opencode.exe (Windows) and re-run, or set OPENCODE_BIN.
+exit /b 1
+:opencode_ok
 
 REM Git
 where git >nul 2>nul

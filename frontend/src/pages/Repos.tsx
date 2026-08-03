@@ -3,6 +3,7 @@ import { RepoList } from "@/components/repo/RepoList";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { Header } from "@/components/layout/Header";
+import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { Button } from "@/components/ui/button";
 import { Plus, FolderOpen } from "lucide-react";
 
@@ -20,6 +21,7 @@ export function Repos() {
         title="OpenCode"
         action={
           <div className="flex items-center gap-2">
+            <OpenCodeStatus />
             <Button
               variant="outline"
               onClick={() => setFileBrowserOpen(true)}
