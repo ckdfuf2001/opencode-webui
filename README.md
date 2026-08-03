@@ -84,6 +84,8 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **Edit Operations** - `replace` (all or nth occurrence), `insert_after`/`insert_before` a matched paragraph/cell, `append`/`prepend` text, and `delete` matched text
 - **Format Backends** - OOXML files edited with python-docx / openpyxl / python-pptx (run-preserving text replacement); encrypted/legacy files fall back to desktop Office COM editing so DRM-protected documents remain editable
 - **Mark-of-the-Web Handling** - The converter strips the `Zone.Identifier` alternate data stream before opening a file with Office COM, so files downloaded from the internet are not blocked in read-only Protected View when previewing/editing
+- **Safe COM Automation** - Each conversion/extraction/edit spins up an isolated Office application (via `DispatchEx`) and always quits it, so the backend does not leave lingering Excel/Word/PowerPoint processes
+- **File-Lock Requirement** - In-place editing needs the target file to not be open/locked in Office; a busy workbook returns a clear permission error until the owning app is closed
 
 ### MCP Document Tools
 - **`doc-reader` MCP server** (FastMCP/stdio) - Registers `read_document(path)` and `edit_document(path, operations)` so the assistant can read and modify DRM-protected Office/PDF files in chat
