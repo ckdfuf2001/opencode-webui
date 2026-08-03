@@ -135,9 +135,6 @@ try {
   
   await ensureDefaultConfigExists()
   await syncDefaultConfigToDisk()
-  
-  await opencodeServerManager.start()
-  logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
 } catch (error) {
   logger.error('Failed to initialize workspace:', error)
 }
@@ -220,6 +217,7 @@ const shutdown = async (signal: string) => {
   isShuttingDown = true
   
   logger.info(`${signal} received, shutting down gracefully...`)
+  clearInterval(healthCheckInterval)
   try {
     await opencodeServerManager.stop()
     logger.info('OpenCode server stopped')
@@ -239,3 +237,17 @@ serve({
 })
 
 logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${PORT}`)
+
+opencodeServerManager.start()
+  .then(() => {
+    logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
+  })
+  .catch((error) => {
+    logger.error('Failed to start OpenCode server:', error)
+  })
+
+const healthCheckInterval = setInterval(() => {
+  opencodeServerManager.ensureRunning().catch((error) => {
+    logger.error('Failed to ensure OpenCode server is running:', error)
+  })
+}, ENV.TIMEOUTS.HEALTH_CHECK_INTERVAL_MS)

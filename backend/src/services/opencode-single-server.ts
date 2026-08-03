@@ -1,10 +1,58 @@
 import { spawn, execSync } from 'child_process'
+import { existsSync } from 'fs'
+import path from 'path'
 import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
 
+function resolveOpenCodeBin(): string | null {
+  const configured = (ENV.OPENCODE.BIN || '').trim()
+
+  if (!configured) {
+    return null
+  }
+
+  if (path.isAbsolute(configured) && existsSync(configured)) {
+    return configured
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      const npmRoot = execSync('npm config get prefix', { encoding: 'utf8' }).trim()
+      const candidates = [
+        path.join(npmRoot, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'),
+      ]
+      for (const candidate of candidates) {
+        if (existsSync(candidate)) return candidate
+      }
+    } catch {
+      // npm not available; fall through to PATH lookup
+    }
+  }
+
+  try {
+    const output = execSync(
+      process.platform === 'win32' ? 'where opencode' : 'which opencode',
+      { encoding: 'utf8' }
+    ).toString()
+    for (const line of output.split(/\r?\n/)) {
+      const p = line.trim().split(' ')[0]
+      if (!p || !existsSync(p)) continue
+      const lower = p.toLowerCase()
+      if (process.platform !== 'win32' || lower.endsWith('.exe')) {
+        return p
+      }
+    }
+  } catch {
+    // command not on PATH
+  }
+
+  return null
+}
+
 const OPENCODE_SERVER_PORT = ENV.OPENCODE.PORT
-const OPENCODE_BIN = ENV.OPENCODE.BIN
+const OPENCODE_BIN_PATH = resolveOpenCodeBin()
+const OPENCODE_BIN = OPENCODE_BIN_PATH ?? ENV.OPENCODE.BIN
 const OPENCODE_SERVER_DIRECTORY = getWorkspacePath()
 const OPENCODE_CONFIG_PATH = getOpenCodeConfigFilePath()
 
@@ -14,6 +62,7 @@ class OpenCodeServerManager {
   private serverPid: number | null = null
   private isHealthy: boolean = false
   private isManaged: boolean = false
+  private isStarting: boolean = false
 
   private constructor() {}
 
@@ -24,12 +73,28 @@ class OpenCodeServerManager {
     return OpenCodeServerManager.instance
   }
 
+  async ensureRunning(): Promise<void> {
+    if (await this.checkHealth()) {
+      this.isHealthy = true
+      return
+    }
+    await this.start()
+  }
+
   async start(): Promise<void> {
-    if (this.isHealthy) {
+    if (this.isHealthy || this.isStarting) {
       logger.info('OpenCode server already running and healthy')
       return
     }
+    this.isStarting = true
+    try {
+      await this.startServer()
+    } finally {
+      this.isStarting = false
+    }
+  }
 
+  private async startServer(): Promise<void> {
     if (await this.checkHealth()) {
       logger.info(`Attaching to existing OpenCode server on port ${OPENCODE_SERVER_PORT}`)
       const existingProcesses = await this.findProcessesByPort(OPENCODE_SERVER_PORT)
@@ -54,17 +119,21 @@ class OpenCodeServerManager {
       await new Promise(r => setTimeout(r, 1000))
     }
 
-    const serverDirectory = process.cwd()
-    logger.info(`Starting OpenCode server from current directory: ${serverDirectory}`)
+    const serverDirectory = OPENCODE_SERVER_DIRECTORY
+    logger.info(`Starting OpenCode server from directory: ${serverDirectory}`)
 
     this.serverProcess = spawn(
       OPENCODE_BIN,
       ['serve', '--port', OPENCODE_SERVER_PORT.toString(), '--hostname', ENV.OPENCODE.HOST],
       {
         cwd: serverDirectory,
+        shell: process.platform === 'win32' && !OPENCODE_BIN_PATH,
         detached: !isDevelopment,
         stdio: isDevelopment ? 'inherit' : 'ignore',
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+        },
       }
     )
 
@@ -105,6 +174,19 @@ class OpenCodeServerManager {
       process.kill(this.serverPid, 'SIGKILL')
     } catch {
       // already terminated
+    }
+
+    try {
+      const procs = await this.findProcessesByPort(OPENCODE_SERVER_PORT)
+      for (const proc of procs) {
+        try {
+          process.kill(proc.pid, 'SIGKILL')
+        } catch {
+          // already terminated
+        }
+      }
+    } catch (error) {
+      logger.warn('Failed to clean up OpenCode processes on port:', error)
     }
 
     this.serverPid = null

@@ -128,13 +128,33 @@ docker exec -it opencode-web sh
 
 ### Option 2: Local Development
 
+#### Prerequisites
+
+| Tool     | Purpose                                        | Install (Windows) |
+|----------|------------------------------------------------|-------------------|
+| Node.js  | Runtime for the build tooling                  | [nodejs.org](https://nodejs.org) |
+| Bun      | Backend runtime (`bun --watch`)                | `npm install -g bun` |
+| pnpm     | Workspace package manager                      | `npm install -g pnpm` |
+| OpenCode | The AI agent CLI (`opencode serve`)            | `npm install -g opencode-ai` |
+| Git      | Repository cloning / worktrees                 | [git-scm.com](https://git-scm.com) |
+
+> **OpenCode on Windows:** `npm install -g opencode-ai` (an official method)
+> installs a `opencode` command shim as well as the real native binary inside
+> `%APPDATA%\npm\node_modules\opencode-ai\bin\opencode.exe`. The backend
+> **auto-detects that executable** and launches it for `opencode serve` — you
+> only need `opencode` on your PATH for the prerequisite check.
+>
+> If a strict PowerShell execution policy blocks the `.ps1` wrappers that npm
+> generates, use the `.cmd` variants (or run the scripts through `cmd`), which
+> the dev workflow already does automatically.
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/opencode-webui.git
 cd opencode-webui
 
-# Install dependencies (uses Bun workspaces)
-bun install
+# Install dependencies (pnpm workspaces)
+pnpm install
 
 # Copy environment configuration
 cp .env.example .env
@@ -142,5 +162,61 @@ cp .env.example .env
 # Start development servers (backend + frontend)
 npm run dev
 ```
+
+`npm run dev` runs a `predev` step that automatically checks that **Bun, pnpm,
+OpenCode and Git** are installed, creates the `workspace/` directory, installs
+dependencies with `pnpm`, and sets up `.env` if missing. The setup is
+**OS-aware**: it uses `scripts/setup-dev.bat` (cmd) on Windows and
+`scripts/setup-dev.sh` on macOS/Linux.
+
+## Uninstall
+
+### Remove a project install
+
+Stop the dev servers (Ctrl+C), then clean the generated project artifacts:
+
+```bash
+# Delete runtime/generated data (repos, opencode config, sqlite database)
+rm -rf workspace data .env
+
+# Remove installed dependencies
+rm -rf node_modules backend/node_modules frontend/node_modules shared/node_modules
+
+# Reinstall from scratch later with:
+#   pnpm install && cp .env.example .env && npm run dev
+```
+
+On Windows (cmd):
+
+```bat
+rmdir /s /q workspace data
+del .env
+rmdir /s /q node_modules backend\node_modules frontend\node_modules shared\node_modules
+```
+
+### Remove global prerequisites (optional)
+
+Only removes the globally-installed tools this project uses. Node.js/Git must be
+uninstalled separately via your Windows Settings or package manager if desired.
+
+```bash
+npm uninstall -g opencode-ai pnpm bun
+```
+
+> The OpenCode config that this app registers lives in the workspace
+> (`workspace/.config/opencode/opencode.json`), not in your user profile, so the
+> global tools can be added/removed freely without affecting app settings.
+
+### Reinstall
+
+The fastest way back is to just launch it again — the `predev` step recreates
+`workspace/` and `.env` and installs deps automatically:
+
+```bash
+npm run dev
+```
+
+To start completely clean: follow **Remove local project install** above, then
+re-clone (optional) and run `npm run dev` again.
 
 
