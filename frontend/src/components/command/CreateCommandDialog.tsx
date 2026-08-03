@@ -6,9 +6,18 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { registryApi, type RegistryType, type RegistryScope } from '@/api/registry'
 import { settingsApi } from '@/api/settings'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { showToast } from '@/lib/toast'
 
 type Mode = 'steps' | 'template'
+type DialogType = RegistryType | 'mcp'
+
+interface EnvironmentVariable {
+  key: string
+  value: string
+}
 
 interface CreateCommandDialogProps {
   open: boolean
@@ -18,10 +27,11 @@ interface CreateCommandDialogProps {
   directory?: string
 }
 
-const TYPE_OPTIONS: { value: RegistryType; label: string }[] = [
+const TYPE_OPTIONS: { value: DialogType; label: string }[] = [
   { value: 'command', label: 'Command' },
   { value: 'skill', label: 'Skill' },
-  { value: 'tool', label: 'Tool' },
+  { value: 'tool', label: 'Plugin' },
+  { value: 'mcp', label: 'MCP' },
 ]
 
 const SCOPE_OPTIONS: { value: RegistryScope; label: string }[] = [
@@ -52,7 +62,7 @@ function buildCommandTemplate(steps: string[], extra: string): string {
 }
 
 export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory }: CreateCommandDialogProps) {
-  const [type, setType] = useState<RegistryType>('command')
+  const [type, setType] = useState<DialogType>('command')
   const [scope, setScope] = useState<RegistryScope>('global')
   const [agent, setAgent] = useState('')
   const [model, setModel] = useState('')
@@ -67,6 +77,12 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
   const [skillBody, setSkillBody] = useState('')
   const [toolScript, setToolScript] = useState(TOOL_TEMPLATE(''))
   const [saving, setSaving] = useState(false)
+  const [mcpType, setMcpType] = useState<'local' | 'remote'>('local')
+  const [mcpCommand, setMcpCommand] = useState('')
+  const [mcpUrl, setMcpUrl] = useState('')
+  const [mcpEnvironment, setMcpEnvironment] = useState<EnvironmentVariable[]>([])
+  const [mcpTimeout, setMcpTimeout] = useState('')
+  const [mcpEnabled, setMcpEnabled] = useState(true)
 
   const reset = () => {
     setName('')
@@ -80,6 +96,12 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
     setRawTemplate('')
     setSkillBody('')
     setToolScript(TOOL_TEMPLATE(''))
+    setMcpType('local')
+    setMcpCommand('')
+    setMcpUrl('')
+    setMcpEnvironment([])
+    setMcpTimeout('')
+    setMcpEnabled(true)
   }
 
   const handleClose = (next: boolean) => {
@@ -111,8 +133,9 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
     setSteps((prev) => [...prev, ''])
   }
 
-  const switchType = (next: RegistryType) => {
+  const switchType = (next: DialogType) => {
     setType(next)
+    if (next === 'mcp') setScope('global')
   }
 
   const resolveContent = (): string => {
@@ -123,10 +146,69 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         return skillBody
       case 'tool':
         return toolScript
+      case 'mcp':
+        return ''
+    }
+  }
+
+  const handleSaveMcp = async () => {
+    const serverId = name.trim()
+    if (!serverId) {
+      showToast.error('Server ID is required.')
+      return
+    }
+    setSaving(true)
+    try {
+      const config = await settingsApi.getDefaultOpenCodeConfig()
+      if (!config) {
+        showToast.error('No OpenCode configuration to update. Create one first.')
+        return
+      }
+      const currentMcp = (config.content?.mcp as Record<string, unknown> | undefined) ?? {}
+      const mcpEntry: Record<string, unknown> = { type: mcpType, enabled: mcpEnabled }
+      if (mcpType === 'local') {
+        const commandArray = mcpCommand.split(' ').filter((arg) => arg.trim())
+        if (commandArray.length === 0) {
+          showToast.error('Command is required for local MCP servers.')
+          return
+        }
+        mcpEntry.command = commandArray
+        const envVars: Record<string, string> = {}
+        mcpEnvironment.forEach((env) => {
+          if (env.key.trim() && env.value.trim()) envVars[env.key.trim()] = env.value.trim()
+        })
+        if (Object.keys(envVars).length > 0) mcpEntry.environment = envVars
+      } else {
+        if (!mcpUrl.trim()) {
+          showToast.error('URL is required for remote MCP servers.')
+          return
+        }
+        mcpEntry.url = mcpUrl.trim()
+      }
+      if (mcpTimeout && parseInt(mcpTimeout)) mcpEntry.timeout = parseInt(mcpTimeout)
+
+      const updatedConfig = {
+        ...config.content,
+        mcp: { ...currentMcp, [serverId]: mcpEntry },
+      }
+      await settingsApi.updateOpenCodeConfig(config.name, { content: updatedConfig })
+      showToast.success(`MCP server "${serverId}" saved to configuration "${config.name}".`)
+      onCreated()
+      reset()
+      onOpenChange(false)
+    } catch (err) {
+      console.error('Failed to add MCP server:', err)
+      showToast.error('Failed to add MCP server.')
+    } finally {
+      setSaving(false)
     }
   }
 
   const handleSave = async () => {
+    if (type === 'mcp') {
+      await handleSaveMcp()
+      return
+    }
     const trimmedName = name.trim()
     if (!trimmedName) {
       showToast.error('Name is required.')
@@ -169,14 +251,14 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
           },
           scope === 'project' ? directory : undefined
         )
-        showToast.success(`${type === 'tool' ? 'Tool' : type === 'skill' ? 'Skill' : 'Command'} "${trimmedName}" registered (${scope}).`)
+        showToast.success(`${type === 'tool' ? 'Plugin' : type === 'skill' ? 'Skill' : 'Command'} "${trimmedName}" registered (${scope}).`)
       }
       onCreated()
       reset()
       onOpenChange(false)
     } catch (err) {
       console.error('Failed to register:', err)
-      showToast.error(`Failed to register ${type === 'tool' ? 'tool' : type === 'skill' ? 'skill' : 'command'}.`)
+      showToast.error(`Failed to register ${type === 'tool' ? 'plugin' : type === 'skill' ? 'skill' : 'command'}.`)
     } finally {
       setSaving(false)
     }
@@ -185,8 +267,38 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
+        <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
           <DialogTitle>Register new opencode file</DialogTitle>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="w-6 h-6 rounded-full border-2 border-foreground text-foreground hover:bg-foreground hover:text-background transition-colors flex items-center justify-center text-sm font-medium flex-shrink-0"
+                title="Help"
+              >
+                ?
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-80">
+              <div className="px-2 py-1.5 space-y-2">
+                <div>
+                  <a href="https://opencode.ai/docs/commands/" target="_blank" rel="noreferrer" className="text-sm font-semibold text-foreground hover:text-primary hover:underline">Command</a>
+                  <p className="text-xs text-muted-foreground mt-0.5">A reusable prompt run with /name. Can set agent, model, topP.</p>
+                </div>
+                <div>
+                  <a href="https://opencode.ai/docs/skills/" target="_blank" rel="noreferrer" className="text-sm font-semibold text-foreground hover:text-primary hover:underline">Skill</a>
+                  <p className="text-xs text-muted-foreground mt-0.5">A markdown skill (SKILL.md) with instructions the agent loads on demand.</p>
+                </div>
+                <div>
+                  <a href="https://opencode.ai/docs/custom-tools/" target="_blank" rel="noreferrer" className="text-sm font-semibold text-foreground hover:text-primary hover:underline">Plugin</a>
+                  <p className="text-xs text-muted-foreground mt-0.5">A TypeScript tool using @opencode-ai/plugin's tool() helper. Filename becomes the tool name.</p>
+                </div>
+                <div>
+                  <a href="https://opencode.ai/docs/mcp-servers/" target="_blank" rel="noreferrer" className="text-sm font-semibold text-foreground hover:text-primary hover:underline">MCP</a>
+                  <p className="text-xs text-muted-foreground mt-0.5">A Model Context Protocol server (local command or remote HTTP URL) added to the config.</p>
+                </div>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </DialogHeader>
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -196,11 +308,23 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
               </Button>
             ))}
             <div className="w-px h-5 bg-border mx-1" />
-            {SCOPE_OPTIONS.map((opt) => (
-              <Button key={opt.value} type="button" size="sm" variant={scope === opt.value ? 'secondary' : 'ghost'} onClick={() => setScope(opt.value)} className="text-xs h-7">
-                {opt.label}
-              </Button>
-            ))}
+            {SCOPE_OPTIONS.map((opt) => {
+              const isMcp = type === 'mcp'
+              const disabled = isMcp && opt.value !== 'global'
+              return (
+                <Button
+                  key={opt.value}
+                  type="button"
+                  size="sm"
+                  variant={scope === opt.value ? 'secondary' : 'ghost'}
+                  onClick={() => setScope(opt.value)}
+                  disabled={disabled}
+                  className="text-xs h-7 disabled:opacity-50"
+                >
+                  {opt.label}
+                </Button>
+              )
+            })}
           </div>
 
           <div className="space-y-1">
@@ -210,7 +334,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={`e.g. ${type}`}
+              placeholder={`e.g. ${type === 'mcp' ? 'filesystem' : type}`}
               className="font-mono"
             />
           </div>
@@ -333,12 +457,102 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
           {type === 'tool' && (
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Tool script (.ts) <span className="text-destructive">*</span></label>
-              <Textarea value={toolScript} onChange={(e) => setToolScript(e.target.value)} placeholder="Full TypeScript tool definition using @opencode-ai/plugin's tool() helper" className="min-h-[160px] font-mono text-xs" />
+              <label className="text-xs text-muted-foreground">Plugin script (.ts) <span className="text-destructive">*</span></label>
+              <Textarea value={toolScript} onChange={(e) => setToolScript(e.target.value)} placeholder="Full TypeScript plugin definition using @opencode-ai/plugin's tool() helper" className="min-h-[160px] font-mono text-xs" />
               <p className="text-[10px] text-muted-foreground">Writes to {scope === 'global' ? '~/.config/opencode/tools' : '.opencode/tools'} as `.ts`. Filename becomes the tool name.</p>
             </div>
           )}
 
+          {type === 'mcp' && (
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-muted-foreground">Server Type</label>
+                <Select value={mcpType} onValueChange={(value: 'local' | 'remote') => setMcpType(value)}>
+                  <SelectTrigger className="bg-background border-border">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="local">Local (Command)</SelectItem>
+                    <SelectItem value="remote">Remote (HTTP)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {mcpType === 'local' ? (
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Command <span className="text-destructive">*</span></label>
+                  <Input
+                    value={mcpCommand}
+                    onChange={(e) => setMcpCommand(e.target.value)}
+                    placeholder="npx @modelcontextprotocol/server-filesystem /tmp"
+                    className="font-mono"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Server URL <span className="text-destructive">*</span></label>
+                  <Input
+                    value={mcpUrl}
+                    onChange={(e) => setMcpUrl(e.target.value)}
+                    placeholder="http://localhost:3000/mcp"
+                    className="font-mono"
+                  />
+                </div>
+              )}
+
+              {mcpType === 'local' && (
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Environment Variables</label>
+                  {mcpEnvironment.map((env, index) => (
+                    <div key={index} className="flex gap-1.5">
+                      <Input
+                        value={env.key}
+                        onChange={(e) => {
+                          const updated = [...mcpEnvironment]
+                          updated[index].key = e.target.value
+                          setMcpEnvironment(updated)
+                        }}
+                        placeholder="API_KEY"
+                        className="font-mono text-xs"
+                      />
+                      <Input
+                        value={env.value}
+                        onChange={(e) => {
+                          const updated = [...mcpEnvironment]
+                          updated[index].value = e.target.value
+                          setMcpEnvironment(updated)
+                        }}
+                        placeholder="value"
+                        className="font-mono text-xs"
+                      />
+                      {mcpEnvironment.length > 1 && (
+                        <Button type="button" variant="outline" size="icon" className="h-8 w-8" onClick={() => setMcpEnvironment(mcpEnvironment.filter((_, i) => i !== index))}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setMcpEnvironment([...mcpEnvironment, { key: '', value: '' }])} className="gap-1 text-xs text-muted-foreground">
+                    <Plus className="w-3.5 h-3.5" />
+                    Add variable
+                  </Button>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Timeout (ms)</label>
+                  <Input value={mcpTimeout} onChange={(e) => setMcpTimeout(e.target.value)} placeholder="5000" className="font-mono" />
+                </div>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <Switch checked={mcpEnabled} onCheckedChange={setMcpEnabled} />
+                  Enable on startup
+                </label>
+              </div>
+            </div>
+          )}
+
+          {type !== 'mcp' && (
           <div className="text-[11px] text-muted-foreground">
             Target:{' '}
             <span className="font-mono">
@@ -346,6 +560,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
               /{type === 'tool' ? 'tools' : type}/{type === 'skill' ? `${name}/` : ''}...
             </span>
           </div>
+          )}
         </div>
         <DialogFooter>
           <Button size="sm" variant="ghost" onClick={() => handleClose(false)} disabled={saving}>
