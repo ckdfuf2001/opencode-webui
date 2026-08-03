@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRepo } from "@/api/repos";
 import { SessionList } from "@/components/session/SessionList";
-import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
+import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
+import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { SwitchConfigDialog } from "@/components/repo/SwitchConfigDialog";
 import { BackButton } from "@/components/ui/back-button";
@@ -12,7 +13,7 @@ import { OPENCODE_API_ENDPOINT } from "@/config";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, FolderOpen, GitBranch } from "lucide-react";
+import { Loader2, Plus, FolderOpen, GitBranch, Terminal } from "lucide-react";
 
 export function RepoDetail() {
   const { id } = useParams<{ id: string }>();
@@ -20,8 +21,34 @@ export function RepoDetail() {
   const queryClient = useQueryClient();
   const repoId = parseInt(id || "0");
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
-  
+  const [commandsOpen, setCommandsOpen] = useState(false);
   const [switchConfigOpen, setSwitchConfigOpen] = useState(false);
+  const [filePanelWidth, setFilePanelWidth] = useState(380);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const container = splitContainerRef.current
+    if (!container) return
+
+    const onMove = (ev: MouseEvent) => {
+      const rect = container.getBoundingClientRect()
+      const nextWidth = Math.min(Math.max(rect.right - ev.clientX, 260), rect.width * 0.6)
+      setFilePanelWidth(nextWidth)
+    }
+
+    const onUp = () => {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
 
   const { data: repo, isLoading: repoLoading } = useQuery({
     queryKey: ["repo", repoId],
@@ -86,7 +113,6 @@ export function RepoDetail() {
     ? repo.repoUrl.split("/").pop()?.replace(".git", "") || "Repository"
     : repo.localPath || "Local Repository";
   const branchToDisplay = repo.currentBranch || repo.branch;
-  const displayName = branchToDisplay ? `${repoName} (${branchToDisplay})` : repoName;
   const isNotMainBranch = branchToDisplay && branchToDisplay !== repo.defaultBranch;
   const currentBranch = repo.currentBranch || "main";
 
@@ -125,16 +151,23 @@ export function RepoDetail() {
             </div>
           </div>
            <div className="flex items-center gap-2">
-             
-
              <Button
-               variant="outline"
+               variant="ghost"
+               size="icon"
                onClick={() => setFileBrowserOpen(true)}
-               size="sm"
-               className="text-foreground border-border hover:bg-muted transition-all duration-200 hover:scale-105"
+               className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
+               title="Files"
              >
-               <FolderOpen className="w-4 h-4 sm:mr-2" />
-               <span className="hidden sm:inline">Files</span>
+               <FolderOpen className="w-4 h-4" />
+             </Button>
+             <Button
+               variant="ghost"
+               size="icon"
+               onClick={() => setCommandsOpen(true)}
+               className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
+               title="Commands"
+             >
+               <Terminal className="w-4 h-4" />
              </Button>
               <Button
                 onClick={() => handleCreateSession()}
@@ -149,21 +182,41 @@ export function RepoDetail() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden">
-        {opcodeUrl && repoDirectory && (
-          <SessionList
-            opcodeUrl={opcodeUrl}
-            directory={repoDirectory}
-            onSelectSession={handleSelectSession}
+      <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
+        <div className="flex-1 overflow-hidden min-w-0">
+          {opcodeUrl && repoDirectory && (
+            <SessionList
+              opcodeUrl={opcodeUrl}
+              directory={repoDirectory}
+              onSelectSession={handleSelectSession}
+            />
+          )}
+        </div>
+
+        {fileBrowserOpen && (
+          <div
+            className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors"
+            onMouseDown={handleResizeStart}
+            title="Drag to resize"
+          />
+        )}
+
+        {fileBrowserOpen && (
+          <SessionFilePanel
+            basePath={repo.localPath}
+            repoName={repoName}
+            width={filePanelWidth}
+            onClose={() => setFileBrowserOpen(false)}
           />
         )}
       </div>
 
-      <FileBrowserSheet
-        isOpen={fileBrowserOpen}
-        onClose={() => setFileBrowserOpen(false)}
-        basePath={repo.localPath}
-        repoName={displayName}
+      <CommandsPanel
+        open={commandsOpen}
+        onClose={() => setCommandsOpen(false)}
+        opcodeUrl={opcodeUrl}
+        sessionID=""
+        directory={repoDirectory}
       />
 
 {repo && (
