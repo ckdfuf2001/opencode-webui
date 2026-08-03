@@ -217,6 +217,53 @@ dependencies with `pnpm`, and sets up `.env` if missing. The setup is
 **OS-aware**: it uses `scripts/setup-dev.bat` (cmd) on Windows and
 `scripts/setup-dev.sh` on macOS/Linux.
 
+#### (Optional) Register the Document MCP tools
+
+The `doc-reader` MCP server (`read_document` / `edit_document`) lets the
+assistant read and edit Office/PDF files (including DRM-protected ones) in
+chat. **It is installed with the repo but not registered automatically** —
+registration lives in the git-ignored workspace database
+(`workspace/.config/opencode/opencode.json`), so a fresh clone must register it
+once. To use these tools in chat:
+
+1. **Requirements** — the dev Python env must have the conversion libs and
+   `fastmcp`:
+   ```bash
+   pip install python-docx openpyxl python-pptx fastmcp pypdf pywin32
+   ```
+   (your copy of `opencode-webui` uses the same machine/`python` to run
+   `backend/scripts/doc_converter.py`.)
+
+2. **Register the server** — via the Web UI **Settings → MCP Servers → Add
+   Local Server**, or by appending to `workspace/.config/opencode/opencode.json`:
+   ```json
+   "mcp": {
+     "doc-reader": {
+       "type": "local",
+       "command": [
+         "python",
+         "D:\\path\\to\\opencode_web\\backend\\scripts\\doc_reader_mcp.py"
+       ],
+       "env": {
+         "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5001",
+         "OPCODE_WEBUI_WORKSPACE": "D:\\path\\to\\opencode_web\\workspace"
+       }
+     }
+   }
+   ```
+   Point `command[1]` and `OPCODE_WEBUI_WORKSPACE` at **your** checkout (the
+   values above are machine-specific). After saving, the OpenCode server
+   restarts and `read_document`/`edit_document` become available in chat.
+
+3. **Verify** — the OpenCode server exposes the tools only after registration.
+   In the UI you can confirm the new tools appear for `/mcp` (`doc-reader` shows
+   `connected`).
+
+> Once registered, the assistant reads documents with
+> `read_document("D:\\...\\file.docx")` and edits them in place with
+> `edit_document(path, [operations])` (replace / insert_after / insert_before /
+> append / prepend / delete).
+
 ## Uninstall
 
 ### Remove a project install
