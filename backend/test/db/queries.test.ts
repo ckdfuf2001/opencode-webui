@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import * as db from '../../src/db/queries'
 import * as schema from '../../src/db/schema'
+import path from 'path'
 
 const mockDb = {
   prepare: vi.fn(),
@@ -22,7 +23,7 @@ describe('Database Queries', () => {
     it('should insert new repo record', () => {
       const repo = {
         repoUrl: 'https://github.com/test/repo',
-        localPath: 'repos/test-repo',
+        localPath: 'test-repo',
         branch: 'main',
         defaultBranch: 'main',
         cloneStatus: 'ready' as const,
@@ -79,7 +80,7 @@ describe('Database Queries', () => {
       const repoRow = {
         id: 1,
         repo_url: 'https://github.com/test/repo',
-        local_path: 'repos/test-repo',
+        local_path: 'test-repo',
         branch: 'main',
         default_branch: 'main',
         clone_status: 'ready',
@@ -100,8 +101,8 @@ describe('Database Queries', () => {
       expect(result).toEqual({
         id: 1,
         repoUrl: 'https://github.com/test/repo',
-        localPath: 'repos/test-repo',
-        fullPath: expect.stringContaining('repos/test-repo'),
+        localPath: 'test-repo',
+        fullPath: expect.stringContaining(path.join('repos', 'test-repo')),
         branch: 'main',
         defaultBranch: 'main',
         cloneStatus: 'ready',
@@ -131,7 +132,7 @@ describe('Database Queries', () => {
         {
           id: 1,
           repo_url: 'https://github.com/test/repo1',
-          local_path: 'repos/test-repo1',
+          local_path: 'test-repo1',
           branch: 'main',
           default_branch: 'main',
           clone_status: 'ready',
@@ -141,7 +142,7 @@ describe('Database Queries', () => {
         {
           id: 2,
           repo_url: 'https://github.com/test/repo2',
-          local_path: 'repos/test-repo2',
+          local_path: 'test-repo2',
           branch: 'main',
           default_branch: 'main',
           clone_status: 'ready',

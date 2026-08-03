@@ -19,6 +19,13 @@ function resolveOpenCodeBin(): string | null {
   const home = process.env.USERPROFILE || process.env.HOME || ''
   const appData = process.env.APPDATA || ''
   const localAppData = process.env.LOCALAPPDATA || ''
+  const cwdRoot = path.join(process.cwd(), 'bin')
+  const workspaceRoot = path.join(getWorkspacePath(), 'bin')
+
+  for (const root of [cwdRoot, workspaceRoot]) {
+    candidates.push(path.join(root, 'opencode.exe'))
+    candidates.push(path.join(root, 'opencode'))
+  }
 
   const npmRoots: string[] = []
   try {
