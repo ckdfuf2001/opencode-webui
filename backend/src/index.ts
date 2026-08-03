@@ -10,6 +10,8 @@ import { createTTSRoutes, cleanupExpiredCache } from './routes/tts'
 import { createFileRoutes } from './routes/files'
 import { createRegistryRoutes } from './routes/registry'
 import { createProvidersRoutes } from './routes/providers'
+import { createPreviewRoutes } from './routes/preview'
+import { stopConverter } from './services/doc-converter'
 import { ensureDirectoryExists, writeFileContent } from './services/file-operations'
 import { SettingsService } from './services/settings'
 import { opencodeServerManager } from './services/opencode-single-server'
@@ -27,6 +29,13 @@ import {
 
 const { PORT, HOST } = ENV.SERVER
 const DB_PATH = getDatabasePath()
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection (preventing crash):', reason)
+})
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception (preventing crash):', error)
+})
 
 const app = new Hono()
 
@@ -146,6 +155,7 @@ app.route('/api/files', createFileRoutes(db))
 app.route('/api/providers', createProvidersRoutes())
 app.route('/api/tts', createTTSRoutes(db))
 app.route('/api/registry', createRegistryRoutes())
+app.route('/api/preview', createPreviewRoutes())
 
 app.all('/api/opencode/*', async (c) => {
   const request = c.req.raw
@@ -224,6 +234,7 @@ const shutdown = async (signal: string) => {
   } catch (error) {
     logger.error('Error stopping OpenCode server:', error)
   }
+  stopConverter()
   process.exit(0)
 }
 

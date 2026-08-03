@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef, useEffect, memo } from 'react'
 import { Button } from '@/components/ui/button'
-import { Download, X, Edit3, Save, X as XIcon, WrapText } from 'lucide-react'
+import { Download, X, Edit3, Save, X as XIcon, WrapText, RefreshCw } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { VirtualizedTextView, type VirtualizedTextViewHandle } from '@/components/ui/virtualized-text-view'
+import { DocumentPreview, detectDocKind } from './DocumentPreview'
 
 
 const API_BASE = API_BASE_URL
@@ -26,11 +27,14 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const [hasVirtualizedChanges, setHasVirtualizedChanges] = useState(false)
   const [highlightedLine, setHighlightedLine] = useState<number | undefined>(initialLineNumber)
   const [lineWrap, setLineWrap] = useState(true)
+  const [refreshKey, setRefreshKey] = useState(0)
   const virtualizedRef = useRef<VirtualizedTextViewHandle>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   
   
-  const shouldVirtualize = file.size > VIRTUALIZATION_THRESHOLD_BYTES && !file.mimeType?.startsWith('image/')
+  const docKind = detectDocKind(file.name)
+  
+  const shouldVirtualize = docKind === null && file.size > VIRTUALIZATION_THRESHOLD_BYTES && !file.mimeType?.startsWith('image/')
   
   
 
@@ -67,6 +71,11 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+  }
+
+  const handleRefresh = () => {
+    setRefreshKey((k) => k + 1)
+    window.dispatchEvent(new CustomEvent('fileSaved', { detail: { path: file.path } }))
   }
 
   const decodeBase64 = (base64: string): string => {
@@ -148,10 +157,14 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     onFileSaved?.()
   }, [file.path, onFileSaved])
 
-  const isTextFile = file.mimeType?.startsWith('text/') || 
-    ['application/json', 'application/xml', 'text/javascript', 'text/typescript'].includes(file.mimeType || '')
+  const isTextFile = !docKind && (file.mimeType?.startsWith('text/') || 
+    ['application/json', 'application/xml', 'text/javascript', 'text/typescript'].includes(file.mimeType || ''))
 
   const renderContent = () => {
+    if (docKind) {
+      return <DocumentPreview file={file} refreshKey={refreshKey} />
+    }
+
     if (file.mimeType?.startsWith('image/')) {
       return (
         <div className="flex justify-center p-4">
@@ -312,6 +325,12 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
               )}
               
               {viewMode !== 'edit' && (
+                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleRefresh() }} className="h-7 w-7 p-0" title="Refresh">
+                  <RefreshCw className="w-3 h-3" />
+                </Button>
+              )}
+
+              {viewMode !== 'edit' && (
                 <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDownload() }} className="h-7 w-7 p-0">
                   <Download className="w-3 h-3" />
                 </Button>
@@ -331,7 +350,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
         ref={contentRef}
         className={`flex-1 ${viewMode === 'edit' && !shouldVirtualize ? 'overflow-hidden' : shouldVirtualize ? '' : 'overflow-y-auto overscroll-contain'} min-h-0 overflow-x-hidden`}
       >
-        <div className={`${shouldVirtualize ? 'h-full' : 'p-2'} min-w-0`}>
+        <div key={refreshKey} className={`${docKind ? 'h-full p-2' : shouldVirtualize ? 'h-full' : 'p-2'} min-w-0`}>
           {renderContent()}
         </div>
       </div>
