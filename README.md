@@ -135,18 +135,38 @@ docker exec -it opencode-web sh
 | Node.js  | Runtime for the build tooling                  | [nodejs.org](https://nodejs.org) |
 | Bun      | Backend runtime (`bun --watch`)                | `npm install -g bun` |
 | pnpm     | Workspace package manager                      | `npm install -g pnpm` |
-| OpenCode | The AI agent CLI (`opencode serve`)            | `npm install -g opencode-ai` |
+| OpenCode | The AI agent CLI (`opencode serve`)            | drop `opencode.exe` into `bin/` (see below) |
 | Git      | Repository cloning / worktrees                 | [git-scm.com](https://git-scm.com) |
 
-> **OpenCode on Windows:** `npm install -g opencode-ai` (an official method)
-> installs a `opencode` command shim as well as the real native binary inside
-> `%APPDATA%\npm\node_modules\opencode-ai\bin\opencode.exe`. The backend
-> **auto-detects that executable** and launches it for `opencode serve` — you
-> only need `opencode` on your PATH for the prerequisite check.
+> **OpenCode on Windows (offline-friendly, recommended):** the simplest way is to
+> drop the standalone `opencode.exe` into the project's `bin/` folder:
 >
-> If a strict PowerShell execution policy blocks the `.ps1` wrappers that npm
-> generates, use the `.cmd` variants (or run the scripts through `cmd`), which
-> the dev workflow already does automatically.
+> ```
+> opencode-webui\
+>   bin\
+>     opencode.exe
+> ```
+>
+> The backend **auto-detects `<project>/bin/opencode.exe`, `<workspace>/bin/opencode.exe`,
+> the npm-global copy (`%APPDATA%\npm\node_modules\opencode-ai\bin\opencode.exe`),
+> `~/.bun/bin`, `~/.opencode/bin`, and the PATH**, launching whichever it finds for
+> `opencode serve`. Only one is required.
+>
+> Get the binary from the [opencode releases page](https://github.com/sst/opencode/releases)
+> (`opencode-windows-x64.zip`) and extract `opencode.exe` into `bin\`. No runtime
+> internet access is needed — the server is just a single local executable.
+>
+> **Automated download:** `npm run opencode:install` downloads the matching binary
+> into `bin/` automatically. On networks behind a TLS-intercepting proxy, run it
+> once with `OPENCODE_INSECURE=1`:
+> ```powershell
+> $env:OPENCODE_INSECURE="1"; npm run opencode:install
+> ```
+> or pin a version with `OPENCODE_VERSION=<x.y.z>`. Alternatively set the backend
+> env `OPENCODE_BIN` to the full path of any `opencode(.exe)` you already have.
+>
+> The dev workflow uses `.cmd` shims automatically, so a strict PowerShell
+> execution policy that blocks `.ps1` wrappers is not an issue.
 
 ```bash
 # Clone the repository
