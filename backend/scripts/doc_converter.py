@@ -16,6 +16,17 @@ PPT_EXTS = {".pptx", ".ppt"}
 SUPPORTED_EXTS = DOC_EXTS | XLS_EXTS | PPT_EXTS
 
 
+def _strip_zone_identifier(source_path):
+    """Remove the Mark-of-the-Web (Zone.Identifier) alternate data stream so
+    Office does not open the file in Protected View (read-only)."""
+    try:
+        import ctypes
+
+        ctypes.windll.kernel32.DeleteFileW(source_path + ":Zone.Identifier")
+    except Exception:
+        pass
+
+
 def cache_path(source_path):
     try:
         st = os.stat(source_path)
@@ -73,6 +84,7 @@ def _export(source_path, tmp_path):
 
 
 def convert(source_path, refresh=False):
+    _strip_zone_identifier(source_path)
     ext = os.path.splitext(source_path)[1].lower()
     if ext not in SUPPORTED_EXTS:
         raise ValueError(f"Unsupported document type: {ext}")
@@ -192,6 +204,7 @@ def _extract_powerpoint_text(source_path):
 
 
 def extract_text(source_path):
+    _strip_zone_identifier(source_path)
     ext = os.path.splitext(source_path)[1].lower()
     if ext not in SUPPORTED_EXTS and ext != ".pdf":
         raise ValueError(f"Unsupported document type: {ext}")
@@ -792,6 +805,7 @@ def _edit_legacy(path, ext, operations):
 
 
 def edit_document(source_path, operations):
+    _strip_zone_identifier(source_path)
     ext = os.path.splitext(source_path)[1].lower()
     if ext not in SUPPORTED_EXTS:
         raise ValueError(f"Unsupported document type: {ext}")
