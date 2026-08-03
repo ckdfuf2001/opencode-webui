@@ -27,6 +27,44 @@ def _strip_zone_identifier(source_path):
         pass
 
 
+_OFFICE_EXES = {"EXCEL.EXE", "WINWORD.EXE", "POWERPNT.EXE"}
+
+
+def _office_pids():
+    """Snapshot of the PIDs of running Office applications."""
+    out = {}
+    try:
+        import psutil
+
+        for proc in psutil.process_iter(["pid", "name"]):
+            name = (proc.info["name"] or "").upper()
+            if name in _OFFICE_EXES:
+                out.setdefault(name, set()).add(proc.info["pid"])
+    except Exception:
+        pass
+    return out
+
+
+def _kill_new_office(before):
+    """Force-quit any Office process that was spawned since the snapshot, so
+    files opened by COM automation do not stay locked."""
+    try:
+        import psutil
+
+        for exe, old_pids in before.items():
+            fresh = _office_pids().get(exe, set())
+            for pid in fresh - old_pids:
+                try:
+                    proc = psutil.Process(pid)
+                    if proc.is_running():
+                        proc.kill()
+                        proc.wait(timeout=3)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                    pass
+    except Exception:
+        pass
+
+
 def cache_path(source_path):
     try:
         st = os.stat(source_path)
@@ -101,11 +139,13 @@ def convert(source_path, refresh=False):
     import pythoncom
 
     tmp_path = out_path[:-4] + ".conv.pdf"
+    before = _office_pids()
     pythoncom.CoInitialize()
     try:
         _export(source_path, tmp_path)
     finally:
         pythoncom.CoUninitialize()
+        _kill_new_office(before)
 
     if not os.path.exists(tmp_path):
         raise RuntimeError("Conversion produced no output")
@@ -213,6 +253,7 @@ def extract_text(source_path):
 
     import pythoncom
 
+    before = _office_pids()
     pythoncom.CoInitialize()
     try:
         if ext in DOC_EXTS:
@@ -224,6 +265,7 @@ def extract_text(source_path):
         raise ValueError(f"Unsupported document type: {ext}")
     finally:
         pythoncom.CoUninitialize()
+        _kill_new_office(before)
 
 
 def text_cache_path(source_path):
@@ -821,11 +863,13 @@ def edit_document(source_path, operations):
 
     import pythoncom
 
+    before = _office_pids()
     pythoncom.CoInitialize()
     try:
         return _edit_legacy(source_path, ext, operations)
     finally:
         pythoncom.CoUninitialize()
+        _kill_new_office(before)
 
 
 class Handler(BaseHTTPRequestHandler):
