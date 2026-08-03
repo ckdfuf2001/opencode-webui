@@ -1,73 +1,77 @@
-#!/bin/bash
-
+#!/bin/sh
 set -e
 
-echo "🔍 Checking prerequisites..."
+echo "=========================================="
+echo "  OpenCode Writer UI - Dev Environment Setup"
+echo "=========================================="
+echo
 
-# Check if Node.js/Bun is installed
-if command -v bun &> /dev/null; then
-  echo "✅ Bun is installed"
-  NODE_CMD="bun"
-elif command -v node &> /dev/null; then
-  echo "✅ Node.js is installed"
-  NODE_CMD="node"
+echo "[1/5] Checking prerequisites..."
+
+# Bun
+if command -v bun >/dev/null 2>&1; then
+  echo "  [+] Bun is installed"
 else
-  echo "❌ Neither Bun nor Node.js is installed. Please install one of them."
+  echo "  [x] Bun is NOT installed. Install it from: https://bun.sh"
   exit 1
 fi
 
-# Check if Git is installed
-if ! git --version &> /dev/null; then
-  echo "❌ Git is not installed. Please install Git and try again."
+# pnpm
+if command -v pnpm >/dev/null 2>&1; then
+  echo "  [+] pnpm is installed"
+else
+  echo "  [x] pnpm is NOT installed. Install it with: npm install -g pnpm"
   exit 1
 fi
 
-echo "✅ Git is installed"
-
-# Check if OpenCode TUI is installed
-if ! opencode --version &> /dev/null; then
-  echo "❌ OpenCode TUI is not installed. Please install it with:"
-  echo "   npm install -g @opencode/tui"
-  echo "   or"
-  echo "   bun add -g @opencode/tui"
+# OpenCode
+if command -v opencode >/dev/null 2>&1; then
+  echo "  [+] OpenCode is installed"
+else
+  echo "  [x] OpenCode TUI is NOT installed."
+  echo "      Install it with: curl -fsSL https://opencode.ai/install"
   exit 1
 fi
 
-echo "✅ OpenCode TUI is installed"
+# Git
+if command -v git >/dev/null 2>&1; then
+  echo "  [+] Git is installed"
+else
+  echo "  [x] Git is NOT installed. Install it from: https://git-scm.com"
+  exit 1
+fi
 
-# Create workspace directory if it doesn't exist
 WORKSPACE_PATH="./workspace"
-if [ ! -d "$WORKSPACE_PATH" ]; then
-  echo "📁 Creating workspace directory at $WORKSPACE_PATH..."
-  mkdir -p "$WORKSPACE_PATH/repos"
-  mkdir -p "$WORKSPACE_PATH/config"
-  echo "✅ Workspace directory created"
-else
-  echo "✅ Workspace directory exists"
-fi
 
-# Install dependencies
-echo "📦 Installing dependencies..."
-if [ "$NODE_CMD" = "bun" ]; then
-  bun install
-else
-  npm install
-fi
+echo
+echo "[2/5] Creating workspace directories..."
+mkdir -p "$WORKSPACE_PATH/repos"
+mkdir -p "$WORKSPACE_PATH/.config/opencode"
 
-echo "✅ Dependencies installed"
+echo
+echo "[3/5] Installing dependencies (pnpm install)..."
+pnpm install
 
-# Copy environment file if it doesn't exist
+echo
+echo "[4/5] Creating environment file if missing..."
 if [ ! -f ".env" ]; then
-  echo "📝 Creating environment file..."
   cp .env.example .env
-  echo "✅ Environment file created from .env.example"
+  echo "  [+] Created .env from .env.example"
 else
-  echo "✅ Environment file exists"
+  echo "  [+] .env already exists"
 fi
 
-echo "✅ Dev environment ready!"
-echo ""
-echo "🚀 To start development:"
-echo "   npm run dev              # Start both backend and frontend"
-echo "   npm run dev:backend      # Start backend only"
-echo "   npm run dev:frontend     # Start frontend only"
+echo
+echo "[5/5] Verifying bun..."
+bun --version >/dev/null 2>&1
+
+echo
+echo "=========================================="
+echo "  Dev environment ready!"
+echo "=========================================="
+echo
+echo "Available commands:"
+echo "  npm run dev              Start both backend and frontend"
+echo "  npm run dev:backend      Start backend only"
+echo "  npm run dev:frontend     Start frontend only"
+echo
