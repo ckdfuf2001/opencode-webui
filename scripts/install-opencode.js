@@ -31,6 +31,10 @@ async function latestTag() {
 }
 
 async function main() {
+  if (process.env.OPENCODE_INSECURE === '1' || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+  }
+
   const assetDef = ASSETS[platformKey]
   if (!assetDef) {
     fail('unsupported platform "' + platformKey + '". Place the opencode binary manually at ' + outDir)
@@ -44,7 +48,7 @@ async function main() {
 
   mkdirSync(outDir, { recursive: true })
 
-  const tag = process.env.OPENCODE_VERSION ? 'v' + process.env.OPENCODE_VERSION : (await latestTag().catch(() => 'latest'))
+  const tag = process.env.OPENCODE_VERSION ? 'v' + process.env.OPENCODE_VERSION : await latestTag()
   const url = 'https://github.com/sst/opencode/releases/download/' + tag + '/' + assetDef.file
   console.log('[install-opencode] downloading ' + url)
 
@@ -77,6 +81,12 @@ async function main() {
 
 main().catch((error) => {
   console.error('[install-opencode] installation failed:', error)
-  console.error('\nTip: place the opencode standalone binary at ' + outDir + ' (opencode.exe on Windows) and set the backend env OPENCODE_BIN to that file, or set OPENCODE_VERSION to a specific release.')
+  if (error && error.cause && error.cause.code === 'SELF_SIGNED_CERT_IN_CHAIN') {
+    console.error('\nThis machine routes GitHub through a TLS-intercepting proxy/corporate certificate.')
+    console.error('Re-run with OPENCODE_INSECURE=1 to trust the proxy certificate for this one-time download:')
+    console.error('    set OPENCODE_INSECURE=1 && npm run opencode:install')
+    console.error('  (or on Windows PowerShell:  $env:OPENCODE_INSECURE="1"; npm run opencode:install)')
+  }
+  console.error('\nTip: place the opencode standalone binary at ' + outDir + ' (opencode.exe on Windows) and set the backend env OPENCODE_BIN to that file. Or set OPENCODE_VERSION to a specific release.')
   process.exit(1)
 })
