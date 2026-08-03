@@ -10,7 +10,6 @@ import {
   Box,
   Globe,
   Folder,
-  FileCode,
   ChevronDown,
   ChevronRight,
   Wrench,
@@ -133,18 +132,16 @@ const SCOPE_DISPLAY: Record<CommandScope, { label: string; className: string }> 
   builtin: { label: 'built-in', className: 'bg-blue-500/15 text-blue-400 border border-blue-500/30' },
   global: { label: 'global', className: 'bg-purple-500/15 text-purple-400 border border-purple-500/30' },
   project: { label: 'project', className: 'bg-amber-500/15 text-amber-400 border border-amber-500/30' },
-  custom: { label: 'custom', className: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' },
 }
 
 const SCOPE_ICON: Record<CommandScope, typeof Box> = {
   builtin: Box,
   global: Globe,
   project: Folder,
-  custom: FileCode,
 }
 
 function getSortedScopes(commands: CommandWithScope[]): CommandWithScope[] {
-  const order: CommandScope[] = ['builtin', 'global', 'project', 'custom']
+  const order: CommandScope[] = ['builtin', 'global', 'project']
   return [...commands].sort((a, b) => {
     const ao = order.indexOf(a.scope ?? 'builtin')
     const bo = order.indexOf(b.scope ?? 'builtin')
@@ -303,19 +300,6 @@ function CommandExplorer({ commands, loading, error, onExecute, onCreate }: Comm
                   {isSelected && (
                     <div className="px-3 py-2 border-t border-border/50 space-y-1.5">
                       <p className="text-xs text-muted-foreground">{command.description || 'No description.'}</p>
-                      {command.steps && command.steps.length > 0 && (
-                        <div className="rounded-md bg-muted/30 border border-border p-2">
-                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">steps</p>
-                          <div className="space-y-1">
-                            {command.steps.map((step, i) => (
-                              <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground">
-                                <Wrench className="w-3 h-3 flex-shrink-0" />
-                                <span className="truncate">{step}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                       {command.template ? (
                         <div className="rounded-md bg-muted/30 border border-border p-2">
                           <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">template</p>

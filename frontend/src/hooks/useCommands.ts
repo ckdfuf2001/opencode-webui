@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createOpenCodeClient } from '@/api/opencode'
-import { settingsApi } from '@/api/settings'
 import type { components } from '@/api/opencode-types'
 
-export type CommandScope = 'builtin' | 'global' | 'project' | 'custom'
+export type CommandScope = 'builtin' | 'global' | 'project'
 
 export type CommandWithScope = components['schemas']['Command'] & {
   scope?: CommandScope
@@ -11,8 +10,6 @@ export type CommandWithScope = components['schemas']['Command'] & {
   // Declarative built-in commands (e.g. /help, /models) return immediately
   // without producing a streamed assistant response.
   oneshot?: boolean
-  // Custom commands: ordered skill names to execute.
-  steps?: string[]
 }
 
 // Built-in OpenCode commands
@@ -216,25 +213,7 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
         openCodeCommands = (await client.listCommands()) as CommandWithScope[]
       }
 
-      let customCommands: CommandWithScope[] = []
-      try {
-        const customs = await settingsApi.getCustomCommands()
-        customCommands = customs.map((c) => ({
-          name: c.name,
-          description: c.description,
-          promptTemplate: c.promptTemplate,
-          template: c.promptTemplate,
-          agent: '',
-          model: '',
-          subtask: false,
-          steps: c.steps,
-          scope: 'custom' as CommandScope,
-        }))
-      } catch (err) {
-        console.error('Failed to fetch custom commands:', err)
-      }
-
-      const merged = [...base, ...openCodeCommands, ...customCommands]
+      const merged = [...base, ...openCodeCommands]
       const unique = merged.filter((command, index, self) =>
         index === self.findIndex((c) => c.name === command.name)
       )

@@ -329,7 +329,7 @@ export function OpenCodeConfigManager() {
                         onClick={() => setExpandedSections(prev => ({ ...prev, commands: !prev.commands }))}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <h4 className="text-sm font-medium truncate">Commands</h4>
+                          <h4 className="text-sm font-medium truncate">Commands (Global)</h4>
                           <span className="text-xs text-muted-foreground">
                             {Object.keys(selectedConfig.content.command as Record<string, any> || {}).length} configured
                           </span>
@@ -358,7 +358,7 @@ export function OpenCodeConfigManager() {
                         onClick={() => setExpandedSections(prev => ({ ...prev, agents: !prev.agents }))}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <h4 className="text-sm font-medium truncate">Agents</h4>
+                          <h4 className="text-sm font-medium truncate">Agents (Global)</h4>
                           <span className="text-xs text-muted-foreground">
                             {Object.keys(selectedConfig.content.agent as Record<string, any> || {}).length} configured
                           </span>
@@ -387,7 +387,7 @@ export function OpenCodeConfigManager() {
                         onClick={() => setExpandedSections(prev => ({ ...prev, mcp: !prev.mcp }))}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <h4 className="text-sm font-medium truncate">MCP Servers</h4>
+                          <h4 className="text-sm font-medium truncate">MCP Servers (Global)</h4>
                           <span className="text-xs text-muted-foreground">
                             {Object.keys((selectedConfig.content.mcp as Record<string, any>) || {}).length} configured
                           </span>
