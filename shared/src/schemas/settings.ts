@@ -45,6 +45,7 @@ export const UserPreferencesSchema = z.object({
   customCommands: z.array(CustomCommandSchema),
   customAgents: z.array(CustomAgentSchema),
   gitToken: z.string().optional(),
+  opencodeBin: z.string().optional(),
   tts: TTSConfigSchema.optional(),
 });
 

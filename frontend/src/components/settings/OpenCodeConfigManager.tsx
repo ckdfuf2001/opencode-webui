@@ -11,6 +11,7 @@ import { OpenCodeConfigEditor } from './OpenCodeConfigEditor'
 import { CommandsEditor } from './CommandsEditor'
 import { AgentsEditor } from './AgentsEditor'
 import { McpManager } from './McpManager'
+import { OpenCodeBinarySetting } from './OpenCodeBinarySetting'
 import { settingsApi } from '@/api/settings'
 import { useMutation } from '@tanstack/react-query'
 
@@ -179,6 +180,8 @@ export function OpenCodeConfigManager() {
 
   return (
     <div className="space-y-6 overflow-y-auto">
+      <OpenCodeBinarySetting />
+
       <div className="flex items-center justify-between">
         <div className="flex gap-2 ">
           <Button

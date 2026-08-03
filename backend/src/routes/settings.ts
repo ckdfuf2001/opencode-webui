@@ -81,7 +81,16 @@ export function createSettingsRoutes(db: Database) {
       const body = await c.req.json()
       const validated = UpdateSettingsSchema.parse(body)
       
+      const previous = settingsService.getSettings(userId)
       const settings = settingsService.updateSettings(validated.preferences, userId)
+
+      const previousBin = previous.preferences.opencodeBin || null
+      const nextBin = settings.preferences.opencodeBin || null
+      if (previousBin !== nextBin) {
+        opencodeServerManager.setPreferredBinPath(nextBin)
+        await opencodeServerManager.restart()
+      }
+
       return c.json(settings)
     } catch (error) {
       logger.error('Failed to update settings:', error)

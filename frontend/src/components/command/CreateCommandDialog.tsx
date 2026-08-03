@@ -113,7 +113,6 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
   const switchType = (next: RegistryType) => {
     setType(next)
-    if (next === 'command') setScope('global')
   }
 
   const resolveContent = (): string => {
@@ -141,7 +140,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
     setSaving(true)
     try {
-      if (type === 'command') {
+      if (type === 'command' && scope === 'global') {
         const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
         const targetName = defaultConfig?.name ?? configs[0]?.name
         if (!targetName) {
@@ -198,7 +197,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             ))}
             <div className="w-px h-5 bg-border mx-1" />
             {SCOPE_OPTIONS.map((opt) => (
-              <Button key={opt.value} type="button" size="sm" variant={scope === opt.value ? 'secondary' : 'ghost'} onClick={() => setScope(opt.value)} className="text-xs h-7" disabled={type === 'command'}>
+              <Button key={opt.value} type="button" size="sm" variant={scope === opt.value ? 'secondary' : 'ghost'} onClick={() => setScope(opt.value)} className="text-xs h-7">
                 {opt.label}
               </Button>
             ))}

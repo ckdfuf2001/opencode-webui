@@ -41,6 +41,7 @@ export interface UserPreferences {
   customCommands: CustomCommand[]
   customAgents: CustomAgent[]
   gitToken?: string
+  opencodeBin?: string
   tts?: TTSConfig
 }
 

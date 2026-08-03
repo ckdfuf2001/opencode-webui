@@ -238,6 +238,9 @@ serve({
 
 logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${PORT}`)
 
+const startupSettings = new SettingsService(db)
+opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferences.opencodeBin ?? null)
+
 opencodeServerManager.start()
   .then(() => {
     logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
