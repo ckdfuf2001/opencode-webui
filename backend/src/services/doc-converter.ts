@@ -3,6 +3,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { logger } from '../utils/logger'
 import { validatePath } from './files'
+import { getWorkspacePath } from '@opencode-webui/shared'
 
 const CONVERTER_PORT = parseInt(process.env.DOC_CONVERTER_PORT || '8765', 10)
 const CONVERTER_BASE = `http://127.0.0.1:${CONVERTER_PORT}`
@@ -107,6 +108,50 @@ export async function convertToPdf(userPath: string, refresh = false): Promise<B
   }
 
   return fs.readFile(body.pdfPath)
+}
+
+export async function extractDocumentText(userPath: string): Promise<{ text: string; fileName: string }> {
+  const workspaceRoot = path.resolve(getWorkspacePath())
+  const target = path.isAbsolute(userPath) ? userPath : path.resolve(workspaceRoot, userPath)
+  const resolved = path.resolve(target)
+  if (resolved !== workspaceRoot && !resolved.startsWith(workspaceRoot + path.sep)) {
+    throw { message: 'Path traversal detected', statusCode: 403 }
+  }
+
+  const ext = path.extname(resolved).toLowerCase()
+  if (!SUPPORTED_EXTENSIONS.has(ext) && ext !== '.pdf') {
+    throw { message: 'Unsupported document type', statusCode: 400 }
+  }
+
+  let isFile = false
+  try {
+    const stat = await fs.stat(resolved)
+    isFile = stat.isFile()
+  } catch {
+    isFile = false
+  }
+  if (!isFile) {
+    throw { message: 'File not found', statusCode: 404 }
+  }
+
+  const ready = await ensureConverter()
+  if (!ready) {
+    throw { message: 'Document conversion service is unavailable', statusCode: 503 }
+  }
+
+  const { status, body } = await fetchJson(`${CONVERTER_BASE}/extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: resolved }),
+  })
+
+  if (status !== 200 || typeof body?.text !== 'string') {
+    const message = body?.error || 'Document text extraction failed'
+    logger.error(`Document text extraction failed for ${userPath}: ${message}`)
+    throw { message, statusCode: 500 }
+  }
+
+  return { text: body.text, fileName: body.fileName || path.basename(resolved) }
 }
 
 export function stopConverter(): void {
