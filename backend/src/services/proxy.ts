@@ -58,6 +58,11 @@ export async function resolveCommandScope(
   source: string | undefined,
   directory?: string,
 ): Promise<CommandScope> {
+  // Trust opencode's own scoping when the /command payload reports one.
+  if (source === 'project' || source === 'global' || source === 'builtin') {
+    return source
+  }
+
   const kindDir = source === 'skill' ? 'skills' : 'commands'
 
   const projectCommands = directory ? await dirFiles(path.join(directory, '.opencode', kindDir)) : new Set<string>()
@@ -70,7 +75,9 @@ export async function resolveCommandScope(
   const workspaceConfig = path.join(ENV.WORKSPACE.BASE_PATH, ENV.WORKSPACE.CONFIG_DIR, kindDir)
   if (await fileExists(path.join(workspaceConfig, `${name}.md`))) return 'global'
 
-  return 'builtin'
+  // Config-defined and registry commands have no .md file. These are user
+  // commands (global), not built-in, so never fall back to 'builtin'.
+  return 'global'
 }
 
 function parseDirectory(url: URL): string | undefined {

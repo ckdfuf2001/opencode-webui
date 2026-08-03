@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { registryApi, type RegistryType, type RegistryScope } from '@/api/registry'
+import { settingsApi } from '@/api/settings'
 import { showToast } from '@/lib/toast'
 
 type Mode = 'steps' | 'template'
@@ -52,7 +53,11 @@ function buildCommandTemplate(steps: string[], extra: string): string {
 
 export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory }: CreateCommandDialogProps) {
   const [type, setType] = useState<RegistryType>('command')
-  const [scope, setScope] = useState<RegistryScope>('project')
+  const [scope, setScope] = useState<RegistryScope>('global')
+  const [agent, setAgent] = useState('')
+  const [model, setModel] = useState('')
+  const [topP, setTopP] = useState('')
+  const [subtask, setSubtask] = useState(false)
   const [mode, setMode] = useState<Mode>('template')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -66,6 +71,10 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
   const reset = () => {
     setName('')
     setDescription('')
+    setAgent('')
+    setModel('')
+    setTopP('')
+    setSubtask(false)
     setSteps([])
     setExtra('')
     setRawTemplate('')
@@ -104,6 +113,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
   const switchType = (next: RegistryType) => {
     setType(next)
+    if (next === 'command') setScope('global')
   }
 
   const resolveContent = (): string => {
@@ -128,31 +138,46 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
       showToast.error('Content is required.')
       return
     }
-    if (scope === 'project' && !directory) {
-      showToast.error('No project selected. Use Global scope or open a repo session.')
-      return
-    }
 
     setSaving(true)
     try {
-      await registryApi.register(
-        {
-          type,
-          scope,
-          name: trimmedName,
-          description: description.trim(),
-          // command content is our text content; for skill/tool use their own bodies
-          content: type === 'command' ? content.trim() : content.trim(),
-        },
-        scope === 'project' ? directory : undefined
-      )
-      showToast.success(`${type === 'tool' ? 'Tool' : type === 'skill' ? 'Skill' : 'Command'} "${trimmedName}" registered (${scope}).`)
+      if (type === 'command') {
+        const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
+        const targetName = defaultConfig?.name ?? configs[0]?.name
+        if (!targetName) {
+          showToast.error('No OpenCode configuration to update. Create one first.')
+          return
+        }
+        const record: Record<string, unknown> = { description: description.trim(), agent, model, subtask }
+        if (topP) record.topP = Number(topP)
+        const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
+        const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
+        const commands: Record<string, unknown> = { ...existingCommands, [trimmedName]: record }
+        await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
+        showToast.success(`Command "${trimmedName}" saved to configuration "${targetName}".`)
+      } else {
+        if (scope === 'project' && !directory) {
+          showToast.error('No project selected. Use Global scope or open a repo session.')
+          return
+        }
+        await registryApi.register(
+          {
+            type,
+            scope,
+            name: trimmedName,
+            description: description.trim(),
+            content: content.trim(),
+          },
+          scope === 'project' ? directory : undefined
+        )
+        showToast.success(`${type === 'tool' ? 'Tool' : type === 'skill' ? 'Skill' : 'Command'} "${trimmedName}" registered (${scope}).`)
+      }
       onCreated()
       reset()
       onOpenChange(false)
     } catch (err) {
       console.error('Failed to register:', err)
-      showToast.error(`Failed to register ${type}.`)
+      showToast.error(`Failed to register ${type === 'tool' ? 'tool' : type === 'skill' ? 'skill' : 'command'}.`)
     } finally {
       setSaving(false)
     }
@@ -173,7 +198,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             ))}
             <div className="w-px h-5 bg-border mx-1" />
             {SCOPE_OPTIONS.map((opt) => (
-              <Button key={opt.value} type="button" size="sm" variant={scope === opt.value ? 'secondary' : 'ghost'} onClick={() => setScope(opt.value)} className="text-xs h-7">
+              <Button key={opt.value} type="button" size="sm" variant={scope === opt.value ? 'secondary' : 'ghost'} onClick={() => setScope(opt.value)} className="text-xs h-7" disabled={type === 'command'}>
                 {opt.label}
               </Button>
             ))}
@@ -276,6 +301,27 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Template <span className="text-destructive">*</span></label>
               <Textarea value={rawTemplate} onChange={(e) => setRawTemplate(e.target.value)} placeholder="Paste the full prompt template. Use $ARGUMENTS, $1, $2..." className="min-h-[140px] font-mono text-xs" />
+            </div>
+          )}
+
+          {type === 'command' && (
+            <div className="flex flex-wrap sm:grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Agent (optional)</label>
+                <Input value={agent} onChange={(e) => setAgent(e.target.value)} placeholder="build" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Model (optional)</label>
+                <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="anthropic/claude-3-5-sonnet-20241022" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Top P (optional)</label>
+                <Input value={topP} onChange={(e) => setTopP(e.target.value)} type="number" min="0" max="1" step="0.1" />
+              </div>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input type="checkbox" checked={subtask} onChange={(e) => setSubtask(e.target.checked)} className="accent-foreground" />
+                Run as subtask
+              </label>
             </div>
           )}
 
