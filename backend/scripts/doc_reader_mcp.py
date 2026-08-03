@@ -12,7 +12,8 @@ mcp = FastMCP(
     instructions=(
         "Use read_document to extract the text content of office and PDF files "
         "(docx, doc, xlsx, xls, pptx, ppt, pdf), including DRM-protected files. "
-        "Pass the absolute file path on this machine."
+        "Use edit_document to modify office files (docx/doc/xlsx/xls/pptx/ppt) in place. "
+        "Pass absolute file paths on this machine when possible."
     ),
 )
 
@@ -47,6 +48,47 @@ def read_document(path: str) -> str:
     except Exception as exc:
         return f"Error reading document: {exc}"
     return body.get("text", "")
+
+
+def _post(payload):
+    req = urllib.request.Request(
+        f"{BACKEND}/api/preview/edit",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            return json.loads(resp.read().decode("utf-8")), None
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8"))
+            return None, detail.get("error", str(exc))
+        except Exception:
+            return None, str(exc)
+    except Exception as exc:
+        return None, str(exc)
+
+
+@mcp.tool()
+def edit_document(path: str, operations: list) -> str:
+    """Edit an Office document (docx/doc/xlsx/xls/pptx/ppt) in place and save it. operations is a JSON list of edit operations, applied in order. Supported ops:
+      - {"op":"replace","find":str,"replace":str,"occurrence":n}  replace text (occurrence: 0/none = all, or the nth match)
+      - {"op":"insert_after","find":str,"text":str,"occurrence":n}  insert text right after the matched paragraph/cell (default 1st match)
+      - {"op":"insert_before","find":str,"text":str,"occurrence":n}  insert text right before the matched paragraph/cell
+      - {"op":"append","text":str}   add a paragraph/row/slide with the text at the end of the document
+      - {"op":"prepend","text":str}  add text at the very beginning
+      - {"op":"delete","find":str,"occurrence":n}  remove the matched text
+    Returns a per-operation applied summary."""
+    target = _resolve(path)
+    body, err = _post({"path": target, "operations": operations})
+    if err:
+        return f"Error editing document: {err}"
+    results = body.get("results", [])
+    summary = ", ".join(
+        f"{r.get('op')}={'ok' if r.get('applied') else 'no-match'}" for r in results
+    )
+    return f"Edited {body.get('fileName', target)}. {summary}"
 
 
 if __name__ == "__main__":

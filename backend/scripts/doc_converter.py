@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -217,6 +218,602 @@ def text_cache_path(source_path):
     return base[:-4] + ".text.txt"
 
 
+def _match_positions(concat, find, occurrence):
+    positions = []
+    start = 0
+    while True:
+        i = concat.find(find, start)
+        if i == -1:
+            break
+        positions.append((i, i + len(find)))
+        start = i + len(find)
+    if occurrence:
+        if 0 < occurrence <= len(positions):
+            return [positions[occurrence - 1]]
+        return []
+    return positions
+
+
+def _replace_in_runs(runs, find, replacement, occurrence):
+    concat = "".join(r.text for r in runs)
+    if find not in concat:
+        return 0
+    targets = _match_positions(concat, find, occurrence)
+    if not targets:
+        return 0
+    pos = 0
+    done = 0
+    for r in runs:
+        rstart = pos
+        rend = rstart + len(r.text)
+        segs = []
+        cursor = rstart
+        for (s, e) in targets:
+            if s >= rend:
+                break
+            if e <= rstart:
+                continue
+            if s < rstart:
+                cursor = e
+                continue
+            if s > cursor:
+                segs.append(r.text[cursor - rstart:s - rstart])
+            segs.append(replacement)
+            cursor = e
+            done += 1
+        if cursor < rend:
+            segs.append(r.text[cursor - rstart:])
+        r.text = "".join(segs)
+        pos = rend
+    return done
+
+
+def _docx_insert_paragraph_after(p, text):
+    from docx.text.paragraph import Paragraph
+    from docx.oxml.ns import qn
+
+    new_p = p._p.makeelement(qn("w:p"), {})
+    p._p.addnext(new_p)
+    new_para = Paragraph(new_p, p._parent)
+    new_para.add_run(text)
+
+
+def _docx_all_paragraphs(doc):
+    paras = list(doc.paragraphs)
+
+    def walk(tables):
+        for table in tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    paras.extend(cell.paragraphs)
+                    walk(cell.tables)
+
+    walk(doc.tables)
+    return paras
+
+
+def _edit_docx(path, operations):
+    import docx
+
+    doc = docx.Document(path)
+    paras = _docx_all_paragraphs(doc)
+    results = []
+    for op in operations:
+        kind = op.get("op")
+        applied = False
+        if kind == "replace":
+            find = op.get("find", "")
+            if find:
+                repl = op.get("replace", "")
+                occurrence = op.get("occurrence") or 0
+                budget = occurrence
+                for p in paras:
+                    if p.runs and find in p.text:
+                        if occurrence:
+                            made = _replace_in_runs(p.runs, find, repl, budget)
+                            if made:
+                                budget -= 1
+                                applied = True
+                            if budget <= 0:
+                                break
+                        else:
+                            applied = _replace_in_runs(p.runs, find, repl, 0) > 0 or applied
+        elif kind in ("insert_after", "insert_before"):
+            find = op.get("find", "")
+            if find:
+                idx = op.get("occurrence") or 1
+                for p in paras:
+                    if find in p.text:
+                        idx -= 1
+                        if idx == 0:
+                            if kind == "insert_after":
+                                _docx_insert_paragraph_after(p, op.get("text", ""))
+                            else:
+                                p.insert_paragraph_before(op.get("text", ""))
+                            applied = True
+                            break
+        elif kind == "append":
+            doc.add_paragraph(op.get("text", ""))
+            applied = True
+        elif kind == "prepend":
+            if doc.paragraphs:
+                doc.paragraphs[0].insert_paragraph_before(op.get("text", ""))
+                applied = True
+        elif kind == "delete":
+            find = op.get("find", "")
+            if find:
+                occurrence = op.get("occurrence") or 0
+                budget = occurrence
+                for p in paras:
+                    if p.runs and find in p.text:
+                        if occurrence:
+                            made = _replace_in_runs(p.runs, find, "", budget)
+                            if made:
+                                budget -= 1
+                                applied = True
+                            if budget <= 0:
+                                break
+                        else:
+                            applied = _replace_in_runs(p.runs, find, "", 0) > 0 or applied
+        results.append({"op": kind, "applied": applied})
+    doc.save(path)
+    return results
+
+
+def _cell_replace(ws, find, repl, occurrence, budget):
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell.value, str) and find in cell.value:
+                if occurrence:
+                    if budget <= 0:
+                        return budget
+                    budget -= 1
+                    cell.value = cell.value.replace(find, repl, 1)
+                else:
+                    cell.value = cell.value.replace(find, repl)
+    return budget
+
+
+def _edit_xlsx(path, operations):
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path)
+    results = []
+    for op in operations:
+        kind = op.get("op")
+        applied = False
+        if kind in ("replace", "delete"):
+            find = op.get("find", "")
+            if find:
+                repl = "" if kind == "delete" else op.get("replace", "")
+                occurrence = op.get("occurrence") or 0
+                budget = occurrence
+                for ws in wb.worksheets:
+                    budget = _cell_replace(ws, find, repl, occurrence, budget)
+                    if occurrence and budget <= 0:
+                        break
+                applied = True
+        elif kind in ("insert_after", "insert_before"):
+            find = op.get("find", "")
+            if find:
+                idx = op.get("occurrence") or 1
+                for ws in wb.worksheets:
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            if isinstance(cell.value, str) and find in cell.value:
+                                idx -= 1
+                                if idx == 0:
+                                    r = cell.row
+                                    c = cell.column
+                                    if kind == "insert_after":
+                                        ws.insert_rows(r + 1)
+                                        ws.cell(row=r + 1, column=c, value=op.get("text", ""))
+                                    else:
+                                        ws.insert_rows(r)
+                                        ws.cell(row=r, column=c, value=op.get("text", ""))
+                                    applied = True
+                                    break
+                        if applied:
+                            break
+                    if applied:
+                        break
+        elif kind == "append":
+            wb.worksheets[0].append([op.get("text", "")])
+            applied = True
+        elif kind == "prepend":
+            ws = wb.worksheets[0]
+            ws.insert_rows(1)
+            ws.cell(row=1, column=1, value=op.get("text", ""))
+            applied = True
+        results.append({"op": kind, "applied": applied})
+    wb.save(path)
+    return results
+
+
+def _pptx_text_frames(prs):
+    frames = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                frames.append(shape.text_frame)
+    return frames
+
+
+def _edit_pptx(path, operations):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation(path)
+    frames = _pptx_text_frames(prs)
+    results = []
+    for op in operations:
+        kind = op.get("op")
+        applied = False
+        if kind in ("replace", "delete"):
+            find = op.get("find", "")
+            if find:
+                repl = "" if kind == "delete" else op.get("replace", "")
+                occurrence = op.get("occurrence") or 0
+                budget = occurrence
+                for tf in frames:
+                    for para in tf.paragraphs:
+                        runs = para.runs
+                        if not runs or find not in "".join(r.text for r in runs):
+                            continue
+                        if occurrence:
+                            made = _replace_in_runs(runs, find, repl, budget)
+                            if made:
+                                budget -= 1
+                                applied = True
+                            if budget <= 0:
+                                break
+                        else:
+                            applied = _replace_in_runs(runs, find, repl, 0) > 0 or applied
+                    if occurrence and budget <= 0:
+                        break
+        elif kind in ("insert_after", "insert_before"):
+            find = op.get("find", "")
+            if find:
+                idx = op.get("occurrence") or 1
+                for tf in frames:
+                    paras = tf.paragraphs
+                    for n, para in enumerate(paras):
+                        if find in "".join(r.text for r in para.runs):
+                            idx -= 1
+                            if idx == 0:
+                                if kind == "insert_after":
+                                    if n + 1 < len(paras):
+                                        paras[n + 1].insert_paragraph_before(op.get("text", ""))
+                                    else:
+                                        from pptx.oxml.ns import qn
+
+                                        tf._txBody.append(tf._txBody.makeelement(qn("a:p"), {}))
+                                        tf.paragraphs[-1].text = op.get("text", "")
+                                else:
+                                    para.insert_paragraph_before(op.get("text", ""))
+                                applied = True
+                                break
+                    if applied:
+                        break
+        elif kind == "append":
+            layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[0]
+            slide = prs.slides.add_slide(layout)
+            box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(5))
+            box.text_frame.text = op.get("text", "")
+            applied = True
+        elif kind == "prepend":
+            if frames and frames[0].paragraphs:
+                frames[0].paragraphs[0].insert_paragraph_before(op.get("text", ""))
+                applied = True
+        results.append({"op": kind, "applied": applied})
+    prs.save(path)
+    return results
+
+
+def _edit_word_com(path, operations):
+    import win32com.client
+
+    app = win32com.client.DispatchEx("Word.Application")
+    app.Visible = False
+    app.DisplayAlerts = False
+    doc = app.Documents.Open(path)
+    results = []
+    try:
+        for op in operations:
+            kind = op.get("op")
+            applied = False
+            if kind in ("replace", "delete"):
+                find = op.get("find", "")
+                if find:
+                    repl = "" if kind == "delete" else op.get("replace", "")
+                    occurrence = op.get("occurrence") or 0
+                    rng = doc.Content
+                    f = rng.Find
+                    f.ClearFormatting()
+                    f.Replacement.ClearFormatting()
+                    if occurrence == 0:
+                        if f.Execute(FindText=find, ReplaceWith=repl, Replace=2):
+                            applied = True
+                    else:
+                        count = 0
+                        f.Text = find
+                        f.Forward = True
+                        f.Wrap = 0
+                        while f.Execute():
+                            count += 1
+                            if count == occurrence:
+                                rng.Text = repl
+                                applied = True
+                                break
+                            rng.Collapse(1)
+            elif kind in ("insert_after", "insert_before"):
+                find = op.get("find", "")
+                if find:
+                    idx = op.get("occurrence") or 1
+                    rng = doc.Content
+                    f = rng.Find
+                    f.ClearFormatting()
+                    f.Text = find
+                    f.Forward = True
+                    f.Wrap = 0
+                    count = 0
+                    while f.Execute():
+                        count += 1
+                        if count == idx:
+                            if kind == "insert_after":
+                                rng.InsertAfter(op.get("text", ""))
+                            else:
+                                rng.InsertBefore(op.get("text", ""))
+                            applied = True
+                            break
+                        rng.Collapse(1)
+            elif kind == "append":
+                rng = doc.Content
+                rng.Collapse(1)
+                rng.InsertAfter("\r\n" + op.get("text", ""))
+                applied = True
+            elif kind == "prepend":
+                rng = doc.Content
+                rng.Collapse(0)
+                rng.InsertBefore(op.get("text", ""))
+                applied = True
+            results.append({"op": kind, "applied": applied})
+        doc.Save()
+    finally:
+        doc.Close(False)
+        app.Quit()
+    return results
+
+
+def _edit_excel_com(path, operations):
+    import win32com.client
+
+    app = win32com.client.DispatchEx("Excel.Application")
+    app.Visible = False
+    app.DisplayAlerts = False
+    wb = app.Workbooks.Open(path)
+    results = []
+    try:
+        for op in operations:
+            kind = op.get("op")
+            applied = False
+            if kind in ("replace", "delete"):
+                find = op.get("find", "")
+                if find:
+                    repl = "" if kind == "delete" else op.get("replace", "")
+                    occurrence = op.get("occurrence") or 0
+                    budget = occurrence
+                    for ws in wb.Worksheets:
+                        used = ws.UsedRange
+                        if used is None:
+                            continue
+                        rows = used.Rows.Count
+                        cols = used.Columns.Count
+                        for r in range(1, rows + 1):
+                            for c in range(1, cols + 1):
+                                cell = used.Cells(r, c)
+                                value = None
+                                try:
+                                    value = cell.Value
+                                except Exception:
+                                    pass
+                                if isinstance(value, str) and find in value:
+                                    if occurrence:
+                                        if budget <= 0:
+                                            break
+                                        budget -= 1
+                                        cell.Value = value.replace(find, repl, 1)
+                                    else:
+                                        cell.Value = value.replace(find, repl)
+                                    applied = True
+                            if occurrence and budget <= 0:
+                                break
+                        if occurrence and budget <= 0:
+                            break
+            elif kind in ("insert_after", "insert_before"):
+                find = op.get("find", "")
+                if find:
+                    idx = op.get("occurrence") or 1
+                    for ws in wb.Worksheets:
+                        used = ws.UsedRange
+                        if used is None:
+                            continue
+                        rows = used.Rows.Count
+                        cols = used.Columns.Count
+                        found = False
+                        for r in range(1, rows + 1):
+                            for c in range(1, cols + 1):
+                                value = None
+                                try:
+                                    value = used.Cells(r, c).Value
+                                except Exception:
+                                    pass
+                                if isinstance(value, str) and find in value:
+                                    idx -= 1
+                                    if idx == 0:
+                                        target = ws.Cells(r + 1 if kind == "insert_after" else r, 1)
+                                        if kind == "insert_after":
+                                            ws.Rows(r + 1).Insert()
+                                        else:
+                                            ws.Rows(r).Insert()
+                                        ws.Cells(r + 1 if kind == "insert_after" else r, c).Value = op.get("text", "")
+                                        applied = True
+                                        found = True
+                                        break
+                            if found:
+                                break
+                        if found:
+                            break
+            elif kind == "append":
+                ws = wb.Worksheets(1)
+                last = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
+                ws.Cells(last + 1, 1).Value = op.get("text", "")
+                applied = True
+            elif kind == "prepend":
+                ws = wb.Worksheets(1)
+                ws.Rows(1).Insert()
+                ws.Cells(1, 1).Value = op.get("text", "")
+                applied = True
+            results.append({"op": kind, "applied": applied})
+        wb.Save()
+    finally:
+        wb.Close(False)
+        app.Quit()
+    return results
+
+
+def _edit_powerpoint_com(path, operations):
+    import win32com.client
+
+    app = win32com.client.DispatchEx("PowerPoint.Application")
+    pres = app.Presentations.Open(path, WithWindow=False)
+    results = []
+    try:
+        for op in operations:
+            kind = op.get("op")
+            applied = False
+            if kind in ("replace", "delete"):
+                find = op.get("find", "")
+                if find:
+                    repl = "" if kind == "delete" else op.get("replace", "")
+                    occurrence = op.get("occurrence") or 0
+                    budget = occurrence
+                    for slide in pres.Slides:
+                        for shape in slide.Shapes:
+                            if not shape.HasTextFrame:
+                                continue
+                            tf = shape.TextFrame
+                            if not tf.HasText:
+                                continue
+                            tr = tf.TextRange
+                            txt = tr.Text
+                            if find not in txt:
+                                continue
+                            if occurrence:
+                                if budget <= 0:
+                                    break
+                                n = txt.find(find)
+                                count = 1
+                                while n != -1 and count < budget:
+                                    count += 1
+                                    n = txt.find(find, n + len(find))
+                                if n != -1:
+                                    tr.Text = txt[:n] + repl + txt[n + len(find):]
+                                    budget -= 1
+                                    applied = True
+                                if budget <= 0:
+                                    break
+                            else:
+                                tr.Text = txt.replace(find, repl)
+                                applied = True
+                        if occurrence and budget <= 0:
+                            break
+                    if occurrence and budget <= 0:
+                        break
+            elif kind in ("insert_after", "insert_before"):
+                find = op.get("find", "")
+                if find:
+                    idx = op.get("occurrence") or 1
+                    done = False
+                    for slide in pres.Slides:
+                        for shape in slide.Shapes:
+                            if not shape.HasTextFrame:
+                                continue
+                            tf = shape.TextFrame
+                            if not tf.HasText:
+                                continue
+                            tr = tf.TextRange
+                            txt = tr.Text
+                            n = txt.find(find)
+                            if n == -1:
+                                continue
+                            idx -= 1
+                            if idx == 0:
+                                pos = n + len(find) if kind == "insert_after" else n
+                                tr.Text = txt[:pos] + op.get("text", "") + txt[pos:]
+                                applied = True
+                                done = True
+                                break
+                        if done:
+                            break
+            elif kind == "append":
+                slide = pres.Slides.Add(pres.Slides.Count + 1, 12)
+                box = slide.Shapes.AddTextbox(1, 20, 20, 700, 400)
+                box.TextFrame.TextRange.Text = op.get("text", "")
+                applied = True
+            elif kind == "prepend":
+                slide = pres.Slides(1)
+                found = False
+                for shape in slide.Shapes:
+                    if shape.HasTextFrame and shape.TextFrame.HasText:
+                        tr = shape.TextFrame.TextRange
+                        tr.Text = op.get("text", "") + tr.Text
+                        applied = True
+                        found = True
+                        break
+                if not found:
+                    box = slide.Shapes.AddTextbox(1, 20, 20, 700, 400)
+                    box.TextFrame.TextRange.Text = op.get("text", "")
+                    applied = True
+            results.append({"op": kind, "applied": applied})
+        pres.Save()
+    finally:
+        pres.Close()
+        app.Quit()
+    return results
+
+
+def _edit_legacy(path, ext, operations):
+    if ext in DOC_EXTS:
+        return _edit_word_com(path, operations)
+    if ext in XLS_EXTS:
+        return _edit_excel_com(path, operations)
+    return _edit_powerpoint_com(path, operations)
+
+
+def edit_document(source_path, operations):
+    ext = os.path.splitext(source_path)[1].lower()
+    if ext not in SUPPORTED_EXTS:
+        raise ValueError(f"Unsupported document type: {ext}")
+
+    if ext in {".docx", ".xlsx", ".pptx"}:
+        if zipfile.is_zipfile(source_path):
+            if ext == ".docx":
+                return _edit_docx(source_path, operations)
+            if ext == ".xlsx":
+                return _edit_xlsx(source_path, operations)
+            return _edit_pptx(source_path, operations)
+        return _edit_legacy(source_path, ext, operations)
+
+    import pythoncom
+
+    pythoncom.CoInitialize()
+    try:
+        return _edit_legacy(source_path, ext, operations)
+    finally:
+        pythoncom.CoUninitialize()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[doc-converter] " + (fmt % args) + "\n")
@@ -240,6 +837,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/extract":
             self._handle_extract()
+            return
+        if parsed.path == "/edit":
+            self._handle_edit()
             return
         if parsed.path != "/convert":
             self._json(404, {"error": "Not found"})
@@ -280,6 +880,23 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             self._json(200, {"text": data, "fileName": os.path.basename(source_path)})
+        except Exception as exc:
+            self._json(500, {"error": str(exc)})
+
+    def _handle_edit(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            source_path = payload.get("path")
+            operations = payload.get("operations")
+            if not source_path or not os.path.isfile(source_path):
+                self._json(400, {"error": "Invalid path"})
+                return
+            if not isinstance(operations, list) or not operations:
+                self._json(400, {"error": "No operations provided"})
+                return
+            results = edit_document(source_path, operations)
+            self._json(200, {"edited": True, "fileName": os.path.basename(source_path), "results": results})
         except Exception as exc:
             self._json(500, {"error": str(exc)})
 

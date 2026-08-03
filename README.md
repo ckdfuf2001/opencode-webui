@@ -79,8 +79,13 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **`POST /api/preview/extract`** - Extracts readable text from DRM-protected Office documents and PDFs (docx/doc, xlsx/xls, ppt/pptx, pdf) for downstream use by LLMs
 - **Format-Aware Extraction** - PDF via pypdf, Word via COM text, Excel via tab-separated used-range, PowerPoint per-slide text frames; results cached under `%TEMP%`
 
-### MCP Document Reading Tools
-- **`doc-reader` MCP server** (FastMCP/stdio) - Registers a `read_document(path)` tool that lets the assistant open and read DRM-protected Office/PDF files in chat
+### Document Editing API
+- **`POST /api/preview/edit`** - Edits Office documents in place (docx/doc, xlsx/xls, ppt/pptx), preserving formatting
+- **Edit Operations** - `replace` (all or nth occurrence), `insert_after`/`insert_before` a matched paragraph/cell, `append`/`prepend` text, and `delete` matched text
+- **Format Backends** - OOXML files edited with python-docx / openpyxl / python-pptx (run-preserving text replacement); encrypted/legacy files fall back to desktop Office COM editing so DRM-protected documents remain editable
+
+### MCP Document Tools
+- **`doc-reader` MCP server** (FastMCP/stdio) - Registers `read_document(path)` and `edit_document(path, operations)` so the assistant can read and modify DRM-protected Office/PDF files in chat
 
 ### Remote Access
 - **Relative API Base** - The frontend resolves `VITE_API_URL` as an empty default so the client always talks to the web server origin it was loaded from, enabling access from other PCs on the network

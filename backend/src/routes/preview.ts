@@ -1,8 +1,39 @@
 import { Hono } from 'hono'
-import { convertToPdf, extractDocumentText } from '../services/doc-converter'
+import { z } from 'zod'
+import { convertToPdf, extractDocumentText, editDocument } from '../services/doc-converter'
+
+const EDIT_OPERATIONS_SCHEMA = z.object({
+  path: z.string().min(1),
+  operations: z
+    .array(
+      z.object({
+        op: z.enum(['replace', 'insert_after', 'insert_before', 'append', 'prepend', 'delete']),
+        find: z.string().optional(),
+        replace: z.string().optional(),
+        text: z.string().optional(),
+        occurrence: z.number().int().positive().optional(),
+      })
+    )
+    .min(1),
+})
 
 export function createPreviewRoutes() {
   const app = new Hono()
+
+  app.post('/edit', async (c) => {
+    let parsed: z.infer<typeof EDIT_OPERATIONS_SCHEMA>
+    try {
+      parsed = EDIT_OPERATIONS_SCHEMA.parse(await c.req.json())
+    } catch (error: any) {
+      return c.json({ error: 'Invalid request body', details: error?.issues || [] }, 400)
+    }
+    try {
+      const result = await editDocument(parsed.path, parsed.operations)
+      return c.json(result)
+    } catch (error: any) {
+      return c.json({ error: error.message || 'Edit failed' }, error.statusCode || 500)
+    }
+  })
 
   app.post('/extract', async (c) => {
     let userPath: string
