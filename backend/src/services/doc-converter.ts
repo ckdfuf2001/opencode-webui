@@ -154,6 +154,53 @@ export async function extractDocumentText(userPath: string): Promise<{ text: str
   return { text: body.text, fileName: body.fileName || path.basename(resolved) }
 }
 
+export async function editDocument(
+  userPath: string,
+  operations: Array<Record<string, unknown>>
+): Promise<{ fileName: string; results: Array<Record<string, unknown>> }> {
+  const workspaceRoot = path.resolve(getWorkspacePath())
+  const target = path.isAbsolute(userPath) ? userPath : path.resolve(workspaceRoot, userPath)
+  const resolved = path.resolve(target)
+  if (resolved !== workspaceRoot && !resolved.startsWith(workspaceRoot + path.sep)) {
+    throw { message: 'Path traversal detected', statusCode: 403 }
+  }
+
+  const ext = path.extname(resolved).toLowerCase()
+  if (!SUPPORTED_EXTENSIONS.has(ext)) {
+    throw { message: 'Unsupported document type', statusCode: 400 }
+  }
+
+  let isFile = false
+  try {
+    const stat = await fs.stat(resolved)
+    isFile = stat.isFile()
+  } catch {
+    isFile = false
+  }
+  if (!isFile) {
+    throw { message: 'File not found', statusCode: 404 }
+  }
+
+  const ready = await ensureConverter()
+  if (!ready) {
+    throw { message: 'Document conversion service is unavailable', statusCode: 503 }
+  }
+
+  const { status, body } = await fetchJson(`${CONVERTER_BASE}/edit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: resolved, operations }),
+  })
+
+  if (status !== 200 || body?.edited !== true) {
+    const message = body?.error || 'Document edit failed'
+    logger.error(`Document edit failed for ${userPath}: ${message}`)
+    throw { message, statusCode: 500 }
+  }
+
+  return { fileName: body.fileName || path.basename(resolved), results: body.results || [] }
+}
+
 export function stopConverter(): void {
   if (converterProcess) {
     converterProcess.kill()
