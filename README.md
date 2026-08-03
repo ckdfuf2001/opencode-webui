@@ -65,6 +65,26 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **Voice & Speed Controls** - Configurable voice selection and playback speed
 - **Custom Endpoints** - Connect to local or self-hosted TTS services
 
+## Added Features
+
+### Document Viewer (DRM Office/PDF)
+- **DRM-Protected Document Preview** - Preview DRM-protected Office documents directly in the browser by converting them through the local desktop Microsoft Office COM (doc, docx, xls, xlsx, ppt, pptx -> PDF), then rendering with pdf.js
+- **Client-Side Fallback Viewers** - Inline viewers for PDF (pdf.js), Word (mammoth), Excel (xlsx + sticky row/column headers), and PowerPoint (JSZip XML parsing) when the conversion service is unavailable
+- **Zoom Controls** - Zoom in/out (50% - 300%) and reset buttons in the document preview header; PDF pages re-render at higher resolution for crisp zoom, HTML viewers scale natively
+- **Excel Fit-to-Page** - Wide spreadsheets are fit to a single page using `FitToPagesWide` so columns are not split across pages
+- **Excel Row/Column Headers** - Print headings and gridlines in COM-generated PDFs so A/B/C column labels and row numbers appear
+- **PDF Conversion Cache + Refresh** - Converted PDFs are cached by file mtime; a "refresh" button re-converts on demand
+
+### Document Text Extraction API
+- **`POST /api/preview/extract`** - Extracts readable text from DRM-protected Office documents and PDFs (docx/doc, xlsx/xls, ppt/pptx, pdf) for downstream use by LLMs
+- **Format-Aware Extraction** - PDF via pypdf, Word via COM text, Excel via tab-separated used-range, PowerPoint per-slide text frames; results cached under `%TEMP%`
+
+### MCP Document Reading Tools
+- **`doc-reader` MCP server** (FastMCP/stdio) - Registers a `read_document(path)` tool that lets the assistant open and read DRM-protected Office/PDF files in chat
+
+### Remote Access
+- **Relative API Base** - The frontend resolves `VITE_API_URL` as an empty default so the client always talks to the web server origin it was loaded from, enabling access from other PCs on the network
+
 ## Demo Videos
 
 ### Demo

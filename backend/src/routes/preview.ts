@@ -1,8 +1,27 @@
 import { Hono } from 'hono'
-import { convertToPdf } from '../services/doc-converter'
+import { convertToPdf, extractDocumentText } from '../services/doc-converter'
 
 export function createPreviewRoutes() {
   const app = new Hono()
+
+  app.post('/extract', async (c) => {
+    let userPath: string
+    try {
+      const body = await c.req.json()
+      userPath = body.path || ''
+    } catch {
+      return c.json({ error: 'Invalid request body' }, 400)
+    }
+    if (!userPath) {
+      return c.json({ error: 'Missing path' }, 400)
+    }
+    try {
+      const result = await extractDocumentText(userPath)
+      return c.json(result)
+    } catch (error: any) {
+      return c.json({ error: error.message || 'Extraction failed' }, error.statusCode || 500)
+    }
+  })
 
   app.get('/pdf', async (c) => {
     const userPath = c.req.query('path') || ''

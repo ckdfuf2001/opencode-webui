@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Loader2, AlertCircle, Maximize2, Minimize2, X } from 'lucide-react'
+import { Loader2, AlertCircle, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
@@ -107,7 +107,7 @@ function useConvertedPdf(path: string, refreshKey = 0) {
   return { data, status, error }
 }
 
-function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: number }) {
+function PdfPage({ pdf, pageNumber, zoom = 1 }: { pdf: any; pageNumber: number; zoom?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const [loading, setLoading] = useState(true)
@@ -122,7 +122,7 @@ function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: number }) {
       const avail = wrapRef.current?.getBoundingClientRect().width ?? 0
       const dpr = window.devicePixelRatio || 1
       const base = page.getViewport({ scale: 1 })
-      const scale = avail > 0 ? Math.min(avail / base.width, 2) : 1
+      const scale = avail > 0 ? Math.min((avail / base.width) * zoom, 4) : 1
       const viewport = page.getViewport({ scale })
       canvas.width = Math.floor(viewport.width * dpr)
       canvas.height = Math.floor(viewport.height * dpr)
@@ -139,10 +139,10 @@ function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: number }) {
     return () => {
       cancelled = true
     }
-  }, [pdf, pageNumber])
+  }, [pdf, pageNumber, zoom])
 
   return (
-    <div ref={wrapRef} className="w-full">
+    <div ref={wrapRef} className="mx-auto" style={{ width: `${zoom * 100}%` }}>
       <div className="relative mx-auto bg-white rounded-md shadow-sm overflow-hidden" style={{ width: 'fit-content' }}>
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-muted/30">
@@ -155,12 +155,24 @@ function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: number }) {
   )
 }
 
-function DocumentShell({ fileName, pageCount, children }: { fileName?: string; pageCount?: number; children: (fullscreen: boolean) => ReactNode }) {
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 3
+const ZOOM_STEP = 0.25
+
+function DocumentShell({ fileName, pageCount, children }: { fileName?: string; pageCount?: number; children: (fullscreen: boolean, zoom: number) => ReactNode }) {
   const [fullscreen, setFullscreen] = useState(false)
+  const [zoom, setZoom] = useState(1)
+
+  useEffect(() => {
+    setZoom(1)
+  }, [fileName])
+
+  const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100))
+  const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100))
 
   const content = (
     <div className="flex-1 min-h-0 overflow-auto bg-muted/40">
-      {children(fullscreen)}
+      {children(fullscreen, zoom)}
     </div>
   )
 
@@ -172,6 +184,7 @@ function DocumentShell({ fileName, pageCount, children }: { fileName?: string; p
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-background flex-shrink-0">
           <span className="text-sm text-foreground font-medium truncate">{title}</span>
           <div className="flex items-center gap-1">
+            <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={() => setZoom(1)} />
             <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setFullscreen(false)} title="Exit fullscreen">
               <Minimize2 className="w-4 h-4" />
             </Button>
@@ -192,11 +205,46 @@ function DocumentShell({ fileName, pageCount, children }: { fileName?: string; p
           {title}
           {pageCount != null ? ` · ${pageCount} pages` : ''}
         </span>
-        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setFullscreen(true)} title="Fullscreen">
-          <Maximize2 className="w-3.5 h-3.5" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={() => setZoom(1)} />
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setFullscreen(true)} title="Fullscreen">
+            <Maximize2 className="w-3.5 h-3.5" />
+          </Button>
+        </div>
       </div>
       {content}
+    </div>
+  )
+}
+
+function ZoomControls({
+  zoom,
+  onZoomIn,
+  onZoomOut,
+  onReset,
+}: {
+  zoom: number
+  onZoomIn: () => void
+  onZoomOut: () => void
+  onReset: () => void
+}) {
+  const iconClass = 'w-3.5 h-3.5'
+  return (
+    <div className="flex items-center gap-0.5">
+      <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={onZoomOut} title="Zoom out">
+        <ZoomOut className={iconClass} />
+      </Button>
+      <button
+        type="button"
+        onClick={onReset}
+        title="Reset zoom"
+        className="px-1 text-[11px] tabular-nums text-muted-foreground hover:text-foreground min-w-[40px] text-center"
+      >
+        {Math.round(zoom * 100)}%
+      </button>
+      <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={onZoomIn} title="Zoom in">
+        <ZoomIn className={iconClass} />
+      </Button>
     </div>
   )
 }
@@ -231,10 +279,10 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1)
   return (
     <DocumentShell fileName={fileName} pageCount={pdf.numPages}>
-      {(fullscreen) => (
-        <div key={fullscreen ? 'fullscreen' : 'panel'} className="p-3 space-y-3">
+      {(fullscreen, zoom) => (
+        <div key={`${fullscreen}:${zoom}`} className="p-3 space-y-3">
           {pages.map((n) => (
-            <PdfPage key={n} pdf={pdf} pageNumber={n} />
+            <PdfPage key={n} pdf={pdf} pageNumber={n} zoom={zoom} />
           ))}
         </div>
       )}
@@ -316,8 +364,10 @@ function DocxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   if (!html) return SPINNER
   return (
     <DocumentShell fileName={fileName}>
-      {() => (
-        <div className="docx-preview p-4 prose-enhanced max-w-full" dangerouslySetInnerHTML={{ __html: html }} />
+      {(fullscreen, zoom) => (
+        <div className="p-4" style={{ zoom }}>
+          <div className="docx-preview prose-enhanced max-w-full" dangerouslySetInnerHTML={{ __html: html }} />
+        </div>
       )}
     </DocumentShell>
   )
@@ -384,7 +434,9 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   if (!html) return SPINNER
   return (
     <DocumentShell fileName={fileName}>
-      {() => <div className="xlsx-preview p-3" dangerouslySetInnerHTML={{ __html: html }} />}
+      {(fullscreen, zoom) => (
+        <div className="xlsx-preview p-3" style={{ zoom }} dangerouslySetInnerHTML={{ __html: html }} />
+      )}
     </DocumentShell>
   )
 }
@@ -439,8 +491,8 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
 
   return (
     <DocumentShell fileName={fileName}>
-      {() => (
-        <div className="p-3 space-y-3">
+      {(fullscreen, zoom) => (
+        <div className="p-3 space-y-3" style={{ zoom }}>
           {slides.map((slide) => (
             <div key={slide.index} className="rounded-md border border-border bg-muted/30 p-3">
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">Slide {slide.index}</p>

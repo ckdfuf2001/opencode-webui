@@ -11,6 +11,7 @@ coverage/
 *.db-wal
 .vscode/
 .idea/
+__pycache__/
 
 data/
 workspace/
