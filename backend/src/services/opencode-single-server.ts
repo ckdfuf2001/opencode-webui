@@ -6,27 +6,47 @@ import { getWorkspacePath, getOpenCodeConfigFilePath, ENV } from '@opencode-webu
 import { getServerAuthHeader } from './opencode-auth'
 
 function resolveOpenCodeBin(): string | null {
+  const candidates: string[] = []
+
   const configured = (ENV.OPENCODE.BIN || '').trim()
-
-  if (!configured) {
-    return null
+  if (configured) {
+    if (path.isAbsolute(configured) && existsSync(configured)) {
+      return configured
+    }
+    candidates.push(configured)
   }
 
-  if (path.isAbsolute(configured) && existsSync(configured)) {
-    return configured
+  const home = process.env.USERPROFILE || process.env.HOME || ''
+  const appData = process.env.APPDATA || ''
+  const localAppData = process.env.LOCALAPPDATA || ''
+
+  const npmRoots: string[] = []
+  try {
+    const prefix = execSync('npm config get prefix', { encoding: 'utf8' }).trim()
+    if (prefix) npmRoots.push(prefix)
+  } catch {
+    // npm unavailable; fall back to well-known locations
+  }
+  if (appData) npmRoots.push(path.join(appData, 'npm'))
+  if (localAppData) npmRoots.push(path.join(localAppData, 'npm'))
+
+  for (const root of npmRoots) {
+    candidates.push(path.join(root, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'))
   }
 
-  if (process.platform === 'win32') {
-    try {
-      const npmRoot = execSync('npm config get prefix', { encoding: 'utf8' }).trim()
-      const candidates = [
-        path.join(npmRoot, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'),
-      ]
-      for (const candidate of candidates) {
-        if (existsSync(candidate)) return candidate
-      }
-    } catch {
-      // npm not available; fall through to PATH lookup
+  if (home) {
+    candidates.push(path.join(home, '.bun', 'bin', 'opencode.exe'))
+    candidates.push(path.join(home, '.bun', 'bin', 'opencode'))
+    candidates.push(path.join(home, '.opencode', 'bin', 'opencode.exe'))
+    candidates.push(path.join(home, '.opencode', 'bin', 'opencode'))
+  }
+  if (localAppData) {
+    candidates.push(path.join(localAppData, 'opencode', 'bin', 'opencode.exe'))
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) {
+      return candidate
     }
   }
 
@@ -36,11 +56,16 @@ function resolveOpenCodeBin(): string | null {
       { encoding: 'utf8' }
     ).toString()
     for (const line of output.split(/\r?\n/)) {
-      const p = line.trim().split(' ')[0]
-      if (!p || !existsSync(p)) continue
-      const lower = p.toLowerCase()
-      if (process.platform !== 'win32' || lower.endsWith('.exe')) {
-        return p
+      const p = line.trim().split(/\s+/)[0]
+      if (!p) continue
+      let resolved = p
+      if (p.toLowerCase().endsWith('.cmd')) {
+        const real = p.slice(0, -4)
+        if (existsSync(real)) resolved = real
+      }
+      if (!resolved || !existsSync(resolved)) continue
+      if (process.platform !== 'win32' || /\.exe$/i.test(resolved)) {
+        return resolved
       }
     }
   } catch {
@@ -120,7 +145,9 @@ class OpenCodeServerManager {
     }
 
     const serverDirectory = OPENCODE_SERVER_DIRECTORY
+    const source = OPENCODE_BIN_PATH ? `resolved binary: ${OPENCODE_BIN_PATH}` : `PATH fallback: ${OPENCODE_BIN}`
     logger.info(`Starting OpenCode server from directory: ${serverDirectory}`)
+    logger.info(`Spawning OpenCode via ${source}`)
 
     this.serverProcess = spawn(
       OPENCODE_BIN,
@@ -136,6 +163,20 @@ class OpenCodeServerManager {
         },
       }
     )
+
+    this.serverProcess.on('error', (error: Error) => {
+      logger.error('OpenCode server spawn failed:', error)
+      this.isHealthy = false
+      this.serverPid = null
+    })
+
+    this.serverProcess.on('exit', (code: number | null, signal: string | null) => {
+      this.isHealthy = false
+      this.serverPid = null
+      if (signal || (code !== null && code !== 0)) {
+        logger.error(`OpenCode server exited unexpectedly (signal: ${signal}, code: ${code})`)
+      }
+    })
 
     this.serverPid = this.serverProcess.pid
     this.isManaged = true
