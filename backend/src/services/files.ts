@@ -223,7 +223,7 @@ export async function renameOrMoveFile(userPath: string, body: { newPath: string
   }
 }
 
-function validatePath(userPath: string): string {
+export function validatePath(userPath: string): string {
   const normalized = path.normalize(userPath).replace(/^(\.\.(\/|\\|$))+/, '')
   const fullPath = path.join(SHARED_WORKSPACE_BASE, normalized)
   const resolved = path.resolve(fullPath)
@@ -256,6 +256,14 @@ function getMimeType(filePath: string, _content: Uint8Array): string {
     '.svg': 'image/svg+xml',
     '.pdf': 'application/pdf',
     '.zip': 'application/zip',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.doc': 'application/msword',
+    '.xls': 'application/vnd.ms-excel',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.md': 'text/markdown',
+    '.csv': 'text/csv',
   }
   
   return mimeTypes[ext] || 'text/plain'

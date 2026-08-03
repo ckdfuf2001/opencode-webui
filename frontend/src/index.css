@@ -230,3 +230,68 @@ body {
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+
+.xlsx-preview table,
+.docx-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.xlsx-preview td,
+.xlsx-preview th,
+.docx-preview td,
+.docx-preview th {
+  border: 1px solid var(--color-border);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.xlsx-sheet h3 {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+  color: var(--color-muted-foreground);
+}
+
+.xlsx-preview {
+  overflow: auto;
+  max-height: 100%;
+}
+
+.xlsx-table th.xlsx-corner,
+.xlsx-table th.xlsx-row-head,
+.xlsx-table th.xlsx-col-head {
+  background-color: var(--color-muted);
+  color: var(--color-muted-foreground);
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  position: sticky;
+  z-index: 1;
+}
+
+.xlsx-table th.xlsx-col-head {
+  top: 0;
+}
+
+.xlsx-table th.xlsx-row-head {
+  left: 0;
+  min-width: 32px;
+}
+
+.xlsx-table th.xlsx-corner {
+  top: 0;
+  left: 0;
+  z-index: 2;
+}
+
+.xlsx-table td.xlsx-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.xlsx-table td {
+  white-space: nowrap;
+}
+
