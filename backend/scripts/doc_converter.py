@@ -28,6 +28,8 @@ def _strip_zone_identifier(source_path):
 
 
 _OFFICE_EXES = {"EXCEL.EXE", "WINWORD.EXE", "POWERPNT.EXE"}
+_LOCK_FILE = os.path.join(CACHE_DIR, "office_pids.json")
+_managed = set()
 
 
 def _office_pids():
@@ -45,24 +47,56 @@ def _office_pids():
     return out
 
 
-def _kill_new_office(before):
-    """Force-quit any Office process that was spawned since the snapshot, so
-    files opened by COM automation do not stay locked."""
+def _persist():
+    try:
+        with open(_LOCK_FILE, "w", encoding="utf-8") as f:
+            json.dump({"managed": sorted([list(p) for p in _managed])}, f)
+    except Exception:
+        pass
+
+
+def _reap(name, pid):
     try:
         import psutil
 
-        for exe, old_pids in before.items():
-            fresh = _office_pids().get(exe, set())
-            for pid in fresh - old_pids:
-                try:
-                    proc = psutil.Process(pid)
-                    if proc.is_running():
-                        proc.kill()
-                        proc.wait(timeout=3)
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-                    pass
+        proc = psutil.Process(pid)
+        if proc.is_running() and (proc.name() or "").upper() == name:
+            proc.kill()
+            try:
+                proc.wait(timeout=3)
+            except psutil.TimeoutExpired:
+                pass
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
     except Exception:
         pass
+
+
+def _reap_stale():
+    """Kill any Office processes we spawned in a previous (possibly crashed) run."""
+    try:
+        with open(_LOCK_FILE, "r", encoding="utf-8") as f:
+            items = json.load(f).get("managed", [])
+    except Exception:
+        return
+    for name, pid in items:
+        _reap(name, pid)
+    _managed.clear()
+    _persist()
+
+
+def _kill_new_office(before):
+    """Force-quit any Office process spawned since the snapshot, so files
+    opened by COM automation do not stay locked. Persists PIDs to disk so a
+    crash cannot leave a zombie that holds a file lock."""
+    for exe, old_pids in before.items():
+        fresh = _office_pids().get(exe, set())
+        for pid in fresh - old_pids:
+            _managed.add((exe, pid))
+            _persist()
+            _reap(exe, pid)
+            _managed.discard((exe, pid))
+    _persist()
 
 
 def cache_path(source_path):
@@ -960,6 +994,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    _reap_stale()
     port = int(os.environ.get("DOC_CONVERTER_PORT", "8765"))
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.serve_forever()
