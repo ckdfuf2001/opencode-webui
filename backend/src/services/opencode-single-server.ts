@@ -5,8 +5,19 @@ import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
 
-function resolveOpenCodeBin(): string | null {
+let preferredOpenCodeBin: string | null = null
+let cachedBinary: string | null | undefined
+
+function scanForBinary(): string | null {
   const candidates: string[] = []
+
+  const preferred = (preferredOpenCodeBin || '').trim()
+  if (preferred) {
+    if (path.isAbsolute(preferred) && existsSync(preferred)) {
+      return preferred
+    }
+    candidates.push(preferred)
+  }
 
   const configured = (ENV.OPENCODE.BIN || '').trim()
   if (configured) {
@@ -82,9 +93,19 @@ function resolveOpenCodeBin(): string | null {
   return null
 }
 
+function resolveOpenCodeBin(): string | null {
+  if (cachedBinary === undefined) {
+    cachedBinary = scanForBinary()
+  }
+  return cachedBinary
+}
+
+function invalidateBinaryCache(): void {
+  cachedBinary = undefined
+}
+
 const OPENCODE_PORT_SCAN = 20
-const OPENCODE_BIN_PATH = resolveOpenCodeBin()
-const OPENCODE_BIN = OPENCODE_BIN_PATH ?? ENV.OPENCODE.BIN
+const OPENCODE_DEFAULT_PORT = ENV.OPENCODE.PORT
 const OPENCODE_SERVER_DIRECTORY = getWorkspacePath()
 const OPENCODE_CONFIG_PATH = getOpenCodeConfigFilePath()
 
@@ -95,7 +116,7 @@ class OpenCodeServerManager {
   private isHealthy: boolean = false
   private isManaged: boolean = false
   private isStarting: boolean = false
-  private port: number = ENV.OPENCODE.PORT
+  private port: number = OPENCODE_DEFAULT_PORT
 
   private constructor() {}
 
@@ -104,6 +125,18 @@ class OpenCodeServerManager {
       OpenCodeServerManager.instance = new OpenCodeServerManager()
     }
     return OpenCodeServerManager.instance
+  }
+
+  setPreferredBinPath(binPath: string | null | undefined): void {
+    const normalized = (binPath || '').trim() || null
+    if (normalized === preferredOpenCodeBin) return
+    preferredOpenCodeBin = normalized
+    invalidateBinaryCache()
+    logger.info(
+      normalized
+        ? `Configured OpenCode binary path: ${normalized}`
+        : 'Cleared preferred OpenCode binary path'
+    )
   }
 
   async ensureRunning(): Promise<void> {
@@ -119,21 +152,28 @@ class OpenCodeServerManager {
       logger.info('OpenCode server already running and healthy')
       return
     }
+    const binPath = resolveOpenCodeBin()
+    if (!binPath) {
+      this.isHealthy = false
+      this.serverPid = null
+      logger.warn('OpenCode executable not found - running without an OpenCode connection. Configure the binary path in Settings -> OpenCode, then restart the server.')
+      return
+    }
     this.isStarting = true
     try {
-      await this.startServer()
+      await this.startServer(binPath)
     } finally {
       this.isStarting = false
     }
   }
 
-  private async startServer(): Promise<void> {
+  private async startServer(binPath: string): Promise<void> {
     const isDevelopment = ENV.SERVER.NODE_ENV !== 'production'
     const serverDirectory = OPENCODE_SERVER_DIRECTORY
-    const source = OPENCODE_BIN_PATH ? `resolved binary: ${OPENCODE_BIN_PATH}` : `PATH fallback: ${OPENCODE_BIN}`
+    const source = `resolved binary: ${binPath}`
     logger.info(`Spawning OpenCode server from directory: ${serverDirectory} (${source})`)
 
-    const base = ENV.OPENCODE.PORT
+    const base = OPENCODE_DEFAULT_PORT
     for (let offset = 0; offset < OPENCODE_PORT_SCAN; offset++) {
       const candidate = base + offset
       this.port = candidate
@@ -148,7 +188,7 @@ class OpenCodeServerManager {
       }
 
       await this.freePort(candidate)
-      this.launch(candidate, serverDirectory, source, isDevelopment)
+      this.launch(candidate, serverDirectory, binPath, isDevelopment)
 
       if (await this.waitForHealth(20000)) {
         this.isHealthy = true
@@ -167,17 +207,18 @@ class OpenCodeServerManager {
   private launch(
     port: number,
     serverDirectory: string,
-    source: string,
+    binPath: string,
     isDevelopment: boolean,
   ): void {
-    logger.info(`Launching OpenCode server on port ${port} (${source})`)
+    logger.info(`Launching OpenCode server on port ${port} (resolved binary: ${binPath})`)
 
+    const isKnownPath = path.isAbsolute(binPath) && existsSync(binPath)
     this.serverProcess = spawn(
-      OPENCODE_BIN,
+      binPath,
       ['serve', '--port', port.toString(), '--hostname', ENV.OPENCODE.HOST],
       {
         cwd: serverDirectory,
-        shell: process.platform === 'win32' && !OPENCODE_BIN_PATH,
+        shell: process.platform === 'win32' && !isKnownPath,
         detached: !isDevelopment,
         stdio: isDevelopment ? 'inherit' : 'ignore',
         env: {
@@ -286,11 +327,8 @@ class OpenCodeServerManager {
   }
 
   async restart(): Promise<void> {
-    if (!this.isManaged) {
-      logger.warn('Skipping restart: attached to an externally managed OpenCode server')
-      return
-    }
     logger.info('Restarting OpenCode server')
+    invalidateBinaryCache()
     await this.stop()
     await new Promise(r => setTimeout(r, 1000))
     await this.start()

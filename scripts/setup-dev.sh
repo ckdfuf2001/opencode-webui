@@ -24,13 +24,12 @@ else
   exit 1
 fi
 
-# OpenCode
+# OpenCode (optional; start without a connection if not installed)
 if command -v opencode >/dev/null 2>&1; then
   echo "  [+] OpenCode is installed"
 else
-  echo "  [x] OpenCode TUI is NOT installed."
-  echo "      Install it with: curl -fsSL https://opencode.ai/install"
-  exit 1
+  echo "  [.] OpenCode TUI is NOT installed - starting without an OpenCode connection."
+  echo "      Set the binary path later under Settings -> OpenCode, then restart the server."
 fi
 
 # Git
