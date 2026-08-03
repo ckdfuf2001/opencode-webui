@@ -1,15 +1,14 @@
 import { logger } from '../utils/logger'
 import { ENV } from '@opencode-webui/shared'
 import { ensureServerAuth } from './opencode-auth'
+import { opencodeServerManager } from './opencode-single-server'
 import { readdir, stat } from 'fs/promises'
 import path from 'path'
 import os from 'os'
 
-const OPENCODE_SERVER_URL = `http://127.0.0.1:${ENV.OPENCODE.PORT}`
-
 export async function patchOpenCodeConfig(config: Record<string, unknown>): Promise<boolean> {
   try {
-    const response = await fetch(`${OPENCODE_SERVER_URL}/config`, {
+    const response = await fetch(`${opencodeServerManager.getUrl()}/config`, {
       method: 'PATCH',
       headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(config),
@@ -85,7 +84,7 @@ export async function proxyRequest(request: Request) {
 
   // Remove /api/opencode prefix before forwarding to OpenCode server
   const cleanPath = pathName.replace(/^\/api\/opencode/, '')
-  const targetUrl = `${OPENCODE_SERVER_URL}${cleanPath}`
+  const targetUrl = `${opencodeServerManager.getUrl()}${cleanPath}`
   
   try {
     const headers = ensureServerAuth({})

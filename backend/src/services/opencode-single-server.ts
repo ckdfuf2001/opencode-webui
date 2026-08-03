@@ -75,7 +75,7 @@ function resolveOpenCodeBin(): string | null {
   return null
 }
 
-const OPENCODE_SERVER_PORT = ENV.OPENCODE.PORT
+const OPENCODE_PORT_SCAN = 20
 const OPENCODE_BIN_PATH = resolveOpenCodeBin()
 const OPENCODE_BIN = OPENCODE_BIN_PATH ?? ENV.OPENCODE.BIN
 const OPENCODE_SERVER_DIRECTORY = getWorkspacePath()
@@ -88,6 +88,7 @@ class OpenCodeServerManager {
   private isHealthy: boolean = false
   private isManaged: boolean = false
   private isStarting: boolean = false
+  private port: number = ENV.OPENCODE.PORT
 
   private constructor() {}
 
@@ -120,38 +121,53 @@ class OpenCodeServerManager {
   }
 
   private async startServer(): Promise<void> {
-    if (await this.checkHealth()) {
-      logger.info(`Attaching to existing OpenCode server on port ${OPENCODE_SERVER_PORT}`)
-      const existingProcesses = await this.findProcessesByPort(OPENCODE_SERVER_PORT)
-      this.serverPid = existingProcesses[0]?.pid ?? null
-      this.isManaged = false
-      this.isHealthy = true
-      return
-    }
-
     const isDevelopment = ENV.SERVER.NODE_ENV !== 'production'
-
-    const existingProcesses = await this.findProcessesByPort(OPENCODE_SERVER_PORT)
-    if (existingProcesses.length > 0) {
-      logger.warn('Killing unhealthy OpenCode server occupying the port')
-      for (const proc of existingProcesses) {
-        try {
-          process.kill(proc.pid, 'SIGKILL')
-        } catch (error) {
-          logger.warn(`Failed to kill process ${proc.pid}:`, error)
-        }
-      }
-      await new Promise(r => setTimeout(r, 1000))
-    }
-
     const serverDirectory = OPENCODE_SERVER_DIRECTORY
     const source = OPENCODE_BIN_PATH ? `resolved binary: ${OPENCODE_BIN_PATH}` : `PATH fallback: ${OPENCODE_BIN}`
-    logger.info(`Starting OpenCode server from directory: ${serverDirectory}`)
-    logger.info(`Spawning OpenCode via ${source}`)
+    logger.info(`Spawning OpenCode server from directory: ${serverDirectory} (${source})`)
+
+    const base = ENV.OPENCODE.PORT
+    for (let offset = 0; offset < OPENCODE_PORT_SCAN; offset++) {
+      const candidate = base + offset
+      this.port = candidate
+
+      if (await this.checkHealth()) {
+        const existingProcesses = await this.findProcessesByPort(candidate)
+        this.serverPid = existingProcesses[0]?.pid ?? null
+        this.isManaged = false
+        this.isHealthy = true
+        logger.info(`Attaching to existing healthy OpenCode server on port ${candidate}`)
+        return
+      }
+
+      await this.freePort(candidate)
+      this.launch(candidate, serverDirectory, source, isDevelopment)
+
+      if (await this.waitForHealth(20000)) {
+        this.isHealthy = true
+        logger.info(`OpenCode server is healthy on port ${candidate}`)
+        return
+      }
+
+      logger.warn(`OpenCode failed to become healthy on port ${candidate}, trying next port`)
+      await this.teardownCurrent()
+      await new Promise((r) => setTimeout(r, 500))
+    }
+
+    throw new Error(`OpenCode server failed to become healthy on any candidate port (base ${base})`)
+  }
+
+  private launch(
+    port: number,
+    serverDirectory: string,
+    source: string,
+    isDevelopment: boolean,
+  ): void {
+    logger.info(`Launching OpenCode server on port ${port} (${source})`)
 
     this.serverProcess = spawn(
       OPENCODE_BIN,
-      ['serve', '--port', OPENCODE_SERVER_PORT.toString(), '--hostname', ENV.OPENCODE.HOST],
+      ['serve', '--port', port.toString(), '--hostname', ENV.OPENCODE.HOST],
       {
         cwd: serverDirectory,
         shell: process.platform === 'win32' && !OPENCODE_BIN_PATH,
@@ -180,16 +196,43 @@ class OpenCodeServerManager {
 
     this.serverPid = this.serverProcess.pid
     this.isManaged = true
+    logger.info(`OpenCode server launch requested, PID ${this.serverPid}`)
+  }
 
-    logger.info(`OpenCode server started with PID ${this.serverPid}`)
-
-    const healthy = await this.waitForHealth(30000)
-    if (!healthy) {
-      throw new Error('OpenCode server failed to become healthy')
+  private async freePort(port: number): Promise<void> {
+    const existingProcesses = await this.findProcessesByPort(port)
+    if (existingProcesses.length === 0) return
+    logger.warn(`Port ${port} is occupied, attempting to free it`)
+    for (const proc of existingProcesses) {
+      if (this.serverPid === proc.pid) continue
+      try {
+        process.kill(proc.pid, 'SIGKILL')
+      } catch (error) {
+        logger.warn(`Failed to kill process ${proc.pid} on port ${port}:`, error)
+      }
     }
+    await new Promise((r) => setTimeout(r, 500))
+  }
 
-    this.isHealthy = true
-    logger.info('OpenCode server is healthy')
+  private async teardownCurrent(): Promise<void> {
+    const port = this.port
+    if (this.serverPid) {
+      try {
+        process.kill(this.serverPid, 'SIGKILL')
+      } catch {
+        // already terminated
+      }
+    }
+    const procs = await this.findProcessesByPort(port)
+    for (const proc of procs) {
+      try {
+        process.kill(proc.pid, 'SIGKILL')
+      } catch {
+        // already terminated
+      }
+    }
+    this.serverPid = null
+    this.isHealthy = false
   }
 
   async stop(): Promise<void> {
@@ -218,7 +261,7 @@ class OpenCodeServerManager {
     }
 
     try {
-      const procs = await this.findProcessesByPort(OPENCODE_SERVER_PORT)
+      const procs = await this.findProcessesByPort(this.port)
       for (const proc of procs) {
         try {
           process.kill(proc.pid, 'SIGKILL')
@@ -247,7 +290,11 @@ class OpenCodeServerManager {
   }
 
   getPort(): number {
-    return OPENCODE_SERVER_PORT
+    return this.port
+  }
+
+  getUrl(): string {
+    return `http://${ENV.OPENCODE.HOST}:${this.port}`
   }
 
   async checkHealth(): Promise<boolean> {
@@ -255,7 +302,7 @@ class OpenCodeServerManager {
       const headers: Record<string, string> = {}
       const auth = getServerAuthHeader()
       if (auth) headers.Authorization = auth
-      const response = await fetch(`http://${ENV.OPENCODE.HOST}:${OPENCODE_SERVER_PORT}/doc`, {
+      const response = await fetch(`${this.getUrl()}/doc`, {
         headers,
         signal: AbortSignal.timeout(3000)
       })
