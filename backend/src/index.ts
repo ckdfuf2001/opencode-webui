@@ -1,3 +1,6 @@
+import { EventEmitter } from 'events'
+EventEmitter.defaultMaxListeners = 20
+
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
