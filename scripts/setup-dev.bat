@@ -84,22 +84,25 @@ if not exist "%ENV_FILE%" (
 
 echo.
 echo [5/7] Installing agent-browser (optional)...
-where agent-browser >nul 2>nul
+where npm >nul 2>nul
 if !errorlevel!==0 (
-  echo   [+] agent-browser is already installed
-) else (
-  where npm >nul 2>nul
-  if !errorlevel!==0 (
-    echo   Installing agent-browser globally...
-    call npm install -g agent-browser
-    echo   Downloading Chrome for Testing...
-    call agent-browser install
+  if not defined AGENT_BROWSER_SKIP_INSTALL (
+    echo   Installing/upgrading agent-browser to latest...
+    call npm install -g agent-browser@latest
     if !errorlevel! neq 0 (
-      echo   [.] agent-browser install failed - run "agent-browser install" manually
+      echo   [x] Failed to install agent-browser. Install with: npm install -g agent-browser
+    ) else (
+      echo   Downloading Chrome for Testing...
+      call agent-browser install
+      if !errorlevel! neq 0 (
+        echo   [.] agent-browser install failed - run "agent-browser install" manually
+      )
     )
   ) else (
-    echo   [.] npm is NOT installed - skipping agent-browser. Install with: npm install -g agent-browser
+    echo   [.] Skipping agent-browser install (AGENT_BROWSER_SKIP_INSTALL is set)
   )
+) else (
+  echo   [.] npm is NOT installed - skipping agent-browser. Install with: npm install -g agent-browser
 )
 
 echo.

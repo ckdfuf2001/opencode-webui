@@ -62,13 +62,18 @@ fi
 
 echo
 echo "[5/7] Installing agent-browser (optional)..."
-if command -v agent-browser >/dev/null 2>&1; then
-  echo "  [+] agent-browser is already installed"
-elif command -v npm >/dev/null 2>&1; then
-  echo "  Installing agent-browser globally (npm install -g agent-browser)..."
-  npm install -g agent-browser
-  echo "  Downloading Chrome for Testing (agent-browser install)..."
-  agent-browser install || echo "  [.] agent-browser install failed - run 'agent-browser install' manually"
+if command -v npm >/dev/null 2>&1; then
+  if [ -z "$AGENT_BROWSER_SKIP_INSTALL" ]; then
+    echo "  Installing/upgrading agent-browser to latest (npm install -g agent-browser@latest)..."
+    if ! npm install -g agent-browser@latest; then
+      echo "  [x] Failed to install agent-browser. Install with: npm install -g agent-browser"
+    else
+      echo "  Downloading Chrome for Testing (agent-browser install)..."
+      agent-browser install || echo "  [.] agent-browser install failed - run 'agent-browser install' manually"
+    fi
+  else
+    echo "  [.] Skipping agent-browser install (AGENT_BROWSER_SKIP_INSTALL is set)"
+  fi
 else
   echo "  [.] npm is NOT installed - skipping agent-browser. Install it with: npm install -g agent-browser"
 fi

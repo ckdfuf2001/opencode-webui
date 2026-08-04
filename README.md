@@ -288,9 +288,14 @@ chat:
 
 1. **Install the CLI** (globally):
    ```bash
-   npm install -g agent-browser
+   npm install -g agent-browser@latest
    agent-browser install   # download Chrome for Testing (first time only)
    ```
+   > Make sure it's a recent version: older releases (e.g. 0.27.x) are missing
+   > the `agent-browser mcp` subcommand, which makes the MCP server fail with
+   > `Connection closed`. The setup script always installs `@latest`, so a stale
+   > copy is upgraded automatically. Set `AGENT_BROWSER_SKIP_INSTALL=1` to skip
+   > this step during setup.
 
 2. **Register the server** — via the Web UI **Settings → MCP Servers → Add
    Local Server**, or by appending to `workspace/.config/opencode/opencode.json`:
