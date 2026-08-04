@@ -107,6 +107,7 @@ export async function proxyRequest(request: Request) {
       method: request.method,
       headers,
       body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.text() : undefined,
+      signal: AbortSignal.timeout(120_000),
     })
 
     const responseHeaders: Record<string, string> = {}
