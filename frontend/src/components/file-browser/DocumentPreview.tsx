@@ -382,7 +382,23 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-function sheetToHtmlWithHeaders(ws: { '!ref'?: string; [key: string]: any }, XLSX: any) {
+function cellBorderInline(cell: any, styles: any[] | undefined): string {
+  if (!cell || cell.s == null || !styles) return ''
+  const style = styles[cell.s]
+  const border = style?.border
+  if (!border) return ''
+  const color = 'color-mix(in srgb, var(--color-border) 60%, transparent)'
+  const parts: string[] = []
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    const b = border[side]
+    if (b && b.style && b.style > 0) {
+      parts.push(`border-${side}:1px solid ${color}`)
+    }
+  }
+  return parts.length ? ` style="${parts.join(';')}"` : ''
+}
+
+function sheetToHtmlWithHeaders(ws: { '!ref'?: string; [key: string]: any }, XLSX: any, styles?: any[]) {
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
   const startCol = range.s.c
   const startRow = range.s.r
@@ -398,7 +414,7 @@ function sheetToHtmlWithHeaders(ws: { '!ref'?: string; [key: string]: any }, XLS
       const cell = ws[addr]
       const val = cell ? XLSX.utils.format_cell(cell) : ''
       const cls = cell && cell.t === 'n' ? ' class="xlsx-num"' : ''
-      cells.push(`<td${cls}>${escapeHtml(val)}</td>`)
+      cells.push(`<td${cls}${cellBorderInline(cell, styles)}>${escapeHtml(val)}</td>`)
     }
     rows.push(`<tr>${cells.join('')}</tr>`)
   }
@@ -415,10 +431,11 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
       try {
         const mod = await import('xlsx')
         const XLSX = mod.default ?? mod
-        const wb = XLSX.read(new Uint8Array(data), { type: 'array' })
+        const wb = XLSX.read(new Uint8Array(data), { type: 'array', cellStyles: true }) as any
+        const sheetStyles: any[] = wb.Styles || []
         const parts = wb.SheetNames.map((name: string) => {
           const ws = wb.Sheets[name]
-          return '<div class="xlsx-sheet"><h3>' + name + '</h3>' + sheetToHtmlWithHeaders(ws, XLSX) + '</div>'
+          return '<div class="xlsx-sheet"><h3>' + name + '</h3>' + sheetToHtmlWithHeaders(ws, XLSX, sheetStyles) + '</div>'
         })
         if (!cancelled) setHtml(parts.join(''))
       } catch (e) {
