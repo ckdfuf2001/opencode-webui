@@ -6,7 +6,7 @@ echo "  OpenCode Writer UI - Dev Environment Setup"
 echo "=========================================="
 echo
 
-echo "[1/7] Checking prerequisites..."
+echo "[1/5] Checking prerequisites..."
 
 # Bun
 if command -v bun >/dev/null 2>&1; then
@@ -43,16 +43,16 @@ fi
 WORKSPACE_PATH="./workspace"
 
 echo
-echo "[2/7] Creating workspace directories..."
+echo "[2/5] Creating workspace directories..."
 mkdir -p "$WORKSPACE_PATH/repos"
 mkdir -p "$WORKSPACE_PATH/.config/opencode"
 
 echo
-echo "[3/7] Installing dependencies (pnpm install)..."
+echo "[3/5] Installing dependencies (pnpm install)..."
 pnpm install
 
 echo
-echo "[4/7] Creating environment file if missing..."
+echo "[4/5] Creating environment file if missing..."
 if [ ! -f ".env" ]; then
   cp .env.example .env
   echo "  [+] Created .env from .env.example"
@@ -61,30 +61,8 @@ else
 fi
 
 echo
-echo "[5/7] Installing agent-browser (optional)..."
-if command -v npm >/dev/null 2>&1; then
-  if [ -z "$AGENT_BROWSER_SKIP_INSTALL" ]; then
-    echo "  Installing/upgrading agent-browser to latest (npm install -g agent-browser@latest)..."
-    if ! npm install -g agent-browser@latest; then
-      echo "  [x] Failed to install agent-browser. Install with: npm install -g agent-browser"
-    else
-      echo "  Downloading Chrome for Testing (agent-browser install)..."
-      agent-browser install || echo "  [.] agent-browser install failed - run 'agent-browser install' manually"
-    fi
-  else
-    echo "  [.] Skipping agent-browser install (AGENT_BROWSER_SKIP_INSTALL is set)"
-  fi
-else
-  echo "  [.] npm is NOT installed - skipping agent-browser. Install it with: npm install -g agent-browser"
-fi
-
-echo
-echo "[6/7] Verifying bun..."
+echo "[5/5] Verifying bun..."
 bun --version >/dev/null 2>&1
-
-echo
-echo "[7/7] Registering default MCP servers..."
-node scripts/register-default-mcp.js
 
 echo
 echo "=========================================="

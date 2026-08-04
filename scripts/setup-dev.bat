@@ -8,7 +8,7 @@ echo ==========================================
 echo  OpenCode WebUI - Dev Environment Setup
 echo ==========================================
 echo.
-echo [1/7] Checking prerequisites...
+echo [1/5] Checking prerequisites...
 
 REM Bun
 where bun >nul 2>nul
@@ -61,12 +61,12 @@ if %errorlevel%==0 (
 )
 
 echo.
-echo [2/7] Creating workspace directories...
+echo [2/5] Creating workspace directories...
 if not exist "%WORKSPACE_PATH%\repos" mkdir "%WORKSPACE_PATH%\repos"
 if not exist "%WORKSPACE_PATH%\.config\opencode" mkdir "%WORKSPACE_PATH%\.config\opencode"
 
 echo.
-echo [3/7] Installing dependencies (pnpm install)...
+echo [3/5] Installing dependencies (pnpm install)...
 call pnpm install
 if %errorlevel% neq 0 (
   echo   [x] pnpm install failed.
@@ -74,7 +74,7 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [4/7] Creating environment file if missing...
+echo [4/5] Creating environment file if missing...
 if not exist "%ENV_FILE%" (
   copy .env.example ".env" >nul
   echo   [+] Created .env from .env.example
@@ -83,39 +83,12 @@ if not exist "%ENV_FILE%" (
 )
 
 echo.
-echo [5/7] Installing agent-browser (optional)...
-where npm >nul 2>nul
-if !errorlevel!==0 (
-  if not defined AGENT_BROWSER_SKIP_INSTALL (
-    echo   Installing/upgrading agent-browser to latest...
-    call npm install -g agent-browser@latest
-    if !errorlevel! neq 0 (
-      echo   [x] Failed to install agent-browser. Install with: npm install -g agent-browser
-    ) else (
-      echo   Downloading Chrome for Testing...
-      call agent-browser install
-      if !errorlevel! neq 0 (
-        echo   [.] agent-browser install failed - run "agent-browser install" manually
-      )
-    )
-  ) else (
-    echo   [.] Skipping agent-browser install (AGENT_BROWSER_SKIP_INSTALL is set)
-  )
-) else (
-  echo   [.] npm is NOT installed - skipping agent-browser. Install with: npm install -g agent-browser
-)
-
-echo.
-echo [6/7] Verifying runtime...
+echo [5/5] Verifying runtime...
 bun --version >nul 2>nul
 if %errorlevel% neq 0 (
   echo   [x] bun --version failed.
   exit /b 1
 )
-
-echo.
-echo [7/7] Registering default MCP servers...
-call node scripts\register-default-mcp.js
 
 echo.
 echo ==========================================

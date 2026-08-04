@@ -103,12 +103,6 @@ const DEFAULT_OPENCODE_CONFIG = {
       '*': 'allow',
     },
   },
-  mcp: {
-    'agent-browser': {
-      type: 'local',
-      command: ['agent-browser', 'mcp'],
-    },
-  },
 }
 
 async function ensureDefaultConfigExists(): Promise<void> {
@@ -123,32 +117,6 @@ async function ensureDefaultConfigExists(): Promise<void> {
       isDefault: true,
     })
     logger.info('Created default OpenCode config')
-    return
-  }
-  
-  // Merge missing default MCP servers (e.g. agent-browser) into the existing
-  // default config so day-one installs get them without manual setup.
-  const defaultConfig = settingsService.getDefaultOpenCodeConfig()
-  if (defaultConfig) {
-    const currentMcp = (defaultConfig.content?.mcp as Record<string, any>) || {}
-    const defaultMcp = (DEFAULT_OPENCODE_CONFIG.mcp as Record<string, any>) || {}
-    const mergedMcp: Record<string, any> = { ...currentMcp }
-    let changed = false
-    
-    for (const [id, entry] of Object.entries(defaultMcp)) {
-      if (!mergedMcp[id]) {
-        mergedMcp[id] = entry
-        changed = true
-        logger.info(`Merged default MCP server '${id}' into default config`)
-      }
-    }
-    
-    if (changed) {
-      settingsService.updateOpenCodeConfig(defaultConfig.name, {
-        content: { ...defaultConfig.content, mcp: mergedMcp },
-        isDefault: true,
-      })
-    }
   }
 }
 

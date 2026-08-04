@@ -380,34 +380,14 @@ class OpenCodeServerManager {
           const localPort = (tokens[1] ?? '').split(':').pop()
           if (localPort !== String(port)) continue
           const pid = parseInt(tokens[4] ?? '', 10)
-          if (isNaN(pid)) continue
-          // netstat can report PIDs whose process has since exited (orphan
-          // socket). Treat those as free so we don't get stuck trying to free
-          // a nonexistent process.
-          if (!this.pidExists(pid)) continue
-          results.push({ pid })
+          if (!isNaN(pid)) results.push({ pid })
         }
         return results
       }
       const pids = execSync(`lsof -ti:${port}`).toString().trim().split('\n')
-      const alive: Array<{pid: number}> = []
-      for (const line of pids) {
-        const pid = parseInt(line.trim(), 10)
-        if (!isNaN(pid) && this.pidExists(pid)) alive.push({ pid })
-      }
-      return alive
+      return pids.filter(Boolean).map(pid => ({ pid: parseInt(pid) }))
     } catch {
       return []
-    }
-  }
-
-  private pidExists(pid: number): boolean {
-    if (pid <= 0) return false
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch (error) {
-      return (error as NodeJS.ErrnoException)?.code === 'EPERM'
     }
   }
 }

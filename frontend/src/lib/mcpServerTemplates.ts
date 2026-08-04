@@ -87,14 +87,6 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplate[] = [
     docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer',
   },
   {
-    id: 'agent-browser',
-    name: 'Agent Browser',
-    description: 'Browser automation CLI for AI agents (Vercel)',
-    type: 'local',
-    command: ['agent-browser', 'mcp'],
-    docsUrl: 'https://github.com/vercel-labs/agent-browser',
-  },
-  {
     id: 'fetch',
     name: 'Fetch',
     description: 'Make HTTP requests to web APIs',
