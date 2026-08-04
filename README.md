@@ -93,7 +93,6 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 
 ### MCP Document Tools
 - **`doc-reader` MCP server** (FastMCP/stdio) - Registers `read_document(path)` and `edit_document(path, operations)` so the assistant can read and modify DRM-protected Office/PDF files in chat
-- **`agent-browser` MCP server** (Vercel) - Registers browser-automation tools so the assistant can drive a real Chrome/Chromium instance in chat (open pages, click/fill, snapshots, screenshots, JS eval)
 
 ### Remote Access
 - **Relative API Base** - The frontend resolves `VITE_API_URL` as an empty default so the client always talks to the web server origin it was loaded from, enabling access from other PCs on the network
@@ -276,48 +275,6 @@ once. To use these tools in chat:
 > `read_document("D:\\...\\file.docx")` and edits them in place with
 > `edit_document(path, [operations])` (replace / insert_after / insert_before /
 > append / prepend / delete).
-
-#### (Optional) Register the Agent Browser MCP tools
-
-The `agent-browser` MCP server ([vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser))
-lets the assistant drive a real Chrome/Chromium browser in chat (open pages,
-click/fill elements, take snapshots and screenshots, run JS, etc.). **It is not
-registered automatically** — registration lives in the git-ignored workspace
-database, so a fresh clone must register it once. To use the browser tools in
-chat:
-
-1. **Install the CLI** (globally):
-   ```bash
-   npm install -g agent-browser@latest
-   agent-browser install   # download Chrome for Testing (first time only)
-   ```
-   > Make sure it's a recent version: older releases (e.g. 0.27.x) are missing
-   > the `agent-browser mcp` subcommand, which makes the MCP server fail with
-   > `Connection closed`. The setup script always installs `@latest`, so a stale
-   > copy is upgraded automatically. Set `AGENT_BROWSER_SKIP_INSTALL=1` to skip
-   > this step during setup.
-
-2. **Register the server** — via the Web UI **Settings → MCP Servers → Add
-   Local Server**, or by appending to `workspace/.config/opencode/opencode.json`:
-   ```json
-   "mcp": {
-     "agent-browser": {
-       "type": "local",
-       "command": ["agent-browser", "mcp"]
-     }
-   }
-   ```
-   After saving, the OpenCode server restarts and the `agent_browser_*` tools
-   become available in chat.
-
-   > The ready-made registration snippet is tracked in the repo at
-   > `config-templates/opencode.mcp.agent-browser.json`. To register it on a
-   > fresh clone, merge the `mcp` block into
-   > `workspace/.config/opencode/opencode.json` (it may need to exist first).
-
-3. **Verify** — the OpenCode server exposes the browser tools only after
-   registration. In the UI you can confirm they appear for `/mcp`
-   (`agent-browser` shows `connected`).
 
 ## Uninstall
 

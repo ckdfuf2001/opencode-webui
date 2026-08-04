@@ -103,19 +103,11 @@ export async function proxyRequest(request: Request) {
       headers[key] = value
     })
 
-    // SSE event streams are long-lived; never apply a hard timeout to them,
-    // otherwise an active stream is force-aborted mid-flight and the client
-    // sees a truncated chunked body ("Invalid character in chunk size").
-    const isEventStream = url.pathname.replace(/^\/api\/opencode/, '').startsWith('/event')
-    const signal = isEventStream
-      ? undefined
-      : AbortSignal.timeout(120_000)
-
     const response = await fetch(targetUrl, {
       method: request.method,
       headers,
       body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.text() : undefined,
-      signal,
+      signal: AbortSignal.timeout(120_000),
     })
 
     const responseHeaders: Record<string, string> = {}
