@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useOpenCodeClient } from './useOpenCode'
-import type { SSEEvent, MessageListResponse } from '@/api/types'
+import type { SSEEvent, MessageListResponse, MessageWithParts } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
 import { showToast } from '@/lib/toast'
 import { settingsApi } from '@/api/settings'
@@ -47,6 +47,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY)
   const mountedRef = useRef(true)
+  const wasConnectedRef = useRef(false)
   const [isConnected, setIsConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isReconnecting, setIsReconnecting] = useState(false)
@@ -306,11 +307,35 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
 
         eventSource.onopen = () => {
           if (!mountedRef.current) return
+          const wasConnected = wasConnectedRef.current
           setIsConnected(true)
           setError(null)
           resetReconnectDelay()
           queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl] })
+
+          if (wasConnected) {
+            const allQueries = queryClient.getQueryCache().getAll()
+            for (const query of allQueries) {
+              const key = query.queryKey
+              if (key[0] === 'opencode' && key[1] === 'messages') {
+                const data = query.state.data as MessageWithParts[] | undefined
+                if (!data) continue
+                let changed = false
+                const updated = data.map(msg => {
+                  if (msg.info.role !== 'assistant') return msg
+                  if ('completed' in msg.info.time && msg.info.time.completed) return msg
+                  changed = true
+                  return { ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } } }
+                })
+                if (changed) {
+                  queryClient.setQueryData(key, updated)
+                }
+              }
+            }
+            showToast.info('Reconnected — stale streams marked as completed', { duration: 3000 })
+          }
+          wasConnectedRef.current = true
         }
 
         eventSource.onerror = () => {
