@@ -259,6 +259,14 @@ once. To use these tools in chat:
    values above are machine-specific). After saving, the OpenCode server
    restarts and `read_document`/`edit_document` become available in chat.
 
+   > **Registered registration lives in the git-ignored workspace, so a new
+   > clone does not get it automatically.** The ready-made registration snippet
+   is tracked in the repo at
+   > `config-templates/opencode.mcp.doc-reader.json`. To register it on a fresh
+   > clone, replace `REPLACE_WITH_CLONE_DIR` with the absolute path of your
+   > checkout and merge the `mcp` block into
+   > `workspace/.config/opencode/opencode.json` (it may need to exist first).
+
 3. **Verify** — the OpenCode server exposes the tools only after registration.
    In the UI you can confirm the new tools appear for `/mcp` (`doc-reader` shows
    `connected`).

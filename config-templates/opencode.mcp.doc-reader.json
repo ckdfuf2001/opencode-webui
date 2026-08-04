@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "doc-reader": {
+      "type": "local",
+      "command": [
+        "python",
+        "REPLACE_WITH_CLONE_DIR\\backend\\scripts\\doc_reader_mcp.py"
+      ],
+      "env": {
+        "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5001",
+        "OPCODE_WEBUI_WORKSPACE": "REPLACE_WITH_CLONE_DIR\\workspace"
+      }
+    }
+  }
+}
