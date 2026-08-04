@@ -460,9 +460,10 @@ export function PromptInput({
     let nextPrompt = prompt
     const nextAttached = new Map(attachedFiles)
     for (const file of injectedFile.files) {
-      nextPrompt = `${nextPrompt}@${file.name} `.trimStart()
-      nextAttached.set(file.name.toLowerCase(), {
-        path: file.path,
+      const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
+      nextPrompt = `${nextPrompt}@${relativePath} `.trimStart()
+      nextAttached.set(relativePath.toLowerCase(), {
+        path: relativePath,
         name: file.name,
       })
     }
