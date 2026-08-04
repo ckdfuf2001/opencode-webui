@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useOpenCodeClient } from './useOpenCode'
-import type { SSEEvent, MessageListResponse, MessageWithParts } from '@/api/types'
+import type { SSEEvent, MessageListResponse, MessageWithParts, QuestionRequest } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
+import { questionEvents } from './useQuestionRequests'
 import { showToast } from '@/lib/toast'
 import { settingsApi } from '@/api/settings'
 
@@ -252,6 +253,33 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
             permissionEvents.emit({ type: 'remove', permissionID: event.properties.permissionID })
           }
           break
+
+        case 'question.asked':
+        case 'question.v2.asked': {
+          const props = event.properties as QuestionRequest
+          if ('id' in props && 'questions' in props) {
+            questionEvents.emit({ type: 'add', question: props })
+          }
+          break
+        }
+
+        case 'question.replied':
+        case 'question.v2.replied': {
+          const props = event.properties as unknown as { requestID?: string }
+          if (props.requestID) {
+            questionEvents.emit({ type: 'remove', requestID: props.requestID })
+          }
+          break
+        }
+
+        case 'question.rejected':
+        case 'question.v2.rejected': {
+          const props = event.properties as unknown as { requestID?: string }
+          if (props.requestID) {
+            questionEvents.emit({ type: 'remove', requestID: props.requestID })
+          }
+          break
+        }
 
         case 'todo.updated':
           if ('sessionID' in event.properties) {

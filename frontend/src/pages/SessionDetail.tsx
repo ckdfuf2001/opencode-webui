@@ -8,6 +8,7 @@ import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
 import { SessionList } from "@/components/session/SessionList";
 import { PermissionRequestDialog } from "@/components/session/PermissionRequestDialog";
+import { QuestionRequestCard } from "@/components/session/QuestionRequestCard";
 import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -18,6 +19,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { usePermissionRequests } from "@/hooks/usePermissionRequests";
+import { useQuestionRequests } from "@/hooks/useQuestionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useEffect, useRef, useCallback } from "react";
 import { Loader2 } from "lucide-react";
@@ -42,6 +44,8 @@ export function SessionDetail() {
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [injectedCommand, setInjectedCommand] = useState<{ token: number; text: string; run?: boolean } | null>(null);
   const [injectedFile, setInjectedFile] = useState<InjectedFile | null>(null);
+  const [injectedPrompt, setInjectedPrompt] = useState<{ token: number; text: string } | null>(null);
+  const [hiddenAfterID, setHiddenAfterID] = useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
@@ -54,6 +58,7 @@ export function SessionDetail() {
   });
 
   const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests();
+  const { currentQuestion, dismissQuestion } = useQuestionRequests();
   
   const opcodeUrl = OPENCODE_API_ENDPOINT;
   const openCodeClient = useOpenCodeClient(opcodeUrl, repo?.fullPath);
@@ -168,6 +173,16 @@ export function SessionDetail() {
     await openCodeClient.respondToPermission(permissionSessionID, permissionID, response)
   }, [openCodeClient]);
 
+  const handleQuestionReply = useCallback(async (requestID: string, answers: string[][]) => {
+    if (!openCodeClient) return
+    await openCodeClient.replyToQuestion(requestID, answers)
+  }, [openCodeClient]);
+
+  const handleQuestionReject = useCallback(async (requestID: string) => {
+    if (!openCodeClient) return
+    await openCodeClient.rejectQuestion(requestID)
+  }, [openCodeClient]);
+
   const handleExecuteCommand = useCallback(async (command: CommandWithScope, run: boolean, args: string) => {
     if (!sessionId) return
     const text = args ? `/${command.name} ${args}` : `/${command.name}`
@@ -184,6 +199,23 @@ export function SessionDetail() {
 
   const handleInjectedFileConsumed = useCallback(() => {
     setInjectedFile(null)
+  }, []);
+
+  const handleEditMessage = useCallback((messageID: string, text: string) => {
+    setHiddenAfterID(messageID)
+    setInjectedPrompt((prev) => ({
+      token: (prev?.token ?? 0) + 1,
+      text,
+    }))
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setHiddenAfterID(null)
+    setInjectedPrompt(null)
+  }, []);
+
+  const handleInjectedPromptConsumed = useCallback(() => {
+    setInjectedPrompt(null)
   }, []);
 
   const handleGlobalDrop = useCallback(async (e: DragEvent) => {
@@ -297,7 +329,20 @@ export function SessionDetail() {
                 directory={repoDirectory}
                 messages={messages}
                 onFileClick={handleFileClick}
+                onEditMessage={handleEditMessage}
+                hiddenAfterID={hiddenAfterID}
+                onCancelEdit={handleCancelEdit}
               />
+            )}
+            {currentQuestion && (
+              <div className="mt-2">
+                <QuestionRequestCard
+                  question={currentQuestion}
+                  onReply={handleQuestionReply}
+                  onReject={handleQuestionReject}
+                  onDismiss={dismissQuestion}
+                />
+              </div>
             )}
           </div>
           {opcodeUrl && repoDirectory && (
@@ -318,6 +363,10 @@ export function SessionDetail() {
                 onInjectedConsumed={handleInjectedConsumed}
                 injectedFile={injectedFile}
                 onInjectedFileConsumed={handleInjectedFileConsumed}
+                injectedPrompt={injectedPrompt}
+                onInjectedPromptConsumed={handleInjectedPromptConsumed}
+                onSubmitted={handleCancelEdit}
+                onCancelEdit={handleCancelEdit}
               />
             </div>
           )}

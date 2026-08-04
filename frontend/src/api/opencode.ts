@@ -116,6 +116,21 @@ export class OpenCodeClient {
     return result.data
   }
 
+  async listQuestions() {
+    const response = await this.client.get('/question')
+    return response.data
+  }
+
+  async replyToQuestion(requestID: string, answers: string[][]) {
+    const result = await this.client.post(`/question/${requestID}/reply`, { answers })
+    return result.data
+  }
+
+  async rejectQuestion(requestID: string) {
+    const result = await this.client.post(`/question/${requestID}/reject`)
+    return result.data
+  }
+
   getEventSourceURL() {
     const base = this.baseURL.startsWith('http') 
       ? this.baseURL 
