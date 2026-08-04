@@ -12,7 +12,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages } from "@/hooks/useOpenCode";
-import { OPENCODE_API_ENDPOINT } from "@/config";
+import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { useSSE } from "@/hooks/useSSE";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -23,6 +23,12 @@ import { useEffect, useRef, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
 import type { CommandWithScope } from "@/hooks/useCommands";
+import { showToast } from "@/lib/toast";
+
+interface InjectedFile {
+  token: number;
+  files: { name: string; path: string }[];
+}
 
 export function SessionDetail() {
   const { id, sessionId } = useParams<{ id: string; sessionId: string }>();
@@ -35,6 +41,7 @@ export function SessionDetail() {
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [injectedCommand, setInjectedCommand] = useState<{ token: number; text: string; run?: boolean } | null>(null);
+  const [injectedFile, setInjectedFile] = useState<InjectedFile | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
@@ -175,6 +182,69 @@ export function SessionDetail() {
     setInjectedCommand(null)
   }, []);
 
+  const handleInjectedFileConsumed = useCallback(() => {
+    setInjectedFile(null)
+  }, []);
+
+  const handleGlobalDrop = useCallback(async (e: DragEvent) => {
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0 || !repo?.localPath) return
+
+    e.preventDefault()
+    const dir = repo.localPath
+    const results: { name: string; path: string }[] = []
+    let lastError: string | null = null
+
+    for (const file of Array.from(files)) {
+      const formData = new FormData()
+      formData.append('file', file)
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/files/${dir}`, {
+          method: 'POST',
+          body: formData,
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => null)
+          if (!lastError) lastError = body?.error || `Upload failed: ${res.statusText}`
+          continue
+        }
+        const data = await res.json().catch(() => null)
+        const uploadedPath: string = data?.path || `${dir}/${file.name}`
+        const repoPath = uploadedPath.split(/[/\\]/).slice(1).join('/')
+        results.push({ name: data?.name || file.name, path: repoPath || file.name })
+      } catch {
+        if (!lastError) lastError = 'Upload failed'
+        continue
+      }
+    }
+
+    if (results.length > 0) {
+      setInjectedFile((prev) => ({
+        token: (prev?.token ?? 0) + 1,
+        files: results,
+      }))
+      showToast.success(`Uploaded ${results.length} file(s) to project`)
+    } else {
+      showToast.error(lastError || 'Upload failed')
+    }
+  }, [repo?.localPath]);
+
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => e.preventDefault()
+    const onDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.files?.length) {
+        handleGlobalDrop(e)
+      }
+    }
+
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [handleGlobalDrop]);
+
   if (repoLoading || sessionLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-background via-background to-background">
@@ -246,6 +316,8 @@ export function SessionDetail() {
                 }}
                 injectedCommand={injectedCommand}
                 onInjectedConsumed={handleInjectedConsumed}
+                injectedFile={injectedFile}
+                onInjectedFileConsumed={handleInjectedFileConsumed}
               />
             </div>
           )}

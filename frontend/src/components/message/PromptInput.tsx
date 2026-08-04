@@ -35,6 +35,8 @@ interface PromptInputProps {
   onShowHelpDialog?: () => void
   injectedCommand?: { token: number; text: string; run?: boolean } | null
   onInjectedConsumed?: () => void
+  injectedFile?: { token: number; files: { name: string; path: string }[] } | null
+  onInjectedFileConsumed?: () => void
 }
 
 export function PromptInput({ 
@@ -48,7 +50,9 @@ export function PromptInput({
   onShowModelsDialog,
   onShowHelpDialog,
   injectedCommand,
-  onInjectedConsumed
+  onInjectedConsumed,
+  injectedFile,
+  onInjectedFileConsumed
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -449,6 +453,29 @@ export function PromptInput({
   useEffect(() => {
     handleSubmitRef.current = handleSubmit
   }, [handleSubmit])
+
+  useEffect(() => {
+    if (!injectedFile || injectedFile.files.length === 0) return
+    const el = textareaRef.current
+    let nextPrompt = prompt
+    const nextAttached = new Map(attachedFiles)
+    for (const file of injectedFile.files) {
+      nextPrompt = `${nextPrompt}@${file.name} `.trimStart()
+      nextAttached.set(file.name.toLowerCase(), {
+        path: file.path,
+        name: file.name,
+      })
+    }
+    setPrompt(nextPrompt)
+    setAttachedFiles(nextAttached)
+    if (el) {
+      el.focus()
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    }
+    onInjectedFileConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [injectedFile, onInjectedFileConsumed])
 
   useEffect(() => {
     if (pendingRunRef.current && prompt === pendingRunRef.current) {

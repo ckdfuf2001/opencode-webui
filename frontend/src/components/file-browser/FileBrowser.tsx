@@ -11,6 +11,7 @@ import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { useMobile } from '@/hooks/useMobile'
 import { useFile } from '@/api/files'
+import { showToast } from '@/lib/toast'
 
 
 
@@ -128,12 +129,20 @@ useEffect(() => {
       })
       
       if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`)
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.error || `Upload failed: ${response.statusText}`)
       }
       
+      const result = await response.json().catch(() => null)
+      showToast.success(`Uploaded "${result?.name || files[0].name}" to ${currentPath || '/'}`, {
+        description: result?.path ? result.path : undefined,
+        duration: 5000,
+      })
       await loadFiles(currentPath)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed')
+      const message = err instanceof Error ? err.message : 'Upload failed'
+      showToast.error(message.startsWith('Upload failed') ? message : `Upload failed: ${message}`)
+      setError(message)
     }
   }, [currentPath])
 

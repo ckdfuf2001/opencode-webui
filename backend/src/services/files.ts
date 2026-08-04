@@ -13,10 +13,14 @@ import {
   getFileStats, 
   listDirectory 
 } from './file-operations'
-import { FILE_LIMITS, ALLOWED_MIME_TYPES, getReposPath } from '@opencode-webui/shared'
+import { FILE_LIMITS, getReposPath } from '@opencode-webui/shared'
 import type { ChunkedFileInfo, PatchOperation } from '@opencode-webui/shared'
 
 const SHARED_WORKSPACE_BASE = getReposPath()
+
+const BLOCKED_UPLOAD_EXTENSIONS = new Set([
+  '.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.ps1', '.msi', '.dll', '.lnk',
+])
 
 interface FileInfo {
   name: string
@@ -140,28 +144,41 @@ export async function getFile(userPath: string): Promise<FileInfo> {
 
 export async function uploadFile(userPath: string, file: File): Promise<FileUploadResult> {
   if (file.size > FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES) {
-    throw new Error('File too large')
+    throw { message: `File too large (max ${FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES} bytes)`, statusCode: 400 }
   }
   
-  const mimeType = file.type || getMimeType(file.name, new Uint8Array())
-  if (!ALLOWED_MIME_TYPES.includes(mimeType as any) && !mimeType.startsWith('text/')) {
-    throw new Error('File type not allowed')
+  const fileName = file.name || path.basename(userPath)
+  const ext = path.extname(fileName).toLowerCase()
+  if (BLOCKED_UPLOAD_EXTENSIONS.has(ext)) {
+    throw { message: `File type not allowed: ${fileName}`, statusCode: 400 }
   }
   
   const validatedPath = validatePath(userPath)
-  const fileName = file.name || path.basename(userPath)
-  const fullPath = path.join(validatedPath, fileName)
+  const fullPath = await resolveUniquePath(validatedPath, fileName)
+  const savedName = path.basename(fullPath)
   
   const buffer = await file.arrayBuffer()
   
   await writeFileContent(fullPath, Buffer.from(buffer))
   
   return {
-    name: fileName,
-    path: path.join(userPath, fileName),
+    name: savedName,
+    path: path.join(userPath, savedName),
     size: file.size,
-    mimeType,
+    mimeType: file.type || getMimeType(file.name, new Uint8Array()),
   }
+}
+
+async function resolveUniquePath(dirPath: string, fileName: string): Promise<string> {
+  const ext = path.extname(fileName)
+  const base = path.basename(fileName, ext)
+  let candidate = path.join(dirPath, fileName)
+  let counter = 1
+  while (await fileExists(candidate)) {
+    candidate = path.join(dirPath, `${base} (${counter})${ext}`)
+    counter++
+  }
+  return candidate
 }
 
 export async function createFileOrFolder(userPath: string, body: { type: 'file' | 'folder', content?: string }): Promise<FileInfo> {

@@ -364,7 +364,7 @@ function DocxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   if (!html) return SPINNER
   return (
     <DocumentShell fileName={fileName}>
-      {(fullscreen, zoom) => (
+      {(_fullscreen, zoom) => (
         <div className="p-4" style={{ zoom }}>
           <div className="docx-preview prose-enhanced max-w-full" dangerouslySetInnerHTML={{ __html: html }} />
         </div>
@@ -434,7 +434,7 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   if (!html) return SPINNER
   return (
     <DocumentShell fileName={fileName}>
-      {(fullscreen, zoom) => (
+      {(_fullscreen, zoom) => (
         <div className="xlsx-preview p-3" style={{ zoom }} dangerouslySetInnerHTML={{ __html: html }} />
       )}
     </DocumentShell>
@@ -491,7 +491,7 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
 
   return (
     <DocumentShell fileName={fileName}>
-      {(fullscreen, zoom) => (
+      {(_fullscreen, zoom) => (
         <div className="p-3 space-y-3" style={{ zoom }}>
           {slides.map((slide) => (
             <div key={slide.index} className="rounded-md border border-border bg-muted/30 p-3">
