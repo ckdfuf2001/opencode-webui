@@ -29,6 +29,10 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **File Operations** - Create files/folders, rename, delete
 - **Drag-and-Drop Upload** - Upload files by dragging into the browser
 - **Large File Support** - Virtualization for large files
+- **Upload Notifications** - Success/error toasts after upload (shows the actual saved name when a filename collision is auto-renamed, or the blocked extension on rejection)
+- **Safe Type Allowance** - Uploads accept most file types (Office, PDF, images, archives, etc.); only a small blacklist of executable/script types (`.exe`, `.bat`, `.cmd`, `.com`, `.scr`, `.vbs`, `.ps1`, `.msi`, `.dll`, `.lnk`) is rejected
+- **Auto-Rename on Collision** - If a file with the same name already exists, the upload is saved as `name (1).ext`, `name (2).ext`, etc.
+- **Session Drag-and-Drop** - With a chat session open, dropping files anywhere on the page uploads them to the project root and inserts their `@path` mention into the prompt for the assistant
 
 ### Chat & Session Features
 - **Slash Commands** - Built-in commands (`/help`, `/new`, `/models`, `/export`, `/compact`, etc.)
