@@ -103,11 +103,14 @@ export async function proxyRequest(request: Request) {
       headers[key] = value
     })
 
+    const isEventStream = url.pathname.replace(/^\/api\/opencode/, '').startsWith('/event')
+    const signal = isEventStream ? undefined : AbortSignal.timeout(120_000)
+
     const response = await fetch(targetUrl, {
       method: request.method,
       headers,
       body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.text() : undefined,
-      signal: AbortSignal.timeout(120_000),
+      signal,
     })
 
     const responseHeaders: Record<string, string> = {}
