@@ -175,8 +175,24 @@ opencode 서버 (:5551)
 ### opencode 서버 연동
 - opencode 서버는 **싱글 전역 서버** (`OpenCodeServerManager` 싱글턴), 레포별 아님
 - 프록시는 `backend/src/services/proxy.ts` — `/api/opencode/*` 경로를
-  opencode 서버로 전달 (시간: `AbortSignal.timeout`)
+  opencode 서버로 전달. **SSE(`/event`) 경로만 `AbortSignal.timeout` 의 적용 대상이 아니며**,
+  나머지 요청은 120초 타임아웃 적용 (chat/message 같은 스트림 요청은
+  `isEventStream` 여부로 판별)
 - CWD 는 `workspace/` — **상대경로는 workspace 기준**
+
+#### 포트 점유 / 좀비 소켓 (Windows)
+- 백엔드가 opencode 를 5551→5552… 순으로 base 포트부터 찾아 **healthy 해질 때까지**
+  후보 포트를 하나씩 띄우는 방식 (`startServer`). 이미 다른 프로세스가 띄운 동일 포트의
+  healthy 서버가 있으면 attach 합니다.
+- `findProcessesByPort()`(netstat 파싱) 는 **프로세스가 이미 종료된 좀비 소켓(고아 PID)을
+  걸러냅니다.** Windows 에서 netstat 은 PID 가 사라진 LISTENING 소켓을 계속 보고할 수 있는데,
+  이를 그대로 kill 시도하면 `ESRCH` 만 반복하고 포트가 계속 "점유됨"으로 남아 백엔드가
+  자기 서버를 못 띄우는 문제가 있었습니다. 이제 `pidExists()`(시그널 0) 로 실제 살아있는
+  프로세스만 결과에 포함합니다.
+  - 증상: health 가 `opencodePort: 5552` 등으로 밀리고, 로그에
+    `Failed to kill process <pid> on port 5551: ESRCH` 가 반복됩니다.
+- opencode 프로세스가 이중으로 뜨면 포트 충돌로 `ServeError`(exit code 1) → ECONNRESET
+  프록시 오류가 납니다. 한 프로세스만 남도록 정리한 뒤 백엔드를 재시작해야 합니다.
 
 ### 문서/템플릿 관리
 - 설정 관련 내용은 `README.md` 와 `architecture.md` 양쪽에 반영
