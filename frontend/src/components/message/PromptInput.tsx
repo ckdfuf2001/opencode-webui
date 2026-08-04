@@ -37,6 +37,10 @@ interface PromptInputProps {
   onInjectedConsumed?: () => void
   injectedFile?: { token: number; files: { name: string; path: string }[] } | null
   onInjectedFileConsumed?: () => void
+  injectedPrompt?: { token: number; text: string } | null
+  onInjectedPromptConsumed?: () => void
+  onSubmitted?: () => void
+  onCancelEdit?: () => void
 }
 
 export function PromptInput({ 
@@ -52,7 +56,11 @@ export function PromptInput({
   injectedCommand,
   onInjectedConsumed,
   injectedFile,
-  onInjectedFileConsumed
+  onInjectedFileConsumed,
+  injectedPrompt,
+  onInjectedPromptConsumed,
+  onSubmitted,
+  onCancelEdit
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -145,6 +153,7 @@ export function PromptInput({
 
     setPrompt('')
     setAttachedFiles(new Map())
+    onSubmitted?.()
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -306,6 +315,7 @@ export function PromptInput({
       setFileQuery('')
       setMentionRange(null)
       setPrompt('')
+      onCancelEdit?.()
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
       }
@@ -449,6 +459,20 @@ export function PromptInput({
     }
     onInjectedConsumed?.()
   }, [injectedCommand, onInjectedConsumed])
+
+  useEffect(() => {
+    if (!injectedPrompt) return
+    setPrompt(injectedPrompt.text)
+    const el = textareaRef.current
+    if (el) {
+      el.focus()
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+      const pos = injectedPrompt.text.length
+      el.setSelectionRange(pos, pos)
+    }
+    onInjectedPromptConsumed?.()
+  }, [injectedPrompt, onInjectedPromptConsumed])
 
   useEffect(() => {
     handleSubmitRef.current = handleSubmit

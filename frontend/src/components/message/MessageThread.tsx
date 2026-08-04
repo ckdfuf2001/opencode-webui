@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { MessagePart } from './MessagePart'
+import { CornerDownLeft, X } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
 
 function getMessageTextContent(msg: MessageWithParts): string {
@@ -16,6 +17,9 @@ interface MessageThreadProps {
   directory?: string
   messages?: MessageWithParts[]
   onFileClick?: (filePath: string, lineNumber?: number) => void
+  onEditMessage?: (messageID: string, text: string) => void
+  hiddenAfterID?: string | null
+  onCancelEdit?: () => void
 }
 
 const isMessageStreaming = (msg: MessageWithParts): boolean => {
@@ -28,7 +32,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, hiddenAfterID, onCancelEdit }: MessageThreadProps) {
   if (!messages || messages.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-600">
@@ -37,17 +41,20 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
     )
   }
 
+  const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1
+  const visibleMessages = editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages
+
   return (
     <div className="flex flex-col space-y-2 p-2 overflow-x-hidden">
-      {messages.map((msg) => {
+      {visibleMessages.map((msg) => {
         const streaming = isMessageStreaming(msg)
         const thinking = isMessageThinking(msg)
         
         return (
-          <div
-            key={msg.info.id}
-            className="flex flex-col"
-          >
+            <div
+              key={msg.info.id}
+              className="flex flex-col group"
+            >
             <div
               className={`w-full rounded-lg p-1.5 ${
                 msg.info.role === 'user'
@@ -68,6 +75,15 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                   <span className="text-xs text-blue-400 flex items-center gap-1">
                     <span className="animate-pulse">●</span> <span className="shine-loading">Generating...</span>
                   </span>
+                )}
+                {msg.info.role === 'user' && onEditMessage && !streaming && (
+                  <button
+                    onClick={() => onEditMessage(msg.info.id, getMessageTextContent(msg))}
+                    className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+                    title="Edit and resend"
+                  >
+                    <CornerDownLeft className="w-3.5 h-3.5" />
+                  </button>
                 )}
               </div>
               
@@ -96,6 +112,21 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
           </div>
         )
       })}
+      {editIndex >= 0 && (
+        <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground border border-dashed rounded-md border-primary/40 bg-primary/5">
+          <span>Editing from this message — the rest is hidden</span>
+          {onCancelEdit && (
+            <button
+              onClick={onCancelEdit}
+              className="ml-auto flex items-center gap-1 p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+              title="Cancel edit and restore messages"
+            >
+              <X className="w-3 h-3" />
+              <span>Cancel</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 })
