@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { create } from 'zustand'
+import { showToast } from '@/lib/toast'
 import type { Permission } from '@/api/types'
 
 type PermissionEventType = 'add' | 'remove'
@@ -25,19 +27,56 @@ export const permissionEvents = {
   }
 }
 
+interface PermissionStore {
+  permissions: Permission[]
+  notifiedIDs: Record<string, boolean>
+}
+
+const usePermissionStore = create<PermissionStore>(() => ({
+  permissions: [],
+  notifiedIDs: {},
+}))
+
+function toastPermissions(): void {
+  const { permissions, notifiedIDs } = usePermissionStore.getState()
+  for (const permission of permissions) {
+    if (notifiedIDs[permission.id]) continue
+    const typeLabel = permission.permission ?? permission.type ?? 'permission'
+    const description = permission.metadata?.command
+      ?? permission.metadata?.path
+      ?? permission.metadata?.url
+      ?? ''
+    showToast.info(`Permission requested: ${typeLabel}`, {
+      id: `permission-${permission.id}`,
+      description: description ? String(description).slice(0, 120) : undefined,
+      duration: 10000,
+    })
+    usePermissionStore.setState((state) => ({
+      notifiedIDs: { ...state.notifiedIDs, [permission.id]: true },
+    }))
+  }
+}
+
 export function usePermissionRequests() {
-  const [permissions, setPermissions] = useState<Permission[]>([])
+  const permissions = usePermissionStore((state) => state.permissions)
+  const subscribeStartedRef = useRef(false)
 
   useEffect(() => {
+    if (subscribeStartedRef.current) return
+    subscribeStartedRef.current = true
+
     const unsubscribe = permissionEvents.subscribe((event) => {
       if (event.type === 'add' && event.permission) {
-        setPermissions(prev => {
-          const exists = prev.some(p => p.id === event.permission!.id)
-          if (exists) return prev
-          return [...prev, event.permission!]
+        usePermissionStore.setState((state) => {
+          const exists = state.permissions.some(p => p.id === event.permission!.id)
+          if (exists) return state
+          return { permissions: [...state.permissions, event.permission!] }
         })
+        toastPermissions()
       } else if (event.type === 'remove' && event.permissionID) {
-        setPermissions(prev => prev.filter(p => p.id !== event.permissionID))
+        usePermissionStore.setState((state) => ({
+          permissions: state.permissions.filter(p => p.id !== event.permissionID),
+        }))
       }
     })
     return unsubscribe
@@ -46,17 +85,19 @@ export function usePermissionRequests() {
   const currentPermission = permissions[0] || null
 
   const dismissPermission = useCallback((permissionID: string) => {
-    setPermissions(prev => prev.filter(p => p.id !== permissionID))
+    usePermissionStore.setState((state) => ({
+      permissions: state.permissions.filter(p => p.id !== permissionID),
+    }))
   }, [])
 
   const clearAllPermissions = useCallback(() => {
-    setPermissions([])
+    usePermissionStore.setState({ permissions: [] })
   }, [])
 
-  return {
+  return useMemo(() => ({
     currentPermission,
     pendingCount: permissions.length,
     dismissPermission,
-    clearAllPermissions
-  }
+    clearAllPermissions,
+  }), [currentPermission, permissions.length, dismissPermission, clearAllPermissions])
 }
