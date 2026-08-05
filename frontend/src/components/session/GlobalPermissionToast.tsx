@@ -8,13 +8,17 @@ import type { PermissionResponse } from '@/api/types'
 export function GlobalPermissionToast() {
   const navigate = useNavigate()
   const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests()
-  const client = useOpenCodeClient(OPENCODE_API_ENDPOINT)
+  const client = useOpenCodeClient(OPENCODE_API_ENDPOINT, currentPermission?.directory)
 
   if (!currentPermission) return null
 
   const handleRespond = async (permissionID: string, sessionID: string, response: PermissionResponse) => {
     if (!client) return
-    await client.respondToPermission(sessionID, permissionID, response)
+    if (currentPermission.v2) {
+      await client.respondToPermissionV2(permissionID, response)
+    } else {
+      await client.respondToPermission(sessionID, permissionID, response)
+    }
   }
 
   const openSession = () => {

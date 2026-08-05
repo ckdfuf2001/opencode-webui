@@ -18,7 +18,7 @@ import type { components } from './opencode-types'
 export type Message = components['schemas']['Message']
 export type Part = components['schemas']['Part']
 export type Session = components['schemas']['Session']
-export type Permission = components['schemas']['Permission']
+export type Permission = components['schemas']['Permission'] & { v2?: boolean; directory?: string }
 export type PermissionResponse = 'once' | 'always' | 'reject'
 
 export interface QuestionOption {
@@ -131,12 +131,12 @@ export interface PermissionAskedProps {
 }
 
 export interface SSEPermissionAskedEvent {
-  type: 'permission.asked' | 'permission.updated'
+  type: 'permission.asked' | 'permission.updated' | 'permission.v2.asked'
   properties: PermissionAskedProps
 }
 
 export interface SSEPermissionRepliedEvent {
-  type: 'permission.replied'
+  type: 'permission.replied' | 'permission.v2.replied'
   properties: {
     sessionID: string
     requestID?: string
