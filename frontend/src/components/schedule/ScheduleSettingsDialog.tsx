@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Loader2, Plus, Trash2, Play, Pencil, X } from 'lucide-react'
+import { CalendarClock, Loader2, Plus, Trash2, Play, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -236,19 +236,14 @@ export function ScheduleSettingsDialog({
       }
       onOpenChange(next)
     }}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
           <DialogTitle>Project Schedules</DialogTitle>
         </DialogHeader>
 
         {formOpen ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="space-y-4">
               <h4 className="text-sm font-semibold">{editingId ? 'Edit Schedule' : 'New Schedule'}</h4>
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={resetForm}>
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
 
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">

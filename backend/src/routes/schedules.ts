@@ -134,9 +134,6 @@ export function createScheduleRoutes(db: Database) {
       if (!schedule) {
         return c.json({ error: 'Schedule not found' }, 404)
       }
-      if (!schedule.enabled) {
-        return c.json({ error: 'Schedule is disabled' }, 400)
-      }
 
       const result = await runSchedule(db, schedule)
       if (result.success) {
