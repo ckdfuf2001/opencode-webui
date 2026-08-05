@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import { showToast } from '@/lib/toast'
 import type { Permission } from '@/api/types'
 
@@ -32,10 +33,18 @@ interface PermissionStore {
   notifiedIDs: Record<string, boolean>
 }
 
-const usePermissionStore = create<PermissionStore>(() => ({
-  permissions: [],
-  notifiedIDs: {},
-}))
+const usePermissionStore = create<PermissionStore, [['zustand/persist', Pick<PermissionStore, 'permissions'>]]>(
+  persist(
+    (): PermissionStore => ({
+      permissions: [],
+      notifiedIDs: {},
+    }),
+    {
+      name: 'opencode-webui-permissions',
+      partialize: (state) => ({ permissions: state.permissions }),
+    },
+  ),
+)
 
 function toastPermissions(): void {
   const { permissions, notifiedIDs } = usePermissionStore.getState()
@@ -64,6 +73,12 @@ export function usePermissionRequests() {
   useEffect(() => {
     if (subscribeStartedRef.current) return
     subscribeStartedRef.current = true
+
+    usePermissionStore.setState((state) => {
+      const now = Date.now()
+      const fresh = state.permissions.filter((p) => now - (p.time?.created ?? now) < 10 * 60 * 1000)
+      return fresh.length === state.permissions.length ? state : { permissions: fresh }
+    })
 
     const unsubscribe = permissionEvents.subscribe((event) => {
       if (event.type === 'add' && event.permission) {
