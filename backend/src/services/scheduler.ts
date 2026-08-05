@@ -1,0 +1,165 @@
+import type { Database } from 'bun:sqlite'
+import type { Schedule } from '../types/schedule'
+import * as scheduleDb from '../db/schedule-queries'
+import { getRepoById } from '../db/queries'
+import { getReposPath } from '@opencode-webui/shared'
+import { opencodeServerManager } from './opencode-single-server'
+import { ensureServerAuth } from './opencode-auth'
+import { logger } from '../utils/logger'
+import path from 'path'
+
+const CHECK_INTERVAL_MS = 30_000
+
+function expandField(field: string, min: number, max: number): number[] | null {
+  const values = new Set<number>()
+  for (const part of field.split(',')) {
+    const stepMatch = part.match(/^([\d*]+)(?:-(\d+))?(?:\/(\d+))?$/)
+    if (!stepMatch) return null
+
+    const startRaw = stepMatch[1]
+    const endRaw = stepMatch[2]
+    const stepRaw = stepMatch[3]
+    if (!startRaw) return null
+    const step = stepRaw ? parseInt(stepRaw, 10) : 1
+    if (step < 1) return null
+
+    const start = startRaw === '*' ? min : parseInt(startRaw, 10)
+    const end = endRaw ? parseInt(endRaw, 10) : startRaw === '*' ? max : start
+
+    for (let v = start; v <= end; v += step) {
+      if (v >= min && v <= max) values.add(v)
+    }
+  }
+  return [...values]
+}
+
+export function matchesCron(cron: string, date: Date): boolean {
+  const parts = cron.trim().split(/\s+/)
+  if (parts.length !== 5) return false
+
+  const minute = parts[0]
+  const hour = parts[1]
+  const day = parts[2]
+  const month = parts[3]
+  const weekday = parts[4]
+  if (!minute || !hour || !day || !month || !weekday) return false
+
+  const minutes = expandField(minute, 0, 59)
+  const hours = expandField(hour, 0, 23)
+  const days = expandField(day, 1, 31)
+  const months = expandField(month, 1, 12)
+  const weekdays = expandField(weekday, 0, 6)
+
+  if (!minutes || !hours || !days || !months || !weekdays) return false
+
+  return (
+    minutes.includes(date.getMinutes()) &&
+    hours.includes(date.getHours()) &&
+    days.includes(date.getDate()) &&
+    months.includes(date.getMonth() + 1) &&
+    weekdays.includes(date.getDay())
+  )
+}
+
+function sameMinute(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate() &&
+    a.getHours() === b.getHours() &&
+    a.getMinutes() === b.getMinutes()
+  )
+}
+
+export async function runSchedule(db: Database, schedule: Schedule): Promise<{ success: boolean; sessionID?: string; error?: string }> {
+  const repo = getRepoById(db, schedule.repoId)
+  if (!repo) {
+    return { success: false, error: `Repo ${schedule.repoId} not found` }
+  }
+
+  await opencodeServerManager.ensureRunning()
+
+  const base = opencodeServerManager.getUrl()
+  const directory = path.join(getReposPath(), repo.localPath)
+  const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
+  const directoryParam = encodeURIComponent(directory)
+
+  const createResponse = await fetch(`${base}/session?directory=${directoryParam}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: schedule.name }),
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!createResponse.ok) {
+    const body = await createResponse.text()
+    return { success: false, error: `Failed to create session: ${createResponse.status} ${body}` }
+  }
+
+  const session = await createResponse.json() as { id: string }
+  const sessionID = session.id
+
+  if (schedule.action === 'command') {
+    const command = schedule.command?.trim()
+    if (!command) {
+      return { success: false, sessionID, error: 'Command name is required' }
+    }
+    const response = await fetch(`${base}/session/${sessionID}/command?directory=${directoryParam}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ command, arguments: '' }),
+      signal: AbortSignal.timeout(60_000),
+    })
+    if (!response.ok) {
+      const body = await response.text()
+      return { success: false, sessionID, error: `Failed to run command: ${response.status} ${body}` }
+    }
+    return { success: true, sessionID }
+  }
+
+  const prompt = schedule.prompt?.trim()
+  if (!prompt) {
+    return { success: false, sessionID, error: 'Prompt is required' }
+  }
+  const response = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ parts: [{ type: 'text', text: prompt }] }),
+    signal: AbortSignal.timeout(60_000),
+  })
+  if (!response.ok) {
+    const body = await response.text()
+    return { success: false, sessionID, error: `Failed to send prompt: ${response.status} ${body}` }
+  }
+  return { success: true, sessionID }
+}
+
+export function startScheduleRunner(db: Database): NodeJS.Timeout {
+  const check = async (): Promise<void> => {
+    try {
+      const now = new Date()
+      const schedules = scheduleDb.listEnabledSchedules(db)
+
+      for (const schedule of schedules) {
+        const lastRun = schedule.lastRunAt ? new Date(schedule.lastRunAt) : null
+        if (lastRun && sameMinute(lastRun, now)) continue
+        if (!matchesCron(schedule.cron, now)) continue
+
+        logger.info(`Running scheduled task "${schedule.name}" (id=${schedule.id}, action=${schedule.action})`)
+        const result = await runSchedule(db, schedule)
+        if (result.success) {
+          scheduleDb.markScheduleRun(db, schedule.id)
+          logger.info(`Scheduled task "${schedule.name}" completed (session ${result.sessionID})`)
+        } else {
+          logger.error(`Scheduled task "${schedule.name}" failed: ${result.error}`)
+          scheduleDb.markScheduleRun(db, schedule.id)
+        }
+      }
+    } catch (error) {
+      logger.error('Schedule runner check failed:', error)
+    }
+  }
+
+  const interval = setInterval(check, CHECK_INTERVAL_MS)
+  check()
+  return interval
+}

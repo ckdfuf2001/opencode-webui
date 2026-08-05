@@ -48,6 +48,22 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
     
     CREATE INDEX IF NOT EXISTS idx_opencode_user_id ON opencode_configs(user_id);
     CREATE INDEX IF NOT EXISTS idx_opencode_default ON opencode_configs(user_id, is_default);
+    
+    CREATE TABLE IF NOT EXISTS schedules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      command TEXT,
+      prompt TEXT,
+      cron TEXT NOT NULL,
+      enabled BOOLEAN DEFAULT TRUE,
+      last_run_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_schedules_repo ON schedules(repo_id);
   `)
   
   runMigrations(db)
