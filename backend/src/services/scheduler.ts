@@ -71,7 +71,23 @@ function sameMinute(a: Date, b: Date): boolean {
   )
 }
 
+function formatSessionTitle(name: string): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const datePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+  const timePart = `${pad(now.getHours())}${pad(now.getMinutes())}`
+  return `[규칙1]${name}_${datePart}-${timePart}`
+}
+
 export async function runSchedule(db: Database, schedule: Schedule): Promise<{ success: boolean; sessionID?: string; error?: string }> {
+  try {
+    return await doRunSchedule(db, schedule)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ success: boolean; sessionID?: string; error?: string }> {
   const repo = getRepoById(db, schedule.repoId)
   if (!repo) {
     return { success: false, error: `Repo ${schedule.repoId} not found` }
@@ -87,7 +103,7 @@ export async function runSchedule(db: Database, schedule: Schedule): Promise<{ s
   const createResponse = await fetch(`${base}/session?directory=${directoryParam}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ title: schedule.name }),
+    body: JSON.stringify({ title: formatSessionTitle(schedule.name) }),
     signal: AbortSignal.timeout(30_000),
   })
   if (!createResponse.ok) {
