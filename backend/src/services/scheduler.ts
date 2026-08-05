@@ -87,6 +87,13 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
     return { success: false, error: `Repo ${schedule.repoId} not found` }
   }
 
+  const prompt = schedule.action === 'command'
+    ? schedule.command?.trim()
+    : schedule.prompt?.trim()
+  if (!prompt) {
+    return { success: false, error: schedule.action === 'command' ? 'Command name is required' : 'Prompt is required' }
+  }
+
   await opencodeServerManager.ensureRunning()
 
   const base = opencodeServerManager.getUrl()
@@ -108,17 +115,27 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
   const session = await createResponse.json() as { id: string }
   const sessionID = session.id
 
-  const prompt = schedule.action === 'command'
-    ? schedule.command?.trim()
-    : schedule.prompt?.trim()
-  if (!prompt) {
-    return { success: false, sessionID, error: schedule.action === 'command' ? 'Command name is required' : 'Prompt is required' }
-  }
-
   const text = schedule.action === 'command' ? `/${prompt}` : prompt
+  void sendSchedulePrompt(base, sessionID, schedule.agent, text, headers, directoryParam, schedule.name)
+    .catch((error: unknown) => {
+      logger.error(`Failed to send scheduled prompt for "${schedule.name}":`, error)
+    })
+
+  return { success: true, sessionID }
+}
+
+async function sendSchedulePrompt(
+  base: string,
+  sessionID: string,
+  agent: string | undefined,
+  text: string,
+  headers: Record<string, string>,
+  directoryParam: string,
+  scheduleName: string,
+): Promise<void> {
   const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text }] }
-  if (schedule.agent) {
-    messageBody.agent = schedule.agent
+  if (agent) {
+    messageBody.agent = agent
   }
   const response = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
     method: 'POST',
@@ -128,9 +145,8 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
   })
   if (!response.ok) {
     const body = await response.text()
-    return { success: false, sessionID, error: `Failed to send prompt: ${response.status} ${body}` }
+    logger.error(`Failed to send scheduled prompt for "${scheduleName}": ${response.status} ${body}`)
   }
-  return { success: true, sessionID }
 }
 
 export function startScheduleRunner(db: Database): NodeJS.Timeout {
