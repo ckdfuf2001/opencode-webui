@@ -1971,7 +1971,10 @@ export interface components {
         Permission: {
             id: string;
             type: string;
+            permission?: string;
             pattern?: string | string[];
+            patterns?: string[];
+            always?: string[];
             sessionID: string;
             messageID: string;
             callID?: string;
@@ -1981,6 +1984,10 @@ export interface components {
             };
             time: {
                 created: number;
+            };
+            tool?: {
+                messageID?: string;
+                callID?: string;
             };
         };
         "Event.permission.updated": {
