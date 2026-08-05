@@ -17,6 +17,8 @@ const SESSION_ERROR_MESSAGES: Record<string, string> = {
   MessageOutputLengthError: 'The model output exceeded the maximum allowed length.',
   MessageAbortedError: 'The message was aborted.',
   APIError: 'The model API returned an error.',
+  RateLimitError: 'Rate limit exceeded. Please wait before sending more requests.',
+  QuotaExceededError: 'Usage quota exceeded. Check your provider limits.',
 }
 
 function getSessionErrorMessage(error: { name: string; data: Record<string, unknown> } | undefined): string {
