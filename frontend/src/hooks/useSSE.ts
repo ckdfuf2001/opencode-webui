@@ -55,7 +55,7 @@ const handleRestartServer = async () => {
 }
 
 
-export const useSSE = (opcodeUrl: string | null | undefined, directory?: string) => {
+export const useSSE = (opcodeUrl: string | null | undefined, directory?: string, global?: boolean) => {
   const client = useOpenCodeClient(opcodeUrl, directory)
   const queryClient = useQueryClient()
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -103,7 +103,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
       return
     }
 
-    const eventSourceUrl = client.getEventSourceURL()
+    const eventSourceUrl = global ? client.getGlobalEventSourceURL() : client.getEventSourceURL()
     
     if (urlRef.current === eventSourceUrl && eventSourceRef.current) {
       return
@@ -488,7 +488,10 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
 
         eventSource.onmessage = (event) => {
           try {
-            const data: SSEEvent = JSON.parse(event.data)
+            const raw: unknown = JSON.parse(event.data)
+            const data: SSEEvent = global && raw && typeof raw === 'object' && 'payload' in raw
+              ? (raw as { payload: SSEEvent }).payload
+              : raw as SSEEvent
             handleSSEEvent(data)
           } catch (err) {
             console.error('Failed to parse SSE event:', err)
@@ -527,7 +530,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
         setIsConnected(false)
       }
     }
-  }, [client, queryClient, opcodeUrl, directory, scheduleReconnect, resetReconnectDelay])
+  }, [client, queryClient, opcodeUrl, directory, global, scheduleReconnect, resetReconnectDelay])
 
   return { isConnected, error, isReconnecting }
 }
