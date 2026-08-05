@@ -24,7 +24,11 @@ function expandField(field: string, min: number, max: number): number[] | null {
     if (step < 1) return null
 
     const start = startRaw === '*' ? min : parseInt(startRaw, 10)
-    const end = endRaw ? parseInt(endRaw, 10) : startRaw === '*' ? max : start
+    const end = endRaw
+      ? parseInt(endRaw, 10)
+      : stepRaw
+        ? max
+        : startRaw === '*' ? max : start
 
     for (let v = start; v <= end; v += step) {
       if (v >= min && v <= max) values.add(v)
@@ -58,16 +62,6 @@ export function matchesCron(cron: string, date: Date): boolean {
     days.includes(date.getDate()) &&
     months.includes(date.getMonth() + 1) &&
     weekdays.includes(date.getDay())
-  )
-}
-
-function sameMinute(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate() &&
-    a.getHours() === b.getHours() &&
-    a.getMinutes() === b.getMinutes()
   )
 }
 
@@ -142,18 +136,15 @@ export function startScheduleRunner(db: Database): NodeJS.Timeout {
       const schedules = scheduleDb.listEnabledSchedules(db)
 
       for (const schedule of schedules) {
-        const lastRun = schedule.lastRunAt ? new Date(schedule.lastRunAt) : null
-        if (lastRun && sameMinute(lastRun, now)) continue
         if (!matchesCron(schedule.cron, now)) continue
+        if (!scheduleDb.tryClaimScheduleRun(db, schedule.id, 60_000)) continue
 
         logger.info(`Running scheduled task "${schedule.name}" (id=${schedule.id}, action=${schedule.action})`)
         const result = await runSchedule(db, schedule)
         if (result.success) {
-          scheduleDb.markScheduleRun(db, schedule.id)
           logger.info(`Scheduled task "${schedule.name}" completed (session ${result.sessionID})`)
         } else {
           logger.error(`Scheduled task "${schedule.name}" failed: ${result.error}`)
-          scheduleDb.markScheduleRun(db, schedule.id)
         }
       }
     } catch (error) {
