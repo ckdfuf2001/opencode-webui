@@ -66,14 +66,17 @@ if not exist "%WORKSPACE_PATH%\repos" mkdir "%WORKSPACE_PATH%\repos"
 if not exist "%WORKSPACE_PATH%\.config\opencode" mkdir "%WORKSPACE_PATH%\.config\opencode"
 
 REM Install the domain guide (AGENTS.md) into the workspace if missing
-if exist "docs\agent-domain-guide.md" (
-  if not exist "%WORKSPACE_PATH%\AGENTS.md" (
-    copy "docs\agent-domain-guide.md" "%WORKSPACE_PATH%\AGENTS.md" >nul
-    echo   [+] Installed domain guide ^(docs\agent-domain-guide.md^) as workspace\AGENTS.md
-  ) else (
-    echo   [+] workspace\AGENTS.md already present
-  )
-)
+if not exist "%WORKSPACE_PATH%\AGENTS.md" goto :agent_guide_missing
+echo   [+] workspace\AGENTS.md already present
+goto :agent_guide_done
+:agent_guide_missing
+if not exist "docs\agent-domain-guide.md" goto :agent_guide_none
+copy "docs\agent-domain-guide.md" "%WORKSPACE_PATH%\AGENTS.md" >nul
+echo   [+] Installed domain guide as workspace\AGENTS.md
+goto :agent_guide_done
+:agent_guide_none
+echo   [.] Domain guide not found (docs\agent-domain-guide.md) - continuing.
+:agent_guide_done
 
 echo.
 echo [3/5] Installing dependencies (pnpm install)...
