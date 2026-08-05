@@ -4,6 +4,7 @@ import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
 import { Loader2, Settings, FolderOpen, Terminal } from "lucide-react";
 import { useState } from "react";
+import { useSessionActive } from "@/hooks/useSessionActivity";
 
 interface Repo {
   id: number;
@@ -47,6 +48,7 @@ export function SessionDetailHeader({
 }: SessionDetailHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(sessionTitle);
+  const isWorking = useSessionActive(sessionId);
 
   if (repo.cloneStatus !== 'ready') {
     return (
@@ -153,6 +155,15 @@ export function SessionDetailHeader({
               {isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}
             </span>
           </div>
+          {isWorking && (
+            <div
+              className="flex items-center gap-1 rounded-full bg-blue-500/10 border border-blue-500/30 px-2 py-0.5"
+              title="LLM is answering"
+            >
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+              <span className="text-xs text-blue-500 font-medium hidden sm:inline">Working</span>
+            </div>
+          )}
           <Button
             variant="ghost"
             size="icon"

@@ -7,7 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { usePendingPermissionCounts } from "@/hooks/usePermissionRequests";
-import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert } from "lucide-react";
+import { useActiveSessions } from "@/hooks/useSessionActivity";
+import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert, Loader2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface SessionListProps {
@@ -26,6 +27,7 @@ export const SessionList = ({
   const { data: sessions, isLoading } = useSessions(opcodeUrl, directory);
   const deleteSession = useDeleteSession(opcodeUrl, directory);
   const pendingPermissionCounts = usePendingPermissionCounts();
+  const activeSessions = useActiveSessions();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<
     string | string[] | null
@@ -225,6 +227,15 @@ export const SessionList = ({
                           >
                             <ShieldAlert className="w-3 h-3" />
                             {pendingPermissionCounts[session.id]}
+                          </span>
+                        ) : null}
+                        {activeSessions[session.id] ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-500 bg-blue-500/10 border border-blue-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
+                            title="LLM is answering"
+                          >
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Working
                           </span>
                         ) : null}
                       </div>

@@ -112,6 +112,10 @@ export class OpenCodeClient {
     return response.data
   }
 
+  async switchModel(sessionID: string, model: { id: string; providerID: string }) {
+    await this.client.post(`/api/session/${sessionID}/model`, { model })
+  }
+
   async sendShell(sessionID: string, data: ShellRequest) {
     const response = await this.client.post(`/session/${sessionID}/shell`, data)
     return response.data

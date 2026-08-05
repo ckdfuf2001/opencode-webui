@@ -4,6 +4,7 @@ import { useOpenCodeClient } from './useOpenCode'
 import type { SSEEvent, MessageListResponse, MessageWithParts, QuestionRequest, PermissionAskedProps } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
 import { questionEvents } from './useQuestionRequests'
+import { sessionActivityEvents } from './useSessionActivity'
 import { showToast } from '@/lib/toast'
 import { settingsApi } from '@/api/settings'
 
@@ -133,6 +134,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
             queryClient.invalidateQueries({ 
               queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, activeDirectory] 
             })
+            sessionActivityEvents.emit({ type: 'remove', sessionID: event.properties.sessionID })
           }
           break
 
@@ -144,6 +146,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           if (!('sessionID' in event.properties)) break
 
           const { sessionID } = event.properties
+          sessionActivityEvents.emit({ type: 'idle', sessionID })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID, activeDirectory] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory] })
           break
@@ -153,6 +156,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           const message = getSessionErrorMessage(event.properties.error)
           showToast.error(message, { duration: 8000 })
           if (event.properties.sessionID) {
+            sessionActivityEvents.emit({ type: 'idle', sessionID: event.properties.sessionID })
             queryClient.invalidateQueries({ 
               queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, activeDirectory] 
             })
@@ -167,6 +171,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           const { part } = event.properties
           const sessionID = part.sessionID
           const messageID = part.messageID
+          sessionActivityEvents.emit({ type: 'active', sessionID })
           
           const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory])
           if (!currentData) return
@@ -204,6 +209,11 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           
           const { info } = event.properties
           const sessionID = info.sessionID
+          if (info.role === 'assistant' && info.time.completed) {
+            sessionActivityEvents.emit({ type: 'completing', sessionID })
+          } else {
+            sessionActivityEvents.emit({ type: 'active', sessionID })
+          }
           
           const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory])
           if (!currentData) {
