@@ -121,6 +121,11 @@ export class OpenCodeClient {
     return result.data
   }
 
+  async respondToPermissionV2(requestID: string, response: 'once' | 'always' | 'reject') {
+    const result = await this.client.post(`/permission/${requestID}/reply`, { reply: response })
+    return result.data
+  }
+
   async listQuestions() {
     const response = await this.client.get('/question')
     return response.data
