@@ -16,6 +16,7 @@ import {
 } from "@/api/providers";
 import { useSettings } from "@/hooks/useSettings";
 import { useOpenCodeClient } from "@/hooks/useOpenCode";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import type { ProviderWithModels, Model } from "@/api/providers";
 
@@ -36,7 +37,8 @@ export function ModelSelectDialog({
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const { preferences, updateSettings } = useSettings();
   const client = useOpenCodeClient(opcodeUrl);
-  const { sessionID } = useParams<{ sessionID: string }>();
+  const queryClient = useQueryClient();
+  const { sessionId } = useParams<{ sessionId: string }>();
 
   const currentModel = preferences?.defaultModel || "";
 
@@ -85,12 +87,17 @@ export function ModelSelectDialog({
     updateSettings({ defaultModel: newModel });
 
     // If we're in a session, try to update the current session's model
-    if (sessionID && client) {
+    if (sessionId && client) {
       try {
-        await client.sendCommand(sessionID, {
-          command: "model",
-          arguments: newModel,
-          model: newModel,
+        await client.switchModel(sessionId, {
+          id: modelId,
+          providerID: providerId,
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["opencode", "session", opcodeUrl, sessionId],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["opencode", "sessions", opcodeUrl],
         });
       } catch {
         // Ignore errors when updating session model

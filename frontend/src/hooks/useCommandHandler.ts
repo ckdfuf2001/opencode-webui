@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createOpenCodeClient } from '@/api/opencode'
 import { useCreateSession } from '@/hooks/useOpenCode'
+import { useCommands } from '@/hooks/useCommands'
 import { useCommandRuns } from '@/stores/commandRunsStore'
 import { showToast } from '@/lib/toast'
 import type { components } from '@/api/opencode-types'
@@ -17,6 +18,9 @@ interface CommandHandlerProps {
   onShowHelpDialog?: () => void
 }
 
+// Commands that exist on the opencode server (v1.18.11)
+const SERVER_COMMANDS = new Set(['init', 'review'])
+
 export function useCommandHandler({
   opcodeUrl,
   sessionID,
@@ -27,6 +31,7 @@ export function useCommandHandler({
 }: CommandHandlerProps) {
   const navigate = useNavigate()
   const createSession = useCreateSession(opcodeUrl, directory)
+  const { commands } = useCommands(opcodeUrl, directory)
   const [loading, setLoading] = useState(false)
 
   const executeCommand = useCallback(async (command: CommandType) => {
@@ -39,6 +44,13 @@ export function useCommandHandler({
     try {
       const client = createOpenCodeClient(opcodeUrl, directory)
       
+      // Check if command exists on server (built-in + MCP + skills from fetched list)
+      const serverCommandNames = new Set([
+        ...SERVER_COMMANDS,
+        ...(commands?.map((c: typeof commands[0]) => c.name) ?? [])
+      ])
+      const isServerCommand = serverCommandNames.has(command.name)
+
       // Handle special commands that need UI interaction
       switch (command.name) {
         case 'sessions':
@@ -52,18 +64,16 @@ export function useCommandHandler({
           break
           
         case 'themes':
-          // Themes command will be sent to server and appear as message
-          await client.sendCommand(sessionID, {
-            command: command.name,
-            arguments: ''
-          })
+          showToast.warning(
+            `"/${command.name}" is not supported in the web UI. This command runs only in the terminal (TUI).`
+          )
           break
           
         case 'help':
           onShowHelpDialog?.()
           break
           
-case 'new':
+        case 'new':
         case 'clear':
           // Create a new session and navigate to it
           try {
@@ -71,8 +81,6 @@ case 'new':
               agent: undefined
             })
             if (newSession?.id) {
-              // Navigate to the correct repo session URL pattern
-              // We need to get the current repo ID from the URL
               const currentPath = window.location.pathname
               const repoMatch = currentPath.match(/\/repos\/(\d+)\/sessions\//)
               if (repoMatch) {
@@ -80,7 +88,6 @@ case 'new':
                 const newPath = `/repos/${repoId}/sessions/${newSession.id}`
                 navigate(newPath)
               } else {
-                // Fallback: try to navigate to session directly if route exists
                 navigate(`/session/${newSession.id}`)
               }
             }
@@ -98,7 +105,6 @@ case 'new':
         case 'redo':
         case 'details':
         case 'editor':
-        case 'init':
           // TUI-only commands that the web HTTP API cannot execute
           showToast.warning(
             `"/${command.name}" is not supported in the web UI. This command runs only in the terminal (TUI).`
@@ -106,18 +112,24 @@ case 'new':
           break
           
         default:
-          // Send custom commands to server
-          await client.sendCommand(sessionID, {
-            command: command.name,
-            arguments: ''
-          })
+          // Only send commands that exist on the server
+          if (isServerCommand) {
+            await client.sendCommand(sessionID, {
+              command: command.name,
+              arguments: args
+            })
+          } else {
+            showToast.warning(
+              `Unknown command: "/${command.name}". Available: ${[...serverCommandNames].join(', ')}`
+            )
+          }
       }
     } catch (error) {
       console.error('Failed to execute command:', error)
     } finally {
       setLoading(false)
     }
-  }, [sessionID, opcodeUrl, onShowSessionsDialog, onShowModelsDialog, onShowHelpDialog, createSession, navigate])
+  }, [sessionID, opcodeUrl, onShowSessionsDialog, onShowModelsDialog, onShowHelpDialog, createSession, navigate, commands, directory])
 
   return {
     executeCommand,

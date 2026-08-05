@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react'
-import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig } from '@/hooks/useOpenCode'
+import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession } from '@/hooks/useOpenCode'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
 import { useCommandHandler } from '@/hooks/useCommandHandler'
@@ -22,6 +22,15 @@ import {
 } from '@/components/ui/dropdown-menu'
 
 type CommandType = components['schemas']['Command']
+
+// Extended session type with model field from actual API response
+type SessionWithModel = components['schemas']['Session'] & {
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+}
 
 interface PromptInputProps {
   opcodeUrl: string
@@ -83,6 +92,8 @@ export function PromptInput({
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
+  const sessionData = useSession(opcodeUrl, sessionID, directory)
+  const session = sessionData.data as SessionWithModel | undefined
   const { data: config } = useConfig(opcodeUrl)
   const { preferences, updateSettings } = useSettings()
   const { filterCommands } = useCommands(opcodeUrl)
@@ -405,9 +416,8 @@ export function PromptInput({
   const modeColor = currentMode === 'plan' ? 'text-yellow-600 dark:text-yellow-500' : 'text-green-600 dark:text-green-500'
   const modeBg = currentMode === 'plan' ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-green-500/10 border-green-500/30'
 
-  const lastAssistantMessage = messages?.filter(msg => msg.info.role === 'assistant').pop()
-  const sessionModel = lastAssistantMessage?.info.role === 'assistant' 
-    ? `${lastAssistantMessage.info.providerID}/${lastAssistantMessage.info.modelID}`
+  const sessionModel = session?.model?.providerID && session?.model?.id
+    ? `${session.model.providerID}/${session.model.id}`
     : null
   const currentModel = sessionModel || config?.model || preferences?.defaultModel || ''
 
