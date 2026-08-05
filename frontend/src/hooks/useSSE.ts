@@ -55,7 +55,7 @@ const handleRestartServer = async () => {
 }
 
 
-export const useSSE = (opcodeUrl: string | null | undefined, directory?: string) => {
+export const useSSE = (opcodeUrl: string | null | undefined, directory?: string, global?: boolean) => {
   const client = useOpenCodeClient(opcodeUrl, directory)
   const queryClient = useQueryClient()
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -103,7 +103,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
       return
     }
 
-    const eventSourceUrl = client.getEventSourceURL()
+    const eventSourceUrl = global ? client.getGlobalEventSourceURL() : client.getEventSourceURL()
     
     if (urlRef.current === eventSourceUrl && eventSourceRef.current) {
       return
@@ -115,36 +115,37 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
     
     urlRef.current = eventSourceUrl
 
-    const handleSSEEvent = (event: SSEEvent) => {
+    const handleSSEEvent = (event: SSEEvent, eventDirectory?: string) => {
+      const activeDirectory = global ? (eventDirectory ?? directory) : directory
       switch (event.type) {
         case 'session.updated':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
           if ('info' in event.properties) {
             queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'session', opcodeUrl, event.properties.info.id, directory] 
+              queryKey: ['opencode', 'session', opcodeUrl, event.properties.info.id, activeDirectory] 
             })
           }
           break
 
         case 'session.deleted':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
           if ('sessionID' in event.properties) {
             queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, directory] 
+              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, activeDirectory] 
             })
           }
           break
 
         case 'session.created':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
           break
 
         case 'session.idle': {
           if (!('sessionID' in event.properties)) break
 
           const { sessionID } = event.properties
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID, directory] })
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID, activeDirectory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory] })
           break
         }
 
@@ -153,7 +154,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           showToast.error(message, { duration: 8000 })
           if (event.properties.sessionID) {
             queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, directory] 
+              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, activeDirectory] 
             })
           }
           break
@@ -167,7 +168,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           const sessionID = part.sessionID
           const messageID = part.messageID
           
-          const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, directory])
+          const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory])
           if (!currentData) return
           
           const messageExists = currentData.some(msg => msg.info.id === messageID)
@@ -193,7 +194,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
             }
           })
           
-          queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, directory], updated)
+          queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], updated)
           break
         }
 
@@ -204,9 +205,9 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           const { info } = event.properties
           const sessionID = info.sessionID
           
-          const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, directory])
+          const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory])
           if (!currentData) {
-            queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, directory], [{ info, parts: [] }])
+            queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], [{ info, parts: [] }])
             return
           }
           
@@ -216,7 +217,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
             const filteredData = info.role === 'user' 
               ? currentData.filter(msg => !msg.info.id.startsWith('optimistic_'))
               : currentData
-            queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, directory], [...filteredData, { info, parts: [] }])
+            queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], [...filteredData, { info, parts: [] }])
             return
           }
           
@@ -228,7 +229,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
             }
           })
           
-          queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, directory], updated)
+          queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], updated)
           break
         }
 
@@ -239,7 +240,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           const { sessionID, messageID } = event.properties
           
           queryClient.setQueryData<MessageListResponse>(
-            ['opencode', 'messages', opcodeUrl, sessionID, directory],
+            ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory],
             (old) => {
               if (!old) return old
               return old.filter(msg => msg.info.id !== messageID)
@@ -255,7 +256,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           const { sessionID, messageID, partID } = event.properties
           
           queryClient.setQueryData<MessageListResponse>(
-            ['opencode', 'messages', opcodeUrl, sessionID, directory],
+            ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory],
             (old) => {
               if (!old) return old
               
@@ -276,7 +277,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           
           const { sessionID } = event.properties
           queryClient.invalidateQueries({ 
-            queryKey: ['opencode', 'messages', opcodeUrl, sessionID, directory] 
+            queryKey: ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory] 
           })
           break
         }
@@ -304,7 +305,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
                 callID: props.tool?.callID,
                 tool: props.tool,
                 time: props.time ?? { created: Date.now() },
-                directory: directory,
+                directory: eventDirectory,
               },
             })
           }
@@ -343,7 +344,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
               tool,
               time: { created: Date.now() },
               v2: true,
-              directory: directory,
+              directory: eventDirectory,
             },
           })
           break
@@ -397,7 +398,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
         case 'todo.updated':
           if ('sessionID' in event.properties) {
             queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'todos', opcodeUrl, event.properties.sessionID, directory] 
+              queryKey: ['opencode', 'todos', opcodeUrl, event.properties.sessionID, activeDirectory] 
             })
           }
           break
@@ -432,7 +433,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
         case 'command.executed': {
           const { name, sessionID } = event.properties
           showToast.info(`Command "${name}" executed`, { duration: 3000 })
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory] })
           break
         }
 
@@ -463,7 +464,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           break
 
         case 'server.connected':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
           break
 
         default:
@@ -537,8 +538,14 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
 
         eventSource.onmessage = (event) => {
           try {
-            const data: SSEEvent = JSON.parse(event.data)
-            handleSSEEvent(data)
+            const raw: unknown = JSON.parse(event.data)
+            const wrapped = global && raw && typeof raw === 'object' && 'payload' in raw
+              ? raw as { payload: { type: string }; directory?: string }
+              : undefined
+            if (wrapped?.payload.type === 'sync') return
+            const data = wrapped ? wrapped.payload as SSEEvent : raw as SSEEvent
+            const eventDirectory = wrapped?.directory
+            handleSSEEvent(data, eventDirectory)
           } catch (err) {
             console.error('Failed to parse SSE event:', err)
           }
@@ -576,7 +583,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
         setIsConnected(false)
       }
     }
-  }, [client, queryClient, opcodeUrl, directory, scheduleReconnect, resetReconnectDelay])
+  }, [client, queryClient, opcodeUrl, directory, global, scheduleReconnect, resetReconnectDelay])
 
   return { isConnected, error, isReconnecting }
 }

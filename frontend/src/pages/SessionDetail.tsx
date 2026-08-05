@@ -19,7 +19,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useQuestionRequests } from "@/hooks/useQuestionRequests";
-import { usePermissionRequests } from "@/hooks/usePermissionRequests";
+import { usePermissionRequests, useLoadPendingPermissions } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useEffect, useRef, useCallback } from "react";
 import { Loader2 } from "lucide-react";
@@ -57,11 +57,12 @@ export function SessionDetail() {
     enabled: !!repoId,
   });
 
-  const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests();
-  const { currentQuestion, dismissQuestion } = useQuestionRequests();
+  const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests(sessionId);
+  const { currentQuestion, dismissQuestion } = useQuestionRequests(sessionId);
   
   const opcodeUrl = OPENCODE_API_ENDPOINT;
   const openCodeClient = useOpenCodeClient(opcodeUrl, repo?.fullPath);
+  useLoadPendingPermissions(openCodeClient, sessionId);
   
   const repoDirectory = repo?.fullPath;
 

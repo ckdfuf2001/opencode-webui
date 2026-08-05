@@ -25,32 +25,36 @@ export const questionEvents = {
   }
 }
 
-export function useQuestionRequests() {
-  const [questions, setQuestions] = useState<QuestionRequest[]>([])
+export function useQuestionRequests(sessionID?: string) {
+  const [allQuestions, setAllQuestions] = useState<QuestionRequest[]>([])
 
   useEffect(() => {
     const unsubscribe = questionEvents.subscribe((event) => {
       if (event.type === 'add' && event.question) {
-        setQuestions(prev => {
+        setAllQuestions(prev => {
           const exists = prev.some(q => q.id === event.question!.id)
           if (exists) return prev
           return [...prev, event.question!]
         })
       } else if (event.type === 'remove' && event.requestID) {
-        setQuestions(prev => prev.filter(q => q.id !== event.requestID))
+        setAllQuestions(prev => prev.filter(q => q.id !== event.requestID))
       }
     })
     return unsubscribe
   }, [])
 
+  const questions = sessionID
+    ? allQuestions.filter(q => q.sessionID === sessionID)
+    : allQuestions
+
   const currentQuestion = questions[0] || null
 
   const dismissQuestion = useCallback((requestID: string) => {
-    setQuestions(prev => prev.filter(q => q.id !== requestID))
+    setAllQuestions(prev => prev.filter(q => q.id !== requestID))
   }, [])
 
   const clearAllQuestions = useCallback(() => {
-    setQuestions([])
+    setAllQuestions([])
   }, [])
 
   return {

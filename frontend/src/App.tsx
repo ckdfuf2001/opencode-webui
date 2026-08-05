@@ -7,6 +7,8 @@ import { SessionDetail } from './pages/SessionDetail'
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
+import { useSSE } from './hooks/useSSE'
+import { OPENCODE_API_ENDPOINT } from './config'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,6 +22,7 @@ const queryClient = new QueryClient({
 function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
+  useSSE(OPENCODE_API_ENDPOINT, undefined, true)
 
   return (
     <BrowserRouter>
