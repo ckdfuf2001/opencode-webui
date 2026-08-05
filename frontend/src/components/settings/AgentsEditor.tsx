@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogTrigger } from '@/components/ui/dialog'
 import { AgentDialog } from './AgentDialog'
-import { Agent, APPROVAL_TYPE_LABELS, inferApprovalType } from './agentTypes'
+import type { Agent } from './agentTypes'
+import { APPROVAL_TYPE_LABELS, inferApprovalType } from './agentTypes'
 
 interface AgentsEditorProps {
   agents: Record<string, Agent>
