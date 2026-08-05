@@ -10,10 +10,11 @@ import { SwitchConfigDialog } from "@/components/repo/SwitchConfigDialog";
 import { BackButton } from "@/components/ui/back-button";
 import { useCreateSession } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT } from "@/config";
+import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, FolderOpen, GitBranch, Terminal } from "lucide-react";
+import { Loader2, Plus, FolderOpen, GitBranch, Terminal, Settings } from "lucide-react";
 
 export function RepoDetail() {
   const { id } = useParams<{ id: string }>();
@@ -23,6 +24,7 @@ export function RepoDetail() {
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [switchConfigOpen, setSwitchConfigOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
   const splitContainerRef = useRef<HTMLDivElement>(null);
 
@@ -126,6 +128,15 @@ export function RepoDetail() {
               <h1 className="text-base font-semibold bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
                 {repoName}
               </h1>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setScheduleOpen(true)}
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-7 w-7"
+                title="Schedules"
+              >
+                <Settings className="w-4 h-4" />
+              </Button>
               {!repo.isWorktree && branchToDisplay ? (
                 <BranchSwitcher
                   repoId={repoId}
@@ -219,7 +230,7 @@ export function RepoDetail() {
         directory={repoDirectory}
       />
 
-{repo && (
+        {repo && (
           <SwitchConfigDialog
             open={switchConfigOpen}
             onOpenChange={setSwitchConfigOpen}
@@ -231,6 +242,16 @@ export function RepoDetail() {
                 openCodeConfigName: configName,
               });
             }}
+          />
+        )}
+
+        {repo && (
+          <ScheduleSettingsDialog
+            open={scheduleOpen}
+            onOpenChange={setScheduleOpen}
+            repoId={repoId}
+            opcodeUrl={opcodeUrl}
+            directory={repoDirectory}
           />
         )}
     </div>

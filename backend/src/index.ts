@@ -8,6 +8,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { initializeDatabase } from './db/schema'
 import { createRepoRoutes } from './routes/repos'
 import { createSettingsRoutes } from './routes/settings'
+import { createScheduleRoutes } from './routes/schedules'
 import { createHealthRoutes } from './routes/health'
 import { createTTSRoutes, cleanupExpiredCache } from './routes/tts'
 import { createFileRoutes } from './routes/files'
@@ -15,6 +16,7 @@ import { createRegistryRoutes } from './routes/registry'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { stopConverter } from './services/doc-converter'
+import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent } from './services/file-operations'
 import { SettingsService } from './services/settings'
 import { opencodeServerManager } from './services/opencode-single-server'
@@ -153,6 +155,7 @@ try {
 
 app.route('/api/repos', createRepoRoutes(db))
 app.route('/api/settings', createSettingsRoutes(db))
+app.route('/api/schedules', createScheduleRoutes(db))
 app.route('/api/health', createHealthRoutes(db))
 app.route('/api/files', createFileRoutes(db))
 app.route('/api/providers', createProvidersRoutes())
@@ -190,6 +193,7 @@ if (isProduction) {
         health: '/api/health',
         repos: '/api/repos',
         settings: '/api/settings',
+        schedules: '/api/schedules',
         sessions: '/api/sessions',
         files: '/api/files',
         providers: '/api/providers',
@@ -231,6 +235,7 @@ const shutdown = async (signal: string) => {
   
   logger.info(`${signal} received, shutting down gracefully...`)
   clearInterval(healthCheckInterval)
+  clearInterval(scheduleRunner)
   try {
     await opencodeServerManager.stop()
     logger.info('OpenCode server stopped')
@@ -268,3 +273,6 @@ const healthCheckInterval = setInterval(() => {
     logger.error('Failed to ensure OpenCode server is running:', error)
   })
 }, ENV.TIMEOUTS.HEALTH_CHECK_INTERVAL_MS)
+
+const scheduleRunner = startScheduleRunner(db)
+logger.info('Schedule runner started')
