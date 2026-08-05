@@ -228,14 +228,16 @@ if (isProduction) {
 }
 
 let isShuttingDown = false
+let healthCheckInterval: NodeJS.Timeout | null = null
+let scheduleRunner: NodeJS.Timeout | null = null
 
 const shutdown = async (signal: string) => {
   if (isShuttingDown) return
   isShuttingDown = true
   
   logger.info(`${signal} received, shutting down gracefully...`)
-  clearInterval(healthCheckInterval)
-  clearInterval(scheduleRunner)
+  if (healthCheckInterval) clearInterval(healthCheckInterval)
+  if (scheduleRunner) clearInterval(scheduleRunner)
   try {
     await opencodeServerManager.stop()
     logger.info('OpenCode server stopped')
@@ -249,30 +251,41 @@ const shutdown = async (signal: string) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'))
 process.on('SIGINT', () => shutdown('SIGINT'))
 
-serve({
+const server = serve({
   fetch: app.fetch,
   port: PORT,
   hostname: HOST,
 })
 
-logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${PORT}`)
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    logger.error(`Port ${PORT} is already in use. Is another backend already running?`)
+  } else {
+    logger.error('Failed to start HTTP server:', error)
+  }
+  process.exit(1)
+})
 
-const startupSettings = new SettingsService(db)
-opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferences.opencodeBin ?? null)
+server.on('listening', () => {
+  logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${PORT}`)
 
-opencodeServerManager.start()
-  .then(() => {
-    logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
-  })
-  .catch((error) => {
-    logger.error('Failed to start OpenCode server:', error)
-  })
+  const startupSettings = new SettingsService(db)
+  opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferences.opencodeBin ?? null)
 
-const healthCheckInterval = setInterval(() => {
-  opencodeServerManager.ensureRunning().catch((error) => {
-    logger.error('Failed to ensure OpenCode server is running:', error)
-  })
-}, ENV.TIMEOUTS.HEALTH_CHECK_INTERVAL_MS)
+  opencodeServerManager.start()
+    .then(() => {
+      logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
+    })
+    .catch((error) => {
+      logger.error('Failed to start OpenCode server:', error)
+    })
 
-const scheduleRunner = startScheduleRunner(db)
-logger.info('Schedule runner started')
+  healthCheckInterval = setInterval(() => {
+    opencodeServerManager.ensureRunning().catch((error) => {
+      logger.error('Failed to ensure OpenCode server is running:', error)
+    })
+  }, ENV.TIMEOUTS.HEALTH_CHECK_INTERVAL_MS)
+
+  scheduleRunner = startScheduleRunner(db)
+  logger.info('Schedule runner started')
+})
