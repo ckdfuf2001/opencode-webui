@@ -18,6 +18,7 @@ import {
   type ScheduleAction,
 } from '@/api/schedules'
 import { useCommands } from '@/hooks/useCommands'
+import { useOpenCodeClient } from '@/hooks/useOpenCode'
 import { showToast } from '@/lib/toast'
 
 interface ScheduleSettingsDialogProps {
@@ -35,6 +36,9 @@ const EMPTY_FORM = {
   prompt: '',
   cron: '0 9 * * *',
   enabled: true,
+  activeFrom: '',
+  activeUntil: '',
+  agent: '',
 }
 
 const CRON_PRESETS: { label: string; value: string }[] = [
@@ -48,6 +52,26 @@ const CRON_PRESETS: { label: string; value: string }[] = [
 function formatLastRun(lastRunAt?: number): string {
   if (!lastRunAt) return 'Never'
   return new Date(lastRunAt).toLocaleString()
+}
+
+function toDatetimeLocal(ts?: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function fromDatetimeLocal(value: string): number | undefined {
+  if (!value) return undefined
+  const ts = new Date(value).getTime()
+  return Number.isNaN(ts) ? undefined : ts
+}
+
+function formatActiveWindow(schedule: Schedule): string {
+  if (!schedule.activeFrom && !schedule.activeUntil) return ''
+  const from = schedule.activeFrom ? new Date(schedule.activeFrom).toLocaleString() : '∞'
+  const until = schedule.activeUntil ? new Date(schedule.activeUntil).toLocaleString() : '∞'
+  return `Active: ${from} ~ ${until}`
 }
 
 export function ScheduleSettingsDialog({
@@ -66,6 +90,13 @@ export function ScheduleSettingsDialog({
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
   const { commands } = useCommands(open ? opcodeUrl : null, directory)
+  const client = useOpenCodeClient(open ? opcodeUrl : null, directory)
+
+  const { data: agents = [] } = useQuery({
+    queryKey: ['agents', opcodeUrl, directory],
+    queryFn: () => client!.listAgents(),
+    enabled: !!client,
+  })
 
   const { data: schedules = [], isLoading } = useQuery({
     queryKey: ['schedules', repoId],
@@ -99,6 +130,9 @@ export function ScheduleSettingsDialog({
       prompt: schedule.prompt ?? '',
       cron: schedule.cron,
       enabled: schedule.enabled,
+      activeFrom: toDatetimeLocal(schedule.activeFrom),
+      activeUntil: toDatetimeLocal(schedule.activeUntil),
+      agent: schedule.agent ?? '',
     })
   }
 
@@ -118,26 +152,29 @@ export function ScheduleSettingsDialog({
 
     setSaving(true)
     try {
+      const activeFrom = fromDatetimeLocal(form.activeFrom)
+      const activeUntil = fromDatetimeLocal(form.activeUntil)
+      if (activeFrom !== undefined && activeUntil !== undefined && activeFrom >= activeUntil) {
+        showToast.error('Active start must be before active end.')
+        setSaving(false)
+        return
+      }
+      const payload = {
+        name: form.name.trim(),
+        action: form.action,
+        command: form.action === 'command' ? form.command.trim() : undefined,
+        prompt: form.action === 'chat' ? form.prompt.trim() : undefined,
+        cron: form.cron.trim(),
+        enabled: form.enabled,
+        activeFrom,
+        activeUntil,
+        agent: form.agent.trim() || undefined,
+      }
       if (editingId) {
-        await updateSchedule(editingId, {
-          name: form.name.trim(),
-          action: form.action,
-          command: form.action === 'command' ? form.command.trim() : undefined,
-          prompt: form.action === 'chat' ? form.prompt.trim() : undefined,
-          cron: form.cron.trim(),
-          enabled: form.enabled,
-        })
+        await updateSchedule(editingId, payload)
         showToast.success('Schedule updated.')
       } else {
-        await createSchedule({
-          repoId,
-          name: form.name.trim(),
-          action: form.action,
-          command: form.action === 'command' ? form.command.trim() : undefined,
-          prompt: form.action === 'chat' ? form.prompt.trim() : undefined,
-          cron: form.cron.trim(),
-          enabled: form.enabled,
-        })
+        await createSchedule({ repoId, ...payload })
         showToast.success('Schedule created.')
       }
       resetForm()
@@ -300,6 +337,47 @@ export function ScheduleSettingsDialog({
               <p className="text-[11px] text-muted-foreground">Format: minute hour day-of-month month day-of-week (5 fields).</p>
             </div>
 
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Agent</label>
+              <Select value={form.agent || 'default'} onValueChange={(value) => setForm({ ...form, agent: value === 'default' ? '' : value })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select agent" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default agent</SelectItem>
+                  {agents.map((agent) => (
+                    <SelectItem key={agent.name} value={agent.name}>
+                      {agent.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">Which agent will run this schedule.</p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Active window</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">From</label>
+                  <Input
+                    type="datetime-local"
+                    value={form.activeFrom}
+                    onChange={(e) => setForm({ ...form, activeFrom: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">Until</label>
+                  <Input
+                    type="datetime-local"
+                    value={form.activeUntil}
+                    onChange={(e) => setForm({ ...form, activeUntil: e.target.value })}
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">Leave empty for no time limit.</p>
+            </div>
+
             <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
               <Switch checked={form.enabled} onCheckedChange={(checked) => setForm({ ...form, enabled: checked })} />
               Enabled
@@ -366,10 +444,16 @@ export function ScheduleSettingsDialog({
                     <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                       <span className="font-mono">{schedule.cron}</span>
                       <span>
+                        {schedule.agent ? `${schedule.agent} · ` : ''}
                         {schedule.action === 'command' ? (schedule.command ?? '') : (schedule.prompt ?? '').slice(0, 40)}
                         {' · '}last: {formatLastRun(schedule.lastRunAt)}
                       </span>
                     </div>
+                    {formatActiveWindow(schedule) && (
+                      <div className="text-[11px] text-muted-foreground">
+                        {formatActiveWindow(schedule)}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

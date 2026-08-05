@@ -59,6 +59,9 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       cron TEXT NOT NULL,
       enabled BOOLEAN DEFAULT TRUE,
       last_run_at INTEGER,
+      active_from INTEGER,
+      active_until INTEGER,
+      agent TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

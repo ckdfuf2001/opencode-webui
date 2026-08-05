@@ -12,6 +12,9 @@ export interface Schedule {
   cron: string
   enabled: boolean
   lastRunAt?: number
+  activeFrom?: number
+  activeUntil?: number
+  agent?: string
   createdAt: number
   updatedAt: number
 }
@@ -24,6 +27,9 @@ export interface ScheduleInput {
   prompt?: string
   cron: string
   enabled?: boolean
+  activeFrom?: number
+  activeUntil?: number
+  agent?: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

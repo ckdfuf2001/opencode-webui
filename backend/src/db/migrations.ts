@@ -97,13 +97,34 @@ export function runMigrations(db: Database): void {
       'CREATE INDEX IF NOT EXISTS idx_opencode_user_id ON opencode_configs(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_opencode_default ON opencode_configs(user_id, is_default)'
     ]
-    
+
     for (const indexSql of indexes) {
       try {
         db.run(indexSql)
       } catch (error) {
         logger.debug('Index already exists:', error)
       }
+    }
+
+    try {
+      const scheduleTable = db.prepare('PRAGMA table_info(schedules)').all() as any[]
+      const scheduleColumns = [
+        { name: 'active_from', sql: 'ALTER TABLE schedules ADD COLUMN active_from INTEGER' },
+        { name: 'active_until', sql: 'ALTER TABLE schedules ADD COLUMN active_until INTEGER' },
+        { name: 'agent', sql: 'ALTER TABLE schedules ADD COLUMN agent TEXT' }
+      ]
+      for (const column of scheduleColumns) {
+        if (!scheduleTable.some(col => col.name === column.name)) {
+          logger.info(`Adding missing schedule column: ${column.name}`)
+          try {
+            db.run(column.sql)
+          } catch (error) {
+            logger.debug(`Schedule column ${column.name} might already exist:`, error)
+          }
+        }
+      }
+    } catch (error) {
+      logger.debug('Schedules table may not exist yet:', error)
     }
     
     try {

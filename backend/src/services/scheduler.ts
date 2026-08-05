@@ -116,10 +116,14 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
   }
 
   const text = schedule.action === 'command' ? `/${prompt}` : prompt
+  const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text }] }
+  if (schedule.agent) {
+    messageBody.agent = schedule.agent
+  }
   const response = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ parts: [{ type: 'text', text }] }),
+    body: JSON.stringify(messageBody),
     signal: AbortSignal.timeout(60_000),
   })
   if (!response.ok) {
@@ -136,6 +140,8 @@ export function startScheduleRunner(db: Database): NodeJS.Timeout {
       const schedules = scheduleDb.listEnabledSchedules(db)
 
       for (const schedule of schedules) {
+        if (schedule.activeFrom && now.getTime() < schedule.activeFrom) continue
+        if (schedule.activeUntil && now.getTime() > schedule.activeUntil) continue
         if (!matchesCron(schedule.cron, now)) continue
         if (!scheduleDb.tryClaimScheduleRun(db, schedule.id, 60_000)) continue
 
