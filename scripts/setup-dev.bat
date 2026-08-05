@@ -65,6 +65,16 @@ echo [2/5] Creating workspace directories...
 if not exist "%WORKSPACE_PATH%\repos" mkdir "%WORKSPACE_PATH%\repos"
 if not exist "%WORKSPACE_PATH%\.config\opencode" mkdir "%WORKSPACE_PATH%\.config\opencode"
 
+REM Install the domain guide (AGENTS.md) into the workspace if missing
+if exist "docs\agent-domain-guide.md" (
+  if not exist "%WORKSPACE_PATH%\AGENTS.md" (
+    copy "docs\agent-domain-guide.md" "%WORKSPACE_PATH%\AGENTS.md" >nul
+    echo   [+] Installed domain guide (docs\agent-domain-guide.md) as workspace\AGENTS.md
+  ) else (
+    echo   [+] workspace\AGENTS.md already present
+  )
+)
+
 echo.
 echo [3/5] Installing dependencies (pnpm install)...
 call pnpm install

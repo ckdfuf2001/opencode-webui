@@ -4,26 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogTrigger } from '@/components/ui/dialog'
 import { AgentDialog } from './AgentDialog'
-
-interface Agent {
-  prompt?: string
-  description?: string
-  mode?: 'subagent' | 'primary' | 'all'
-  temperature?: number
-  topP?: number
-  model?: {
-    modelID: string
-    providerID: string
-  }
-  tools?: Record<string, boolean>
-  permission?: {
-    edit?: 'ask' | 'allow' | 'deny'
-    bash?: 'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
-    webfetch?: 'ask' | 'allow' | 'deny'
-  }
-  disable?: boolean
-  [key: string]: unknown
-}
+import { Agent, APPROVAL_TYPE_LABELS, inferApprovalType } from './agentTypes'
 
 interface AgentsEditorProps {
   agents: Record<string, Agent>
@@ -117,6 +98,7 @@ export function AgentsEditor({ agents, onChange }: AgentsEditorProps) {
                     <p className="text-sm text-muted-foreground">{agent.description}</p>
                   )}
                   <div className="text-xs text-muted-foreground space-y-1">
+                    <p>Type: {APPROVAL_TYPE_LABELS[inferApprovalType(agent)]}</p>
                     <p>Mode: {agent.mode}</p>
                     {agent.temperature !== undefined && <p>Temperature: {agent.temperature}</p>}
                     {agent.topP !== undefined && <p>Top P: {agent.topP}</p>}
