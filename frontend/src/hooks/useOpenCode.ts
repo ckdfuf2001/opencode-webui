@@ -7,10 +7,38 @@ import type {
   ContentPart,
 } from "../api/types";
 import type { paths } from "../api/opencode-types";
+import { showToast } from "@/lib/toast"
 
 type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
+
+// Format server error similar to OpenCode's formatServerError
+function formatServerError(error: unknown): string {
+  // Axios error with response
+  if (error && typeof error === "object" && "response" in error) {
+    const axiosError = error as { response?: { data?: unknown; status?: number } }
+    const data = axiosError.response?.data
+    if (data && typeof data === "object") {
+      const errorData = data as Record<string, unknown>
+      // OpenCode server error format: { _tag: "ErrorName", message: "...", ... }
+      if (typeof errorData.message === "string" && errorData.message.length > 0) {
+        return errorData.message
+      }
+      if (typeof errorData._tag === "string") {
+        return errorData._tag
+      }
+    }
+    if (axiosError.response?.status === 429) return "Rate limit exceeded. Please wait before sending more requests."
+    if (axiosError.response?.status === 401) return "Authentication failed. Check your API key."
+    if (axiosError.response?.status === 403) return "Access denied."
+  }
+  // Native Error
+  if (error instanceof Error && error.message) return error.message
+  // String error
+  if (typeof error === "string" && error.length > 0) return error
+  return "An unexpected error occurred."
+}
 
 export const useOpenCodeClient = (opcodeUrl: string | null | undefined, directory?: string) => {
   return useMemo(
@@ -225,12 +253,13 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
 
       return { optimisticUserID, response };
     },
-    onError: (_, variables) => {
+    onError: (error, variables) => {
       const { sessionID } = variables;
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
+      showToast.error(formatServerError(error), { duration: 8000 });
     },
     onSuccess: (data, variables) => {
       const { sessionID } = variables;
@@ -312,12 +341,13 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
 
       return { optimisticUserID, response };
     },
-    onError: (_, variables) => {
+    onError: (error, variables) => {
       const { sessionID } = variables;
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
+      showToast.error(formatServerError(error), { duration: 8000 });
     },
     onSuccess: (data, variables) => {
       const { sessionID } = variables;
