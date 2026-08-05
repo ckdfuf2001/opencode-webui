@@ -7,6 +7,7 @@ import { PromptInput } from "@/components/message/PromptInput";
 import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
 import { SessionList } from "@/components/session/SessionList";
+import { PermissionRequestCard } from "@/components/session/PermissionRequestCard";
 import { QuestionRequestCard } from "@/components/session/QuestionRequestCard";
 import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
@@ -18,10 +19,12 @@ import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useQuestionRequests } from "@/hooks/useQuestionRequests";
+import { usePermissionRequests } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useEffect, useRef, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import type { CommandWithScope } from "@/hooks/useCommands";
+import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
 
 interface InjectedFile {
@@ -54,6 +57,7 @@ export function SessionDetail() {
     enabled: !!repoId,
   });
 
+  const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests();
   const { currentQuestion, dismissQuestion } = useQuestionRequests();
   
   const opcodeUrl = OPENCODE_API_ENDPOINT;
@@ -169,6 +173,19 @@ export function SessionDetail() {
     if (!openCodeClient) return
     await openCodeClient.rejectQuestion(requestID)
   }, [openCodeClient]);
+
+  const handlePermissionResponse = useCallback(async (
+    permissionID: string,
+    permissionSessionID: string,
+    response: PermissionResponse
+  ) => {
+    if (!openCodeClient) return
+    if (currentPermission?.v2) {
+      await openCodeClient.respondToPermissionV2(permissionID, response)
+    } else {
+      await openCodeClient.respondToPermission(permissionSessionID, permissionID, response)
+    }
+  }, [openCodeClient, currentPermission]);
 
   const handleExecuteCommand = useCallback(async (command: CommandWithScope, run: boolean, args: string) => {
     if (!sessionId) return
@@ -328,6 +345,16 @@ export function SessionDetail() {
                   onReply={handleQuestionReply}
                   onReject={handleQuestionReject}
                   onDismiss={dismissQuestion}
+                />
+              </div>
+            )}
+            {currentPermission && (
+              <div className="mt-2">
+                <PermissionRequestCard
+                  permission={currentPermission}
+                  pendingCount={pendingCount}
+                  onRespond={handlePermissionResponse}
+                  onDismiss={dismissPermission}
                 />
               </div>
             )}
