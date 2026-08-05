@@ -47,6 +47,16 @@ echo "[2/5] Creating workspace directories..."
 mkdir -p "$WORKSPACE_PATH/repos"
 mkdir -p "$WORKSPACE_PATH/.config/opencode"
 
+# Install the domain guide (AGENTS.md) into the workspace if missing
+if [ -f "docs/agent-domain-guide.md" ] && [ ! -f "$WORKSPACE_PATH/AGENTS.md" ]; then
+  cp docs/agent-domain-guide.md "$WORKSPACE_PATH/AGENTS.md"
+  echo "  [+] Installed domain guide (docs/agent-domain-guide.md) as workspace/AGENTS.md"
+else
+  if [ -f "$WORKSPACE_PATH/AGENTS.md" ]; then
+    echo "  [+] workspace/AGENTS.md already present"
+  fi
+fi
+
 echo
 echo "[3/5] Installing dependencies (pnpm install)..."
 pnpm install

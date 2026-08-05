@@ -221,6 +221,14 @@ dependencies with `pnpm`, and sets up `.env` if missing. The setup is
 **OS-aware**: it uses `scripts/setup-dev.bat` (cmd) on Windows and
 `scripts/setup-dev.sh` on macOS/Linux.
 
+> **Domain guide (AGENTS.md):** the setup also checks that the assistant's
+> domain guide is present in the workspace. If `workspace/AGENTS.md` does not
+> exist yet, it copies `docs/agent-domain-guide.md` there automatically. This
+> guide defines the business concepts the assistant works with — 업무(project)
+> = 하나의 담당자(agent)가 전담, command = 작업 시작 명령어, skill = 업무
+> 스텝 — and the agent approval types (일반 대화 / 슈퍼 배치 / 알림). Delete the
+> file to re-run this install step, or edit it directly to tune your assistant.
+
 #### (Optional) Register the Document MCP tools
 
 The `doc-reader` MCP server (`read_document` / `edit_document`) lets the

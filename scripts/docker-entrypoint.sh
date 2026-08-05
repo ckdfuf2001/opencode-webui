@@ -32,4 +32,15 @@ fi
 
 echo "🚀 Starting OpenCode WebUI Backend..."
 
+# Place the domain guide into the workspace if missing
+if [ -n "$WORKSPACE_PATH" ]; then
+  mkdir -p "$WORKSPACE_PATH"
+  if [ -f "/app/docs/agent-domain-guide.md" ] && [ ! -f "$WORKSPACE_PATH/AGENTS.md" ]; then
+    cp /app/docs/agent-domain-guide.md "$WORKSPACE_PATH/AGENTS.md"
+    echo "✅ Installed workspace AGENTS.md (domain guide)"
+  else
+    echo "✅ workspace AGENTS.md already present"
+  fi
+fi
+
 exec "$@"

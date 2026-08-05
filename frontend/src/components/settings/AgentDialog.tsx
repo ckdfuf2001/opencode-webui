@@ -8,6 +8,13 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Agent,
+  ApprovalType,
+  NOTIFY_PROMPT_BLOCK,
+  hasNotifyPrompt,
+  inferApprovalType,
+} from './agentTypes'
 
 const agentFormSchema = z.object({
   name: z.string().min(1, 'Agent name is required').regex(/^[a-z0-9-]+$/, 'Must be lowercase letters, numbers, and hyphens only'),
@@ -25,30 +32,11 @@ const agentFormSchema = z.object({
   editPermission: z.enum(['ask', 'allow', 'deny']),
   bashPermission: z.enum(['ask', 'allow', 'deny']),
   webfetchPermission: z.enum(['ask', 'allow', 'deny']),
+  approvalType: z.enum(['general', 'auto', 'notify']),
   disable: z.boolean()
 })
 
 type AgentFormValues = z.infer<typeof agentFormSchema>
-
-interface Agent {
-  prompt?: string
-  description?: string
-  mode?: 'subagent' | 'primary' | 'all'
-  temperature?: number
-  topP?: number
-  model?: {
-    modelID: string
-    providerID: string
-  }
-  tools?: Record<string, boolean>
-  permission?: {
-    edit?: 'ask' | 'allow' | 'deny'
-    bash?: 'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
-    webfetch?: 'ask' | 'allow' | 'deny'
-  }
-  disable?: boolean
-  [key: string]: unknown
-}
 
 interface AgentDialogProps {
   open: boolean
@@ -58,27 +46,46 @@ interface AgentDialogProps {
 }
 
 export function AgentDialog({ open, onOpenChange, onSubmit, editingAgent }: AgentDialogProps) {
+  const editableAgent = editingAgent?.agent
+  const initialType = inferApprovalType(editableAgent)
+  const defaultPerm: 'ask' | 'allow' = initialType === 'general' ? 'ask' : 'allow'
+
   const form = useForm<AgentFormValues>({
     resolver: zodResolver(agentFormSchema),
     defaultValues: {
       name: editingAgent?.name || '',
-      description: editingAgent?.agent.description || '',
-      prompt: editingAgent?.agent.prompt || '',
-      mode: editingAgent?.agent.mode || 'subagent',
-      temperature: editingAgent?.agent.temperature ?? 0.7,
-      topP: editingAgent?.agent.topP ?? 1,
-      modelId: editingAgent?.agent.model?.modelID || '',
-      providerId: editingAgent?.agent.model?.providerID || '',
-      write: editingAgent?.agent.tools?.write ?? true,
-      edit: editingAgent?.agent.tools?.edit ?? true,
-      bash: editingAgent?.agent.tools?.bash ?? true,
-      webfetch: editingAgent?.agent.tools?.webfetch ?? true,
-      editPermission: editingAgent?.agent.permission?.edit ?? 'allow',
-      bashPermission: typeof editingAgent?.agent.permission?.bash === 'string' ? editingAgent.agent.permission.bash : 'allow',
-      webfetchPermission: editingAgent?.agent.permission?.webfetch ?? 'allow',
-      disable: editingAgent?.agent.disable ?? false
+      description: editableAgent?.description || '',
+      prompt: editableAgent?.prompt || '',
+      mode: editableAgent?.mode || 'subagent',
+      temperature: editableAgent?.temperature ?? 0.7,
+      topP: editableAgent?.topP ?? 1,
+      approvalType: initialType,
+      modelId: editableAgent?.model?.modelID || '',
+      providerId: editableAgent?.model?.providerID || '',
+      write: editableAgent?.tools?.write ?? true,
+      edit: editableAgent?.tools?.edit ?? true,
+      bash: editableAgent?.tools?.bash ?? true,
+      webfetch: editableAgent?.tools?.webfetch ?? true,
+      editPermission: editableAgent?.permission?.edit ?? defaultPerm,
+      bashPermission: typeof editableAgent?.permission?.bash === 'string' ? editableAgent.permission.bash : defaultPerm,
+      webfetchPermission: editableAgent?.permission?.webfetch ?? defaultPerm,
+      disable: editableAgent?.disable ?? false
     }
   })
+
+  const handleApprovalTypeChange = (type: ApprovalType) => {
+    const perm: 'ask' | 'allow' = type === 'general' ? 'ask' : 'allow'
+    form.setValue('approvalType', type)
+    form.setValue('editPermission', perm)
+    form.setValue('bashPermission', perm)
+    form.setValue('webfetchPermission', perm)
+    if (type === 'notify') {
+      const current = form.getValues('prompt').trim()
+      if (!hasNotifyPrompt(current)) {
+        form.setValue('prompt', current ? current + NOTIFY_PROMPT_BLOCK : NOTIFY_PROMPT_BLOCK.trim())
+      }
+    }
+  }
 
   const handleSubmit = (values: AgentFormValues) => {
     const agent: Agent = {
@@ -88,6 +95,7 @@ export function AgentDialog({ open, onOpenChange, onSubmit, editingAgent }: Agen
       temperature: values.temperature,
       topP: values.topP,
       disable: values.disable,
+      approvalType: values.approvalType,
       tools: {
         write: values.write,
         edit: values.edit,
@@ -99,6 +107,11 @@ export function AgentDialog({ open, onOpenChange, onSubmit, editingAgent }: Agen
         bash: values.bashPermission,
         webfetch: values.webfetchPermission
       }
+    }
+
+    if (values.approvalType === 'notify') {
+      const prompt = values.prompt.trim()
+      agent.prompt = hasNotifyPrompt(prompt) ? prompt : prompt ? prompt + NOTIFY_PROMPT_BLOCK : NOTIFY_PROMPT_BLOCK.trim()
     }
 
     if (values.modelId || values.providerId) {
@@ -182,6 +195,42 @@ export function AgentDialog({ open, onOpenChange, onSubmit, editingAgent }: Agen
                       className="font-mono text-sm"
                     />
                   </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="approvalType"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Approval Type</FormLabel>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {([
+                      ['general', '일반 대화 (Ask)'],
+                      ['auto', '슈퍼 배치 (Auto)'],
+                      ['notify', '알림 (Notify)'],
+                    ] as [ApprovalType, string][]).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => handleApprovalTypeChange(value)}
+                        className={`rounded-md border px-3 py-2 text-left text-sm ${
+                          field.value === value
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border text-foreground hover:bg-muted'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <FormDescription>
+                    {field.value === 'general' && '단계마다 확인하는 일반 대화 방식 (기본).'}
+                    {field.value === 'auto' && '모든 도구를 자동 승인하여 확인 없이 배치 수행.'}
+                    {field.value === 'notify' && '자동 수행하되 각 단계 결과를 사용자에게 보고.'}
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
