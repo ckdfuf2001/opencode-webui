@@ -8,13 +8,8 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import {
-  Agent,
-  ApprovalType,
-  NOTIFY_PROMPT_BLOCK,
-  hasNotifyPrompt,
-  inferApprovalType,
-} from './agentTypes'
+import type { Agent, ApprovalType } from './agentTypes'
+import { NOTIFY_PROMPT_BLOCK, hasNotifyPrompt, inferApprovalType } from './agentTypes'
 
 const agentFormSchema = z.object({
   name: z.string().min(1, 'Agent name is required').regex(/^[a-z0-9-]+$/, 'Must be lowercase letters, numbers, and hyphens only'),
