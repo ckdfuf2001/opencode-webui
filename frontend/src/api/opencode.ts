@@ -101,6 +101,11 @@ export class OpenCodeClient {
     return response.data
   }
 
+  async listAgents() {
+    const response = await this.client.get<{ name: string; description?: string }[]>('/agent')
+    return response.data
+  }
+
   async sendCommand(sessionID: string, data: CommandRequest) {
     const response = await this.client.post(`/session/${sessionID}/command`, data)
     return response.data

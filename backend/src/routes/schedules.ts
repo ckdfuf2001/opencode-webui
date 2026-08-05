@@ -14,7 +14,15 @@ const CreateScheduleSchema = z.object({
   prompt: z.string().min(1).max(20000).optional(),
   cron: z.string().min(1).max(255),
   enabled: z.boolean().optional(),
-})
+  activeFrom: z.number().optional(),
+  activeUntil: z.number().optional(),
+  agent: z.string().min(1).max(255).optional(),
+}).refine((data) => {
+  if (data.activeFrom !== undefined && data.activeUntil !== undefined && data.activeFrom >= data.activeUntil) {
+    return false
+  }
+  return true
+}, { message: 'activeFrom must be before activeUntil' })
 
 const UpdateScheduleSchema = CreateScheduleSchema.omit({ repoId: true }).partial()
 
@@ -125,6 +133,9 @@ export function createScheduleRoutes(db: Database) {
       const schedule = scheduleDb.getScheduleById(db, id)
       if (!schedule) {
         return c.json({ error: 'Schedule not found' }, 404)
+      }
+      if (!schedule.enabled) {
+        return c.json({ error: 'Schedule is disabled' }, 400)
       }
 
       const result = await runSchedule(db, schedule)

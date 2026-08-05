@@ -10,6 +10,9 @@ export interface Schedule {
   cron: string
   enabled: boolean
   lastRunAt?: number
+  activeFrom?: number
+  activeUntil?: number
+  agent?: string
   createdAt: number
   updatedAt: number
 }
@@ -22,6 +25,9 @@ export interface CreateScheduleInput {
   prompt?: string
   cron: string
   enabled?: boolean
+  activeFrom?: number
+  activeUntil?: number
+  agent?: string
 }
 
 export interface UpdateScheduleInput {
@@ -31,4 +37,7 @@ export interface UpdateScheduleInput {
   prompt?: string
   cron?: string
   enabled?: boolean
+  activeFrom?: number
+  activeUntil?: number
+  agent?: string
 }
