@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useOpenCodeClient } from './useOpenCode'
-import type { SSEEvent, MessageListResponse, MessageWithParts, QuestionRequest } from '@/api/types'
+import type { SSEEvent, MessageListResponse, MessageWithParts, QuestionRequest, PermissionAskedProps } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
 import { questionEvents } from './useQuestionRequests'
 import { showToast } from '@/lib/toast'
@@ -9,6 +9,21 @@ import { settingsApi } from '@/api/settings'
 
 const MAX_RECONNECT_DELAY = 30000
 const INITIAL_RECONNECT_DELAY = 1000
+
+const SESSION_ERROR_MESSAGES: Record<string, string> = {
+  ProviderAuthError: 'Provider authentication failed. Check your API key.',
+  UnknownError: 'An unexpected error occurred.',
+  MessageOutputLengthError: 'The model output exceeded the maximum allowed length.',
+  MessageAbortedError: 'The message was aborted.',
+  APIError: 'The model API returned an error.',
+}
+
+function getSessionErrorMessage(error: { name: string; data: Record<string, unknown> } | undefined): string {
+  if (!error) return 'A session error occurred.'
+  const detail = error.data?.message
+  if (typeof detail === 'string' && detail.length > 0) return detail
+  return SESSION_ERROR_MESSAGES[error.name] ?? error.name
+}
 
 const handleRestartServer = async () => {
   showToast.loading('Restarting OpenCode server...', {
@@ -119,6 +134,30 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
             })
           }
           break
+
+        case 'session.created':
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
+          break
+
+        case 'session.idle': {
+          if (!('sessionID' in event.properties)) break
+
+          const { sessionID } = event.properties
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, directory] })
+          break
+        }
+
+        case 'session.error': {
+          const message = getSessionErrorMessage(event.properties.error)
+          showToast.error(message, { duration: 8000 })
+          if (event.properties.sessionID) {
+            queryClient.invalidateQueries({ 
+              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, directory] 
+            })
+          }
+          break
+        }
 
         case 'message.part.updated':
         case 'messagev2.part.updated': {
@@ -242,17 +281,42 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
           break
         }
 
+        case 'permission.asked':
         case 'permission.updated':
           if ('id' in event.properties) {
-            permissionEvents.emit({ type: 'add', permission: event.properties })
+            const props = event.properties as PermissionAskedProps
+            const rawPatterns = props.patterns ?? props.pattern
+            const patterns = Array.isArray(rawPatterns) ? rawPatterns : rawPatterns ? [rawPatterns] : []
+            const type = props.permission ?? props.type ?? 'permission'
+            permissionEvents.emit({
+              type: 'add',
+              permission: {
+                id: props.id,
+                sessionID: props.sessionID,
+                type,
+                permission: props.permission,
+                pattern: patterns,
+                patterns,
+                always: props.always,
+                metadata: props.metadata ?? {},
+                title: props.title ?? `Allow ${type}?`,
+                messageID: props.tool?.messageID ?? '',
+                callID: props.tool?.callID,
+                tool: props.tool,
+                time: props.time ?? { created: Date.now() },
+              },
+            })
           }
           break
 
-        case 'permission.replied':
-          if ('permissionID' in event.properties) {
-            permissionEvents.emit({ type: 'remove', permissionID: event.properties.permissionID })
+        case 'permission.replied': {
+          const props = event.properties as { requestID?: string; permissionID?: string }
+          const requestID = props.requestID ?? props.permissionID
+          if (requestID) {
+            permissionEvents.emit({ type: 'remove', permissionID: requestID })
           }
           break
+        }
 
         case 'question.asked':
         case 'question.v2.asked': {
@@ -309,6 +373,48 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string)
               duration: 10000,
             })
           }
+          break
+
+        case 'file.edited':
+        case 'file.watcher.updated':
+          queryClient.invalidateQueries({ queryKey: ['file'] })
+          break
+
+        case 'command.executed': {
+          const { name, sessionID } = event.properties
+          showToast.info(`Command "${name}" executed`, { duration: 3000 })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, directory] })
+          break
+        }
+
+        case 'lsp.client.diagnostics': {
+          const { path } = event.properties
+          showToast.warning(`Diagnostics available for ${path}`, { duration: 5000 })
+          break
+        }
+
+        case 'lsp.updated':
+          break
+
+        case 'tui.toast.show': {
+          const { title, message, variant, duration } = event.properties
+          const toastFn = variant === 'success'
+            ? showToast.success
+            : variant === 'error'
+              ? showToast.error
+              : variant === 'warning'
+                ? showToast.warning
+                : showToast.info
+          toastFn(title ? `${title}: ${message}` : message, { duration: duration || 5000 })
+          break
+        }
+
+        case 'tui.prompt.append':
+        case 'tui.command.execute':
+          break
+
+        case 'server.connected':
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
           break
 
         default:

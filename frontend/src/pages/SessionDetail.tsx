@@ -7,7 +7,7 @@ import { PromptInput } from "@/components/message/PromptInput";
 import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
 import { SessionList } from "@/components/session/SessionList";
-import { PermissionRequestDialog } from "@/components/session/PermissionRequestDialog";
+import { PermissionRequestCard } from "@/components/session/PermissionRequestCard";
 import { QuestionRequestCard } from "@/components/session/QuestionRequestCard";
 import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
@@ -344,6 +344,16 @@ export function SessionDetail() {
                 />
               </div>
             )}
+            {currentPermission && (
+              <div className="mt-2">
+                <PermissionRequestCard
+                  permission={currentPermission}
+                  pendingCount={pendingCount}
+                  onRespond={handlePermissionResponse}
+                  onDismiss={dismissPermission}
+                />
+              </div>
+            )}
           </div>
           {opcodeUrl && repoDirectory && (
             <div className="absolute bottom-0 left-0 right-0 flex justify-center">
@@ -425,13 +435,6 @@ export function SessionDetail() {
           </div>
         </DialogContent>
       </Dialog>
-
-      <PermissionRequestDialog
-        permission={currentPermission}
-        pendingCount={pendingCount}
-        onRespond={handlePermissionResponse}
-        onDismiss={dismissPermission}
-      />
 
       <CommandsPanel
         open={commandsOpen}

@@ -111,17 +111,38 @@ export interface SSETodoUpdatedEvent {
   }
 }
 
-export interface SSEPermissionUpdatedEvent {
-  type: 'permission.updated'
-  properties: Permission
+export interface PermissionAskedProps {
+  id: string
+  sessionID: string
+  permission?: string
+  type?: string
+  pattern?: string | string[]
+  patterns?: string[]
+  always?: string[]
+  metadata?: Record<string, unknown>
+  tool?: {
+    messageID?: string
+    callID?: string
+  }
+  title?: string
+  time?: {
+    created: number
+  }
+}
+
+export interface SSEPermissionAskedEvent {
+  type: 'permission.asked' | 'permission.updated'
+  properties: PermissionAskedProps
 }
 
 export interface SSEPermissionRepliedEvent {
   type: 'permission.replied'
   properties: {
     sessionID: string
-    permissionID: string
-    response: string
+    requestID?: string
+    permissionID?: string
+    reply?: string
+    response?: string
   }
 }
 
@@ -161,6 +182,98 @@ export interface SSEInstallationUpdateAvailableEvent {
   }
 }
 
+export interface SSESessionCreatedEvent {
+  type: 'session.created'
+  properties: {
+    info: Session
+  }
+}
+
+export interface SSESessionIdleEvent {
+  type: 'session.idle'
+  properties: {
+    sessionID: string
+  }
+}
+
+export interface SSESessionErrorEvent {
+  type: 'session.error'
+  properties: {
+    sessionID?: string
+    error?: {
+      name: string
+      data: Record<string, unknown>
+    }
+  }
+}
+
+export interface SSEFileEditedEvent {
+  type: 'file.edited'
+  properties: {
+    file: string
+  }
+}
+
+export interface SSEFileWatcherUpdatedEvent {
+  type: 'file.watcher.updated'
+  properties: {
+    file: string
+    event: 'add' | 'change' | 'unlink'
+  }
+}
+
+export interface SSECommandExecutedEvent {
+  type: 'command.executed'
+  properties: {
+    name: string
+    sessionID: string
+    arguments: string
+    messageID: string
+  }
+}
+
+export interface SSELspClientDiagnosticsEvent {
+  type: 'lsp.client.diagnostics'
+  properties: {
+    serverID: string
+    path: string
+  }
+}
+
+export interface SSELspUpdatedEvent {
+  type: 'lsp.updated'
+  properties: Record<string, never>
+}
+
+export interface SSETuiToastShowEvent {
+  type: 'tui.toast.show'
+  properties: {
+    title?: string
+    message: string
+    variant: 'info' | 'success' | 'warning' | 'error'
+    duration: number
+  }
+}
+
+export interface SSETuiPromptAppendEvent {
+  type: 'tui.prompt.append'
+  properties: {
+    text: string
+  }
+}
+
+export interface SSETuiCommandExecuteEvent {
+  type: 'tui.command.execute'
+  properties: {
+    command: string
+  }
+}
+
+export interface SSEServerConnectedEvent {
+  type: 'server.connected'
+  properties: Record<string, never>
+}
+
 export type SSEEvent =
   | SSEMessagePartUpdatedEvent
   | SSEMessageUpdatedEvent
@@ -170,13 +283,25 @@ export type SSEEvent =
   | SSESessionDeletedEvent
   | SSESessionCompactedEvent
   | SSETodoUpdatedEvent
-  | SSEPermissionUpdatedEvent
+  | SSEPermissionAskedEvent
   | SSEPermissionRepliedEvent
   | SSEQuestionAskedEvent
   | SSEQuestionRepliedEvent
   | SSEQuestionRejectedEvent
   | SSEInstallationUpdatedEvent
   | SSEInstallationUpdateAvailableEvent
+  | SSESessionCreatedEvent
+  | SSESessionIdleEvent
+  | SSESessionErrorEvent
+  | SSEFileEditedEvent
+  | SSEFileWatcherUpdatedEvent
+  | SSECommandExecutedEvent
+  | SSELspClientDiagnosticsEvent
+  | SSELspUpdatedEvent
+  | SSETuiToastShowEvent
+  | SSETuiPromptAppendEvent
+  | SSETuiCommandExecuteEvent
+  | SSEServerConnectedEvent
 
 export type ContentPart = 
   | { type: 'text', content: string }
