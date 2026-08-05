@@ -70,7 +70,7 @@ function formatSessionTitle(name: string): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   const datePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
   const timePart = `${pad(now.getHours())}${pad(now.getMinutes())}`
-  return `[규칙1]${name}_${datePart}-${timePart}`
+  return `[BATCH]${name}_${datePart}-${timePart}`
 }
 
 export async function runSchedule(db: Database, schedule: Schedule): Promise<{ success: boolean; sessionID?: string; error?: string }> {

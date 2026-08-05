@@ -24,7 +24,7 @@ function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
 
-  useSSE(OPENCODE_API_ENDPOINT)
+  useSSE(OPENCODE_API_ENDPOINT, undefined, true)
 
   return (
     <BrowserRouter>

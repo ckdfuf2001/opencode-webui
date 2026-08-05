@@ -103,7 +103,8 @@ export async function proxyRequest(request: Request) {
       headers[key] = value
     })
 
-    const isEventStream = url.pathname.replace(/^\/api\/opencode/, '').startsWith('/event')
+    const cleanEventPath = url.pathname.replace(/^\/api\/opencode/, '')
+    const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
     const signal = isEventStream ? undefined : AbortSignal.timeout(120_000)
 
     const response = await fetch(targetUrl, {
