@@ -1,5 +1,5 @@
 import axios, { type AxiosInstance } from 'axios'
-import type { paths } from './opencode-types'
+import type { components, paths } from './opencode-types'
 
 type SessionListResponse = paths['/session']['get']['responses']['200']['content']['application/json']
 type SessionResponse = paths['/session/{id}']['get']['responses']['200']['content']['application/json']
@@ -10,6 +10,7 @@ type ConfigResponse = paths['/config']['get']['responses']['200']['content']['ap
 type CommandListResponse = paths['/command']['get']['responses']['200']['content']['application/json']
 type CommandRequest = NonNullable<paths['/session/{id}/command']['post']['requestBody']>['content']['application/json']
 type ShellRequest = NonNullable<paths['/session/{id}/shell']['post']['requestBody']>['content']['application/json']
+type Permission = components['schemas']['Permission']
 
 export class OpenCodeClient {
   private client: AxiosInstance
@@ -121,6 +122,11 @@ export class OpenCodeClient {
     return result.data
   }
 
+  async listPermissions() {
+    const response = await this.client.get<Permission[]>('/permission')
+    return response.data
+  }
+
   async respondToPermissionV2(requestID: string, response: 'once' | 'always' | 'reject') {
     const result = await this.client.post(`/permission/${requestID}/reply`, { reply: response })
     return result.data
@@ -149,6 +155,14 @@ export class OpenCodeClient {
     if (this.directory) {
       url.searchParams.set('directory', this.directory)
     }
+    return url.toString()
+  }
+
+  getGlobalEventSourceURL() {
+    const base = this.baseURL.startsWith('http') 
+      ? this.baseURL 
+      : `${window.location.origin}${this.baseURL}`
+    const url = new URL(`${base}/global/event`)
     return url.toString()
   }
 }

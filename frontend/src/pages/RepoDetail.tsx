@@ -8,13 +8,14 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { SwitchConfigDialog } from "@/components/repo/SwitchConfigDialog";
 import { BackButton } from "@/components/ui/back-button";
-import { useCreateSession } from "@/hooks/useOpenCode";
+import { useCreateSession, useOpenCodeClient } from "@/hooks/useOpenCode";
+import { useLoadPendingPermissions } from "@/hooks/usePermissionRequests";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, FolderOpen, GitBranch, Terminal, Settings } from "lucide-react";
+import { Loader2, Plus, FolderOpen, GitBranch, Terminal, CalendarPlus } from "lucide-react";
 
 export function RepoDetail() {
   const { id } = useParams<{ id: string }>();
@@ -63,6 +64,8 @@ export function RepoDetail() {
   const opcodeUrl = OPENCODE_API_ENDPOINT;
   
   const repoDirectory = repo?.fullPath;
+  const openCodeClient = useOpenCodeClient(opcodeUrl, repoDirectory);
+  useLoadPendingPermissions(openCodeClient);
 
   const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
 
@@ -135,7 +138,7 @@ export function RepoDetail() {
                 className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-7 w-7"
                 title="Schedules"
               >
-                <Settings className="w-4 h-4" />
+                <CalendarPlus className="w-4 h-4" />
               </Button>
               {!repo.isWorktree && branchToDisplay ? (
                 <BranchSwitcher

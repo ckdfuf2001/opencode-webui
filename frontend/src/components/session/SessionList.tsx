@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-import { Trash2, GitBranch, Clock, Search, MoreHorizontal } from "lucide-react";
+import { usePendingPermissionCounts } from "@/hooks/usePermissionRequests";
+import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface SessionListProps {
@@ -24,6 +25,7 @@ export const SessionList = ({
 }: SessionListProps) => {
   const { data: sessions, isLoading } = useSessions(opcodeUrl, directory);
   const deleteSession = useDeleteSession(opcodeUrl, directory);
+  const pendingPermissionCounts = usePendingPermissionCounts();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<
     string | string[] | null
@@ -212,9 +214,20 @@ export const SessionList = ({
                       className="w-5 h-5 flex-shrink-0 mt-0.5"
                     />
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-medium text-foreground truncate">
-                        {session.title || "Untitled Session"}
-                      </h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-medium text-foreground truncate">
+                          {session.title || "Untitled Session"}
+                        </h3>
+                        {pendingPermissionCounts[session.id] ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
+                            title={`${pendingPermissionCounts[session.id]} permission request(s) awaiting approval`}
+                          >
+                            <ShieldAlert className="w-3 h-3" />
+                            {pendingPermissionCounts[session.id]}
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                         {session.parentID && (
                           <span className="flex items-center gap-1">
