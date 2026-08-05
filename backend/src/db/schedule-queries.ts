@@ -102,3 +102,11 @@ export function listEnabledSchedules(db: Database): Schedule[] {
 export function markScheduleRun(db: Database, id: number): void {
   db.prepare('UPDATE schedules SET last_run_at = ? WHERE id = ?').run(Date.now(), id)
 }
+
+export function tryClaimScheduleRun(db: Database, id: number, cooldownMs: number): boolean {
+  const cutoff = Date.now() - cooldownMs
+  const result = db.prepare(
+    'UPDATE schedules SET last_run_at = ? WHERE id = ? AND (last_run_at IS NULL OR last_run_at < ?)'
+  ).run(Date.now(), id, cutoff)
+  return result.changes > 0
+}
