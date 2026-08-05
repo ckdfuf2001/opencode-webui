@@ -1,16 +1,21 @@
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { usePermissionRequests } from '@/hooks/usePermissionRequests'
 import { useOpenCodeClient } from '@/hooks/useOpenCode'
 import { PermissionRequestCard } from '@/components/session/PermissionRequestCard'
 import { OPENCODE_API_ENDPOINT } from '@/config'
 import type { PermissionResponse } from '@/api/types'
 
+const SESSION_DETAIL_PATHS = [/^\/session\/[^/]+$/, /^\/repos\/[^/]+\/sessions\/[^/]+$/]
+
 export function GlobalPermissionToast() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests()
   const client = useOpenCodeClient(OPENCODE_API_ENDPOINT, currentPermission?.directory)
 
-  if (!currentPermission) return null
+  const onSessionDetail = SESSION_DETAIL_PATHS.some((re) => re.test(location.pathname))
+
+  if (!currentPermission || onSessionDetail) return null
 
   const handleRespond = async (permissionID: string, sessionID: string, response: PermissionResponse) => {
     if (!client) return
