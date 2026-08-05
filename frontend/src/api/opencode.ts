@@ -151,14 +151,6 @@ export class OpenCodeClient {
     }
     return url.toString()
   }
-
-  getGlobalEventSourceURL() {
-    const base = this.baseURL.startsWith('http') 
-      ? this.baseURL 
-      : `${window.location.origin}${this.baseURL}`
-    const url = new URL(`${base}/global/event`)
-    return url.toString()
-  }
 }
 
 export const createOpenCodeClient = (baseURL: string, directory?: string) => {
