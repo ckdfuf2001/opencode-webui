@@ -5,8 +5,11 @@ import { Repos } from './pages/Repos'
 import { RepoDetail } from './pages/RepoDetail'
 import { SessionDetail } from './pages/SessionDetail'
 import { SettingsDialog } from './components/settings/SettingsDialog'
+import { GlobalPermissionToast } from './components/session/GlobalPermissionToast'
 import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
+import { useSSE } from './hooks/useSSE'
+import { OPENCODE_API_ENDPOINT } from './config'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,6 +24,8 @@ function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
 
+  useSSE(OPENCODE_API_ENDPOINT)
+
   return (
     <BrowserRouter>
       <Routes>
@@ -30,6 +35,7 @@ function AppContent() {
         <Route path="/session/:sessionId" element={<SessionDetail />} />
       </Routes>
       <SettingsDialog open={isOpen} onOpenChange={close} />
+      <GlobalPermissionToast />
       <Toaster 
         position="bottom-right"
         expand={false}
