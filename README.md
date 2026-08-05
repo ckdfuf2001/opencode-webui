@@ -41,12 +41,15 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **Plan/Build Mode Toggle** - Switch between read-only and file-change modes
 - **Session Management** - Create, search, delete, and bulk delete sessions
 - **Real-time Streaming** - Live message streaming with SSE
+- **Session Activity Indicator** - "Working" badge shows when LLM is actively processing in a session
+- **Safe Slash Commands** - Only executes commands available on the OpenCode server; unknown commands show a toast warning instead of failing
 
 ### AI Model & Provider Configuration
 - **Model Selection** - Browse and select from available AI models with filtering
 - **Provider Management** - Configure multiple AI providers with API keys
 - **Context Usage Indicator** - Visual progress bar showing token usage
 - **Agent Configuration** - Create custom agents with system prompts and tool permissions
+- **Per-Session Model Switching** - Change the active model mid-session via the model selector dialog
 
 ### MCP Server Management
 - **MCP Server Configuration** - Add local (command-based) or remote (HTTP) MCP servers
@@ -283,6 +286,83 @@ once. To use these tools in chat:
 > `read_document("D:\\...\\file.docx")` and edits them in place with
 > `edit_document(path, [operations])` (replace / insert_after / insert_before /
 > append / prepend / delete).
+
+## Architecture
+
+### Tech Stack
+
+**Frontend** (React 19 + Vite 7)
+- React Query (TanStack Query) for server state
+- Radix UI + Tailwind CSS for components
+- React Hook Form + Zod for forms
+- TypeScript strict mode
+
+**Backend** (Bun + Hono)
+- SQLite database (better-sqlite3)
+- OpenCode server proxy (`/api/opencode/*`)
+- SSE event streaming proxy (`/api/opencode/event`, `/api/opencode/global/event`)
+- File upload/download endpoints
+
+**OpenCode Server** (separate process, port 5551)
+- Provides AI agent execution via REST API + SSE
+- Manages sessions, messages, permissions, MCP servers
+
+### Data Flow
+
+```
+Browser (React) → Backend (Hono, :5001) → OpenCode Server (Bun, :5551)
+     ↑                  ↑                        ↑
+  SSE client        SSE proxy              SSE source
+  React Query       REST proxy             REST API
+```
+
+### Key Components
+
+**Frontend**
+- `useOpenCode` hooks - React Query wrappers for all API calls
+- `useSSE` - Global SSE connection for real-time events (messages, permissions, session lifecycle)
+- `useSessionActivity` - Tracks per-session "Working" state from SSE events
+- `usePermissionRequests` - Global permission request polling + store
+- `ModelSelectDialog` - Switches session model via `POST /api/session/{id}/model`
+
+**Backend**
+- `proxy.ts` - Forwards `/api/opencode/*` to OpenCode server, enriches `/command` with scope
+- `scheduler.ts` - Runs scheduled prompts, creates sessions, sends prompts in background
+- `opencode-single-server.ts` - Manages OpenCode server process lifecycle
+
+### Session Model Switching
+
+The OpenCode server (v1.18.11) does not support `POST /session/{id}/command {command: "model"}`. Instead, use:
+
+```
+POST /api/session/{id}/model
+Content-Type: application/json
+
+{ "model": { "id": "deepseek-v4-flash-free", "providerID": "opencode" } }
+```
+
+Returns `204 No Content`. The frontend calls this via `OpenCodeClient.switchModel()` and invalidates the session/sessions queries to refresh the UI.
+
+### Slash Commands
+
+Only commands that exist on the OpenCode server are sent via `POST /session/{id}/command`:
+- Built-in: `init`, `review`
+- MCP prompts (dynamically registered)
+- Skills (from `~/.config/opencode/skills/` and project `.opencode/skills/`)
+
+UI-only commands (`models`, `themes`, `new`, `clear`, `help`, `sessions`, `resume`, `continue`, `share`, `unshare`, `export`, `compact`, `summarize`, `undo`, `redo`, `details`, `editor`) are handled client-side with toasts or dialogs.
+
+### Session Activity Tracking
+
+The `useSessionActivity` hook maintains a global store of active sessions:
+- `active` → emitted on `part.updated` or `message.updated` (assistant role)
+- `completing` → emitted when assistant message has `time.completed` (3s grace period)
+- `idle` → emitted on `session.idle`, `session.error`
+- `remove` → emitted on `session.deleted`
+Components use `useActiveSessions()` (Record<sessionId, boolean>) and `useSessionActive(sessionId)` for
+badges.
+
+---
 
 ## Uninstall
 
