@@ -69,7 +69,7 @@ REM Install the domain guide (AGENTS.md) into the workspace if missing
 if exist "docs\agent-domain-guide.md" (
   if not exist "%WORKSPACE_PATH%\AGENTS.md" (
     copy "docs\agent-domain-guide.md" "%WORKSPACE_PATH%\AGENTS.md" >nul
-    echo   [+] Installed domain guide (docs\agent-domain-guide.md) as workspace\AGENTS.md
+    echo   [+] Installed domain guide ^(docs\agent-domain-guide.md^) as workspace\AGENTS.md
   ) else (
     echo   [+] workspace\AGENTS.md already present
   )
