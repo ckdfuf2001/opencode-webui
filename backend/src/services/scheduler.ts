@@ -98,32 +98,18 @@ export async function runSchedule(db: Database, schedule: Schedule): Promise<{ s
   const session = await createResponse.json() as { id: string }
   const sessionID = session.id
 
-  if (schedule.action === 'command') {
-    const command = schedule.command?.trim()
-    if (!command) {
-      return { success: false, sessionID, error: 'Command name is required' }
-    }
-    const response = await fetch(`${base}/session/${sessionID}/command?directory=${directoryParam}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ command, arguments: '' }),
-      signal: AbortSignal.timeout(60_000),
-    })
-    if (!response.ok) {
-      const body = await response.text()
-      return { success: false, sessionID, error: `Failed to run command: ${response.status} ${body}` }
-    }
-    return { success: true, sessionID }
+  const prompt = schedule.action === 'command'
+    ? schedule.command?.trim()
+    : schedule.prompt?.trim()
+  if (!prompt) {
+    return { success: false, sessionID, error: schedule.action === 'command' ? 'Command name is required' : 'Prompt is required' }
   }
 
-  const prompt = schedule.prompt?.trim()
-  if (!prompt) {
-    return { success: false, sessionID, error: 'Prompt is required' }
-  }
+  const text = schedule.action === 'command' ? `/${prompt}` : prompt
   const response = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ parts: [{ type: 'text', text: prompt }] }),
+    body: JSON.stringify({ parts: [{ type: 'text', text }] }),
     signal: AbortSignal.timeout(60_000),
   })
   if (!response.ok) {
