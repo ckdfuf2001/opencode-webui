@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getRepo } from "@/api/repos";
 import { MessageThread } from "@/components/message/MessageThread";
@@ -11,17 +11,17 @@ import { PermissionRequestCard } from "@/components/session/PermissionRequestCar
 import { QuestionRequestCard } from "@/components/session/QuestionRequestCard";
 import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
+import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { useSSE } from "@/hooks/useSSE";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useQuestionRequests } from "@/hooks/useQuestionRequests";
-import { usePermissionRequests, useLoadPendingPermissions } from "@/hooks/usePermissionRequests";
+import { usePermissionRequests, useLoadPendingPermissions, collectDescendantIDs } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
-import { useEffect, useRef, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import type { PermissionResponse } from "@/api/types";
@@ -42,10 +42,12 @@ export function SessionDetail() {
   const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
+  const [permissionRulesOpen, setPermissionRulesOpen] = useState(false);
   const [injectedCommand, setInjectedCommand] = useState<{ token: number; text: string; run?: boolean } | null>(null);
   const [injectedFile, setInjectedFile] = useState<InjectedFile | null>(null);
   const [injectedPrompt, setInjectedPrompt] = useState<{ token: number; text: string } | null>(null);
   const [hiddenAfterID, setHiddenAfterID] = useState<string | null>(null);
+  const [highlightedMessageID, setHighlightedMessageID] = useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
@@ -57,14 +59,27 @@ export function SessionDetail() {
     enabled: !!repoId,
   });
 
-  const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests(sessionId);
-  const { currentQuestion, dismissQuestion } = useQuestionRequests(sessionId);
-  
   const opcodeUrl = OPENCODE_API_ENDPOINT;
   const openCodeClient = useOpenCodeClient(opcodeUrl, repo?.fullPath);
-  useLoadPendingPermissions(openCodeClient, sessionId);
-  
+
   const repoDirectory = repo?.fullPath;
+  const { data: sessions } = useSessions(opcodeUrl, repoDirectory);
+
+  const descendantIDs = useMemo(
+    () => sessionId && sessions ? collectDescendantIDs(sessions, sessionId) : [],
+    [sessionId, sessions],
+  );
+
+  const sessionTitles = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const s of sessions ?? []) map[s.id] = s.title
+    return map
+  }, [sessions]);
+
+  const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests(sessionId, descendantIDs);
+  const { currentQuestion, dismissQuestion } = useQuestionRequests(sessionId);
+  
+  useLoadPendingPermissions(openCodeClient, sessionId, descendantIDs);
 
   const { data: messages } = useMessages(opcodeUrl, sessionId, repoDirectory);
 
@@ -114,6 +129,26 @@ export function SessionDetail() {
   }, [preferences?.mode, updateSettings]);
 
   
+
+  const scrollToMessage = useCallback((messageID: string) => {
+    setHighlightedMessageID(messageID);
+    requestAnimationFrame(() => {
+      document.getElementById(`message-${messageID}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, []);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    const msgID = searchParams.get('msg');
+    if (!msgID) return;
+    if (!messages) return;
+    const found = messages.some((m) => m.info.id === msgID);
+    setSearchParams({}, { replace: true });
+    if (found) {
+      requestAnimationFrame(() => scrollToMessage(msgID));
+    }
+  }, [searchParams, setSearchParams, messages, scrollToMessage]);
 
   const handleFileClick = useCallback((filePath: string) => {
     let pathToOpen = filePath
@@ -321,6 +356,7 @@ export function SessionDetail() {
         onFileBrowserOpen={() => setFileBrowserOpen(true)}
         onSettingsOpen={openSettings}
         onCommandsOpen={() => setCommandsOpen(true)}
+        onPermissionRulesOpen={() => setPermissionRulesOpen(true)}
         onSessionTitleUpdate={handleSessionTitleUpdate}
       />
 
@@ -337,6 +373,7 @@ export function SessionDetail() {
                 onEditMessage={handleEditMessage}
                 hiddenAfterID={hiddenAfterID}
                 onCancelEdit={handleCancelEdit}
+                highlightedMessageID={highlightedMessageID}
               />
             )}
             {currentQuestion && (
@@ -354,6 +391,9 @@ export function SessionDetail() {
                 <PermissionRequestCard
                   permission={currentPermission}
                   pendingCount={pendingCount}
+                  viewedSessionID={sessionId}
+                  sessionTitles={sessionTitles}
+                  repoId={repoId}
                   onRespond={handlePermissionResponse}
                   onDismiss={dismissPermission}
                 />
@@ -447,7 +487,15 @@ export function SessionDetail() {
         opcodeUrl={opcodeUrl}
         sessionID={sessionId}
         directory={repoDirectory}
+        repoId={repoId}
         onExecuteCommand={handleExecuteCommand}
+        onScrollToMessage={scrollToMessage}
+      />
+
+      <PermissionRulesDialog
+        open={permissionRulesOpen}
+        onOpenChange={setPermissionRulesOpen}
+        repoId={repoId}
       />
     </div>
   );

@@ -20,6 +20,7 @@ interface MessageThreadProps {
   onEditMessage?: (messageID: string, text: string) => void
   hiddenAfterID?: string | null
   onCancelEdit?: () => void
+  highlightedMessageID?: string | null
 }
 
 const isMessageStreaming = (msg: MessageWithParts): boolean => {
@@ -32,7 +33,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, hiddenAfterID, onCancelEdit }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, hiddenAfterID, onCancelEdit, highlightedMessageID }: MessageThreadProps) {
   if (!messages || messages.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-600">
@@ -53,7 +54,8 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
         return (
             <div
               key={msg.info.id}
-              className="flex flex-col group"
+              id={`message-${msg.info.id}`}
+              className={`flex flex-col group ${highlightedMessageID === msg.info.id ? 'message-highlight' : ''}`}
             >
             <div
               className={`w-full rounded-lg p-1.5 ${

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useSessions, useDeleteSession } from "@/hooks/useOpenCode";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { usePendingPermissionCounts } from "@/hooks/usePermissionRequests";
 import { useActiveSessions } from "@/hooks/useSessionActivity";
-import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert, Loader2 } from "lucide-react";
+import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface SessionListProps {
@@ -16,6 +16,16 @@ interface SessionListProps {
   directory?: string;
   activeSessionID?: string;
   onSelectSession: (sessionID: string) => void;
+}
+
+interface SessionNode {
+  session: {
+    id: string;
+    title?: string;
+    parentID?: string;
+    time: { updated: number };
+  };
+  children: SessionNode[];
 }
 
 export const SessionList = ({
@@ -26,7 +36,7 @@ export const SessionList = ({
 }: SessionListProps) => {
   const { data: sessions, isLoading } = useSessions(opcodeUrl, directory);
   const deleteSession = useDeleteSession(opcodeUrl, directory);
-  const pendingPermissionCounts = usePendingPermissionCounts();
+  const pendingPermissionCounts = usePendingPermissionCounts(sessions);
   const activeSessions = useActiveSessions();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<
@@ -34,6 +44,9 @@ export const SessionList = ({
   >(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(
+    new Set(),
+  );
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(
     new Set(),
   );
 
@@ -46,6 +59,78 @@ export const SessionList = ({
       (session.title || "Untitled Session").toLowerCase().includes(query),
     );
   }, [sessions, searchQuery]);
+
+  const sessionTree = useMemo(() => {
+    const nodes = new Map<string, SessionNode>();
+    for (const s of filteredSessions) {
+      nodes.set(s.id, { session: s, children: [] });
+    }
+    const roots: SessionNode[] = [];
+    for (const node of nodes.values()) {
+      const parentID = node.session.parentID;
+      const parent = parentID ? nodes.get(parentID) : undefined;
+      if (parent) {
+        parent.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+    const sortRecursive = (list: SessionNode[]) => {
+      list.sort((a, b) => b.session.time.updated - a.session.time.updated);
+      for (const item of list) sortRecursive(item.children);
+    };
+    sortRecursive(roots);
+    return roots;
+  }, [filteredSessions]);
+
+  const visibleSessionIDs = useMemo(() => {
+    const ids = new Set<string>();
+    const walk = (nodes: SessionNode[]) => {
+      for (const node of nodes) {
+        ids.add(node.session.id);
+        walk(node.children);
+      }
+    };
+    walk(sessionTree);
+    return ids;
+  }, [sessionTree]);
+
+  const toggleExpand = (sessionId: string) => {
+    setExpandedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  };
+
+  const collectSubtreeIDs = (node: SessionNode): string[] => {
+    return [node.session.id, ...node.children.flatMap(collectSubtreeIDs)];
+  };
+
+  const getSubtreeSelectionState = (node: SessionNode) => {
+    const subtreeIDs = collectSubtreeIDs(node);
+    const selectedCount = subtreeIDs.filter((id) => selectedSessions.has(id)).length;
+    if (selectedCount === subtreeIDs.length) return true;
+    if (selectedCount > 0) return "indeterminate" as const;
+    return false;
+  };
+
+  const toggleSubtreeSelection = (node: SessionNode, selected: boolean) => {
+    const subtreeIDs = collectSubtreeIDs(node);
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      if (selected) {
+        for (const id of subtreeIDs) next.add(id);
+      } else {
+        for (const id of subtreeIDs) next.delete(id);
+      }
+      return next;
+    });
+  };
 
   if (isLoading) {
     return <div className="p-4 text-sm text-muted-foreground">Loading sessions...</div>;
@@ -112,6 +197,114 @@ export const SessionList = ({
       setSessionToDelete(Array.from(selectedSessions));
       setDeleteDialogOpen(true);
     }
+  };
+
+  const renderSessionNode = (node: SessionNode) => {
+    const session = node.session;
+    const hasChildren = node.children.length > 0;
+    const isExpanded = expandedSessions.has(session.id);
+    const isOrphan = !!session.parentID && !visibleSessionIDs.has(session.parentID);
+    const subtreeSelection = getSubtreeSelectionState(node);
+
+    return (
+      <Fragment key={session.id}>
+        <Card
+          className={`p-3 cursor-pointer transition-all ${
+            selectedSessions.has(session.id)
+              ? "border-blue-500 shadow-lg shadow-blue-900/30 bg-muted"
+              : activeSessionID === session.id
+                ? "bg-muted border-border"
+                : "bg-card border-border hover:bg-muted/60 hover:border-ring"
+          } hover:shadow-lg`}
+          onClick={() => onSelectSession(session.id)}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2 flex-1 min-w-0">
+              <Checkbox
+                checked={subtreeSelection}
+                onCheckedChange={(checked) => {
+                  if (hasChildren) {
+                    toggleSubtreeSelection(node, checked === true);
+                  } else {
+                    toggleSessionSelection(session.id, checked === true);
+                  }
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+                className="w-5 h-5 flex-shrink-0 mt-0.5"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  {hasChildren && (
+                    <button
+                      className="h-4 w-4 p-0 text-muted-foreground hover:text-foreground bg-transparent border-none cursor-pointer flex-shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleExpand(session.id);
+                      }}
+                      title={isExpanded ? "Collapse sub-sessions" : "Expand sub-sessions"}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  )}
+                  <h3 className="text-sm font-medium text-foreground truncate">
+                    {session.title || "Untitled Session"}
+                  </h3>
+                  {pendingPermissionCounts[session.id] ? (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
+                      title={`${pendingPermissionCounts[session.id]} permission request(s) awaiting approval`}
+                    >
+                      <ShieldAlert className="w-3 h-3" />
+                      {pendingPermissionCounts[session.id]}
+                    </span>
+                  ) : null}
+                  {activeSessions[session.id] ? (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-500 bg-blue-500/10 border border-blue-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
+                      title="LLM is answering"
+                    >
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Working
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                  {isOrphan && (
+                    <span className="flex items-center gap-1">
+                      <GitBranch className="w-3 h-3" />
+                      Forked
+                    </span>
+                  )}
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {formatDistanceToNow(new Date(session.time.updated), {
+                      addSuffix: true,
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <button
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer"
+              onClick={(e) => handleDelete(session.id, e)}
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </Card>
+        {hasChildren && isExpanded && (
+          <div className="ml-6 border-l border-border pl-3 flex flex-col gap-2">
+            {node.children.map((child) => renderSessionNode(child))}
+          </div>
+        )}
+      </Fragment>
+    );
   };
 
   return (
@@ -191,79 +384,7 @@ export const SessionList = ({
               No sessions found
             </div>
           ) : (
-            filteredSessions.map((session) => (
-              <Card
-                key={session.id}
-                className={`p-3 cursor-pointer transition-all ${
-                  selectedSessions.has(session.id)
-                    ? "border-blue-500 shadow-lg shadow-blue-900/30 bg-muted"
-                    : activeSessionID === session.id
-                      ? "bg-muted border-border"
-                      : "bg-card border-border hover:bg-muted/60 hover:border-ring"
-                } hover:shadow-lg`}
-                onClick={() => onSelectSession(session.id)}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 flex-1 min-w-0">
-                    <Checkbox
-                      checked={selectedSessions.has(session.id)}
-                      onCheckedChange={(checked) => {
-                        toggleSessionSelection(session.id, checked === true);
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                      }}
-                      className="w-5 h-5 flex-shrink-0 mt-0.5"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-medium text-foreground truncate">
-                          {session.title || "Untitled Session"}
-                        </h3>
-                        {pendingPermissionCounts[session.id] ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
-                            title={`${pendingPermissionCounts[session.id]} permission request(s) awaiting approval`}
-                          >
-                            <ShieldAlert className="w-3 h-3" />
-                            {pendingPermissionCounts[session.id]}
-                          </span>
-                        ) : null}
-                        {activeSessions[session.id] ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-500 bg-blue-500/10 border border-blue-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
-                            title="LLM is answering"
-                          >
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            Working
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                        {session.parentID && (
-                          <span className="flex items-center gap-1">
-                            <GitBranch className="w-3 h-3" />
-                            Forked
-                          </span>
-                        )}
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          {formatDistanceToNow(new Date(session.time.updated), {
-                            addSuffix: true,
-                          })}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer"
-                    onClick={(e) => handleDelete(session.id, e)}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </Card>
-            ))
+            sessionTree.map((node) => renderSessionNode(node))
           )}
         </div>
       </div>
