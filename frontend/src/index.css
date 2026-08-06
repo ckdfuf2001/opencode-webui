@@ -133,6 +133,15 @@ body {
   animation: shine-loading 3s linear infinite;
 }
 
+@keyframes message-highlight-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45); }
+}
+
+.message-highlight {
+  animation: message-highlight-pulse 1.6s ease-in-out 2;
+}
+
 .prose-enhanced {
   line-height: 1.7;
   word-break: break-word;

@@ -231,6 +231,7 @@ export function RepoDetail() {
         opcodeUrl={opcodeUrl}
         sessionID=""
         directory={repoDirectory}
+        repoId={repoId}
       />
 
         {repo && (

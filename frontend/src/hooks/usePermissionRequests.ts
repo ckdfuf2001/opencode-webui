@@ -74,15 +74,48 @@ function pruneStalePermissions(): void {
 startStoreSubscription()
 pruneStalePermissions()
 
-export function usePendingPermissionCounts(): Record<string, number> {
+export function collectDescendantIDs(sessions: { id: string; parentID?: string }[], sessionID: string): string[] {
+  const byParent = new Map<string, string[]>()
+  for (const s of sessions) {
+    if (!s.parentID) continue
+    const children = byParent.get(s.parentID)
+    if (children) {
+      children.push(s.id)
+    } else {
+      byParent.set(s.parentID, [s.id])
+    }
+  }
+  const result: string[] = []
+  const queue = byParent.get(sessionID) ?? []
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    result.push(id)
+    const children = byParent.get(id)
+    if (children) queue.push(...children)
+  }
+  return result
+}
+
+export function usePendingPermissionCounts(sessions?: { id: string; parentID?: string }[]): Record<string, number> {
   const allPermissions = usePermissionStore((state) => state.permissions)
   return useMemo(() => {
     const counts: Record<string, number> = {}
     for (const p of allPermissions) {
       counts[p.sessionID] = (counts[p.sessionID] ?? 0) + 1
     }
+    if (sessions) {
+      const directCounts = { ...counts }
+      for (const s of sessions) {
+        const descendants = collectDescendantIDs(sessions, s.id)
+        if (descendants.length === 0) continue
+        const descendantCount = descendants.reduce((sum, id) => sum + (directCounts[id] ?? 0), 0)
+        if (descendantCount > 0) {
+          counts[s.id] = (counts[s.id] ?? 0) + descendantCount
+        }
+      }
+    }
     return counts
-  }, [allPermissions])
+  }, [allPermissions, sessions])
 }
 
 function normalizePermission(raw: unknown): Permission | null {
@@ -117,17 +150,19 @@ function normalizePermission(raw: unknown): Permission | null {
   }
 }
 
-export function useLoadPendingPermissions(client: { listPermissions(): Promise<unknown[]> } | null, sessionID?: string) {
+export function useLoadPendingPermissions(client: { listPermissions(): Promise<unknown[]> } | null, sessionID?: string, relatedSessionIDs?: string[]) {
   useEffect(() => {
     if (!client) return
     let cancelled = false
+
+    const scopeIDs = sessionID ? new Set([sessionID, ...(relatedSessionIDs ?? [])]) : null
 
     const load = async () => {
       try {
         const pending = await client.listPermissions()
         if (cancelled) return
-        const scope = sessionID
-          ? pending.filter((p) => (p as { sessionID?: string }).sessionID === sessionID)
+        const scope = scopeIDs
+          ? pending.filter((p) => scopeIDs.has((p as { sessionID?: string }).sessionID ?? ''))
           : pending
         const serverIDs = new Set<string>()
         for (const p of scope) {
@@ -139,7 +174,7 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
         }
         const current = usePermissionStore.getState().permissions
         const stale = current.filter((p) => {
-          if (sessionID && p.sessionID !== sessionID) return false
+          if (scopeIDs && !scopeIDs.has(p.sessionID)) return false
           return !serverIDs.has(p.id)
         })
         if (stale.length > 0) {
@@ -158,17 +193,24 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
       cancelled = true
       clearInterval(interval)
     }
-  }, [client, sessionID])
+  }, [client, sessionID, relatedSessionIDs])
 }
 
-export function usePermissionRequests(sessionID?: string) {
+export function usePermissionRequests(sessionID?: string, relatedSessionIDs?: string[]) {
   const allPermissions = usePermissionStore((state) => state.permissions)
 
+  const scopeIDs = useMemo(() => {
+    const ids = new Set<string>()
+    if (sessionID) ids.add(sessionID)
+    for (const id of relatedSessionIDs ?? []) ids.add(id)
+    return ids
+  }, [sessionID, relatedSessionIDs])
+
   const permissions = useMemo(
-    () => sessionID
-      ? allPermissions.filter(p => p.sessionID === sessionID)
+    () => scopeIDs.size > 0
+      ? allPermissions.filter(p => scopeIDs.has(p.sessionID))
       : allPermissions,
-    [allPermissions, sessionID],
+    [allPermissions, scopeIDs],
   )
 
   const currentPermission = permissions[0] || null

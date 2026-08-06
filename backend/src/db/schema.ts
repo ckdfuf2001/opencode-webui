@@ -67,6 +67,16 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
     );
     
     CREATE INDEX IF NOT EXISTS idx_schedules_repo ON schedules(repo_id);
+    
+    CREATE TABLE IF NOT EXISTS permission_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id INTEGER NOT NULL,
+      permission TEXT NOT NULL,
+      pattern TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_permission_rules_repo ON permission_rules(repo_id);
   `)
   
   runMigrations(db)

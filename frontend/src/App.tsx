@@ -8,7 +8,10 @@ import { SettingsDialog } from './components/settings/SettingsDialog'
 import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
 import { useSSE } from './hooks/useSSE'
+import { startAutoApprover } from './hooks/useAutoApprovePermissions'
 import { OPENCODE_API_ENDPOINT } from './config'
+
+startAutoApprover()
 
 const queryClient = new QueryClient({
   defaultOptions: {

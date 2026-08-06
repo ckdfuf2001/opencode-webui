@@ -1,13 +1,26 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useCreatePermissionRule } from '@/hooks/usePermissionRules'
+import { refreshAutoApproveData } from '@/hooks/useAutoApprovePermissions'
 import type { Permission, PermissionResponse } from '@/api/types'
 import { cn } from '@/lib/utils'
 
 interface PermissionRequestCardProps {
   permission: Permission
   pendingCount: number
+  viewedSessionID?: string
+  sessionTitles?: Record<string, string>
+  repoId?: number
   onRespond: (permissionID: string, sessionID: string, response: PermissionResponse) => Promise<void>
   onDismiss: (permissionID: string) => void
+}
+
+function getRulePattern(permission: Permission): string | null {
+  const patterns = permission.patterns ?? permission.pattern
+  const normalized = Array.isArray(patterns) ? patterns : patterns ? [patterns] : []
+  if (normalized.length > 0) return normalized[0]
+  const metadataValue = permission.metadata?.command ?? permission.metadata?.path ?? permission.metadata?.url
+  return typeof metadataValue === 'string' && metadataValue ? metadataValue : null
 }
 
 function getPermissionTypeLabel(type: string): string {
@@ -53,17 +66,33 @@ function getPermissionDescription(permission: Permission): string {
 export function PermissionRequestCard({
   permission,
   pendingCount,
+  viewedSessionID,
+  sessionTitles,
+  repoId,
   onRespond,
   onDismiss,
 }: PermissionRequestCardProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [loadingAction, setLoadingAction] = useState<PermissionResponse | null>(null)
+  const createRule = useCreatePermissionRule()
 
   const handleResponse = async (response: PermissionResponse) => {
     setIsLoading(true)
     setLoadingAction(response)
     try {
       await onRespond(permission.id, permission.sessionID, response)
+      if (response === 'always' && repoId) {
+        const pattern = getRulePattern(permission)
+        const type = permission.permission ?? permission.type
+        if (pattern) {
+          try {
+            await createRule.mutateAsync({ repoId, permission: type, pattern })
+            refreshAutoApproveData()
+          } catch (error) {
+            console.error('Failed to save permission rule:', error)
+          }
+        }
+      }
       onDismiss(permission.id)
     } catch (error) {
       console.error('Failed to respond to permission:', error)
@@ -77,6 +106,8 @@ export function PermissionRequestCard({
   const typeLabel = getPermissionTypeLabel(permission.permission ?? permission.type)
   const description = getPermissionDescription(permission)
   const alwaysPatterns = permission.always ?? []
+  const isSubagentRequest = !!viewedSessionID && permission.sessionID !== viewedSessionID
+  const sourceSessionTitle = sessionTitles?.[permission.sessionID]
 
   return (
     <div className="w-full rounded-lg p-1.5 bg-card/60 border border-primary/30 animate-pulse-subtle">
@@ -115,7 +146,15 @@ export function PermissionRequestCard({
         )}
 
         <div className="text-xs text-muted-foreground">
-          Session: <span className="font-mono">{permission.sessionID.slice(0, 12)}...</span>
+          {isSubagentRequest ? (
+            <>
+              From subagent: <span className="font-mono">{sourceSessionTitle || `${permission.sessionID.slice(0, 12)}...`}</span>
+            </>
+          ) : (
+            <>
+              Session: <span className="font-mono">{permission.sessionID.slice(0, 12)}...</span>
+            </>
+          )}
         </div>
       </div>
 

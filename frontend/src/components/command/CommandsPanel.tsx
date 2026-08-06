@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import {
   Terminal,
   Loader2,
@@ -14,14 +16,19 @@ import {
   ChevronRight,
   Wrench,
   Plus,
+  CornerDownLeft,
+  Trash2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { useMessages } from '@/hooks/useOpenCode'
-import { useCommandRuns } from '@/stores/commandRunsStore'
+import { useMessages, useSessions } from '@/hooks/useOpenCode'
+import { useCommandRuns, type CommandRunStart } from '@/stores/commandRunsStore'
 import { CreateCommandDialog } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
+import { collectDescendantIDs } from '@/hooks/usePermissionRequests'
+import { listRepos } from '@/api/repos'
+import { createOpenCodeClient } from '@/api/opencode'
 import type { MessageWithParts, Part } from '@/api/types'
 
 function commandNeedsArgs(command: CommandWithScope): boolean {
@@ -35,7 +42,17 @@ interface CommandsPanelProps {
   opcodeUrl: string | null | undefined
   sessionID: string
   directory?: string
+  repoId?: number
+  global?: boolean
   onExecuteCommand?: (command: CommandWithScope, run: boolean, args: string) => void
+  onScrollToMessage?: (messageID: string) => void
+}
+
+interface RunSessionMeta {
+  title: string
+  repoId: number
+  directory: string
+  repoName: string
 }
 
 type RunStatus = 'running' | 'completed' | 'error'
@@ -45,6 +62,7 @@ interface SegmentedRun {
   args: string
   startedAt: number
   trigger: string | null
+  triggerMessageID: string | null
   result: string
   steps: string[]
   status: RunStatus
@@ -70,10 +88,11 @@ function segmentRun(
   messages: MessageWithParts[],
   run: { startedAt: number; name?: string },
   oneshot = false,
-): Pick<SegmentedRun, 'trigger' | 'result' | 'steps' | 'status' | 'lastUpdated' | 'stepCount'> {
+): Pick<SegmentedRun, 'trigger' | 'triggerMessageID' | 'result' | 'steps' | 'status' | 'lastUpdated' | 'stepCount'> {
   let sawTrigger = false
   const assistantMessages: MessageWithParts[] = []
   let trigger: string | null = null
+  let triggerMessageID: string | null = null
   let lastUpdated = run.startedAt
   let stepCount = 0
 
@@ -82,9 +101,13 @@ function segmentRun(
     if (created < run.startedAt) continue
 
     if (message.info.role === 'user') {
+      const isSynthetic = message.parts.length > 0 && message.parts.every((p) => 'synthetic' in p && p.synthetic)
+      if (isSynthetic) continue
+
       if (!sawTrigger) {
         sawTrigger = true
         trigger = assistantText(message) || null
+        triggerMessageID = message.info.id
         if (created > lastUpdated) lastUpdated = created
       } else {
         break
@@ -121,7 +144,7 @@ function segmentRun(
   }
 
   const steps = assistantMessages.map(assistantSteps).flat()
-  return { trigger, result, steps, status, lastUpdated, stepCount }
+  return { trigger, triggerMessageID, result, steps, status, lastUpdated, stepCount }
 }
 
 function formatTime(timestamp: number): string {
@@ -155,6 +178,7 @@ interface CommandExplorerProps {
   error: string | null
   onExecute?: (command: CommandWithScope, run: boolean, args: string) => void
   onCreate?: () => void
+  focusCommand?: CommandWithScope | null
 }
 
 interface PendingArgs {
@@ -162,11 +186,18 @@ interface PendingArgs {
   run: boolean
 }
 
-function CommandExplorer({ commands, loading, error, onExecute, onCreate }: CommandExplorerProps) {
+function CommandExplorer({ commands, loading, error, onExecute, onCreate, focusCommand }: CommandExplorerProps) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<CommandWithScope | null>(null)
   const [pendingArgs, setPendingArgs] = useState<PendingArgs | null>(null)
   const [argsInput, setArgsInput] = useState('')
+
+  useEffect(() => {
+    if (focusCommand) {
+      setSelected(focusCommand)
+      setQuery('')
+    }
+  }, [focusCommand])
 
   const requestExecute = (command: CommandWithScope, run: boolean) => {
     if (commandNeedsArgs(command)) {
@@ -338,40 +369,185 @@ function CommandExplorer({ commands, loading, error, onExecute, onCreate }: Comm
   )
 }
 
-export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, onExecuteCommand }: CommandsPanelProps) {
+export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, repoId, global = sessionID === '', onExecuteCommand, onScrollToMessage }: CommandsPanelProps) {
+  const navigate = useNavigate()
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
-  const runList = useCommandRuns((state) => state.runsBySession[sessionID])
+  const runsBySession = useCommandRuns((state) => state.runsBySession)
+  const { data: sessions } = useSessions(opcodeUrl, directory)
   const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
   const [tab, setTab] = useState<'runs' | 'explorer'>('runs')
   const [expanded, setExpanded] = useState<Record<string, { steps: boolean; response: boolean }>>({})
   const [createOpen, setCreateOpen] = useState(false)
+  const [historyQuery, setHistoryQuery] = useState('')
+  const [explorerFocus, setExplorerFocus] = useState<CommandWithScope | null>(null)
 
   const availableSkills = useMemo(
     () => commands.filter((c) => c.source === 'skill').map((c) => c.name),
     [commands]
   )
 
+  const currentSessionMeta = useMemo(() => {
+    const map: Record<string, RunSessionMeta> = {}
+    for (const s of sessions ?? []) {
+      map[s.id] = { title: s.title || 'Untitled Session', repoId: repoId ?? 0, directory: directory ?? '', repoName: '' }
+    }
+    return map
+  }, [sessions, repoId, directory])
+
+  const { data: globalSessionMeta } = useQuery({
+    queryKey: ['command-history-sessions', opcodeUrl],
+    queryFn: async () => {
+      if (!opcodeUrl) return {} as Record<string, RunSessionMeta>
+      const repos = await listRepos()
+      const repoNameOf = (repo: { repoUrl: string; localPath: string }) => {
+        if (repo.repoUrl) return repo.repoUrl.split('/').slice(-1)[0].replace('.git', '')
+        return repo.localPath || 'repo'
+      }
+      const map: Record<string, RunSessionMeta> = {}
+      await Promise.all(repos.map(async (repo) => {
+        try {
+          const client = createOpenCodeClient(opcodeUrl, repo.fullPath)
+          const sessionList = await client.listSessions()
+          for (const s of sessionList) {
+            map[s.id] = { title: s.title || 'Untitled Session', repoId: repo.id, directory: repo.fullPath, repoName: repoNameOf(repo) }
+          }
+        } catch {
+          // Ignore per-repo failures
+        }
+      }))
+      return map
+    },
+    enabled: !!opcodeUrl && global,
+  })
+
+  const sessionMeta = useMemo(
+    () => (global ? globalSessionMeta ?? {} : currentSessionMeta),
+    [global, globalSessionMeta, currentSessionMeta],
+  )
+
+  const runList = useMemo(() => {
+    if (global) {
+      const all: (CommandRunStart & { sessionMeta?: RunSessionMeta })[] = []
+      for (const [sid, list] of Object.entries(runsBySession)) {
+        if (!list || list.length === 0) continue
+        for (const run of list) {
+          all.push({ ...run, sessionMeta: sessionMeta[sid] })
+        }
+      }
+      return all.sort((a, b) => a.startedAt - b.startedAt)
+    }
+    const descendantIDs = sessions ? collectDescendantIDs(sessions, sessionID) : []
+    const ids = new Set([sessionID, ...descendantIDs])
+    const list: CommandRunStart[] = []
+    for (const sid of ids) {
+      for (const run of runsBySession[sid] ?? []) list.push(run)
+    }
+    return list.sort((a, b) => a.startedAt - b.startedAt)
+  }, [global, runsBySession, sessionID, sessions, sessionMeta])
+
+  const filteredRunList = useMemo(() => {
+    if (!historyQuery.trim()) return runList
+    const q = historyQuery.toLowerCase()
+    return runList.filter((run) => {
+      const cmdText = `${run.name} ${run.args}`.toLowerCase()
+      const sessionTitle = (run as { sessionMeta?: RunSessionMeta }).sessionMeta?.title
+        ?? sessionMeta[run.sessionID]?.title
+        ?? ''
+      return cmdText.includes(q) || sessionTitle.toLowerCase().includes(q)
+    })
+  }, [runList, historyQuery, sessionMeta])
+
   const segments = useMemo(() => {
+    if (global) return []
     const ordered = [...(runList ?? [])].sort((a, b) => a.startedAt - b.startedAt)
     return ordered
       .map((run) => {
         const meta = commands.find((c) => c.name === run.name)
+        const segmented = segmentRun(messages ?? [], run, meta?.oneshot)
         return {
           id: run.id,
           name: run.name,
           args: run.args,
           startedAt: run.startedAt,
-          ...segmentRun(messages ?? [], run, meta?.oneshot),
+          sessionID: run.sessionID,
+          messageID: run.messageID ?? segmented.triggerMessageID ?? undefined,
+          ...segmented,
         }
       })
       .reverse()
-  }, [runList, messages, commands])
+  }, [global, runList, messages, commands])
+
+  useEffect(() => {
+    if (global) return
+    for (const run of runList) {
+      if (run.messageID) continue
+      const seg = segments.find((s) => s.id === run.id && s.messageID)
+      if (seg?.messageID) {
+        useCommandRuns.getState().setRunMessage(run.sessionID, run.id, seg.messageID)
+      }
+    }
+  }, [runList, segments, global])
+
+  const handleGoToMessage = useCallback((runSessionID: string, messageID?: string, runRepoId?: number) => {
+    if (!global && runSessionID === sessionID) {
+      if (messageID) {
+        onScrollToMessage?.(messageID)
+      }
+      return
+    }
+    const targetRepoId = runRepoId || repoId
+    const base = targetRepoId
+      ? `/repos/${targetRepoId}/sessions/${runSessionID}`
+      : `/session/${runSessionID}`
+    navigate(messageID ? `${base}?msg=${encodeURIComponent(messageID)}` : base)
+  }, [global, sessionID, repoId, navigate, onScrollToMessage])
 
   const runningCount = segments.filter((s) => s.status === 'running').length
 
   if (!open) return null
 
   const commandByName = (name: string) => commands.find((c) => c.name === name)
+
+  const renderGlobalRun = (run: CommandRunStart & { sessionMeta?: RunSessionMeta }) => (
+    <div
+      key={run.id}
+      className="rounded-lg border border-border bg-background overflow-hidden cursor-pointer hover:border-ring group"
+      onClick={() => handleGoToMessage(run.sessionID, run.messageID, run.sessionMeta?.repoId)}
+    >
+      <div className="flex items-start justify-between gap-2 px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-foreground font-mono truncate">
+            /{run.name}{run.args ? ` ${run.args}` : ''}
+          </p>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className="text-[10px] text-muted-foreground">{formatTime(run.startedAt)}</span>
+            {run.sessionMeta && (
+              <span className="text-[10px] text-primary/80 truncate max-w-[160px]" title={run.sessionMeta.title}>
+                {run.sessionMeta.title}
+              </span>
+            )}
+            {run.sessionMeta?.repoName && (
+              <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">· {run.sessionMeta.repoName}</span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <CornerDownLeft className="w-3.5 h-3.5 text-primary/80" />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              useCommandRuns.getState().removeRun(run.sessionID, run.id)
+            }}
+            className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Delete history entry"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div className="fixed inset-0 z-40" style={{ pointerEvents: open ? 'auto' : 'none' }}>
@@ -414,17 +590,40 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'explorer' ? (
-          <CommandExplorer commands={commands} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={() => setCreateOpen(true)} />
+          <CommandExplorer commands={commands} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={() => setCreateOpen(true)} focusCommand={explorerFocus} />
         ) : (
           <div className="flex-1 overflow-y-auto min-h-0">
-            {segments.length === 0 ? (
+            {runList.length > 0 && (
+              <div className="p-3 pb-0">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  <Input
+                    value={historyQuery}
+                    onChange={(e) => setHistoryQuery(e.target.value)}
+                    placeholder="Search history..."
+                    className="pl-8 h-8 text-xs"
+                  />
+                </div>
+              </div>
+            )}
+            {filteredRunList.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full px-6 text-center">
                 <History className="w-8 h-8 mb-2 text-muted-foreground/40" />
-                <p className="text-sm text-muted-foreground">No commands executed yet in this session.</p>
+                <p className="text-sm text-muted-foreground">
+                  {runList.length === 0
+                    ? global
+                      ? 'No commands executed yet.'
+                      : 'No commands executed yet in this session.'
+                    : 'No history matches your search.'}
+                </p>
+              </div>
+            ) : global ? (
+              <div className="p-3 space-y-3">
+                {[...filteredRunList].reverse().map(renderGlobalRun)}
               </div>
             ) : (
               <div className="p-3 space-y-3">
-                {segments.map((run) => {
+                {segments.filter((s) => filteredRunList.some((r) => r.id === s.id)).map((run) => {
                   const meta = commandByName(run.name)
                   const scope = meta?.scope ?? 'builtin'
                   const badge = SCOPE_DISPLAY[scope]
@@ -433,13 +632,22 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                   const responseOpen = state?.response ?? false
                   const toggle = (key: 'steps' | 'response', open: boolean) =>
                     setExpanded((prev) => ({ ...prev, [run.id]: { ...(prev[run.id] ?? { steps: false, response: false }), [key]: open } }))
+                  const sessionLabel = run.sessionID !== sessionID
+                    ? (currentSessionMeta[run.sessionID]?.title ?? run.sessionID)
+                    : null
                   return (
                     <div key={run.id} className="rounded-lg border border-border bg-background overflow-hidden">
                       <div className="flex items-start justify-between gap-2 px-3 py-2 border-b border-border bg-muted/30">
                         <div className="min-w-0">
                           <button
                             type="button"
-                            onClick={() => meta && setTab('explorer')}
+                            onClick={() => {
+                              const meta = commandByName(run.name)
+                              if (meta) {
+                                setExplorerFocus(meta)
+                                setTab('explorer')
+                              }
+                            }}
                             title={meta?.description}
                             className="text-xs font-medium text-foreground font-mono truncate hover:text-primary"
                           >
@@ -447,28 +655,52 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                           </button>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span className="text-[10px] text-muted-foreground">{formatTime(run.startedAt)}</span>
+                            {sessionLabel && (
+                              <span className="text-[10px] text-primary/80 truncate max-w-[140px]" title={sessionLabel}>
+                                {sessionLabel}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleGoToMessage(run.sessionID, run.messageID, repoId)}
+                              className="inline-flex items-center gap-0.5 text-[10px] text-primary/80 hover:text-primary underline underline-offset-2"
+                              title="Go to message in chat"
+                            >
+                              <CornerDownLeft className="w-2.5 h-2.5" />
+                              chat
+                            </button>
                             {meta && <span className={`px-1 rounded text-[9px] ${badge.className}`}>{badge.label}</span>}
                             {run.stepCount > 0 && (
                               <span className="text-[10px] text-muted-foreground">{run.stepCount} steps</span>
                             )}
                           </div>
                         </div>
-                        {run.status === 'running' ? (
-                          <div className="flex items-center gap-1 text-[11px] text-amber-500 flex-shrink-0">
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            Running
-                          </div>
-                        ) : run.status === 'error' ? (
-                          <div className="flex items-center gap-1 text-[11px] text-destructive flex-shrink-0">
-                            <AlertCircle className="w-3 h-3" />
-                            Error
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1 text-[11px] text-green-500 flex-shrink-0">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Done
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          {run.status === 'running' ? (
+                            <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Running
+                            </div>
+                          ) : run.status === 'error' ? (
+                            <div className="flex items-center gap-1 text-[11px] text-destructive">
+                              <AlertCircle className="w-3 h-3" />
+                              Error
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-[11px] text-green-500">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Done
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => useCommandRuns.getState().removeRun(run.sessionID, run.id)}
+                            className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer"
+                            title="Delete history entry"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                       <div className="px-3 py-2 space-y-2">
                         {meta?.description && (

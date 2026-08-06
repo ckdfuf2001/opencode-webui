@@ -1,16 +1,20 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Trash2, GitBranch, ExternalLink } from "lucide-react";
+import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AddBranchWorkspaceDialog } from "./AddBranchWorkspaceDialog";
+import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
+import { OPENCODE_API_ENDPOINT } from "@/config";
 
 interface RepoCardProps {
   repo: {
     id: number;
     repoUrl?: string | null;
     localPath?: string;
+    fullPath?: string;
     branch?: string;
     currentBranch?: string;
     cloneStatus: string;
@@ -21,6 +25,7 @@ interface RepoCardProps {
   isDeleting: boolean;
   isSelected?: boolean;
   onSelect?: (id: number, selected: boolean) => void;
+  scheduleCount?: number;
 }
 
 export function RepoCard({
@@ -29,14 +34,24 @@ export function RepoCard({
   isDeleting,
   isSelected = false,
   onSelect,
+  scheduleCount = 0,
 }: RepoCardProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [addBranchOpen, setAddBranchOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const repoName = repo.repoUrl 
     ? repo.repoUrl.split("/").slice(-1)[0].replace(".git", "")
     : repo.localPath || "Local Repo";
   const branchToDisplay = repo.currentBranch || repo.branch;
   const isReady = repo.cloneStatus === "ready";
+
+  const handleScheduleOpenChange = (next: boolean) => {
+    setScheduleOpen(next);
+    if (!next) {
+      queryClient.invalidateQueries({ queryKey: ["schedules"] });
+    }
+  };
 
   return (
     <div
@@ -136,6 +151,21 @@ export function RepoCard({
 
             <Button
               size="sm"
+              variant="outline"
+              onClick={(e) => {
+                e.stopPropagation();
+                setScheduleOpen(true);
+              }}
+              disabled={!isReady}
+              className="h-10 sm:h-9 px-2 gap-1"
+              title="Schedules"
+            >
+              <CalendarClock className="w-4 h-4" />
+              <span className="text-xs tabular-nums">{scheduleCount}</span>
+            </Button>
+
+            <Button
+              size="sm"
               variant="destructive"
               onClick={(e) => {
                 e.stopPropagation();
@@ -160,6 +190,14 @@ export function RepoCard({
           repoUrl={repo.repoUrl}
         />
       )}
+
+      <ScheduleSettingsDialog
+        open={scheduleOpen}
+        onOpenChange={handleScheduleOpenChange}
+        repoId={repo.id}
+        opcodeUrl={OPENCODE_API_ENDPOINT}
+        directory={repo.fullPath}
+      />
     </div>
   );
 }

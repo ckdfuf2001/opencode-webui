@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listRepos, deleteRepo } from "@/api/repos";
+import { listSchedules } from "@/api/schedules";
 import { DeleteDialog } from "@/components/ui/delete-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,16 @@ export function RepoList() {
     queryKey: ["repos"],
     queryFn: listRepos,
   });
+
+  const { data: schedules } = useQuery({
+    queryKey: ["schedules"],
+    queryFn: () => listSchedules(),
+  });
+
+  const scheduleCounts = (schedules ?? []).reduce<Record<number, number>>((acc, schedule) => {
+    acc[schedule.repoId] = (acc[schedule.repoId] ?? 0) + 1;
+    return acc;
+  }, {});
 
   const deleteMutation = useMutation({
     mutationFn: deleteRepo,
@@ -215,6 +226,7 @@ export function RepoList() {
                   }
                   isSelected={selectedRepos.has(repo.id)}
                   onSelect={handleSelectRepo}
+                  scheduleCount={scheduleCounts[repo.id] ?? 0}
                 />
               ))}
             </div>

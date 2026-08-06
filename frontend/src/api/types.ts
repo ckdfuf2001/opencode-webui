@@ -44,6 +44,14 @@ export interface QuestionRequest {
   }
 }
 
+export interface PermissionRule {
+  id: number
+  repoId: number
+  permission: string
+  pattern: string
+  createdAt: number
+}
+
 export type MessageWithParts = {
   info: Message
   parts: Part[]
