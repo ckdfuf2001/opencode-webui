@@ -43,4 +43,10 @@ if [ -n "$WORKSPACE_PATH" ]; then
   fi
 fi
 
+# Register the doc-reader MCP server into the workspace config if missing
+if [ -f "/app/scripts/register-default-mcp.js" ]; then
+  echo "  [+] Registering default MCP servers..."
+  node /app/scripts/register-default-mcp.js || echo "  [.] Default MCP registration skipped"
+fi
+
 exec "$@"

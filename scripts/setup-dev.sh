@@ -75,6 +75,10 @@ echo "[5/5] Verifying bun..."
 bun --version >/dev/null 2>&1
 
 echo
+echo "Registering default MCP servers..."
+node scripts/register-default-mcp.js
+
+echo
 echo "=========================================="
 echo "  Dev environment ready!"
 echo "=========================================="
