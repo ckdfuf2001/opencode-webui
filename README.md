@@ -236,10 +236,11 @@ dependencies with `pnpm`, and sets up `.env` if missing. The setup is
 
 The `doc-reader` MCP server (`read_document` / `edit_document`) lets the
 assistant read and edit Office/PDF files (including DRM-protected ones) in
-chat. **It is installed with the repo but not registered automatically** —
-registration lives in the git-ignored workspace database
-(`workspace/.config/opencode/opencode.json`), so a fresh clone must register it
-once. To use these tools in chat:
+chat. The dev environment setup scripts (`setup-dev.bat` / `setup-dev.sh` /
+`docker-entrypoint.sh`) run `scripts/register-default-mcp.js`, which merges the
+server into the git-ignored workspace config
+(`workspace/.config/opencode/opencode.json`) if it is not already there. To use
+these tools in chat:
 
 1. **Requirements** — the dev Python env must have the conversion libs and
    `fastmcp`:
@@ -249,8 +250,11 @@ once. To use these tools in chat:
    (your copy of `opencode-webui` uses the same machine/`python` to run
    `backend/scripts/doc_converter.py`.)
 
-2. **Register the server** — via the Web UI **Settings → MCP Servers → Add
-   Local Server**, or by appending to `workspace/.config/opencode/opencode.json`:
+2. **Register the server** — run the dev setup once (or call
+   `node scripts/register-default-mcp.js` directly); it is idempotent and only
+   adds `doc-reader` when missing. To register manually instead — via the Web UI
+   **Settings → MCP Servers → Add Local Server**, or by appending to
+   `workspace/.config/opencode/opencode.json`:
    ```json
    "mcp": {
      "doc-reader": {
@@ -270,13 +274,10 @@ once. To use these tools in chat:
    values above are machine-specific). After saving, the OpenCode server
    restarts and `read_document`/`edit_document` become available in chat.
 
-   > **Registered registration lives in the git-ignored workspace, so a new
-   > clone does not get it automatically.** The ready-made registration snippet
-   is tracked in the repo at
-   > `config-templates/opencode.mcp.doc-reader.json`. To register it on a fresh
-   > clone, replace `REPLACE_WITH_CLONE_DIR` with the absolute path of your
-   > checkout and merge the `mcp` block into
-   > `workspace/.config/opencode/opencode.json` (it may need to exist first).
+   > Registration lives in the git-ignored workspace database, so a fresh clone
+   > gets it only after running a setup script (or the register script). A
+   > ready-made snippet is also tracked in the repo at
+   > `config-templates/opencode.mcp.doc-reader.json` for manual merges.
 
 3. **Verify** — the OpenCode server exposes the tools only after registration.
    In the UI you can confirm the new tools appear for `/mcp` (`doc-reader` shows

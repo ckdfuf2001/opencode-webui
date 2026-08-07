@@ -104,6 +104,10 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+echo Registering default MCP servers...
+call node scripts\register-default-mcp.js
+
+echo.
 echo ==========================================
 echo   Dev environment ready!
 echo ==========================================
