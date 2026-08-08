@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 EventEmitter.defaultMaxListeners = 20
 
+import path from 'node:path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -18,7 +19,7 @@ import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
-import { ensureDirectoryExists, writeFileContent } from './services/file-operations'
+import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
 import { opencodeServerManager } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
@@ -123,6 +124,16 @@ async function ensureDefaultConfigExists(): Promise<void> {
   }
 }
 
+async function ensureGlobalRulesFile(): Promise<void> {
+  const source = path.join(process.cwd(), 'docs', 'agent-domain-guide.md')
+  const target = path.join(getConfigPath(), 'AGENTS.md')
+  if (!(await fileExists(source))) return
+  if (await fileExists(target)) return
+  const content = await readFileContent(source)
+  await writeFileContent(target, content)
+  logger.info(`Installed global rules file: ${target}`)
+}
+
 async function syncDefaultConfigToDisk(): Promise<void> {
   const settingsService = new SettingsService(db)
   const defaultConfig = settingsService.getDefaultOpenCodeConfig()
@@ -150,6 +161,7 @@ try {
   
   await ensureDefaultConfigExists()
   await syncDefaultConfigToDisk()
+  await ensureGlobalRulesFile()
 } catch (error) {
   logger.error('Failed to initialize workspace:', error)
 }

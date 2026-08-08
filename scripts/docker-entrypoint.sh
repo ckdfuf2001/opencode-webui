@@ -49,4 +49,15 @@ if [ -f "/app/scripts/register-default-mcp.js" ]; then
   node /app/scripts/register-default-mcp.js || echo "  [.] Default MCP registration skipped"
 fi
 
+# Place the domain guide as a global rules file (applies to every session)
+if [ -n "$WORKSPACE_PATH" ]; then
+  mkdir -p "$WORKSPACE_PATH/.config/opencode"
+  if [ -f "/app/docs/agent-domain-guide.md" ] && [ ! -f "$WORKSPACE_PATH/.config/opencode/AGENTS.md" ]; then
+    cp /app/docs/agent-domain-guide.md "$WORKSPACE_PATH/.config/opencode/AGENTS.md"
+    echo "✅ Installed global rules AGENTS.md (domain guide)"
+  else
+    echo "✅ global rules AGENTS.md already present"
+  fi
+fi
+
 exec "$@"

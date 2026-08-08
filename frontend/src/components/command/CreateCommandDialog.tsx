@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { registryApi, type RegistryType, type RegistryScope } from '@/api/registry'
+import { registryApi, type RegistryType, type RegistryScope, type RegistryAgentMode } from '@/api/registry'
 import { settingsApi } from '@/api/settings'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -31,6 +31,7 @@ const TYPE_OPTIONS: { value: DialogType; label: string }[] = [
   { value: 'command', label: 'Command' },
   { value: 'skill', label: 'Skill' },
   { value: 'tool', label: 'Plugin' },
+  { value: 'agent', label: 'Agent' },
   { value: 'mcp', label: 'MCP' },
 ]
 
@@ -38,6 +39,22 @@ const SCOPE_OPTIONS: { value: RegistryScope; label: string }[] = [
   { value: 'project', label: 'Project' },
   { value: 'global', label: 'Global' },
 ]
+
+const TYPE_LABEL: Record<RegistryType, string> = {
+  command: 'Command',
+  skill: 'Skill',
+  tool: 'Plugin',
+  agent: 'Agent',
+}
+
+const TYPE_LABEL_LOWER: Record<RegistryType, string> = {
+  command: 'command',
+  skill: 'skill',
+  tool: 'plugin',
+  agent: 'agent',
+}
+
+const GLOBAL_TARGET_DIR = '.config/opencode'
 
 const TOOL_TEMPLATE = (description: string) => `import { tool } from "@opencode-ai/plugin"
 export default tool({
@@ -76,6 +93,8 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
   const [rawTemplate, setRawTemplate] = useState('')
   const [skillBody, setSkillBody] = useState('')
   const [toolScript, setToolScript] = useState(TOOL_TEMPLATE(''))
+  const [agentBody, setAgentBody] = useState('')
+  const [agentMode, setAgentMode] = useState<RegistryAgentMode>('all')
   const [saving, setSaving] = useState(false)
   const [mcpType, setMcpType] = useState<'local' | 'remote'>('local')
   const [mcpCommand, setMcpCommand] = useState('')
@@ -96,6 +115,8 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
     setRawTemplate('')
     setSkillBody('')
     setToolScript(TOOL_TEMPLATE(''))
+    setAgentBody('')
+    setAgentMode('all')
     setMcpType('local')
     setMcpCommand('')
     setMcpUrl('')
@@ -146,6 +167,8 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         return skillBody
       case 'tool':
         return toolScript
+      case 'agent':
+        return agentBody
       case 'mcp':
         return ''
     }
@@ -248,17 +271,18 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             name: trimmedName,
             description: description.trim(),
             content: content.trim(),
+            ...(type === 'agent' ? { mode: agentMode } : {}),
           },
           scope === 'project' ? directory : undefined
         )
-        showToast.success(`${type === 'tool' ? 'Plugin' : type === 'skill' ? 'Skill' : 'Command'} "${trimmedName}" registered (${scope}).`)
+        showToast.success(`${TYPE_LABEL[type]} "${trimmedName}" registered (${scope}).`)
       }
       onCreated()
       reset()
       onOpenChange(false)
     } catch (err) {
       console.error('Failed to register:', err)
-      showToast.error(`Failed to register ${type === 'tool' ? 'plugin' : type === 'skill' ? 'skill' : 'command'}.`)
+      showToast.error(`Failed to register ${TYPE_LABEL_LOWER[type]}.`)
     } finally {
       setSaving(false)
     }
@@ -266,7 +290,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
           <DialogTitle>Register new opencode file</DialogTitle>
           <DropdownMenu>
@@ -291,6 +315,10 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
                 <div>
                   <a href="https://opencode.ai/docs/custom-tools/" target="_blank" rel="noreferrer" className="text-sm font-semibold text-foreground hover:text-primary hover:underline">Plugin</a>
                   <p className="text-xs text-muted-foreground mt-0.5">A TypeScript tool using @opencode-ai/plugin's tool() helper. Filename becomes the tool name.</p>
+                </div>
+                <div>
+                  <a href="https://opencode.ai/docs/agents/" target="_blank" rel="noreferrer" className="text-sm font-semibold text-foreground hover:text-primary hover:underline">Agent</a>
+                  <p className="text-xs text-muted-foreground mt-0.5">A markdown agent (mode + system prompt) usable as a primary or subagent.</p>
                 </div>
                 <div>
                   <a href="https://opencode.ai/docs/mcp-servers/" target="_blank" rel="noreferrer" className="text-sm font-semibold text-foreground hover:text-primary hover:underline">MCP</a>
@@ -459,7 +487,29 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Plugin script (.ts) <span className="text-destructive">*</span></label>
               <Textarea value={toolScript} onChange={(e) => setToolScript(e.target.value)} placeholder="Full TypeScript plugin definition using @opencode-ai/plugin's tool() helper" className="min-h-[160px] font-mono text-xs" />
-              <p className="text-[10px] text-muted-foreground">Writes to {scope === 'global' ? '~/.config/opencode/tools' : '.opencode/tools'} as `.ts`. Filename becomes the tool name.</p>
+              <p className="text-[10px] text-muted-foreground">Writes to {scope === 'global' ? `${GLOBAL_TARGET_DIR}/plugin` : '.opencode/plugin'} as `.ts`. Filename becomes the tool name.</p>
+            </div>
+          )}
+
+          {type === 'agent' && (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Mode</label>
+                <Select value={agentMode} onValueChange={(value: RegistryAgentMode) => setAgentMode(value)}>
+                  <SelectTrigger className="bg-background border-border">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All (primary + subagent)</SelectItem>
+                    <SelectItem value="subagent">Subagent</SelectItem>
+                    <SelectItem value="primary">Primary</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">System prompt <span className="text-destructive">*</span></label>
+                <Textarea value={agentBody} onChange={(e) => setAgentBody(e.target.value)} placeholder="System prompt for the agent. Frontmatter (description/mode) is added automatically." className="min-h-[160px] font-mono text-xs" />
+              </div>
             </div>
           )}
 
@@ -556,8 +606,10 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
           <div className="text-[11px] text-muted-foreground">
             Target:{' '}
             <span className="font-mono">
-              {scope === 'global' ? '~/.config/opencode' : `${directory ? directory.split(/[\\/]/).pop() : 'project'} /.opencode`}
-              /{type === 'tool' ? 'tools' : type}/{type === 'skill' ? `${name}/` : ''}...
+              {scope === 'global'
+                ? GLOBAL_TARGET_DIR
+                : `${directory ? directory.split(/[\\/]/).pop() : 'project'} /.opencode`}
+              /{type === 'tool' ? 'plugin' : type === 'skill' ? 'skill' : type === 'agent' ? 'agents' : 'command'}/{type === 'skill' ? `${name}/` : ''}...
             </span>
           </div>
           )}

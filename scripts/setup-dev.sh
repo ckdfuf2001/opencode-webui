@@ -57,6 +57,16 @@ else
   fi
 fi
 
+# Install the domain guide as a global rules file (applies to every session)
+if [ -f "docs/agent-domain-guide.md" ] && [ ! -f "$WORKSPACE_PATH/.config/opencode/AGENTS.md" ]; then
+  cp docs/agent-domain-guide.md "$WORKSPACE_PATH/.config/opencode/AGENTS.md"
+  echo "  [+] Installed domain guide as global rules (workspace/.config/opencode/AGENTS.md)"
+else
+  if [ -f "$WORKSPACE_PATH/.config/opencode/AGENTS.md" ]; then
+    echo "  [+] workspace/.config/opencode/AGENTS.md already present"
+  fi
+fi
+
 echo
 echo "[3/5] Installing dependencies (pnpm install)..."
 pnpm install
