@@ -181,16 +181,19 @@ docker exec -it opencode-web sh
 | Node.js  | Runtime for the build tooling                  | [nodejs.org](https://nodejs.org) |
 | Bun      | Backend runtime (`bun --watch`)                | `npm install -g bun` |
 | pnpm     | Workspace package manager                      | `npm install -g pnpm` |
-| OpenCode | The AI agent CLI (`opencode serve`)            | drop `opencode.exe` into `bin/` (see below) |
+| OpenCode | The AI agent CLI (`opencode serve`)            | bundled — copied from `vendor/` (see below) |
 | Git      | Repository cloning / worktrees                 | [git-scm.com](https://git-scm.com) |
+| Git LFS  | Pulls the vendored binaries in `vendor/`       | [git-lfs.com](https://git-lfs.com) |
 
-> **OpenCode on Windows (offline-friendly, recommended):** the simplest way is to
-> drop the standalone `opencode.exe` into the project's `bin/` folder:
+> **OpenCode, agent-browser and Chromium are vendored** in the git-LFS-tracked
+> `vendor/` folder, so an air-gapped machine needs **no downloads**: the setup
+> copies `vendor/opencode/opencode.exe`, `vendor/agent-browser/…` and
+> `vendor/chromium/…` into `bin/` automatically (and falls back to a download
+> when `vendor/` is empty). After cloning, run `git lfs install` once so the
+> binary files are checked out:
 >
 > ```
-> opencode-webui\
->   bin\
->     opencode.exe
+> git lfs install
 > ```
 >
 > The backend **auto-detects `<project>/bin/opencode.exe`, `<workspace>/bin/opencode.exe`,
@@ -198,13 +201,20 @@ docker exec -it opencode-web sh
 > `~/.bun/bin`, `~/.opencode/bin`, and the PATH**, launching whichever it finds for
 > `opencode serve`. Only one is required.
 >
-> Get the binary from the [opencode releases page](https://github.com/sst/opencode/releases)
-> (`opencode-windows-x64.zip`) and extract `opencode.exe` into `bin\`. No runtime
-> internet access is needed — the server is just a single local executable.
+> **Manual placement (alternative):** drop any `opencode.exe` into the project's
+> `bin/` folder:
+> ```
+> opencode-webui\
+>   bin\
+>     opencode.exe
+> ```
+> Get it from the [opencode releases page](https://github.com/sst/opencode/releases)
+> (`opencode-windows-x64.zip`). No runtime internet access is needed — the server
+> is just a single local executable.
 >
-> **Automated download:** `npm run opencode:install` downloads the matching binary
-> into `bin/` automatically. On networks behind a TLS-intercepting proxy, run it
-> once with `OPENCODE_INSECURE=1`:
+> **Automated download (no `vendor/` files):** `npm run opencode:install`
+> downloads the matching binary into `bin/` automatically. On networks behind a
+> TLS-intercepting proxy, run it once with `OPENCODE_INSECURE=1`:
 > ```powershell
 > $env:OPENCODE_INSECURE="1"; npm run opencode:install
 > ```
@@ -219,6 +229,9 @@ docker exec -it opencode-web sh
 git clone https://github.com/yourusername/opencode-webui.git
 cd opencode-webui
 
+# Pull the vendored binaries (opencode/agent-browser/chromium) from Git LFS
+git lfs install && git lfs pull
+
 # Install dependencies (pnpm workspaces)
 pnpm install
 
@@ -231,7 +244,9 @@ npm run dev
 
 `npm run dev` runs a `predev` step that automatically checks that **Bun, pnpm,
 OpenCode and Git** are installed, creates the `workspace/` directory, installs
-dependencies with `pnpm`, and sets up `.env` if missing. The setup is
+dependencies with `pnpm`, copies the vendored **opencode, agent-browser and
+Chromium** from `vendor/` into `bin/` when present (no download), and sets up
+`.env` if missing. The setup is
 **OS-aware**: it uses `scripts/setup-dev.bat` (cmd) on Windows and
 `scripts/setup-dev.sh` on macOS/Linux.
 
