@@ -112,6 +112,9 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
    바뀐다. 오류가 아니며 MCP 항목은 항상 `enabled: true`로 등록한다.
 4. **이전 버그**: 백엔드가 DB 내용으로 config를 덮어써서 디스크에 수동 추가한 MCP가
    사라지던 문제를 병합(merge)으로 해결했다. 이제 시작 시마다 기본 MCP가 자동 보존된다.
+5. **백엔드 API 문서**: exe 배포 후 소스 분석 불가 문제를 해결 위해 런타임에 조회 가능:
+   - `GET /api/openapi.json` — 전체 백엔드 라우트 OpenAPI 3.1 스펙
+   - `GET /api/docs` — Swagger UI (CDN 기반, 오프라인 시 JSON 직접 조회)
 
 ## 반복 업무 (스케줄링)
 
