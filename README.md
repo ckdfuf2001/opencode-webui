@@ -306,6 +306,69 @@ these tools in chat:
 > `edit_document(path, [operations])` (replace / insert_after / insert_before /
 > append / prepend / delete).
 
+#### (Optional) Register the Browser Automation MCP tools
+
+The `agent-browser` MCP server exposes `agent_browser_*` tools (open, snapshot,
+click, fill, type, screenshot, …) so the assistant can drive a real browser in
+chat. Unlike `doc-reader`, agent-browser is a self-contained native binary plus
+a Chromium build, both vendored by this repo so **no separate download or global
+install is required**:
+
+- `npm run agent-browser:install` — downloads the `agent-browser` release binary
+  (from the npm package) and a matching Chromium (Chrome for Testing) into the
+  git-ignored `bin/agent-browser/`, then records their paths in `.meta.json`.
+- `npm run agent-browser:update` — re-runs the install with `--force` to fetch
+  the latest releases (a dedicated update command).
+- The dev setup scripts (`setup-dev.bat` / `setup-dev.sh` / `docker-entrypoint.sh`)
+  call the installer automatically (idempotent — skips when already installed)
+  before `scripts/register-default-mcp.js`.
+
+`scripts/register-default-mcp.js` then registers the MCP server into the
+git-ignored workspace config (`workspace/.config/opencode/opencode.json`) using
+the vendored binary and sets `AGENT_BROWSER_EXECUTABLE_PATH` so it uses the
+vendored Chromium:
+
+```json
+"mcp": {
+  "agent-browser": {
+    "type": "local",
+    "command": [
+      "D:\\path\\to\\opencode_web\\bin\\agent-browser\\bin\\agent-browser.exe",
+      "mcp"
+    ],
+    "env": {
+      "AGENT_BROWSER_EXECUTABLE_PATH": "D:\\path\\to\\opencode_web\\bin\\agent-browser\\chromium\\chrome-win64\\chrome.exe"
+    }
+  }
+}
+```
+
+Options:
+
+- Pin a specific agent-browser release with `AGENT_BROWSER_VERSION=x.y.z` before
+  running the installer.
+- Corporate/proxy networks that intercept TLS: run with
+  `AGENT_BROWSER_INSECURE=1` (one-time trust for the download).
+- Unsupported platforms are detected and reported before anything is downloaded.
+
+Verify in the UI: the OpenCode server exposes the `agent_browser_*` tools after
+registration (`/mcp` shows `agent-browser` as `connected`).
+
+#### Offline installs (no internet)
+
+The installers check the git-tracked `vendor/` folder **first** and copy your
+files (no download); they only download when `vendor/` is empty. To make the
+repo work on an air-gapped machine, put the binaries there and commit them:
+
+- `vendor/opencode/` — the opencode CLI archive or binary.
+- `vendor/agent-browser/` — the platform `agent-browser` binary.
+- `vendor/chromium/` — a `chrome-<platform>.zip` or the extracted Chromium.
+
+Prepare on a connected machine with
+`node scripts/install-opencode.js` + `node scripts/install-agent-browser.js`,
+then copy `bin/` results back into `vendor/`. Full layout and per-platform file
+names are in `vendor/README.md`.
+
 ## Architecture
 
 ### Tech Stack

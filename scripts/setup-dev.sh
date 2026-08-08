@@ -86,6 +86,7 @@ bun --version >/dev/null 2>&1
 
 echo
 echo "Registering default MCP servers..."
+node scripts/install-agent-browser.js || echo "  [.] agent-browser setup skipped - run: npm run agent-browser:install"
 node scripts/register-default-mcp.js
 
 echo
