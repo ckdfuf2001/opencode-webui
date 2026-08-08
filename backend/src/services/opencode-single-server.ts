@@ -263,6 +263,10 @@ class OpenCodeServerManager {
     await new Promise((r) => setTimeout(r, 500))
   }
 
+  public async freePortPublic(port: number): Promise<void> {
+    return this.freePort(port)
+  }
+
   private async teardownCurrent(): Promise<void> {
     const port = this.port
     if (this.serverPid) {
@@ -394,3 +398,7 @@ class OpenCodeServerManager {
 }
 
 export const opencodeServerManager = OpenCodeServerManager.getInstance()
+
+export async function freePort(port: number): Promise<void> {
+  return opencodeServerManager.freePortPublic(port)
+}

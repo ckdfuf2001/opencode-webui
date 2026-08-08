@@ -22,7 +22,7 @@ import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
 import { mergeDefaultMcpEntries } from './services/default-mcp'
-import { opencodeServerManager } from './services/opencode-single-server'
+import { opencodeServerManager, freePort } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
 import { openApiSpec } from './services/api-docs'
 import { proxyRequest } from './services/proxy'
@@ -165,6 +165,8 @@ try {
   logger.info('Orphaned directory cleanup completed')
   
   await cleanupExpiredCache()
+  
+  await freePort(PORT)
   
   await ensureDefaultConfigExists()
   await syncDefaultConfigToDisk()
