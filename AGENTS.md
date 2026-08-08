@@ -61,3 +61,6 @@
   The app registry writes plural paths.
 - backend/src/index.ts startup sync: `ensureDefaultConfigExists` → `syncDefaultConfigToDisk`
   → `ensureGlobalRulesFile` (copies `docs/agent-domain-guide.md` to config AGENTS.md if missing).
+- Backend API docs served at runtime (works in exe deployments):
+  - `GET /api/openapi.json` — OpenAPI 3.1 spec for all backend routes
+  - `GET /api/docs` — Swagger UI (loads from `/api/openapi.json`)

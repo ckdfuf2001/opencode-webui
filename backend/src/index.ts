@@ -24,6 +24,7 @@ import { SettingsService } from './services/settings'
 import { mergeDefaultMcpEntries } from './services/default-mcp'
 import { opencodeServerManager } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
+import { openApiSpec } from './services/api-docs'
 import { proxyRequest } from './services/proxy'
 import { logger } from './utils/logger'
 import { 
@@ -182,6 +183,38 @@ app.route('/api/providers', createProvidersRoutes())
 app.route('/api/tts', createTTSRoutes(db))
 app.route('/api/registry', createRegistryRoutes())
 app.route('/api/preview', createPreviewRoutes())
+
+app.get('/api/openapi.json', (c) => c.json(openApiSpec))
+
+app.get('/api/docs', (c) => {
+  return c.html(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenCode WebUI - Backend API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    body { margin: 0; }
+    .swagger-ui .topbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => {
+      SwaggerUIBundle({
+        url: '/api/openapi.json',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        persistAuthorization: true,
+      })
+    }
+  </script>
+</body>
+</html>`)
+})
 
 app.all('/api/opencode/*', async (c) => {
   const request = c.req.raw
