@@ -39,3 +39,25 @@
 - ./opencode-src/ is reference only, never commit
 - Use shared types from workspace package
 - OpenCode server runs on port 5551, backend API on port 5001
+
+## Operational Notes (avoid recurring mistakes)
+
+- `workspace/` is fully gitignored. Anything under `workspace/.config/opencode/`
+  (agents/commands/skills/plugins) and `workspace/repos/` is NOT versioned. Never
+  rely on git to restore those files; keep canonical copies tracked in the repo.
+- `workspace/.config/opencode/opencode.json` is regenerated from the DB default
+  config at backend startup (`syncDefaultConfigToDisk()`). Default MCP servers
+  (doc-reader, agent-browser) are handled via
+  `backend/src/services/default-mcp.ts` (`mergeDefaultMcpEntries`): missing
+  entries are added, and existing entries are **repaired** to the canonical
+  absolute-path command (doc-reader must point at
+  `backend/scripts/doc_reader_mcp.py`, never a relative `..\backend\...` path that
+  breaks in per-repo sessions) with `enabled: true`. Do not hand-edit MCPs in
+  that file; use the app UI.
+- MCP servers can briefly report `disabled` in the opencode web UI while connecting;
+  they switch to `connected` after a few seconds. Not an error.
+- opencode scans **plural** directories (`agents/`, `commands/`, `skills/`,
+  `plugins/`) as canonical; singular (`agent/`, `command/`, `skill/`) is legacy.
+  The app registry writes plural paths.
+- backend/src/index.ts startup sync: `ensureDefaultConfigExists` → `syncDefaultConfigToDisk`
+  → `ensureGlobalRulesFile` (copies `docs/agent-domain-guide.md` to config AGENTS.md if missing).
