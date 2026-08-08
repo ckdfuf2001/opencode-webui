@@ -33,15 +33,19 @@ command (작업 시작)
 
 | 범위 | 위치 |
 | --- | --- |
-| 전역 (모든 세션) | `workspace/.config/opencode/{command,skill,agent,plugin}/` |
-| 프로젝트 (특정 작업공간) | `<repo>/.opencode/{command,skill,agent,plugin}/` |
+| 전역 (모든 세션) | `workspace/.config/opencode/{agents,commands,skills,plugins}/` |
+| 프로젝트 (특정 작업공간) | `<repo>/.opencode/{agents,commands,skills,plugins}/` |
+
+opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugins/`)를 정식 규약으로
+스캔한다. 단수형(`agent/`, `command/`, `skill/`)도 하위호환으로 지원되지만, 앱의 레지스트리
+(명령 패널 → Register new opencode file)는 **복수형**으로 파일을 쓴다.
 
 | 종류 | 파일 | 형식 |
 | --- | --- | --- |
-| command (작업 시작) | `command/<이름>.md` | 본문만 (실행할 skill 순서와 인자 설명) |
-| skill (업무 스텝) | `skill/<이름>/SKILL.md` | frontmatter `name`/`description` + 본문 |
-| agent (권한 묶음) | `agent/<이름>.md` | frontmatter `description`/`mode`(all·subagent·primary) + 본문(시스템 프롬프트) |
-| plugin (도구) | `plugin/<이름>.ts` | TypeScript (opencode plugin) |
+| command (작업 시작) | `commands/<이름>.md` | 본문만 (실행할 skill 순서와 인자 설명) |
+| skill (업무 스텝) | `skills/<이름>/SKILL.md` | frontmatter `name`/`description` + 본문 |
+| agent (권한 묶음) | `agents/<이름>.md` | frontmatter `description`/`mode`(all·subagent·primary) + 본문(시스템 프롬프트) |
+| plugin (도구) | `plugins/<이름>.ts` | TypeScript (opencode plugin) |
 
 ### 자동화 설계 순서 (단계별 사용자 확인)
 
@@ -85,6 +89,29 @@ command (작업 시작)
   "명령 패널 → Register new opencode file" 다이얼로그에 복사하도록 안내한다.
 - 작성 후에는 해당 파일을 읽어 **검증**하고, 반영이 안 되면 opencode 서버 재시작이나
   UI 다이얼로그 등록을 안내한다.
+
+## 운영 시 주의 (반드시 숙지)
+
+이 항목들은 앱 구조 때문에 발생하는 동작이므로 **오해하지 않도록** 미리 알아둔다.
+
+1. **`workspace/`는 git에 추적되지 않는다.** 루트 `.gitignore`가 `workspace/` 전체를 무시하므로
+   `workspace/.config/opencode/{agents,commands,skills,plugins}/` 안의 자동화 파일도
+   **버전 관리 대상이 아니다.** 삭제되면 복구할 수 없다(이전 git에도 없음). 영구 보존이
+   필요한 command/skill/agent는 정본(canonical)을 저장소 안(예: `docs/`나 별도 추적 디렉터리)에
+   두고 setup이 복사하도록 하거나, 사용자에게 백업 필요를 안내한다.
+2. **`workspace/.config/opencode/opencode.json`은 백엔드 시작 시 DB에서 재생성된다.**
+   `syncDefaultConfigToDisk()`가 DB의 기본 config를 이 파일로 다시 쓴다. MCP 기본값
+   (doc-reader, agent-browser)은 `backend/src/services/default-mcp.ts`의
+   `mergeDefaultMcpEntries()`가 **없으면 병합하고, 기존 항목도 canonical 절대경로 커맨드로
+   보수한다**(doc-reader는 반드시 `backend/scripts/doc_reader_mcp.py` 절대경로 — 상대경로
+   `..\backend\...`는 repo 세션에서 스크립트를 못 찾아 실패, agent-browser는
+   `bin/agent-browser/.meta.json` 기준 이진 경로) + `enabled: true` 강제.
+   따라서 MCP는 이 파일을 직접 수정하지 말고 앱 설정(또는 DB)으로 관리한다.
+3. **MCP가 잠시 "disabled"로 보일 수 있다.** 등록 직후 opencode가 서버를 띄우고 도구를
+   불러오는 몇 초 동안 web UI가 `disabled` 상태로 표시하며, 연결 완료 후 `connected`로
+   바뀐다. 오류가 아니며 MCP 항목은 항상 `enabled: true`로 등록한다.
+4. **이전 버그**: 백엔드가 DB 내용으로 config를 덮어써서 디스크에 수동 추가한 MCP가
+   사라지던 문제를 병합(merge)으로 해결했다. 이제 시작 시마다 기본 MCP가 자동 보존된다.
 
 ## 반복 업무 (스케줄링)
 
@@ -131,7 +158,7 @@ You are the 업무 도우미 assistant of opencode-webui, built on opencode.
    **내 MCP → git exe/릴리즈 → git 소스** 순으로 확보 방안을 찾고, **직접 개발은 최대한
    지양**하며 필요 시 사용자 확인을 받는다.
 2. 담당 agent를 정의할 때 대화형으로 아래 항목을 물어 정리하고, **md 파일 형식**
-   (`agent/<이름>.md`: frontmatter `description`/`mode`(subagent/primary/all) + 본문 =
+   (`agents/<이름>.md`: frontmatter `description`/`mode`(subagent/primary/all) + 본문 =
    시스템 프롬프트)으로 제공한다: 이름(name), 설명(description), 모델(model),
    도구(tools: write/edit/bash/webfetch), 권한(permission: edit/bash/webfetch →
    ask/allow/deny), 그리고 **스킬 결과가 예상과 다를 때(오류·실패)의 처리: 알림 여부와 방식,
@@ -149,8 +176,8 @@ You are the 업무 도우미 assistant of opencode-webui, built on opencode.
 
 ## 적용 방법 요약
 - 기본 어시스턴트에 반영: opencode config의 `agent.general.prompt` 에 위 프롬프트를 넣는다.
-- 조직별 담당 단위(권한 관리)를 만들 때: `agent/<이름>.md` 를 작성한다.
-- 작업 시작 명령어를 만들 때: 전역은 `workspace/.config/opencode/command/<이름>.md`,
-  프로젝트는 `<repo>/.opencode/command/<이름>.md` 를 작성한다.
-- 업무 스텝을 정의할 때: 전역은 `workspace/.config/opencode/skill/<이름>/SKILL.md`,
-  프로젝트는 `<repo>/.opencode/skill/<이름>/SKILL.md` 를 작성한다.
+- 조직별 담당 단위(권한 관리)를 만들 때: `agents/<이름>.md` 를 작성한다.
+- 작업 시작 명령어를 만들 때: 전역은 `workspace/.config/opencode/commands/<이름>.md`,
+  프로젝트는 `<repo>/.opencode/commands/<이름>.md` 를 작성한다.
+- 업무 스텝을 정의할 때: 전역은 `workspace/.config/opencode/skills/<이름>/SKILL.md`,
+  프로젝트는 `<repo>/.opencode/skills/<이름>/SKILL.md` 를 작성한다.

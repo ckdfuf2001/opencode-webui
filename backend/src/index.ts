@@ -21,6 +21,7 @@ import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
+import { mergeDefaultMcpEntries } from './services/default-mcp'
 import { opencodeServerManager } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
 import { proxyRequest } from './services/proxy'
@@ -117,7 +118,7 @@ async function ensureDefaultConfigExists(): Promise<void> {
     logger.info('No OpenCode configs found, creating default config')
     settingsService.createOpenCodeConfig({
       name: 'default',
-      content: DEFAULT_OPENCODE_CONFIG,
+      content: mergeDefaultMcpEntries(DEFAULT_OPENCODE_CONFIG),
       isDefault: true,
     })
     logger.info('Created default OpenCode config')
@@ -139,8 +140,13 @@ async function syncDefaultConfigToDisk(): Promise<void> {
   const defaultConfig = settingsService.getDefaultOpenCodeConfig()
   
   if (defaultConfig) {
+    const merged = mergeDefaultMcpEntries(defaultConfig.content)
+    if (JSON.stringify(merged.mcp) !== JSON.stringify(defaultConfig.content.mcp)) {
+      settingsService.updateOpenCodeConfig(defaultConfig.name, { content: merged }, 'default')
+      logger.info('Merged default MCP servers into default config')
+    }
     const configPath = getOpenCodeConfigFilePath()
-    const configContent = JSON.stringify(defaultConfig.content, null, 2)
+    const configContent = JSON.stringify(merged, null, 2)
     await writeFileContent(configPath, configContent)
     logger.info(`Synced default config '${defaultConfig.name}' to: ${configPath}`)
   } else {

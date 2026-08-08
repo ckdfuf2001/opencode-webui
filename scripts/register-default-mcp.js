@@ -13,6 +13,7 @@ const workspaceBackend = 'http://127.0.0.1:5001'
 const defaultMcp = {
   'doc-reader': {
     type: 'local',
+    enabled: true,
     command: ['python', docReaderScript],
     env: {
       OPCODE_WEBUI_BACKEND: workspaceBackend,
@@ -33,6 +34,7 @@ if (existsSync(agentBrowserMeta)) {
     }
     defaultMcp['agent-browser'] = {
       type: 'local',
+      enabled: true,
       command: [binPath, 'mcp'],
       env,
     }
