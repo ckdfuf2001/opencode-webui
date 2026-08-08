@@ -2,16 +2,16 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { mkdir, writeFile, unlink } from 'fs/promises'
 import path from 'path'
-import os from 'os'
 import { logger } from '../utils/logger'
+import { getConfigPath } from '@opencode-webui/shared'
 
-type RegistryType = 'command' | 'skill' | 'tool'
+type RegistryType = 'command' | 'skill' | 'tool' | 'agent'
 type RegistryScope = 'global' | 'project'
 
 const sanitize = (name: string): string => name.trim().replace(/[\\/:*?"<>|]/g, '-')
 
 function scopeRoot(scope: RegistryScope, directory?: string): string {
-  if (scope === 'global') return path.join(os.homedir(), '.config', 'opencode')
+  if (scope === 'global') return getConfigPath()
   if (!directory) throw new Error('Project scope requires a directory')
   return path.join(directory, '.opencode')
 }
@@ -25,11 +25,13 @@ function resolveTarget(type: RegistryType, scope: RegistryScope, name: string, d
     case 'skill':
       return path.join(root, 'skill', clean, 'SKILL.md')
     case 'tool':
-      return path.join(root, 'tools', `${clean}.ts`)
+      return path.join(root, 'plugin', `${clean}.ts`)
+    case 'agent':
+      return path.join(root, 'agents', `${clean}.md`)
   }
 }
 
-function buildContent(type: RegistryType, data: { name: string; description: string; content: string }): string {
+function buildContent(type: RegistryType, data: { name: string; description: string; content: string; mode?: string }): string {
   switch (type) {
     case 'command':
       return data.content.trim()
@@ -46,6 +48,15 @@ function buildContent(type: RegistryType, data: { name: string; description: str
         .join('\n')
     case 'tool':
       return data.content.trim()
+    case 'agent':
+      return [
+        '---',
+        `description: ${data.description || data.name}`,
+        `mode: ${data.mode || 'all'}`,
+        '---',
+        '',
+        data.content.trim(),
+      ].join('\n')
   }
 }
 
@@ -60,11 +71,12 @@ function validateName(name: string) {
 }
 
 const CreateRegistrySchema = z.object({
-  type: z.enum(['command', 'skill', 'tool']),
+  type: z.enum(['command', 'skill', 'tool', 'agent']),
   scope: z.enum(['global', 'project']),
   name: z.string().min(1).max(255),
   description: z.string().default(''),
   content: z.string().min(1).max(100000),
+  mode: z.enum(['all', 'subagent', 'primary']).default('all'),
 })
 
 export function createRegistryRoutes() {
@@ -103,7 +115,7 @@ export function createRegistryRoutes() {
       const scope = c.req.param('scope') as RegistryScope
       const name = c.req.param('name')
 
-      if (!['command', 'skill', 'tool'].includes(type)) return c.json({ error: 'Invalid type' }, 400)
+      if (!['command', 'skill', 'tool', 'agent'].includes(type)) return c.json({ error: 'Invalid type' }, 400)
       if (!['global', 'project'].includes(scope)) return c.json({ error: 'Invalid scope' }, 400)
 
       const target = resolveTarget(type, scope, name, directory)

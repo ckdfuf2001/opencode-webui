@@ -2,7 +2,7 @@ import { spawn, execSync } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { logger } from '../utils/logger'
-import { getWorkspacePath, getOpenCodeConfigFilePath, ENV } from '@opencode-webui/shared'
+import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
 
 let preferredOpenCodeBin: string | null = null
@@ -224,6 +224,7 @@ class OpenCodeServerManager {
         env: {
           ...process.env,
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+          OPENCODE_CONFIG_DIR: getConfigPath(),
         },
       }
     )

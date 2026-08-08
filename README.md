@@ -1,5 +1,7 @@
-This repository is clone of threehymns/opencode-webui. not related with opencode.
-Some architecture are changed. (later upload with md file)
+This repository is a clone of threehymns/opencode-webui, not related to the
+upstream opencode project. Some architecture is changed — see
+[`docs/architecture.md`](docs/architecture.md) for the workspace, config and
+rules layout.
 
 https://github.com/threehymns/opencode-webui
 
@@ -99,6 +101,15 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 
 ### Remote Access
 - **Relative API Base** - The frontend resolves `VITE_API_URL` as an empty default so the client always talks to the web server origin it was loaded from, enabling access from other PCs on the network
+
+### OpenCode File Registration (Command Panel)
+- **Register new opencode file** - The command panel dialog (`POST /api/registry`) writes opencode config files directly into the correct discovery locations, with a `Global` scope targeting the workspace config dir
+- **Four file types** - Command (`command/<name>.md`), Skill (`skill/<name>/SKILL.md`), Plugin/tool (`plugin/<name>.ts`), and Agent (`agent/<name>.md`)
+- **Agent registration** - New Agent tab with a mode selector (`all` / `subagent` / `primary`) and system-prompt textarea; frontmatter `description`/`mode` is generated automatically, matching opencode's agent discovery format
+- **Workspace-scoped global config** - Global files are written to `workspace/.config/opencode/` (via `getConfigPath()`) instead of `~/.config/opencode`, so all app-managed config stays inside the git-ignored workspace; the OpenCode server is spawned with both `OPENCODE_CONFIG` and `OPENCODE_CONFIG_DIR` pointing at it
+- **Plugin path fix** - Tools are saved under `plugin/` (opencode v1.18.11 discovery rule `{plugin,plugins}/*.{ts,js}`), not `tools/`
+- **Robust scope detection** - `proxy.ts` resolves slash-command scope across both singular/plural directory spellings (`command`/`commands`, `skill`/`skills`) in the project `.opencode/` and the global config dir
+- **Scrollable dialog** - The register dialog scrolls (`max-h-[90vh]`) so long plugin/agent content stays reachable on small screens
 
 ## Demo Videos
 
@@ -225,12 +236,19 @@ dependencies with `pnpm`, and sets up `.env` if missing. The setup is
 `scripts/setup-dev.sh` on macOS/Linux.
 
 > **Domain guide (AGENTS.md):** the setup also checks that the assistant's
-> domain guide is present in the workspace. If `workspace/AGENTS.md` does not
-> exist yet, it copies `docs/agent-domain-guide.md` there automatically. This
-> guide defines the business concepts the assistant works with — 업무(project)
+> domain guide is present. `docs/agent-domain-guide.md` is installed in two
+> places (when missing):
+> - `workspace/AGENTS.md` — project rules for sessions opened in `workspace/`.
+> - `workspace/.config/opencode/AGENTS.md` — **global rules file** that applies
+>   to every session, including repos cloned under `workspace/repos/` (project
+>   rules stop at the git worktree root, so the global copy is what actually
+>   reaches repo sessions).
+>
+> The guide defines the business concepts the assistant works with — 업무(project)
 > = 하나의 담당자(agent)가 전담, command = 작업 시작 명령어, skill = 업무
 > 스텝 — and the agent approval types (일반 대화 / 슈퍼 배치 / 알림). Delete the
-> file to re-run this install step, or edit it directly to tune your assistant.
+> file(s) to re-run this install step, or edit them directly to tune your
+> assistant.
 
 #### (Optional) Register the Document MCP tools
 
@@ -307,6 +325,21 @@ these tools in chat:
 **OpenCode Server** (separate process, port 5551)
 - Provides AI agent execution via REST API + SSE
 - Manages sessions, messages, permissions, MCP servers
+- Spawned with `OPENCODE_CONFIG` and `OPENCODE_CONFIG_DIR` pointing at
+  `workspace/.config/opencode` so all app-managed config stays in the workspace
+
+### Workspace Configuration & Rules
+
+Everything the app manages lives under the workspace root (`./workspace`, or
+`WORKSPACE_PATH`). The config dir is
+`workspace/.config/opencode/` — `getConfigPath()` derives it from the workspace
+path, it is *not* the user's `~/.config/opencode`. The OpenCode server is
+launched with `OPENCODE_CONFIG_DIR` set to that dir, and the domain guide is
+installed there as a **global rules file** (`AGENTS.md`) so it applies to every
+session, including repos under `workspace/repos/` (project rules stop at the
+git worktree root). The register dialog writes commands, skills, plugins
+(`plugin/`) and agents (`agent/`) into it. See
+[`docs/architecture.md`](docs/architecture.md) for details.
 
 ### Data Flow
 
@@ -328,8 +361,9 @@ Browser (React) → Backend (Hono, :5001) → OpenCode Server (Bun, :5551)
 
 **Backend**
 - `proxy.ts` - Forwards `/api/opencode/*` to OpenCode server, enriches `/command` with scope
+- `registry.ts` - Resolves scope/target paths and writes opencode files (command/skill/plugin/agent)
 - `scheduler.ts` - Runs scheduled prompts, creates sessions, sends prompts in background
-- `opencode-single-server.ts` - Manages OpenCode server process lifecycle
+- `opencode-single-server.ts` - Manages OpenCode server process lifecycle, injects config env
 
 ### Session Model Switching
 

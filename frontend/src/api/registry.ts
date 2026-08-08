@@ -1,8 +1,9 @@
 import axios from 'axios'
 import { API_BASE_URL } from '@/config'
 
-export type RegistryType = 'command' | 'skill' | 'tool'
+export type RegistryType = 'command' | 'skill' | 'tool' | 'agent'
 export type RegistryScope = 'global' | 'project'
+export type RegistryAgentMode = 'all' | 'subagent' | 'primary'
 
 export interface RegisterRequest {
   type: RegistryType
@@ -10,6 +11,7 @@ export interface RegisterRequest {
   name: string
   description: string
   content: string
+  mode?: RegistryAgentMode
 }
 
 export interface RegisterResult {

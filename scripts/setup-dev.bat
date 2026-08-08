@@ -78,6 +78,19 @@ goto :agent_guide_done
 echo   [.] Domain guide not found (docs\agent-domain-guide.md) - continuing.
 :agent_guide_done
 
+REM Install the domain guide as a global rules file (applies to every session)
+if not exist "%WORKSPACE_PATH%\.config\opencode\AGENTS.md" goto :global_agent_missing
+echo   [+] workspace\.config\opencode\AGENTS.md already present
+goto :global_agent_done
+:global_agent_missing
+if not exist "docs\agent-domain-guide.md" goto :global_agent_none
+copy "docs\agent-domain-guide.md" "%WORKSPACE_PATH%\.config\opencode\AGENTS.md" >nul
+echo   [+] Installed domain guide as global rules (workspace\.config\opencode\AGENTS.md)
+goto :global_agent_done
+:global_agent_none
+echo   [.] Domain guide not found (docs\agent-domain-guide.md) - continuing.
+:global_agent_done
+
 echo.
 echo [3/5] Installing dependencies (pnpm install)...
 call pnpm install

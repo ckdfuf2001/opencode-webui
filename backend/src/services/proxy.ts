@@ -1,10 +1,9 @@
 import { logger } from '../utils/logger'
-import { ENV } from '@opencode-webui/shared'
+import { getConfigPath } from '@opencode-webui/shared'
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { readdir, stat } from 'fs/promises'
 import path from 'path'
-import os from 'os'
 
 export async function patchOpenCodeConfig(config: Record<string, unknown>): Promise<boolean> {
   try {
@@ -63,17 +62,18 @@ export async function resolveCommandScope(
     return source
   }
 
-  const kindDir = source === 'skill' ? 'skills' : 'commands'
+  const kindDirs = source === 'skill' ? ['skills', 'skill'] : ['commands', 'command']
 
-  const projectCommands = directory ? await dirFiles(path.join(directory, '.opencode', kindDir)) : new Set<string>()
-  if (projectCommands.has(name)) return 'project'
+  if (directory) {
+    for (const kindDir of kindDirs) {
+      if ((await dirFiles(path.join(directory, '.opencode', kindDir))).has(name)) return 'project'
+    }
+  }
 
-  const globalBase = path.join(os.homedir(), '.config', 'opencode')
-  const globalCommands = await dirFiles(path.join(globalBase, kindDir))
-  if (globalCommands.has(name)) return 'global'
-
-  const workspaceConfig = path.join(ENV.WORKSPACE.BASE_PATH, ENV.WORKSPACE.CONFIG_DIR, kindDir)
-  if (await fileExists(path.join(workspaceConfig, `${name}.md`))) return 'global'
+  const globalBase = getConfigPath()
+  for (const kindDir of kindDirs) {
+    if (await fileExists(path.join(globalBase, kindDir, `${name}.md`))) return 'global'
+  }
 
   // Config-defined and registry commands have no .md file. These are user
   // commands (global), not built-in, so never fall back to 'builtin'.
