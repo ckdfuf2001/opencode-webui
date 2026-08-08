@@ -45,6 +45,8 @@ fi
 
 # Register the doc-reader MCP server into the workspace config if missing
 if [ -f "/app/scripts/register-default-mcp.js" ]; then
+  echo "  [+] Installing agent-browser (binary + Chromium)..."
+  node /app/scripts/install-agent-browser.js || echo "  [.] agent-browser install skipped"
   echo "  [+] Registering default MCP servers..."
   node /app/scripts/register-default-mcp.js || echo "  [.] Default MCP registration skipped"
 fi

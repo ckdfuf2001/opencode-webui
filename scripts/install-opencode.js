@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, existsSync, chmodSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, chmodSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
@@ -7,6 +7,23 @@ import os from 'node:os'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const outDir = join(root, 'bin')
 const platformKey = `${os.platform()}-${os.arch()}`
+
+function rel(path) {
+  return path.replaceAll('\\', '/').replace(root.replaceAll('\\', '/') + '/', '')
+}
+
+function extractArchive(archivePath, destDir, type) {
+  if (type === 'zip') {
+    if (process.platform === 'win32') {
+      const ps = "Expand-Archive -LiteralPath '" + archivePath + "' -DestinationPath '" + destDir + "' -Force"
+      execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'inherit' })
+    } else {
+      execFileSync('unzip', ['-o', archivePath, '-d', destDir], { stdio: 'inherit' })
+    }
+  } else {
+    execFileSync('tar', ['-xzf', archivePath, '-C', destDir], { stdio: 'inherit' })
+  }
+}
 
 const ASSETS = {
   'win32-x64': { file: 'opencode-windows-x64.zip', bin: 'opencode.exe', type: 'zip' },
@@ -48,26 +65,30 @@ async function main() {
 
   mkdirSync(outDir, { recursive: true })
 
-  const tag = process.env.OPENCODE_VERSION ? 'v' + process.env.OPENCODE_VERSION : await latestTag()
-  const url = 'https://github.com/sst/opencode/releases/download/' + tag + '/' + assetDef.file
-  console.log('[install-opencode] downloading ' + url)
+  const vendorDir = join(root, 'vendor', 'opencode')
+  const vendorArchive = join(vendorDir, assetDef.file)
+  const vendorBin = join(vendorDir, assetDef.bin)
 
-  const res = await fetch(url)
-  if (!res.ok) throw new Error('Download failed (' + res.status + '): ' + url)
-  const archiveBytes = new Uint8Array(await res.arrayBuffer())
-
-  const archivePath = join(os.tmpdir(), assetDef.file)
-  writeFileSync(archivePath, archiveBytes)
-
-  if (assetDef.type === 'zip') {
-    if (process.platform === 'win32') {
-      const ps = "Expand-Archive -LiteralPath '" + archivePath + "' -DestinationPath '" + outDir + "' -Force"
-      execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'inherit' })
+  if (existsSync(vendorArchive) || existsSync(vendorBin)) {
+    if (existsSync(vendorArchive)) {
+      console.log('[install-opencode] [vendor] extracting ' + rel(vendorArchive))
+      extractArchive(vendorArchive, outDir, assetDef.type)
     } else {
-      execFileSync('unzip', ['-o', archivePath, '-d', outDir], { stdio: 'inherit' })
+      console.log('[install-opencode] [vendor] copying ' + rel(vendorBin))
+      copyFileSync(vendorBin, outBin)
     }
   } else {
-    execFileSync('tar', ['-xzf', archivePath, '-C', outDir], { stdio: 'inherit' })
+    const tag = process.env.OPENCODE_VERSION ? 'v' + process.env.OPENCODE_VERSION : await latestTag()
+    const url = 'https://github.com/sst/opencode/releases/download/' + tag + '/' + assetDef.file
+    console.log('[install-opencode] [download] ' + url)
+
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('Download failed (' + res.status + '): ' + url)
+    const archiveBytes = new Uint8Array(await res.arrayBuffer())
+
+    const archivePath = join(os.tmpdir(), assetDef.file)
+    writeFileSync(archivePath, archiveBytes)
+    extractArchive(archivePath, outDir, assetDef.type)
   }
 
   const installed = existsSync(outBin)
@@ -75,7 +96,7 @@ async function main() {
     if (process.platform !== 'win32') chmodSync(outBin, 0o755)
     console.log('[install-opencode] installed to ' + outBin)
   } else {
-    console.warn('[install-opencode] extracted but did not find ' + assetDef.bin + '; inspect contents under ' + outDir)
+    console.warn('[install-opencode] obtained files but did not find ' + assetDef.bin + '; inspect contents under ' + outDir)
   }
 }
 
@@ -88,5 +109,6 @@ main().catch((error) => {
     console.error('  (or on Windows PowerShell:  $env:OPENCODE_INSECURE="1"; npm run opencode:install)')
   }
   console.error('\nTip: place the opencode standalone binary at ' + outDir + ' (opencode.exe on Windows) and set the backend env OPENCODE_BIN to that file. Or set OPENCODE_VERSION to a specific release.')
+  console.error('\nOffline: put your files in vendor/opencode/ (the ' + platformKey + ' archive or binary) and this installer copies them without any download.')
   process.exit(1)
 })

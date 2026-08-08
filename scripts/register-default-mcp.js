@@ -10,7 +10,7 @@ const configFile = join(configDir, 'opencode.json')
 const docReaderScript = join(root, 'backend', 'scripts', 'doc_reader_mcp.py')
 const workspaceBackend = 'http://127.0.0.1:5001'
 
-const docReaderMcp = {
+const defaultMcp = {
   'doc-reader': {
     type: 'local',
     command: ['python', docReaderScript],
@@ -19,6 +19,27 @@ const docReaderMcp = {
       OPCODE_WEBUI_WORKSPACE: workspacePath,
     },
   },
+}
+
+const agentBrowserMeta = join(root, 'bin', 'agent-browser', '.meta.json')
+if (existsSync(agentBrowserMeta)) {
+  const meta = JSON.parse(readFileSync(agentBrowserMeta, 'utf8'))
+  const binPath = join(root, meta.bin)
+  if (existsSync(binPath)) {
+    const env = {}
+    const executablePath = join(root, meta.executable)
+    if (existsSync(executablePath)) {
+      env.AGENT_BROWSER_EXECUTABLE_PATH = executablePath
+    }
+    defaultMcp['agent-browser'] = {
+      type: 'local',
+      command: [binPath, 'mcp'],
+      env,
+    }
+    console.log(`  [+] Found agent-browser binary (${meta.agentBrowserVersion === 'vendor' ? 'vendor' : 'v' + (meta.agentBrowserVersion ?? '?')})`)
+  }
+} else {
+  console.log('  [.] agent-browser not installed - run: npm run agent-browser:install')
 }
 
 if (!existsSync(configFile)) {
@@ -30,7 +51,7 @@ const config = JSON.parse(readFileSync(configFile, 'utf8'))
 config.mcp = config.mcp ?? {}
 
 let changed = false
-for (const [id, entry] of Object.entries(docReaderMcp)) {
+for (const [id, entry] of Object.entries(defaultMcp)) {
   if (!config.mcp[id]) {
     config.mcp[id] = entry
     changed = true

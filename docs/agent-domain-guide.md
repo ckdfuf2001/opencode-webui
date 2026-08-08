@@ -65,6 +65,16 @@ command (작업 시작)
    처리를 결정한다: 알림을 줄지, 어떤 방식(채팅/노티)으로, 재시도할지 중단할지.**
    → 사용자 확인
 
+### 내장 MCP 도구 (이미 등록되어 바로 사용 가능)
+
+- **doc-reader** — `read_document(path)` / `edit_document(path, operations)`로
+  Office/PDF(DRM 포함) 파일 읽기·편집.
+- **agent-browser** — `agent_browser_*` 도구(open/snapshot/click/fill/type/
+  screenshot 등)로 실제 브라우저 자동화. 네비게이션 후에는 클릭/입력 전에
+  `agent_browser_snapshot`으로 안정적인 요소 참조를 얻는다.
+- 설치·업데이트: `npm run agent-browser:install` / `npm run agent-browser:update`
+  (별도 다운로드·전역 설치 불필요 — `bin/agent-browser/`에 바이너리+Chromium 번들).
+
 모든 항목이 확인되면 위 "등록 방법"대로 등록한다.
 
 ### 등록 방법

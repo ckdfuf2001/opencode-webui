@@ -16,6 +16,24 @@ RUN apt-get update && apt-get install -y \
     less \
     tree \
     file \
+    unzip \
+    fonts-liberation \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
@@ -65,6 +83,10 @@ COPY package.json pnpm-workspace.yaml ./
 
 RUN mkdir -p /app/backend/node_modules/@opencode-webui && \
     ln -s /app/shared /app/backend/node_modules/@opencode-webui/shared
+
+COPY scripts/install-agent-browser.js scripts/register-default-mcp.js ./scripts/
+
+RUN node scripts/install-agent-browser.js || echo "agent-browser bake skipped (no network during build)"
 
 COPY scripts/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
