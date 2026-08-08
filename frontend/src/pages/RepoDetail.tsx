@@ -10,6 +10,7 @@ import { SwitchConfigDialog } from "@/components/repo/SwitchConfigDialog";
 import { BackButton } from "@/components/ui/back-button";
 import { useCreateSession, useOpenCodeClient } from "@/hooks/useOpenCode";
 import { useLoadPendingPermissions } from "@/hooks/usePermissionRequests";
+import { useLoadPendingQuestions } from "@/hooks/useQuestionRequests";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
 
@@ -66,6 +67,7 @@ export function RepoDetail() {
   const repoDirectory = repo?.fullPath;
   const openCodeClient = useOpenCodeClient(opcodeUrl, repoDirectory);
   useLoadPendingPermissions(openCodeClient);
+  useLoadPendingQuestions(openCodeClient);
 
   const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
 

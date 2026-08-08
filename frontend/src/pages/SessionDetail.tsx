@@ -19,7 +19,7 @@ import { useSSE } from "@/hooks/useSSE";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
-import { useQuestionRequests } from "@/hooks/useQuestionRequests";
+import { useQuestionRequests, useLoadPendingQuestions } from "@/hooks/useQuestionRequests";
 import { usePermissionRequests, useLoadPendingPermissions, collectDescendantIDs } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { Loader2 } from "lucide-react";
@@ -80,6 +80,7 @@ export function SessionDetail() {
   const { currentQuestion, dismissQuestion } = useQuestionRequests(sessionId);
   
   useLoadPendingPermissions(openCodeClient, sessionId, descendantIDs);
+  useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages } = useMessages(opcodeUrl, sessionId, repoDirectory);
 
