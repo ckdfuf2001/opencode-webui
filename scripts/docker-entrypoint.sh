@@ -62,4 +62,10 @@ if [ -n "$WORKSPACE_PATH" ]; then
   fi
 fi
 
+# Install the Python document conversion dependencies
+if [ -f "/app/backend/requirements.txt" ]; then
+  echo "  [+] Installing Python conversion dependencies..."
+  pip install -r /app/backend/requirements.txt || echo "  [.] pip install skipped/failed (document preview/MCP unavailable)"
+fi
+
 exec "$@"

@@ -8,7 +8,27 @@ echo ==========================================
 echo  OpenCode WebUI - Dev Environment Setup
 echo ==========================================
 echo.
-echo [1/5] Checking prerequisites...
+echo [1/7] Checking prerequisites...
+
+REM Python
+where python >nul 2>nul
+if %errorlevel%==0 (
+  python -c "import sys;print^(sys.executable^)" > "%TEMP%\opencode-python-path.txt" 2>nul
+  set /p PYTHON_REAL=<"%TEMP%\opencode-python-path.txt"
+  echo "%PYTHON_REAL%" | findstr /i "WindowsApps" >nul
+  if not errorlevel 1 (
+    echo   [x] Python resolves to the Microsoft Store stub (WindowsApps^).
+    echo       Install a real Python from https://www.python.org/downloads/
+    echo       and check "Add python.exe to PATH", then re-run this script.
+    exit /b 1
+  )
+  echo   [+] Python is installed: %PYTHON_REAL%
+) else (
+  echo   [x] Python is NOT installed.
+  echo       Install it from: https://www.python.org/downloads/
+  echo       and check "Add python.exe to PATH", then re-run this script.
+  exit /b 1
+)
 
 REM Bun
 where bun >nul 2>nul
@@ -61,7 +81,7 @@ if %errorlevel%==0 (
 )
 
 echo.
-echo [2/5] Creating workspace directories...
+echo [2/7] Creating workspace directories...
 if not exist "%WORKSPACE_PATH%\repos" mkdir "%WORKSPACE_PATH%\repos"
 if not exist "%WORKSPACE_PATH%\.config\opencode" mkdir "%WORKSPACE_PATH%\.config\opencode"
 
@@ -92,7 +112,7 @@ echo   [.] Domain guide not found (docs\agent-domain-guide.md) - continuing.
 :global_agent_done
 
 echo.
-echo [3/5] Installing dependencies (pnpm install)...
+echo [3/7] Installing dependencies (pnpm install)...
 call pnpm install
 if %errorlevel% neq 0 (
   echo   [x] pnpm install failed.
@@ -100,7 +120,16 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [4/5] Creating environment file if missing...
+echo [4/7] Installing Python conversion dependencies...
+python -m pip install -r backend\requirements.txt
+if %errorlevel% neq 0 (
+  echo   [x] pip install failed. Run it manually:
+  echo       python -m pip install -r backend\requirements.txt
+  exit /b 1
+)
+
+echo.
+echo [5/7] Creating environment file if missing...
 if not exist "%ENV_FILE%" (
   copy .env.example ".env" >nul
   echo   [+] Created .env from .env.example
@@ -109,7 +138,7 @@ if not exist "%ENV_FILE%" (
 )
 
 echo.
-echo [5/5] Verifying runtime...
+echo [6/7] Verifying runtime...
 bun --version >nul 2>nul
 if %errorlevel% neq 0 (
   echo   [x] bun --version failed.
@@ -117,7 +146,7 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo Registering default MCP servers...
+echo [7/7] Registering default MCP servers...
 call node scripts\install-agent-browser.js
 if %errorlevel% neq 0 (
   echo   [x] agent-browser setup failed. Continue? (or run: npm run agent-browser:install)

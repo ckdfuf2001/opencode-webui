@@ -1,0 +1,7 @@
+python-docx
+openpyxl
+python-pptx
+pypdf
+pywin32
+psutil
+fastmcp

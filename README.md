@@ -276,9 +276,11 @@ server into the git-ignored workspace config
 these tools in chat:
 
 1. **Requirements** — the dev Python env must have the conversion libs and
-   `fastmcp`:
+   `fastmcp`. The dev setup scripts (`setup-dev.bat` / `setup-dev.sh` /
+   `docker-entrypoint.sh`) install them automatically from
+   `backend/requirements.txt`. To install by hand:
    ```bash
-   pip install python-docx openpyxl python-pptx fastmcp pypdf pywin32
+   pip install -r backend/requirements.txt
    ```
    (your copy of `opencode-webui` uses the same machine/`python` to run
    `backend/scripts/doc_converter.py`.)

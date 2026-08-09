@@ -2,8 +2,27 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+try {
+  const { config } = await import('dotenv')
+  config()
+} catch {
+  // dotenv not available
+}
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const workspacePath = process.env.WORKSPACE_PATH ? resolve(process.env.WORKSPACE_PATH) : join(root, 'workspace')
+
+const resolveWorkspacePath = () => {
+  const envPath = process.env.WORKSPACE_PATH
+  if (envPath) {
+    if (envPath.startsWith('~')) {
+      return join(process.env.HOME ?? process.env.USERPROFILE ?? '.', envPath.slice(1))
+    }
+    return resolve(envPath)
+  }
+  return join(root, 'workspace')
+}
+
+const workspacePath = resolveWorkspacePath()
 const configDir = join(workspacePath, '.config', 'opencode')
 const configFile = join(configDir, 'opencode.json')
 

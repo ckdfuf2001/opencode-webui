@@ -6,7 +6,18 @@ echo "  OpenCode Writer UI - Dev Environment Setup"
 echo "=========================================="
 echo
 
-echo "[1/5] Checking prerequisites..."
+echo "[1/7] Checking prerequisites..."
+
+# Python
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "  [x] Python is NOT installed. Install it from: https://www.python.org/downloads/"
+  exit 1
+fi
+echo "  [+] Python is installed: $("$PYTHON" -c 'import sys; print(sys.executable)')"
 
 # Bun
 if command -v bun >/dev/null 2>&1; then
@@ -43,7 +54,7 @@ fi
 WORKSPACE_PATH="./workspace"
 
 echo
-echo "[2/5] Creating workspace directories..."
+echo "[2/7] Creating workspace directories..."
 mkdir -p "$WORKSPACE_PATH/repos"
 mkdir -p "$WORKSPACE_PATH/.config/opencode"
 
@@ -68,11 +79,15 @@ else
 fi
 
 echo
-echo "[3/5] Installing dependencies (pnpm install)..."
+echo "[3/7] Installing dependencies (pnpm install)..."
 pnpm install
 
 echo
-echo "[4/5] Creating environment file if missing..."
+echo "[4/7] Installing Python conversion dependencies..."
+"$PYTHON" -m pip install -r backend/requirements.txt
+
+echo
+echo "[5/7] Creating environment file if missing..."
 if [ ! -f ".env" ]; then
   cp .env.example .env
   echo "  [+] Created .env from .env.example"
@@ -81,11 +96,11 @@ else
 fi
 
 echo
-echo "[5/5] Verifying bun..."
+echo "[6/7] Verifying bun..."
 bun --version >/dev/null 2>&1
 
 echo
-echo "Registering default MCP servers..."
+echo "[7/7] Registering default MCP servers..."
 node scripts/install-agent-browser.js || echo "  [.] agent-browser setup skipped - run: npm run agent-browser:install"
 node scripts/register-default-mcp.js
 
