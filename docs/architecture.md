@@ -58,6 +58,54 @@ the user's `~/.config/opencode`.
 3. `proxy.ts` patches the fetched config before forwarding it to the UI and
    resolves the scope of slash commands (`global` vs `project` vs `builtin`).
 
+## Default MCP Servers & agent-browser daemon warm-up
+
+`backend/src/services/default-mcp.ts` owns the two built-in MCP servers:
+
+- `doc-reader` — FastMCP/stdio Python server
+  (`backend/scripts/doc_reader_mcp.py`) with `OPCODE_WEBUI_BACKEND` /
+  `OPCODE_WEBUI_WORKSPACE` env.
+- `agent-browser` — native binary + vendored Chromium
+  (`bin/agent-browser/`, paths from `.meta.json`). Its command is
+  `<bin> mcp --namespace opencode` and its env pins
+  `AGENT_BROWSER_NAMESPACE=opencode` and
+  `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h).
+
+`mergeDefaultMcpEntries(content)` (called from `ensureDefaultConfigExists()` and
+`syncDefaultConfigToDisk()`, `backend/src/index.ts`) guarantees these entries
+exist and **repairs** them on every sync:
+
+1. `command` — replaced with the canonical absolute paths when they differ
+   (doc-reader must point at `backend/scripts/doc_reader_mcp.py`, never a
+   relative `..\backend\...` path that breaks in per-repo sessions).
+2. `enabled: true` — forced on.
+3. `env` — each default key/value is merged in when missing or stale (this is
+   what keeps `AGENT_BROWSER_NAMESPACE` and `AGENT_BROWSER_IDLE_TIMEOUT_MS`
+   present in a config regenerated from the DB).
+
+The agent-browser MCP server spawns the CLI per tool call; that CLI talks to a
+long-lived background **daemon** over a local socket (namespace-scoped under
+`~/.agent-browser/namespaces/<ns>/run`). On a cold start the freshly-spawned
+daemon inherits the MCP server's stdout pipe, so the MCP server never receives
+EOF and `tools/call` waits ~40-75s then times out — the "first open hangs"
+failure mode. `warmUpAgentBrowserDaemon()` prevents it:
+
+- Called right after the opencode server starts
+  (`opencodeServerManager.start().then(...)`, `backend/src/index.ts`) and
+  re-called every 60s on a self-healing interval.
+- Runs `<bin> --headed false open about:blank --json` (stdio discarded), which
+  spawns + connects the daemon and launches a headless browser.
+- Skips (fast no-op) when `agent-browser session info --json` already reports
+  `active` with `browserLaunched: true`, so the periodic re-check is cheap.
+- `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` keeps that warm daemon alive between
+  tool calls; a warm daemon answers `agent_browser_open` in <1s.
+
+Do **not** hand-edit these MCP entries in
+`workspace/.config/opencode/opencode.json` — the backend regenerates the file
+from the DB default config at startup and repairs the entries. Use the app UI
+(Settings → MCP Servers) or `scripts/register-default-mcp.js` for the
+agent-browser / doc-reader defaults.
+
 ## Rules (AGENTS.md)
 
 OpenCode applies two kinds of rules files:

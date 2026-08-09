@@ -340,8 +340,8 @@ install is required**:
 
 `scripts/register-default-mcp.js` then registers the MCP server into the
 git-ignored workspace config (`workspace/.config/opencode/opencode.json`) using
-the vendored binary and sets `AGENT_BROWSER_EXECUTABLE_PATH` so it uses the
-vendored Chromium:
+the vendored binary. The entry pins three env vars and a fixed namespace so the
+MCP server talks to the same daemon the backend pre-warms (see below):
 
 ```json
 "mcp": {
@@ -349,14 +349,38 @@ vendored Chromium:
     "type": "local",
     "command": [
       "D:\\path\\to\\opencode_web\\bin\\agent-browser\\bin\\agent-browser.exe",
-      "mcp"
+      "mcp",
+      "--namespace",
+      "opencode"
     ],
     "env": {
-      "AGENT_BROWSER_EXECUTABLE_PATH": "D:\\path\\to\\opencode_web\\bin\\agent-browser\\chromium\\chrome-win64\\chrome.exe"
+      "AGENT_BROWSER_EXECUTABLE_PATH": "D:\\path\\to\\opencode_web\\bin\\agent-browser\\chromium\\chrome-win64\\chrome.exe",
+      "AGENT_BROWSER_NAMESPACE": "opencode",
+      "AGENT_BROWSER_IDLE_TIMEOUT_MS": "86400000"
     }
   }
 }
 ```
+
+`AGENT_BROWSER_NAMESPACE=opencode` must match the `--namespace opencode` flag —
+the MCP server and the daemon only talk to each other when both use the same
+namespace. `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h) stops the daemon from
+being evicted between tool calls.
+
+> **Daemon warm-up (why the first `agent_browser_open` no longer hangs):**
+> the agent-browser MCP server spawns the `agent-browser` CLI per tool call,
+> which talks to a long-lived background daemon over a local socket. On a cold
+> start the daemon inherits the MCP server's stdout pipe, so the MCP server
+> never sees EOF and a `tools/call` waits 40-75s then times out. The backend
+> now pre-warms the daemon so the first tool call is fast:
+> - `backend/src/services/default-mcp.ts` → `warmUpAgentBrowserDaemon()` runs
+>   `agent-browser --headed false open about:blank --json` right after the
+>   opencode server starts, and `backend/src/index.ts` re-runs it every 60s
+>   (self-heals a dead daemon). It skips when `agent-browser session info`
+>   already reports an active browser.
+> - `mergeDefaultMcpEntries` also **repairs env vars** (namespace + idle
+>   timeout) on sync, so a config regenerated from the DB keeps them even if a
+>   previous version was missing them.
 
 Options:
 

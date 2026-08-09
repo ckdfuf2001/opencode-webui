@@ -49,11 +49,24 @@
   config at backend startup (`syncDefaultConfigToDisk()`). Default MCP servers
   (doc-reader, agent-browser) are handled via
   `backend/src/services/default-mcp.ts` (`mergeDefaultMcpEntries`): missing
-  entries are added, and existing entries are **repaired** to the canonical
-  absolute-path command (doc-reader must point at
-  `backend/scripts/doc_reader_mcp.py`, never a relative `..\backend\...` path that
-  breaks in per-repo sessions) with `enabled: true`. Do not hand-edit MCPs in
-  that file; use the app UI.
+  entries are added, and existing entries are **repaired** — command (doc-reader
+  must point at `backend/scripts/doc_reader_mcp.py`, never a relative
+  `..\backend\...` path that breaks in per-repo sessions), `enabled: true`, AND
+  env vars (agent-browser must keep `AGENT_BROWSER_NAMESPACE=opencode` +
+  `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000`). Do not hand-edit MCPs in
+  `workspace/.config/opencode/opencode.json`; use the app UI.
+- agent-browser MCP uses a long-lived daemon per namespace (`--namespace
+  opencode` must match `AGENT_BROWSER_NAMESPACE`). On a cold start the daemon
+  inherits the MCP server's stdout pipe and `tools/call` hangs ~40-75s → the
+  "first open fails" symptom. The backend pre-warms it via
+  `warmUpAgentBrowserDaemon()` (after opencode server start + every 60s, skips
+  if `agent-browser session info` already shows an active browser) and the 24h
+  `AGENT_BROWSER_IDLE_TIMEOUT_MS` keeps it warm. When debugging MCP/browser
+  issues, check `agent-browser session info --json` for
+  `active`/`browserLaunched` before blaming the config.
+- If `bin/agent-browser/.meta.json` or `bin/agent-browser/bin/…` is missing,
+  `resolveAgentBrowser()` returns null and the agent-browser MCP entry is not
+  registered — run `npm run agent-browser:install` (auto-run by predev).
 - MCP servers can briefly report `disabled` in the opencode web UI while connecting;
   they switch to `connected` after a few seconds. Not an error.
 - opencode scans **plural** directories (`agents/`, `commands/`, `skills/`,
