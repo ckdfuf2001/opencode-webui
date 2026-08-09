@@ -21,7 +21,7 @@ import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries } from './services/default-mcp'
+import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon } from './services/default-mcp'
 import { opencodeServerManager, freePort } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
 import { openApiSpec } from './services/api-docs'
@@ -219,8 +219,7 @@ app.get('/api/docs', (c) => {
 })
 
 app.all('/api/opencode/*', async (c) => {
-  const request = c.req.raw
-  return proxyRequest(request)
+  return proxyRequest(c.req.raw, c.req.method, c.req.path, c.req.query())
 })
 
 const isProduction = ENV.SERVER.NODE_ENV === 'production'
@@ -292,6 +291,7 @@ const shutdown = async (signal: string) => {
   
   logger.info(`${signal} received, shutting down gracefully...`)
   if (healthCheckInterval) clearInterval(healthCheckInterval)
+  if (agentBrowserWarmupInterval) clearInterval(agentBrowserWarmupInterval)
   if (scheduleRunner) clearInterval(scheduleRunner)
   try {
     await opencodeServerManager.stop()
@@ -299,6 +299,7 @@ const shutdown = async (signal: string) => {
   } catch (error) {
     logger.error('Error stopping OpenCode server:', error)
   }
+  httpServer?.close()
   stopConverter()
   process.exit(0)
 }
@@ -306,41 +307,70 @@ const shutdown = async (signal: string) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'))
 process.on('SIGINT', () => shutdown('SIGINT'))
 
-const server = serve({
-  fetch: app.fetch,
-  port: PORT,
-  hostname: HOST,
-})
+let httpServer: ReturnType<typeof serve> | null = null
 
-server.on('error', (error: NodeJS.ErrnoException) => {
-  if (error.code === 'EADDRINUSE') {
-    logger.error(`Port ${PORT} is already in use. Is another backend already running?`)
-  } else {
-    logger.error('Failed to start HTTP server:', error)
+const startServer = async () => {
+  const maxPortAttempts = 10
+  for (let offset = 0; offset < maxPortAttempts; offset++) {
+    const tryPort = PORT + offset
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const server = serve({
+          fetch: app.fetch,
+          port: tryPort,
+          hostname: HOST,
+        })
+        httpServer = server
+        server.on('listening', () => resolve())
+        server.on('error', (err: NodeJS.ErrnoException) => {
+          if (err.code === 'EADDRINUSE') {
+            reject(err)
+          } else {
+            reject(err)
+          }
+        })
+      })
+      logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${tryPort}`)
+      return
+    } catch (error: any) {
+      if (error.code === 'EADDRINUSE') {
+        logger.warn(`Port ${tryPort} in use, trying next...`)
+        continue
+      }
+      throw error
+    }
   }
-  process.exit(1)
-})
+  throw new Error(`Could not bind to any port in range ${PORT}-${PORT + maxPortAttempts - 1}`)
+}
 
-server.on('listening', () => {
-  logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${PORT}`)
+await startServer()
 
-  const startupSettings = new SettingsService(db)
-  opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferences.opencodeBin ?? null)
+const startupSettings = new SettingsService(db)
+opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferences.opencodeBin ?? null)
 
-  opencodeServerManager.start()
-    .then(() => {
-      logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
+opencodeServerManager.start()
+  .then(() => {
+    logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
+    warmUpAgentBrowserDaemon().catch((error) => {
+      logger.error('Agent-browser daemon warm-up error:', error)
     })
-    .catch((error) => {
-      logger.error('Failed to start OpenCode server:', error)
-    })
+  })
+  .catch((error) => {
+    logger.error('Failed to start OpenCode server:', error)
+  })
 
-  healthCheckInterval = setInterval(() => {
-    opencodeServerManager.ensureRunning().catch((error) => {
-      logger.error('Failed to ensure OpenCode server is running:', error)
-    })
-  }, ENV.TIMEOUTS.HEALTH_CHECK_INTERVAL_MS)
+healthCheckInterval = setInterval(() => {
+  opencodeServerManager.ensureRunning().catch((error) => {
+    logger.error('Failed to ensure OpenCode server is running:', error)
+  })
+}, ENV.TIMEOUTS.HEALTH_CHECK_INTERVAL_MS)
 
-  scheduleRunner = startScheduleRunner(db)
-  logger.info('Schedule runner started')
-})
+let agentBrowserWarmupInterval: NodeJS.Timeout | null = null
+agentBrowserWarmupInterval = setInterval(() => {
+  warmUpAgentBrowserDaemon().catch((error) => {
+    logger.error('Agent-browser daemon re-warm-up error:', error)
+  })
+}, 60_000)
+
+scheduleRunner = startScheduleRunner(db)
+logger.info('Schedule runner started')

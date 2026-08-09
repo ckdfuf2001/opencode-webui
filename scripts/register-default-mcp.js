@@ -32,10 +32,12 @@ if (existsSync(agentBrowserMeta)) {
     if (existsSync(executablePath)) {
       env.AGENT_BROWSER_EXECUTABLE_PATH = executablePath
     }
+    env.AGENT_BROWSER_NAMESPACE = 'opencode'
+    env.AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
     defaultMcp['agent-browser'] = {
       type: 'local',
       enabled: true,
-      command: [binPath, 'mcp'],
+      command: [binPath, 'mcp', '--namespace', 'opencode'],
       env,
     }
     console.log(`  [+] Found agent-browser binary (${meta.agentBrowserVersion === 'vendor' ? 'vendor' : 'v' + (meta.agentBrowserVersion ?? '?')})`)
@@ -54,10 +56,15 @@ config.mcp = config.mcp ?? {}
 
 let changed = false
 for (const [id, entry] of Object.entries(defaultMcp)) {
-  if (!config.mcp[id]) {
+  const existing = config.mcp[id]
+  const shouldUpdate = !existing || 
+    JSON.stringify(existing.command) !== JSON.stringify(entry.command) ||
+    JSON.stringify(existing.env) !== JSON.stringify(entry.env)
+  
+  if (shouldUpdate) {
     config.mcp[id] = entry
     changed = true
-    console.log(`  [+] Registered MCP server: ${id}`)
+    console.log(`  [+] ${existing ? 'Updated' : 'Registered'} MCP server: ${id}`)
   } else {
     console.log(`  [.] MCP server already registered: ${id}`)
   }
