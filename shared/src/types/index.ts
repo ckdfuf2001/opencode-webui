@@ -26,10 +26,6 @@ import {
   PatchOperationSchema,
   FilePatchRequestSchema,
 } from '../schemas/files'
-import {
-  SessionSchema,
-  MessageSchema,
-} from '../schemas/opencode'
 
 export type UserPreferences = z.infer<typeof UserPreferencesSchema>
 export type SettingsResponse = z.infer<typeof SettingsResponseSchema>
@@ -54,9 +50,6 @@ export type ChunkedFileInfo = z.infer<typeof ChunkedFileInfoSchema>
 export type FileRangeRequest = z.infer<typeof FileRangeRequestSchema>
 export type PatchOperation = z.infer<typeof PatchOperationSchema>
 export type FilePatchRequest = z.infer<typeof FilePatchRequestSchema>
-
-export type Session = z.infer<typeof SessionSchema>
-export type Message = z.infer<typeof MessageSchema>
 
 export interface ErrorResponse {
   error: string

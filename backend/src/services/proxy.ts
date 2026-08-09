@@ -85,12 +85,9 @@ function parseDirectory(url: URL): string | undefined {
   return value ? decodeURIComponent(value) : undefined
 }
 
-export async function proxyRequest(request: Request) {
-  const url = new URL(request.url)
-  const pathName = url.pathname + url.search
-
-  // Remove /api/opencode prefix before forwarding to OpenCode server
-  const cleanPath = pathName.replace(/^\/api\/opencode/, '')
+export async function proxyRequest(request: Request, method: string, pathname: string, query: Record<string, string>) {
+  const search = query ? '?' + new URLSearchParams(query).toString() : ''
+  const cleanPath = pathname.replace(/^\/api\/opencode/, '') + search
   const targetUrl = `${opencodeServerManager.getUrl()}${cleanPath}`
   
   try {
@@ -103,14 +100,16 @@ export async function proxyRequest(request: Request) {
       headers[key] = value
     })
 
-    const cleanEventPath = url.pathname.replace(/^\/api\/opencode/, '')
+    const cleanEventPath = pathname.replace(/^\/api\/opencode/, '')
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
     const signal = isEventStream ? undefined : AbortSignal.timeout(120_000)
 
+    const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
+
     const response = await fetch(targetUrl, {
-      method: request.method,
+      method,
       headers,
-      body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.text() : undefined,
+      body,
       signal,
     })
 
@@ -123,12 +122,12 @@ export async function proxyRequest(request: Request) {
       responseHeaders[key] = value
     })
 
-    if (request.method === 'GET' && url.pathname.replace(/^\/api\/opencode/, '') === '/command') {
+    if (method === 'GET' && cleanEventPath === '/command') {
       try {
-        const directory = parseDirectory(url)
-        const body = await response.text()
-        const commands = JSON.parse(body)
+        const bodyText = await response.text()
+        const commands = JSON.parse(bodyText)
         if (Array.isArray(commands)) {
+          const directory = new URLSearchParams(query).get('directory')?.replace(/%2F/g, '/')
           const enriched = await Promise.all(
             commands.map(async (cmd: Record<string, unknown>) => ({
               ...cmd,
@@ -145,7 +144,7 @@ export async function proxyRequest(request: Request) {
             headers: responseHeaders,
           })
         }
-        return new Response(body, { status: response.status, headers: responseHeaders })
+        return new Response(bodyText, { status: response.status, headers: responseHeaders })
       } catch (error) {
         logger.warn('Failed to augment command list with scope:', error)
       }
@@ -157,7 +156,7 @@ export async function proxyRequest(request: Request) {
       headers: responseHeaders,
     })
   } catch (error) {
-    logger.error(`Proxy request failed for ${pathName}:`, error)
+    logger.error(`Proxy request failed:`, error)
     return new Response(JSON.stringify({ error: 'Proxy request failed' }), {
       status: 502,
       headers: { 'Content-Type': 'application/json' },
