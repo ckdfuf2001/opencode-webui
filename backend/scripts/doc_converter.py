@@ -31,6 +31,23 @@ _OFFICE_EXES = {"EXCEL.EXE", "WINWORD.EXE", "POWERPNT.EXE"}
 _LOCK_FILE = os.path.join(CACHE_DIR, "office_pids.json")
 _managed = set()
 
+_COM_MODULES = ("win32com", "pythoncom", "psutil")
+_INSTALL_HINT = "pip install -r backend/requirements.txt"
+
+
+def _ensure_deps(additional=(), require_com=True):
+    import importlib
+
+    required = _COM_MODULES if require_com else ()
+    for mod in tuple(required) + tuple(additional):
+        try:
+            importlib.import_module(mod)
+        except ImportError as exc:
+            raise RuntimeError(
+                f"Missing Python dependency '{mod}'. "
+                f"Run: {_INSTALL_HINT}"
+            ) from exc
+
 
 def _office_pids():
     """Snapshot of the PIDs of running Office applications."""
@@ -160,6 +177,7 @@ def convert(source_path, refresh=False):
     ext = os.path.splitext(source_path)[1].lower()
     if ext not in SUPPORTED_EXTS:
         raise ValueError(f"Unsupported document type: {ext}")
+    _ensure_deps()
 
     out_path = cache_path(source_path)
     if refresh:
@@ -283,7 +301,9 @@ def extract_text(source_path):
     if ext not in SUPPORTED_EXTS and ext != ".pdf":
         raise ValueError(f"Unsupported document type: {ext}")
     if ext == ".pdf":
+        _ensure_deps(additional=("pypdf",), require_com=False)
         return _extract_pdf_text(source_path)
+    _ensure_deps()
 
     import pythoncom
 
@@ -888,13 +908,16 @@ def edit_document(source_path, operations):
 
     if ext in {".docx", ".xlsx", ".pptx"}:
         if zipfile.is_zipfile(source_path):
+            _ensure_deps(additional=({"docx": "docx", "xlsx": "openpyxl", "pptx": "pptx"}[ext],), require_com=False)
             if ext == ".docx":
                 return _edit_docx(source_path, operations)
             if ext == ".xlsx":
                 return _edit_xlsx(source_path, operations)
             return _edit_pptx(source_path, operations)
+        _ensure_deps()
         return _edit_legacy(source_path, ext, operations)
 
+    _ensure_deps()
     import pythoncom
 
     before = _office_pids()
