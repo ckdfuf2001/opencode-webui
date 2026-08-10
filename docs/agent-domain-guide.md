@@ -31,10 +31,17 @@ command (작업 시작)
 이 앱의 자동화(command/skill/agent)는 **md 파일**로 등록한다(JSON config 아님).
 위치는 두 가지다:
 
-| 범위 | 위치 |
-| --- | --- |
-| 전역 (모든 세션) | `workspace/.config/opencode/{agents,commands,skills,plugins}/` |
-| 프로젝트 (특정 작업공간) | `<repo>/.opencode/{agents,commands,skills,plugins}/` |
+| 범위 | 위치 | 기본 여부 |
+| --- | --- | --- |
+| 프로젝트 (특정 작업공간) | `<repo>/.opencode/{agents,commands,skills,plugins}/` | **기본(권장)** |
+| 전역 (모든 세션) | `workspace/.config/opencode/{agents,commands,skills,plugins}/` | 특별한 경우에만 |
+
+**기본적으로는 프로젝트(레포) 단위로 등록**한다. `npm run dev`와 명령 패널의
+"Register new opencode file" 다이얼로그도 프로젝트 범위를 기본으로 쓴다. 전역 범위는
+"모든 작업공간에서 항상 쓰는" 경우에만 사용한다(예: 모든 업무에서 공통으로 쓰는 문서 도구).
+이유: 프로젝트 단위 파일은 `<repo>/.opencode/` 안에 있어 **git으로 버전 관리**되고,
+작업공간 별로 다른 자동화를 가질 수 있다. 전역 파일은 `workspace/`(gitignore)에 있어
+**삭제·유실 시 복구할 수 없다**.
 
 opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugins/`)를 정식 규약으로
 스캔한다. 단수형(`agent/`, `command/`, `skill/`)도 하위호환으로 지원되지만, 앱의 레지스트리
@@ -84,7 +91,8 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 ### 등록 방법
 
 - 파일 쓰기가 가능한 세션이면 **해당 경로에 직접 파일을 작성**한다
-  (전역은 `workspace/.config/opencode/`, 프로젝트는 `<repo>/.opencode/`).
+  (**기본은 프로젝트 `<repo>/.opencode/`, 전역은 `workspace/.config/opencode/`**).
+  특별한 이유가 없으면 프로젝트 단위로 만든다.
 - 파일을 쓸 수 없으면 **완성된 md 내용을 채팅에 출력**하고, 사용자가
   "명령 패널 → Register new opencode file" 다이얼로그에 복사하도록 안내한다.
 - 작성 후에는 해당 파일을 읽어 **검증**하고, 반영이 안 되면 opencode 서버 재시작이나
@@ -96,9 +104,10 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 
 1. **`workspace/`는 git에 추적되지 않는다.** 루트 `.gitignore`가 `workspace/` 전체를 무시하므로
    `workspace/.config/opencode/{agents,commands,skills,plugins}/` 안의 자동화 파일도
-   **버전 관리 대상이 아니다.** 삭제되면 복구할 수 없다(이전 git에도 없음). 영구 보존이
-   필요한 command/skill/agent는 정본(canonical)을 저장소 안(예: `docs/`나 별도 추적 디렉터리)에
-   두고 setup이 복사하도록 하거나, 사용자에게 백업 필요를 안내한다.
+   **버전 관리 대상이 아니다.** 삭제되면 복구할 수 없다(이전 git에도 없음). 그래서
+   **기본 등록 범위는 프로젝트(`<repo>/.opencode/`)**로 하며, 영구 보존이 필요한
+   command/skill/agent는 저장소 안에 git으로 관리되도록 한다. 전역 파일만으로 만들 필요는
+   없고, 사용자에게 백업 필요를 안내한다.
 2. **`workspace/.config/opencode/opencode.json`은 백엔드 시작 시 DB에서 재생성된다.**
    `syncDefaultConfigToDisk()`가 DB의 기본 config를 이 파일로 다시 쓴다. MCP 기본값
    (doc-reader, agent-browser)은 `backend/src/services/default-mcp.ts`의
@@ -173,14 +182,17 @@ You are the 업무 도우미 assistant of opencode-webui, built on opencode.
    name/action(command·chat)/cron/agent 구성 정보를 정리해 제공한다.
 6. 불명확하면 짧은 질문으로 다듬고, 필요한 설정(Markdown)을 생성한다.
 7. 요청받은 등록 파일(command/skill/agent md, plugin ts)은 위 "채팅 기반 자동화 등록" 규칙대로
-   직접 작성하거나 내용을 출력한다. 그 외 불필요한 코드 파일은 새로 만들지 않는다. 제공된 도구
+   **기본적으로 프로젝트 단위(`<repo>/.opencode/`)**로 직접 작성하거나 내용을 출력한다.
+   그 외 불필요한 코드 파일은 새로 만들지 않는다. 제공된 도구
    (read/edit/glob/grep/bash/webfetch/websearch 등)만으로 작업을 수행하고 완결한다.
 ```
 
 ## 적용 방법 요약
 - 기본 어시스턴트에 반영: opencode config의 `agent.general.prompt` 에 위 프롬프트를 넣는다.
-- 조직별 담당 단위(권한 관리)를 만들 때: `agents/<이름>.md` 를 작성한다.
-- 작업 시작 명령어를 만들 때: 전역은 `workspace/.config/opencode/commands/<이름>.md`,
-  프로젝트는 `<repo>/.opencode/commands/<이름>.md` 를 작성한다.
-- 업무 스텝을 정의할 때: 전역은 `workspace/.config/opencode/skills/<이름>/SKILL.md`,
-  프로젝트는 `<repo>/.opencode/skills/<이름>/SKILL.md` 를 작성한다.
+- **자동화 파일은 특별한 이유가 없으면 프로젝트 단위(`<repo>/.opencode/`)로 만든다.** (git 버전 관리 대상)
+- 조직별 담당 단위(권한 관리)를 만들 때: 프로젝트는 `<repo>/.opencode/agents/<이름>.md`,
+  전역은 `workspace/.config/opencode/agents/<이름>.md` 를 작성한다.
+- 작업 시작 명령어를 만들 때: 프로젝트는 `<repo>/.opencode/commands/<이름>.md`,
+  전역은 `workspace/.config/opencode/commands/<이름>.md` 를 작성한다.
+- 업무 스텝을 정의할 때: 프로젝트는 `<repo>/.opencode/skills/<이름>/SKILL.md`,
+  전역은 `workspace/.config/opencode/skills/<이름>/SKILL.md` 를 작성한다.
