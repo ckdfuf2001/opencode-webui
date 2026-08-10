@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { MessagePart } from './MessagePart'
 import { CornerDownLeft, X } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
+import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 
 function getMessageTextContent(msg: MessageWithParts): string {
   return msg.parts
@@ -9,6 +10,10 @@ function getMessageTextContent(msg: MessageWithParts): string {
     .map(p => p.text || '')
     .join('\n\n')
     .trim()
+}
+
+const isErrorMessage = (msg: MessageWithParts): boolean => {
+  return msg.info.id.startsWith(ERROR_MESSAGE_ID_PREFIX)
 }
 
 interface MessageThreadProps {
@@ -50,6 +55,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
       {visibleMessages.map((msg) => {
         const streaming = isMessageStreaming(msg)
         const thinking = isMessageThinking(msg)
+        const isError = isErrorMessage(msg)
         
         return (
             <div
@@ -59,14 +65,16 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
             >
             <div
               className={`w-full rounded-lg p-1.5 ${
-                msg.info.role === 'user'
-                  ? 'bg-blue-600/20 border border-blue-600/30'
-                  : 'bg-card/50 border border-border'
+                isError
+                  ? 'bg-red-600/15 border border-red-600/40'
+                  : msg.info.role === 'user'
+                    ? 'bg-blue-600/20 border border-blue-600/30'
+                    : 'bg-card/50 border border-border'
               } ${streaming ? 'animate-pulse-subtle' : ''}`}
             >
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs font-medium text-zinc-400">
-                  {msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
+                <span className={`text-xs font-medium ${isError ? 'text-red-400' : 'text-zinc-400'}`}>
+                  {isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
                 </span>
                 {msg.info.time && (
                   <span className="text-xs text-muted-foreground">

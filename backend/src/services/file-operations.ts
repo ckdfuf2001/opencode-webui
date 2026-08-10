@@ -3,12 +3,19 @@ import path from 'path'
 import { logger } from '../utils/logger'
 import { getReposPath } from '@opencode-webui/shared'
 
+function withErrorCode(error: Error, cause: unknown): Error {
+  if (cause && typeof cause === 'object' && 'code' in cause) {
+    ;(error as Error & { code?: string }).code = String((cause as { code?: unknown }).code)
+  }
+  return error
+}
+
 export async function readFileContent(filePath: string): Promise<string> {
   try {
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getReposPath(), filePath)
     return await fs.readFile(fullPath, 'utf8')
   } catch (error) {
-    throw new Error(`Failed to read file ${filePath}: ${error}`)
+    throw withErrorCode(new Error(`Failed to read file ${filePath}: ${error}`), error)
   }
 }
 
@@ -18,7 +25,7 @@ export async function readFileAsBase64(filePath: string): Promise<string> {
     const buffer = await fs.readFile(fullPath)
     return buffer.toString('base64')
   } catch (error) {
-    throw new Error(`Failed to read file ${filePath}: ${error}`)
+    throw withErrorCode(new Error(`Failed to read file ${filePath}: ${error}`), error)
   }
 }
 
@@ -52,8 +59,11 @@ export async function fileExists(filePath: string): Promise<boolean> {
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getReposPath(), filePath)
     await fs.access(fullPath)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && String((error as { code?: unknown }).code) === 'ENOENT') {
+      return false
+    }
+    throw withErrorCode(new Error(`Failed to check path ${filePath}: ${error}`), error)
   }
 }
 
@@ -85,7 +95,7 @@ export async function getFileStats(filePath: string): Promise<{ size: number; la
       isDirectory: stats.isDirectory()
     }
   } catch (error) {
-    throw new Error(`Failed to get stats for ${filePath}: ${error}`)
+    throw withErrorCode(new Error(`Failed to get stats for ${filePath}: ${error}`), error)
   }
 }
 
@@ -118,6 +128,6 @@ export async function listDirectory(dirPath: string): Promise<Array<{
     
     return result
   } catch (error) {
-    throw new Error(`Failed to list directory ${dirPath}: ${error}`)
+    throw withErrorCode(new Error(`Failed to list directory ${dirPath}: ${error}`), error)
   }
 }
