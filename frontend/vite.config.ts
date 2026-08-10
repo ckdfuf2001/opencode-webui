@@ -4,8 +4,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
-  const backendPort = env.PORT || 5001;
+  loadEnv(mode, path.resolve(__dirname, ".."), "");
+  const backendPort = Number(process.env.PORT) || 5003;
 
   return {
     envDir: path.resolve(__dirname, ".."),
