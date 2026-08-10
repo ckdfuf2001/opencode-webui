@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 
+let agentBrowserWarmState: 'warm' | 'cold' | 'unknown' = 'unknown'
+
 const workspaceBackend = 'http://127.0.0.1:5001'
 const AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
 const AGENT_BROWSER_NAMESPACE = 'opencode'
@@ -65,7 +67,10 @@ export async function warmUpAgentBrowserDaemon(): Promise<boolean> {
   const info = resolveAgentBrowser()
   if (!info) return false
   if (isAgentBrowserDaemonWarm(info.binPath)) {
-    logger.debug('Agent-browser daemon already warm, skipping warm-up')
+    if (agentBrowserWarmState !== 'warm') {
+      agentBrowserWarmState = 'warm'
+      logger.info('Agent-browser daemon is warm')
+    }
     return true
   }
   const env: Record<string, string> = {
@@ -84,18 +89,32 @@ export async function warmUpAgentBrowserDaemon(): Promise<boolean> {
     )
     const timer = setTimeout(() => {
       child.kill()
-      logger.warn('Agent-browser daemon warm-up timed out')
+      if (agentBrowserWarmState !== 'cold') {
+        agentBrowserWarmState = 'cold'
+        logger.warn('Agent-browser daemon warm-up timed out')
+      }
       resolve(false)
     }, 90_000)
     child.on('error', (error) => {
       clearTimeout(timer)
-      logger.warn('Agent-browser daemon warm-up failed:', error)
+      if (agentBrowserWarmState !== 'cold') {
+        agentBrowserWarmState = 'cold'
+        logger.warn('Agent-browser daemon warm-up failed:', error)
+      }
       resolve(false)
     })
     child.on('exit', (code) => {
       clearTimeout(timer)
       const ok = code === 0
-      logger.info(ok ? 'Agent-browser daemon warmed up successfully' : `Agent-browser warm-up exited with code ${code}`)
+      if (ok) {
+        if (agentBrowserWarmState !== 'warm') {
+          agentBrowserWarmState = 'warm'
+          logger.info('Agent-browser daemon warmed up successfully')
+        }
+      } else if (agentBrowserWarmState !== 'cold') {
+        agentBrowserWarmState = 'cold'
+        logger.warn(`Agent-browser warm-up exited with code ${code}`)
+      }
       resolve(ok)
     })
   })

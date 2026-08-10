@@ -156,7 +156,12 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       headers: responseHeaders,
     })
   } catch (error) {
-    logger.error(`Proxy request failed:`, error)
+    const err = error as { name?: string }
+    if (err?.name === 'TimeoutError') {
+      logger.debug('Proxy request timed out:', err)
+    } else {
+      logger.error(`Proxy request failed:`, error)
+    }
     return new Response(JSON.stringify({ error: 'Proxy request failed' }), {
       status: 502,
       headers: { 'Content-Type': 'application/json' },
