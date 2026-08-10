@@ -41,22 +41,46 @@ interface FileUploadResult {
   mimeType: string
 }
 
+const TRANSIENT_ERROR_CODES = new Set(['ENOENT', 'EBUSY', 'EPERM', 'EAGAIN', 'EMFILE', 'ENFILE'])
+
+function isTransientError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    TRANSIENT_ERROR_CODES.has(String((error as { code?: unknown }).code))
+  )
+}
+
+async function withRetry<T>(fn: () => Promise<T>, retries = 4, baseDelayMs = 150): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      if (attempt >= retries || !isTransientError(error)) throw error
+      await new Promise(resolve => setTimeout(resolve, baseDelayMs * (attempt + 1)))
+    }
+  }
+}
+
 export async function getRawFileContent(userPath: string): Promise<Buffer> {
   const validatedPath = validatePath(userPath)
   logger.info(`Getting raw file content for path: ${userPath} -> ${validatedPath}`)
   
   try {
-    const exists = await fileExists(validatedPath)
-    if (!exists) {
-      throw new Error('File does not exist')
-    }
-    
-    const stats = await getFileStats(validatedPath)
-    if (stats.isDirectory) {
-      throw new Error('Path is a directory')
-    }
-    
-    return await fs.readFile(validatedPath)
+    return await withRetry(async () => {
+      const exists = await fileExists(validatedPath)
+      if (!exists) {
+        throw Object.assign(new Error('File does not exist'), { code: 'ENOENT' })
+      }
+      
+      const stats = await getFileStats(validatedPath)
+      if (stats.isDirectory) {
+        throw new Error('Path is a directory')
+      }
+      
+      return await fs.readFile(validatedPath)
+    })
   } catch (error) {
     logger.error(`Failed to read raw file content ${validatedPath}:`, error)
     throw { message: 'File not found or cannot be read', statusCode: 404 }
@@ -68,74 +92,76 @@ export async function getFile(userPath: string): Promise<FileInfo> {
   logger.info(`Getting file for path: ${userPath} -> ${validatedPath}`)
   
   try {
-    // Check if path exists
-    const exists = await fileExists(validatedPath)
-    if (!exists) {
-      throw new Error('Path does not exist')
-    }
-    
-    // Get file stats
-    const stats = await getFileStats(validatedPath)
-    
-    if (stats.isDirectory) {
-      // It's a directory - list contents
-      const entries = await listDirectory(validatedPath)
-      const children: FileInfo[] = []
-      
-      for (const entry of entries) {
-        children.push({
-          name: entry.name,
-          path: path.join(userPath, entry.name),
-          isDirectory: entry.isDirectory,
-          size: entry.size,
-          lastModified: entry.lastModified,
-        })
+    return await withRetry(async () => {
+      // Check if path exists
+      const exists = await fileExists(validatedPath)
+      if (!exists) {
+        throw Object.assign(new Error('Path does not exist'), { code: 'ENOENT' })
       }
       
-      return {
-        name: path.basename(validatedPath),
-        path: userPath,
-        isDirectory: true,
-        size: 0,
-        children: children.sort((a, b) => {
-          if (a.isDirectory !== b.isDirectory) {
-            return a.isDirectory ? -1 : 1
-          }
-          return a.name.localeCompare(b.name)
-        }),
-        lastModified: stats.lastModified,
-        workspaceRoot: SHARED_WORKSPACE_BASE,
-      }
-    } else {
-      // It's a file - get content
-      let content = ''
-      let mimeType = getMimeType(validatedPath, new Uint8Array())
+      // Get file stats
+      const stats = await getFileStats(validatedPath)
       
-      if (stats.size < FILE_LIMITS.MAX_SIZE_BYTES) {
-        try {
-          const mimeType = getMimeType(validatedPath, new Uint8Array())
-          
-          if (mimeType.startsWith('image/') || !mimeType.startsWith('text/')) {
-            content = await readFileAsBase64(validatedPath)
-          } else {
-            const fileOutput = await readFileContent(validatedPath)
-            content = Buffer.from(fileOutput, 'utf8').toString('base64')
+      if (stats.isDirectory) {
+        // It's a directory - list contents
+        const entries = await listDirectory(validatedPath)
+        const children: FileInfo[] = []
+        
+        for (const entry of entries) {
+          children.push({
+            name: entry.name,
+            path: path.join(userPath, entry.name),
+            isDirectory: entry.isDirectory,
+            size: entry.size,
+            lastModified: entry.lastModified,
+          })
+        }
+        
+        return {
+          name: path.basename(validatedPath),
+          path: userPath,
+          isDirectory: true,
+          size: 0,
+          children: children.sort((a, b) => {
+            if (a.isDirectory !== b.isDirectory) {
+              return a.isDirectory ? -1 : 1
+            }
+            return a.name.localeCompare(b.name)
+          }),
+          lastModified: stats.lastModified,
+          workspaceRoot: SHARED_WORKSPACE_BASE,
+        }
+      } else {
+        // It's a file - get content
+        let content = ''
+        let mimeType = getMimeType(validatedPath, new Uint8Array())
+        
+        if (stats.size < FILE_LIMITS.MAX_SIZE_BYTES) {
+          try {
+            const mimeType = getMimeType(validatedPath, new Uint8Array())
+            
+            if (mimeType.startsWith('image/') || !mimeType.startsWith('text/')) {
+              content = await readFileAsBase64(validatedPath)
+            } else {
+              const fileOutput = await readFileContent(validatedPath)
+              content = Buffer.from(fileOutput, 'utf8').toString('base64')
+            }
+          } catch (error) {
+            logger.warn(`Failed to read file content: ${error}`)
           }
-        } catch (error) {
-          logger.warn(`Failed to read file content: ${error}`)
+        }
+        
+        return {
+          name: path.basename(validatedPath),
+          path: userPath,
+          isDirectory: false,
+          size: stats.size,
+          mimeType,
+          content,
+          lastModified: stats.lastModified,
         }
       }
-      
-      return {
-        name: path.basename(validatedPath),
-        path: userPath,
-        isDirectory: false,
-        size: stats.size,
-        mimeType,
-        content,
-        lastModified: stats.lastModified,
-      }
-    }
+    })
   } catch (error) {
     logger.error(`Failed to access path ${validatedPath}:`, error)
     throw { message: 'File or directory not found', statusCode: 404 }
@@ -324,34 +350,36 @@ export async function getFileRange(userPath: string, startLine: number, endLine:
   const validatedPath = validatePath(userPath)
   logger.info(`Getting file range for path: ${userPath} lines ${startLine}-${endLine}`)
   
-  const exists = await fileExists(validatedPath)
-  if (!exists) {
-    throw { message: 'File does not exist', statusCode: 404 }
-  }
-  
-  const stats = await getFileStats(validatedPath)
-  if (stats.isDirectory) {
-    throw { message: 'Path is a directory', statusCode: 400 }
-  }
-  
-  const totalLines = await countFileLines(validatedPath)
-  const clampedEnd = Math.min(endLine, totalLines)
-  const lines = await readFileLines(validatedPath, startLine, clampedEnd)
-  const mimeType = getMimeType(validatedPath, new Uint8Array())
-  
-  return {
-    name: path.basename(validatedPath),
-    path: userPath,
-    isDirectory: false as const,
-    size: stats.size,
-    mimeType,
-    lines,
-    totalLines,
-    startLine,
-    endLine: clampedEnd,
-    hasMore: clampedEnd < totalLines,
-    lastModified: stats.lastModified,
-  }
+  return withRetry(async () => {
+    const exists = await fileExists(validatedPath)
+    if (!exists) {
+      throw Object.assign(new Error('File does not exist'), { code: 'ENOENT' })
+    }
+    
+    const stats = await getFileStats(validatedPath)
+    if (stats.isDirectory) {
+      throw { message: 'Path is a directory', statusCode: 400 }
+    }
+    
+    const totalLines = await countFileLines(validatedPath)
+    const clampedEnd = Math.min(endLine, totalLines)
+    const lines = await readFileLines(validatedPath, startLine, clampedEnd)
+    const mimeType = getMimeType(validatedPath, new Uint8Array())
+    
+    return {
+      name: path.basename(validatedPath),
+      path: userPath,
+      isDirectory: false as const,
+      size: stats.size,
+      mimeType,
+      lines,
+      totalLines,
+      startLine,
+      endLine: clampedEnd,
+      hasMore: clampedEnd < totalLines,
+      lastModified: stats.lastModified,
+    }
+  })
 }
 
 export async function getFileTotalLines(userPath: string): Promise<number> {

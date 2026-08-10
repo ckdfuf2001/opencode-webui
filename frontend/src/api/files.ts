@@ -17,6 +17,8 @@ export function useFile(path: string | undefined) {
     queryKey: ['file', path],
     queryFn: () => path ? fetchFile(path) : Promise.reject(new Error('No file path provided')),
     enabled: !!path,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   })
 }
 

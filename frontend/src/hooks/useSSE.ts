@@ -7,6 +7,7 @@ import { questionEvents } from './useQuestionRequests'
 import { sessionActivityEvents } from './useSessionActivity'
 import { showToast } from '@/lib/toast'
 import { settingsApi } from '@/api/settings'
+import { appendErrorMessageToThread } from '@/lib/chatErrors'
 
 const MAX_RECONNECT_DELAY = 30000
 const INITIAL_RECONNECT_DELAY = 1000
@@ -64,6 +65,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
   const eventSourceRef = useRef<EventSource | null>(null)
   const urlRef = useRef<string | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fileInvalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY)
   const mountedRef = useRef(true)
   const wasConnectedRef = useRef(false)
@@ -158,9 +160,11 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           const message = getSessionErrorMessage(event.properties.error)
           showToast.error(message, { duration: 8000 })
           if (event.properties.sessionID) {
-            sessionActivityEvents.emit({ type: 'idle', sessionID: event.properties.sessionID })
+            const sessionID = event.properties.sessionID
+            sessionActivityEvents.emit({ type: 'idle', sessionID })
+            appendErrorMessageToThread(queryClient, opcodeUrl, sessionID, activeDirectory, message)
             queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, activeDirectory] 
+              queryKey: ['opencode', 'session', opcodeUrl, sessionID, activeDirectory] 
             })
           }
           break
@@ -438,9 +442,16 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           break
 
         case 'file.edited':
-        case 'file.watcher.updated':
-          queryClient.invalidateQueries({ queryKey: ['file'] })
+        case 'file.watcher.updated': {
+          if (fileInvalidateTimerRef.current) {
+            clearTimeout(fileInvalidateTimerRef.current)
+          }
+          fileInvalidateTimerRef.current = setTimeout(() => {
+            fileInvalidateTimerRef.current = null
+            queryClient.invalidateQueries({ queryKey: ['file'] })
+          }, 500)
           break
+        }
 
         case 'command.executed': {
           const { name, sessionID } = event.properties
@@ -588,6 +599,10 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
         reconnectTimeoutRef.current = null
+      }
+      if (fileInvalidateTimerRef.current) {
+        clearTimeout(fileInvalidateTimerRef.current)
+        fileInvalidateTimerRef.current = null
       }
       if (eventSourceRef.current) {
         eventSourceRef.current.close()

@@ -8,10 +8,42 @@ import type {
 } from "../api/types";
 import type { paths } from "../api/opencode-types";
 import { showToast } from "@/lib/toast"
+import { appendErrorMessageToThread } from "@/lib/chatErrors"
 
 type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
+
+const MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  txt: "text/plain",
+  md: "text/markdown",
+  json: "application/json",
+  xml: "application/xml",
+  csv: "text/csv",
+  html: "text/html",
+  css: "text/css",
+  js: "text/javascript",
+  mjs: "text/javascript",
+  ts: "text/typescript",
+  tsx: "text/typescript",
+  jsx: "text/javascript",
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+function mimeForFilename(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? ""
+  return MIME_BY_EXT[ext] ?? "application/octet-stream"
+}
 
 // Format server error similar to OpenCode's formatServerError
 function formatServerError(error: unknown): string {
@@ -226,7 +258,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             ? { type: "text", text: part.content }
             : {
                 type: "file",
-                mime: "text/plain",
+                mime: mimeForFilename(part.name),
                 filename: part.name,
                 url: part.path.startsWith("file:")
                   ? part.path
@@ -255,11 +287,13 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
+      const formatted = formatServerError(error)
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
-      showToast.error(formatServerError(error), { duration: 8000 });
+      appendErrorMessageToThread(queryClient, opcodeUrl, sessionID, directory, formatted)
+      showToast.error(formatted, { duration: 8000 });
     },
     onSuccess: (data, variables) => {
       const { sessionID } = variables;
@@ -343,11 +377,13 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
+      const formatted = formatServerError(error)
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
-      showToast.error(formatServerError(error), { duration: 8000 });
+      appendErrorMessageToThread(queryClient, opcodeUrl, sessionID, directory, formatted)
+      showToast.error(formatted, { duration: 8000 });
     },
     onSuccess: (data, variables) => {
       const { sessionID } = variables;
