@@ -139,7 +139,7 @@ if not exist "%ENV_FILE%" (
 
 echo.
 echo [6/7] Verifying runtime...
-bun --version >nul 2>nul
+call bun --version >nul 2>nul
 if %errorlevel% neq 0 (
   echo   [x] bun --version failed.
   exit /b 1
