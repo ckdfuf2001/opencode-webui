@@ -6,7 +6,7 @@ import { logger } from '../utils/logger'
 
 let agentBrowserWarmState: 'warm' | 'cold' | 'unknown' = 'unknown'
 
-const workspaceBackend = 'http://127.0.0.1:5001'
+const workspaceBackend = `http://127.0.0.1:${process.env.PORT || 5003}`
 const AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
 const AGENT_BROWSER_NAMESPACE = 'opencode'
 
