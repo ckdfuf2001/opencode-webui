@@ -4,6 +4,7 @@ import path from 'path'
 import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
+import { killLingeringAgentBrowser } from './default-mcp'
 
 let preferredOpenCodeBin: string | null = null
 let cachedBinary: string | null | undefined
@@ -248,6 +249,16 @@ class OpenCodeServerManager {
     logger.info(`OpenCode server launch requested, PID ${this.serverPid}`)
   }
 
+  private async waitForPortFree(port: number, timeoutMs = 5000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const procs = await this.findProcessesByPort(port)
+      if (procs.length === 0) return true
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    return false
+  }
+
   private async freePort(port: number): Promise<void> {
     const existingProcesses = await this.findProcessesByPort(port)
     if (existingProcesses.length === 0) return
@@ -260,11 +271,55 @@ class OpenCodeServerManager {
         logger.warn(`Failed to kill process ${proc.pid} on port ${port}:`, error)
       }
     }
-    await new Promise((r) => setTimeout(r, 500))
+    if (!(await this.waitForPortFree(port))) {
+      logger.warn(`Port ${port} is still occupied after termination attempt`)
+    }
   }
 
   public async freePortPublic(port: number): Promise<void> {
     return this.freePort(port)
+  }
+
+  public async findProcessesByPortPublic(port: number): Promise<Array<{pid: number}>> {
+    return this.findProcessesByPort(port)
+  }
+
+  private async httpResponds(port: number): Promise<boolean> {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 4000)
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: controller.signal })
+      clearTimeout(timer)
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+
+  private async isOurBackend(port: number): Promise<boolean> {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 4000)
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: controller.signal })
+      clearTimeout(timer)
+      if (!res.ok) return false
+      const body = (await res.json()) as Record<string, unknown>
+      return (
+        typeof body.database === 'string' &&
+        typeof body.opencode === 'string' &&
+        typeof body.opencodePort === 'number'
+      )
+    } catch {
+      return false
+    }
+  }
+
+  public async isOurBackendPublic(port: number): Promise<boolean> {
+    return this.isOurBackend(port)
+  }
+
+  public async httpRespondsPublic(port: number): Promise<boolean> {
+    return this.httpResponds(port)
   }
 
   private async teardownCurrent(): Promise<void> {
@@ -401,4 +456,32 @@ export const opencodeServerManager = OpenCodeServerManager.getInstance()
 
 export async function freePort(port: number): Promise<void> {
   return opencodeServerManager.freePortPublic(port)
+}
+
+export async function prepareBackendPort(port: number): Promise<void> {
+  const procs = await opencodeServerManager.findProcessesByPortPublic(port)
+  if (procs.length === 0) return
+
+  if (await opencodeServerManager.isOurBackendPublic(port)) {
+    logger.info(`Port ${port} already serves this app (PID ${procs.map((p) => p.pid).join(', ')}); reusing existing instance`)
+    process.exit(0)
+  }
+
+  if (await opencodeServerManager.httpRespondsPublic(port)) {
+    throw new Error(`Port ${port} is in use by another application. Stop it or change PORT in .env.`)
+  }
+
+  logger.warn(`Port ${port} is occupied by a stale process; freeing it`)
+  await opencodeServerManager.freePortPublic(port)
+
+  if ((await opencodeServerManager.findProcessesByPortPublic(port)).length > 0) {
+    logger.warn(`Port ${port} still occupied after termination attempt; cleaning up lingering agent-browser MCP processes`)
+    killLingeringAgentBrowser()
+    await new Promise((r) => setTimeout(r, 2000))
+    if ((await opencodeServerManager.findProcessesByPortPublic(port)).length > 0) {
+      throw new Error(
+        `Port ${port} is held by a process that could not be freed. Stop it manually or change PORT in .env.`
+      )
+    }
+  }
 }

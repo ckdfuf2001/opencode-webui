@@ -21,9 +21,10 @@ import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, setBackendPort, warmUpAgentBrowserDaemon } from './services/default-mcp'
-import { opencodeServerManager, freePort } from './services/opencode-single-server'
+import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig, killLingeringAgentBrowser } from './services/default-mcp'
+import { opencodeServerManager, prepareBackendPort } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
+import { listRepos } from './db/queries'
 import { openApiSpec } from './services/api-docs'
 import { proxyRequest } from './services/proxy'
 import { logger } from './utils/logger'
@@ -36,9 +37,8 @@ import {
   ENV
 } from '@opencode-webui/shared'
 
-const { PORT, PORT_MAX, PORT_IS_RANGE, HOST } = ENV.SERVER
+const { PORT, HOST } = ENV.SERVER
 const DB_PATH = getDatabasePath()
-const BACKEND_PORT_FILE = path.resolve(process.cwd(), 'data', 'backend-port.json')
 
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled promise rejection (preventing crash):', reason)
@@ -167,7 +167,7 @@ try {
   
   await cleanupExpiredCache()
   
-  await freePort(PORT)
+  await prepareBackendPort(PORT)
   
   await ensureDefaultConfigExists()
   await syncDefaultConfigToDisk()
@@ -300,6 +300,7 @@ const shutdown = async (signal: string) => {
   } catch (error) {
     logger.error('Error stopping OpenCode server:', error)
   }
+  killLingeringAgentBrowser()
   httpServer?.close()
   stopConverter()
   process.exit(0)
@@ -310,75 +311,52 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 
 let httpServer: ReturnType<typeof serve> | null = null
 
-const writeBackendPortFile = async (port: number): Promise<void> => {
-  try {
-    await ensureDirectoryExists(path.dirname(BACKEND_PORT_FILE))
-    await writeFileContent(BACKEND_PORT_FILE, JSON.stringify({ port }, null, 2))
-    logger.info(`Backend port file written: ${BACKEND_PORT_FILE} (port ${port})`)
-  } catch (error) {
-    logger.warn(`Failed to write backend port file ${BACKEND_PORT_FILE}:`, error)
-  }
-}
-
 const startServer = async () => {
-  const portEnd = PORT_MAX ?? PORT
-
-  for (let tryPort = PORT; tryPort <= portEnd; tryPort++) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const server = serve({
-          fetch: app.fetch,
-          port: tryPort,
-          hostname: HOST,
-        })
-        httpServer = server
-        server.on('listening', () => resolve())
-        server.on('error', (err: NodeJS.ErrnoException) => {
-          reject(err)
-        })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const server = serve({
+        fetch: app.fetch,
+        port: PORT,
+        hostname: HOST,
       })
-      logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${tryPort}`)
-
-      setBackendPort(tryPort)
-
-      if (PORT_IS_RANGE) {
-        await writeBackendPortFile(tryPort)
-      } else if (tryPort === PORT) {
-        logger.info(`Backend API bound to fixed port ${PORT}`)
-      }
-      return
-    } catch (error: any) {
-      if (error.code === 'EADDRINUSE') {
-        if (PORT_IS_RANGE) {
-          logger.warn(`Port ${tryPort} in use, trying next...`)
-          continue
-        }
-        logger.error(`Communication failure: backend API could not bind to fixed port ${PORT} (already in use).`)
-        logger.error('The frontend proxy targets this port, so the WebUI cannot reach the backend.')
-        logger.error('Free the port or set PORT to a range in .env (e.g. PORT=5001-5010).')
-        throw error
-      }
-      throw error
+      httpServer = server
+      server.on('listening', () => resolve())
+      server.on('error', (err: NodeJS.ErrnoException) => reject(err))
+    })
+  } catch (error: any) {
+    if (error.code === 'EADDRINUSE') {
+      logger.error(`Port ${PORT} is already in use. Free it or change PORT in .env and restart.`)
+      await prepareBackendPort(PORT)
+      return startServer()
     }
+    throw error
   }
-  throw new Error(`Could not bind to any port in range ${PORT}-${portEnd}`)
+  logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${PORT}`)
 }
 
-try {
-  await startServer()
-  await syncDefaultConfigToDisk()
-} catch (error) {
-  logger.error('Backend failed to start:', error)
-  process.exit(1)
-}
+await startServer()
 
 const startupSettings = new SettingsService(db)
 opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferences.opencodeBin ?? null)
 
+for (const repo of listRepos(db)) {
+  try {
+    if (writeRepoOpenCodeConfig(repo.localPath)) {
+      logger.info(`Ensured per-repo OpenCode config for repo ${repo.localPath}`)
+    }
+  } catch (error) {
+    logger.warn(`Failed to write per-repo OpenCode config for ${repo.localPath}:`, error)
+  }
+}
+
+async function warmUpAllAgentBrowserDaemons(): Promise<void> {
+  await warmUpAgentBrowserDaemon()
+}
+
 opencodeServerManager.start()
   .then(() => {
     logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
-    warmUpAgentBrowserDaemon().catch((error) => {
+    warmUpAllAgentBrowserDaemons().catch((error) => {
       logger.error('Agent-browser daemon warm-up error:', error)
     })
   })
@@ -394,7 +372,7 @@ healthCheckInterval = setInterval(() => {
 
 let agentBrowserWarmupInterval: NodeJS.Timeout | null = null
 agentBrowserWarmupInterval = setInterval(() => {
-  warmUpAgentBrowserDaemon().catch((error) => {
+  warmUpAllAgentBrowserDaemons().catch((error) => {
     logger.error('Agent-browser daemon re-warm-up error:', error)
   })
 }, 60_000)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronUp, Loader2, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -12,35 +12,33 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/compon
 import { showToast } from '@/lib/toast'
 
 type Mode = 'steps' | 'template'
-type DialogType = RegistryType | 'mcp'
+export type DialogType = RegistryType | 'mcp'
 
-interface EnvironmentVariable {
-  key: string
-  value: string
-}
-
-export interface McpEditTarget {
-  type: 'local' | 'remote'
-  enabled: boolean
-  command?: string[]
-  url?: string
-  environment?: Record<string, string>
-  timeout?: number
-}
-
-export interface RegistryEditTarget {
+export interface EditingEntry {
+  kind: 'registry' | 'config-command' | 'config-agent' | 'mcp'
   type: DialogType
   scope: RegistryScope
   name: string
-  description?: string
+  description: string
   content?: string
   mode?: RegistryAgentMode
+  template?: string
   agent?: string
   model?: string
   topP?: number
   subtask?: boolean
-  source: 'file' | 'config'
-  mcp?: McpEditTarget
+  prompt?: string
+  mcpType?: 'local' | 'remote'
+  mcpCommand?: string
+  mcpUrl?: string
+  mcpEnvironment?: { key: string; value: string }[]
+  mcpTimeout?: string
+  mcpEnabled?: boolean
+}
+
+interface EnvironmentVariable {
+  key: string
+  value: string
 }
 
 interface CreateCommandDialogProps {
@@ -49,8 +47,8 @@ interface CreateCommandDialogProps {
   onCreated: () => void
   availableSkills?: string[]
   directory?: string
-  editing?: RegistryEditTarget | null
-  defaultType?: DialogType
+  initialType?: DialogType
+  editing?: EditingEntry | null
 }
 
 const TYPE_OPTIONS: { value: DialogType; label: string }[] = [
@@ -104,9 +102,9 @@ function buildCommandTemplate(steps: string[], extra: string): string {
   return lines.join('\n')
 }
 
-export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory, editing = null, defaultType = 'command' }: CreateCommandDialogProps) {
-  const [type, setType] = useState<DialogType>('command')
-  const [scope, setScope] = useState<RegistryScope>('global')
+export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory, initialType = 'command', editing = null }: CreateCommandDialogProps) {
+  const [type, setType] = useState<DialogType>(initialType)
+  const [scope, setScope] = useState<RegistryScope>(initialType === 'mcp' ? 'global' : 'project')
   const [agent, setAgent] = useState('')
   const [model, setModel] = useState('')
   const [topP, setTopP] = useState('')
@@ -129,6 +127,57 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
   const [mcpTimeout, setMcpTimeout] = useState('')
   const [mcpEnabled, setMcpEnabled] = useState(true)
 
+  useEffect(() => {
+    if (!open) return
+    setType(initialType)
+    if (editing) {
+      setType(editing.type)
+      setName(editing.name)
+      setDescription(editing.description ?? '')
+      if (editing.kind === 'config-command' || (editing.kind === 'registry' && editing.type === 'command')) {
+        setMode('template')
+        setRawTemplate(editing.content ?? editing.template ?? '')
+        setAgent(editing.agent ?? '')
+        setModel(editing.model ?? '')
+        setTopP(editing.topP != null ? String(editing.topP) : '')
+        setSubtask(editing.subtask ?? false)
+        setScope(editing.scope)
+      }
+      if (editing.kind === 'registry' && editing.type === 'skill') {
+        setSkillBody(editing.content ?? '')
+        setScope(editing.scope)
+      }
+      if (editing.kind === 'registry' && editing.type === 'tool') {
+        setToolScript(editing.content ?? TOOL_TEMPLATE(''))
+        setScope(editing.scope)
+      }
+      if (editing.kind === 'registry' && editing.type === 'agent') {
+        setAgentBody(editing.content ?? '')
+        setAgentMode(editing.mode ?? 'all')
+        setScope(editing.scope)
+      }
+      if (editing.kind === 'config-agent') {
+        setAgentBody(editing.prompt ?? '')
+        setAgentMode(editing.mode ?? 'all')
+        setScope('global')
+      }
+      if (editing.kind === 'config-command') {
+        setScope('global')
+      }
+      if (editing.kind === 'mcp') {
+        setMcpType(editing.mcpType ?? 'local')
+        setMcpCommand(editing.mcpCommand ?? '')
+        setMcpUrl(editing.mcpUrl ?? '')
+        setMcpEnvironment(editing.mcpEnvironment ?? [])
+        setMcpTimeout(editing.mcpTimeout ?? '')
+        setMcpEnabled(editing.mcpEnabled ?? true)
+        setScope('global')
+      }
+    } else {
+      setScope(initialType === 'mcp' ? 'global' : 'project')
+    }
+  }, [open, editing, initialType])
+
   const reset = () => {
     setName('')
     setDescription('')
@@ -150,53 +199,6 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
     setMcpTimeout('')
     setMcpEnabled(true)
   }
-
-  useEffect(() => {
-    if (!open) {
-      reset()
-      return
-    }
-    if (!editing) {
-      setType(defaultType)
-      return
-    }
-    setType(editing.type)
-    setScope(editing.scope)
-    setName(editing.name)
-    setDescription(editing.description ?? '')
-    setAgent(editing.agent ?? '')
-    setModel(editing.model ?? '')
-    setTopP(editing.topP !== undefined ? String(editing.topP) : '')
-    setSubtask(editing.subtask ?? false)
-    setSteps([])
-    setExtra('')
-    setRawTemplate('')
-    setSkillBody('')
-    setToolScript(TOOL_TEMPLATE(''))
-    setAgentBody('')
-    setAgentMode(editing.mode ?? 'all')
-
-    if (editing.type === 'command') {
-      setRawTemplate(editing.content ?? '')
-      setMode('template')
-    } else if (editing.type === 'skill') {
-      setSkillBody(editing.content ?? '')
-    } else if (editing.type === 'tool') {
-      setToolScript(editing.content ?? TOOL_TEMPLATE(''))
-    } else if (editing.type === 'agent') {
-      setAgentBody(editing.content ?? '')
-    } else if (editing.type === 'mcp' && editing.mcp) {
-      const mcp = editing.mcp
-      setMcpType(mcp.type === 'remote' ? 'remote' : 'local')
-      setMcpCommand(mcp.type === 'local' ? (mcp.command ?? []).join(' ') : '')
-      setMcpUrl(mcp.type === 'remote' ? (mcp.url ?? '') : '')
-      setMcpEnvironment(mcp.type === 'local'
-        ? Object.entries(mcp.environment ?? {}).map(([key, value]) => ({ key, value }))
-        : [])
-      setMcpTimeout(mcp.timeout ? String(mcp.timeout) : '')
-      setMcpEnabled(mcp.enabled)
-    }
-  }, [open, editing, defaultType])
 
   const handleClose = (next: boolean) => {
     if (!next) {
@@ -229,7 +231,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
   const switchType = (next: DialogType) => {
     setType(next)
-    if (next === 'mcp') setScope('global')
+    setScope(next === 'mcp' ? 'global' : 'project')
   }
 
   const resolveContent = (): string => {
@@ -261,6 +263,9 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         return
       }
       const currentMcp = (config.content?.mcp as Record<string, unknown> | undefined) ?? {}
+      if (editing?.kind === 'mcp' && editing.name !== serverId) {
+        delete currentMcp[editing.name]
+      }
       const mcpEntry: Record<string, unknown> = { type: mcpType, enabled: mcpEnabled }
       if (mcpType === 'local') {
         const commandArray = mcpCommand.split(' ').filter((arg) => arg.trim())
@@ -283,15 +288,9 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
       }
       if (mcpTimeout && parseInt(mcpTimeout)) mcpEntry.timeout = parseInt(mcpTimeout)
 
-      const merged: Record<string, unknown> = { ...currentMcp }
-      if (editing && editing.type === 'mcp' && editing.name !== serverId) {
-        delete merged[editing.name]
-      }
-      merged[serverId] = mcpEntry
-
       const updatedConfig = {
         ...config.content,
-        mcp: merged,
+        mcp: { ...currentMcp, [serverId]: mcpEntry },
       }
       await settingsApi.updateOpenCodeConfig(config.name, { content: updatedConfig })
       showToast.success(`MCP server "${serverId}" saved to configuration "${config.name}".`)
@@ -317,32 +316,14 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
       return
     }
     const content = resolveContent()
-    if (!content.trim()) {
+    if (!content.trim() && !(editing?.kind === 'config-command')) {
       showToast.error('Content is required.')
       return
     }
 
     setSaving(true)
     try {
-      if (editing && editing.source === 'file') {
-        if (editing.scope === 'project' && !directory) {
-          showToast.error('No project selected. Use Global scope or open a repo session.')
-          return
-        }
-        await registryApi.update(
-          editing.type as RegistryType,
-          editing.scope,
-          editing.name,
-          {
-            name: trimmedName,
-            description: description.trim(),
-            content: content.trim(),
-            ...(editing.type === 'agent' ? { mode: agentMode } : {}),
-          },
-          editing.scope === 'project' ? directory : undefined
-        )
-        showToast.success(`${TYPE_LABEL[editing.type as RegistryType]} "${trimmedName}" updated.`)
-      } else if (type === 'command' && scope === 'global') {
+      if (type === 'command' && scope === 'global') {
         const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
         const targetName = defaultConfig?.name ?? configs[0]?.name
         if (!targetName) {
@@ -351,19 +332,50 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         }
         const record: Record<string, unknown> = { description: description.trim(), agent, model, subtask }
         if (topP) record.topP = Number(topP)
+        if (rawTemplate.trim()) record.template = rawTemplate.trim()
         const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
         const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
         const commands: Record<string, unknown> = { ...existingCommands }
-        if (editing && editing.type === 'command' && editing.name !== trimmedName) {
+        if (editing?.kind === 'config-command' && editing.name !== trimmedName) {
           delete commands[editing.name]
         }
         commands[trimmedName] = record
         await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
         showToast.success(`Command "${trimmedName}" saved to configuration "${targetName}".`)
+      } else if (type === 'agent' && editing?.kind === 'config-agent') {
+        const config = await settingsApi.getDefaultOpenCodeConfig()
+        if (!config) {
+          showToast.error('No OpenCode configuration to update. Create one first.')
+          return
+        }
+        const current = { ...config.content }
+        const existingAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
+        const agents: Record<string, unknown> = { ...existingAgents }
+        if (editing.name !== trimmedName) {
+          delete agents[editing.name]
+        }
+        agents[trimmedName] = {
+          description: description.trim(),
+          mode: agentMode,
+          prompt: agentBody.trim(),
+        }
+        await settingsApi.updateOpenCodeConfig(config.name, { content: { ...current, agent: agents } })
+        showToast.success(`Agent "${trimmedName}" saved to configuration "${config.name}".`)
       } else {
         if (scope === 'project' && !directory) {
           showToast.error('No project selected. Use Global scope or open a repo session.')
           return
+        }
+        if (editing?.kind === 'registry') {
+          const changed = editing.type !== type || editing.scope !== scope || editing.name !== trimmedName
+          if (changed) {
+            await registryApi.unregister(
+              editing.type as RegistryType,
+              editing.scope,
+              editing.name,
+              editing.scope === 'project' ? directory : undefined
+            )
+          }
         }
         await registryApi.register(
           {
@@ -432,14 +444,15 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-1.5">
             {TYPE_OPTIONS.map((opt) => (
-              <Button key={opt.value} type="button" size="sm" variant={type === opt.value ? 'secondary' : 'ghost'} onClick={() => switchType(opt.value)} disabled={!!editing} className="text-xs h-7 disabled:opacity-50">
+              <Button key={opt.value} type="button" size="sm" variant={type === opt.value ? 'secondary' : 'ghost'} onClick={() => switchType(opt.value)} disabled={!!editing} className="text-xs h-7 disabled:opacity-40">
                 {opt.label}
               </Button>
             ))}
             <div className="w-px h-5 bg-border mx-1" />
             {SCOPE_OPTIONS.map((opt) => {
               const isMcp = type === 'mcp'
-              const disabled = (isMcp && opt.value !== 'global') || !!editing
+              const lockScope = editing?.kind === 'config-command' || editing?.kind === 'config-agent' || editing?.kind === 'mcp'
+              const disabled = (isMcp && opt.value !== 'global') || (!!editing && lockScope && opt.value !== 'global')
               return (
                 <Button
                   key={opt.value}
@@ -720,7 +733,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             Cancel
           </Button>
           <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1">
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : !editing && <Plus className="w-3.5 h-3.5" />}
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
             {editing ? 'Save' : 'Register'}
           </Button>
         </DialogFooter>

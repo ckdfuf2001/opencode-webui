@@ -7,10 +7,10 @@ on the workspace, configuration and rules layout that differs from upstream.
 ## Process Topology
 
 ```
-Browser (React/PWA, :5173) → Backend (Bun + Hono, :5001) → OpenCode server (opencode serve, :5551)
+Browser (React/PWA, :5173) → Backend (Bun + Hono, :5002) → OpenCode server (opencode serve, :5551)
                                     ↑                                 ↑
                               SSE proxy                          SSE source
-                           REST proxy (:5001 → :5551)          REST API
+                           REST proxy (:5002 → :5551)          REST API
 ```
 
 - **Backend** owns the workspace directory, the SQLite database, the git
@@ -29,6 +29,7 @@ application-owned lives inside it:
 ```
 workspace/
 ├── repos/                      # cloned repos & worktrees (git-ignored)
+│   └── <repo>/opencode.json    # per-repo project config (agent-browser namespace override)
 ├── AGENTS.md                   # project rules for sessions opened in workspace/ itself
 └── .config/opencode/           # the app's OpenCode config dir ("global" scope)
     ├── opencode.json           # merged config (mcp, provider, etc.)
@@ -57,6 +58,13 @@ the user's `~/.config/opencode`.
    inside the workspace.
 3. `proxy.ts` patches the fetched config before forwarding it to the UI and
    resolves the scope of slash commands (`global` vs `project` vs `builtin`).
+4. Each repo directory under `workspace/repos/` gets its own project-level
+   `opencode.json` (written/merged by `writeRepoOpenCodeConfig`,
+   `backend/src/services/default-mcp.ts`). It carries only the `agent-browser`
+   MCP override scoped to the shared `opencode` namespace plus that repo's unique
+   session, so every repo's browser instance stays isolated within one daemon
+   (see below). The global `opencode.json` keeps the bare
+   `doc-reader` + `agent-browser` entries for sessions that run outside a repo.
 
 ## Default MCP Servers & agent-browser daemon warm-up
 
@@ -68,12 +76,23 @@ the user's `~/.config/opencode`.
 - `agent-browser` — native binary + vendored Chromium
   (`bin/agent-browser/`, paths from `.meta.json`). Its command is
   `<bin> mcp --namespace opencode` and its env pins
-  `AGENT_BROWSER_NAMESPACE=opencode` and
+  `AGENT_BROWSER_NAMESPACE=opencode`, `AGENT_BROWSER_SESSION=<session>` and
   `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h).
 
+Namespaces isolate the agent-browser daemon socket
+(`~/.agent-browser/namespaces/<ns>/run`). The global config uses `opencode`; each
+repo under `workspace/repos/` also connects to the `opencode` daemon but pins a
+unique session `repo-<localPath>` (worktree dirs are `repo-<name>-<branch>`),
+derived by `repoAgentBrowserSession()` in `backend/src/services/default-mcp.ts`.
+`writeRepoOpenCodeConfig()` (called on every repo clone/init, and once for all
+existing repos at backend startup) writes/merges that override into the repo root's
+`opencode.json`. Sessions isolate browser instances (cookies/storage/state) within
+the single shared daemon — one Chrome tree per active session, so cross-repo tabs
+no longer leak/blank without a Chrome process per repo.
+
 `mergeDefaultMcpEntries(content)` (called from `ensureDefaultConfigExists()` and
-`syncDefaultConfigToDisk()`, `backend/src/index.ts`) guarantees these entries
-exist and **repairs** them on every sync:
+`syncDefaultConfigToDisk()`, `backend/src/index.ts`) guarantees the **global**
+config entries exist and **repairs** them on every sync:
 
 1. `command` — replaced with the canonical absolute paths when they differ
    (doc-reader must point at `backend/scripts/doc_reader_mcp.py`, never a
@@ -83,16 +102,22 @@ exist and **repairs** them on every sync:
    what keeps `AGENT_BROWSER_NAMESPACE` and `AGENT_BROWSER_IDLE_TIMEOUT_MS`
    present in a config regenerated from the DB).
 
+Per-repo `opencode.json` files are written directly by `writeRepoOpenCodeConfig`
+and are **not** re-merged by `syncDefaultConfigToDisk` — the repo root config is
+untouched by the global sync so a repo keeps its own namespace.
+
 The agent-browser MCP server spawns the CLI per tool call; that CLI talks to a
 long-lived background **daemon** over a local socket (namespace-scoped under
 `~/.agent-browser/namespaces/<ns>/run`). On a cold start the freshly-spawned
 daemon inherits the MCP server's stdout pipe, so the MCP server never receives
 EOF and `tools/call` waits ~40-75s then times out — the "first open hangs"
-failure mode. `warmUpAgentBrowserDaemon()` prevents it:
+failure mode. `warmUpAgentBrowserDaemon(namespace)` prevents it:
 
 - Called right after the opencode server starts
   (`opencodeServerManager.start().then(...)`, `backend/src/index.ts`) and
-  re-called every 60s on a self-healing interval.
+  re-called every 60s on a self-healing interval. `warmUpAllAgentBrowserDaemons()`
+  warms the global `opencode` namespace plus one namespace per repo in the DB
+  (deduped), so every repo's first `agent-browser` tool call is fast.
 - Runs `<bin> --headed false open about:blank --json` (stdio discarded), which
   spawns + connects the daemon and launches a headless browser.
 - Skips (fast no-op) when `agent-browser session info --json` already reports
@@ -100,11 +125,15 @@ failure mode. `warmUpAgentBrowserDaemon()` prevents it:
 - `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` keeps that warm daemon alive between
   tool calls; a warm daemon answers `agent_browser_open` in <1s.
 
-Do **not** hand-edit these MCP entries in
+Do **not** hand-edit the MCP entries in
 `workspace/.config/opencode/opencode.json` — the backend regenerates the file
-from the DB default config at startup and repairs the entries. Use the app UI
-(Settings → MCP Servers) or `scripts/register-default-mcp.js` for the
-agent-browser / doc-reader defaults.
+from the DB default config and repairs the entries at every startup
+(`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk()`), then spawns OpenCode
+with the resulting config so the default MCP servers (doc-reader, agent-browser)
+come up together. Use the app UI (Settings → MCP Servers) to change them beyond
+the defaults. Repo-root `opencode.json` files are written
+by the backend per repo; only the `agent-browser` key is managed there, so a
+repo's own config keys are preserved when re-written.
 
 ## Rules (AGENTS.md)
 

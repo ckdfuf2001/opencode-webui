@@ -146,12 +146,11 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [7/7] Registering default MCP servers...
+echo [7/7] Installing agent-browser...
 call node scripts\install-agent-browser.js
 if %errorlevel% neq 0 (
   echo   [x] agent-browser setup failed. Continue? (or run: npm run agent-browser:install)
 )
-call node scripts\register-default-mcp.js
 
 echo.
 echo ==========================================
