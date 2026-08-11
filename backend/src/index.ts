@@ -21,7 +21,7 @@ import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig, repoAgentBrowserNamespace, killLingeringAgentBrowser } from './services/default-mcp'
+import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig, killLingeringAgentBrowser } from './services/default-mcp'
 import { opencodeServerManager, prepareBackendPort } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
 import { listRepos } from './db/queries'
@@ -350,13 +350,7 @@ for (const repo of listRepos(db)) {
 }
 
 async function warmUpAllAgentBrowserDaemons(): Promise<void> {
-  const namespaces = new Set<string>(['opencode'])
-  for (const repo of listRepos(db)) {
-    namespaces.add(repoAgentBrowserNamespace(repo.localPath))
-  }
-  for (const namespace of namespaces) {
-    await warmUpAgentBrowserDaemon(namespace)
-  }
+  await warmUpAgentBrowserDaemon()
 }
 
 opencodeServerManager.start()

@@ -371,11 +371,12 @@ being evicted between tool calls.
 
 > **Per-repo browser isolation:** every repo under `workspace/repos/` gets its
 > own project-level `opencode.json` where the backend writes an `agent-browser`
-> entry scoped to a unique namespace (`repo-<localPath>`), so each repo has its
-> own browser daemon + session and repos never share/leak browser tabs
-> (`writeRepoOpenCodeConfig()` + `repoAgentBrowserNamespace()` in
-> `backend/src/services/default-mcp.ts`). The global config keeps the
-> `opencode` namespace for sessions outside a repo. See
+> entry pinned to the shared `opencode` namespace plus a unique session
+> (`repo-<localPath>`), so all repos share one daemon while each gets its own
+> browser instance (cookies/storage/state) and repos never share/leak browser tabs
+> (`writeRepoOpenCodeConfig()` + `repoAgentBrowserSession()` in
+> `backend/src/services/default-mcp.ts`). An existing `enabled: false` on the
+> agent-browser entry is preserved so a repo can opt out of the MCP. See
 > [`docs/architecture.md`](docs/architecture.md).
 
 > **Daemon warm-up (why the first `agent_browser_open` no longer hangs):**

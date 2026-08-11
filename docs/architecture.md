@@ -61,8 +61,9 @@ the user's `~/.config/opencode`.
 4. Each repo directory under `workspace/repos/` gets its own project-level
    `opencode.json` (written/merged by `writeRepoOpenCodeConfig`,
    `backend/src/services/default-mcp.ts`). It carries only the `agent-browser`
-   MCP override scoped to that repo's unique namespace, so every repo's browser
-   daemon stays isolated (see below). The global `opencode.json` keeps the bare
+   MCP override scoped to the shared `opencode` namespace plus that repo's unique
+   session, so every repo's browser instance stays isolated within one daemon
+   (see below). The global `opencode.json` keeps the bare
    `doc-reader` + `agent-browser` entries for sessions that run outside a repo.
 
 ## Default MCP Servers & agent-browser daemon warm-up
@@ -74,18 +75,20 @@ the user's `~/.config/opencode`.
   `OPCODE_WEBUI_WORKSPACE` env.
 - `agent-browser` — native binary + vendored Chromium
   (`bin/agent-browser/`, paths from `.meta.json`). Its command is
-  `<bin> mcp --namespace <ns>` and its env pins
-  `AGENT_BROWSER_NAMESPACE=<ns>`, `AGENT_BROWSER_SESSION=<ns>` and
+  `<bin> mcp --namespace opencode` and its env pins
+  `AGENT_BROWSER_NAMESPACE=opencode`, `AGENT_BROWSER_SESSION=<session>` and
   `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h).
 
-Namespaces isolate both the agent-browser daemon socket (`~/.agent-browser/namespaces/<ns>/run`)
-and its browser session state. The global config uses `opencode`; each repo under
-`workspace/repos/` uses `repo-<localPath>` (worktree dirs are `repo-<name>-<branch>`),
-derived by `repoAgentBrowserNamespace()` in `backend/src/services/default-mcp.ts`.
+Namespaces isolate the agent-browser daemon socket
+(`~/.agent-browser/namespaces/<ns>/run`). The global config uses `opencode`; each
+repo under `workspace/repos/` also connects to the `opencode` daemon but pins a
+unique session `repo-<localPath>` (worktree dirs are `repo-<name>-<branch>`),
+derived by `repoAgentBrowserSession()` in `backend/src/services/default-mcp.ts`.
 `writeRepoOpenCodeConfig()` (called on every repo clone/init, and once for all
 existing repos at backend startup) writes/merges that override into the repo root's
-`opencode.json`. This is what stops two repos from sharing one browser — each repo
-gets its own daemon + session, so cross-repo tabs no longer leak/blank.
+`opencode.json`. Sessions isolate browser instances (cookies/storage/state) within
+the single shared daemon — one Chrome tree per active session, so cross-repo tabs
+no longer leak/blank without a Chrome process per repo.
 
 `mergeDefaultMcpEntries(content)` (called from `ensureDefaultConfigExists()` and
 `syncDefaultConfigToDisk()`, `backend/src/index.ts`) guarantees the **global**

@@ -58,17 +58,20 @@
 - **Per-repo browser isolation**: every repo under `workspace/repos/` gets its own
   project-level `opencode.json` (written/merged by `writeRepoOpenCodeConfig()`,
   `backend/src/services/default-mcp.ts`) that overrides only the `agent-browser`
-  MCP with a unique namespace `repo-<localPath>`
-  (`repoAgentBrowserNamespace()`). Global sync (`syncDefaultConfigToDisk`) does
-  NOT touch these repo-root files. Repo config keys other than `mcp.agent-browser`
-  are preserved when re-written. If a repo shows a blank/leaking browser tab,
-  check that `workspace/repos/<repo>/opencode.json` exists and carries the
-  repo-specific `AGENT_BROWSER_NAMESPACE`.
-- agent-browser MCP uses a long-lived daemon per namespace (`--namespace <ns>`
-  must match `AGENT_BROWSER_NAMESPACE`; global = `opencode`, each repo =
-  `repo-<localPath>`). On a cold start the daemon
+  MCP with the shared global namespace `opencode` plus a unique session
+  `repo-<localPath>` (`repoAgentBrowserSession()`). Global sync
+  (`syncDefaultConfigToDisk`) does NOT touch these repo-root files. Repo config
+  keys other than `mcp.agent-browser` are preserved when re-written; an existing
+  `enabled: false` on the agent-browser entry is also preserved so a repo can opt
+  out of the MCP. If a repo shows a blank/leaking browser tab, check that
+  `workspace/repos/<repo>/opencode.json` exists and carries the repo-specific
+  `AGENT_BROWSER_SESSION`.
+- agent-browser MCP uses a single long-lived daemon for the global `opencode`
+  namespace; repos connect to it with distinct `AGENT_BROWSER_SESSION` values, and
+  each session is its own browser instance (cookies/storage/state isolated, one
+  Chrome tree per active session). On a cold start the daemon
   inherits the MCP server's stdout pipe and `tools/call` hangs ~40-75s → the
-  "first open fails" symptom. The backend pre-warms every namespace via
+  "first open fails" symptom. The backend pre-warms the global daemon via
   `warmUpAllAgentBrowserDaemons()` (after opencode server start + every 60s,
   skips if `agent-browser session info` already shows an active browser) and the 24h
   `AGENT_BROWSER_IDLE_TIMEOUT_MS` keeps it warm. When debugging MCP/browser
