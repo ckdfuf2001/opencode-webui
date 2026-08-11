@@ -438,7 +438,7 @@ names are in `vendor/README.md`.
 - SSE event streaming proxy (`/api/opencode/event`, `/api/opencode/global/event`)
 - File upload/download endpoints
 
-**OpenCode Server** (separate process, port 5551)
+**OpenCode Server** (separate process, port 5552)
 - Provides AI agent execution via REST API + SSE
 - Manages sessions, messages, permissions, MCP servers
 - Spawned with `OPENCODE_CONFIG` and `OPENCODE_CONFIG_DIR` pointing at
@@ -460,7 +460,7 @@ git worktree root). The register dialog writes commands, skills, plugins
 ### Data Flow
 
 ```
-Browser (React) → Backend (Hono, :5002) → OpenCode Server (Bun, :5551)
+Browser (React) → Backend (Hono, :5002) → OpenCode Server (Bun, :5552)
      ↑                  ↑                        ↑
   SSE client        SSE proxy              SSE source
   React Query       REST proxy             REST API

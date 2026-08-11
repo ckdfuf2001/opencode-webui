@@ -38,7 +38,7 @@
 - DRY principles, follow existing patterns
 - ./opencode-src/ is reference only, never commit
 - Use shared types from workspace package
-- OpenCode server runs on port 5551, backend API on port 5001
+- OpenCode server runs on port 5552, backend API on port 5001
 
 ## Operational Notes (avoid recurring mistakes)
 
