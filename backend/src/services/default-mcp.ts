@@ -5,10 +5,19 @@ import { getWorkspacePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 
 let agentBrowserWarmState: 'warm' | 'cold' | 'unknown' = 'unknown'
+let backendPort = 5001
 
-const workspaceBackend = 'http://127.0.0.1:5001'
+export function setBackendPort(port: number): void {
+  backendPort = port
+}
+
+function getBackendUrl(): string {
+  return `http://127.0.0.1:${backendPort}`
+}
+
 const AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
 const AGENT_BROWSER_NAMESPACE = 'opencode'
+const AGENT_BROWSER_HEADED = 'false'
 
 function buildDocReaderMcp(): Record<string, unknown> {
   return {
@@ -17,7 +26,7 @@ function buildDocReaderMcp(): Record<string, unknown> {
       enabled: true,
       command: ['python', path.join(process.cwd(), 'backend', 'scripts', 'doc_reader_mcp.py')],
       env: {
-        OPCODE_WEBUI_BACKEND: workspaceBackend,
+        OPCODE_WEBUI_BACKEND: getBackendUrl(),
         OPCODE_WEBUI_WORKSPACE: getWorkspacePath(),
       },
     },
@@ -53,6 +62,7 @@ function buildAgentBrowserMcp(): Record<string, unknown> {
   }
   env.AGENT_BROWSER_NAMESPACE = 'opencode'
   env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
+  env.AGENT_BROWSER_HEADED = AGENT_BROWSER_HEADED
   return {
     'agent-browser': {
       type: 'local',
@@ -77,6 +87,7 @@ export async function warmUpAgentBrowserDaemon(): Promise<boolean> {
     ...process.env,
     AGENT_BROWSER_NAMESPACE,
     AGENT_BROWSER_IDLE_TIMEOUT_MS,
+    AGENT_BROWSER_HEADED,
   }
   if (info.executablePath && existsSync(info.executablePath)) {
     env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath

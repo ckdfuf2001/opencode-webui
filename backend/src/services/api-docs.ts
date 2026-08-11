@@ -764,6 +764,41 @@ export const openApiSpec = {
       },
     },
     '/api/registry': {
+      get: {
+        tags: ['registry'],
+        summary: 'List registered opencode files (command/skill/tool/agent)',
+        parameters: [{ name: 'directory', in: 'query', schema: { type: 'string' }, description: 'Repo directory for project scope' }],
+        responses: {
+          '200': {
+            description: 'List of registered files',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    items: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          type: { type: 'string', enum: ['command', 'skill', 'tool', 'agent'] },
+                          scope: { type: 'string', enum: ['global', 'project'] },
+                          name: { type: 'string' },
+                          description: { type: 'string' },
+                          content: { type: 'string' },
+                          mode: { type: 'string' },
+                          path: { type: 'string' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '500': { description: 'Failed to list registry items' },
+        },
+      },
       post: {
         tags: ['registry'],
         summary: 'Register an opencode file (command/skill/tool/agent)',
@@ -810,6 +845,53 @@ export const openApiSpec = {
       },
     },
     '/api/registry/{type}/{scope}/{name}': {
+      put: {
+        tags: ['registry'],
+        summary: 'Update an existing registered opencode file (supports rename via body name)',
+        parameters: [
+          { name: 'type', in: 'path', required: true, schema: { type: 'string', enum: ['command', 'skill', 'tool', 'agent'] } },
+          { name: 'scope', in: 'path', required: true, schema: { type: 'string', enum: ['global', 'project'] } },
+          { name: 'name', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'directory', in: 'query', schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  description: { type: 'string' },
+                  content: { type: 'string' },
+                  mode: { type: 'string', enum: ['all', 'subagent', 'primary'] },
+                },
+                required: ['name', 'content'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Updated file',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    type: { type: 'string' },
+                    scope: { type: 'string' },
+                    name: { type: 'string' },
+                    path: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          '400': { description: 'Invalid type/scope/name or update failed' },
+        },
+      },
       delete: {
         tags: ['registry'],
         summary: 'Delete a registered opencode file',

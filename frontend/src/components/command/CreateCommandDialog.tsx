@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronDown, ChevronUp, Loader2, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -19,12 +19,38 @@ interface EnvironmentVariable {
   value: string
 }
 
+export interface McpEditTarget {
+  type: 'local' | 'remote'
+  enabled: boolean
+  command?: string[]
+  url?: string
+  environment?: Record<string, string>
+  timeout?: number
+}
+
+export interface RegistryEditTarget {
+  type: DialogType
+  scope: RegistryScope
+  name: string
+  description?: string
+  content?: string
+  mode?: RegistryAgentMode
+  agent?: string
+  model?: string
+  topP?: number
+  subtask?: boolean
+  source: 'file' | 'config'
+  mcp?: McpEditTarget
+}
+
 interface CreateCommandDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreated: () => void
   availableSkills?: string[]
   directory?: string
+  editing?: RegistryEditTarget | null
+  defaultType?: DialogType
 }
 
 const TYPE_OPTIONS: { value: DialogType; label: string }[] = [
@@ -78,7 +104,7 @@ function buildCommandTemplate(steps: string[], extra: string): string {
   return lines.join('\n')
 }
 
-export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory }: CreateCommandDialogProps) {
+export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory, editing = null, defaultType = 'command' }: CreateCommandDialogProps) {
   const [type, setType] = useState<DialogType>('command')
   const [scope, setScope] = useState<RegistryScope>('global')
   const [agent, setAgent] = useState('')
@@ -124,6 +150,53 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
     setMcpTimeout('')
     setMcpEnabled(true)
   }
+
+  useEffect(() => {
+    if (!open) {
+      reset()
+      return
+    }
+    if (!editing) {
+      setType(defaultType)
+      return
+    }
+    setType(editing.type)
+    setScope(editing.scope)
+    setName(editing.name)
+    setDescription(editing.description ?? '')
+    setAgent(editing.agent ?? '')
+    setModel(editing.model ?? '')
+    setTopP(editing.topP !== undefined ? String(editing.topP) : '')
+    setSubtask(editing.subtask ?? false)
+    setSteps([])
+    setExtra('')
+    setRawTemplate('')
+    setSkillBody('')
+    setToolScript(TOOL_TEMPLATE(''))
+    setAgentBody('')
+    setAgentMode(editing.mode ?? 'all')
+
+    if (editing.type === 'command') {
+      setRawTemplate(editing.content ?? '')
+      setMode('template')
+    } else if (editing.type === 'skill') {
+      setSkillBody(editing.content ?? '')
+    } else if (editing.type === 'tool') {
+      setToolScript(editing.content ?? TOOL_TEMPLATE(''))
+    } else if (editing.type === 'agent') {
+      setAgentBody(editing.content ?? '')
+    } else if (editing.type === 'mcp' && editing.mcp) {
+      const mcp = editing.mcp
+      setMcpType(mcp.type === 'remote' ? 'remote' : 'local')
+      setMcpCommand(mcp.type === 'local' ? (mcp.command ?? []).join(' ') : '')
+      setMcpUrl(mcp.type === 'remote' ? (mcp.url ?? '') : '')
+      setMcpEnvironment(mcp.type === 'local'
+        ? Object.entries(mcp.environment ?? {}).map(([key, value]) => ({ key, value }))
+        : [])
+      setMcpTimeout(mcp.timeout ? String(mcp.timeout) : '')
+      setMcpEnabled(mcp.enabled)
+    }
+  }, [open, editing, defaultType])
 
   const handleClose = (next: boolean) => {
     if (!next) {
@@ -210,9 +283,15 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
       }
       if (mcpTimeout && parseInt(mcpTimeout)) mcpEntry.timeout = parseInt(mcpTimeout)
 
+      const merged: Record<string, unknown> = { ...currentMcp }
+      if (editing && editing.type === 'mcp' && editing.name !== serverId) {
+        delete merged[editing.name]
+      }
+      merged[serverId] = mcpEntry
+
       const updatedConfig = {
         ...config.content,
-        mcp: { ...currentMcp, [serverId]: mcpEntry },
+        mcp: merged,
       }
       await settingsApi.updateOpenCodeConfig(config.name, { content: updatedConfig })
       showToast.success(`MCP server "${serverId}" saved to configuration "${config.name}".`)
@@ -245,7 +324,25 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
     setSaving(true)
     try {
-      if (type === 'command' && scope === 'global') {
+      if (editing && editing.source === 'file') {
+        if (editing.scope === 'project' && !directory) {
+          showToast.error('No project selected. Use Global scope or open a repo session.')
+          return
+        }
+        await registryApi.update(
+          editing.type as RegistryType,
+          editing.scope,
+          editing.name,
+          {
+            name: trimmedName,
+            description: description.trim(),
+            content: content.trim(),
+            ...(editing.type === 'agent' ? { mode: agentMode } : {}),
+          },
+          editing.scope === 'project' ? directory : undefined
+        )
+        showToast.success(`${TYPE_LABEL[editing.type as RegistryType]} "${trimmedName}" updated.`)
+      } else if (type === 'command' && scope === 'global') {
         const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
         const targetName = defaultConfig?.name ?? configs[0]?.name
         if (!targetName) {
@@ -256,7 +353,11 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         if (topP) record.topP = Number(topP)
         const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
         const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
-        const commands: Record<string, unknown> = { ...existingCommands, [trimmedName]: record }
+        const commands: Record<string, unknown> = { ...existingCommands }
+        if (editing && editing.type === 'command' && editing.name !== trimmedName) {
+          delete commands[editing.name]
+        }
+        commands[trimmedName] = record
         await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
         showToast.success(`Command "${trimmedName}" saved to configuration "${targetName}".`)
       } else {
@@ -292,7 +393,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
-          <DialogTitle>Register new opencode file</DialogTitle>
+          <DialogTitle>{editing ? 'Edit opencode file' : 'Register new opencode file'}</DialogTitle>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -331,14 +432,14 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-1.5">
             {TYPE_OPTIONS.map((opt) => (
-              <Button key={opt.value} type="button" size="sm" variant={type === opt.value ? 'secondary' : 'ghost'} onClick={() => switchType(opt.value)} className="text-xs h-7">
+              <Button key={opt.value} type="button" size="sm" variant={type === opt.value ? 'secondary' : 'ghost'} onClick={() => switchType(opt.value)} disabled={!!editing} className="text-xs h-7 disabled:opacity-50">
                 {opt.label}
               </Button>
             ))}
             <div className="w-px h-5 bg-border mx-1" />
             {SCOPE_OPTIONS.map((opt) => {
               const isMcp = type === 'mcp'
-              const disabled = isMcp && opt.value !== 'global'
+              const disabled = (isMcp && opt.value !== 'global') || !!editing
               return (
                 <Button
                   key={opt.value}
@@ -619,8 +720,8 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             Cancel
           </Button>
           <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1">
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-            Register
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : !editing && <Plus className="w-3.5 h-3.5" />}
+            {editing ? 'Save' : 'Register'}
           </Button>
         </DialogFooter>
       </DialogContent>

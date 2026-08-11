@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Terminal,
   Loader2,
@@ -18,17 +18,26 @@ import {
   Plus,
   CornerDownLeft,
   Trash2,
+  Edit,
+  Puzzle,
+  Bot,
+  Server,
+  Shield,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useMessages, useSessions } from '@/hooks/useOpenCode'
 import { useCommandRuns, type CommandRunStart } from '@/stores/commandRunsStore'
-import { CreateCommandDialog } from '@/components/command/CreateCommandDialog'
+import { CreateCommandDialog, type RegistryEditTarget } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
 import { collectDescendantIDs } from '@/hooks/usePermissionRequests'
 import { listRepos } from '@/api/repos'
 import { createOpenCodeClient } from '@/api/opencode'
+import { registryApi, type RegistryListItem, type RegistryType } from '@/api/registry'
+import { settingsApi } from '@/api/settings'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
+import { showToast } from '@/lib/toast'
 import type { MessageWithParts, Part } from '@/api/types'
 
 function commandNeedsArgs(command: CommandWithScope): boolean {
@@ -178,6 +187,8 @@ interface CommandExplorerProps {
   error: string | null
   onExecute?: (command: CommandWithScope, run: boolean, args: string) => void
   onCreate?: () => void
+  onEdit?: (command: CommandWithScope) => void
+  onDelete?: (command: CommandWithScope) => void
   focusCommand?: CommandWithScope | null
 }
 
@@ -186,7 +197,7 @@ interface PendingArgs {
   run: boolean
 }
 
-function CommandExplorer({ commands, loading, error, onExecute, onCreate, focusCommand }: CommandExplorerProps) {
+function CommandExplorer({ commands, loading, error, onExecute, onCreate, onEdit, onDelete, focusCommand }: CommandExplorerProps) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<CommandWithScope | null>(null)
   const [pendingArgs, setPendingArgs] = useState<PendingArgs | null>(null)
@@ -341,7 +352,7 @@ function CommandExplorer({ commands, loading, error, onExecute, onCreate, focusC
                           Use /{command.name} in chat to {command.oneshot ? 'open this panel' : 'run this command'}.
                         </p>
                       )}
-                      <div className="flex items-center gap-2 pt-1">
+                      <div className="flex items-center gap-3 pt-1">
                         <button
                           type="button"
                           onClick={() => requestExecute(command, true)}
@@ -356,6 +367,24 @@ function CommandExplorer({ commands, loading, error, onExecute, onCreate, focusC
                         >
                           Use in chat
                         </button>
+                        {command.scope !== 'builtin' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onEdit?.(command)}
+                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                            >
+                              <Edit className="w-3 h-3" /> Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDelete?.(command)}
+                              className="inline-flex items-center gap-1 text-[11px] text-red-400 hover:text-red-300 hover:underline"
+                            >
+                              <Trash2 className="w-3 h-3" /> Delete
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -380,6 +409,139 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const [createOpen, setCreateOpen] = useState(false)
   const [historyQuery, setHistoryQuery] = useState('')
   const [explorerFocus, setExplorerFocus] = useState<CommandWithScope | null>(null)
+  const [explorerType, setExplorerType] = useState<'command' | 'skill' | 'tool' | 'agent' | 'mcp'>('command')
+  const [editingTarget, setEditingTarget] = useState<RegistryEditTarget | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ type: string; name: string; scope: string; kind: 'registry' | 'mcp' | 'command' } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  const queryClient = useQueryClient()
+
+  const { data: registryItems = [] } = useQuery({
+    queryKey: ['registry-items', directory],
+    queryFn: () => registryApi.list(directory),
+    enabled: !!opcodeUrl,
+  })
+
+  const { data: mcpServers = [] } = useQuery({
+    queryKey: ['registry-mcp-servers'],
+    queryFn: async () => {
+      const config = await settingsApi.getDefaultOpenCodeConfig()
+      const mcp = (config?.content?.mcp as Record<string, unknown> | undefined) ?? {}
+      return Object.entries(mcp).map(([id, entry]) => ({ id, entry: entry as Record<string, unknown> }))
+    },
+    enabled: !!opcodeUrl,
+  })
+
+  const filteredRegistryItems = useMemo(() => {
+    if (explorerType === 'skill' || explorerType === 'tool' || explorerType === 'agent') {
+      const typeMap: Record<string, RegistryType> = { skill: 'skill', tool: 'tool', agent: 'agent' }
+      return registryItems.filter((item) => item.type === typeMap[explorerType])
+    }
+    return []
+  }, [explorerType, registryItems])
+
+  const refreshRegistry = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['registry-items', directory] })
+    queryClient.invalidateQueries({ queryKey: ['registry-mcp-servers'] })
+    refresh()
+  }, [queryClient, directory, refresh])
+
+  const handleEditCommand = useCallback((command: CommandWithScope) => {
+    const isFileBased = command.scope === 'project'
+      || registryItems.some((i) => i.type === 'command' && i.scope === 'global' && i.name === command.name)
+    setEditingTarget({
+      type: 'command',
+      scope: command.scope === 'project' ? 'project' : 'global',
+      name: command.name,
+      description: command.description,
+      content: command.template,
+      agent: command.agent,
+      model: command.model,
+      subtask: command.subtask,
+      source: isFileBased ? 'file' : 'config',
+    })
+    setCreateOpen(true)
+  }, [registryItems])
+
+  const handleEditRegistryItem = useCallback((item: RegistryListItem) => {
+    setEditingTarget({
+      type: item.type,
+      scope: item.scope,
+      name: item.name,
+      description: item.description,
+      content: item.content,
+      mode: item.mode as RegistryEditTarget['mode'],
+      source: 'file',
+    })
+    setCreateOpen(true)
+  }, [])
+
+  const handleEditMcp = useCallback((serverId: string, entry: Record<string, unknown>) => {
+    setEditingTarget({
+      type: 'mcp',
+      scope: 'global',
+      name: serverId,
+      source: 'config',
+      mcp: {
+        type: entry.type === 'remote' ? 'remote' : 'local',
+        enabled: entry.enabled !== false,
+        command: Array.isArray(entry.command) ? (entry.command as string[]) : undefined,
+        url: typeof entry.url === 'string' ? entry.url : undefined,
+        environment: entry.environment as Record<string, string> | undefined,
+        timeout: typeof entry.timeout === 'number' ? entry.timeout : undefined,
+      },
+    })
+    setCreateOpen(true)
+  }, [])
+
+  const handleDeleteCommand = useCallback(async (command: CommandWithScope) => {
+    if (command.scope === 'builtin') return
+    if (command.scope === 'project') {
+      await registryApi.unregister('command', 'project', command.name, directory)
+    } else {
+      const fileBased = registryItems.some((i) => i.type === 'command' && i.scope === 'global' && i.name === command.name)
+      if (fileBased) {
+        await registryApi.unregister('command', 'global', command.name, directory)
+      } else {
+        const config = await settingsApi.getDefaultOpenCodeConfig()
+        if (!config) return
+        const commands = { ...((config.content?.command as Record<string, unknown> | undefined) ?? {}) }
+        delete commands[command.name]
+        await settingsApi.updateOpenCodeConfig(config.name, { content: { ...config.content, command: commands } })
+      }
+    }
+    refreshRegistry()
+  }, [registryItems, directory, refreshRegistry])
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      if (deleteTarget.kind === 'registry') {
+        await registryApi.unregister(
+          deleteTarget.type as RegistryType,
+          deleteTarget.scope as 'global' | 'project',
+          deleteTarget.name,
+          deleteTarget.scope === 'project' ? directory : undefined
+        )
+      } else if (deleteTarget.kind === 'mcp') {
+        const config = await settingsApi.getDefaultOpenCodeConfig()
+        if (!config) return
+        const mcp = { ...((config.content?.mcp as Record<string, unknown> | undefined) ?? {}) }
+        delete mcp[deleteTarget.name]
+        await settingsApi.updateOpenCodeConfig(config.name, { content: { ...config.content, mcp } })
+      } else if (deleteTarget.kind === 'command') {
+        await handleDeleteCommand({ name: deleteTarget.name, scope: deleteTarget.scope as CommandScope, template: '' } as CommandWithScope)
+      }
+      refreshRegistry()
+      setDeleteTarget(null)
+    } catch (err) {
+      console.error('Failed to delete:', err)
+      showToast.error(`Failed to delete "${deleteTarget.name}".`)
+    } finally {
+      setDeleting(false)
+    }
+  }, [deleteTarget, directory, refreshRegistry, handleDeleteCommand])
 
   const availableSkills = useMemo(
     () => commands.filter((c) => c.source === 'skill').map((c) => c.name),
@@ -590,7 +752,161 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'explorer' ? (
-          <CommandExplorer commands={commands} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={() => setCreateOpen(true)} focusCommand={explorerFocus} />
+          <div className="flex flex-col h-full min-h-0">
+            <div className="px-3 pt-2 flex-shrink-0">
+              <div className="flex items-center gap-1.5">
+                {([
+                  { value: 'command', label: 'Command', icon: Terminal },
+                  { value: 'skill', label: 'Skill', icon: Shield },
+                  { value: 'tool', label: 'Plugin', icon: Puzzle },
+                  { value: 'agent', label: 'Agent', icon: Bot },
+                  { value: 'mcp', label: 'MCP', icon: Server },
+                ] as const).map((t) => {
+                  const Icon = t.icon
+                  return (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() => setExplorerType(t.value)}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                        explorerType === t.value
+                          ? 'bg-primary/15 text-primary'
+                          : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground'
+                      }`}
+                    >
+                      <Icon className="w-3 h-3" />
+                      {t.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            {explorerType === 'command' ? (
+              <div className="flex-1 min-h-0 flex flex-col">
+                <CommandExplorer
+                  commands={commands}
+                  loading={loading}
+                  error={error}
+                  onExecute={onExecuteCommand}
+                  onCreate={() => setCreateOpen(true)}
+                  onEdit={handleEditCommand}
+                  onDelete={(command) => setDeleteTarget({ type: 'command', scope: command.scope ?? 'global', name: command.name, kind: 'command' })}
+                  focusCommand={explorerFocus}
+                />
+              </div>
+            ) : explorerType === 'mcp' ? (
+              <div className="flex flex-col flex-1 min-h-0">
+                <div className="px-3 pt-2 pb-1 flex-shrink-0">
+                  <Button variant="secondary" size="sm" onClick={() => { setEditingTarget(null); setCreateOpen(true) }} className="h-8 gap-1 text-xs w-full">
+                    <Plus className="w-3.5 h-3.5" />
+                    Add MCP server
+                  </Button>
+                </div>
+                <div className="flex-1 overflow-y-auto min-h-0 px-2 pb-2">
+                  <div className="space-y-1">
+                    {mcpServers.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full px-6 text-center">
+                        <Server className="w-8 h-8 mb-2 text-muted-foreground/40" />
+                        <p className="text-sm text-muted-foreground">No MCP servers configured.</p>
+                      </div>
+                    ) : (
+                      mcpServers.map(({ id, entry }) => {
+                        const typeLabel = entry.type === 'remote' ? 'remote' : 'local'
+                        const detail = entry.type === 'remote'
+                          ? String(entry.url ?? '')
+                          : Array.isArray(entry.command) ? (entry.command as string[]).join(' ') : ''
+                        const enabled = entry.enabled !== false
+                        return (
+                          <div key={id} className="rounded-md border border-transparent hover:bg-muted/40">
+                            <div className="flex items-center gap-2 px-2 py-1.5 text-left">
+                              <Server className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                              <span className="font-mono text-xs font-medium flex-1 min-w-0 truncate">{id}</span>
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${enabled ? 'bg-green-500/15 text-green-400 border border-green-500/30' : 'bg-muted text-muted-foreground border border-border'}`}>
+                                {enabled ? 'enabled' : 'disabled'}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/15 text-purple-400 border border-purple-500/30 flex-shrink-0">{typeLabel}</span>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditMcp(id, entry)}
+                                  className="text-muted-foreground hover:text-foreground"
+                                  title="Edit MCP server"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteTarget({ type: 'mcp', name: id, scope: 'global', kind: 'mcp' })}
+                                  className="text-muted-foreground hover:text-red-400"
+                                  title="Delete MCP server"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                            {detail && <p className="px-2 pb-1.5 pl-9 text-[11px] text-muted-foreground font-mono truncate">{detail}</p>}
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col flex-1 min-h-0">
+                <div className="px-3 pt-2 pb-1 flex-shrink-0">
+                  <Button variant="secondary" size="sm" onClick={() => { setEditingTarget(null); setCreateOpen(true) }} className="h-8 gap-1 text-xs w-full">
+                    <Plus className="w-3.5 h-3.5" />
+                    New {explorerType}
+                  </Button>
+                </div>
+                <div className="flex-1 overflow-y-auto min-h-0 px-2 pb-2">
+                  {filteredRegistryItems.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full px-6 text-center">
+                      <Search className="w-8 h-8 mb-2 text-muted-foreground/40" />
+                      <p className="text-sm text-muted-foreground">No {explorerType} files registered.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {filteredRegistryItems.map((item) => {
+                        const scope = item.scope
+                        const badge = SCOPE_DISPLAY[scope]
+                        const Icon = SCOPE_ICON[scope]
+                        return (
+                          <div key={`${item.type}-${item.scope}-${item.name}`} className="rounded-md border border-transparent hover:bg-muted/40">
+                            <div className="flex items-center gap-2 px-2 py-1.5 text-left">
+                              <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                              <span className="font-mono text-xs font-medium flex-1 min-w-0 truncate">{item.name}</span>
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${badge.className}`}>{badge.label}</span>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditRegistryItem(item)}
+                                  className="text-muted-foreground hover:text-foreground"
+                                  title="Edit"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteTarget({ type: item.type, name: item.name, scope: item.scope, kind: 'registry' })}
+                                  className="text-muted-foreground hover:text-red-400"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                            {item.description && <p className="px-2 pb-1.5 pl-9 text-[11px] text-muted-foreground line-clamp-2">{item.description}</p>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto min-h-0">
             {runList.length > 0 && (
@@ -768,10 +1084,25 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       </div>
       <CreateCommandDialog
         open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={() => refresh()}
+        onOpenChange={(next) => {
+          setCreateOpen(next)
+          if (!next) setEditingTarget(null)
+        }}
+        onCreated={() => refreshRegistry()}
         availableSkills={availableSkills}
         directory={directory}
+        editing={editingTarget}
+        defaultType={explorerType}
+      />
+      <DeleteDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => !next && setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+        title={`Delete ${deleteTarget?.type ?? 'item'}`}
+        description={`This will permanently remove the ${deleteTarget?.type ?? 'item'} "${deleteTarget?.name ?? ''}".`}
+        itemName={deleteTarget?.name}
+        isDeleting={deleting}
       />
     </div>
   )

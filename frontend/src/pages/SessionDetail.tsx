@@ -152,13 +152,15 @@ export function SessionDetail() {
   }, [searchParams, setSearchParams, messages, scrollToMessage]);
 
   const handleFileClick = useCallback((filePath: string) => {
-    let pathToOpen = filePath
+    const normalizedFilePath = filePath.replace(/\\/g, '/')
+    let pathToOpen = normalizedFilePath
     
-    if (filePath.startsWith('/') && repo?.fullPath) {
-      const workspaceReposPath = repo.fullPath.substring(0, repo.fullPath.lastIndexOf('/'))
+    if (repo?.fullPath) {
+      const normalizedFullPath = repo.fullPath.replace(/\\/g, '/')
+      const workspaceReposPath = normalizedFullPath.substring(0, normalizedFullPath.lastIndexOf('/'))
       
-      if (filePath.startsWith(workspaceReposPath + '/')) {
-        pathToOpen = filePath.substring(workspaceReposPath.length + 1)
+      if (normalizedFilePath.startsWith(workspaceReposPath + '/')) {
+        pathToOpen = normalizedFilePath.substring(workspaceReposPath.length + 1)
       }
     }
     
