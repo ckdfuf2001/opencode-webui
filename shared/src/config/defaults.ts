@@ -11,7 +11,7 @@ export const DEFAULTS = {
   },
 
   OPENCODE: {
-    PORT: 5551,
+    PORT: 5552,
     HOST: '127.0.0.1',
     BIN: 'opencode',
   },

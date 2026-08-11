@@ -1,5 +1,6 @@
 import { spawn, execSync } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, writeFileSync, rmSync } from 'fs'
+import { createServer } from 'node:net'
 import path from 'path'
 import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
@@ -110,6 +111,48 @@ const OPENCODE_DEFAULT_PORT = ENV.OPENCODE.PORT
 const OPENCODE_SERVER_DIRECTORY = getWorkspacePath()
 const OPENCODE_CONFIG_PATH = getOpenCodeConfigFilePath()
 
+export function killLingeringOpenCodeServers(): void {
+  if (process.platform !== 'win32') {
+    return
+  }
+  if (typeof process.env.TEMP !== 'string') {
+    return
+  }
+  const script = [
+    '$defaultPort = ' + OPENCODE_DEFAULT_PORT,
+    '$processes = Get-CimInstance Win32_Process | Where-Object {',
+    "  ($_.Name -ieq 'opencode.exe') -and",
+    "  ($_.CommandLine -like '*serve*') -and",
+    "  ($_.CommandLine -like '*--port*')",
+    '}',
+    'foreach ($process in $processes) {',
+    "  $m = [regex]::Match($process.CommandLine, '--port[ =](\\d+)')",
+    '  if (-not $m.Success) { continue }',
+    '  $port = [int]$m.Groups[1].Value',
+    '  if ($port -eq $defaultPort) { continue }',
+    "  Write-Host \"Killing lingering OpenCode server on port $port (PID $($process.ProcessId))\"",
+    '  Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue',
+    '}',
+  ].join('\n')
+  const scriptPath = path.join(process.env.TEMP, `opencode-webui-opencode-cleanup-${process.pid}.ps1`)
+  try {
+    writeFileSync(scriptPath, script, 'utf8')
+    execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`, {
+      stdio: 'ignore',
+      timeout: 15_000,
+    })
+    logger.info('Cleaned up lingering OpenCode servers on non-default ports')
+  } catch {
+    logger.warn('Failed to clean up lingering OpenCode server processes')
+  } finally {
+    try {
+      rmSync(scriptPath, { force: true })
+    } catch {
+      // ignore cleanup of the temp script
+    }
+  }
+}
+
 class OpenCodeServerManager {
   private static instance: OpenCodeServerManager
   private serverProcess: any = null
@@ -117,6 +160,7 @@ class OpenCodeServerManager {
   private isHealthy: boolean = false
   private isManaged: boolean = false
   private isStarting: boolean = false
+  private hasLoggedHealthy: boolean = false
   private port: number = OPENCODE_DEFAULT_PORT
 
   private constructor() {}
@@ -150,22 +194,50 @@ class OpenCodeServerManager {
 
   async start(): Promise<void> {
     if (this.isHealthy || this.isStarting) {
-      logger.info('OpenCode server already running and healthy')
+      if (!this.hasLoggedHealthy) {
+        this.hasLoggedHealthy = true
+        logger.info('OpenCode server already running and healthy')
+      }
       return
     }
     const binPath = resolveOpenCodeBin()
     if (!binPath) {
       this.isHealthy = false
+      this.hasLoggedHealthy = false
       this.serverPid = null
       logger.warn('OpenCode executable not found - running without an OpenCode connection. Configure the binary path in Settings -> OpenCode, then restart the server.')
       return
     }
     this.isStarting = true
     try {
+      if (this.serverPid) {
+        if (await this.waitForHealth(20000)) {
+          this.isHealthy = true
+          logger.info(`OpenCode server is healthy on port ${this.port}`)
+          return
+        }
+        await this.teardownCurrent()
+      }
       await this.startServer(binPath)
     } finally {
       this.isStarting = false
     }
+  }
+
+  spawnNow(): void {
+    if (this.serverPid || this.isHealthy) return
+    const binPath = resolveOpenCodeBin()
+    if (!binPath) return
+    const existing = this.findPidsByPortSync(this.port)
+    if (existing.length > 0) {
+      this.serverPid = existing[0] ?? null
+      this.isManaged = false
+      this.isHealthy = true
+      logger.info(`Attaching to existing OpenCode server on port ${this.port}`)
+      return
+    }
+    this.port = OPENCODE_DEFAULT_PORT
+    this.launch(this.port, OPENCODE_SERVER_DIRECTORY, binPath, ENV.SERVER.NODE_ENV !== 'production')
   }
 
   private async startServer(binPath: string): Promise<void> {
@@ -221,7 +293,7 @@ class OpenCodeServerManager {
         cwd: serverDirectory,
         shell: process.platform === 'win32' && !isKnownPath,
         detached: !isDevelopment,
-        stdio: isDevelopment ? 'inherit' : 'ignore',
+        stdio: isDevelopment ? ['ignore', 'pipe', 'pipe'] : 'ignore',
         env: {
           ...process.env,
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
@@ -230,14 +302,25 @@ class OpenCodeServerManager {
       }
     )
 
+    if (isDevelopment) {
+      this.serverProcess.stdout?.on('data', (data: Buffer) => {
+        logger.info(`[opencode] ${data.toString().trimEnd()}`)
+      })
+      this.serverProcess.stderr?.on('data', (data: Buffer) => {
+        logger.info(`[opencode] ${data.toString().trimEnd()}`)
+      })
+    }
+
     this.serverProcess.on('error', (error: Error) => {
       logger.error('OpenCode server spawn failed:', error)
       this.isHealthy = false
+      this.hasLoggedHealthy = false
       this.serverPid = null
     })
 
     this.serverProcess.on('exit', (code: number | null, signal: string | null) => {
       this.isHealthy = false
+      this.hasLoggedHealthy = false
       this.serverPid = null
       if (signal || (code !== null && code !== 0)) {
         logger.error(`OpenCode server exited unexpectedly (signal: ${signal}, code: ${code})`)
@@ -322,6 +405,10 @@ class OpenCodeServerManager {
     return this.httpResponds(port)
   }
 
+  public async canBindPortPublic(port: number): Promise<boolean> {
+    return this.canBindPort(port)
+  }
+
   private async teardownCurrent(): Promise<void> {
     const port = this.port
     if (this.serverPid) {
@@ -341,6 +428,7 @@ class OpenCodeServerManager {
     }
     this.serverPid = null
     this.isHealthy = false
+    this.hasLoggedHealthy = false
   }
 
   async stop(): Promise<void> {
@@ -348,6 +436,7 @@ class OpenCodeServerManager {
       logger.info('Skipping stop: attached to an externally managed OpenCode server')
       this.serverPid = null
       this.isHealthy = false
+      this.hasLoggedHealthy = false
       return
     }
     if (!this.serverPid) return
@@ -384,6 +473,7 @@ class OpenCodeServerManager {
     this.serverPid = null
     this.isHealthy = false
     this.isManaged = false
+    this.hasLoggedHealthy = false
   }
 
   async restart(): Promise<void> {
@@ -428,27 +518,53 @@ class OpenCodeServerManager {
     return false
   }
 
-  private async findProcessesByPort(port: number): Promise<Array<{pid: number}>> {
+  private findPidsByPortSync(port: number): number[] {
     try {
-      if (process.platform === 'win32') {
-        const output = execSync('netstat -ano -p tcp').toString()
-        const results: Array<{pid: number}> = []
-        for (const line of output.split(/\r?\n/)) {
-          const tokens = line.trim().split(/\s+/)
-          if ((tokens[0] ?? '').toUpperCase() !== 'TCP') continue
-          if ((tokens[3] ?? '').toUpperCase() !== 'LISTENING') continue
-          const localPort = (tokens[1] ?? '').split(':').pop()
-          if (localPort !== String(port)) continue
-          const pid = parseInt(tokens[4] ?? '', 10)
-          if (!isNaN(pid)) results.push({ pid })
-        }
-        return results
+      if (process.platform !== 'win32') {
+        const pids = execSync(`lsof -ti:${port}`).toString().trim().split('\n')
+        return pids.filter(Boolean).map(pid => parseInt(pid))
       }
-      const pids = execSync(`lsof -ti:${port}`).toString().trim().split('\n')
-      return pids.filter(Boolean).map(pid => ({ pid: parseInt(pid) }))
+      const output = execSync('netstat -ano -p tcp').toString()
+      const results: number[] = []
+      for (const line of output.split(/\r?\n/)) {
+        const tokens = line.trim().split(/\s+/)
+        if ((tokens[0] ?? '').toUpperCase() !== 'TCP') continue
+        if ((tokens[3] ?? '').toUpperCase() !== 'LISTENING') continue
+        const localPort = (tokens[1] ?? '').split(':').pop()
+        if (localPort !== String(port)) continue
+        const pid = parseInt(tokens[4] ?? '', 10)
+        if (isNaN(pid)) continue
+        if (!this.pidExists(pid)) continue
+        results.push(pid)
+      }
+      return results
     } catch {
       return []
     }
+  }
+
+  private async findProcessesByPort(port: number): Promise<Array<{pid: number}>> {
+    return this.findPidsByPortSync(port).map(pid => ({ pid }))
+  }
+
+  private pidExists(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async canBindPort(port: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const server = createServer()
+      server.once('error', () => resolve(false))
+      server.once('listening', () => {
+        server.close(() => resolve(true))
+      })
+      server.listen(port, '127.0.0.1')
+    })
   }
 }
 
@@ -459,11 +575,11 @@ export async function freePort(port: number): Promise<void> {
 }
 
 export async function prepareBackendPort(port: number): Promise<void> {
-  const procs = await opencodeServerManager.findProcessesByPortPublic(port)
-  if (procs.length === 0) return
+  killLingeringOpenCodeServers()
+  if (await opencodeServerManager.canBindPortPublic(port)) return
 
   if (await opencodeServerManager.isOurBackendPublic(port)) {
-    logger.info(`Port ${port} already serves this app (PID ${procs.map((p) => p.pid).join(', ')}); reusing existing instance`)
+    logger.info(`Port ${port} already serves this app; reusing existing instance`)
     process.exit(0)
   }
 
@@ -473,15 +589,17 @@ export async function prepareBackendPort(port: number): Promise<void> {
 
   logger.warn(`Port ${port} is occupied by a stale process; freeing it`)
   await opencodeServerManager.freePortPublic(port)
+  killLingeringAgentBrowser()
+  await opencodeServerManager.freePortPublic(OPENCODE_DEFAULT_PORT)
 
-  if ((await opencodeServerManager.findProcessesByPortPublic(port)).length > 0) {
-    logger.warn(`Port ${port} still occupied after termination attempt; cleaning up lingering agent-browser MCP processes`)
-    killLingeringAgentBrowser()
-    await new Promise((r) => setTimeout(r, 2000))
-    if ((await opencodeServerManager.findProcessesByPortPublic(port)).length > 0) {
-      throw new Error(
-        `Port ${port} is held by a process that could not be freed. Stop it manually or change PORT in .env.`
-      )
-    }
+  const waitMs = 20000
+  const deadline = Date.now() + waitMs
+  while (Date.now() < deadline) {
+    if (await opencodeServerManager.canBindPortPublic(port)) return
+    await new Promise((r) => setTimeout(r, 500))
   }
+
+  throw new Error(
+    `Port ${port} is held by a process that could not be freed. Stop it manually or change PORT in .env.`
+  )
 }

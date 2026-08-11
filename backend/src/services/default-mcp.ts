@@ -122,8 +122,9 @@ export async function warmUpAgentBrowserDaemon(namespace: string = AGENT_BROWSER
     const child = spawn(
       info.binPath,
       ['--headed', 'false', 'open', 'about:blank', '--json'],
-      { env, stdio: ['ignore', 'ignore', 'ignore'] },
+      { env, stdio: ['ignore', 'ignore', 'ignore'], detached: true },
     )
+    child.unref()
     const timer = setTimeout(() => {
       child.kill()
       if (agentBrowserWarmState !== 'cold') {

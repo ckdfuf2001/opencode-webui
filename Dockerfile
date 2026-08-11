@@ -71,7 +71,7 @@ RUN curl -fsSL https://opencode.ai/install | bash && \
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=5003
-ENV OPENCODE_SERVER_PORT=5551
+ENV OPENCODE_SERVER_PORT=5552
 ENV DATABASE_PATH=/app/data/opencode.db
 ENV WORKSPACE_PATH=/workspace
 

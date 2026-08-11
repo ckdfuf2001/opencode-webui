@@ -106,12 +106,41 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
 
-    const response = await fetch(targetUrl, {
-      method,
-      headers,
-      body,
-      signal,
-    })
+    const retryable = (error: unknown): boolean => {
+      const code = (error as { cause?: { code?: string } })?.cause?.code
+        ?? (error as { code?: string })?.code
+      if (!code) return false
+      const normalized = code.toUpperCase()
+      return normalized === 'ECONNREFUSED'
+        || normalized === 'ECONNRESET'
+        || normalized === 'ENOTFOUND'
+        || normalized === 'EAI_AGAIN'
+        || normalized === 'CONNECTIONREFUSED'
+        || normalized === 'CONNECTIONRESET'
+        || normalized === 'CONNECTIONCLOSED'
+        || normalized === 'UND_ERR_CONNECT_TIMEOUT'
+    }
+
+    let response: Response | null = null
+    let lastError: unknown = null
+    const connectDeadline = Date.now() + 15_000
+    for (let attempt = 1; attempt <= 30; attempt++) {
+      try {
+        response = await fetch(targetUrl, {
+          method,
+          headers,
+          body,
+          signal,
+        })
+        break
+      } catch (error) {
+        lastError = error
+        if (!retryable(error)) throw error
+        if (Date.now() >= connectDeadline) throw error
+        await new Promise((r) => setTimeout(r, 500))
+      }
+    }
+    if (!response) throw lastError
 
     const responseHeaders: Record<string, string> = {}
     response.headers.forEach((value, key) => {
