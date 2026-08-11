@@ -27,7 +27,7 @@ const configDir = join(workspacePath, '.config', 'opencode')
 const configFile = join(configDir, 'opencode.json')
 
 const docReaderScript = join(root, 'backend', 'scripts', 'doc_reader_mcp.py')
-const workspaceBackend = 'http://127.0.0.1:5001'
+const workspaceBackend = `http://127.0.0.1:${process.env.PORT || '5002'}`
 
 const defaultMcp = {
   'doc-reader': {

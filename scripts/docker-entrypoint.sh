@@ -43,12 +43,10 @@ if [ -n "$WORKSPACE_PATH" ]; then
   fi
 fi
 
-# Register the doc-reader MCP server into the workspace config if missing
-if [ -f "/app/scripts/register-default-mcp.js" ]; then
+# Install the agent-browser binary (MCP config is handled by the backend at startup)
+if [ -f "/app/scripts/install-agent-browser.js" ]; then
   echo "  [+] Installing agent-browser (binary + Chromium)..."
   node /app/scripts/install-agent-browser.js || echo "  [.] agent-browser install skipped"
-  echo "  [+] Registering default MCP servers..."
-  node /app/scripts/register-default-mcp.js || echo "  [.] Default MCP registration skipped"
 fi
 
 # Place the domain guide as a global rules file (applies to every session)

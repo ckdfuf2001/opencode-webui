@@ -7,10 +7,10 @@ on the workspace, configuration and rules layout that differs from upstream.
 ## Process Topology
 
 ```
-Browser (React/PWA, :5173) → Backend (Bun + Hono, :5001) → OpenCode server (opencode serve, :5551)
+Browser (React/PWA, :5173) → Backend (Bun + Hono, :5002) → OpenCode server (opencode serve, :5551)
                                     ↑                                 ↑
                               SSE proxy                          SSE source
-                           REST proxy (:5001 → :5551)          REST API
+                           REST proxy (:5002 → :5551)          REST API
 ```
 
 - **Backend** owns the workspace directory, the SQLite database, the git
@@ -124,9 +124,11 @@ failure mode. `warmUpAgentBrowserDaemon(namespace)` prevents it:
 
 Do **not** hand-edit the MCP entries in
 `workspace/.config/opencode/opencode.json` — the backend regenerates the file
-from the DB default config at startup and repairs the entries. Use the app UI
-(Settings → MCP Servers) or `scripts/register-default-mcp.js` for the
-agent-browser / doc-reader defaults. Repo-root `opencode.json` files are written
+from the DB default config and repairs the entries at every startup
+(`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk()`), then spawns OpenCode
+with the resulting config so the default MCP servers (doc-reader, agent-browser)
+come up together. Use the app UI (Settings → MCP Servers) to change them beyond
+the defaults. Repo-root `opencode.json` files are written
 by the backend per repo; only the `agent-browser` key is managed there, so a
 repo's own config keys are preserved when re-written.
 

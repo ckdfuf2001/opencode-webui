@@ -21,7 +21,7 @@ import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig, repoAgentBrowserNamespace } from './services/default-mcp'
+import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig, repoAgentBrowserNamespace, killLingeringAgentBrowser } from './services/default-mcp'
 import { opencodeServerManager, prepareBackendPort } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
 import { listRepos } from './db/queries'
@@ -300,6 +300,7 @@ const shutdown = async (signal: string) => {
   } catch (error) {
     logger.error('Error stopping OpenCode server:', error)
   }
+  killLingeringAgentBrowser()
   httpServer?.close()
   stopConverter()
   process.exit(0)
@@ -325,7 +326,8 @@ const startServer = async () => {
   } catch (error: any) {
     if (error.code === 'EADDRINUSE') {
       logger.error(`Port ${PORT} is already in use. Free it or change PORT in .env and restart.`)
-      process.exit(1)
+      await prepareBackendPort(PORT)
+      return startServer()
     }
     throw error
   }
