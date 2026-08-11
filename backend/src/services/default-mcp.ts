@@ -104,6 +104,7 @@ export async function warmUpAgentBrowserDaemon(namespace: string = AGENT_BROWSER
   const env: Record<string, string> = {
     ...process.env,
     AGENT_BROWSER_NAMESPACE: namespace,
+    AGENT_BROWSER_SESSION: namespace,
     AGENT_BROWSER_IDLE_TIMEOUT_MS,
   }
   if (info.executablePath && existsSync(info.executablePath)) {
@@ -151,7 +152,7 @@ export async function warmUpAgentBrowserDaemon(namespace: string = AGENT_BROWSER
 function isAgentBrowserDaemonWarm(binPath: string, namespace: string): boolean {
   try {
     const output = execFileSync(binPath, ['session', 'info', '--json'], {
-      env: { ...process.env, AGENT_BROWSER_NAMESPACE: namespace },
+      env: { ...process.env, AGENT_BROWSER_NAMESPACE: namespace, AGENT_BROWSER_SESSION: namespace },
       encoding: 'utf8',
       timeout: 10_000,
       stdio: ['ignore', 'pipe', 'ignore'],
