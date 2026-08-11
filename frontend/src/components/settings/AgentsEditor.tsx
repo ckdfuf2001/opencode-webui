@@ -1,127 +1,95 @@
 import { useState } from 'react'
-import { Plus, Trash2, Edit } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogTrigger } from '@/components/ui/dialog'
+import { FileText as FileTextIcon } from 'lucide-react'
+import { ResourceEditor } from '@/components/ui/resource-editor'
 import { AgentDialog } from './AgentDialog'
-import type { Agent } from './agentTypes'
 import { APPROVAL_TYPE_LABELS, inferApprovalType } from './agentTypes'
 
-interface AgentsEditorProps {
-  agents: Record<string, Agent>
-  onChange: (agents: Record<string, Agent>) => void
-}
-
-export function AgentsEditor({ agents, onChange }: AgentsEditorProps) {
+export function AgentsEditor({ agents, onChange }: { agents: Record<string, any>; onChange: (agents: Record<string, any>) => void }) {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
-  const [editingAgent, setEditingAgent] = useState<{ name: string; agent: Agent } | null>(null)
-
-  const handleAgentSubmit = (name: string, agent: Agent) => {
-    if (editingAgent) {
-      const updatedAgents = { ...agents }
-      delete updatedAgents[editingAgent.name]
-      updatedAgents[name] = agent
-      onChange(updatedAgents)
-      setEditingAgent(null)
-    } else {
-      const updatedAgents = {
-        ...agents,
-        [name]: agent
-      }
-      onChange(updatedAgents)
-      setIsCreateDialogOpen(false)
-    }
-  }
-
-  const deleteAgent = (name: string) => {
-    const updatedAgents = { ...agents }
-    delete updatedAgents[name]
-    onChange(updatedAgents)
-  }
-
-  const startEdit = (name: string, agent: Agent) => {
-    setEditingAgent({ name, agent })
-  }
+  const [editingAgent, setEditingAgent] = useState<{ name: string; agent: any } | null>(null)
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Agents</h3>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className='mr-1 h-6'>
-              <Plus className="h-4 w-4" />
-            </Button>
-          </DialogTrigger>
-          <AgentDialog
-            open={isCreateDialogOpen}
-            onOpenChange={setIsCreateDialogOpen}
-            onSubmit={handleAgentSubmit}
-          />
-        </Dialog>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-semibold">Agents</h3>
+          <p className="text-sm text-muted-foreground">{Object.keys(agents).length} configured</p>
+        </div>
+        <button className="h-6 gap-1" onClick={() => setIsCreateDialogOpen(true)}>
+          <span className="h-4 w-4">+</span>
+          <span className="text-xs">New</span>
+        </button>
       </div>
 
-      {Object.keys(agents).length === 0 ? (
-        <Card>
-          <CardContent className="p-2 sm:p-8 text-center">
-            <p className="text-muted-foreground">No agents configured. Add your first agent to get started.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4">
-          {Object.entries(agents).map(([name, agent]) => (
-            <Card key={name}>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">{name}</CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => startEdit(name, agent)}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => deleteAgent(name)}
-                      className="text-red-500 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className='p-2'>
-                <div className="space-y-2">
-                  {agent.description && (
-                    <p className="text-sm text-muted-foreground">{agent.description}</p>
-                  )}
-                  <div className="text-xs text-muted-foreground space-y-1">
-                    <p>Type: {APPROVAL_TYPE_LABELS[inferApprovalType(agent)]}</p>
-                    <p>Mode: {agent.mode}</p>
-                    {agent.temperature !== undefined && <p>Temperature: {agent.temperature}</p>}
-                    {agent.topP !== undefined && <p>Top P: {agent.topP}</p>}
-                    {agent.model?.modelID && <p>Model: {agent.model.providerID}/{agent.model.modelID}</p>}
-                    {agent.disable && <p>Status: Disabled</p>}
-                  </div>
-                  {agent.prompt && (
-                    <div className="mt-2 bg-muted rounded text-xs font-mono overflow-y-auto p-1 rounded-lg">
-                      {agent.prompt}
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+      <ResourceEditor
+        groups={[
+          {
+            id: 'agents',
+            label: 'Agents',
+            icon: FileTextIcon,
+            items: Object.entries(agents).map(([name, agent]) => ({
+              id: name,
+              name,
+              description: agent.description ?? '',
+              icon: FileTextIcon,
+              badges: [
+                { label: APPROVAL_TYPE_LABELS[inferApprovalType(agent)], className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+                { label: agent.mode, className: 'bg-purple-500/15 text-purple-400 border-purple-500/30' },
+                ...(agent.disable ? [{ label: 'disabled', className: 'bg-red-500/15 text-red-400 border-red-500/30' }] : []),
+                ...(agent.model?.providerID ? [{ label: `${agent.model.providerID}/${agent.model.modelID}`, className: 'bg-gray-500/15 text-gray-400 border-gray-500/30' }] : []),
+              ],
+              metadata: {
+                mode: agent.mode,
+                approvalType: inferApprovalType(agent),
+                temperature: agent.temperature,
+                topP: agent.topP,
+                model: agent.model?.modelID ? `${agent.model.providerID}/${agent.model.modelID}` : undefined,
+                disable: agent.disable,
+              },
+              data: agent,
+            })),
+          },
+        ]}
+        onItemEdit={(item) => setEditingAgent({ name: item.id, agent: item.data! })}
+        onItemDelete={(item) => {
+          const updatedAgents = { ...agents }
+          delete updatedAgents[item.id]
+          onChange(updatedAgents)
+        }}
+        emptyMessage="No agents configured. Add your first agent to get started."
+        emptyIcon={FileTextIcon}
+        searchPlaceholder="Search agents..."
+      />
 
+      <AgentDialog
+        open={isCreateDialogOpen}
+        onOpenChange={setIsCreateDialogOpen}
+        onSubmit={(name, agent) => {
+          if (editingAgent) {
+            const updatedAgents = { ...agents }
+            delete updatedAgents[editingAgent.name]
+            updatedAgents[name] = agent
+            onChange(updatedAgents)
+            setEditingAgent(null)
+          } else {
+            onChange({ ...agents, [name]: agent })
+          }
+        }}
+      />
       <AgentDialog
         open={!!editingAgent}
         onOpenChange={() => setEditingAgent(null)}
-        onSubmit={handleAgentSubmit}
+        onSubmit={(name, agent) => {
+          if (editingAgent) {
+            const updatedAgents = { ...agents }
+            delete updatedAgents[editingAgent.name]
+            updatedAgents[name] = agent
+            onChange(updatedAgents)
+            setEditingAgent(null)
+          } else {
+            onChange({ ...agents, [name]: agent })
+          }
+        }}
         editingAgent={editingAgent}
       />
     </div>

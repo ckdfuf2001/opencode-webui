@@ -55,12 +55,22 @@
   env vars (agent-browser must keep `AGENT_BROWSER_NAMESPACE=opencode` +
   `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000`). Do not hand-edit MCPs in
   `workspace/.config/opencode/opencode.json`; use the app UI.
-- agent-browser MCP uses a long-lived daemon per namespace (`--namespace
-  opencode` must match `AGENT_BROWSER_NAMESPACE`). On a cold start the daemon
+- **Per-repo browser isolation**: every repo under `workspace/repos/` gets its own
+  project-level `opencode.json` (written/merged by `writeRepoOpenCodeConfig()`,
+  `backend/src/services/default-mcp.ts`) that overrides only the `agent-browser`
+  MCP with a unique namespace `repo-<localPath>`
+  (`repoAgentBrowserNamespace()`). Global sync (`syncDefaultConfigToDisk`) does
+  NOT touch these repo-root files. Repo config keys other than `mcp.agent-browser`
+  are preserved when re-written. If a repo shows a blank/leaking browser tab,
+  check that `workspace/repos/<repo>/opencode.json` exists and carries the
+  repo-specific `AGENT_BROWSER_NAMESPACE`.
+- agent-browser MCP uses a long-lived daemon per namespace (`--namespace <ns>`
+  must match `AGENT_BROWSER_NAMESPACE`; global = `opencode`, each repo =
+  `repo-<localPath>`). On a cold start the daemon
   inherits the MCP server's stdout pipe and `tools/call` hangs ~40-75s → the
-  "first open fails" symptom. The backend pre-warms it via
-  `warmUpAgentBrowserDaemon()` (after opencode server start + every 60s, skips
-  if `agent-browser session info` already shows an active browser) and the 24h
+  "first open fails" symptom. The backend pre-warms every namespace via
+  `warmUpAllAgentBrowserDaemons()` (after opencode server start + every 60s,
+  skips if `agent-browser session info` already shows an active browser) and the 24h
   `AGENT_BROWSER_IDLE_TIMEOUT_MS` keeps it warm. When debugging MCP/browser
   issues, check `agent-browser session info --json` for
   `active`/`browserLaunched` before blaming the config.

@@ -2,10 +2,11 @@ import path from "path";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { DEFAULTS } from "../shared/src/config/defaults";
 
 export default defineConfig(({ mode }) => {
-  loadEnv(mode, path.resolve(__dirname, ".."), "");
-  const backendPort = Number(process.env.PORT) || 5003;
+  const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
+  const backendPort = Number(env.PORT) || Number(process.env.PORT) || DEFAULTS.SERVER.PORT;
 
   return {
     envDir: path.resolve(__dirname, ".."),

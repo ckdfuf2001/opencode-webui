@@ -116,6 +116,15 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
    `..\backend\...`는 repo 세션에서 스크립트를 못 찾아 실패, agent-browser는
    `bin/agent-browser/.meta.json` 기준 이진 경로) + `enabled: true` 강제.
    따라서 MCP는 이 파일을 직접 수정하지 말고 앱 설정(또는 DB)으로 관리한다.
+   **단, 전역 병합은 repo 루트의 `opencode.json`에는 적용되지 않는다.**
+2b. **레포별 브라우저 격리**: 각 repo 루트(`workspace/repos/<repo>/opencode.json`)에
+   백엔드가 `agent-browser` 항목만 repo 전용 namespace(`repo-<localPath>`)로
+   **직접 기록/병합**한다(`writeRepoOpenCodeConfig()`). repo가 클론/생성될 때마다
+   쓰고, 백엔드 시작 시 모든 기존 repo에도 보장한다. 그래서 **repo마다 브라우저 데몬과
+   세션이 분리**되어 서로의 탭이 공유/비는 문제가 없다. 전역 동기화가 이 파일을
+   덮어쓰지 않으므로 repo 자신의 config 키는 보존된다. 브라우저 탭이 비거나 섞이면
+   `workspace/repos/<repo>/opencode.json`에 repo 전용 `AGENT_BROWSER_NAMESPACE`가
+   있는지 먼저 확인한다.
 3. **MCP가 잠시 "disabled"로 보일 수 있다.** 등록 직후 opencode가 서버를 띄우고 도구를
    불러오는 몇 초 동안 web UI가 `disabled` 상태로 표시하며, 연결 완료 후 `connected`로
    바뀐다. 오류가 아니며 MCP 항목은 항상 `enabled: true`로 등록한다.

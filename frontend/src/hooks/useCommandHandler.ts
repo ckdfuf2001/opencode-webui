@@ -34,11 +34,11 @@ export function useCommandHandler({
   const { commands } = useCommands(opcodeUrl, directory)
   const [loading, setLoading] = useState(false)
 
-  const executeCommand = useCallback(async (command: CommandType) => {
+  const executeCommand = useCallback(async (command: CommandType, explicitArgs?: string) => {
     if (!opcodeUrl) return
 
     setLoading(true)
-    const args = (command as CommandType & { arguments?: string }).arguments ?? ''
+    const args = explicitArgs ?? ''
     useCommandRuns.getState().startRun(sessionID, command.name, args)
 
     try {
