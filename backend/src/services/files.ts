@@ -268,11 +268,10 @@ export async function renameOrMoveFile(userPath: string, body: { newPath: string
 
 export function validatePath(userPath: string): string {
   const normalized = path.normalize(userPath).replace(/^(\.\.(\/|\\|$))+/, '')
-  const fullPath = path.join(SHARED_WORKSPACE_BASE, normalized)
-  const resolved = path.resolve(fullPath)
+  const resolved = path.resolve(SHARED_WORKSPACE_BASE, normalized)
   
   const basePath = path.resolve(SHARED_WORKSPACE_BASE)
-  if (!resolved.startsWith(basePath)) {
+  if (resolved !== basePath && !resolved.startsWith(basePath + path.sep)) {
     throw { message: 'Path traversal detected', statusCode: 403 }
   }
   

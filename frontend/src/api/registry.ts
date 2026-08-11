@@ -22,7 +22,28 @@ export interface RegisterResult {
   path: string
 }
 
+export interface RegistryListItem {
+  type: RegistryType
+  scope: RegistryScope
+  name: string
+  description: string
+  content: string
+  mode?: string
+  path: string
+}
+
+export interface RegistryListResponse {
+  items: RegistryListItem[]
+}
+
 export const registryApi = {
+  list: async (directory?: string): Promise<RegistryListItem[]> => {
+    const { data } = await axios.get<RegistryListResponse>(`${API_BASE_URL}/api/registry`, {
+      params: directory ? { directory } : {},
+    })
+    return data.items ?? []
+  },
+
   register: async (
     payload: RegisterRequest,
     directory?: string
@@ -30,6 +51,21 @@ export const registryApi = {
     const { data } = await axios.post(`${API_BASE_URL}/api/registry`, payload, {
       params: directory ? { directory } : {},
     })
+    return data
+  },
+
+  update: async (
+    type: RegistryType,
+    scope: RegistryScope,
+    currentName: string,
+    payload: { name: string; description: string; content: string; mode?: RegistryAgentMode },
+    directory?: string
+  ): Promise<RegisterResult> => {
+    const { data } = await axios.put(
+      `${API_BASE_URL}/api/registry/${type}/${scope}/${encodeURIComponent(currentName)}`,
+      payload,
+      { params: directory ? { directory } : {} }
+    )
     return data
   },
 

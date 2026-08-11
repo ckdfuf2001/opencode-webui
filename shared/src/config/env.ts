@@ -18,6 +18,29 @@ const getEnvNumber = (key: string, defaultValue: number): number => {
   return value ? parseInt(value, 10) : defaultValue
 }
 
+export interface PortSpec {
+  port: number
+  portMax: number | null
+}
+
+const parsePortSpec = (key: string, defaultValue: number): PortSpec => {
+  const value = process.env[key]
+  if (!value) return { port: defaultValue, portMax: null }
+
+  const rangeMatch = value.trim().match(/^(\d+)\s*-\s*(\d+)$/)
+  if (rangeMatch) {
+    const min = parseInt(rangeMatch[1]!, 10)
+    const max = parseInt(rangeMatch[2]!, 10)
+    return { port: min, portMax: Math.max(min, max) }
+  }
+
+  const parsed = parseInt(value.trim(), 10)
+  if (Number.isNaN(parsed)) {
+    throw new Error(`Invalid PORT value '${value}'. Use a single port (e.g. 5001) or a range (e.g. 5001-5010).`)
+  }
+  return { port: parsed, portMax: null }
+}
+
 const getEnvBoolean = (key: string, defaultValue: boolean): boolean => {
   const value = process.env[key]
   if (value === undefined) return defaultValue
@@ -36,10 +59,13 @@ const resolveWorkspacePath = (): string => {
 }
 
 const workspaceBasePath = resolveWorkspacePath()
+const serverPortSpec = parsePortSpec('PORT', DEFAULTS.SERVER.PORT)
 
 export const ENV = {
   SERVER: {
-    PORT: getEnvNumber('PORT', DEFAULTS.SERVER.PORT),
+    PORT: serverPortSpec.port,
+    PORT_MAX: serverPortSpec.portMax,
+    PORT_IS_RANGE: serverPortSpec.portMax !== null,
     HOST: getEnvString('HOST', DEFAULTS.SERVER.HOST),
     CORS_ORIGIN: getEnvString('CORS_ORIGIN', DEFAULTS.SERVER.CORS_ORIGIN),
     NODE_ENV: getEnvString('NODE_ENV', 'development'),
