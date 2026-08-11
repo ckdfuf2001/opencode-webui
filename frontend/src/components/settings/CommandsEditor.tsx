@@ -1,8 +1,6 @@
-import { useState } from 'react'
-import { Plus, Trash2, Edit } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogTrigger } from '@/components/ui/dialog'
+import { useState, useMemo } from 'react'
+import { Terminal as TerminalIcon } from 'lucide-react'
+import { ResourceEditor, ResourceEditorHeader, type ResourceItem, type ResourceGroup } from '@/components/ui/resource-editor'
 import { CommandDialog } from './CommandDialog'
 
 interface Command {
@@ -19,9 +17,44 @@ interface CommandsEditorProps {
   onChange: (commands: Record<string, Command>) => void
 }
 
+function commandToItem(name: string, command: Command): ResourceItem<Command> {
+  const badges: { label: string; className: string }[] = []
+  if (command.agent) badges.push({ label: command.agent, className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' })
+  if (command.model) badges.push({ label: command.model.split('/').pop() || command.model, className: 'bg-purple-500/15 text-purple-400 border-purple-500/30' })
+  if (command.subtask) badges.push({ label: 'subtask', className: 'bg-amber-500/15 text-amber-400 border-amber-500/30' })
+
+  return {
+    id: name,
+    name: `/${name}`,
+    description: command.description,
+    icon: TerminalIcon,
+    badges,
+    metadata: {
+      agent: command.agent,
+      model: command.model,
+      subtask: command.subtask,
+      topP: command.topP,
+    },
+    preview: command.template,
+    data: command,
+  }
+}
+
 export function CommandsEditor({ commands, onChange }: CommandsEditorProps) {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [editingCommand, setEditingCommand] = useState<{ name: string; command: Command } | null>(null)
+
+  const commandGroups = useMemo((): ResourceGroup<Command>[] => {
+    const items = Object.entries(commands).map(([name, command]) => commandToItem(name, command))
+    return [
+      {
+        id: 'commands',
+        label: 'Commands',
+        icon: TerminalIcon,
+        items,
+      },
+    ]
+  }, [commands])
 
   const handleCommandSubmit = (name: string, command: Command) => {
     if (editingCommand) {
@@ -31,96 +64,43 @@ export function CommandsEditor({ commands, onChange }: CommandsEditorProps) {
       onChange(updatedCommands)
       setEditingCommand(null)
     } else {
-      const updatedCommands = {
-        ...commands,
-        [name]: command
-      }
-      onChange(updatedCommands)
+      onChange({ ...commands, [name]: command })
     }
   }
 
-  const deleteCommand = (name: string) => {
+  const handleDelete = (item: ResourceItem<Command>) => {
     const updatedCommands = { ...commands }
-    delete updatedCommands[name]
+    delete updatedCommands[item.id]
     onChange(updatedCommands)
   }
 
-  const startEdit = (name: string, command: Command) => {
-    setEditingCommand({ name, command })
+  const handleEdit = (item: ResourceItem<Command>) => {
+    setEditingCommand({ name: item.id, command: item.data! })
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Commands</h3>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className='mr-1 h-6'>
-              <Plus className="h-4 w-4" />
-             
-            </Button>
-          </DialogTrigger>
-          <CommandDialog
-            open={isCreateDialogOpen}
-            onOpenChange={setIsCreateDialogOpen}
-            onSubmit={handleCommandSubmit}
-          />
-        </Dialog>
-      </div>
+      <ResourceEditorHeader
+        title="Commands"
+        subtitle={`${Object.keys(commands).length} configured`}
+        onCreate={() => setIsCreateDialogOpen(true)}
+        createLabel="New"
+      />
 
-      {Object.keys(commands).length === 0 ? (
-        <Card>
-          <CardContent className="p-2 sm:p-8 text-center">
-            <p className="text-muted-foreground">No commands configured. Add your first command to get started.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4">
-          {Object.entries(commands).map(([name, command]) => (
-            <Card key={name}>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">/{name}</CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => startEdit(name, command)}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => deleteCommand(name)}
-                      className="text-red-500 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className='p-2'>
-                <div className="space-y-2">
-                  {command.description && (
-                    <p className="text-sm text-muted-foreground">{command.description}</p>
-                  )}
-<div className="text-xs text-muted-foreground space-y-1">
-                     {command.agent && <p>Agent: {command.agent}</p>}
-                     {command.model && <p>Model: {command.model}</p>}
-                     {command.topP !== undefined && <p>Top P: {command.topP}</p>}
-                     {command.subtask && <p>Subtask: Yes</p>}
-                   </div>
-                  <div className="mt-2 bg-muted rounded text-xs font-mono overflow-y-auto p-1 rounded-lg">
-                    {command.template}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+      <ResourceEditor<Command>
+        groups={commandGroups}
+        onItemEdit={handleEdit}
+        onItemDelete={handleDelete}
+        emptyMessage="No commands configured. Add your first command to get started."
+        emptyIcon={TerminalIcon}
+        searchPlaceholder="Search commands..."
+      />
 
+      <CommandDialog
+        open={isCreateDialogOpen}
+        onOpenChange={setIsCreateDialogOpen}
+        onSubmit={handleCommandSubmit}
+      />
       <CommandDialog
         open={!!editingCommand}
         onOpenChange={() => setEditingCommand(null)}

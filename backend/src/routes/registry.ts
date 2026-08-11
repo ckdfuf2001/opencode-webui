@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { mkdir, writeFile, unlink } from 'fs/promises'
+import { mkdir, writeFile, unlink, readdir, readFile, stat } from 'fs/promises'
 import path from 'path'
 import { logger } from '../utils/logger'
 import { getConfigPath } from '@opencode-webui/shared'
@@ -9,6 +9,58 @@ type RegistryType = 'command' | 'skill' | 'tool' | 'agent'
 type RegistryScope = 'global' | 'project'
 
 const sanitize = (name: string): string => name.trim().replace(/[\\/:*?"<>|]/g, '-')
+
+const TYPE_DIR: Record<RegistryType, string> = {
+  command: 'command',
+  skill: 'skill',
+  tool: 'plugin',
+  agent: 'agents',
+}
+
+async function listEntries(
+  type: RegistryType,
+  directory?: string
+): Promise<{ name: string; scope: RegistryScope; path: string; content: string }[]> {
+  const results: { name: string; scope: RegistryScope; path: string; content: string }[] = []
+  const roots: { root: string; scope: RegistryScope }[] = [{ root: getConfigPath(), scope: 'global' }]
+  if (directory) roots.push({ root: path.join(directory, '.opencode'), scope: 'project' })
+
+  for (const { root, scope } of roots) {
+    const dir = path.join(root, TYPE_DIR[type])
+    let items: string[]
+    try {
+      items = await readdir(dir)
+    } catch {
+      continue
+    }
+    for (const item of items) {
+      const full = path.join(dir, item)
+      if (type === 'skill') {
+        const skillFile = path.join(full, 'SKILL.md')
+        try {
+          await stat(skillFile)
+          results.push({ name: item, scope, path: skillFile, content: await readFile(skillFile, 'utf-8') })
+        } catch {
+          continue
+        }
+      } else {
+        try {
+          const info = await stat(full)
+          if (!info.isFile()) continue
+          results.push({
+            name: item.replace(/\.[^.]+$/, ''),
+            scope,
+            path: full,
+            content: await readFile(full, 'utf-8'),
+          })
+        } catch {
+          continue
+        }
+      }
+    }
+  }
+  return results
+}
 
 function scopeRoot(scope: RegistryScope, directory?: string): string {
   if (scope === 'global') return getConfigPath()
@@ -105,6 +157,23 @@ export function createRegistryRoutes() {
         return c.json({ error: 'Invalid data', details: error.issues }, 400)
       }
       return c.json({ error: 'Failed to register file', message: (error as Error).message }, 400)
+    }
+  })
+
+  app.get('/:type', async (c) => {
+    const directory = c.req.query('directory') || undefined
+    const type = c.req.param('type') as RegistryType
+
+    if (!['command', 'skill', 'tool', 'agent'].includes(type)) {
+      return c.json({ error: 'Invalid type' }, 400)
+    }
+
+    try {
+      const entries = await listEntries(type, directory)
+      return c.json(entries)
+    } catch (error) {
+      logger.error('Failed to list opencode files:', error)
+      return c.json({ error: 'Failed to list files' }, 400)
     }
   })
 

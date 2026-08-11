@@ -369,17 +369,28 @@ the MCP server and the daemon only talk to each other when both use the same
 namespace. `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h) stops the daemon from
 being evicted between tool calls.
 
+> **Per-repo browser isolation:** every repo under `workspace/repos/` gets its
+> own project-level `opencode.json` where the backend writes an `agent-browser`
+> entry scoped to a unique namespace (`repo-<localPath>`), so each repo has its
+> own browser daemon + session and repos never share/leak browser tabs
+> (`writeRepoOpenCodeConfig()` + `repoAgentBrowserNamespace()` in
+> `backend/src/services/default-mcp.ts`). The global config keeps the
+> `opencode` namespace for sessions outside a repo. See
+> [`docs/architecture.md`](docs/architecture.md).
+
 > **Daemon warm-up (why the first `agent_browser_open` no longer hangs):**
 > the agent-browser MCP server spawns the `agent-browser` CLI per tool call,
 > which talks to a long-lived background daemon over a local socket. On a cold
 > start the daemon inherits the MCP server's stdout pipe, so the MCP server
 > never sees EOF and a `tools/call` waits 40-75s then times out. The backend
 > now pre-warms the daemon so the first tool call is fast:
-> - `backend/src/services/default-mcp.ts` → `warmUpAgentBrowserDaemon()` runs
->   `agent-browser --headed false open about:blank --json` right after the
+> - `backend/src/services/default-mcp.ts` → `warmUpAgentBrowserDaemon(namespace)`
+>   runs `agent-browser --headed false open about:blank --json` right after the
 >   opencode server starts, and `backend/src/index.ts` re-runs it every 60s
->   (self-heals a dead daemon). It skips when `agent-browser session info`
->   already reports an active browser.
+>   (self-heals a dead daemon). `warmUpAllAgentBrowserDaemons()` warms the
+>   global `opencode` namespace **plus one namespace per repo in the DB** —
+>   every repo's first `agent_browser_open` is fast, not just the first one.
+>   It skips when `agent-browser session info` already reports an active browser.
 > - `mergeDefaultMcpEntries` also **repairs env vars** (namespace + idle
 >   timeout) on sync, so a config regenerated from the DB keeps them even if a
 >   previous version was missing them.

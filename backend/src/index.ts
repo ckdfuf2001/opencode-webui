@@ -21,9 +21,10 @@ import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon } from './services/default-mcp'
-import { opencodeServerManager, freePort } from './services/opencode-single-server'
+import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig, repoAgentBrowserNamespace } from './services/default-mcp'
+import { opencodeServerManager, prepareBackendPort } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
+import { listRepos } from './db/queries'
 import { openApiSpec } from './services/api-docs'
 import { proxyRequest } from './services/proxy'
 import { logger } from './utils/logger'
@@ -166,7 +167,7 @@ try {
   
   await cleanupExpiredCache()
   
-  await freePort(PORT)
+  await prepareBackendPort(PORT)
   
   await ensureDefaultConfigExists()
   await syncDefaultConfigToDisk()
@@ -310,37 +311,25 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 let httpServer: ReturnType<typeof serve> | null = null
 
 const startServer = async () => {
-  const maxPortAttempts = 10
-  for (let offset = 0; offset < maxPortAttempts; offset++) {
-    const tryPort = PORT + offset
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const server = serve({
-          fetch: app.fetch,
-          port: tryPort,
-          hostname: HOST,
-        })
-        httpServer = server
-        server.on('listening', () => resolve())
-        server.on('error', (err: NodeJS.ErrnoException) => {
-          if (err.code === 'EADDRINUSE') {
-            reject(err)
-          } else {
-            reject(err)
-          }
-        })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const server = serve({
+        fetch: app.fetch,
+        port: PORT,
+        hostname: HOST,
       })
-      logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${tryPort}`)
-      return
-    } catch (error: any) {
-      if (error.code === 'EADDRINUSE') {
-        logger.warn(`Port ${tryPort} in use, trying next...`)
-        continue
-      }
-      throw error
+      httpServer = server
+      server.on('listening', () => resolve())
+      server.on('error', (err: NodeJS.ErrnoException) => reject(err))
+    })
+  } catch (error: any) {
+    if (error.code === 'EADDRINUSE') {
+      logger.error(`Port ${PORT} is already in use. Free it or change PORT in .env and restart.`)
+      process.exit(1)
     }
+    throw error
   }
-  throw new Error(`Could not bind to any port in range ${PORT}-${PORT + maxPortAttempts - 1}`)
+  logger.info(`🚀 OpenCode WebUI API running on http://${HOST}:${PORT}`)
 }
 
 await startServer()
@@ -348,10 +337,30 @@ await startServer()
 const startupSettings = new SettingsService(db)
 opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferences.opencodeBin ?? null)
 
+for (const repo of listRepos(db)) {
+  try {
+    if (writeRepoOpenCodeConfig(repo.localPath)) {
+      logger.info(`Ensured per-repo OpenCode config for repo ${repo.localPath}`)
+    }
+  } catch (error) {
+    logger.warn(`Failed to write per-repo OpenCode config for ${repo.localPath}:`, error)
+  }
+}
+
+async function warmUpAllAgentBrowserDaemons(): Promise<void> {
+  const namespaces = new Set<string>(['opencode'])
+  for (const repo of listRepos(db)) {
+    namespaces.add(repoAgentBrowserNamespace(repo.localPath))
+  }
+  for (const namespace of namespaces) {
+    await warmUpAgentBrowserDaemon(namespace)
+  }
+}
+
 opencodeServerManager.start()
   .then(() => {
     logger.info(`OpenCode server running on port ${opencodeServerManager.getPort()}`)
-    warmUpAgentBrowserDaemon().catch((error) => {
+    warmUpAllAgentBrowserDaemons().catch((error) => {
       logger.error('Agent-browser daemon warm-up error:', error)
     })
   })
@@ -367,7 +376,7 @@ healthCheckInterval = setInterval(() => {
 
 let agentBrowserWarmupInterval: NodeJS.Timeout | null = null
 agentBrowserWarmupInterval = setInterval(() => {
-  warmUpAgentBrowserDaemon().catch((error) => {
+  warmUpAllAgentBrowserDaemons().catch((error) => {
     logger.error('Agent-browser daemon re-warm-up error:', error)
   })
 }, 60_000)

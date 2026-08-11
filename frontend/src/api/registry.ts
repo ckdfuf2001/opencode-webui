@@ -22,7 +22,24 @@ export interface RegisterResult {
   path: string
 }
 
+export interface RegistryEntry {
+  name: string
+  scope: RegistryScope
+  path: string
+  content: string
+}
+
 export const registryApi = {
+  list: async (
+    type: RegistryType,
+    directory?: string
+  ): Promise<RegistryEntry[]> => {
+    const { data } = await axios.get(`${API_BASE_URL}/api/registry/${type}`, {
+      params: directory ? { directory } : {},
+    })
+    return data
+  },
+
   register: async (
     payload: RegisterRequest,
     directory?: string
