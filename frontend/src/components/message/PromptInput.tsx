@@ -96,7 +96,7 @@ export function PromptInput({
   const session = sessionData.data as SessionWithModel | undefined
   const { data: config } = useConfig(opcodeUrl)
   const { preferences, updateSettings } = useSettings()
-  const { filterCommands } = useCommands(opcodeUrl)
+  const { filterCommands } = useCommands(opcodeUrl, directory)
   const { executeCommand } = useCommandHandler({
     opcodeUrl,
     sessionID,
@@ -144,7 +144,7 @@ export function PromptInput({
       
       if (command) {
         
-        executeCommand(command)
+        executeCommand(command, commandMatch[2] ?? '')
         setPrompt('')
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto'

@@ -22,26 +22,22 @@ export interface RegisterResult {
   path: string
 }
 
-export interface RegistryListItem {
-  type: RegistryType
-  scope: RegistryScope
+export interface RegistryEntry {
   name: string
-  description: string
-  content: string
-  mode?: string
+  scope: RegistryScope
   path: string
-}
-
-export interface RegistryListResponse {
-  items: RegistryListItem[]
+  content: string
 }
 
 export const registryApi = {
-  list: async (directory?: string): Promise<RegistryListItem[]> => {
-    const { data } = await axios.get<RegistryListResponse>(`${API_BASE_URL}/api/registry`, {
+  list: async (
+    type: RegistryType,
+    directory?: string
+  ): Promise<RegistryEntry[]> => {
+    const { data } = await axios.get(`${API_BASE_URL}/api/registry/${type}`, {
       params: directory ? { directory } : {},
     })
-    return data.items ?? []
+    return data
   },
 
   register: async (
@@ -51,21 +47,6 @@ export const registryApi = {
     const { data } = await axios.post(`${API_BASE_URL}/api/registry`, payload, {
       params: directory ? { directory } : {},
     })
-    return data
-  },
-
-  update: async (
-    type: RegistryType,
-    scope: RegistryScope,
-    currentName: string,
-    payload: { name: string; description: string; content: string; mode?: RegistryAgentMode },
-    directory?: string
-  ): Promise<RegisterResult> => {
-    const { data } = await axios.put(
-      `${API_BASE_URL}/api/registry/${type}/${scope}/${encodeURIComponent(currentName)}`,
-      payload,
-      { params: directory ? { directory } : {} }
-    )
     return data
   },
 
