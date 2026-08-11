@@ -4,6 +4,7 @@ import path from 'path'
 import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
+import { killLingeringAgentBrowser } from './default-mcp'
 
 let preferredOpenCodeBin: string | null = null
 let cachedBinary: string | null | undefined
@@ -286,7 +287,7 @@ class OpenCodeServerManager {
   private async httpResponds(port: number): Promise<boolean> {
     try {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 1500)
+      const timer = setTimeout(() => controller.abort(), 4000)
       const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: controller.signal })
       clearTimeout(timer)
       return res.ok
@@ -298,7 +299,7 @@ class OpenCodeServerManager {
   private async isOurBackend(port: number): Promise<boolean> {
     try {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 1500)
+      const timer = setTimeout(() => controller.abort(), 4000)
       const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: controller.signal })
       clearTimeout(timer)
       if (!res.ok) return false
@@ -472,4 +473,15 @@ export async function prepareBackendPort(port: number): Promise<void> {
 
   logger.warn(`Port ${port} is occupied by a stale process; freeing it`)
   await opencodeServerManager.freePortPublic(port)
+
+  if ((await opencodeServerManager.findProcessesByPortPublic(port)).length > 0) {
+    logger.warn(`Port ${port} still occupied after termination attempt; cleaning up lingering agent-browser MCP processes`)
+    killLingeringAgentBrowser()
+    await new Promise((r) => setTimeout(r, 2000))
+    if ((await opencodeServerManager.findProcessesByPortPublic(port)).length > 0) {
+      throw new Error(
+        `Port ${port} is held by a process that could not be freed. Stop it manually or change PORT in .env.`
+      )
+    }
+  }
 }

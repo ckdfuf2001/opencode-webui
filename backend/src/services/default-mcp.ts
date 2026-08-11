@@ -1,6 +1,6 @@
 import path from 'node:path'
-import { spawn, execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, execFileSync, execSync } from 'node:child_process'
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { ENV, getWorkspacePath, getReposPath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 
@@ -205,4 +205,40 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
     }
   }
   return { ...content, mcp } as T
+}
+
+export function killLingeringAgentBrowser(): void {
+  if (process.platform !== 'win32') {
+    return
+  }
+  if (typeof process.env.TEMP !== 'string') {
+    return
+  }
+  const script = [
+    '$processes = Get-CimInstance Win32_Process | Where-Object {',
+    "  ($_.Name -eq 'agent-browser.exe') -or",
+    "  ($_.ExecutablePath -like '*agent-browser*') -or",
+    "  ($_.CommandLine -like '*doc_reader_mcp.py*')",
+    '}',
+    'foreach ($process in $processes) {',
+    '  Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue',
+    '}',
+  ].join('\n')
+  const scriptPath = path.join(process.env.TEMP, `opencode-webui-cleanup-${process.pid}.ps1`)
+  try {
+    writeFileSync(scriptPath, script, 'utf8')
+    execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`, {
+      stdio: 'ignore',
+      timeout: 15_000,
+    })
+    logger.info('Cleaned up lingering agent-browser MCP processes')
+  } catch {
+    logger.warn('Failed to clean up lingering agent-browser processes')
+  } finally {
+    try {
+      rmSync(scriptPath, { force: true })
+    } catch {
+      // ignore cleanup of the temp script
+    }
+  }
 }

@@ -142,7 +142,7 @@ cd opencode-webui
 # Start with Docker Compose (single container)
 docker-compose up -d
 
-# Access the application at http://localhost:5001
+# Access the application at http://localhost:5003
 ```
 
 The Docker setup automatically:
@@ -269,11 +269,10 @@ Chromium** from `vendor/` into `bin/` when present (no download), and sets up
 
 The `doc-reader` MCP server (`read_document` / `edit_document`) lets the
 assistant read and edit Office/PDF files (including DRM-protected ones) in
-chat. The dev environment setup scripts (`setup-dev.bat` / `setup-dev.sh` /
-`docker-entrypoint.sh`) run `scripts/register-default-mcp.js`, which merges the
-server into the git-ignored workspace config
-(`workspace/.config/opencode/opencode.json`) if it is not already there. To use
-these tools in chat:
+chat. The backend registers the server automatically at startup: every time the
+server boots, `syncDefaultConfigToDisk()` merges it into the git-ignored
+workspace config (`workspace/.config/opencode/opencode.json`) if it is not
+already there. To use these tools in chat:
 
 1. **Requirements** — the dev Python env must have the conversion libs and
    `fastmcp`. The dev setup scripts (`setup-dev.bat` / `setup-dev.sh` /
@@ -285,9 +284,9 @@ these tools in chat:
    (your copy of `opencode-webui` uses the same machine/`python` to run
    `backend/scripts/doc_converter.py`.)
 
-2. **Register the server** — run the dev setup once (or call
-   `node scripts/register-default-mcp.js` directly); it is idempotent and only
-   adds `doc-reader` when missing. To register manually instead — via the Web UI
+2. **Server registration is automatic** — the backend merges `doc-reader` into
+   `workspace/.config/opencode/opencode.json` at every startup, so a fresh clone
+   gets it on the first boot. To register manually instead — via the Web UI
    **Settings → MCP Servers → Add Local Server**, or by appending to
    `workspace/.config/opencode/opencode.json`:
    ```json
@@ -297,10 +296,10 @@ these tools in chat:
        "command": [
          "python",
          "D:\\path\\to\\opencode_web\\backend\\scripts\\doc_reader_mcp.py"
-       ],
-       "env": {
-         "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5001",
-         "OPCODE_WEBUI_WORKSPACE": "D:\\path\\to\\opencode_web\\workspace"
+],
+        "env": {
+          "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5002",
+          "OPCODE_WEBUI_WORKSPACE": "D:\\path\\to\\opencode_web\\workspace"
        }
      }
    }
@@ -310,7 +309,7 @@ these tools in chat:
    restarts and `read_document`/`edit_document` become available in chat.
 
    > Registration lives in the git-ignored workspace database, so a fresh clone
-   > gets it only after running a setup script (or the register script). A
+   > gets it automatically on the first backend boot. A
    > ready-made snippet is also tracked in the repo at
    > `config-templates/opencode.mcp.doc-reader.json` for manual merges.
 
@@ -337,13 +336,14 @@ install is required**:
 - `npm run agent-browser:update` — re-runs the install with `--force` to fetch
   the latest releases (a dedicated update command).
 - The dev setup scripts (`setup-dev.bat` / `setup-dev.sh` / `docker-entrypoint.sh`)
-  call the installer automatically (idempotent — skips when already installed)
-  before `scripts/register-default-mcp.js`.
+  call the installer automatically (idempotent — skips when already installed).
+  MCP registration itself needs no separate step: the backend merges the
+  `agent-browser` entry into the git-ignored workspace config
+  (`workspace/.config/opencode/opencode.json`) at startup using the vendored
+  binary (`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk`).
 
-`scripts/register-default-mcp.js` then registers the MCP server into the
-git-ignored workspace config (`workspace/.config/opencode/opencode.json`) using
-the vendored binary. The entry pins three env vars and a fixed namespace so the
-MCP server talks to the same daemon the backend pre-warms (see below):
+The entry pins three env vars and a fixed namespace so the MCP server talks to
+the same daemon the backend pre-warms (see below):
 
 ```json
 "mcp": {
@@ -459,7 +459,7 @@ git worktree root). The register dialog writes commands, skills, plugins
 ### Data Flow
 
 ```
-Browser (React) → Backend (Hono, :5001) → OpenCode Server (Bun, :5551)
+Browser (React) → Backend (Hono, :5002) → OpenCode Server (Bun, :5551)
      ↑                  ↑                        ↑
   SSE client        SSE proxy              SSE source
   React Query       REST proxy             REST API
