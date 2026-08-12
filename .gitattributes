@@ -1,18 +1,19 @@
-# Vendor binaries via Git LFS (GitHub hard limit: 100MB/file)
-vendor/opencode/opencode.exe filter=lfs diff=lfs merge=lfs -text
-vendor/agent-browser/agent-browser-win32-x64.exe filter=lfs diff=lfs merge=lfs -text
-vendor/agent-browser/agent-browser-darwin-arm64 filter=lfs diff=lfs merge=lfs -text
-vendor/agent-browser/agent-browser-darwin-x64 filter=lfs diff=lfs merge=lfs -text
-vendor/agent-browser/agent-browser-linux-arm64 filter=lfs diff=lfs merge=lfs -text
-vendor/agent-browser/agent-browser-linux-x64 filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/chrome-*.zip filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.dll filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.exe filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.pak filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.dat filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.bin filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.so filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.dylib filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.hyb filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.pb filter=lfs diff=lfs merge=lfs -text
-vendor/chromium/**/*.snapshot filter=lfs diff=lfs merge=lfs -text
+# Binary files via Git LFS (GitHub hard limit: 100MB/file)
+bin/opencode/opencode.exe filter=lfs diff=lfs merge=lfs -text
+bin/opencode.exe filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/agent-browser.exe filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/agent-browser-darwin-arm64 filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/agent-browser-darwin-x64 filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/agent-browser-linux-arm64 filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/agent-browser-linux-x64 filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/chrome-*.zip filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.dll filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.exe filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.pak filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.dat filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.bin filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.so filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.dylib filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.hyb filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.pb filter=lfs diff=lfs merge=lfs -text
+bin/agent-browser/chromium/**/*.snapshot filter=lfs diff=lfs merge=lfs -text
