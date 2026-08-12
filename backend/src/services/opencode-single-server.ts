@@ -106,7 +106,6 @@ function invalidateBinaryCache(): void {
   cachedBinary = undefined
 }
 
-const OPENCODE_PORT_SCAN = 20
 const OPENCODE_DEFAULT_PORT = ENV.OPENCODE.PORT
 const OPENCODE_SERVER_DIRECTORY = getWorkspacePath()
 const OPENCODE_CONFIG_PATH = getOpenCodeConfigFilePath()
@@ -230,10 +229,7 @@ class OpenCodeServerManager {
     if (!binPath) return
     const existing = this.findPidsByPortSync(this.port)
     if (existing.length > 0) {
-      this.serverPid = existing[0] ?? null
-      this.isManaged = false
-      this.isHealthy = true
-      logger.info(`Attaching to existing OpenCode server on port ${this.port}`)
+      logger.info(`Port ${this.port} is occupied; deferring OpenCode launch to start()`)
       return
     }
     this.port = OPENCODE_DEFAULT_PORT
@@ -246,35 +242,30 @@ class OpenCodeServerManager {
     const source = `resolved binary: ${binPath}`
     logger.info(`Spawning OpenCode server from directory: ${serverDirectory} (${source})`)
 
-    const base = OPENCODE_DEFAULT_PORT
-    for (let offset = 0; offset < OPENCODE_PORT_SCAN; offset++) {
-      const candidate = base + offset
-      this.port = candidate
+    const candidate = OPENCODE_DEFAULT_PORT
+    this.port = candidate
 
-      if (await this.checkHealth()) {
-        const existingProcesses = await this.findProcessesByPort(candidate)
-        this.serverPid = existingProcesses[0]?.pid ?? null
-        this.isManaged = false
-        this.isHealthy = true
-        logger.info(`Attaching to existing healthy OpenCode server on port ${candidate}`)
-        return
-      }
-
-      await this.freePort(candidate)
-      this.launch(candidate, serverDirectory, binPath, isDevelopment)
-
-      if (await this.waitForHealth(20000)) {
-        this.isHealthy = true
-        logger.info(`OpenCode server is healthy on port ${candidate}`)
-        return
-      }
-
-      logger.warn(`OpenCode failed to become healthy on port ${candidate}, trying next port`)
-      await this.teardownCurrent()
-      await new Promise((r) => setTimeout(r, 500))
+    if (await this.checkHealth()) {
+      const existingProcesses = await this.findProcessesByPort(candidate)
+      this.serverPid = existingProcesses[0]?.pid ?? null
+      this.isManaged = false
+      this.isHealthy = true
+      logger.info(`Attaching to existing healthy OpenCode server on port ${candidate}`)
+      return
     }
 
-    throw new Error(`OpenCode server failed to become healthy on any candidate port (base ${base})`)
+    this.launch(candidate, serverDirectory, binPath, isDevelopment)
+
+    if (!(await this.waitForHealth(20000))) {
+      logger.warn(`OpenCode failed to become healthy on port ${candidate}`)
+      if (this.serverPid) {
+        await this.teardownCurrent()
+      }
+      throw new Error(`OpenCode server failed to become healthy on port ${candidate}`)
+    }
+
+    this.isHealthy = true
+    logger.info(`OpenCode server is healthy on port ${candidate}`)
   }
 
   private launch(
@@ -590,7 +581,6 @@ export async function prepareBackendPort(port: number): Promise<void> {
   logger.warn(`Port ${port} is occupied by a stale process; freeing it`)
   await opencodeServerManager.freePortPublic(port)
   killLingeringAgentBrowser()
-  await opencodeServerManager.freePortPublic(OPENCODE_DEFAULT_PORT)
 
   const waitMs = 20000
   const deadline = Date.now() + waitMs

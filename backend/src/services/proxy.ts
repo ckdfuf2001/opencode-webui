@@ -107,9 +107,9 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
 
     const retryable = (error: unknown): boolean => {
-      const code = (error as { cause?: { code?: string } })?.cause?.code
-        ?? (error as { code?: string })?.code
-      if (!code) return false
+      const code = (error as { cause?: { code?: unknown } })?.cause?.code
+        ?? (error as { code?: unknown })?.code
+      if (typeof code !== 'string' || !code) return false
       const normalized = code.toUpperCase()
       return normalized === 'ECONNREFUSED'
         || normalized === 'ECONNRESET'
