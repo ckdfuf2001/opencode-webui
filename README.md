@@ -372,8 +372,9 @@ being evicted between tool calls.
 > **Per-repo browser isolation:** every repo under `workspace/repos/` gets its
 > own project-level `opencode.json` where the backend writes an `agent-browser`
 > entry pinned to the shared `opencode` namespace plus a unique session
-> (`repo-<localPath>`), so all repos share one daemon while each gets its own
-> browser instance (cookies/storage/state) and repos never share/leak browser tabs
+> (`repo-<localPath>`), so all repos share one daemon and ONE Chrome tree while
+> each session runs in its own CDP browser context (cookies/storage/state) and
+> repos never share/leak browser tabs
 > (`writeRepoOpenCodeConfig()` + `repoAgentBrowserSession()` in
 > `backend/src/services/default-mcp.ts`). An existing `enabled: false` on the
 > agent-browser entry is preserved so a repo can opt out of the MCP. See
