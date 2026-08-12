@@ -18,5 +18,4 @@ workspace/
 /config/
 temp/
 
-
-bin/
+vendor/

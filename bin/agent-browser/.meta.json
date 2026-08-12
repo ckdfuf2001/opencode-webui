@@ -1,0 +1,7 @@
+{
+  "agentBrowserVersion": "vendor",
+  "chromiumVersion": "vendor",
+  "bin": "bin/agent-browser/bin/agent-browser.exe",
+  "executable": "bin/agent-browser/chromium/chrome-win64/chrome.exe",
+  "platform": "win32-x64"
+}
