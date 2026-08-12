@@ -55,10 +55,27 @@ async function resolveBinarySource(pkg) {
       const release = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/latest`)
       const asset = release?.assets?.find((a) => a.name === pkg)
       if (asset?.browser_download_url) {
-        return { version: release.tag_name, url: asset.browser_download_url, tarball: false }
+        return { version: release.tag_name, url: asset.browser_download_url, tarball: false, source: 'github' }
       }
+      console.warn(
+        '[install-agent-browser] WARN: ' + AGENT_BROWSER_GITHUB_REPO + ' release ' + release?.tag_name +
+        ' has no asset for platform "' + platformKey + '" (' + pkg + ').',
+      )
+      console.warn(
+        '  Falling back to the npm package (upstream agent-browser), which does NOT include',
+      )
+      console.warn(
+        '  the namespace-mode changes. Build the fork on ' + process.platform + ' and add an ' +
+        pkg + ' asset to the release, or run the installer with AGENT_BROWSER_GITHUB_REPO pointing',
+      )
+      console.warn(
+        '  at a fork that ships a ' + pkg + ' asset. See the agent-browser fork README.',
+      )
     } catch {
-      // fall through to npm
+      console.warn(
+        '[install-agent-browser] WARN: no reachable release for ' + AGENT_BROWSER_GITHUB_REPO +
+        ', falling back to the npm package (upstream agent-browser, no namespace-mode changes).',
+      )
     }
   }
   const pkgVersion = process.env.AGENT_BROWSER_VERSION || (await json('https://registry.npmjs.org/agent-browser/latest')).version
@@ -66,6 +83,7 @@ async function resolveBinarySource(pkg) {
     version: pkgVersion,
     url: `https://registry.npmjs.org/agent-browser/-/agent-browser-${pkgVersion}.tgz`,
     tarball: true,
+    source: 'npm',
   }
 }
 
