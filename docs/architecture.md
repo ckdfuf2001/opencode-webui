@@ -87,7 +87,8 @@ derived by `repoAgentBrowserSession()` in `backend/src/services/default-mcp.ts`.
 `writeRepoOpenCodeConfig()` (called on every repo clone/init, and once for all
 existing repos at backend startup) writes/merges that override into the repo root's
 `opencode.json`. Sessions isolate browser instances (cookies/storage/state) within
-the single shared daemon — one Chrome tree per active session, so cross-repo tabs
+the single shared daemon — every repo shares ONE Chrome tree in the `opencode`
+namespace, isolated via CDP browser contexts, so cross-repo tabs
 no longer leak/blank without a Chrome process per repo.
 
 `mergeDefaultMcpEntries(content)` (called from `ensureDefaultConfigExists()` and

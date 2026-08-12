@@ -121,9 +121,9 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
    백엔드가 `agent-browser` 항목만 **공용 namespace(`opencode`) + repo 전용 세션
    (`repo-<localPath>`)으로 직접 기록/병합**한다(`writeRepoOpenCodeConfig()`).
    repo가 클론/생성될 때마다 쓰고, 백엔드 시작 시 모든 기존 repo에도 보장한다.
-   모든 repo가 데몬 하나(`opencode`)를 공유하되 **세션마다 브라우저 인스턴스가
-   분리**되어(쿠키/스토리지/상태 격리, 활성 세션당 Chrome 트리 1개) 서로의 탭이
-   공유/비는 문제가 없다. 전역 동기화가 이 파일을 덮어쓰지 않으므로 repo 자신의 config
+    모든 repo가 데몬 하나(`opencode`)를 공유하되 **세션마다 CDP 브라우저 컨텍스트가
+    분리**되어(쿠키/스토리지/상태 격리, 네임스페이스당 Chrome 트리 1개 공유) 서로의 탭이
+    공유/비는 문제가 없다. 전역 동기화가 이 파일을 덮어쓰지 않으므로 repo 자신의 config
    키는 보존되고, 기존 `enabled: false`도 보존되어 repo에서 MCP를 끌 수 있다.
    브라우저 탭이 비거나 섞이면 `workspace/repos/<repo>/opencode.json`에 repo 전용
    `AGENT_BROWSER_SESSION`이 있는지 먼저 확인한다.

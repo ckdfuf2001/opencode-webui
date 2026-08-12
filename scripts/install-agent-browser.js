@@ -10,6 +10,8 @@ const binDir = join(outDir, 'bin')
 const chromeDir = join(outDir, 'chromium')
 const metaFile = join(outDir, '.meta.json')
 
+const AGENT_BROWSER_GITHUB_REPO = process.env.AGENT_BROWSER_GITHUB_REPO || 'ckdfuf2001/agent-browser'
+
 const platformKey = `${os.platform()}-${os.arch()}`
 
 const AGENT_BROWSER_BIN = {
@@ -43,6 +45,28 @@ async function json(url) {
   const res = await fetch(url)
   if (!res.ok) throw new Error('HTTP ' + res.status + ' for ' + url)
   return res.json()
+}
+
+async function resolveBinarySource(pkg) {
+  // Prefer the fork's GitHub release first (asset names match the npm binaries),
+  // and fall back to the published npm package when no release asset exists.
+  if (!process.env.AGENT_BROWSER_VERSION) {
+    try {
+      const release = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/latest`)
+      const asset = release?.assets?.find((a) => a.name === pkg)
+      if (asset?.browser_download_url) {
+        return { version: release.tag_name, url: asset.browser_download_url, tarball: false }
+      }
+    } catch {
+      // fall through to npm
+    }
+  }
+  const pkgVersion = process.env.AGENT_BROWSER_VERSION || (await json('https://registry.npmjs.org/agent-browser/latest')).version
+  return {
+    version: pkgVersion,
+    url: `https://registry.npmjs.org/agent-browser/-/agent-browser-${pkgVersion}.tgz`,
+    tarball: true,
+  }
 }
 
 async function downloadTo(url, dest) {
@@ -120,8 +144,10 @@ async function installAgentBrowser() {
   const outBin = join(binDir, binDef.bin)
   const meta = existsSync(metaFile) ? JSON.parse(readFileSync(metaFile, 'utf8')) : null
 
+  const binaryLabel = (v) => (v === 'vendor' ? 'vendor' : v?.startsWith('v') ? v : 'v' + v)
+
   if (!force && existsSync(outBin) && meta?.executable && existsSync(join(root, meta.executable))) {
-    console.log('[install-agent-browser] agent-browser already present (' + (meta.agentBrowserVersion === 'vendor' ? 'vendor' : 'v' + meta.agentBrowserVersion ?? '?') + ').')
+    console.log('[install-agent-browser] agent-browser already present (' + binaryLabel(meta.agentBrowserVersion) + ').')
     console.log('  Update with: npm run agent-browser:update')
     return
   }
@@ -141,21 +167,24 @@ async function installAgentBrowser() {
     binaryVersion = 'vendor'
     console.log('  [vendor] binary copied from ' + rel(vendorBin))
   } else {
-    const pkgVersion = process.env.AGENT_BROWSER_VERSION || (await json('https://registry.npmjs.org/agent-browser/latest')).version
-    binaryVersion = pkgVersion
-    const tarballUrl = 'https://registry.npmjs.org/agent-browser/-/agent-browser-' + pkgVersion + '.tgz'
-    const tarballPath = join(os.tmpdir(), 'agent-browser-' + pkgVersion + '.tgz')
-    console.log('  [download] ' + tarballUrl)
-    await downloadTo(tarballUrl, tarballPath)
+    const source = await resolveBinarySource(binDef.pkg)
+    binaryVersion = source.version
+    console.log('  [download] ' + source.url)
+    if (source.tarball) {
+      const tarballPath = join(os.tmpdir(), 'agent-browser-' + source.version + '.tgz')
+      await downloadTo(source.url, tarballPath)
 
-    const pkgExtract = join(os.tmpdir(), 'agent-browser-pkg-' + pkgVersion)
-    rmSync(pkgExtract, { recursive: true, force: true })
-    mkdirSync(pkgExtract, { recursive: true })
-    extractTar(tarballPath, pkgExtract)
+      const pkgExtract = join(os.tmpdir(), 'agent-browser-pkg-' + source.version)
+      rmSync(pkgExtract, { recursive: true, force: true })
+      mkdirSync(pkgExtract, { recursive: true })
+      extractTar(tarballPath, pkgExtract)
 
-    const packagedBin = findFile(pkgExtract, [binDef.pkg])
-    if (!packagedBin) fail('could not find ' + binDef.pkg + ' inside the npm package')
-    copyFileSync(packagedBin, outBin)
+      const packagedBin = findFile(pkgExtract, [binDef.pkg])
+      if (!packagedBin) fail('could not find ' + binDef.pkg + ' inside the npm package')
+      copyFileSync(packagedBin, outBin)
+    } else {
+      await downloadTo(source.url, outBin)
+    }
   }
   if (process.platform !== 'win32') chmodSync(outBin, 0o755)
 
@@ -208,7 +237,7 @@ async function installAgentBrowser() {
   )
 
   console.log('[install-agent-browser] installed:')
-  console.log('  binary    -> ' + outBin + ' (' + (binaryVersion === 'vendor' ? 'vendor' : 'v' + binaryVersion) + ')')
+  console.log('  binary    -> ' + outBin + ' (' + binaryLabel(binaryVersion) + ')')
   console.log('  chromium  -> ' + chromeExe + ' (' + (chromiumVersion === 'vendor' ? 'vendor' : 'v' + chromiumVersion) + ')')
   console.log('  update with: npm run agent-browser:update')
 }
@@ -221,6 +250,7 @@ installAgentBrowser().catch((error) => {
     console.error('    $env:AGENT_BROWSER_INSECURE="1"; npm run agent-browser:install')
   }
   console.error('\nAlternatively set AGENT_BROWSER_VERSION=<x.y.z> to pin a specific agent-browser release.')
+  console.error('\nSet AGENT_BROWSER_GITHUB_REPO to pull the binary from a different GitHub release source (default: ckdfuf2001/agent-browser).')
   console.error('\nOffline: put your files under vendor/agent-browser/ and vendor/chromium/ (see vendor/README.md) and this installer copies them without any download.')
   process.exit(1)
 })

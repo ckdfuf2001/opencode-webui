@@ -68,15 +68,20 @@
   `AGENT_BROWSER_SESSION`.
 - agent-browser MCP uses a single long-lived daemon for the global `opencode`
   namespace; repos connect to it with distinct `AGENT_BROWSER_SESSION` values, and
-  each session is its own browser instance (cookies/storage/state isolated, one
-  Chrome tree per active session). On a cold start the daemon
+  every session in the namespace shares ONE daemon and ONE Chrome tree while each
+  session runs in its own CDP browser context (cookies/storage/tabs/navigation
+  isolated between repos). On a cold start the daemon
   inherits the MCP server's stdout pipe and `tools/call` hangs ~40-75s → the
   "first open fails" symptom. The backend pre-warms the global daemon via
   `warmUpAllAgentBrowserDaemons()` (after opencode server start + every 60s,
   skips if `agent-browser session info` already shows an active browser) and the 24h
   `AGENT_BROWSER_IDLE_TIMEOUT_MS` keeps it warm. When debugging MCP/browser
   issues, check `agent-browser session info --json` for
-  `active`/`browserLaunched` before blaming the config.
+  `active`/`browserLaunched` before blaming the config. The shared daemon
+  restarts (closing every session's browser) only when daemon-level options
+  (`--debug`, `--action-policy`, `--confirm-actions`, `--idle-timeout`,
+  `--default-timeout`, `--no-auto-dialog`) differ across commands in the
+  namespace, so keep those identical for every repo.
 - If `bin/agent-browser/.meta.json` or `bin/agent-browser/bin/…` is missing,
   `resolveAgentBrowser()` returns null and the agent-browser MCP entry is not
   registered — run `npm run agent-browser:install` (auto-run by predev).
