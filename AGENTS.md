@@ -55,33 +55,29 @@
   env vars (agent-browser must keep `AGENT_BROWSER_NAMESPACE=opencode` +
   `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000`). Do not hand-edit MCPs in
   `workspace/.config/opencode/opencode.json`; use the app UI.
-- **Per-repo browser isolation**: every repo under `workspace/repos/` gets its own
-  project-level `opencode.json` (written/merged by `writeRepoOpenCodeConfig()`,
-  `backend/src/services/default-mcp.ts`) that overrides only the `agent-browser`
-  MCP with the shared global namespace `opencode` plus a unique session
-  `repo-<localPath>` (`repoAgentBrowserSession()`). Global sync
-  (`syncDefaultConfigToDisk`) does NOT touch these repo-root files. Repo config
-  keys other than `mcp.agent-browser` are preserved when re-written; an existing
-  `enabled: false` on the agent-browser entry is also preserved so a repo can opt
-  out of the MCP. If a repo shows a blank/leaking browser tab, check that
-  `workspace/repos/<repo>/opencode.json` exists and carries the repo-specific
-  `AGENT_BROWSER_SESSION`.
-- agent-browser MCP uses a single long-lived daemon for the global `opencode`
-  namespace; repos connect to it with distinct `AGENT_BROWSER_SESSION` values, and
-  every session in the namespace shares ONE daemon and ONE Chrome tree while each
-  session runs in its own CDP browser context (cookies/storage/tabs/navigation
-  isolated between repos). On a cold start the daemon
-  inherits the MCP server's stdout pipe and `tools/call` hangs ~40-75s → the
-  "first open fails" symptom. The backend pre-warms the global daemon via
-  `warmUpAllAgentBrowserDaemons()` (after opencode server start + every 60s,
-  skips if `agent-browser session info` already shows an active browser) and the 24h
-  `AGENT_BROWSER_IDLE_TIMEOUT_MS` keeps it warm. When debugging MCP/browser
-  issues, check `agent-browser session info --json` for
-  `active`/`browserLaunched` before blaming the config. The shared daemon
-  restarts (closing every session's browser) only when daemon-level options
-  (`--debug`, `--action-policy`, `--confirm-actions`, `--idle-timeout`,
-  `--default-timeout`, `--no-auto-dialog`) differ across commands in the
-  namespace, so keep those identical for every repo.
+- **Agent-browser MCP is a singleton**: opencode does NOT forward the `env` field
+  of an MCP entry to the spawned `agent-browser.exe mcp` child (verified 2026-08),
+  and agent-browser ignores the `--session`/`--executable-path` CLI args when
+  resolving its daemon in MCP mode. So the MCP child always runs as session
+  `default` (namespace `opencode`, bundled chromium) regardless of the
+  per-repo `AGENT_BROWSER_SESSION` values. All browser activity therefore goes
+  through ONE shared daemon + ONE Chrome tree. Per-repo `opencode.json` files are
+  still written (`writeRepoOpenCodeConfig()`, unique `repo-<localPath>` session)
+  but the session is stripped by opencode, so repos cannot be isolated this way.
+- **Warm-up matches the real MCP spawn**: on a cold start the daemon inherits the
+  MCP server's stdout pipe and `tools/call` hangs until the browser launches → the
+  "first open fails" / `MCP error -32001: Request timed out` (~60s) symptom. The
+  backend pre-warms the `default` session via `warmUpAllAgentBrowserDaemons()`
+  (after opencode server start + every 60s). `warmUpAgentBrowserDaemon()` spawns
+  `agent-browser.exe mcp --namespace opencode` with all `AGENT_BROWSER_*` env vars
+  stripped — exactly like opencode does — and performs a real JSON-RPC
+  `agent_browser_open about:blank` to force the browser launch, then kills the MCP
+  child (the background daemon survives). Do NOT warm with `open --headed false`
+  or `AGENT_BROWSER_IDLE_TIMEOUT_MS`: that produces a different daemon profile and
+  the MCP restarts it on first use (measured ~45s instead of <300ms). When
+  debugging MCP/browser issues, check `AGENT_BROWSER_NAMESPACE=opencode
+  AGENT_BROWSER_SESSION=default agent-browser session info --json` for
+  `active`/`browserLaunched` before blaming the config.
 - If `bin/agent-browser/.meta.json` or `bin/agent-browser/bin/…` is missing,
   `resolveAgentBrowser()` returns null and the agent-browser MCP entry is not
   registered — run `npm run agent-browser:install` (auto-run by predev).

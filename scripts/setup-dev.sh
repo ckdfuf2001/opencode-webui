@@ -51,6 +51,14 @@ else
   exit 1
 fi
 
+# Git LFS (needed to check out the vendored binaries from the repo)
+if command -v git-lfs >/dev/null 2>&1 || git lfs version >/dev/null 2>&1; then
+  echo "  [+] Git LFS is installed"
+else
+  echo "  [x] Git LFS is NOT installed. Install it from: https://git-lfs.com (then run: git lfs install && git lfs pull)"
+  exit 1
+fi
+
 WORKSPACE_PATH="./workspace"
 
 echo

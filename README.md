@@ -183,14 +183,15 @@ docker exec -it opencode-web sh
 | pnpm     | Workspace package manager                      | `npm install -g pnpm` |
 | OpenCode | The AI agent CLI (`opencode serve`)            | bundled — copied from `vendor/` (see below) |
 | Git      | Repository cloning / worktrees                 | [git-scm.com](https://git-scm.com) |
-| Git LFS  | Pulls the vendored binaries in `vendor/`       | [git-lfs.com](https://git-lfs.com) |
+| Git LFS  | Materializes the vendored binaries in `bin/`      | [git-lfs.com](https://git-lfs.com) |
 
-> **OpenCode, agent-browser and Chromium are vendored** in the git-LFS-tracked
-> `vendor/` folder, so an air-gapped machine needs **no downloads**: the setup
-> copies `vendor/opencode/opencode.exe`, `vendor/agent-browser/…` and
-> `vendor/chromium/…` into `bin/` automatically (and falls back to a download
-> when `vendor/` is empty). After cloning, run `git lfs install` once so the
-> binary files are checked out:
+> **OpenCode, agent-browser and Chromium are vendored under `bin/`** and tracked
+> through Git LFS, so an air-gapped machine needs **no downloads**: a clone
+> pulls the real binaries (`bin/opencode.exe`, `bin/agent-browser/…`) once Git
+> LFS is installed. `vendor/` is an optional, **git-ignored offline fallback**:
+> the installers check it first and copy your files from there (no download),
+> and only fall back to a download when `vendor/` is empty. After cloning, run
+> `git lfs install` once so the binary files are checked out:
 >
 > ```
 > git lfs install
@@ -342,8 +343,11 @@ install is required**:
   (`workspace/.config/opencode/opencode.json`) at startup using the vendored
   binary (`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk`).
 
-The entry pins three env vars and a fixed namespace so the MCP server talks to
-the same daemon the backend pre-warms (see below):
+The entry pins the namespace and a 24h idle timeout so the MCP server talks to
+the same daemon the backend pre-warms (see below). Note that opencode **does not
+forward the `env` field** to the spawned MCP child — the env values below are
+informational and the session is always resolved as `default`; the `--namespace`
+flag is what actually matters:
 
 ```json
 "mcp": {
@@ -358,6 +362,7 @@ the same daemon the backend pre-warms (see below):
     "env": {
       "AGENT_BROWSER_EXECUTABLE_PATH": "D:\\path\\to\\opencode_web\\bin\\agent-browser\\chromium\\chrome-win64\\chrome.exe",
       "AGENT_BROWSER_NAMESPACE": "opencode",
+      "AGENT_BROWSER_SESSION": "opencode",
       "AGENT_BROWSER_IDLE_TIMEOUT_MS": "86400000"
     }
   }
@@ -369,30 +374,33 @@ the MCP server and the daemon only talk to each other when both use the same
 namespace. `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h) stops the daemon from
 being evicted between tool calls.
 
-> **Per-repo browser isolation:** every repo under `workspace/repos/` gets its
-> own project-level `opencode.json` where the backend writes an `agent-browser`
-> entry pinned to the shared `opencode` namespace plus a unique session
-> (`repo-<localPath>`), so all repos share one daemon and ONE Chrome tree while
-> each session runs in its own CDP browser context (cookies/storage/state) and
-> repos never share/leak browser tabs
-> (`writeRepoOpenCodeConfig()` + `repoAgentBrowserSession()` in
-> `backend/src/services/default-mcp.ts`). An existing `enabled: false` on the
-> agent-browser entry is preserved so a repo can opt out of the MCP. See
+> **Browser sessions are a singleton:** opencode strips the MCP entry's `env`
+> field when spawning the local MCP, and agent-browser ignores
+> `--session`/`--executable-path` in MCP mode — so every session resolves to the
+> same `default` session in the `opencode` namespace. All repos and the global
+> session therefore share ONE daemon and ONE Chrome tree
+> (`writeRepoOpenCodeConfig()` still writes a per-repo `opencode.json`, but the
+> session it carries is not honored by opencode). An existing `enabled: false`
+> on the agent-browser entry is preserved so a repo can opt out of the MCP. See
 > [`docs/architecture.md`](docs/architecture.md).
 
 > **Daemon warm-up (why the first `agent_browser_open` no longer hangs):**
-> the agent-browser MCP server spawns the `agent-browser` CLI per tool call,
-> which talks to a long-lived background daemon over a local socket. On a cold
-> start the daemon inherits the MCP server's stdout pipe, so the MCP server
-> never sees EOF and a `tools/call` waits 40-75s then times out. The backend
-> now pre-warms the daemon so the first tool call is fast:
-> - `backend/src/services/default-mcp.ts` → `warmUpAgentBrowserDaemon(namespace)`
->   runs `agent-browser --headed false open about:blank --json` right after the
->   opencode server starts, and `backend/src/index.ts` re-runs it every 60s
->   (self-heals a dead daemon). `warmUpAllAgentBrowserDaemons()` warms the
->   global `opencode` namespace **plus one namespace per repo in the DB** —
->   every repo's first `agent_browser_open` is fast, not just the first one.
->   It skips when `agent-browser session info` already reports an active browser.
+> the agent-browser MCP server talks to a long-lived background daemon over a
+> local socket. On a cold start the daemon inherits the MCP server's stdout
+> pipe, so the MCP server never sees EOF and a `tools/call` waits ~60s then
+> times out (`MCP error -32001: Request timed out`). The backend pre-warms the
+> daemon so the first tool call is fast:
+> - `backend/src/services/default-mcp.ts` → `warmUpAgentBrowserDaemon()` spawns
+>   `agent-browser.exe mcp --namespace opencode` with all `AGENT_BROWSER_*` env
+>   vars stripped — identical to how opencode itself spawns the MCP — and
+>   performs a real JSON-RPC `agent_browser_open about:blank` to force the
+>   browser launch, then kills the MCP client (the background daemon survives).
+>   `backend/src/index.ts` runs this after the opencode server starts and every
+>   60s (self-heals a dead daemon), skipping when `agent-browser session info`
+>   already reports an active browser.
+> - Warming the daemon with `open --headed false` or `AGENT_BROWSER_IDLE_TIMEOUT_MS`
+>   produces a different daemon profile, so the MCP restarts it on first use
+>   (~45s) — do not do that.
 > - `mergeDefaultMcpEntries` also **repairs env vars** (namespace + idle
 >   timeout) on sync, so a config regenerated from the DB keeps them even if a
 >   previous version was missing them.
