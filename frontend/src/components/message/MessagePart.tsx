@@ -177,8 +177,9 @@ case 'file':
       )
 case 'text':
       // @filename 패턴이 포함된 텍스트도 클릭 가능하게 함
-      const mentionRegex = /[@\u3131-\ud798]([^\s]+)/
-      const mentionMatch = (part.text || '').match(mentionRegex)
+      // @뒤 공백 전까지를 파일명으로 추출
+      const text = part.text || ''
+      const mentionMatch = text.match(/@(\S+)/)
       if (mentionMatch) {
         return (
           <span 
