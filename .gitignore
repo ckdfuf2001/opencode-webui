@@ -19,6 +19,7 @@ workspace/
 temp/
 
 vendor/
+!vendor/README.md
 
 # Chromium runtime-generated spellcheck dictionaries
 bin/agent-browser/chromium/**/Dictionaries/
