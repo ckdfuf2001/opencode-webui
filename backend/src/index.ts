@@ -359,7 +359,7 @@ for (const repo of listRepos(db)) {
 }
 
 async function warmUpAllAgentBrowserDaemons(): Promise<void> {
-  await warmUpAgentBrowserDaemon()
+  await warmUpAgentBrowserDaemon(undefined, 'default')
 }
 
 opencodeServerManager.spawnNow()

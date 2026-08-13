@@ -80,6 +80,16 @@ if %errorlevel%==0 (
   exit /b 1
 )
 
+REM Git LFS (needed to check out the vendored bin/opencode.exe and bin/agent-browser from the repo)
+where git-lfs >nul 2>nul
+if %errorlevel%==0 (
+  echo   [+] Git LFS is installed
+) else (
+  echo   [x] Git LFS is NOT installed.
+  echo       Install it from: https://git-lfs.com  (then run: git lfs install ^&^& git lfs pull)
+  exit /b 1
+)
+
 echo.
 echo [2/7] Creating workspace directories...
 if not exist "%WORKSPACE_PATH%\repos" mkdir "%WORKSPACE_PATH%\repos"

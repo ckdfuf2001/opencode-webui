@@ -99,69 +99,157 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   return true
 }
 
-export async function warmUpAgentBrowserDaemon(namespace: string = AGENT_BROWSER_NAMESPACE): Promise<boolean> {
+let warmUpInFlight: Promise<boolean> | null = null
+
+export function warmUpAgentBrowserDaemon(
+  namespace: string = AGENT_BROWSER_NAMESPACE,
+  session?: string,
+): Promise<boolean> {
+  if (warmUpInFlight) return warmUpInFlight
+  warmUpInFlight = doWarmUp(namespace, session).finally(() => {
+    warmUpInFlight = null
+  })
+  return warmUpInFlight
+}
+
+async function doWarmUp(
+  namespace: string = AGENT_BROWSER_NAMESPACE,
+  session?: string,
+): Promise<boolean> {
   const info = resolveAgentBrowser()
   if (!info) return false
-  if (isAgentBrowserDaemonWarm(info.binPath, namespace)) {
+  const sessionName = session ?? namespace
+  if (isAgentBrowserDaemonWarm(info.binPath, namespace, sessionName)) {
     if (agentBrowserWarmState !== 'warm') {
       agentBrowserWarmState = 'warm'
-      logger.info(`Agent-browser daemon is warm (namespace: ${namespace})`)
+      logger.info(`Agent-browser daemon is warm (namespace: ${namespace}, session: ${sessionName})`)
     }
     return true
   }
-  const env: Record<string, string> = {
-    ...process.env,
-    AGENT_BROWSER_NAMESPACE: namespace,
-    AGENT_BROWSER_SESSION: namespace,
-    AGENT_BROWSER_IDLE_TIMEOUT_MS,
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value
   }
-  if (info.executablePath && existsSync(info.executablePath)) {
-    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
-  }
-  return new Promise<boolean>((resolve) => {
-    const child = spawn(
-      info.binPath,
-      ['--headed', 'false', 'open', 'about:blank', '--json'],
-      { env, stdio: ['ignore', 'ignore', 'ignore'], detached: true },
-    )
-    child.unref()
-    const timer = setTimeout(() => {
-      child.kill()
-      if (agentBrowserWarmState !== 'cold') {
-        agentBrowserWarmState = 'cold'
-        logger.warn(`Agent-browser daemon warm-up timed out (namespace: ${namespace})`)
-      }
-      resolve(false)
-    }, 90_000)
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      if (agentBrowserWarmState !== 'cold') {
-        agentBrowserWarmState = 'cold'
-        logger.warn(`Agent-browser daemon warm-up failed (namespace: ${namespace}):`, error)
-      }
-      resolve(false)
-    })
-    child.on('exit', (code) => {
-      clearTimeout(timer)
-      const ok = code === 0
-      if (ok) {
+  delete env.AGENT_BROWSER_SESSION
+  delete env.AGENT_BROWSER_NAMESPACE
+  delete env.AGENT_BROWSER_EXECUTABLE_PATH
+  delete env.AGENT_BROWSER_IDLE_TIMEOUT_MS
+  const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  let succeeded = false
+  try {
+    const deadline = Date.now() + 240_000
+    while (Date.now() < deadline) {
+      const remaining = deadline - Date.now()
+      const ok = await openViaMcp(child, remaining)
+      if (ok && isAgentBrowserDaemonWarm(info.binPath, namespace, sessionName)) {
         if (agentBrowserWarmState !== 'warm') {
           agentBrowserWarmState = 'warm'
-          logger.info(`Agent-browser daemon warmed up successfully (namespace: ${namespace})`)
+          logger.info(`Agent-browser daemon warmed up (namespace: ${namespace}, session: ${sessionName})`)
         }
-      } else if (agentBrowserWarmState !== 'cold') {
-        agentBrowserWarmState = 'cold'
-        logger.warn(`Agent-browser warm-up exited with code ${code} (namespace: ${namespace})`)
+        succeeded = true
+        break
       }
-      resolve(ok)
-    })
-  })
+      if (Date.now() < deadline) await sleep(5_000)
+    }
+  } catch (error) {
+    logger.warn(`Agent-browser warm-up interrupted (namespace: ${namespace}, session: ${sessionName}):`, error)
+  } finally {
+    try {
+      child.kill()
+    } catch {
+      // ignore
+    }
+  }
+  if (succeeded) return true
+  if (agentBrowserWarmState !== 'cold') {
+    agentBrowserWarmState = 'cold'
+    logger.warn(`Agent-browser warm-up timed out (namespace: ${namespace}, session: ${sessionName})`)
+  }
+  return false
 }
 
-function isAgentBrowserDaemonWarm(binPath: string, namespace: string): boolean {
+async function openViaMcp(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<boolean> {
+  const stdout = child.stdout
+  const stdin = child.stdin
+  if (!stdout || !stdin) return false
+  let buf = ''
+  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  let nextId = 1
+  let settled = false
+  const waitResponse = new Promise<boolean>((resolve, reject) => {
+    stdout.on('data', (d: Buffer) => {
+      buf += d.toString()
+      let idx
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx)
+        buf = buf.slice(idx + 1)
+        if (!line.trim()) continue
+        let msg: { id?: number; result?: { isError?: boolean }; error?: { message?: string } } | null = null
+        try {
+          msg = JSON.parse(line) as { id?: number; result?: { isError?: boolean }; error?: { message?: string } }
+        } catch {
+          continue
+        }
+        if (!msg || msg.id === undefined) continue
+        const entry = pending.get(msg.id)
+        if (!entry) continue
+        clearTimeout(entry.timer)
+        pending.delete(msg.id)
+        if (msg.error) entry.reject(new Error(JSON.stringify(msg.error)))
+        else entry.resolve(msg.result)
+      }
+    })
+    child.on('error', (e) => reject(e))
+    child.on('exit', () => {
+      if (!settled) {
+        settled = true
+        resolve(false)
+      }
+    })
+  })
+  const send = (method: string, params: Record<string, unknown>): Promise<unknown> => {
+    const id = nextId++
+    const req = { jsonrpc: '2.0', id, method, params }
+    stdin.write(JSON.stringify(req) + '\n')
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id)
+        reject(new Error('NO RESPONSE within timeout'))
+      }, Math.max(timeoutMs, 5_000))
+      pending.set(id, { resolve, reject, timer })
+    })
+  }
   try {
+    await send('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'opencode-webui', version: '1.0.0' } })
+    await send('tools/list', {})
+    const res = (await send('tools/call', {
+      name: 'agent_browser_open',
+      arguments: { url: 'about:blank' },
+    })) as { isError?: boolean } | undefined
+    return res?.isError !== true
+  } catch (error) {
+    logger.warn(`Agent-browser MCP warm open failed:`, error)
+    return false
+  } finally {
+    settled = true
+    for (const entry of pending.values()) clearTimeout(entry.timer)
+    pending.clear()
+    waitResponse.catch(() => undefined)
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isAgentBrowserDaemonWarm(binPath: string, namespace: string, session?: string): boolean {
+  try {
+    const sessionName = session ?? namespace
     const output = execFileSync(binPath, ['session', 'info', '--json'], {
-      env: { ...process.env, AGENT_BROWSER_NAMESPACE: namespace, AGENT_BROWSER_SESSION: namespace },
+      env: { ...process.env, AGENT_BROWSER_NAMESPACE: namespace, AGENT_BROWSER_SESSION: sessionName },
       encoding: 'utf8',
       timeout: 10_000,
       stdio: ['ignore', 'pipe', 'ignore'],
