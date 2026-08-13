@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { FileTree } from './FileTree'
 import { FileOperations } from './FileOperations'
 import { FilePreview } from './FilePreview'
@@ -26,7 +27,22 @@ interface FileBrowserProps {
 
 export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState(basePath)
-  const [files, setFiles] = useState<FileInfo | null>(null)
+  const queryClient = useQueryClient()
+  const { data: files } = useQuery<FileInfo, Error>({
+    queryKey: ['files'],
+    queryFn: async () => {
+      if (!currentPath) return null
+      const response = await fetch(`${API_BASE_URL}/api/files/${currentPath}`)
+      if (!response.ok) throw new Error('Failed to load files')
+      return response.json()
+    },
+    enabled: !!currentPath,
+    staleTime: 60 * 1000,
+  })
+  
+  const setFiles = useCallback((data: FileInfo | null) => {
+    queryClient.setQueryData(['files'], data)
+  }, [queryClient])
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
@@ -258,9 +274,7 @@ useEffect(() => {
     }
   }, [isPreviewModalOpen])
 
-  const filteredFiles = files?.children?.filter(file =>
-    file.name.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const filteredFiles = files?.children?.filter((file: FileInfo) => file.name.toLowerCase().includes(searchQuery.toLowerCase()))
 
   if (embedded) {
     return (
@@ -282,7 +296,7 @@ useEffect(() => {
         )}
         
         {/* Mobile: Full width file listing, Desktop: Split view */}
-        <div className="flex-1 flex overflow-hidden min-h-0 h-full">
+        <div className="flex-1 flex overflow-hidden min-h-0 h-full min-h-[600px]">
           <div className={`${isMobile ? 'w-full' : 'w-[30%]'} border-r border-border px-4 flex flex-col min-h-0 h-full`}>
             <div className="sticky top-0 z-20 bg-background flex items-center gap-2 py-3 flex-shrink-0 pointer-events-auto">
               <Input
