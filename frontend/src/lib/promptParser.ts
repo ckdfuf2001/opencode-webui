@@ -1,7 +1,7 @@
 import type { ContentPart, FileInfo } from '@/api/types'
 
-export const MENTION_PATTERN = /@([\w\u3131-\ud798\s-./]+)/g
-export const MENTION_TRIGGER_PATTERN = /(^|\s)@([\w\u3131-\ud798\s-]*)$/
+export const MENTION_PATTERN = /@(\S+)/g
+export const MENTION_TRIGGER_PATTERN = /(^|\s)@(\S*)$/
 
 export interface MentionTrigger {
   start: number
