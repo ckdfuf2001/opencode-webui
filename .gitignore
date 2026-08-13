@@ -18,7 +18,7 @@ workspace/
 /config/
 temp/
 
-vendor/
+vendor/*
 !vendor/README.md
 
 # Chromium runtime-generated spellcheck dictionaries
