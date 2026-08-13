@@ -165,7 +165,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           {messageTextContent && <TTSButton content={messageTextContent} />}
         </div>
       )
-    case 'file':
+case 'file':
       return (
         <span 
           className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer"
@@ -175,6 +175,22 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           <span className="font-medium">{part.filename || 'File'}</span>
         </span>
       )
+    case 'text':
+      // @filename 패턴이 포함된 텍스트도 클릭 가능하게 함
+      const mentionRegex = /@([A-Za-z0-9_.-]+)/
+      const mentionMatch = (part.text || '').match(mentionRegex)
+      if (mentionMatch) {
+        return (
+          <span 
+            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer"
+            onClick={() => onFileClick?.(mentionMatch[1])}
+          >
+            <span className="text-blue-400">@</span>
+            <span className="font-medium">@{mentionMatch[1]}</span>
+          </span>
+        )
+      }
+      return <span>{part.text}</span>
     default:
       return 
   }
