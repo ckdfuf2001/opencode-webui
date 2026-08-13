@@ -167,7 +167,10 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       )
     case 'file':
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300">
+        <span 
+          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer"
+          onClick={() => onFileClick?.(part.filename || '')}
+        >
           <span className="text-blue-400">@</span>
           <span className="font-medium">{part.filename || 'File'}</span>
         </span>
