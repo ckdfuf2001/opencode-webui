@@ -86,8 +86,18 @@ if %errorlevel%==0 (
   echo   [+] Git LFS is installed
 ) else (
   echo   [x] Git LFS is NOT installed.
-  echo       Install it from: https://git-lfs.com  (then run: git lfs install ^&^& git lfs pull)
+  echo       Install it from: https://git-lfs.com
+  echo       Then run: git lfs install ^&^& git lfs pull
   exit /b 1
+)
+
+REM Verify the vendored binaries are real files, not LFS pointers left by a clone without git lfs pull
+if exist "bin\opencode.exe" (
+  findstr /m "git-lfs.github.com/spec/v1" "bin\opencode.exe" >nul 2>nul
+  if not errorlevel 1 (
+    echo   [x] Vendored binaries are Git LFS pointers; run: git lfs install ^&^& git lfs pull
+    exit /b 1
+  )
 )
 
 echo.
