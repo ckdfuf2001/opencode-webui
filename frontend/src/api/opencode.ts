@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance } from 'axios'
 import type { components, paths } from './opencode-types'
+import { showToast } from '@/lib/toast'
 
 type SessionListResponse = paths['/session']['get']['responses']['200']['content']['application/json']
 type SessionResponse = paths['/session/{id}']['get']['responses']['200']['content']['application/json']
@@ -22,7 +23,7 @@ export class OpenCodeClient {
     this.directory = directory
     this.client = axios.create({
       baseURL,
-      timeout: 30000
+      timeout: 600000
     })
     
     this.client.interceptors.request.use((config) => {
@@ -31,6 +32,43 @@ export class OpenCodeClient {
       }
       return config
     })
+
+    this.client.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        if (error.message?.includes?.('timeout') && error?.config?.url?.includes?.('/session')) {
+          try {
+            const healthy = await this.checkServerHealth()
+            const port = this.baseURL != null && this.baseURL.includes(':') ? this.baseURL!.split(':').pop()!.split('/')[0] : 'unknown'
+            const msg = `Answer is generating over Timeout 600 sec, Backend is ${healthy ? 'alived' : 'not alived'} at port ${port}`
+            console.warn(msg)
+            // Show warning but don't add error to chat - show toast only once
+            showToast.warning(msg)
+            return Promise.resolve({}) // Return empty to prevent chat error display
+          } catch (checkError) {
+            // Health check failed, show normal error
+            console.error('Health check error:', checkError)
+          }
+        }
+        return Promise.reject(error)
+      }
+    )
+  }
+
+  private async checkServerHealth(): Promise<boolean> {
+    try {
+      const base = this.baseURL.startsWith('http')
+        ? this.baseURL
+        : `${window.location.origin}${this.baseURL}`
+      const healthUrl = new URL(`${base}/health`)
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+      const response = await fetch(healthUrl.toString(), { signal: controller.signal })
+      clearTimeout(timeoutId)
+      return response.ok
+    } catch {
+      return false
+    }
   }
 
   setDirectory(directory: string) {

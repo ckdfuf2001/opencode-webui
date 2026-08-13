@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getRepo } from "@/api/repos";
@@ -38,6 +39,7 @@ export function SessionDetail() {
   const repoId = parseInt(id || "0");
   const { preferences, updateSettings } = useSettings();
   const messageContainerRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient()
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
@@ -261,7 +263,7 @@ export function SessionDetail() {
     setInjectedPrompt(null)
   }, []);
 
-  const handleGlobalDrop = useCallback(async (e: DragEvent) => {
+const handleGlobalDrop = useCallback(async (e: DragEvent) => {
     const files = e.dataTransfer?.files
     if (!files || files.length === 0 || !repo?.localPath) return
 
@@ -293,12 +295,13 @@ export function SessionDetail() {
       }
     }
 
-    if (results.length > 0) {
+if (results.length > 0) {
       setInjectedFile((prev) => ({
         token: (prev?.token ?? 0) + 1,
         files: results,
       }))
       showToast.success(`Uploaded ${results.length} file(s) to project`)
+      queryClient?.invalidateQueries({ queryKey: ['files'] })
     } else {
       showToast.error(lastError || 'Upload failed')
     }
