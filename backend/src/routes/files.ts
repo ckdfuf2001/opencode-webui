@@ -6,9 +6,18 @@ import { logger } from '../utils/logger'
 export function createFileRoutes(_database: Database) {
   const app = new Hono()
 
+  const decodePath = (c: { req: { path: string } }) =>
+    c.req.path.replace(/^\/api\/files\//, '').replace(/%2F/gi, '/').split('/').map((seg) => {
+      try {
+        return decodeURIComponent(seg)
+      } catch {
+        return seg
+      }
+    }).join('/')
+
   app.get('/*', async (c) => {
     try {
-      const userPath = c.req.path.replace(/^\/api\/files\//, '') || ''
+      const userPath = decodePath(c)
       const download = c.req.query('download') === 'true'
       const raw = c.req.query('raw') === 'true'
       const startLineParam = c.req.query('startLine')
@@ -58,7 +67,7 @@ export function createFileRoutes(_database: Database) {
 
   app.post('/*', async (c) => {
     try {
-      const path = c.req.path.replace(/^\/api\/files\//, '') || ''
+      const path = decodePath(c)
       const body = await c.req.parseBody()
       
       const file = body.file as File
@@ -76,7 +85,7 @@ export function createFileRoutes(_database: Database) {
 
   app.put('/*', async (c) => {
     try {
-      const path = c.req.path.replace(/^\/api\/files\//, '') || ''
+      const path = decodePath(c)
       const body = await c.req.json()
       
       const result = await fileService.createFileOrFolder(path, body)
@@ -89,7 +98,7 @@ export function createFileRoutes(_database: Database) {
 
   app.delete('/*', async (c) => {
     try {
-      const path = c.req.path.replace(/^\/api\/files\//, '') || ''
+      const path = decodePath(c)
       
       await fileService.deleteFileOrFolder(path)
       return c.json({ success: true })
@@ -101,7 +110,7 @@ export function createFileRoutes(_database: Database) {
 
   app.patch('/*', async (c) => {
     try {
-      const path = c.req.path.replace(/^\/api\/files\//, '') || ''
+      const path = decodePath(c)
       const body = await c.req.json()
       
       if (body.patches && Array.isArray(body.patches)) {

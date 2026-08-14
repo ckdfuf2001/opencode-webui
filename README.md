@@ -34,7 +34,10 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **Upload Notifications** - Success/error toasts after upload (shows the actual saved name when a filename collision is auto-renamed, or the blocked extension on rejection)
 - **Safe Type Allowance** - Uploads accept most file types (Office, PDF, images, archives, etc.); only a small blacklist of executable/script types (`.exe`, `.bat`, `.cmd`, `.com`, `.scr`, `.vbs`, `.ps1`, `.msi`, `.dll`, `.lnk`) is rejected
 - **Auto-Rename on Collision** - If a file with the same name already exists, the upload is saved as `name (1).ext`, `name (2).ext`, etc.
-- **Session Drag-and-Drop** - With a chat session open, dropping files anywhere on the page uploads them to the project root and inserts their `@path` mention into the prompt for the assistant
+- **Session Drag-and-Drop** - With a chat session open, dropping files anywhere on the page uploads them to the repo's `chat_uploads/` folder and inserts their `@'path'` mention into the prompt for the assistant
+- **Clipboard Paste Upload** - With a chat session open, pasting files/images (Ctrl+V) uploads them to `chat_uploads/` and inserts an `@'path'` mention into the prompt
+- **Clickable File Mentions** - `@'path'` mentions render as clickable chips in chat history; clicking opens the file in the file browser (handles `chat_uploads/` files, `file://` URLs and base64 data-URL parts alike)
+- **Edit & Resend Restores Mentions** - Editing a sent message rebuilds the prompt with quoted `@'filename'` mentions (and drops the "Called the ... tool" artifacts), so resending keeps the file attachments
 
 ### Chat & Session Features
 - **Slash Commands** - Built-in commands (`/help`, `/new`, `/models`, `/export`, `/compact`, etc.)
@@ -75,6 +78,18 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **Custom Endpoints** - Connect to local or self-hosted TTS services
 
 ## Added Features
+
+### Chat File Uploads
+- **`chat_uploads/` upload folder** - Files dropped or pasted into a chat session are uploaded to `<repo>/chat_uploads/`, keeping them separate from the repo source; the folder is git-ignored along with the rest of the workspace
+- **Quoted mentions** - Attachments are always referenced as `@'chat_uploads/<name>'` (single-quoted), so Korean/spaced filenames survive mention parsing on both the send and edit paths
+- **Unsupported-file fallback** - Files whose MIME type opencode cannot handle (`application/octet-stream`, e.g. `.xls`) are sent as a quoted text mention instead of a `file` part, so the session never aborts with "functionality not supported"; the mention stays clickable in history
+- **File URL resolution** - Attached files are sent to opencode as `file:///C:/...` URLs (Windows-absolute, backslash-normalized, space-encoded), which opencode resolves reliably
+- **Optimistic history** - The optimistic user message mirrors the above rules so the UI matches what the server stores
+- **Edit round-trip** - `MessageThread.getEditablePrompt()` rebuilds the edit prompt from the stored parts: file parts become `@'filename'`, unquoted text mentions are re-quoted, and "Called the ... tool" artifacts are stripped
+
+### File Browser
+- **Path decoding** - `backend/src/routes/files.ts` now percent-decodes each path segment (`decodePath`), so filenames with Korean characters, spaces, or parens load correctly instead of 404
+- **Mention click resolution** - Clicking a `@filename` chip whose path was stripped to a bare name by opencode falls back to `<repo>/chat_uploads/<name>` when that file exists
 
 ### Document Viewer (DRM Office/PDF)
 - **DRM-Protected Document Preview** - Preview DRM-protected Office documents directly in the browser by converting them through the local desktop Microsoft Office COM (doc, docx, xls, xlsx, ppt, pptx -> PDF), then rendering with pdf.js
