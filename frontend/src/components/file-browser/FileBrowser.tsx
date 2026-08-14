@@ -14,6 +14,16 @@ import { useMobile } from '@/hooks/useMobile'
 import { useFile } from '@/api/files'
 import { showToast } from '@/lib/toast'
 
+const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
+
+const clampToBasePath = (path: string, base: string): string => {
+  const current = normalizePath(path)
+  const basePath = normalizePath(base)
+  if (!basePath) return current
+  if (current === basePath || current.startsWith(basePath + '/')) return current
+  return basePath
+}
+
 
 
 
@@ -73,17 +83,18 @@ useEffect(() => {
   const loadFiles = async (path: string) => {
     setLoading(true)
     setError(null)
+    const resolvedPath = clampToBasePath(path, basePath)
     
     try {
-      const response = await fetch(`${API_BASE_URL}/api/files/${path}`)
+      const response = await fetch(`${API_BASE_URL}/api/files/${resolvedPath}`)
       if (!response.ok) {
         throw new Error(`Failed to load files: ${response.statusText}`)
       }
       
       const data = await response.json()
       setFiles(data)
-      setCurrentPath(path)
-      onDirectoryLoad?.({ workspaceRoot: data.workspaceRoot, currentPath: path })
+      setCurrentPath(resolvedPath)
+      onDirectoryLoad?.({ workspaceRoot: data.workspaceRoot, currentPath: resolvedPath })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load files')
     } finally {
