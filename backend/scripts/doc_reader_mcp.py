@@ -56,7 +56,7 @@ def read_document(path: str) -> str:
 
 @mcp.tool()
 def download_attachment(path: str, index: int, destination: str = "") -> str:
-    """Save an attachment of an Outlook MSG email to disk. path is the .msg file (absolute or workspace-relative). index is the 0-based position shown in read_document's Attachments list. destination is an optional folder (absolute or workspace-relative); by default the attachment is saved into the chat_upload folder of the email under a subfolder named after the email file. Returns the saved file path."""
+    """Save an attachment of an Outlook MSG email to disk. path is the .msg file (absolute or workspace-relative). index is the 0-based position shown in read_document's Attachments list. destination is an optional folder (absolute or workspace-relative); by default the attachment is saved into a subfolder of the email's folder named after the email file with its extension replaced by an underscore (e.g. report.msg -> report_). Returns the saved file path."""
     target = _resolve(path)
     try:
         index = int(index)
@@ -67,7 +67,8 @@ def download_attachment(path: str, index: int, destination: str = "") -> str:
     if destination:
         dest_dir = _resolve(destination)
     else:
-        dest_dir = os.path.join(os.path.dirname(target), os.path.basename(target))
+        base = os.path.splitext(os.path.basename(target))[0]
+        dest_dir = os.path.join(os.path.dirname(target), base + "_")
     os.makedirs(dest_dir, exist_ok=True)
     url = f"{BACKEND}/api/preview/attachment?path={urllib.parse.quote(target)}&index={index}"
     try:
