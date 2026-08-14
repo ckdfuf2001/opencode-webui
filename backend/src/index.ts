@@ -19,6 +19,7 @@ import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
+import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
 import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig } from './services/default-mcp'
@@ -294,6 +295,7 @@ const shutdown = async (signal: string) => {
   if (healthCheckInterval) clearInterval(healthCheckInterval)
   if (agentBrowserWarmupInterval) clearInterval(agentBrowserWarmupInterval)
   if (scheduleRunner) clearInterval(scheduleRunner)
+  stopAutomationWatcher()
   try {
     await opencodeServerManager.stop()
     logger.info('OpenCode server stopped')
@@ -392,3 +394,5 @@ agentBrowserWarmupInterval = setInterval(() => {
 
 scheduleRunner = startScheduleRunner(db)
 logger.info('Schedule runner started')
+
+startAutomationWatcher()
