@@ -265,11 +265,11 @@ const mentionFor = (part: ContentPart & { name: string; path: string }): string 
   const path = part.path.replace(/^file:\/{2,3}/, "").replace(/\\/g, "/")
   const chatIdx = path.indexOf("/chat_uploads/")
   if (chatIdx >= 0) {
-    return `@'${path.slice(chatIdx + 1)}'`
+    return `@"${path.slice(chatIdx + 1)}"`
   }
   const reposIdx = path.indexOf("/repos/")
   const rel = reposIdx >= 0 ? path.slice(reposIdx + "/repos/".length).split("/").slice(1).join("/") : part.name
-  return `@'${rel}'`
+  return `@"${rel}"`
 };
 
 export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: string) => {

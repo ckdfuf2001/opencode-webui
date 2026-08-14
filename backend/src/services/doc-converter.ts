@@ -3,7 +3,6 @@ import fs from 'fs/promises'
 import path from 'path'
 import { logger } from '../utils/logger'
 import { validatePath } from './files'
-import { getWorkspacePath } from '@opencode-webui/shared'
 
 const CONVERTER_PORT = parseInt(process.env.DOC_CONVERTER_PORT || '8765', 10)
 const CONVERTER_BASE = `http://127.0.0.1:${CONVERTER_PORT}`
@@ -111,12 +110,7 @@ export async function convertToPdf(userPath: string, refresh = false): Promise<B
 }
 
 export async function extractDocumentText(userPath: string, refresh = false): Promise<{ text: string; fileName: string }> {
-  const workspaceRoot = path.resolve(getWorkspacePath())
-  const target = path.isAbsolute(userPath) ? userPath : path.resolve(workspaceRoot, userPath)
-  const resolved = path.resolve(target)
-  if (resolved !== workspaceRoot && !resolved.startsWith(workspaceRoot + path.sep)) {
-    throw { message: 'Path traversal detected', statusCode: 403 }
-  }
+  const resolved = validatePath(userPath)
 
   const ext = path.extname(resolved).toLowerCase()
   if (!SUPPORTED_EXTENSIONS.has(ext) && ext !== '.pdf' && ext !== '.msg') {
@@ -158,12 +152,7 @@ export async function editDocument(
   userPath: string,
   operations: Array<Record<string, unknown>>
 ): Promise<{ fileName: string; results: Array<Record<string, unknown>> }> {
-  const workspaceRoot = path.resolve(getWorkspacePath())
-  const target = path.isAbsolute(userPath) ? userPath : path.resolve(workspaceRoot, userPath)
-  const resolved = path.resolve(target)
-  if (resolved !== workspaceRoot && !resolved.startsWith(workspaceRoot + path.sep)) {
-    throw { message: 'Path traversal detected', statusCode: 403 }
-  }
+  const resolved = validatePath(userPath)
 
   const ext = path.extname(resolved).toLowerCase()
   if (!SUPPORTED_EXTENSIONS.has(ext)) {

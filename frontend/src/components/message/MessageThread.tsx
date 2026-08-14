@@ -18,12 +18,12 @@ function getEditablePrompt(msg: MessageWithParts): string {
   for (const p of msg.parts) {
     if (p.type === 'file') {
       const filename = p.filename || p.url?.replace(/^file:\/{2,3}/, '').split('/').pop() || 'File'
-      lines.push(`@'${filename}'`)
+      lines.push(`@"${filename}"`)
     } else if (p.type === 'text' && p.text) {
       const text = p.text.trim()
       if (!text) continue
       if (/^Called the \w+ tool with the following input:/i.test(text)) continue
-      lines.push(text.replace(MENTION_PATTERN, (m, quoted, unquoted) => quoted ? m : `@'${unquoted}'`))
+      lines.push(text.replace(MENTION_PATTERN, (m, quoted, single, unquoted) => quoted || single ? m : `@"${unquoted}"`))
     }
   }
   return lines.join(' ').trim()

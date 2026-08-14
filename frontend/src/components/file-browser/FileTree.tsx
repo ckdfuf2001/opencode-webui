@@ -1,4 +1,4 @@
-import { useState, memo } from 'react'
+import { useState, useRef, useEffect, memo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
@@ -46,8 +46,17 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [editing])
 
   const handleClick = () => {
+    if (editing) return
     if (file.isDirectory) {
       onDirectoryClick(file.path)
     } else {
@@ -147,15 +156,17 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
           
           {editing ? (
             <Input
+              ref={inputRef}
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
               onBlur={handleRenameSubmit}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleRenameSubmit()
                 if (e.key === 'Escape') handleRenameCancel()
               }}
               className="h-6 text-sm"
-              autoFocus
             />
           ) : (
             <span className="text-sm truncate">{file.name}</span>
@@ -172,7 +183,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               <MoreHorizontal className="w-3 h-3" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent>
+          <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
             <DropdownMenuItem onClick={handleRename}>
               <Edit3 className="w-4 h-4 mr-2" />
               Rename

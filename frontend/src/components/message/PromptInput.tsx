@@ -218,7 +218,7 @@ export function PromptInput({
     const beforeMention = prompt.slice(0, mentionRange.start)
     const afterMention = prompt.slice(mentionRange.end)
     
-    const newPrompt = beforeMention + `@'${relativePath}'` + ' ' + afterMention
+    const newPrompt = beforeMention + `@"${relativePath}"` + ' ' + afterMention
     setPrompt(newPrompt)
     
     const absolutePath = filePath.startsWith('/') 
@@ -242,7 +242,7 @@ export function PromptInput({
     
     setTimeout(() => {
       if (textareaRef.current) {
-        const newCursorPos = beforeMention.length + `@'${relativePath}'`.length + 1
+        const newCursorPos = beforeMention.length + `@"${relativePath}"`.length + 1
         textareaRef.current.focus()
         textareaRef.current.setSelectionRange(newCursorPos, newCursorPos)
       }
@@ -294,7 +294,7 @@ export function PromptInput({
     const el = textareaRef.current
     const insertions = uploaded.map((file) => {
       const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      const mention = `@'${relativePath}'`
+      const mention = `@"${relativePath}"`
       return { relativePath, mention, name: file.name }
     })
 
@@ -568,7 +568,7 @@ export function PromptInput({
     const nextAttached = new Map(attachedFiles)
     for (const file of injectedFile.files) {
       const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      const mention = `@'${relativePath}'`
+      const mention = `@"${relativePath}"`
       nextPrompt = `${nextPrompt}${mention} `.trimStart()
       nextAttached.set(relativePath.toLowerCase(), {
         path: resolveFilePath(relativePath),
@@ -654,7 +654,7 @@ export function PromptInput({
                 <span className="font-mono">Cmd/Ctrl+Enter</span> - Send message
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                <span className="font-mono">@'</span> - Mention files
+                <span className="font-mono">@"</span> - Mention files
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
                 <span className="font-mono">!</span> - Bash command mode
