@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { useSSE } from "@/hooks/useSSE";
 import { useSettings } from "@/hooks/useSettings";
@@ -101,6 +101,7 @@ export function SessionDetail() {
   const { isConnected, isReconnecting } = useSSE(opcodeUrl, repoDirectory);
   const abortSession = useAbortSession(opcodeUrl, repoDirectory);
   const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
+  const truncateSession = useTruncateSession(opcodeUrl, repoDirectory);
   const { open: openSettings } = useSettingsDialog();
 
   useKeyboardShortcuts({
@@ -259,6 +260,28 @@ export function SessionDetail() {
     setInjectedPrompt(null)
   }, []);
 
+  const handleResendEdit = useCallback(async (messageID: string): Promise<boolean> => {
+    if (!sessionId) return false
+    try {
+      const result = await truncateSession.mutateAsync({ sessionID: sessionId, messageID })
+      if (!result?.success) {
+        showToast.error('Failed to truncate session')
+        return false
+      }
+      setHiddenAfterID(null)
+      setInjectedPrompt(null)
+      return true
+    } catch (error) {
+      showToast.error((error as Error).message || 'Failed to truncate session')
+      return false
+    }
+  }, [sessionId, truncateSession]);
+
+  const handleTruncate = useCallback((messageID: string) => {
+    if (!sessionId) return
+    handleResendEdit(messageID)
+  }, [sessionId, handleResendEdit]);
+
   const handleInjectedPromptConsumed = useCallback(() => {
     setInjectedPrompt(null)
   }, []);
@@ -377,6 +400,7 @@ if (results.length > 0) {
                 messages={messages}
                 onFileClick={handleFileClick}
                 onEditMessage={handleEditMessage}
+                onTruncate={handleTruncate}
                 hiddenAfterID={hiddenAfterID}
                 onCancelEdit={handleCancelEdit}
                 highlightedMessageID={highlightedMessageID}
@@ -428,6 +452,8 @@ if (results.length > 0) {
                 onInjectedPromptConsumed={handleInjectedPromptConsumed}
                 onSubmitted={handleCancelEdit}
                 onCancelEdit={handleCancelEdit}
+                editTargetMessageID={hiddenAfterID}
+                onResendEdit={handleResendEdit}
               />
             </div>
           )}

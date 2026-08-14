@@ -2,6 +2,7 @@ import { logger } from '../utils/logger'
 import { getConfigPath } from '@opencode-webui/shared'
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
+import { truncateSessionMessages } from './opencode-db'
 import { readdir, stat } from 'fs/promises'
 import path from 'path'
 
@@ -85,7 +86,43 @@ function parseDirectory(url: URL): string | undefined {
   return value ? decodeURIComponent(value) : undefined
 }
 
+async function handleTruncate(request: Request, sessionId: string): Promise<Response> {
+  try {
+    const body = (await request.json().catch(() => null)) as { messageID?: string } | null
+    const messageID = body?.messageID
+    if (!messageID) {
+      return new Response(JSON.stringify({ error: 'messageID is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    const result = await truncateSessionMessages(sessionId, messageID)
+    if (!result) {
+      return new Response(JSON.stringify({ error: 'Failed to truncate session' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ success: true, ...result }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  } catch (error) {
+    logger.error('Failed to truncate session:', error)
+    return new Response(JSON.stringify({ error: 'Failed to truncate session' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+}
+
 export async function proxyRequest(request: Request, method: string, pathname: string, query: Record<string, string>) {
+  const truncateMatch = pathname.match(/^\/api\/opencode\/session\/([^/]+)\/truncate$/)
+  const truncateSessionId = truncateMatch?.[1]
+  if (method === 'POST' && truncateSessionId) {
+    return handleTruncate(request, truncateSessionId)
+  }
+
   const search = query ? '?' + new URLSearchParams(query).toString() : ''
   const cleanPath = pathname.replace(/^\/api\/opencode/, '') + search
   const targetUrl = `${opencodeServerManager.getUrl()}${cleanPath}`

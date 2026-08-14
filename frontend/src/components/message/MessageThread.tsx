@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { MessagePart } from './MessagePart'
-import { CornerDownLeft, X } from 'lucide-react'
+import { CornerDownLeft, Scissors, X } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 
@@ -23,6 +23,7 @@ interface MessageThreadProps {
   messages?: MessageWithParts[]
   onFileClick?: (filePath: string, lineNumber?: number) => void
   onEditMessage?: (messageID: string, text: string) => void
+  onTruncate?: (messageID: string) => void
   hiddenAfterID?: string | null
   onCancelEdit?: () => void
   highlightedMessageID?: string | null
@@ -38,7 +39,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, hiddenAfterID, onCancelEdit, highlightedMessageID }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID }: MessageThreadProps) {
   if (!messages || messages.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-600">
@@ -89,10 +90,19 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 {msg.info.role === 'user' && onEditMessage && !streaming && (
                   <button
                     onClick={() => onEditMessage(msg.info.id, getMessageTextContent(msg))}
-                    className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+                    className="ml-auto p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
                     title="Edit and resend"
                   >
                     <CornerDownLeft className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {msg.info.role === 'user' && onTruncate && !streaming && (
+                  <button
+                    onClick={() => onTruncate(msg.info.id)}
+                    className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+                    title="Delete this message and everything after"
+                  >
+                    <Scissors className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>

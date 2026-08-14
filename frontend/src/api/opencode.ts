@@ -94,6 +94,13 @@ export class OpenCodeClient {
     await this.client.delete(`/session/${sessionID}`)
   }
 
+  async truncateSession(sessionID: string, messageID: string) {
+    const response = await this.client.post(`/session/${sessionID}/truncate`, {
+      messageID
+    })
+    return response.data
+  }
+
   async updateSession(sessionID: string, data: { title?: string }) {
     const response = await this.client.patch(`/session/${sessionID}`, data)
     return response.data
