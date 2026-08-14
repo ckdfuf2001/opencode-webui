@@ -109,7 +109,15 @@ export async function convertToPdf(userPath: string, refresh = false): Promise<B
   return fs.readFile(body.pdfPath)
 }
 
-export async function extractDocumentText(userPath: string, refresh = false): Promise<{ text: string; fileName: string }> {
+export type ExtractedMessage = {
+  html?: string
+  attachments?: Array<{ name: string; size: number; cid: string; mime: string }>
+}
+
+export async function extractDocumentText(
+  userPath: string,
+  refresh = false
+): Promise<{ text: string; fileName: string; msg?: ExtractedMessage }> {
   const resolved = validatePath(userPath)
 
   const ext = path.extname(resolved).toLowerCase()
@@ -145,7 +153,7 @@ export async function extractDocumentText(userPath: string, refresh = false): Pr
     throw { message, statusCode: 500 }
   }
 
-  return { text: body.text, fileName: body.fileName || path.basename(resolved) }
+  return { text: body.text, fileName: body.fileName || path.basename(resolved), msg: body.msg }
 }
 
 export async function editDocument(
