@@ -122,14 +122,29 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
   const copyableContent = getCopyableContent(part, allParts)
   
   switch (part.type) {
-    case 'text':
+    case 'text': {
       if (role === 'user' && allParts && partIndex !== undefined) {
         const nextPart = allParts[partIndex + 1]
         if (nextPart && nextPart.type === 'file') {
           return null
         }
       }
-      return <TextPart part={part} />
+      const text = part.text || ''
+      const mentionMatch = text.match(/@(?:'([^']*)'|(\S+))/)
+      if (!mentionMatch) {
+        return <TextPart part={part} />
+      }
+      const mentionText = mentionMatch[1] ?? mentionMatch[2]
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
+          onClick={() => onFileClick?.(mentionText)}
+        >
+          <span className="text-blue-400">@</span>
+          <span className="font-medium">{mentionText}</span>
+        </span>
+      )
+    }
     case 'patch':
       return <PatchPart part={part} />
     case 'tool':
@@ -165,33 +180,22 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           {messageTextContent && <TTSButton content={messageTextContent} />}
         </div>
       )
-case 'file':
+    case 'file': {
+      const fileClickTarget = part.url?.startsWith('data:')
+        ? part.filename
+          ? `chat_uploads/${part.filename}`
+          : ''
+        : part.url?.replace(/^file:\/{2,3}/, '') || part.filename || ''
       return (
         <span 
           className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
-          onClick={() => onFileClick?.(part.filename || '')}
+          onClick={() => onFileClick?.(fileClickTarget)}
         >
           <span className="text-blue-400">@</span>
           <span className="font-medium">{part.filename || 'File'}</span>
         </span>
       )
-case 'text':
-      // @filename 패턴이 포함된 텍스트도 클릭 가능하게 함
-      // @뒤 공백 전까지를 파일명으로 추출
-      const text = part.text || ''
-      const mentionMatch = text.match(/@(\S+)/)
-      if (mentionMatch) {
-        return (
-          <span 
-            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
-            onClick={() => onFileClick?.(mentionMatch[1])}
-          >
-            <span className="text-blue-400">@</span>
-            <span className="font-medium">@{mentionMatch[1]}</span>
-          </span>
-        )
-      }
-      return <span>{part.text}</span>
+    }
     default:
       return 
   }

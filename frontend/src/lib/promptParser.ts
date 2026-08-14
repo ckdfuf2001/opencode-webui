@@ -1,6 +1,6 @@
 import type { ContentPart, FileInfo } from '@/api/types'
 
-export const MENTION_PATTERN = /@(\S+)/g
+export const MENTION_PATTERN = /@(?:'([^']*)'|(\S+))/g
 export const MENTION_TRIGGER_PATTERN = /(^|\s)@(\S*)$/
 
 export interface MentionTrigger {
@@ -43,7 +43,7 @@ export function parsePromptToParts(
       }
     }
     
-    const mentionText = match[1]
+    const mentionText = match[1] ?? match[2]
     const file = fileMap.get(mentionText.toLowerCase())
     
     if (file) {

@@ -221,25 +221,33 @@ const createOptimisticUserMessage = (
   parts: ContentPart[],
   optimisticID: string,
 ): MessageWithParts => {
-  const messageParts = parts.map((part, index) => {
+  const messageParts = parts.flatMap((part, index) => {
     if (part.type === "text") {
-      return {
+      return [{
         id: `${optimisticID}_part_${index}`,
         type: "text" as const,
         text: part.content,
         messageID: optimisticID,
         sessionID,
-      };
-    } else {
-      return {
+      }];
+    }
+    if (mimeForFilename(part.name) === "application/octet-stream") {
+      return [{
         id: `${optimisticID}_part_${index}`,
-        type: "file" as const,
-        filename: part.name,
-        url: part.path,
+        type: "text" as const,
+        text: mentionFor(part),
         messageID: optimisticID,
         sessionID,
-      };
+      }];
     }
+    return [{
+      id: `${optimisticID}_part_${index}`,
+      type: "file" as const,
+      filename: part.name,
+      url: part.path,
+      messageID: optimisticID,
+      sessionID,
+    }];
   });
 
   return {
@@ -251,6 +259,17 @@ const createOptimisticUserMessage = (
     },
     parts: messageParts,
   } as MessageWithParts;
+};
+
+const mentionFor = (part: ContentPart & { name: string; path: string }): string => {
+  const path = part.path.replace(/^file:\/{2,3}/, "").replace(/\\/g, "/")
+  const chatIdx = path.indexOf("/chat_uploads/")
+  if (chatIdx >= 0) {
+    return `@'${path.slice(chatIdx + 1)}'`
+  }
+  const reposIdx = path.indexOf("/repos/")
+  const rel = reposIdx >= 0 ? path.slice(reposIdx + "/repos/".length).split("/").slice(1).join("/") : part.name
+  return `@'${rel}'`
 };
 
 export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: string) => {
@@ -288,18 +307,23 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       );
 
       const requestData: SendPromptRequest = {
-        parts: parts?.map((part) =>
-          part.type === "text"
-            ? { type: "text", text: part.content }
-            : {
-                type: "file",
-                mime: mimeForFilename(part.name),
-                filename: part.name,
-                url: part.path.startsWith("file:")
-                  ? part.path
-                  : `file://${part.path}`,
-              },
-        ) || [{ type: "text", text: prompt || "" }],
+        parts: parts?.flatMap((part) => {
+          if (part.type === "text") {
+            return [{ type: "text" as const, text: part.content }]
+          }
+          const mime = mimeForFilename(part.name)
+          if (mime === "application/octet-stream") {
+            return [{ type: "text" as const, text: mentionFor(part) }]
+          }
+          return [{
+            type: "file",
+            mime,
+            filename: part.name,
+            url: part.path.startsWith("file:")
+              ? part.path
+              : `file:///${part.path.replace(/\\/g, "/").replace(/ /g, "%20")}`,
+          }]
+        }) || [{ type: "text", text: prompt || "" }],
       };
 
       if (model) {

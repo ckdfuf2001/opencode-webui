@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, type KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from 'react'
 import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession } from '@/hooks/useOpenCode'
+import { API_BASE_URL } from '@/config'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
 import { useCommandHandler } from '@/hooks/useCommandHandler'
@@ -35,6 +36,7 @@ type SessionWithModel = components['schemas']['Session'] & {
 interface PromptInputProps {
   opcodeUrl: string
   directory?: string
+  uploadDir?: string
   sessionID: string
   disabled?: boolean
   showScrollButton?: boolean
@@ -57,6 +59,7 @@ interface PromptInputProps {
 export function PromptInput({ 
   opcodeUrl,
   directory,
+  uploadDir,
   sessionID, 
   disabled,
   showScrollButton,
@@ -250,6 +253,68 @@ export function PromptInput({
   const handleModeToggle = () => {
     const newMode = currentMode === 'plan' ? 'build' : 'plan'
     updateSettings({ mode: newMode })
+  }
+
+  const resolveFilePath = (relativePath: string): string => {
+    if (!directory) return relativePath
+    if (relativePath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(relativePath) || relativePath.startsWith('file:')) return relativePath
+    return `${directory.replace(/\\/g, '/')}/${relativePath}`
+  }
+
+  const handlePaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items || [])
+    const files = items
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null)
+
+    if (files.length === 0) return
+    e.preventDefault()
+    if (!uploadDir) return
+
+    const uploaded: { name: string; path: string }[] = []
+    for (const file of files) {
+      const formData = new FormData()
+      formData.append('file', file)
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/files/${uploadDir}`, {
+          method: 'POST',
+          body: formData,
+        })
+        if (!res.ok) continue
+        const data = await res.json().catch(() => null)
+        const savedName: string = data?.name || file.name
+        uploaded.push({ name: savedName, path: `chat_uploads/${savedName}` })
+      } catch {
+        continue
+      }
+    }
+
+    if (uploaded.length === 0) return
+
+    const el = textareaRef.current
+    const insertions = uploaded.map((file) => {
+      const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
+      const mention = `@'${relativePath}'`
+      return { relativePath, mention, name: file.name }
+    })
+
+    setPrompt(prev => `${prev}${insertions.map(i => i.mention).join(' ')} `.trimStart())
+    setAttachedFiles(prev => {
+      const next = new Map(prev)
+      for (const i of insertions) {
+        next.set(i.relativePath.toLowerCase(), {
+          path: resolveFilePath(i.relativePath),
+          name: i.name,
+        })
+      }
+      return next
+    })
+    if (el) {
+      el.focus()
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    }
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -504,9 +569,10 @@ export function PromptInput({
     const nextAttached = new Map(attachedFiles)
     for (const file of injectedFile.files) {
       const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      nextPrompt = `${nextPrompt}@${relativePath} `.trimStart()
+      const mention = `@'${relativePath}'`
+      nextPrompt = `${nextPrompt}${mention} `.trimStart()
       nextAttached.set(relativePath.toLowerCase(), {
-        path: relativePath,
+        path: resolveFilePath(relativePath),
         name: file.name,
       })
     }
@@ -539,6 +605,7 @@ export function PromptInput({
         value={prompt}
         onChange={handleInput}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         placeholder={
           isBashMode 
             ? "Enter bash command..." 

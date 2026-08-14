@@ -212,10 +212,59 @@ differ across opencode versions:
 Config-defined and registry commands have no `.md` file on disk and are never
 treated as `builtin`.
 
+## Chat File Uploads & Mentions
+
+Files dropped on the page or pasted (Ctrl+V) while a chat session is open are
+uploaded to the repo's `<repo>/chat_uploads/` folder via `POST /api/files`
+(`frontend/src/pages/SessionDetail.tsx` `handleGlobalDrop`,
+`frontend/src/components/message/PromptInput.tsx` `handlePaste`). The prompt
+then carries a single-quoted mention (`@'chat_uploads/<name>'`) plus an entry
+in the prompt input's attached-files map.
+
+`parsePromptToParts` (`frontend/src/lib/promptParser.ts`) turns quoted or
+unquoted `@mention` tokens into `file` parts when the mention matches the
+attached-files map, otherwise keeps them as text. On send
+(`frontend/src/hooks/useOpenCode.ts`):
+
+- Supported MIME types (from `mimeForFilename`, e.g. images, text, PDF, Office)
+  are sent as `file` parts with a Windows-absolute `file:///C:/...` URL
+  (backslash-normalized, spaces encoded).
+- Unsupported types (`application/octet-stream`) are sent as a quoted **text**
+  mention instead, because opencode rejects `file` parts for MIME types it
+  cannot handle and would abort the session with "functionality not supported".
+  The mention stays clickable in history (see below).
+- The optimistic user message applies the same rules so the UI pre-renders what
+  the server will store.
+
+Mentions render as clickable chips in chat history
+(`frontend/src/components/message/MessagePart.tsx`): `file` parts resolve their
+click target from the part URL (base64 `data:` URLs map back to
+`chat_uploads/<filename>`, `file://` prefixes are stripped), and text mentions
+are matched with `MENTION_PATTERN`. Clicking a chip opens the file browser at
+the resolved path.
+
+Clicking a chip whose path was collapsed to a bare filename by opencode (it
+normalizes a `@'chat_uploads/...'` mention to `@<basename>` on store) falls
+back to `<repo>/chat_uploads/<name>` when that file exists
+(`SessionDetail.tsx` `handleFileClick`).
+
+Editing a sent message rebuilds the prompt with
+`MessageThread.getEditablePrompt()`: `file` parts become `@'filename'`,
+unquoted text mentions are re-quoted, and "Called the ... tool" artifacts are
+stripped, so edit-and-resend re-attaches the files.
+
+Because `/api/files/*` receives an encoded path (spaces, Korean, parens),
+`backend/src/routes/files.ts` decodes every path segment (`decodePath`,
+`decodeURIComponent` per segment) before resolving it against the workspace.
+
 ## Key Components
 
 **Frontend**
-- `useOpenCode` hooks — React Query wrappers for all API calls
+- `useOpenCode` hooks — React Query wrappers for all API calls; `useSendPrompt`
+  converts attached files to opencode `file` parts (or quoted text mentions for
+  unsupported MIME types)
+- `MessagePart` / `MessageThread` — render `@mention` chips and offer
+  edit-and-resend that restores quoted mentions
 - `useSSE` — global SSE connection for real-time events
 - `useSessionActivity` — per-session "Working" state
 - `usePermissionRequests` — global permission request polling + store
@@ -230,3 +279,5 @@ treated as `builtin`.
 - `scheduler.ts` — scheduled prompt runner
 - `file-operations.ts` — file read/write helpers used by the registry and the
   global-rules installer
+- `routes/files.ts` — file browser + upload endpoints; `decodePath` percent-decodes
+  each path segment so non-ASCII filenames resolve

@@ -3,6 +3,7 @@ import { MessagePart } from './MessagePart'
 import { CornerDownLeft, Scissors, X } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
+import { MENTION_PATTERN } from '@/lib/promptParser'
 
 function getMessageTextContent(msg: MessageWithParts): string {
   return msg.parts
@@ -10,6 +11,22 @@ function getMessageTextContent(msg: MessageWithParts): string {
     .map(p => p.text || '')
     .join('\n\n')
     .trim()
+}
+
+function getEditablePrompt(msg: MessageWithParts): string {
+  const lines: string[] = []
+  for (const p of msg.parts) {
+    if (p.type === 'file') {
+      const filename = p.filename || p.url?.replace(/^file:\/{2,3}/, '').split('/').pop() || 'File'
+      lines.push(`@'${filename}'`)
+    } else if (p.type === 'text' && p.text) {
+      const text = p.text.trim()
+      if (!text) continue
+      if (/^Called the \w+ tool with the following input:/i.test(text)) continue
+      lines.push(text.replace(MENTION_PATTERN, (m, quoted, unquoted) => quoted ? m : `@'${unquoted}'`))
+    }
+  }
+  return lines.join(' ').trim()
 }
 
 const isErrorMessage = (msg: MessageWithParts): boolean => {
@@ -89,7 +106,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 )}
                 {msg.info.role === 'user' && onEditMessage && !streaming && (
                   <button
-                    onClick={() => onEditMessage(msg.info.id, getMessageTextContent(msg))}
+                    onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg))}
                     className="ml-auto p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
                     title="Edit and resend"
                   >

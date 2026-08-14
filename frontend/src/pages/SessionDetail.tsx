@@ -154,7 +154,7 @@ export function SessionDetail() {
     }
   }, [searchParams, setSearchParams, messages, scrollToMessage]);
 
-  const handleFileClick = useCallback((filePath: string) => {
+  const handleFileClick = useCallback(async (filePath: string) => {
     const normalizedFilePath = filePath.replace(/\\/g, '/')
     let pathToOpen = normalizedFilePath
     
@@ -164,12 +164,20 @@ export function SessionDetail() {
       
       if (normalizedFilePath.startsWith(workspaceReposPath + '/')) {
         pathToOpen = normalizedFilePath.substring(workspaceReposPath.length + 1)
+      } else if (repo?.localPath && normalizedFilePath.startsWith('chat_uploads/')) {
+        pathToOpen = `${repo.localPath}/${normalizedFilePath}`
+      } else if (repo?.localPath && !normalizedFilePath.includes('/')) {
+        const candidate = `${repo.localPath}/chat_uploads/${normalizedFilePath}`
+        const exists = await fetch(`${API_BASE_URL}/api/files/${candidate}`)
+          .then((res) => res.ok)
+          .catch(() => false)
+        pathToOpen = exists ? candidate : normalizedFilePath
       }
     }
     
     setSelectedFilePath(pathToOpen)
     setFileBrowserOpen(true)
-  }, [repo?.fullPath]);
+  }, [repo?.fullPath, repo?.localPath]);
 
   const handleSessionTitleUpdate = useCallback((newTitle: string) => {
     if (sessionId) {
@@ -291,7 +299,7 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
     if (!files || files.length === 0 || !repo?.localPath) return
 
     e.preventDefault()
-    const dir = repo.localPath
+    const uploadDir = `${repo.localPath}/chat_uploads`
     const results: { name: string; path: string }[] = []
     let lastError: string | null = null
 
@@ -299,7 +307,7 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
       const formData = new FormData()
       formData.append('file', file)
       try {
-        const res = await fetch(`${API_BASE_URL}/api/files/${dir}`, {
+        const res = await fetch(`${API_BASE_URL}/api/files/${uploadDir}`, {
           method: 'POST',
           body: formData,
         })
@@ -309,9 +317,8 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
           continue
         }
         const data = await res.json().catch(() => null)
-        const uploadedPath: string = data?.path || `${dir}/${file.name}`
-        const repoPath = uploadedPath.split(/[/\\]/).slice(1).join('/')
-        results.push({ name: data?.name || file.name, path: repoPath || file.name })
+        const savedName: string = data?.name || file.name
+        results.push({ name: savedName, path: `chat_uploads/${savedName}` })
       } catch {
         if (!lastError) lastError = 'Upload failed'
         continue
@@ -435,6 +442,7 @@ if (results.length > 0) {
               <PromptInput
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
+                uploadDir={`${repo.localPath}/chat_uploads`}
                 sessionID={sessionId}
                 disabled={!isConnected}
                 showScrollButton={showScrollButton}
