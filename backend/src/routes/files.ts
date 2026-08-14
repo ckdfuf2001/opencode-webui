@@ -60,7 +60,7 @@ export function createFileRoutes(_database: Database) {
       }
       
       if (download && !result.isDirectory) {
-        const content = result.content ? Buffer.from(result.content, 'base64') : Buffer.alloc(0)
+        const content = await fileService.getRawFileContent(userPath)
         return new Response(content, {
           headers: {
             'Content-Type': result.mimeType || 'application/octet-stream',
