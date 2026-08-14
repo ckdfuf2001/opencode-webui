@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { convertToPdf, extractDocumentText, editDocument } from '../services/doc-converter'
+import { convertToPdf, extractDocumentText, editDocument, extractAttachment } from '../services/doc-converter'
 
 const EDIT_OPERATIONS_SCHEMA = z.object({
   path: z.string().min(1),
@@ -53,6 +53,26 @@ export function createPreviewRoutes() {
       return c.json(result)
     } catch (error: any) {
       return c.json({ error: error.message || 'Extraction failed' }, error.statusCode || 500)
+    }
+  })
+
+  app.get('/attachment', async (c) => {
+    const userPath = c.req.query('path') || ''
+    const index = Number(c.req.query('index') ?? '')
+    if (!userPath || !Number.isInteger(index) || index < 0) {
+      return c.json({ error: 'Invalid request' }, 400)
+    }
+    try {
+      const { data, fileName, mimeType } = await extractAttachment(userPath, index)
+      return new Response(data, {
+        headers: {
+          'Content-Type': mimeType,
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+          'Content-Length': String(data.length),
+        },
+      })
+    } catch (error: any) {
+      return c.json({ error: error.message || 'Attachment extraction failed' }, error.statusCode || 500)
     }
   })
 

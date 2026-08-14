@@ -7,7 +7,7 @@ import sys
 import tempfile
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "opencode-doc-conv")
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -1117,6 +1117,45 @@ def edit_document(source_path, operations):
         _kill_new_office(before)
 
 
+def _read_msg_attachment(source_path, index):
+    import extract_msg
+
+    msg = extract_msg.Message(source_path)
+    try:
+        atts = list(getattr(msg, "attachments", None) or [])
+        if not atts or not (0 <= index < len(atts)):
+            return "", None, ""
+        att = atts[index]
+        name = ""
+        try:
+            name = _clean_msg_field(getattr(att, "longFilename", None) or getattr(att, "shortFilename", None))
+        except Exception:
+            name = ""
+        if not name:
+            try:
+                name = _clean_msg_field(getattr(att, "displayName", None))
+            except Exception:
+                name = ""
+        data = None
+        try:
+            d = getattr(att, "data", None)
+            if isinstance(d, bytes):
+                data = d
+        except Exception:
+            data = None
+        mime = ""
+        try:
+            mime = _clean_msg_field(getattr(att, "mimetype", None))
+        except Exception:
+            mime = ""
+        return name or "attachment", data, mime
+    finally:
+        try:
+            msg.close()
+        except Exception:
+            pass
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[doc-converter] " + (fmt % args) + "\n")
@@ -1140,6 +1179,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/extract":
             self._handle_extract()
+            return
+        if parsed.path == "/attachment":
+            self._handle_attachment()
             return
         if parsed.path == "/edit":
             self._handle_edit()
@@ -1195,6 +1237,33 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     resp["msg"] = {"html": None, "attachments": []}
             self._json(200, resp)
+        except Exception as exc:
+            self._json(500, {"error": str(exc)})
+
+    def _handle_attachment(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            source_path = payload.get("path")
+            index = payload.get("index")
+            if not source_path or not os.path.isfile(source_path):
+                self._json(400, {"error": "Invalid path"})
+                return
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                self._json(400, {"error": "Invalid attachment index"})
+                return
+            name, data, mime = _read_msg_attachment(source_path, index)
+            if data is None:
+                self._json(404, {"error": "Attachment not found"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", mime or "application/octet-stream")
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         except Exception as exc:
             self._json(500, {"error": str(exc)})
 
