@@ -61,11 +61,12 @@ export function createFileRoutes(_database: Database) {
       
       if (download && !result.isDirectory) {
         const content = await fileService.getRawFileContent(userPath)
+        const asciiFallback = result.name.replace(/[^\x20-\x7e]/g, '_') || 'file'
         return new Response(content, {
           headers: {
             'Content-Type': result.mimeType || 'application/octet-stream',
-            'Content-Disposition': `attachment; filename="${result.name}"`,
-            'Content-Length': result.size.toString(),
+            'Content-Disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(result.name)}`,
+            'Content-Length': content.length.toString(),
           }
         })
       }
