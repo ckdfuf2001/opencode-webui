@@ -453,22 +453,39 @@ def _extract_msg_text(source_path):
             for att in atts:
                 size = _human_size(att.get("size"))
                 lines.append(f"- {att['name']}" + (f" ({size})" if size else ""))
+        html = ""
+        try:
+            raw_html = getattr(msg, "htmlBody", None)
+            if isinstance(raw_html, bytes):
+                html = raw_html.decode("utf-8", errors="replace").replace("\x00", "").strip()
+            else:
+                html = _clean_msg_field(raw_html)
+        except Exception:
+            html = ""
         body = ""
         try:
             body = _clean_msg_field(getattr(msg, "body", None)) or body
         except Exception:
             body = ""
-        if not body:
-            html = ""
-            try:
-                html = _clean_msg_field(getattr(msg, "htmlBody", None)) or html
-            except Exception:
-                html = ""
-            if html:
-                import re
-
-                body = re.sub(r"<[^>]+>", " ", html).strip()
-                body = re.sub(r"\s+", " ", body)
+        if not body and html:
+            body = re.sub(r"<[^>]+>", " ", html).strip()
+            body = re.sub(r"\s+", " ", body)
+        links = []
+        if html:
+            links = re.findall(r"""(?:href|src)\s*=\s*["']?([^"'\s>]+)["']?""", html, flags=re.IGNORECASE)
+        if body:
+            links += re.findall(r"https?://[^\s<\"']+", body)
+        links = [l for l in links if not l.startswith(("cid:", "data:", "#", "mailto:"))]
+        seen = set()
+        unique_links = []
+        for link in links:
+            if link not in seen:
+                seen.add(link)
+                unique_links.append(link)
+        if unique_links:
+            lines.append(f"Links: {len(unique_links)}")
+            for link in unique_links:
+                lines.append(f"- {link}")
         if body:
             lines.append("Body:")
             lines.append(body)
