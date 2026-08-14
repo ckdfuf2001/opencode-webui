@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
+import { Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { QuestionRequest, QuestionInfo } from '@/api/types'
@@ -63,11 +63,15 @@ function QuestionPrompt({
               )}
             >
               <div className="pt-0.5">
-                <Checkbox
-                  checked={checked}
-                  onCheckedChange={() => toggleLabel(option.label)}
-                  onClick={(e) => e.stopPropagation()}
-                />
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary",
+                    checked && "bg-primary text-primary-foreground"
+                  )}
+                >
+                  {checked && <Check className="h-4 w-4" />}
+                </span>
               </div>
               <div className="space-y-0.5">
                 <div className="text-sm font-medium">{option.label}</div>

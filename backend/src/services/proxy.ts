@@ -139,7 +139,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     const cleanEventPath = pathname.replace(/^\/api\/opencode/, '')
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
-    const signal = isEventStream ? undefined : AbortSignal.timeout(120_000)
+    const isLongRunning = /\/session\/[^/]+\/message$/.test(cleanEventPath)
+      || /\/session\/[^/]+\/command$/.test(cleanEventPath)
+      || /\/question\/[^/]+\/reply$/.test(cleanEventPath)
+      || /\/permission\/[^/]+\/reply$/.test(cleanEventPath)
+    const signal = isEventStream
+      ? undefined
+      : AbortSignal.timeout(isLongRunning ? 600_000 : 120_000)
 
     const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
 
