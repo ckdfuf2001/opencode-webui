@@ -346,6 +346,7 @@ function getMimeType(filePath: string, _content: Uint8Array): string {
     '.doc': 'application/msword',
     '.xls': 'application/vnd.ms-excel',
     '.ppt': 'application/vnd.ms-powerpoint',
+    '.msg': 'application/vnd.ms-outlook',
     '.md': 'text/markdown',
     '.csv': 'text/csv',
   }
