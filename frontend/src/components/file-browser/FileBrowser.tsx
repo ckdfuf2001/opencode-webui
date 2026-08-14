@@ -308,21 +308,23 @@ useEffect(() => {
         
         {/* Mobile: Full width file listing, Desktop: Split view */}
         <div className="flex-1 flex overflow-hidden min-h-0 h-full min-h-[600px]">
-          <div className={`${isMobile ? 'w-full' : 'w-[30%]'} border-r border-border px-4 flex flex-col min-h-0 h-full`}>
-            <div className="sticky top-0 z-20 bg-background flex items-center gap-2 py-3 flex-shrink-0 pointer-events-auto">
+          <div className={`${isMobile ? 'w-full' : 'w-[30%] min-w-[160px]'} border-r border-border px-4 flex flex-col min-h-0 h-full`}>
+            <div className="sticky top-0 z-20 bg-background flex flex-col gap-2 py-3 flex-shrink-0 pointer-events-auto">
+              <div className="flex items-center justify-between pointer-events-auto">
+                <Button variant="outline" size="sm" onClick={handleRefresh} className="pointer-events-auto">
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+                <FileOperations
+                  onUpload={handleUpload}
+                  onCreate={handleCreateFile}
+                  
+                />
+              </div>
               <Input
                 placeholder="Search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="flex-1"
-              />
-              <Button variant="outline" size="sm" onClick={handleRefresh} className="pointer-events-auto">
-                <RefreshCw className="w-4 h-4" />
-              </Button>
-              <FileOperations
-                onUpload={handleUpload}
-                onCreate={handleCreateFile}
-                
               />
             </div>
             
@@ -416,18 +418,23 @@ useEffect(() => {
         
         <CardContent className="flex-1 flex overflow-hidden min-h-0">
           {/* Mobile: Full width file listing, Desktop: Split view */}
-          <div className={`${isMobile ? 'w-full' : 'w-1/3'} border-r pr-4 flex flex-col min-h-0`}>
-            <div className="flex items-center gap-2 mb-4 flex-shrink-0">
+          <div className={`${isMobile ? 'w-full' : 'w-1/3 min-w-[160px]'} border-r pr-4 flex flex-col min-h-0`}>
+            <div className="flex flex-col gap-2 mb-4 flex-shrink-0">
+              <div className="flex items-center justify-between">
+                <Button variant="outline" size="sm" onClick={handleRefresh}>
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+                <FileOperations
+                  onUpload={handleUpload}
+                  onCreate={handleCreateFile}
+                  
+                />
+              </div>
               <Input
                 placeholder="Search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="flex-1"
-              />
-              <FileOperations
-                onUpload={handleUpload}
-                onCreate={handleCreateFile}
-                
               />
             </div>
             
