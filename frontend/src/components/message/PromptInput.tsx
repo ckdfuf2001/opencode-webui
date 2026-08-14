@@ -50,6 +50,8 @@ interface PromptInputProps {
   onInjectedPromptConsumed?: () => void
   onSubmitted?: () => void
   onCancelEdit?: () => void
+  editTargetMessageID?: string | null
+  onResendEdit?: (messageID: string) => Promise<boolean>
 }
 
 export function PromptInput({ 
@@ -69,7 +71,9 @@ export function PromptInput({
   injectedPrompt,
   onInjectedPromptConsumed,
   onSubmitted,
-  onCancelEdit
+  onCancelEdit,
+  editTargetMessageID,
+  onResendEdit
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -87,7 +91,7 @@ export function PromptInput({
   
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const pendingRunRef = useRef<string | null>(null)
-  const handleSubmitRef = useRef<() => void>(() => {})
+  const handleSubmitRef = useRef<() => Promise<void>>(async () => {})
   const sendPrompt = useSendPrompt(opcodeUrl, directory)
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
@@ -116,7 +120,7 @@ export function PromptInput({
 
   const { addUserBashCommand } = useUserBash()
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!prompt.trim() || disabled) return
 
     if (isBashMode) {
@@ -154,7 +158,12 @@ export function PromptInput({
     }
 
     const parts = parsePromptToParts(prompt, attachedFiles)
-    
+
+    if (editTargetMessageID && onResendEdit) {
+      const truncated = await onResendEdit(editTargetMessageID)
+      if (!truncated) return
+    }
+
     sendPrompt.mutate({
       sessionID,
       parts,

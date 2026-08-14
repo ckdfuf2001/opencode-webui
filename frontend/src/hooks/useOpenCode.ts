@@ -164,6 +164,41 @@ export const useDeleteSession = (opcodeUrl: string | null | undefined, directory
   });
 };
 
+export const useTruncateSession = (opcodeUrl: string | null | undefined, directory?: string) => {
+  const queryClient = useQueryClient();
+  const client = useOpenCodeClient(opcodeUrl, directory);
+
+  return useMutation({
+    mutationFn: async ({ sessionID, messageID }: { sessionID: string; messageID: string }) => {
+      if (!client) throw new Error("No client available");
+      return client.truncateSession(sessionID, messageID);
+    },
+    onMutate: async ({ sessionID, messageID }) => {
+      const messagesKey = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+      await queryClient.cancelQueries({ queryKey: messagesKey });
+      const previous = queryClient.getQueryData<MessageListResponse>(messagesKey);
+      const cursor = previous?.find((m) => m.info.id === messageID);
+      if (previous && cursor) {
+        const cursorTime = cursor.info.time?.created ?? 0;
+        queryClient.setQueryData<MessageListResponse>(messagesKey, () =>
+          previous.filter((m) => (m.info.time?.created ?? 0) < cursorTime),
+        );
+      }
+      return { messagesKey, previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(context.messagesKey, context.previous);
+      }
+    },
+    onSettled: (_data, _error, variables) => {
+      const { sessionID } = variables;
+      queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionID, directory] });
+      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+    },
+  });
+};
+
 export const useUpdateSession = (opcodeUrl: string | null | undefined, directory?: string) => {
   const queryClient = useQueryClient();
   const client = useOpenCodeClient(opcodeUrl, directory);
