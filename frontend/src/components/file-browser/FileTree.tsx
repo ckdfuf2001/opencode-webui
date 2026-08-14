@@ -236,7 +236,6 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
           className="flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer"
           onClick={handleGoUp}
         >
-          <span className="w-4 h-4 flex items-center justify-center text-sm">↩️</span>
           <span className="text-sm text-muted-foreground">..</span>
         </div>
       )}
