@@ -2,6 +2,7 @@ python-docx
 openpyxl
 python-pptx
 pypdf
+extract-msg
 pywin32
 psutil
 fastmcp

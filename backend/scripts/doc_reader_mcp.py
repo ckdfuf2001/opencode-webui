@@ -10,8 +10,8 @@ WORKSPACE = os.environ.get("OPCODE_WEBUI_WORKSPACE", os.path.join(os.getcwd(), "
 mcp = FastMCP(
     "opencode-doc-reader",
     instructions=(
-        "Use read_document to extract the text content of office and PDF files "
-        "(docx, doc, xlsx, xls, pptx, ppt, pdf), including DRM-protected files. "
+        "Use read_document to extract the text content of office, PDF and Outlook email files "
+        "(docx, doc, xlsx, xls, pptx, ppt, pdf, msg), including DRM-protected files. "
         "Use edit_document to modify office files (docx/doc/xlsx/xls/pptx/ppt) in place. "
         "Pass absolute file paths on this machine when possible."
     ),
@@ -26,7 +26,7 @@ def _resolve(path_value):
 
 @mcp.tool()
 def read_document(path: str) -> str:
-    """Extract readable text from an Office/PDF file (docx, doc, xlsx, xls, pptx, ppt, pdf). Returns the document text for analysis. Accepts an absolute path or a path relative to the workspace."""
+    """Extract readable text from an Office/PDF/Outlook MSG file (docx, doc, xlsx, xls, pptx, ppt, pdf, msg). Returns the document text for analysis. Accepts an absolute path or a path relative to the workspace."""
     target = _resolve(path)
     payload = json.dumps({"path": target}).encode("utf-8")
     req = urllib.request.Request(

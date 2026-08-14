@@ -119,7 +119,7 @@ export async function extractDocumentText(userPath: string): Promise<{ text: str
   }
 
   const ext = path.extname(resolved).toLowerCase()
-  if (!SUPPORTED_EXTENSIONS.has(ext) && ext !== '.pdf') {
+  if (!SUPPORTED_EXTENSIONS.has(ext) && ext !== '.pdf' && ext !== '.msg') {
     throw { message: 'Unsupported document type', statusCode: 400 }
   }
 

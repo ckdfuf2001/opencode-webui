@@ -962,7 +962,7 @@ export const openApiSpec = {
     '/api/preview/extract': {
       post: {
         tags: ['preview'],
-        summary: 'Extract readable text from an Office/PDF document',
+        summary: 'Extract readable text from an Office/PDF/Outlook MSG document',
         requestBody: {
           required: true,
           content: {

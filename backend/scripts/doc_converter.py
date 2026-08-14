@@ -295,14 +295,73 @@ def _extract_powerpoint_text(source_path):
         app.Quit()
 
 
+def _clean_msg_field(value):
+    return (value or "").replace("\x00", "").strip()
+
+
+def _extract_msg_text(source_path):
+    import extract_msg
+
+    msg = extract_msg.Message(source_path)
+    try:
+        lines = []
+        sender = _clean_msg_field(str(getattr(msg, "sender", None) or ""))
+        if sender:
+            lines.append(f"From: {sender}")
+        for label, attr in (("To", "to"), ("CC", "cc")):
+            try:
+                value = _clean_msg_field(getattr(msg, attr, None))
+            except Exception:
+                value = ""
+            if value:
+                lines.append(f"{label}: {value}")
+        subject = _clean_msg_field(getattr(msg, "subject", None))
+        if subject:
+            lines.append(f"Subject: {subject}")
+        try:
+            date = _clean_msg_field(getattr(msg, "date", None))
+        except Exception:
+            date = ""
+        if date:
+            lines.append(f"Date: {date}")
+        body = ""
+        try:
+            body = _clean_msg_field(getattr(msg, "body", None)) or body
+        except Exception:
+            body = ""
+        if not body:
+            html = ""
+            try:
+                html = _clean_msg_field(getattr(msg, "htmlBody", None)) or html
+            except Exception:
+                html = ""
+            if html:
+                import re
+
+                body = re.sub(r"<[^>]+>", " ", html).strip()
+                body = re.sub(r"\s+", " ", body)
+        if body:
+            lines.append("Body:")
+            lines.append(body)
+        return "\n".join(lines) or "(Empty email message)"
+    finally:
+        try:
+            msg.close()
+        except Exception:
+            pass
+
+
 def extract_text(source_path):
     _strip_zone_identifier(source_path)
     ext = os.path.splitext(source_path)[1].lower()
-    if ext not in SUPPORTED_EXTS and ext != ".pdf":
+    if ext not in SUPPORTED_EXTS and ext not in {".pdf", ".msg"}:
         raise ValueError(f"Unsupported document type: {ext}")
     if ext == ".pdf":
         _ensure_deps(additional=("pypdf",), require_com=False)
         return _extract_pdf_text(source_path)
+    if ext == ".msg":
+        _ensure_deps(additional=("extract_msg",), require_com=False)
+        return _extract_msg_text(source_path)
     _ensure_deps()
 
     import pythoncom
