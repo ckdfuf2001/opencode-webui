@@ -49,10 +49,15 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 
 | 종류 | 파일 | 형식 |
 | --- | --- | --- |
-| command (작업 시작) | `commands/<이름>.md` | 본문만 (실행할 skill 순서와 인자 설명) |
+| command (작업 시작) | `commands/<이름>.md` | 본문만 (실행할 skill 순서와 인자 설명). 권장: 선택적으로 `description` frontmatter 추가 |
 | skill (업무 스텝) | `skills/<이름>/SKILL.md` | frontmatter `name`/`description` + 본문 |
 | agent (권한 묶음) | `agents/<이름>.md` | frontmatter `description`/`mode`(all·subagent·primary) + 본문(시스템 프롬프트) |
 | plugin (도구) | `plugins/<이름>.ts` | TypeScript (opencode plugin) |
+
+**주의 — agent frontmatter의 `tools`는 배열이 아니다.** opencode의 agent `tools` 필드는
+`{도구명: true}` 객체만 허용하며(배열이면 `ConfigInvalidError` → **해당 레포의 command/skill/agent
+전체가 한 번에 로드 실패**하고 커맨드 목록이 비어 보인다) 본질적으로 **deprecated**다.
+도구/권한 제한은 `permission` 필드(`edit: allow` 등)로 하고, 되도록 `tools`는 쓰지 않는다.
 
 ### 자동화 설계 순서 (단계별 사용자 확인)
 
@@ -95,8 +100,10 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
   특별한 이유가 없으면 프로젝트 단위로 만든다.
 - 파일을 쓸 수 없으면 **완성된 md 내용을 채팅에 출력**하고, 사용자가
   "명령 패널 → Register new opencode file" 다이얼로그에 복사하도록 안내한다.
-- 작성 후에는 해당 파일을 읽어 **검증**하고, 반영이 안 되면 opencode 서버 재시작이나
-  UI 다이얼로그 등록을 안내한다.
+- 작성 후에는 해당 파일을 읽어 **검증**한다. opencode는 자동화 파일을 **서버 기동 시에만
+  한 번 로드**하지만, 이 앱의 백엔드가 `commands/·skills/·agents/·plugins/` 파일 변경을
+  감시해 **자동으로 opencode 서버를 재시작**(약 1.5초)하므로 사용자가 수동 재시작을 할
+  필요는 없다. 단, 다시 시작되는 동안 잠시 커맨드/스킬 목록이 갱신되며 세션은 재연결된다.
 
 ## 운영 시 주의 (반드시 숙지)
 
@@ -142,24 +149,54 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 Windows 작업 스케줄러를 직접 구성하지 말고**, 이 앱의 **스케줄 기능**을 이용한다.
 
 - **UI**: 레포 상세 → **Schedules** 다이얼로그 (Project Schedules)
-- **API**: `POST /api/schedules` (백엔드가 30초마다 체크해 실행)
+- **API**: `POST /api/schedules` (백엔드가 30초마다 체크해 실행) — 문서: `GET /api/openapi.json`, `GET /api/docs` (Swagger UI)
 
-스케줄 구성 항목:
+### 배치(스케줄) 등록 API
 
-| 항목 | 설명 |
+사용자가 `bash`/`webfetch` 도구로 직접 호출해 스케줄을 등록·수정·삭제할 수 있다.
+백엔드는 `5001`, opencode는 `5552`. 커맨드 실행은 `/api/opencode` 프록시를 이용한다.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/schedules?repoId=<id>` | 목록 (repoId 필터 선택) |
+| `POST` | `/api/schedules` | 생성 |
+| `PUT` | `/api/schedules/{id}` | 수정 (부분 업데이트) |
+| `DELETE` | `/api/schedules/{id}` | 삭제 |
+| `POST` | `/api/schedules/{id}/run` | 즉시 실행 |
+
+**POST /api/schedules 요청 본문:**
+
+```json
+{
+  "repoId": 3,
+  "name": "오늘경제요약",
+  "action": "command",
+  "command": "/오늘경제요약",
+  "cron": "0 8 * * 1-5",
+  "enabled": true,
+  "activeFrom": null,
+  "activeUntil": null,
+  "agent": "economy-summary"
+}
+```
+
+| 필드 | 설명 |
 | --- | --- |
+| `repoId` | 스케줄을 실행할 레포 id (`GET /api/repos`로 확인) |
 | `name` | 스케줄 이름 |
 | `action` | `command`(커맨드 실행) 또는 `chat`(프롬프트 실행) |
-| `command` / `prompt` | 실행할 커맨드 이름(`/이름`) 또는 프롬프트 |
+| `command` | `action=command`일 때, 실행할 커맨드 이름(`/이름`) |
+| `prompt` | `action=chat`일 때, 전송할 프롬프트 |
 | `cron` | 5필드 cron (분 시 일 월 요일) |
 | `agent` | 실행할 담당 agent (선택) |
-| `enabled` | 활성화 여부 |
-| `activeFrom` / `activeUntil` | 활성 기간 (선택) |
+| `enabled` | 활성화 여부 (기본 true) |
+| `activeFrom` / `activeUntil` | 활성 기간 (밀리초, 선택) |
 
 - 실행 시 해당 레포 작업공간에 `[BATCH]<이름>_YYYYMMDD-HHMM` 세션이 생성되어
   커맨드 또는 프롬프트가 실행된다.
 - 즉시 실행: `POST /api/schedules/{id}/run` 또는 다이얼로그의 **Run now**.
 - 스킬 실패/이상 시 알림 여부·방식은 위 설계 순서 5단계(담당 agent 정의)에서 결정한다.
+- 레포 id 조회: `GET /api/repos` → `[{"id":3,"name":"일일요약",...}]`.
 
 ## 기본(어시스턴트) 시스템 프롬프트
 아래는 위 개념을 기본 어시스턴트(general agent)에 적용하기 위한 시스템 프롬프트입니다.
@@ -189,8 +226,10 @@ You are the 업무 도우미 assistant of opencode-webui, built on opencode.
 3. command를 정의할 때는 실행할 skill들의 순서와 인자 입력 형식("n월 gsp 시스템")을 명확히 한다.
 4. skill을 정의할 때는 해당 스텝이 접근 가능한 tool/MCP와, 다른 skill을 재호출할지 여부를 명시한다.
 5. 반복 업무(스케줄) 요청 시 PC cron/Windows 작업 스케줄러를 직접 만들지 않고, 이 앱의
-   스케줄 기능(레포 상세 Schedules 다이얼로그, `POST /api/schedules`)을 안내하고
-   name/action(command·chat)/cron/agent 구성 정보를 정리해 제공한다.
+   스케줄 기능으로 처리한다. 사용자가 배치 등록을 요청하면 **`POST /api/schedules`** API를
+   직접 호출해 등록한다(위 "배치(스케줄) 등록 API" 참고: repoId는 `GET /api/repos`로 확인,
+   action `command`는 `command` 필드에 `/커맨드이름`, `chat`은 `prompt`에 프롬프트, cron은
+   5필드). 완료 후 등록 결과를 보고한다.
 6. 불명확하면 짧은 질문으로 다듬고, 필요한 설정(Markdown)을 생성한다.
 7. 요청받은 등록 파일(command/skill/agent md, plugin ts)은 위 "채팅 기반 자동화 등록" 규칙대로
    **기본적으로 프로젝트 단위(`<repo>/.opencode/`)**로 직접 작성하거나 내용을 출력한다.
