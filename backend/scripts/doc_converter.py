@@ -1,6 +1,8 @@
+import base64
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import zipfile
@@ -299,6 +301,124 @@ def _clean_msg_field(value):
     return (value or "").replace("\x00", "").strip()
 
 
+def _human_size(num):
+    if not num:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if num < 1024:
+            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+        num /= 1024
+    return f"{num:.1f} TB"
+
+
+def _guess_img_mime(name, mime):
+    if mime:
+        return mime
+    ext = (name or "").rsplit(".", 1)[-1].lower()
+    return {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "bmp": "image/bmp",
+        "tif": "image/tiff",
+        "tiff": "image/tiff",
+        "webp": "image/webp",
+        "svg": "image/svg+xml",
+    }.get(ext, "")
+
+
+def _msg_attachments(msg):
+    out = []
+    for att in (list(getattr(msg, "attachments", None) or [])):
+        name = ""
+        try:
+            name = _clean_msg_field(getattr(att, "longFilename", None) or getattr(att, "shortFilename", None))
+        except Exception:
+            name = ""
+        if not name:
+            try:
+                name = _clean_msg_field(getattr(att, "displayName", None))
+            except Exception:
+                name = ""
+        size = 0
+        try:
+            d = getattr(att, "data", None)
+            if isinstance(d, bytes):
+                size = len(d)
+        except Exception:
+            size = 0
+        cid = ""
+        try:
+            cid = _clean_msg_field(getattr(att, "cid", None))
+        except Exception:
+            cid = ""
+        mime = ""
+        try:
+            mime = _clean_msg_field(getattr(att, "mimetype", None))
+        except Exception:
+            mime = ""
+        out.append({"name": name or "attachment", "size": size, "cid": cid, "mime": mime})
+    return out
+
+
+def _msg_render(source_path):
+    import extract_msg
+
+    msg = extract_msg.Message(source_path)
+    try:
+        atts = _msg_attachments(msg)
+        cid_data = {}
+        for att in (list(getattr(msg, "attachments", None) or [])):
+            cid = ""
+            try:
+                cid = _clean_msg_field(getattr(att, "cid", None))
+            except Exception:
+                cid = ""
+            if not cid:
+                continue
+            data = None
+            try:
+                d = getattr(att, "data", None)
+                if isinstance(d, bytes):
+                    data = d
+            except Exception:
+                data = None
+            if not data:
+                continue
+            mime = _guess_img_mime(
+                _clean_msg_field(getattr(att, "longFilename", None) or getattr(att, "shortFilename", None)),
+                _clean_msg_field(getattr(att, "mimetype", None)),
+            )
+            cid_data[cid] = (mime, data)
+
+        html = None
+        try:
+            raw = getattr(msg, "htmlBody", None)
+            if raw:
+                html = raw.decode("utf-8", errors="replace")
+        except Exception:
+            html = None
+
+        if html and cid_data:
+            def _inline(mt):
+                item = cid_data.get(mt.group(1))
+                if not item:
+                    return mt.group(0)
+                mime, data = item
+                if not mime:
+                    return mt.group(0)
+                return 'src="data:%s;base64,%s"' % (mime, base64.b64encode(data).decode("ascii"))
+
+            html = re.sub(r'src\s*=\s*["\']?cid:([^"\'> ]+)["\']?', _inline, html, flags=re.IGNORECASE)
+        return {"html": html, "attachments": atts}
+    finally:
+        try:
+            msg.close()
+        except Exception:
+            pass
+
+
 def _extract_msg_text(source_path):
     import extract_msg
 
@@ -324,6 +444,15 @@ def _extract_msg_text(source_path):
             date = ""
         if date:
             lines.append(f"Date: {date}")
+        try:
+            atts = _msg_attachments(msg)
+        except Exception:
+            atts = []
+        if atts:
+            lines.append(f"Attachments: {len(atts)}")
+            for att in atts:
+                size = _human_size(att.get("size"))
+                lines.append(f"- {att['name']}" + (f" ({size})" if size else ""))
         body = ""
         try:
             body = _clean_msg_field(getattr(msg, "body", None)) or body
@@ -1059,7 +1188,13 @@ class Handler(BaseHTTPRequestHandler):
                         f.write(data)
                 except Exception:
                     pass
-            self._json(200, {"text": data, "fileName": os.path.basename(source_path)})
+            resp = {"text": data, "fileName": os.path.basename(source_path)}
+            if os.path.splitext(source_path)[1].lower() == ".msg":
+                try:
+                    resp["msg"] = _msg_render(source_path)
+                except Exception:
+                    resp["msg"] = {"html": None, "attachments": []}
+            self._json(200, resp)
         except Exception as exc:
             self._json(500, {"error": str(exc)})
 

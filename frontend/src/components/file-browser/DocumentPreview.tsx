@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Loader2, AlertCircle, Maximize2, Minimize2, X, ZoomIn, ZoomOut, User, Users, Clock } from 'lucide-react'
+import { Loader2, AlertCircle, Maximize2, Minimize2, X, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg'
+
+type ExtractedMsg = {
+  html?: string
+  attachments?: Array<{ name: string; size: number; cid: string; mime: string }>
+}
 
 export function detectDocKind(name: string): DocKind | null {
   const ext = name.split('.').pop()?.toLowerCase()
@@ -113,7 +118,7 @@ function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
 }
 
 function useExtractedText(path: string, refreshKey = 0, enabled = true) {
-  const [data, setData] = useState<{ text: string; fileName?: string } | null>(null)
+  const [data, setData] = useState<{ text: string; fileName?: string; msg?: ExtractedMsg } | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading')
   const [error, setError] = useState('')
 
@@ -139,7 +144,7 @@ function useExtractedText(path: string, refreshKey = 0, enabled = true) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = await res.json()
         if (!cancelled) {
-          setData({ text: json.text ?? '', fileName: json.fileName })
+          setData({ text: json.text ?? '', fileName: json.fileName, msg: json.msg })
           setStatus('ready')
         }
       })
@@ -355,7 +360,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     if (extracted.status === 'loading') {
       body = SPINNER
     } else if (extracted.status === 'ready' && extracted.data) {
-      body = <ExtractedTextView text={extracted.data.text} fileName={file.name} />
+      body = <ExtractedTextView text={extracted.data.text} fileName={file.name} msg={extracted.data.msg} />
     } else if (extracted.status === 'unavailable') {
       body = <ConversionRequiredNote msg={extracted.error} />
     } else {
@@ -431,8 +436,22 @@ function MetaRow({ icon, label, value }: { icon: ReactNode; label: string; value
   )
 }
 
-function ExtractedTextView({ text, fileName }: { text: string; fileName?: string }) {
+function formatSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return ''
+  const units = ['B', 'KB', 'MB', 'GB']
+  let n = bytes
+  let i = 0
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024
+    i++
+  }
+  return `${i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`
+}
+
+function ExtractedTextView({ text, fileName, msg }: { text: string; fileName?: string; msg?: ExtractedMsg }) {
   const parsed = useMemo(() => parseMsgText(text), [text])
+  const attachments = msg?.attachments ?? []
+  const hasHtml = !!msg?.html
 
   return (
     <DocumentShell fileName={fileName}>
@@ -452,11 +471,36 @@ function ExtractedTextView({ text, fileName }: { text: string; fileName?: string
                 {parsed.cc && <MetaRow icon={<Users className="w-3.5 h-3.5" />} label="Cc" value={parsed.cc} />}
                 {parsed.date && <MetaRow icon={<Clock className="w-3.5 h-3.5" />} label="Date" value={parsed.date} />}
               </div>
-              <div className="px-5 py-4">
-                {parsed.body ? (
-                  <div className="whitespace-pre-wrap break-words text-sm text-foreground/90 leading-relaxed">{parsed.body}</div>
+              {attachments.length > 0 && (
+                <div className="px-5 py-3 border-b border-border">
+                  <div className="flex items-center gap-1.5 text-muted-foreground text-xs uppercase tracking-wide mb-2">
+                    <Paperclip className="w-3.5 h-3.5" />
+                    <span>Attachments ({attachments.length})</span>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {attachments.map((a, i) => (
+                      <li key={i} className="flex items-center gap-2 text-sm">
+                        <File className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <span className="break-all">{a.name}</span>
+                        <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">{formatSize(a.size)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="bg-white">
+                {hasHtml ? (
+                  <iframe
+                    title="email body"
+                    sandbox=""
+                    referrerPolicy="no-referrer"
+                    srcDoc={msg?.html}
+                    className="w-full h-[600px] border-0"
+                  />
+                ) : parsed.body ? (
+                  <div className="px-5 py-4 whitespace-pre-wrap break-words text-sm text-foreground/90 leading-relaxed">{parsed.body}</div>
                 ) : (
-                  <p className="text-sm text-muted-foreground italic">(No body)</p>
+                  <p className="px-5 py-4 text-sm text-muted-foreground italic">(No body)</p>
                 )}
               </div>
             </div>
