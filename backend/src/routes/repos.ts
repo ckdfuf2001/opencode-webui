@@ -6,6 +6,7 @@ import * as gitOperations from '../services/git-operations'
 import { SettingsService } from '../services/settings'
 import { writeFileContent } from '../services/file-operations'
 import { opencodeServerManager } from '../services/opencode-single-server'
+import { ensureServerAuth } from '../services/opencode-auth'
 import { logger } from '../utils/logger'
 import { withTransactionAsync } from '../db/transactions'
 import { getOpenCodeConfigFilePath, getReposPath } from '@opencode-webui/shared'
@@ -96,19 +97,58 @@ export function createRepoRoutes(database: Database) {
     try {
       const id = parseInt(c.req.param('id'))
       const repo = db.getRepoById(database, id)
-      
+
       if (!repo) {
         return c.json({ error: 'Repo not found' }, 404)
       }
-      
-      await withTransactionAsync(database, async (db) => {
-        await repoService.deleteRepoFiles(db, id)
+
+      const repoDir = path.resolve(getReposPath(), path.basename(repo.localPath))
+      const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
+
+      // Stop any opencode sessions running inside this repo so they release their file handles before the directory is removed
+      try {
+        await opencodeServerManager.ensureRunning()
+        const base = opencodeServerManager.getUrl()
+        const directoryParam = encodeURIComponent(repoDir)
+        const sessionRes = await fetch(`${base}/session?directory=${directoryParam}`, {
+          headers,
+          signal: AbortSignal.timeout(10_000)
+        })
+        if (sessionRes.ok) {
+          const sessions = await sessionRes.json() as Array<{ id: string }>
+          for (const session of sessions) {
+            await fetch(`${base}/session/${session.id}?directory=${directoryParam}`, {
+              method: 'DELETE',
+              headers,
+              signal: AbortSignal.timeout(10_000)
+            }).catch((error) => logger.warn(`Failed to stop opencode session ${session.id}:`, error))
+          }
+        }
+      } catch (error) {
+        logger.warn('Failed to stop opencode sessions for repo:', error)
+      }
+
+      // Remove files OUTSIDE the DB transaction (fs deletion is slow and must not hold the SQLite connection)
+      try {
+        await repoService.deleteRepoFiles(database, id)
+      } catch (error) {
+        // The opencode server or its MCP children may hold handles on the repo dir. Restart to release them, then retry.
+        logger.warn('Repo file deletion failed, restarting OpenCode server to release handles:', error)
+        await opencodeServerManager.restart().catch((restartError) => logger.error('Failed to restart OpenCode server after repo delete:', restartError))
+        await repoService.deleteRepoFiles(database, id)
+      }
+
+      // Delete the DB row inside a short, serialized transaction
+      await withTransactionAsync(database, async (tx) => {
+        db.deleteRepo(tx, id)
       })
-      
+
       return c.json({ success: true })
     } catch (error: any) {
       logger.error('Failed to delete repo:', error)
       return c.json({ error: error.message }, 500)
+    } finally {
+      await opencodeServerManager.start().catch((startError) => logger.error('Failed to start OpenCode server:', startError))
     }
   })
   

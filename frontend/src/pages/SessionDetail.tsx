@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useReconcileOrphanedStreams } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { useSSE } from "@/hooks/useSSE";
 import { useSettings } from "@/hooks/useSettings";
@@ -99,6 +99,7 @@ export function SessionDetail() {
     repoDirectory,
   );
   const { isConnected, isReconnecting } = useSSE(opcodeUrl, repoDirectory);
+  useReconcileOrphanedStreams(opcodeUrl, repoDirectory);
   const abortSession = useAbortSession(opcodeUrl, repoDirectory);
   const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
   const truncateSession = useTruncateSession(opcodeUrl, repoDirectory);

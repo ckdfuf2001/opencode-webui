@@ -158,9 +158,9 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
 
         case 'session.error': {
           const message = getSessionErrorMessage(event.properties.error)
-          showToast.error(message, { duration: 8000 })
-          if (event.properties.sessionID) {
-            const sessionID = event.properties.sessionID
+          const sessionID = event.properties.sessionID
+          showToast.error(message, { duration: 8000, id: `session-error-${sessionID ?? 'unknown'}` })
+          if (sessionID) {
             sessionActivityEvents.emit({ type: 'idle', sessionID })
             appendErrorMessageToThread(queryClient, opcodeUrl, sessionID, activeDirectory, message)
             queryClient.invalidateQueries({ 
@@ -478,7 +478,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
               : variant === 'warning'
                 ? showToast.warning
                 : showToast.info
-          toastFn(title ? `${title}: ${message}` : message, { duration: duration || 5000 })
+          toastFn(title ? `${title}: ${message}` : message, { duration: duration || 5000, id: `tui-toast-${title ?? 'toast'}-${message}` })
           break
         }
 

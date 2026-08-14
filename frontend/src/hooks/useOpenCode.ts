@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { OpenCodeClient } from "../api/opencode";
 import type {
   MessageWithParts,
@@ -104,7 +104,13 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
 
   return useQuery({
     queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory],
-    queryFn: () => client!.listMessages(sessionID!),
+    queryFn: async () => {
+      const data = await client!.listMessages(sessionID!);
+      const status = await client!.getSessionStatus().catch(() => null);
+      if (status === null) return data;
+      const isBusy = status[sessionID!]?.type === "busy";
+      return reconcileOrphanedStreams(data, sessionID!, isBusy);
+    },
     enabled: !!client && !!sessionID,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
@@ -112,6 +118,80 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
   });
+};
+
+function reconcileOrphanedStreams(
+  messages: MessageListResponse,
+  sessionID: string,
+  isBusy: boolean,
+): MessageListResponse {
+  if (isBusy) return messages;
+  let changed = false;
+  const updated = messages.map((msg): MessageWithParts => {
+    if (msg.info.sessionID !== sessionID) return msg;
+    if (msg.info.role !== "assistant") return msg;
+    if ("completed" in msg.info.time && msg.info.time.completed) return msg;
+    changed = true;
+    const parts = msg.parts.map((part) => {
+      if (part.type === "tool" && part.state?.status === "running") {
+        return {
+          ...part,
+          state: { status: "error" as const, error: "Run was interrupted" },
+        } as MessageWithParts["parts"][number];
+      }
+      return part;
+    });
+    return {
+      ...msg,
+      info: {
+        ...msg.info,
+        time: { ...msg.info.time, completed: msg.info.time.created ?? Date.now() },
+      },
+      parts,
+    };
+  });
+  return changed ? updated : messages;
+}
+
+export const useReconcileOrphanedStreams = (opcodeUrl: string | null | undefined, directory?: string) => {
+  const client = useOpenCodeClient(opcodeUrl, directory);
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const status = await client.getSessionStatus();
+        if (cancelled || !status) return;
+        const queries = queryClient.getQueryCache().getAll();
+        for (const query of queries) {
+          const key = query.queryKey;
+          if (key[0] !== "opencode" || key[1] !== "messages") continue;
+          if (key[2] !== opcodeUrl || key[4] !== directory) continue;
+          const sessionID = key[3];
+          if (typeof sessionID !== "string" || !sessionID) continue;
+          if (status[sessionID]?.type === "busy") continue;
+          const data = query.state.data as MessageListResponse | undefined;
+          if (!data) continue;
+          const reconciled = reconcileOrphanedStreams(data, sessionID, false);
+          if (reconciled !== data) {
+            queryClient.setQueryData(key, reconciled);
+          }
+        }
+      } catch {
+        // status endpoint unavailable; skip this cycle
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [client, queryClient, opcodeUrl, directory]);
 };
 
 export const useCreateSession = (opcodeUrl: string | null | undefined, directory?: string) => {

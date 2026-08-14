@@ -517,7 +517,28 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
     const dir = path.resolve(getReposPath(), dirName)
     logger.info(`Removing directory: ${dirName} from ${getReposPath()}`)
     const fs = await import('fs/promises')
-    await fs.rm(dir, { recursive: true, force: true })
+
+    // Windows often holds the directory for a moment (file watchers, virus scanner).
+    // Retry with backoff so transient locks do not abort the deletion.
+    let lastError: unknown = null
+    const maxAttempts = 8
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await fs.rm(dir, { recursive: true, force: true })
+        lastError = null
+        break
+      } catch (error: any) {
+        lastError = error
+        if (attempt < maxAttempts) {
+          const delayMs = 300 * attempt
+          logger.warn(`Directory removal attempt ${attempt}/${maxAttempts} failed (${error?.code ?? error?.message}), retrying in ${delayMs}ms`)
+          await new Promise(resolve => setTimeout(resolve, delayMs))
+        }
+      }
+    }
+    if (lastError) {
+      throw lastError
+    }
 
     const stillExists = await fs.stat(dir).then(() => true).catch(() => false)
     if (stillExists) {
@@ -538,8 +559,7 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
       }
     }
     
-    db.deleteRepo(database, repoId)
-    logger.info(`Repo deleted successfully: ${repoIdentifier}`)
+    logger.info(`Repo files deleted successfully: ${repoIdentifier}`)
   } catch (error: any) {
     logger.error(`Failed to delete repo: ${repoIdentifier}`, error)
     throw error
