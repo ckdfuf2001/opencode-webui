@@ -266,6 +266,48 @@ export async function renameOrMoveFile(userPath: string, body: { newPath: string
   }
 }
 
+const SEARCH_IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build'])
+
+export async function searchFiles(basePath: string, query: string): Promise<string[]> {
+  const validatedPath = validatePath(basePath)
+  const q = query.trim().toLowerCase()
+  const results: string[] = []
+
+  if (!q) {
+    const entries = await listDirectory(validatedPath)
+    return entries
+      .filter((entry) => entry.name !== '.git' && entry.name !== 'node_modules')
+      .sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+      .map((entry) => entry.name)
+  }
+
+  const walk = async (dir: string, rel: string): Promise<void> => {
+    let entries: Awaited<ReturnType<typeof listDirectory>>
+    try {
+      entries = await listDirectory(dir)
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (results.length >= 200) return
+      if (SEARCH_IGNORED_DIRS.has(entry.name)) continue
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name
+      if (relPath.toLowerCase().includes(q)) {
+        results.push(relPath)
+      }
+      if (entry.isDirectory) {
+        await walk(entry.path, relPath)
+      }
+    }
+  }
+
+  await walk(validatedPath, '')
+  return results
+}
+
 export function validatePath(userPath: string): string {
   const normalized = path.normalize(userPath).replace(/^(\.\.(\/|\\|$))+/, '')
   const resolved = path.resolve(SHARED_WORKSPACE_BASE, normalized)

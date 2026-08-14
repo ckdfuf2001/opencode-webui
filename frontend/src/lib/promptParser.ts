@@ -1,7 +1,7 @@
 import type { ContentPart, FileInfo } from '@/api/types'
 
 export const MENTION_PATTERN = /@(?:'([^']*)'|(\S+))/g
-export const MENTION_TRIGGER_PATTERN = /(^|\s)@(\S*)$/
+export const MENTION_TRIGGER_PATTERN = /(^|\s)@'([^']*)$/
 
 export interface MentionTrigger {
   start: number

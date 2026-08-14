@@ -114,7 +114,6 @@ export function PromptInput({
   })
   
   const { files: searchResults } = useFileSearch(
-    opcodeUrl,
     fileQuery,
     showFileSuggestions,
     directory
@@ -215,11 +214,11 @@ export function PromptInput({
   const handleFileSelect = (filePath: string) => {
     if (!mentionRange || !textareaRef.current) return
     
-    const filename = getFilename(filePath)
+    const relativePath = filePath.startsWith('/') ? filePath.slice(1) : filePath
     const beforeMention = prompt.slice(0, mentionRange.start)
     const afterMention = prompt.slice(mentionRange.end)
     
-    const newPrompt = beforeMention + '@' + filename + ' ' + afterMention
+    const newPrompt = beforeMention + `@'${relativePath}'` + ' ' + afterMention
     setPrompt(newPrompt)
     
     const absolutePath = filePath.startsWith('/') 
@@ -230,9 +229,9 @@ export function PromptInput({
     
     setAttachedFiles(prev => {
       const next = new Map(prev)
-      next.set(filename.toLowerCase(), {
+      next.set(relativePath.toLowerCase(), {
         path: absolutePath,
-        name: filename
+        name: getFilename(relativePath)
       })
       return next
     })
@@ -243,7 +242,7 @@ export function PromptInput({
     
     setTimeout(() => {
       if (textareaRef.current) {
-        const newCursorPos = beforeMention.length + filename.length + 2
+        const newCursorPos = beforeMention.length + `@'${relativePath}'`.length + 1
         textareaRef.current.focus()
         textareaRef.current.setSelectionRange(newCursorPos, newCursorPos)
       }
@@ -655,7 +654,7 @@ export function PromptInput({
                 <span className="font-mono">Cmd/Ctrl+Enter</span> - Send message
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                <span className="font-mono">@</span> - Mention files
+                <span className="font-mono">@'</span> - Mention files
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
                 <span className="font-mono">!</span> - Bash command mode

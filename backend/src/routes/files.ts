@@ -15,6 +15,18 @@ export function createFileRoutes(_database: Database) {
       }
     }).join('/')
 
+  app.get('/search', async (c) => {
+    try {
+      const basePath = c.req.query('path') || '.'
+      const query = c.req.query('query') || ''
+      const results = await fileService.searchFiles(basePath, query)
+      return c.json(results)
+    } catch (error: any) {
+      logger.error('Failed to search files:', error)
+      return c.json({ error: error.message || 'Failed to search files' }, error.statusCode || 500)
+    }
+  })
+
   app.get('/*', async (c) => {
     try {
       const userPath = decodePath(c)
