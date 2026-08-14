@@ -1,5 +1,7 @@
 import json
 import os
+import urllib.error
+import urllib.parse
 import urllib.request
 
 from fastmcp import FastMCP
@@ -12,6 +14,8 @@ mcp = FastMCP(
     instructions=(
         "Use read_document to extract the text content of office, PDF and Outlook email files "
         "(docx, doc, xlsx, xls, pptx, ppt, pdf, msg), including DRM-protected files. "
+        "For Outlook MSG emails the extracted text lists attachments and any HTTP(S) links found in the "
+        "message; use download_attachment (with the 0-based Attachments index) to save an attachment to disk. "
         "Use edit_document to modify office files (docx/doc/xlsx/xls/pptx/ppt) in place. "
         "Pass absolute file paths on this machine when possible."
     ),
@@ -48,6 +52,46 @@ def read_document(path: str) -> str:
     except Exception as exc:
         return f"Error reading document: {exc}"
     return body.get("text", "")
+
+
+@mcp.tool()
+def download_attachment(path: str, index: int, destination: str = "") -> str:
+    """Save an attachment of an Outlook MSG email to disk. path is the .msg file (absolute or workspace-relative). index is the 0-based position shown in read_document's Attachments list. destination is an optional folder (absolute or workspace-relative); by default the attachment is saved into the chat_upload folder of the email under a subfolder named after the email file. Returns the saved file path."""
+    target = _resolve(path)
+    try:
+        index = int(index)
+        if index < 0:
+            return "Error downloading attachment: index must be 0 or greater"
+    except (TypeError, ValueError):
+        return "Error downloading attachment: invalid index"
+    if destination:
+        dest_dir = _resolve(destination)
+    else:
+        dest_dir = os.path.join(os.path.dirname(target), os.path.basename(target))
+    os.makedirs(dest_dir, exist_ok=True)
+    url = f"{BACKEND}/api/preview/attachment?path={urllib.parse.quote(target)}&index={index}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=180) as resp:
+            data = resp.read()
+            disposition = resp.headers.get("Content-Disposition", "")
+            name = ""
+            if "filename*=UTF-8''" in disposition:
+                name = urllib.parse.unquote(disposition.split("filename*=UTF-8''")[1].split(";")[0].strip())
+            if not name:
+                name = os.path.basename(target)
+            out_path = os.path.join(dest_dir, name)
+            with open(out_path, "wb") as f:
+                f.write(data)
+            return f"Saved attachment to {out_path} ({len(data)} bytes)"
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8"))
+            error = detail.get("error", str(exc))
+        except Exception:
+            error = str(exc)
+        return f"Error downloading attachment: {error}"
+    except Exception as exc:
+        return f"Error downloading attachment: {exc}"
 
 
 def _post(payload):
