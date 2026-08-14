@@ -360,7 +360,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     if (extracted.status === 'loading') {
       body = SPINNER
     } else if (extracted.status === 'ready' && extracted.data) {
-      body = <ExtractedTextView text={extracted.data.text} fileName={file.name} msg={extracted.data.msg} />
+      body = <ExtractedTextView text={extracted.data.text} fileName={file.name} path={file.path} msg={extracted.data.msg} />
     } else if (extracted.status === 'unavailable') {
       body = <ConversionRequiredNote msg={extracted.error} />
     } else {
@@ -448,7 +448,7 @@ function formatSize(bytes?: number): string {
   return `${i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`
 }
 
-function ExtractedTextView({ text, fileName, msg }: { text: string; fileName?: string; msg?: ExtractedMsg }) {
+function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileName?: string; path: string; msg?: ExtractedMsg }) {
   const parsed = useMemo(() => parseMsgText(text), [text])
   const attachments = msg?.attachments ?? []
   const hasHtml = !!msg?.html
@@ -477,12 +477,19 @@ function ExtractedTextView({ text, fileName, msg }: { text: string; fileName?: s
                     <Paperclip className="w-3.5 h-3.5" />
                     <span>Attachments ({attachments.length})</span>
                   </div>
-                  <ul className="space-y-1.5">
+                  <ul className="space-y-1">
                     {attachments.map((a, i) => (
-                      <li key={i} className="flex items-center gap-2 text-sm">
-                        <File className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                        <span className="break-all">{a.name}</span>
-                        <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">{formatSize(a.size)}</span>
+                      <li key={i}>
+                        <a
+                          href={`${API_BASE_URL}/api/preview/attachment?path=${encodeURIComponent(path)}&index=${i}`}
+                          download={a.name}
+                          className="flex items-center gap-2 rounded px-1.5 -mx-1.5 py-0.5 text-sm text-foreground hover:bg-muted/60 transition-colors"
+                          title="Download attachment"
+                        >
+                          <File className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          <span className="break-all">{a.name}</span>
+                          <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">{formatSize(a.size)}</span>
+                        </a>
                       </li>
                     ))}
                   </ul>

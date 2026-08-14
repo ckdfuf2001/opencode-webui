@@ -198,6 +198,53 @@ export async function editDocument(
   return { fileName: body.fileName || path.basename(resolved), results: body.results || [] }
 }
 
+export async function extractAttachment(
+  userPath: string,
+  index: number
+): Promise<{ data: Buffer; fileName: string; mimeType: string }> {
+  const resolved = validatePath(userPath)
+
+  let isFile = false
+  try {
+    const stat = await fs.stat(resolved)
+    isFile = stat.isFile()
+  } catch {
+    isFile = false
+  }
+  if (!isFile) {
+    throw { message: 'File not found', statusCode: 404 }
+  }
+
+  const ready = await ensureConverter()
+  if (!ready) {
+    throw { message: 'Document conversion service is unavailable', statusCode: 503 }
+  }
+
+  const res = await fetch(`${CONVERTER_BASE}/attachment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: resolved, index }),
+  })
+
+  if (!res.ok) {
+    let message = 'Attachment extraction failed'
+    try {
+      const body = await res.json()
+      if (body?.error) message = body.error
+    } catch {
+      // not JSON
+    }
+    logger.error(`Attachment extraction failed for ${userPath}: ${message}`)
+    throw { message, statusCode: res.status === 404 ? 404 : 500 }
+  }
+
+  const data = Buffer.from(await res.arrayBuffer())
+  const disposition = res.headers.get('Content-Disposition') || ''
+  const fileName = decodeURIComponent(disposition.split("filename*=UTF-8''")[1] || '') || path.basename(resolved)
+  const mimeType = res.headers.get('Content-Type') || 'application/octet-stream'
+  return { data, fileName, mimeType }
+}
+
 export function stopConverter(): void {
   if (converterProcess) {
     converterProcess.kill()
