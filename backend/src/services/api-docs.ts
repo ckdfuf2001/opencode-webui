@@ -615,6 +615,20 @@ export const openApiSpec = {
         },
       },
     },
+    '/api/files/search': {
+      get: {
+        tags: ['files'],
+        summary: 'Search files under a path (case-insensitive, supports any unicode)',
+        parameters: [
+          { name: 'path', in: 'query', schema: { type: 'string' }, description: 'Base path (relative to workspace or absolute repo path). Defaults to workspace root.' },
+          { name: 'query', in: 'query', schema: { type: 'string' }, description: 'Substring to match. Empty returns the top-level entries of the base path.' },
+        ],
+        responses: {
+          '200': { description: 'Matching relative paths' },
+          '500': { description: 'Search failed' },
+        },
+      },
+    },
     '/api/files/{path}': {
       parameters: [{ name: 'path', in: 'path', required: true, schema: { type: 'string' }, description: 'Relative path under the workspace' }],
       get: {

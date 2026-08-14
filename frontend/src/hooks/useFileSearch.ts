@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { API_BASE_URL } from '@/config'
 
 export interface FileSearchResult {
   files: string[]
@@ -8,7 +9,6 @@ export interface FileSearchResult {
 }
 
 export function useFileSearch(
-  opcodeUrl: string | null,
   query: string,
   enabled: boolean = true,
   directory?: string
@@ -21,25 +21,26 @@ export function useFileSearch(
   }, [query])
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['file-search', opcodeUrl, debouncedQuery, directory],
+    queryKey: ['file-search', directory, debouncedQuery],
     queryFn: async () => {
-      if (!opcodeUrl || !debouncedQuery) return []
-      
-      const params = new URLSearchParams({ query: debouncedQuery })
+      const params = new URLSearchParams()
       if (directory) {
-        params.append('directory', directory)
+        params.append('path', directory)
       }
-      
+      if (debouncedQuery) {
+        params.append('query', debouncedQuery)
+      }
+
       const response = await fetch(
-        `${opcodeUrl}/find/file?${params.toString()}`
+        `${API_BASE_URL}/api/files/search?${params.toString()}`
       )
-      
+
       if (!response.ok) throw new Error('File search failed')
-      
+
       const data = await response.json()
       return data as string[]
     },
-    enabled: enabled && !!opcodeUrl && !!debouncedQuery,
+    enabled: enabled && !!directory,
     staleTime: 60000,
   })
 
