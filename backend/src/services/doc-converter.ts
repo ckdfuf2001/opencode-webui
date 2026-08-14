@@ -110,7 +110,7 @@ export async function convertToPdf(userPath: string, refresh = false): Promise<B
   return fs.readFile(body.pdfPath)
 }
 
-export async function extractDocumentText(userPath: string): Promise<{ text: string; fileName: string }> {
+export async function extractDocumentText(userPath: string, refresh = false): Promise<{ text: string; fileName: string }> {
   const workspaceRoot = path.resolve(getWorkspacePath())
   const target = path.isAbsolute(userPath) ? userPath : path.resolve(workspaceRoot, userPath)
   const resolved = path.resolve(target)
@@ -142,7 +142,7 @@ export async function extractDocumentText(userPath: string): Promise<{ text: str
   const { status, body } = await fetchJson(`${CONVERTER_BASE}/extract`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: resolved }),
+    body: JSON.stringify({ path: resolved, refresh }),
   })
 
   if (status !== 200 || typeof body?.text !== 'string') {

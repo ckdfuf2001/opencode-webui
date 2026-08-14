@@ -37,9 +37,11 @@ export function createPreviewRoutes() {
 
   app.post('/extract', async (c) => {
     let userPath: string
+    let refresh = false
     try {
       const body = await c.req.json()
       userPath = body.path || ''
+      refresh = body.refresh === true
     } catch {
       return c.json({ error: 'Invalid request body' }, 400)
     }
@@ -47,7 +49,7 @@ export function createPreviewRoutes() {
       return c.json({ error: 'Missing path' }, 400)
     }
     try {
-      const result = await extractDocumentText(userPath)
+      const result = await extractDocumentText(userPath, refresh)
       return c.json(result)
     } catch (error: any) {
       return c.json({ error: error.message || 'Extraction failed' }, error.statusCode || 500)

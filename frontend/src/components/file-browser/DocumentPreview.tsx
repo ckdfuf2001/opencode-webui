@@ -4,7 +4,7 @@ import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 
-type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt'
+type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg'
 
 export function detectDocKind(name: string): DocKind | null {
   const ext = name.split('.').pop()?.toLowerCase()
@@ -14,6 +14,7 @@ export function detectDocKind(name: string): DocKind | null {
   if (ext === 'xlsx' || ext === 'xls') return 'xlsx'
   if (ext === 'pptx') return 'pptx'
   if (ext === 'ppt') return 'ppt'
+  if (ext === 'msg') return 'msg'
   return null
 }
 
@@ -69,12 +70,16 @@ function useRawFile(path: string, enabled = true) {
   return { data, status, error }
 }
 
-function useConvertedPdf(path: string, refreshKey = 0) {
+function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
   const [data, setData] = useState<ArrayBuffer | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading')
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (!enabled) {
+      setStatus('unavailable')
+      return
+    }
     let cancelled = false
     setStatus('loading')
     setData(null)
@@ -102,7 +107,52 @@ function useConvertedPdf(path: string, refreshKey = 0) {
     return () => {
       cancelled = true
     }
-  }, [path, refreshKey])
+  }, [path, refreshKey, enabled])
+
+  return { data, status, error }
+}
+
+function useExtractedText(path: string, refreshKey = 0, enabled = true) {
+  const [data, setData] = useState<{ text: string; fileName?: string } | null>(null)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!enabled) {
+      setStatus('unavailable')
+      return
+    }
+    let cancelled = false
+    setStatus('loading')
+    setData(null)
+    setError('')
+    fetch(`${API_BASE_URL}/api/preview/extract?path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, refresh: refreshKey > 0 }),
+    })
+      .then(async (res) => {
+        if (res.status === 503) {
+          if (!cancelled) setStatus('unavailable')
+          return
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json = await res.json()
+        if (!cancelled) {
+          setData({ text: json.text ?? '', fileName: json.fileName })
+          setStatus('ready')
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Failed to extract text')
+          setStatus('error')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [path, refreshKey, enabled])
 
   return { data, status, error }
 }
@@ -292,7 +342,8 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
 
 export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refreshKey?: number }) {
   const kind = detectDocKind(file.name)
-  const converted = useConvertedPdf(file.path, refreshKey)
+  const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg')
+  const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 
   const hasClientFallback = kind ? CONVERTABLE_CLIENT_KINDS.has(kind) : false
   const { data: raw, status: rawStatus, error: rawError } = useRawFile(file.path, hasClientFallback && converted.status !== 'ready')
@@ -300,7 +351,17 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   if (!kind) return null
 
   let body: ReactNode
-  if (converted.status === 'loading') {
+  if (kind === 'msg') {
+    if (extracted.status === 'loading') {
+      body = SPINNER
+    } else if (extracted.status === 'ready' && extracted.data) {
+      body = <ExtractedTextView text={extracted.data.text} fileName={file.name} />
+    } else if (extracted.status === 'unavailable') {
+      body = <ConversionRequiredNote msg={extracted.error} />
+    } else {
+      body = <ErrorNote msg={extracted.error} />
+    }
+  } else if (converted.status === 'loading') {
     body = SPINNER
   } else if (converted.status === 'ready' && converted.data) {
     body = <PdfViewer data={converted.data} fileName={file.name} />
@@ -336,6 +397,18 @@ function ConversionRequiredNote({ msg }: { msg?: string }) {
       {msg && <p className="text-xs text-destructive mt-1">{msg}</p>}
       <p className="text-xs text-muted-foreground mt-1">Start the backend, then reload the file.</p>
     </div>
+  )
+}
+
+function ExtractedTextView({ text, fileName }: { text: string; fileName?: string }) {
+  return (
+    <DocumentShell fileName={fileName}>
+      {(_fullscreen, zoom) => (
+        <div className="p-4" style={{ zoom }}>
+          <pre className="whitespace-pre-wrap break-words text-sm text-foreground font-mono leading-relaxed">{text}</pre>
+        </div>
+      )}
+    </DocumentShell>
   )
 }
 

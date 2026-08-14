@@ -1042,10 +1042,16 @@ class Handler(BaseHTTPRequestHandler):
             out_path = text_cache_path(source_path)
             data = None
             if os.path.exists(out_path):
-                try:
-                    data = open(out_path, "r", encoding="utf-8").read()
-                except Exception:
-                    data = None
+                if payload.get("refresh"):
+                    try:
+                        os.remove(out_path)
+                    except OSError:
+                        pass
+                else:
+                    try:
+                        data = open(out_path, "r", encoding="utf-8").read()
+                    except Exception:
+                        data = None
             if data is None:
                 data = extract_text(source_path)
                 try:
