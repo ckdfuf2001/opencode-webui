@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Loader2, AlertCircle, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Loader2, AlertCircle, Maximize2, Minimize2, X, ZoomIn, ZoomOut, User, Users, Clock } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
@@ -400,12 +400,69 @@ function ConversionRequiredNote({ msg }: { msg?: string }) {
   )
 }
 
+function parseMsgText(text: string): { from: string; to: string; cc: string; subject: string; date: string; body: string; isMsg: boolean } {
+  const lines = text.split('\n')
+  const fields: Record<string, string> = { from: '', to: '', cc: '', subject: '', date: '', body: '' }
+  let sawHeader = false
+  let bodyStart = -1
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const lower = line.toLowerCase()
+    if (lower.startsWith('from:')) { fields.from = line.slice(5).trim(); sawHeader = true }
+    else if (lower.startsWith('to:')) { fields.to = line.slice(3).trim(); sawHeader = true }
+    else if (lower.startsWith('cc:')) { fields.cc = line.slice(3).trim(); sawHeader = true }
+    else if (lower.startsWith('subject:')) { fields.subject = line.slice(8).trim(); sawHeader = true }
+    else if (lower.startsWith('date:')) { fields.date = line.slice(5).trim(); sawHeader = true }
+    else if (lower.startsWith('body:')) { bodyStart = i + 1; break }
+  }
+  fields.body = bodyStart >= 0 ? lines.slice(bodyStart).join('\n').trim() : ''
+  return { ...fields, isMsg: sawHeader }
+}
+
+function MetaRow({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="flex items-center gap-1.5 text-muted-foreground w-16 flex-shrink-0 text-xs uppercase tracking-wide">
+        {icon}
+        <span>{label}</span>
+      </span>
+      <span className="text-sm text-foreground break-all leading-snug">{value}</span>
+    </div>
+  )
+}
+
 function ExtractedTextView({ text, fileName }: { text: string; fileName?: string }) {
+  const parsed = useMemo(() => parseMsgText(text), [text])
+
   return (
     <DocumentShell fileName={fileName}>
       {(_fullscreen, zoom) => (
         <div className="p-4" style={{ zoom }}>
-          <pre className="whitespace-pre-wrap break-words text-sm text-foreground font-mono leading-relaxed">{text}</pre>
+          {parsed.isMsg ? (
+            <div className="mx-auto max-w-3xl rounded-lg border border-border bg-card shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b-2 border-primary/20 bg-muted/40">
+                <h2 className="text-base font-semibold text-foreground break-words">{parsed.subject || 'No subject'}</h2>
+                {parsed.from && (
+                  <p className="mt-1 text-sm text-muted-foreground">{parsed.from}</p>
+                )}
+              </div>
+              <div className="px-5 py-3 border-b border-border text-sm space-y-1.5">
+                {parsed.from && <MetaRow icon={<User className="w-3.5 h-3.5" />} label="From" value={parsed.from} />}
+                {parsed.to && <MetaRow icon={<Users className="w-3.5 h-3.5" />} label="To" value={parsed.to} />}
+                {parsed.cc && <MetaRow icon={<Users className="w-3.5 h-3.5" />} label="Cc" value={parsed.cc} />}
+                {parsed.date && <MetaRow icon={<Clock className="w-3.5 h-3.5" />} label="Date" value={parsed.date} />}
+              </div>
+              <div className="px-5 py-4">
+                {parsed.body ? (
+                  <div className="whitespace-pre-wrap break-words text-sm text-foreground/90 leading-relaxed">{parsed.body}</div>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">(No body)</p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap break-words text-sm text-foreground font-mono leading-relaxed">{text}</pre>
+          )}
         </div>
       )}
     </DocumentShell>
