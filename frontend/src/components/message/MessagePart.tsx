@@ -130,11 +130,11 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         }
       }
       const text = part.text || ''
-      const mentionMatch = text.match(/@(?:'([^']*)'|(\S+))/)
+      const mentionMatch = text.match(/@(?:"([^"]*)"|'([^']*)'|(\S+))/)
       if (!mentionMatch) {
         return <TextPart part={part} />
       }
-      const mentionText = mentionMatch[1] ?? mentionMatch[2]
+      const mentionText = mentionMatch[1] ?? mentionMatch[2] ?? mentionMatch[3]
       return (
         <span
           className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
