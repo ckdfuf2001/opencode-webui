@@ -66,7 +66,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
 
   const handleDownload = () => {
     const link = document.createElement('a')
-    link.href = `${API_BASE}/api/files/${file.path}?download=true`
+    link.href = `${API_BASE}/api/files/${encodeURIComponent(file.path)}?download=true`
     link.download = file.name
     document.body.appendChild(link)
     link.click()
