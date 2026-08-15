@@ -23,6 +23,7 @@ import {
   Plug,
   Puzzle,
   Pencil,
+  RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -286,7 +287,7 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
     }
     const base = tab === 'skill'
       ? commands.filter((c) => c.source === 'skill')
-      : commands
+      : commands.filter((c) => c.source !== 'skill')
     const list = q
       ? base.filter(c => c.name.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q))
       : base
@@ -559,16 +560,25 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const [editing, setEditing] = useState<EditingEntry | null>(null)
   const [historyQuery, setHistoryQuery] = useState('')
   const [explorerFocus, setExplorerFocus] = useState<CommandWithScope | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   const { data: plugins = [], refetch: refetchPlugins } = useQuery({
     queryKey: ['registry-list', 'tool', directory],
     queryFn: () => registryApi.list('tool', directory),
   })
 
-  const refreshExplorer = useCallback(() => {
+  const refreshExplorer = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await registryApi.reload(directory)
+    } catch (err) {
+      console.warn('Failed to reload OpenCode instances for refresh:', err)
+    }
     refresh()
     refetchPlugins()
     queryClient.invalidateQueries({ queryKey: ['opencode', 'config', opcodeUrl, directory] })
+    window.dispatchEvent(new CustomEvent('opencode:commands-refreshed'))
+    setRefreshing(false)
   }, [refresh, refetchPlugins, queryClient, opcodeUrl, directory])
 
   const handleEdit = useCallback(async (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => {
@@ -953,6 +963,16 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
           <div className="flex items-center gap-2">
             <Terminal className="w-4 h-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">Commands</h2>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => { refreshExplorer() }}
+              className="text-muted-foreground hover:text-foreground hover:bg-muted"
+              title="Refresh"
+              disabled={refreshing}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            </Button>
             {runningCount > 0 && (
               <span className="inline-flex items-center gap-1 text-xs text-amber-500">
                 <Loader2 className="w-3 h-3 animate-spin" />

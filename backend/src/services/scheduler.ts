@@ -5,6 +5,7 @@ import { getRepoById } from '../db/queries'
 import { getReposPath } from '@opencode-webui/shared'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
+import { markRequestBusy, clearRequestBusy } from './busy-tracker'
 import { logger } from '../utils/logger'
 import path from 'path'
 
@@ -137,15 +138,20 @@ async function sendSchedulePrompt(
   if (agent) {
     messageBody.agent = agent
   }
-  const response = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(messageBody),
-    signal: AbortSignal.timeout(60_000),
-  })
-  if (!response.ok) {
-    const body = await response.text()
-    logger.error(`Failed to send scheduled prompt for "${scheduleName}": ${response.status} ${body}`)
+  markRequestBusy()
+  try {
+    const response = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(messageBody),
+      signal: AbortSignal.timeout(60_000),
+    })
+    if (!response.ok) {
+      const body = await response.text()
+      logger.error(`Failed to send scheduled prompt for "${scheduleName}": ${response.status} ${body}`)
+    }
+  } finally {
+    clearRequestBusy()
   }
 }
 

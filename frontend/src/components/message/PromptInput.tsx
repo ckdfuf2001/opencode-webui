@@ -103,7 +103,7 @@ export function PromptInput({
   const session = sessionData.data as SessionWithModel | undefined
   const { data: config } = useConfig(opcodeUrl)
   const { preferences, updateSettings } = useSettings()
-  const { filterCommands } = useCommands(opcodeUrl, directory)
+  const { filterCommands, refresh: refreshCommands } = useCommands(opcodeUrl, directory)
   const { executeCommand } = useCommandHandler({
     opcodeUrl,
     sessionID,
@@ -556,6 +556,16 @@ export function PromptInput({
     }
     onInjectedPromptConsumed?.()
   }, [injectedPrompt, onInjectedPromptConsumed])
+
+  useEffect(() => {
+    const handleCommandsRefreshed = () => {
+      refreshCommands()
+    }
+    window.addEventListener('opencode:commands-refreshed', handleCommandsRefreshed)
+    return () => {
+      window.removeEventListener('opencode:commands-refreshed', handleCommandsRefreshed)
+    }
+  }, [refreshCommands])
 
   useEffect(() => {
     handleSubmitRef.current = handleSubmit

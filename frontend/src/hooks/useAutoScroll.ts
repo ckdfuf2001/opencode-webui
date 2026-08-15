@@ -14,6 +14,7 @@ interface UseAutoScrollOptions<T extends Message> {
   containerRef?: React.RefObject<HTMLDivElement | null>
   messages?: T[]
   sessionId?: string
+  enabled?: boolean
   onScrollStateChange?: (isScrolledUp: boolean) => void
 }
 
@@ -25,6 +26,7 @@ export function useAutoScroll<T extends Message>({
   containerRef,
   messages,
   sessionId,
+  enabled = true,
   onScrollStateChange
 }: UseAutoScrollOptions<T>): UseAutoScrollReturn {
   const lastMessageCountRef = useRef(0)
@@ -85,6 +87,14 @@ export function useAutoScroll<T extends Message>({
         markDisengaged()
       }
     }
+
+    const handleScroll = () => {
+      if (container.scrollTop + container.clientHeight >= container.scrollHeight) {
+        userScrolledAtRef.current = 0
+        userDisengagedRef.current = false
+        onScrollStateChange?.(false)
+      }
+    }
     
     container.addEventListener('pointerdown', handlePointerDown, { passive: true })
     container.addEventListener('pointermove', handlePointerMove, { passive: true })
@@ -92,6 +102,7 @@ export function useAutoScroll<T extends Message>({
     container.addEventListener('pointercancel', handlePointerUp, { passive: true })
     container.addEventListener('wheel', handleWheel, { passive: true })
     container.addEventListener('keydown', handleKeyDown)
+    container.addEventListener('scroll', handleScroll, { passive: true })
     
     return () => {
       container.removeEventListener('pointerdown', handlePointerDown)
@@ -100,11 +111,12 @@ export function useAutoScroll<T extends Message>({
       container.removeEventListener('pointercancel', handlePointerUp)
       container.removeEventListener('wheel', handleWheel)
       container.removeEventListener('keydown', handleKeyDown)
+      container.removeEventListener('scroll', handleScroll)
     }
   }, [containerRef, onScrollStateChange])
 
   useEffect(() => {
-    if (!containerRef?.current || !messages) return
+    if (!containerRef?.current || !messages || !enabled) return
 
     const currentCount = messages.length
     const prevCount = lastMessageCountRef.current
@@ -132,7 +144,7 @@ export function useAutoScroll<T extends Message>({
     }
 
     scrollToBottom()
-  }, [messages, containerRef, scrollToBottom])
+  }, [messages, containerRef, scrollToBottom, enabled])
 
   return { scrollToBottom }
 }
