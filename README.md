@@ -131,6 +131,13 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 ### Demo
 ![Demo](https://github.com/chriswritescode-dev/opencode-web/releases/download/0.3.0/Chat.gif)
 
+### Demo Project
+![Demo Project](demo.mp4)
+
+**Demo Project**: A simple web-based demo project featuring:
+- Web server accessible from mobile/desktop
+- Schedule-based automatic task processing
+
 ### File Editing
 ![File Editing](https://github.com/chriswritescode-dev/opencode-web/releases/download/0.3.0/git-file-edit.gif)
 
