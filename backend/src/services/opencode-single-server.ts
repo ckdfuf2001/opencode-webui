@@ -161,6 +161,7 @@ class OpenCodeServerManager {
   private isStarting: boolean = false
   private hasLoggedHealthy: boolean = false
   private port: number = OPENCODE_DEFAULT_PORT
+  private restartPromise: Promise<void> | null = null
 
   private constructor() {}
 
@@ -184,6 +185,10 @@ class OpenCodeServerManager {
   }
 
   async ensureRunning(): Promise<void> {
+    if (this.restartPromise) {
+      await this.restartPromise
+      return
+    }
     if (await this.checkHealth()) {
       this.isHealthy = true
       return
@@ -252,6 +257,10 @@ class OpenCodeServerManager {
       this.isHealthy = true
       logger.info(`Attaching to existing healthy OpenCode server on port ${candidate}`)
       return
+    }
+
+    if (!(await this.waitForPortFree(candidate, 20_000))) {
+      logger.warn(`Port ${candidate} is still occupied; launching anyway`)
     }
 
     this.launch(candidate, serverDirectory, binPath, isDevelopment)
@@ -468,15 +477,103 @@ class OpenCodeServerManager {
   }
 
   async restart(): Promise<void> {
-    logger.info('Restarting OpenCode server')
-    invalidateBinaryCache()
-    await this.stop()
-    await new Promise(r => setTimeout(r, 1000))
-    await this.start()
+    if (this.restartPromise) {
+      logger.info('Restart already in progress; joining existing restart')
+      return this.restartPromise
+    }
+    this.restartPromise = (async () => {
+      try {
+        logger.info('Restarting OpenCode server')
+        invalidateBinaryCache()
+        await this.stop()
+        await new Promise(r => setTimeout(r, 1000))
+        await this.start()
+      } finally {
+        this.restartPromise = null
+      }
+    })()
+    return this.restartPromise
   }
 
   getPort(): number {
     return this.port
+  }
+
+  /**
+   * Reload a single project instance by disk-changing capture without
+   * restarting the whole OpenCode process. opencode 1.18+ loads commands,
+   * skills, agents, MCP prompts lazily per directory and re-scans on
+   * /instance/dispose. This preserves active sessions and other directories.
+   */
+  async reloadDirectory(directory: string): Promise<void> {
+    if (!this.serverPid && !this.isHealthy) {
+      await this.ensureRunning()
+    }
+    if (!this.isHealthy) {
+      logger.warn('OpenCode server not healthy; skipping instance reload')
+      return
+    }
+    const headers: Record<string, string> = {}
+    const auth = getServerAuthHeader()
+    if (auth) headers.Authorization = auth
+    const url = `${this.getUrl()}/instance/dispose?directory=${encodeURIComponent(directory)}`
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) {
+        logger.warn(`Instance reload failed for ${directory} (HTTP ${response.status})`)
+        return
+      }
+      logger.info(`Reloaded OpenCode instance for ${directory}`)
+      this.isHealthy = true
+    } catch (error) {
+      logger.warn(`Instance reload error for ${directory}:`, error)
+    }
+  }
+
+  /**
+   * Reload the instance for a directory and optionally verify it can boot the
+   * replacement by listing commands. Sessions and history are preserved.
+   */
+  async reloadAndVerify(directory: string): Promise<boolean> {
+    await this.reloadDirectory(directory)
+    if (!this.isHealthy) return false
+    const headers: Record<string, string> = {}
+    const auth = getServerAuthHeader()
+    if (auth) headers.Authorization = auth
+    try {
+      const response = await fetch(`${this.getUrl()}/command?directory=${encodeURIComponent(directory)}`, {
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Reload many project instances in one pass (used by the automation watcher
+   * when a global config change or several repo files change at once). Each
+   * directory is disposed independently; failures do not abort the rest.
+   */
+  async reloadDirectories(directories: string[]): Promise<number> {
+    const unique = [...new Set(directories)].filter(Boolean)
+    if (unique.length === 0) return 0
+    let succeeded = 0
+    for (const directory of unique) {
+      try {
+        await this.reloadDirectory(directory)
+        succeeded++
+      } catch (error) {
+        logger.warn(`Instance reload failed for ${directory}:`, error)
+      }
+    }
+    logger.info(`Reloaded ${succeeded}/${unique.length} OpenCode instances`)
+    return succeeded
   }
 
   getUrl(): string {

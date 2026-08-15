@@ -217,6 +217,15 @@ docker exec -it opencode-web sh
 > `~/.bun/bin`, `~/.opencode/bin`, and the PATH**, launching whichever it finds for
 > `opencode serve`. Only one is required.
 >
+> **Current bundled version:** `bin/opencode.exe` is **v1.18.18**. Check the
+> installed one anytime with:
+> ```
+> bin\opencode.exe --version
+> ```
+> The automation watcher requires **opencode ≥ 1.18** (per-directory instance
+> reload via `POST /instance/dispose` — see `docs/architecture.md`). If you
+> vendor a newer binary, update the version string above.
+>
 > **Manual placement (alternative):** drop any `opencode.exe` into the project's
 > `bin/` folder:
 > ```

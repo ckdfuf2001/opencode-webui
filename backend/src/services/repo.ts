@@ -7,6 +7,7 @@ import { logger } from '../utils/logger'
 import { SettingsService } from './settings'
 import { writeRepoOpenCodeConfig } from './default-mcp'
 import { getReposPath } from '@opencode-webui/shared'
+import { stopAutomationWatcher, startAutomationWatcher } from './automation-watcher'
 import path from 'path'
 
 async function directoryExists(dir: string): Promise<boolean> {
@@ -518,6 +519,10 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
     logger.info(`Removing directory: ${dirName} from ${getReposPath()}`)
     const fs = await import('fs/promises')
 
+    // Suspend the automation watcher so recursive deletion of the repo's
+    // .opencode/ files does not trigger an unnecessary OpenCode restart.
+    stopAutomationWatcher()
+
     // Windows often holds the directory for a moment (file watchers, virus scanner).
     // Retry with backoff so transient locks do not abort the deletion.
     let lastError: unknown = null
@@ -535,6 +540,11 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
           await new Promise(resolve => setTimeout(resolve, delayMs))
         }
       }
+    }
+    try {
+      startAutomationWatcher()
+    } catch (error) {
+      logger.warn('Failed to resume automation watcher after repo delete:', error)
     }
     if (lastError) {
       throw lastError

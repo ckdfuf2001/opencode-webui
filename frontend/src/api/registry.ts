@@ -62,4 +62,11 @@ export const registryApi = {
     )
     return true
   },
+
+  reload: async (directory?: string): Promise<{ success: boolean; reloaded: number }> => {
+    const { data } = await axios.post(`${API_BASE_URL}/api/registry/reload`, null, {
+      params: directory ? { directory } : {},
+    })
+    return data
+  },
 }

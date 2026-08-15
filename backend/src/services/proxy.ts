@@ -1,9 +1,10 @@
 import { logger } from '../utils/logger'
-import { getConfigPath } from '@opencode-webui/shared'
+import { getConfigPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages } from './opencode-db'
-import { readdir, stat } from 'fs/promises'
+import { markRequestBusy, clearRequestBusy } from './busy-tracker'
+import { readFile, stat } from 'fs/promises'
 import path from 'path'
 
 export async function patchOpenCodeConfig(config: Record<string, unknown>): Promise<boolean> {
@@ -36,22 +37,51 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function dirFiles(dir: string): Promise<Set<string>> {
-  const names = new Set<string>()
-  try {
-    const entries = await readdir(dir, { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.md')) {
-        names.add(entry.name.replace(/\.md$/, ''))
-      }
+export type CommandScope = 'builtin' | 'global' | 'project'
+
+/**
+ * Skills are stored as `<scope>/.opencode/skills/<name>/SKILL.md`, commands as
+ * `<scope>/.opencode/commands/<name>.md` (plural is canonical, singular legacy).
+ * `rootBase` is `{dir}` for project scope (entries live under
+ * `{dir}/.opencode/...`) and `getConfigPath()` for global scope (`{config}` is
+ * already the config root — entries live under `{config}/command[s]/...`).
+ */
+async function scopeHasEntry(
+  rootBase: string,
+  name: string,
+  source: string | undefined,
+  isProject: boolean,
+): Promise<boolean> {
+  const kindDirs = source === 'skill' ? ['skills', 'skill'] : ['commands', 'command']
+  for (const kindDir of kindDirs) {
+    const root = isProject ? path.join(rootBase, '.opencode', kindDir) : path.join(rootBase, kindDir)
+    if (source === 'skill') {
+      if (await fileExists(path.join(root, name, 'SKILL.md'))) return true
+    } else {
+      if (await fileExists(path.join(root, `${name}.md`))) return true
     }
-  } catch {
-    // directory does not exist
   }
-  return names
+  return false
 }
 
-export type CommandScope = 'builtin' | 'global' | 'project'
+/**
+ * Config-defined commands (declared inline in opencode.json `command`) have no
+ * `.md` file, so the file scan alone cannot classify them. They are user-owned
+ * (global), registered via the app's config editor.
+ */
+async function isConfigDefined(name: string, source: string | undefined): Promise<boolean> {
+  try {
+    if (source === 'skill') return false
+    const raw = await readFile(getOpenCodeConfigFilePath(), 'utf-8')
+    const cfg = JSON.parse(raw) as {
+      command?: Record<string, unknown>
+      agent?: Record<string, unknown>
+    }
+    return Boolean(cfg.command?.[name] || cfg.agent?.[name])
+  } catch {
+    return false
+  }
+}
 
 export async function resolveCommandScope(
   name: string,
@@ -63,22 +93,15 @@ export async function resolveCommandScope(
     return source
   }
 
-  const kindDirs = source === 'skill' ? ['skills', 'skill'] : ['commands', 'command']
+  if (directory && (await scopeHasEntry(directory, name, source, true))) return 'project'
 
-  if (directory) {
-    for (const kindDir of kindDirs) {
-      if ((await dirFiles(path.join(directory, '.opencode', kindDir))).has(name)) return 'project'
-    }
-  }
+  if (await scopeHasEntry(getConfigPath(), name, source, false)) return 'global'
 
-  const globalBase = getConfigPath()
-  for (const kindDir of kindDirs) {
-    if (await fileExists(path.join(globalBase, kindDir, `${name}.md`))) return 'global'
-  }
+  if (await isConfigDefined(name, source)) return 'global'
 
-  // Config-defined and registry commands have no .md file. These are user
-  // commands (global), not built-in, so never fall back to 'builtin'.
-  return 'global'
+  // No file and not defined in config: what's left is a built-in shipped by
+  // opencode itself (e.g. customize-opencode).
+  return 'builtin'
 }
 
 function parseDirectory(url: URL): string | undefined {
@@ -126,7 +149,24 @@ export async function proxyRequest(request: Request, method: string, pathname: s
   const search = query ? '?' + new URLSearchParams(query).toString() : ''
   const cleanPath = pathname.replace(/^\/api\/opencode/, '') + search
   const targetUrl = `${opencodeServerManager.getUrl()}${cleanPath}`
-  
+
+  const cleanEventPath = pathname.replace(/^\/api\/opencode/, '')
+  const isLongRunning = /\/session\/[^/]+\/message$/.test(cleanEventPath)
+    || /\/session\/[^/]+\/command$/.test(cleanEventPath)
+    || /\/question\/[^/]+\/reply$/.test(cleanEventPath)
+    || /\/permission\/[^/]+\/reply$/.test(cleanEventPath)
+  const releaseBusy = (() => {
+    const released = () => {
+      if (isLongRunning) clearRequestBusy()
+    }
+    let done = false
+    return () => {
+      if (done) return
+      done = true
+      released()
+    }
+  })()
+
   try {
     const headers = ensureServerAuth({})
     request.headers.forEach((value, key) => {
@@ -137,12 +177,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       headers[key] = value
     })
 
-    const cleanEventPath = pathname.replace(/^\/api\/opencode/, '')
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
-    const isLongRunning = /\/session\/[^/]+\/message$/.test(cleanEventPath)
-      || /\/session\/[^/]+\/command$/.test(cleanEventPath)
-      || /\/question\/[^/]+\/reply$/.test(cleanEventPath)
-      || /\/permission\/[^/]+\/reply$/.test(cleanEventPath)
     const signal = isEventStream
       ? undefined
       : AbortSignal.timeout(isLongRunning ? 600_000 : 120_000)
@@ -166,6 +201,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     let response: Response | null = null
     let lastError: unknown = null
+
+    // Busy is released only when the response body finishes streaming, so the
+    // automation watcher never runs an instance reload (dispose) while an
+    // in-flight message/command is still being produced.
+    if (isLongRunning) {
+      markRequestBusy()
+    }
     const connectDeadline = Date.now() + 15_000
     for (let attempt = 1; attempt <= 30; attempt++) {
       try {
@@ -222,12 +264,44 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       }
     }
 
-    return new Response(response.body, {
+    if (!isLongRunning || !response.body) {
+      releaseBusy()
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      })
+    }
+
+    const trackedStream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const reader = response.body!.getReader()
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            controller.enqueue(value)
+          }
+          controller.close()
+        } catch (error) {
+          controller.error(error)
+        } finally {
+          releaseBusy()
+          reader.releaseLock()
+        }
+      },
+      cancel() {
+        releaseBusy()
+      },
+    })
+
+    return new Response(trackedStream, {
       status: response.status,
       statusText: response.statusText,
       headers: responseHeaders,
     })
   } catch (error) {
+    releaseBusy()
     const err = error as { name?: string }
     if (err?.name === 'TimeoutError') {
       logger.debug('Proxy request timed out:', err)

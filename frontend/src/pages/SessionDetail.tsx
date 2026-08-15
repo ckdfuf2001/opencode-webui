@@ -90,6 +90,7 @@ export function SessionDetail() {
     containerRef: messageContainerRef,
     messages,
     sessionId,
+    enabled: preferences?.autoScroll ?? true,
     onScrollStateChange: setShowScrollButton
   });
 

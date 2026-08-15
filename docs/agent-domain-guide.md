@@ -8,7 +8,7 @@ opencode의 고유 구조(프로젝트·에이전트·커맨드·스킬)를 그�
 | 사용자(업무) 개념 | opencode 구조 | 설명 |
 | --- | --- | --- |
 | **업무 (Business Task)** | `project` | 하나의 업무 단위 (예: 월간보고, 모니터링, 장애 대응). 각 작업 공간(디렉터리)과 대응하며, **하나의 담당자(agent)가 전담 처리**. |
-| **동일 권한 관리** | `agent` | 같은 권한·모델·도구 세트를 묶는 단위. 특정 담당(에이전트)이 쓰는 도구/권한/MCP를 정의. |
+| **동일 권한 관리** | `agent` | 같은 권한·모델·도구 세트를 묶는 단위. 특정 담당(에이전트)이 쓰는 도구/권한/MCP를 정의. command와 유사하게 수행 흐름을 별도 시스템 프롬프트 + 툴 권한으로 독립 실행 환경을 만들고, 생성한 에이전트를 사용하면 커맨드 없이도 유사한 흐름으로 수행하게 함. 또한 커맨드 수행시 더 제한된 범위에서 동작하도록 함. |
 | **작업 시작 명령어** | `command` | 내부·외부에서 작업을 시작하는 진입점. 예) `/월간보고 n월 gsp 시스템` → "n월 gsp 시스템" 대상 작업 시작. 여러 스킬의 절차(워크플로)로 구성됨. |
 | **업무 스텝** | `skill` | 업무에서 하나의 단계. 사용할 tool·MCP를 제한함. 다른 스킬을 다시 호출(재사용)할 수 있는지 등을 정의. |
 
@@ -24,7 +24,7 @@ command (작업 시작)
 - **project (업무)**: 한 번의 명령 실행 단위이자 결과/문서 저장 공간. **하나의 담당자(agent)가 전담 처리**한다.
 - **command (진입점)**: 사용자/외부 시스템이 실제로 입력하는 최소 인터페이스. 인자를 받아 어떤 skill을 어떤 순서로 실행할지 정의.
 - **skill (스텝)**: 각 stage의 절차이자 **권한·도구 격리** 단위. 특정 스킬이 어떤 tool/MCP에만 접근하도록 제한해 실수를 방지하고, 필요한 경우 다른 스킬을 조합 재호출.
-- **agent (권한 관리)**: skill/command가 실제로 쓰는 도구·권한(edit/bash/webfetch/MCP)·모델을 담당별로 묶은 것.
+- **agent (권한 관리)**: skill/command가 실제로 쓰는 도구·권한(edit/bash/webfetch/MCP)·모델을 담당별로 묶은 것. command와 유사하게 **별도 시스템 프롬프트와 허용된 툴 권한을 가진 독립 실행 환경**이라, 커맨드를 더 제한적으로 수행시킬 수 있다.
 
 ## 채팅 기반 자동화 등록 (md 파일)
 
@@ -54,6 +54,30 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 | agent (권한 묶음) | `agents/<이름>.md` | frontmatter `description`/`mode`(all·subagent·primary) + 본문(시스템 프롬프트) |
 | plugin (도구) | `plugins/<이름>.ts` | TypeScript (opencode plugin) |
 
+**중요 — skill/agent/plugin은 "폴더 + 지정 파일" 구조, command는 "폴더 안의 .md 파일"이다.**
+
+- **skill은 반드시 폴더 구조**: `skills/<이름>/SKILL.md`. `skills/<이름>.md`처럼
+  skills 폴더에 .md 파일을 직접 두면 인식되지 않는다.
+- **command는 .md 파일**: `commands/<이름>.md`.
+- **agent는 .md 파일**: `agents/<이름>.md`.
+- **plugin은 .ts 파일**: `plugins/<이름>.ts`.
+
+### 생성 위치 → scope(범위) 판별 규칙
+
+명령 패널에 표시되는 scope는 **파일이 "어디에" "어떤 구조로" 있는지**로 결정된다.
+파일을 만들기 전에 아래 표로 목적에 맞는 위치를 고른다.
+
+| scope | 판별 조건 | 편집/삭제 |
+| --- | --- | --- |
+| **project** | `<repo>/.opencode/{commands,skills,agents,plugins}/` 안에 위 형식의 파일이 존재 | 가능 (기본 목표) |
+| **global** | `workspace/.config/opencode/{commands,skills,agents,plugins}/` 안에 존재, 또는 opencode.json의 `command`/`agent` 키로 정의됨 | 가능 |
+| **built-in** | 위 어디에도 파일이 없음 — opencode가 기본 제공 (`init`, `review`, `customize-opencode` 등) | **불가** (배지로만 표시) |
+
+혼동하기 쉬운 사례: `customize-opencode`처럼 파일이 없는 항목은 built-in으로
+표시되며 delete/edit 버튼이 나오지 않는다. "빌트인인데 왜 global로 보이지?"
+하는 헷갈림을 막으려면, 생성 시 **반드시 파일을 의도한 위치에 정확한 구조로
+만들어야 한다** (예: `skills/<이름>/` 폴더를 만들고 그 안에 `SKILL.md`를 쓴다).
+
 **주의 — agent frontmatter의 `tools`는 배열이 아니다.** opencode의 agent `tools` 필드는
 `{도구명: true}` 객체만 허용하며(배열이면 `ConfigInvalidError` → **해당 레포의 command/skill/agent
 전체가 한 번에 로드 실패**하고 커맨드 목록이 비어 보인다) 본질적으로 **deprecated**다.
@@ -80,6 +104,12 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
    (edit/bash/webfetch/MCP)을 정의한다. **특히 스킬 결과가 예상과 다를 때(오류·실패)의
    처리를 결정한다: 알림을 줄지, 어떤 방식(채팅/노티)으로, 재시도할지 중단할지.**
    → 사용자 확인
+6. **(선택, default: 생성 안 함) agent도 함께 생성할까?** — `agent로도 생성을 할까요?`
+   질문으로 **기본값은 "생성 안 함"**이며, 사용자가 원할 때만 만든다.
+   agent는 command와 유사하지만, **별도의 시스템 프롬프트와 허용된 툴 권한을 가진
+   독립 실행 환경**이다. 이 agent를 사용하는 세션에서 커맨드를 수행하면 해당
+   커맨드를 더 **제한된 도구·권한 안에서** 수행한다. 예: 커맨드는 절차만 정의하고,
+   실제 도구 사용은 전용 agent(권한 묶음)가 선택된 세션에서 격리. → 사용자 확인
 
 ### 내장 MCP 도구 (이미 등록되어 바로 사용 가능)
 
@@ -98,12 +128,17 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 - 파일 쓰기가 가능한 세션이면 **해당 경로에 직접 파일을 작성**한다
   (**기본은 프로젝트 `<repo>/.opencode/`, 전역은 `workspace/.config/opencode/`**).
   특별한 이유가 없으면 프로젝트 단위로 만든다.
+- **구조를 정확히 지켜라**: skill은 `skills/<이름>/SKILL.md` **폴더**를 만들고 그
+  안에 쓴다(폴더 없이 `skills/<이름>.md`로 두면 인식·scope 판별이 안 됨), command는
+  `commands/<이름>.md`, agent는 `agents/<이름>.md`, plugin은 `plugins/<이름>.ts`.
 - 파일을 쓸 수 없으면 **완성된 md 내용을 채팅에 출력**하고, 사용자가
   "명령 패널 → Register new opencode file" 다이얼로그에 복사하도록 안내한다.
-- 작성 후에는 해당 파일을 읽어 **검증**한다. opencode는 자동화 파일을 **서버 기동 시에만
-  한 번 로드**하지만, 이 앱의 백엔드가 `commands/·skills/·agents/·plugins/` 파일 변경을
-  감시해 **자동으로 opencode 서버를 재시작**(약 1.5초)하므로 사용자가 수동 재시작을 할
-  필요는 없다. 단, 다시 시작되는 동안 잠시 커맨드/스킬 목록이 갱신되며 세션은 재연결된다.
+- 작성 후에는 해당 파일을 읽어 **검증**한다. opencode는 자동화 파일을 **인스턴스 단위로
+  캐시**하지만, 이 앱의 백엔드가 `commands/·skills/·agents/·plugins/` 파일 변경을
+  감시해 해당 프로젝트 인스턴스만 **자동으로 리로드**(`/instance/dispose`, 약 1.5초)하므로
+  사용자가 수동 재시작을 할 필요는 없다(전역 `workspace/.config/opencode/` 변경 시에는
+  모든 레포 인스턴스를 리로드). 세션·진행 중 요청은 유지된다.
+  **bin/opencode.exe는 ≥ 1.18 버전이어야 한다**(per-instance reload 지원).
 
 ## 운영 시 주의 (반드시 숙지)
 
@@ -197,6 +232,24 @@ Windows 작업 스케줄러를 직접 구성하지 말고**, 이 앱의 **스케
 - 즉시 실행: `POST /api/schedules/{id}/run` 또는 다이얼로그의 **Run now**.
 - 스킬 실패/이상 시 알림 여부·방식은 위 설계 순서 5단계(담당 agent 정의)에서 결정한다.
 - 레포 id 조회: `GET /api/repos` → `[{"id":3,"name":"일일요약",...}]`.
+
+### 자동화 파일 변경 시 자동 리로드 (automation watcher)
+
+- `repos/<repo>/.opencode/{agents,commands,skills,plugins}` 하위 또는
+  `workspace/.config/opencode/{agents,commands,skills,plugins}` 하위에 파일이
+  추가/변경/삭제되면 백엔드가 해당 프로젝트 인스턴스만 **자동 리로드**하여
+  새 커맨드/스킬/에이전트를 즉시 반영한다(디바운스 1.5초, 리로드 간 최소 10초).
+  리로드는 `POST /instance/dispose?directory=<repo>`로 수행하므로 **opencode 프로세스를
+  재시작하지 않는다** — 세션·진행 중 작업은 유지된다.
+- **전역(`workspace/.config/opencode/`) 변경**은 모든 프로젝트에 영향을 주므로
+  workspace 루트 + 모든 레포 인스턴스를 함께 리로드한다.
+- **`node_modules`·`.git`·`dist` 등은 무시**하므로 패키지 설치 노이즈로 리로드하지 않는다.
+- **활성 세션 보호**: 진행 중인 요청(메시지/커맨드/질문 응답)이 있으면 리로드를 **미루고**
+  대기하다가 idle이 되면 실행한다. 따라서 배치(스케줄) 실행 중 커맨드 파일을 만들어도
+  실행 중인 세션이 죽지 않는다. 오래 busy면(최대 10분) 이번 변경은 건너뛴다.
+- **전제 버전**: per-instance reload는 opencode **≥ 1.18**에서 지원된다(`bin/opencode.exe`
+  가 그 이하라면 자동 리로드가 동작하지 않으므로 README의 현재 버전을 확인한다).
+- 직접 재시작이 필요한 경우: 설정에서 opencode 바이너리 재설정 또는 앱 재시작을 이용한다.
 
 ## 기본(어시스턴트) 시스템 프롬프트
 아래는 위 개념을 기본 어시스턴트(general agent)에 적용하기 위한 시스템 프롬프트입니다.
