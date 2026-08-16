@@ -339,86 +339,51 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         }
       }
 
-      if (type === 'command' && scope === 'global') {
-        await oldRegistryCleanup(true)
+      if (scope === 'project' && !directory) {
+        showToast.error('No project selected. Use Global scope or open a repo session.')
+        return
+      }
+
+      if (!cloning && editing?.kind === 'config-command') {
         const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
         const targetName = defaultConfig?.name ?? configs[0]?.name
-        if (!targetName) {
-          showToast.error('No OpenCode configuration to update. Create one first.')
-          return
-        }
-        const record: Record<string, unknown> = { description: description.trim(), agent, model, subtask }
-        if (topP) record.topP = Number(topP)
-        if (rawTemplate.trim()) record.template = rawTemplate.trim()
-        const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
-        const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
-        const commands: Record<string, unknown> = { ...existingCommands }
-        if (!cloning && editing?.kind === 'config-command' && editing.name !== trimmedName) {
+        if (targetName) {
+          const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
+          const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
+          const commands: Record<string, unknown> = { ...existingCommands }
           delete commands[editing.name]
+          await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
         }
-        commands[trimmedName] = record
-        await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
-        showToast.success(`Command "${trimmedName}" saved to configuration "${targetName}".`)
-      } else if (type === 'agent' && scope === 'global') {
-        await oldRegistryCleanup(true)
-        const config = await settingsApi.getDefaultOpenCodeConfig()
-        if (!config) {
-          showToast.error('No OpenCode configuration to update. Create one first.')
-          return
-        }
-        const current = { ...config.content }
-        const existingAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
-        const agents: Record<string, unknown> = { ...existingAgents }
-        if (!cloning && editing?.kind === 'config-agent' && editing.name !== trimmedName) {
-          delete agents[editing.name]
-        }
-        agents[trimmedName] = {
-          description: description.trim(),
-          mode: agentMode,
-          prompt: agentBody.trim(),
-        }
-        await settingsApi.updateOpenCodeConfig(config.name, { content: { ...current, agent: agents } })
-        showToast.success(`Agent "${trimmedName}" saved to configuration "${config.name}".`)
-      } else {
-        if (scope === 'project' && !directory) {
-          showToast.error('No project selected. Use Global scope or open a repo session.')
-          return
-        }
-        if (editing?.kind === 'config-command') {
-          const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
-          const targetName = defaultConfig?.name ?? configs[0]?.name
-          if (targetName) {
-            const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
-            const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
-            const commands: Record<string, unknown> = { ...existingCommands }
-            delete commands[editing.name]
-            await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
-          }
-        }
-        if (editing?.kind === 'config-agent') {
-          const config = await settingsApi.getDefaultOpenCodeConfig()
-          if (config) {
-            const current = { ...config.content }
-            const existingAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
-            const agents: Record<string, unknown> = { ...existingAgents }
-            delete agents[editing.name]
-            await settingsApi.updateOpenCodeConfig(config.name, { content: { ...current, agent: agents } })
-          }
-        }
-        await oldRegistryCleanup()
-        await registryApi.register(
-          {
-            type,
-            scope,
-            name: trimmedName,
-            description: description.trim(),
-            content: content.trim(),
-            ...(type === 'agent' ? { mode: agentMode } : {}),
-          },
-          scope === 'project' ? directory : undefined
-        )
-        showToast.success(`${TYPE_LABEL[type]} "${trimmedName}" registered (${scope}).`)
       }
+      if (!cloning && editing?.kind === 'config-agent') {
+        const config = await settingsApi.getDefaultOpenCodeConfig()
+        if (config) {
+          const current = { ...config.content }
+          const existingAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
+          const agents: Record<string, unknown> = { ...existingAgents }
+          delete agents[editing.name]
+          await settingsApi.updateOpenCodeConfig(config.name, { content: { ...current, agent: agents } })
+        }
+      }
+      await oldRegistryCleanup()
+      await registryApi.register(
+        {
+          type,
+          scope,
+          name: trimmedName,
+          description: description.trim(),
+          content: content.trim(),
+          ...(type === 'agent' ? { mode: agentMode } : {}),
+          ...(type === 'command' ? {
+            agent: agent.trim() || undefined,
+            model: model.trim() || undefined,
+            topP: topP.trim() && !Number.isNaN(Number(topP)) ? Number(topP) : undefined,
+            subtask: subtask ? true : undefined,
+          } : {}),
+        },
+        scope === 'project' ? directory : undefined
+      )
+      showToast.success(`${TYPE_LABEL[type]} "${trimmedName}" registered (${scope}).`)
       onCreated()
       reset()
       onOpenChange(false)

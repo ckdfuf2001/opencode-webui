@@ -17,6 +17,10 @@ interface RegistryListItem {
   description: string
   content: string
   mode?: string
+  agent?: string
+  model?: string
+  subtask?: boolean
+  topP?: number
   path: string
 }
 
@@ -85,10 +89,24 @@ function resolveTarget(type: RegistryType, scope: RegistryScope, name: string, d
   }
 }
 
-function buildContent(type: RegistryType, data: { name: string; description: string; content: string; mode?: string }): string {
+function buildContent(type: RegistryType, data: { name: string; description: string; content: string; mode?: string; agent?: string; model?: string; subtask?: boolean; topP?: number }): string {
   switch (type) {
-    case 'command':
-      return data.content.trim()
+    case 'command': {
+      const fields: string[] = []
+      if (data.description) fields.push(`description: ${data.description}`)
+      if (data.agent) fields.push(`agent: ${data.agent}`)
+      if (data.model) fields.push(`model: ${data.model}`)
+      if (data.topP != null) fields.push(`topP: ${data.topP}`)
+      if (data.subtask != null) fields.push(`subtask: ${data.subtask}`)
+      if (fields.length === 0) return data.content.trim()
+      return [
+        '---',
+        ...fields,
+        '---',
+        '',
+        data.content.trim(),
+      ].join('\n')
+    }
     case 'skill':
       return [
         '---',
@@ -131,6 +149,10 @@ const CreateRegistrySchema = z.object({
   description: z.string().default(''),
   content: z.string().min(1).max(100000),
   mode: z.enum(['all', 'subagent', 'primary']).default('all'),
+  agent: z.string().optional(),
+  model: z.string().optional(),
+  subtask: z.boolean().optional(),
+  topP: z.number().optional(),
 })
 
 const UpdateRegistrySchema = z.object({
@@ -138,15 +160,31 @@ const UpdateRegistrySchema = z.object({
   description: z.string().default(''),
   content: z.string().min(1).max(100000),
   mode: z.enum(['all', 'subagent', 'primary']).default('all'),
+  agent: z.string().optional(),
+  model: z.string().optional(),
+  subtask: z.boolean().optional(),
+  topP: z.number().optional(),
 })
 
-function parseFrontmatter(content: string): { description: string; mode?: string; body: string } {
+function parseFrontmatter(content: string): { description: string; mode?: string; agent?: string; model?: string; subtask?: boolean; topP?: number; body: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
   if (!match) return { description: '', body: content }
   const front = match[1] ?? ''
   const description = front.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
   const mode = front.match(/^mode:\s*(.+)$/m)?.[1]?.trim()
-  return { description, mode, body: content.slice(match[0].length).trim() }
+  const agent = front.match(/^agent:\s*(.+)$/m)?.[1]?.trim()
+  const model = front.match(/^model:\s*(.+)$/m)?.[1]?.trim()
+  const topP = front.match(/^topP:\s*(.+)$/m)?.[1]?.trim()
+  const subtask = front.match(/^subtask:\s*(.+)$/m)?.[1]?.trim()
+  return {
+    description,
+    mode,
+    agent,
+    model,
+    topP: topP != null && !Number.isNaN(Number(topP)) ? Number(topP) : undefined,
+    subtask: subtask == null ? undefined : subtask === 'true',
+    body: content.slice(match[0].length).trim(),
+  }
 }
 
 async function listDir(dir: string): Promise<string[]> {
@@ -189,7 +227,20 @@ async function collectType(
           const raw = await readIfFile(full)
           if (raw === null) continue
           const parsed = type === 'command' ? parseFrontmatter(raw) : { description: '', body: raw }
-          items.push({ type, scope, name, description: parsed.description, content: parsed.body, path: full })
+          items.push({
+            type,
+            scope,
+            name,
+            description: parsed.description,
+            content: parsed.body,
+            ...(type === 'command' ? {
+              agent: parsed.agent,
+              model: parsed.model,
+              subtask: parsed.subtask,
+              topP: parsed.topP,
+            } : {}),
+            path: full,
+          })
         }
       }
       break
