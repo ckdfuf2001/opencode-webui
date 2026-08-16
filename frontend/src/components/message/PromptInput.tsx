@@ -143,7 +143,7 @@ export function PromptInput({
 
     
 
-    const commandMatch = prompt.match(/^\/([a-zA-Z0-9_-]+)(?:\s+(.*))?$/)
+    const commandMatch = prompt.match(/^\/([^\s/]+)(?:\s+(.*))?$/)
     if (commandMatch) {
       const [, commandName] = commandMatch
       const command = filterCommands(commandName)[0]
@@ -192,7 +192,7 @@ export function PromptInput({
     setSuggestionQuery('')
     
     const cursorPosition = textareaRef.current.selectionStart
-    const commandMatch = prompt.slice(0, cursorPosition).match(/(^|\s)\/([a-zA-Z0-9_-]*)$/)
+    const commandMatch = prompt.slice(0, cursorPosition).match(/(^|\s)\/([^\s/]*)$/)
     
     if (commandMatch) {
       const beforeCommand = prompt.slice(0, commandMatch.index)
@@ -449,7 +449,7 @@ export function PromptInput({
         })
       }
     } else {
-      const commandMatch = value.slice(0, cursorPosition).match(/(^|\s)\/([a-zA-Z0-9_-]*)$/)
+      const commandMatch = value.slice(0, cursorPosition).match(/(^|\s)\/([^\s/]*)$/)
       
       if (commandMatch) {
         const query = commandMatch[2]
