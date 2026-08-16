@@ -12,6 +12,10 @@ export interface RegisterRequest {
   description: string
   content: string
   mode?: RegistryAgentMode
+  agent?: string
+  model?: string
+  subtask?: boolean
+  topP?: number
 }
 
 export interface RegisterResult {
@@ -27,6 +31,12 @@ export interface RegistryEntry {
   scope: RegistryScope
   path: string
   content: string
+  description: string
+  mode?: RegistryAgentMode
+  agent?: string
+  model?: string
+  subtask?: boolean
+  topP?: number
 }
 
 export const registryApi = {

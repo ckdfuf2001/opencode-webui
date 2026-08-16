@@ -23,6 +23,7 @@ import { startAutomationWatcher, stopAutomationWatcher } from './services/automa
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
 import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig } from './services/default-mcp'
+import { migrateConfigMapToFiles } from './services/config-migration'
 import { opencodeServerManager, prepareBackendPort } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
 import { listRepos } from './db/queries'
@@ -171,6 +172,8 @@ try {
   await prepareBackendPort(PORT)
   
   await ensureDefaultConfigExists()
+  await syncDefaultConfigToDisk()
+  await migrateConfigMapToFiles(db)
   await syncDefaultConfigToDisk()
   await ensureGlobalRulesFile()
 } catch (error) {

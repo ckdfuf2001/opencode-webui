@@ -624,7 +624,23 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     }
 
     if (type === 'agent') {
-      const a = ((cfg?.agent as Record<string, unknown> | undefined) ?? {})[item.name] as Record<string, unknown> | undefined
+      const list = await registryApi.list('agent', directory)
+      const entry = list.find((e) => e.name === item.name)
+      if (entry) {
+        return {
+          createType: 'agent',
+          entry: {
+            kind: 'registry',
+            type: 'agent',
+            scope: entry.scope,
+            name: item.name,
+            description: entry.description ?? '',
+            content: stripFrontmatter(entry.content ?? ''),
+            mode: (entry.mode as EditingEntry['mode'] | undefined) ?? (item.mode as EditingEntry['mode'] | undefined) ?? 'all',
+          },
+        }
+      }
+      const a = ((cfg?.agent as Record<string, unknown> | undefined) ?? {})[item.name]
       if (a) {
         return {
           createType: 'agent',
@@ -639,17 +655,15 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
           },
         }
       }
-      const list = await registryApi.list('agent', directory)
-      const entry = list.find((e) => e.name === item.name)
       return {
         createType: 'agent',
         entry: {
           kind: 'registry',
           type: 'agent',
-          scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
+          scope: (item.scope === 'project' ? 'project' : 'global') as RegistryScope,
           name: item.name,
           description: item.description ?? '',
-          content: stripFrontmatter(entry?.content ?? ''),
+          content: '',
           mode: (item.mode as EditingEntry['mode'] | undefined) ?? 'all',
         },
       }
@@ -687,6 +701,25 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       }
     }
 
+    const list = await registryApi.list('command', directory)
+    const entry = list.find((e) => e.name === item.name)
+    if (entry) {
+      return {
+        createType: 'command',
+        entry: {
+          kind: 'registry',
+          type: 'command',
+          scope: entry.scope,
+          name: item.name,
+          description: entry.description ?? '',
+          content: entry.content ?? '',
+          agent: entry.agent,
+          model: entry.model,
+          topP: entry.topP,
+          subtask: entry.subtask ?? false,
+        },
+      }
+    }
     const c = ((cfg?.command as Record<string, unknown> | undefined) ?? {})[item.name] as Record<string, unknown> | undefined
     if (c) {
       return {
@@ -705,17 +738,15 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         },
       }
     }
-    const list = await registryApi.list('command', directory)
-    const entry = list.find((e) => e.name === item.name)
     return {
       createType: 'command',
       entry: {
         kind: 'registry',
         type: 'command',
-        scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
+        scope: (item.scope === 'project' ? 'project' : 'global') as RegistryScope,
         name: item.name,
         description: item.description ?? '',
-        content: entry?.content ?? '',
+        content: '',
       },
     }
   }, [directory])
