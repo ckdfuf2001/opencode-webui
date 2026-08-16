@@ -49,6 +49,7 @@ interface CreateCommandDialogProps {
   directory?: string
   initialType?: DialogType
   editing?: EditingEntry | null
+  cloning?: EditingEntry | null
 }
 
 const TYPE_OPTIONS: { value: DialogType; label: string }[] = [
@@ -102,7 +103,7 @@ function buildCommandTemplate(steps: string[], extra: string): string {
   return lines.join('\n')
 }
 
-export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory, initialType = 'command', editing = null }: CreateCommandDialogProps) {
+export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSkills = [], directory, initialType = 'command', editing = null, cloning = null }: CreateCommandDialogProps) {
   const [type, setType] = useState<DialogType>(initialType)
   const [scope, setScope] = useState<RegistryScope>(initialType === 'mcp' ? 'global' : 'project')
   const [agent, setAgent] = useState('')
@@ -130,53 +131,54 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
   useEffect(() => {
     if (!open) return
     setType(initialType)
-    if (editing) {
-      setType(editing.type)
-      setName(editing.name)
-      setDescription(editing.description ?? '')
-      if (editing.kind === 'config-command' || (editing.kind === 'registry' && editing.type === 'command')) {
+    const source = editing ?? cloning
+    if (source) {
+      setType(source.type)
+      setName(cloning ? `${source.name}-copy` : source.name)
+      setDescription(source.description ?? '')
+      if (source.kind === 'config-command' || (source.kind === 'registry' && source.type === 'command')) {
         setMode('template')
-        setRawTemplate(editing.content ?? editing.template ?? '')
-        setAgent(editing.agent ?? '')
-        setModel(editing.model ?? '')
-        setTopP(editing.topP != null ? String(editing.topP) : '')
-        setSubtask(editing.subtask ?? false)
-        setScope(editing.scope)
+        setRawTemplate(source.content ?? source.template ?? '')
+        setAgent(source.agent ?? '')
+        setModel(source.model ?? '')
+        setTopP(source.topP != null ? String(source.topP) : '')
+        setSubtask(source.subtask ?? false)
+        setScope(source.scope)
       }
-      if (editing.kind === 'registry' && editing.type === 'skill') {
-        setSkillBody(editing.content ?? '')
-        setScope(editing.scope)
+      if (source.kind === 'registry' && source.type === 'skill') {
+        setSkillBody(source.content ?? '')
+        setScope(source.scope)
       }
-      if (editing.kind === 'registry' && editing.type === 'tool') {
-        setToolScript(editing.content ?? TOOL_TEMPLATE(''))
-        setScope(editing.scope)
+      if (source.kind === 'registry' && source.type === 'tool') {
+        setToolScript(source.content ?? TOOL_TEMPLATE(''))
+        setScope(source.scope)
       }
-      if (editing.kind === 'registry' && editing.type === 'agent') {
-        setAgentBody(editing.content ?? '')
-        setAgentMode(editing.mode ?? 'all')
-        setScope(editing.scope)
+      if (source.kind === 'registry' && source.type === 'agent') {
+        setAgentBody(source.content ?? '')
+        setAgentMode(source.mode ?? 'all')
+        setScope(source.scope)
       }
-      if (editing.kind === 'config-agent') {
-        setAgentBody(editing.prompt ?? '')
-        setAgentMode(editing.mode ?? 'all')
+      if (source.kind === 'config-agent') {
+        setAgentBody(source.prompt ?? '')
+        setAgentMode(source.mode ?? 'all')
         setScope('global')
       }
-      if (editing.kind === 'config-command') {
+      if (source.kind === 'config-command') {
         setScope('global')
       }
-      if (editing.kind === 'mcp') {
-        setMcpType(editing.mcpType ?? 'local')
-        setMcpCommand(editing.mcpCommand ?? '')
-        setMcpUrl(editing.mcpUrl ?? '')
-        setMcpEnvironment(editing.mcpEnvironment ?? [])
-        setMcpTimeout(editing.mcpTimeout ?? '')
-        setMcpEnabled(editing.mcpEnabled ?? true)
+      if (source.kind === 'mcp') {
+        setMcpType(source.mcpType ?? 'local')
+        setMcpCommand(source.mcpCommand ?? '')
+        setMcpUrl(source.mcpUrl ?? '')
+        setMcpEnvironment(source.mcpEnvironment ?? [])
+        setMcpTimeout(source.mcpTimeout ?? '')
+        setMcpEnabled(source.mcpEnabled ?? true)
         setScope('global')
       }
     } else {
       setScope(initialType === 'mcp' ? 'global' : 'project')
     }
-  }, [open, editing, initialType])
+  }, [open, editing, cloning, initialType])
 
   const reset = () => {
     setName('')
@@ -316,14 +318,29 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
       return
     }
     const content = resolveContent()
-    if (!content.trim() && !(editing?.kind === 'config-command')) {
+    if (!content.trim() && !(editing?.kind === 'config-command') && !(cloning?.kind === 'config-command')) {
       showToast.error('Content is required.')
       return
     }
 
     setSaving(true)
     try {
+      const oldRegistryCleanup = async (force = false) => {
+        if (editing && editing.kind === 'registry') {
+          const changed = force || editing.type !== type || editing.scope !== scope || editing.name !== trimmedName
+          if (changed) {
+            await registryApi.unregister(
+              editing.type as RegistryType,
+              editing.scope,
+              editing.name,
+              editing.scope === 'project' ? directory : undefined
+            )
+          }
+        }
+      }
+
       if (type === 'command' && scope === 'global') {
+        await oldRegistryCleanup(true)
         const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
         const targetName = defaultConfig?.name ?? configs[0]?.name
         if (!targetName) {
@@ -336,13 +353,14 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
         const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
         const commands: Record<string, unknown> = { ...existingCommands }
-        if (editing?.kind === 'config-command' && editing.name !== trimmedName) {
+        if (!cloning && editing?.kind === 'config-command' && editing.name !== trimmedName) {
           delete commands[editing.name]
         }
         commands[trimmedName] = record
         await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
         showToast.success(`Command "${trimmedName}" saved to configuration "${targetName}".`)
-      } else if (type === 'agent' && editing?.kind === 'config-agent') {
+      } else if (type === 'agent' && scope === 'global') {
+        await oldRegistryCleanup(true)
         const config = await settingsApi.getDefaultOpenCodeConfig()
         if (!config) {
           showToast.error('No OpenCode configuration to update. Create one first.')
@@ -351,7 +369,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
         const current = { ...config.content }
         const existingAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
         const agents: Record<string, unknown> = { ...existingAgents }
-        if (editing.name !== trimmedName) {
+        if (!cloning && editing?.kind === 'config-agent' && editing.name !== trimmedName) {
           delete agents[editing.name]
         }
         agents[trimmedName] = {
@@ -366,17 +384,28 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
           showToast.error('No project selected. Use Global scope or open a repo session.')
           return
         }
-        if (editing?.kind === 'registry') {
-          const changed = editing.type !== type || editing.scope !== scope || editing.name !== trimmedName
-          if (changed) {
-            await registryApi.unregister(
-              editing.type as RegistryType,
-              editing.scope,
-              editing.name,
-              editing.scope === 'project' ? directory : undefined
-            )
+        if (editing?.kind === 'config-command') {
+          const { defaultConfig, configs } = await settingsApi.getOpenCodeConfigs()
+          const targetName = defaultConfig?.name ?? configs[0]?.name
+          if (targetName) {
+            const current = configs.find((c) => c.name === targetName)?.content ?? defaultConfig?.content ?? {}
+            const existingCommands = (current.command as Record<string, unknown> | undefined) ?? {}
+            const commands: Record<string, unknown> = { ...existingCommands }
+            delete commands[editing.name]
+            await settingsApi.updateOpenCodeConfig(targetName, { content: { ...current, command: commands } })
           }
         }
+        if (editing?.kind === 'config-agent') {
+          const config = await settingsApi.getDefaultOpenCodeConfig()
+          if (config) {
+            const current = { ...config.content }
+            const existingAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
+            const agents: Record<string, unknown> = { ...existingAgents }
+            delete agents[editing.name]
+            await settingsApi.updateOpenCodeConfig(config.name, { content: { ...current, agent: agents } })
+          }
+        }
+        await oldRegistryCleanup()
         await registryApi.register(
           {
             type,
@@ -403,7 +432,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-[562px] max-h-[90vh] overflow-y-auto">
         <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
           <DialogTitle>{editing ? 'Edit opencode file' : 'Register new opencode file'}</DialogTitle>
           <DropdownMenu>
@@ -451,7 +480,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             <div className="w-px h-5 bg-border mx-1" />
             {SCOPE_OPTIONS.map((opt) => {
               const isMcp = type === 'mcp'
-              const lockScope = editing?.kind === 'config-command' || editing?.kind === 'config-agent' || editing?.kind === 'mcp'
+              const lockScope = editing?.kind === 'mcp'
               const disabled = (isMcp && opt.value !== 'global') || (!!editing && lockScope && opt.value !== 'global')
               return (
                 <Button

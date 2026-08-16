@@ -24,6 +24,7 @@ import {
   Puzzle,
   Pencil,
   RefreshCw,
+  Copy,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -204,6 +205,7 @@ interface CommandExplorerProps {
   onExecute?: (command: CommandWithScope, run: boolean, args: string) => void
   onCreate?: (type: ExplorerResourceType) => void
   onEdit?: (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => void
+  onClone?: (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => void
   onDelete?: (type: DialogType, item: { name: string; scope?: string; id?: string }) => void
   focusCommand?: CommandWithScope | null
 }
@@ -219,6 +221,7 @@ interface AgentExplorerItem {
   name: string
   description?: string
   mode?: string
+  scope?: string
 }
 
 interface McpExplorerItem {
@@ -236,7 +239,7 @@ const EXPLORER_TABS: { value: ExplorerResourceType; label: string; Icon: typeof 
   { value: 'mcp', label: 'MCP', Icon: Plug },
 ]
 
-function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error, onExecute, onCreate, onEdit, onDelete, focusCommand }: CommandExplorerProps) {
+function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error, onExecute, onCreate, onEdit, onClone, onDelete, focusCommand }: CommandExplorerProps) {
   const [tab, setTab] = useState<ExplorerResourceType>('command')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<CommandWithScope | null>(null)
@@ -408,13 +411,13 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
                 ? (item as McpExplorerItem).status
                 : tab === 'tool'
                   ? (item as RegistryEntry).scope
-                  : (item as AgentExplorerItem).mode || 'agent'
+                  : (item as AgentExplorerItem).scope || 'agent'
               const Icon = tab === 'mcp' ? Plug : tab === 'tool' ? Puzzle : Bot
               const badgeClass = tab === 'mcp'
                 ? (badge === 'connected' || badge === 'local' ? 'bg-green-500/15 text-green-400 border border-green-500/30' : 'bg-blue-500/15 text-blue-400 border border-blue-500/30')
                 : tab === 'tool'
                   ? (badge === 'project' ? SCOPE_DISPLAY.project.className : SCOPE_DISPLAY.global.className)
-                  : 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
+                  : (badge === 'project' ? SCOPE_DISPLAY.project.className : SCOPE_DISPLAY.global.className)
               return (
                 <div
                   key={name}
@@ -444,6 +447,13 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
                           className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
                         >
                           <Pencil className="w-3 h-3" /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onClone?.(tab === 'mcp' ? 'mcp' : tab === 'tool' ? 'tool' : 'agent', { name, scope: (item as { scope?: string }).scope ?? 'global', description: (item as AgentExplorerItem).description, mode: (item as AgentExplorerItem).mode, id: 'id' in item ? (item as McpExplorerItem).id : undefined })}
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                        >
+                          <Copy className="w-3 h-3" /> Clone
                         </button>
                         <button
                           type="button"
@@ -526,6 +536,13 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
                           </button>
                           <button
                             type="button"
+                            onClick={() => onClone?.(tab === 'skill' ? 'skill' : 'command', { name: command.name, scope, description: command.description })}
+                            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                          >
+                            <Copy className="w-3 h-3" /> Clone
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => onDelete?.(tab === 'skill' ? 'skill' : 'command', { name: command.name, scope })}
                             className="inline-flex items-center gap-1 text-[11px] text-destructive hover:underline"
                           >
@@ -558,6 +575,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const [createOpen, setCreateOpen] = useState(false)
   const [createType, setCreateType] = useState<ExplorerResourceType>('command')
   const [editing, setEditing] = useState<EditingEntry | null>(null)
+  const [cloning, setCloning] = useState<EditingEntry | null>(null)
   const [historyQuery, setHistoryQuery] = useState('')
   const [explorerFocus, setExplorerFocus] = useState<CommandWithScope | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -581,14 +599,15 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     setRefreshing(false)
   }, [refresh, refetchPlugins, queryClient, opcodeUrl, directory])
 
-  const handleEdit = useCallback(async (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => {
-    try {
-      const configData = await settingsApi.getDefaultOpenCodeConfig()
-      const cfg = configData?.content as Record<string, unknown> | undefined
+  const loadEntry = useCallback(async (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }): Promise<{ entry: EditingEntry; createType: ExplorerResourceType }> => {
+    const configData = await settingsApi.getDefaultOpenCodeConfig()
+    const cfg = configData?.content as Record<string, unknown> | undefined
 
-      if (type === 'mcp') {
-        const m = ((cfg?.mcp as Record<string, unknown> | undefined) ?? {})[item.id ?? item.name] as Record<string, unknown> | undefined
-        setEditing({
+    if (type === 'mcp') {
+      const m = ((cfg?.mcp as Record<string, unknown> | undefined) ?? {})[item.id ?? item.name] as Record<string, unknown> | undefined
+      return {
+        createType: 'mcp',
+        entry: {
           kind: 'mcp',
           type: 'mcp',
           scope: 'global',
@@ -600,16 +619,16 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
           mcpEnvironment: Object.entries((m?.environment as Record<string, string>) ?? {}).map(([key, value]) => ({ key, value })),
           mcpTimeout: m?.timeout != null ? String(m.timeout) : '',
           mcpEnabled: (m?.enabled as boolean) ?? true,
-        })
-        setCreateType('mcp')
-        setCreateOpen(true)
-        return
+        },
       }
+    }
 
-      if (type === 'agent') {
-        const a = ((cfg?.agent as Record<string, unknown> | undefined) ?? {})[item.name] as Record<string, unknown> | undefined
-        if (a) {
-          setEditing({
+    if (type === 'agent') {
+      const a = ((cfg?.agent as Record<string, unknown> | undefined) ?? {})[item.name] as Record<string, unknown> | undefined
+      if (a) {
+        return {
+          createType: 'agent',
+          entry: {
             kind: 'config-agent',
             type: 'agent',
             scope: 'global',
@@ -617,60 +636,62 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
             description: (a.description as string) ?? item.description ?? '',
             mode: ((a.mode as string) ?? item.mode ?? 'all') as EditingEntry['mode'],
             prompt: (a.prompt as string) ?? '',
-          })
-        } else {
-          const list = await registryApi.list('agent', directory)
-          const entry = list.find((e) => e.name === item.name)
-          setEditing({
-            kind: 'registry',
-            type: 'agent',
-            scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
-            name: item.name,
-            description: item.description ?? '',
-            content: stripFrontmatter(entry?.content ?? ''),
-            mode: ((item.mode as EditingEntry['mode']) ?? 'all'),
-          })
+          },
         }
-        setCreateType('agent')
-        setCreateOpen(true)
-        return
       }
+      const list = await registryApi.list('agent', directory)
+      const entry = list.find((e) => e.name === item.name)
+      return {
+        createType: 'agent',
+        entry: {
+          kind: 'registry',
+          type: 'agent',
+          scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
+          name: item.name,
+          description: item.description ?? '',
+          content: stripFrontmatter(entry?.content ?? ''),
+          mode: (item.mode as EditingEntry['mode'] | undefined) ?? 'all',
+        },
+      }
+    }
 
-      if (type === 'skill') {
-        const list = await registryApi.list('skill', directory)
-        const entry = list.find((e) => e.name === item.name)
-        setEditing({
+    if (type === 'skill') {
+      const list = await registryApi.list('skill', directory)
+      const entry = list.find((e) => e.name === item.name)
+      return {
+        createType: 'skill',
+        entry: {
           kind: 'registry',
           type: 'skill',
           scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
           name: item.name,
           description: item.description ?? '',
           content: stripFrontmatter(entry?.content ?? ''),
-        })
-        setCreateType('skill')
-        setCreateOpen(true)
-        return
+        },
       }
+    }
 
-      if (type === 'tool') {
-        const list = await registryApi.list('tool', directory)
-        const entry = list.find((e) => e.name === item.name)
-        setEditing({
+    if (type === 'tool') {
+      const list = await registryApi.list('tool', directory)
+      const entry = list.find((e) => e.name === item.name)
+      return {
+        createType: 'tool',
+        entry: {
           kind: 'registry',
           type: 'tool',
           scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
           name: item.name,
           description: '',
           content: entry?.content ?? '',
-        })
-        setCreateType('tool')
-        setCreateOpen(true)
-        return
+        },
       }
+    }
 
-      const c = ((cfg?.command as Record<string, unknown> | undefined) ?? {})[item.name] as Record<string, unknown> | undefined
-      if (c) {
-        setEditing({
+    const c = ((cfg?.command as Record<string, unknown> | undefined) ?? {})[item.name] as Record<string, unknown> | undefined
+    if (c) {
+      return {
+        createType: 'command',
+        entry: {
           kind: 'config-command',
           type: 'command',
           scope: 'global',
@@ -681,26 +702,49 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
           model: (c.model as string) ?? '',
           topP: c.topP as number | undefined,
           subtask: (c.subtask as boolean) ?? false,
-        })
-      } else {
-        const list = await registryApi.list('command', directory)
-        const entry = list.find((e) => e.name === item.name)
-        setEditing({
-          kind: 'registry',
-          type: 'command',
-          scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
-          name: item.name,
-          description: item.description ?? '',
-          content: entry?.content ?? '',
-        })
+        },
       }
-      setCreateType('command')
+    }
+    const list = await registryApi.list('command', directory)
+    const entry = list.find((e) => e.name === item.name)
+    return {
+      createType: 'command',
+      entry: {
+        kind: 'registry',
+        type: 'command',
+        scope: (entry?.scope ?? (item.scope === 'project' ? 'project' : 'global')) as RegistryScope,
+        name: item.name,
+        description: item.description ?? '',
+        content: entry?.content ?? '',
+      },
+    }
+  }, [directory])
+
+  const handleEdit = useCallback(async (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => {
+    try {
+      const { entry, createType } = await loadEntry(type, item)
+      setEditing(entry)
+      setCloning(null)
+      setCreateType(createType)
       setCreateOpen(true)
     } catch (err) {
       console.error('Failed to load item for editing:', err)
       showToast.error('Failed to load item for editing.')
     }
-  }, [directory])
+  }, [loadEntry])
+
+  const handleClone = useCallback(async (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => {
+    try {
+      const { entry, createType } = await loadEntry(type, item)
+      setCloning(entry)
+      setEditing(null)
+      setCreateType(createType)
+      setCreateOpen(true)
+    } catch (err) {
+      console.error('Failed to load item for cloning:', err)
+      showToast.error('Failed to load item for cloning.')
+    }
+  }, [loadEntry])
 
   const handleDelete = useCallback(async (type: DialogType, item: { name: string; scope?: string; id?: string }) => {
     try {
@@ -767,15 +811,25 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     [commands]
   )
 
+  const { data: agentsRegistry = [] } = useQuery({
+    queryKey: ['registry-list', 'agent', directory],
+    queryFn: () => registryApi.list('agent', directory),
+  })
+
   const agents = useMemo<AgentExplorerItem[]>(() => {
     const map = config?.agent
-    if (!map) return []
-    return Object.entries(map).map(([name, cfg]) => ({
+    const configAgentNames = new Set(Object.keys(map ?? {}))
+    const fromConfig: AgentExplorerItem[] = Object.entries(map ?? {}).map(([name, cfg]) => ({
       name,
       description: (cfg as { description?: string }).description,
       mode: (cfg as { mode?: string }).mode,
+      scope: 'global',
     }))
-  }, [config])
+    const fromRegistry: AgentExplorerItem[] = agentsRegistry
+      .filter((e) => !configAgentNames.has(e.name))
+      .map((e) => ({ name: e.name, description: e.description, mode: e.mode, scope: e.scope }))
+    return [...fromConfig, ...fromRegistry].sort((a, b) => a.name.localeCompare(b.name))
+  }, [config, agentsRegistry])
 
   const mcpServers = useMemo<McpExplorerItem[]>(() => {
     const map = config?.mcp
@@ -1006,7 +1060,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'explorer' ? (
-          <CommandExplorer commands={commands} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onDelete={handleDelete} focusCommand={explorerFocus} />
+          <CommandExplorer commands={commands} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} focusCommand={explorerFocus} />
         ) : (
           <div className="flex-1 overflow-y-auto min-h-0">
             {runList.length > 0 && (
@@ -1186,16 +1240,21 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         open={createOpen}
         onOpenChange={(next) => {
           setCreateOpen(next)
-          if (!next) setEditing(null)
+          if (!next) {
+            setEditing(null)
+            setCloning(null)
+          }
         }}
         onCreated={() => {
           setEditing(null)
+          setCloning(null)
           refreshExplorer()
         }}
         availableSkills={availableSkills}
         directory={directory}
         initialType={createType}
         editing={editing}
+        cloning={cloning}
       />
     </div>
   )
