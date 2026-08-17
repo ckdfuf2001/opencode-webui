@@ -28,7 +28,8 @@ import {
 } from '@/api/schedules'
 import { useCommands } from '@/hooks/useCommands'
 import { useOpenCodeClient } from '@/hooks/useOpenCode'
-import { useCommandRuns } from '@/stores/commandRunsStore'
+import { useCommandRunsInRange } from '@/hooks/useCommandRuns'
+import { groupRunsBySession } from '@/lib/command-run-view'
 import { listRepos } from '@/api/repos'
 import { createOpenCodeClient } from '@/api/opencode'
 import { ScheduleCalendar } from '@/components/schedule/ScheduleCalendar'
@@ -125,7 +126,12 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
 
   const [calendarViewDate, setCalendarViewDate] = useState(() => new Date())
 
-  const runsBySession = useCommandRuns((s) => s.runsBySession)
+  const { start: runRangeStart, end: runRangeEnd } = useMemo(
+    () => monthCalendarRange(calendarViewDate),
+    [calendarViewDate],
+  )
+  const { data: serverRuns = [] } = useCommandRunsInRange(runRangeStart, runRangeEnd, active)
+  const runsBySession = useMemo(() => groupRunsBySession(serverRuns), [serverRuns])
 
   interface SessionMeta { title: string; repoId: number; repoName: string; directory: string }
   const { data: repos = [] } = useQuery({
