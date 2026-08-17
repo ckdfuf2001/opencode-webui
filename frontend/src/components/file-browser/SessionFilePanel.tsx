@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { FileBrowser } from './FileBrowser'
 import { Button } from '@/components/ui/button'
 import { PathDisplay } from '@/components/ui/path-display'
-import { X } from 'lucide-react'
+import { X, Maximize2 } from 'lucide-react'
 
 interface SessionFilePanelProps {
   basePath?: string
@@ -10,9 +10,10 @@ interface SessionFilePanelProps {
   initialSelectedFile?: string
   width?: number
   onClose: () => void
+  onOpenFullscreen?: () => void
 }
 
-export function SessionFilePanel({ basePath = '', repoName, initialSelectedFile, width = 380, onClose }: SessionFilePanelProps) {
+export function SessionFilePanel({ basePath = '', repoName, initialSelectedFile, width = 380, onClose, onOpenFullscreen }: SessionFilePanelProps) {
   const [displayPath, setDisplayPath] = useState<string>('/')
 
   const handleDirectoryLoad = useCallback((info: { workspaceRoot?: string; currentPath: string }) => {
@@ -45,14 +46,27 @@ export function SessionFilePanel({ basePath = '', repoName, initialSelectedFile,
         <div className="flex items-center gap-3 min-w-0">
           <PathDisplay path={displayPath} maxSegments={3} />
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground hover:bg-muted shrink-0"
-        >
-          <X className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onOpenFullscreen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onOpenFullscreen}
+              className="text-muted-foreground hover:text-foreground hover:bg-muted shrink-0"
+              title="Open fullscreen"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground hover:bg-muted shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-hidden min-h-0">

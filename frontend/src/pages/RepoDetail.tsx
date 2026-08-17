@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRepo } from "@/api/repos";
 import { SessionList } from "@/components/session/SessionList";
 import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
+import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { SwitchConfigDialog } from "@/components/repo/SwitchConfigDialog";
@@ -11,12 +12,13 @@ import { BackButton } from "@/components/ui/back-button";
 import { useCreateSession, useOpenCodeClient } from "@/hooks/useOpenCode";
 import { useLoadPendingPermissions } from "@/hooks/usePermissionRequests";
 import { useLoadPendingQuestions } from "@/hooks/useQuestionRequests";
+import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, FolderOpen, GitBranch, Terminal, CalendarPlus } from "lucide-react";
+import { Loader2, Plus, FolderOpen, GitBranch, Terminal, CalendarPlus, Settings } from "lucide-react";
 
 export function RepoDetail() {
   const { id } = useParams<{ id: string }>();
@@ -24,11 +26,13 @@ export function RepoDetail() {
   const queryClient = useQueryClient();
   const repoId = parseInt(id || "0");
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
+  const [fileBrowserFullscreenOpen, setFileBrowserFullscreenOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [switchConfigOpen, setSwitchConfigOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const { open: openSettings } = useSettingsDialog();
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -194,6 +198,15 @@ export function RepoDetail() {
                 <Plus className="w-4 h-4 sm:mr-2" />
                 <span className="hidden sm:inline">New Session</span>
               </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={openSettings}
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
+                title="Settings"
+              >
+                <Settings className="w-4 h-4" />
+              </Button>
            </div>
         </div>
       </div>
@@ -223,6 +236,7 @@ export function RepoDetail() {
             repoName={repoName}
             width={filePanelWidth}
             onClose={() => setFileBrowserOpen(false)}
+            onOpenFullscreen={() => setFileBrowserFullscreenOpen(true)}
           />
         )}
       </div>
@@ -260,6 +274,13 @@ export function RepoDetail() {
             directory={repoDirectory}
           />
         )}
+
+        <FileBrowserSheet
+          isOpen={fileBrowserFullscreenOpen}
+          onClose={() => setFileBrowserFullscreenOpen(false)}
+          basePath={repo.localPath}
+          repoName={repoName}
+        />
     </div>
   );
 }

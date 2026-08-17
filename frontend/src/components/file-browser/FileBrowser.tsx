@@ -19,7 +19,7 @@ const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').fi
 const clampToBasePath = (path: string, base: string): string => {
   const current = normalizePath(path)
   const basePath = normalizePath(base)
-  if (!basePath) return current
+  if (!basePath || basePath === '.') return current
   if (current === basePath || current.startsWith(basePath + '/')) return current
   return basePath
 }
