@@ -322,7 +322,7 @@ export function ScheduleCalendar({
       </div>
 
       <div className="mt-2 space-y-1.5">
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-1.5 gap-y-1 text-[10px] text-muted-foreground">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button

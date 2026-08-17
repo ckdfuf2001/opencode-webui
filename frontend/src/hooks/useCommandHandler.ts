@@ -41,6 +41,12 @@ export function useCommandHandler({
     const args = explicitArgs ?? ''
     useCommandRuns.getState().startRun(sessionID, command.name, args, directory)
 
+    // 방금 startRun 으로 추가된 마지막 run 의 id (finally/catch 에서 상태 마킹에 사용)
+    const runs = useCommandRuns.getState().runsBySession[sessionID] ?? []
+    const currentRunId = runs[runs.length - 1]?.id
+
+    let hasError = false
+
     try {
       const client = createOpenCodeClient(opcodeUrl, directory)
       
@@ -93,6 +99,7 @@ export function useCommandHandler({
             }
           } catch (error) {
             console.error('Failed to create new session:', error)
+            hasError = true
           }
           break
           
@@ -126,8 +133,17 @@ export function useCommandHandler({
       }
     } catch (error) {
       console.error('Failed to execute command:', error)
+      hasError = true
     } finally {
       setLoading(false)
+      // 서버 DB에 실행 완료 상태 마킹
+      if (currentRunId) {
+        useCommandRuns.getState().finishRun(
+          sessionID,
+          currentRunId,
+          hasError ? 'failed' : 'completed',
+        )
+      }
     }
   }, [sessionID, opcodeUrl, onShowSessionsDialog, onShowModelsDialog, onShowHelpDialog, createSession, navigate, commands, directory])
 

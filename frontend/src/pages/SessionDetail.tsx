@@ -23,6 +23,7 @@ import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useQuestionRequests, useLoadPendingQuestions } from "@/hooks/useQuestionRequests";
 import { usePermissionRequests, useLoadPendingPermissions, collectDescendantIDs } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
+import { useCommandRuns } from "@/stores/commandRunsStore";
 import { Loader2 } from "lucide-react";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import type { PermissionResponse } from "@/api/types";
@@ -155,6 +156,41 @@ export function SessionDetail() {
       requestAnimationFrame(() => scrollToMessage(msgID));
     }
   }, [searchParams, setSearchParams, messages, scrollToMessage]);
+
+  // 서버 DB에서 command 실행 히스토리를 가져와 로컬 store에 hydrate
+  // (다른 디바이스에서 실행한 커맨드 히스토리도 여기서 병합됨)
+  useEffect(() => {
+    if (!sessionId) return;
+    fetch(`${API_BASE_URL}/api/command-runs?sessionId=${encodeURIComponent(sessionId)}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Array<{
+        id: string;
+        sessionId: string;
+        commandName: string;
+        args: string | null;
+        directory: string | null;
+        messageId: string | null;
+        startedAt: number;
+        repoId: number | null;
+      }>) => {
+        // 서버는 최신순(DESC)으로 보내는데, 로컬 store는 append 순서(ASC)를 기대하므로 뒤집기
+        const mapped = rows
+          .slice()
+          .reverse()
+          .map((r) => ({
+            id: r.id,
+            sessionID: r.sessionId,
+            name: r.commandName,
+            args: r.args ?? '',
+            directory: r.directory ?? undefined,
+            messageID: r.messageId ?? undefined,
+            startedAt: r.startedAt,
+            repoId: r.repoId ?? undefined,
+          }));
+        useCommandRuns.getState().hydrateFromServer(sessionId, mapped);
+      })
+      .catch((e) => console.warn('[commandRuns] hydrate failed:', e));
+  }, [sessionId]);
 
   const handleFileClick = useCallback(async (filePath: string) => {
     const normalizedFilePath = filePath.replace(/\\/g, '/')

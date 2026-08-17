@@ -17,6 +17,7 @@ import { createFileRoutes } from './routes/files'
 import { createRegistryRoutes } from './routes/registry'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
+import { createCommandRunRoutes } from './routes/command-runs'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
@@ -190,6 +191,7 @@ app.route('/api/providers', createProvidersRoutes())
 app.route('/api/tts', createTTSRoutes(db))
 app.route('/api/registry', createRegistryRoutes())
 app.route('/api/preview', createPreviewRoutes())
+app.route('/api/command-runs', createCommandRunRoutes(db))
 
 app.get('/api/openapi.json', (c) => c.json(openApiSpec))
 
@@ -256,7 +258,8 @@ if (isProduction) {
         sessions: '/api/sessions',
         files: '/api/files',
         providers: '/api/providers',
-        opencode_proxy: '/api/opencode/*'
+        opencode_proxy: '/api/opencode/*',
+        command_runs: '/api/command-runs'
       }
     })
   })

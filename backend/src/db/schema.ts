@@ -77,6 +77,24 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
     );
     
     CREATE INDEX IF NOT EXISTS idx_permission_rules_repo ON permission_rules(repo_id);
+
+    CREATE TABLE IF NOT EXISTS command_runs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      repo_id INTEGER,
+      command_name TEXT NOT NULL,
+      args TEXT,
+      directory TEXT,
+      message_id TEXT,
+      status TEXT NOT NULL DEFAULT 'started',
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_command_runs_session ON command_runs(session_id);
+    CREATE INDEX IF NOT EXISTS idx_command_runs_repo ON command_runs(repo_id);
+    CREATE INDEX IF NOT EXISTS idx_command_runs_started ON command_runs(started_at DESC);
   `)
   
   runMigrations(db)
