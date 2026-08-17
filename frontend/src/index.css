@@ -314,3 +314,7 @@ body {
   white-space: nowrap;
 }
 
+.p-6 {
+  padding: calc(var(--spacing) * 4);
+}
+
