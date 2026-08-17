@@ -184,7 +184,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     enabled: active,
   })
   const [listProjects, setListProjects] = useState<string[]>(() =>
-    currentProject ? [currentProject] : repoNames.length > 0 ? [...repoNames] : [],
+    currentProject ? [currentProject] : repos.length > 0 ? [repoNameOf(repos[0])] : [],
   )
   const filteredSchedules = useMemo(() => {
     if (listProjects.length === 0) return []
