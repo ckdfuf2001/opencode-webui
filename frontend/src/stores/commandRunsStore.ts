@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { API_BASE_URL } from '@/config'
 
 export interface CommandRunStart {
   id: string
@@ -23,7 +24,7 @@ interface CommandRunsStore {
 }
 
 const MAX_RUNS_PER_SESSION = 200
-const API_BASE = '/api/command-runs'
+const API_BASE = `${API_BASE_URL}/api/command-runs`
 
 // ─── 서버 저장 헬퍼 (fire-and-forget) ─────────────────────────────
 // 네트워크 오류/서버 다운 상황에서도 UI를 막지 않도록 실패는 콘솔 경고만.
