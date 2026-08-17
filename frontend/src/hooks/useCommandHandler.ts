@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { createOpenCodeClient } from '@/api/opencode'
 import { useCreateSession } from '@/hooks/useOpenCode'
 import { useCommands } from '@/hooks/useCommands'
-import { useCommandRuns } from '@/stores/commandRunsStore'
+import { useCreateCommandRun, useFinishCommandRun } from '@/hooks/useCommandRuns'
 import { showToast } from '@/lib/toast'
 import type { components } from '@/api/opencode-types'
 
@@ -13,6 +13,7 @@ interface CommandHandlerProps {
   opcodeUrl: string
   sessionID: string
   directory?: string
+  repoId?: number
   onShowSessionsDialog?: () => void
   onShowModelsDialog?: () => void
   onShowHelpDialog?: () => void
@@ -25,6 +26,7 @@ export function useCommandHandler({
   opcodeUrl,
   sessionID,
   directory,
+  repoId,
   onShowSessionsDialog,
   onShowModelsDialog,
   onShowHelpDialog
@@ -34,22 +36,35 @@ export function useCommandHandler({
   const { commands } = useCommands(opcodeUrl, directory)
   const [loading, setLoading] = useState(false)
 
+  const createRun = useCreateCommandRun()
+  const finishRun = useFinishCommandRun()
+
   const executeCommand = useCallback(async (command: CommandType, explicitArgs?: string) => {
     if (!opcodeUrl) return
 
     setLoading(true)
     const args = explicitArgs ?? ''
-    useCommandRuns.getState().startRun(sessionID, command.name, args, directory)
 
-    // 방금 startRun 으로 추가된 마지막 run 의 id (finally/catch 에서 상태 마킹에 사용)
-    const runs = useCommandRuns.getState().runsBySession[sessionID] ?? []
-    const currentRunId = runs[runs.length - 1]?.id
+    // run id 는 서버가 발급한다. 기록 실패가 커맨드 실행을 막지는 않는다.
+    let currentRunId: string | null = null
+    try {
+      const run = await createRun.mutateAsync({
+        sessionId: sessionID,
+        commandName: command.name,
+        args,
+        directory,
+        repoId,
+      })
+      currentRunId = run.id
+    } catch {
+      // onError 에서 이미 토스트 처리됨
+    }
 
     let hasError = false
 
     try {
       const client = createOpenCodeClient(opcodeUrl, directory)
-      
+
       // Check if command exists on server (built-in + MCP + skills from fetched list)
       const serverCommandNames = new Set([
         ...SERVER_COMMANDS,
@@ -64,21 +79,21 @@ export function useCommandHandler({
         case 'continue':
           onShowSessionsDialog?.()
           break
-          
+
         case 'models':
           onShowModelsDialog?.()
           break
-          
+
         case 'themes':
           showToast.warning(
             `"/${command.name}" is not supported in the web UI. This command runs only in the terminal (TUI).`
           )
           break
-          
+
         case 'help':
           onShowHelpDialog?.()
           break
-          
+
         case 'new':
         case 'clear':
           // Create a new session and navigate to it
@@ -90,8 +105,8 @@ export function useCommandHandler({
               const currentPath = window.location.pathname
               const repoMatch = currentPath.match(/\/repos\/(\d+)\/sessions\//)
               if (repoMatch) {
-                const repoId = repoMatch[1]
-                const newPath = `/repos/${repoId}/sessions/${newSession.id}`
+                const matchedRepoId = repoMatch[1]
+                const newPath = `/repos/${matchedRepoId}/sessions/${newSession.id}`
                 navigate(newPath)
               } else {
                 navigate(`/session/${newSession.id}`)
@@ -102,7 +117,7 @@ export function useCommandHandler({
             hasError = true
           }
           break
-          
+
         case 'share':
         case 'unshare':
         case 'export':
@@ -117,7 +132,7 @@ export function useCommandHandler({
             `"/${command.name}" is not supported in the web UI. This command runs only in the terminal (TUI).`
           )
           break
-          
+
         default:
           // Only send commands that exist on the server
           if (isServerCommand) {
@@ -136,16 +151,18 @@ export function useCommandHandler({
       hasError = true
     } finally {
       setLoading(false)
-      // 서버 DB에 실행 완료 상태 마킹
       if (currentRunId) {
-        useCommandRuns.getState().finishRun(
-          sessionID,
-          currentRunId,
-          hasError ? 'failed' : 'completed',
-        )
+        finishRun.mutate({
+          id: currentRunId,
+          status: hasError ? 'failed' : 'completed',
+        })
       }
     }
-  }, [sessionID, opcodeUrl, onShowSessionsDialog, onShowModelsDialog, onShowHelpDialog, createSession, navigate, commands, directory])
+  }, [
+    sessionID, opcodeUrl, directory, repoId,
+    onShowSessionsDialog, onShowModelsDialog, onShowHelpDialog,
+    createSession, navigate, commands, createRun, finishRun,
+  ])
 
   return {
     executeCommand,
