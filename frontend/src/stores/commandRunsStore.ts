@@ -8,11 +8,12 @@ export interface CommandRunStart {
   args: string
   startedAt: number
   messageID?: string
+  directory?: string
 }
 
 interface CommandRunsStore {
   runsBySession: Record<string, CommandRunStart[]>
-  startRun: (sessionID: string, name: string, args: string) => void
+  startRun: (sessionID: string, name: string, args: string, directory?: string) => void
   setRunMessage: (sessionID: string, runID: string, messageID: string) => void
   removeRun: (sessionID: string, runID: string) => void
   clearSession: (sessionID: string) => void
@@ -24,7 +25,7 @@ export const useCommandRuns = create<CommandRunsStore>()(
   persist(
     (set) => ({
       runsBySession: {},
-      startRun: (sessionID: string, name: string, args: string) =>
+      startRun: (sessionID: string, name: string, args: string, directory?: string) =>
         set((state) => {
           const run: CommandRunStart = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -32,6 +33,7 @@ export const useCommandRuns = create<CommandRunsStore>()(
             name,
             args,
             startedAt: Date.now(),
+            directory,
           }
           const current = state.runsBySession[sessionID] ?? []
           const next = [...current, run]

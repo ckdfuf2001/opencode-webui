@@ -39,7 +39,7 @@ export function useCommandHandler({
 
     setLoading(true)
     const args = explicitArgs ?? ''
-    useCommandRuns.getState().startRun(sessionID, command.name, args)
+    useCommandRuns.getState().startRun(sessionID, command.name, args, directory)
 
     try {
       const client = createOpenCodeClient(opcodeUrl, directory)

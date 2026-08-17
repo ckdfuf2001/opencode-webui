@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Loader2, Plus, Trash2, Play, Pencil, X } from 'lucide-react'
+import { CalendarClock, Loader2, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
@@ -33,13 +31,13 @@ function repoNameOf(repo: { repoUrl?: string | null; localPath: string }): strin
   return repo.localPath || 'repo'
 }
 
-interface ScheduleSettingsDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+interface ScheduleManagerProps {
   repoId: number
   opcodeUrl: string
   directory?: string
   initialDate?: Date | null
+  active: boolean
+  onNavigate: (path: string) => void
 }
 
 const EMPTY_FORM = {
@@ -87,21 +85,13 @@ function formatActiveWindow(schedule: Schedule): string {
   return `Active: ${from} ~ ${until}`
 }
 
-export function ScheduleSettingsDialog({
-  open,
-  onOpenChange,
-  repoId,
-  opcodeUrl,
-  directory,
-  initialDate,
-}: ScheduleSettingsDialogProps) {
-  const navigate = useNavigate()
+export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, active, onNavigate }: ScheduleManagerProps) {
   useEffect(() => {
-    if (open && initialDate) {
+    if (active && initialDate) {
       startCreateForDate(initialDate)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [active])
 
   const queryClient = useQueryClient()
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -111,8 +101,8 @@ export function ScheduleSettingsDialog({
   const [runningId, setRunningId] = useState<number | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
-  const { commands } = useCommands(open ? opcodeUrl : null, directory)
-  const client = useOpenCodeClient(open ? opcodeUrl : null, directory)
+  const { commands } = useCommands(active ? opcodeUrl : null, directory)
+  const client = useOpenCodeClient(active ? opcodeUrl : null, directory)
 
   const { data: agents = [] } = useQuery({
     queryKey: ['agents', opcodeUrl, directory],
@@ -128,7 +118,7 @@ export function ScheduleSettingsDialog({
   const { data: repos = [] } = useQuery({
     queryKey: ['repos'],
     queryFn: listRepos,
-    enabled: open,
+    enabled: active,
   })
   const repoNames = useMemo(
     () => repos.map((repo) => repoNameOf(repo)).filter((name, i, arr) => arr.indexOf(name) === i).sort((a, b) => a.localeCompare(b)),
@@ -153,19 +143,20 @@ export function ScheduleSettingsDialog({
       }))
       return map
     },
-    enabled: open && !!opcodeUrl,
+    enabled: active && !!opcodeUrl,
   })
 
   const { data: schedules = [], isLoading } = useQuery({
     queryKey: ['schedules', repoId],
     queryFn: () => listSchedules(repoId),
-    enabled: open,
+    enabled: active,
   })
 
   const calendarMarkers = useMemo<Record<string, CalendarMarker[]>>(() => {
     const map: Record<string, CalendarMarker[]> = {}
     const { start: scanStart, end: scanEnd } = monthCalendarRange(calendarViewDate)
-    const scheduleProject = repos.find((r) => r.id === repoId) ? repoNameOf(repos.find((r) => r.id === repoId)!) : undefined
+    const currentRepo = repos.find((r) => r.id === repoId)
+    const scheduleProject = currentRepo ? repoNameOf(currentRepo) : undefined
 
     for (const schedule of schedules) {
       const firesOn = scheduleFiresInWindow(schedule.cron, schedule.createdAt, schedule.activeFrom, schedule.activeUntil)
@@ -358,27 +349,17 @@ export function ScheduleSettingsDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => {
-      if (!next) {
-        resetForm()
-      }
-      onOpenChange(next)
-    }}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
-          <DialogTitle>Project Schedules</DialogTitle>
-        </DialogHeader>
-
-        {formOpen && (
-          <div className="absolute inset-0 z-10 overflow-y-auto bg-background p-4">
-            <div className="space-y-4 pt-2">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold">{editingId ? 'Edit Schedule' : 'New Schedule'}</h4>
-                <Button size="sm" variant="ghost" onClick={resetForm} disabled={saving}>
-                  <X className="w-3.5 h-3.5" />
-                  Close
-                </Button>
-              </div>
+    <div className="relative flex-1 min-h-0 overflow-y-auto pr-1">
+      {formOpen && (
+        <div className="absolute inset-0 z-10 overflow-y-auto bg-background p-4">
+          <div className="space-y-4 pt-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold">{editingId ? 'Edit Schedule' : 'New Schedule'}</h4>
+              <Button size="sm" variant="ghost" onClick={resetForm} disabled={saving}>
+                <X className="w-3.5 h-3.5" />
+                Close
+              </Button>
+            </div>
 
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">
@@ -513,7 +494,7 @@ export function ScheduleSettingsDialog({
               Enabled
             </label>
 
-            <DialogFooter>
+            <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={resetForm} disabled={saving}>
                 Cancel
               </Button>
@@ -521,95 +502,94 @@ export function ScheduleSettingsDialog({
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {editingId ? 'Update' : 'Create'}
               </Button>
-            </DialogFooter>
             </div>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        <ScheduleCalendar
+          viewDate={calendarViewDate}
+          onViewDateChange={setCalendarViewDate}
+          markersByDate={calendarMarkers}
+          repos={repoNames}
+          projectName={directory?.split(/[\\/]/).filter(Boolean).pop()}
+          onAddDate={startCreateForDate}
+          onGoToSession={(marker) => {
+            const targetRepoId = marker.repoId ?? repoId
+            const base = targetRepoId
+              ? `/repos/${targetRepoId}/sessions/${marker.sessionID}`
+              : `/session/${marker.sessionID}`
+            onNavigate(marker.messageID ? `${base}?msg=${encodeURIComponent(marker.messageID)}` : base)
+          }}
+        />
+        <div className="flex items-center justify-between">
+          <Button size="sm" onClick={startCreate} className="gap-1">
+            <Plus className="w-3.5 h-3.5" />
+            Add Schedule
+          </Button>
+          <Badge variant="outline" className="text-xs">
+            <CalendarClock className="w-3 h-3 mr-1" />
+            {schedules.length}
+          </Badge>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : schedules.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-10">
+            No schedules yet. Add one to run a command or chat on a fixed schedule.
+          </p>
+        ) : (
+          <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+            {schedules.map((schedule) => (
+              <div key={schedule.id} className="rounded-lg border border-border bg-card p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Switch
+                      checked={schedule.enabled}
+                      onCheckedChange={(checked) => handleToggleEnabled(schedule, checked)}
+                    />
+                    <span className="text-sm font-medium truncate">{schedule.name}</span>
+                    <span className={`px-1 py-[1px] rounded border text-[9px] leading-none truncate shrink-0 ${KIND_BADGE[cronScheduleKind(schedule.cron)] ?? ''}`}>
+                      {KIND_LABEL[cronScheduleKind(schedule.cron)]}
+                    </span>
+                    <Badge variant="outline" className="text-[10px] shrink-0">
+                      {schedule.action === 'command' ? 'Command' : 'Chat'}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => handleRunNow(schedule)} disabled={runningId === schedule.id} title="Run now">
+                      {runningId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                    </Button>
+                    <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => startEdit(schedule)} title="Edit">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button type="button" variant="outline" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(schedule.id)} disabled={deletingId === schedule.id} title="Delete">
+                      {deletingId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                  <span className="font-mono">{schedule.cron}</span>
+                  <span>
+                    {schedule.agent ? `${schedule.agent} · ` : ''}
+                    {schedule.action === 'command' ? (schedule.command ?? '') : (schedule.prompt ?? '').slice(0, 40)}
+                    {' · '}last: {formatLastRun(schedule.lastRunAt)}
+                  </span>
+                </div>
+                {formatActiveWindow(schedule) && (
+                  <div className="text-[11px] text-muted-foreground">
+                    {formatActiveWindow(schedule)}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
-
-        <div className="space-y-3">
-            <ScheduleCalendar
-              viewDate={calendarViewDate}
-              onViewDateChange={setCalendarViewDate}
-              markersByDate={calendarMarkers}
-              repos={repoNames}
-              projectName={directory?.split(/[\\/]/).filter(Boolean).pop()}
-              onAddDate={startCreateForDate}
-              onGoToSession={(marker) => {
-                const targetRepoId = marker.repoId ?? repoId
-                const base = targetRepoId
-                  ? `/repos/${targetRepoId}/sessions/${marker.sessionID}`
-                  : `/session/${marker.sessionID}`
-                navigate(marker.messageID ? `${base}?msg=${encodeURIComponent(marker.messageID)}` : base)
-              }}
-            />
-            <div className="flex items-center justify-between">
-              <Button size="sm" onClick={startCreate} className="gap-1">
-                <Plus className="w-3.5 h-3.5" />
-                Add Schedule
-              </Button>
-              <Badge variant="outline" className="text-xs">
-                <CalendarClock className="w-3 h-3 mr-1" />
-                {schedules.length}
-              </Badge>
-            </div>
-
-            {isLoading ? (
-              <div className="flex items-center justify-center py-10">
-                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-              </div>
-            ) : schedules.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-10">
-                No schedules yet. Add one to run a command or chat on a fixed schedule.
-              </p>
-            ) : (
-              <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-                {schedules.map((schedule) => (
-                  <div key={schedule.id} className="rounded-lg border border-border bg-card p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Switch
-                          checked={schedule.enabled}
-                          onCheckedChange={(checked) => handleToggleEnabled(schedule, checked)}
-                        />
-                        <span className="text-sm font-medium truncate">{schedule.name}</span>
-                        <span className={`px-1 py-[1px] rounded border text-[9px] leading-none truncate shrink-0 ${KIND_BADGE[cronScheduleKind(schedule.cron)] ?? ''}`}>
-                          {KIND_LABEL[cronScheduleKind(schedule.cron)]}
-                        </span>
-                        <Badge variant="outline" className="text-[10px] shrink-0">
-                          {schedule.action === 'command' ? 'Command' : 'Chat'}
-                        </Badge>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => handleRunNow(schedule)} disabled={runningId === schedule.id} title="Run now">
-                          {runningId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                        </Button>
-                        <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => startEdit(schedule)} title="Edit">
-                          <Pencil className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button type="button" variant="outline" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(schedule.id)} disabled={deletingId === schedule.id} title="Delete">
-                          {deletingId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                      <span className="font-mono">{schedule.cron}</span>
-                      <span>
-                        {schedule.agent ? `${schedule.agent} · ` : ''}
-                        {schedule.action === 'command' ? (schedule.command ?? '') : (schedule.prompt ?? '').slice(0, 40)}
-                        {' · '}last: {formatLastRun(schedule.lastRunAt)}
-                      </span>
-                    </div>
-                    {formatActiveWindow(schedule) && (
-                      <div className="text-[11px] text-muted-foreground">
-                        {formatActiveWindow(schedule)}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }
