@@ -37,6 +37,7 @@ interface ScheduleManagerProps {
   directory?: string
   initialDate?: Date | null
   active: boolean
+  global?: boolean
   onNavigate: (path: string) => void
 }
 
@@ -85,7 +86,7 @@ function formatActiveWindow(schedule: Schedule): string {
   return `Active: ${from} ~ ${until}`
 }
 
-export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, active, onNavigate }: ScheduleManagerProps) {
+export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, active, global, onNavigate }: ScheduleManagerProps) {
   useEffect(() => {
     if (active && initialDate) {
       startCreateForDate(initialDate)
@@ -95,8 +96,9 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
 
   const queryClient = useQueryClient()
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [formOpen, setFormOpen] = useState(false)
+  const [tab, setTab] = useState<'calendar' | 'form'>('calendar')
   const [form, setForm] = useState(EMPTY_FORM)
+  const [targetRepoId, setTargetRepoId] = useState<number | null>(repoId)
   const [saving, setSaving] = useState(false)
   const [runningId, setRunningId] = useState<number | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
@@ -124,6 +126,19 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     () => repos.map((repo) => repoNameOf(repo)).filter((name, i, arr) => arr.indexOf(name) === i).sort((a, b) => a.localeCompare(b)),
     [repos],
   )
+  const repoNameById = useMemo(() => {
+    const map: Record<number, string> = {}
+    for (const repo of repos) map[repo.id] = repoNameOf(repo)
+    return map
+  }, [repos])
+  const repoNameByDirectory = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const repo of repos) {
+      map[repo.localPath.replace(/\\/g, '/').replace(/\/+$/, '')] = repoNameOf(repo)
+    }
+    return map
+  }, [repos])
+  const currentProject = repoNameById[repoId] ?? (directory?.split(/[\\/]/).filter(Boolean).pop() ?? '')
   const { data: globalSessionMeta } = useQuery({
     queryKey: ['schedule-dialog-sessions', opcodeUrl],
     queryFn: async () => {
@@ -147,8 +162,8 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
   })
 
   const { data: schedules = [], isLoading } = useQuery({
-    queryKey: ['schedules', repoId],
-    queryFn: () => listSchedules(repoId),
+    queryKey: ['schedules', global ? undefined : repoId],
+    queryFn: () => listSchedules(global ? undefined : repoId),
     enabled: active,
   })
 
@@ -160,6 +175,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
 
     for (const schedule of schedules) {
       const firesOn = scheduleFiresInWindow(schedule.cron, schedule.createdAt, schedule.activeFrom, schedule.activeUntil)
+      const scheduleRepoName = repoNameById[schedule.repoId] ?? scheduleProject
       for (let d = new Date(scanStart); d <= scanEnd; d.setDate(d.getDate() + 1)) {
         if (!firesOn(d)) continue
         const key = dateKey(d)
@@ -169,15 +185,14 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
           label: schedule.name,
           kind: cronScheduleKind(schedule.cron),
           detail: schedule.cron,
-          project: scheduleProject,
-          repoName: scheduleProject,
+          project: scheduleRepoName,
+          repoName: scheduleRepoName,
         })
       }
     }
 
     const scanStartKey = dateKey(scanStart)
     const scanEndKey = dateKey(scanEnd)
-    const currentProject = directory?.split(/[\\/]/).filter(Boolean).pop() ?? ''
     for (const [sid, runs] of Object.entries(runsBySession)) {
       if (!runs || runs.length === 0) continue
       for (const run of runs) {
@@ -187,7 +202,8 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
         const runDirectory = run.directory ?? meta?.directory
         const hasAttribution = runDirectory != null || meta?.repoId != null
         if (!hasAttribution) continue
-        const runRepoName = meta?.repoName ?? (runDirectory ? runDirectory.split(/[\\/]/).filter(Boolean).pop() ?? '' : currentProject)
+        const normRunDir = runDirectory?.replace(/\\/g, '/').replace(/\/+$/, '') ?? ''
+        const runRepoName = meta?.repoName ?? (normRunDir ? (repoNameByDirectory[normRunDir] ?? normRunDir.split('/').pop() ?? '') : currentProject)
         map[key] ??= []
         map[key].push({
           id: `run-${run.id}`,
@@ -204,28 +220,32 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
       }
     }
     return map
-  }, [schedules, calendarViewDate, runsBySession, globalSessionMeta, repoId, directory, repos])
+  }, [schedules, calendarViewDate, runsBySession, globalSessionMeta, repoId, repos, repoNameById, repoNameByDirectory, currentProject])
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['schedules', repoId] })
+    queryClient.invalidateQueries({ queryKey: ['schedules'] })
   }
 
   const resetForm = () => {
     setEditingId(null)
-    setFormOpen(false)
+    setTab('calendar')
     setForm(EMPTY_FORM)
   }
 
-  const startCreate = () => {
+  const initializeForm = () => {
     setEditingId(null)
-    setFormOpen(true)
+    setTab('form')
     setForm(EMPTY_FORM)
+    setTargetRepoId(repoId)
+  }
+
+  const startCreate = () => {
+    initializeForm()
   }
 
   const startCreateForDate = (date: Date) => {
     const pad = (n: number) => String(n).padStart(2, '0')
-    setEditingId(null)
-    setFormOpen(true)
+    initializeForm()
     setForm({
       name: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
       action: 'command',
@@ -241,7 +261,8 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
 
   const startEdit = (schedule: Schedule) => {
     setEditingId(schedule.id)
-    setFormOpen(true)
+    setTab('form')
+    setTargetRepoId(schedule.repoId ?? repoId)
     setForm({
       name: schedule.name,
       action: schedule.action,
@@ -293,7 +314,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
         await updateSchedule(editingId, payload)
         showToast.success('Schedule updated.')
       } else {
-        await createSchedule({ repoId, ...payload })
+        await createSchedule({ repoId: targetRepoId ?? repoId, ...payload })
         showToast.success('Schedule created.')
       }
       resetForm()
@@ -350,246 +371,258 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
 
   return (
     <div className="relative flex-1 min-h-0 overflow-y-auto pr-1">
-      {formOpen && (
-        <div className="absolute inset-0 z-10 overflow-y-auto bg-background p-4">
-          <div className="space-y-4 pt-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-semibold">{editingId ? 'Edit Schedule' : 'New Schedule'}</h4>
-              <Button size="sm" variant="ghost" onClick={resetForm} disabled={saving}>
-                <X className="w-3.5 h-3.5" />
-                Close
-              </Button>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">
-                Name <span className="text-destructive">*</span>
-              </label>
-              <Input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g. Morning report"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Action</label>
-              <Select
-                value={form.action}
-                onValueChange={(value) => setForm({ ...form, action: value as ScheduleAction })}
-              >
-                <SelectTrigger className="bg-background border-border">
+      {tab === 'form' ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <h4 className="text-sm font-semibold shrink-0">{editingId ? 'Edit Schedule' : 'New Schedule'}</h4>
+              <Select value={String(targetRepoId ?? repoId)} onValueChange={(value) => setTargetRepoId(Number(value))}>
+                <SelectTrigger className="h-6 px-2 text-xs gap-1 flex-1 min-w-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="command">Run command</SelectItem>
-                  <SelectItem value="chat">Send chat message</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {form.action === 'command' ? (
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">
-                  Command <span className="text-destructive">*</span>
-                </label>
-                <Input
-                  value={form.command}
-                  onChange={(e) => setForm({ ...form, command: e.target.value })}
-                  placeholder="e.g. report"
-                  list="schedule-command-options"
-                />
-                <datalist id="schedule-command-options">
-                  {commands.map((cmd) => (
-                    <option key={cmd.name} value={cmd.name} />
-                  ))}
-                </datalist>
-              </div>
-            ) : (
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">
-                  Prompt <span className="text-destructive">*</span>
-                </label>
-                <Textarea
-                  value={form.prompt}
-                  onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-                  placeholder="Message to send to a new session"
-                  className="min-h-[120px] font-mono text-xs"
-                />
-              </div>
-            )}
-
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">
-                Cron <span className="text-destructive">*</span>
-              </label>
-              <Input
-                value={form.cron}
-                onChange={(e) => setForm({ ...form, cron: e.target.value })}
-                placeholder="0 9 * * *"
-                className="font-mono"
-              />
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {CRON_PRESETS.map((preset) => (
-                  <button
-                    key={preset.value}
-                    type="button"
-                    onClick={() => setForm({ ...form, cron: preset.value })}
-                    className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
-                      form.cron === preset.value
-                        ? 'border-blue-500 text-blue-400 bg-blue-500/10'
-                        : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground'
-                    }`}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[11px] text-muted-foreground">Format: minute hour day-of-month month day-of-week (5 fields).</p>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Agent</label>
-              <Select value={form.agent || 'default'} onValueChange={(value) => setForm({ ...form, agent: value === 'default' ? '' : value })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select agent" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">Default agent</SelectItem>
-                  {agents.map((agent) => (
-                    <SelectItem key={agent.name} value={agent.name}>
-                      {agent.name}
+                  {repos.map((repo) => (
+                    <SelectItem key={repo.id} value={String(repo.id)}>
+                      {repoNameOf(repo)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-[11px] text-muted-foreground">Which agent will run this schedule.</p>
             </div>
-
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Active window</label>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <label className="text-[11px] text-muted-foreground">From</label>
-                  <Input
-                    type="datetime-local"
-                    value={form.activeFrom}
-                    onChange={(e) => setForm({ ...form, activeFrom: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] text-muted-foreground">Until</label>
-                  <Input
-                    type="datetime-local"
-                    value={form.activeUntil}
-                    onChange={(e) => setForm({ ...form, activeUntil: e.target.value })}
-                  />
-                </div>
-              </div>
-              <p className="text-[11px] text-muted-foreground">Leave empty for no time limit.</p>
-            </div>
-
-            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-              <Switch checked={form.enabled} onCheckedChange={(checked) => setForm({ ...form, enabled: checked })} />
-              Enabled
-            </label>
-
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={resetForm} disabled={saving}>
-                Cancel
-              </Button>
-              <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1">
-                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {editingId ? 'Update' : 'Create'}
-              </Button>
-            </div>
+            <Button size="icon" variant="ghost" onClick={resetForm} disabled={saving} title="Close" className="h-7 w-7 shrink-0">
+              <X className="w-4 h-4" />
+            </Button>
           </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">
+              Name <span className="text-destructive">*</span>
+            </label>
+            <Input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Morning report"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Action</label>
+            <Select
+              value={form.action}
+              onValueChange={(value) => setForm({ ...form, action: value as ScheduleAction })}
+            >
+              <SelectTrigger className="bg-background border-border">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="command">Run command</SelectItem>
+                <SelectItem value="chat">Send chat message</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {form.action === 'command' ? (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">
+                Command <span className="text-destructive">*</span>
+              </label>
+              <Input
+                value={form.command}
+                onChange={(e) => setForm({ ...form, command: e.target.value })}
+                placeholder="e.g. report"
+                list="schedule-command-options"
+              />
+              <datalist id="schedule-command-options">
+                {commands.map((cmd) => (
+                  <option key={cmd.name} value={cmd.name} />
+                ))}
+              </datalist>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">
+                Prompt <span className="text-destructive">*</span>
+              </label>
+              <Textarea
+                value={form.prompt}
+                onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+                placeholder="Message to send to a new session"
+                className="min-h-[120px] font-mono text-xs"
+              />
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">
+              Cron <span className="text-destructive">*</span>
+            </label>
+            <Input
+              value={form.cron}
+              onChange={(e) => setForm({ ...form, cron: e.target.value })}
+              placeholder="0 9 * * *"
+              className="font-mono"
+            />
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {CRON_PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  onClick={() => setForm({ ...form, cron: preset.value })}
+                  className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
+                    form.cron === preset.value
+                      ? 'border-blue-500 text-blue-400 bg-blue-500/10'
+                      : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">Format: minute hour day-of-month month day-of-week (5 fields).</p>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Agent</label>
+            <Select value={form.agent || 'default'} onValueChange={(value) => setForm({ ...form, agent: value === 'default' ? '' : value })}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select agent" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">Default agent</SelectItem>
+                {agents.map((agent) => (
+                  <SelectItem key={agent.name} value={agent.name}>
+                    {agent.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">Which agent will run this schedule.</p>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Active window</label>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-[11px] text-muted-foreground">From</label>
+                <Input
+                  type="datetime-local"
+                  value={form.activeFrom}
+                  onChange={(e) => setForm({ ...form, activeFrom: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] text-muted-foreground">Until</label>
+                <Input
+                  type="datetime-local"
+                  value={form.activeUntil}
+                  onChange={(e) => setForm({ ...form, activeUntil: e.target.value })}
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground">Leave empty for no time limit.</p>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+            <Switch checked={form.enabled} onCheckedChange={(checked) => setForm({ ...form, enabled: checked })} />
+            Enabled
+          </label>
+
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={resetForm} disabled={saving}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1">
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {editingId ? 'Update' : 'Create'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <ScheduleCalendar
+            viewDate={calendarViewDate}
+            onViewDateChange={setCalendarViewDate}
+            markersByDate={calendarMarkers}
+            repos={repoNames}
+            projectName={currentProject || undefined}
+            onAddDate={startCreateForDate}
+            onGoToSession={(marker) => {
+              const targetRepoId = marker.repoId ?? repoId
+              const base = targetRepoId
+                ? `/repos/${targetRepoId}/sessions/${marker.sessionID}`
+                : `/session/${marker.sessionID}`
+              onNavigate(marker.messageID ? `${base}?msg=${encodeURIComponent(marker.messageID)}` : base)
+            }}
+          />
+          <div className="flex items-center justify-between">
+            <Button size="sm" onClick={startCreate} className="gap-1">
+              <Plus className="w-3.5 h-3.5" />
+              Add Schedule
+            </Button>
+            <Badge variant="outline" className="text-xs">
+              <CalendarClock className="w-3 h-3 mr-1" />
+              {schedules.length}
+            </Badge>
+          </div>
+
+          {isLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : schedules.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-10">
+              No schedules yet. Add one to run a command or chat on a fixed schedule.
+            </p>
+          ) : (
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+              {schedules.map((schedule) => (
+                <div key={schedule.id} className="rounded-lg border border-border bg-card p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Switch
+                        checked={schedule.enabled}
+                        onCheckedChange={(checked) => handleToggleEnabled(schedule, checked)}
+                      />
+                      <span className="text-sm font-medium truncate">{schedule.name}</span>
+                      <span className={`px-1 py-[1px] rounded border text-[9px] leading-none truncate shrink-0 ${KIND_BADGE[cronScheduleKind(schedule.cron)] ?? ''}`}>
+                        {KIND_LABEL[cronScheduleKind(schedule.cron)]}
+                      </span>
+                      <Badge variant="outline" className="text-[10px] shrink-0">
+                        {schedule.action === 'command' ? 'Command' : 'Chat'}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => handleRunNow(schedule)} disabled={runningId === schedule.id} title="Run now">
+                        {runningId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                      </Button>
+                      <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => startEdit(schedule)} title="Edit">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button type="button" variant="outline" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(schedule.id)} disabled={deletingId === schedule.id} title="Delete">
+                        {deletingId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                    <span className="font-mono">{schedule.cron}</span>
+                    <span>
+                      {global && repoNameById[schedule.repoId] ? `${repoNameById[schedule.repoId]} · ` : ''}
+                      {schedule.agent ? `${schedule.agent} · ` : ''}
+                      {schedule.action === 'command' ? (schedule.command ?? '') : (schedule.prompt ?? '').slice(0, 40)}
+                      {' · '}last: {formatLastRun(schedule.lastRunAt)}
+                    </span>
+                  </div>
+                  {formatActiveWindow(schedule) && (
+                    <div className="text-[11px] text-muted-foreground">
+                      {formatActiveWindow(schedule)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
-
-      <div className="space-y-3">
-        <ScheduleCalendar
-          viewDate={calendarViewDate}
-          onViewDateChange={setCalendarViewDate}
-          markersByDate={calendarMarkers}
-          repos={repoNames}
-          projectName={directory?.split(/[\\/]/).filter(Boolean).pop()}
-          onAddDate={startCreateForDate}
-          onGoToSession={(marker) => {
-            const targetRepoId = marker.repoId ?? repoId
-            const base = targetRepoId
-              ? `/repos/${targetRepoId}/sessions/${marker.sessionID}`
-              : `/session/${marker.sessionID}`
-            onNavigate(marker.messageID ? `${base}?msg=${encodeURIComponent(marker.messageID)}` : base)
-          }}
-        />
-        <div className="flex items-center justify-between">
-          <Button size="sm" onClick={startCreate} className="gap-1">
-            <Plus className="w-3.5 h-3.5" />
-            Add Schedule
-          </Button>
-          <Badge variant="outline" className="text-xs">
-            <CalendarClock className="w-3 h-3 mr-1" />
-            {schedules.length}
-          </Badge>
-        </div>
-
-        {isLoading ? (
-          <div className="flex items-center justify-center py-10">
-            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : schedules.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-10">
-            No schedules yet. Add one to run a command or chat on a fixed schedule.
-          </p>
-        ) : (
-          <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-            {schedules.map((schedule) => (
-              <div key={schedule.id} className="rounded-lg border border-border bg-card p-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Switch
-                      checked={schedule.enabled}
-                      onCheckedChange={(checked) => handleToggleEnabled(schedule, checked)}
-                    />
-                    <span className="text-sm font-medium truncate">{schedule.name}</span>
-                    <span className={`px-1 py-[1px] rounded border text-[9px] leading-none truncate shrink-0 ${KIND_BADGE[cronScheduleKind(schedule.cron)] ?? ''}`}>
-                      {KIND_LABEL[cronScheduleKind(schedule.cron)]}
-                    </span>
-                    <Badge variant="outline" className="text-[10px] shrink-0">
-                      {schedule.action === 'command' ? 'Command' : 'Chat'}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => handleRunNow(schedule)} disabled={runningId === schedule.id} title="Run now">
-                      {runningId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                    </Button>
-                    <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => startEdit(schedule)} title="Edit">
-                      <Pencil className="w-3.5 h-3.5" />
-                    </Button>
-                    <Button type="button" variant="outline" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(schedule.id)} disabled={deletingId === schedule.id} title="Delete">
-                      {deletingId === schedule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                    </Button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                  <span className="font-mono">{schedule.cron}</span>
-                  <span>
-                    {schedule.agent ? `${schedule.agent} · ` : ''}
-                    {schedule.action === 'command' ? (schedule.command ?? '') : (schedule.prompt ?? '').slice(0, 40)}
-                    {' · '}last: {formatLastRun(schedule.lastRunAt)}
-                  </span>
-                </div>
-                {formatActiveWindow(schedule) && (
-                  <div className="text-[11px] text-muted-foreground">
-                    {formatActiveWindow(schedule)}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   )
 }

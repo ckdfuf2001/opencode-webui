@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -26,7 +26,6 @@ import {
   RefreshCw,
   Copy,
   Calendar as CalendarIcon,
-  CalendarClock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -40,11 +39,7 @@ import { listRepos } from '@/api/repos'
 import { createOpenCodeClient } from '@/api/opencode'
 import { settingsApi } from '@/api/settings'
 import { registryApi, type RegistryType, type RegistryScope, type RegistryEntry } from '@/api/registry'
-import { listSchedules } from '@/api/schedules'
-import { ScheduleCalendar } from '@/components/schedule/ScheduleCalendar'
 import { ScheduleManager } from '@/components/schedule/ScheduleManager'
-import type { CalendarMarker } from '@/lib/calendar-marker'
-import { dateKey, cronScheduleKind, monthCalendarRange, scheduleFiresInWindow } from '@/lib/cron'
 import { showToast } from '@/lib/toast'
 import type { MessageWithParts, Part } from '@/api/types'
 
@@ -585,9 +580,6 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const [cloning, setCloning] = useState<EditingEntry | null>(null)
   const [historyQuery, setHistoryQuery] = useState('')
   const [calendarView, setCalendarView] = useState(false)
-  const [calendarViewDate, setCalendarViewDate] = useState(() => new Date())
-  const [scheduleView, setScheduleView] = useState(false)
-  const [scheduleDialogDate, setScheduleDialogDate] = useState<Date | null>(null)
   const [explorerFocus, setExplorerFocus] = useState<CommandWithScope | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -927,26 +919,6 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     [global, globalSessionMeta, currentSessionMeta],
   )
 
-  const { data: allSchedules = [] } = useQuery({
-    queryKey: ['schedules', global ? undefined : repoId],
-    queryFn: () => listSchedules(global ? undefined : repoId),
-    enabled: open && calendarView,
-  })
-
-  const { data: repos = [] } = useQuery({
-    queryKey: ['repos'],
-    queryFn: listRepos,
-    enabled: open && calendarView,
-  })
-  const repoNameById = useMemo(() => {
-    const map: Record<number, string> = {}
-    for (const repo of repos) {
-      const name = repo.repoUrl ? repo.repoUrl.split('/').slice(-1)[0].replace('.git', '') : repo.localPath || 'repo'
-      map[repo.id] = name
-    }
-    return map
-  }, [repos])
-
   const runList = useMemo(() => {
     if (global) {
       const all: (CommandRunStart & { sessionMeta?: RunSessionMeta })[] = []
@@ -966,49 +938,6 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     }
     return list.sort((a, b) => a.startedAt - b.startedAt)
   }, [global, runsBySession, sessionID, sessions, sessionMeta])
-
-  const calendarMarkers = useMemo<Record<string, CalendarMarker[]>>(() => {
-    const map: Record<string, CalendarMarker[]> = {}
-    const { start: scanStart, end: scanEnd } = monthCalendarRange(calendarViewDate)
-
-    for (const schedule of allSchedules) {
-      const firesOn = scheduleFiresInWindow(schedule.cron, schedule.createdAt, schedule.activeFrom, schedule.activeUntil)
-      const scheduleRepoName = repoNameById[schedule.repoId]
-      for (let d = new Date(scanStart); d <= scanEnd; d.setDate(d.getDate() + 1)) {
-        if (!firesOn(d)) continue
-        const key = dateKey(d)
-        map[key] ??= []
-        map[key].push({
-          id: `sched-${schedule.id}`,
-          label: schedule.name,
-          kind: cronScheduleKind(schedule.cron),
-          detail: schedule.cron,
-          project: scheduleRepoName,
-          repoName: scheduleRepoName,
-        })
-      }
-    }
-
-    for (const run of runList) {
-      const key = dateKey(new Date(run.startedAt))
-      const meta = (run as { sessionMeta?: RunSessionMeta }).sessionMeta
-      const runRepoName = meta?.repoName ?? (directory?.split(/[\\/]/).filter(Boolean).pop() ?? '')
-      map[key] ??= []
-      map[key].push({
-        id: `run-${run.id}`,
-        label: `/${run.name}${run.args ? ` ${run.args}` : ''}`,
-        kind: 'run',
-        detail: new Date(run.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-        sessionID: run.sessionID,
-        messageID: run.messageID,
-        repoId: meta?.repoId ?? repoId,
-        repoName: runRepoName,
-        sessionTitle: meta?.title,
-        project: runRepoName,
-      })
-    }
-    return map
-  }, [allSchedules, runList, calendarViewDate, repoId, directory, repoNameById])
 
   const filteredRunList = useMemo(() => {
     if (!historyQuery.trim()) return runList
@@ -1052,14 +981,6 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       }
     }
   }, [runList, segments, global])
-
-  const wasScheduleView = useRef(false)
-  useEffect(() => {
-    if (wasScheduleView.current && !scheduleView) {
-      queryClient.invalidateQueries({ queryKey: ['schedules'] })
-    }
-    wasScheduleView.current = scheduleView
-  }, [scheduleView, queryClient])
 
   const handleGoToMessage = useCallback((runSessionID: string, messageID?: string, runRepoId?: number) => {
     if (!global && runSessionID === sessionID) {
@@ -1181,20 +1102,18 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                   <Input
-                    value={calendarView || scheduleView ? '' : historyQuery}
-                    disabled={calendarView || scheduleView}
+                    value={calendarView ? '' : historyQuery}
+                    disabled={calendarView}
                     onChange={(e) => setHistoryQuery(e.target.value)}
                     placeholder="Search history..."
                     className="pl-8 h-8 text-xs"
                   />
                 </div>
                 <Button
-                  variant={calendarView && !scheduleView ? 'secondary' : 'outline'}
+                  variant={calendarView ? 'secondary' : 'outline'}
                   size="sm"
                   onClick={() => {
                     setCalendarView((v) => !v)
-                    setScheduleView(false)
-                    setScheduleDialogDate(null)
                   }}
                   className="text-xs h-8 gap-1"
                   title="Toggle calendar view with schedules and command history"
@@ -1202,50 +1121,18 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                   <CalendarIcon className="w-3.5 h-3.5" />
                   달력
                 </Button>
-                <Button
-                  variant={scheduleView ? 'secondary' : 'outline'}
-                  size="sm"
-                  onClick={() => {
-                    setScheduleView((v) => !v)
-                    setCalendarView(false)
-                    setScheduleDialogDate(null)
-                  }}
-                  className="text-xs h-8 gap-1"
-                  title="Manage schedules"
-                >
-                  <CalendarClock className="w-3.5 h-3.5" />
-                  스케줄
-                </Button>
               </div>
             </div>
-            {scheduleView ? (
-              <div className="flex-1 min-h-0 flex flex-col px-3 pb-3">
+            {calendarView ? (
+              <div className="flex-1 min-h-0 flex flex-col px-3 pb-3 pt-1">
                 <ScheduleManager
                   repoId={repoId ?? 0}
                   opcodeUrl={opcodeUrl ?? ''}
                   directory={directory}
-                  initialDate={scheduleDialogDate}
+                  global={global}
                   active={open}
                   onNavigate={(path) => navigate(path)}
                 />
-              </div>
-            ) : calendarView ? (
-              <div className="flex-1 overflow-y-auto min-h-0">
-                <div className="p-3 pt-0 space-y-2">
-                  <ScheduleCalendar
-                    markersByDate={calendarMarkers}
-                    viewDate={calendarViewDate}
-                    onViewDateChange={setCalendarViewDate}
-                    projectName={global ? undefined : (directory?.split(/[\\/]/).filter(Boolean).pop())}
-                    defaultFilters={{ run: true }}
-                    onAddDate={(date) => {
-                      setScheduleDialogDate(date)
-                      setCalendarView(false)
-                      setScheduleView(true)
-                    }}
-                    onGoToSession={(marker) => handleGoToMessage(marker.sessionID ?? '', marker.messageID, marker.repoId)}
-                  />
-                </div>
               </div>
             ) : filteredRunList.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full px-6 text-center">
