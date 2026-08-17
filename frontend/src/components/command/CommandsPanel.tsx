@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -31,7 +31,8 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useMessages, useSessions, useConfig } from '@/hooks/useOpenCode'
-import { useCommandRuns, type CommandRunStart } from '@/stores/commandRunsStore'
+import { useCommandRunsInRange, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
+import { groupRunsBySession, historyWindow, type CommandRunView } from '@/lib/command-run-view'
 import { CreateCommandDialog, type DialogType, type EditingEntry } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
 import { collectDescendantIDs } from '@/hooks/usePermissionRequests'
@@ -568,7 +569,11 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
-  const runsBySession = useCommandRuns((state) => state.runsBySession)
+  const { start: historyStart, end: historyEnd } = useMemo(() => historyWindow(), [])
+  const { data: serverRuns = [] } = useCommandRunsInRange(historyStart, historyEnd, open)
+  const runsBySession = useMemo(() => groupRunsBySession(serverRuns), [serverRuns])
+  const deleteRun = useDeleteCommandRun()
+  const setRunMessage = useSetCommandRunMessage()
   const { data: sessions } = useSessions(opcodeUrl, directory)
   const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
   const { data: config } = useConfig(opcodeUrl, directory)
@@ -921,7 +926,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
 
   const runList = useMemo(() => {
     if (global) {
-      const all: (CommandRunStart & { sessionMeta?: RunSessionMeta })[] = []
+      const all: (CommandRunView & { sessionMeta?: RunSessionMeta })[] = []
       for (const [sid, list] of Object.entries(runsBySession)) {
         if (!list || list.length === 0) continue
         for (const run of list) {
@@ -932,7 +937,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     }
     const descendantIDs = sessions ? collectDescendantIDs(sessions, sessionID) : []
     const ids = new Set([sessionID, ...descendantIDs])
-    const list: CommandRunStart[] = []
+    const list: CommandRunView[] = []
     for (const sid of ids) {
       for (const run of runsBySession[sid] ?? []) list.push(run)
     }
@@ -971,16 +976,20 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       .reverse()
   }, [global, runList, messages, commands])
 
+  const syncedMessageIds = useRef<Set<string>>(new Set())
+
   useEffect(() => {
     if (global) return
     for (const run of runList) {
       if (run.messageID) continue
+      if (syncedMessageIds.current.has(run.id)) continue
       const seg = segments.find((s) => s.id === run.id && s.messageID)
       if (seg?.messageID) {
-        useCommandRuns.getState().setRunMessage(run.sessionID, run.id, seg.messageID)
+        syncedMessageIds.current.add(run.id)
+        setRunMessage.mutate({ id: run.id, messageId: seg.messageID })
       }
     }
-  }, [runList, segments, global])
+  }, [runList, segments, global, setRunMessage])
 
   const handleGoToMessage = useCallback((runSessionID: string, messageID?: string, runRepoId?: number) => {
     if (!global && runSessionID === sessionID) {
@@ -1002,7 +1011,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
 
   const commandByName = (name: string) => commands.find((c) => c.name === name)
 
-  const renderGlobalRun = (run: CommandRunStart & { sessionMeta?: RunSessionMeta }) => (
+  const renderGlobalRun = (run: CommandRunView & { sessionMeta?: RunSessionMeta }) => (
     <div
       key={run.id}
       className="rounded-lg border border-border bg-background overflow-hidden cursor-pointer hover:border-ring group"
@@ -1031,7 +1040,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              useCommandRuns.getState().removeRun(run.sessionID, run.id)
+              deleteRun.mutate(run.id)
             }}
             className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
             title="Delete history entry"
@@ -1222,7 +1231,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                           )}
                           <button
                             type="button"
-                            onClick={() => useCommandRuns.getState().removeRun(run.sessionID, run.id)}
+                            onClick={() => deleteRun.mutate(run.id)}
                             className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer"
                             title="Delete history entry"
                           >
