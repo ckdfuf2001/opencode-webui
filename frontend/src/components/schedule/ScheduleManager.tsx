@@ -1,12 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Loader2, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { CalendarClock, ChevronDown, Loader2, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   listSchedules,
   createSchedule,
@@ -98,7 +108,8 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
   const [editingId, setEditingId] = useState<number | null>(null)
   const [tab, setTab] = useState<'calendar' | 'form'>('calendar')
   const [form, setForm] = useState(EMPTY_FORM)
-  const [targetRepoId, setTargetRepoId] = useState<number | null>(repoId)
+  const [targetRepoId, setTargetRepoId] = useState<number | null>(repoId && repoId > 0 ? repoId : null)
+  const [sortBy, setSortBy] = useState<'active-first' | 'name' | 'last-run'>('active-first')
   const [saving, setSaving] = useState(false)
   const [runningId, setRunningId] = useState<number | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
@@ -139,6 +150,12 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     return map
   }, [repos])
   const currentProject = repoNameById[repoId] ?? (directory?.split(/[\\/]/).filter(Boolean).pop() ?? '')
+
+  useEffect(() => {
+    if (!targetRepoId && repos.length > 0) {
+      setTargetRepoId(repos[0].id)
+    }
+  }, [targetRepoId, repos])
   const { data: globalSessionMeta } = useQuery({
     queryKey: ['schedule-dialog-sessions', opcodeUrl],
     queryFn: async () => {
@@ -166,6 +183,27 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     queryFn: () => listSchedules(global ? undefined : repoId),
     enabled: active,
   })
+  const [listProjects, setListProjects] = useState<string[]>(() =>
+    currentProject ? [currentProject] : repoNames.length > 0 ? [...repoNames] : [],
+  )
+  const filteredSchedules = useMemo(() => {
+    if (listProjects.length === 0) return []
+    return schedules.filter((s) => {
+      const name = repoNameById[s.repoId] ?? ''
+      return name ? listProjects.includes(name) : false
+    })
+  }, [schedules, listProjects, repoNameById])
+  const sortedSchedules = useMemo(() => {
+    const sorted = [...filteredSchedules]
+    switch (sortBy) {
+      case 'name':
+        return sorted.sort((a, b) => a.name.localeCompare(b.name))
+      case 'last-run':
+        return sorted.sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
+      default:
+        return sorted.sort((a, b) => Number(b.enabled) - Number(a.enabled) || (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
+    }
+  }, [filteredSchedules, sortBy])
 
   const calendarMarkers = useMemo<Record<string, CalendarMarker[]>>(() => {
     const map: Record<string, CalendarMarker[]> = {}
@@ -187,6 +225,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
           detail: schedule.cron,
           project: scheduleRepoName,
           repoName: scheduleRepoName,
+          enabled: schedule.enabled,
         })
       }
     }
@@ -232,11 +271,13 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     setForm(EMPTY_FORM)
   }
 
+  const defaultTargetRepoId = () => (repoId && repoId > 0 ? repoId : (repos[0]?.id ?? repoId))
+
   const initializeForm = () => {
     setEditingId(null)
     setTab('form')
     setForm(EMPTY_FORM)
-    setTargetRepoId(repoId)
+    setTargetRepoId(defaultTargetRepoId())
   }
 
   const startCreate = () => {
@@ -559,10 +600,70 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
               <Plus className="w-3.5 h-3.5" />
               Add Schedule
             </Button>
-            <Badge variant="outline" className="text-xs">
-              <CalendarClock className="w-3 h-3 mr-1" />
-              {schedules.length}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      'flex items-center gap-1 px-1.5 py-1 rounded border transition-colors leading-none text-[11px] max-w-[130px]',
+                      listProjects.length > 0
+                        ? 'border-primary/50 text-primary bg-primary/10'
+                        : 'border-border text-muted-foreground/50 hover:text-muted-foreground',
+                    )}
+                    title="Filter by project"
+                  >
+                    <span className="truncate">
+                      {listProjects.length === 0
+                        ? 'No project'
+                        : listProjects.length === 1
+                          ? listProjects[0]
+                          : `${listProjects.length} selected`}
+                    </span>
+                    <ChevronDown className="w-2.5 h-2.5 shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="max-h-64 overflow-y-auto min-w-[160px]">
+                  <DropdownMenuLabel>Projects</DropdownMenuLabel>
+                  <DropdownMenuCheckboxItem
+                    checked={repoNames.length > 0 && repoNames.every((r) => listProjects.includes(r))}
+                    onCheckedChange={() => {
+                      const allSelected = repoNames.length > 0 && repoNames.every((r) => listProjects.includes(r))
+                      setListProjects(allSelected ? [] : [...repoNames])
+                    }}
+                  >
+                    All projects
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuSeparator />
+                  {repoNames.map((name) => (
+                    <DropdownMenuCheckboxItem
+                      key={name}
+                      checked={listProjects.includes(name)}
+                      onCheckedChange={(checked) =>
+                        setListProjects(checked ? [...listProjects, name] : listProjects.filter((p) => p !== name))
+                      }
+                    >
+                      {name}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  {repoNames.length === 0 && <DropdownMenuItem disabled>No repos</DropdownMenuItem>}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Select value={sortBy} onValueChange={(value) => setSortBy(value as typeof sortBy)}>
+                <SelectTrigger className="h-6 px-2 text-[11px] gap-1 w-auto">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active-first">Active first</SelectItem>
+                  <SelectItem value="last-run">Last run</SelectItem>
+                  <SelectItem value="name">Name</SelectItem>
+                </SelectContent>
+              </Select>
+              <Badge variant="outline" className="text-xs">
+                <CalendarClock className="w-3 h-3 mr-1" />
+                {sortedSchedules.length}
+              </Badge>
+            </div>
           </div>
 
           {isLoading ? (
@@ -573,9 +674,11 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
             <p className="text-sm text-muted-foreground text-center py-10">
               No schedules yet. Add one to run a command or chat on a fixed schedule.
             </p>
+          ) : filteredSchedules.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-10">No schedules match the selected project.</p>
           ) : (
             <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-              {schedules.map((schedule) => (
+              {sortedSchedules.map((schedule) => (
                 <div key={schedule.id} className="rounded-lg border border-border bg-card p-3 space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
@@ -604,9 +707,13 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
                     </div>
                   </div>
                   <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                    <span className="font-mono">{schedule.cron}</span>
-                    <span>
-                      {global && repoNameById[schedule.repoId] ? `${repoNameById[schedule.repoId]} · ` : ''}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {repoNameById[schedule.repoId] && (
+                        <span className="font-semibold shrink-0 truncate max-w-[110px]">{repoNameById[schedule.repoId]}</span>
+                      )}
+                      <span className="font-mono shrink-0">{schedule.cron}</span>
+                    </div>
+                    <span className="truncate">
                       {schedule.agent ? `${schedule.agent} · ` : ''}
                       {schedule.action === 'command' ? (schedule.command ?? '') : (schedule.prompt ?? '').slice(0, 40)}
                       {' · '}last: {formatLastRun(schedule.lastRunAt)}

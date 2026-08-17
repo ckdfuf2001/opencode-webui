@@ -53,8 +53,9 @@ function kindVisible(filters: CalendarFilters, kind: CalendarMarkerKind): boolea
   return filters[kind]
 }
 
-function markerVisible(m: CalendarMarker, filters: CalendarFilters): boolean {
+function markerVisible(m: CalendarMarker, filters: CalendarFilters, enabledOnly: boolean): boolean {
   if (!kindVisible(filters, m.kind)) return false
+  if (enabledOnly && m.enabled === false) return false
   if (filters.projects.length === 0) return false
   if (!filters.projects.includes(m.project ?? '')) return false
   const q = filters.search.trim().toLowerCase()
@@ -134,6 +135,7 @@ export function ScheduleCalendar({
 
   const [pickOpen, setPickOpen] = useState(false)
   const [detailKey, setDetailKey] = useState<string | null>(null)
+  const [enabledOnly, setEnabledOnly] = useState(true)
 
   const days = useMemo(() => buildDayGrid(effectiveView), [effectiveView])
   const today = dateKey(new Date())
@@ -159,7 +161,7 @@ export function ScheduleCalendar({
     [],
   )
 
-  const detailMarkers = detailKey ? (markersByDate[detailKey] ?? []).filter((m) => markerVisible(m, filters)) : []
+  const detailMarkers = detailKey ? (markersByDate[detailKey] ?? []).filter((m) => markerVisible(m, filters, enabledOnly)) : []
   const detailDate = detailKey ? days.find((d) => d.key === detailKey) : undefined
 
   const toggleFilterKind = (key: 'daily' | 'weekly' | 'monthly' | 'other' | 'run') => {
@@ -257,7 +259,7 @@ export function ScheduleCalendar({
       </div>
       <div className="grid grid-cols-7 border border-border/60 rounded-b-md bg-border/60 gap-px overflow-hidden">
         {days.map((cell) => {
-          const visible = (markersByDate[cell.key] ?? []).filter((m) => markerVisible(m, filters))
+          const visible = (markersByDate[cell.key] ?? []).filter((m) => markerVisible(m, filters, enabledOnly))
           const groups = groupMarkers(visible)
           const isToday = cell.key === today
           const isDetail = cell.key === detailKey
@@ -377,6 +379,19 @@ export function ScheduleCalendar({
           {kindChip('monthly', 'Monthly')}
           {kindChip('other', 'Other')}
           {kindChip('run', 'Run')}
+          <button
+            type="button"
+            onClick={() => setEnabledOnly((v) => !v)}
+            className={cn(
+              'text-[10px] px-1.5 py-0.5 rounded border transition-colors leading-none ml-auto',
+              enabledOnly
+                ? 'border-primary/50 text-primary bg-primary/10'
+                : 'border-border text-muted-foreground/50 hover:text-muted-foreground',
+            )}
+            title={enabledOnly ? 'Click to show all schedules' : 'Click to show enabled schedules only'}
+          >
+            {enabledOnly ? 'Active' : 'All'}
+          </button>
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />

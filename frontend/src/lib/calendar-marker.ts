@@ -13,6 +13,7 @@ export interface CalendarMarker {
   repoId?: number
   repoName?: string
   sessionTitle?: string
+  enabled?: boolean
 }
 
 export interface CalendarFilters {
