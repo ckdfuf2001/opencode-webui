@@ -55,7 +55,8 @@ function kindVisible(filters: CalendarFilters, kind: CalendarMarkerKind): boolea
 
 function markerVisible(m: CalendarMarker, filters: CalendarFilters): boolean {
   if (!kindVisible(filters, m.kind)) return false
-  if (filters.projects.length > 0 && m.project && !filters.projects.includes(m.project)) return false
+  if (filters.projects.length === 0) return false
+  if (!filters.projects.includes(m.project ?? '')) return false
   const q = filters.search.trim().toLowerCase()
   if (q) {
     const hay = `${m.label} ${m.detail ?? ''} ${m.project ?? ''}`.toLowerCase()
@@ -125,7 +126,9 @@ export function ScheduleCalendar({
 
   const [filters, setFilters] = useState<CalendarFilters>(() => {
     const base = { ...defaultCalendarFilters(), ...defaultFilters }
-    if (base.projects.length === 0 && projectName) base.projects = [projectName]
+    if (base.projects.length === 0) {
+      base.projects = projectName ? [projectName] : repos.length > 0 ? [...repos] : []
+    }
     return base
   })
 
@@ -293,15 +296,15 @@ export function ScheduleCalendar({
                 )}
               </div>
               {groups.length > 0 && (
-                <span className="grid grid-cols-2 w-full mt-0.5 px-1 gap-[2px]">
+                <span className="grid grid-cols-2 w-full mt-0.5 px-[2px] gap-[1px]">
                   {groups.map((g) => (
                     <span
                       key={g.kind}
                       className={cn(
-                        'rounded border text-center truncate',
+                        'rounded border text-center truncate leading-none min-w-0',
                         visible.length > MAX_BADGES
-                          ? 'text-[7px] leading-none px-[3px] py-[1px] min-h-[10px]'
-                          : 'text-[8px] leading-none px-1 py-[1px]',
+                          ? 'text-[7px] px-[2px] py-[1px] min-h-[10px]'
+                          : 'text-[7px] px-[3px] py-[1px]',
                         KIND_BADGE[g.kind],
                       )}
                       title={`${KIND_LABEL[g.kind]} ${g.count}`}
@@ -332,7 +335,7 @@ export function ScheduleCalendar({
               >
                 <span className="truncate">
                   {filters.projects.length === 0
-                    ? 'All projects'
+                    ? 'Select project'
                     : filters.projects.length === 1
                       ? filters.projects[0]
                       : `${filters.projects.length} selected`}
@@ -342,12 +345,15 @@ export function ScheduleCalendar({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="max-h-64 overflow-y-auto min-w-[160px]">
               <DropdownMenuLabel>Projects</DropdownMenuLabel>
-              <DropdownMenuItem
-                onClick={() => setFilters((f) => ({ ...f, projects: [] }))}
-                className={cn(filters.projects.length === 0 && 'text-primary')}
+              <DropdownMenuCheckboxItem
+                checked={repos.length > 0 && repos.every((r) => filters.projects.includes(r))}
+                onCheckedChange={() => {
+                  const allSelected = repos.length > 0 && repos.every((r) => filters.projects.includes(r))
+                  setFilters((f) => ({ ...f, projects: allSelected ? [] : [...repos] }))
+                }}
               >
                 All projects
-              </DropdownMenuItem>
+              </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               {repos.map((repo) => (
                 <DropdownMenuCheckboxItem
