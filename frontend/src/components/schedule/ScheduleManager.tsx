@@ -97,7 +97,7 @@ function formatActiveWindow(schedule: Schedule): string {
   return `Active: ${from} ~ ${until}`
 }
 
-export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, active, global, onNavigate }: ScheduleManagerProps) {
+export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, active, onNavigate }: ScheduleManagerProps) {
   useEffect(() => {
     if (active && initialDate) {
       startCreateForDate(initialDate)
@@ -184,9 +184,10 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     enabled: active && !!opcodeUrl,
   })
 
+  // 스케줄은 항상 전체를 받아온다. repo 스코프는 아래 listProjects 필터가 담당한다.
   const { data: schedules = [], isLoading } = useQuery({
-    queryKey: ['schedules', global ? undefined : repoId],
-    queryFn: () => listSchedules(global ? undefined : repoId),
+    queryKey: ['schedules'],
+    queryFn: () => listSchedules(),
     enabled: active,
   })
   const [listProjects, setListProjects] = useState<string[]>(() =>
