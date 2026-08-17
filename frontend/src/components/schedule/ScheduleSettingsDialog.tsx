@@ -24,7 +24,7 @@ export function ScheduleSettingsDialog({ open, onOpenChange, repoId, opcodeUrl, 
         onOpenChange(next)
       }}
     >
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-full max-w-none rounded-none h-[100dvh] sm:w-[90%] sm:max-w-xl sm:h-auto sm:max-h-[90vh] sm:rounded-lg overflow-y-auto p-3 sm:p-6">
         <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
           <DialogTitle>Project Schedules</DialogTitle>
         </DialogHeader>
