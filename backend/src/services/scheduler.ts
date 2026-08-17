@@ -6,6 +6,7 @@ import { getReposPath } from '@opencode-webui/shared'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { markRequestBusy, clearRequestBusy } from './busy-tracker'
+import { recordRunStartSafe, finishRunSafe } from './command-runs'
 import { logger } from '../utils/logger'
 import path from 'path'
 
@@ -116,10 +117,25 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
   const session = await createResponse.json() as { id: string }
   const sessionID = session.id
 
+  // 달력에 표시될 run 마커를 서버 DB 에 기록한다.
+  // repoId 를 확실히 알고 있으므로 directory 역추적이 필요 없다.
+  const run = recordRunStartSafe(db, {
+    sessionId: sessionID,
+    commandName: schedule.action === 'command' ? prompt : schedule.name,
+    args: schedule.action === 'chat' ? prompt.slice(0, 500) : '',
+    directory,
+    repoId: schedule.repoId,
+    origin: 'schedule',
+  })
+
   const text = schedule.action === 'command' ? `/${prompt}` : prompt
   void sendSchedulePrompt(base, sessionID, schedule.agent, text, headers, directoryParam, schedule.name)
+    .then(() => {
+      if (run) finishRunSafe(db, run.id, 'completed')
+    })
     .catch((error: unknown) => {
       logger.error(`Failed to send scheduled prompt for "${schedule.name}":`, error)
+      if (run) finishRunSafe(db, run.id, 'failed')
     })
 
   return { success: true, sessionID }
@@ -148,7 +164,8 @@ async function sendSchedulePrompt(
     })
     if (!response.ok) {
       const body = await response.text()
-      logger.error(`Failed to send scheduled prompt for "${scheduleName}": ${response.status} ${body}`)
+      // throw 해야 호출자가 run 을 'failed' 로 마킹할 수 있다.
+      throw new Error(`Scheduled prompt for "${scheduleName}" failed: ${response.status} ${body}`)
     }
   } finally {
     clearRequestBusy()

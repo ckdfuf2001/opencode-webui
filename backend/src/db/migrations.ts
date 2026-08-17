@@ -126,6 +126,26 @@ export function runMigrations(db: Database): void {
     } catch (error) {
       logger.debug('Schedules table may not exist yet:', error)
     }
+
+    // command_runs: origin 컬럼 (ui | schedule)
+    try {
+      const commandRunTable = db.prepare('PRAGMA table_info(command_runs)').all() as any[]
+      if (commandRunTable.length > 0 && !commandRunTable.some(col => col.name === 'origin')) {
+        logger.info('Adding missing command_runs column: origin')
+        try {
+          db.run("ALTER TABLE command_runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'ui'")
+        } catch (error) {
+          logger.debug('Command run column origin might already exist:', error)
+        }
+      }
+      try {
+        db.run('CREATE INDEX IF NOT EXISTS idx_command_runs_repo_started ON command_runs(repo_id, started_at DESC)')
+      } catch (error) {
+        logger.debug('command_runs composite index already exists:', error)
+      }
+    } catch (error) {
+      logger.debug('command_runs table may not exist yet:', error)
+    }
     
     try {
       const repos = db.prepare("SELECT id, local_path FROM repos WHERE local_path LIKE 'repos/%'").all() as any[]
