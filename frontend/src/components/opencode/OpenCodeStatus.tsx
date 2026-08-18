@@ -52,8 +52,8 @@ export function OpenCodeStatus() {
         {loading
           ? "Checking"
           : opencodeHealthy
-            ? "opencode Connected"
-            : "opencode Offline"}
+            ? "Connected"
+            : "Offline"}
       </span>
     </Badge>
   );
