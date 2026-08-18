@@ -11,10 +11,12 @@ import { ChevronDown } from 'lucide-react'
 
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
 import { FileSuggestions } from './FileSuggestions'
-import { detectMentionTrigger, parsePromptToParts, getFilename } from '@/lib/promptParser'
+import { detectMentionTrigger, parsePromptToParts, getFilename, MENTION_PATTERN } from '@/lib/promptParser'
 import { getModel, formatModelName } from '@/api/providers'
 import type { components } from '@/api/opencode-types'
-import type { MessageWithParts, FileInfo } from '@/api/types'
+import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
+import { getFileStat } from '@/api/files'
+import { showToast } from '@/lib/toast'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -122,6 +124,39 @@ export function PromptInput({
 
   const { addUserBashCommand } = useUserBash()
 
+  const buildValidatedParts = async (): Promise<ContentPart[]> => {
+    if (attachedFiles.size === 0) return parsePromptToParts(prompt, attachedFiles)
+
+    const mentionedKeys = new Set<string>()
+    for (const match of prompt.matchAll(MENTION_PATTERN)) {
+      const mention = match[1] ?? match[2] ?? match[3]
+      if (mention) mentionedKeys.add(mention.toLowerCase())
+    }
+
+    const validAttachments = new Map<string, FileInfo>()
+    const rejected: { name: string; reason: string }[] = []
+    for (const [key, file] of attachedFiles) {
+      if (!mentionedKeys.has(key)) continue
+      const stat = await getFileStat(file.path).catch(() => null)
+      if (stat?.exists && !stat.isDirectory) {
+        validAttachments.set(key, file)
+      } else if (stat?.isDirectory) {
+        rejected.push({ name: file.name, reason: 'is a folder, not a file' })
+      } else {
+        rejected.push({ name: file.name, reason: 'does not exist' })
+      }
+    }
+
+    if (rejected.length > 0) {
+      showToast.warning(
+        `${rejected.map((r) => `"${r.name}" ${r.reason}`).join(', ')} — sent as text`,
+        { duration: 5000 },
+      )
+    }
+
+    return parsePromptToParts(prompt, validAttachments)
+  }
+
   const handleSubmit = async () => {
     if (!prompt.trim() || disabled) return
 
@@ -159,7 +194,7 @@ export function PromptInput({
       }
     }
 
-    const parts = parsePromptToParts(prompt, attachedFiles)
+    const parts = await buildValidatedParts()
 
     if (editTargetMessageID && onResendEdit) {
       const truncated = await onResendEdit(editTargetMessageID)

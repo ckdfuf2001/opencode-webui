@@ -1,10 +1,11 @@
-import { memo } from 'react'
+import { memo, useState, useEffect } from 'react'
 import type { components } from '@/api/opencode-types'
 import { Copy, Volume2, Square, Loader2 } from 'lucide-react'
 import { TextPart } from './TextPart'
 import { PatchPart } from './PatchPart'
 import { ToolCallPart } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
+import { getFileStat } from '@/api/files'
 
 type Part = components['schemas']['Part']
 
@@ -15,6 +16,7 @@ interface MessagePartProps {
   partIndex?: number
   onFileClick?: (filePath: string, lineNumber?: number) => void
   messageTextContent?: string
+  directory?: string
 }
 
 function getCopyableContent(part: Part, allParts?: Part[]): string {
@@ -116,9 +118,60 @@ export function TTSButton({ content, className = "" }: TTSButtonProps) {
   )
 }
 
+function resolveMentionPath(mentionText: string, directory?: string): string {
+  if (!directory) return mentionText
+  if (/^[a-zA-Z]:[\\/]/.test(mentionText) || mentionText.startsWith('/') || mentionText.startsWith('file:')) return mentionText
+  const normalizedDir = directory.replace(/\\/g, '/')
+  return mentionText.includes('/')
+    ? `${normalizedDir}/${mentionText}`
+    : `${normalizedDir}/chat_uploads/${mentionText}`
+}
+
+function FileMention({
+  part,
+  mentionText,
+  directory,
+  onFileClick,
+}: {
+  part: components['schemas']['TextPart']
+  mentionText: string
+  directory?: string
+  onFileClick?: (filePath: string, lineNumber?: number) => void
+}) {
+  const [isFile, setIsFile] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getFileStat(resolveMentionPath(mentionText, directory))
+      .then((stat) => {
+        if (!cancelled) setIsFile(stat.exists && !stat.isDirectory)
+      })
+      .catch(() => {
+        if (!cancelled) setIsFile(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mentionText, directory])
+
+  if (isFile !== true) {
+    return <TextPart part={part} />
+  }
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
+      onClick={() => onFileClick?.(mentionText)}
+    >
+      <span className="text-blue-400">@</span>
+      <span className="font-medium">{mentionText}</span>
+    </span>
+  )
+}
 
 
-export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent }: MessagePartProps) {
+
+export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory }: MessagePartProps) {
   const copyableContent = getCopyableContent(part, allParts)
   
   switch (part.type) {
@@ -135,15 +188,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         return <TextPart part={part} />
       }
       const mentionText = mentionMatch[1] ?? mentionMatch[2] ?? mentionMatch[3]
-      return (
-        <span
-          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
-          onClick={() => onFileClick?.(mentionText)}
-        >
-          <span className="text-blue-400">@</span>
-          <span className="font-medium">{mentionText}</span>
-        </span>
-      )
+      return <FileMention part={part} mentionText={mentionText} directory={directory} onFileClick={onFileClick} />
     }
     case 'patch':
       return <PatchPart part={part} />
