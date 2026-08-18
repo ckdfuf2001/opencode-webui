@@ -45,8 +45,11 @@ export function Repos() {
             </Button>
             <Button
               onClick={() => setAddRepoOpen(true)}
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 hover:scale-105"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Repository</span>
             </Button>
           </div>
         }
