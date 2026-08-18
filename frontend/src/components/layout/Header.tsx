@@ -18,7 +18,7 @@ export function Header({ title, backTo, action }: HeaderProps) {
   return (
     <header className="sticky top-0 z-10 bg-gradient-to-b from-background via-background to-background border-b border-border backdrop-blur-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center justify-between py-2">
           <div className="flex items-center gap-4">
             {backTo && <BackButton to={backTo} />}
             <div className="flex items-center gap-2">
@@ -41,9 +41,9 @@ export function Header({ title, backTo, action }: HeaderProps) {
               variant="ghost"
               size="icon"
               onClick={openSettings}
-              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200"
+              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
             >
-              <Settings className="w-10 h-10" />
+              <Settings className="w-4 h-4" />
             </Button>
           </div>
         </div>
