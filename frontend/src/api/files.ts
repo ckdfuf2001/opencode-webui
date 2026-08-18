@@ -22,6 +22,24 @@ export function useFile(path: string | undefined) {
   })
 }
 
+export interface FileStat {
+  exists: boolean
+  isDirectory: boolean
+  name: string
+  size: number
+  lastModified?: string
+}
+
+export async function getFileStat(filePath: string): Promise<FileStat> {
+  const response = await fetch(`${API_BASE_URL}/api/files/stat?path=${encodeURIComponent(filePath)}`)
+
+  if (!response.ok) {
+    throw new Error(`Failed to stat file: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
 export async function fetchFileRange(path: string, startLine: number, endLine: number): Promise<ChunkedFileInfo> {
   const response = await fetch(`${API_BASE_URL}/api/files/${path}?startLine=${startLine}&endLine=${endLine}`)
   

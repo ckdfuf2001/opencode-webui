@@ -168,6 +168,22 @@ export async function getFile(userPath: string): Promise<FileInfo> {
   }
 }
 
+export async function getFileStat(userPath: string): Promise<{ exists: boolean; isDirectory: boolean; name: string; size: number; lastModified?: Date }> {
+  const validatedPath = validatePath(userPath)
+  const exists = await fileExists(validatedPath)
+  if (!exists) {
+    return { exists: false, isDirectory: false, name: path.basename(validatedPath), size: 0 }
+  }
+  const stats = await getFileStats(validatedPath)
+  return {
+    exists: true,
+    isDirectory: stats.isDirectory,
+    name: path.basename(validatedPath),
+    size: stats.size,
+    lastModified: stats.lastModified,
+  }
+}
+
 export async function uploadFile(userPath: string, file: File): Promise<FileUploadResult> {
   if (file.size > FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES) {
     throw { message: `File too large (max ${FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES} bytes)`, statusCode: 400 }

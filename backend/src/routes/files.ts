@@ -27,6 +27,18 @@ export function createFileRoutes(_database: Database) {
     }
   })
 
+  app.get('/stat', async (c) => {
+    try {
+      const userPath = c.req.query('path') || ''
+      if (!userPath) return c.json({ error: 'Missing path query parameter' }, 400)
+      const result = await fileService.getFileStat(userPath)
+      return c.json(result)
+    } catch (error: any) {
+      logger.error('Failed to stat file:', error)
+      return c.json({ error: error.message || 'Failed to stat file' }, error.statusCode || 500)
+    }
+  })
+
   app.get('/*', async (c) => {
     try {
       const userPath = decodePath(c)

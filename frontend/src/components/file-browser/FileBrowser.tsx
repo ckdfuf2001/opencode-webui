@@ -235,9 +235,12 @@ useEffect(() => {
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (e.currentTarget === dropZoneRef.current) {
-      setIsDragging(false)
+    if (!dropZoneRef.current) return
+    const next = e.relatedTarget as Node | null
+    if (next && dropZoneRef.current.contains(next)) {
+      return
     }
+    setIsDragging(false)
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -290,7 +293,7 @@ useEffect(() => {
   if (embedded) {
     return (
       <div 
-        className="h-full flex flex-col bg-background"
+        className="h-full flex flex-col bg-background relative"
         ref={dropZoneRef}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
@@ -298,7 +301,7 @@ useEffect(() => {
         onDrop={handleDrop}
       >
         {isDragging && (
-          <div className="absolute inset-0 z-50 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center">
+          <div className="absolute inset-0 z-50 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center pointer-events-none">
             <div className="text-center">
               <Upload className="w-12 h-12 mx-auto mb-2 text-primary" />
               <p className="text-lg font-semibold text-primary">Drop files here to upload</p>
@@ -390,7 +393,7 @@ useEffect(() => {
     >
       <Card className="flex-1 relative">
         {isDragging && (
-          <div className="absolute inset-0 z-50 bg-blue-50/90 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center">
+          <div className="absolute inset-0 z-50 bg-blue-50/90 border-2 border-dashed border-blue-500 rounded-lg flex items-center justify-center pointer-events-none">
             <div className="text-center">
               <Upload className="w-12 h-12 mx-auto mb-2 text-blue-500" />
               <p className="text-lg font-semibold text-blue-600">Drop files here to upload</p>
