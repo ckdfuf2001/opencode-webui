@@ -25,11 +25,15 @@ import {
   Pencil,
   RefreshCw,
   Copy,
+  ListChecks,
+  MoreHorizontal,
   Calendar as CalendarIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useMessages, useSessions, useConfig } from '@/hooks/useOpenCode'
 import { useCommandRunsInRange, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
 import { groupRunsBySession, historyWindow, type CommandRunView } from '@/lib/command-run-view'
@@ -210,6 +214,7 @@ interface CommandExplorerProps {
   onEdit?: (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => void
   onClone?: (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => void
   onDelete?: (type: DialogType, item: { name: string; scope?: string; id?: string }) => void
+  onBulkDelete?: (type: DialogType, items: { name: string; scope?: string; id?: string }[]) => void
   focusCommand?: CommandWithScope | null
 }
 
@@ -242,12 +247,13 @@ const EXPLORER_TABS: { value: ExplorerResourceType; label: string; Icon: typeof 
   { value: 'mcp', label: 'MCP', Icon: Plug },
 ]
 
-function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error, onExecute, onCreate, onEdit, onClone, onDelete, focusCommand }: CommandExplorerProps) {
+function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error, onExecute, onCreate, onEdit, onClone, onDelete, onBulkDelete, focusCommand }: CommandExplorerProps) {
   const [tab, setTab] = useState<ExplorerResourceType>('command')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<CommandWithScope | null>(null)
   const [pendingArgs, setPendingArgs] = useState<PendingArgs | null>(null)
   const [argsInput, setArgsInput] = useState('')
+  const [bulkSelection, setBulkSelection] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (focusCommand) {
@@ -259,6 +265,7 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
   useEffect(() => {
     setQuery('')
     setSelected(null)
+    setBulkSelection(new Set())
   }, [tab])
 
   const requestExecute = (command: CommandWithScope, run: boolean) => {
@@ -301,6 +308,51 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
   }, [tab, query, commands, agents, mcpServers, plugins])
 
   const pendingCommand = pendingArgs?.command
+
+  const itemKey = (item: AgentExplorerItem | McpExplorerItem | RegistryEntry | CommandWithScope): string =>
+    'id' in item ? item.id : item.name
+
+  const deletableFiltered = useMemo(() => {
+    if (tab === 'command' || tab === 'skill') {
+      return (filtered as CommandWithScope[]).filter((c) => (c.scope ?? 'builtin') !== 'builtin')
+    }
+    return filtered
+  }, [tab, filtered])
+
+  const toggleBulkSelection = (key: string) => {
+    setBulkSelection((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const allFilteredSelected =
+    deletableFiltered.length > 0 && deletableFiltered.every((item) => bulkSelection.has(itemKey(item)))
+
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) {
+      setBulkSelection(new Set())
+    } else {
+      setBulkSelection(new Set(deletableFiltered.map((item) => itemKey(item))))
+    }
+  }
+
+  const confirmBulkDelete = () => {
+    if (bulkSelection.size === 0) return
+    const items = deletableFiltered
+      .filter((item) => bulkSelection.has(itemKey(item)))
+      .map((item) => {
+        if (tab === 'mcp') {
+          return { name: (item as McpExplorerItem).id, id: (item as McpExplorerItem).id, scope: 'global' }
+        }
+        const it = item as AgentExplorerItem | RegistryEntry | CommandWithScope
+        return { name: it.name, scope: (it as { scope?: string }).scope ?? 'global' }
+      })
+    onBulkDelete?.(tab === 'skill' ? 'skill' : tab === 'mcp' ? 'mcp' : tab === 'tool' ? 'tool' : tab === 'agent' ? 'agent' : 'command', items)
+    setBulkSelection(new Set())
+  }
 
   if (loading) {
     return (
@@ -390,6 +442,30 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
             <Plus className="w-3.5 h-3.5" />
             New
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant={bulkSelection.size > 0 ? 'default' : 'outline'} size="sm" className="h-8 text-xs flex-shrink-0" title="Bulk actions">
+                <MoreHorizontal className="w-3.5 h-3.5" />
+                {bulkSelection.size > 0 && `(${bulkSelection.size})`}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {deletableFiltered.length > 0 && (
+                <DropdownMenuItem onClick={toggleSelectAll}>
+                  <ListChecks className="w-3.5 h-3.5 mr-2" />
+                  {allFilteredSelected ? 'Deselect All' : 'Select All'}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                onClick={confirmBulkDelete}
+                disabled={bulkSelection.size === 0}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-2" />
+                Delete All ({bulkSelection.size})
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         {error && <p className="text-[11px] text-destructive mt-1">{error}</p>}
       </div>
@@ -405,6 +481,7 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
             {(filtered as (AgentExplorerItem | McpExplorerItem | RegistryEntry)[]).map((item) => {
               const name = 'id' in item ? item.id : item.name
               const isSelected = selected?.name === name
+              const isBulkSelected = bulkSelection.has(name)
               const description = 'id' in item
                 ? (item as McpExplorerItem).detail
                 : tab === 'tool'
@@ -428,11 +505,18 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
                     isSelected ? 'border-primary/50 bg-primary/5' : 'border-transparent hover:bg-muted/40'
                   }`}
                 >
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-left"
-                    onClick={() => setSelected(isSelected ? null : { name, description, template: '', agent: '', model: '', subtask: false, scope: 'global' })}
-                  >
+                  <div className="flex items-center gap-1 pl-2">
+                    <Checkbox
+                      checked={isBulkSelected}
+                      onCheckedChange={() => toggleBulkSelection(name)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-4 h-4 flex-shrink-0"
+                    />
+                    <button
+                      type="button"
+                      className="flex-1 flex items-center gap-2 px-1 py-1.5 text-left"
+                      onClick={() => setSelected(isSelected ? null : { name, description, template: '', agent: '', model: '', subtask: false, scope: 'global' })}
+                    >
                     <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                     <span className="font-mono text-xs font-medium flex-1 min-w-0 truncate">{name}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${badgeClass}`}>
@@ -440,6 +524,7 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
                     </span>
                     {isSelected ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                   </button>
+                  </div>
                   {isSelected && (
                     <div className="px-3 py-2 border-t border-border/50 space-y-1.5">
                       <p className="text-xs text-muted-foreground break-words">{description}</p>
@@ -479,6 +564,8 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
               const badge = SCOPE_DISPLAY[scope]
               const Icon = SCOPE_ICON[scope]
               const isSelected = selected?.name === command.name
+              const isBulkSelected = bulkSelection.has(command.name)
+              const isDeletable = scope !== 'builtin'
 
               return (
                 <div
@@ -487,11 +574,19 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
                     isSelected ? 'border-primary/50 bg-primary/5' : 'border-transparent hover:bg-muted/40'
                   }`}
                 >
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-left"
-                    onClick={() => setSelected(isSelected ? null : command)}
-                  >
+                  <div className="flex items-center gap-1 pl-2">
+                    <Checkbox
+                      checked={isBulkSelected}
+                      onCheckedChange={() => toggleBulkSelection(command.name)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-4 h-4 flex-shrink-0"
+                      disabled={!isDeletable}
+                    />
+                    <button
+                      type="button"
+                      className="flex-1 flex items-center gap-2 px-1 py-1.5 text-left"
+                      onClick={() => setSelected(isSelected ? null : command)}
+                    >
                     <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                     <span className="font-mono text-xs font-medium flex-1 min-w-0 truncate">/{command.name}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${badge.className}`}>
@@ -499,6 +594,7 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
                     </span>
                     {isSelected ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                   </button>
+                  </div>
                   {isSelected && (
                     <div className="px-3 py-2 border-t border-border/50 space-y-1.5">
                       <p className="text-xs text-muted-foreground">{command.description || 'No description.'}</p>
@@ -785,64 +881,77 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     }
   }, [loadEntry])
 
+  const deleteItem = useCallback(async (type: DialogType, item: { name: string; scope?: string; id?: string }) => {
+    if (type === 'mcp') {
+      const configData = await settingsApi.getDefaultOpenCodeConfig()
+      if (!configData) {
+        throw new Error('No OpenCode configuration to update.')
+      }
+      const content = { ...configData.content }
+      const mcp = { ...((content.mcp as Record<string, unknown>) ?? {}) }
+      delete mcp[item.id ?? item.name]
+      content.mcp = mcp
+      await settingsApi.updateOpenCodeConfig(configData.name, { content })
+    } else if (type === 'agent') {
+      const configData = await settingsApi.getDefaultOpenCodeConfig()
+      const cfg = configData?.content as Record<string, unknown> | undefined
+      const inConfig = !!((cfg?.agent as Record<string, unknown> | undefined) ?? {})[item.name]
+      if (inConfig && configData) {
+        const content = { ...configData.content }
+        const agents = { ...((content.agent as Record<string, unknown>) ?? {}) }
+        delete agents[item.name]
+        content.agent = agents
+        await settingsApi.updateOpenCodeConfig(configData.name, { content })
+      } else {
+        const list = await registryApi.list('agent', directory)
+        const entry = list.find((e) => e.name === item.name)
+        const scope = entry?.scope ?? 'global'
+        await registryApi.unregister('agent', scope, item.name, scope === 'project' ? directory : undefined)
+      }
+    } else if (type === 'command') {
+      const configData = await settingsApi.getDefaultOpenCodeConfig()
+      const cfg = configData?.content as Record<string, unknown> | undefined
+      const inConfig = !!((cfg?.command as Record<string, unknown> | undefined) ?? {})[item.name]
+      if (inConfig && configData) {
+        const content = { ...configData.content }
+        const commandsMap = { ...((content.command as Record<string, unknown>) ?? {}) }
+        delete commandsMap[item.name]
+        content.command = commandsMap
+        await settingsApi.updateOpenCodeConfig(configData.name, { content })
+      } else {
+        const scope = item.scope === 'project' ? 'project' : 'global'
+        await registryApi.unregister('command', scope, item.name, scope === 'project' ? directory : undefined)
+      }
+    } else {
+      const registryType = type as RegistryType
+      const scope = item.scope === 'project' ? 'project' : 'global'
+      await registryApi.unregister(registryType, scope, item.name, scope === 'project' ? directory : undefined)
+    }
+  }, [directory])
+
   const handleDelete = useCallback(async (type: DialogType, item: { name: string; scope?: string; id?: string }) => {
     try {
-      if (type === 'mcp') {
-        const configData = await settingsApi.getDefaultOpenCodeConfig()
-        if (!configData) {
-          showToast.error('No OpenCode configuration to update.')
-          return
-        }
-        const content = { ...configData.content }
-        const mcp = { ...((content.mcp as Record<string, unknown>) ?? {}) }
-        delete mcp[item.id ?? item.name]
-        content.mcp = mcp
-        await settingsApi.updateOpenCodeConfig(configData.name, { content })
-        showToast.success(`MCP server "${item.id ?? item.name}" deleted.`)
-      } else if (type === 'agent') {
-        const configData = await settingsApi.getDefaultOpenCodeConfig()
-        const cfg = configData?.content as Record<string, unknown> | undefined
-        const inConfig = !!((cfg?.agent as Record<string, unknown> | undefined) ?? {})[item.name]
-        if (inConfig && configData) {
-          const content = { ...configData.content }
-          const agents = { ...((content.agent as Record<string, unknown>) ?? {}) }
-          delete agents[item.name]
-          content.agent = agents
-          await settingsApi.updateOpenCodeConfig(configData.name, { content })
-        } else {
-          const list = await registryApi.list('agent', directory)
-          const entry = list.find((e) => e.name === item.name)
-          const scope = entry?.scope ?? 'global'
-          await registryApi.unregister('agent', scope, item.name, scope === 'project' ? directory : undefined)
-        }
-        showToast.success(`Agent "${item.name}" deleted.`)
-      } else if (type === 'command') {
-        const configData = await settingsApi.getDefaultOpenCodeConfig()
-        const cfg = configData?.content as Record<string, unknown> | undefined
-        const inConfig = !!((cfg?.command as Record<string, unknown> | undefined) ?? {})[item.name]
-        if (inConfig && configData) {
-          const content = { ...configData.content }
-          const commandsMap = { ...((content.command as Record<string, unknown>) ?? {}) }
-          delete commandsMap[item.name]
-          content.command = commandsMap
-          await settingsApi.updateOpenCodeConfig(configData.name, { content })
-        } else {
-          const scope = item.scope === 'project' ? 'project' : 'global'
-          await registryApi.unregister('command', scope, item.name, scope === 'project' ? directory : undefined)
-        }
-        showToast.success(`Command "${item.name}" deleted.`)
-      } else {
-        const registryType = type as RegistryType
-        const scope = item.scope === 'project' ? 'project' : 'global'
-        await registryApi.unregister(registryType, scope, item.name, scope === 'project' ? directory : undefined)
-        showToast.success(`${type === 'skill' ? 'Skill' : 'Plugin'} "${item.name}" deleted.`)
-      }
+      await deleteItem(type, item)
+      const label = type === 'mcp' ? 'MCP server' : type === 'skill' ? 'Skill' : type === 'tool' ? 'Plugin' : type === 'agent' ? 'Agent' : 'Command'
+      showToast.success(`${label} "${item.id ?? item.name}" deleted.`)
       refreshExplorer()
     } catch (err) {
       console.error('Failed to delete item:', err)
       showToast.error('Failed to delete item.')
     }
-  }, [directory, refreshExplorer])
+  }, [deleteItem, refreshExplorer])
+
+  const handleBulkDelete = useCallback(async (type: DialogType, items: { name: string; scope?: string; id?: string }[]) => {
+    if (items.length === 0) return
+    try {
+      await Promise.all(items.map((item) => deleteItem(type, item)))
+      showToast.success(`${items.length} item(s) deleted.`)
+      refreshExplorer()
+    } catch (err) {
+      console.error('Failed to delete items:', err)
+      showToast.error('Failed to delete items.')
+    }
+  }, [deleteItem, refreshExplorer])
 
 
   const availableSkills = useMemo(
@@ -1103,7 +1212,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'explorer' ? (
-          <CommandExplorer commands={commands} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} focusCommand={explorerFocus} />
+          <CommandExplorer commands={commands} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
         ) : (
           <div className="flex-1 min-h-0 flex flex-col">
             <div className="p-3 pb-0 flex-shrink-0">
