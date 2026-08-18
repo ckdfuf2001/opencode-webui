@@ -79,6 +79,30 @@ export const useOpenCodeClient = (opcodeUrl: string | null | undefined, director
   );
 };
 
+export function isInterruptedMessage(msg: MessageWithParts | undefined | null): boolean {
+  if (!msg) return false
+  if (msg.info.role !== 'assistant') return false
+  if ("completed" in msg.info.time && msg.info.time.completed) return false
+  return true
+}
+
+export async function continueInterruptedSession(
+  client: OpenCodeClient,
+  sessionID: string,
+): Promise<boolean> {
+  try {
+    const status = await client.getSessionStatus()
+    if (status[sessionID]?.type === 'busy') return false
+    const messages = await client.listMessages(sessionID)
+    const last = messages[messages.length - 1]
+    if (!isInterruptedMessage(last)) return false
+    await client.sendPrompt(sessionID, { parts: [{ type: 'text', text: 'Continue' }] })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export const useSessions = (opcodeUrl: string | null | undefined, directory?: string) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
 

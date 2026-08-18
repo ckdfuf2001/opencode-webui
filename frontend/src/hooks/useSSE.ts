@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useOpenCodeClient } from './useOpenCode'
+import { useOpenCodeClient, isInterruptedMessage, continueInterruptedSession } from './useOpenCode'
 import type { SSEEvent, MessageListResponse, MessageWithParts, QuestionRequest, PermissionAskedProps } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
 import { questionEvents } from './useQuestionRequests'
@@ -523,24 +523,37 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
 
           if (wasConnected) {
             const allQueries = queryClient.getQueryCache().getAll()
+            const interruptedSessions = new Set<string>()
             for (const query of allQueries) {
               const key = query.queryKey
-              if (key[0] === 'opencode' && key[1] === 'messages') {
-                const data = query.state.data as MessageWithParts[] | undefined
-                if (!data) continue
-                let changed = false
-                const updated = data.map(msg => {
-                  if (msg.info.role !== 'assistant') return msg
-                  if ('completed' in msg.info.time && msg.info.time.completed) return msg
-                  changed = true
-                  return { ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } } }
-                })
-                if (changed) {
-                  queryClient.setQueryData(key, updated)
-                }
+              if (key[0] !== 'opencode' || key[1] !== 'messages') continue
+              const sessionID = key[3]
+              if (typeof sessionID !== 'string' || !sessionID) continue
+              const data = query.state.data as MessageWithParts[] | undefined
+              if (!data) continue
+              if (isInterruptedMessage(data[data.length - 1])) {
+                interruptedSessions.add(sessionID)
               }
             }
-            showToast.info('Reconnected — stale streams marked as completed', { duration: 3000 })
+
+            if (interruptedSessions.size > 0) {
+              ;(async () => {
+                let resumed = 0
+                for (const sessionID of interruptedSessions) {
+                  if (await continueInterruptedSession(client, sessionID)) resumed++
+                }
+                if (mountedRef.current) {
+                  showToast.info(
+                    resumed > 0
+                      ? `Reconnected — resuming ${resumed} interrupted response${resumed === 1 ? '' : 's'}`
+                      : 'Reconnected — no interrupted responses',
+                    { duration: 3000 },
+                  )
+                }
+              })()
+            } else {
+              showToast.info('Reconnected', { duration: 3000 })
+            }
           }
           wasConnectedRef.current = true
         }
