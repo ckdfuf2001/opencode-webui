@@ -128,7 +128,7 @@ export function RepoDetail() {
   const currentBranch = repo.currentBranch || "main";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-background flex flex-col">
+    <div className="h-screen bg-gradient-to-br from-background via-background to-background flex flex-col">
       <div className="sticky top-0 z-10 border-b border-border bg-gradient-to-b from-background via-background to-background backdrop-blur-sm px-4 py-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
