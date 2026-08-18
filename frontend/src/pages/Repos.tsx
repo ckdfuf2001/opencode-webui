@@ -46,9 +46,7 @@ export function Repos() {
             <Button
               onClick={() => setAddRepoOpen(true)}
             >
-              <Plus className="w-4 h-4 mr-1" />
-              <span className="hidden sm:inline">Repository</span>
-              <span className="sm:hidden">Repo</span>
+              <Plus className="w-4 h-4" />
             </Button>
           </div>
         }
