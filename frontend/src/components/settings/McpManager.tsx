@@ -192,6 +192,7 @@ export function McpManager({ config, onUpdate, onConfigUpdate }: McpManagerProps
         groups={mcpGroups}
         onItemEdit={handleToggleServerWrapper}
         onItemDelete={handleDelete}
+        editLabel={(item) => (item.data?.enabled ? 'Disable' : 'Enable')}
         emptyMessage="No MCP servers configured. Add your first server to get started."
         emptyIcon={Globe}
         searchPlaceholder="Search MCP servers..."
