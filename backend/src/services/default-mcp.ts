@@ -126,6 +126,13 @@ async function doWarmUp(
     }
     return true
   }
+  if (isAgentBrowserMcpChildRunning(namespace)) {
+    if (agentBrowserWarmState !== 'warm') {
+      agentBrowserWarmState = 'warm'
+      logger.info(`Agent-browser MCP child already running (namespace: ${namespace}); skipping warm-up spawn`)
+    }
+    return true
+  }
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value
@@ -256,6 +263,32 @@ function isAgentBrowserDaemonWarm(binPath: string, namespace: string, session?: 
     })
     const parsed = JSON.parse(output) as { data?: { active?: boolean; runtime?: { browserLaunched?: boolean } | null } }
     return parsed.data?.active === true && parsed.data.runtime?.browserLaunched === true
+  } catch {
+    return false
+  }
+}
+
+function isAgentBrowserMcpChildRunning(namespace: string): boolean {
+  try {
+    const marker = `--namespace ${namespace}`
+    if (process.platform === 'win32') {
+      const script = [
+        `$ps = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'agent-browser.exe' -and $_.CommandLine -like '*mcp*--namespace ${namespace}*' }`,
+        'if ($ps) { Write-Output "1" } else { Write-Output "0" }',
+      ].join('\n')
+      const output = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
+        encoding: 'utf8',
+        timeout: 10_000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      return output.trim().endsWith('1')
+    }
+    const output = execFileSync('ps', ['-eo', 'args'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    return output.split('\n').some((line) => line.includes('agent-browser') && line.includes('mcp') && line.includes(marker))
   } catch {
     return false
   }
