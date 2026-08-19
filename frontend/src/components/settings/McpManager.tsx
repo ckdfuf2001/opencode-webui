@@ -191,6 +191,7 @@ export function McpManager({ config, onUpdate, onConfigUpdate }: McpManagerProps
       <ResourceEditor
         groups={mcpGroups}
         onItemEdit={handleToggleServerWrapper}
+        editLabel="Disable"
         onItemDelete={handleDelete}
         emptyMessage="No MCP servers configured. Add your first server to get started."
         emptyIcon={Globe}
