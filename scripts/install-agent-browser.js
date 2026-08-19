@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, existsSync, chmodSync, writeFileSync, rmSync, readdirSync, readFileSync, copyFileSync, cpSync } from 'node:fs'
+import { mkdirSync, existsSync, chmodSync, writeFileSync, rmSync, readdirSync, readFileSync, copyFileSync } from 'node:fs'
 import { join, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
@@ -136,17 +136,6 @@ function rel(path) {
   return path.replaceAll('\\', '/').replace(root.replaceAll('\\', '/') + '/', '')
 }
 
-function copyDirContents(src, dest) {
-  mkdirSync(dest, { recursive: true })
-  for (const entry of readdirSync(src)) {
-    cpSync(join(src, entry), join(dest, entry), { recursive: true })
-  }
-}
-
-function pickExisting(...paths) {
-  return paths.find((p) => existsSync(p)) ?? null
-}
-
 async function installAgentBrowser() {
   const force = process.argv.includes('--force')
   if (process.env.AGENT_BROWSER_INSECURE === '1' || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
@@ -162,7 +151,7 @@ async function installAgentBrowser() {
   const outBin = join(binDir, binDef.bin)
   const meta = existsSync(metaFile) ? JSON.parse(readFileSync(metaFile, 'utf8')) : null
 
-  const binaryLabel = (v) => (v === 'vendor' ? 'vendor' : v?.startsWith('v') ? v : 'v' + v)
+  const binaryLabel = (v) => (v?.startsWith('v') ? v : 'v' + v)
 
   if (!force && existsSync(outBin) && meta?.executable && existsSync(join(root, meta.executable))) {
     console.log('[install-agent-browser] agent-browser already present (' + binaryLabel(meta.agentBrowserVersion) + ').')
@@ -173,68 +162,41 @@ async function installAgentBrowser() {
   mkdirSync(binDir, { recursive: true })
   mkdirSync(chromeDir, { recursive: true })
 
-  const vendorAgentDir = join(root, 'vendor', 'agent-browser')
-  const vendorChromeDir = join(root, 'vendor', 'chromium')
-
   console.log('[install-agent-browser] installing agent-browser + Chromium (Chrome for Testing)')
 
-  let binaryVersion = 'download'
-  const vendorBin = pickExisting(join(vendorAgentDir, binDef.pkg), join(vendorAgentDir, binDef.bin))
-  if (vendorBin) {
-    copyFileSync(vendorBin, outBin)
-    binaryVersion = 'vendor'
-    console.log('  [vendor] binary copied from ' + rel(vendorBin))
+  const source = await resolveBinarySource(binDef.pkg)
+  const binaryVersion = source.version
+  console.log('  [download] ' + source.url)
+  if (source.tarball) {
+    const tarballPath = join(os.tmpdir(), 'agent-browser-' + source.version + '.tgz')
+    await downloadTo(source.url, tarballPath)
+
+    const pkgExtract = join(os.tmpdir(), 'agent-browser-pkg-' + source.version)
+    rmSync(pkgExtract, { recursive: true, force: true })
+    mkdirSync(pkgExtract, { recursive: true })
+    extractTar(tarballPath, pkgExtract)
+
+    const packagedBin = findFile(pkgExtract, [binDef.pkg])
+    if (!packagedBin) fail('could not find ' + binDef.pkg + ' inside the npm package')
+    copyFileSync(packagedBin, outBin)
   } else {
-    const source = await resolveBinarySource(binDef.pkg)
-    binaryVersion = source.version
-    console.log('  [download] ' + source.url)
-    if (source.tarball) {
-      const tarballPath = join(os.tmpdir(), 'agent-browser-' + source.version + '.tgz')
-      await downloadTo(source.url, tarballPath)
-
-      const pkgExtract = join(os.tmpdir(), 'agent-browser-pkg-' + source.version)
-      rmSync(pkgExtract, { recursive: true, force: true })
-      mkdirSync(pkgExtract, { recursive: true })
-      extractTar(tarballPath, pkgExtract)
-
-      const packagedBin = findFile(pkgExtract, [binDef.pkg])
-      if (!packagedBin) fail('could not find ' + binDef.pkg + ' inside the npm package')
-      copyFileSync(packagedBin, outBin)
-    } else {
-      await downloadTo(source.url, outBin)
-    }
+    await downloadTo(source.url, outBin)
   }
   if (process.platform !== 'win32') chmodSync(outBin, 0o755)
 
-  let chromiumVersion = ''
-  const vendorChromeZip = join(vendorChromeDir, 'chrome-' + chromePlatform + '.zip')
-  const vendorChromeExe = findFile(vendorChromeDir, CHROME_EXE_NAMES[process.platform])
-  if (existsSync(vendorChromeZip) || vendorChromeExe) {
-    rmSync(chromeDir, { recursive: true, force: true })
-    mkdirSync(chromeDir, { recursive: true })
-    if (existsSync(vendorChromeZip)) {
-      console.log('  [vendor] chromium archive copied from ' + rel(vendorChromeZip))
-      extractZip(vendorChromeZip, chromeDir)
-    } else {
-      console.log('  [vendor] chromium directory copied from ' + rel(vendorChromeDir))
-      copyDirContents(vendorChromeDir, chromeDir)
-    }
-    chromiumVersion = 'vendor'
-  } else {
-    const cft = await json('https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json')
-    const stable = cft?.channels?.Stable
-    chromiumVersion = stable?.version
-    const chromeDownload = stable?.downloads?.chrome?.find((d) => d.platform === chromePlatform)
-    if (!chromiumVersion || !chromeDownload?.url) {
-      fail('could not resolve Chrome for Testing download for platform ' + chromePlatform)
-    }
-    const chromeArchive = join(os.tmpdir(), 'chrome-' + chromePlatform + '.zip')
-    console.log('  [download] Chromium ' + chromiumVersion + ' (' + chromePlatform + ')')
-    await downloadTo(chromeDownload.url, chromeArchive)
-    rmSync(chromeDir, { recursive: true, force: true })
-    mkdirSync(chromeDir, { recursive: true })
-    extractZip(chromeArchive, chromeDir)
+  const cft = await json('https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json')
+  const stable = cft?.channels?.Stable
+  const chromiumVersion = stable?.version
+  const chromeDownload = stable?.downloads?.chrome?.find((d) => d.platform === chromePlatform)
+  if (!chromiumVersion || !chromeDownload?.url) {
+    fail('could not resolve Chrome for Testing download for platform ' + chromePlatform)
   }
+  const chromeArchive = join(os.tmpdir(), 'chrome-' + chromePlatform + '.zip')
+  console.log('  [download] Chromium ' + chromiumVersion + ' (' + chromePlatform + ')')
+  await downloadTo(chromeDownload.url, chromeArchive)
+  rmSync(chromeDir, { recursive: true, force: true })
+  mkdirSync(chromeDir, { recursive: true })
+  extractZip(chromeArchive, chromeDir)
 
   const chromeExe = findFile(chromeDir, CHROME_EXE_NAMES[process.platform])
   if (!chromeExe) fail('could not locate the Chromium executable')
@@ -256,7 +218,7 @@ async function installAgentBrowser() {
 
   console.log('[install-agent-browser] installed:')
   console.log('  binary    -> ' + outBin + ' (' + binaryLabel(binaryVersion) + ')')
-  console.log('  chromium  -> ' + chromeExe + ' (' + (chromiumVersion === 'vendor' ? 'vendor' : 'v' + chromiumVersion) + ')')
+  console.log('  chromium  -> ' + chromeExe + ' (' + 'v' + chromiumVersion + ')')
   console.log('  update with: npm run agent-browser:update')
 }
 
@@ -269,6 +231,5 @@ installAgentBrowser().catch((error) => {
   }
   console.error('\nAlternatively set AGENT_BROWSER_VERSION=<x.y.z> to pin a specific agent-browser release.')
   console.error('\nSet AGENT_BROWSER_GITHUB_REPO to pull the binary from a different GitHub release source (default: ckdfuf2001/agent-browser).')
-  console.error('\nOffline: put your files under vendor/agent-browser/ and vendor/chromium/ (see vendor/README.md) and this installer copies them without any download.')
   process.exit(1)
 })
