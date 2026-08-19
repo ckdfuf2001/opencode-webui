@@ -26,6 +26,7 @@ interface ResourceEditorProps<T> {
   onItemClick?: (item: ResourceItem<T>) => void
   onItemEdit?: (item: ResourceItem<T>) => void
   onItemDelete?: (item: ResourceItem<T>) => void
+  editLabel?: (item: ResourceItem<T>) => string
   emptyMessage?: string
   emptyIcon?: LucideIcon
   searchPlaceholder?: string
@@ -38,6 +39,7 @@ export function ResourceEditor<T>({
   onItemClick,
   onItemEdit,
   onItemDelete,
+  editLabel,
   emptyMessage = 'No items configured.',
   emptyIcon,
   searchPlaceholder = 'Search...',
@@ -155,7 +157,7 @@ export function ResourceEditor<T>({
                             onClick={() => onItemEdit(item)}
                             className="px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
                           >
-                            Edit
+                            {editLabel ? editLabel(item) : 'Edit'}
                           </button>
                         )}
                         {onItemDelete && (
