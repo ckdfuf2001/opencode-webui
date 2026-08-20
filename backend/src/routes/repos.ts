@@ -6,6 +6,7 @@ import * as gitOperations from '../services/git-operations'
 import { SettingsService } from '../services/settings'
 import { writeFileContent } from '../services/file-operations'
 import { opencodeServerManager } from '../services/opencode-single-server'
+import { releaseAgentBrowserForDirectory } from '../services/default-mcp'
 import { ensureServerAuth } from '../services/opencode-auth'
 import { logger } from '../utils/logger'
 import { withTransactionAsync } from '../db/transactions'
@@ -128,14 +129,28 @@ export function createRepoRoutes(database: Database) {
         logger.warn('Failed to stop opencode sessions for repo:', error)
       }
 
-      // Remove files OUTSIDE the DB transaction (fs deletion is slow and must not hold the SQLite connection)
-      try {
-        await repoService.deleteRepoFiles(database, id)
-      } catch (error) {
-        // The opencode server or its MCP children may hold handles on the repo dir. Restart to release them, then retry.
-        logger.warn('Repo file deletion failed, restarting OpenCode server to release handles:', error)
-        await opencodeServerManager.restart().catch((restartError) => logger.error('Failed to restart OpenCode server after repo delete:', restartError))
-        await repoService.deleteRepoFiles(database, id)
+      // Remove files OUTSIDE the DB transaction (fs deletion is slow and must not hold the SQLite connection).
+      // On Windows the dir is pinned by processes whose cwd/open handles point
+      // into it (opencode sessions, agent-browser daemon + Chrome, doc reader).
+      // Release those and retry a few times before giving up.
+      let deleteErr: unknown = null
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await repoService.deleteRepoFiles(database, id)
+          deleteErr = null
+          break
+        } catch (error) {
+          deleteErr = error
+          logger.warn(`Repo file deletion attempt ${attempt}/3 failed, releasing handles and retrying:`, error)
+          releaseAgentBrowserForDirectory(repoDir)
+          await opencodeServerManager.restart().catch((restartError) =>
+            logger.error('Failed to restart OpenCode server after repo delete:', restartError)
+          )
+          await new Promise((resolve) => setTimeout(resolve, 800))
+        }
+      }
+      if (deleteErr) {
+        throw deleteErr
       }
 
       // Delete the DB row inside a short, serialized transaction

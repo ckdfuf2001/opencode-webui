@@ -345,17 +345,41 @@ class OpenCodeServerManager {
   private async freePort(port: number): Promise<void> {
     const existingProcesses = await this.findProcessesByPort(port)
     if (existingProcesses.length === 0) return
-    logger.warn(`Port ${port} is occupied, attempting to free it`)
+    logger.warn(`Port ${port} is occupied by ${existingProcesses.map((p) => p.pid).join(', ')}, attempting to free it`)
     for (const proc of existingProcesses) {
       if (this.serverPid === proc.pid) continue
-      try {
-        process.kill(proc.pid, 'SIGKILL')
-      } catch (error) {
-        logger.warn(`Failed to kill process ${proc.pid} on port ${port}:`, error)
-      }
+      await this.killPidTreeWindows(proc.pid, `Port ${port} holder`)
     }
     if (!(await this.waitForPortFree(port))) {
       logger.warn(`Port ${port} is still occupied after termination attempt`)
+    }
+  }
+
+  // Windows has no automatic parent-death cleanup: force-killing the dev
+  // shell/terminal orphans the bun backend and its children, which keep the
+  // HTTP/opencode ports bound. taskkill /T /F kills the whole PID tree, which
+  // a lone process.kill() cannot (and it also survives EPERM from protected
+  // children). Used for stale-port cleanup and the shutdown watchdog.
+  private async killPidTreeWindows(pid: number, label = 'process'): Promise<void> {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return
+    }
+    if (pid === process.pid || pid === 0 || pid === 4) return
+    const taskkill = process.platform === 'win32'
+      ? `taskkill /PID ${pid} /T /F`
+      : `kill -9 ${pid}`
+    try {
+      execSync(taskkill, { stdio: 'ignore', timeout: 10_000 })
+      logger.info(`Terminated PID tree ${pid} (${label})`)
+    } catch (error) {
+      logger.warn(`taskkill failed for PID ${pid} (${label}):`, error)
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // give up; the process may already be gone
+      }
     }
   }
 
@@ -667,16 +691,25 @@ export async function prepareBackendPort(port: number): Promise<void> {
   if (await opencodeServerManager.canBindPortPublic(port)) return
 
   if (await opencodeServerManager.isOurBackendPublic(port)) {
+    // A healthy instance of this app is already serving the port: reuse it
+    // instead of restarting. This is the normal "I already have it running,
+    // just attach" path (double `npm run dev`, EXE double-launch, or a dev
+    // backend that survived a closed terminal). The new process exits with a
+    // clear log line so the user knows the existing instance is the one
+    // serving. Only instances that do NOT answer /api/health healthy are
+    // treated as stale and killed below.
     logger.info(`Port ${port} already serves this app; reusing existing instance`)
     process.exit(0)
-  }
-
-  if (await opencodeServerManager.httpRespondsPublic(port)) {
+  } else if (await opencodeServerManager.httpRespondsPublic(port)) {
     throw new Error(`Port ${port} is in use by another application. Stop it or change PORT in .env.`)
+  } else {
+    // The port is bound but nothing answers /api/health: a half-dead leftover
+    // from a force-killed `npm run dev`. Reuse is impossible — kill it so the
+    // fresh backend can bind and start cleanly.
+    logger.warn(`Port ${port} is occupied by a stale/half-dead process; freeing it before starting fresh`)
+    await opencodeServerManager.freePortPublic(port)
   }
 
-  logger.warn(`Port ${port} is occupied by a stale process; freeing it`)
-  await opencodeServerManager.freePortPublic(port)
   killLingeringAgentBrowser()
 
   const waitMs = 20000
@@ -689,4 +722,50 @@ export async function prepareBackendPort(port: number): Promise<void> {
   throw new Error(
     `Port ${port} is held by a process that could not be freed. Stop it manually or change PORT in .env.`
   )
+}
+
+/**
+ * Install a Windows-only watchdog that cleans up this process's children when
+ * the backend dies for any reason (window close, taskkill /F on the console,
+ * crash). Windows orphans children when the parent is force-killed — without
+ * this, the opencode server, agent-browser daemon/MCP children, and converter
+ * keep their ports/files open, which is what leaves 5001 "in use" on the next
+ * `npm run dev` and can make repo directories report "busy" during deletion.
+ *
+ * The watchdog runs as a detached PowerShell that waits on this PID, then
+ * force-kills the app's known child trees. Idempotent: the graceful shutdown
+ * path already stops these, so the watchdog finds nothing on clean exits.
+ */
+export function installWindowsShutdownWatchdog(): void {
+  if (process.platform !== 'win32') return
+  if (ENV.SERVER.NODE_ENV === 'production') return
+  if (typeof process.env.TEMP !== 'string') return
+
+  const script = [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    '$backendPid = ' + process.pid,
+    'Wait-Process -Id $backendPid -Timeout 86400',
+    'Start-Sleep -Milliseconds 500',
+    "$opencodeProcs = Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'opencode.exe' -and $_.CommandLine -like '*serve*' -and $_.CommandLine -like '*--port*' }",
+    'foreach ($p in $opencodeProcs) { taskkill /PID $p.ProcessId /T /F | Out-Null }',
+    "$abProcs = Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'agent-browser.exe' }",
+    'foreach ($p in $abProcs) { taskkill /PID $p.ProcessId /T /F | Out-Null }',
+    "$chromeProcs = Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'chrome.exe' -and $_.CommandLine -like '*agent-browser*' }",
+    'foreach ($p in $chromeProcs) { taskkill /PID $p.ProcessId /T /F | Out-Null }',
+    'Get-Process soffice.bin, ffmpeg, soffice, libreoffice -ErrorAction SilentlyContinue | Stop-Process -Force',
+  ].join('\n')
+
+  const scriptPath = path.join(process.env.TEMP, `opencode-webui-watchdog-${process.pid}.ps1`)
+  try {
+    writeFileSync(scriptPath, script, 'utf8')
+    const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+    logger.info(`Windows shutdown watchdog installed (PID ${process.pid})`)
+  } catch (error) {
+    logger.warn('Failed to install Windows shutdown watchdog:', error)
+  }
 }
