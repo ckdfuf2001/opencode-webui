@@ -921,6 +921,80 @@ export const openApiSpec = {
         },
       },
     },
+    '/api/config-files': {
+      get: {
+        tags: ['config-files'],
+        summary: 'List opencode config files (AGENTS.md / opencode.json) at global/project scope',
+        parameters: [{ name: 'directory', in: 'query', schema: { type: 'string' }, description: 'Repo directory for project scope' }],
+        responses: {
+          '200': {
+            description: 'Config files',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    files: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          name: { type: 'string', enum: ['AGENTS.md', 'opencode.json'] },
+                          scope: { type: 'string', enum: ['global', 'project'] },
+                          path: { type: 'string' },
+                          exists: { type: 'boolean' },
+                          content: { type: 'string', nullable: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '500': { description: 'Failed to list config files' },
+        },
+      },
+      put: {
+        tags: ['config-files'],
+        summary: 'Write an opencode config file (AGENTS.md / opencode.json) from a template',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  scope: { type: 'string', enum: ['global', 'project'] },
+                  name: { type: 'string', enum: ['AGENTS.md', 'opencode.json'] },
+                  content: { type: 'string' },
+                  directory: { type: 'string', description: 'Repo directory for project scope' },
+                },
+                required: ['scope', 'name', 'content'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'File written', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, path: { type: 'string' } } } } } },
+          '400': { description: 'Invalid data, directory, or invalid JSON config' },
+        },
+      },
+      delete: {
+        tags: ['config-files'],
+        summary: 'Delete an opencode config file (global opencode.json is managed via Settings)',
+        parameters: [
+          { name: 'scope', in: 'query', required: true, schema: { type: 'string', enum: ['global', 'project'] } },
+          { name: 'name', in: 'query', required: true, schema: { type: 'string', enum: ['AGENTS.md', 'opencode.json'] } },
+          { name: 'directory', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'Deleted', content: { 'application/json': { schema: { $ref: '#/components/schemas/Success' } } } },
+          '400': { description: 'Invalid scope/name or delete failed' },
+          '404': { description: 'Config file not found' },
+        },
+      },
+    },
     '/api/preview/edit': {
       post: {
         tags: ['preview'],

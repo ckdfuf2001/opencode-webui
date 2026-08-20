@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Plus, Trash2, Edit, Star, StarOff, Download, RotateCcw } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit, Star, StarOff, Download, RotateCcw, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -13,6 +13,7 @@ import { AgentsEditor } from './AgentsEditor'
 import { McpManager } from './McpManager'
 import { OpenCodeBinarySetting } from './OpenCodeBinarySetting'
 import { settingsApi } from '@/api/settings'
+import { configFilesApi } from '@/api/config-files'
 import { useMutation } from '@tanstack/react-query'
 
 interface OpenCodeConfig {
@@ -34,10 +35,14 @@ export function OpenCodeConfigManager() {
     commands: false,
     agents: false,
     mcp: false,
+    agentsmd: false,
   })
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [deleteConfirmConfig, setDeleteConfirmConfig] = useState<OpenCodeConfig | null>(null)
+  const [agentsMdContent, setAgentsMdContent] = useState('')
+  const [agentsMdLoading, setAgentsMdLoading] = useState(true)
+  const [agentsMdError, setAgentsMdError] = useState('')
   
   const restartServerMutation = useMutation({
     mutationFn: async () => {
@@ -60,6 +65,34 @@ export function OpenCodeConfigManager() {
       console.error('Failed to fetch configs:', error)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const fetchAgentsMd = async () => {
+    try {
+      setAgentsMdLoading(true)
+      const files = await configFilesApi.list()
+      const globalAgents = files.find((f) => f.scope === 'global' && f.name === 'AGENTS.md')
+      setAgentsMdContent(globalAgents?.content ?? '')
+    } catch (error) {
+      console.error('Failed to fetch AGENTS.md:', error)
+      setAgentsMdError('Failed to load AGENTS.md.')
+    } finally {
+      setAgentsMdLoading(false)
+    }
+  }
+
+  const saveAgentsMd = async () => {
+    try {
+      setIsUpdating(true)
+      await configFilesApi.write('global', 'AGENTS.md', agentsMdContent)
+      await fetchAgentsMd()
+      setAgentsMdError('')
+    } catch (error) {
+      console.error('Failed to save AGENTS.md:', error)
+      setAgentsMdError('Failed to save AGENTS.md.')
+    } finally {
+      setIsUpdating(false)
     }
   }
 
@@ -88,6 +121,7 @@ export function OpenCodeConfigManager() {
 
   useEffect(() => {
     fetchConfigs()
+    fetchAgentsMd()
   }, [])
 
   useEffect(() => {
@@ -181,6 +215,67 @@ export function OpenCodeConfigManager() {
   return (
     <div className="space-y-6 overflow-y-auto">
       <OpenCodeBinarySetting />
+
+      <div className="bg-card border border-border rounded-lg overflow-hidden min-w-0">
+        <button
+          className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/50 transition-colors min-w-0"
+          onClick={() => setExpandedSections(prev => ({ ...prev, agentsmd: !prev.agentsmd }))}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <h4 className="text-sm font-medium truncate">AGENTS.md (Global Rules)</h4>
+            <span className="text-xs text-muted-foreground">
+              {agentsMdContent ? 'exists' : 'not created yet'}
+            </span>
+          </div>
+          <Edit className={`h-4 w-4 transition-transform ${expandedSections.agentsmd ? 'rotate-90' : ''}`} />
+        </button>
+        <div className={`${expandedSections.agentsmd ? 'block' : 'hidden'} border-t border-border`}>
+          <div className="p-4 max-h-[50vh] overflow-y-auto">
+            <p className="text-sm text-muted-foreground mb-3">
+              Instructions in this file apply to every opencode session on this machine.
+            </p>
+            <div className="flex items-center gap-2 text-xs text-amber-600 mb-3">
+              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+              <span>Changes apply after an opencode restart.</span>
+            </div>
+            {agentsMdLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <>
+                <textarea
+                  value={agentsMdContent}
+                  onChange={(e) => {
+                    setAgentsMdContent(e.target.value)
+                    setAgentsMdError('')
+                  }}
+                  rows={12}
+                  placeholder={'# Global Agent Rules\n\nWrite your global instructions here...'}
+                  className="w-full min-h-[24rem] rounded-md bg-background border border-border px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary resize-y"
+                />
+                {agentsMdError && <p className="text-sm text-red-500 mt-2">{agentsMdError}</p>}
+                <div className="flex justify-end gap-2 mt-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => fetchAgentsMd()}
+                    disabled={isUpdating || agentsMdLoading}
+                  >
+                    Revert
+                  </Button>
+                  <Button
+                    onClick={saveAgentsMd}
+                    disabled={isUpdating || agentsMdLoading}
+                  >
+                    {isUpdating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
 
       <div className="flex items-center justify-between">
         <div className="flex gap-2 ">
