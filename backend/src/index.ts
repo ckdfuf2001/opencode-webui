@@ -25,7 +25,7 @@ import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } 
 import { SettingsService } from './services/settings'
 import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig } from './services/default-mcp'
 import { migrateConfigMapToFiles } from './services/config-migration'
-import { opencodeServerManager, prepareBackendPort } from './services/opencode-single-server'
+import { opencodeServerManager, prepareBackendPort, installWindowsShutdownWatchdog } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
 import { listRepos } from './db/queries'
 import { openApiSpec } from './services/api-docs'
@@ -327,6 +327,13 @@ const shutdown = async (signal: string) => {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'))
 process.on('SIGINT', () => shutdown('SIGINT'))
+for (const signal of ['SIGBREAK', 'SIGHUP']) {
+  try {
+    process.on(signal, () => shutdown(signal))
+  } catch {
+    // signal not supported on this runtime/platform
+  }
+}
 
 let httpServer: ReturnType<typeof serve> | null = null
 
@@ -376,6 +383,11 @@ warmUpAllAgentBrowserDaemons().catch((error) => {
 })
 
 await startServer()
+
+// Windows orphans children when the backend is force-killed (window close,
+// taskkill /F), leaving opencode/agent-browser processes and stale ports
+// behind. The watchdog reaps our children whenever this PID exits.
+installWindowsShutdownWatchdog()
 
 opencodeServerManager.start()
   .then(() => {

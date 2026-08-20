@@ -5,7 +5,7 @@ import type { Database } from 'bun:sqlite'
 import type { Repo, CreateRepoInput } from '../types/repo'
 import { logger } from '../utils/logger'
 import { SettingsService } from './settings'
-import { writeRepoOpenCodeConfig } from './default-mcp'
+import { writeRepoOpenCodeConfig, releaseAgentBrowserForDirectory } from './default-mcp'
 import { getReposPath } from '@opencode-webui/shared'
 import { stopAutomationWatcher, startAutomationWatcher } from './automation-watcher'
 import path from 'path'
@@ -523,10 +523,15 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
     // .opencode/ files does not trigger an unnecessary OpenCode restart.
     stopAutomationWatcher()
 
-    // Windows often holds the directory for a moment (file watchers, virus scanner).
-    // Retry with backoff so transient locks do not abort the deletion.
+    // Release processes whose working directory or open handles pin this repo
+    // folder on Windows (agent-browser daemon/MCP/Chrome, doc reader). Without
+    // this, recursive rm fails with EBUSY even after an OpenCode restart.
+    releaseAgentBrowserForDirectory(dir)
+
+    // Windows likes to hold a directory for a moment after those processes die
+    // (file watchers, virus scanner, stale cwd handles). Retry with backoff.
     let lastError: unknown = null
-    const maxAttempts = 8
+    const maxAttempts = 12
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await fs.rm(dir, { recursive: true, force: true })
@@ -535,9 +540,12 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
       } catch (error: any) {
         lastError = error
         if (attempt < maxAttempts) {
-          const delayMs = 300 * attempt
+          const delayMs = 400 * attempt
           logger.warn(`Directory removal attempt ${attempt}/${maxAttempts} failed (${error?.code ?? error?.message}), retrying in ${delayMs}ms`)
           await new Promise(resolve => setTimeout(resolve, delayMs))
+          if (attempt % 3 === 0) {
+            releaseAgentBrowserForDirectory(dir)
+          }
         }
       }
     }

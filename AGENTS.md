@@ -51,10 +51,12 @@
   `backend/src/services/default-mcp.ts` (`mergeDefaultMcpEntries`): missing
   entries are added, and existing entries are **repaired** — command (doc-reader
   must point at `backend/scripts/doc_reader_mcp.py`, never a relative
-  `..\backend\...` path that breaks in per-repo sessions), `enabled: true`, AND
-  env vars (agent-browser must keep `AGENT_BROWSER_NAMESPACE=opencode` +
-  `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000`). Do not hand-edit MCPs in
-  `workspace/.config/opencode/opencode.json`; use the app UI.
+  `..\backend\...` path that breaks in per-repo sessions), env vars
+  (agent-browser must keep `AGENT_BROWSER_NAMESPACE=opencode` +
+  `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000`). The user's `enabled` choice is
+  PRESERVED (never force `enabled: true`) so the MCP Manager toggle works. Do
+  not hand-edit MCPs in `workspace/.config/opencode/opencode.json`; use the app
+  UI.
 - **Agent-browser MCP is a singleton**: opencode does NOT forward the `env` field
   of an MCP entry to the spawned `agent-browser.exe mcp` child (verified 2026-08),
   and agent-browser ignores the `--session`/`--executable-path` CLI args when

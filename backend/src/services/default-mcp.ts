@@ -316,10 +316,6 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
       repaired.command = defaultCommand
       changed = true
     }
-    if (existing.enabled !== true) {
-      repaired.enabled = true
-      changed = true
-    }
     if (defaultEnv) {
       const repairedEnv = { ...((existing.env as Record<string, string>) ?? {}) }
       for (const [key, value] of Object.entries(defaultEnv)) {
@@ -365,6 +361,49 @@ export function killLingeringAgentBrowser(): void {
     logger.info('Cleaned up lingering agent-browser MCP processes')
   } catch {
     logger.warn('Failed to clean up lingering agent-browser processes')
+  } finally {
+    try {
+      rmSync(scriptPath, { force: true })
+    } catch {
+      // ignore cleanup of the temp script
+    }
+  }
+}
+
+// On Windows the agent-browser daemon/MCP children inherit the opencode
+// project directory as their working directory. That working directory is a
+// handle on the repo folder: recursive rm then fails with EBUSY/EPERM even
+// after the opencode server is restarted, because the detached daemon and its
+// Chrome tree outlive the MCP children. Kill the whole tree (daemon, MCP
+// children, chrome, doc reader) before deleting a repo so the handles release.
+export function releaseAgentBrowserForDirectory(_directory: string): void {
+  if (process.platform !== 'win32') {
+    return
+  }
+  if (typeof process.env.TEMP !== 'string') {
+    return
+  }
+  const script = [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    '$processes = Get-CimInstance Win32_Process | Where-Object {',
+    "  ($_.Name -eq 'agent-browser.exe') -or",
+    "  ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*agent-browser*') -or",
+    "  ($_.CommandLine -like '*doc_reader_mcp.py*')",
+    '}',
+    'foreach ($process in $processes) {',
+    '  taskkill /PID $process.ProcessId /T /F | Out-Null',
+    '}',
+  ].join('\n')
+  const scriptPath = path.join(process.env.TEMP, `opencode-webui-repo-cleanup-${process.pid}.ps1`)
+  try {
+    writeFileSync(scriptPath, script, 'utf8')
+    execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`, {
+      stdio: 'ignore',
+      timeout: 20_000,
+    })
+    logger.info(`Released agent-browser handles for directory: ${_directory}`)
+  } catch {
+    logger.warn(`Failed to release agent-browser handles for directory: ${_directory}`)
   } finally {
     try {
       rmSync(scriptPath, { force: true })
