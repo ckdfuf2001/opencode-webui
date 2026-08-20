@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef, useEffect, memo } from 'react'
 import { Button } from '@/components/ui/button'
-import { Download, X, Edit3, Save, X as XIcon, WrapText, RefreshCw } from 'lucide-react'
+import { Download, X, Edit3, Save, X as XIcon, WrapText, RefreshCw, Maximize2, Minimize2 } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { VirtualizedTextView, type VirtualizedTextViewHandle } from '@/components/ui/virtualized-text-view'
 import { DocumentPreview, detectDocKind } from './DocumentPreview'
+import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
 
 
 const API_BASE = API_BASE_URL
@@ -28,6 +29,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const [highlightedLine, setHighlightedLine] = useState<number | undefined>(initialLineNumber)
   const [lineWrap, setLineWrap] = useState(true)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const virtualizedRef = useRef<VirtualizedTextViewHandle>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   
@@ -143,6 +145,36 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     const event = new CustomEvent('editModeChange', { detail: { isEditing: false } })
     window.dispatchEvent(event)
   }
+
+  const toggleFullscreen = () => {
+    const next = !isFullscreen
+    setIsFullscreen(next)
+    window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: next } }))
+  }
+
+  const exitFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      setIsFullscreen(false)
+      window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: false } }))
+    }
+  }, [isFullscreen])
+
+  useEffect(() => {
+    if (!isFullscreen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        exitFullscreen()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown, true)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      document.body.style.overflow = 'unset'
+    }
+  }, [isFullscreen, exitFullscreen])
 
   const handleVirtualizedSaveStateChange = useCallback((hasChanges: boolean) => {
     setHasVirtualizedChanges(hasChanges)
@@ -272,7 +304,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const showCancelButton = viewMode === 'edit'
 
   return (
-    <div className="h-full flex flex-col bg-background">
+    <div className={`${isFullscreen ? 'fixed inset-0 z-[100] bg-background flex flex-col' : 'h-full flex flex-col bg-background'}`} style={isFullscreen ? GPU_ACCELERATED_STYLE : undefined} onContextMenu={(e) => { if (isFullscreen) e.stopPropagation() }}>
       {!hideHeader && (
         <>
           <div className={`flex items-start gap-2 px-3 py-2 border-b border-border flex-shrink-0 overflow-hidden ${isMobileModal ? 'pt-3' : ''}`}>
@@ -294,6 +326,18 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
             </div>
             
             <div className="flex items-center gap-1 flex-shrink-0 mt-1">
+              {!isMobileModal && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); toggleFullscreen() }} 
+                  className="h-7 w-7 p-0"
+                  title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+                >
+                  {isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+                </Button>
+              )}
+              
               {isTextFile && (
                 <Button 
                   variant="outline" 
@@ -313,7 +357,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
               )}
               
               {showSaveButton && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); shouldVirtualize ? handleVirtualizedSaveClick() : handleSave() }} disabled={isSaving || (shouldVirtualize && !hasVirtualizedChanges)} className="border-green-600 bg-green-600/10 text-green-600 hover:bg-green-600/20 h-7 w-7 p-0">
+                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); if (shouldVirtualize) { handleVirtualizedSaveClick() } else { handleSave() } }} disabled={isSaving || (shouldVirtualize && !hasVirtualizedChanges)} className="border-green-600 bg-green-600/10 text-green-600 hover:bg-green-600/20 h-7 w-7 p-0">
                   <Save className="w-3 h-3" />
                 </Button>
               )}

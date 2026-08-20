@@ -15,6 +15,7 @@ import { createHealthRoutes } from './routes/health'
 import { createTTSRoutes, cleanupExpiredCache } from './routes/tts'
 import { createFileRoutes } from './routes/files'
 import { createRegistryRoutes } from './routes/registry'
+import { createConfigFileRoutes } from './routes/config-files'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
@@ -190,6 +191,7 @@ app.route('/api/files', createFileRoutes(db))
 app.route('/api/providers', createProvidersRoutes())
 app.route('/api/tts', createTTSRoutes(db))
 app.route('/api/registry', createRegistryRoutes())
+app.route('/api/config-files', createConfigFileRoutes(db))
 app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
 
