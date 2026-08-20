@@ -233,6 +233,22 @@ Windows 작업 스케줄러를 직접 구성하지 말고**, 이 앱의 **스케
 - 스킬 실패/이상 시 알림 여부·방식은 위 설계 순서 5단계(담당 agent 정의)에서 결정한다.
 - 레포 id 조회: `GET /api/repos` → `[{"id":3,"name":"일일요약",...}]`.
 
+**주의 — 한글(비-ASCII) 이름/커맨드를 `Invoke-RestMethod -Body`로 보내지 말 것**:
+Windows PowerShell 5.1은 `-Body` 문자열을 Latin-1/ASCII로 바꿔 전송해 한글이
+전부 `?`로 깨진다(스케줄명이 "??"로 저장되는 원인. 이미 `?`로 저장된 이름은
+복구 불가). 반드시 **`curl.exe`**를 쓴다:
+
+```powershell
+# JSON을 UTF-8 파일로 저장 후 전송 (가장 안전)
+curl.exe -s -X POST http://127.0.0.1:5001/api/schedules `
+  -H "Content-Type: application/json; charset=utf-8" `
+  --data-binary "@C:\Users\me\AppData\Local\Temp\schedule.json"
+# 또는 인라인(따옴표 안쪽 한글은 그대로 유지)
+curl.exe -s -X POST http://127.0.0.1:5001/api/schedules `
+  -H "Content-Type: application/json; charset=utf-8" `
+  -d '{"repoId":3,"name":"일일뉴스","action":"command","command":"/일일뉴스","cron":"0 8 * * 1-5"}'
+```
+
 ### 자동화 파일 변경 시 자동 리로드 (automation watcher)
 
 - `repos/<repo>/.opencode/{agents,commands,skills,plugins}` 하위 또는
@@ -285,7 +301,9 @@ You are the 업무 도우미 assistant of opencode-webui, built on opencode.
    스케줄 기능으로 처리한다. 사용자가 배치 등록을 요청하면 **`POST /api/schedules`** API를
    직접 호출해 등록한다(위 "배치(스케줄) 등록 API" 참고: repoId는 `GET /api/repos`로 확인,
    action `command`는 `command` 필드에 `/커맨드이름`, `chat`은 `prompt`에 프롬프트, cron은
-   5필드). 완료 후 등록 결과를 보고한다.
+   5필드). 한글 이름·커맨드가 있으면 PowerShell `Invoke-RestMethod`로 보내지 말고
+   **`curl.exe`**(또는 JSON을 UTF-8 파일로 만들고 `--data-binary @파일`)로 전송한다.
+   완료 후 등록 결과를 보고한다.
 6. 불명확하면 짧은 질문으로 다듬고, 필요한 설정(Markdown)을 생성한다.
 7. 요청받은 등록 파일(command/skill/agent md, plugin ts)은 위 "채팅 기반 자동화 등록" 규칙대로
    **기본적으로 프로젝트 단위(`<repo>/.opencode/`)**로 직접 작성하거나 내용을 출력한다.
