@@ -38,7 +38,7 @@ export function ResourceEditor<T>({
   groups,
   onItemClick,
   onItemEdit,
-  editLabel = 'Edit',
+  editLabel,
   onItemDelete,
   emptyMessage = 'No items configured.',
   emptyIcon,

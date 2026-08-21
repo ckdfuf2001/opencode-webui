@@ -23,6 +23,7 @@ import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useQuestionRequests, useLoadPendingQuestions } from "@/hooks/useQuestionRequests";
 import { usePermissionRequests, useLoadPendingPermissions, collectDescendantIDs } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
+import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
