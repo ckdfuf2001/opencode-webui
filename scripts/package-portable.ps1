@@ -28,14 +28,12 @@ if (-not (Test-Path (Join-Path $release 'scripts\doc-reader.exe')) -and -not $Sk
   & (Join-Path $PSScriptRoot 'build-doc-tools.ps1')
 }
 
-Write-Output '[package 6/6] launcher'
-@'
-@echo off
-setlocal
-cd /d "%~dp0"
-set NODE_ENV=production
-opencode-webui.exe
-'@ | Set-Content (Join-Path $release 'START.bat') -Encoding ASCII
+Write-Output '[package 6/6] launcher scripts'
+Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.sh') $release
+Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.bat') $release
+$bat = Join-Path $release 'start_opencode_webui_exe.bat'
+(Get-Content $bat) | Set-Content $bat -Encoding ASCII
+Remove-Item (Join-Path $release 'START.bat') -Force -ErrorAction SilentlyContinue
 
 Write-Output ''
 Write-Output 'Portable package ready:'
