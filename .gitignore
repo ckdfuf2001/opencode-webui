@@ -23,3 +23,5 @@ vendor/*
 
 # Chromium runtime-generated spellcheck dictionaries
 bin/agent-browser/chromium/**/Dictionaries/
+
+release/

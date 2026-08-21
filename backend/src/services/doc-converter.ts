@@ -3,6 +3,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { logger } from '../utils/logger'
 import { validatePath } from './files'
+import { resolveDocConverterCommand } from './doc-tools'
 
 const CONVERTER_PORT = parseInt(process.env.DOC_CONVERTER_PORT || '8765', 10)
 const CONVERTER_BASE = `http://127.0.0.1:${CONVERTER_PORT}`
@@ -29,8 +30,8 @@ async function fetchJson(url: string, init?: RequestInit): Promise<{ status: num
 
 function startConverterProcess(): Promise<boolean> {
   return new Promise((resolve) => {
-    const scriptPath = path.join(process.cwd(), 'backend', 'scripts', 'doc_converter.py')
-    const child = spawn('python', [scriptPath], {
+    const converter = resolveDocConverterCommand()
+    const child = spawn(converter.command, converter.args, {
       cwd: process.cwd(),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
