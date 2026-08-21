@@ -3,6 +3,7 @@ import { spawn, execFileSync, execSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { ENV, getWorkspacePath, getReposPath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
+import { resolveDocReaderCommand } from './doc-tools'
 
 let agentBrowserWarmState: 'warm' | 'cold' | 'unknown' = 'unknown'
 
@@ -11,11 +12,12 @@ const AGENT_BROWSER_NAMESPACE = 'opencode'
 const AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
 
 function buildDocReaderMcp(): Record<string, unknown> {
+  const reader = resolveDocReaderCommand()
   return {
     'doc-reader': {
       type: 'local',
       enabled: true,
-      command: ['python', path.join(process.cwd(), 'backend', 'scripts', 'doc_reader_mcp.py')],
+      command: [reader.command, ...reader.args],
       env: {
         OPCODE_WEBUI_BACKEND: workspaceBackend,
         OPCODE_WEBUI_WORKSPACE: getWorkspacePath(),
