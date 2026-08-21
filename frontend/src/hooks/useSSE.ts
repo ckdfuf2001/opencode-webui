@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import type { QueryClient } from '@tanstack/react-query'
 import { useOpenCodeClient, isInterruptedMessage, continueInterruptedSession } from './useOpenCode'
 import type { SSEEvent, MessageListResponse, MessageWithParts, QuestionRequest, PermissionAskedProps } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
@@ -7,7 +8,7 @@ import { questionEvents } from './useQuestionRequests'
 import { sessionActivityEvents } from './useSessionActivity'
 import { showToast } from '@/lib/toast'
 import { settingsApi } from '@/api/settings'
-import { appendErrorMessageToThread } from '@/lib/chatErrors'
+import { listCommandRunsBySession, finishCommandRun } from '@/api/command-runs'
 
 const MAX_RECONNECT_DELAY = 30000
 const INITIAL_RECONNECT_DELAY = 1000
@@ -27,6 +28,50 @@ function getSessionErrorMessage(error: { name: string; data: Record<string, unkn
   const detail = error.data?.message
   if (typeof detail === 'string' && detail.length > 0) return detail
   return SESSION_ERROR_MESSAGES[error.name] ?? error.name
+}
+
+const RUN_FAILURE_WINDOW_MS = 10 * 60 * 1000
+
+// Message caches are keyed per directory variant; SSE events must update every
+// variant or the UI keeps stale state (e.g. a finished command stuck on
+// "running" because time.completed landed in a differently-keyed cache entry).
+function updateMessagesQueries(
+  queryClient: QueryClient,
+  opcodeUrl: string | null | undefined,
+  sessionID: string,
+  updater: (data: MessageListResponse) => MessageListResponse,
+): boolean {
+  const queries = queryClient.getQueryCache().findAll({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID] })
+  let touched = false
+  for (const query of queries) {
+    const data = query.state.data as MessageListResponse | undefined
+    if (!data) continue
+    queryClient.setQueryData(query.queryKey, updater(data))
+    touched = true
+  }
+  return touched
+}
+
+async function markLatestSessionRunFinished(
+  queryClient: QueryClient,
+  sessionID: string,
+  status: 'failed' | 'cancelled',
+): Promise<void> {
+  try {
+    const runs = await listCommandRunsBySession(sessionID)
+    if (runs.length === 0) return
+    const latest = [...runs].sort((a, b) => b.startedAt - a.startedAt)[0]
+    if (latest.status === status || latest.status === 'failed' || latest.status === 'cancelled') return
+    const recent =
+      latest.status === 'started'
+        ? Date.now() - latest.startedAt < RUN_FAILURE_WINDOW_MS
+        : latest.finishedAt != null && Date.now() - latest.finishedAt < RUN_FAILURE_WINDOW_MS
+    if (!recent) return
+    await finishCommandRun(latest.id, status)
+    queryClient.invalidateQueries({ queryKey: ['command-runs'] })
+  } catch {
+    // best-effort history update
+  }
 }
 
 const handleRestartServer = async () => {
@@ -124,26 +169,26 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
       const activeDirectory = global ? (eventDirectory ?? directory) : directory
       switch (event.type) {
         case 'session.updated':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl] })
           if ('info' in event.properties) {
-            queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'session', opcodeUrl, event.properties.info.id, activeDirectory] 
+            queryClient.invalidateQueries({
+              queryKey: ['opencode', 'session', opcodeUrl, event.properties.info.id]
             })
           }
           break
 
         case 'session.deleted':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl] })
           if ('sessionID' in event.properties) {
-            queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID, activeDirectory] 
+            queryClient.invalidateQueries({
+              queryKey: ['opencode', 'session', opcodeUrl, event.properties.sessionID]
             })
             sessionActivityEvents.emit({ type: 'remove', sessionID: event.properties.sessionID })
           }
           break
 
         case 'session.created':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl] })
           break
 
         case 'session.idle': {
@@ -151,21 +196,22 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
 
           const { sessionID } = event.properties
           sessionActivityEvents.emit({ type: 'idle', sessionID })
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID, activeDirectory] })
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID] })
           break
         }
 
         case 'session.error': {
-          const message = getSessionErrorMessage(event.properties.error)
           const sessionID = event.properties.sessionID
+          const isAbort = event.properties.error?.name === 'MessageAbortedError'
+          const message = getSessionErrorMessage(event.properties.error)
           showToast.error(message, { duration: 8000, id: `session-error-${sessionID ?? 'unknown'}` })
           if (sessionID) {
             sessionActivityEvents.emit({ type: 'idle', sessionID })
-            appendErrorMessageToThread(queryClient, opcodeUrl, sessionID, activeDirectory, message)
-            queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'session', opcodeUrl, sessionID, activeDirectory] 
+            queryClient.invalidateQueries({
+              queryKey: ['opencode', 'session', opcodeUrl, sessionID]
             })
+            void markLatestSessionRunFinished(queryClient, sessionID, isAbort ? 'cancelled' : 'failed')
           }
           break
         }
@@ -179,33 +225,30 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           const messageID = part.messageID
           sessionActivityEvents.emit({ type: 'active', sessionID })
           
-          const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory])
-          if (!currentData) return
-          
-          const messageExists = currentData.some(msg => msg.info.id === messageID)
-          if (!messageExists) return
-          
-          const updated = currentData.map(msg => {
-            if (msg.info.id !== messageID) return msg
+          updateMessagesQueries(queryClient, opcodeUrl, sessionID, (currentData) => {
+            const messageExists = currentData.some(msg => msg.info.id === messageID)
+            if (!messageExists) return currentData
             
-            const existingPartIndex = msg.parts.findIndex(p => p.id === part.id)
-            
-            if (existingPartIndex >= 0) {
-              const newParts = [...msg.parts]
-              newParts[existingPartIndex] = { ...part }
-              return { 
-                info: { ...msg.info }, 
-                parts: newParts 
+            return currentData.map(msg => {
+              if (msg.info.id !== messageID) return msg
+              
+              const existingPartIndex = msg.parts.findIndex(p => p.id === part.id)
+              
+              if (existingPartIndex >= 0) {
+                const newParts = [...msg.parts]
+                newParts[existingPartIndex] = { ...part }
+                return { 
+                  info: { ...msg.info }, 
+                  parts: newParts 
+                }
+              } else {
+                return { 
+                  info: { ...msg.info }, 
+                  parts: [...msg.parts, { ...part }] 
+                }
               }
-            } else {
-              return { 
-                info: { ...msg.info }, 
-                parts: [...msg.parts, { ...part }] 
-              }
-            }
+            })
           })
-          
-          queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], updated)
           break
         }
 
@@ -221,31 +264,28 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
             sessionActivityEvents.emit({ type: 'active', sessionID })
           }
           
-          const currentData = queryClient.getQueryData<MessageListResponse>(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory])
-          if (!currentData) {
-            queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], [{ info, parts: [] }])
-            return
-          }
-          
-          const messageExists = currentData.some(msg => msg.info.id === info.id)
-          
-          if (!messageExists) {
-            const filteredData = info.role === 'user' 
-              ? currentData.filter(msg => !msg.info.id.startsWith('optimistic_'))
-              : currentData
-            queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], [...filteredData, { info, parts: [] }])
-            return
-          }
-          
-          const updated = currentData.map(msg => {
-            if (msg.info.id !== info.id) return msg
-            return { 
-              info: { ...info }, 
-              parts: [...msg.parts] 
+          const updated = updateMessagesQueries(queryClient, opcodeUrl, sessionID, (currentData) => {
+            const messageExists = currentData.some(msg => msg.info.id === info.id)
+            
+            if (!messageExists) {
+              const filteredData = info.role === 'user' 
+                ? currentData.filter(msg => !msg.info.id.startsWith('optimistic_'))
+                : currentData
+              return [...filteredData, { info, parts: [] }]
             }
+            
+            return currentData.map(msg => {
+              if (msg.info.id !== info.id) return msg
+              return { 
+                info: { ...info }, 
+                parts: [...msg.parts] 
+              }
+            })
           })
           
-          queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], updated)
+          if (!updated) {
+            queryClient.setQueryData(['opencode', 'messages', opcodeUrl, sessionID, activeDirectory], [{ info, parts: [] }])
+          }
           break
         }
 
@@ -255,12 +295,8 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           
           const { sessionID, messageID } = event.properties
           
-          queryClient.setQueryData<MessageListResponse>(
-            ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory],
-            (old) => {
-              if (!old) return old
-              return old.filter(msg => msg.info.id !== messageID)
-            }
+          updateMessagesQueries(queryClient, opcodeUrl, sessionID, (old) =>
+            old.filter(msg => msg.info.id !== messageID)
           )
           break
         }
@@ -271,19 +307,14 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           
           const { sessionID, messageID, partID } = event.properties
           
-          queryClient.setQueryData<MessageListResponse>(
-            ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory],
-            (old) => {
-              if (!old) return old
-              
-              return old.map(msg => {
-                if (msg.info.id !== messageID) return msg
-                return {
-                  ...msg,
-                  parts: msg.parts.filter(p => p.id !== partID)
-                }
-              })
-            }
+          updateMessagesQueries(queryClient, opcodeUrl, sessionID, (old) =>
+            old.map(msg => {
+              if (msg.info.id !== messageID) return msg
+              return {
+                ...msg,
+                parts: msg.parts.filter(p => p.id !== partID)
+              }
+            })
           )
           break
         }
@@ -293,7 +324,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           
           const { sessionID } = event.properties
           queryClient.invalidateQueries({ 
-            queryKey: ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory] 
+            queryKey: ['opencode', 'messages', opcodeUrl, sessionID] 
           })
           break
         }
@@ -414,7 +445,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
         case 'todo.updated':
           if ('sessionID' in event.properties) {
             queryClient.invalidateQueries({ 
-              queryKey: ['opencode', 'todos', opcodeUrl, event.properties.sessionID, activeDirectory] 
+              queryKey: ['opencode', 'todos', opcodeUrl, event.properties.sessionID] 
             })
           }
           break
@@ -449,6 +480,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           fileInvalidateTimerRef.current = setTimeout(() => {
             fileInvalidateTimerRef.current = null
             queryClient.invalidateQueries({ queryKey: ['file'] })
+            queryClient.invalidateQueries({ queryKey: ['files'] })
           }, 500)
           break
         }
@@ -456,7 +488,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
         case 'command.executed': {
           const { name, sessionID } = event.properties
           showToast.info(`Command "${name}" executed`, { duration: 3000 })
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, activeDirectory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID] })
           break
         }
 
@@ -487,7 +519,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           break
 
         case 'server.connected':
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, activeDirectory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl] })
           break
 
         default:
@@ -518,7 +550,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           setIsConnected(true)
           setError(null)
           resetReconnectDelay()
-          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
+          queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl] })
 
           if (wasConnected) {

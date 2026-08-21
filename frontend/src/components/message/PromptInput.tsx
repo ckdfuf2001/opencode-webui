@@ -304,9 +304,13 @@ export function PromptInput({
 
     if (files.length === 0) return
     e.preventDefault()
-    if (!uploadDir) return
+    if (!uploadDir) {
+      showToast.error('No project folder available for upload')
+      return
+    }
 
     const uploaded: { name: string; path: string }[] = []
+    let failures = 0
     for (const file of files) {
       const formData = new FormData()
       formData.append('file', file)
@@ -315,16 +319,27 @@ export function PromptInput({
           method: 'POST',
           body: formData,
         })
-        if (!res.ok) continue
+        if (!res.ok) {
+          failures++
+          continue
+        }
         const data = await res.json().catch(() => null)
         const savedName: string = data?.name || file.name
         uploaded.push({ name: savedName, path: `chat_uploads/${savedName}` })
       } catch {
+        failures++
         continue
       }
     }
 
-    if (uploaded.length === 0) return
+    if (uploaded.length === 0) {
+      showToast.error('Upload failed')
+      return
+    }
+    if (failures > 0) {
+      showToast.error(`${failures} of ${files.length} file(s) failed to upload`)
+    }
+    showToast.success(`Uploaded ${uploaded.length} file(s) to project`, { duration: 5000 })
 
     const el = textareaRef.current
     const insertions = uploaded.map((file) => {

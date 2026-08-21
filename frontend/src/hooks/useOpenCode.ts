@@ -8,11 +8,12 @@ import type {
 } from "../api/types";
 import type { paths } from "../api/opencode-types";
 import { showToast } from "@/lib/toast"
-import { appendErrorMessageToThread } from "@/lib/chatErrors"
 
 type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
+
+type PromptPart = NonNullable<SendPromptRequest["parts"]>[number];
 
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
@@ -43,6 +44,29 @@ const MIME_BY_EXT: Record<string, string> = {
 function mimeForFilename(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? ""
   return MIME_BY_EXT[ext] ?? "application/octet-stream"
+}
+
+// opencode providers only accept image/*, audio/*, text/* and application/pdf
+// as inline file parts. Everything else (office docs, json, binaries) must go
+// as a text mention so the agent can read it with doc-reader instead of the
+// request failing with "file part media type ... not supported".
+function canSendAsFilePart(mime: string): boolean {
+  return (
+    mime === "application/pdf" ||
+    mime.startsWith("image/") ||
+    mime.startsWith("audio/") ||
+    mime.startsWith("text/")
+  )
+}
+
+function isAbortCancellation(error: unknown): boolean {
+  if (error && typeof error === "object") {
+    const code = (error as { code?: string }).code
+    if (code === "ERR_CANCELED" || code === "ECONNABORTED") return true
+    const message = (error as { message?: string }).message
+    if (typeof message === "string" && /cancel|abort/i.test(message)) return true
+  }
+  return false
 }
 
 // Format server error similar to OpenCode's formatServerError
@@ -325,7 +349,7 @@ const createOptimisticUserMessage = (
   parts: ContentPart[],
   optimisticID: string,
 ): MessageWithParts => {
-  const messageParts = parts.flatMap((part, index) => {
+  const messageParts = parts.flatMap((part, index): MessageWithParts["parts"] => {
     if (part.type === "text") {
       return [{
         id: `${optimisticID}_part_${index}`,
@@ -335,7 +359,7 @@ const createOptimisticUserMessage = (
         sessionID,
       }];
     }
-    if (mimeForFilename(part.name) === "application/octet-stream") {
+    if (!canSendAsFilePart(mimeForFilename(part.name))) {
       return [{
         id: `${optimisticID}_part_${index}`,
         type: "text" as const,
@@ -347,6 +371,7 @@ const createOptimisticUserMessage = (
     return [{
       id: `${optimisticID}_part_${index}`,
       type: "file" as const,
+      mime: mimeForFilename(part.name),
       filename: part.name,
       url: part.path,
       messageID: optimisticID,
@@ -411,13 +436,13 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       );
 
       const requestData: SendPromptRequest = {
-        parts: parts?.flatMap((part) => {
+        parts: parts?.flatMap((part): PromptPart[] => {
           if (part.type === "text") {
-            return [{ type: "text" as const, text: part.content }]
+            return [{ type: "text", text: part.content }]
           }
           const mime = mimeForFilename(part.name)
-          if (mime === "application/octet-stream") {
-            return [{ type: "text" as const, text: mentionFor(part) }]
+          if (!canSendAsFilePart(mime)) {
+            return [{ type: "text", text: mentionFor(part) }]
           }
           return [{
             type: "file",
@@ -455,8 +480,9 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
-      appendErrorMessageToThread(queryClient, opcodeUrl, sessionID, directory, formatted)
-      showToast.error(formatted, { duration: 8000 });
+      if (!isAbortCancellation(error)) {
+        showToast.error(formatted, { duration: 8000 });
+      }
     },
     onSuccess: (data, variables) => {
       const { sessionID } = variables;
@@ -545,8 +571,9 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
-      appendErrorMessageToThread(queryClient, opcodeUrl, sessionID, directory, formatted)
-      showToast.error(formatted, { duration: 8000 });
+      if (!isAbortCancellation(error)) {
+        showToast.error(formatted, { duration: 8000 });
+      }
     },
     onSuccess: (data, variables) => {
       const { sessionID } = variables;

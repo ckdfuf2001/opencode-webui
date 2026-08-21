@@ -421,7 +421,15 @@ function parseMsgText(text: string): { from: string; to: string; cc: string; sub
     else if (lower.startsWith('body:')) { bodyStart = i + 1; break }
   }
   fields.body = bodyStart >= 0 ? lines.slice(bodyStart).join('\n').trim() : ''
-  return { ...fields, isMsg: sawHeader }
+  return {
+    from: fields.from,
+    to: fields.to,
+    cc: fields.cc,
+    subject: fields.subject,
+    date: fields.date,
+    body: fields.body,
+    isMsg: sawHeader,
+  }
 }
 
 function MetaRow({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
