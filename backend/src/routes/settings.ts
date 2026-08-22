@@ -11,6 +11,7 @@ import {
 } from '../types/settings'
 import { logger } from '../utils/logger'
 import { opencodeServerManager } from '../services/opencode-single-server'
+import { applyRepoTrackingForAllRepos } from '../services/repo-tracking'
 
 const UpdateSettingsSchema = z.object({
   preferences: UserPreferencesSchema.partial(),
@@ -89,6 +90,13 @@ export function createSettingsRoutes(db: Database) {
       if (previousBin !== nextBin) {
         opencodeServerManager.setPreferredBinPath(nextBin)
         await opencodeServerManager.restart()
+      }
+
+      const previousTrackPaths = JSON.stringify(previous.preferences.repoTrackPaths ?? [])
+      const nextTrackPaths = JSON.stringify(settings.preferences.repoTrackPaths ?? [])
+      if (previousTrackPaths !== nextTrackPaths) {
+        const applied = await applyRepoTrackingForAllRepos(db)
+        logger.info(`Re-applied repo tracking to ${applied} repos after settings change`)
       }
 
       return c.json(settings)
