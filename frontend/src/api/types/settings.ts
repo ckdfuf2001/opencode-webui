@@ -43,6 +43,7 @@ export interface UserPreferences {
   gitToken?: string
   opencodeBin?: string
   tts?: TTSConfig
+  repoTrackPaths?: string[]
 }
 
 export interface SettingsResponse {
@@ -109,4 +110,5 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   customAgents: [],
   gitToken: undefined,
   tts: DEFAULT_TTS_CONFIG,
+  repoTrackPaths: ['.opencode'],
 }

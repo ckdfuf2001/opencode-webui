@@ -4,6 +4,7 @@ import * as db from '../db/queries'
 import * as repoService from '../services/repo'
 import * as gitOperations from '../services/git-operations'
 import { SettingsService } from '../services/settings'
+import { applyRepoTracking } from '../services/repo-tracking'
 import { writeFileContent } from '../services/file-operations'
 import { opencodeServerManager } from '../services/opencode-single-server'
 import { releaseAgentBrowserForDirectory } from '../services/default-mcp'
@@ -44,7 +45,7 @@ export function createRepoRoutes(database: Database) {
       if (openCodeConfigName) {
         const settingsService = new SettingsService(database)
         const configContent = settingsService.getOpenCodeConfigContent(openCodeConfigName)
-        
+
         if (configContent) {
           const openCodeConfigPath = getOpenCodeConfigFilePath()
           await writeFileContent(openCodeConfigPath, configContent)
@@ -52,7 +53,15 @@ export function createRepoRoutes(database: Database) {
           logger.info(`Applied config '${openCodeConfigName}' to: ${openCodeConfigPath}`)
         }
       }
-      
+
+      try {
+        const { preferences } = new SettingsService(database).getSettings()
+        const fullPath = path.resolve(getReposPath(), repo.localPath)
+        await applyRepoTracking(fullPath, preferences.repoTrackPaths ?? [])
+      } catch (trackingError) {
+        logger.warn(`Failed to apply repo tracking to ${repo.localPath}:`, trackingError)
+      }
+
       return c.json(repo)
     } catch (error: any) {
       logger.error('Failed to create repo:', error)

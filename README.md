@@ -605,4 +605,35 @@ npm run dev
 To start completely clean: follow **Remove local project install** above, then
 re-clone (optional) and run `npm run dev` again.
 
+---
+
+## Roadmap: Self-Improving Automation Registry (in progress)
+
+cy5(opencode-webui)의 포지셔닝은 유사 툴과 비교해 명확하다:
+
+| Tool | Focus | 강점 |
+|------|-------|------|
+| **Hermes** | 최고의 Agent | Memory/Skill/Self-improvement가 Agent 런타임에 통합됨 |
+| **Orca** | 최고의 Workflow | 복잡한 작업 절차(Flow)를 명시적으로 설계·실행 |
+| **cy5 (this repo)** | **자동화 Registry/운영 UI** | Command/Skill/Tool/Agent 등록 + Scheduler + 실행 이력 + Office/Browser MCP |
+
+Hermes의 self-improvement는 특별한 학습 알고리즘이 아니라
+"저장·검색 인프라 + LLM 판단" scaffolding이다. 이 저장소는 그 인프라를 이미
+대부분 갖추고 있으므로, Hermes식 **실행 → 평가 → 제안 → 승인 → 반영** 루프를
+Command 단위 업무 자동화에 맞게 얹는 것을 목표로 한다.
+
+### 진행 중인 개선 항목
+
+| 순위 | 항목 | 상태 |
+|------|------|------|
+| P4 | **Registry 버전 스냅샷 (git)** — 레포 생성 시 자동화 파일 영역만 git이 변경 감지하도록 `.git/info/exclude`에 화이트리스트(기본 `​.opencode`)를 기록. 추적 경로는 General Settings에서 관리하며 변경 시 기존 레포 전체에 재적용. 워킹트리를 건드리지 않아 pull/브랜치 전환과 충돌 없음 | ✅ 구현 완료 |
+| P1 | **실행 컨텍스트 주입** — 명령 실행 시 같은 커맨드의 최근 결과(성공률·실패 요약)를 "사실"로만 프롬프트에 주입. 처방 금지 + 연속 실패 시 서킷브레이커 | ⏳ 예정 |
+| P3 | **개선 제안 스테이징 + 승인** — improvement_proposals(pending/applied/rejected), 승인 시 registry 반영(Hermes의 write approval 상당) | ⏳ 예정 |
+| P2 | **Post-run 개선 에이전트** — 실행 종료 후 비동기 improver 세션이 transcript와 현재 커맨드/Skill을 대조해 패치 제안 생성(`autoReview` 옵트인) | ⏳ 예정 |
+| P5 | **Memory 분리** — AGENTS.md(불변 규칙) / MEMORY.md(사실·환경) / Skill(절차) / Command(호출 단위) 구분 | ⏳ 예정 |
+
+설계 원칙: 잘못된 개선이 이력을 오염시켜 무한 개선 루프로 지연이 누적되는
+것을 막기 위해 (1) 주입 컨텍스트는 관측 사실만, (2) 처방 반영은 승인 게이트
+통과 시에만, (3) 연속 실패 감지 시 개선 루프 중단 후 롤백 제안.
+
 
