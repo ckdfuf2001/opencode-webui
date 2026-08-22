@@ -34,14 +34,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { useMessages, useSessions, useConfig } from '@/hooks/useOpenCode'
-import { useCommandRunsInRange, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
-import { groupRunsBySession, historyWindow, type CommandRunView } from '@/lib/command-run-view'
+import { useMessages, useConfig } from '@/hooks/useOpenCode'
+import { useCommandRunView, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
+import { historyWindow, toCommandRunView, type CommandRunView } from '@/lib/command-run-view'
+import type { CommandRunViewItem } from '@/api/command-runs'
 import { CreateCommandDialog, type DialogType, type EditingEntry } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
-import { collectDescendantIDs } from '@/hooks/usePermissionRequests'
-import { listRepos } from '@/api/repos'
-import { createOpenCodeClient } from '@/api/opencode'
 import { settingsApi } from '@/api/settings'
 import { registryApi, type RegistryType, type RegistryScope, type RegistryEntry } from '@/api/registry'
 import { ScheduleManager } from '@/components/schedule/ScheduleManager'
@@ -666,11 +664,12 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const queryClient = useQueryClient()
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
   const { start: historyStart, end: historyEnd } = useMemo(() => historyWindow(), [])
-  const { data: serverRuns = [] } = useCommandRunsInRange(historyStart, historyEnd, open)
-  const runsBySession = useMemo(() => groupRunsBySession(serverRuns), [serverRuns])
+  // 스코프: 세션 안 = 해당 세션(+하위 세션), 레포 안 = 해당 레포, 레포 리스트 = 전체.
+  // 서버가 필터링 + repoName/sessionTitle 채움을 담당하며, open 시마다 최신값을 받아온다.
+  const viewScope: 'session' | 'repo' | 'all' = sessionID ? 'session' : repoId ? 'repo' : 'all'
+  const { data: runItems = [] } = useCommandRunView(viewScope, repoId, sessionID || undefined, historyStart, historyEnd, open)
   const deleteRun = useDeleteCommandRun()
   const setRunMessage = useSetCommandRunMessage()
-  const { data: sessions } = useSessions(opcodeUrl, directory)
   const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
   const { data: config } = useConfig(opcodeUrl, directory)
   const [tab, setTab] = useState<'runs' | 'explorer'>('runs')
@@ -994,64 +993,25 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     })
   }, [config])
 
-  const currentSessionMeta = useMemo(() => {
+  const sessionMeta = useMemo(() => {
     const map: Record<string, RunSessionMeta> = {}
-    for (const s of sessions ?? []) {
-      map[s.id] = { title: s.title || 'Untitled Session', repoId: repoId ?? 0, directory: directory ?? '', repoName: '' }
+    for (const item of runItems) {
+      map[item.sessionId] = {
+        title: item.sessionTitle || 'Untitled Session',
+        repoId: item.repoId ?? 0,
+        directory: item.directory ?? '',
+        repoName: item.repoName ?? '',
+      }
     }
     return map
-  }, [sessions, repoId, directory])
-
-  const { data: globalSessionMeta } = useQuery({
-    queryKey: ['command-history-sessions', opcodeUrl],
-    queryFn: async () => {
-      if (!opcodeUrl) return {} as Record<string, RunSessionMeta>
-      const repos = await listRepos()
-      const repoNameOf = (repo: { repoUrl: string; localPath: string }) => {
-        if (repo.repoUrl) return repo.repoUrl.split('/').slice(-1)[0].replace('.git', '')
-        return repo.localPath || 'repo'
-      }
-      const map: Record<string, RunSessionMeta> = {}
-      await Promise.all(repos.map(async (repo) => {
-        try {
-          const client = createOpenCodeClient(opcodeUrl, repo.fullPath)
-          const sessionList = await client.listSessions()
-          for (const s of sessionList) {
-            map[s.id] = { title: s.title || 'Untitled Session', repoId: repo.id, directory: repo.fullPath, repoName: repoNameOf(repo) }
-          }
-        } catch {
-          // Ignore per-repo failures
-        }
-      }))
-      return map
-    },
-    enabled: !!opcodeUrl && global,
-  })
-
-  const sessionMeta = useMemo(
-    () => (global ? globalSessionMeta ?? {} : currentSessionMeta),
-    [global, globalSessionMeta, currentSessionMeta],
-  )
+  }, [runItems])
 
   const runList = useMemo(() => {
-    if (global) {
-      const all: (CommandRunView & { sessionMeta?: RunSessionMeta })[] = []
-      for (const [sid, list] of Object.entries(runsBySession)) {
-        if (!list || list.length === 0) continue
-        for (const run of list) {
-          all.push({ ...run, sessionMeta: sessionMeta[sid] })
-        }
-      }
-      return all.sort((a, b) => a.startedAt - b.startedAt)
-    }
-    const descendantIDs = sessions ? collectDescendantIDs(sessions, sessionID) : []
-    const ids = new Set([sessionID, ...descendantIDs])
-    const list: CommandRunView[] = []
-    for (const sid of ids) {
-      for (const run of runsBySession[sid] ?? []) list.push(run)
-    }
-    return list.sort((a, b) => a.startedAt - b.startedAt)
-  }, [global, runsBySession, sessionID, sessions, sessionMeta])
+    // 서버가 스코프(세션(+하위)/레포/전체) 필터링과 이름 채움을 마친 상태다.
+    return (runItems as CommandRunViewItem[])
+      .map((item) => ({ ...toCommandRunView(item), sessionMeta: sessionMeta[item.sessionId] }))
+      .sort((a, b) => a.startedAt - b.startedAt)
+  }, [runItems, sessionMeta])
 
   const filteredRunList = useMemo(() => {
     if (!historyQuery.trim()) return runList

@@ -28,10 +28,8 @@ import {
 } from '@/api/schedules'
 import { useCommands } from '@/hooks/useCommands'
 import { useOpenCodeClient } from '@/hooks/useOpenCode'
-import { useCommandRunsInRange } from '@/hooks/useCommandRuns'
-import { groupRunsBySession } from '@/lib/command-run-view'
+import { useCommandRunView } from '@/hooks/useCommandRuns'
 import { listRepos } from '@/api/repos'
-import { createOpenCodeClient } from '@/api/opencode'
 import { ScheduleCalendar } from '@/components/schedule/ScheduleCalendar'
 import { KIND_LABEL, KIND_BADGE, type CalendarMarker } from '@/lib/calendar-marker'
 import { dateKey, cronScheduleKind, monthCalendarRange, scheduleFiresInWindow } from '@/lib/cron'
@@ -130,10 +128,9 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     () => monthCalendarRange(calendarViewDate),
     [calendarViewDate],
   )
-  const { data: serverRuns = [] } = useCommandRunsInRange(runRangeStart, runRangeEnd, active)
-  const runsBySession = useMemo(() => groupRunsBySession(serverRuns), [serverRuns])
+  // 캘린더 run 마커도 프로젝트 필터(listProjects)를 적용하기 위해 전체 스코프 + 서버 채움(repoName/sessionTitle)으로 받는다.
+  const { data: serverRunItems = [] } = useCommandRunView('all', undefined, undefined, runRangeStart, runRangeEnd, active)
 
-  interface SessionMeta { title: string; repoId: number; repoName: string; directory: string }
   const { data: repos = [] } = useQuery({
     queryKey: ['repos'],
     queryFn: listRepos,
@@ -162,28 +159,6 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
       setTargetRepoId(repos[0].id)
     }
   }, [targetRepoId, repos])
-  const { data: globalSessionMeta } = useQuery({
-    queryKey: ['schedule-dialog-sessions', opcodeUrl],
-    queryFn: async () => {
-      if (!opcodeUrl) return {} as Record<string, SessionMeta>
-      const repos = await listRepos()
-      const map: Record<string, SessionMeta> = {}
-      await Promise.all(repos.map(async (repo) => {
-        try {
-          const client = createOpenCodeClient(opcodeUrl, repo.fullPath)
-          const sessionList = await client.listSessions()
-          for (const s of sessionList) {
-            map[s.id] = { title: s.title || 'Untitled Session', repoId: repo.id, repoName: repoNameOf(repo), directory: repo.fullPath }
-          }
-        } catch {
-          // Ignore per-repo failures
-        }
-      }))
-      return map
-    },
-    enabled: active && !!opcodeUrl,
-  })
-
   // 스케줄은 항상 전체를 받아온다. repo 스코프는 아래 listProjects 필터가 담당한다.
   const { data: schedules = [], isLoading } = useQuery({
     queryKey: ['schedules'],
@@ -239,34 +214,32 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
 
     const scanStartKey = dateKey(scanStart)
     const scanEndKey = dateKey(scanEnd)
-    for (const [sid, runs] of Object.entries(runsBySession)) {
-      if (!runs || runs.length === 0) continue
-      for (const run of runs) {
-        const key = dateKey(new Date(run.startedAt))
-        if (key < scanStartKey || key > scanEndKey) continue
-        const meta = globalSessionMeta?.[sid]
-        const runDirectory = run.directory ?? meta?.directory
-        const hasAttribution = runDirectory != null || meta?.repoId != null
-        if (!hasAttribution) continue
-        const normRunDir = runDirectory?.replace(/\\/g, '/').replace(/\/+$/, '') ?? ''
-        const runRepoName = meta?.repoName ?? (normRunDir ? (repoNameByDirectory[normRunDir] ?? normRunDir.split('/').pop() ?? '') : currentProject)
-        map[key] ??= []
-        map[key].push({
-          id: `run-${run.id}`,
-          label: `/${run.name}${run.args ? ` ${run.args}` : ''}`,
-          kind: 'run',
-          detail: new Date(run.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-          sessionID: sid,
-          messageID: run.messageID,
-          repoId: meta?.repoId ?? repoId,
-          repoName: runRepoName,
-          sessionTitle: meta?.title,
-          project: runRepoName,
-        })
-      }
+    for (const run of serverRunItems) {
+      const key = dateKey(new Date(run.startedAt))
+      if (key < scanStartKey || key > scanEndKey) continue
+      // 레포 귀속 없는 런은 어느 프로젝트 필터에도 속하지 않으므로 표시하지 않는다.
+      if (run.repoId == null && !run.directory) continue
+      const normRunDir = run.directory?.replace(/\\/g, '/').replace(/\/+$/, '') ?? ''
+      const runRepoName =
+        run.repoName ?? repoNameByDirectory[normRunDir] ?? (normRunDir ? normRunDir.split('/').pop() ?? '' : currentProject)
+      // 런 마커도 스케줄과 같은 프로젝트 필터(listProjects)를 따른다.
+      if (!listProjects.includes(runRepoName)) continue
+      map[key] ??= []
+      map[key].push({
+        id: `run-${run.id}`,
+        label: `/${run.commandName}${run.args ? ` ${run.args}` : ''}`,
+        kind: 'run',
+        detail: new Date(run.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        sessionID: run.sessionId,
+        messageID: run.messageId,
+        repoId: run.repoId ?? undefined,
+        repoName: runRepoName,
+        sessionTitle: run.sessionTitle ?? undefined,
+        project: runRepoName,
+      })
     }
     return map
-  }, [schedules, calendarViewDate, runsBySession, globalSessionMeta, repoId, repos, repoNameById, repoNameByDirectory, currentProject])
+  }, [schedules, calendarViewDate, serverRunItems, listProjects, repoId, repos, repoNameById, repoNameByDirectory, currentProject])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['schedules'] })

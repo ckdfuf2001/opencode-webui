@@ -88,3 +88,29 @@ export async function clearSessionCommandRuns(sessionId: string): Promise<void> 
     { method: 'DELETE' },
   )
 }
+
+export interface CommandRunViewItem extends CommandRun {
+  repoName: string | null
+  sessionTitle: string | null
+}
+
+export type CommandRunViewScope = 'all' | 'repo' | 'session'
+
+export interface CommandRunViewQuery {
+  scope: CommandRunViewScope
+  repoId?: number
+  sessionId?: string
+  start?: Date
+  end?: Date
+}
+
+export async function fetchCommandRunView(query: CommandRunViewQuery): Promise<CommandRunViewItem[]> {
+  const params = new URLSearchParams({ scope: query.scope })
+  if (query.repoId != null) params.set('repoId', String(query.repoId))
+  if (query.sessionId) params.set('sessionId', query.sessionId)
+  if (query.start) params.set('from', String(query.start.getTime()))
+  if (query.end) params.set('to', String(query.end.getTime()))
+
+  const body = await request<{ items: CommandRunViewItem[] }>(`/view?${params.toString()}`)
+  return body.items
+}

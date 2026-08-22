@@ -32,19 +32,6 @@ export function toCommandRunView(run: CommandRun): CommandRunView {
   }
 }
 
-export function groupRunsBySession(runs: CommandRun[]): Record<string, CommandRunView[]> {
-  const out: Record<string, CommandRunView[]> = {}
-  for (const run of runs) {
-    const view = toCommandRunView(run)
-    if (!out[view.sessionID]) out[view.sessionID] = []
-    out[view.sessionID].push(view)
-  }
-  for (const list of Object.values(out)) {
-    list.sort((a, b) => a.startedAt - b.startedAt)
-  }
-  return out
-}
-
 /** 히스토리 패널용 트레일링 윈도우. 백엔드 범위 상한(1년) 안쪽으로 유지한다. */
 export function historyWindow(days = 364): { start: Date; end: Date } {
   const end = new Date()
