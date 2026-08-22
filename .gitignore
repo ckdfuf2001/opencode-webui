@@ -25,3 +25,5 @@ vendor/*
 bin/agent-browser/chromium/**/Dictionaries/
 
 release/
+
+opencode-webui-v*-portable.zip
