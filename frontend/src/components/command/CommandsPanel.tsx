@@ -33,10 +33,10 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useConfig } from '@/hooks/useOpenCode'
 import { useCommandRunView, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
-import { historyWindow, toCommandRunView } from '@/lib/command-run-view'
+import { toCommandRunView } from '@/lib/command-run-view'
 import type { CommandRunViewItem, CommandRunStatus } from '@/api/command-runs'
 import { CreateCommandDialog, type DialogType, type EditingEntry } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
@@ -208,6 +208,8 @@ interface CommandExplorerProps {
   plugins: RegistryEntry[]
   loading: boolean
   error: string | null
+  commandContentLookup?: Map<string, string>
+  skillContentLookup?: Map<string, string>
   onExecute?: (command: CommandWithScope, run: boolean, args: string) => void
   onCreate?: (type: ExplorerResourceType) => void
   onEdit?: (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }) => void
@@ -229,6 +231,7 @@ interface AgentExplorerItem {
   description?: string
   mode?: string
   scope?: string
+  content?: string
 }
 
 interface McpExplorerItem {
@@ -246,7 +249,7 @@ const EXPLORER_TABS: { value: ExplorerResourceType; label: string; Icon: typeof 
   { value: 'mcp', label: 'MCP', Icon: Plug },
 ]
 
-function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error, onExecute, onCreate, onEdit, onClone, onDelete, onBulkDelete, focusCommand }: CommandExplorerProps) {
+function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error, commandContentLookup = new Map(), skillContentLookup = new Map(), onExecute, onCreate, onEdit, onClone, onDelete, onBulkDelete, focusCommand }: CommandExplorerProps) {
   const [tab, setTab] = useState<ExplorerResourceType>('command')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<CommandWithScope | null>(null)
@@ -286,7 +289,10 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (tab === 'agent') {
-      const list = agents.filter(a => a.name.toLowerCase().includes(q) || a.description?.toLowerCase().includes(q))
+      const list = agents.filter(a =>
+        a.name.toLowerCase().includes(q) ||
+        a.description?.toLowerCase().includes(q) ||
+        a.content?.toLowerCase().includes(q))
       return list.sort((a, b) => a.name.localeCompare(b.name))
     }
     if (tab === 'mcp') {
@@ -300,11 +306,20 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
     const base = tab === 'skill'
       ? commands.filter((c) => c.source === 'skill')
       : commands.filter((c) => c.source !== 'skill')
+    const contentLookup = tab === 'skill' ? skillContentLookup : commandContentLookup
     const list = q
-      ? base.filter(c => c.name.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q))
+      ? base.filter(c => {
+          const hay = [
+            c.name,
+            c.description ?? '',
+            'template' in c ? String((c as { template?: unknown }).template ?? '') : '',
+            contentLookup.get(c.name) ?? '',
+          ].join(' ').toLowerCase()
+          return hay.includes(q)
+        })
       : base
     return getSortedScopes(list)
-  }, [tab, query, commands, agents, mcpServers, plugins])
+  }, [tab, query, commands, agents, mcpServers, plugins, skillContentLookup, commandContentLookup])
 
   const pendingCommand = pendingArgs?.command
 
@@ -663,24 +678,12 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
 export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, repoId, global = sessionID === '', onExecuteCommand, onScrollToMessage }: CommandsPanelProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { start: historyStart, end: historyEnd } = useMemo(() => historyWindow(), [])
-  // 스코프: 세션 안 = 해당 세션(+하위 세션), 레포 안 = 해당 레포, 레포 리스트 = 전체.
-  // 서버가 필터링 + repoName/sessionTitle 채움을 담당하며, open 시마다 최신값을 받아온다.
-  const viewScope: 'session' | 'repo' | 'all' = sessionID ? 'session' : repoId ? 'repo' : 'all'
-  const {
-    data: runItems = [],
-    dataUpdatedAt: runItemsUpdatedAt,
-    refetch: refetchRunItems,
-  } = useCommandRunView(viewScope, repoId, sessionID || undefined, historyStart, historyEnd, open)
+  // 달력과 동일하게 "항상 최신": 기간을 클라이언트에서 고정하지 않는다.
+  // from/to 미지정 시 서버가 요청 시점 기준 최근 364일을 계산하므로
+  // 페이지를 오래 열어둬도 새 실행이 창 밖으로 밀려나지 않는다.
+  const { data: serverRunItems = [] } = useCommandRunView('all', undefined, undefined, undefined, undefined, open)
 
-  // 라이브러리 폴링 대신 직접 인터벌: 어떤 환경에서도 히스토리가 5초 내 갱신된다.
-  useEffect(() => {
-    if (!open) return
-    const timer = setInterval(() => {
-      void refetchRunItems()
-    }, 5_000)
-    return () => clearInterval(timer)
-  }, [open, refetchRunItems])
+  // 폴링은 useCommandRunView의 refetchInterval(선언적)이 담당한다.
   const deleteRun = useDeleteCommandRun()
   const setRunMessage = useSetCommandRunMessage()
   const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
@@ -693,6 +696,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const [cloning, setCloning] = useState<EditingEntry | null>(null)
   const [historyQuery, setHistoryQuery] = useState('')
   const [calendarView, setCalendarView] = useState(false)
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(new Set())
   const [explorerFocus, setExplorerFocus] = useState<CommandWithScope | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -977,6 +981,26 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     queryFn: () => registryApi.list('agent', directory),
   })
 
+  // Explorer 내용 검색용: 등록 파일 본문(name -> content)
+  const { data: registryCommands = [] } = useQuery({
+    queryKey: ['registry-list', 'command', directory],
+    queryFn: () => registryApi.list('command', directory),
+  })
+  const { data: registrySkills = [] } = useQuery({
+    queryKey: ['registry-list', 'skill', directory],
+    queryFn: () => registryApi.list('skill', directory),
+  })
+  const commandContentLookup = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const e of registryCommands) m.set(e.name, `${e.content ?? ''}\n${e.description ?? ''}`)
+    return m
+  }, [registryCommands])
+  const skillContentLookup = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const e of registrySkills) m.set(e.name, `${e.content ?? ''}\n${e.description ?? ''}`)
+    return m
+  }, [registrySkills])
+
   const agents = useMemo<AgentExplorerItem[]>(() => {
     const map = config?.agent
     const configAgentNames = new Set(Object.keys(map ?? {}))
@@ -985,10 +1009,11 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       description: (cfg as { description?: string }).description,
       mode: (cfg as { mode?: string }).mode,
       scope: 'global',
+      content: (cfg as { prompt?: string }).prompt,
     }))
     const fromRegistry: AgentExplorerItem[] = agentsRegistry
       .filter((e) => !configAgentNames.has(e.name))
-      .map((e) => ({ name: e.name, description: e.description, mode: e.mode, scope: e.scope }))
+      .map((e) => ({ name: e.name, description: e.description, mode: e.mode, scope: e.scope, content: e.content }))
     return [...fromConfig, ...fromRegistry].sort((a, b) => a.name.localeCompare(b.name))
   }, [config, agentsRegistry])
 
@@ -1007,16 +1032,24 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     })
   }, [config])
 
+  // 페이지 컨텍스트 필터: 세션 안 = 해당 세션, 레포 안 = 해당 레포, 그 외 = 전체.
+  const scopedItems = useMemo(() => {
+    const items = serverRunItems as CommandRunViewItem[]
+    if (sessionID) return items.filter((i) => i.sessionId === sessionID)
+    if (repoId) return items.filter((i) => i.repoId === repoId)
+    return items
+  }, [serverRunItems, sessionID, repoId])
+
   // 세션 내부와 동일한 카드(Steps/Response/상태)를 어느 화면에서든 그리기 위해
-  // 뷰에 등장하는 모든 세션의 메시지를 스코프 불문 수집한다.
+  // 화면에 보이는 세션들의 메시지를 수집한다.
   const sessionTargets = useMemo(() => {
     const map = new Map<string, { sessionId: string; directory?: string }>()
-    for (const item of runItems as CommandRunViewItem[]) {
+    for (const item of scopedItems) {
       const key = `${item.directory ?? ''}|${item.sessionId}`
       if (!map.has(key)) map.set(key, { sessionId: item.sessionId, directory: item.directory ?? undefined })
     }
     return [...map.values()]
-  }, [runItems])
+  }, [scopedItems])
 
   const messageQueries = useQueries({
     queries: sessionTargets.map(({ sessionId, directory }) => ({
@@ -1041,7 +1074,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
 
   const sessionMeta = useMemo(() => {
     const map: Record<string, RunSessionMeta> = {}
-    for (const item of runItems) {
+    for (const item of scopedItems) {
       map[item.sessionId] = {
         title: item.sessionTitle || 'Untitled Session',
         repoId: item.repoId ?? 0,
@@ -1050,14 +1083,13 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       }
     }
     return map
-  }, [runItems])
+  }, [scopedItems])
 
   const runList = useMemo(() => {
-    // 서버가 스코프(세션(+하위)/레포/전체) 필터링과 이름 채움을 마친 상태다.
-    return (runItems as CommandRunViewItem[])
+    return (scopedItems as CommandRunViewItem[])
       .map((item) => ({ ...toCommandRunView(item), sessionMeta: sessionMeta[item.sessionId] }))
       .sort((a, b) => a.startedAt - b.startedAt)
-  }, [runItems, sessionMeta])
+  }, [scopedItems, sessionMeta])
 
   const segments = useMemo(() => {
     const ordered = [...(runList ?? [])].sort((a, b) => a.startedAt - b.startedAt)
@@ -1116,6 +1148,35 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       return hay.includes(q)
     })
   }, [runList, historyQuery, sessionMeta, segmentById])
+
+  const toggleRunSelected = useCallback((id: string, checked: boolean) => {
+    setSelectedRunIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
+
+  const selectAllRuns = useCallback(() => {
+    setSelectedRunIds(new Set(filteredRunList.map((r) => r.id)))
+  }, [filteredRunList])
+
+  const clearRunSelection = useCallback(() => {
+    setSelectedRunIds(new Set())
+  }, [])
+
+  const deleteSelectedRuns = useCallback(async () => {
+    const ids = [...selectedRunIds]
+    for (const id of ids) {
+      try {
+        await deleteRun.mutateAsync(id)
+      } catch {
+        // onError 토스트 처리됨
+      }
+    }
+    setSelectedRunIds(new Set())
+  }, [selectedRunIds, deleteRun])
 
   const syncedMessageIds = useRef<Set<string>>(new Set())
 
@@ -1205,7 +1266,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'explorer' ? (
-          <CommandExplorer commands={commands} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
+          <CommandExplorer commands={commands} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} commandContentLookup={commandContentLookup} skillContentLookup={skillContentLookup} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
         ) : (
           <div className="flex-1 min-h-0 flex flex-col">
             <div className="p-3 pb-0 flex-shrink-0">
@@ -1221,17 +1282,47 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                   />
                 </div>
                 <Button
-                  variant={calendarView ? 'secondary' : 'outline'}
-                  size="sm"
+                  variant="outline"
+                  size="icon"
                   onClick={() => {
                     setCalendarView((v) => !v)
                   }}
-                  className="text-xs h-8 gap-1"
+                  className={`h-8 w-8 shrink-0 transition-colors ${
+                    calendarView
+                      ? 'border-foreground text-foreground'
+                      : 'border-border/60 text-muted-foreground'
+                  }`}
                   title="Toggle calendar view with schedules and command history"
                 >
-                  <CalendarIcon className="w-3.5 h-3.5" />
-                  달력
+                  {calendarView ? (
+                    <History className="w-3.5 h-3.5" />
+                  ) : (
+                    <CalendarIcon className="w-3.5 h-3.5" />
+                  )}
                 </Button>
+                {!calendarView && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="History actions">
+                      <MoreHorizontal className="w-3.5 h-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onSelect={() => selectAllRuns()}>Select all</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={clearRunSelection} disabled={selectedRunIds.size === 0}>
+                      Deselect all
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      disabled={selectedRunIds.size === 0}
+                      onSelect={() => void deleteSelectedRuns()}
+                    >
+                      Delete selected ({selectedRunIds.size})
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                )}
               </div>
             </div>
             {calendarView ? (
@@ -1258,9 +1349,6 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               </div>
               ) : (
                 <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-                  <div className="text-[10px] font-mono text-muted-foreground/50">
-                    dbg items={runItems.length} · cards={filteredRunList.length} · fetch={runItemsUpdatedAt ? new Date(runItemsUpdatedAt).toLocaleTimeString() : '-'} · scope={viewScope}
-                  </div>
                 {/* 달력과 동일: 뷰 데이터가 도착하는 대로 카드를 즉시 렌더링한다.
                     Steps/Response 본문은 해당 세션 메시지 로드 후 채워진다. */}
                 {[...filteredRunList].reverse().map((entry) => {
@@ -1295,6 +1383,12 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                       <div className="px-3 pt-2 pb-1.5">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-1.5 min-w-0">
+                            <Checkbox
+                              checked={selectedRunIds.has(run.id)}
+                              onCheckedChange={(checked) => toggleRunSelected(run.id, checked === true)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="shrink-0"
+                            />
                             <button
                               type="button"
                               onClick={() => {

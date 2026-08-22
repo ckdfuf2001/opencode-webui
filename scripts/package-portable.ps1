@@ -31,6 +31,7 @@ if (-not (Test-Path (Join-Path $release 'scripts\doc-reader.exe')) -and -not $Sk
 Write-Output '[package 6/6] launcher scripts'
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.sh') $release
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.bat') $release
+Copy-Item -Force (Join-Path $PSScriptRoot 'PORT-GUIDE.txt') $release
 $bat = Join-Path $release 'start_opencode_webui_exe.bat'
 (Get-Content $bat) | Set-Content $bat -Encoding ASCII
 Remove-Item (Join-Path $release 'START.bat') -Force -ErrorAction SilentlyContinue

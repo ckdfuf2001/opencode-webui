@@ -3,7 +3,27 @@
 set -u
 cd "$(dirname "$0")"
 
+# .env 가 없으면 기본값으로 생성 (PORT / HOST / NODE_ENV)
+if [ ! -f .env ]; then
+  printf 'PORT=5002\nHOST=0.0.0.0\nNODE_ENV=production\n' > .env
+  printf '%s\n' "[START] created default .env"
+fi
+
 PORT="${PORT:-5002}"
+
+# .env 키 로드 (이미 환경변수로 설정된 값은 유지)
+if [ -f .env ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in ''|\#*) continue ;; esac
+    value="${value%\"}"; value="${value#\"}"
+    case "$key" in
+      PORT) [ -n "${PORT:-}" ] || PORT="$value" ;;
+      HOST) [ -n "${HOST:-}" ] || export HOST="$value" ;;
+      OPENCODE_SERVER_PORT) [ -n "${OPENCODE_SERVER_PORT:-}" ] || export OPENCODE_SERVER_PORT="$value" ;;
+    esac
+  done < .env
+fi
+
 LOG_DIR="logs"
 LOG="$LOG_DIR/webui.log"
 mkdir -p "$LOG_DIR"

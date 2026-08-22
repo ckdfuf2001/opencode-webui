@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   clearSessionCommandRuns,
@@ -38,14 +37,14 @@ export function useCommandRunView(
   end?: Date,
   enabled = true,
 ) {
-  useEffect(() => {
-    console.debug('[useCommandRunView] v2 mounted', { scope, repoId, sessionId })
-  }, [])
   return useQuery({
     queryKey: commandRunKeys.view(scope, repoId, sessionId, start, end),
     queryFn: () => fetchCommandRunView({ scope, repoId, sessionId, start, end }),
     enabled,
+    // 선언적 폴링: 컴포넌트 수명과 무관하게 옵션이 즉시 적용된다.
     refetchOnMount: 'always',
+    refetchInterval: enabled ? 5_000 : false,
+    refetchIntervalInBackground: true,
     staleTime: 0,
   })
 }

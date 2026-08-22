@@ -100,7 +100,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: Record<string, string> = {
 }
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
-  theme: 'dark',
+  theme: 'light',
   mode: 'build',
   autoScroll: true,
   showReasoning: false,
