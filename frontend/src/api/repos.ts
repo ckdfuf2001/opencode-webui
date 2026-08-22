@@ -139,3 +139,16 @@ export async function listBranches(id: number): Promise<{ local: string[], remot
 
   return response.json()
 }
+
+export async function applyRepoTrackingAll(): Promise<{ success: boolean; applied: number }> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/tracking/apply-all`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.error || 'Failed to apply repo tracking')
+  }
+
+  return response.json()
+}

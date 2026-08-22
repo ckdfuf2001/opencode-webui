@@ -141,6 +141,19 @@ export const openApiSpec = {
         },
       },
     },
+    '/api/repos/tracking/apply-all': {
+      post: {
+        tags: ['repos'],
+        summary: 'Re-apply registry git tracking (info/exclude) to all existing repos',
+        responses: {
+          '200': {
+            description: 'Tracking applied',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, applied: { type: 'integer' } } } } },
+          },
+          '500': { description: 'Apply failed' },
+        },
+      },
+    },
     '/api/repos/{id}': {
       get: {
         tags: ['repos'],
