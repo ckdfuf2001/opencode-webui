@@ -33,7 +33,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS = {
   selectModel: "ctrl+M",
 };
 
-export const DEFAULT_REPO_TRACK_PATHS = [".opencode"];
+export const DEFAULT_REPO_TRACK_PATHS = [".opencode", "scripts"];
 
 export const UserPreferencesSchema = z.object({
   theme: z.enum(["dark", "light", "system"]),

@@ -110,5 +110,5 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   customAgents: [],
   gitToken: undefined,
   tts: DEFAULT_TTS_CONFIG,
-  repoTrackPaths: ['.opencode'],
+  repoTrackPaths: ['.opencode', 'scripts'],
 }
