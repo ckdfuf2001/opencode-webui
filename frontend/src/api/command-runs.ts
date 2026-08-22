@@ -92,6 +92,7 @@ export async function clearSessionCommandRuns(sessionId: string): Promise<void> 
 export interface CommandRunViewItem extends CommandRun {
   repoName: string | null
   sessionTitle: string | null
+  responsePreview: string | null
 }
 
 export type CommandRunViewScope = 'all' | 'repo' | 'session'

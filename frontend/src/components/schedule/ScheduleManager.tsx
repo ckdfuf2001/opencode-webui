@@ -235,7 +235,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
         kind: 'run',
         detail: new Date(run.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
         sessionID: run.sessionId,
-        messageID: run.messageId,
+        messageID: run.messageId ?? undefined,
         repoId: run.repoId ?? undefined,
         repoName: runRepoName,
         sessionTitle: run.sessionTitle ?? undefined,

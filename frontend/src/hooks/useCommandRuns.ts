@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   clearSessionCommandRuns,
@@ -37,14 +38,18 @@ export function useCommandRunView(
   end?: Date,
   enabled = true,
 ) {
+  useEffect(() => {
+    console.debug('[useCommandRunView] v2 mounted', { scope, repoId, sessionId })
+  }, [])
   return useQuery({
     queryKey: commandRunKeys.view(scope, repoId, sessionId, start, end),
     queryFn: () => fetchCommandRunView({ scope, repoId, sessionId, start, end }),
     enabled,
-    staleTime: 15_000,
+    refetchOnMount: 'always',
+    staleTime: 0,
   })
 }
-/** 달력 뷰(6주 윈도우) 범위의 run 목록. 서버 DB 가 단일 진실 공급원. */
+/** 달력 뷰(6주 윈도우) 범위의 run 목록. */
 export function useCommandRunsInRange(start: Date, end: Date, enabled = true) {
   return useQuery({
     queryKey: commandRunKeys.range(start, end),

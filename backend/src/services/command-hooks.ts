@@ -62,16 +62,61 @@ async function postCommand(run: CommandRun, status: Exclude<CommandRunStatus, 's
 }
 
 export function firePreCommandHooks(run: CommandRun): void {
-  void preCommand(run).catch((error: unknown) => {
-    logger.warn('pre-command hook failed:', error)
-  })
+  void preCommand(run)
+    .then(() => notifyListeners('pre', run))
+    .catch((error: unknown) => {
+      logger.warn('pre-command hook failed:', error)
+    })
 }
 
 export function firePostCommandHooks(
   run: CommandRun,
   status: Exclude<CommandRunStatus, 'started'>
 ): void {
-  void postCommand(run, status).catch((error: unknown) => {
-    logger.warn('post-command hook failed:', error)
-  })
+  void postCommand(run, status)
+    .then(() => notifyListeners('post', run, status))
+    .catch((error: unknown) => {
+      logger.warn('post-command hook failed:', error)
+    })
+}
+
+/** ── 실시간 알림(SSE)용 리스너 ────────────────────────────── */
+
+export interface CommandRunEvent {
+  type: 'command-run'
+  phase: CommandHookPhase
+  runId: string
+  sessionId: string
+  commandName: string
+  origin: string
+  status: CommandRunStatus | null
+}
+
+type RunEventListener = (event: CommandRunEvent) => void
+const listeners = new Set<RunEventListener>()
+
+export function onCommandRunUpdate(listener: RunEventListener): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+function notifyListeners(phase: CommandHookPhase, run: CommandRun, status?: CommandRunStatus): void {
+  const event: CommandRunEvent = {
+    type: 'command-run',
+    phase,
+    runId: run.id,
+    sessionId: run.sessionId,
+    commandName: run.commandName,
+    origin: run.origin,
+    status: status ?? null,
+  }
+  for (const listener of listeners) {
+    try {
+      listener(event)
+    } catch (error) {
+      logger.warn('command run listener failed:', error)
+    }
+  }
 }

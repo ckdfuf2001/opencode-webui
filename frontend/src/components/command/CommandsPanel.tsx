@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import {
   Terminal,
   Loader2,
@@ -34,12 +34,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { useMessages, useConfig } from '@/hooks/useOpenCode'
+import { useConfig } from '@/hooks/useOpenCode'
 import { useCommandRunView, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
-import { historyWindow, toCommandRunView, type CommandRunView } from '@/lib/command-run-view'
-import type { CommandRunViewItem } from '@/api/command-runs'
+import { historyWindow, toCommandRunView } from '@/lib/command-run-view'
+import type { CommandRunViewItem, CommandRunStatus } from '@/api/command-runs'
 import { CreateCommandDialog, type DialogType, type EditingEntry } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
+import { createOpenCodeClient } from '@/api/opencode'
 import { settingsApi } from '@/api/settings'
 import { registryApi, type RegistryType, type RegistryScope, type RegistryEntry } from '@/api/registry'
 import { ScheduleManager } from '@/components/schedule/ScheduleManager'
@@ -662,12 +663,24 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
 export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, repoId, global = sessionID === '', onExecuteCommand, onScrollToMessage }: CommandsPanelProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
   const { start: historyStart, end: historyEnd } = useMemo(() => historyWindow(), [])
   // 스코프: 세션 안 = 해당 세션(+하위 세션), 레포 안 = 해당 레포, 레포 리스트 = 전체.
   // 서버가 필터링 + repoName/sessionTitle 채움을 담당하며, open 시마다 최신값을 받아온다.
   const viewScope: 'session' | 'repo' | 'all' = sessionID ? 'session' : repoId ? 'repo' : 'all'
-  const { data: runItems = [] } = useCommandRunView(viewScope, repoId, sessionID || undefined, historyStart, historyEnd, open)
+  const {
+    data: runItems = [],
+    dataUpdatedAt: runItemsUpdatedAt,
+    refetch: refetchRunItems,
+  } = useCommandRunView(viewScope, repoId, sessionID || undefined, historyStart, historyEnd, open)
+
+  // 라이브러리 폴링 대신 직접 인터벌: 어떤 환경에서도 히스토리가 5초 내 갱신된다.
+  useEffect(() => {
+    if (!open) return
+    const timer = setInterval(() => {
+      void refetchRunItems()
+    }, 5_000)
+    return () => clearInterval(timer)
+  }, [open, refetchRunItems])
   const deleteRun = useDeleteCommandRun()
   const setRunMessage = useSetCommandRunMessage()
   const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
@@ -698,6 +711,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     refresh()
     refetchPlugins()
     queryClient.invalidateQueries({ queryKey: ['opencode', 'config', opcodeUrl, directory] })
+    queryClient.invalidateQueries({ queryKey: ['command-runs'] })
     window.dispatchEvent(new CustomEvent('opencode:commands-refreshed'))
     setRefreshing(false)
   }, [refresh, refetchPlugins, queryClient, opcodeUrl, directory])
@@ -993,6 +1007,36 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     })
   }, [config])
 
+  // 세션 내부와 동일한 카드(Steps/Response/상태)를 어느 화면에서든 그리기 위해
+  // 뷰에 등장하는 모든 세션의 메시지를 스코프 불문 수집한다.
+  const sessionTargets = useMemo(() => {
+    const map = new Map<string, { sessionId: string; directory?: string }>()
+    for (const item of runItems as CommandRunViewItem[]) {
+      const key = `${item.directory ?? ''}|${item.sessionId}`
+      if (!map.has(key)) map.set(key, { sessionId: item.sessionId, directory: item.directory ?? undefined })
+    }
+    return [...map.values()]
+  }, [runItems])
+
+  const messageQueries = useQueries({
+    queries: sessionTargets.map(({ sessionId, directory }) => ({
+      queryKey: ['opencode', 'messages', opcodeUrl, sessionId, directory],
+      queryFn: async () => {
+        const client = createOpenCodeClient(opcodeUrl ?? '', directory)
+        return client.listMessages(sessionId)
+      },
+      enabled: open && !!opcodeUrl && !!sessionId,
+      staleTime: 30_000,
+    })),
+  })
+
+  const getMessagesFor = useCallback((sessionId: string, directory?: string): MessageWithParts[] | undefined => {
+    const idx = sessionTargets.findIndex(
+      (t) => t.sessionId === sessionId && (t.directory ?? '') === (directory ?? ''),
+    )
+    return idx >= 0 ? (messageQueries[idx]?.data as MessageWithParts[] | undefined) : undefined
+  }, [sessionTargets, messageQueries])
+
   const sessionMeta = useMemo(() => {
     const map: Record<string, RunSessionMeta> = {}
     for (const item of runItems) {
@@ -1013,25 +1057,13 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       .sort((a, b) => a.startedAt - b.startedAt)
   }, [runItems, sessionMeta])
 
-  const filteredRunList = useMemo(() => {
-    if (!historyQuery.trim()) return runList
-    const q = historyQuery.toLowerCase()
-    return runList.filter((run) => {
-      const cmdText = `${run.name} ${run.args}`.toLowerCase()
-      const sessionTitle = (run as { sessionMeta?: RunSessionMeta }).sessionMeta?.title
-        ?? sessionMeta[run.sessionID]?.title
-        ?? ''
-      return cmdText.includes(q) || sessionTitle.toLowerCase().includes(q)
-    })
-  }, [runList, historyQuery, sessionMeta])
-
   const segments = useMemo(() => {
-    if (global) return []
     const ordered = [...(runList ?? [])].sort((a, b) => a.startedAt - b.startedAt)
     return ordered
       .map((run) => {
+        const msgs = getMessagesFor(run.sessionID, run.sessionMeta?.directory || run.directory)
         const meta = commands.find((c) => c.name === run.name)
-        const segmented = segmentRun(messages ?? [], run, meta?.oneshot)
+        const segmented = segmentRun(msgs ?? [], run, meta?.oneshot)
         return {
           id: run.id,
           name: run.name,
@@ -1039,16 +1071,50 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
           startedAt: run.startedAt,
           sessionID: run.sessionID,
           messageID: run.messageID ?? segmented.triggerMessageID ?? undefined,
-          ...segmented,
+          messagesLoaded: Array.isArray(msgs),
+          // 상태의 단일 진실은 파일 기록(run.status). 메시지 분석값은
+          // 진행 중('started')일 때의 live 판정(running/error)으로만 사용한다.
+          status: run.status === 'started'
+            ? ((segmented.status as CommandRunStatus) ?? 'running')
+            : run.status === 'failed'
+              ? 'error'
+              : 'completed',
+          steps: segmented.steps ?? [],
+          result: segmented.result,
         }
       })
       .reverse()
-  }, [global, runList, messages, commands])
+  }, [runList, getMessagesFor, commands])
+
+  const segmentById = useMemo(() => new Map(segments.map((s) => [s.id, s])), [segments])
+
+  // 검색은 목록 카드의 모든 내용(명령·인자·세션명·레포명·상태·스텝·응답 본문)을 대상으로 한다.
+  const filteredRunList = useMemo(() => {
+    if (!historyQuery.trim()) return runList
+    const q = historyQuery.trim().toLowerCase()
+    return runList.filter((run) => {
+      const meta = sessionMeta[run.sessionID]
+      const seg = segmentById.get(run.id)
+      const statusLabel =
+        run.status === 'started' ? 'running' : run.status
+      const hay = [
+        `/${run.name}`,
+        run.args ?? '',
+        meta?.title ?? '',
+        meta?.repoName ?? '',
+        statusLabel,
+        seg?.result ?? '',
+        ...(seg?.steps ?? []),
+      ]
+        .join(' ')
+        .toLowerCase()
+      return hay.includes(q)
+    })
+  }, [runList, historyQuery, sessionMeta, segmentById])
 
   const syncedMessageIds = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    if (global) return
     for (const run of runList) {
       if (run.messageID) continue
       if (syncedMessageIds.current.has(run.id)) continue
@@ -1058,7 +1124,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         setRunMessage.mutate({ id: run.id, messageId: seg.messageID })
       }
     }
-  }, [runList, segments, global, setRunMessage])
+  }, [runList, segments, setRunMessage])
 
   const handleGoToMessage = useCallback((runSessionID: string, messageID?: string, runRepoId?: number) => {
     if (!global && runSessionID === sessionID) {
@@ -1067,59 +1133,21 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       }
       return
     }
-    const targetRepoId = runRepoId || repoId
-    const base = targetRepoId
-      ? `/repos/${targetRepoId}/sessions/${runSessionID}`
-      : `/session/${runSessionID}`
+    // 세션 목록 등 레포 컨텍스트 없는 화면에서도 서버가 채워준 repoId로 정확히 이동한다.
+    const targetRepoId = runRepoId ?? sessionMeta[runSessionID]?.repoId ?? repoId
+    if (!targetRepoId) {
+      showToast.warning('이 세션의 저장소를 찾을 수 없어 이동할 수 없습니다.')
+      return
+    }
+    const base = `/repos/${targetRepoId}/sessions/${runSessionID}`
     navigate(messageID ? `${base}?msg=${encodeURIComponent(messageID)}` : base)
-  }, [global, sessionID, repoId, navigate, onScrollToMessage])
+  }, [global, sessionID, repoId, sessionMeta, navigate, onScrollToMessage])
 
   const runningCount = segments.filter((s) => s.status === 'running').length
 
   if (!open) return null
 
   const commandByName = (name: string) => commands.find((c) => c.name === name)
-
-  const renderGlobalRun = (run: CommandRunView & { sessionMeta?: RunSessionMeta }) => (
-    <div
-      key={run.id}
-      className="rounded-lg border border-border bg-background overflow-hidden cursor-pointer hover:border-ring group"
-      onClick={() => handleGoToMessage(run.sessionID, run.messageID, run.sessionMeta?.repoId)}
-    >
-      <div className="flex items-start justify-between gap-2 px-3 py-2">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-foreground font-mono truncate">
-            /{run.name}{run.args ? ` ${run.args}` : ''}
-          </p>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <span className="text-[10px] text-muted-foreground">{formatTime(run.startedAt)}</span>
-            {run.sessionMeta && (
-              <span className="text-[10px] text-primary/80 truncate max-w-[160px]" title={run.sessionMeta.title}>
-                {run.sessionMeta.title}
-              </span>
-            )}
-            {run.sessionMeta?.repoName && (
-              <span className="text-[10px] font-semibold text-muted-foreground truncate max-w-[120px]">· {run.sessionMeta.repoName}</span>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          <CornerDownLeft className="w-3.5 h-3.5 text-primary/80" />
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              deleteRun.mutate(run.id)
-            }}
-            className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Delete history entry"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 
   return (
     <div className="fixed inset-0 z-40" style={{ pointerEvents: open ? 'auto' : 'none' }}>
@@ -1223,13 +1251,28 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                     : 'No history matches your search.'}
                 </p>
               </div>
-            ) : global ? (
-              <div className="p-3 space-y-3">
-                {[...filteredRunList].reverse().map(renderGlobalRun)}
-              </div>
-            ) : (
-              <div className="p-3 space-y-3">
-                {segments.filter((s) => filteredRunList.some((r) => r.id === s.id)).map((run) => {
+              ) : (
+                <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+                  <div className="text-[10px] font-mono text-muted-foreground/50">
+                    dbg items={runItems.length} · cards={filteredRunList.length} · fetch={runItemsUpdatedAt ? new Date(runItemsUpdatedAt).toLocaleTimeString() : '-'} · scope={viewScope}
+                  </div>
+                {/* 달력과 동일: 뷰 데이터가 도착하는 대로 카드를 즉시 렌더링한다.
+                    Steps/Response 본문은 해당 세션 메시지 로드 후 채워진다. */}
+                {[...filteredRunList].reverse().map((entry) => {
+                  const seg = segmentById.get(entry.id)
+                  const run = {
+                    ...entry,
+                    status: entry.status === 'started'
+                      ? ((seg?.status as CommandRunStatus) ?? 'running')
+                      : entry.status === 'failed'
+                        ? 'error'
+                        : 'completed',
+                    steps: seg?.steps ?? [],
+                    stepCount: seg?.steps?.length ?? 0,
+                    result: seg?.result,
+                    messageID: entry.messageID ?? seg?.messageID,
+                    messagesLoaded: Boolean(seg),
+                  }
                   const meta = commandByName(run.name)
                   const scope = meta?.scope ?? 'builtin'
                   const badge = SCOPE_DISPLAY[scope]
@@ -1239,81 +1282,88 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                   const toggle = (key: 'steps' | 'response', open: boolean) =>
                     setExpanded((prev) => ({ ...prev, [run.id]: { ...(prev[run.id] ?? { steps: false, response: false }), [key]: open } }))
                   const sessionLabel = run.sessionID !== sessionID
-                    ? (currentSessionMeta[run.sessionID]?.title ?? run.sessionID)
+                    ? (sessionMeta[run.sessionID]?.title ?? run.sessionID)
                     : null
+                  const repoLabel = sessionMeta[run.sessionID]?.repoName ?? null
                   return (
                     <div key={run.id} className="rounded-lg border border-border bg-background overflow-hidden">
-                      <div className="flex items-start justify-between gap-2 px-3 py-2 border-b border-border bg-muted/30">
-                        <div className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const meta = commandByName(run.name)
-                              if (meta) {
-                                setExplorerFocus(meta)
-                                setTab('explorer')
-                              }
-                            }}
-                            title={meta?.description}
-                            className="text-xs font-medium text-foreground font-mono truncate hover:text-primary"
-                          >
-                            /{run.name}{run.args ? ` ${run.args}` : ''}
-                          </button>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="text-[10px] text-muted-foreground">{formatTime(run.startedAt)}</span>
-                            {sessionLabel && (
-                              <span className="text-[10px] text-primary/80 truncate max-w-[140px]" title={sessionLabel}>
-                                {sessionLabel}
-                              </span>
+                      <div className="px-3 pt-2 pb-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const meta = commandByName(run.name)
+                                if (meta) {
+                                  setExplorerFocus(meta)
+                                  setTab('explorer')
+                                }
+                              }}
+                              title={meta?.description}
+                              className="text-xs font-medium text-foreground font-mono truncate hover:text-primary"
+                            >
+                              /{run.name}{run.args ? ` ${run.args}` : ''}
+                            </button>
+                            {meta && (
+                              <span className={`px-1 rounded text-[9px] shrink-0 ${badge.className}`}>{badge.label}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {run.status === 'running' ? (
+                              <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Running
+                              </div>
+                            ) : run.status === 'error' ? (
+                              <div className="flex items-center gap-1 text-[11px] text-destructive">
+                                <AlertCircle className="w-3 h-3" />
+                                Error
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1 text-[11px] text-green-500">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Done
+                              </div>
                             )}
                             <button
                               type="button"
-                              onClick={() => handleGoToMessage(run.sessionID, run.messageID, repoId)}
-                              className="inline-flex items-center gap-0.5 text-[10px] text-primary/80 hover:text-primary underline underline-offset-2"
-                              title="Go to message in chat"
+                              onClick={() => deleteRun.mutate(run.id)}
+                              className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer"
+                              title="Delete history entry"
                             >
-                              <CornerDownLeft className="w-2.5 h-2.5" />
-                              chat
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                            {meta && <span className={`px-1 rounded text-[9px] ${badge.className}`}>{badge.label}</span>}
-                            {run.stepCount > 0 && (
-                              <span className="text-[10px] text-muted-foreground">{run.stepCount} steps</span>
-                            )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          {run.status === 'running' ? (
-                            <div className="flex items-center gap-1 text-[11px] text-amber-500">
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                              Running
-                            </div>
-                          ) : run.status === 'error' ? (
-                            <div className="flex items-center gap-1 text-[11px] text-destructive">
-                              <AlertCircle className="w-3 h-3" />
-                              Error
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1 text-[11px] text-green-500">
-                              <CheckCircle2 className="w-3 h-3" />
-                              Done
-                            </div>
+                        <div className="flex items-center flex-wrap gap-x-1.5 gap-y-0.5 mt-1 text-[10px] text-muted-foreground min-w-0">
+                          <span className="shrink-0">{formatTime(run.startedAt)}</span>
+                          {repoLabel && (
+                            <span className="font-semibold truncate max-w-[110px] shrink-0" title={repoLabel}>
+                              {repoLabel}
+                            </span>
+                          )}
+                          {sessionLabel && (
+                            <span className="text-primary/80 truncate max-w-[150px] min-w-0" title={sessionLabel}>
+                              {sessionLabel}
+                            </span>
                           )}
                           <button
                             type="button"
-                            onClick={() => deleteRun.mutate(run.id)}
-                            className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer"
-                            title="Delete history entry"
+                            onClick={() => handleGoToMessage(run.sessionID, run.messageID, run.sessionMeta?.repoId ?? repoId)}
+                            className="inline-flex items-center gap-0.5 text-primary/80 hover:text-primary underline underline-offset-2 shrink-0"
+                            title="Go to message in chat"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <CornerDownLeft className="w-2.5 h-2.5" />
+                            chat
                           </button>
                         </div>
                       </div>
-                      <div className="px-3 py-2 space-y-2">
+                      <div className="border-t border-border/60 px-3 py-2 space-y-2">
                         {meta?.description && (
                           <p className="text-[11px] text-muted-foreground">{meta.description}</p>
                         )}
 
-                        {(run.steps.length > 0 || run.status === 'running') && (
+                        {(run.messagesLoaded || run.steps.length > 0 || run.status === 'running') && (
                           <div className="border border-border rounded-md overflow-hidden">
                             <button
                               type="button"
@@ -1325,7 +1375,12 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                             </button>
                             {stepsOpen && (
                               <div className="px-2.5 pb-2 space-y-1">
-                                {run.steps.length > 0 ? (
+                                {!run.messagesLoaded ? (
+                                  <p className="text-[11px] text-muted-foreground animate-pulse flex items-center gap-1.5">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Loading conversation...
+                                  </p>
+                                ) : run.steps.length > 0 ? (
                                   run.steps.map((step, i) => (
                                     <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground truncate">
                                       <Wrench className="w-3 h-3 flex-shrink-0" />
@@ -1342,33 +1397,35 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                           </div>
                         )}
 
-                        <div className="border border-border rounded-md overflow-hidden">
-                          <button
-                            type="button"
-                            onClick={() => toggle('response', !responseOpen)}
-                            className="w-full flex items-center justify-between px-2.5 py-1.5 text-left hover:bg-muted/40"
-                          >
-                            <span className="text-[11px] font-medium text-foreground">Response</span>
-                            <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${responseOpen ? '' : '-rotate-90'}`} />
-                          </button>
-                          {responseOpen && (
-                            <div className="px-2.5 pb-2">
-                              {run.result ? (
-                                <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-sans">{run.result}</pre>
-                              ) : run.status === 'running' ? (
-                                <p className="text-xs text-muted-foreground animate-pulse">Waiting for response...</p>
-                              ) : (
-                                <p className="text-xs text-muted-foreground">(no text response)</p>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                        {run.messagesLoaded && (
+                          <div className="border border-border rounded-md overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => toggle('response', !responseOpen)}
+                              className="w-full flex items-center justify-between px-2.5 py-1.5 text-left hover:bg-muted/40"
+                            >
+                              <span className="text-[11px] font-medium text-foreground">Response</span>
+                              <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${responseOpen ? '' : '-rotate-90'}`} />
+                            </button>
+                            {responseOpen && (
+                              <div className="px-2.5 pb-2">
+                                {run.result ? (
+                                  <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-sans">{run.result}</pre>
+                                ) : run.status === 'running' ? (
+                                  <p className="text-xs text-muted-foreground animate-pulse">Waiting for response...</p>
+                                ) : (
+                                  <p className="text-xs text-muted-foreground">(no text response)</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )
                 })}
-              </div>
-)}
+                </div>
+              )}
           </div>
         )}
       </div>
@@ -1395,3 +1452,5 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     </div>
   )
 }
+
+

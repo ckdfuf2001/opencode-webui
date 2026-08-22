@@ -1,10 +1,11 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { streamSSE } from 'hono/streaming'
 import type { Database } from 'bun:sqlite'
 import type { CommandRun } from '../db/command-run-queries'
 import * as runs from '../services/command-runs'
-import { getRecentHookCalls } from '../services/command-hooks'
-import { getSessionTitles, getDescendantSessionIds } from '../services/opencode-session-titles'
+import { getRecentHookCalls, onCommandRunUpdate } from '../services/command-hooks'
+import { getSessionTitles, getDescendantSessionIds, getSessionResponsePreviews } from '../services/opencode-session-titles'
 import { listRepos } from '../db/queries'
 import { logger } from '../utils/logger'
 
@@ -85,6 +86,23 @@ export function createCommandRunRoutes(db: Database) {
     return c.json({ calls: getRecentHookCalls() })
   })
 
+  // GET /api/command-runs/events — pre/post 훅에서 밀어주는 run 라이프사이클 SSE.
+  // 프론트는 이 이벤트를 받아 커맨드 패널을 즉시 갱신한다(running → completed).
+  app.get('/events', (c) => {
+    return streamSSE(c, async (stream) => {
+      const unsubscribe = onCommandRunUpdate((event) => {
+        void stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {})
+      })
+      stream.onAbort(() => {
+        unsubscribe()
+      })
+      while (!stream.aborted) {
+        await stream.writeSSE({ data: ': ping' }).catch(() => {})
+        await stream.sleep(20_000)
+      }
+    })
+  })
+
   // GET /api/command-runs/view?scope=all|repo|session&repoId=&sessionId=&from=&to=
   // 커맨드 패널/캘린더용 스코프 조회. repoName·sessionTitle을 서버가 채워 반환한다.
   app.get('/view', async (c) => {
@@ -128,6 +146,7 @@ export function createCommandRunRoutes(db: Database) {
       }
 
       const titles = await getSessionTitles(matched.map((r) => r.sessionId))
+      const previews = await getSessionResponsePreviews(matched.slice(0, 40).map((r) => r.sessionId))
 
       const items = matched
         .map((run) => {
@@ -135,7 +154,12 @@ export function createCommandRunRoutes(db: Database) {
             (run.repoId != null ? repoNameById.get(run.repoId) : undefined) ??
             (run.directory ? repoNameByDir.get(run.directory.replace(/\\/g, '/').toLowerCase()) : undefined) ??
             null
-          return { ...run, repoName, sessionTitle: titles[run.sessionId] ?? null }
+          return {
+            ...run,
+            repoName,
+            sessionTitle: titles[run.sessionId] ?? null,
+            responsePreview: previews[run.sessionId] ?? null,
+          }
         })
         .sort((a, b) => b.startedAt - a.startedAt)
 

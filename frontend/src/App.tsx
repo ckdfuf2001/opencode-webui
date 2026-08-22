@@ -8,6 +8,7 @@ import { SettingsDialog } from './components/settings/SettingsDialog'
 import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
 import { useSSE } from './hooks/useSSE'
+import { useCommandRunEvents } from './hooks/useCommandRunEvents'
 import { startAutoApprover } from './hooks/useAutoApprovePermissions'
 import { OPENCODE_API_ENDPOINT } from './config'
 
@@ -26,6 +27,7 @@ function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
   useSSE(OPENCODE_API_ENDPOINT, undefined, true)
+  useCommandRunEvents()
 
   return (
     <BrowserRouter>
