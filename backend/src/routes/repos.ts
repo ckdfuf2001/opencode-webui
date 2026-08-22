@@ -4,7 +4,7 @@ import * as db from '../db/queries'
 import * as repoService from '../services/repo'
 import * as gitOperations from '../services/git-operations'
 import { SettingsService } from '../services/settings'
-import { applyRepoTracking } from '../services/repo-tracking'
+import { applyRepoTracking, applyRepoTrackingForAllRepos } from '../services/repo-tracking'
 import { writeFileContent } from '../services/file-operations'
 import { opencodeServerManager } from '../services/opencode-single-server'
 import { releaseAgentBrowserForDirectory } from '../services/default-mcp'
@@ -69,6 +69,17 @@ export function createRepoRoutes(database: Database) {
     }
   })
   
+  app.post('/tracking/apply-all', async (c) => {
+    try {
+      const applied = await applyRepoTrackingForAllRepos(database)
+      logger.info(`Manually re-applied repo tracking to ${applied} repos`)
+      return c.json({ success: true, applied })
+    } catch (error: any) {
+      logger.error('Failed to apply repo tracking to all repos:', error)
+      return c.json({ error: error.message || 'Failed to apply repo tracking' }, 500)
+    }
+  })
+
   app.get('/', async (c) => {
     try {
       const repos = db.listRepos(database)

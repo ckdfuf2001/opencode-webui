@@ -626,7 +626,7 @@ Command 단위 업무 자동화에 맞게 얹는 것을 목표로 한다.
 
 | 순위 | 항목 | 상태 |
 |------|------|------|
-| P4 | **Registry 버전 스냅샷 (git)** — 레포 생성 시 자동화 파일 영역만 git이 변경 감지하도록 `.git/info/exclude`에 화이트리스트(기본 `​.opencode`)를 기록. 추적 경로는 General Settings에서 관리하며 변경 시 기존 레포 전체에 재적용. 워킹트리를 건드리지 않아 pull/브랜치 전환과 충돌 없음 | ✅ 구현 완료 |
+| P4 | **Registry 버전 스냅샷 (git)** — 레포 생성 시 자동화 파일 영역만 git이 변경 감지하도록 `.git/info/exclude`에 화이트리스트(기본 `​.opencode`)를 기록. 추적 경로는 General Settings에서 관리하며, 설정은 이후 생성 레포부터 적용하고 "Apply to existing repos" 버튼으로 기존 레포 전체에 수동 재적용(`POST /api/repos/tracking/apply-all`). 워킹트리를 건드리지 않아 pull/브랜치 전환과 충돌 없음 | ✅ 구현 완료 |
 | P1 | **실행 컨텍스트 주입** — 명령 실행 시 같은 커맨드의 최근 결과(성공률·실패 요약)를 "사실"로만 프롬프트에 주입. 처방 금지 + 연속 실패 시 서킷브레이커 | ⏳ 예정 |
 | P3 | **개선 제안 스테이징 + 승인** — improvement_proposals(pending/applied/rejected), 승인 시 registry 반영(Hermes의 write approval 상당) | ⏳ 예정 |
 | P2 | **Post-run 개선 에이전트** — 실행 종료 후 비동기 improver 세션이 transcript와 현재 커맨드/Skill을 대조해 패치 제안 생성(`autoReview` 옵트인) | ⏳ 예정 |
