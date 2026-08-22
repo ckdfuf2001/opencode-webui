@@ -71,7 +71,7 @@ export function createCommandRunRoutes(db: Database) {
     try {
       const input = CreateSchema.parse(await c.req.json())
       // origin 은 클라이언트가 지정할 수 없다. UI 경로는 항상 'ui'.
-      const run = runs.recordRunStart(db, { ...input, origin: 'ui' })
+      const run = await runs.recordRunStart(db, { ...input, origin: 'ui' })
       return c.json(run, 201)
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -85,7 +85,7 @@ export function createCommandRunRoutes(db: Database) {
   app.patch('/:id/message', async (c) => {
     try {
       const { messageId } = UpdateMessageSchema.parse(await c.req.json())
-      runs.attachMessage(db, c.req.param('id'), messageId)
+      await runs.attachMessage(db, c.req.param('id'), messageId)
       return c.json({ success: true })
     } catch (error) {
       if (error instanceof z.ZodError) return c.json({ error: 'Invalid data' }, 400)
@@ -97,7 +97,7 @@ export function createCommandRunRoutes(db: Database) {
   app.patch('/:id/finish', async (c) => {
     try {
       const { status } = FinishSchema.parse(await c.req.json())
-      runs.finishRun(db, c.req.param('id'), status)
+      await runs.finishRun(db, c.req.param('id'), status)
       return c.json({ success: true })
     } catch (error) {
       if (error instanceof z.ZodError) return c.json({ error: 'Invalid data' }, 400)
@@ -108,7 +108,7 @@ export function createCommandRunRoutes(db: Database) {
 
   app.delete('/:id', async (c) => {
     try {
-      runs.removeRun(db, c.req.param('id'))
+      await runs.removeRun(db, c.req.param('id'))
       return c.json({ success: true })
     } catch (error) {
       logger.error('Failed to delete command run:', error)
@@ -118,7 +118,7 @@ export function createCommandRunRoutes(db: Database) {
 
   app.delete('/session/:sessionId', async (c) => {
     try {
-      runs.clearSessionRuns(db, c.req.param('sessionId'))
+      await runs.clearSessionRuns(db, c.req.param('sessionId'))
       return c.json({ success: true })
     } catch (error) {
       logger.error('Failed to clear session command runs:', error)

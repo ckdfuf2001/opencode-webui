@@ -7,6 +7,7 @@ import type {
   CommandRunStatus,
   CreateCommandRunInput,
 } from '../db/command-run-queries'
+import * as store from './command-run-store'
 import { listRepos } from '../db/queries'
 import { firePreCommandHooks, firePostCommandHooks } from './command-hooks'
 import { logger } from '../utils/logger'
@@ -59,11 +60,14 @@ export interface RecordRunStartInput extends CreateCommandRunInput {
 }
 
 /**
- * run 시작을 기록한다. id / startedAt 은 서버가 생성하므로
- * 클라이언트 시계가 어긋나도 달력 날짜가 밀리지 않는다.
+ * run 시작을 기록한다(SQLite + run_history jsonl 이중 기록).
+ * id / startedAt 은 서버가 생성하므로 클라이언트 시계가 어긋나도 달력 날짜가 밀리지 않는다.
  * repoId 가 없으면 directory 로 해석해 채운다.
  */
-export function recordRunStart(db: Database, input: RecordRunStartInput): CommandRun {
+export async function recordRunStart(
+  db: Database,
+  input: RecordRunStartInput,
+): Promise<CommandRun> {
   const repoId = input.repoId ?? resolveRepoId(db, input.directory)
 
   const run = crDb.insertCommandRun(db, {
@@ -78,42 +82,54 @@ export function recordRunStart(db: Database, input: RecordRunStartInput): Comman
   })
 
   firePreCommandHooks(run)
+
+  try {
+    await store.insertRun(db, run, input.directory ?? null)
+  } catch (error) {
+    logger.warn(`Failed to mirror command run ${run.id} to run_history:`, error)
+  }
+
   return run
 }
 
 /** 기록 실패가 본 작업(스케줄 실행)을 중단시켜서는 안 되는 경로용. */
-export function recordRunStartSafe(db: Database, input: RecordRunStartInput): CommandRun | null {
+export async function recordRunStartSafe(
+  db: Database,
+  input: RecordRunStartInput,
+): Promise<CommandRun | null> {
   try {
-    return recordRunStart(db, input)
+    return await recordRunStart(db, input)
   } catch (error) {
     logger.warn('Failed to record command run start:', error)
     return null
   }
 }
 
-export function finishRunSafe(
+export async function finishRunSafe(
   db: Database,
   id: string,
-  status: Exclude<CommandRunStatus, 'started'>
-): void {
+  status: Exclude<CommandRunStatus, 'started'>,
+): Promise<void> {
   try {
-    finishRun(db, id, status)
+    await finishRun(db, id, status)
   } catch (error) {
     logger.warn(`Failed to mark command run ${id} as ${status}:`, error)
   }
 }
 
-export function attachMessage(db: Database, id: string, messageId: string): void {
+export async function attachMessage(db: Database, id: string, messageId: string): Promise<void> {
   crDb.updateCommandRunMessage(db, id, messageId)
+  await store.updateMessage(db, id, messageId)
 }
 
-export function finishRun(
+export async function finishRun(
   db: Database,
   id: string,
-  status: Exclude<CommandRunStatus, 'started'>
-): void {
+  status: Exclude<CommandRunStatus, 'started'>,
+): Promise<void> {
   const run = crDb.getCommandRunById(db, id)
   crDb.markCommandRunFinished(db, id, status)
+  await store.markFinished(db, id, status)
   if (run) {
     firePostCommandHooks(run, status)
   }
@@ -131,10 +147,12 @@ export function listRunsByRepo(db: Database, repoId: number): CommandRun[] {
   return crDb.listCommandRunsByRepo(db, repoId)
 }
 
-export function removeRun(db: Database, id: string): void {
+export async function removeRun(db: Database, id: string): Promise<void> {
   crDb.deleteCommandRun(db, id)
+  await store.removeRun(db, id)
 }
 
-export function clearSessionRuns(db: Database, sessionId: string): void {
+export async function clearSessionRuns(db: Database, sessionId: string): Promise<void> {
   crDb.clearSessionCommandRuns(db, sessionId)
+  await store.clearSession(db, sessionId)
 }
