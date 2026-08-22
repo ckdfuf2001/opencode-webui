@@ -171,8 +171,10 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
   const filteredSchedules = useMemo(() => {
     if (listProjects.length === 0) return []
     return schedules.filter((s) => {
-      const name = repoNameById[s.repoId] ?? ''
-      return name ? listProjects.includes(name) : false
+      const name = repoNameById[s.repoId]
+      // 삭제된 레포를 참조하는 스케줄은 필터와 무관하게 항상 표시한다(Unknown).
+      if (!name) return true
+      return listProjects.includes(name)
     })
   }, [schedules, listProjects, repoNameById])
   const sortedSchedules = useMemo(() => {
@@ -194,6 +196,8 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     const scheduleProject = currentRepo ? repoNameOf(currentRepo) : undefined
 
     for (const schedule of schedules) {
+      // 삭제된 레포의 스케줄은 실행이 계속 실패하므로 캘린더 마커에서는 제외한다(목록에는 Unknown으로 표시).
+      if (!repoNameById[schedule.repoId]) continue
       const firesOn = scheduleFiresInWindow(schedule.cron, schedule.createdAt, schedule.activeFrom, schedule.activeUntil)
       const scheduleRepoName = repoNameById[schedule.repoId] ?? scheduleProject
       for (let d = new Date(scanStart); d <= scanEnd; d.setDate(d.getDate() + 1)) {
@@ -688,8 +692,15 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
                   </div>
                   <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      {repoNameById[schedule.repoId] && (
+                      {repoNameById[schedule.repoId] ? (
                         <span className="font-semibold shrink-0 truncate max-w-[110px]">{repoNameById[schedule.repoId]}</span>
+                      ) : (
+                        <span
+                          className="font-semibold shrink-0 px-1 rounded border border-amber-500/50 bg-amber-500/10 text-amber-500 text-[9px] leading-tight"
+                          title={`Repo #${schedule.repoId} no longer exists — this schedule cannot run`}
+                        >
+                          Unknown
+                        </span>
                       )}
                       <span className="font-mono shrink-0">{schedule.cron}</span>
                     </div>
