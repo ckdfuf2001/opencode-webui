@@ -226,8 +226,8 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
       const normRunDir = run.directory?.replace(/\\/g, '/').replace(/\/+$/, '') ?? ''
       const runRepoName =
         run.repoName ?? repoNameByDirectory[normRunDir] ?? (normRunDir ? normRunDir.split('/').pop() ?? '' : currentProject)
-      // 런 마커도 스케줄과 같은 프로젝트 필터(listProjects)를 따른다.
-      if (!listProjects.includes(runRepoName)) continue
+      // 프로젝트 선택은 캘린더 자체 필터(ScheduleCalendar filters.projects)가 담당한다.
+      // 여기서 걸러두면 캘린더 필터로 다른 프로젝트를 골라도 마커가 이미 없어 보이지 않는다.
       map[key] ??= []
       map[key].push({
         id: `run-${run.id}`,
@@ -243,7 +243,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
       })
     }
     return map
-  }, [schedules, calendarViewDate, serverRunItems, listProjects, repoId, repos, repoNameById, repoNameByDirectory, currentProject])
+  }, [schedules, calendarViewDate, serverRunItems, repoId, repos, repoNameById, repoNameByDirectory, currentProject])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['schedules'] })
