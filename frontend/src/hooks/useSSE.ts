@@ -55,17 +55,15 @@ function updateMessagesQueries(
 async function markLatestSessionRunFinished(
   queryClient: QueryClient,
   sessionID: string,
-  status: 'failed' | 'cancelled',
+  status: 'completed' | 'failed' | 'cancelled',
 ): Promise<void> {
   try {
     const runs = await listCommandRunsBySession(sessionID)
     if (runs.length === 0) return
     const latest = [...runs].sort((a, b) => b.startedAt - a.startedAt)[0]
-    if (latest.status === status || latest.status === 'failed' || latest.status === 'cancelled') return
-    const recent =
-      latest.status === 'started'
-        ? Date.now() - latest.startedAt < RUN_FAILURE_WINDOW_MS
-        : latest.finishedAt != null && Date.now() - latest.finishedAt < RUN_FAILURE_WINDOW_MS
+    // 아직 진행 중('started')인 최근 실행만 마킹한다. 종료된 기록은 건드리지 않는다.
+    if (latest.status !== 'started') return
+    const recent = Date.now() - latest.startedAt < RUN_FAILURE_WINDOW_MS
     if (!recent) return
     await finishCommandRun(latest.id, status)
     queryClient.invalidateQueries({ queryKey: ['command-runs'] })
@@ -198,6 +196,10 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           sessionActivityEvents.emit({ type: 'idle', sessionID })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID] })
+          // 응답 완료 = 커맨드 히스토리 갱신 시점. 진행 중 run을 completed로 마킹하고
+          // 패널/캘린더가 파일 이력의 최신 상태를 바로 받아오게 한다.
+          void markLatestSessionRunFinished(queryClient, sessionID, 'completed')
+          queryClient.invalidateQueries({ queryKey: ['command-runs'] })
           break
         }
 
