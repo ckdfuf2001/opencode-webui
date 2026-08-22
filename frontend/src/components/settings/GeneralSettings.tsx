@@ -11,10 +11,12 @@ export function GeneralSettings() {
   const { preferences, isLoading, updateSettings, isUpdating } = useSettings()
   
   const [gitToken, setGitToken] = useState('')
-  
+  const [repoTrackPathsInput, setRepoTrackPathsInput] = useState('')
+
   useEffect(() => {
     if (preferences) {
       setGitToken(preferences.gitToken || '')
+      setRepoTrackPathsInput((preferences.repoTrackPaths ?? []).join(', '))
     }
   }, [preferences])
 
@@ -125,6 +127,32 @@ export function GeneralSettings() {
           />
           <p className="text-sm text-muted-foreground">
             Required for cloning private repos. Get one at github.com/settings/tokens
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="repoTrackPaths">Registry git tracking paths</Label>
+          <Input
+            id="repoTrackPaths"
+            placeholder=".opencode, docs"
+            value={repoTrackPathsInput}
+            onChange={(e) => setRepoTrackPathsInput(e.target.value)}
+            onBlur={() => {
+              const paths = repoTrackPathsInput
+                .split(',')
+                .map((entry) => entry.trim())
+                .filter(Boolean)
+              const current = (preferences?.repoTrackPaths ?? []).join(', ')
+              if (paths.join(', ') !== current) {
+                updateSettings({ repoTrackPaths: paths })
+              }
+            }}
+            className="bg-background border-border text-foreground placeholder:text-muted-foreground"
+          />
+          <p className="text-sm text-muted-foreground">
+            Repo-relative paths tracked for version history (comma-separated). All other files are
+            excluded from change detection via .git/info/exclude. Applied to new and existing repos.
+            Empty = track everything.
           </p>
         </div>
 

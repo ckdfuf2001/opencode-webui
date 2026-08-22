@@ -33,6 +33,8 @@ export const DEFAULT_KEYBOARD_SHORTCUTS = {
   selectModel: "ctrl+M",
 };
 
+export const DEFAULT_REPO_TRACK_PATHS = [".opencode"];
+
 export const UserPreferencesSchema = z.object({
   theme: z.enum(["dark", "light", "system"]),
   mode: z.enum(["plan", "build"]),
@@ -47,6 +49,7 @@ export const UserPreferencesSchema = z.object({
   gitToken: z.string().optional(),
   opencodeBin: z.string().optional(),
   tts: TTSConfigSchema.optional(),
+  repoTrackPaths: z.array(z.string()).default(DEFAULT_REPO_TRACK_PATHS),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -69,6 +72,7 @@ export const DEFAULT_USER_PREFERENCES = {
   customAgents: [],
   gitToken: undefined,
   tts: DEFAULT_TTS_CONFIG,
+  repoTrackPaths: DEFAULT_REPO_TRACK_PATHS,
 };
 
 export const SettingsResponseSchema = z.object({
