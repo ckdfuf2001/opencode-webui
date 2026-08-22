@@ -250,9 +250,9 @@ export function OpenCodeConfigManager() {
                     setAgentsMdContent(e.target.value)
                     setAgentsMdError('')
                   }}
-                  rows={12}
+                  rows={8}
                   placeholder={'# Global Agent Rules\n\nWrite your global instructions here...'}
-                  className="w-full min-h-[24rem] rounded-md bg-background border border-border px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary resize-y"
+                  className="w-full h-60 rounded-md bg-background border border-border px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary resize-y"
                 />
                 {agentsMdError && <p className="text-sm text-red-500 mt-2">{agentsMdError}</p>}
                 <div className="flex justify-end gap-2 mt-3">
