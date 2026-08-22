@@ -8,6 +8,7 @@ import type {
   CreateCommandRunInput,
 } from '../db/command-run-queries'
 import { listRepos } from '../db/queries'
+import { firePreCommandHooks, firePostCommandHooks } from './command-hooks'
 import { logger } from '../utils/logger'
 
 /** 슬래시 방향과 끝 슬래시를 정규화한다. Windows 경로 비교를 위해 필요. */
@@ -65,7 +66,7 @@ export interface RecordRunStartInput extends CreateCommandRunInput {
 export function recordRunStart(db: Database, input: RecordRunStartInput): CommandRun {
   const repoId = input.repoId ?? resolveRepoId(db, input.directory)
 
-  return crDb.insertCommandRun(db, {
+  const run = crDb.insertCommandRun(db, {
     id: randomUUID(),
     startedAt: Date.now(),
     origin: input.origin,
@@ -75,6 +76,9 @@ export function recordRunStart(db: Database, input: RecordRunStartInput): Comman
     directory: input.directory ?? null,
     repoId,
   })
+
+  firePreCommandHooks(run)
+  return run
 }
 
 /** 기록 실패가 본 작업(스케줄 실행)을 중단시켜서는 안 되는 경로용. */
@@ -90,10 +94,10 @@ export function recordRunStartSafe(db: Database, input: RecordRunStartInput): Co
 export function finishRunSafe(
   db: Database,
   id: string,
-  status: Exclude<CommandRunStatus, 'started'>,
+  status: Exclude<CommandRunStatus, 'started'>
 ): void {
   try {
-    crDb.markCommandRunFinished(db, id, status)
+    finishRun(db, id, status)
   } catch (error) {
     logger.warn(`Failed to mark command run ${id} as ${status}:`, error)
   }
@@ -106,9 +110,13 @@ export function attachMessage(db: Database, id: string, messageId: string): void
 export function finishRun(
   db: Database,
   id: string,
-  status: Exclude<CommandRunStatus, 'started'>,
+  status: Exclude<CommandRunStatus, 'started'>
 ): void {
+  const run = crDb.getCommandRunById(db, id)
   crDb.markCommandRunFinished(db, id, status)
+  if (run) {
+    firePostCommandHooks(run, status)
+  }
 }
 
 export function listRunsInRange(db: Database, fromTs: number, toTs: number): CommandRun[] {

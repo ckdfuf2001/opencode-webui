@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import * as runs from '../services/command-runs'
+import { getRecentHookCalls } from '../services/command-hooks'
 import { logger } from '../utils/logger'
 
 const CreateSchema = z.object({
@@ -60,6 +61,10 @@ export function createCommandRunRoutes(db: Database) {
       logger.error('Failed to list command runs:', error)
       return c.json({ error: 'Failed to list command runs' }, 500)
     }
+  })
+
+  app.get('/hooks/recent', (c) => {
+    return c.json({ calls: getRecentHookCalls() })
   })
 
   app.post('/', async (c) => {

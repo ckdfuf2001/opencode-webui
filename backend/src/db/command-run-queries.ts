@@ -116,6 +116,13 @@ export function listCommandRunsByRange(
   return rows.map(rowToRun)
 }
 
+export function getCommandRunById(db: Database, id: string): CommandRun | null {
+  const row = db
+    .prepare('SELECT * FROM command_runs WHERE id = ?')
+    .get(id) as CommandRunRow | undefined
+  return row ? rowToRun(row) : null
+}
+
 export function updateCommandRunMessage(db: Database, id: string, messageId: string): void {
   db.prepare('UPDATE command_runs SET message_id = ? WHERE id = ? AND message_id IS NULL')
     .run(messageId, id)
