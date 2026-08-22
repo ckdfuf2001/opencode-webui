@@ -1027,14 +1027,16 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       },
       enabled: open && !!opcodeUrl && !!sessionId,
       staleTime: 30_000,
+      // 존재하지 않는 세션(외부 기록 등)은 500 스팸 없이 조용히 건너뛴다.
+      retry: false,
     })),
   })
 
-  const getMessagesFor = useCallback((sessionId: string, directory?: string): MessageWithParts[] | undefined => {
+  const getMessageQuery = useCallback((sessionId: string, directory?: string) => {
     const idx = sessionTargets.findIndex(
       (t) => t.sessionId === sessionId && (t.directory ?? '') === (directory ?? ''),
     )
-    return idx >= 0 ? (messageQueries[idx]?.data as MessageWithParts[] | undefined) : undefined
+    return idx >= 0 ? messageQueries[idx] : undefined
   }, [sessionTargets, messageQueries])
 
   const sessionMeta = useMemo(() => {
@@ -1061,7 +1063,10 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     const ordered = [...(runList ?? [])].sort((a, b) => a.startedAt - b.startedAt)
     return ordered
       .map((run) => {
-        const msgs = getMessagesFor(run.sessionID, run.sessionMeta?.directory || run.directory)
+        const mq = getMessageQuery(run.sessionID, run.sessionMeta?.directory || run.directory)
+        const msgs = Array.isArray(mq?.data) ? (mq.data as MessageWithParts[]) : undefined
+        // 조회 실패(삭제된 세션 등)도 '로드 완료(빈 값)'로 취급해 스피너 무한 방지
+        const messagesLoaded = Array.isArray(msgs) || mq?.status === 'error'
         const meta = commands.find((c) => c.name === run.name)
         const segmented = segmentRun(msgs ?? [], run, meta?.oneshot)
         return {
@@ -1071,7 +1076,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
           startedAt: run.startedAt,
           sessionID: run.sessionID,
           messageID: run.messageID ?? segmented.triggerMessageID ?? undefined,
-          messagesLoaded: Array.isArray(msgs),
+          messagesLoaded,
           // 상태의 단일 진실은 파일 기록(run.status). 메시지 분석값은
           // 진행 중('started')일 때의 live 판정(running/error)으로만 사용한다.
           status: run.status === 'started'
@@ -1084,7 +1089,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         }
       })
       .reverse()
-  }, [runList, getMessagesFor, commands])
+  }, [runList, getMessageQuery, commands])
 
   const segmentById = useMemo(() => new Map(segments.map((s) => [s.id, s])), [segments])
 
