@@ -41,19 +41,19 @@ export function createCommandRunRoutes(db: Database) {
         if (toTs - fromTs > MAX_RANGE_MS) {
           return c.json({ error: 'Range too large (max 1 year)' }, 400)
         }
-        return c.json(runs.listRunsInRange(db, fromTs, toTs))
+        return c.json(await runs.listRunsInRange(db, fromTs, toTs))
       }
 
       const sessionId = c.req.query('sessionId')
       if (sessionId) {
-        return c.json(runs.listRunsBySession(db, sessionId))
+        return c.json(await runs.listRunsBySession(db, sessionId))
       }
 
       const repoIdRaw = c.req.query('repoId')
       if (repoIdRaw) {
         const repoId = parseInt(repoIdRaw, 10)
         if (Number.isNaN(repoId)) return c.json({ error: 'Invalid repoId' }, 400)
-        return c.json(runs.listRunsByRepo(db, repoId))
+        return c.json(await runs.listRunsByRepo(db, repoId))
       }
 
       return c.json({ error: 'from/to, sessionId or repoId is required' }, 400)

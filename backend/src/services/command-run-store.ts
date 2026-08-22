@@ -173,6 +173,20 @@ function candidateDirs(db: Database): string[] {
   return dirs
 }
 
+/** 모든 run_history 파일에 존재하는 run id 집합. 마이그레이션 중복 방지용. */
+export async function listExistingRunIds(db: Database): Promise<Set<string>> {
+  const ids = new Set<string>()
+  const tasks = candidateDirs(db).map(async (dir) => {
+    for (const file of await listMonthFiles(dir)) {
+      const content = await readFile(path.join(dir, file), 'utf8').catch(() => null)
+      if (content === null) continue
+      for (const { run } of parseLines(content)) ids.add(run.id)
+    }
+  })
+  await Promise.all(tasks)
+  return ids
+}
+
 const locationCache = new Map<string, string>()
 
 function rememberLocation(id: string, dir: string): void {
@@ -253,6 +267,7 @@ export async function listBySession(db: Database, sessionId: string): Promise<Co
 }
 
 export async function listByRepo(db: Database, repoId: number): Promise<CommandRun[]> {
-  const dir = resolveHistoryDir(db, null, repoId)
-  return listFromDir(dir, () => true)
+  const repo = listRepos(db).find((r) => r.id === repoId)
+  if (!repo?.fullPath) return []
+  return listFromDir(path.join(repo.fullPath, HISTORY_DIRNAME), () => true)
 }

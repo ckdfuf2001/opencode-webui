@@ -135,16 +135,16 @@ export async function finishRun(
   }
 }
 
-export function listRunsInRange(db: Database, fromTs: number, toTs: number): CommandRun[] {
-  return crDb.listCommandRunsByRange(db, fromTs, toTs)
+export async function listRunsInRange(db: Database, fromTs: number, toTs: number): Promise<CommandRun[]> {
+  return store.listInRange(db, fromTs, toTs)
 }
 
-export function listRunsBySession(db: Database, sessionId: string): CommandRun[] {
-  return crDb.listCommandRunsBySession(db, sessionId)
+export async function listRunsBySession(db: Database, sessionId: string): Promise<CommandRun[]> {
+  return store.listBySession(db, sessionId)
 }
 
-export function listRunsByRepo(db: Database, repoId: number): CommandRun[] {
-  return crDb.listCommandRunsByRepo(db, repoId)
+export async function listRunsByRepo(db: Database, repoId: number): Promise<CommandRun[]> {
+  return store.listByRepo(db, repoId)
 }
 
 export async function removeRun(db: Database, id: string): Promise<void> {
