@@ -1,6 +1,5 @@
 import type { Database } from 'bun:sqlite'
 import { randomUUID } from 'node:crypto'
-import * as crDb from '../db/command-run-queries'
 import type {
   CommandRun,
   CommandRunOrigin,
@@ -60,7 +59,7 @@ export interface RecordRunStartInput extends CreateCommandRunInput {
 }
 
 /**
- * run 시작을 기록한다(SQLite + run_history jsonl 이중 기록).
+ * run 시작을 기록한다(단일 소스: <repo>/run_history/<yyyy-MM>.jsonl).
  * id / startedAt 은 서버가 생성하므로 클라이언트 시계가 어긋나도 달력 날짜가 밀리지 않는다.
  * repoId 가 없으면 directory 로 해석해 채운다.
  */
@@ -68,27 +67,24 @@ export async function recordRunStart(
   db: Database,
   input: RecordRunStartInput,
 ): Promise<CommandRun> {
-  const repoId = input.repoId ?? resolveRepoId(db, input.directory)
-
-  const run = crDb.insertCommandRun(db, {
+  const now = Date.now()
+  const run: CommandRun = {
     id: randomUUID(),
-    startedAt: Date.now(),
-    origin: input.origin,
     sessionId: input.sessionId,
+    repoId: input.repoId ?? resolveRepoId(db, input.directory),
     commandName: input.commandName,
     args: input.args ?? null,
     directory: input.directory ?? null,
-    repoId,
-  })
-
-  firePreCommandHooks(run)
-
-  try {
-    await store.insertRun(db, run, input.directory ?? null)
-  } catch (error) {
-    logger.warn(`Failed to mirror command run ${run.id} to run_history:`, error)
+    messageId: null,
+    status: 'started',
+    origin: input.origin,
+    startedAt: now,
+    finishedAt: null,
+    createdAt: now,
   }
 
+  await store.insertRun(db, run, input.directory ?? null)
+  firePreCommandHooks(run)
   return run
 }
 
@@ -118,7 +114,6 @@ export async function finishRunSafe(
 }
 
 export async function attachMessage(db: Database, id: string, messageId: string): Promise<void> {
-  crDb.updateCommandRunMessage(db, id, messageId)
   await store.updateMessage(db, id, messageId)
 }
 
@@ -127,8 +122,7 @@ export async function finishRun(
   id: string,
   status: Exclude<CommandRunStatus, 'started'>,
 ): Promise<void> {
-  const run = crDb.getCommandRunById(db, id)
-  crDb.markCommandRunFinished(db, id, status)
+  const run = await store.getRunById(db, id)
   await store.markFinished(db, id, status)
   if (run) {
     firePostCommandHooks(run, status)
@@ -148,11 +142,9 @@ export async function listRunsByRepo(db: Database, repoId: number): Promise<Comm
 }
 
 export async function removeRun(db: Database, id: string): Promise<void> {
-  crDb.deleteCommandRun(db, id)
   await store.removeRun(db, id)
 }
 
 export async function clearSessionRuns(db: Database, sessionId: string): Promise<void> {
-  crDb.clearSessionCommandRuns(db, sessionId)
   await store.clearSession(db, sessionId)
 }

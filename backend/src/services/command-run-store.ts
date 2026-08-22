@@ -208,6 +208,13 @@ async function locateDir(db: Database, id: string): Promise<string | null> {
   return null
 }
 
+export async function getRunById(db: Database, id: string): Promise<CommandRun | null> {
+  const dir = await locateDir(db, id)
+  if (!dir) return null
+  const runs = await listFromDir(dir, (r) => r.id === id)
+  return runs[0] ?? null
+}
+
 export async function insertRun(db: Database, run: CommandRun, directory?: string | null): Promise<void> {
   const dir = resolveHistoryDir(db, directory ?? run.directory, run.repoId)
   rememberLocation(run.id, dir)
