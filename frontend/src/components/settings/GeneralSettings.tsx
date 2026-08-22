@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useSettings } from '@/hooks/useSettings'
-import { Loader2 } from 'lucide-react'
+import { applyRepoTrackingAll } from '@/api/repos'
+import { showToast } from '@/lib/toast'
+import { Loader2, RefreshCw } from 'lucide-react'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { TTSSettings } from './TTSSettings'
 
 export function GeneralSettings() {
@@ -12,6 +15,7 @@ export function GeneralSettings() {
   
   const [gitToken, setGitToken] = useState('')
   const [repoTrackPathsInput, setRepoTrackPathsInput] = useState('')
+  const [isApplyingTracking, setIsApplyingTracking] = useState(false)
 
   useEffect(() => {
     if (preferences) {
@@ -132,27 +136,52 @@ export function GeneralSettings() {
 
         <div className="space-y-2">
           <Label htmlFor="repoTrackPaths">Registry git tracking paths</Label>
-          <Input
-            id="repoTrackPaths"
-            placeholder=".opencode, docs"
-            value={repoTrackPathsInput}
-            onChange={(e) => setRepoTrackPathsInput(e.target.value)}
-            onBlur={() => {
-              const paths = repoTrackPathsInput
-                .split(',')
-                .map((entry) => entry.trim())
-                .filter(Boolean)
-              const current = (preferences?.repoTrackPaths ?? []).join(', ')
-              if (paths.join(', ') !== current) {
-                updateSettings({ repoTrackPaths: paths })
-              }
-            }}
-            className="bg-background border-border text-foreground placeholder:text-muted-foreground"
-          />
+          <div className="flex gap-2">
+            <Input
+              id="repoTrackPaths"
+              placeholder=".opencode, scripts"
+              value={repoTrackPathsInput}
+              onChange={(e) => setRepoTrackPathsInput(e.target.value)}
+              onBlur={() => {
+                const paths = repoTrackPathsInput
+                  .split(',')
+                  .map((entry) => entry.trim())
+                  .filter(Boolean)
+                const current = (preferences?.repoTrackPaths ?? []).join(', ')
+                if (paths.join(', ') !== current) {
+                  updateSettings({ repoTrackPaths: paths })
+                }
+              }}
+              className="bg-background border-border text-foreground placeholder:text-muted-foreground"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isApplyingTracking}
+              onClick={async () => {
+                setIsApplyingTracking(true)
+                try {
+                  const result = await applyRepoTrackingAll()
+                  showToast.success(`Applied tracking to ${result.applied} repo${result.applied === 1 ? '' : 's'}`)
+                } catch (error) {
+                  showToast.error(error instanceof Error ? error.message : 'Failed to apply repo tracking')
+                } finally {
+                  setIsApplyingTracking(false)
+                }
+              }}
+            >
+              {isApplyingTracking ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Apply to existing repos
+            </Button>
+          </div>
           <p className="text-sm text-muted-foreground">
             Repo-relative paths tracked for version history (comma-separated). All other files are
-            excluded from change detection via .git/info/exclude. Applied to new and existing repos.
-            Empty = track everything.
+            excluded from change detection via .git/info/exclude. Saved paths apply to newly created
+            repos; use "Apply to existing repos" to update all current ones. Empty = track everything.
           </p>
         </div>
 

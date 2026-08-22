@@ -128,9 +128,13 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 - 파일 쓰기가 가능한 세션이면 **해당 경로에 직접 파일을 작성**한다
   (**기본은 프로젝트 `<repo>/.opencode/`, 전역은 `workspace/.config/opencode/`**).
   특별한 이유가 없으면 프로젝트 단위로 만든다.
-- **구조를 정확히 지켜라**: skill은 `skills/<이름>/SKILL.md` **폴더**를 만들고 그
+- 구조를 정확히 지켜라**: skill은 `skills/<이름>/SKILL.md` **폴더**를 만들고 그
   안에 쓴다(폴더 없이 `skills/<이름>.md`로 두면 인식·scope 판별이 안 됨), command는
   `commands/<이름>.md`, agent는 `agents/<이름>.md`, plugin은 `plugins/<이름>.ts`.
+- **실행 코드(스크립트·툴)가 필요하면 `<repo>/scripts/` 안에 만든다.** MCP로 확보할 수
+  없어 직접 개발이 불가피한 Python/PowerShell/Node 코드 등은 모두 이 폴더에 둔다.
+  `scripts/`는 `.opencode/`와 마찬가지로 레포 git의 버전 관리 대상이므로, 작성 후
+  커밋하면 이력·롤백이 가능하다. 그 밖의 위치에 코드 파일을 생성하지 않는다.
 - 파일을 쓸 수 없으면 **완성된 md 내용을 채팅에 출력**하고, 사용자가
   "명령 패널 → Register new opencode file" 다이얼로그에 복사하도록 안내한다.
 - 작성 후에는 해당 파일을 읽어 **검증**한다. opencode는 자동화 파일을 **인스턴스 단위로
@@ -177,6 +181,24 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
 5. **백엔드 API 문서**: exe 배포 후 소스 분석 불가 문제를 해결 위해 런타임에 조회 가능:
    - `GET /api/openapi.json` — 전체 백엔드 라우트 OpenAPI 3.1 스펙
    - `GET /api/docs` — Swagger UI (CDN 기반, 오프라인 시 JSON 직접 조회)
+6. **자동화 코드와 스크립트는 레포 git으로 버전 관리한다(P4).** 어시스턴트가 생성하는
+   command·skill·tool(plugin)·agent 코드(`<repo>/.opencode/`)와 직접 개발한
+   실행 코드(`<repo>/scripts/`)는 레포 git이 변경 감지하도록, 백엔드가 레포 생성 시
+   `<repo>/.git/info/exclude`에 화이트리스트(기본 `/*` + `!/.opencode` + `!/scripts`)를 기록한다.
+   **목적은 코드가 발생(생성·수정)할 때마다 git 커밋으로 이력을 남기고,
+   잘못된 변경은 되돌리기로 롤백 가능하게 하는 것**이다.
+   - 자동화 파일을 작성·수정한 뒤에는 버전 관리를 위해 커밋을 권장한다:
+     `git -C <repo> add .opencode && git commit -m "..."`.
+   - 소스 코드 변경이 GitChangesPanel에 안 보이면 버그가 아니라 추적 범위 설정 때문이다
+     (워킹트리는 건드리지 않으므로 pull/브랜치 전환과 충돌하지 않는다).
+   - 추적 경로는 General Settings → *Registry git tracking paths*에서 관리하며,
+     저장은 **이후 생성 레포**부터 적용된다.
+   - **사용자가 추적 경로를 사후에 추가·수정했다면**, 이미 존재하는 레포들의 exclude에는
+     반영되어 있지 않다. 반드시 재적용 API를 호출해 해당 경로를 각 레포의 exclude에
+     등록해야 한다: UI의 *Apply to existing repos* 버튼 또는
+     **`POST /api/repos/tracking/apply-all`** → `{success, applied}`.
+     이 호출을 생략하면 새 경로의 파일은 기존 레포에서 git 감지 대상에서 계속 빠진다.
+     빈 경로로 적용하면 화이트리스트가 제거되어 전체 추적으로 복귀한다.
 
 ## 반복 업무 (스케줄링)
 
