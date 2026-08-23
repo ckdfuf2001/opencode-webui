@@ -9,16 +9,13 @@ pnpm run build:frontend
 if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' }
 
 Write-Output '[package 2/6] backend single-exe compile'
+bun scripts/generate-frontend-embed.ts
+if ($LASTEXITCODE -ne 0) { throw 'frontend embed generation failed' }
 bun build --compile --target=bun backend/src/index.ts --outfile (Join-Path $release 'opencode-webui.exe')
 if ($LASTEXITCODE -ne 0) { throw 'backend compile failed' }
 
-Write-Output '[package 3/6] frontend dist copy'
-# Remove destination first: Copy-Item -Recurse into an EXISTING directory
-# nests the source inside it (dist\dist), leaving stale bundles behind.
-$distDest = Join-Path $release 'frontend\dist'
-if (Test-Path $distDest) { Remove-Item $distDest -Recurse -Force }
-New-Item -ItemType Directory -Force -Path (Split-Path $distDest) | Out-Null
-Copy-Item -Recurse -Force (Join-Path $root 'frontend\dist') $distDest
+Write-Output '[package 3/6] frontend is embedded in the exe'
+Remove-Item (Join-Path $release 'frontend') -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Output '[package 4/6] bin copy (opencode / agent-browser)'
 $binDest = Join-Path $release 'bin'

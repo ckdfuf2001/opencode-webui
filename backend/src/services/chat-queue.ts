@@ -52,60 +52,117 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
  * the session idle again. Dispatch failures re-queue the item at the front
  * with a backoff so a broken OpenCode server cannot spin the flusher.
  */
+function dispatchHead(base: string, sessionID: string): void {
+  const queue = queues.get(sessionID)
+  if (!queue || queue.length === 0) return
+  if (inFlight.has(sessionID)) return
+  if ((failedUntil.get(sessionID) ?? 0) > Date.now()) return
+
+  const next = queue[0]
+  if (!next) return
+
+  // Optimistic removal: the strip must clear as soon as the message is
+  // handed to OpenCode, not when the generated answer finishes. Failures
+  // put the item back at the front with a backoff.
+  queue.splice(0, 1)
+  if (queue.length === 0) queues.delete(sessionID)
+
+  inFlight.add(sessionID)
+  logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
+
+  void dispatchQueuedChat(base, sessionID, next)
+    .then((sent) => {
+      if (sent) {
+        failedUntil.delete(sessionID)
+        logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
+      } else {
+        requeueFront(sessionID, next)
+        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+      }
+    })
+    .catch((error) => {
+      logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
+      // OpenCode may not return response headers until the whole turn has
+      // finished generating. A timeout therefore means the request almost
+      // certainly REACHED OpenCode — treat it as delivered instead of
+      // re-queuing, otherwise the message would be sent twice.
+      const name = (error as { name?: string })?.name
+      const code = ((error as { cause?: { code?: unknown } })?.cause?.code
+        ?? (error as { code?: unknown })?.code) as string | undefined
+      const connectError = typeof code === 'string'
+        && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code.toUpperCase())
+      if (connectError) {
+        requeueFront(sessionID, next)
+        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+      } else if (name !== 'TimeoutError' && name !== 'AbortError') {
+        requeueFront(sessionID, next)
+        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+      }
+    })
+    .finally(() => {
+      inFlight.delete(sessionID)
+    })
+}
+
 export async function flushReadyQueues(busySessions: Set<string>): Promise<void> {
   if (queues.size === 0) return
   const base = opencodeServerManager.getUrl()
 
-  for (const [sessionID, queue] of [...queues]) {
-    if (queue.length === 0 || busySessions.has(sessionID)) continue
-    if ((failedUntil.get(sessionID) ?? 0) > Date.now()) continue
-    if (inFlight.has(sessionID)) continue
-
-    const next = queue[0]
-    if (!next) continue
-
-    // Optimistic removal: the strip must clear as soon as the message is
-    // handed to OpenCode, not when the generated answer finishes. Failures
-    // put the item back at the front with a backoff.
-    queue.splice(0, 1)
-    if (queue.length === 0) queues.delete(sessionID)
-
-    inFlight.add(sessionID)
-    logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
-
-    void dispatchQueuedChat(base, sessionID, next)
-      .then((sent) => {
-        if (sent) {
-          failedUntil.delete(sessionID)
-          logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
-        } else {
-          requeueFront(sessionID, next)
-          failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
-        }
-      })
-      .catch((error) => {
-        logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
-        // OpenCode may not return response headers until the whole turn has
-        // finished generating. A timeout therefore means the request almost
-        // certainly REACHED OpenCode — treat it as delivered instead of
-        // re-queuing, otherwise the message would be sent twice.
-        const name = (error as { name?: string })?.name
-        const code = ((error as { cause?: { code?: unknown } })?.cause?.code
-          ?? (error as { code?: unknown })?.code) as string | undefined
-        const connectError = typeof code === 'string'
-          && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code.toUpperCase())
-        if (connectError) {
-          requeueFront(sessionID, next)
-          failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
-        } else if (name !== 'TimeoutError' && name !== 'AbortError') {
-          requeueFront(sessionID, next)
-          failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
-        }
-      })
-      .finally(() => {
-        inFlight.delete(sessionID)
-      })
+  for (const [sessionID] of [...queues]) {
+    if (busySessions.has(sessionID)) continue
+    dispatchHead(base, sessionID)
   }
+}
+
+// Real-time completion: instead of waiting up to one status-poll cycle for a
+// turn to end, subscribe to OpenCode's global event stream and dispatch the
+// moment a session reports idle/error. The 5s poll in session-watch stays as
+// a fallback for missed events.
+let idleListenerStarted = false
+
+export function startQueueIdleListener(): void {
+  if (idleListenerStarted) return
+  idleListenerStarted = true
+
+  const connect = async (): Promise<void> => {
+    const base = opencodeServerManager.getUrl()
+    const headers = ensureServerAuth({})
+    try {
+      const res = await fetch(`${base}/global/event`, { headers })
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() ?? ''
+        for (const chunk of chunks) {
+          const dataLine = chunk.split('\n').find((l) => l.startsWith('data:'))
+          if (!dataLine) continue
+          try {
+            const evt = JSON.parse(dataLine.slice(5).trim())
+            const type = String(evt?.type ?? '')
+            if (type !== 'session.idle' && type !== 'session.error') continue
+            const sessionID = evt.properties?.sessionID
+            if (typeof sessionID === 'string' && queues.has(sessionID)) {
+              logger.info(`Session ${sessionID} went idle; flushing queued chat immediately`)
+              dispatchHead(base, sessionID)
+            }
+          } catch {}
+        }
+      }
+    } catch {
+      // server restarting or unreachable — fall through to reconnect
+    }
+    setTimeout(() => {
+      void connect()
+    }, 3_000)
+  }
+
+  void connect()
 }
 
 function requeueFront(sessionID: string, chat: QueuedChat): void {

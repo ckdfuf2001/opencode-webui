@@ -20,6 +20,8 @@ import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
 import { createChatQueueRoutes } from './routes/chat-queue'
+import { startQueueIdleListener } from './services/chat-queue'
+import { getEmbeddedAsset } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionWatch } from './services/session-watch'
@@ -242,11 +244,30 @@ app.all('/api/opencode/*', async (c) => {
 const isProduction = ENV.SERVER.NODE_ENV === 'production'
 
 if (isProduction) {
+  // Embedded frontend first: when the exe was packaged with
+  // scripts/generate-frontend-embed.ts, everything is served from memory and
+  // no frontend/dist folder needs to ship next to the binary.
+  app.use('/*', async (c, next) => {
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next()
+    if (c.req.path.startsWith('/api/')) return next()
+    const route = c.req.path === '/' ? '/index.html' : decodeURIComponent(c.req.path)
+    const asset = await getEmbeddedAsset(route)
+    if (!asset) return next()
+    c.header('Content-Type', asset.contentType)
+    c.header('Cache-Control', asset.immutable ? 'public, max-age=31536000, immutable' : 'no-cache')
+    return c.body(new Uint8Array(asset.body))
+  })
+
   app.use('/*', serveStatic({ root: './frontend/dist' }))
-  
+
   app.get('*', async (c) => {
     if (c.req.path.startsWith('/api/')) {
       return c.notFound()
+    }
+    const embeddedIndex = await getEmbeddedAsset('/index.html')
+    if (embeddedIndex) {
+      c.header('Cache-Control', 'no-cache')
+      return c.body(new Uint8Array(embeddedIndex.body))
     }
     const fs = await import('fs/promises')
     const path = await import('path')
@@ -425,5 +446,7 @@ logger.info('Schedule runner started')
 
 startSessionWatch(db)
 logger.info('Session watch started')
+
+startQueueIdleListener()
 
 startAutomationWatcher()
