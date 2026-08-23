@@ -63,30 +63,42 @@ export async function flushReadyQueues(busySessions: Set<string>): Promise<void>
 
     const next = queue[0]
     if (!next) continue
+
+    // Optimistic removal: the strip must clear as soon as the message is
+    // handed to OpenCode, not when the generated answer finishes. Failures
+    // put the item back at the front with a backoff.
+    queue.splice(0, 1)
+    if (queue.length === 0) queues.delete(sessionID)
+
     inFlight.add(sessionID)
 
     void dispatchQueuedChat(base, sessionID, next)
       .then((sent) => {
         if (sent) {
-          const current = queues.get(sessionID)
-          if (current) {
-            const index = current.findIndex((item) => item.id === next.id)
-            if (index !== -1) current.splice(index, 1)
-            if (current.length === 0) queues.delete(sessionID)
-          }
           failedUntil.delete(sessionID)
           logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
         } else {
+          requeueFront(sessionID, next)
           failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
         }
       })
       .catch((error) => {
         logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
+        requeueFront(sessionID, next)
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
       })
       .finally(() => {
         inFlight.delete(sessionID)
       })
+  }
+}
+
+function requeueFront(sessionID: string, chat: QueuedChat): void {
+  const queue = queues.get(sessionID)
+  if (queue) {
+    queue.unshift(chat)
+  } else {
+    queues.set(sessionID, [chat])
   }
 }
 

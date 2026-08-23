@@ -40,10 +40,9 @@ export function createChatQueueRoutes() {
     try {
       const sessionId = c.req.param('sessionId')
       const itemId = c.req.param('itemId')
-      const removed = removeQueuedChat(sessionId, itemId)
-      if (!removed) {
-        return c.json({ error: 'Queued chat not found' }, 404)
-      }
+      // Idempotent: the item may already be mid-dispatch (optimistically
+      // removed by the flusher), and deleting a vanished id is not an error.
+      removeQueuedChat(sessionId, itemId)
       return c.json({ success: true })
     } catch (error) {
       logger.error('Failed to remove queued chat:', error)
