@@ -200,6 +200,7 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           // 패널/캘린더가 파일 이력의 최신 상태를 바로 받아오게 한다.
           void markLatestSessionRunFinished(queryClient, sessionID, 'completed')
           queryClient.invalidateQueries({ queryKey: ['command-runs'] })
+          queryClient.invalidateQueries({ queryKey: ['chat-queue', sessionID] })
           break
         }
 

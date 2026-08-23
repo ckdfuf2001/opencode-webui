@@ -19,6 +19,7 @@ import { createConfigFileRoutes } from './routes/config-files'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
+import { createChatQueueRoutes } from './routes/chat-queue'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionWatch } from './services/session-watch'
@@ -200,6 +201,7 @@ app.route('/api/registry', createRegistryRoutes())
 app.route('/api/config-files', createConfigFileRoutes(db))
 app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
+app.route('/api/chat-queue', createChatQueueRoutes())
 
 app.get('/api/openapi.json', (c) => c.json(openApiSpec))
 

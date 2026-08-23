@@ -1,6 +1,7 @@
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { SettingsService } from './settings'
+import { flushReadyQueues } from './chat-queue'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 import type { Database } from 'bun:sqlite'
@@ -83,13 +84,6 @@ export function startSessionWatch(db: Database): NodeJS.Timeout {
   }
 
   async function pollOnce(): Promise<void> {
-    const preferences = new SettingsService(db).getSettings('default').preferences
-    if (preferences.autoResumeInterrupted === false) {
-      prevBusy.clear()
-      sawOutage = false
-      return
-    }
-
     const base = opencodeServerManager.getUrl()
     const headers = ensureServerAuth({})
 
@@ -117,7 +111,8 @@ export function startSessionWatch(db: Database): NodeJS.Timeout {
         .map(([id]) => id),
     )
 
-    if (sawOutage && prevBusy.size > 0) {
+    const preferences = new SettingsService(db).getSettings('default').preferences
+    if (preferences.autoResumeInterrupted !== false && sawOutage && prevBusy.size > 0) {
       const candidates = [...prevBusy].filter((id) => !currentlyBusy.has(id))
       for (const sessionID of candidates) {
         try {
@@ -132,6 +127,8 @@ export function startSessionWatch(db: Database): NodeJS.Timeout {
     sawOutage = false
     prevBusy.clear()
     currentlyBusy.forEach((id) => prevBusy.add(id))
+
+    await flushReadyQueues(currentlyBusy)
   }
 
   return setInterval(() => {

@@ -7,6 +7,9 @@ import { useCommandHandler } from '@/hooks/useCommandHandler'
 import { useFileSearch } from '@/hooks/useFileSearch'
 
 import { useUserBash } from '@/stores/userBashStore'
+import { useSessionActive } from '@/hooks/useSessionActivity'
+import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
+import { ChatQueueStrip } from './ChatQueueStrip'
 import { ChevronDown } from 'lucide-react'
 
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
@@ -100,6 +103,8 @@ export function PromptInput({
   const sendPrompt = useSendPrompt(opcodeUrl, directory)
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
+  const enqueueQueued = useEnqueueQueuedChat()
+  const sessionActive = useSessionActive(sessionID)
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
   const sessionData = useSession(opcodeUrl, sessionID, directory)
   const session = sessionData.data as SessionWithModel | undefined
@@ -199,6 +204,23 @@ export function PromptInput({
     if (editTargetMessageID && onResendEdit) {
       const truncated = await onResendEdit(editTargetMessageID)
       if (!truncated) return
+    }
+
+    if (hasActiveStream || sessionActive) {
+      const text = parts
+        .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
+        .filter((text) => text.trim().length > 0)
+        .join('\n')
+      if (text.trim()) {
+        enqueueQueued.mutate({ sessionID, text })
+        setPrompt('')
+        setAttachedFiles(new Map())
+        onSubmitted?.()
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto'
+        }
+      }
+      return
     }
 
     sendPrompt.mutate({
@@ -657,8 +679,7 @@ export function PromptInput({
 
   return (
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 md:p-3 mx-2 md:mx-4 mb-2 md:mb-5 w-[90%] md:max-w-4xl">
-      
-      
+      <ChatQueueStrip sessionID={sessionID} />
       <textarea
         ref={textareaRef}
         value={prompt}
@@ -666,11 +687,13 @@ export function PromptInput({
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         placeholder={
-          isBashMode 
-            ? "Enter bash command..." 
-            : "Send a message..."
+          isBashMode
+            ? "Enter bash command..."
+            : hasActiveStream
+              ? "Queue a message — it will send after the current response..."
+              : "Send a message..."
         }
-        disabled={disabled || hasActiveStream}
+        disabled={disabled}
         className={`w-full bg-background/90 px-2 md:px-3 py-2 text-[16px] text-foreground placeholder-muted-foreground focus:outline-none focus:bg-background resize-none min-h-[40px] max-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed md:text-sm rounded-lg ${
           isBashMode 
             ? 'border-purple-500/50 bg-purple-500/5' 
