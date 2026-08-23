@@ -162,6 +162,11 @@ class OpenCodeServerManager {
   private hasLoggedHealthy: boolean = false
   private port: number = OPENCODE_DEFAULT_PORT
   private restartPromise: Promise<void> | null = null
+  // Consecutive failed health probes. A single slow probe (busy opencode
+  // streaming a large answer, AV scan, GC pause) must NOT tear down a live
+  // server — that restart gap is what produced periodic 502s on proxied
+  // session/message GETs.
+  private healthFailures: number = 0
 
   private constructor() {}
 
@@ -191,8 +196,19 @@ class OpenCodeServerManager {
     }
     if (await this.checkHealth()) {
       this.isHealthy = true
+      this.healthFailures = 0
       return
     }
+    // Require several consecutive failed probes (across separate ticks) before
+    // attempting a restart, so a transiently busy server is never recycled.
+    this.healthFailures++
+    if (this.healthFailures < 3) {
+      logger.warn(
+        `OpenCode health probe failed (${this.healthFailures}/3); skipping restart attempt`
+      )
+      return
+    }
+    logger.warn('OpenCode health probe failed 3 times in a row; attempting restart')
     await this.start()
   }
 
@@ -202,6 +218,7 @@ class OpenCodeServerManager {
         this.hasLoggedHealthy = true
         logger.info('OpenCode server already running and healthy')
       }
+      this.healthFailures = 0
       return
     }
     const binPath = resolveOpenCodeBin()
@@ -217,6 +234,7 @@ class OpenCodeServerManager {
       if (this.serverPid) {
         if (await this.waitForHealth(20000)) {
           this.isHealthy = true
+          this.healthFailures = 0
           logger.info(`OpenCode server is healthy on port ${this.port}`)
           return
         }
@@ -255,6 +273,7 @@ class OpenCodeServerManager {
       this.serverPid = existingProcesses[0]?.pid ?? null
       this.isManaged = false
       this.isHealthy = true
+      this.healthFailures = 0
       logger.info(`Attaching to existing healthy OpenCode server on port ${candidate}`)
       return
     }
@@ -274,6 +293,7 @@ class OpenCodeServerManager {
     }
 
     this.isHealthy = true
+    this.healthFailures = 0
     logger.info(`OpenCode server is healthy on port ${candidate}`)
   }
 
