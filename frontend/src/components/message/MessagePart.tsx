@@ -17,6 +17,8 @@ interface MessagePartProps {
   onFileClick?: (filePath: string, lineNumber?: number) => void
   messageTextContent?: string
   directory?: string
+  opcodeUrl?: string
+  sessionID?: string
 }
 
 function getCopyableContent(part: Part, allParts?: Part[]): string {
@@ -171,7 +173,7 @@ function FileMention({
 
 
 
-export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory }: MessagePartProps) {
+export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, opcodeUrl, sessionID }: MessagePartProps) {
   const copyableContent = getCopyableContent(part, allParts)
   
   switch (part.type) {
@@ -193,7 +195,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'patch':
       return <PatchPart part={part} />
     case 'tool':
-      return <ToolCallPart part={part} onFileClick={onFileClick} />
+      return <ToolCallPart part={part} onFileClick={onFileClick} opcodeUrl={opcodeUrl} sessionID={sessionID} />
     case 'reasoning':
       return (
         <details className="border border-border rounded-lg my-2">

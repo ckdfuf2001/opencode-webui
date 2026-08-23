@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { components } from '@/api/opencode-types'
 import { useSettings } from '@/hooks/useSettings'
 import { useUserBash } from '@/stores/userBashStore'
@@ -34,6 +35,8 @@ type ToolPart = components['schemas']['ToolPart']
 interface ToolCallPartProps {
   part: ToolPart
   onFileClick?: (filePath: string, lineNumber?: number) => void
+  opcodeUrl?: string
+  sessionID?: string
 }
 
 function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (filePath: string) => void }) {
@@ -76,10 +79,24 @@ function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (fi
   return <pre className="bg-accent p-2 rounded text-xs overflow-x-auto">{parts}</pre>
 }
 
-export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
+export function ToolCallPart({ part, onFileClick, opcodeUrl, sessionID }: ToolCallPartProps) {
   const { preferences } = useSettings()
   const { userBashCommands } = useUserBash()
+  const queryClient = useQueryClient()
   const outputRef = useRef<HTMLDivElement>(null)
+
+  // Like the CLI, keep the interim tool output fresh while the command is
+  // still running: SSE part updates cover most of it, and this 10s poll is a
+  // safety net for tools that stream sparsely.
+  useEffect(() => {
+    if (part.state.status !== 'running' || !opcodeUrl || !sessionID) return
+    const timer = setInterval(() => {
+      queryClient.invalidateQueries({
+        queryKey: ['opencode', 'messages', opcodeUrl, sessionID],
+      })
+    }, 10_000)
+    return () => clearInterval(timer)
+  }, [part.state.status, opcodeUrl, sessionID, queryClient])
   const isUserBashCommand = part.tool === 'bash' && 
     part.state.status === 'completed' &&
     typeof part.state.input?.command === 'string' &&
@@ -147,6 +164,9 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
 
   const previewText = getPreviewText()
   const isFileTool = ['read', 'write', 'edit'].includes(part.tool)
+  const rawState = part.state as unknown as Partial<{ output: string; error: string }>
+  const outputText = typeof rawState.output === 'string' ? rawState.output : ''
+  const errorText = typeof rawState.error === 'string' ? rawState.error : ''
 
   if (isUserBashCommand) {
     const command = part.state.input.command as string
@@ -201,56 +221,53 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
 
       {expanded && (
         <div className="bg-card space-y-2">
-          {part.state.status === 'running' && (
+          {part.tool === 'bash' ? (
+            <div className="text-sm">
+              <div className="flex items-center gap-2 mb-1">
+                <div className="text-zinc-400">Command:</div>
+                <CopyButton
+                  content={typeof part.state.input?.command === 'string' ? part.state.input.command : ''}
+                  title="Copy command"
+                />
+              </div>
+              <div className="bg-accent p-2 rounded text-xs overflow-x-auto">
+                <span className="text-green-400">$</span> {typeof part.state.input?.command === 'string' ? part.state.input.command : ''}
+              </div>
+            </div>
+          ) : (
             <div className="text-sm">
               <div className="text-zinc-400 mb-1">Input:</div>
               <ClickableJson json={part.state.input} onFileClick={onFileClick} />
             </div>
           )}
 
-          {part.state.status === 'completed' && (
-            <>
-              {part.tool === 'bash' ? (
-                <div className="text-sm">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="text-zinc-400">Command:</div>
-                    <CopyButton 
-                      content={typeof part.state.input?.command === 'string' ? part.state.input.command : ''} 
-                      title="Copy command" 
-                    />
-                  </div>
-                  <div className="bg-accent p-2 rounded text-xs overflow-x-auto">
-                    <span className="text-green-400">$</span> {typeof part.state.input?.command === 'string' ? part.state.input.command : ''}
-                  </div>
-                </div>
-              ) : (
-                <div className="text-sm">
-                  <div className="text-zinc-400 mb-1">Input:</div>
-                  <ClickableJson json={part.state.input} onFileClick={onFileClick} />
-                </div>
-              )}
-              <div className="text-sm" ref={outputRef}>
-                <div className="text-zinc-400 mb-1">Output:</div>
-                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors" 
-                     onClick={() => part.state.status === 'completed' && navigator.clipboard.writeText(part.state.output)}
-                     title="Click to copy output">
-                  {part.state.status === 'completed' ? part.state.output : ''}
-                </pre>
+          {part.state.status !== 'pending' && (
+            <div className="text-sm" ref={outputRef}>
+              <div className="text-zinc-400 mb-1">
+                Output:{part.state.status === 'running' ? ' (streaming…)' : ''}
               </div>
-              {part.state.time && (
-                <div className="text-xs text-zinc-500">
-                  Duration: {((part.state.time.end - part.state.time.start) / 1000).toFixed(2)}s
-                </div>
-              )}
-            </>
+              <pre
+                className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors"
+                onClick={() => navigator.clipboard.writeText(outputText)}
+                title="Click to copy output"
+              >
+                {outputText}
+              </pre>
+            </div>
           )}
 
-          {part.state.status === 'error' && (
+          {part.state.status === 'error' && errorText.trim() !== '' && (
             <div className="text-sm">
               <div className="text-red-400 mb-1">Error:</div>
               <pre className="bg-accent p-2 rounded text-xs overflow-x-auto text-red-300">
-                {part.state.error}
+                {errorText}
               </pre>
+            </div>
+          )}
+
+          {part.state.status === 'completed' && part.state.time && (
+            <div className="text-xs text-zinc-500">
+              Duration: {((part.state.time.end - part.state.time.start) / 1000).toFixed(2)}s
             </div>
           )}
         </div>
