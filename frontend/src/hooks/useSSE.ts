@@ -5,7 +5,7 @@ import { useOpenCodeClient } from './useOpenCode'
 import type { SSEEvent, MessageListResponse, QuestionRequest, PermissionAskedProps } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
 import { questionEvents } from './useQuestionRequests'
-import { sessionActivityEvents, isSessionActiveInStore } from './useSessionActivity'
+import { sessionActivityEvents, isSessionActiveInStore, reconcileSessionActivity } from './useSessionActivity'
 import { playCompletionTick } from '@/lib/sounds'
 import { showToast } from '@/lib/toast'
 import { settingsApi } from '@/api/settings'
@@ -558,6 +558,16 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           resetReconnectDelay()
           queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl] })
+          // Re-sync Working badges with the server's real busy map so badges
+          // that survived a missed session.idle correct immediately.
+          client.getSessionStatus().then((status) => {
+            const busy = new Set(
+              Object.entries(status ?? {})
+                .filter(([, s]) => s?.type === 'busy')
+                .map(([id]) => id),
+            )
+            reconcileSessionActivity(busy)
+          }).catch(() => {})
           wasConnectedRef.current = true
         }
 

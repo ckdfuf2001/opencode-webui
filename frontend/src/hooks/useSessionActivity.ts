@@ -33,7 +33,9 @@ const useSessionActivityStore = create<SessionActivityStore>(() => ({
 }))
 
 const COMPLETION_GRACE_MS = 3000
-const ACTIVITY_TIMEOUT_MS = 60_000
+// Fallback only: sessions are cleared by session.idle/session.error events.
+// The sweeper exists for events missed while the connection was down.
+const ACTIVITY_TIMEOUT_MS = 15_000
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function setActive(sessionID: string): void {
@@ -121,4 +123,29 @@ export function useSessionActive(sessionID?: string): boolean {
 /** Non-reactive check used by the SSE handler before it clears the state. */
 export function isSessionActiveInStore(sessionID: string): boolean {
   return !!useSessionActivityStore.getState().activeSessions[sessionID]
+}
+
+/**
+ * Align the activity store with the server's real busy map. Called on SSE
+ * (re)connect so a Working badge that survived a missed session.idle event
+ * corrects itself immediately instead of waiting out the sweeper.
+ */
+export function reconcileSessionActivity(busySessionIDs: Set<string>): void {
+  useSessionActivityStore.setState((state) => {
+    let changed = false
+    const activeSessions: Record<string, number> = { ...state.activeSessions }
+    for (const sessionID of busySessionIDs) {
+      if (!(sessionID in activeSessions)) {
+        activeSessions[sessionID] = Date.now()
+        changed = true
+      }
+    }
+    for (const sessionID of Object.keys(activeSessions)) {
+      if (!busySessionIDs.has(sessionID) && sessionID in state.activeSessions) {
+        delete activeSessions[sessionID]
+        changed = true
+      }
+    }
+    return changed ? { activeSessions } : state
+  })
 }
