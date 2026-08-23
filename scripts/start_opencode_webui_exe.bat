@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 set NODE_ENV=production
 
-rem .env 가 없으면 기본값으로 생성 (PORT / HOST / NODE_ENV)
+rem .env ? ??? ????? ?? (PORT / HOST / NODE_ENV)
 if not exist ".env" (
   echo [START] creating default .env
   > .env echo PORT=5002
@@ -11,7 +11,7 @@ if not exist ".env" (
   >> .env echo NODE_ENV=production
 )
 
-rem .env 의 PORT 등 키를 읽어 환경변수로 사용 (이미 설정된 값은 유지)
+rem .env ? PORT ? ?? ?? ????? ?? (?? ??? ?? ??)
 if exist ".env" (
   for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do (
     if /i "%%a"=="PORT" if not defined PORT set "PORT=%%b"
@@ -25,7 +25,6 @@ if not exist "logs" mkdir logs
 
 echo [START] checking prerequisites...
 if not exist "opencode-webui.exe" echo [START] ERROR: opencode-webui.exe not found & exit /b 1
-if not exist "frontend\dist\index.html" echo [START] ERROR: frontend\dist missing & exit /b 1
 if exist "bin\opencode.exe" (echo [START] ok: opencode binary) else echo [START] WARN: bin\opencode.exe missing - AI sessions unavailable
 if exist "bin\agent-browser" (echo [START] ok: agent-browser) else echo [START] WARN: bin\agent-browser missing - browser automation disabled
 if exist "scripts\doc-reader.exe" (echo [START] ok: doc-reader.exe) else echo [START] WARN: doc-reader.exe missing - python fallback required
