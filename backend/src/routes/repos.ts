@@ -115,6 +115,7 @@ export function createRepoRoutes(database: Database) {
   })
   
   app.delete('/:id', async (c) => {
+    const startedAt = Date.now()
     try {
       const id = parseInt(c.req.param('id'))
       const repo = db.getRepoById(database, id)
@@ -137,13 +138,15 @@ export function createRepoRoutes(database: Database) {
         })
         if (sessionRes.ok) {
           const sessions = await sessionRes.json() as Array<{ id: string }>
-          for (const session of sessions) {
-            await fetch(`${base}/session/${session.id}?directory=${directoryParam}`, {
+          await Promise.allSettled(sessions.map((session) =>
+            fetch(`${base}/session/${session.id}?directory=${directoryParam}`, {
               method: 'DELETE',
               headers,
-              signal: AbortSignal.timeout(10_000)
+              signal: AbortSignal.timeout(5_000)
+            }).then((res) => {
+              if (!res.ok) logger.warn(`Failed to stop opencode session ${session.id}: HTTP ${res.status}`)
             }).catch((error) => logger.warn(`Failed to stop opencode session ${session.id}:`, error))
-          }
+          ))
         }
       } catch (error) {
         logger.warn('Failed to stop opencode sessions for repo:', error)
@@ -161,23 +164,29 @@ export function createRepoRoutes(database: Database) {
           break
         } catch (error) {
           deleteErr = error
-          logger.warn(`Repo file deletion attempt ${attempt}/3 failed, releasing handles and retrying:`, error)
-          releaseAgentBrowserForDirectory(repoDir)
-          await opencodeServerManager.restart().catch((restartError) =>
-            logger.error('Failed to restart OpenCode server after repo delete:', restartError)
-          )
-          await new Promise((resolve) => setTimeout(resolve, 800))
+          logger.warn(`Repo file deletion attempt ${attempt}/3 failed:`, error)
+          if (attempt === 1) {
+            releaseAgentBrowserForDirectory(repoDir)
+            await new Promise((resolve) => setTimeout(resolve, 800))
+          } else {
+            await opencodeServerManager.restart().catch((restartError) =>
+              logger.error('Failed to restart OpenCode server after repo delete:', restartError)
+            )
+          }
         }
       }
       if (deleteErr) {
         throw deleteErr
       }
 
-      // Delete the DB row inside a short, serialized transaction
+      // Delete the DB rows inside a short, serialized transaction. The cascade
+      // also removes schedules, permission rules and command runs owned by the
+      // repo so no orphaned rows survive in SQLite.
       await withTransactionAsync(database, async (tx) => {
-        db.deleteRepo(tx, id)
+        db.deleteRepoCascade(tx, id)
       })
 
+      logger.info(`Repo deleted in ${Date.now() - startedAt}ms (repo id ${id})`)
       return c.json({ success: true })
     } catch (error: any) {
       logger.error('Failed to delete repo:', error)

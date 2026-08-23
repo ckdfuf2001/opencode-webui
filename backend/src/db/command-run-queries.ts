@@ -140,3 +140,7 @@ export function deleteCommandRun(db: Database, id: string): void {
 export function clearSessionCommandRuns(db: Database, sessionId: string): void {
   db.prepare('DELETE FROM command_runs WHERE session_id = ?').run(sessionId)
 }
+
+export function deleteCommandRunsByRepo(db: Database, repoId: number): number {
+  return db.prepare('DELETE FROM command_runs WHERE repo_id = ?').run(repoId).changes
+}
