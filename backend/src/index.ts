@@ -21,6 +21,7 @@ import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
+import { startSessionWatch } from './services/session-watch'
 import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
@@ -419,5 +420,8 @@ agentBrowserWarmupInterval = setInterval(() => {
 
 scheduleRunner = startScheduleRunner(db)
 logger.info('Schedule runner started')
+
+startSessionWatch(db)
+logger.info('Session watch started')
 
 startAutomationWatcher()

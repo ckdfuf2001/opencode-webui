@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { QueryClient } from '@tanstack/react-query'
-import { useOpenCodeClient, continueInterruptedSession } from './useOpenCode'
+import { useOpenCodeClient } from './useOpenCode'
 import type { SSEEvent, MessageListResponse, QuestionRequest, PermissionAskedProps } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
 import { questionEvents } from './useQuestionRequests'
@@ -112,11 +112,6 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
   const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY)
   const mountedRef = useRef(true)
   const wasConnectedRef = useRef(false)
-  // Sessions whose response was streaming when we last saw an SSE event.
-  // Only these are ever eligible for an automatic "Continue" on reconnect.
-  const activeStreamSessionsRef = useRef<Set<string>>(new Set())
-  // Snapshot of active streams taken when the connection dropped.
-  const resumeCandidatesRef = useRef<Set<string>>(new Set())
   const [isConnected, setIsConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isReconnecting, setIsReconnecting] = useState(false)
@@ -198,7 +193,6 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           if (!('sessionID' in event.properties)) break
 
           const { sessionID } = event.properties
-          activeStreamSessionsRef.current.delete(sessionID)
           sessionActivityEvents.emit({ type: 'idle', sessionID })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID] })
@@ -215,7 +209,6 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           const message = getSessionErrorMessage(event.properties.error)
           showToast.error(message, { duration: 8000, id: `session-error-${sessionID ?? 'unknown'}` })
           if (sessionID) {
-            activeStreamSessionsRef.current.delete(sessionID)
             sessionActivityEvents.emit({ type: 'idle', sessionID })
             queryClient.invalidateQueries({
               queryKey: ['opencode', 'session', opcodeUrl, sessionID]
@@ -232,7 +225,6 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           const { part } = event.properties
           const sessionID = part.sessionID
           const messageID = part.messageID
-          activeStreamSessionsRef.current.add(sessionID)
           sessionActivityEvents.emit({ type: 'active', sessionID })
           
           updateMessagesQueries(queryClient, opcodeUrl, sessionID, (currentData) => {
@@ -556,33 +548,11 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
 
         eventSource.onopen = () => {
           if (!mountedRef.current) return
-          const wasConnected = wasConnectedRef.current
           setIsConnected(true)
           setError(null)
           resetReconnectDelay()
           queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl] })
-
-          // Resume only sessions that were mid-generation when the connection
-          // dropped. Everything else (stale cache entries, runs that finished
-          // or were stopped long ago) is never auto-continued.
-          const candidates = resumeCandidatesRef.current
-          resumeCandidatesRef.current = new Set()
-
-          if (wasConnected && candidates.size > 0) {
-            ;(async () => {
-              let resumed = 0
-              for (const sessionID of candidates) {
-                if (await continueInterruptedSession(client, sessionID)) resumed++
-              }
-              if (mountedRef.current && resumed > 0) {
-                showToast.info(
-                  `Reconnected — resuming ${resumed} interrupted response${resumed === 1 ? '' : 's'}`,
-                  { duration: 3000 },
-                )
-              }
-            })()
-          }
           wasConnectedRef.current = true
         }
 
@@ -591,7 +561,6 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
 
           setIsConnected(false)
           setError('Connection lost. Reconnecting...')
-          resumeCandidatesRef.current = new Set(activeStreamSessionsRef.current)
 
           if (eventSourceRef.current) {
             eventSourceRef.current.close()
