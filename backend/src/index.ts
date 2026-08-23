@@ -21,7 +21,7 @@ import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
 import { createChatQueueRoutes } from './routes/chat-queue'
 import { startQueueIdleListener } from './services/chat-queue'
-import { getEmbeddedAsset } from './services/embedded-frontend'
+import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionWatch } from './services/session-watch'
@@ -246,7 +246,11 @@ const isProduction = ENV.SERVER.NODE_ENV === 'production'
 if (isProduction) {
   // Embedded frontend first: when the exe was packaged with
   // scripts/generate-frontend-embed.ts, everything is served from memory and
-  // no frontend/dist folder needs to ship next to the binary.
+  // no frontend/dist folder needs to ship next to the binary. When embedded
+  // assets exist, the disk fallback is disabled entirely so a stale dist
+  // folder can never serve mismatched chunks.
+  const embeddedAvailable = await hasEmbeddedAssets()
+
   app.use('/*', async (c, next) => {
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next()
     if (c.req.path.startsWith('/api/')) return next()
@@ -258,7 +262,9 @@ if (isProduction) {
     return c.body(new Uint8Array(asset.body))
   })
 
-  app.use('/*', serveStatic({ root: './frontend/dist' }))
+  if (!embeddedAvailable) {
+    app.use('/*', serveStatic({ root: './frontend/dist' }))
+  }
 
   app.get('*', async (c) => {
     if (c.req.path.startsWith('/api/')) {
@@ -266,6 +272,7 @@ if (isProduction) {
     }
     const embeddedIndex = await getEmbeddedAsset('/index.html')
     if (embeddedIndex) {
+      c.header('Content-Type', 'text/html; charset=utf-8')
       c.header('Cache-Control', 'no-cache')
       return c.body(new Uint8Array(embeddedIndex.body))
     }

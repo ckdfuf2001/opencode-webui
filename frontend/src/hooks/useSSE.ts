@@ -5,7 +5,8 @@ import { useOpenCodeClient } from './useOpenCode'
 import type { SSEEvent, MessageListResponse, QuestionRequest, PermissionAskedProps } from '@/api/types'
 import { permissionEvents } from './usePermissionRequests'
 import { questionEvents } from './useQuestionRequests'
-import { sessionActivityEvents } from './useSessionActivity'
+import { sessionActivityEvents, isSessionActiveInStore } from './useSessionActivity'
+import { playCompletionTick } from '@/lib/sounds'
 import { showToast } from '@/lib/toast'
 import { settingsApi } from '@/api/settings'
 import { listCommandRunsBySession, finishCommandRun } from '@/api/command-runs'
@@ -193,6 +194,9 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
           if (!('sessionID' in event.properties)) break
 
           const { sessionID } = event.properties
+          // Completion chime — only for sessions this tab actually saw
+          // streaming, so background/scheduled runs stay silent.
+          if (isSessionActiveInStore(sessionID)) playCompletionTick()
           sessionActivityEvents.emit({ type: 'idle', sessionID })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionID] })
           queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID] })

@@ -117,3 +117,8 @@ export function useSessionActive(sessionID?: string): boolean {
   const activeSessions = useSessionActivityStore((state) => state.activeSessions)
   return useMemo(() => !!sessionID && !!activeSessions[sessionID], [activeSessions, sessionID])
 }
+
+/** Non-reactive check used by the SSE handler before it clears the state. */
+export function isSessionActiveInStore(sessionID: string): boolean {
+  return !!useSessionActivityStore.getState().activeSessions[sessionID]
+}

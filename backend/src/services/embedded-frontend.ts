@@ -74,3 +74,8 @@ export async function getEmbeddedAsset(route: string): Promise<Asset | null> {
   await ensureLoaded()
   return cache.get(normalizeRoute(route)) ?? null
 }
+
+export async function hasEmbeddedAssets(): Promise<boolean> {
+  await ensureLoaded()
+  return cache.size > 0
+}
