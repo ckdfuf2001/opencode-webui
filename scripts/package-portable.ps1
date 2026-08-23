@@ -13,14 +13,20 @@ bun build --compile --target=bun backend/src/index.ts --outfile (Join-Path $rele
 if ($LASTEXITCODE -ne 0) { throw 'backend compile failed' }
 
 Write-Output '[package 3/6] frontend dist copy'
-New-Item -ItemType Directory -Force -Path (Join-Path $release 'frontend') | Out-Null
-Copy-Item -Recurse -Force (Join-Path $root 'frontend\dist') (Join-Path $release 'frontend\dist')
+# Remove destination first: Copy-Item -Recurse into an EXISTING directory
+# nests the source inside it (dist\dist), leaving stale bundles behind.
+$distDest = Join-Path $release 'frontend\dist'
+if (Test-Path $distDest) { Remove-Item $distDest -Recurse -Force }
+New-Item -ItemType Directory -Force -Path (Split-Path $distDest) | Out-Null
+Copy-Item -Recurse -Force (Join-Path $root 'frontend\dist') $distDest
 
 Write-Output '[package 4/6] bin copy (opencode / agent-browser)'
-New-Item -ItemType Directory -Force -Path (Join-Path $release 'bin') | Out-Null
-Copy-Item -Force (Join-Path $root 'bin\opencode.exe') (Join-Path $release 'bin\opencode.exe')
+$binDest = Join-Path $release 'bin'
+if (Test-Path $binDest) { Remove-Item $binDest -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $binDest | Out-Null
+Copy-Item -Force (Join-Path $root 'bin\opencode.exe') (Join-Path $binDest 'opencode.exe')
 if (Test-Path (Join-Path $root 'bin\agent-browser')) {
-  Copy-Item -Recurse -Force (Join-Path $root 'bin\agent-browser') (Join-Path $release 'bin\agent-browser')
+  Copy-Item -Recurse -Force (Join-Path $root 'bin\agent-browser') (Join-Path $binDest 'agent-browser')
 }
 
 Write-Output '[package 5/6] doc tools exe'
