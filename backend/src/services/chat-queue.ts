@@ -13,7 +13,7 @@ const MAX_QUEUE_LENGTH = 20
 const MAX_TEXT_LENGTH = 16_000
 const REQUEST_TIMEOUT_MS = 4_000
 const SEND_HEADERS_TIMEOUT_MS = 30_000
-const FLUSH_RETRY_BACKOFF_MS = 60_000
+const FLUSH_RETRY_BACKOFF_MS = 15_000
 
 // In-memory, per-session FIFO of user messages typed while the assistant was
 // still generating. The session watch poll flushes them one at a time whenever
@@ -71,6 +71,7 @@ export async function flushReadyQueues(busySessions: Set<string>): Promise<void>
     if (queue.length === 0) queues.delete(sessionID)
 
     inFlight.add(sessionID)
+    logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
 
     void dispatchQueuedChat(base, sessionID, next)
       .then((sent) => {
@@ -84,8 +85,22 @@ export async function flushReadyQueues(busySessions: Set<string>): Promise<void>
       })
       .catch((error) => {
         logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
-        requeueFront(sessionID, next)
-        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        // OpenCode may not return response headers until the whole turn has
+        // finished generating. A timeout therefore means the request almost
+        // certainly REACHED OpenCode — treat it as delivered instead of
+        // re-queuing, otherwise the message would be sent twice.
+        const name = (error as { name?: string })?.name
+        const code = ((error as { cause?: { code?: unknown } })?.cause?.code
+          ?? (error as { code?: unknown })?.code) as string | undefined
+        const connectError = typeof code === 'string'
+          && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code.toUpperCase())
+        if (connectError) {
+          requeueFront(sessionID, next)
+          failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        } else if (name !== 'TimeoutError' && name !== 'AbortError') {
+          requeueFront(sessionID, next)
+          failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        }
       })
       .finally(() => {
         inFlight.delete(sessionID)

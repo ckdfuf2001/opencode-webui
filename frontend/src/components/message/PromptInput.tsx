@@ -162,6 +162,22 @@ export function PromptInput({
     return parsePromptToParts(prompt, validAttachments)
   }
 
+  const queueCurrentInput = async () => {
+    const parts = await buildValidatedParts()
+    const text = parts
+      .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
+      .filter((text) => text.trim().length > 0)
+      .join('\n')
+    if (!text.trim()) return
+    enqueueQueued.mutate({ sessionID, text })
+    setPrompt('')
+    setAttachedFiles(new Map())
+    onSubmitted?.()
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+  }
+
   const handleSubmit = async () => {
     if (!prompt.trim() || disabled) return
 
@@ -207,19 +223,7 @@ export function PromptInput({
     }
 
     if (hasActiveStream || sessionActive) {
-      const text = parts
-        .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
-        .filter((text) => text.trim().length > 0)
-        .join('\n')
-      if (text.trim()) {
-        enqueueQueued.mutate({ sessionID, text })
-        setPrompt('')
-        setAttachedFiles(new Map())
-        onSubmitted?.()
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto'
-        }
-      }
+      await queueCurrentInput()
       return
     }
 
@@ -677,6 +681,9 @@ export function PromptInput({
 
   
 
+  // While streaming with text typed, the primary button queues instead of stopping.
+  const canQueue = hasActiveStream && prompt.trim().length > 0
+
   return (
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 md:p-3 mx-2 md:mx-4 mb-2 md:mb-5 w-[90%] md:max-w-4xl">
       <ChatQueueStrip sessionID={sessionID} />
@@ -757,16 +764,16 @@ export function PromptInput({
           )}
           <button
             data-submit-prompt
-            onClick={hasActiveStream ? handleStop : handleSubmit}
+            onClick={canQueue ? queueCurrentInput : hasActiveStream ? handleStop : handleSubmit}
             disabled={(!prompt.trim() && !hasActiveStream) || disabled}
             className={`px-5 md:px-6 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              hasActiveStream
-                ? 'bg-destructive hover:bg-destructive/90 text-destructive-foreground' 
+              hasActiveStream && !canQueue
+                ? 'bg-destructive hover:bg-destructive/90 text-destructive-foreground'
                 : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
             }`}
-            title={hasActiveStream ? 'Stop' : 'Send'}
+            title={canQueue ? 'Queue message' : hasActiveStream ? 'Stop' : 'Send'}
           >
-            {hasActiveStream ? 'Stop' : 'Send'}
+            {canQueue ? 'Queue' : hasActiveStream ? 'Stop' : 'Send'}
           </button>
         </div>
       </div>
