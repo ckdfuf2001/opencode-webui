@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import type { components } from '@/api/opencode-types'
 import { useSettings } from '@/hooks/useSettings'
 import { useUserBash } from '@/stores/userBashStore'
@@ -35,8 +34,6 @@ type ToolPart = components['schemas']['ToolPart']
 interface ToolCallPartProps {
   part: ToolPart
   onFileClick?: (filePath: string, lineNumber?: number) => void
-  opcodeUrl?: string
-  sessionID?: string
 }
 
 function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (filePath: string) => void }) {
@@ -79,24 +76,10 @@ function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (fi
   return <pre className="bg-accent p-2 rounded text-xs overflow-x-auto">{parts}</pre>
 }
 
-export function ToolCallPart({ part, onFileClick, opcodeUrl, sessionID }: ToolCallPartProps) {
+export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   const { preferences } = useSettings()
   const { userBashCommands } = useUserBash()
-  const queryClient = useQueryClient()
   const outputRef = useRef<HTMLDivElement>(null)
-
-  // Like the CLI, keep the interim tool output fresh while the command is
-  // still running: SSE part updates cover most of it, and this 10s poll is a
-  // safety net for tools that stream sparsely.
-  useEffect(() => {
-    if (part.state.status !== 'running' || !opcodeUrl || !sessionID) return
-    const timer = setInterval(() => {
-      queryClient.invalidateQueries({
-        queryKey: ['opencode', 'messages', opcodeUrl, sessionID],
-      })
-    }, 10_000)
-    return () => clearInterval(timer)
-  }, [part.state.status, opcodeUrl, sessionID, queryClient])
   const isUserBashCommand = part.tool === 'bash' && 
     part.state.status === 'completed' &&
     typeof part.state.input?.command === 'string' &&
@@ -243,9 +226,7 @@ export function ToolCallPart({ part, onFileClick, opcodeUrl, sessionID }: ToolCa
 
           {part.state.status !== 'pending' && (
             <div className="text-sm" ref={outputRef}>
-              <div className="text-zinc-400 mb-1">
-                Output:{part.state.status === 'running' ? ' (streaming…)' : ''}
-              </div>
+              <div className="text-zinc-400 mb-1">Output:</div>
               <pre
                 className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors"
                 onClick={() => navigator.clipboard.writeText(outputText)}

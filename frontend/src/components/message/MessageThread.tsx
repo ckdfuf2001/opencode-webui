@@ -56,7 +56,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, opcodeUrl, sessionID }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID, directory }: MessageThreadProps) {
   if (!messages || messages.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-600">
@@ -141,8 +141,6 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                         onFileClick={onFileClick}
                         messageTextContent={msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined}
                         directory={directory}
-                        opcodeUrl={opcodeUrl}
-                        sessionID={sessionID}
                       />
                     </div>
                   ))}
