@@ -398,7 +398,6 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       if (!client) throw new Error("No client available");
 
       const optimisticUserID = `optimistic_user_${Date.now()}_${Math.random()}`;
-
       const contentParts = parts || [{ type: "text" as const, content: prompt || "", name: "" }];
 
       const userMessage = createOptimisticUserMessage(
@@ -448,6 +447,24 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       const response = await client.sendPrompt(sessionID, requestData);
 
       return { optimisticUserID, response };
+    },
+    onMutate: ({ sessionID }) => {
+      // POST /session/{id}/message does not resolve until the whole answer is
+      // generated, so onSuccess fires far too late to refresh the chat. The
+      // user message itself is persisted almost immediately though — refetch
+      // shortly after dispatch so a resent/edited text shows right away
+      // instead of a blank bubble.
+      const timers = [600, 2000].map((ms) =>
+        setTimeout(() => {
+          queryClient.invalidateQueries({
+            queryKey: ["opencode", "messages", opcodeUrl, sessionID],
+          });
+        }, ms),
+      );
+      return { timers };
+    },
+    onSettled: (_data, _error, _variables, context) => {
+      context?.timers.forEach(clearTimeout);
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
