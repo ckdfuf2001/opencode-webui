@@ -472,6 +472,14 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       queryClient.invalidateQueries({
         queryKey: ["opencode", "session", opcodeUrl, sessionID, directory],
       });
+
+      // The real user message can land as an empty record via SSE — its text
+      // part streams separately and is sometimes missed right after a
+      // truncate+resend, leaving a blank bubble until the next refetch.
+      // Pull fresh messages so the sent text shows immediately.
+      queryClient.invalidateQueries({
+        queryKey: ["opencode", "messages", opcodeUrl, sessionID],
+      });
     },
   });
 };
