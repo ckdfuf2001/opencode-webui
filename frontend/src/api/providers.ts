@@ -52,7 +52,7 @@ export interface ProviderWithModels {
 
 async function getProvidersFromOpenCode(): Promise<Provider[] | null> {
   try {
-    const response = await axios.get(`${API_BASE_URL}/api/opencode/config/providers`);
+    const response = await axios.get(`${API_BASE_URL}/api/opencode/config/providers`, { timeout: 10_000 });
     const data = response.data as { providers?: Provider[] };
     if (data?.providers?.length) {
       return data.providers.map((provider) => ({
@@ -75,7 +75,27 @@ export async function getProviders(): Promise<Provider[]> {
   const fromOpenCode = await getProvidersFromOpenCode();
   if (fromOpenCode && fromOpenCode.length > 0) return fromOpenCode;
 
+  // opencode(벤더 API)가 느리거나 실패해도, 자격증명이 등록된 프로바이더는 표시한다.
+  const fromCredentials = await getProvidersFromCredentials();
+  if (fromCredentials) return fromCredentials;
+
   return [];
+}
+
+async function getProvidersFromCredentials(): Promise<Provider[] | null> {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/providers/credentials`, { timeout: 8_000 });
+    const ids = (response.data?.providers ?? []) as string[];
+    if (!ids.length) return null;
+    return ids.map((id) => ({
+      id,
+      name: id,
+      env: [],
+      models: {},
+    }));
+  } catch {
+    return null;
+  }
 }
 
 export async function getProvidersWithModels(): Promise<ProviderWithModels[]> {

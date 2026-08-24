@@ -37,6 +37,33 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * GET 응답의 마지막 성공 본문 캐시(stale-while-revalidate).
+ * opencode 서버가 벤더 API(model/provider 목록 등) 지연으로 늦어질 때
+ * 마지막 성공 데이터를 즉시 돌려주고, 실제 갱신은 비동기로 따라온다.
+ */
+const STALE_CACHE_LIMIT = 200
+const staleCache = new Map<string, { status: number; contentType: string; body: string }>()
+
+function cacheKeyFor(method: string, targetUrl: string): string | null {
+  if (method !== 'GET') return null
+  try {
+    const u = new URL(targetUrl)
+    return u.pathname + u.search
+  } catch {
+    return null
+  }
+}
+
+function rememberStale(key: string | null, status: number, contentType: string, body: string): void {
+  if (!key || status >= 500 || !body) return
+  if (staleCache.size >= STALE_CACHE_LIMIT) {
+    const oldest = staleCache.keys().next().value
+    if (oldest) staleCache.delete(oldest)
+  }
+  staleCache.set(key, { status, contentType, body })
+}
+
 export type CommandScope = 'builtin' | 'global' | 'project'
 
 /**
@@ -178,9 +205,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     })
 
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
+    // GET(설정/목록류)은 외부 벤더 API 지연에 발이 묶이지 않도록 짧게 끊는다.
     const signal = isEventStream
       ? undefined
-      : AbortSignal.timeout(isLongRunning ? 600_000 : 120_000)
+      : AbortSignal.timeout(isLongRunning ? 600_000 : method === 'GET' ? 20_000 : 120_000)
 
     const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
 
@@ -239,6 +267,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     if (method === 'GET' && cleanEventPath === '/command') {
       try {
         const bodyText = await response.text()
+        rememberStale(cacheKeyFor(method, targetUrl), response.status, 'application/json', bodyText)
         const commands = JSON.parse(bodyText)
         if (Array.isArray(commands)) {
           const directory = new URLSearchParams(query).get('directory')?.replace(/%2F/g, '/')
@@ -265,6 +294,17 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     }
 
     if (!isLongRunning || !response.body) {
+      // GET 응답을 캐시에 저장해 벤더 API 장애 시에도 마지막 성공 데이터를 제공한다.
+      if (method === 'GET' && !isEventStream) {
+        const bodyText = await response.text()
+        rememberStale(cacheKeyFor(method, targetUrl), response.status, responseHeaders['Content-Type'] ?? 'application/json', bodyText)
+        releaseBusy()
+        return new Response(bodyText, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+        })
+      }
       releaseBusy()
       return new Response(response.body, {
         status: response.status,
@@ -307,6 +347,16 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       logger.debug('Proxy request timed out:', err)
     } else {
       logger.error(`Proxy request failed:`, error)
+    }
+    // 업스트림(opencode→벤더 API) 지연/장애 시 마지막 성공 응답을 즉시 제공한다.
+    const staleKey = cacheKeyFor(method, targetUrl)
+    const stale = staleKey ? staleCache.get(staleKey) : undefined
+    if (stale) {
+      logger.warn(`Serving stale cached response for ${method} ${staleKey}`)
+      return new Response(stale.body, {
+        status: stale.status,
+        headers: { 'Content-Type': stale.contentType, 'x-stale': '1' },
+      })
     }
     return new Response(JSON.stringify({ error: 'Proxy request failed' }), {
       status: 502,
