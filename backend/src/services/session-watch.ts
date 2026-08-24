@@ -1,6 +1,5 @@
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isOpenCodeServerBusy } from './busy-tracker'
 import { SettingsService } from './settings'
 import { flushReadyQueues } from './chat-queue'
 import { getWorkspacePath } from '@opencode-webui/shared'
@@ -85,8 +84,8 @@ export function startSessionWatch(db: Database): NodeJS.Timeout {
   }
 
   async function pollOnce(): Promise<void> {
-    // 생성 중(busy)에는 opencode를 전혀 건드리지 않는다(폴링 부하 제거).
-    if (isOpenCodeServerBusy()) return
+    // 상태 폴링은 가벼운 단일 GET이라 항상 실행한다(세션별 큐 플러시를 위해).
+    // 무거운 작업(타이틀/프리뷰 조회 등)은 각자 busy 게이트로 관리된다.
     const base = opencodeServerManager.getUrl()
     const headers = ensureServerAuth({})
 
