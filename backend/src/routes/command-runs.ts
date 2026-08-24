@@ -6,6 +6,7 @@ import type { CommandRun } from '../db/command-run-queries'
 import * as runs from '../services/command-runs'
 import { getRecentHookCalls, onCommandRunUpdate } from '../services/command-hooks'
 import { getSessionTitles, getDescendantSessionIds, getSessionResponsePreviews } from '../services/opencode-session-titles'
+import { isOpenCodeServerBusy } from '../services/busy-tracker'
 import { listRepos } from '../db/queries'
 import { logger } from '../utils/logger'
 
@@ -145,8 +146,13 @@ export function createCommandRunRoutes(db: Database) {
         if (repo.fullPath) repoNameByDir.set(repo.fullPath.replace(/\\/g, '/').toLowerCase(), name)
       }
 
-      const titles = await getSessionTitles(matched.map((r) => r.sessionId))
-      const previews = await getSessionResponsePreviews(matched.slice(0, 40).map((r) => r.sessionId))
+      // 생성 중(opencode DB 다중 쓰기)엔 타이틀/프리뷰 조회를 생략한다 —
+      // 5s 폴링이 opencode DB 락과 경합해 다른 레포 요청까지 지연시키는 것을 방지.
+      const busy = isOpenCodeServerBusy()
+      const titles = busy ? {} : await getSessionTitles(matched.map((r) => r.sessionId))
+      const previews = busy
+        ? {}
+        : await getSessionResponsePreviews(matched.slice(0, 40).map((r) => r.sessionId))
 
       const items = matched
         .map((run) => {
