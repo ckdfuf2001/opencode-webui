@@ -91,11 +91,6 @@ export class OpenCodeClient {
     await this.client.post(`/session/${sessionID}/abort`)
   }
 
-  async getSessionStatus(): Promise<Record<string, { type: string }>> {
-    const response = await this.client.get(`/session/status`)
-    return response.data
-  }
-
   async listMessages(sessionID: string) {
     const response = await this.client.get<MessageListResponse>(`/session/${sessionID}/message`)
     return response.data
