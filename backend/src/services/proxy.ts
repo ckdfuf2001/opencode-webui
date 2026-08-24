@@ -3,7 +3,7 @@ import { getConfigPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages } from './opencode-db'
-import { markRequestBusy, clearRequestBusy } from './busy-tracker'
+import { markRequestBusy, clearRequestBusy, isOpenCodeServerBusy } from './busy-tracker'
 import { readFile, stat } from 'fs/promises'
 import path from 'path'
 
@@ -206,8 +206,19 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     })
 
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
+    // 생성 중(opencode 바쁨)엔 GET을 opencode에 물지 않고 캐시로 즉시 응답한다.
+    const staleKeyPre = method === 'GET' && !isEventStream ? cacheKeyFor(method, targetUrl) : null
+    if (staleKeyPre) {
+      const pre = staleCache.get(staleKeyPre)
+      if (pre && isOpenCodeServerBusy()) {
+        return new Response(pre.body, {
+          status: pre.status,
+          headers: { 'Content-Type': pre.contentType, 'x-stale': '1', 'x-busy': '1' },
+        })
+      }
+    }
     // GET(설정/목록류)은 외부 벤더 API 지연에 발이 묶이지 않도록 짧게 끊고,
-    // 타임아웃 시 마지막 성공 캐시로 즉시 응답한다(프론트 타임아웃 25s보다 짧아야 함).
+    // 타임아웃 시 마지막 성공 캐시로 즉시 응답한다(프론트 타임아웃보다 짧아야 함).
     const signal = isEventStream
       ? undefined
       : AbortSignal.timeout(isLongRunning ? 600_000 : method === 'GET' ? 8_000 : 120_000)

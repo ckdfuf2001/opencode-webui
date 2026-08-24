@@ -229,7 +229,7 @@ export class OpenCodeClient {
   async listCommands() {
     // opencode 서버가 생성 중일 때 /command 가 늦게 응답할 수 있다.
     // 백엔드 프록시가 8s 후 stale 캐시로 응답하므로 그보다 길게 대기한다.
-    const response = await this.client.get<CommandListResponse>('/command', { timeout: 25_000 })
+    const response = await this.client.get<CommandListResponse>('/command', { timeout: 12_000 })
         return response.data
       }
 

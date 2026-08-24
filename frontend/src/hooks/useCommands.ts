@@ -221,7 +221,9 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
     } catch (err) {
       console.error('Failed to fetch commands:', err)
       setError('Failed to load commands')
-      setCommands(base)
+      // 서버가 바쁠 때 실패해도 마지막 목록을 유지한다(builtin으로 덮어쓰지 않음).
+      // 최초 로드 실패 시에만 builtin으로 시작한다.
+      setCommands((prev) => (prev.length > base.length ? prev : base))
     } finally {
       setLoading(false)
     }
