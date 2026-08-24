@@ -639,7 +639,13 @@ class OpenCodeServerManager {
         signal: AbortSignal.timeout(5000)
       })
       return response.ok
-    } catch {
+    } catch (error) {
+      // 타임아웃 = 서버가 바쁜 것(생존). 진짜 죽음은 연결 거부뿐이다.
+      const err = error as { name?: string; code?: string; cause?: { code?: string } }
+      const code = (err.code ?? err.cause?.code ?? '').toUpperCase()
+      if (err.name === 'TimeoutError' || code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT') {
+        return true
+      }
       return false
     }
   }
