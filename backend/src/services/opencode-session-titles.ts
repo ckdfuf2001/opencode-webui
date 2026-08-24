@@ -9,29 +9,54 @@ interface SessionRow {
 }
 
 /** opencode 로컬 DB에서 세션 제목을 조회한다. 실패 시 빈 map(타이틀 미확정)으로 폴백한다. */
+const TITLES_CACHE_TTL_MS = 60_000
+const titlesCache = new Map<string, { title: string; at: number }>()
+
 export async function getSessionTitles(ids: string[]): Promise<Record<string, string>> {
   const unique = [...new Set(ids)].filter(Boolean)
   if (unique.length === 0) return {}
 
+  const out: Record<string, string> = {}
+  const stale: string[] = []
+  const now = Date.now()
+  for (const id of unique) {
+    const cached = titlesCache.get(id)
+    if (cached && now - cached.at < TITLES_CACHE_TTL_MS) out[id] = cached.title
+    else stale.push(id)
+  }
+  if (stale.length === 0) return out
+
   try {
     const dbPath = await getOpenCodeDbPath()
-    if (!dbPath) return {}
+    if (!dbPath) return out
 
     const db = new Database(dbPath, { readonly: true })
     try {
-      const placeholders = unique.map(() => '?').join(',')
+      // bun:sqlite의 동기 busy 대기가 이벤트 루프를 막는 것을 방지한다.
+      db.exec('PRAGMA busy_timeout = 200')
+      const placeholders = stale.map(() => '?').join(',')
       const rows = db
         .prepare(`SELECT id, title FROM session WHERE id IN (${placeholders})`)
-        .all(...unique) as { id: string; title: string | null }[]
-      const out: Record<string, string> = {}
-      for (const row of rows) out[row.id] = row.title || 'Untitled Session'
+        .all(...stale) as { id: string; title: string | null }[]
+      for (const row of rows) {
+        const title = row.title || 'Untitled Session'
+        out[row.id] = title
+        titlesCache.set(row.id, { title, at: now })
+      }
+      // 조회 실패한 것도 짧게 기록해 반복 시도를 줄인다
+      for (const id of stale) {
+        if (!out[id]) {
+          titlesCache.set(id, { title: 'Untitled Session', at: now })
+          out[id] = 'Untitled Session'
+        }
+      }
       return out
     } finally {
       db.close()
     }
   } catch (error) {
     logger.warn('Failed to read opencode session titles:', error)
-    return {}
+    return out
   }
 }
 
@@ -65,6 +90,7 @@ export async function getSessionResponsePreviews(
 
     const db = new Database(dbPath, { readonly: true })
     try {
+      db.exec('PRAGMA busy_timeout = 200')
       const stmt = db.prepare(`
         SELECT p.data AS part_data
         FROM message m
