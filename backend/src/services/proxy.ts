@@ -46,9 +46,12 @@ const STALE_CACHE_LIMIT = 200
 const staleCache = new Map<string, { status: number; contentType: string; body: string }>()
 
 function cacheKeyFor(method: string, targetUrl: string): string | null {
+  // stale 캐시는 외부 벤더 API에 의존하는 경로(/config*)에만 적용한다.
+  // 세션/명령 등 로컬 상태 조회까지 오래된 데이터로 덮지 않기 위함.
   if (method !== 'GET') return null
   try {
     const u = new URL(targetUrl)
+    if (u.pathname !== '/config' && !u.pathname.startsWith('/config/')) return null
     return u.pathname + u.search
   } catch {
     return null
@@ -205,10 +208,12 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     })
 
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
+  // /config* = 프로바이더·모델 목록 등 외부 벤더 API에 의존하는 경로
+  const isConfigPath = cleanEventPath === '/config' || cleanEventPath.startsWith('/config/')
     // GET(설정/목록류)은 외부 벤더 API 지연에 발이 묶이지 않도록 짧게 끊는다.
     const signal = isEventStream
       ? undefined
-      : AbortSignal.timeout(isLongRunning ? 600_000 : method === 'GET' ? 20_000 : 120_000)
+      : AbortSignal.timeout(isLongRunning ? 600_000 : method === 'GET' ? (isConfigPath ? 20_000 : 8_000) : 120_000)
 
     const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
 

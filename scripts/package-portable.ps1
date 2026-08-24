@@ -4,6 +4,10 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $release = Join-Path $root 'release'
 
+Write-Output '[package 0/6] sync latest source'
+git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { throw 'git pull failed - commit/push local changes or resolve conflicts first' }
+
 Write-Output '[package 1/6] frontend build'
 pnpm run build:frontend
 if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' }

@@ -23,8 +23,8 @@ export function useEnqueueQueuedChat() {
     mutationFn: ({ sessionID, text }: { sessionID: string; text: string }) =>
       enqueueQueuedChat(sessionID, text),
     onSuccess: (queue, { sessionID }) => {
+      // 대기 표시는 ChatQueueStrip으로 충분 — 토스트 없이 조용히 큐에 추가
       queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
-      showToast.info(`Queued — will send after the current response (#${queue.length})`, { duration: 3000 })
     },
     onError: (error) => {
       showToast.error(error instanceof Error ? error.message : 'Failed to queue message', { duration: 5000 })
