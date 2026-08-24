@@ -101,8 +101,9 @@ function startActivitySweeper(): void {
       return changed ? { activeSessions } : state
     })
 
-    // 2) LLM 실제 generating 상태 기준 정합화 — 이벤트 누락과 무관하게
-    //    배지가 실제 생성 상태를 따르도록 10s마다 서버 busy 맵과 동기화한다.
+    // 2) LLM 실제 generating 상태 기준 정합화 — 빠진 busy 세션은 켠다.
+    //    (끄기는 session.idle 이벤트와 15s 타임아웃이 담당 — 디렉터리 미지정
+    //     status 조회는 세션이 빠질 수 있어 clear는 여기서 하지 않는다)
     try {
       const res = await fetch(`${API_BASE_URL}/api/opencode/session/status`)
       if (res.ok) {
@@ -112,7 +113,7 @@ function startActivitySweeper(): void {
             .filter(([, s]) => s?.type === 'busy')
             .map(([id]) => id),
         )
-        reconcileSessionActivity(busy)
+        reconcileSessionActivity(busy, { addOnly: true })
       }
     } catch {
       // 상태 조회 실패 시 타임아웃 스윕만으로 동작
@@ -149,7 +150,11 @@ export function isSessionActiveInStore(sessionID: string): boolean {
  * (re)connect so a Working badge that survived a missed session.idle event
  * corrects itself immediately instead of waiting out the sweeper.
  */
-export function reconcileSessionActivity(busySessionIDs: Set<string>): void {
+export function reconcileSessionActivity(
+  busySessionIDs: Set<string>,
+  opts?: { addOnly?: boolean },
+): void {
+  const addOnly = opts?.addOnly === true
   useSessionActivityStore.setState((state) => {
     let changed = false
     const activeSessions: Record<string, number> = { ...state.activeSessions }
@@ -159,10 +164,12 @@ export function reconcileSessionActivity(busySessionIDs: Set<string>): void {
         changed = true
       }
     }
-    for (const sessionID of Object.keys(activeSessions)) {
-      if (!busySessionIDs.has(sessionID) && sessionID in state.activeSessions) {
-        delete activeSessions[sessionID]
-        changed = true
+    if (!addOnly) {
+      for (const sessionID of Object.keys(activeSessions)) {
+        if (!busySessionIDs.has(sessionID) && sessionID in state.activeSessions) {
+          delete activeSessions[sessionID]
+          changed = true
+        }
       }
     }
     return changed ? { activeSessions } : state
