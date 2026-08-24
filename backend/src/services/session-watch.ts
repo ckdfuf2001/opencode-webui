@@ -115,7 +115,9 @@ export function startSessionWatch(db: Database): NodeJS.Timeout {
     )
 
     const preferences = new SettingsService(db).getSettings('default').preferences
-    if (preferences.autoResumeInterrupted !== false && sawOutage && prevBusy.size > 0) {
+    // 자동 재실행(Continue 전송)은 중단 루프의 원인이 될 수 있어 기본 비활성화.
+    // 명시적으로 켜려면 설정에서 autoResumeInterrupted = true
+    if (preferences.autoResumeInterrupted === true && sawOutage && prevBusy.size > 0) {
       const candidates = [...prevBusy].filter((id) => !currentlyBusy.has(id))
       for (const sessionID of candidates) {
         try {
