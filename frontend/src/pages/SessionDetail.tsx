@@ -15,6 +15,7 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useReconcileOrphanedStreams } from "@/hooks/useOpenCode";
+import { clearQueuedChats } from "@/api/chat-queue";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { useSSE } from "@/hooks/useSSE";
 import { useSettings } from "@/hooks/useSettings";
@@ -117,6 +118,8 @@ export function SessionDetail() {
     abortSession: () => {
       if (sessionId) {
         abortSession.mutate(sessionId);
+        // 중단 시 대기열도 비운다(자동 발송 방지)
+        void clearQueuedChats(sessionId).catch(() => {});
       }
     },
   });

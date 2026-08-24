@@ -205,10 +205,11 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     })
 
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
-    // GET(설정/목록류)은 외부 벤더 API 지연에 발이 묶이지 않도록 짧게 끊는다.
+    // GET(설정/목록류)은 외부 벤더 API 지연에 발이 묶이지 않도록 짧게 끊고,
+    // 타임아웃 시 마지막 성공 캐시로 즉시 응답한다(프론트 타임아웃 25s보다 짧아야 함).
     const signal = isEventStream
       ? undefined
-      : AbortSignal.timeout(isLongRunning ? 600_000 : method === 'GET' ? 20_000 : 120_000)
+      : AbortSignal.timeout(isLongRunning ? 600_000 : method === 'GET' ? 8_000 : 120_000)
 
     const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
 

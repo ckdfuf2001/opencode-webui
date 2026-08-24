@@ -24,7 +24,9 @@ export function OpenCodeStatus() {
     retry: 3,
   });
 
-  const loading = isLoading || isFetching;
+  // Checking 은 최초 로드에만 표시한다. 백그라운드 재조회(isFetching) 중에는
+  // 마지막 상태를 유지해 다른 레포 생성 중에도 배지가 계속 도는 것을 막는다.
+  const loading = isLoading;
   const opencodeHealthy = data?.opencode === "healthy";
 
   return (
@@ -36,7 +38,7 @@ export function OpenCodeStatus() {
           : opencodeHealthy
             ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
             : "bg-red-500/10 text-red-500 border-red-500/30"
-      }`}
+      } ${isFetching && !loading ? "opacity-60" : ""}`}
       title={data ? `opencode port: ${data.opencodePort}` : "opencode status"}
     >
       {loading ? (

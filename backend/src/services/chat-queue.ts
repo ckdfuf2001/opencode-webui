@@ -46,6 +46,16 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
   return true
 }
 
+/** 중단(abort) 시 호출: 세션의 대기열 전체를 비운다. */
+export function clearQueuedChats(sessionID: string): number {
+  const queue = queues.get(sessionID)
+  if (!queue) return 0
+  const count = queue.length
+  queues.delete(sessionID)
+  logger.info(`Cleared ${count} queued chat(s) for session ${sessionID}`)
+  return count
+}
+
 /**
  * Sends the head of every idle session's queue. Only one message per session
  * per cycle: sending starts a new turn, so the rest wait until the poll sees

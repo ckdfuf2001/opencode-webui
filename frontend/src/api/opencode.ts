@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance } from 'axios'
 import type { components, paths } from './opencode-types'
 import { showToast } from '@/lib/toast'
+import { clearQueuedChats } from './chat-queue'
 
 type SessionListResponse = paths['/session']['get']['responses']['200']['content']['application/json']
 type SessionResponse = paths['/session/{id}']['get']['responses']['200']['content']['application/json']
@@ -17,6 +18,7 @@ export class OpenCodeClient {
   private client: AxiosInstance
   private baseURL: string
   private directory?: string
+  private static lastTimeoutWarn: Record<string, number> = {}
 
   constructor(baseURL: string, directory?: string) {
     this.baseURL = baseURL
@@ -37,18 +39,37 @@ export class OpenCodeClient {
       (response) => response,
       async (error) => {
         if (error.message?.includes?.('timeout') && error?.config?.url?.includes?.('/session')) {
-          try {
-            const healthy = await this.checkServerHealth()
-            const port = this.baseURL != null && this.baseURL.includes(':') ? this.baseURL!.split(':').pop()!.split('/')[0] : 'unknown'
-            const msg = `Answer is generating over Timeout 600 sec, Backend is ${healthy ? 'alived' : 'not alived'} at port ${port}`
-            console.warn(msg)
-            // Show warning but don't add error to chat - show toast only once
-            showToast.warning(msg)
-            return Promise.resolve({}) // Return empty to prevent chat error display
-          } catch (checkError) {
-            // Health check failed, show normal error
-            console.error('Health check error:', checkError)
+          const sessionID = error.config.url.match(/\/session\/([^/]+)/)?.[1] ?? null
+          // 세션별 토스트 중복 억제: 10분 내 재경고 없음
+          const now = Date.now()
+          const last = OpenCodeClient.lastTimeoutWarn[sessionID ?? ''] ?? 0
+          if (now - last > 10 * 60 * 1000) {
+            OpenCodeClient.lastTimeoutWarn[sessionID ?? ''] = now
+            try {
+              const healthy = await this.checkServerHealth()
+              const port = this.baseURL != null && this.baseURL.includes(':') ? this.baseURL!.split(':').pop()!.split('/')[0] : 'unknown'
+              const msg = `Answer is generating over Timeout 600 sec, Backend is ${healthy ? 'alived' : 'not alived'} at port ${port}`
+              console.warn(msg)
+              showToast.warning(msg)
+            } catch (checkError) {
+              console.error('Health check error:', checkError)
+            }
           }
+          // 600s 타임아웃 = 응답 대기를 포기한다는 뜻. 서버 쪽 생성도
+          // 실제로 중단시키고, 대기열(자동 발송)까지 비워야 stop 없이도 깔끔히 끝난다.
+          if (sessionID) {
+            try {
+              await this.client.post(`/session/${sessionID}/abort`, undefined, { timeout: 10_000 })
+            } catch (abortError) {
+              console.warn('Failed to abort session after timeout:', abortError)
+            }
+            try {
+              clearQueuedChats(sessionID)
+            } catch {
+              // 큐 정리 실패는 무시
+            }
+          }
+          return Promise.resolve({}) // Return empty to prevent chat error display
         }
         return Promise.reject(error)
       }
@@ -132,25 +153,28 @@ export class OpenCodeClient {
     return response.data
   }
 
-  async getConfig() {
-    const response = await this.client.get<ConfigResponse>('/config')
-    return response.data
-  }
+      async getConfig() {
+        // 메타 조회: 벤더(provider) 응답이 느려도 UI가 멈추지 않도록 짧은 타임아웃
+        const response = await this.client.get<ConfigResponse>('/config', { timeout: 10_000 })
+        return response.data
+      }
 
   async updateConfig(config: Partial<ConfigResponse>) {
     const response = await this.client.patch<ConfigResponse>('/config', config)
     return response.data
   }
 
-  async getProviders() {
-    const response = await this.client.get('/config/providers')
-    return response.data
-  }
+      async getProviders() {
+        const response = await this.client.get('/config/providers', { timeout: 10_000 })
+        return response.data
+      }
 
   async listCommands() {
-    const response = await this.client.get<CommandListResponse>('/command')
-    return response.data
-  }
+    // opencode 서버가 생성 중일 때 /command 가 늦게 응답할 수 있다.
+    // 백엔드 프록시가 8s 후 stale 캐시로 응답하므로 그보다 길게 대기한다.
+    const response = await this.client.get<CommandListResponse>('/command', { timeout: 25_000 })
+        return response.data
+      }
 
   async listAgents() {
     const response = await this.client.get<{ name: string; description?: string }[]>('/agent')
@@ -224,3 +248,4 @@ export class OpenCodeClient {
 export const createOpenCodeClient = (baseURL: string, directory?: string) => {
   return new OpenCodeClient(baseURL, directory)
 }
+

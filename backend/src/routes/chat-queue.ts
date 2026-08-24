@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, removeQueuedChat } from '../services/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, removeQueuedChat, clearQueuedChats } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
@@ -33,6 +33,17 @@ export function createChatQueueRoutes() {
       }
       logger.error('Failed to enqueue chat:', error)
       return c.json({ error: 'Failed to enqueue chat' }, 500)
+    }
+  })
+
+  // 세션 중단(abort) 시 대기열 전체 정리용
+  app.delete('/:sessionId', async (c) => {
+    try {
+      const cleared = clearQueuedChats(c.req.param('sessionId'))
+      return c.json({ success: true, cleared })
+    } catch (error) {
+      logger.error('Failed to clear queued chats:', error)
+      return c.json({ error: 'Failed to clear queued chats' }, 500)
     }
   })
 

@@ -21,11 +21,17 @@ export function ProviderSettings() {
     queryKey: ['providers'],
     queryFn: () => getProviders(),
     staleTime: 300000,
+    // provider 웹사이트가 느려도 탭이 멈추지 않도록: 재시도 없이 실패 수용,
+    // 이전 데이터가 있으면 그대로 표시(백그라운드 갱신)
+    retry: false,
+    placeholderData: (prev) => prev,
   })
 
   const { data: credentialsList, isLoading: credentialsLoading } = useQuery({
     queryKey: ['provider-credentials'],
     queryFn: () => providerCredentialsApi.list(),
+    retry: false,
+    placeholderData: (prev) => prev,
   })
 
   const setCredentialMutation = useMutation({

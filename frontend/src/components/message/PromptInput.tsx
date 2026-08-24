@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from 'react'
 import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
+import { clearQueuedChats } from '@/api/chat-queue'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
 import { useCommandHandler } from '@/hooks/useCommandHandler'
@@ -244,6 +245,8 @@ export function PromptInput({
 
   const handleStop = () => {
     abortSession.mutate(sessionID)
+    // 중단 시 대기열(자동 발송 예정 메시지)도 비운다 — stop 이 무시되는 것처럼 보이는 원인
+    void clearQueuedChats(sessionID).catch(() => {})
   }
 
   const handleCommandSelect = async (command: CommandType) => {

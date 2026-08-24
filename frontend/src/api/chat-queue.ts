@@ -36,3 +36,8 @@ export async function enqueueQueuedChat(sessionID: string, text: string): Promis
 export async function removeQueuedChat(sessionID: string, id: string): Promise<void> {
   await request<{ success: boolean }>(`/${encodeURIComponent(sessionID)}/${encodeURIComponent(id)}`, jsonInit('DELETE'))
 }
+
+/** 중단(abort) 시: 세션 대기열 전체 비우기 */
+export async function clearQueuedChats(sessionID: string): Promise<void> {
+  await request<{ success: boolean }>(`/${encodeURIComponent(sessionID)}`, { method: 'DELETE' })
+}
