@@ -18,7 +18,9 @@ export class OpenCodeClient {
   private client: AxiosInstance
   private baseURL: string
   private directory?: string
-  private static lastTimeoutWarn: Record<string, number> = {}
+  private static sessionTimers: Record<string, ReturnType<typeof setInterval>> = {}
+  private static firstTimeoutAt: Record<string, number> = {}
+  private static lastWarnedBoundary: Record<string, number> = {}
 
   constructor(baseURL: string, directory?: string) {
     this.baseURL = baseURL
@@ -40,11 +42,10 @@ export class OpenCodeClient {
       async (error) => {
         if (error.message?.includes?.('timeout') && error?.config?.url?.includes?.('/session')) {
           const sessionID = error.config.url.match(/\/session\/([^/]+)/)?.[1] ?? null
-          // 세션별 토스트 중복 억제: 10분 내 재경고 없음
-          const now = Date.now()
-          const last = OpenCodeClient.lastTimeoutWarn[sessionID ?? ''] ?? 0
-          if (now - last > 10 * 60 * 1000) {
-            OpenCodeClient.lastTimeoutWarn[sessionID ?? ''] = now
+          if (sessionID) {
+            // 최초 타임아웃 = 10분 경고 1회. 이후 워치독이 10분 경계마다 1회씩 추가 경고한다.
+            OpenCodeClient.firstTimeoutAt[sessionID] ??= Date.now()
+            OpenCodeClient.lastWarnedBoundary[sessionID] ??= 1
             try {
               const healthy = await this.checkServerHealth()
               const port = this.baseURL != null && this.baseURL.includes(':') ? this.baseURL!.split(':').pop()!.split('/')[0] : 'unknown'
@@ -54,19 +55,23 @@ export class OpenCodeClient {
             } catch (checkError) {
               console.error('Health check error:', checkError)
             }
-          }
-          // 600s 타임아웃 = 응답 대기를 포기한다는 뜻. 서버 쪽 생성도
-          // 실제로 중단시키고, 대기열(자동 발송)까지 비워야 stop 없이도 깔끔히 끝난다.
-          if (sessionID) {
-            try {
-              await this.client.post(`/session/${sessionID}/abort`, undefined, { timeout: 10_000 })
-            } catch (abortError) {
-              console.warn('Failed to abort session after timeout:', abortError)
-            }
-            try {
-              clearQueuedChats(sessionID)
-            } catch {
-              // 큐 정리 실패는 무시
+            // 600s 타임아웃에는 두 경우가 있다:
+            //  1) 백엔드 살아있고 생성 진행 중  → 건드리지 않고 워치독이 10분 단위 추적
+            //  2) 백엔드 응답 불가/세션 종료     → 생성 중단 + 대기열 비움
+            const stillGenerating = await this.isSessionGenerating(sessionID)
+            if (!stillGenerating) {
+              try {
+                await this.client.post(`/session/${sessionID}/abort`, undefined, { timeout: 10_000 })
+              } catch (abortError) {
+                console.warn('Failed to abort session after timeout:', abortError)
+              }
+              try {
+                clearQueuedChats(sessionID)
+              } catch {
+                // 큐 정리 실패는 무시
+              }
+            } else {
+              this.ensureGenerationWatchdog(sessionID)
             }
           }
           return Promise.resolve({}) // Return empty to prevent chat error display
@@ -74,6 +79,46 @@ export class OpenCodeClient {
         return Promise.reject(error)
       }
     )
+  }
+
+  /** 마지막 assistant 메시지가 완료되지 않았으면 아직 생성 중으로 판정한다. */
+  private async isSessionGenerating(sessionID: string): Promise<boolean> {
+    try {
+      const response = await this.client.get(`/session/${sessionID}/message`, { timeout: 8_000 })
+      const messages = response.data as Array<{ info: { role?: string; time?: { completed?: number } } }>
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]
+        if (m.info?.role === 'assistant') {
+          return !m.info.time?.completed
+        }
+      }
+      return false
+    } catch {
+      // 서버 응답 불가 → 생성 중으로 판단할 수 없음(false) → 상위에서 중단 경로 처리
+      return false
+    }
+  }
+
+  /** 10분 경계마다 1회씩 경고하며, 생성이 끝나면 자동으로 추적을 멈춘다. */
+  private ensureGenerationWatchdog(sessionID: string): void {
+    if (OpenCodeClient.sessionTimers[sessionID]) return
+    const first = OpenCodeClient.firstTimeoutAt[sessionID] ?? Date.now()
+    const timer = setInterval(async () => {
+      const elapsed = Date.now() - first
+      const boundary = Math.floor(elapsed / 600_000)
+      const lastB = OpenCodeClient.lastWarnedBoundary[sessionID] ?? 1
+      const generating = await this.isSessionGenerating(sessionID)
+      if (!generating) {
+        clearInterval(timer)
+        delete OpenCodeClient.sessionTimers[sessionID]
+        return
+      }
+      if (boundary > lastB) {
+        OpenCodeClient.lastWarnedBoundary[sessionID] = boundary
+        showToast.warning(`Answer is still generating (${boundary * 10} min elapsed)`)
+      }
+    }, 60_000)
+    OpenCodeClient.sessionTimers[sessionID] = timer
   }
 
   private async checkServerHealth(): Promise<boolean> {
