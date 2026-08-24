@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
+import { API_BASE_URL } from '@/config'
 
 type SessionActivityEventType = 'active' | 'completing' | 'idle' | 'remove'
 
@@ -84,7 +85,8 @@ function startActivitySubscription(): void {
 }
 
 function startActivitySweeper(): void {
-  setInterval(() => {
+  setInterval(async () => {
+    // 1) 15s 활동 타임아웃 스윕
     useSessionActivityStore.setState((state) => {
       const now = Date.now()
       let changed = false
@@ -98,6 +100,23 @@ function startActivitySweeper(): void {
       }
       return changed ? { activeSessions } : state
     })
+
+    // 2) LLM 실제 generating 상태 기준 정합화 — 이벤트 누락과 무관하게
+    //    배지가 실제 생성 상태를 따르도록 10s마다 서버 busy 맵과 동기화한다.
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/opencode/session/status`)
+      if (res.ok) {
+        const status = (await res.json()) as Record<string, { type?: string }>
+        const busy = new Set(
+          Object.entries(status ?? {})
+            .filter(([, s]) => s?.type === 'busy')
+            .map(([id]) => id),
+        )
+        reconcileSessionActivity(busy)
+      }
+    } catch {
+      // 상태 조회 실패 시 타임아웃 스윕만으로 동작
+    }
   }, 10_000)
 }
 
