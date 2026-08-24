@@ -176,6 +176,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
   const search = query ? '?' + new URLSearchParams(query).toString() : ''
   const cleanPath = pathname.replace(/^\/api\/opencode/, '') + search
   const targetUrl = `${opencodeServerManager.getUrl()}${cleanPath}`
+  const requestStartedAt = Date.now()
 
   const cleanEventPath = pathname.replace(/^\/api\/opencode/, '')
   const isLongRunning = /\/session\/[^/]+\/message$/.test(cleanEventPath)
@@ -300,6 +301,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         const bodyText = await response.text()
         rememberStale(cacheKeyFor(method, targetUrl), response.status, responseHeaders['Content-Type'] ?? 'application/json', bodyText)
         releaseBusy()
+        const tookMs = Date.now() - requestStartedAt
+        if (tookMs > 2_000) {
+          logger.warn(`Slow proxied GET ${cleanEventPath} -> ${tookMs}ms (status ${response.status})`)
+        }
         return new Response(bodyText, {
           status: response.status,
           statusText: response.statusText,

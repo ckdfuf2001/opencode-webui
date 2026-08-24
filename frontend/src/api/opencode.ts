@@ -43,22 +43,31 @@ export class OpenCodeClient {
         if (error.message?.includes?.('timeout') && error?.config?.url?.includes?.('/session')) {
           const sessionID = error.config.url.match(/\/session\/([^/]+)/)?.[1] ?? null
           if (sessionID) {
-            // 최초 타임아웃 = 10분 경고 1회. 이후 워치독이 10분 경계마다 1회씩 추가 경고한다.
+            // 최초 타임아웃 시점을 기준으로 10분 경계를 계산해
+            // 경계가 늘어날 때만(10분→20분→30분) 1회씩 경고한다.
             OpenCodeClient.firstTimeoutAt[sessionID] ??= Date.now()
-            OpenCodeClient.lastWarnedBoundary[sessionID] ??= 1
-            try {
-              const healthy = await this.checkServerHealth()
-              const port = this.baseURL != null && this.baseURL.includes(':') ? this.baseURL!.split(':').pop()!.split('/')[0] : 'unknown'
-              const msg = `Answer is generating over Timeout 600 sec, Backend is ${healthy ? 'alived' : 'not alived'} at port ${port}`
-              console.warn(msg)
-              showToast.warning(msg)
-            } catch (checkError) {
-              console.error('Health check error:', checkError)
-            }
-            // 600s 타임아웃에는 두 경우가 있다:
-            //  1) 백엔드 살아있고 생성 진행 중  → 건드리지 않고 워치독이 10분 단위 추적
-            //  2) 백엔드 응답 불가/세션 종료     → 생성 중단 + 대기열 비움
+            const elapsed = Date.now() - OpenCodeClient.firstTimeoutAt[sessionID]
+            const boundary = Math.max(1, Math.floor(elapsed / 600_000))
+            const lastBoundary = OpenCodeClient.lastWarnedBoundary[sessionID] ?? 0
             const stillGenerating = await this.isSessionGenerating(sessionID)
+
+            if (boundary > lastBoundary) {
+              OpenCodeClient.lastWarnedBoundary[sessionID] = boundary
+              try {
+                const healthy = await this.checkServerHealth()
+                const port = this.baseURL != null && this.baseURL.includes(':') ? this.baseURL!.split(':').pop()!.split('/')[0] : 'unknown'
+                const msg = boundary === 1
+                  ? `Answer is generating over Timeout 600 sec, Backend is ${healthy ? 'alived' : 'not alived'} at port ${port}`
+                  : `Answer is still generating (${boundary * 10} min elapsed)`
+                console.warn(msg)
+                showToast.warning(msg)
+              } catch (checkError) {
+                console.error('Health check error:', checkError)
+              }
+            }
+
+            // 백엔드 응답 불가/세션 종료일 때만 중단+큐 비움.
+            // 생성 진행 중이면 건드리지 않고 워치독이 10분 단위 추적한다.
             if (!stillGenerating) {
               try {
                 await this.client.post(`/session/${sessionID}/abort`, undefined, { timeout: 10_000 })
@@ -70,6 +79,9 @@ export class OpenCodeClient {
               } catch {
                 // 큐 정리 실패는 무시
               }
+              // 세션 정리: 다음 장기 실행 때 처음부터 다시 계산
+              delete OpenCodeClient.firstTimeoutAt[sessionID]
+              delete OpenCodeClient.lastWarnedBoundary[sessionID]
             } else {
               this.ensureGenerationWatchdog(sessionID)
             }
