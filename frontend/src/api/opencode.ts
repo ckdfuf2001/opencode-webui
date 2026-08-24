@@ -44,6 +44,11 @@ export class OpenCodeClient {
     this.directory = directory
   }
 
+  async getSessionStatus(): Promise<Record<string, { type: string }>> {
+    const response = await this.client.get(`/session/status`)
+    return response.data
+  }
+
   async listSessions() {
     const response = await this.client.get<SessionListResponse>('/session')
     return response.data
