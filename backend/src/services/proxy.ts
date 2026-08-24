@@ -208,13 +208,22 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     const isEventStream = cleanEventPath === '/event' || cleanEventPath === '/global/event' || cleanEventPath.startsWith('/event?')
     // 생성 중(opencode 바쁨)엔 GET을 opencode에 물지 않고 캐시로 즉시 응답한다.
     const staleKeyPre = method === 'GET' && !isEventStream ? cacheKeyFor(method, targetUrl) : null
-    if (staleKeyPre) {
+    if (staleKeyPre && isOpenCodeServerBusy()) {
       const pre = staleCache.get(staleKeyPre)
-      if (pre && isOpenCodeServerBusy()) {
+      if (pre) {
         return new Response(pre.body, {
           status: pre.status,
           headers: { 'Content-Type': pre.contentType, 'x-stale': '1', 'x-busy': '1' },
         })
+      }
+      // 캐시 미스 + 생성 중: 핫 폴링 경로는 opencode에 물지 않고 합성 응답 즉답.
+      // (이때 opencode는 생성 스트리밍으로 GET에 수십 초씩 늦게 답하기 때문)
+      const p = cleanEventPath
+      if (p === '/permission' || p === '/question') {
+        return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json', 'x-busy': '1' } })
+      }
+      if (p === '/session/status') {
+        return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json', 'x-busy': '1' } })
       }
     }
     // GET(설정/목록류)은 외부 벤더 API 지연에 발이 묶이지 않도록 짧게 끊고,
