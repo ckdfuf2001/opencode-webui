@@ -6,6 +6,7 @@ import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
 import { killLingeringAgentBrowser } from './default-mcp'
+import { isOpenCodeServerBusy } from './busy-tracker'
 
 let preferredOpenCodeBin: string | null = null
 let cachedBinary: string | null | undefined
@@ -625,13 +626,17 @@ class OpenCodeServerManager {
   }
 
   async checkHealth(): Promise<boolean> {
+    // 장기 요청(응답 생성 스트리밍)이 활성 상태면 서버가 살아있음이 명백하다.
+    // 이때 /doc 프로브는 스트리밍 부하로 3~5s 내 응답이 못 와서
+    // 다른 레포의 상태 배지가 Disconnected로 떴었다.
+    if (isOpenCodeServerBusy()) return true
     try {
       const headers: Record<string, string> = {}
       const auth = getServerAuthHeader()
       if (auth) headers.Authorization = auth
       const response = await fetch(`${this.getUrl()}/doc`, {
         headers,
-        signal: AbortSignal.timeout(3000)
+        signal: AbortSignal.timeout(5000)
       })
       return response.ok
     } catch {
