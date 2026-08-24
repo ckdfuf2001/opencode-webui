@@ -130,8 +130,18 @@ export async function flushReadyQueues(busySessions: Set<string>): Promise<void>
 // a fallback for missed events.
 let idleListenerStarted = false
 
+// 실시간 큐 디스패치용 전역 이벤트 스트림 소비자.
+// 생성 중 토큰 이벤트를 전부 파싱하는 부하가 의심되어 일시 비활성화 가능.
+// QUEUE_IDLE_LISTENER=1 로 시작하면 다시 활성화된다(기본: 꺼짐, 5s 폴링 폴백 동작).
+const IDLE_LISTENER_ENABLED = process.env.QUEUE_IDLE_LISTENER === '1'
+
 export function startQueueIdleListener(): void {
   if (idleListenerStarted) return
+  if (!IDLE_LISTENER_ENABLED) {
+    logger.info('Queue idle listener disabled (QUEUE_IDLE_LISTENER!=1); using 5s poll fallback')
+    idleListenerStarted = true
+    return
+  }
   idleListenerStarted = true
 
   const connect = async (): Promise<void> => {

@@ -1,5 +1,6 @@
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
+import { isOpenCodeServerBusy } from './busy-tracker'
 import { SettingsService } from './settings'
 import { flushReadyQueues } from './chat-queue'
 import { getWorkspacePath } from '@opencode-webui/shared'
@@ -84,6 +85,8 @@ export function startSessionWatch(db: Database): NodeJS.Timeout {
   }
 
   async function pollOnce(): Promise<void> {
+    // 생성 중(busy)에는 opencode를 전혀 건드리지 않는다(폴링 부하 제거).
+    if (isOpenCodeServerBusy()) return
     const base = opencodeServerManager.getUrl()
     const headers = ensureServerAuth({})
 

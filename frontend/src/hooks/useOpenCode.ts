@@ -110,6 +110,10 @@ export const useSessions = (opcodeUrl: string | null | undefined, directory?: st
     queryKey: ["opencode", "sessions", opcodeUrl, directory],
     queryFn: () => client!.listSessions(),
     enabled: !!client,
+    // SSE 이벤트 누락/HMR 지연과 무관하게 세션 리스트가 항상 신선하도록 폴링
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
   });
 };
 
