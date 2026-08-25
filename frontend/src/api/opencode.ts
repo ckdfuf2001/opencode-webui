@@ -114,7 +114,7 @@ export class OpenCodeClient {
   }
 
   async abortSession(sessionID: string) {
-    await this.client.post(`/session/${sessionID}/abort`)
+    await this.client.post(`/session/${sessionID}/abort`, null, { timeout: 10000 })
   }
 
   async getSessionStatus(): Promise<Record<string, { type: string }>> {
@@ -147,8 +147,11 @@ export class OpenCodeClient {
     return response.data
   }
 
-  async listCommands() {
-    const response = await this.client.get<CommandListResponse>('/command')
+  async listCommands(timeoutMs?: number) {
+    const response = await this.client.get<CommandListResponse>(
+      '/command',
+      timeoutMs ? { timeout: timeoutMs } : undefined
+    )
     return response.data
   }
 

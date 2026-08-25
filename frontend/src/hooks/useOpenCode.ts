@@ -509,25 +509,36 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       if (!client) throw new Error("No client available");
       await client.abortSession(sessionID);
     },
+    onMutate: (sessionID) => {
+      markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
+    },
     onSettled: (_data, _error, sessionID) => {
-      const messagesKey = ['opencode', 'messages', opcodeUrl, sessionID, directory] as const
-      const data = queryClient.getQueryData<MessageListResponse>(messagesKey)
-      if (data) {
-        let changed = false
-        const updated = data.map(msg => {
-          if (msg.info.role !== 'assistant') return msg
-          if ('completed' in msg.info.time && msg.info.time.completed) return msg
-          changed = true
-          return { ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } } }
-        })
-        if (changed) {
-          queryClient.setQueryData(messagesKey, updated)
-        }
-      }
+      markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
       queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
     },
   });
 };
+
+function markSessionMessagesCompleted(
+  queryClient: ReturnType<typeof useQueryClient>,
+  opcodeUrl: string | null | undefined,
+  directory: string | undefined,
+  sessionID: string,
+) {
+  const messagesKey = ['opencode', 'messages', opcodeUrl, sessionID, directory] as const
+  const data = queryClient.getQueryData<MessageListResponse>(messagesKey)
+  if (!data) return
+  let changed = false
+  const updated = data.map(msg => {
+    if (msg.info.role !== 'assistant') return msg
+    if ('completed' in msg.info.time && msg.info.time.completed) return msg
+    changed = true
+    return { ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } } }
+  })
+  if (changed) {
+    queryClient.setQueryData(messagesKey, updated)
+  }
+}
 
 export const useSendShell = (opcodeUrl: string | null | undefined, directory?: string) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
