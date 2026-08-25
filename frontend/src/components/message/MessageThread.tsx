@@ -46,7 +46,7 @@ interface MessageThreadProps {
   highlightedMessageID?: string | null
 }
 
-const isMessageStreaming = (msg: MessageWithParts): boolean => {
+export const isMessageStreaming = (msg: MessageWithParts): boolean => {
   if (msg.info.role !== 'assistant') return false
   return !('completed' in msg.info.time && msg.info.time.completed)
 }
