@@ -7,7 +7,6 @@ if not exist "logs" mkdir logs
 
 echo [START] checking prerequisites...
 if not exist "opencode-webui.exe" echo [START] ERROR: opencode-webui.exe not found & exit /b 1
-if not exist "frontend\dist\index.html" echo [START] ERROR: frontend\dist missing & exit /b 1
 if exist "bin\opencode.exe" (echo [START] ok: opencode binary) else echo [START] WARN: bin\opencode.exe missing - AI sessions unavailable
 if exist "bin\agent-browser" (echo [START] ok: agent-browser) else echo [START] WARN: bin\agent-browser missing - browser automation disabled
 if exist "scripts\doc-reader.exe" (echo [START] ok: doc-reader.exe) else echo [START] WARN: doc-reader.exe missing - python fallback required

@@ -17,7 +17,6 @@ BIN=./opencode-webui.exe
 [ -f "$BIN" ] || fail "opencode-webui executable not found in $(pwd)"
 
 say "checking prerequisites..."
-[ -f ./frontend/dist/index.html ] || fail "frontend/dist missing — UI cannot be served"
 if [ -f ./bin/opencode.exe ] || [ -f ./bin/opencode ]; then
   say "ok: opencode binary"
 else
