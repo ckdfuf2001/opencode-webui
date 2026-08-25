@@ -14,7 +14,7 @@
     "opencode:install": "node scripts/install-opencode.js",
     "agent-browser:install": "node scripts/install-agent-browser.js",
     "agent-browser:update": "node scripts/install-agent-browser.js --force",
-    "dev": "concurrently \"pnpm:dev:backend\" \"pnpm:dev:frontend\"",
+    "dev": "concurrently --kill-others \"pnpm:dev:backend\" \"pnpm:dev:frontend\"",
     "dev:backend": "bun --watch backend/src/index.ts",
     "dev:frontend": "pnpm --filter frontend dev",
     "build": "pnpm run build:backend && pnpm run build:frontend",
