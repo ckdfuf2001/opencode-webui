@@ -5,7 +5,6 @@ import path from 'path'
 import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
-import { killLingeringAgentBrowser } from './default-mcp'
 
 let preferredOpenCodeBin: string | null = null
 let cachedBinary: string | null | undefined
@@ -251,6 +250,13 @@ class OpenCodeServerManager {
     this.port = candidate
 
     if (await this.checkHealth()) {
+      if (!(await this.verifyOpenCodeServer())) {
+        logger.error(
+          `OPENCODE_SERVER_PORT ${candidate} is occupied by another program (it answers HTTP but is not an OpenCode server). ` +
+          `Do NOT kill it manually - set OPENCODE_SERVER_PORT in .env to a free port and restart.`
+        )
+        await gracefulExit(1)
+      }
       const existingProcesses = await this.findProcessesByPort(candidate)
       this.serverPid = existingProcesses[0]?.pid ?? null
       this.isManaged = false
@@ -260,7 +266,11 @@ class OpenCodeServerManager {
     }
 
     if (!(await this.waitForPortFree(candidate, 20_000))) {
-      logger.warn(`Port ${candidate} is still occupied; launching anyway`)
+      logger.error(
+        `OPENCODE_SERVER_PORT ${candidate} is in use by another program that is not a healthy OpenCode server. ` +
+        `Do NOT kill it manually - set OPENCODE_SERVER_PORT in .env to a free port and restart.`
+      )
+      await gracefulExit(1)
     }
 
     this.launch(candidate, serverDirectory, binPath, isDevelopment)
@@ -619,6 +629,25 @@ class OpenCodeServerManager {
     }
   }
 
+  private async verifyOpenCodeServer(): Promise<boolean> {
+    try {
+      const headers: Record<string, string> = {}
+      const auth = getServerAuthHeader()
+      if (auth) headers.Authorization = auth
+      const response = await fetch(`${this.getUrl()}/doc`, {
+        headers,
+        signal: AbortSignal.timeout(3000)
+      })
+      if (!response.ok) return false
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!contentType.includes('application/json')) return false
+      const body = await response.json() as { openapi?: unknown; paths?: unknown }
+      return typeof body === 'object' && body !== null && ('openapi' in body || 'paths' in body)
+    } catch {
+      return false
+    }
+  }
+
   private async waitForHealth(timeoutMs: number): Promise<boolean> {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
@@ -682,12 +711,16 @@ class OpenCodeServerManager {
 
 export const opencodeServerManager = OpenCodeServerManager.getInstance()
 
+async function gracefulExit(code: number): Promise<never> {
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  process.exit(code)
+}
+
 export async function freePort(port: number): Promise<void> {
   return opencodeServerManager.freePortPublic(port)
 }
 
 export async function prepareBackendPort(port: number): Promise<void> {
-  killLingeringOpenCodeServers()
   if (await opencodeServerManager.canBindPortPublic(port)) return
 
   if (await opencodeServerManager.isOurBackendPublic(port)) {
@@ -696,32 +729,16 @@ export async function prepareBackendPort(port: number): Promise<void> {
     // just attach" path (double `npm run dev`, EXE double-launch, or a dev
     // backend that survived a closed terminal). The new process exits with a
     // clear log line so the user knows the existing instance is the one
-    // serving. Only instances that do NOT answer /api/health healthy are
-    // treated as stale and killed below.
+    // serving.
     logger.info(`Port ${port} already serves this app; reusing existing instance`)
     process.exit(0)
-  } else if (await opencodeServerManager.httpRespondsPublic(port)) {
-    throw new Error(`Port ${port} is in use by another application. Stop it or change PORT in .env.`)
-  } else {
-    // The port is bound but nothing answers /api/health: a half-dead leftover
-    // from a force-killed `npm run dev`. Reuse is impossible — kill it so the
-    // fresh backend can bind and start cleanly.
-    logger.warn(`Port ${port} is occupied by a stale/half-dead process; freeing it before starting fresh`)
-    await opencodeServerManager.freePortPublic(port)
   }
 
-  killLingeringAgentBrowser()
-
-  const waitMs = 20000
-  const deadline = Date.now() + waitMs
-  while (Date.now() < deadline) {
-    if (await opencodeServerManager.canBindPortPublic(port)) return
-    await new Promise((r) => setTimeout(r, 500))
-  }
-
-  throw new Error(
-    `Port ${port} is held by a process that could not be freed. Stop it manually or change PORT in .env.`
+  logger.error(
+    `Port ${port} is already in use by another program. ` +
+    `Do NOT kill it manually - change PORT in .env to a free port and start again.`
   )
+  await gracefulExit(1)
 }
 
 /**

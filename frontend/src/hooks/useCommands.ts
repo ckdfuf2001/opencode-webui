@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createOpenCodeClient } from '@/api/opencode'
 import type { components } from '@/api/opencode-types'
 
@@ -195,37 +195,65 @@ const BUILTIN_COMMANDS: CommandWithScope[] = [
   }
 ]
 
+const COMMANDS_FETCH_TIMEOUT_MS = 12000
+const commandsCache = new Map<string, CommandWithScope[]>()
+let inFlight: { key: string; token: { done: boolean }; promise: Promise<void> } | null = null
+
 export function useCommands(opcodeUrl: string | null, directory?: string) {
   const [commands, setCommands] = useState<CommandWithScope[]>(BUILTIN_COMMANDS)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const lastAttemptSucceededRef = useRef(true)
+
+  const cacheKey = `${opcodeUrl ?? ''}|${directory ?? ''}`
 
   const fetchCommands = useCallback(async () => {
+    if (inFlight && inFlight.key === cacheKey) return inFlight.promise
     setLoading(true)
-    setError(null)
 
     const base = [...BUILTIN_COMMANDS]
+    const token = { done: false }
 
-    try {
-      let openCodeCommands: CommandWithScope[] = []
-      if (opcodeUrl) {
-        const client = createOpenCodeClient(opcodeUrl, directory)
-        openCodeCommands = (await client.listCommands()) as CommandWithScope[]
+    const promise = (async () => {
+      try {
+        let openCodeCommands: CommandWithScope[] = []
+        if (opcodeUrl) {
+          const client = createOpenCodeClient(opcodeUrl, directory)
+          openCodeCommands = (await client.listCommands(COMMANDS_FETCH_TIMEOUT_MS)) as CommandWithScope[]
+        }
+
+        const merged = [...base, ...openCodeCommands]
+        const unique = merged.filter((command, index, self) =>
+          index === self.findIndex((c) => c.name === command.name)
+        )
+        commandsCache.set(cacheKey, unique)
+        setCommands(unique)
+        setError(null)
+        lastAttemptSucceededRef.current = true
+      } catch (err) {
+        const cached = commandsCache.get(cacheKey)
+        if (cached && cached.length > base.length) {
+          setCommands(cached)
+          setError(null)
+          if (lastAttemptSucceededRef.current) {
+            lastAttemptSucceededRef.current = false
+            console.warn('Commands fetch failed (server busy?); serving cached list until it recovers')
+          }
+        } else {
+          console.error('Failed to fetch commands:', err)
+          setError('Failed to load commands')
+          setCommands(base)
+        }
+      } finally {
+        token.done = true
+        setLoading(false)
+        if (inFlight && inFlight.token === token) inFlight = null
       }
+    })()
 
-      const merged = [...base, ...openCodeCommands]
-      const unique = merged.filter((command, index, self) =>
-        index === self.findIndex((c) => c.name === command.name)
-      )
-      setCommands(unique)
-    } catch (err) {
-      console.error('Failed to fetch commands:', err)
-      setError('Failed to load commands')
-      setCommands(base)
-    } finally {
-      setLoading(false)
-    }
-  }, [opcodeUrl, directory])
+    inFlight = { key: cacheKey, token, promise }
+    return promise
+  }, [opcodeUrl, directory, cacheKey])
 
   useEffect(() => {
     fetchCommands()
