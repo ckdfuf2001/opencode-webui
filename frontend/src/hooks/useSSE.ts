@@ -559,6 +559,8 @@ export const useSSE = (opcodeUrl: string | null | undefined, directory?: string,
             for (const query of allQueries) {
               const key = query.queryKey
               if (key[0] !== 'opencode' || key[1] !== 'messages') continue
+              if (key[2] !== opcodeUrl) continue
+              if (key[4] !== directory) continue
               const sessionID = key[3]
               if (typeof sessionID !== 'string' || !sessionID) continue
               const data = query.state.data as MessageWithParts[] | undefined
