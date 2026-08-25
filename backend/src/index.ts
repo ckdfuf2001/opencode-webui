@@ -19,6 +19,7 @@ import { createConfigFileRoutes } from './routes/config-files'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
+import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
@@ -234,11 +235,36 @@ app.all('/api/opencode/*', async (c) => {
 const isProduction = ENV.SERVER.NODE_ENV === 'production'
 
 if (isProduction) {
-  app.use('/*', serveStatic({ root: './frontend/dist' }))
-  
+  // Embedded frontend first: when the exe was packaged with
+  // scripts/generate-frontend-embed.ts, everything is served from memory and
+  // no frontend/dist folder needs to ship next to the binary. When embedded
+  // assets exist, the disk fallback is disabled entirely so a stale dist
+  // folder can never serve mismatched chunks.
+  app.use('/*', async (c, next) => {
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next()
+    if (c.req.path.startsWith('/api/')) return next()
+    const route = c.req.path === '/' ? '/index.html' : decodeURIComponent(c.req.path)
+    const asset = await getEmbeddedAsset(route)
+    if (!asset) return next()
+    c.header('Content-Type', asset.contentType)
+    c.header('Cache-Control', asset.immutable ? 'public, max-age=31536000, immutable' : 'no-cache')
+    return c.body(new Uint8Array(asset.body))
+  })
+
+  const embeddedAvailable = await hasEmbeddedAssets()
+  if (!embeddedAvailable) {
+    app.use('/*', serveStatic({ root: './frontend/dist' }))
+  }
+
   app.get('*', async (c) => {
     if (c.req.path.startsWith('/api/')) {
       return c.notFound()
+    }
+    const embeddedIndex = await getEmbeddedAsset('/index.html')
+    if (embeddedIndex) {
+      c.header('Content-Type', 'text/html; charset=utf-8')
+      c.header('Cache-Control', 'no-cache')
+      return c.body(new Uint8Array(embeddedIndex.body))
     }
     const fs = await import('fs/promises')
     const path = await import('path')
