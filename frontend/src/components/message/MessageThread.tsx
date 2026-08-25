@@ -133,14 +133,15 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 <div className="space-y-2">
                   {msg.parts.map((part, index) => (
                     <div key={`${msg.info.id}-${part.id}-${index}`}>
-                      <MessagePart 
-                        part={part} 
+                      <MessagePart
+                        part={part}
                         role={msg.info.role}
                         allParts={msg.parts}
                         partIndex={index}
                         onFileClick={onFileClick}
                         messageTextContent={msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined}
                         directory={directory}
+                        messageStreaming={streaming}
                       />
                     </div>
                   ))}

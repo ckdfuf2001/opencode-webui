@@ -26,6 +26,7 @@ interface RepoCardProps {
   isSelected?: boolean;
   onSelect?: (id: number, selected: boolean) => void;
   scheduleCount?: number;
+  workingCount?: number;
 }
 
 export function RepoCard({
@@ -35,6 +36,7 @@ export function RepoCard({
   isSelected = false,
   onSelect,
   scheduleCount = 0,
+  workingCount = 0,
 }: RepoCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -55,7 +57,17 @@ export function RepoCard({
 
   return (
     <div
-      className={`group relative bg-gradient-to-br from-card to-card-hover border rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg w-full ${
+      onClick={(e) => {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          window.open(`${window.location.origin}/repos/${repo.id}`, '_blank');
+          return;
+        }
+        if (isReady && !e.defaultPrevented) {
+          navigate(`/repos/${repo.id}`);
+        }
+      }}
+      className={`group relative bg-gradient-to-br from-card to-card-hover border rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg w-full cursor-pointer ${
         isSelected
           ? "border-blue-500 shadow-lg shadow-blue-900/30"
           : "border-border hover:border-border hover:shadow-blue-900/20"
@@ -121,10 +133,14 @@ export function RepoCard({
             </div>
           )}
           <div className="flex gap-2 flex-wrap">
-					            <Button
+              <Button
               size="sm"
               onClick={(e) => {
                 e.stopPropagation();
+                if (e.ctrlKey || e.metaKey) {
+                  window.open(`${window.location.origin}/repos/${repo.id}`, '_blank');
+                  return;
+                }
                 navigate(`/repos/${repo.id}`);
               }}
               disabled={!isReady}
@@ -163,6 +179,16 @@ export function RepoCard({
               <CalendarClock className="w-4 h-4" />
               <span className="text-xs tabular-nums">{scheduleCount}</span>
             </Button>
+
+            {workingCount > 0 && (
+              <div
+                className="inline-flex items-center gap-1 h-10 sm:h-9 px-2 rounded-md border border-blue-500/30 bg-blue-500/10"
+                title={`${workingCount} session(s) working`}
+              >
+                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                <span className="text-xs font-medium text-blue-500 tabular-nums">{workingCount}</span>
+              </div>
+            )}
 
             <Button
               size="sm"

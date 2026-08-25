@@ -230,7 +230,7 @@ export async function extractAttachment(
   if (!res.ok) {
     let message = 'Attachment extraction failed'
     try {
-      const body = await res.json()
+      const body = (await res.json()) as { error?: string }
       if (body?.error) message = body.error
     } catch {
       // not JSON

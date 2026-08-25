@@ -97,6 +97,19 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
     CREATE INDEX IF NOT EXISTS idx_command_runs_repo ON command_runs(repo_id);
     CREATE INDEX IF NOT EXISTS idx_command_runs_started ON command_runs(started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_command_runs_repo_started ON command_runs(repo_id, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS session_status (
+      session_id TEXT PRIMARY KEY,
+      directory TEXT NOT NULL,
+      repo_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'idle',
+      pending_permissions INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_session_status_directory ON session_status(directory);
+    CREATE INDEX IF NOT EXISTS idx_session_status_status ON session_status(status);
+
   
   `)
   

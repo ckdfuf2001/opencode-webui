@@ -217,6 +217,7 @@ export function RepoDetail() {
             <SessionList
               opcodeUrl={opcodeUrl}
               directory={repoDirectory}
+              sessionHrefBase={`/repos/${repoId}/sessions`}
               onSelectSession={handleSelectSession}
             />
           )}

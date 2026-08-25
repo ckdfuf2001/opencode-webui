@@ -1,13 +1,11 @@
 import { useState, useMemo, Fragment } from "react";
-import { useSessions, useDeleteSession } from "@/hooks/useOpenCode";
+import { useSessions, useDeleteSession, useSessionStatusMap } from "@/hooks/useOpenCode";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-import { usePendingPermissionCounts } from "@/hooks/usePermissionRequests";
-import { useActiveSessions } from "@/hooks/useSessionActivity";
 import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -16,6 +14,7 @@ interface SessionListProps {
   directory?: string;
   activeSessionID?: string;
   onSelectSession: (sessionID: string) => void;
+  sessionHrefBase?: string;
 }
 
 interface SessionNode {
@@ -33,11 +32,25 @@ export const SessionList = ({
   directory,
   activeSessionID,
   onSelectSession,
+  sessionHrefBase,
 }: SessionListProps) => {
   const { data: sessions, isLoading } = useSessions(opcodeUrl, directory);
   const deleteSession = useDeleteSession(opcodeUrl, directory);
-  const pendingPermissionCounts = usePendingPermissionCounts(sessions);
-  const activeSessions = useActiveSessions();
+  const { data: dbStatuses } = useSessionStatusMap();
+  const dbBusyIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const entry of dbStatuses ?? []) {
+      if (entry.status === "busy") set.add(entry.sessionId);
+    }
+    return set;
+  }, [dbStatuses]);
+  const dbPendingCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const entry of dbStatuses ?? []) {
+      if (entry.pendingPermissions > 0) map[entry.sessionId] = entry.pendingPermissions;
+    }
+    return map;
+  }, [dbStatuses]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<
     string | string[] | null
@@ -216,7 +229,14 @@ export const SessionList = ({
                 ? "bg-muted border-border"
                 : "bg-card border-border hover:bg-muted/60 hover:border-ring"
           } hover:shadow-lg`}
-          onClick={() => onSelectSession(session.id)}
+          onClick={(e) => {
+            if ((e.ctrlKey || e.metaKey) && sessionHrefBase) {
+              e.preventDefault();
+              window.open(`${window.location.origin}${sessionHrefBase}/${session.id}`, '_blank');
+              return;
+            }
+            onSelectSession(session.id);
+          }}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-start gap-2 flex-1 min-w-0">
@@ -255,16 +275,16 @@ export const SessionList = ({
                   <h3 className="text-sm font-medium text-foreground truncate">
                     {session.title || "Untitled Session"}
                   </h3>
-                  {pendingPermissionCounts[session.id] ? (
+                  {dbPendingCounts[session.id] ? (
                     <span
                       className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
-                      title={`${pendingPermissionCounts[session.id]} permission request(s) awaiting approval`}
+                      title={`${dbPendingCounts[session.id]} permission request(s) awaiting approval`}
                     >
                       <ShieldAlert className="w-3 h-3" />
-                      {pendingPermissionCounts[session.id]}
+                      {dbPendingCounts[session.id]}
                     </span>
                   ) : null}
-                  {activeSessions[session.id] ? (
+                  {dbBusyIds.has(session.id) ? (
                     <span
                       className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-500 bg-blue-500/10 border border-blue-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
                       title="LLM is answering"

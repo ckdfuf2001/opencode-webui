@@ -79,6 +79,7 @@ export function PermissionRequestCard({
   const handleResponse = async (response: PermissionResponse) => {
     setIsLoading(true)
     setLoadingAction(response)
+    onDismiss(permission.id)
     try {
       await onRespond(permission.id, permission.sessionID, response)
       if (response === 'always' && repoId) {
@@ -93,10 +94,8 @@ export function PermissionRequestCard({
           }
         }
       }
-      onDismiss(permission.id)
     } catch (error) {
       console.error('Failed to respond to permission:', error)
-      onDismiss(permission.id)
     } finally {
       setIsLoading(false)
       setLoadingAction(null)

@@ -122,9 +122,9 @@ export function QuestionRequestCard({
     if (answers.some(a => a.length === 0)) return
     setIsLoading(true)
     setAction('reply')
+    onDismiss?.(question.id)
     try {
       await onReply(question.id, answers)
-      onDismiss?.(question.id)
     } catch (error) {
       console.error('Failed to reply to question:', error)
     } finally {
@@ -136,9 +136,9 @@ export function QuestionRequestCard({
   const handleReject = async () => {
     setIsLoading(true)
     setAction('reject')
+    onDismiss?.(question.id)
     try {
       await onReject(question.id)
-      onDismiss?.(question.id)
     } catch (error) {
       console.error('Failed to reject question:', error)
     } finally {

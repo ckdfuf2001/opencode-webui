@@ -162,6 +162,21 @@ export function runMigrations(db: Database): void {
       logger.error('Failed to migrate local_path format:', error)
     }
     
+    // session_status: pending_permissions 컬럼 (초기 버전 누락 대비)
+    try {
+      const sessionStatusTable = db.prepare('PRAGMA table_info(session_status)').all() as any[]
+      if (sessionStatusTable.length > 0 && !sessionStatusTable.some(col => col.name === 'pending_permissions')) {
+        logger.info('Adding missing session_status column: pending_permissions')
+        try {
+          db.run('ALTER TABLE session_status ADD COLUMN pending_permissions INTEGER NOT NULL DEFAULT 0')
+        } catch (error) {
+          logger.debug('session_status column pending_permissions might already exist:', error)
+        }
+      }
+    } catch (error) {
+      logger.debug('session_status table may not exist yet:', error)
+    }
+
     logger.info('Database migrations completed successfully')
   } catch (error) {
     logger.error('Failed to run database migrations:', error)

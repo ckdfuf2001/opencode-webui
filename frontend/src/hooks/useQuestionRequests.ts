@@ -45,6 +45,24 @@ const useQuestionStore = create<QuestionStore, [['zustand/persist', Pick<Questio
 
 let storeSubscriptionStarted = false
 
+/** 낙관 dismiss 직후 폴링이 미처리 요청을 되살려 깜빡이는 것을 막는 가드. */
+const RECENTLY_DISMISSED_MS = 12_000
+const recentlyDismissed = new Map<string, number>()
+
+export function markQuestionDismissed(requestID: string): void {
+  recentlyDismissed.set(requestID, Date.now())
+}
+
+function isRecentlyDismissed(requestID: string): boolean {
+  const at = recentlyDismissed.get(requestID)
+  if (!at) return false
+  if (Date.now() - at > RECENTLY_DISMISSED_MS) {
+    recentlyDismissed.delete(requestID)
+    return false
+  }
+  return true
+}
+
 function startStoreSubscription(): void {
   if (storeSubscriptionStarted) return
   storeSubscriptionStarted = true
@@ -88,7 +106,9 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
           const question = normalizeQuestion(q)
           if (question) {
             serverIDs.add(question.id)
-            questionEvents.emit({ type: 'add', question })
+            if (!isRecentlyDismissed(question.id)) {
+              questionEvents.emit({ type: 'add', question })
+            }
           }
         }
         const current = useQuestionStore.getState().questions
@@ -107,7 +127,7 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
     }
 
     load()
-    const interval = setInterval(load, 5000)
+    const interval = setInterval(load, 2000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -128,6 +148,7 @@ export function useQuestionRequests(sessionID?: string) {
   const currentQuestion = questions[0] || null
 
   const dismissQuestion = useCallback((requestID: string) => {
+    markQuestionDismissed(requestID)
     useQuestionStore.setState((state) => ({
       questions: state.questions.filter(q => q.id !== requestID),
     }))

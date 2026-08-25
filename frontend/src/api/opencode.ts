@@ -175,7 +175,7 @@ export class OpenCodeClient {
   }
 
   async respondToPermission(sessionID: string, permissionID: string, response: 'once' | 'always' | 'reject') {
-    const result = await this.client.post(`/session/${sessionID}/permissions/${permissionID}`, { response })
+    const result = await this.client.post(`/session/${sessionID}/permissions/${permissionID}`, { response }, { timeout: 10000 })
     return result.data
   }
 
@@ -185,7 +185,7 @@ export class OpenCodeClient {
   }
 
   async respondToPermissionV2(requestID: string, response: 'once' | 'always' | 'reject') {
-    const result = await this.client.post(`/permission/${requestID}/reply`, { reply: response })
+    const result = await this.client.post(`/permission/${requestID}/reply`, { reply: response }, { timeout: 10000 })
     return result.data
   }
 
@@ -195,12 +195,12 @@ export class OpenCodeClient {
   }
 
   async replyToQuestion(requestID: string, answers: string[][]) {
-    const result = await this.client.post(`/question/${requestID}/reply`, { answers })
+    const result = await this.client.post(`/question/${requestID}/reply`, { answers }, { timeout: 10000 })
     return result.data
   }
 
   async rejectQuestion(requestID: string) {
-    const result = await this.client.post(`/question/${requestID}/reject`)
+    const result = await this.client.post(`/question/${requestID}/reject`, null, { timeout: 10000 })
     return result.data
   }
 

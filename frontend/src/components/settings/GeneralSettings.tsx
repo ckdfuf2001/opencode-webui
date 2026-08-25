@@ -99,7 +99,7 @@ export function GeneralSettings() {
           </div>
           <Switch
             id="showReasoning"
-            checked={preferences?.showReasoning ?? false}
+              checked={preferences?.showReasoning ?? true}
             onCheckedChange={(checked) => updateSettings({ showReasoning: checked })}
           />
         </div>
