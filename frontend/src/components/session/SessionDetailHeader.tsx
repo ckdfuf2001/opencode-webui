@@ -4,7 +4,6 @@ import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
 import { Loader2, Settings, FolderOpen, Terminal, ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import { useSessionActive } from "@/hooks/useSessionActivity";
 
 interface Repo {
   id: number;
@@ -52,8 +51,7 @@ export function SessionDetailHeader({
 }: SessionDetailHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(sessionTitle);
-  const activityWorking = useSessionActive(sessionId);
-  const isWorking = isStreaming || activityWorking;
+  const isWorking = isStreaming;
 
   if (repo.cloneStatus !== 'ready') {
     return (
@@ -106,6 +104,9 @@ export function SessionDetailHeader({
         <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
           <BackButton to={`/repos/${repoId}`} className="text-xs sm:text-sm" />
           <div className="min-w-0 flex-1">
+            <p className="text-[10px] sm:text-xs text-muted-foreground truncate">
+              {repoName}
+            </p>
             {isEditing ? (
               <form onSubmit={handleTitleSubmit} className="min-w-0">
                 <input
@@ -119,16 +120,13 @@ export function SessionDetailHeader({
                 />
               </form>
             ) : (
-              <h1 
+              <h1
                 className="text-xs sm:text-base font-semibold bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent truncate cursor-pointer hover:opacity-80 transition-opacity"
                 onClick={handleTitleClick}
               >
                 {sessionTitle}
               </h1>
             )}
-            <p className="text-[10px] sm:text-xs text-muted-foreground truncate">
-              {repoName}
-            </p>
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">

@@ -7,6 +7,8 @@ import { useCommandHandler } from '@/hooks/useCommandHandler'
 import { useFileSearch } from '@/hooks/useFileSearch'
 
 import { useUserBash } from '@/stores/userBashStore'
+import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
+import { ChatQueueStrip } from './ChatQueueStrip'
 import { ChevronDown } from 'lucide-react'
 
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
@@ -100,6 +102,7 @@ export function PromptInput({
   const sendPrompt = useSendPrompt(opcodeUrl, directory)
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
+  const enqueueQueued = useEnqueueQueuedChat()
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
   const sessionData = useSession(opcodeUrl, sessionID, directory)
   const session = sessionData.data as SessionWithModel | undefined
@@ -201,6 +204,24 @@ export function PromptInput({
       if (!truncated) return
     }
 
+    // 응답 생성 중에는 전송 대신 큐에 적재한다. 백엔드 폴러가 idle 전환 시 발송한다.
+    if (hasActiveStream || sendPrompt.isPending) {
+      const text = parts
+        .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
+        .filter((text) => text.trim().length > 0)
+        .join('\n')
+      if (text.trim()) {
+        enqueueQueued.mutate({ sessionID, text })
+        setPrompt('')
+        setAttachedFiles(new Map())
+        onSubmitted?.()
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto'
+        }
+      }
+      return
+    }
+
     sendPrompt.mutate({
       sessionID,
       parts,
@@ -218,6 +239,24 @@ export function PromptInput({
 
   const handleStop = () => {
     abortSession.mutate(sessionID)
+  }
+
+  // 생성 중 전송 = 큐 적재. 백엔드 폴러가 idle 전환 시 발송한다.
+  const handleQueue = async () => {
+    if (!prompt.trim() || disabled) return
+    const parts = await buildValidatedParts()
+    const text = parts
+      .map((part) => (part.type === 'text' ? part.content : `@"${part.name}"`))
+      .filter((text) => text.trim().length > 0)
+      .join('\n')
+    if (!text.trim()) return
+    enqueueQueued.mutate({ sessionID, text })
+    setPrompt('')
+    setAttachedFiles(new Map())
+    onSubmitted?.()
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
   }
 
   const handleCommandSelect = async (command: CommandType) => {
@@ -534,6 +573,8 @@ export function PromptInput({
   }
 
   const hasActiveStream = messages?.some(msg => isMessageStreaming(msg)) || false
+  // 전송 POST는 턴이 끝날 때까지 대기하므로 isPending = 생성 중 신호 (폴링보다 즉각적).
+  const showStop = hasActiveStream || sendPrompt.isPending
 
   const currentMode = preferences?.mode || 'build'
   const modeColor = currentMode === 'plan' ? 'text-yellow-600 dark:text-yellow-500' : 'text-green-600 dark:text-green-500'
@@ -657,8 +698,7 @@ export function PromptInput({
 
   return (
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 md:p-3 mx-2 md:mx-4 mb-2 md:mb-5 w-[90%] md:max-w-4xl">
-      
-      
+      <ChatQueueStrip sessionID={sessionID} />
       <textarea
         ref={textareaRef}
         value={prompt}
@@ -666,11 +706,13 @@ export function PromptInput({
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         placeholder={
-          isBashMode 
-            ? "Enter bash command..." 
-            : "Send a message..."
+          isBashMode
+            ? "Enter bash command..."
+            : showStop
+              ? "Queue a message — it will send after the current response..."
+              : "Send a message..."
         }
-        disabled={disabled || hasActiveStream}
+        disabled={disabled}
         className={`w-full bg-background/90 px-2 md:px-3 py-2 text-[16px] text-foreground placeholder-muted-foreground focus:outline-none focus:bg-background resize-none min-h-[40px] max-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed md:text-sm rounded-lg ${
           isBashMode 
             ? 'border-purple-500/50 bg-purple-500/5' 
@@ -732,18 +774,27 @@ export function PromptInput({
               <ChevronDown className="w-5 h-5" />
             </button>
           )}
+          {showStop && (
+            <button
+              onClick={handleStop}
+              className="px-4 md:px-5 py-1.5 rounded-lg text-sm font-medium bg-destructive hover:bg-destructive/90 text-destructive-foreground transition-colors"
+              title="Stop generating"
+            >
+              Stop
+            </button>
+          )}
           <button
             data-submit-prompt
-            onClick={hasActiveStream ? handleStop : handleSubmit}
-            disabled={(!prompt.trim() && !hasActiveStream) || disabled}
+            onClick={showStop ? handleQueue : handleSubmit}
+            disabled={(!prompt.trim() && !showStop) || disabled}
             className={`px-5 md:px-6 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              hasActiveStream
-                ? 'bg-destructive hover:bg-destructive/90 text-destructive-foreground' 
+              showStop
+                ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
                 : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
             }`}
-            title={hasActiveStream ? 'Stop' : 'Send'}
+            title={showStop ? 'Queue message' : 'Send'}
           >
-            {hasActiveStream ? 'Stop' : 'Send'}
+            {showStop ? 'Queue' : 'Send'}
           </button>
         </div>
       </div>

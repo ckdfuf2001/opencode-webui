@@ -8,10 +8,47 @@ import type {
 } from "../api/types";
 import type { paths } from "../api/opencode-types";
 import { showToast } from "@/lib/toast"
+import { markSessionIdle } from "./useSessionActivity"
+import { listSessionStatuses } from "@/api/session-status"
 
 type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
+
+/** 낙관 abort 직후 폴링이 미처리 상태를 되살려 뱃지가 깜빡이는 것을 막는 가드. */
+const RECENTLY_ABORTED_MS = 12_000;
+const recentlyAborted = new Map<string, number>();
+
+/** 전송 중인 낙관 user 메시지. 2s 폴링이 캐시를 덮어써도 유지된다. */
+const pendingOptimistic = new Map<string, MessageWithParts>();
+
+/** truncate 직후 opencode 메모리가 옛 목록을 돌려줄 수 있어 뷰를 유지하는 가드.
+ *  시간이 아닌 "제거된 메시지 ID" 기준으로 걸러 새 메시지는 즉시 통과된다. */
+const RECENTLY_TRUNCATED_MS = 12_000;
+const recentlyTruncated = new Map<string, { until: number; removedIds: Set<string> }>();
+
+function applyTruncationWindow(
+  sessionID: string,
+  data: MessageListResponse,
+): MessageListResponse {
+  const entry = recentlyTruncated.get(sessionID);
+  if (!entry) return data;
+  if (Date.now() > entry.until) {
+    recentlyTruncated.delete(sessionID);
+    return data;
+  }
+  return data.filter((m) => !entry.removedIds.has(m.info.id));
+}
+
+function isRecentlyAborted(sessionID: string): boolean {
+  const at = recentlyAborted.get(sessionID);
+  if (!at) return false;
+  if (Date.now() - at > RECENTLY_ABORTED_MS) {
+    recentlyAborted.delete(sessionID);
+    return false;
+  }
+  return true;
+}
 
 type PromptPart = NonNullable<SendPromptRequest["parts"]>[number];
 
@@ -134,6 +171,7 @@ export const useSessions = (opcodeUrl: string | null | undefined, directory?: st
     queryKey: ["opencode", "sessions", opcodeUrl, directory],
     queryFn: () => client!.listSessions(),
     enabled: !!client,
+    refetchInterval: 2000,
   });
 };
 
@@ -154,17 +192,33 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory],
     queryFn: async () => {
       const data = await client!.listMessages(sessionID!);
+      let result = applyTruncationWindow(sessionID!, data);
+      const optimistic = pendingOptimistic.get(sessionID!);
+      const realUserArrived =
+        optimistic != null &&
+        result.some(
+          (m) =>
+            m.info.role === "user" &&
+            (m.info.time?.created ?? 0) >= (optimistic.info.time?.created ?? 0),
+        );
+      if (optimistic && !realUserArrived && !result.some((m) => m.info.id === optimistic.info.id)) {
+        result = [...result, optimistic];
+      }
+      if (isRecentlyAborted(sessionID!)) {
+        return reconcileOrphanedStreams(result, sessionID!, false);
+      }
       const status = await client!.getSessionStatus().catch(() => null);
-      if (status === null) return data;
+      if (status === null) return result;
       const isBusy = status[sessionID!]?.type === "busy";
-      return reconcileOrphanedStreams(data, sessionID!, isBusy);
+      return reconcileOrphanedStreams(result, sessionID!, isBusy);
     },
     enabled: !!client && !!sessionID,
-    refetchOnMount: false,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
+    refetchInterval: 2000,
   });
 };
 
@@ -175,7 +229,17 @@ function reconcileOrphanedStreams(
 ): MessageListResponse {
   if (isBusy) return messages;
   let changed = false;
-  const updated = messages.map((msg): MessageWithParts => {
+  // idle 상태에서 파트 없는 미완료 assistant 메시지는 유령 카드이므로 제거한다.
+  const filtered = messages.filter((msg) => {
+    const ghost =
+      msg.info.sessionID === sessionID &&
+      msg.info.role === "assistant" &&
+      !("completed" in msg.info.time && msg.info.time.completed) &&
+      msg.parts.length === 0;
+    if (ghost) changed = true;
+    return !ghost;
+  });
+  const updated = filtered.map((msg): MessageWithParts => {
     if (msg.info.sessionID !== sessionID) return msg;
     if (msg.info.role !== "assistant") return msg;
     if ("completed" in msg.info.time && msg.info.time.completed) return msg;
@@ -226,6 +290,7 @@ export const useReconcileOrphanedStreams = (opcodeUrl: string | null | undefined
           const reconciled = reconcileOrphanedStreams(data, sessionID, false);
           if (reconciled !== data) {
             queryClient.setQueryData(key, reconciled);
+            markSessionIdle(sessionID);
           }
         }
       } catch {
@@ -286,8 +351,17 @@ export const useDeleteSession = (opcodeUrl: string | null | undefined, directory
       
       return results
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["opencode", "sessions", opcodeUrl, directory] });
+    onSuccess: (_data, variables) => {
+      const ids = Array.isArray(variables) ? variables : [variables];
+      const sessionsKey = ["opencode", "sessions", opcodeUrl, directory] as const;
+      const current = queryClient.getQueryData<{ id: string }[]>(sessionsKey);
+      if (current) {
+        queryClient.setQueryData(
+          sessionsKey,
+          current.filter((s) => !ids.includes(s.id)),
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: sessionsKey });
     },
   });
 };
@@ -308,6 +382,15 @@ export const useTruncateSession = (opcodeUrl: string | null | undefined, directo
       const cursor = previous?.find((m) => m.info.id === messageID);
       if (previous && cursor) {
         const cursorTime = cursor.info.time?.created ?? 0;
+        const removedIds = new Set(
+          previous
+            .filter((m) => (m.info.time?.created ?? 0) >= cursorTime)
+            .map((m) => m.info.id),
+        );
+        recentlyTruncated.set(sessionID, {
+          until: Date.now() + RECENTLY_TRUNCATED_MS,
+          removedIds,
+        });
         queryClient.setQueryData<MessageListResponse>(messagesKey, () =>
           previous.filter((m) => (m.info.time?.created ?? 0) < cursorTime),
         );
@@ -430,6 +513,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         contentParts,
         optimisticUserID,
       );
+      pendingOptimistic.set(sessionID, userMessage);
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => [...(old || []), userMessage],
@@ -473,6 +557,9 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
 
       return { optimisticUserID, response };
     },
+    onSettled: (_data, _error, variables) => {
+      pendingOptimistic.delete(variables.sessionID);
+    },
     onError: (error, variables) => {
       const { sessionID } = variables;
       const formatted = formatServerError(error)
@@ -500,6 +587,15 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
   });
 };
 
+export const useSessionStatusMap = () => {
+  return useQuery({
+    queryKey: ["session-status-db"],
+    queryFn: listSessionStatuses,
+    refetchInterval: 2000,
+    staleTime: 0,
+  });
+};
+
 export const useAbortSession = (opcodeUrl: string | null | undefined, directory?: string) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
@@ -510,6 +606,7 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       await client.abortSession(sessionID);
     },
     onMutate: (sessionID) => {
+      recentlyAborted.set(sessionID, Date.now());
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
     },
     onSettled: (_data, _error, sessionID) => {
@@ -529,12 +626,21 @@ function markSessionMessagesCompleted(
   const data = queryClient.getQueryData<MessageListResponse>(messagesKey)
   if (!data) return
   let changed = false
-  const updated = data.map(msg => {
-    if (msg.info.role !== 'assistant') return msg
-    if ('completed' in msg.info.time && msg.info.time.completed) return msg
+  const updated: MessageListResponse = []
+  for (const msg of data) {
+    if (msg.info.role !== 'assistant') {
+      updated.push(msg)
+      continue
+    }
+    if ('completed' in msg.info.time && msg.info.time.completed) {
+      updated.push(msg)
+      continue
+    }
     changed = true
-    return { ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } } }
-  })
+    // 빈 placeholder(파트 없는 미완료 카드)는 완료 처리 대신 제거한다.
+    if (msg.parts.length === 0) continue
+    updated.push({ ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } } })
+  }
   if (changed) {
     queryClient.setQueryData(messagesKey, updated)
   }

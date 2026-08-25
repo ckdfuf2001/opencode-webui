@@ -19,9 +19,12 @@ import { createConfigFileRoutes } from './routes/config-files'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
+import { createSessionStatusRoutes } from './routes/session-status'
+import { createChatQueueRoutes } from './routes/chat-queue'
 import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
+import { startSessionStatusPoller, stopSessionStatusPoller } from './services/session-status'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
@@ -195,6 +198,8 @@ app.route('/api/registry', createRegistryRoutes())
 app.route('/api/config-files', createConfigFileRoutes(db))
 app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
+app.route('/api/session-status', createSessionStatusRoutes(db))
+app.route('/api/chat-queue', createChatQueueRoutes())
 
 app.get('/api/openapi.json', (c) => c.json(openApiSpec))
 
@@ -329,6 +334,7 @@ const shutdown = async (signal: string) => {
   if (healthCheckInterval) clearInterval(healthCheckInterval)
   if (agentBrowserWarmupInterval) clearInterval(agentBrowserWarmupInterval)
   if (scheduleRunner) clearInterval(scheduleRunner)
+  stopSessionStatusPoller()
   stopAutomationWatcher()
   try {
     await opencodeServerManager.stop()
@@ -440,5 +446,8 @@ agentBrowserWarmupInterval = setInterval(() => {
 
 scheduleRunner = startScheduleRunner(db)
 logger.info('Schedule runner started')
+
+startSessionStatusPoller(db)
+logger.info('Session status poller started')
 
 startAutomationWatcher()

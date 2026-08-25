@@ -103,7 +103,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   theme: 'dark',
   mode: 'build',
   autoScroll: true,
-  showReasoning: false,
+  showReasoning: true,
   expandToolCalls: false,
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   customCommands: [],

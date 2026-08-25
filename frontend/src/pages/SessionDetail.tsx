@@ -14,9 +14,9 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useReconcileOrphanedStreams } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useReconcileOrphanedStreams, useSessionStatusMap } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
-import { useSSE } from "@/hooks/useSSE";
+import { playCompletionTick } from "@/lib/sounds";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -85,8 +85,24 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages } = useMessages(opcodeUrl, sessionId, repoDirectory);
+  const {
+    data: dbStatuses,
+    isError: statusError,
+    isFetching: statusFetching,
+  } = useSessionStatusMap();
+  const isConnected = !statusError && !!dbStatuses;
+  const isReconnecting = statusError && statusFetching;
+  const dbBusy = !!sessionId && dbStatuses?.some((s) => s.sessionId === sessionId && s.status === "busy") === true;
   const lastMessage = messages?.[messages.length - 1];
-  const isStreaming = !!lastMessage && isMessageStreaming(lastMessage);
+  const isStreaming = (!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy;
+
+  // 응답 완료 똑소리: 카드 상태 기준으로 전환 1회만 재생한다.
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    const was = prevStreamingRef.current;
+    prevStreamingRef.current = isStreaming;
+    if (was && !isStreaming) playCompletionTick();
+  }, [isStreaming]);
 
   const { scrollToBottom } = useAutoScroll({
     containerRef: messageContainerRef,
@@ -101,7 +117,6 @@ export function SessionDetail() {
     sessionId,
     repoDirectory,
   );
-  const { isConnected, isReconnecting } = useSSE(opcodeUrl, repoDirectory);
   useReconcileOrphanedStreams(opcodeUrl, repoDirectory);
   const abortSession = useAbortSession(opcodeUrl, repoDirectory);
   const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
@@ -507,6 +522,11 @@ if (results.length > 0) {
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
                 activeSessionID={sessionId || undefined}
+                sessionHrefBase={
+                  window.location.pathname.match(/\/repos\/(\d+)\/sessions\//)
+                    ? `/repos/${window.location.pathname.match(/\/repos\/(\d+)\/sessions\//)![1]}/sessions`
+                    : undefined
+                }
                 onSelectSession={(sessionID) => {
                   // Navigate to the correct repo session URL pattern
                   const currentPath = window.location.pathname

@@ -543,15 +543,33 @@ Only commands that exist on the OpenCode server are sent via `POST /session/{id}
 
 UI-only commands (`models`, `themes`, `new`, `clear`, `help`, `sessions`, `resume`, `continue`, `share`, `unshare`, `export`, `compact`, `summarize`, `undo`, `redo`, `details`, `editor`) are handled client-side with toasts or dialogs.
 
-### Session Activity Tracking
+### Session Activity Tracking (2s polling — SSE removed from frontend)
 
-The `useSessionActivity` hook maintains a global store of active sessions:
-- `active` → emitted on `part.updated` or `message.updated` (assistant role)
-- `completing` → emitted when assistant message has `time.completed` (3s grace period)
-- `idle` → emitted on `session.idle`, `session.error`
-- `remove` → emitted on `session.deleted`
-Components use `useActiveSessions()` (Record<sessionId, boolean>) and `useSessionActive(sessionId)` for
-badges.
+**Rule: the frontend uses ONLY 2-second polling. No SSE/EventSource in the browser.**
+
+사유: opencode SSE 이벤트가 타 세션 점유 시 유실되어 프론트가 멈춘 것처럼 보였다
+(백엔드/서버는 정상 동작). 이벤트 기반 상태 동기화는 제거하고, 백엔드가 단일 진실을
+수집·저장하고 프론트는 그 DB를 2초 폴링으로 표시하는 구조로 통일했다.
+
+- **Backend poller** (`backend/src/services/session-status.ts`, every 2s): reads
+  `/session/status` + `/permission` + `/question` per repo directory and upserts
+  the `session_status` table (status busy/idle, pending_permissions, updated_at).
+  Question/permission pending counts as **busy** (the session is waiting on user
+  input). First tick on boot reconciles stale busy rows against the live server
+  (재시작 후 상태 정정). Idle transition also finishes `command_runs` rows.
+- **GET /api/session-status** — the single status endpoint the frontend polls.
+- **Frontend (all 2s polls, no events):**
+  - Repo list: per-repo working count badge (`RepoCard`).
+  - Session list: Working badge + shield (pending permission/question count) from DB.
+  - Chat: `useMessages` refetches every 2s while the session page is open — this
+    replaces SSE token streaming (output appears in ≤2s chunks).
+  - Permission/question cards: fed by 2s server polls (`useLoadPendingPermissions`
+    / `useLoadPendingQuestions`); optimistic dismiss + recently-dismissed guard
+    prevents poll flicker.
+  - Header Working badge: last assistant message incomplete (card state) OR DB busy.
+    Abort/permission/question clicks apply optimistic UI instantly; polling
+    reconciles the truth.
+- The `useSSE` hook and the client activity store were removed.
 
 ---
 

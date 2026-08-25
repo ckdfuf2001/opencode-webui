@@ -45,6 +45,24 @@ const usePermissionStore = create<PermissionStore, [['zustand/persist', Pick<Per
 
 let storeSubscriptionStarted = false
 
+/** 낙관 dismiss 직후 폴링이 미처리 요청을 되살려 깜빡이는 것을 막는 가드. */
+const RECENTLY_DISMISSED_MS = 12_000
+const recentlyDismissed = new Map<string, number>()
+
+export function markPermissionDismissed(permissionID: string): void {
+  recentlyDismissed.set(permissionID, Date.now())
+}
+
+function isRecentlyDismissed(permissionID: string): boolean {
+  const at = recentlyDismissed.get(permissionID)
+  if (!at) return false
+  if (Date.now() - at > RECENTLY_DISMISSED_MS) {
+    recentlyDismissed.delete(permissionID)
+    return false
+  }
+  return true
+}
+
 function startStoreSubscription(): void {
   if (storeSubscriptionStarted) return
   storeSubscriptionStarted = true
@@ -169,7 +187,9 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
           const permission = normalizePermission(p)
           if (permission) {
             serverIDs.add(permission.id)
-            permissionEvents.emit({ type: 'add', permission })
+            if (!isRecentlyDismissed(permission.id)) {
+              permissionEvents.emit({ type: 'add', permission })
+            }
           }
         }
         const current = usePermissionStore.getState().permissions
@@ -188,7 +208,7 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
     }
 
     load()
-    const interval = setInterval(load, 5000)
+    const interval = setInterval(load, 2000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -216,6 +236,7 @@ export function usePermissionRequests(sessionID?: string, relatedSessionIDs?: st
   const currentPermission = permissions[0] || null
 
   const dismissPermission = useCallback((permissionID: string) => {
+    markPermissionDismissed(permissionID)
     usePermissionStore.setState((state) => ({
       permissions: state.permissions.filter(p => p.id !== permissionID),
     }))

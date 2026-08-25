@@ -5,6 +5,7 @@ import { TextPart } from './TextPart'
 import { PatchPart } from './PatchPart'
 import { ToolCallPart } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
+import { useSettings } from '@/hooks/useSettings'
 import { getFileStat } from '@/api/files'
 
 type Part = components['schemas']['Part']
@@ -17,6 +18,7 @@ interface MessagePartProps {
   onFileClick?: (filePath: string, lineNumber?: number) => void
   messageTextContent?: string
   directory?: string
+  messageStreaming?: boolean
 }
 
 function getCopyableContent(part: Part, allParts?: Part[]): string {
@@ -171,7 +173,9 @@ function FileMention({
 
 
 
-export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory }: MessagePartProps) {
+export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, messageStreaming }: MessagePartProps) {
+  const { preferences } = useSettings()
+  const showReasoning = preferences?.showReasoning ?? true
   const copyableContent = getCopyableContent(part, allParts)
   
   switch (part.type) {
@@ -194,7 +198,21 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       return <PatchPart part={part} />
     case 'tool':
       return <ToolCallPart part={part} onFileClick={onFileClick} />
-    case 'reasoning':
+    case 'reasoning': {
+      if (!showReasoning) {
+        const isLive =
+          messageStreaming &&
+          !!allParts &&
+          allParts.length > 0 &&
+          allParts[allParts.length - 1]?.id === part.id
+        if (!isLive) return null
+        return (
+          <div className="flex items-center gap-2 text-xs text-zinc-500 my-1">
+            <span className="animate-pulse">▋</span>
+            <span className="shine-loading">Reasoning...</span>
+          </div>
+        )
+      }
       return (
         <details className="border border-border rounded-lg my-2">
           <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
@@ -205,6 +223,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           </div>
         </details>
       )
+    }
     case 'snapshot':
       return (
         <div className="border border-border rounded-lg p-4 my-2 bg-muted/50">
