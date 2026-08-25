@@ -24,6 +24,7 @@ interface SessionDetailHeaderProps {
   repoId: number;
   isConnected: boolean;
   isReconnecting?: boolean;
+  isStreaming?: boolean;
   opcodeUrl: string | null;
   repoDirectory: string | undefined;
   onFileBrowserOpen: () => void;
@@ -40,6 +41,7 @@ export function SessionDetailHeader({
   repoId,
   isConnected,
   isReconnecting,
+  isStreaming,
   opcodeUrl,
   repoDirectory,
   onFileBrowserOpen,
@@ -50,7 +52,8 @@ export function SessionDetailHeader({
 }: SessionDetailHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(sessionTitle);
-  const isWorking = useSessionActive(sessionId);
+  const activityWorking = useSessionActive(sessionId);
+  const isWorking = isStreaming || activityWorking;
 
   if (repo.cloneStatus !== 'ready') {
     return (

@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getRepo } from "@/api/repos";
-import { MessageThread } from "@/components/message/MessageThread";
+import { MessageThread, isMessageStreaming } from "@/components/message/MessageThread";
 import { PromptInput } from "@/components/message/PromptInput";
 import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
@@ -85,6 +85,8 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages } = useMessages(opcodeUrl, sessionId, repoDirectory);
+  const lastMessage = messages?.[messages.length - 1];
+  const isStreaming = !!lastMessage && isMessageStreaming(lastMessage);
 
   const { scrollToBottom } = useAutoScroll({
     containerRef: messageContainerRef,
@@ -389,6 +391,7 @@ if (results.length > 0) {
         repoId={repoId}
         isConnected={isConnected}
         isReconnecting={isReconnecting}
+        isStreaming={isStreaming}
         opcodeUrl={opcodeUrl}
         repoDirectory={repoDirectory}
         onFileBrowserOpen={() => setFileBrowserOpen(true)}
