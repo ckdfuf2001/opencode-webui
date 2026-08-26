@@ -97,6 +97,13 @@ export function SessionDetail() {
   const descendantBusy = !!sessionId && dbStatuses?.some(
     (s) => s.status === "busy" && descendantIDs.includes(s.sessionId),
   ) === true;
+  // 세션 리스트의 방패 배지와 동일한 데이터: 이 세션(+하위)의 승인 대기 권한 합계.
+  const headerPendingPermissions = useMemo(() => {
+    if (!sessionId) return 0;
+    return (dbStatuses ?? [])
+      .filter((s) => s.sessionId === sessionId || descendantIDs.includes(s.sessionId))
+      .reduce((sum, s) => sum + (s.pendingPermissions ?? 0), 0);
+  }, [dbStatuses, sessionId, descendantIDs]);
   const lastMessage = messages?.[messages.length - 1];
   const isStreaming = (!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy;
 
@@ -410,7 +417,8 @@ if (results.length > 0) {
         repoId={repoId}
         isConnected={isConnected}
         isReconnecting={isReconnecting}
-        isStreaming={isStreaming}
+                isStreaming={isStreaming}
+                pendingPermissions={headerPendingPermissions}
         opcodeUrl={opcodeUrl}
         repoDirectory={repoDirectory}
         onFileBrowserOpen={() => setFileBrowserOpen(true)}

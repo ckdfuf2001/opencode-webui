@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock } from "lucide-react";
+import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -27,6 +27,7 @@ interface RepoCardProps {
   onSelect?: (id: number, selected: boolean) => void;
   scheduleCount?: number;
   workingCount?: number;
+  pendingCount?: number;
 }
 
 export function RepoCard({
@@ -37,6 +38,7 @@ export function RepoCard({
   onSelect,
   scheduleCount = 0,
   workingCount = 0,
+  pendingCount = 0,
 }: RepoCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -123,6 +125,15 @@ export function RepoCard({
               >
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
                 <span className="text-xs font-medium text-blue-500 tabular-nums">{workingCount}</span>
+              </div>
+            )}
+            {pendingCount > 0 && (
+              <div
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-amber-500/30 bg-amber-500/10"
+                title={`${pendingCount} permission request(s) awaiting approval`}
+              >
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+                <span className="text-xs font-medium text-amber-500 tabular-nums">{pendingCount}</span>
               </div>
             )}
           </div>

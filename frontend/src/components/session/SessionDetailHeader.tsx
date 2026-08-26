@@ -2,7 +2,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
-import { Loader2, Settings, FolderOpen, Terminal, ShieldCheck } from "lucide-react";
+import { Loader2, Settings, FolderOpen, Terminal, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 
 interface Repo {
@@ -24,6 +24,8 @@ interface SessionDetailHeaderProps {
   isConnected: boolean;
   isReconnecting?: boolean;
   isStreaming?: boolean;
+  /** 이 세션(+하위)의 승인 대기 권한 수. 세션 리스트의 방패 배지와 동일한 데이터. */
+  pendingPermissions?: number;
   opcodeUrl: string | null;
   repoDirectory: string | undefined;
   onFileBrowserOpen: () => void;
@@ -41,6 +43,7 @@ export function SessionDetailHeader({
   isConnected,
   isReconnecting,
   isStreaming,
+  pendingPermissions = 0,
   opcodeUrl,
   repoDirectory,
   onFileBrowserOpen,
@@ -165,6 +168,15 @@ export function SessionDetailHeader({
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
               <span className="text-xs text-blue-500 font-medium hidden sm:inline">Working</span>
+            </div>
+          )}
+          {pendingPermissions > 0 && (
+            <div
+              className="flex items-center gap-1 rounded-full bg-amber-500/10 border border-amber-500/30 px-2 py-0.5"
+              title={`${pendingPermissions} permission request(s) awaiting approval`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+              <span className="text-xs text-amber-500 font-medium hidden sm:inline">{pendingPermissions}</span>
             </div>
           )}
           <Button
