@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { QuestionRequest, QuestionInfo } from '@/api/types'
 import { cn } from '@/lib/utils'
+import { showToast } from '@/lib/toast'
 
 interface QuestionRequestCardProps {
   question: QuestionRequest
@@ -127,6 +128,10 @@ export function QuestionRequestCard({
       await onReply(question.id, answers)
     } catch (error) {
       console.error('Failed to reply to question:', error)
+      showToast.error(
+        `Failed to reply: ${error instanceof Error ? error.message : "unknown error"}`,
+        { duration: 6000 },
+      )
     } finally {
       setIsLoading(false)
       setAction(null)
@@ -139,8 +144,19 @@ export function QuestionRequestCard({
     onDismiss?.(question.id)
     try {
       await onReject(question.id)
-    } catch (error) {
-      console.error('Failed to reject question:', error)
+    } catch (firstError) {
+      console.error('Failed to reject question:', firstError)
+      // reject 가 빠지면 방패 배지 숫자가 줄지 않는다. 일시적 실패는 한 번 재시도한다.
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        await onReject(question.id)
+      } catch (retryError) {
+        console.error('Failed to reject question (retry):', retryError)
+        showToast.error(
+          `Failed to dismiss question: ${retryError instanceof Error ? retryError.message : "unknown error"}`,
+          { duration: 6000 },
+        )
+      }
     } finally {
       setIsLoading(false)
       setAction(null)
