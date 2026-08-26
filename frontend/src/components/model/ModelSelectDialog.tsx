@@ -19,6 +19,7 @@ import { useOpenCodeClient } from "@/hooks/useOpenCode";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import type { ProviderWithModels, Model } from "@/api/providers";
+import { showToast } from "@/lib/toast";
 
 interface ModelSelectDialogProps {
   open: boolean;
@@ -88,19 +89,31 @@ export function ModelSelectDialog({
 
     // If we're in a session, try to update the current session's model
     if (sessionId && client) {
+      const sessionKey = ["opencode", "session", opcodeUrl, sessionId];
+      // 낙천 업데이트: 현재 모델이 존재하지 않는(지원 중단된) 모델이어도
+      // 클릭 즉시 컴포저 라벨이 바뀌게 한다. 실패하면 되돌리고 사유를 표시한다.
+      const previous = queryClient.getQueryData(sessionKey);
+      queryClient.setQueryData(sessionKey, (old: unknown) => {
+        if (!old || typeof old !== "object") return old;
+        return { ...(old as Record<string, unknown>), model: { providerID: providerId, id: modelId } };
+      });
       try {
         await client.switchModel(sessionId, {
           id: modelId,
           providerID: providerId,
         });
         queryClient.invalidateQueries({
-          queryKey: ["opencode", "session", opcodeUrl, sessionId],
+          queryKey: sessionKey,
         });
         queryClient.invalidateQueries({
           queryKey: ["opencode", "sessions", opcodeUrl],
         });
-      } catch {
-        // Ignore errors when updating session model
+      } catch (error) {
+        if (previous !== undefined) queryClient.setQueryData(sessionKey, previous);
+        showToast.error(
+          `Failed to switch model: ${error instanceof Error ? error.message : "unknown error"}`,
+          { duration: 6000 },
+        );
       }
     }
 

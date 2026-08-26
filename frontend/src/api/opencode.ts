@@ -13,6 +13,50 @@ type CommandRequest = NonNullable<paths['/session/{id}/command']['post']['reques
 type ShellRequest = NonNullable<paths['/session/{id}/shell']['post']['requestBody']>['content']['application/json']
 type Permission = components['schemas']['Permission']
 
+/**
+ * axios 기본 메시지("Request failed with status code 500")는 원인이 안 보인다.
+ * 서버(백엔드/프록시/opencode)가 내려주는 error·message·detail 필드를 꺼내
+ * error.message 를 실제 사유로 바꿔준다. 토스트·콘솔이 이 값을 그대로 쓴다.
+ */
+export function enrichAxiosErrorMessage(error: unknown): void {
+  if (!error || typeof error !== 'object') return
+  const err = error as { message?: string; response?: { status?: number; data?: unknown } }
+  if (err.response == null) return
+  const data: unknown = err.response.data
+  let reason: string | undefined
+  if (typeof data === 'string') {
+    reason = data.trim() || undefined
+  } else if (data && typeof data === 'object') {
+    const obj = data as Record<string, unknown>
+    // opencode 에러 형태: { name, data: { message, ref } } 도 처리한다.
+    const nested = obj.data && typeof obj.data === 'object' ? obj.data as Record<string, unknown> : undefined
+    for (const source of [obj, nested ?? {}]) {
+      for (const key of ['message', 'error', 'detail']) {
+        const v = source[key]
+        if (typeof v === 'string' && v.trim() && !v.includes('Check server logs for details')) { reason = v.trim(); break }
+        if (v != null && typeof v !== 'object' && !(typeof v === 'string')) { reason = String(v); break }
+      }
+      if (reason) break
+    }
+    if (!reason) {
+      // zod 등 { details: [...] } 형태 보조 표시
+      const details = obj.details ?? obj.issues
+      if (details != null) reason = JSON.stringify(details).slice(0, 300)
+    }
+  }
+  if (reason) {
+    const status = err.response.status
+    err.message = `${reason}${status ? ` (HTTP ${status})` : ''}`
+    return
+  }
+  // 본문이 비어 있어도 어떤 요청이 왜 실패했는지는 알 수 있게 한다.
+  const cfg = (err as { response?: { config?: { method?: string; url?: string } } }).response?.config
+  if (err.response.status != null) {
+    const target = cfg?.url ? ` ${cfg.method?.toUpperCase() ?? 'GET'} ${cfg.url}` : ''
+    err.message = `Request failed${target} (HTTP ${err.response.status})`
+  }
+}
+
 export class OpenCodeClient {
   private client: AxiosInstance
   private baseURL: string
@@ -50,6 +94,7 @@ export class OpenCodeClient {
             console.error('Health check error:', checkError)
           }
         }
+        enrichAxiosErrorMessage(error)
         return Promise.reject(error)
       }
     )

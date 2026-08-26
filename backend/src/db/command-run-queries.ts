@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite'
 
 export type CommandRunStatus = 'started' | 'completed' | 'failed' | 'cancelled'
 export type CommandRunOrigin = 'ui' | 'schedule'
+export type CommandRunKind = 'command' | 'skill'
 
 export interface CommandRun {
   id: string
@@ -13,6 +14,8 @@ export interface CommandRun {
   messageId: string | null
   status: CommandRunStatus
   origin: CommandRunOrigin
+  /** 마이그레이션 이전 레거시 레코드에는 없을 수 있다(없으면 command 취급). */
+  kind?: CommandRunKind
   startedAt: number
   finishedAt: number | null
   createdAt: number
@@ -25,6 +28,7 @@ export interface CreateCommandRunInput {
   args?: string | null
   directory?: string | null
   repoId?: number | null
+  kind?: CommandRunKind
 }
 
 /** 서비스가 완성해서 쿼리 계층에 넘기는 레코드. 이 계층은 값을 만들지 않는다. */
@@ -114,6 +118,13 @@ export function listCommandRunsByRange(
      ORDER BY started_at DESC LIMIT ?`
   ).all(fromTs, toTs, limit) as CommandRunRow[]
   return rows.map(rowToRun)
+}
+
+export function getCommandRunById(db: Database, id: string): CommandRun | null {
+  const row = db
+    .prepare('SELECT * FROM command_runs WHERE id = ?')
+    .get(id) as CommandRunRow | undefined
+  return row ? rowToRun(row) : null
 }
 
 export function updateCommandRunMessage(db: Database, id: string, messageId: string): void {

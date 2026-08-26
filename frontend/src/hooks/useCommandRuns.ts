@@ -3,11 +3,13 @@ import {
   clearSessionCommandRuns,
   createCommandRun,
   deleteCommandRun,
+  fetchCommandRunView,
   finishCommandRun,
   listCommandRunsByRange,
   listCommandRunsBySession,
   setCommandRunMessage,
   type CommandRun,
+  type CommandRunViewScope,
   type CommandRunStatus,
   type CreateCommandRunInput,
 } from '@/api/command-runs'
@@ -18,8 +20,30 @@ export const commandRunKeys = {
   all: ['command-runs'] as const,
   range: (start: Date, end: Date) => ['command-runs', 'range', dateKey(start), dateKey(end)] as const,
   session: (sessionId: string) => ['command-runs', 'session', sessionId] as const,
+  view: (scope: CommandRunViewScope, repoId: number | undefined, sessionId: string | undefined, start?: Date, end?: Date) =>
+    ['command-runs', 'view', scope, repoId ?? null, sessionId ?? null, start ? dateKey(start) : null, end ? dateKey(end) : null] as const,
 }
 
+/**
+ * 커맨드 패널/캘린더용 스코프 뷰. 서버가 스코프 필터링과
+ * repoName·sessionTitle 채움을 담당한다. enabled가 open에 묶여
+ * 패널을 열 때마다(=페이지 이동 후 첫 오픈) 최신값을 받아온다.
+ */
+export function useCommandRunView(
+  scope: CommandRunViewScope,
+  repoId: number | undefined,
+  sessionId: string | undefined,
+  start?: Date,
+  end?: Date,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: commandRunKeys.view(scope, repoId, sessionId, start, end),
+    queryFn: () => fetchCommandRunView({ scope, repoId, sessionId, start, end }),
+    enabled,
+    staleTime: 15_000,
+  })
+}
 /** 달력 뷰(6주 윈도우) 범위의 run 목록. 서버 DB 가 단일 진실 공급원. */
 export function useCommandRunsInRange(start: Date, end: Date, enabled = true) {
   return useQuery({

@@ -2,6 +2,7 @@ import { API_BASE_URL } from '@/config'
 
 export type CommandRunStatus = 'started' | 'completed' | 'failed' | 'cancelled'
 export type CommandRunOrigin = 'ui' | 'schedule'
+export type CommandRunKind = 'command' | 'skill'
 
 export interface CommandRun {
   id: string
@@ -13,6 +14,7 @@ export interface CommandRun {
   messageId: string | null
   status: CommandRunStatus
   origin: CommandRunOrigin
+  kind?: CommandRunKind
   startedAt: number
   finishedAt: number | null
   createdAt: number
@@ -24,6 +26,7 @@ export interface CreateCommandRunInput {
   args?: string
   directory?: string
   repoId?: number
+  kind?: CommandRunKind
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -87,4 +90,30 @@ export async function clearSessionCommandRuns(sessionId: string): Promise<void> 
     `/session/${encodeURIComponent(sessionId)}`,
     { method: 'DELETE' },
   )
+}
+
+export interface CommandRunViewItem extends CommandRun {
+  repoName: string | null
+  sessionTitle: string | null
+}
+
+export type CommandRunViewScope = 'all' | 'repo' | 'session'
+
+export interface CommandRunViewQuery {
+  scope: CommandRunViewScope
+  repoId?: number
+  sessionId?: string
+  start?: Date
+  end?: Date
+}
+
+export async function fetchCommandRunView(query: CommandRunViewQuery): Promise<CommandRunViewItem[]> {
+  const params = new URLSearchParams({ scope: query.scope })
+  if (query.repoId != null) params.set('repoId', String(query.repoId))
+  if (query.sessionId) params.set('sessionId', query.sessionId)
+  if (query.start) params.set('from', String(query.start.getTime()))
+  if (query.end) params.set('to', String(query.end.getTime()))
+
+  const body = await request<{ items: CommandRunViewItem[] }>(`/view?${params.toString()}`)
+  return body.items
 }

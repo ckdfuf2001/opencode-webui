@@ -37,6 +37,14 @@ export async function removeQueuedChat(sessionID: string, id: string): Promise<v
   await request<{ success: boolean }>(`/${encodeURIComponent(sessionID)}/${encodeURIComponent(id)}`, jsonInit('DELETE'))
 }
 
+/** 대기열 순서 변경. toTop=true 면 맨 앞(최우선), 아니면 한 칸 위로. */
+export async function moveQueuedChat(sessionID: string, id: string, toTop: boolean): Promise<QueuedChat[]> {
+  return request<QueuedChat[]>(
+    `/${encodeURIComponent(sessionID)}/${encodeURIComponent(id)}/move`,
+    jsonInit('PATCH', { toTop }),
+  )
+}
+
 /** 중단(abort) 시: 세션 대기열 전체 비우기 */
 export async function clearQueuedChats(sessionID: string): Promise<void> {
   await request<{ success: boolean }>(`/${encodeURIComponent(sessionID)}`, { method: 'DELETE' })

@@ -116,6 +116,15 @@ export function RepoCard({
                 cloning
               </Badge>
             )}
+            {workingCount > 0 && (
+              <div
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-blue-500/30 bg-blue-500/10"
+                title={`${workingCount} session(s) working`}
+              >
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                <span className="text-xs font-medium text-blue-500 tabular-nums">{workingCount}</span>
+              </div>
+            )}
           </div>
           <p className="text-sm text-muted-foreground truncate flex items-center gap-1">
               <GitBranch className="w-3 h-3" />
@@ -179,16 +188,6 @@ export function RepoCard({
               <CalendarClock className="w-4 h-4" />
               <span className="text-xs tabular-nums">{scheduleCount}</span>
             </Button>
-
-            {workingCount > 0 && (
-              <div
-                className="inline-flex items-center gap-1 h-10 sm:h-9 px-2 rounded-md border border-blue-500/30 bg-blue-500/10"
-                title={`${workingCount} session(s) working`}
-              >
-                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                <span className="text-xs font-medium text-blue-500 tabular-nums">{workingCount}</span>
-              </div>
-            )}
 
             <Button
               size="sm"

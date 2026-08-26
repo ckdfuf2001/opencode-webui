@@ -196,7 +196,12 @@ const BUILTIN_COMMANDS: CommandWithScope[] = [
 ]
 
 const COMMANDS_FETCH_TIMEOUT_MS = 12000
+const FETCH_RETRY_DELAY_MS = 5000
+const FETCH_RETRY_MAX = 3
 const commandsCache = new Map<string, CommandWithScope[]>()
+// cacheKey 별 마지막 성공 시각. 전역 하나로 쓰면 다른 인스턴스의 성공 직후에
+// 갱신을 건너뛰어 방금 등록한 커맨드/스킬이 슬래시 메뉴에 안 보였다.
+const lastSuccessfulFetchByKey = new Map<string, number>()
 let inFlight: { key: string; token: { done: boolean }; promise: Promise<void> } | null = null
 
 export function useCommands(opcodeUrl: string | null, directory?: string) {
@@ -204,6 +209,8 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const lastAttemptSucceededRef = useRef(true)
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryCountRef = useRef(0)
 
   const cacheKey = `${opcodeUrl ?? ''}|${directory ?? ''}`
 
@@ -230,6 +237,8 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
         setCommands(unique)
         setError(null)
         lastAttemptSucceededRef.current = true
+        lastSuccessfulFetchByKey.set(cacheKey, Date.now())
+        retryCountRef.current = 0
       } catch (err) {
         const cached = commandsCache.get(cacheKey)
         if (cached && cached.length > base.length) {
@@ -244,6 +253,13 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
           setError('Failed to load commands')
           setCommands(base)
         }
+        // 마운트 시 1회만 받고 끝나면, 서버가 바쁜 동안 만든 커맨드/스킬을 영원히 못 받는다.
+        // 실패 시에는 백오프 재시도를 건다.
+        if (opcodeUrl && retryCountRef.current < FETCH_RETRY_MAX) {
+          retryCountRef.current += 1
+          if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+          retryTimerRef.current = setTimeout(() => { void fetchCommands() }, FETCH_RETRY_DELAY_MS)
+        }
       } finally {
         token.done = true
         setLoading(false)
@@ -257,11 +273,37 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
 
   useEffect(() => {
     fetchCommands()
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+    }
   }, [fetchCommands])
 
+  // 다른 인스턴스(커맨드 패널 refresh 등)가 목록을 새로 받으면 캐시를 즉시 채택한다.
+  // 인스턴스별 state 는 독립이라, 이 이벤트가 없으면 패널에서 만든 스킬이
+  // 채팅 슬래시 도우미에 새로고침 전까지 안 보였다.
+  useEffect(() => {
+    const handler = () => {
+      const cached = commandsCache.get(cacheKey)
+      if (cached && cached.length > 0) setCommands(cached)
+    }
+    window.addEventListener('opencode:commands-refreshed', handler)
+    return () => window.removeEventListener('opencode:commands-refreshed', handler)
+  }, [cacheKey])
+
   const refresh = useCallback(() => {
+    retryCountRef.current = 0
     fetchCommands()
   }, [fetchCommands])
+
+  /** 입력창 포커스·슬래시 메뉴 오픈에서 호출: 이 디렉터리 목록이 오래됐으면 새로 받는다. */
+  const refreshIfStale = useCallback((maxAgeMs = 30_000) => {
+    if (!opcodeUrl) return
+    const last = lastSuccessfulFetchByKey.get(cacheKey) ?? 0
+    if (Date.now() - last > maxAgeMs) {
+      retryCountRef.current = 0
+      fetchCommands()
+    }
+  }, [opcodeUrl, cacheKey, fetchCommands])
 
   const removeCustomCommand = useCallback((name: string) => {
     setCommands((prev) => prev.filter((c) => c.name !== name))
@@ -269,12 +311,21 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
 
   const filterCommands = (query: string) => {
     if (!query.trim()) return commands
-    
+
     const searchTerm = query.toLowerCase()
-    return commands.filter(command =>
-      command.name.toLowerCase().includes(searchTerm) ||
-      command.description?.toLowerCase().includes(searchTerm)
-    )
+    // 이름 매칭을 먼저, 설명(내용) 매칭은 그 다음 순으로 보여준다.
+    const rank = (command: CommandWithScope): number => {
+      const name = command.name.toLowerCase()
+      if (name.startsWith(searchTerm)) return 0
+      if (name.includes(searchTerm)) return 1
+      return 2
+    }
+    return commands
+      .filter(command =>
+        command.name.toLowerCase().includes(searchTerm) ||
+        command.description?.toLowerCase().includes(searchTerm)
+      )
+      .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
   }
 
   return {
@@ -283,6 +334,7 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
     error,
     filterCommands,
     refresh,
+    refreshIfStale,
     removeCustomCommand
   }
 }

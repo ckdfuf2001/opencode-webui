@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Loader2, AlertCircle, Maximize2, Minimize2, X, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
+import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
@@ -162,7 +162,7 @@ function useExtractedText(path: string, refreshKey = 0, enabled = true) {
   return { data, status, error }
 }
 
-function PdfPage({ pdf, pageNumber, zoom = 1 }: { pdf: any; pageNumber: number; zoom?: number }) {
+function PdfPage({ pdf, pageNumber, zoom = 1, containerWidth = null }: { pdf: any; pageNumber: number; zoom?: number; containerWidth?: number | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const [loading, setLoading] = useState(true)
@@ -194,7 +194,7 @@ function PdfPage({ pdf, pageNumber, zoom = 1 }: { pdf: any; pageNumber: number; 
     return () => {
       cancelled = true
     }
-  }, [pdf, pageNumber, zoom])
+  }, [pdf, pageNumber, zoom, containerWidth])
 
   return (
     <div ref={wrapRef} className="mx-auto" style={{ width: `${zoom * 100}%` }}>
@@ -214,44 +214,44 @@ const ZOOM_MIN = 0.5
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.25
 
-function DocumentShell({ fileName, pageCount, children }: { fileName?: string; pageCount?: number; children: (fullscreen: boolean, zoom: number) => ReactNode }) {
-  const [fullscreen, setFullscreen] = useState(false)
+function DocumentShell({ fileName, pageCount, children }: { fileName?: string; pageCount?: number; children: (zoom: number, containerWidth: number | null) => ReactNode }) {
   const [zoom, setZoom] = useState(1)
+  const [containerWidth, setContainerWidth] = useState<number | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setZoom(1)
   }, [fileName])
 
+  // Track the preview area size so pages re-fit when it changes (fullscreen
+  // toggle, panel resize). Without this the scale computed for the old width
+  // stayed frozen after entering fullscreen.
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? el.clientWidth
+      setContainerWidth(width > 0 ? Math.round(width) : null)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // The file header owns the fullscreen toggle ('Enter fullscreen'). Reset to
+  // 100% on entry so pages re-fit the larger viewport.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ isFullscreen?: boolean }>).detail
+      if (detail?.isFullscreen) setZoom(1)
+    }
+    window.addEventListener('fileFullscreenChange', handler)
+    return () => window.removeEventListener('fileFullscreenChange', handler)
+  }, [])
+
   const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100))
   const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100))
 
-  const content = (
-    <div className="flex-1 min-h-0 overflow-auto bg-muted/40">
-      {children(fullscreen, zoom)}
-    </div>
-  )
-
   const title = fileName ?? 'Document preview'
-
-  if (fullscreen) {
-    return (
-      <div className="fixed inset-0 z-[100] flex flex-col bg-background">
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-background flex-shrink-0">
-          <span className="text-sm text-foreground font-medium truncate">{title}</span>
-          <div className="flex items-center gap-1">
-            <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={() => setZoom(1)} />
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setFullscreen(false)} title="Exit fullscreen">
-              <Minimize2 className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setFullscreen(false)} title="Close">
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-        {content}
-      </div>
-    )
-  }
 
   return (
     <div className="flex flex-col h-full min-h-[200px]">
@@ -262,12 +262,11 @@ function DocumentShell({ fileName, pageCount, children }: { fileName?: string; p
         </span>
         <div className="flex items-center gap-1">
           <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={() => setZoom(1)} />
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setFullscreen(true)} title="Fullscreen">
-            <Maximize2 className="w-3.5 h-3.5" />
-          </Button>
         </div>
       </div>
-      {content}
+      <div ref={contentRef} className="flex-1 min-h-0 overflow-auto bg-muted/40">
+        {children(zoom, containerWidth)}
+      </div>
     </div>
   )
 }
@@ -334,10 +333,10 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1)
   return (
     <DocumentShell fileName={fileName} pageCount={pdf.numPages}>
-      {(fullscreen, zoom) => (
-        <div key={`${fullscreen}:${zoom}`} className="p-3 space-y-3">
+      {(zoom, containerWidth) => (
+        <div key={`${zoom}:${containerWidth ?? 0}`} className="p-3 space-y-3">
           {pages.map((n) => (
-            <PdfPage key={n} pdf={pdf} pageNumber={n} zoom={zoom} />
+            <PdfPage key={n} pdf={pdf} pageNumber={n} zoom={zoom} containerWidth={containerWidth} />
           ))}
         </div>
       )}
@@ -463,7 +462,7 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
 
   return (
     <DocumentShell fileName={fileName}>
-      {(_fullscreen, zoom) => (
+      {(zoom) => (
         <div className="p-4" style={{ zoom }}>
           {parsed.isMsg ? (
             <div className="mx-auto max-w-3xl rounded-lg border border-border bg-card shadow-sm overflow-hidden">
@@ -553,7 +552,7 @@ function DocxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   if (!html) return SPINNER
   return (
     <DocumentShell fileName={fileName}>
-      {(_fullscreen, zoom) => (
+      {(zoom) => (
         <div className="p-4" style={{ zoom }}>
           <div className="docx-preview prose-enhanced max-w-full" dangerouslySetInnerHTML={{ __html: html }} />
         </div>
@@ -640,7 +639,7 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   if (!html) return SPINNER
   return (
     <DocumentShell fileName={fileName}>
-      {(_fullscreen, zoom) => (
+      {(zoom) => (
         <div className="xlsx-preview p-3" style={{ zoom }} dangerouslySetInnerHTML={{ __html: html }} />
       )}
     </DocumentShell>
@@ -697,7 +696,7 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
 
   return (
     <DocumentShell fileName={fileName}>
-      {(_fullscreen, zoom) => (
+      {(zoom) => (
         <div className="p-3 space-y-3" style={{ zoom }}>
           {slides.map((slide) => (
             <div key={slide.index} className="rounded-md border border-border bg-muted/30 p-3">

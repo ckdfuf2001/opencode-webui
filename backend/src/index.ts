@@ -19,12 +19,14 @@ import { createConfigFileRoutes } from './routes/config-files'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
+import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
 import { createChatQueueRoutes } from './routes/chat-queue'
 import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionStatusPoller, stopSessionStatusPoller } from './services/session-status'
+import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
@@ -64,6 +66,10 @@ app.use('/*', cors({
 }))
 
 const db = initializeDatabase(DB_PATH)
+
+void migrateCommandRunsToFiles(db).catch((error) => {
+  logger.error('Command runs file migration failed (will retry on next boot):', error)
+})
 
 const DEFAULT_OPENCODE_CONFIG = {
   $schema: 'https://opencode.ai/config.json',
@@ -200,6 +206,7 @@ app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
 app.route('/api/session-status', createSessionStatusRoutes(db))
 app.route('/api/chat-queue', createChatQueueRoutes())
+app.route('/api/logs', createClientLogRoutes())
 
 app.get('/api/openapi.json', (c) => c.json(openApiSpec))
 

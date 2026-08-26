@@ -93,8 +93,12 @@ export function SessionDetail() {
   const isConnected = !statusError && !!dbStatuses;
   const isReconnecting = statusError && statusFetching;
   const dbBusy = !!sessionId && dbStatuses?.some((s) => s.sessionId === sessionId && s.status === "busy") === true;
+  // 세션 리스트 배지와 동일한 기준: 이 세션 또는 하위 세션이 busy 면 Working.
+  const descendantBusy = !!sessionId && dbStatuses?.some(
+    (s) => s.status === "busy" && descendantIDs.includes(s.sessionId),
+  ) === true;
   const lastMessage = messages?.[messages.length - 1];
-  const isStreaming = (!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy;
+  const isStreaming = (!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy;
 
   // 응답 완료 똑소리: 카드 상태 기준으로 전환 1회만 재생한다.
   const prevStreamingRef = useRef(false);

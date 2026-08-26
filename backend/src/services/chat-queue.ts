@@ -46,6 +46,23 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
   return true
 }
 
+/**
+ * 대기열 순서 변경. toTop 이면 맨 앞(최우선)으로, 아니면 한 칸 위로.
+ * 이미 첫 항목이거나 id 를 못 찾으면 현재 큐를 그대로 돌려준다(변화 없음).
+ */
+export function moveQueuedChat(sessionID: string, id: string, toTop: boolean): QueuedChat[] | null {
+  const queue = queues.get(sessionID)
+  if (!queue) return null
+  const index = queue.findIndex((item) => item.id === id)
+  if (index <= 0) return [...queue]
+  const removed = queue.splice(index, 1)
+  const item = removed[0]
+  if (!item) return [...queue]
+  if (toTop) queue.unshift(item)
+  else queue.splice(index - 1, 0, item)
+  return [...queue]
+}
+
 /** 중단(abort) 시 호출: 세션의 대기열 전체를 비운다. */
 export function clearQueuedChats(sessionID: string): number {
   const queue = queues.get(sessionID)

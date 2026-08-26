@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { enqueueQueuedChat, listQueuedChats, removeQueuedChat } from '@/api/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat } from '@/api/chat-queue'
 import { showToast } from '@/lib/toast'
 
 export const chatQueueKeys = {
@@ -45,6 +45,21 @@ export function useRemoveQueuedChat() {
     },
     onSuccess: (_data, { sessionID }) => {
       queryClient.invalidateQueries({ queryKey: chatQueueKeys.session(sessionID) })
+    },
+  })
+}
+
+export function useMoveQueuedChat() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ sessionID, id, toTop }: { sessionID: string; id: string; toTop: boolean }) =>
+      moveQueuedChat(sessionID, id, toTop),
+    onSuccess: (queue, { sessionID }) => {
+      queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
+    },
+    onError: (error) => {
+      showToast.error(error instanceof Error ? error.message : 'Failed to reorder queue', { duration: 5000 })
     },
   })
 }

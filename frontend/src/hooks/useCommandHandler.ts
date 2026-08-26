@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createOpenCodeClient } from '@/api/opencode'
 import { useCreateSession } from '@/hooks/useOpenCode'
-import { useCommands } from '@/hooks/useCommands'
+import type { CommandWithScope } from '@/hooks/useCommands'
 import { useCreateCommandRun, useFinishCommandRun } from '@/hooks/useCommandRuns'
 import { showToast } from '@/lib/toast'
 import type { components } from '@/api/opencode-types'
@@ -14,6 +14,8 @@ interface CommandHandlerProps {
   sessionID: string
   directory?: string
   repoId?: number
+  /** 드롭다운과 같은 목록을 공유한다. 별도 fetch 인스턴스를 두면 목록이 어긋나 실행이 차단된다. */
+  commands: CommandWithScope[]
   onShowSessionsDialog?: () => void
   onShowModelsDialog?: () => void
   onShowHelpDialog?: () => void
@@ -27,13 +29,13 @@ export function useCommandHandler({
   sessionID,
   directory,
   repoId,
+  commands,
   onShowSessionsDialog,
   onShowModelsDialog,
   onShowHelpDialog
 }: CommandHandlerProps) {
   const navigate = useNavigate()
   const createSession = useCreateSession(opcodeUrl, directory)
-  const { commands } = useCommands(opcodeUrl, directory)
   const [loading, setLoading] = useState(false)
 
   const createRun = useCreateCommandRun()
@@ -46,6 +48,7 @@ export function useCommandHandler({
     const args = explicitArgs ?? ''
 
     // run id 는 서버가 발급한다. 기록 실패가 커맨드 실행을 막지는 않는다.
+    // opencode 가 내려주는 source 로 skill 호출을 구분한다(히스토리/달력 UI는 command 만 표시).
     let currentRunId: string | null = null
     try {
       const run = await createRun.mutateAsync({
@@ -54,6 +57,7 @@ export function useCommandHandler({
         args,
         directory,
         repoId,
+        kind: (command as { source?: string }).source === 'skill' ? 'skill' : 'command',
       })
       currentRunId = run.id
     } catch {
@@ -66,11 +70,13 @@ export function useCommandHandler({
       const client = createOpenCodeClient(opcodeUrl, directory)
 
       // Check if command exists on server (built-in + MCP + skills from fetched list)
+      // 드롭다운에서 온 항목은 opencode 목록에 있는 것이므로 source 로 신뢰한다.
       const serverCommandNames = new Set([
         ...SERVER_COMMANDS,
         ...(commands?.map((c: typeof commands[0]) => c.name) ?? [])
       ])
-      const isServerCommand = serverCommandNames.has(command.name)
+      const isServerCommand =
+        (command as { source?: string }).source != null || serverCommandNames.has(command.name)
 
       // Handle special commands that need UI interaction
       switch (command.name) {
@@ -136,10 +142,19 @@ export function useCommandHandler({
         default:
           // Only send commands that exist on the server
           if (isServerCommand) {
-            await client.sendCommand(sessionID, {
-              command: command.name,
-              arguments: args
-            })
+            const source = (command as { source?: string; template?: string }).source
+            const template = (command as { template?: string }).template
+            if (source === 'skill') {
+              // opencode HTTP command 엔드포인트는 skill 실행을 500 으로 거절한다.
+              // TUI 와 동일하게 스킬 본문을 프롬프트로 보내 모델이 skill 을 로드하게 한다.
+              const text = args ? `${template ?? `/${command.name}`}\n\n${args}` : (template ?? `/${command.name}`)
+              await client.sendPrompt(sessionID, { parts: [{ type: 'text', text }] })
+            } else {
+              await client.sendCommand(sessionID, {
+                command: command.name,
+                arguments: args
+              })
+            }
           } else {
             showToast.warning(
               `Unknown command: "/${command.name}". Available: ${[...serverCommandNames].join(', ')}`
