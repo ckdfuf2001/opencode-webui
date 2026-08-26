@@ -1,10 +1,14 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, removeQueuedChat, clearQueuedChats } from '../services/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
   text: z.string().trim().min(1).max(16_000),
+})
+
+const MoveChatSchema = z.object({
+  toTop: z.boolean().default(false),
 })
 
 export function createChatQueueRoutes() {
@@ -58,6 +62,22 @@ export function createChatQueueRoutes() {
     } catch (error) {
       logger.error('Failed to remove queued chat:', error)
       return c.json({ error: 'Failed to remove queued chat' }, 500)
+    }
+  })
+
+  // 대기열 순서 변경: { toTop: true } 면 맨 앞(최우선), 아니면 한 칸 위로
+  app.patch('/:sessionId/:itemId/move', async (c) => {
+    try {
+      const sessionId = c.req.param('sessionId')
+      const itemId = c.req.param('itemId')
+      const validated = MoveChatSchema.parse(await c.req.json().catch(() => ({})))
+      const queue = moveQueuedChat(sessionId, itemId, validated.toTop)
+      if (!queue) return c.json({ error: 'Queue not found' }, 404)
+      return c.json(queue)
+    } catch (error) {
+      if (error instanceof z.ZodError) return c.json({ error: 'Invalid move payload' }, 400)
+      logger.error('Failed to move queued chat:', error)
+      return c.json({ error: 'Failed to move queued chat' }, 500)
     }
   })
 

@@ -34,14 +34,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { useMessages, useSessions, useConfig } from '@/hooks/useOpenCode'
-import { useCommandRunsInRange, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
-import { groupRunsBySession, historyWindow, type CommandRunView } from '@/lib/command-run-view'
+import { useMessages, useConfig } from '@/hooks/useOpenCode'
+import { useCommandRunView, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
+import { historyWindow, toCommandRunView, type CommandRunView } from '@/lib/command-run-view'
+import type { CommandRunViewItem } from '@/api/command-runs'
 import { CreateCommandDialog, type DialogType, type EditingEntry } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
-import { collectDescendantIDs } from '@/hooks/usePermissionRequests'
-import { listRepos } from '@/api/repos'
-import { createOpenCodeClient } from '@/api/opencode'
 import { settingsApi } from '@/api/settings'
 import { registryApi, type RegistryType, type RegistryScope, type RegistryEntry } from '@/api/registry'
 import { ScheduleManager } from '@/components/schedule/ScheduleManager'
@@ -202,8 +200,18 @@ function getSortedScopes(commands: CommandWithScope[]): CommandWithScope[] {
   })
 }
 
+/** 검색 랭크: 이름 시작 > 이름 포함 > 설명(내용) 포함. 이름 매칭을 먼저 보여준다. */
+function searchRank(name: string, _description: string | undefined, q: string): number {
+  const n = name.toLowerCase()
+  if (n.startsWith(q)) return 0
+  if (n.includes(q)) return 1
+  return 2
+}
+
 interface CommandExplorerProps {
   commands: CommandWithScope[]
+  /** 레지스트리 파일에서 직접 조회한 최신 스킬 (+opencode 내장 스킬 병합) */
+  skills: CommandWithScope[]
   agents: AgentExplorerItem[]
   mcpServers: McpExplorerItem[]
   plugins: RegistryEntry[]
@@ -247,7 +255,7 @@ const EXPLORER_TABS: { value: ExplorerResourceType; label: string; Icon: typeof 
   { value: 'mcp', label: 'MCP', Icon: Plug },
 ]
 
-function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error, onExecute, onCreate, onEdit, onClone, onDelete, onBulkDelete, focusCommand }: CommandExplorerProps) {
+function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loading, error, onExecute, onCreate, onEdit, onClone, onDelete, onBulkDelete, focusCommand }: CommandExplorerProps) {
   const [tab, setTab] = useState<ExplorerResourceType>('command')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<CommandWithScope | null>(null)
@@ -299,13 +307,17 @@ function CommandExplorer({ commands, agents, mcpServers, plugins, loading, error
       return list.sort((a, b) => a.name.localeCompare(b.name))
     }
     const base = tab === 'skill'
-      ? commands.filter((c) => c.source === 'skill')
+      ? skills
       : commands.filter((c) => c.source !== 'skill')
     const list = q
       ? base.filter(c => c.name.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q))
       : base
-    return getSortedScopes(list)
-  }, [tab, query, commands, agents, mcpServers, plugins])
+    if (!q) return getSortedScopes(list)
+    // 이름 매칭 우선, 같은 랭크 내에서는 기존 스코프 정렬 유지
+    return getSortedScopes(list).sort((a, b) =>
+      searchRank(a.name, a.description, q) - searchRank(b.name, b.description, q)
+    )
+  }, [tab, query, commands, skills, agents, mcpServers, plugins])
 
   const pendingCommand = pendingArgs?.command
 
@@ -666,11 +678,12 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const queryClient = useQueryClient()
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
   const { start: historyStart, end: historyEnd } = useMemo(() => historyWindow(), [])
-  const { data: serverRuns = [] } = useCommandRunsInRange(historyStart, historyEnd, open)
-  const runsBySession = useMemo(() => groupRunsBySession(serverRuns), [serverRuns])
+  // 스코프: 세션 안 = 해당 세션(+하위 세션), 레포 안 = 해당 레포, 레포 리스트 = 전체.
+  // 서버가 필터링 + repoName/sessionTitle 채움을 담당하며, open 시마다 최신값을 받아온다.
+  const viewScope: 'session' | 'repo' | 'all' = sessionID ? 'session' : repoId ? 'repo' : 'all'
+  const { data: runItems = [] } = useCommandRunView(viewScope, repoId, sessionID || undefined, historyStart, historyEnd, open)
   const deleteRun = useDeleteCommandRun()
   const setRunMessage = useSetCommandRunMessage()
-  const { data: sessions } = useSessions(opcodeUrl, directory)
   const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
   const { data: config } = useConfig(opcodeUrl, directory)
   const [tab, setTab] = useState<'runs' | 'explorer'>('runs')
@@ -684,10 +697,38 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const [explorerFocus, setExplorerFocus] = useState<CommandWithScope | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
-  const { data: plugins = [], refetch: refetchPlugins } = useQuery({
+  const { data: plugins = [] } = useQuery({
     queryKey: ['registry-list', 'tool', directory],
     queryFn: () => registryApi.list('tool', directory),
   })
+
+  // Explorer Skills 탭은 opencode /command 목록 대신 레지스트리 파일을 직접 조회한다.
+  // /command 목록은 페이지 마운트 시점 스냅샷이라, 이후 생성된 스킬이 새로고침 전엔 안 보였다.
+  const { data: skillsRegistry = [] } = useQuery({
+    queryKey: ['registry-list', 'skill', directory],
+    queryFn: () => registryApi.list('skill', directory),
+    enabled: open,
+    refetchOnMount: 'always',
+    staleTime: 0,
+  })
+
+  const skills = useMemo<CommandWithScope[]>(() => {
+    const fromRegistry: CommandWithScope[] = skillsRegistry.map((e) => ({
+      name: e.name,
+      description: e.description,
+      template: '',
+      agent: '',
+      model: '',
+      subtask: false,
+      scope: e.scope === 'project' ? 'project' : 'global',
+      source: 'skill',
+    }))
+    const registryNames = new Set(fromRegistry.map((s) => s.name))
+    const fromServer = commands
+      .filter((c) => c.source === 'skill' && !registryNames.has(c.name))
+      .map((c) => ({ ...c, scope: c.scope ?? 'global' }))
+    return [...fromRegistry, ...fromServer]
+  }, [skillsRegistry, commands])
 
   const refreshExplorer = useCallback(async () => {
     setRefreshing(true)
@@ -696,12 +737,13 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     } catch (err) {
       console.warn('Failed to reload OpenCode instances for refresh:', err)
     }
-    refresh()
-    refetchPlugins()
+    // 이벤트를 먼저 쏘면 다른 인스턴스가 아직 오래된 캐시를 읽는다. fetch 완료 후 dispatch.
+    await refresh()
+    queryClient.invalidateQueries({ queryKey: ['registry-list'] })
     queryClient.invalidateQueries({ queryKey: ['opencode', 'config', opcodeUrl, directory] })
     window.dispatchEvent(new CustomEvent('opencode:commands-refreshed'))
     setRefreshing(false)
-  }, [refresh, refetchPlugins, queryClient, opcodeUrl, directory])
+  }, [refresh, queryClient, opcodeUrl, directory])
 
   const loadEntry = useCallback(async (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }): Promise<{ entry: EditingEntry; createType: ExplorerResourceType }> => {
     const configData = await settingsApi.getDefaultOpenCodeConfig()
@@ -955,8 +997,8 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
 
 
   const availableSkills = useMemo(
-    () => commands.filter((c) => c.source === 'skill').map((c) => c.name),
-    [commands]
+    () => skills.map((s) => s.name),
+    [skills]
   )
 
   const { data: agentsRegistry = [] } = useQuery({
@@ -994,75 +1036,40 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     })
   }, [config])
 
-  const currentSessionMeta = useMemo(() => {
+  const sessionMeta = useMemo(() => {
     const map: Record<string, RunSessionMeta> = {}
-    for (const s of sessions ?? []) {
-      map[s.id] = { title: s.title || 'Untitled Session', repoId: repoId ?? 0, directory: directory ?? '', repoName: '' }
+    for (const item of runItems) {
+      map[item.sessionId] = {
+        title: item.sessionTitle || 'Untitled Session',
+        repoId: item.repoId ?? 0,
+        directory: item.directory ?? '',
+        repoName: item.repoName ?? '',
+      }
     }
     return map
-  }, [sessions, repoId, directory])
-
-  const { data: globalSessionMeta } = useQuery({
-    queryKey: ['command-history-sessions', opcodeUrl],
-    queryFn: async () => {
-      if (!opcodeUrl) return {} as Record<string, RunSessionMeta>
-      const repos = await listRepos()
-      const repoNameOf = (repo: { repoUrl: string; localPath: string }) => {
-        if (repo.repoUrl) return repo.repoUrl.split('/').slice(-1)[0].replace('.git', '')
-        return repo.localPath || 'repo'
-      }
-      const map: Record<string, RunSessionMeta> = {}
-      await Promise.all(repos.map(async (repo) => {
-        try {
-          const client = createOpenCodeClient(opcodeUrl, repo.fullPath)
-          const sessionList = await client.listSessions()
-          for (const s of sessionList) {
-            map[s.id] = { title: s.title || 'Untitled Session', repoId: repo.id, directory: repo.fullPath, repoName: repoNameOf(repo) }
-          }
-        } catch {
-          // Ignore per-repo failures
-        }
-      }))
-      return map
-    },
-    enabled: !!opcodeUrl && global,
-  })
-
-  const sessionMeta = useMemo(
-    () => (global ? globalSessionMeta ?? {} : currentSessionMeta),
-    [global, globalSessionMeta, currentSessionMeta],
-  )
+  }, [runItems])
 
   const runList = useMemo(() => {
-    if (global) {
-      const all: (CommandRunView & { sessionMeta?: RunSessionMeta })[] = []
-      for (const [sid, list] of Object.entries(runsBySession)) {
-        if (!list || list.length === 0) continue
-        for (const run of list) {
-          all.push({ ...run, sessionMeta: sessionMeta[sid] })
-        }
-      }
-      return all.sort((a, b) => a.startedAt - b.startedAt)
-    }
-    const descendantIDs = sessions ? collectDescendantIDs(sessions, sessionID) : []
-    const ids = new Set([sessionID, ...descendantIDs])
-    const list: CommandRunView[] = []
-    for (const sid of ids) {
-      for (const run of runsBySession[sid] ?? []) list.push(run)
-    }
-    return list.sort((a, b) => a.startedAt - b.startedAt)
-  }, [global, runsBySession, sessionID, sessions, sessionMeta])
+    // 서버가 스코프(세션(+하위)/레포/전체) 필터링과 이름 채움을 마친 상태다.
+    return (runItems as CommandRunViewItem[])
+      .map((item) => ({ ...toCommandRunView(item), sessionMeta: sessionMeta[item.sessionId] }))
+      .sort((a, b) => a.startedAt - b.startedAt)
+  }, [runItems, sessionMeta])
 
   const filteredRunList = useMemo(() => {
     if (!historyQuery.trim()) return runList
     const q = historyQuery.toLowerCase()
-    return runList.filter((run) => {
+    const matched = runList.filter((run) => {
       const cmdText = `${run.name} ${run.args}`.toLowerCase()
       const sessionTitle = (run as { sessionMeta?: RunSessionMeta }).sessionMeta?.title
         ?? sessionMeta[run.sessionID]?.title
         ?? ''
       return cmdText.includes(q) || sessionTitle.toLowerCase().includes(q)
     })
+    // 커맨드 이름 매칭을 먼저, args/세션제목(내용) 매칭은 그 다음
+    const rank = (run: CommandRunView & { sessionMeta?: RunSessionMeta }): number =>
+      run.name.toLowerCase().includes(q) ? 0 : 1
+    return [...matched].sort((a, b) => rank(a) - rank(b) || b.startedAt - a.startedAt)
   }, [runList, historyQuery, sessionMeta])
 
   const segments = useMemo(() => {
@@ -1212,7 +1219,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'explorer' ? (
-          <CommandExplorer commands={commands} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
+          <CommandExplorer commands={commands} skills={skills} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
         ) : (
           <div className="flex-1 min-h-0 flex flex-col">
             <div className="p-3 pb-0 flex-shrink-0">
@@ -1279,7 +1286,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                   const toggle = (key: 'steps' | 'response', open: boolean) =>
                     setExpanded((prev) => ({ ...prev, [run.id]: { ...(prev[run.id] ?? { steps: false, response: false }), [key]: open } }))
                   const sessionLabel = run.sessionID !== sessionID
-                    ? (currentSessionMeta[run.sessionID]?.title ?? run.sessionID)
+                    ? (sessionMeta[run.sessionID]?.title ?? run.sessionID)
                     : null
                   return (
                     <div key={run.id} className="rounded-lg border border-border bg-background overflow-hidden">

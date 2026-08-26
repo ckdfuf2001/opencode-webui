@@ -37,9 +37,20 @@ export function RepoList() {
   }, {});
 
   const { data: dbStatuses } = useSessionStatusMap();
+  // 세션 리스트 배지와 동일한 기준(status==='busy')으로 카운트한다.
+  // 폴러가 repoId 를 못 채운 경우 directory 로 레포를 역매칭해 누락을 막는다.
   const workingCounts = (dbStatuses ?? []).reduce<Record<number, number>>((acc, entry) => {
-    if (entry.status !== "busy" || entry.repoId == null) return acc;
-    acc[entry.repoId] = (acc[entry.repoId] ?? 0) + 1;
+    if (entry.status !== "busy") return acc;
+    let repoId = entry.repoId ?? null;
+    if (repoId == null && entry.directory) {
+      const norm = entry.directory.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+      const repo = (repos ?? []).find(
+        (r) => (r.fullPath ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() === norm,
+      );
+      repoId = repo?.id ?? null;
+    }
+    if (repoId == null) return acc;
+    acc[repoId] = (acc[repoId] ?? 0) + 1;
     return acc;
   }, {});
 

@@ -119,7 +119,7 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
 
   // 달력에 표시될 run 마커를 서버 DB 에 기록한다.
   // repoId 를 확실히 알고 있으므로 directory 역추적이 필요 없다.
-  const run = recordRunStartSafe(db, {
+  const run = await recordRunStartSafe(db, {
     sessionId: sessionID,
     commandName: schedule.action === 'command' ? prompt : schedule.name,
     args: schedule.action === 'chat' ? prompt.slice(0, 500) : '',

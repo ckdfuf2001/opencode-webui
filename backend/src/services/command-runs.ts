@@ -1,13 +1,14 @@
 import type { Database } from 'bun:sqlite'
 import { randomUUID } from 'node:crypto'
-import * as crDb from '../db/command-run-queries'
 import type {
   CommandRun,
   CommandRunOrigin,
   CommandRunStatus,
   CreateCommandRunInput,
 } from '../db/command-run-queries'
+import * as store from './command-run-store'
 import { listRepos } from '../db/queries'
+import { firePreCommandHooks, firePostCommandHooks } from './command-hooks'
 import { logger } from '../utils/logger'
 
 /** 슬래시 방향과 끝 슬래시를 정규화한다. Windows 경로 비교를 위해 필요. */
@@ -58,75 +59,93 @@ export interface RecordRunStartInput extends CreateCommandRunInput {
 }
 
 /**
- * run 시작을 기록한다. id / startedAt 은 서버가 생성하므로
- * 클라이언트 시계가 어긋나도 달력 날짜가 밀리지 않는다.
+ * run 시작을 기록한다(단일 소스: <repo>/run_history/<yyyy-MM>.jsonl).
+ * id / startedAt 은 서버가 생성하므로 클라이언트 시계가 어긋나도 달력 날짜가 밀리지 않는다.
  * repoId 가 없으면 directory 로 해석해 채운다.
  */
-export function recordRunStart(db: Database, input: RecordRunStartInput): CommandRun {
-  const repoId = input.repoId ?? resolveRepoId(db, input.directory)
-
-  return crDb.insertCommandRun(db, {
+export async function recordRunStart(
+  db: Database,
+  input: RecordRunStartInput,
+): Promise<CommandRun> {
+  const now = Date.now()
+  const run: CommandRun = {
     id: randomUUID(),
-    startedAt: Date.now(),
-    origin: input.origin,
     sessionId: input.sessionId,
+    repoId: input.repoId ?? resolveRepoId(db, input.directory),
     commandName: input.commandName,
     args: input.args ?? null,
     directory: input.directory ?? null,
-    repoId,
-  })
+    messageId: null,
+    status: 'started',
+    origin: input.origin,
+    kind: input.kind ?? 'command',
+    startedAt: now,
+    finishedAt: null,
+    createdAt: now,
+  }
+
+  await store.insertRun(db, run, input.directory ?? null)
+  firePreCommandHooks(run)
+  return run
 }
 
 /** 기록 실패가 본 작업(스케줄 실행)을 중단시켜서는 안 되는 경로용. */
-export function recordRunStartSafe(db: Database, input: RecordRunStartInput): CommandRun | null {
+export async function recordRunStartSafe(
+  db: Database,
+  input: RecordRunStartInput,
+): Promise<CommandRun | null> {
   try {
-    return recordRunStart(db, input)
+    return await recordRunStart(db, input)
   } catch (error) {
     logger.warn('Failed to record command run start:', error)
     return null
   }
 }
 
-export function finishRunSafe(
+export async function finishRunSafe(
   db: Database,
   id: string,
   status: Exclude<CommandRunStatus, 'started'>,
-): void {
+): Promise<void> {
   try {
-    crDb.markCommandRunFinished(db, id, status)
+    await finishRun(db, id, status)
   } catch (error) {
     logger.warn(`Failed to mark command run ${id} as ${status}:`, error)
   }
 }
 
-export function attachMessage(db: Database, id: string, messageId: string): void {
-  crDb.updateCommandRunMessage(db, id, messageId)
+export async function attachMessage(db: Database, id: string, messageId: string): Promise<void> {
+  await store.updateMessage(db, id, messageId)
 }
 
-export function finishRun(
+export async function finishRun(
   db: Database,
   id: string,
   status: Exclude<CommandRunStatus, 'started'>,
-): void {
-  crDb.markCommandRunFinished(db, id, status)
+): Promise<void> {
+  const run = await store.getRunById(db, id)
+  await store.markFinished(db, id, status)
+  if (run) {
+    firePostCommandHooks(run, status)
+  }
 }
 
-export function listRunsInRange(db: Database, fromTs: number, toTs: number): CommandRun[] {
-  return crDb.listCommandRunsByRange(db, fromTs, toTs)
+export async function listRunsInRange(db: Database, fromTs: number, toTs: number): Promise<CommandRun[]> {
+  return store.listInRange(db, fromTs, toTs)
 }
 
-export function listRunsBySession(db: Database, sessionId: string): CommandRun[] {
-  return crDb.listCommandRunsBySession(db, sessionId)
+export async function listRunsBySession(db: Database, sessionId: string): Promise<CommandRun[]> {
+  return store.listBySession(db, sessionId)
 }
 
-export function listRunsByRepo(db: Database, repoId: number): CommandRun[] {
-  return crDb.listCommandRunsByRepo(db, repoId)
+export async function listRunsByRepo(db: Database, repoId: number): Promise<CommandRun[]> {
+  return store.listByRepo(db, repoId)
 }
 
-export function removeRun(db: Database, id: string): void {
-  crDb.deleteCommandRun(db, id)
+export async function removeRun(db: Database, id: string): Promise<void> {
+  await store.removeRun(db, id)
 }
 
-export function clearSessionRuns(db: Database, sessionId: string): void {
-  crDb.clearSessionCommandRuns(db, sessionId)
+export async function clearSessionRuns(db: Database, sessionId: string): Promise<void> {
+  await store.clearSession(db, sessionId)
 }

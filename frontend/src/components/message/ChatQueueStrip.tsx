@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Clock, X } from 'lucide-react'
-import { useQueuedChats, useRemoveQueuedChat } from '@/hooks/useChatQueue'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, X } from 'lucide-react'
+import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat } from '@/hooks/useChatQueue'
 
 interface ChatQueueStripProps {
   sessionID: string
@@ -9,6 +9,7 @@ interface ChatQueueStripProps {
 export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
   const { data: items = [] } = useQueuedChats(sessionID)
   const removeChat = useRemoveQueuedChat()
+  const moveChat = useMoveQueuedChat()
   const [minimized, setMinimized] = useState(true)
 
   if (items.length === 0) return null
@@ -52,14 +53,36 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
               <span className="line-clamp-2 min-w-0 flex-1 break-words text-foreground/80">
                 {item.text}
               </span>
-              <button
-                type="button"
-                aria-label="Remove queued message"
-                className="shrink-0 rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-destructive"
-                onClick={() => removeChat.mutate({ sessionID, id: item.id })}
-              >
-                <X className="h-3 w-3" />
-              </button>
+              <span className="flex shrink-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  aria-label="Move to first"
+                  title="Move to first"
+                  disabled={index === 0}
+                  className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground disabled:pointer-events-none disabled:opacity-20"
+                  onClick={() => moveChat.mutate({ sessionID, id: item.id, toTop: true })}
+                >
+                  <ChevronsUp className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Move up one"
+                  title="Move up one"
+                  disabled={index === 0}
+                  className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground disabled:pointer-events-none disabled:opacity-20"
+                  onClick={() => moveChat.mutate({ sessionID, id: item.id, toTop: false })}
+                >
+                  <ChevronUp className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Remove queued message"
+                  className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-destructive"
+                  onClick={() => removeChat.mutate({ sessionID, id: item.id })}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
             </li>
           ))}
         </ul>

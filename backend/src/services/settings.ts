@@ -16,7 +16,67 @@ import {
 } from '../types/settings'
 
 export class SettingsService {
-  constructor(private db: Database) {}
+  constructor(private db: Database) {
+    this.applyReasoningDefaultMigration()
+  }
+
+  /**
+   * 구버전 기본값으로 저장된 환경설정을 딱 한 번 새 기본값으로 전환한다.
+   * - showReasoning: false → true
+   * - theme: 'dark' → 'light'
+   * 마이그레이션 플래그는 user_preferences 테이블의 예약 user_id 행에 기록하므로
+   * 이후 사용자가 의도적으로 바꾼 값은 다시 덮어쓰지 않는다.
+   */
+  private applyReasoningDefaultMigration(): void {
+    const MIGRATION_USER = '__migration_flags__'
+    try {
+      this.db
+        .query(
+          `INSERT INTO user_preferences (user_id, preferences, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(user_id) DO NOTHING`
+        )
+        .run(MIGRATION_USER, '{}', Date.now())
+
+      const flagRow = this.db
+        .query('SELECT preferences FROM user_preferences WHERE user_id = ?')
+        .get(MIGRATION_USER) as { preferences: string } | undefined
+      const flags = JSON.parse(flagRow?.preferences ?? '{}') as Record<string, boolean>
+
+      const row = this.db
+        .query('SELECT preferences FROM user_preferences WHERE user_id = ?')
+        .get('default') as { preferences: string } | undefined
+
+      if (row && !flags.reasoningDefaultApplied) {
+        const parsed = JSON.parse(row.preferences) as Record<string, unknown>
+        if (parsed.showReasoning === false) {
+          parsed.showReasoning = true
+          this.db
+            .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
+            .run(JSON.stringify(parsed), Date.now(), 'default')
+          logger.info('Migrated stored showReasoning=false to true (new default)')
+        }
+        flags.reasoningDefaultApplied = true
+      }
+
+      if (row && !flags.themeLightDefaultApplied) {
+        const parsed = JSON.parse(row.preferences) as Record<string, unknown>
+        if (parsed.theme === 'dark') {
+          parsed.theme = 'light'
+          this.db
+            .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
+            .run(JSON.stringify(parsed), Date.now(), 'default')
+          logger.info("Migrated stored theme='dark' to 'light' (new default)")
+        }
+        flags.themeLightDefaultApplied = true
+      }
+
+      this.db
+        .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
+        .run(JSON.stringify(flags), Date.now(), MIGRATION_USER)
+    } catch (error) {
+      logger.warn('preference default migration skipped:', error)
+    }
+  }
 
   getSettings(userId: string = 'default'): SettingsResponse {
     const row = this.db

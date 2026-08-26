@@ -204,13 +204,8 @@ export function OpenCodeConfigManager() {
     setIsEditDialogOpen(true)
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
+  // 섹션 셸(버튼/설정)은 즉시 렌더하고, 목록만 인라인 로딩으로 채운다.
+  // 전체를 막는 스피너였을 때 느린 조회 하나가 설정 화면 전환을 막았다.
 
   return (
     <div className="space-y-6 overflow-y-auto">
@@ -304,7 +299,11 @@ export function OpenCodeConfigManager() {
         </div>
       </div>
 
-      {configs.length === 0 ? (
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : configs.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center">
             <p className="text-muted-foreground">No OpenCode configurations found. Create your first config to get started.</p>

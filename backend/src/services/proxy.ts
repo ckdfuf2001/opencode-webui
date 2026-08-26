@@ -4,8 +4,40 @@ import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages } from './opencode-db'
 import { markRequestBusy, clearRequestBusy } from './busy-tracker'
-import { readFile, stat } from 'fs/promises'
+import { open, readFile, stat, appendFile } from 'fs/promises'
+import os from 'os'
 import path from 'path'
+
+const OPENCODE_LOG_PATH = path.join(os.homedir(), '.local', 'share', 'opencode', 'log', 'opencode.log')
+
+/**
+ * opencode 는 5xx 에 빈 본문을 돌려주는 경우가 많아 클라이언트가 사유를 알 수 없다.
+ * opencode 로그 꼬리에서 가장 최근 level=ERROR 라인의 error="..." 를 꺼내 돌려준다.
+ */
+async function readLatestOpenCodeError(): Promise<string | null> {
+  try {
+    const handle = await open(OPENCODE_LOG_PATH, 'r')
+    try {
+      const size = (await handle.stat()).size
+      const start = Math.max(0, size - 65536)
+      const length = size - start
+      const buf = Buffer.alloc(length)
+      await handle.read(buf, 0, length, start)
+      const lines = buf.toString('utf8').split('\n').filter((l) => l.includes('level=ERROR'))
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i] ?? ''
+        const m = line.match(/\serror="([^"]{5,500})"/) ?? line.match(/\scause="([^"]{5,500})"/)
+        const reason = m?.[1]?.split('\\n')[0]?.trim()
+        if (reason) return reason
+      }
+      return null
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return null
+  }
+}
 
 export async function patchOpenCodeConfig(config: Record<string, unknown>): Promise<boolean> {
   try {
@@ -262,6 +294,36 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       } catch (error) {
         logger.warn('Failed to augment command list with scope:', error)
       }
+    }
+
+    // 에러 응답은 본문을 검사해서, 사유가 비어 있거나 opencode 의 제네릭 메시지
+    // ("Unexpected server error. Check server logs for details.") 뿐이면
+    // opencode 로그 꼬리의 최근 level=ERROR 사유를 채워 돌려준다.
+    if (response.status >= 400) {
+      releaseBusy()
+      const bodyText = await response.text().catch(() => '')
+      const generic = !bodyText.trim() || bodyText.includes('Check server logs for details')
+      if (generic) {
+        const reason = await readLatestOpenCodeError()
+        if (reason) {
+          let original: Record<string, unknown> | undefined
+          try { original = JSON.parse(bodyText) as Record<string, unknown> } catch { original = undefined }
+          responseHeaders['Content-Type'] = 'application/json'
+          const payload = original
+            ? { ...original, error: reason, opencodeLog: OPENCODE_LOG_PATH }
+            : { error: reason, opencodeLog: OPENCODE_LOG_PATH }
+          return new Response(JSON.stringify(payload), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: responseHeaders,
+          })
+        }
+      }
+      return new Response(bodyText, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      })
     }
 
     if (!isLongRunning || !response.body) {

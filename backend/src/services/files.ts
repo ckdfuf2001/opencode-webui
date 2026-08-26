@@ -321,7 +321,13 @@ export async function searchFiles(basePath: string, query: string): Promise<stri
   }
 
   await walk(validatedPath, '')
-  return results
+  // 파일명(경로 마지막 세그먼트) 매칭을 먼저, 경로만 매칭된 결과는 그 다음
+  const ranked = results.map((rel) => {
+    const base = rel.split('/').pop()?.toLowerCase() ?? ''
+    return { rel, rank: base.includes(q) ? 0 : 1 }
+  })
+  ranked.sort((a, b) => a.rank - b.rank || a.rel.localeCompare(b.rel))
+  return ranked.map((r) => r.rel)
 }
 
 export function validatePath(userPath: string): string {

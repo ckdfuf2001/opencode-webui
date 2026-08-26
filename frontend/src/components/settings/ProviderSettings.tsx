@@ -61,13 +61,8 @@ export function ProviderSettings() {
     return credentialsList?.includes(providerId) || false
   }
 
-  if (providersLoading || credentialsLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
+  // 섹션 셸은 즉시 렌더하고, 목록 영역만 인라인 로딩으로 채운다.
+  const listLoading = providersLoading || credentialsLoading
 
   return (
     <div className="space-y-4">
@@ -84,7 +79,11 @@ export function ProviderSettings() {
         </Button>
       </div>
 
-      {!providers || providers.length === 0 ? (
+      {listLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : !providers || providers.length === 0 ? (
         <Card className="bg-card border-border">
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground text-center">
