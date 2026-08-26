@@ -87,11 +87,32 @@ export function PromptInput({
   const [isBashMode, setIsBashMode] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [suggestionQuery, setSuggestionQuery] = useState('')
-  const [suggestionPosition, setSuggestionPosition] = useState({ bottom: 0, left: 0, width: 0 })
+  const [suggestionPosition, setSuggestionPosition] = useState({ bottom: 0, left: 0, width: 0, maxHeight: 256 })
   const [attachedFiles, setAttachedFiles] = useState(new Map<string, FileInfo>())
   const [showFileSuggestions, setShowFileSuggestions] = useState(false)
   const [fileQuery, setFileQuery] = useState('')
-  const [fileSuggestionPosition, setFileSuggestionPosition] = useState({ bottom: 0, left: 0, width: 0 })
+  const [fileSuggestionPosition, setFileSuggestionPosition] = useState({ bottom: 0, left: 0, width: 0, maxHeight: 256 })
+
+  /**
+   * 슬래시(/)/멘션(@) 헬퍼 팝업을 textarea 위쪽에 고정 배치한다.
+   * 모바일(특히 iOS Safari)에선 키보드가 뜨면 window.innerHeight 는 그대로고
+   * visualViewport 만 줄어들어서, 팝업이 보이는 영역 위로 밀려나 사라졌다.
+   * visualViewport 기준으로 textarea 위쪽 가용 높이를 계산해 maxHeight 로 clamp 한다.
+   */
+  const updateSuggestionAnchor = (el: HTMLElement, kind: 'command' | 'file') => {
+    const rect = el.getBoundingClientRect()
+    const vv = window.visualViewport
+    const visibleTop = vv ? vv.offsetTop : 0
+    const availableAbove = Math.max(140, rect.top - visibleTop - 8)
+    const next = {
+      bottom: window.innerHeight - rect.top + 4,
+      left: rect.left,
+      width: rect.width,
+      maxHeight: Math.round(Math.min(256, availableAbove)),
+    }
+    if (kind === 'command') setSuggestionPosition(next)
+    else setFileSuggestionPosition(next)
+  }
   const [mentionRange, setMentionRange] = useState<{ start: number, end: number } | null>(null)
   const [selectedFileIndex, setSelectedFileIndex] = useState(0)
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
@@ -531,12 +552,7 @@ export function PromptInput({
       setSelectedFileIndex(0)
       
       if (textareaRef.current) {
-        const rect = textareaRef.current.getBoundingClientRect()
-        setFileSuggestionPosition({
-          bottom: window.innerHeight - rect.top + window.scrollY + 4,
-          left: rect.left + window.scrollX,
-          width: rect.width
-        })
+        updateSuggestionAnchor(textareaRef.current, 'file')
       }
     } else {
       const commandMatch = value.slice(0, cursorPosition).match(/(^|\s)\/([^\s/]*)$/)
@@ -551,12 +567,7 @@ export function PromptInput({
         refreshIfStale(5_000)
 
         if (textareaRef.current) {
-          const rect = textareaRef.current.getBoundingClientRect()
-          setSuggestionPosition({
-            bottom: window.innerHeight - rect.top + window.scrollY + 4,
-            left: rect.left + window.scrollX,
-            width: rect.width
-          })
+          updateSuggestionAnchor(textareaRef.current, 'command')
         }
       } else {
         setShowSuggestions(false)
@@ -620,6 +631,24 @@ export function PromptInput({
       textareaRef.current.focus()
     }
   }, [disabled, hasActiveStream])
+
+  // 키보드가 뜨거나 접히며 visualViewport 가 변하면 열려 있는 헬퍼 팝업을 다시 앵커한다.
+  useEffect(() => {
+    if (!showSuggestions && !showFileSuggestions) return
+    const el = textareaRef.current
+    if (!el) return
+    const reanchor = () => {
+      if (showSuggestions) updateSuggestionAnchor(el, 'command')
+      if (showFileSuggestions) updateSuggestionAnchor(el, 'file')
+    }
+    window.visualViewport?.addEventListener('resize', reanchor)
+    window.visualViewport?.addEventListener('scroll', reanchor)
+    return () => {
+      window.visualViewport?.removeEventListener('resize', reanchor)
+      window.visualViewport?.removeEventListener('scroll', reanchor)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSuggestions, showFileSuggestions])
 
   useEffect(() => {
     if (!injectedCommand) return

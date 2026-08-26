@@ -194,13 +194,28 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const data = await client!.listMessages(sessionID!);
       let result = applyTruncationWindow(sessionID!, data);
       const optimistic = pendingOptimistic.get(sessionID!);
-      const realUserArrived =
-        optimistic != null &&
-        result.some(
-          (m) =>
-            m.info.role === "user" &&
-            (m.info.time?.created ?? 0) >= (optimistic.info.time?.created ?? 0),
-        );
+      let realUserArrived = false;
+      if (optimistic) {
+        const optimisticCreated = optimistic.info.time?.created ?? 0;
+        const optimisticText = optimistic.parts
+          .map((p) => (p.type === "text" ? (p as { text?: string }).text ?? "" : ""))
+          .join("\n")
+          .trim();
+        // 클라이언트(특히 모바일) 시계가 서버보다 몇 초 어긋나면 created >= 비교로는
+        // 실제 유저 메시지를 못 찾아 낙관 카드가 남아 duplicated 로 보였다.
+        // 시계 오차 5초 허용 + 텍스트 일치로 판정한다.
+        realUserArrived = result.some((m) => {
+          if (m.info.role !== "user" || m.info.id === optimistic.info.id) return false;
+          const created = m.info.time?.created ?? 0;
+          if (created < optimisticCreated - 5000) return false;
+          if (!optimisticText) return true;
+          const text = m.parts
+            .map((p) => (p.type === "text" ? (p as { text?: string }).text ?? "" : ""))
+            .join("\n")
+            .trim();
+          return text === optimisticText;
+        });
+      }
       if (optimistic && !realUserArrived && !result.some((m) => m.info.id === optimistic.info.id)) {
         result = [...result, optimistic];
       }

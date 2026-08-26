@@ -10,7 +10,7 @@ interface CommandSuggestionsProps {
   commands: CommandType[]
   onSelect: (command: CommandType) => void
   onClose: () => void
-  position: { bottom: number; left: number; width: number }
+  position: { bottom: number; left: number; width: number; maxHeight?: number }
   selectedIndex?: number
 }
 
@@ -54,7 +54,8 @@ export function CommandSuggestions({
       style={{
         bottom: `${position.bottom}px`, // Position from bottom
         left: `${position.left}px`,
-        width: `${position.width}px`
+        width: `${position.width}px`,
+        maxHeight: position.maxHeight ? `${position.maxHeight}px` : undefined
       }}
     >
       <div className="p-1">
