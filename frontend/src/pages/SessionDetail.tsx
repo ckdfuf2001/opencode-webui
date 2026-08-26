@@ -27,7 +27,6 @@ import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
-import { OutputPreview } from "@/components/session/OutputPreview";
 
 interface InjectedFile {
   token: number;
@@ -480,11 +479,8 @@ if (results.length > 0) {
             )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center gap-1 pb-1 pointer-events-none">
-              <div className="w-full max-w-3xl pointer-events-auto">
-                <OutputPreview isStreaming={isStreaming} />
-              </div>
-              <div className="w-full flex justify-center pointer-events-auto">
+            <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none">
+              <div className="pointer-events-auto w-[90%] max-w-3xl">
               <PromptInput
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
