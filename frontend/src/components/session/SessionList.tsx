@@ -275,15 +275,6 @@ export const SessionList = ({
                   <h3 className="text-sm font-medium text-foreground truncate">
                     {session.title || "Untitled Session"}
                   </h3>
-                  {dbPendingCounts[session.id] ? (
-                    <span
-                      className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
-                      title={`${dbPendingCounts[session.id]} permission request(s) awaiting approval`}
-                    >
-                      <ShieldAlert className="w-3 h-3" />
-                      {dbPendingCounts[session.id]}
-                    </span>
-                  ) : null}
                   {dbBusyIds.has(session.id) ? (
                     <span
                       className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-500 bg-blue-500/10 border border-blue-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
@@ -291,6 +282,15 @@ export const SessionList = ({
                     >
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Working
+                    </span>
+                  ) : null}
+                  {dbPendingCounts[session.id] ? (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
+                      title={`${dbPendingCounts[session.id]} permission request(s) awaiting approval`}
+                    >
+                      <ShieldAlert className="w-3 h-3" />
+                      {dbPendingCounts[session.id]}
                     </span>
                   ) : null}
                 </div>
