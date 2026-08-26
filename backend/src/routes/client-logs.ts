@@ -1,8 +1,11 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { appendFile, mkdir, readFile, stat } from 'fs/promises'
+import { appendFile, mkdir, open, readFile, stat } from 'fs/promises'
+import os from 'os'
 import path from 'path'
 import { logger } from '../utils/logger'
+
+const OPENCODE_LOG_PATH = path.join(os.homedir(), '.local', 'share', 'opencode', 'log', 'opencode.log')
 
 const EntrySchema = z.object({
   level: z.enum(['error', 'warn', 'info']).default('error'),
@@ -60,6 +63,29 @@ export function createClientLogRoutes() {
     } catch (error) {
       logger.warn('Failed to read client log:', error)
       return c.json({ error: 'Failed to read log' }, 500)
+    }
+  })
+
+  // GET /api/logs/opencode?lines=200 — opencode 서버 로그 꼬리
+  app.get('/opencode', async (c) => {
+    try {
+      const lines = Math.min(Math.max(parseInt(c.req.query('lines') || '80', 10) || 80, 1), 2000)
+      const handle = await open(OPENCODE_LOG_PATH, 'r').catch(() => null)
+      if (!handle) return c.text('')
+      try {
+        const size = (await handle.stat()).size
+        const start = Math.max(0, size - 256 * 1024)
+        const length = size - start
+        const buf = Buffer.alloc(length)
+        await handle.read(buf, 0, length, start)
+        const all = buf.toString('utf8').split('\n').filter((l) => l.trim())
+        return c.text(all.slice(-lines).join('\n'))
+      } finally {
+        await handle.close().catch(() => {})
+      }
+    } catch (error) {
+      logger.warn('Failed to read opencode log:', error)
+      return c.json({ error: 'Failed to read opencode log' }, 500)
     }
   })
 
