@@ -7,6 +7,7 @@ import { ToolCallPart } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
 import { useSettings } from '@/hooks/useSettings'
 import { getFileStat } from '@/api/files'
+import { OutputPreview } from '@/components/session/OutputPreview'
 
 type Part = components['schemas']['Part']
 
@@ -219,12 +220,15 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         )
       }
       if (reasoningIsAnswer) {
+        const firstReasoningId = allParts?.find((p) => p.type === 'reasoning')?.id
+        const isFirstReasoning = !firstReasoningId || part.id === firstReasoningId
         return (
-          <div className="my-2">
+          <div className="my-2 space-y-2">
             <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Reasoning</div>
             <div className="p-4 bg-muted/50 border border-border rounded-lg text-sm text-foreground/90 whitespace-pre-wrap">
               {part.text}
             </div>
+            {isFirstReasoning && <OutputPreview isStreaming={messageStreaming} />}
           </div>
         )
       }
