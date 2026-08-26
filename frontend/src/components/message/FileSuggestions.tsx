@@ -6,7 +6,7 @@ interface FileSuggestionsProps {
   files: string[]
   onSelect: (file: string) => void
   onClose: () => void
-  position: { bottom: number, left: number, width: number }
+  position: { bottom: number, left: number, width: number, maxHeight?: number }
   selectedIndex?: number
 }
 
@@ -57,7 +57,8 @@ export function FileSuggestions({
       style={{
         bottom: `${position.bottom}px`,
         left: `${position.left}px`,
-        width: `${position.width}px`
+        width: `${position.width}px`,
+        maxHeight: position.maxHeight ? `${position.maxHeight}px` : undefined
       }}
     >
       {files.map((file, idx) => (
