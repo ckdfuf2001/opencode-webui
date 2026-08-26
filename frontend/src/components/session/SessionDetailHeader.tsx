@@ -164,7 +164,7 @@ export function SessionDetailHeader({
               title="LLM is answering"
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
-              <span className="text-xs text-blue-500 font-medium">Working</span>
+              <span className="text-xs text-blue-500 font-medium hidden sm:inline">Working</span>
             </div>
           )}
           <Button
