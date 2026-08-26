@@ -480,11 +480,11 @@ if (results.length > 0) {
             )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center gap-1 pb-1">
-              <div className="w-full max-w-3xl">
+            <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center gap-1 pb-1 pointer-events-none">
+              <div className="w-full max-w-3xl pointer-events-auto">
                 <OutputPreview isStreaming={isStreaming} />
               </div>
-              <div className="w-full flex justify-center">
+              <div className="w-full flex justify-center pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
