@@ -480,7 +480,7 @@ if (results.length > 0) {
           </div>
           {opcodeUrl && repoDirectory && (
             <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none">
-              <div className="pointer-events-auto w-[90%] max-w-3xl">
+              <div className="pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
