@@ -124,6 +124,15 @@ export function SessionDetail() {
     onScrollStateChange: setShowScrollButton
   });
 
+  // permission/question 카드가 새로 뜨면(allow 버튼 포함) 하단까지 스크롤 — 카드가 길어도 버튼이 보이게
+  useEffect(() => {
+    if (currentPermission || currentQuestion) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => scrollToBottom())
+      })
+    }
+  }, [currentPermission, currentQuestion, scrollToBottom])
+
   const { data: session, isLoading: sessionLoading } = useSession(
     opcodeUrl,
     sessionId,

@@ -115,6 +115,31 @@ export function useAutoScroll<T extends Message>({
     }
   }, [containerRef, onScrollStateChange])
 
+  // ResizeObserver: streaming 중 카드가 길어질 때(allow 버튼 등)도 하단까지 따라가게 한다
+  useEffect(() => {
+    if (!containerRef?.current || !enabled) return
+    const container = containerRef.current
+    let raf = 0
+    const ro = new ResizeObserver(() => {
+      if (userDisengagedRef.current) return
+      if (Date.now() - userScrolledAtRef.current < SCROLL_LOCK_MS) return
+      // 이미 하단 근처에 있을 때만 자동 추적 — 사용자가 위를 보고 있으면 방해하지 않는다
+      const nearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 120
+      if (!nearBottom) return
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight
+      })
+    })
+    ro.observe(container)
+    // 자식 높이 변화도 감지 (메시지 스트리밍 중)
+    if (container.firstElementChild) ro.observe(container.firstElementChild as Element)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [containerRef, enabled])
+
   useEffect(() => {
     if (!containerRef?.current || !messages || !enabled) return
 
@@ -124,14 +149,15 @@ export function useAutoScroll<T extends Message>({
 
     if (!hasInitialScrolledRef.current && currentCount > 0) {
       hasInitialScrolledRef.current = true
-      scrollToBottom()
+      // 초기 진입도 하단으로
+      requestAnimationFrame(() => scrollToBottom())
       return
     }
 
     if (currentCount > prevCount) {
       const newMessage = messages[currentCount - 1]
       if (newMessage?.info.role === 'user') {
-        scrollToBottom()
+        requestAnimationFrame(() => scrollToBottom())
         return
       }
     }
@@ -143,7 +169,7 @@ export function useAutoScroll<T extends Message>({
       return
     }
 
-    scrollToBottom()
+    requestAnimationFrame(() => scrollToBottom())
   }, [messages, containerRef, scrollToBottom, enabled])
 
   return { scrollToBottom }
