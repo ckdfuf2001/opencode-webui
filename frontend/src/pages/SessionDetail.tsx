@@ -447,11 +447,11 @@ if (results.length > 0) {
 
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
-          <div className="absolute top-2 right-8 z-20 flex flex-col items-center gap-0.5 bg-background/70 backdrop-blur-md border border-border/20 rounded-2xl px-2.5 py-1.5 shadow-sm">
-            <span className="text-xs text-muted-foreground leading-none">Auto scroll</span>
-            <Switch checked={effectiveAutoScroll} onCheckedChange={(v) => setAutoScrollOverride(v)} className="scale-75" />
+          <div className="absolute top-2 right-8 z-20 flex flex-col items-center gap-0.5 bg-background/70 backdrop-blur-md border border-border/20 rounded-2xl px-2.5 py-1.5 shadow-sm scale-[0.66] origin-top-right">
+            <span className="text-sm text-muted-foreground leading-none">Auto scroll</span>
+            <Switch checked={effectiveAutoScroll} onCheckedChange={(v) => setAutoScrollOverride(v)} />
           </div>
-          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
+          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-32 overscroll-contain">
             {opcodeUrl && repoDirectory && (
               <MessageThread 
                 opcodeUrl={opcodeUrl} 
@@ -493,7 +493,7 @@ if (results.length > 0) {
             )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none">
+            <div className="absolute bottom-3 left-0 right-0 flex justify-center pb-3 pointer-events-none">
               <div className="contents pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
