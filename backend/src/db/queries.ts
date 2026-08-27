@@ -2,6 +2,10 @@ import type { Database } from 'bun:sqlite'
 import type { Repo, CreateRepoInput } from '../types/repo'
 import { getReposPath } from '@opencode-webui/shared'
 import path from 'path'
+import { logger } from '../utils/logger'
+import { deleteSchedulesByRepo } from './schedule-queries'
+import { deletePermissionRulesByRepo } from './permission-rule-queries'
+import { deleteCommandRunsByRepo } from './command-run-queries'
 
 export interface RepoRow {
   id: number
@@ -144,4 +148,16 @@ export function updateLastPulled(db: Database, id: number): void {
 export function deleteRepo(db: Database, id: number): void {
   const stmt = db.prepare('DELETE FROM repos WHERE id = ?')
   stmt.run(id)
+}
+
+export function deleteRepoCascade(db: Database, id: number): void {
+  const schedules = deleteSchedulesByRepo(db, id)
+  const rules = deletePermissionRulesByRepo(db, id)
+  const runs = deleteCommandRunsByRepo(db, id)
+  deleteRepo(db, id)
+  if (schedules > 0 || rules > 0 || runs > 0) {
+    logger.info(
+      `Cascade-deleted rows for repo ${id}: ${schedules} schedule(s), ${rules} permission rule(s), ${runs} command run(s)`
+    )
+  }
 }

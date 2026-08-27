@@ -20,6 +20,28 @@ let pendingRestart = false
 let deferStartedAt = 0
 let pendingDirectories = new Set<string>()
 let globalConfigChanged = false
+const suppressedRoots = new Set<string>()
+
+/**
+ * Drop events under a directory tree (case-insensitive, Windows-safe). Used to
+ * keep background deletion of a renamed repo directory from triggering reloads.
+ */
+export function suppressAutomationTree(directory: string): void {
+  suppressedRoots.add(path.resolve(directory).toLowerCase())
+}
+
+export function unsuppressAutomationTree(directory: string): void {
+  suppressedRoots.delete(path.resolve(directory).toLowerCase())
+}
+
+function isSuppressedTree(fullPath: string): boolean {
+  if (suppressedRoots.size === 0) return false
+  const resolved = path.resolve(fullPath).toLowerCase()
+  for (const root of suppressedRoots) {
+    if (resolved === root || resolved.startsWith(root + path.sep)) return true
+  }
+  return false
+}
 
 function isAutomationPath(relativePath: string): boolean {
   const parts = relativePath.split(/[\\/]+/)
@@ -150,6 +172,7 @@ function watchRoot(root: string): void {
       const relative = filename.toString()
       if (!isAutomationPath(relative)) return
       const full = path.join(root, relative)
+      if (isSuppressedTree(full)) return
       if (path.basename(full).startsWith('.')) return
       const target = resolveTargetDirectory(root, relative)
       if (target) {
