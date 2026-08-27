@@ -84,7 +84,7 @@ export function SessionDetail() {
   useLoadPendingPermissions(openCodeClient, sessionId, descendantIDs);
   useLoadPendingQuestions(openCodeClient, sessionId);
 
-  const { data: messages } = useMessages(opcodeUrl, sessionId, repoDirectory);
+  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -446,6 +446,7 @@ if (results.length > 0) {
                 sessionID={sessionId} 
                 directory={repoDirectory}
                 messages={messages}
+                isLoading={messagesLoading}
                 onFileClick={handleFileClick}
                 onEditMessage={handleEditMessage}
                 onTruncate={handleTruncate}
@@ -480,7 +481,7 @@ if (results.length > 0) {
           </div>
           {opcodeUrl && repoDirectory && (
             <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none">
-              <div className="pointer-events-auto w-full max-w-4xl">
+              <div className="contents pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}

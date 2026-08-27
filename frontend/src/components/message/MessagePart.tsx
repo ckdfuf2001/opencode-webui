@@ -72,7 +72,7 @@ function CopyButton({ content, title, className = "" }: { content: string; title
   return (
     <button
       onClick={handleCopy}
-      className={`p-1.5 rounded bg-card hover:bg-card-hover text-muted-foreground hover:text-foreground ${className}`}
+      className={`p-1.5 rounded bg-card hover:bg-card-hover text-muted-foreground hover:text-foreground cursor-pointer ${className}`}
       title={title}
     >
       <Copy className="w-4 h-4" />
@@ -105,7 +105,7 @@ export function TTSButton({ content, className = "" }: TTSButtonProps) {
   return (
     <button
       onClick={handleClick}
-      className={`p-1.5 rounded ${isThisPlaying ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30' : 'bg-card hover:bg-card-hover text-muted-foreground hover:text-foreground'} ${className}`}
+      className={`p-1.5 rounded cursor-pointer ${isThisPlaying ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30' : 'bg-card hover:bg-card-hover text-muted-foreground hover:text-foreground'} ${className}`}
       title={isThisPlaying ? "Stop playback" : "Read aloud"}
       disabled={isLoading && currentText !== content}
     >
