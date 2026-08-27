@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, ChevronDown, Loader2, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -166,8 +166,17 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     enabled: active,
   })
   const [listProjects, setListProjects] = useState<string[]>(() =>
-    currentProject ? [currentProject] : repos.length > 0 ? [repoNameOf(repos[0])] : [],
+    currentProject ? [currentProject] : [],
   )
+  // 레포 리스트(전역)에서 열면 모든 프로젝트를 기본 선택한다. 레포 안이면 해당 레포만.
+  const projectsInitRef = useRef(false)
+  useEffect(() => {
+    if (projectsInitRef.current || repos.length === 0) return
+    projectsInitRef.current = true
+    if (!currentProject) {
+      setListProjects([...new Set(repos.map((repo) => repoNameOf(repo)))])
+    }
+  }, [repos, currentProject])
   const filteredSchedules = useMemo(() => {
     if (listProjects.length === 0) return []
     return schedules.filter((s) => {
