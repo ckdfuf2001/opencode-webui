@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useQueryClient } from '@tanstack/react-query'
 import type { Permission } from '@/api/types'
 
 type PermissionEventType = 'add' | 'remove'
@@ -218,6 +219,7 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
 
 export function usePermissionRequests(sessionID?: string, relatedSessionIDs?: string[]) {
   const allPermissions = usePermissionStore((state) => state.permissions)
+  const queryClient = useQueryClient()
 
   const scopeIDs = useMemo(() => {
     const ids = new Set<string>()
@@ -240,7 +242,8 @@ export function usePermissionRequests(sessionID?: string, relatedSessionIDs?: st
     usePermissionStore.setState((state) => ({
       permissions: state.permissions.filter(p => p.id !== permissionID),
     }))
-  }, [])
+    queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
+  }, [queryClient])
 
   const clearAllPermissions = useCallback(() => {
     usePermissionStore.setState({ permissions: [] })

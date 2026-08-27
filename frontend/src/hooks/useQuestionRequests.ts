@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useQueryClient } from '@tanstack/react-query'
 import type { QuestionRequest } from '@/api/types'
 
 type QuestionEventType = 'add' | 'remove'
@@ -137,6 +138,7 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
 
 export function useQuestionRequests(sessionID?: string) {
   const allQuestions = useQuestionStore((state) => state.questions)
+  const queryClient = useQueryClient()
 
   const questions = useMemo(
     () => sessionID
@@ -152,7 +154,9 @@ export function useQuestionRequests(sessionID?: string) {
     useQuestionStore.setState((state) => ({
       questions: state.questions.filter(q => q.id !== requestID),
     }))
-  }, [])
+    // 방패 배지 카운트(세션 상태 DB 폴링)도 즉시 갱신 — 다음 폴링(2s)까지 기다리지 않음
+    queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
+  }, [queryClient])
 
   const clearAllQuestions = useCallback(() => {
     useQuestionStore.setState({ questions: [] })
