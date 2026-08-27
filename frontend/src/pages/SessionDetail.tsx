@@ -27,6 +27,7 @@ import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
+import { Switch } from "@/components/ui/switch";
 
 interface InjectedFile {
   token: number;
@@ -53,6 +54,7 @@ export function SessionDetail() {
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
+  const [autoScrollOverride, setAutoScrollOverride] = useState<boolean | null>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
 
   const { data: repo, isLoading: repoLoading } = useQuery({
@@ -106,6 +108,7 @@ export function SessionDetail() {
   }, [dbStatuses, sessionId, descendantIDs]);
   const lastMessage = messages?.[messages.length - 1];
   const isStreaming = (!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy;
+  const effectiveAutoScroll = autoScrollOverride ?? (preferences?.autoScroll ?? true);
 
   // 응답 완료 똑소리: 카드 상태 기준으로 전환 1회만 재생한다.
   const prevStreamingRef = useRef(false);
@@ -119,9 +122,14 @@ export function SessionDetail() {
     containerRef: messageContainerRef,
     messages,
     sessionId,
-    enabled: preferences?.autoScroll ?? true,
+    enabled: effectiveAutoScroll,
     onScrollStateChange: setShowScrollButton
   });
+
+  // 세션 변경 시 세션별 임시 오버라이드는 초기화 (설정 기본값으로 복귀)
+  useEffect(() => {
+    setAutoScrollOverride(null)
+  }, [sessionId]);
 
   // permission/question 카드가 새로 뜨면(allow 버튼 포함) 하단까지 스크롤 — 카드가 길어도 버튼이 보이게
   useEffect(() => {
@@ -439,6 +447,10 @@ if (results.length > 0) {
 
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
+          <div className="absolute top-2 right-2 z-20 flex items-center gap-2 bg-background/90 backdrop-blur border rounded-full px-2.5 py-1 shadow-sm">
+            <span className="text-xs text-muted-foreground">Auto scroll</span>
+            <Switch checked={effectiveAutoScroll} onCheckedChange={(v) => setAutoScrollOverride(v)} className="scale-75" />
+          </div>
           <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
             {opcodeUrl && repoDirectory && (
               <MessageThread 
