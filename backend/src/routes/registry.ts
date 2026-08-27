@@ -24,7 +24,7 @@ interface RegistryListItem {
   path: string
 }
 
-const sanitize = (name: string): string => name.trim().replace(/[\\/:*?"<>|]/g, '-')
+const sanitize = (name: string): string => name.trim().replace(/[\\:*?"<>|]/g, '-')
 
 function scopeRoot(scope: RegistryScope, directory?: string): string {
   if (scope === 'global') return getConfigPath()

@@ -555,12 +555,16 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       };
 
       if (model) {
-        const [providerID, modelID] = model.split("/");
-        if (providerID && modelID) {
-          requestData.model = {
-            providerID,
-            modelID,
-          };
+        const firstSlash = model.indexOf("/");
+        if (firstSlash > 0) {
+          const providerID = model.slice(0, firstSlash);
+          const modelID = model.slice(firstSlash + 1);
+          if (providerID && modelID) {
+            requestData.model = {
+              providerID,
+              modelID,
+            };
+          }
         }
       }
 
