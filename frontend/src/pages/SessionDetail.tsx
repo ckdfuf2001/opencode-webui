@@ -447,8 +447,8 @@ if (results.length > 0) {
 
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
-          <div className="absolute top-2 right-2 z-20 flex items-center gap-2 bg-background/90 backdrop-blur border rounded-full px-2.5 py-1 shadow-sm">
-            <span className="text-xs text-muted-foreground">Auto scroll</span>
+          <div className="absolute top-2 right-2 z-20 flex flex-col items-center gap-0.5 bg-background/90 backdrop-blur border rounded-xl px-2.5 py-1.5 shadow-sm">
+            <span className="text-xs text-muted-foreground leading-none">Auto scroll</span>
             <Switch checked={effectiveAutoScroll} onCheckedChange={(v) => setAutoScrollOverride(v)} className="scale-75" />
           </div>
           <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
