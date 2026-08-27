@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   clearSessionCommandRuns,
   createCommandRun,
@@ -25,9 +25,9 @@ export const commandRunKeys = {
 }
 
 /**
- * 커맨드 패널/캘린더용 스코프 뷰. 서버가 스코프 필터링과
- * repoName·sessionTitle 채움을 담당한다. enabled가 open에 묶여
- * 패널을 열 때마다(=페이지 이동 후 첫 오픈) 최신값을 받아온다.
+ * 而ㅻ㎤???⑤꼸/罹섎┛?붿슜 ?ㅼ퐫??酉? ?쒕쾭媛 ?ㅼ퐫???꾪꽣留곴낵
+ * repoName쨌sessionTitle 梨꾩????대떦?쒕떎. enabled媛 open??臾띠뿬
+ * ?⑤꼸?????뚮쭏??=?섏씠吏 ?대룞 ??泥??ㅽ뵂) 理쒖떊媛믪쓣 諛쏆븘?⑤떎.
  */
 export function useCommandRunView(
   scope: CommandRunViewScope,
@@ -41,14 +41,18 @@ export function useCommandRunView(
     queryKey: commandRunKeys.view(scope, repoId, sessionId, start, end),
     queryFn: () => fetchCommandRunView({ scope, repoId, sessionId, start, end }),
     enabled,
-    staleTime: 15_000,
+    // ?좎뼵???대쭅: 而댄룷?뚰듃 ?섎챸怨?臾닿??섍쾶 ?듭뀡??利됱떆 ?곸슜?쒕떎.
+    refetchOnMount: 'always',
+    refetchInterval: enabled ? 5_000 : false,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
   })
 }
-/** 달력 뷰(6주 윈도우) 범위의 run 목록. 서버 DB 가 단일 진실 공급원. */
+/** ?щ젰 酉?6二??덈룄?? 踰붿쐞??run 紐⑸줉. */
 export function useCommandRunsInRange(start: Date, end: Date, enabled = true) {
   return useQuery({
     queryKey: commandRunKeys.range(start, end),
-    // 윈도우 경계 포함: start 00:00:00.000 ~ end 23:59:59.999
+    // ?덈룄??寃쎄퀎 ?ы븿: start 00:00:00.000 ~ end 23:59:59.999
     queryFn: () => {
       const from = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()
       const to = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999).getTime()
@@ -78,7 +82,7 @@ export function useCreateCommandRun() {
     mutationFn: createCommandRun,
     onSuccess: () => { void invalidate() },
     onError: (error) => {
-      // 조용한 유실 방지: 예전 store 는 console.warn 만 했다.
+      // 議곗슜???좎떎 諛⑹?: ?덉쟾 store ??console.warn 留??덈떎.
       showToast.error(`Failed to record command history: ${error.message}`)
     },
   })
@@ -119,3 +123,4 @@ export function useClearSessionCommandRuns() {
     onError: (error) => showToast.error(`Failed to clear: ${error.message}`),
   })
 }
+
