@@ -201,6 +201,13 @@ function getSortedScopes(commands: CommandWithScope[]): CommandWithScope[] {
   })
 }
 
+function searchRank(name: string, _description: string | undefined, q: string): number {
+  const n = name.toLowerCase()
+  if (n.startsWith(q)) return 0
+  if (n.includes(q)) return 1
+  return 2
+}
+
 interface CommandExplorerProps {
   commands: CommandWithScope[]
   skills: CommandWithScope[]
