@@ -25,12 +25,14 @@ interface ModelSelectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   opcodeUrl?: string | null;
+  directory?: string;
 }
 
 export function ModelSelectDialog({
   open,
   onOpenChange,
   opcodeUrl,
+  directory,
 }: ModelSelectDialogProps) {
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,13 +91,22 @@ export function ModelSelectDialog({
 
     // If we're in a session, try to update the current session's model
     if (sessionId && client) {
-      const sessionKey = ["opencode", "session", opcodeUrl, sessionId];
+      const sessionKey = ["opencode", "session", opcodeUrl, sessionId, directory] as const;
+      const sessionsKey = ["opencode", "sessions", opcodeUrl, directory] as const;
       // 낙천 업데이트: 현재 모델이 존재하지 않는(지원 중단된) 모델이어도
       // 클릭 즉시 컴포저 라벨이 바뀌게 한다. 실패하면 되돌리고 사유를 표시한다.
       const previous = queryClient.getQueryData(sessionKey);
+      const previousSessions = queryClient.getQueryData(sessionsKey);
       queryClient.setQueryData(sessionKey, (old: unknown) => {
         if (!old || typeof old !== "object") return old;
         return { ...(old as Record<string, unknown>), model: { providerID: providerId, id: modelId } };
+      });
+      // 세션 목록의 모델 표시도 즉시 갱신
+      queryClient.setQueryData(sessionsKey, (old: unknown) => {
+        if (!Array.isArray(old)) return old;
+        return (old as Array<Record<string, unknown>>).map((s) =>
+          (s as { id?: string }).id === sessionId ? { ...s, model: { providerID: providerId, id: modelId } } : s
+        );
       });
       try {
         await client.switchModel(sessionId, {
@@ -106,10 +117,11 @@ export function ModelSelectDialog({
           queryKey: sessionKey,
         });
         queryClient.invalidateQueries({
-          queryKey: ["opencode", "sessions", opcodeUrl],
+          queryKey: sessionsKey,
         });
       } catch (error) {
         if (previous !== undefined) queryClient.setQueryData(sessionKey, previous);
+        if (previousSessions !== undefined) queryClient.setQueryData(sessionsKey, previousSessions);
         showToast.error(
           `Failed to switch model: ${error instanceof Error ? error.message : "unknown error"}`,
           { duration: 6000 },
