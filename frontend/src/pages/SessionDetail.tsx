@@ -547,6 +547,7 @@ if (results.length > 0) {
         open={modelDialogOpen}
         onOpenChange={setModelDialogOpen}
         opcodeUrl={opcodeUrl}
+        directory={repoDirectory}
       />
 
       {/* Sessions Dialog */}
