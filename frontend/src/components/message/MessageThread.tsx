@@ -45,6 +45,7 @@ interface MessageThreadProps {
   onCancelEdit?: () => void
   highlightedMessageID?: string | null
   isLoading?: boolean
+  isFetching?: boolean
 }
 
 export const isMessageStreaming = (msg: MessageWithParts): boolean => {
@@ -57,18 +58,26 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, isFetching }: MessageThreadProps) {
   if (!messages) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-600">
-        {isLoading ? "Loading..." : "No messages yet. Start a conversation below."}
+      <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-600 border-t-transparent" />
+        <div>Loading messages...</div>
       </div>
     )
   }
   if (messages.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-600">
-        No messages yet. Start a conversation below.
+      <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
+        {isLoading ? (
+          <>
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-600 border-t-transparent" />
+            <div>Loading messages...</div>
+          </>
+        ) : (
+          "No messages yet. Start a conversation below."
+        )}
       </div>
     )
   }
@@ -78,6 +87,12 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
 
   return (
     <div className="flex flex-col space-y-2 p-2 overflow-x-hidden">
+      {isFetching && (
+        <div className="flex items-center justify-center gap-2 text-xs text-zinc-500 py-1">
+          <span className="h-3 w-3 animate-spin rounded-full border border-zinc-500 border-t-transparent" />
+          Loading... ({visibleMessages.length} messages)
+        </div>
+      )}
       {visibleMessages.map((msg) => {
         const streaming = isMessageStreaming(msg)
         const thinking = isMessageThinking(msg)

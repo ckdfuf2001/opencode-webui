@@ -84,7 +84,7 @@ export function SessionDetail() {
   useLoadPendingPermissions(openCodeClient, sessionId, descendantIDs);
   useLoadPendingQuestions(openCodeClient, sessionId);
 
-  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
+  const { data: messages, isLoading: messagesLoading, isFetching: messagesFetching } = useMessages(opcodeUrl, sessionId, repoDirectory);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -447,6 +447,7 @@ if (results.length > 0) {
                 directory={repoDirectory}
                 messages={messages}
                 isLoading={messagesLoading}
+                isFetching={messagesFetching}
                 onFileClick={handleFileClick}
                 onEditMessage={handleEditMessage}
                 onTruncate={handleTruncate}
