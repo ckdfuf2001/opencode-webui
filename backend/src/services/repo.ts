@@ -7,7 +7,7 @@ import { logger } from '../utils/logger'
 import { SettingsService } from './settings'
 import { writeRepoOpenCodeConfig, releaseAgentBrowserForDirectory } from './default-mcp'
 import { getReposPath } from '@opencode-webui/shared'
-import { stopAutomationWatcher, startAutomationWatcher } from './automation-watcher'
+import { stopAutomationWatcher, startAutomationWatcher, suppressAutomationTree, unsuppressAutomationTree } from './automation-watcher'
 import path from 'path'
 
 async function directoryExists(dir: string): Promise<boolean> {
@@ -109,7 +109,7 @@ export async function initLocalRepo(
     logger.error(`Failed to initialize local repo, rolling back: ${normalizedPath}`, error)
     
     try {
-      db.deleteRepo(database, repo.id)
+      db.deleteRepoCascade(database, repo.id)
       logger.info(`Rolled back database record for repo id: ${repo.id}`)
     } catch (dbError: any) {
       logger.error(`Failed to rollback database record for repo id ${repo.id}:`, dbError)
@@ -345,7 +345,7 @@ export async function cloneRepo(
     return { ...repo, cloneStatus: 'ready' }
   } catch (error: any) {
     logger.error(`Failed to create repo: ${repoUrl}${branch ? `#${branch}` : ''}`, error)
-    db.deleteRepo(database, repo.id)
+    db.deleteRepoCascade(database, repo.id)
     throw error
   }
 }
@@ -528,10 +528,41 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
     // this, recursive rm fails with EBUSY even after an OpenCode restart.
     releaseAgentBrowserForDirectory(dir)
 
+    const deleteStartedAt = Date.now()
+    const trashName = `.trash-${dirName}-${Date.now()}`
+    const trashPath = path.resolve(getReposPath(), trashName)
+
+    // Fast path: a same-volume rename is near-instant even for huge trees, so
+    // the request returns quickly and the slow recursive delete runs in the
+    // background. Leftover trash dirs are swept by cleanupOrphanedDirectories
+    // on next startup if the process dies mid-cleanup.
+    const renamed = await fs.rename(dir, trashPath).then(() => true).catch((renameError: any) => {
+      logger.info(`Rename-to-trash failed (${renameError?.code ?? renameError?.message}); falling back to direct removal`)
+      return false
+    })
+
+    if (renamed) {
+      startAutomationWatcher()
+      suppressAutomationTree(trashPath)
+      void removeDirectoryInBackground(trashPath)
+
+      if (repo.isWorktree && repo.branch && repo.repoUrl) {
+        try {
+          logger.info(`Pruning worktree references in base repo: ${extractRepoName(repo.repoUrl)}`)
+          await executeCommand(['git', '-C', path.resolve(getReposPath(), extractRepoName(repo.repoUrl)), 'worktree', 'prune'])
+        } catch (pruneError: any) {
+          logger.warn(`Failed to prune worktree references: ${pruneError.message}`)
+        }
+      }
+
+      logger.info(`Repo files moved aside in ${Date.now() - deleteStartedAt}ms; deleting in background: ${repoIdentifier}`)
+      return
+    }
+
     // Windows likes to hold a directory for a moment after those processes die
     // (file watchers, virus scanner, stale cwd handles). Retry with backoff.
     let lastError: unknown = null
-    const maxAttempts = 12
+    const maxAttempts = 8
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await fs.rm(dir, { recursive: true, force: true })
@@ -540,12 +571,10 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
       } catch (error: any) {
         lastError = error
         if (attempt < maxAttempts) {
-          const delayMs = 400 * attempt
+          const delayMs = Math.min(400 * attempt, 2000)
           logger.warn(`Directory removal attempt ${attempt}/${maxAttempts} failed (${error?.code ?? error?.message}), retrying in ${delayMs}ms`)
           await new Promise(resolve => setTimeout(resolve, delayMs))
-          if (attempt % 3 === 0) {
-            releaseAgentBrowserForDirectory(dir)
-          }
+          releaseAgentBrowserForDirectory(dir)
         }
       }
     }
@@ -577,11 +606,44 @@ export async function deleteRepoFiles(database: Database, repoId: number): Promi
       }
     }
     
-    logger.info(`Repo files deleted successfully: ${repoIdentifier}`)
+    logger.info(`Repo files deleted successfully in ${Date.now() - deleteStartedAt}ms: ${repoIdentifier}`)
   } catch (error: any) {
     logger.error(`Failed to delete repo: ${repoIdentifier}`, error)
     throw error
   }
+}
+
+function removeDirectoryInBackground(trashDir: string): Promise<void> {
+  return (async () => {
+    const startedAt = Date.now()
+    const fs = await import('fs/promises')
+    const maxAttempts = 10
+    let lastError: unknown = null
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await fs.rm(trashDir, { recursive: true, force: true })
+        lastError = null
+        break
+      } catch (error: any) {
+        lastError = error
+        if (attempt < maxAttempts) {
+          const delayMs = Math.min(500 * attempt, 3000)
+          logger.warn(`Background cleanup attempt ${attempt}/${maxAttempts} failed for ${trashDir} (${error?.code ?? error?.message}), retrying in ${delayMs}ms`)
+          await new Promise(resolve => setTimeout(resolve, delayMs))
+          releaseAgentBrowserForDirectory(trashDir)
+        }
+      }
+    }
+    unsuppressAutomationTree(trashDir)
+    if (lastError) {
+      logger.warn(`Background cleanup gave up on ${trashDir}; startup orphan sweep will retry`)
+      return
+    }
+    logger.info(`Background cleanup finished in ${Date.now() - startedAt}ms: ${trashDir}`)
+  })().catch((error) => {
+    unsuppressAutomationTree(trashDir)
+    logger.warn('Background cleanup crashed:', error)
+  })
 }
 
 function extractRepoName(url: string): string {

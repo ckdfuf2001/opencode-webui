@@ -107,6 +107,10 @@ export function deleteSchedule(db: Database, id: number): void {
   db.prepare('DELETE FROM schedules WHERE id = ?').run(id)
 }
 
+export function deleteSchedulesByRepo(db: Database, repoId: number): number {
+  return db.prepare('DELETE FROM schedules WHERE repo_id = ?').run(repoId).changes
+}
+
 export function listEnabledSchedules(db: Database): Schedule[] {
   const rows = db.prepare('SELECT * FROM schedules WHERE enabled = 1').all() as ScheduleRow[]
   return rows.map(rowToSchedule)

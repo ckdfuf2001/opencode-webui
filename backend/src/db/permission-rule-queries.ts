@@ -55,3 +55,7 @@ export function deletePermissionRule(db: Database, id: number): boolean {
   const result = db.prepare('DELETE FROM permission_rules WHERE id = ?').run(id)
   return result.changes > 0
 }
+
+export function deletePermissionRulesByRepo(db: Database, repoId: number): number {
+  return db.prepare('DELETE FROM permission_rules WHERE repo_id = ?').run(repoId).changes
+}
