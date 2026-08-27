@@ -44,6 +44,7 @@ interface MessageThreadProps {
   hiddenAfterID?: string | null
   onCancelEdit?: () => void
   highlightedMessageID?: string | null
+  isLoading?: boolean
 }
 
 export const isMessageStreaming = (msg: MessageWithParts): boolean => {
@@ -56,8 +57,15 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID, directory }: MessageThreadProps) {
-  if (!messages || messages.length === 0) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading }: MessageThreadProps) {
+  if (!messages) {
+    return (
+      <div className="flex items-center justify-center h-full text-zinc-600">
+        {isLoading ? "Loading..." : "No messages yet. Start a conversation below."}
+      </div>
+    )
+  }
+  if (messages.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-600">
         No messages yet. Start a conversation below.
