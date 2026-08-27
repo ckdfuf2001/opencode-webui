@@ -225,7 +225,7 @@ export function OpenCodeConfigManager() {
           <Edit className={`h-4 w-4 transition-transform ${expandedSections.agentsmd ? 'rotate-90' : ''}`} />
         </button>
         <div className={`${expandedSections.agentsmd ? 'block' : 'hidden'} border-t border-border`}>
-          <div className="p-4 max-h-[50vh] overflow-y-auto">
+          <div className="p-4 max-h-[40vh] overflow-y-auto">
             <p className="text-sm text-muted-foreground mb-3">
               Instructions in this file apply to every opencode session on this machine.
             </p>
@@ -245,9 +245,9 @@ export function OpenCodeConfigManager() {
                     setAgentsMdContent(e.target.value)
                     setAgentsMdError('')
                   }}
-                  rows={12}
+                  rows={10}
                   placeholder={'# Global Agent Rules\n\nWrite your global instructions here...'}
-                  className="w-full min-h-[24rem] rounded-md bg-background border border-border px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary resize-y"
+                  className="w-full min-h-[19.2rem] rounded-md bg-background border border-border px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary resize-y"
                 />
                 {agentsMdError && <p className="text-sm text-red-500 mt-2">{agentsMdError}</p>}
                 <div className="flex justify-end gap-2 mt-3">
