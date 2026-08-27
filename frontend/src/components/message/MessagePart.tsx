@@ -204,7 +204,9 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       // (big-pickle 등 일부 모델은 답변 전체를 reasoning 으로 출력한다)
       // 접거나 숨기지 않고 본문처럼 바로 보여준다.
       const hasTextPart = !!allParts?.some((p) => p.type === 'text');
+      const hasToolPart = !!allParts?.some((p) => p.type === 'tool');
       const reasoningIsAnswer = role === 'assistant' && !hasTextPart;
+      // tool call이 있으면 reasoning 영역을 펼치지 않음 (답변인 경우는 제외)
       if (!showReasoning && !reasoningIsAnswer) {
         const isLive =
           messageStreaming &&
@@ -228,6 +230,10 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
             </div>
           </div>
         )
+      }
+      // tool call이 있으면 reasoning 접기 영역 숨김
+      if (hasToolPart) {
+        return null
       }
       return (
         <details className="border border-border rounded-lg my-2">

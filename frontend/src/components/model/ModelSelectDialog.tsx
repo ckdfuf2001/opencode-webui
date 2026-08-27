@@ -68,20 +68,46 @@ export function ModelSelectDialog({
     }
   }, [open, loadProviders]);
 
-  const filteredProviders = providers.filter((provider) => {
-    const matchesSearch =
-      provider.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      provider.models.some(
-        (model) =>
-          model.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          model.id.toLowerCase().includes(searchQuery.toLowerCase()),
-      );
+// Compute match rank for sorting: lower rank = better match
+    const getModelMatchRank = (model: Model): number | null => {
+      const queryLower = searchQuery.toLowerCase();
+      if (model.name.toLowerCase().includes(queryLower)) return 0;
+      if (model.id.toLowerCase().includes(queryLower)) return 1;
+      return null;
+    };
 
-    const matchesProvider =
-      !selectedProvider || provider.id === selectedProvider;
+    const getProviderMatchRank = (provider: ProviderWithModels): number | null => {
+      const queryLower = searchQuery.toLowerCase();
+      if (provider.name.toLowerCase().includes(queryLower)) return 0;
+      return null;
+    };
 
-    return matchesSearch && matchesProvider;
-  });
+    const filteredProviders = providers
+      .map((provider) => {
+        const providerRank = getProviderMatchRank(provider);
+        const filteredModels = provider.models
+          .map((model) => ({ model, rank: getModelMatchRank(model) }))
+          .filter(({ rank }) => rank !== null || !searchQuery)
+          .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
+          .map(({ model }) => model);
+        
+        const bestModelRank = filteredModels.length > 0 
+          ? getModelMatchRank(filteredModels[0]) 
+          : null;
+        
+        const bestRank = providerRank !== null 
+          ? Math.min(providerRank, bestModelRank ?? 999)
+          : bestModelRank;
+
+        return { provider, filteredModels, bestRank };
+      })
+      .filter(({ filteredModels, bestRank, provider }) => {
+        const matchesSearch = !searchQuery || bestRank !== null;
+        const matchesProvider = !selectedProvider || provider.id === selectedProvider;
+        return matchesSearch && matchesProvider && filteredModels.length > 0;
+      })
+      .sort((a, b) => (a.bestRank ?? 999) - (b.bestRank ?? 999))
+      .map(({ provider, filteredModels }) => ({ ...provider, models: filteredModels }));
 
   const handleModelSelect = async (providerId: string, modelId: string) => {
     const newModel = `${providerId}/${modelId}`;

@@ -133,13 +133,11 @@ export function SessionDetailHeader({
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
-          <div className="hidden sm:block">
             <ContextUsageIndicator
               opcodeUrl={opcodeUrl}
               sessionID={sessionId}
               directory={repoDirectory}
             />
-          </div>
           <BranchSwitcher
             repoId={repoId}
             currentBranch={currentBranch}

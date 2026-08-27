@@ -1,7 +1,5 @@
 import { useContextUsage } from '@/hooks/useContextUsage'
-import { getModel, formatModelName } from '@/api/providers'
-import { useSettings } from '@/hooks/useSettings'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 
 interface ContextUsageIndicatorProps {
   opcodeUrl: string | null
@@ -10,87 +8,90 @@ interface ContextUsageIndicatorProps {
 }
 
 export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: ContextUsageIndicatorProps) {
-  const { totalTokens, contextLimit, usagePercentage, currentModel, isLoading } = useContextUsage(opcodeUrl, sessionID, directory)
-  const { preferences } = useSettings()
-  const [modelName, setModelName] = useState<string>('')
-
-  const displayModel = preferences?.defaultModel || currentModel || ''
-
-  useEffect(() => {
-    const loadModelName = async () => {
-      if (displayModel) {
-        try {
-          const [providerId, modelId] = displayModel.split('/')
-          if (providerId && modelId) {
-            const model = await getModel(providerId, modelId)
-            if (model) {
-              setModelName(formatModelName(model))
-            } else {
-              setModelName(displayModel)
-            }
-          } else {
-            setModelName(displayModel)
-          }
-        } catch {
-          setModelName(displayModel)
-        }
-      } else {
-        setModelName('')
-      }
-    }
-
-    loadModelName()
-  }, [displayModel, opcodeUrl])
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">Loading...</span>
-      </div>
-    )
-  }
-
-  if (!modelName) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">No model</span>
-      </div>
-    )
-  }
+  const { totalTokens, contextLimit, usagePercentage, isLoading } = useContextUsage(opcodeUrl, sessionID, directory)
+  const [isHovered, setIsHovered] = useState(false)
 
   const getUsageColor = (percentage: number) => {
-    if (percentage < 50) return 'bg-green-700 dark:bg-green-400'
-    if (percentage < 80) return 'bg-yellow-700 dark:bg-yellow-400'
-    return 'bg-red-700 dark:bg-red-400'
+    if (percentage < 50) return 'text-green-500'
+    if (percentage < 80) return 'text-yellow-500'
+    return 'text-red-500'
   }
 
-  const getUsageTextColor = (percentage: number) => {
-    if (percentage < 50) return 'text-green-700 dark:text-green-400'
-    if (percentage < 80) return 'text-yellow-700 dark:text-yellow-400'
-    return 'text-red-700 dark:text-red-400'
-  }
-
-  if (!contextLimit) {
+  if (isLoading || !contextLimit) {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">{modelName}</span>
+        <div className="relative w-5 h-5 flex-shrink-0 opacity-50" title="Context limit not available">
+          <svg className="w-5 h-5 -rotate-90 transform" viewBox="0 0 24 24">
+            <circle
+              className="text-muted-foreground/30"
+              strokeWidth="2.5"
+              stroke="currentColor"
+              fill="transparent"
+              r="10"
+              cx="12"
+              cy="12"
+            />
+            <circle
+              className="text-muted-foreground"
+              strokeWidth="2.5"
+              strokeDasharray={2 * Math.PI * 10}
+              strokeDashoffset={2 * Math.PI * 10}
+              strokeLinecap="round"
+              stroke="currentColor"
+              fill="transparent"
+              r="10"
+              cx="12"
+              cy="12"
+            />
+          </svg>
+        </div>
       </div>
     )
   }
 
+  const percentage = Math.min(usagePercentage || 0, 100)
+  const circumference = 2 * Math.PI * 10
+  const strokeDashoffset = circumference - (percentage / 100) * circumference
+
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex items-center gap-2 min-w-0">
-        <div className="w-16 h-2 bg-muted rounded-full overflow-hidden border border-border">
-          <div 
-            className={`h-full transition-all duration-300 ${getUsageColor(usagePercentage || 0)}`}
-            style={{ width: `${Math.min(usagePercentage || 0, 100)}%` }}
-          />
+    <div
+      className="relative w-5 h-5 flex-shrink-0 group"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <svg className="w-5 h-5 -rotate-90 transform" viewBox="0 0 24 24">
+        <circle
+          className="text-muted-foreground/30"
+          strokeWidth="2.5"
+          stroke="currentColor"
+          fill="transparent"
+          r="10"
+          cx="12"
+          cy="12"
+        />
+        <circle
+          className={getUsageColor(percentage)}
+          strokeWidth="2.5"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          stroke="currentColor"
+          fill="transparent"
+          r="10"
+          cx="12"
+          cy="12"
+          style={{ transition: 'stroke-dashoffset 0.3s ease' }}
+        />
+      </svg>
+      <span className={`absolute inset-0 flex items-center justify-center text-[7px] font-medium ${getUsageColor(percentage)}`}>
+        {Math.round(percentage)}%
+      </span>
+      {isHovered && (
+        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-2 py-1 bg-background border border-border rounded text-xs whitespace-nowrap z-10 shadow-lg">
+          <div>{totalTokens.toLocaleString()} / {contextLimit.toLocaleString()} tokens</div>
+          <div className="text-muted-foreground">{percentage.toFixed(1)}% used</div>
         </div>
-        <span className={`text-xs font-medium whitespace-nowrap ${getUsageTextColor(usagePercentage || 0)}`}>
-          {totalTokens.toLocaleString()} / {contextLimit.toLocaleString()}
-        </span>
-      </div>
+      )}
     </div>
   )
 }

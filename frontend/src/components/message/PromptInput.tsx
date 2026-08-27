@@ -127,9 +127,9 @@ export function PromptInput({
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
   const sessionData = useSession(opcodeUrl, sessionID, directory)
   const session = sessionData.data as SessionWithModel | undefined
-  const { data: config } = useConfig(opcodeUrl)
-  const { preferences, updateSettings } = useSettings()
-  const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory)
+const { data: config } = useConfig(opcodeUrl)
+const { preferences, updateSettings } = useSettings()
+const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory)
   const { executeCommand } = useCommandHandler({
     opcodeUrl,
     sessionID,
@@ -595,12 +595,12 @@ export function PromptInput({
   const modeColor = currentMode === 'plan' ? 'text-yellow-600 dark:text-yellow-500' : 'text-green-600 dark:text-green-500'
   const modeBg = currentMode === 'plan' ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-green-500/10 border-green-500/30'
 
-  const sessionModel = session?.model?.providerID && session?.model?.id
+const sessionModel = session?.model?.providerID && session?.model?.id
     ? `${session.model.providerID}/${session.model.id}`
     : null
-  const currentModel = sessionModel || config?.model || preferences?.defaultModel || ''
+const currentModel = sessionModel || config?.model || preferences?.defaultModel || ''
 
-  useEffect(() => {
+useEffect(() => {
     const loadModelName = async () => {
       if (currentModel) {
         try {
@@ -767,12 +767,14 @@ export function PromptInput({
           >
             {isBashMode ? 'BASH' : currentMode.toUpperCase()} 
           </button>
-          <button
-            onClick={onShowModelsDialog}
-            className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[120px] md:max-w-[180px] truncate"
-          >
-            {modelName.length > 12 ? modelName.substring(0, 10) + '...' : modelName || 'Select model'}
-          </button>
+<div className="flex items-center space-x-2">
+  <button
+    onClick={onShowModelsDialog}
+    className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[120px] md:max-w-[180px] truncate"
+  >
+    {modelName.length > 12 ? modelName.substring(0, 10) + '...' : modelName || 'Select model'}
+  </button>
+</div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -787,7 +789,7 @@ export function PromptInput({
                 Keyboard Shortcuts
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                <span className="font-mono">Cmd/Ctrl+Enter</span> - Send message
+                <span className="font-mono">Cmd/Ctrl+Enter</span>{' '}- Send message
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
                 <span className="font-mono">@"</span> - Mention files
