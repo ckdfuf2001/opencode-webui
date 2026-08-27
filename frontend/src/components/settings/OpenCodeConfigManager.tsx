@@ -225,7 +225,7 @@ export function OpenCodeConfigManager() {
           <Edit className={`h-4 w-4 transition-transform ${expandedSections.agentsmd ? 'rotate-90' : ''}`} />
         </button>
         <div className={`${expandedSections.agentsmd ? 'block' : 'hidden'} border-t border-border`}>
-          <div className="p-4 max-h-[40vh] overflow-y-auto">
+          <div className="p-4">
             <p className="text-sm text-muted-foreground mb-3">
               Instructions in this file apply to every opencode session on this machine.
             </p>
