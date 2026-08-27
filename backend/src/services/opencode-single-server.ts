@@ -720,25 +720,25 @@ export async function freePort(port: number): Promise<void> {
   return opencodeServerManager.freePortPublic(port)
 }
 
-export async function prepareBackendPort(port: number): Promise<void> {
-  if (await opencodeServerManager.canBindPortPublic(port)) return
-
-  if (await opencodeServerManager.isOurBackendPublic(port)) {
-    // A healthy instance of this app is already serving the port: reuse it
-    // instead of restarting. This is the normal "I already have it running,
-    // just attach" path (double `npm run dev`, EXE double-launch, or a dev
-    // backend that survived a closed terminal). The new process exits with a
-    // clear log line so the user knows the existing instance is the one
-    // serving.
-    logger.info(`Port ${port} already serves this app; reusing existing instance`)
-    process.exit(0)
+export async function prepareBackendPort(port: number): Promise<number> {
+  const start = port
+  const end = ENV.SERVER.PORT_MAX ?? port
+  for (let p = start; p <= end; p++) {
+    if (await opencodeServerManager.canBindPortPublic(p)) {
+      if (p !== start) logger.info(`Port ${start} in use, using next free port ${p} from env range`)
+      return p
+    }
+    if (await opencodeServerManager.isOurBackendPublic(p)) {
+      logger.info(`Port ${p} already serves this app; reusing existing instance`)
+      process.exit(0)
+    }
+    logger.warn(`Port ${p} is already in use by another program`)
   }
-
-  logger.error(
-    `Port ${port} is already in use by another program. ` +
-    `Do NOT kill it manually - change PORT in .env to a free port and start again.`
-  )
-  await gracefulExit(1)
+  const msg = end !== start
+    ? `No free port in range ${start}-${end}. Change PORT in .env to a free port and restart.`
+    : `Port ${port} is already in use by another program. Change PORT in .env to a free port and restart.`
+  logger.error(msg)
+  throw new Error(msg)
 }
 
 /**

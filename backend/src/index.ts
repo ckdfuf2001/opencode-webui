@@ -47,8 +47,46 @@ import {
   ENV
 } from '@opencode-webui/shared'
 
-const { PORT, HOST } = ENV.SERVER
+let { PORT, HOST } = ENV.SERVER
 const DB_PATH = getDatabasePath()
+
+async function ensureEnvFile(): Promise<void> {
+  const envPath = path.resolve(process.cwd(), '.env')
+  const examplePath = path.resolve(process.cwd(), '.env.example')
+  if (await fileExists(envPath)) {
+    logger.info('.env found, using existing env file')
+    try {
+      const { config } = await import('dotenv')
+      config({ path: envPath, override: true })
+      const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : NaN
+      if (!Number.isNaN(envPort)) PORT = envPort
+      const envHost = process.env.HOST
+      if (envHost) HOST = envHost
+    } catch {}
+    return
+  }
+  try {
+    if (await fileExists(examplePath)) {
+      const content = await readFileContent(examplePath)
+      await writeFileContent(envPath, content)
+      logger.info('Created .env from .env.example (program handling, not script)')
+    } else {
+      const content = `PORT=${PORT}\nHOST=${HOST}\n`
+      await writeFileContent(envPath, content)
+      logger.info('Created .env with defaults (program handling)')
+    }
+    try {
+      const { config } = await import('dotenv')
+      config({ path: envPath, override: true })
+      const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : NaN
+      if (!Number.isNaN(envPort)) PORT = envPort
+      const envHost = process.env.HOST
+      if (envHost) HOST = envHost
+    } catch {}
+  } catch (error) {
+    logger.warn('Failed to ensure .env file:', error)
+  }
+}
 
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled promise rejection (preventing crash):', reason)
@@ -171,6 +209,7 @@ async function syncDefaultConfigToDisk(): Promise<void> {
 }
 
 try {
+  await ensureEnvFile()
   await ensureDirectoryExists(getWorkspacePath())
   await ensureDirectoryExists(getReposPath())
   await ensureDirectoryExists(getConfigPath())
@@ -181,7 +220,7 @@ try {
   
   await cleanupExpiredCache()
   
-  await prepareBackendPort(PORT)
+  PORT = await prepareBackendPort(PORT)
   
   await ensureDefaultConfigExists()
   await syncDefaultConfigToDisk()
