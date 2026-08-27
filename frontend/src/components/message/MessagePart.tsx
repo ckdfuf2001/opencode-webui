@@ -199,6 +199,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'tool':
       return <ToolCallPart part={part} onFileClick={onFileClick} />
     case 'reasoning': {
+      if (!part.text?.trim()) return null
       // 이 메시지에 text 파트가 없다면 reasoning 이 사실상 답변이다.
       // (big-pickle 등 일부 모델은 답변 전체를 reasoning 으로 출력한다)
       // 접거나 숨기지 않고 본문처럼 바로 보여준다.
