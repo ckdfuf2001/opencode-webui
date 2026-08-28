@@ -7,6 +7,12 @@ import { markRequestBusy, clearRequestBusy } from './busy-tracker'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
+import type { Database } from 'bun:sqlite'
+
+let proxyDb: Database | null = null
+export function setProxyDb(db: Database): void {
+  proxyDb = db
+}
 
 const OPENCODE_LOG_PATH = path.join(os.homedir(), '.local', 'share', 'opencode', 'log', 'opencode.log')
 
@@ -214,7 +220,34 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       ? undefined
       : AbortSignal.timeout(isLongRunning ? 600_000 : 120_000)
 
-    const body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
+    let body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
+
+    if (method === 'POST' && body && proxyDb && /\/session\/[^/]+\/message$/.test(cleanEventPath)) {
+      try {
+        const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
+        const parsed = JSON.parse(body) as { parts?: { type?: string; text?: string }[] }
+        const firstText = parsed?.parts?.find((p) => p.type === 'text' && typeof p.text === 'string') as { type: string; text: string } | undefined
+        if (firstText) {
+          const text = firstText.text ?? ''
+          const cmdMatch = text.trim().match(/^\/([a-zA-Z0-9_-]+)/)
+          const commandName = cmdMatch?.[1]
+          if (commandName && !text.includes('[run-context]')) {
+            const scope = await resolveCommandScope(commandName, undefined, directory)
+            if (scope !== 'builtin') {
+              const { buildRunContext, CIRCUIT_BREAKER_THRESHOLD } = await import('./run-context')
+              const { block, facts } = await buildRunContext(proxyDb, directory, commandName, 10)
+              if (facts.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+                logger.warn(`[run-context] circuit breaker warn: ${commandName} consecutive failures ${facts.consecutiveFailures}`)
+              }
+              firstText.text = `${block}\n\n${text}`
+              body = JSON.stringify(parsed)
+            }
+          }
+        }
+      } catch (e) {
+        logger.warn('run-context injection failed:', e)
+      }
+    }
 
     const retryable = (error: unknown): boolean => {
       const code = (error as { cause?: { code?: unknown } })?.cause?.code

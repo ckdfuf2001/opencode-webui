@@ -36,7 +36,7 @@ import { opencodeServerManager, prepareBackendPort, installWindowsShutdownWatchd
 import { cleanupOrphanedDirectories } from './services/repo'
 import { listRepos } from './db/queries'
 import { openApiSpec } from './services/api-docs'
-import { proxyRequest } from './services/proxy'
+import { proxyRequest, setProxyDb } from './services/proxy'
 import { logger } from './utils/logger'
 import { 
   getWorkspacePath, 
@@ -107,6 +107,7 @@ app.use('/*', cors({
 }))
 
 const db = initializeDatabase(DB_PATH)
+setProxyDb(db)
 
 void migrateCommandRunsToFiles(db).catch((error) => {
   logger.error('Command runs file migration failed (will retry on next boot):', error)

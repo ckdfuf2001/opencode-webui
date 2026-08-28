@@ -9,6 +9,7 @@ import type {
 import * as store from './command-run-store'
 import { listRepos } from '../db/queries'
 import { firePreCommandHooks, firePostCommandHooks } from './command-hooks'
+import { captureRunVersions } from './run-version'
 import { logger } from '../utils/logger'
 
 /** 슬래시 방향과 끝 슬래시를 정규화한다. Windows 경로 비교를 위해 필요. */
@@ -68,6 +69,7 @@ export async function recordRunStart(
   input: RecordRunStartInput,
 ): Promise<CommandRun> {
   const now = Date.now()
+  const versions = await captureRunVersions(input.directory ?? null, input.commandName).catch(() => ({ registrySha: null, targetHash: null }))
   const run: CommandRun = {
     id: randomUUID(),
     sessionId: input.sessionId,
@@ -82,6 +84,8 @@ export async function recordRunStart(
     startedAt: now,
     finishedAt: null,
     createdAt: now,
+    registrySha: versions.registrySha,
+    targetHash: versions.targetHash,
   }
 
   await store.insertRun(db, run, input.directory ?? null)

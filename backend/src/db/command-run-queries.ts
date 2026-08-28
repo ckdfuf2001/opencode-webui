@@ -19,6 +19,9 @@ export interface CommandRun {
   startedAt: number
   finishedAt: number | null
   createdAt: number
+  registrySha?: string | null
+  targetHash?: string | null
+  opencodeVersion?: string | null
 }
 
 /** 호출자(라우트/스케줄러)가 서비스에 넘기는 값. id·startedAt·origin은 서비스가 결정한다. */
