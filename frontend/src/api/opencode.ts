@@ -84,13 +84,14 @@ export class OpenCodeClient {
           try {
             const healthy = await this.checkServerHealth()
             const port = this.baseURL != null && this.baseURL.includes(':') ? this.baseURL!.split(':').pop()!.split('/')[0] : 'unknown'
-            const msg = `Answer is generating over Timeout 600 sec, Backend is ${healthy ? 'alived' : 'not alived'} at port ${port}`
-            console.warn(msg)
-            // Show warning but don't add error to chat - show toast only once
-            showToast.warning(msg)
-            return Promise.resolve({}) // Return empty to prevent chat error display
+            const isProviderTimeout = error?.config?.timeout === 300000 || error.response?.status === 408
+            const source = isProviderTimeout ? 'Provider' : 'Frontend'
+            const timeoutSec = isProviderTimeout ? 300 : 600
+            const msg = `${source} timeout (${timeoutSec}s): ${isProviderTimeout ? 'LLM provider did not respond' : 'OpenCode server did not respond'} - backend is ${healthy ? 'alive' : 'not alive'} at port ${port}`
+            console.warn(`[${source}] ${msg}`, error)
+            showToast.warning(`[${source}] ${msg}`)
+            return Promise.resolve({})
           } catch (checkError) {
-            // Health check failed, show normal error
             console.error('Health check error:', checkError)
           }
         }

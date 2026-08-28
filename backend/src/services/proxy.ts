@@ -330,12 +330,12 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         }
       }
 
-      // 40x: provider 원문을 보존하되, 빌링/쿼터 키워드가 있으면 한글 힌트와 빌링 URL을 덧붙인다.
-      // 프론트 formatServerError 가 402/429 등을 토스트로 띄운다.
+      // 40x: preserve provider body, append English billing hint and billing URL.
+      // Frontend formatServerError will show it as toast for 402/429.
       if (response.status >= 400 && response.status < 500 && isBillingQuota) {
         let parsed: Record<string, unknown> | undefined
         try { parsed = JSON.parse(bodyText) as Record<string, unknown> } catch { parsed = undefined }
-        const hint = ' — 무료 한도/잔액 소진. 결제가 필요합니다. (https://opencode.ai/zen)'
+        const hint = ' - free quota/balance exhausted. Payment required. (https://opencode.ai/zen)'
         if (parsed) {
           const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : bodyText
           const enriched = { ...parsed, error: msg + hint, message: msg + hint, billingUrl: 'https://opencode.ai/zen' }
@@ -403,18 +403,24 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     const rawMsg = err?.message || String(error)
     const causeCode = (err?.cause as { code?: string } | undefined)?.code || (error as { code?: string } | undefined)?.code
     if (err?.name === 'TimeoutError') {
-      logger.debug('Proxy request timed out:', err)
-      return new Response(JSON.stringify({ error: `OpenCode 서버 응답 시간 초과 (600s). 세션이 길거나 서버가 바쁩니다. — ${rawMsg}`, code: 'TIMEOUT' }), {
+      const alive = await opencodeServerManager.checkHealth().catch(() => false)
+      const source = alive ? 'Backend proxy' : 'Backend'
+      const hint = alive
+        ? 'OpenCode server is alive but the request timed out (600s). The session turn is too long or the model is still generating.'
+        : 'OpenCode server is not reachable (health check failed). It may have crashed or the port is blocked.'
+      logger.debug(`[${source}] Proxy request timed out:`, err)
+      return new Response(JSON.stringify({ error: `[${source}] Gateway Timeout (504): ${rawMsg} - ${hint}`, code: 'TIMEOUT', alive, source }), {
         status: 504,
         headers: { 'Content-Type': 'application/json' },
       })
     }
-    logger.error(`Proxy request failed:`, error)
+    logger.error(`[Backend] Proxy request failed:`, error)
     const isConnRefused = causeCode && /ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|CONNECTIONREFUSED/i.test(String(causeCode))
+    const alive = await opencodeServerManager.checkHealth().catch(() => false)
     const hint = isConnRefused
-      ? ' — OpenCode 서버(:5552)에 연결할 수 없습니다. 백엔드가 서버를 띄우는 중이거나 포트가 막혀 있습니다. `backend` 로그와 `opencode --version`을 확인하세요.'
-      : ' — 백엔드→OpenCode 프록시 실패. 네트워크/방화벽을 확인하세요.'
-    return new Response(JSON.stringify({ error: `Bad Gateway (502): ${rawMsg}${hint}`, code: causeCode || 'PROXY_502', opencodeUrl: opencodeServerManager.getUrl() }), {
+      ? (alive ? 'OpenCode server recovered but the connection was reset. Retrying may succeed.' : 'Cannot connect to OpenCode server (:5552). Backend may be starting the server or the port is blocked. Check backend logs and `opencode --version`.')
+      : (alive ? 'Backend->OpenCode proxy failed but server is alive. Check network/firewall.' : 'Backend->OpenCode proxy failed and server is not reachable.')
+    return new Response(JSON.stringify({ error: `[Backend] Bad Gateway (502): ${rawMsg} - ${hint}`, code: causeCode || 'PROXY_502', opencodeUrl: opencodeServerManager.getUrl(), alive, source: 'Backend' }), {
       status: 502,
       headers: { 'Content-Type': 'application/json' },
     })
