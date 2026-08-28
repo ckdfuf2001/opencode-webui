@@ -95,6 +95,10 @@ if ($needDocTools -and -not $SkipDocTools) {
 Write-Output '[package 7/7] launcher scripts'
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.sh') $release
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.bat') $release
+Copy-Item -Force (Join-Path $PSScriptRoot 'stop_opencode_webui_exe.sh') $release
+Copy-Item -Force (Join-Path $PSScriptRoot 'stop_opencode_webui_exe.bat') $release
+Copy-Item -Force (Join-Path $PSScriptRoot 'clear_opencode_webui_exe.sh') $release
+Copy-Item -Force (Join-Path $PSScriptRoot 'clear_opencode_webui_exe.bat') $release
 Copy-Item -Force (Join-Path $PSScriptRoot 'PORT-GUIDE.txt') $release
 $bat = Join-Path $release 'start_opencode_webui_exe.bat'
 # ASCII 변환 시 한글 깨짐 방지: 원본이 UTF8이면 그대로 유지, 불필요한 변환 제거
