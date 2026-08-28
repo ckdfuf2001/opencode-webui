@@ -3,6 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo [STOP] stopping opencode-webui.exe...
+taskkill /IM opencode-webui.exe /T /F >nul 2>&1
 taskkill /IM cy5-webui.exe /T /F >nul 2>&1
 
 echo [STOP] stopping OpenCode server spawned by this folder...
