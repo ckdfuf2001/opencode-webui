@@ -25,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Switch } from '@/components/ui/switch'
 
 type CommandType = components['schemas']['Command']
 
@@ -58,6 +59,8 @@ interface PromptInputProps {
   onCancelEdit?: () => void
   editTargetMessageID?: string | null
   onResendEdit?: (messageID: string) => Promise<boolean>
+  autoScrollEnabled?: boolean
+  onAutoScrollChange?: (enabled: boolean) => void
 }
 
 export function PromptInput({ 
@@ -80,7 +83,9 @@ export function PromptInput({
   onSubmitted,
   onCancelEdit,
   editTargetMessageID,
-  onResendEdit
+  onResendEdit,
+  autoScrollEnabled,
+  onAutoScrollChange
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -802,6 +807,12 @@ useEffect(() => {
           </DropdownMenu>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {onAutoScrollChange && (
+            <div className="flex items-center gap-1.5 mr-1 px-2 py-1 rounded-md border border-border/50 bg-muted/30" title="Auto scroll on/off">
+              <span className="text-[11px] text-muted-foreground whitespace-nowrap hidden sm:inline">Auto</span>
+              <Switch checked={!!autoScrollEnabled} onCheckedChange={onAutoScrollChange} className="scale-75" />
+            </div>
+          )}
           {showScrollButton && (
             <button
               onClick={onScrollToBottom}

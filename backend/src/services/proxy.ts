@@ -333,6 +333,39 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       releaseBusy()
       const bodyText = await response.text().catch(() => '')
       const lower = bodyText.toLowerCase()
+      const isTimeoutResponse =
+        response.status === 504 ||
+        response.status === 408 ||
+        lower.includes('timeout') ||
+        lower.includes('timed out') ||
+        lower.includes('deadline exceeded') ||
+        lower.includes('deadline')
+      if (isTimeoutResponse) {
+        // opencode 내부 타임아웃은 300s (5분), proxy 타임아웃(600s)과 구분한다.
+        const opencodeHint = ' - OpenCode internal timeout (300s / 5분). The session turn is too long or the model is still generating. Please retry or reduce context.'
+        let parsed: Record<string, unknown> | undefined
+        try { parsed = JSON.parse(bodyText) as Record<string, unknown> } catch { parsed = undefined }
+        if (parsed) {
+          const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : bodyText
+          const alreadyHasHint = msg.toLowerCase().includes('300s') || msg.includes('5분') || msg.toLowerCase().includes('600s')
+          const enrichedMsg = alreadyHasHint ? msg : msg + opencodeHint
+          const enriched = { ...parsed, error: enrichedMsg, message: enrichedMsg, timeoutMs: 300_000, timeoutSource: 'opencode' }
+          responseHeaders['Content-Type'] = 'application/json'
+          return new Response(JSON.stringify(enriched), {
+            status: 504,
+            statusText: 'Gateway Timeout',
+            headers: responseHeaders,
+          })
+        }
+        responseHeaders['Content-Type'] = 'application/json'
+        const enrichedBody = bodyText.trim()
+          ? (bodyText.toLowerCase().includes('300s') || bodyText.includes('5분') ? bodyText : bodyText + opencodeHint)
+          : `Gateway Timeout (504): OpenCode internal timeout (300s / 5분).${opencodeHint}`
+        return new Response(JSON.stringify({ error: enrichedBody, timeoutMs: 300_000, timeoutSource: 'opencode' }), {
+          status: 504,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       const isBillingQuota =
         lower.includes('freeusagelimit') ||
         lower.includes('insufficient_quota') ||
@@ -438,11 +471,12 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     if (err?.name === 'TimeoutError') {
       const alive = await opencodeServerManager.checkHealth().catch(() => false)
       const source = alive ? 'Backend proxy' : 'Backend'
+      // proxy 타임아웃은 600s (10분), opencode 내부 타임아웃(300s/5분)과 구분한다.
       const hint = alive
-        ? 'OpenCode server is alive but the request timed out (600s). The session turn is too long or the model is still generating.'
+        ? 'OpenCode server is alive but the request timed out (600s / 10분). Proxy timeout — the session turn is too long or the model is still generating. Please retry or reduce context.'
         : 'OpenCode server is not reachable (health check failed). It may have crashed or the port is blocked.'
       logger.debug(`[${source}] Proxy request timed out:`, err)
-      return new Response(JSON.stringify({ error: `[${source}] Gateway Timeout (504): ${rawMsg} - ${hint}`, code: 'TIMEOUT', alive, source }), {
+      return new Response(JSON.stringify({ error: `[${source}] Gateway Timeout (504): ${rawMsg} - ${hint}`, code: 'TIMEOUT', alive, source, timeoutMs: 600_000, timeoutSource: 'proxy' }), {
         status: 504,
         headers: { 'Content-Type': 'application/json' },
       })

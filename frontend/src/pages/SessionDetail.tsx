@@ -27,7 +27,6 @@ import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
-import { Switch } from "@/components/ui/switch";
 
 interface InjectedFile {
   token: number;
@@ -112,11 +111,74 @@ export function SessionDetail() {
 
   // 응답 완료 똑소리: 카드 상태 기준으로 전환 1회만 재생한다.
   const prevStreamingRef = useRef(false);
+  const lastBillingToastRef = useRef<string | null>(null);
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  const isBillingQuotaMessage = useCallback((msg: string) => {
+    const m = msg.toLowerCase();
+    return (
+      m.includes("freeusagelimit") ||
+      m.includes("insufficient_quota") ||
+      m.includes("insufficient balance") ||
+      m.includes("payment required") ||
+      m.includes("quota exceeded") ||
+      m.includes("billing") ||
+      m.includes("purchase") ||
+      m.includes("add credits") ||
+      m.includes("subscriptionusagelimit") ||
+      m.includes("usage_not_included") ||
+      m.includes("exceeded your current quota")
+    );
+  }, []);
   useEffect(() => {
     const was = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
-    if (was && !isStreaming) playCompletionTick();
+    if (was && !isStreaming) {
+      playCompletionTick();
+      // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
+      // 폴링 지연(2s) 고려해 3.5초 뒤 재확인한다.
+      const timer = setTimeout(() => {
+        const cur = messagesRef.current;
+        if (!cur || cur.length === 0) return;
+        const last = cur[cur.length - 1];
+        const hasVisible = last.parts.some((p: any) => {
+          if (p.type === "text" && typeof p.text === "string" && p.text.trim()) return true;
+          if (p.type === "tool" || p.type === "patch" || p.type === "file" || p.type === "agent" || p.type === "reasoning") return true;
+          return false;
+        });
+        const isEmptyAssistant = last.info.role === "assistant" && !hasVisible;
+        const isUserWithoutReply = last.info.role === "user";
+        if ((isEmptyAssistant || isUserWithoutReply) && last.info.id !== lastBillingToastRef.current) {
+          showToast.error(
+            "LLM 응답이 비어있습니다. Free quota 만료, 타임아웃 또는 provider 오류일 수 있습니다. 모델/키를 확인하세요. (https://opencode.ai/zen / https://openrouter.ai/credits)",
+            { duration: 10000 },
+          );
+        }
+      }, 3500);
+      return () => clearTimeout(timer);
+    }
   }, [isStreaming]);
+
+  // billing 문구가 assistant 텍스트에 직접 포함된 경우(스트리밍 본문으로 전달)에도 토스트
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (last.info.role !== "assistant") return;
+    if (last.info.id === lastBillingToastRef.current) return;
+    const combinedText = last.parts
+      .filter((p: any) => p.type === "text" && typeof p.text === "string")
+      .map((p: any) => (p.text as string))
+      .join(" ");
+    if (!combinedText.trim()) return;
+    if (isBillingQuotaMessage(combinedText)) {
+      lastBillingToastRef.current = last.info.id;
+      showToast.error(combinedText.slice(0, 400) + " — free quota/balance exhausted. (https://opencode.ai/zen)", {
+        duration: 10000,
+      });
+    }
+  }, [messages, isBillingQuotaMessage]);
 
   const { scrollToBottom } = useAutoScroll({
     containerRef: messageContainerRef,
@@ -447,10 +509,6 @@ if (results.length > 0) {
 
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
-          <div className="absolute top-2 right-8 z-20 flex flex-col items-center gap-0.5 bg-background/70 backdrop-blur-md border border-border/20 rounded-2xl px-2.5 py-1.5 shadow-sm scale-[0.66] origin-top-right">
-            <span className="text-sm text-muted-foreground leading-none">Auto scroll</span>
-            <Switch checked={effectiveAutoScroll} onCheckedChange={(v) => setAutoScrollOverride(v)} />
-          </div>
           <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
             {opcodeUrl && repoDirectory && (
               <MessageThread 
@@ -517,6 +575,8 @@ if (results.length > 0) {
                 onCancelEdit={handleCancelEdit}
                 editTargetMessageID={hiddenAfterID}
                 onResendEdit={handleResendEdit}
+                autoScrollEnabled={effectiveAutoScroll}
+                onAutoScrollChange={setAutoScrollOverride}
               />
             </div>
             </div>
