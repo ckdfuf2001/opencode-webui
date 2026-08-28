@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useQueryClient } from '@tanstack/react-query'
 import type { QuestionRequest } from '@/api/types'
+import { showToast } from '@/lib/toast'
 
 type QuestionEventType = 'add' | 'remove'
 
@@ -124,6 +125,13 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
         }
       } catch (error) {
         console.error('Failed to load pending questions:', error)
+        const now = Date.now()
+        const last = (globalThis as unknown as { __qToast?: number }).__qToast ?? 0
+        if (now - last > 30000) {
+          ;(globalThis as unknown as { __qToast?: number }).__qToast = now
+          const msg = error instanceof Error ? error.message : String(error)
+          showToast.error(`[Poll] questions 500: ${msg} - opencode/backend connection check`, { duration: 5000 })
+        }
       }
     }
 

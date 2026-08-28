@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Permission } from '@/api/types'
+import { showToast } from '@/lib/toast'
 
 type PermissionEventType = 'add' | 'remove'
 
@@ -169,6 +170,7 @@ function normalizePermission(raw: unknown): Permission | null {
   }
 }
 
+let lastPermissionErrorToast = 0
 export function useLoadPendingPermissions(client: { listPermissions(): Promise<unknown[]> } | null, sessionID?: string, relatedSessionIDs?: string[]) {
   useEffect(() => {
     if (!client) return
@@ -205,6 +207,12 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
         }
       } catch (error) {
         console.error('Failed to load pending permissions:', error)
+        const now = Date.now()
+        if (now - lastPermissionErrorToast > 30000) {
+          lastPermissionErrorToast = now
+          const msg = error instanceof Error ? error.message : String(error)
+          showToast.error(`[Poll] permissions 500: ${msg} - opencode/backend connection check`, { duration: 5000 })
+        }
       }
     }
 
