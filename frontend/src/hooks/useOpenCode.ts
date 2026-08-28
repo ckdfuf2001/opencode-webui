@@ -106,30 +106,79 @@ function isAbortCancellation(error: unknown): boolean {
   return false
 }
 
-// Format server error similar to OpenCode's formatServerError
-function formatServerError(error: unknown): string {
-  // Axios error with response
-  if (error && typeof error === "object" && "response" in error) {
-    const axiosError = error as { response?: { data?: unknown; status?: number } }
-    const data = axiosError.response?.data
-    if (data && typeof data === "object") {
-      const errorData = data as Record<string, unknown>
-      // OpenCode server error format: { _tag: "ErrorName", message: "...", ... }
-      if (typeof errorData.message === "string" && errorData.message.length > 0) {
-        return errorData.message
-      }
-      if (typeof errorData._tag === "string") {
-        return errorData._tag
-      }
-    }
-    if (axiosError.response?.status === 429) return "Rate limit exceeded. Please wait before sending more requests."
-    if (axiosError.response?.status === 401) return "Authentication failed. Check your API key."
-    if (axiosError.response?.status === 403) return "Access denied."
+// Format server error similar to OpenCode's formatServerError - 40x provider-agnostic
+function extractProviderMessage(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined
+  const d = data as Record<string, unknown>
+  if (typeof d.message === "string" && d.message.trim()) return d.message.trim()
+  if (typeof d.error === "string" && d.error.trim()) return d.error.trim()
+  if (d.error && typeof d.error === "object") {
+    const e = d.error as Record<string, unknown>
+    if (typeof e.message === "string" && e.message.trim()) return e.message.trim()
   }
-  // Native Error
-  if (error instanceof Error && error.message) return error.message
-  // String error
-  if (typeof error === "string" && error.length > 0) return error
+  if (typeof d._tag === "string" && d._tag.trim()) return d._tag.trim()
+  return undefined
+}
+
+function isBillingQuotaMessage(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    m.includes("freeusagelimit") ||
+    m.includes("insufficient_quota") ||
+    m.includes("insufficient balance") ||
+    m.includes("payment required") ||
+    m.includes("quota exceeded") ||
+    m.includes("billing") ||
+    m.includes("purchase") ||
+    m.includes("add credits") ||
+    m.includes("subscriptionusagelimit") ||
+    m.includes("usage_not_included") ||
+    m.includes("exceeded your current quota")
+  )
+}
+
+function formatServerError(error: unknown): string {
+  if (error && typeof error === "object" && "response" in error) {
+    const axiosError = error as { response?: { data?: unknown; status?: number; headers?: Record<string, string> } }
+    const status = axiosError.response?.status
+    const data = axiosError.response?.data
+    const providerMsg = extractProviderMessage(data)
+
+    if (providerMsg) {
+      if (isBillingQuotaMessage(providerMsg)) {
+        return providerMsg + " - free quota/balance exhausted. Payment required. (Zen: https://opencode.ai/zen / OpenRouter: https://openrouter.ai/credits)"
+      }
+      return providerMsg
+    }
+
+    if (typeof status === "number") {
+      if (status === 400) return "Bad Request (400). Check model ID or parameters."
+      if (status === 401) return "Authentication failed (401). Check your API key."
+      if (status === 402) return "Payment Required (402). Insufficient balance - please add credits. (https://opencode.ai/zen)"
+      if (status === 403) return "Access denied (403). No permission for this model/feature."
+      if (status === 404) return "Not Found (404). Check model ID or endpoint."
+      if (status === 408) return "Request Timeout (408). Please retry."
+      if (status === 413) return "Payload Too Large (413). Reduce context length."
+      if (status === 422) return "Unprocessable (422). Check parameter values."
+      if (status === 429) return "Rate limit exceeded (429). Please wait or check your quota."
+      if (status >= 400 && status < 500) return "Client error (" + status + "). Check your request."
+      if (status === 500) return "Server error (500). Provider failure - retry later."
+      if (status === 502) return "Bad Gateway (502). Cannot connect to OpenCode server - check backend status."
+      if (status === 503) return "Service Unavailable (503). Provider overloaded - retry later."
+      if (status === 504) return "Gateway Timeout (504). Please retry."
+      if (status >= 500) return "Server error (" + status + "). Please retry later."
+    }
+  }
+  if (error instanceof Error && error.message) {
+    if (isBillingQuotaMessage(error.message)) {
+      return error.message + " - payment/recharge required."
+    }
+    return error.message
+  }
+  if (typeof error === "string" && error.length > 0) {
+    if (isBillingQuotaMessage(error)) return error + " - payment/recharge required."
+    return error
+  }
   return "An unexpected error occurred."
 }
 

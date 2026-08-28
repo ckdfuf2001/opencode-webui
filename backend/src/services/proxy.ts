@@ -296,12 +296,22 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       }
     }
 
-    // 에러 응답은 본문을 검사해서, 사유가 비어 있거나 opencode 의 제네릭 메시지
-    // ("Unexpected server error. Check server logs for details.") 뿐이면
-    // opencode 로그 꼬리의 최근 level=ERROR 사유를 채워 돌려준다.
     if (response.status >= 400) {
       releaseBusy()
       const bodyText = await response.text().catch(() => '')
+      const lower = bodyText.toLowerCase()
+      const isBillingQuota =
+        lower.includes('freeusagelimit') ||
+        lower.includes('insufficient_quota') ||
+        lower.includes('insufficient balance') ||
+        lower.includes('payment required') ||
+        lower.includes('quota exceeded') ||
+        lower.includes('billing') ||
+        lower.includes('add credits') ||
+        lower.includes('subscriptionusagelimit') ||
+        lower.includes('exceeded your current quota')
+
+      // opencode 가 5xx에 빈 본문을 돌려줄 때 로그로 보강한다.
       const generic = !bodyText.trim() || bodyText.includes('Check server logs for details')
       if (generic) {
         const reason = await readLatestOpenCodeError()
@@ -319,6 +329,31 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           })
         }
       }
+
+      // 40x: provider 원문을 보존하되, 빌링/쿼터 키워드가 있으면 한글 힌트와 빌링 URL을 덧붙인다.
+      // 프론트 formatServerError 가 402/429 등을 토스트로 띄운다.
+      if (response.status >= 400 && response.status < 500 && isBillingQuota) {
+        let parsed: Record<string, unknown> | undefined
+        try { parsed = JSON.parse(bodyText) as Record<string, unknown> } catch { parsed = undefined }
+        const hint = ' — 무료 한도/잔액 소진. 결제가 필요합니다. (https://opencode.ai/zen)'
+        if (parsed) {
+          const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : bodyText
+          const enriched = { ...parsed, error: msg + hint, message: msg + hint, billingUrl: 'https://opencode.ai/zen' }
+          responseHeaders['Content-Type'] = 'application/json'
+          return new Response(JSON.stringify(enriched), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: responseHeaders,
+          })
+        }
+        responseHeaders['Content-Type'] = 'application/json'
+        return new Response(JSON.stringify({ error: bodyText + hint, billingUrl: 'https://opencode.ai/zen' }), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+        })
+      }
+
       return new Response(bodyText, {
         status: response.status,
         statusText: response.statusText,
@@ -364,13 +399,22 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     })
   } catch (error) {
     releaseBusy()
-    const err = error as { name?: string }
+    const err = error as { name?: string; message?: string; cause?: unknown }
+    const rawMsg = err?.message || String(error)
+    const causeCode = (err?.cause as { code?: string } | undefined)?.code || (error as { code?: string } | undefined)?.code
     if (err?.name === 'TimeoutError') {
       logger.debug('Proxy request timed out:', err)
-    } else {
-      logger.error(`Proxy request failed:`, error)
+      return new Response(JSON.stringify({ error: `OpenCode 서버 응답 시간 초과 (600s). 세션이 길거나 서버가 바쁩니다. — ${rawMsg}`, code: 'TIMEOUT' }), {
+        status: 504,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
-    return new Response(JSON.stringify({ error: 'Proxy request failed' }), {
+    logger.error(`Proxy request failed:`, error)
+    const isConnRefused = causeCode && /ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|CONNECTIONREFUSED/i.test(String(causeCode))
+    const hint = isConnRefused
+      ? ' — OpenCode 서버(:5552)에 연결할 수 없습니다. 백엔드가 서버를 띄우는 중이거나 포트가 막혀 있습니다. `backend` 로그와 `opencode --version`을 확인하세요.'
+      : ' — 백엔드→OpenCode 프록시 실패. 네트워크/방화벽을 확인하세요.'
+    return new Response(JSON.stringify({ error: `Bad Gateway (502): ${rawMsg}${hint}`, code: causeCode || 'PROXY_502', opencodeUrl: opencodeServerManager.getUrl() }), {
       status: 502,
       headers: { 'Content-Type': 'application/json' },
     })
