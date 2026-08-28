@@ -730,7 +730,7 @@ useEffect(() => {
   
 
   return (
-    <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 md:p-3 mx-2 md:mx-4 mb-2 md:mb-5 w-[90%] md:max-w-4xl">
+    <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 mx-2 mb-2 w-[90%] max-w-4xl">
       <ChatQueueStrip sessionID={sessionID} />
       <textarea
         ref={textareaRef}
@@ -747,7 +747,7 @@ useEffect(() => {
               : "Send a message..."
         }
         disabled={disabled}
-        className={`w-full bg-background/90 px-2 md:px-3 py-2 text-[16px] text-foreground placeholder-muted-foreground focus:outline-none focus:bg-background resize-none min-h-[40px] max-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed md:text-sm rounded-lg ${
+        className={`w-full bg-background/90 px-2 py-2 text-[16px] text-foreground placeholder-muted-foreground focus:outline-none focus:bg-background resize-none min-h-[40px] max-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg ${
           isBashMode 
             ? 'border-purple-500/50 bg-purple-500/5' 
             : ''
@@ -755,8 +755,8 @@ useEffect(() => {
         rows={1}
       />
       
-      <div className="flex gap-1.5 md:gap-2 items-center justify-between">
-        <div className="flex gap-1.5 md:gap-2 items-center">
+      <div className="flex gap-1.5 items-center justify-between">
+        <div className="flex gap-1.5 items-center">
           <button
             onClick={handleModeToggle}
             className={`px-2 py-1 rounded-md text-xs font-medium border w-14 ${
@@ -770,7 +770,7 @@ useEffect(() => {
 <div className="flex items-center space-x-2">
   <button
     onClick={onShowModelsDialog}
-    className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[120px] md:max-w-[180px] truncate"
+    className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[120px] truncate"
   >
     {modelName.length > 12 ? modelName.substring(0, 10) + '...' : modelName || 'Select model'}
   </button>
@@ -800,11 +800,11 @@ useEffect(() => {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           {showScrollButton && (
             <button
               onClick={onScrollToBottom}
-              className="p-1.5 md:p-2 rounded-lg bg-muted hover:bg-muted-foreground/20 text-muted-foreground hover:text-foreground transition-colors border border-foreground/30"
+              className="p-1.5 rounded-lg bg-muted hover:bg-muted-foreground/20 text-muted-foreground hover:text-foreground transition-colors border border-foreground/30"
               title="Scroll to bottom"
             >
               <ChevronDown className="w-5 h-5" />
@@ -813,7 +813,7 @@ useEffect(() => {
           {showStop && (
             <button
               onClick={handleStop}
-              className="px-4 md:px-5 py-1.5 rounded-lg text-sm font-medium bg-destructive hover:bg-destructive/90 text-destructive-foreground transition-colors"
+              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-destructive hover:bg-destructive/90 text-destructive-foreground transition-colors"
               title="Stop generating"
             >
               Stop
@@ -823,7 +823,7 @@ useEffect(() => {
             data-submit-prompt
             onClick={showStop ? handleQueue : handleSubmit}
             disabled={(!prompt.trim() && !showStop) || disabled}
-            className={`px-5 md:px-6 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            className={`px-5 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               showStop
                 ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
                 : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'

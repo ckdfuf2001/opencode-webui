@@ -451,7 +451,7 @@ if (results.length > 0) {
             <span className="text-sm text-muted-foreground leading-none">Auto scroll</span>
             <Switch checked={effectiveAutoScroll} onCheckedChange={(v) => setAutoScrollOverride(v)} />
           </div>
-          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-32 overscroll-contain">
+          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
             {opcodeUrl && repoDirectory && (
               <MessageThread 
                 opcodeUrl={opcodeUrl} 
@@ -492,7 +492,7 @@ if (results.length > 0) {
             )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div className="absolute bottom-3 left-0 right-0 flex justify-center pb-3 pointer-events-none">
+            <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none">
               <div className="contents pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
