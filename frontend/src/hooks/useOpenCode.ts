@@ -655,25 +655,13 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
   });
 };
 
-let lastSessionStatusToast = 0
 export const useSessionStatusMap = () => {
-  const query = useQuery({
+  return useQuery({
     queryKey: ["session-status-db"],
     queryFn: listSessionStatuses,
     refetchInterval: 2000,
     staleTime: 0,
-    throwOnError: false,
-    retry: false,
-  })
-  if (query.error) {
-    const now = Date.now()
-    if (now - lastSessionStatusToast > 30000) {
-      lastSessionStatusToast = now
-      const msg = query.error instanceof Error ? query.error.message : String(query.error)
-      showToast.error(`[Poll] session-status 500: ${msg} - backend DB check`, { duration: 5000 })
-    }
-  }
-  return query
+  });
 };
 
 export const useAbortSession = (opcodeUrl: string | null | undefined, directory?: string) => {

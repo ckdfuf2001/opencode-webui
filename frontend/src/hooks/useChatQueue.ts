@@ -7,24 +7,13 @@ export const chatQueueKeys = {
   session: (sessionID: string) => ['chat-queue', sessionID] as const,
 }
 
-let lastChatQueueToast = 0
 export function useQueuedChats(sessionID?: string | null) {
-  const query = useQuery({
+  return useQuery({
     queryKey: chatQueueKeys.session(sessionID ?? ''),
     queryFn: () => listQueuedChats(sessionID!),
     enabled: !!sessionID,
     refetchInterval: 2000,
-    retry: false,
   })
-  if (query.error) {
-    const now = Date.now()
-    if (now - lastChatQueueToast > 30000) {
-      lastChatQueueToast = now
-      const msg = query.error instanceof Error ? query.error.message : String(query.error)
-      showToast.error(`[Poll] chat-queue 500: ${msg} — backend DB 확인`, { duration: 5000 })
-    }
-  }
-  return query
 }
 
 export function useEnqueueQueuedChat() {

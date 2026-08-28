@@ -141,8 +141,9 @@ async function collectDirectorySnapshots(db: Database): Promise<Map<string, Dire
         merged.set(sessionId, (merged.get(sessionId) ?? 0) + count)
       }
       snapshots.set(directory, { busySessionIds, pendingPermissions: merged })
-    } catch (error) {
-      logger.warn(`[Poll] ${directory} status fetch failed:`, error)
+    } catch {
+      // 이 디렉터리 조회 실패는 전체 사이클을 중단시키지 않는다.
+      // 실패한 디렉터리의 행은 다음 틱까지 마지막 상태를 유지한다.
     }
   }
   return snapshots
