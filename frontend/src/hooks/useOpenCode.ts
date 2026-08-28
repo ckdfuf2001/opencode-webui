@@ -676,10 +676,15 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
     onMutate: (sessionID) => {
       recentlyAborted.set(sessionID, Date.now());
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
+      const statuses = queryClient.getQueryData<{ sessionId: string; status: string; pendingPermissions: number }[]>(['session-status-db'])
+      if (statuses) {
+        queryClient.setQueryData(['session-status-db'], statuses.map((entry) => entry.sessionId === sessionID ? { ...entry, status: 'idle' as const, pendingPermissions: 0 } : entry))
+      }
     },
     onSettled: (_data, _error, sessionID) => {
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
       queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
+      queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
     },
   });
 };
@@ -707,7 +712,13 @@ function markSessionMessagesCompleted(
     changed = true
     // 빈 placeholder(파트 없는 미완료 카드)는 완료 처리 대신 제거한다.
     if (msg.parts.length === 0) continue
-    updated.push({ ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } } })
+    const patchedParts = msg.parts.map((part) => {
+      if ((part as { type?: string }).type === 'tool' && (part as { state?: { status?: string } }).state?.status === 'running') {
+        return { ...part, state: { status: 'error' as const, error: 'Run was interrupted' } } as typeof part
+      }
+      return part
+    })
+    updated.push({ ...msg, info: { ...msg.info, time: { ...msg.info.time, completed: Date.now() } }, parts: patchedParts })
   }
   if (changed) {
     queryClient.setQueryData(messagesKey, updated)
