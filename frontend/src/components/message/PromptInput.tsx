@@ -770,6 +770,7 @@ useEffect(() => {
 <div className="flex items-center space-x-2">
   <button
     onClick={onShowModelsDialog}
+    title={modelName || 'Select model'}
     className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[120px] truncate"
   >
     {modelName.length > 12 ? modelName.substring(0, 10) + '...' : modelName || 'Select model'}
