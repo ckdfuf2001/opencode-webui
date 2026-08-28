@@ -205,7 +205,9 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       // 접거나 숨기지 않고 본문처럼 바로 보여준다.
       const hasTextPart = !!allParts?.some((p) => p.type === 'text');
       const hasToolPart = !!allParts?.some((p) => p.type === 'tool');
-      const reasoningIsAnswer = role === 'assistant' && !hasTextPart;
+      // 대화(text)가 없어도 tool/patch/file/agent 등 다른 파트가 있으면 reasoning을 답변으로 펼치지 않는다
+      const hasOtherVisiblePart = !!allParts?.some((p) => p.type === 'patch' || p.type === 'file' || p.type === 'agent');
+      const reasoningIsAnswer = role === 'assistant' && !hasTextPart && !hasToolPart && !hasOtherVisiblePart;
       // tool call이 있으면 reasoning 영역을 펼치지 않음 (답변인 경우는 제외)
       if (!showReasoning && !reasoningIsAnswer) {
         const isLive =
@@ -222,19 +224,20 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         )
       }
       if (reasoningIsAnswer) {
+        // 기존 reasoning details를 open 상태로 펼쳐서 보여준다 (새 UI 생성 아님)
         return (
-          <div className="my-2">
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Reasoning</div>
-            <div className="p-4 bg-muted/50 border border-border rounded-lg text-sm text-foreground/90 whitespace-pre-wrap">
+          <details open className="border border-border rounded-lg my-2">
+            <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
+              Reasoning
+            </summary>
+            <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
               {part.text}
             </div>
-          </div>
+          </details>
         )
       }
-      // tool call이 있으면 reasoning 접기 영역 숨김
-      if (hasToolPart) {
-        return null
-      }
+      // tool/patch 등 다른 파트가 있어도 setting이 on이면 접힌 상태로 보여준다.
+      // setting이 off이면 위 !showReasoning 분기에서 이미 숨겨졌으므로 여기선 항상 접힌 상태로 노출.
       return (
         <details className="border border-border rounded-lg my-2">
           <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
