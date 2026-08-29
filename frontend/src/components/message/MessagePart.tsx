@@ -208,7 +208,8 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       // 대화(text)가 없어도 tool/patch/file/agent 등 다른 파트가 있으면 reasoning을 답변으로 펼치지 않는다
       const hasOtherVisiblePart = !!allParts?.some((p) => p.type === 'patch' || p.type === 'file' || p.type === 'agent');
       const reasoningIsAnswer = role === 'assistant' && !hasTextPart && !hasToolPart && !hasOtherVisiblePart;
-      const hasContextPart = hasOtherVisiblePart || !!allParts?.some((p) => p.type === 'snapshot');
+      // context는 text/patch/file/agent/snapshot 등 reasoning 외 가시적 응답을 의미
+      const hasContextPart = hasTextPart || hasOtherVisiblePart || !!allParts?.some((p) => p.type === 'snapshot');
       const noContextNoTool = !hasToolPart && !hasContextPart;
 
       // showReasoning on이면 무조건 보임: noContextNoTool/answer는 펼쳐서, 그 외는 접힌 상태
