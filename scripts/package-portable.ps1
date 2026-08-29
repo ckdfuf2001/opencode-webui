@@ -59,9 +59,30 @@ if ($LASTEXITCODE -ne 0) { throw 'frontend embed generation failed' }
 $embedFile = Join-Path $root 'backend/generated/frontend-embed.generated.ts'
 if (-not (Test-Path $embedFile)) { throw 'frontend embed file not generated' }
 
-Write-Output '[package 3/7] backend single-exe compile'
+Write-Output '[package 3/7] backend single-exe compile (temp static import for embed)'
+$embedSrc = Join-Path $root 'backend/src/services/embedded-frontend.ts'
+$embedBackup = $null
+$didPatch = $false
+try {
+  $embedBackup = Get-Content $embedSrc -Raw -ErrorAction Stop
+  if ($embedBackup -match "eval.*import") {
+    $static = $embedBackup -replace "const embedPath = '../../generated/frontend-embed.generated'\s*\r?\n\s*const mod = await \(0, eval\)\('import'\)\(embedPath\)", "const mod = await import('../../generated/frontend-embed.generated')"
+    if ($static -ne $embedBackup) {
+      Set-Content -Path $embedSrc -Value $static -NoNewline
+      $didPatch = $true
+      Write-Output '[package 3/7] switched embedded-frontend to static import for compile'
+    }
+  }
+} catch {
+  Write-Output "[package 3/7] WARN: embed patch failed: $_"
+}
 bun build --compile --target=bun backend/src/index.ts --outfile $exePath
-if ($LASTEXITCODE -ne 0) { throw 'backend compile failed' }
+$compileExit = $LASTEXITCODE
+if ($didPatch -and $embedBackup) {
+  Set-Content -Path $embedSrc -Value $embedBackup -NoNewline
+  Write-Output '[package 3/7] restored embedded-frontend to eval (dev)'
+}
+if ($compileExit -ne 0) { throw 'backend compile failed' }
 if (-not (Test-Path $exePath)) { throw 'backend compile did not produce exe' }
 
 Write-Output '[package 4/7] frontend is embedded in the exe'
