@@ -761,10 +761,10 @@ useEffect(() => {
       />
       
       <div className="flex gap-1.5 items-center justify-between">
-        <div className="flex gap-1.5 items-center">
+        <div className="flex gap-1.5 items-center flex-1 min-w-0">
           <button
             onClick={handleModeToggle}
-            className={`px-2 py-1 rounded-md text-xs font-medium border w-14 ${
+            className={`px-2 py-1 rounded-md text-xs font-medium border w-14 flex-shrink-0 ${
               isBashMode 
                 ? 'bg-purple-500/10 border-purple-500/30 text-purple-600 dark:text-purple-400' 
                 : `${modeBg} ${modeColor}`
@@ -772,11 +772,11 @@ useEffect(() => {
           >
             {isBashMode ? 'BASH' : currentMode.toUpperCase()} 
           </button>
-<div className="flex items-center space-x-2">
+<div className="flex items-center space-x-2 flex-1 min-w-0">
   <button
     onClick={onShowModelsDialog}
     title={modelName || 'Select model'}
-    className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[120px] truncate"
+    className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[80px] sm:max-w-[120px] truncate flex-1 min-w-0"
   >
     {modelName.length > 12 ? modelName.substring(0, 10) + '...' : modelName || 'Select model'}
   </button>
