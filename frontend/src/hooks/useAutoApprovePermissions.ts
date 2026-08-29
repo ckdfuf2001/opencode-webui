@@ -32,7 +32,19 @@ function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
   const type = permission.permission ?? permission.type
   if (rule.permission !== '*' && rule.permission !== type) return false
   const regex = globToRegex(rule.pattern)
-  return getCandidatePatterns(permission).some(candidate => candidate && regex.test(candidate))
+  return getCandidatePatterns(permission).some(candidate => {
+    if (!candidate) return false
+    if (regex.test(candidate)) return true
+    // 하위 경로까지 허용: 룰이 prefix인 경우
+    // 예: 룰 "/tmp/foo" → "/tmp/foo/bar" 허용, 룰 "npm run" → "npm run build" 허용
+    if (rule.pattern === '*') return true
+    const normCandidate = candidate.replace(/\\/g, '/')
+    const normRule = rule.pattern.replace(/\\/g, '/')
+    if (normCandidate === normRule) return true
+    if (normCandidate.startsWith(normRule + '/')) return true
+    if (normCandidate.startsWith(normRule + ' ')) return true
+    return false
+  })
 }
 
 async function refreshData(): Promise<void> {
