@@ -208,11 +208,37 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       // 대화(text)가 없어도 tool/patch/file/agent 등 다른 파트가 있으면 reasoning을 답변으로 펼치지 않는다
       const hasOtherVisiblePart = !!allParts?.some((p) => p.type === 'patch' || p.type === 'file' || p.type === 'agent');
       const reasoningIsAnswer = role === 'assistant' && !hasTextPart && !hasToolPart && !hasOtherVisiblePart;
-      // context 응답(patch/file/agent/snapshot 등)과 tool 호출이 모두 없으면 reasoning을 무조건 펼쳐서 보여준다.
-      // 그 외에는 setting(showReasoning) 값을 따른다.
       const hasContextPart = hasOtherVisiblePart || !!allParts?.some((p) => p.type === 'snapshot');
       const noContextNoTool = !hasToolPart && !hasContextPart;
-      if (noContextNoTool) {
+
+      // showReasoning on이면 무조건 보임: noContextNoTool/answer는 펼쳐서, 그 외는 접힌 상태
+      if (showReasoning) {
+        if (reasoningIsAnswer || noContextNoTool) {
+          return (
+            <details open className="border border-border rounded-lg my-2">
+              <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
+                Reasoning
+              </summary>
+              <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
+                {part.text}
+              </div>
+            </details>
+          )
+        }
+        return (
+          <details className="border border-border rounded-lg my-2">
+            <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
+              Reasoning
+            </summary>
+            <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
+              {part.text}
+            </div>
+          </details>
+        )
+      }
+
+      // showReasoning off: noContextNoTool/answer는 무조건 펼쳐서, live는 인디케이터, 그 외 숨김
+      if (noContextNoTool || reasoningIsAnswer) {
         return (
           <details open className="border border-border rounded-lg my-2">
             <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
@@ -224,8 +250,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           </details>
         )
       }
-      // setting이 off이면 reasoning 숨김 (답변인 경우는 제외, live 스트리밍 중에는 인디케이터 표시)
-      if (!showReasoning && !reasoningIsAnswer) {
+      {
         const isLive =
           messageStreaming &&
           !!allParts &&
@@ -239,30 +264,6 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           </div>
         )
       }
-      if (reasoningIsAnswer) {
-        // 기존 reasoning details를 open 상태로 펼쳐서 보여준다 (새 UI 생성 아님)
-        return (
-          <details open className="border border-border rounded-lg my-2">
-            <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
-              Reasoning
-            </summary>
-            <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
-              {part.text}
-            </div>
-          </details>
-        )
-      }
-      // tool/context 등 다른 파트가 있으면 setting이 on일 때 접힌 상태로 보여준다.
-      return (
-        <details className="border border-border rounded-lg my-2">
-          <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
-            Reasoning
-          </summary>
-          <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
-            {part.text}
-          </div>
-        </details>
-      )
     }
     case 'snapshot':
       return (
