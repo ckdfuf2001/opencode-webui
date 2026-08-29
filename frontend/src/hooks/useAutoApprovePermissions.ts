@@ -58,15 +58,29 @@ async function refreshData(): Promise<void> {
 }
 
 async function handlePermissionAdd(permission: Permission): Promise<void> {
-  if (!permission.directory) return
   if (recentlyProcessed.has(permission.id)) return
 
-  const repoId = repoByDirectory.get(permission.directory)
-  if (!repoId) return
-
-  const rules = rulesByRepo.get(repoId)
-  if (!rules || rules.length === 0) return
-  if (!rules.some(rule => ruleMatches(rule, permission))) return
+  // directory 정규화: 윈도우 백슬래시, 트레일링 슬래시, 대소문자 무시
+  const normalizeDir = (d: string) => d.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  let candidateRules: PermissionRule[] | undefined
+  if (permission.directory) {
+    const normalized = normalizeDir(permission.directory)
+    let repoId: number | undefined
+    for (const [dir, id] of repoByDirectory.entries()) {
+      if (normalizeDir(dir) === normalized) {
+        repoId = id
+        break
+      }
+    }
+    if (repoId) candidateRules = rulesByRepo.get(repoId)
+  }
+  // directory가 없거나 매칭 실패 시(재기동 후 세션-디렉토리 매핑 유실 등) 전체 룰에서 매칭 시도
+  if (!candidateRules || candidateRules.length === 0) {
+    const all = Array.from(rulesByRepo.values()).flat()
+    if (all.length === 0) return
+    candidateRules = all
+  }
+  if (!candidateRules.some(rule => ruleMatches(rule, permission))) return
 
   recentlyProcessed.add(permission.id)
   setTimeout(() => {
