@@ -577,6 +577,8 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         contentParts,
         optimisticUserID,
       );
+      // 진행 중인 폴링(2s)이 낙관 메시지를 덮어써 깜빡이는 것을 방지: in-flight fetch 취소
+      await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
       pendingOptimistic.set(sessionID, userMessage);
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
@@ -748,6 +750,8 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
         [{ type: "text" as const, content: command }],
         optimisticUserID,
       );
+      await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+      pendingOptimistic.set(sessionID, userMessage);
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => [...(old || []), userMessage],
@@ -759,6 +763,9 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
       });
 
       return { optimisticUserID, response };
+    },
+    onSettled: (_data, _error, variables) => {
+      pendingOptimistic.delete(variables.sessionID);
     },
     onError: (error, variables) => {
       const { sessionID } = variables;

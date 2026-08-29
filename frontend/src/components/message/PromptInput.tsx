@@ -808,9 +808,9 @@ useEffect(() => {
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {onAutoScrollChange && (
-            <div className="flex items-center gap-1.5 mr-1 px-2 py-1 rounded-md border border-border/50 bg-muted/30" title="Auto scroll on/off">
-              <span className="text-[11px] text-muted-foreground whitespace-nowrap hidden sm:inline">Auto</span>
-              <Switch checked={!!autoScrollEnabled} onCheckedChange={onAutoScrollChange} className="scale-75" />
+            <div className="flex flex-col items-center gap-0.5 bg-background/70 backdrop-blur-md border border-border/20 rounded-2xl px-2.5 py-1.5 shadow-sm scale-[0.66] origin-bottom-right mr-1" title="Auto scroll on/off">
+              <span className="text-sm text-muted-foreground leading-none">Auto Scroll</span>
+              <Switch checked={!!autoScrollEnabled} onCheckedChange={onAutoScrollChange} />
             </div>
           )}
           {showScrollButton && (
