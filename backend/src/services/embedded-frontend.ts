@@ -48,7 +48,8 @@ async function ensureLoaded(): Promise<void> {
       // Present in compiled releases (packaging generates it before compile).
       // In dev it is an empty placeholder or may fail to resolve - both fall
       // back to serving frontend/dist from disk.
-      const mod = await import('../generated/frontend-embed.generated')
+      // NOTE: generated file is at backend/generated (outside src) to avoid bun --watch restart killing opencode
+      const mod = await import('../../generated/frontend-embed.generated')
       for (const entry of mod.embeddedFiles) {
         try {
           const body = await readFile(entry.path)

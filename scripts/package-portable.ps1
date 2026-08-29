@@ -56,7 +56,7 @@ if (-not (Test-Path (Join-Path $dist 'index.html'))) { throw 'frontend build suc
 Write-Output '[package 2/7] frontend embed manifest generation'
 bun scripts/generate-frontend-embed.ts
 if ($LASTEXITCODE -ne 0) { throw 'frontend embed generation failed' }
-$embedFile = Join-Path $root 'backend/src/generated/frontend-embed.generated.ts'
+$embedFile = Join-Path $root 'backend/generated/frontend-embed.generated.ts'
 if (-not (Test-Path $embedFile)) { throw 'frontend embed file not generated' }
 
 Write-Output '[package 3/7] backend single-exe compile'

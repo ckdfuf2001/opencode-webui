@@ -25,3 +25,5 @@ vendor/*
 bin/agent-browser/chromium/**/Dictionaries/
 
 release/
+backend/generated/
+backend/src/generated/

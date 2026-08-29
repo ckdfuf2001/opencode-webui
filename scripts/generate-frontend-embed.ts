@@ -3,7 +3,7 @@ import { join, relative, posix, dirname } from 'path'
 
 const root = join(import.meta.dir, '..')
 const distDir = join(root, 'frontend', 'dist')
-const outFile = join(root, 'backend', 'src', 'generated', 'frontend-embed.generated.ts')
+const outFile = join(root, 'backend', 'generated', 'frontend-embed.generated.ts')
 
 if (!existsSync(distDir)) {
   console.error(`[embed] frontend dist not found: ${distDir}`)
@@ -30,7 +30,7 @@ if (files.length === 0) {
 const routes = files.map((rel) => (rel === 'index.html' ? '/' : `/${rel}`))
 
 const imports = files
-  .map((file, i) => `import f${i} from '../../../frontend/dist/${file}' with { type: 'file' }`)
+  .map((file, i) => `import f${i} from '../../frontend/dist/${file}' with { type: 'file' }`)
   .join('\n')
 
 const entries = routes
