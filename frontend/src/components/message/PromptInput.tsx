@@ -10,6 +10,7 @@ import { useUserBash } from '@/stores/userBashStore'
 import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
 import { ChatQueueStrip } from './ChatQueueStrip'
 import { ChevronDown } from 'lucide-react'
+import { useContextUsage } from '@/hooks/useContextUsage'
 
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
 import { FileSuggestions } from './FileSuggestions'
@@ -153,6 +154,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   
 
   const { addUserBashCommand } = useUserBash()
+  const { totalTokens, contextLimit, usagePercentage } = useContextUsage(opcodeUrl, sessionID, directory)
+  const usage = usagePercentage ?? 0
+  const isContextWarning = usage >= 85 && usage < 95
+  const isContextCritical = usage >= 95
+  const estimatedInputTokens = Math.ceil(prompt.length / 4)
+  const projectedUsage = contextLimit ? ((totalTokens + estimatedInputTokens) / contextLimit) * 100 : 0
+  const willExceed = contextLimit ? projectedUsage >= 95 : false
 
   const buildValidatedParts = async (): Promise<ContentPart[]> => {
     if (attachedFiles.size === 0) return parsePromptToParts(prompt, attachedFiles)
@@ -189,6 +197,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
 
   const handleSubmit = async () => {
     if (!prompt.trim() || disabled) return
+    if (isContextCritical || willExceed) {
+      showToast.error(`컨텍스트 ${Math.round(usage)}% 초과 — 전송 차단됨. Scissors로 이전 대화를 잘라내거나 새 세션으로 이동하세요. (${totalTokens.toLocaleString()} / ${contextLimit?.toLocaleString()} tokens)`, { duration: 6000 })
+      return
+    }
+    if (isContextWarning) {
+      showToast.warning(`컨텍스트 ${Math.round(usage)}% — 곧 한도에 도달합니다. 불필요한 대화는 잘라내세요.`, { duration: 4000 })
+    }
 
     if (isBashMode) {
       const command = prompt.startsWith('!') ? prompt.slice(1) : prompt
@@ -271,6 +286,10 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   // 생성 중 전송 = 큐 적재. 백엔드 폴러가 idle 전환 시 발송한다.
   const handleQueue = async () => {
     if (!prompt.trim() || disabled) return
+    if (isContextCritical || willExceed) {
+      showToast.error(`컨텍스트 ${Math.round(usage)}% 초과 — 큐 적재 차단됨. 먼저 대화를 정리하세요.`, { duration: 6000 })
+      return
+    }
     const parts = await buildValidatedParts()
     const text = parts
       .map((part) => (part.type === 'text' ? part.content : `@"${part.name}"`))
@@ -737,6 +756,16 @@ useEffect(() => {
   return (
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 mx-2 mb-2 w-[90%] max-w-4xl">
       <ChatQueueStrip sessionID={sessionID} />
+      {(isContextWarning || isContextCritical || willExceed) && contextLimit && (
+        <div className={`mb-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between ${isContextCritical || willExceed ? 'bg-red-500/15 border border-red-500/40 text-red-400' : 'bg-yellow-500/15 border border-yellow-500/40 text-yellow-600 dark:text-yellow-400'}`}>
+          <span>
+            {isContextCritical || willExceed
+              ? `컨텍스트 초과 ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — 전송이 차단됩니다. Scissors(가위)로 이전 대화를 잘라내거나 새 세션을 시작하세요.`
+              : `컨텍스트 경고 ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — 곧 한도에 도달합니다.`}
+          </span>
+          {willExceed && <span className="ml-2 font-mono text-[10px] opacity-70">예상 {Math.round(projectedUsage)}%</span>}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={prompt}
@@ -834,15 +863,17 @@ useEffect(() => {
           <button
             data-submit-prompt
             onClick={showStop ? handleQueue : handleSubmit}
-            disabled={(!prompt.trim() && !showStop) || disabled}
+            disabled={(!prompt.trim() && !showStop) || disabled || isContextCritical || willExceed}
             className={`px-5 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              showStop
-                ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
-                : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
+              isContextCritical || willExceed
+                ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
+                : showStop
+                  ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
+                  : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
             }`}
-            title={showStop ? 'Queue message' : 'Send'}
+            title={isContextCritical || willExceed ? '컨텍스트 초과로 전송 차단' : showStop ? 'Queue message' : 'Send'}
           >
-            {showStop ? 'Queue' : 'Send'}
+            {isContextCritical || willExceed ? 'Blocked' : showStop ? 'Queue' : 'Send'}
           </button>
         </div>
       </div>

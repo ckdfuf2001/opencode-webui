@@ -51,9 +51,13 @@ interface CommandRunRow {
   message_id: string | null
   status: string
   origin: string
+  kind: string | null
   started_at: number
   finished_at: number | null
   created_at: number
+  registry_sha: string | null
+  target_hash: string | null
+  opencode_version: string | null
 }
 
 function rowToRun(row: CommandRunRow): CommandRun {
@@ -67,17 +71,23 @@ function rowToRun(row: CommandRunRow): CommandRun {
     messageId: row.message_id,
     status: row.status as CommandRunStatus,
     origin: (row.origin ?? 'ui') as CommandRunOrigin,
+    kind: (row.kind as CommandRunKind | null) ?? 'command',
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     createdAt: row.created_at,
+    registrySha: row.registry_sha ?? null,
+    targetHash: row.target_hash ?? null,
+    opencodeVersion: row.opencode_version ?? null,
   }
 }
 
-export function insertCommandRun(db: Database, row: InsertCommandRunRow): CommandRun {
+export function insertCommandRun(db: Database, row: InsertCommandRunRow & { registrySha?: string | null; targetHash?: string | null; opencodeVersion?: string | null }): CommandRun {
+  // registrySha/targetHash는 command-runs.ts에서 직접 처리하지만, 호환을 위해 여기서도 지원
+  const ext = row as unknown as { registrySha?: string | null; targetHash?: string | null; opencodeVersion?: string | null; kind?: string | null }
   db.prepare(`
     INSERT INTO command_runs
-      (id, session_id, repo_id, command_name, args, directory, status, origin, started_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'started', ?, ?, ?)
+      (id, session_id, repo_id, command_name, args, directory, status, origin, kind, started_at, created_at, registry_sha, target_hash, opencode_version)
+    VALUES (?, ?, ?, ?, ?, ?, 'started', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     row.id,
     row.sessionId,
@@ -86,8 +96,12 @@ export function insertCommandRun(db: Database, row: InsertCommandRunRow): Comman
     row.args ?? null,
     row.directory ?? null,
     row.origin,
+    ext.kind ?? (row as unknown as { kind?: string }).kind ?? 'command',
     row.startedAt,
     Date.now(),
+    ext.registrySha ?? null,
+    ext.targetHash ?? null,
+    ext.opencodeVersion ?? null,
   )
 
   const inserted = db

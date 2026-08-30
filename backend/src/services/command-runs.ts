@@ -9,7 +9,8 @@ import type {
 import * as store from './command-run-store'
 import { listRepos } from '../db/queries'
 import { firePreCommandHooks, firePostCommandHooks } from './command-hooks'
-import { captureRunVersions } from './run-version'
+import { captureRunVersions, findTargetPath, isPathIgnored } from './run-version'
+import { createSuggestion, deriveTrackPath } from './untracked-suggestions'
 import { logger } from '../utils/logger'
 
 /** 슬래시 방향과 끝 슬래시를 정규화한다. Windows 경로 비교를 위해 필요. */
@@ -90,7 +91,55 @@ export async function recordRunStart(
 
   await store.insertRun(db, run, input.directory ?? null)
   firePreCommandHooks(run)
+
+  // 버전이 없는 기록(파일은 있으나 git 추적 제외)이면 include 여부 질의용 suggestion 생성
+  if (run.kind !== 'command' && run.kind !== 'skill') {
+    // agent/plugin 등은 제외
+  } else if (!versions.targetHash) {
+    // 파일 자체를 못 찾은 경우도 untracked로 간주할 수 있으나, builtin은 제외
+    const isBuiltin = !input.directory && !(await findTargetPath(input.directory ?? undefined, input.commandName))
+    if (!isBuiltin) {
+      void handleUntrackedRun(db, run, input.directory ?? null)
+    }
+  } else if (!versions.registrySha) {
+    // 파일은 있으나 git repo가 아니거나, 파일이 exclude된 경우
+    void handleUntrackedRun(db, run, input.directory ?? null)
+  } else {
+    // 둘 다 있어도 파일이 실제로 ignore된 경우 체크
+    void (async () => {
+      try {
+        const targetPath = await findTargetPath(input.directory ?? undefined, input.commandName)
+        if (!targetPath || !input.directory) return
+        const ignored = await isPathIgnored(input.directory, targetPath).catch(() => false)
+        if (ignored) {
+          await handleUntrackedRun(db, run, input.directory)
+        }
+      } catch {}
+    })()
+  }
+
   return run
+}
+
+async function handleUntrackedRun(db: Database, run: CommandRun, directory: string | null): Promise<void> {
+  try {
+    const targetPath = await findTargetPath(directory ?? undefined, run.commandName)
+    if (!targetPath) return
+    // 이미 추적 중인 경로인지 확인: .opencode나 scripts는 기본 추적, 그 외는 제안
+    const trackPath = deriveTrackPath(targetPath, directory)
+    if (!trackPath || trackPath === '.opencode' || trackPath === 'scripts') return
+    // 최근 동일 파일에 대한 pending이 있으면 스킵 (createSuggestion 내부 dedup)
+    await createSuggestion(db, {
+      repoId: run.repoId,
+      directory,
+      commandName: run.commandName,
+      filePath: targetPath,
+      trackPath,
+      runId: run.id,
+    })
+  } catch (e) {
+    logger.debug('handleUntrackedRun failed:', e)
+  }
 }
 
 /** 기록 실패가 본 작업(스케줄 실행)을 중단시켜서는 안 되는 경로용. */

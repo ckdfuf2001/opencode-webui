@@ -88,15 +88,35 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       message_id TEXT,
       status TEXT NOT NULL DEFAULT 'started',
       origin TEXT NOT NULL DEFAULT 'ui',
+      kind TEXT DEFAULT 'command',
       started_at INTEGER NOT NULL,
       finished_at INTEGER,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      registry_sha TEXT,
+      target_hash TEXT,
+      opencode_version TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_command_runs_session ON command_runs(session_id);
     CREATE INDEX IF NOT EXISTS idx_command_runs_repo ON command_runs(repo_id);
     CREATE INDEX IF NOT EXISTS idx_command_runs_started ON command_runs(started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_command_runs_repo_started ON command_runs(repo_id, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS untracked_suggestions (
+      id TEXT PRIMARY KEY,
+      repo_id INTEGER,
+      directory TEXT,
+      command_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      track_path TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      run_id TEXT,
+      created_at INTEGER NOT NULL,
+      decided_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_untracked_repo ON untracked_suggestions(repo_id);
+    CREATE INDEX IF NOT EXISTS idx_untracked_status ON untracked_suggestions(status);
 
     CREATE TABLE IF NOT EXISTS session_status (
       session_id TEXT PRIMARY KEY,

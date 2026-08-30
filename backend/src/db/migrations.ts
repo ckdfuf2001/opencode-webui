@@ -177,6 +177,49 @@ export function runMigrations(db: Database): void {
       logger.debug('session_status table may not exist yet:', error)
     }
 
+    // command_runs: kind, registry_sha, target_hash, opencode_version
+    try {
+      const crTable = db.prepare('PRAGMA table_info(command_runs)').all() as any[]
+      if (crTable.length > 0) {
+        const needed = [
+          { name: 'kind', sql: "ALTER TABLE command_runs ADD COLUMN kind TEXT DEFAULT 'command'" },
+          { name: 'registry_sha', sql: 'ALTER TABLE command_runs ADD COLUMN registry_sha TEXT' },
+          { name: 'target_hash', sql: 'ALTER TABLE command_runs ADD COLUMN target_hash TEXT' },
+          { name: 'opencode_version', sql: 'ALTER TABLE command_runs ADD COLUMN opencode_version TEXT' },
+        ]
+        for (const col of needed) {
+          if (!crTable.some((c: any) => c.name === col.name)) {
+            logger.info(`Adding missing command_runs column: ${col.name}`)
+            try { db.run(col.sql) } catch (e) { logger.debug(`Column ${col.name} might already exist:`, e) }
+          }
+        }
+      }
+    } catch (e) {
+      logger.debug('command_runs table may not exist yet:', e)
+    }
+
+    // untracked_suggestions table (P3/P4 git 추적 제안)
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS untracked_suggestions (
+          id TEXT PRIMARY KEY,
+          repo_id INTEGER,
+          directory TEXT,
+          command_name TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          track_path TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          run_id TEXT,
+          created_at INTEGER NOT NULL,
+          decided_at INTEGER
+        )
+      `)
+      db.run('CREATE INDEX IF NOT EXISTS idx_untracked_repo ON untracked_suggestions(repo_id)')
+      db.run('CREATE INDEX IF NOT EXISTS idx_untracked_status ON untracked_suggestions(status)')
+    } catch (e) {
+      logger.debug('untracked_suggestions table may already exist:', e)
+    }
+
     logger.info('Database migrations completed successfully')
   } catch (error) {
     logger.error('Failed to run database migrations:', error)

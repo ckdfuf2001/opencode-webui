@@ -90,6 +90,13 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
         const streaming = isMessageStreaming(msg)
         const thinking = isMessageThinking(msg)
         const isError = isErrorMessage(msg)
+        const isLength = (() => {
+          const finish = (msg.info as any)?.finish
+          const errName = (msg.info as any)?.error?.name
+          if (finish === "length" || errName === "MessageOutputLengthError") return true
+          if (msg.parts?.some((p: any) => p.type === "step-finish" && p.reason === "length")) return true
+          return false
+        })()
         
         return (
             <div
@@ -99,16 +106,18 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
             >
             <div
               className={`w-full rounded-lg p-1.5 ${
-                isError
-                  ? 'bg-red-600/15 border border-red-600/40'
-                  : msg.info.role === 'user'
-                    ? 'bg-blue-600/20 border border-blue-600/30'
-                    : 'bg-card/50 border border-border'
+                isLength
+                  ? 'bg-red-500/20 border border-red-500/50 animate-pulse'
+                  : isError
+                    ? 'bg-red-600/15 border border-red-600/40'
+                    : msg.info.role === 'user'
+                      ? 'bg-blue-600/20 border border-blue-600/30'
+                      : 'bg-card/50 border border-border'
               } ${streaming ? 'animate-pulse-subtle' : ''}`}
             >
               <div className="flex items-center gap-2 mb-1">
-                <span className={`text-xs font-medium ${isError ? 'text-red-400' : 'text-zinc-400'}`}>
-                  {isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
+                <span className={`text-xs font-medium ${isLength ? 'text-red-500 font-bold' : isError ? 'text-red-400' : 'text-zinc-400'}`}>
+                  {isLength ? '컨텍스트 초과로 잘림' : isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
                 </span>
                 {msg.info.time && (
                   <span className="text-xs text-muted-foreground">
@@ -140,6 +149,14 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 )}
               </div>
               
+              {isLength && (
+                <div className="mb-2 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 flex items-center justify-between">
+                  <span>응답이 컨텍스트 한도(length)로 잘렸습니다 — 이전 대화를 잘라내거나 요약 후 재시도하세요.</span>
+                  {onTruncate && (
+                    <button onClick={() => onTruncate(msg.info.id)} className="ml-2 px-2 py-0.5 rounded bg-red-500 text-white text-xs hover:bg-red-600">잘라내기</button>
+                  )}
+                </div>
+              )}
               {thinking ? (
                 <div className="flex items-center gap-2 text-zinc-500">
                   <span className="animate-pulse">▋</span>

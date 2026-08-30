@@ -33,6 +33,11 @@ function candidatePaths(directory: string | undefined, commandName: string): str
     paths.push(path.join(root, 'agent', `${clean}.md`))
     paths.push(path.join(root, 'plugins', `${clean}.ts`))
     paths.push(path.join(root, 'plugin', `${clean}.ts`))
+    // repo 루트의 commands/skills 등도 탐색 (trackPaths에 없을 때 untracked로 감지하기 위해)
+    paths.push(path.join(directory, 'commands', `${clean}.md`))
+    paths.push(path.join(directory, 'command', `${clean}.md`))
+    paths.push(path.join(directory, 'skills', clean, 'SKILL.md'))
+    paths.push(path.join(directory, 'skill', clean, 'SKILL.md'))
   }
   const globalRoot = getConfigPath()
   paths.push(path.join(globalRoot, 'commands', `${clean}.md`))
@@ -58,6 +63,28 @@ export async function getTargetHash(directory: string | undefined, commandName: 
     }
   }
   return null
+}
+
+export async function findTargetPath(directory: string | undefined, commandName: string): Promise<string | null> {
+  if (!commandName) return null
+  for (const p of candidatePaths(directory, commandName)) {
+    try {
+      await readFile(p, 'utf-8')
+      return p
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+export async function isPathIgnored(directory: string, filePath: string): Promise<boolean> {
+  try {
+    await executeCommand(['git', '-C', directory, 'check-ignore', '-q', filePath], { silent: true })
+    return true
+  } catch {
+    return false
+  }
 }
 
 export async function captureRunVersions(directory: string | undefined | null, commandName: string): Promise<{ registrySha: string | null; targetHash: string | null }> {

@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useReconcileOrphanedStreams, useSessionStatusMap } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
 import { useSettings } from "@/hooks/useSettings";
@@ -23,10 +23,12 @@ import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useQuestionRequests, useLoadPendingQuestions } from "@/hooks/useQuestionRequests";
 import { usePermissionRequests, useLoadPendingPermissions, collectDescendantIDs } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
+import { useContextUsage } from "@/hooks/useContextUsage";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
+import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
 
 interface InjectedFile {
   token: number;
@@ -108,6 +110,17 @@ export function SessionDetail() {
   const lastMessage = messages?.[messages.length - 1];
   const isStreaming = (!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy;
   const effectiveAutoScroll = autoScrollOverride ?? (preferences?.autoScroll ?? true);
+  const { data: session, isLoading: sessionLoading } = useSession(opcodeUrl, sessionId, repoDirectory);
+  useReconcileOrphanedStreams(opcodeUrl, repoDirectory);
+  const abortSession = useAbortSession(opcodeUrl, repoDirectory);
+  const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
+  const truncateSession = useTruncateSession(opcodeUrl, repoDirectory);
+  const summarizeSession = useSummarizeSession(opcodeUrl, repoDirectory);
+  const ctx = useContextUsage(opcodeUrl, sessionId, repoDirectory);
+  const { open: openSettings } = useSettingsDialog();
+  const [lengthModal, setLengthModal] = useState<{ open: boolean; messageId: string | null }>({ open: false, messageId: null });
+  const [isCompacting, setIsCompacting] = useState(false);
+  const lastLengthToastRef = useRef<string | null>(null);
 
   // 응답 완료 똑소리: 카드 상태 기준으로 전환 1회만 재생한다.
   const prevStreamingRef = useRef(false);
@@ -180,6 +193,64 @@ export function SessionDetail() {
     }
   }, [messages, isBillingQuotaMessage]);
 
+  // 컨텍스트 초과(length) 자동 관리: finish=length 또는 MessageOutputLengthError 감지
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    const lengthMsg = messages.find((m: any) => {
+      const finish = (m.info as any)?.finish
+      const errName = (m.info as any)?.error?.name
+      if (finish === "length" || errName === "MessageOutputLengthError") return true;
+      if (m.parts?.some((p: any) => p.type === "step-finish" && p.reason === "length")) return true;
+      return false;
+    }) as any;
+    if (!lengthMsg) return;
+    if (lastLengthToastRef.current === lengthMsg.info.id) return;
+    lastLengthToastRef.current = lengthMsg.info.id;
+    const pct = ctx.usagePercentage ? Math.round(ctx.usagePercentage) : 0;
+    showToast.error(
+      `컨텍스트 한도 초과로 응답이 잘렸습니다 (finish=length, ${pct ? pct + "%" : "한도 초과"}). 요약(compact) 또는 이전 대화 잘라내기로 정리하세요.`,
+      { duration: 8000 }
+    );
+    setLengthModal({ open: true, messageId: lengthMsg.info.id });
+  }, [messages, ctx.usagePercentage]);
+
+  const handleCompact = useCallback(async () => {
+    if (!sessionId) return;
+    setIsCompacting(true);
+    try {
+      await summarizeSession.mutateAsync({ sessionID: sessionId });
+      showToast.success("세션을 요약(compact)했습니다. 컨텍스트가 정리되었습니다.", { duration: 4000 });
+      setLengthModal({ open: false, messageId: null });
+    } catch (e) {
+      showToast.error((e as Error).message || "요약(compact)에 실패했습니다. 수동으로 잘라내기를 시도하세요.");
+    } finally {
+      setIsCompacting(false);
+    }
+  }, [sessionId, summarizeSession]);
+
+  const handleAutoTruncate = useCallback(async () => {
+    if (!messages || !sessionId) return;
+    // length 메시지 이전의 유저 메시지부터 잘라내어 최근 턴을 제거
+    const lengthIdx = messages.findIndex((m: any) => (m.info as any)?.finish === "length" || (m.info as any)?.error?.name === "MessageOutputLengthError" || m.parts?.some((p: any) => p.type === "step-finish" && p.reason === "length"));
+    if (lengthIdx < 0) return;
+    // 이전 유저 메시지 찾기 (없으면 length 메시지 자체를 커서로)
+    let cursorId: string | null = null;
+    for (let i = lengthIdx; i >= 0; i--) {
+      if (messages[i].info.role === "user") { cursorId = messages[i].info.id; break; }
+    }
+    cursorId = cursorId ?? (messages[lengthIdx] as any).info.id;
+    if (!cursorId) return;
+    try {
+      const res = await truncateSession.mutateAsync({ sessionID: sessionId, messageID: cursorId });
+      if (res?.success) {
+        showToast.success(`이전 대화 ${res.messagesRemoved ?? ""}개를 잘라냈습니다. 다시 시도하세요.`);
+        setLengthModal({ open: false, messageId: null });
+      }
+    } catch (e) {
+      showToast.error((e as Error).message || "잘라내기에 실패했습니다.");
+    }
+  }, [messages, sessionId, truncateSession]);
+
   const { scrollToBottom } = useAutoScroll({
     containerRef: messageContainerRef,
     messages,
@@ -201,17 +272,6 @@ export function SessionDetail() {
       })
     }
   }, [currentPermission, currentQuestion, scrollToBottom])
-
-  const { data: session, isLoading: sessionLoading } = useSession(
-    opcodeUrl,
-    sessionId,
-    repoDirectory,
-  );
-  useReconcileOrphanedStreams(opcodeUrl, repoDirectory);
-  const abortSession = useAbortSession(opcodeUrl, repoDirectory);
-  const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
-  const truncateSession = useTruncateSession(opcodeUrl, repoDirectory);
-  const { open: openSettings } = useSettingsDialog();
 
   useKeyboardShortcuts({
     openModelDialog: () => setModelDialogOpen(true),
@@ -509,6 +569,7 @@ if (results.length > 0) {
 
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
+          <UntrackedSuggestionBanner />
           <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
             {opcodeUrl && repoDirectory && (
               <MessageThread 
@@ -659,6 +720,41 @@ if (results.length > 0) {
         onOpenChange={setPermissionRulesOpen}
         repoId={repoId}
       />
+
+      <Dialog open={lengthModal.open} onOpenChange={(o) => setLengthModal({ open: o, messageId: o ? lengthModal.messageId : null })}>
+        <DialogContent className="max-w-lg">
+          <DialogTitle>컨텍스트 한도 초과</DialogTitle>
+          <div className="mt-2 space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              모델 응답이 <span className="font-mono font-bold text-red-500">finish=length</span> 로 잘렸습니다. 컨텍스트가 한도({ctx.contextLimit ? `${ctx.contextLimit.toLocaleString()} tokens` : "초과"})를 넘어 더 이상 정상 생성이 불가합니다.
+              {ctx.usagePercentage ? ` 현재 ${Math.round(ctx.usagePercentage)}% (${ctx.totalTokens.toLocaleString()} tokens) 사용 중.` : ""}
+            </p>
+            <p className="text-xs text-muted-foreground">요약(compact)은 서버에서 대화를 요약해 컨텍스트를 줄입니다. 실패하면 이전 대화를 잘라내세요.</p>
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                onClick={() => setLengthModal({ open: false, messageId: null })}
+                className="px-3 py-1.5 rounded-md border text-sm"
+              >
+                닫기
+              </button>
+              <button
+                onClick={handleAutoTruncate}
+                disabled={truncateSession.isPending}
+                className="px-3 py-1.5 rounded-md bg-yellow-500/10 border border-yellow-500/30 text-yellow-700 dark:text-yellow-400 text-sm disabled:opacity-50"
+              >
+                {truncateSession.isPending ? "처리 중..." : "이전 대화 잘라내기"}
+              </button>
+              <button
+                onClick={handleCompact}
+                disabled={isCompacting || summarizeSession.isPending}
+                className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm disabled:opacity-50"
+              >
+                {isCompacting || summarizeSession.isPending ? "요약 중..." : "요약(compact) 실행"}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

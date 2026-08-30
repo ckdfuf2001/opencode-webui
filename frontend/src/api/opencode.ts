@@ -147,6 +147,11 @@ export class OpenCodeClient {
     return response.data
   }
 
+  async summarizeSession(sessionID: string) {
+    const response = await this.client.post(`/session/${sessionID}/summarize`, {})
+    return response.data
+  }
+
   async updateSession(sessionID: string, data: { title?: string }) {
     const response = await this.client.patch(`/session/${sessionID}`, data)
     return response.data

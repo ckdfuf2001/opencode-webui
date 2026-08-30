@@ -11,6 +11,7 @@ import { createRepoRoutes } from './routes/repos'
 import { createSettingsRoutes } from './routes/settings'
 import { createScheduleRoutes } from './routes/schedules'
 import { createPermissionRuleRoutes } from './routes/permission-rules'
+import { createUntrackedSuggestionsRoutes } from './routes/untracked-suggestions'
 import { createHealthRoutes } from './routes/health'
 import { createTTSRoutes, cleanupExpiredCache } from './routes/tts'
 import { createFileRoutes } from './routes/files'
@@ -238,8 +239,9 @@ try {
 app.route('/api/repos', createRepoRoutes(db))
 app.route('/api/settings', createSettingsRoutes(db))
 app.route('/api/schedules', createScheduleRoutes(db))
-app.route('/api/permission-rules', createPermissionRuleRoutes(db))
-app.route('/api/health', createHealthRoutes(db))
+  app.route('/api/permission-rules', createPermissionRuleRoutes(db))
+  app.route('/api/untracked-suggestions', createUntrackedSuggestionsRoutes(db))
+  app.route('/api/health', createHealthRoutes(db))
 app.route('/api/files', createFileRoutes(db))
 app.route('/api/providers', createProvidersRoutes())
 app.route('/api/tts', createTTSRoutes(db))

@@ -14,6 +14,7 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
   const getUsageColor = (percentage: number) => {
     if (percentage < 50) return 'text-green-500'
     if (percentage < 80) return 'text-yellow-500'
+    if (percentage < 95) return 'text-orange-500'
     return 'text-red-500'
   }
 
@@ -50,12 +51,14 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
   }
 
   const percentage = Math.min(usagePercentage || 0, 100)
+  const isCritical = percentage >= 95
+  const isWarning = percentage >= 85 && percentage < 95
   const circumference = 2 * Math.PI * 10
   const strokeDashoffset = circumference - (percentage / 100) * circumference
 
   return (
     <div
-      className="relative w-5 h-5 flex-shrink-0 group"
+      className={`relative w-5 h-5 flex-shrink-0 group ${isCritical ? 'animate-pulse' : ''}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
@@ -70,7 +73,7 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
           cy="12"
         />
         <circle
-          className={getUsageColor(percentage)}
+          className={`${getUsageColor(percentage)} ${isCritical ? 'animate-pulse' : ''}`}
           strokeWidth="2.5"
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
@@ -87,9 +90,11 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
         {Math.round(percentage)}%
       </span>
       {isHovered && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-2 py-1 bg-background border border-border rounded text-xs whitespace-nowrap z-10 shadow-lg">
+        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-3 py-2 bg-background border border-border rounded text-xs whitespace-nowrap z-10 shadow-lg min-w-[200px]">
           <div>{totalTokens.toLocaleString()} / {contextLimit.toLocaleString()} tokens</div>
           <div className="text-muted-foreground">{percentage.toFixed(1)}% used</div>
+          {isWarning && <div className="text-yellow-600 dark:text-yellow-400 font-medium mt-1">경고: 곧 한도 도달 — 대화 정리 필요</div>}
+          {isCritical && <div className="text-red-500 font-bold mt-1">초과: 전송 차단됨 — Scissors로 잘라내거나 compact 실행</div>}
         </div>
       )}
     </div>

@@ -430,6 +430,25 @@ export const useDeleteSession = (opcodeUrl: string | null | undefined, directory
   });
 };
 
+export const useSummarizeSession = (opcodeUrl: string | null | undefined, directory?: string) => {
+  const client = useOpenCodeClient(opcodeUrl, directory);
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ sessionID }: { sessionID: string }) => {
+      if (!client) throw new Error("No client available");
+      return client.summarizeSession(sessionID);
+    },
+    onSuccess: (_data, variables) => {
+      const { sessionID } = variables;
+      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+      queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionID, directory] });
+    },
+    onError: (error) => {
+      showToast.error(formatServerError(error), { duration: 8000 });
+    },
+  });
+};
+
 export const useTruncateSession = (opcodeUrl: string | null | undefined, directory?: string) => {
   const queryClient = useQueryClient();
   const client = useOpenCodeClient(opcodeUrl, directory);
