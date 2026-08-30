@@ -128,6 +128,8 @@ export function useCommandHandler({
             hasError = true
             break
           }
+          const result = await client.summarizeSession(sessionID, providerID, modelID)
+          // axios 인터셉터가 timeout 을 조용히 {} 로 삼키므로 성공을 단정하지 않는다.
           const isEmpty = !result || (typeof result === 'object' && Object.keys(result).length === 0)
           if (isEmpty) {
             showToast.warning('요약 응답이 비어 있습니다. 타임아웃일 수 있으니 메시지 목록을 확인하세요.')
@@ -139,7 +141,6 @@ export function useCommandHandler({
           await queryClient.invalidateQueries({ queryKey: ['session', opcodeUrl, sessionID] })
           break
         }
-
         case 'share':
         case 'unshare':
         case 'export':
