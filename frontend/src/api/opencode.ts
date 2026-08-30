@@ -147,8 +147,8 @@ export class OpenCodeClient {
     return response.data
   }
 
-  async summarizeSession(sessionID: string) {
-    const response = await this.client.post(`/session/${sessionID}/summarize`, {})
+  async summarizeSession(sessionID: string, providerID: string, modelID: string) {
+    const response = await this.client.post(`/session/${sessionID}/summarize`, { providerID, modelID })
     return response.data
   }
 

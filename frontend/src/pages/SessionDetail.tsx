@@ -218,7 +218,13 @@ export function SessionDetail() {
     if (!sessionId) return;
     setIsCompacting(true);
     try {
-      await summarizeSession.mutateAsync({ sessionID: sessionId });
+      const modelStr = ctx.currentModel || "opencode/muse-spark-1.2-contributor-free";
+      const slashIdx = modelStr.indexOf("/");
+      if (slashIdx === -1) throw new Error("모델 정보가 없습니다. 모델을 먼저 선택하세요.");
+      const providerID = modelStr.slice(0, slashIdx);
+      const modelID = modelStr.slice(slashIdx + 1);
+      if (!providerID || !modelID) throw new Error("모델 정보가 올바르지 않습니다.");
+      await summarizeSession.mutateAsync({ sessionID: sessionId, providerID, modelID });
       showToast.success("세션을 요약(compact)했습니다. 컨텍스트가 정리되었습니다.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
     } catch (e) {
@@ -226,7 +232,7 @@ export function SessionDetail() {
     } finally {
       setIsCompacting(false);
     }
-  }, [sessionId, summarizeSession]);
+  }, [sessionId, summarizeSession, ctx.currentModel]);
 
   const handleAutoTruncate = useCallback(async () => {
     if (!messages || !sessionId) return;

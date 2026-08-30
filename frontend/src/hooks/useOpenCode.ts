@@ -434,9 +434,9 @@ export const useSummarizeSession = (opcodeUrl: string | null | undefined, direct
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ sessionID }: { sessionID: string }) => {
+    mutationFn: async ({ sessionID, providerID, modelID }: { sessionID: string; providerID: string; modelID: string }) => {
       if (!client) throw new Error("No client available");
-      return client.summarizeSession(sessionID);
+      return client.summarizeSession(sessionID, providerID, modelID);
     },
     onSuccess: (_data, variables) => {
       const { sessionID } = variables;
