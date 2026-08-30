@@ -1,9 +1,11 @@
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { createOpenCodeClient } from '@/api/opencode'
 import { useCreateSession } from '@/hooks/useOpenCode'
 import type { CommandWithScope } from '@/hooks/useCommands'
 import { useCreateCommandRun, useFinishCommandRun } from '@/hooks/useCommandRuns'
+import { useSettings } from '@/hooks/useSettings'
 import { showToast } from '@/lib/toast'
 import type { components } from '@/api/opencode-types'
 
@@ -35,7 +37,9 @@ export function useCommandHandler({
   onShowHelpDialog
 }: CommandHandlerProps) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const createSession = useCreateSession(opcodeUrl, directory)
+  const { preferences } = useSettings()
   const [loading, setLoading] = useState(false)
 
   const createRun = useCreateCommandRun()
@@ -47,8 +51,6 @@ export function useCommandHandler({
     setLoading(true)
     const args = explicitArgs ?? ''
 
-    // run id 는 서버가 발급한다. 기록 실패가 커맨드 실행을 막지는 않는다.
-    // opencode 가 내려주는 source 로 skill 호출을 구분한다(히스토리/달력 UI는 command 만 표시).
     let currentRunId: string | null = null
     try {
       const run = await createRun.mutateAsync({
@@ -69,8 +71,6 @@ export function useCommandHandler({
     try {
       const client = createOpenCodeClient(opcodeUrl, directory)
 
-      // Check if command exists on server (built-in + MCP + skills from fetched list)
-      // 드롭다운에서 온 항목은 opencode 목록에 있는 것이므로 source 로 신뢰한다.
       const serverCommandNames = new Set([
         ...SERVER_COMMANDS,
         ...(commands?.map((c: typeof commands[0]) => c.name) ?? [])
@@ -78,7 +78,6 @@ export function useCommandHandler({
       const isServerCommand =
         (command as { source?: string }).source != null || serverCommandNames.has(command.name)
 
-      // Handle special commands that need UI interaction
       switch (command.name) {
         case 'sessions':
         case 'resume':
@@ -102,18 +101,13 @@ export function useCommandHandler({
 
         case 'new':
         case 'clear':
-          // Create a new session and navigate to it
           try {
-            const newSession = await createSession.mutateAsync({
-              agent: undefined
-            })
+            const newSession = await createSession.mutateAsync({ agent: undefined })
             if (newSession?.id) {
               const currentPath = window.location.pathname
               const repoMatch = currentPath.match(/\/repos\/(\d+)\/sessions\//)
               if (repoMatch) {
-                const matchedRepoId = repoMatch[1]
-                const newPath = `/repos/${matchedRepoId}/sessions/${newSession.id}`
-                navigate(newPath)
+                navigate(`/repos/${repoMatch[1]}/sessions/${newSession.id}`)
               } else {
                 navigate(`/session/${newSession.id}`)
               }
@@ -124,36 +118,50 @@ export function useCommandHandler({
           }
           break
 
+        // opencode 의 요약은 메시지를 지우지 않는다. 요약 메시지를 하나 추가하고
+        // 세션의 컨텍스트 시작점만 그 지점으로 옮긴다. 세션 ID 도 그대로다.
+        case 'compact':
+        case 'summarize': {
+          const [providerID, modelID] = (preferences?.defaultModel ?? '').split('/')
+          if (!providerID || !modelID) {
+            showToast.warning('먼저 모델을 선택하세요. 요약에는 providerID/modelID 가 필요합니다.')
+            hasError = true
+            break
+          }
+          const result = await client.summarizeSession(sessionID, providerID, modelID)
+          // axios 인터셉터가 timeout 을 조용히 {} 로 삼키므로 성공을 단정하지 않는다.
+          if (result === undefined || result === null) {
+            showToast.warning('요약 응답이 비어 있습니다. 타임아웃일 수 있으니 메시지 목록을 확인하세요.')
+            hasError = true
+          } else {
+            showToast.success('컨텍스트를 요약했습니다.')
+          }
+          await queryClient.invalidateQueries({ queryKey: ['messages', opcodeUrl, sessionID] })
+          await queryClient.invalidateQueries({ queryKey: ['session', opcodeUrl, sessionID] })
+          break
+        }
+
         case 'share':
         case 'unshare':
         case 'export':
-        case 'compact':
-        case 'summarize':
         case 'undo':
         case 'redo':
         case 'details':
         case 'editor':
-          // TUI-only commands that the web HTTP API cannot execute
           showToast.warning(
             `"/${command.name}" is not supported in the web UI. This command runs only in the terminal (TUI).`
           )
           break
 
         default:
-          // Only send commands that exist on the server
           if (isServerCommand) {
             const source = (command as { source?: string; template?: string }).source
             const template = (command as { template?: string }).template
             if (source === 'skill') {
-              // opencode HTTP command 엔드포인트는 skill 실행을 500 으로 거절한다.
-              // TUI 와 동일하게 스킬 본문을 프롬프트로 보내 모델이 skill 을 로드하게 한다.
               const text = args ? `${template ?? `/${command.name}`}\n\n${args}` : (template ?? `/${command.name}`)
               await client.sendPrompt(sessionID, { parts: [{ type: 'text', text }] })
             } else {
-              await client.sendCommand(sessionID, {
-                command: command.name,
-                arguments: args
-              })
+              await client.sendCommand(sessionID, { command: command.name, arguments: args })
             }
           } else {
             showToast.warning(
@@ -177,10 +185,8 @@ export function useCommandHandler({
     sessionID, opcodeUrl, directory, repoId,
     onShowSessionsDialog, onShowModelsDialog, onShowHelpDialog,
     createSession, navigate, commands, createRun, finishRun,
+    preferences?.defaultModel, queryClient,
   ])
 
-  return {
-    executeCommand,
-    loading
-  }
+  return { executeCommand, loading }
 }

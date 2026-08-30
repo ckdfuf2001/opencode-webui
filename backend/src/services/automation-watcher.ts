@@ -11,7 +11,7 @@ const RESTART_DEBOUNCE_MS = 1500
 const MIN_RESTART_INTERVAL_MS = 10_000
 const BUSY_RETRY_MS = 5_000
 const MAX_DEFER_MS = 10 * 60_000
-const RELOAD_GRACE_MS = 300
+const RELOAD_GRACE_MS = 1500
 
 let debounceTimer: NodeJS.Timeout | null = null
 let watchers: Array<fs.FSWatcher> = []
@@ -88,6 +88,12 @@ function expandGlobalTargets(): string[] {
 }
 
 function executeReload(): void {
+    / 마지막 관문. 여기까지 오는 사이에 요청이 시작됐으면 dispose 하지 않는다.
+  if (isOpenCodeServerBusy()) {
+    scheduleRestart(BUSY_RETRY_MS)
+    return
+  }
+
   pendingRestart = false
   deferStartedAt = 0
   lastRestartAt = Date.now()

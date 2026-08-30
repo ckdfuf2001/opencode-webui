@@ -3,7 +3,7 @@ import { getConfigPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages } from './opencode-db'
-import { markRequestBusy, clearRequestBusy } from './busy-tracker'
+import { acquireBusy, type BusyToken } from './busy-tracker'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -191,18 +191,19 @@ export async function proxyRequest(request: Request, method: string, pathname: s
   const cleanEventPath = pathname.replace(/^\/api\/opencode/, '')
   const isLongRunning = /\/session\/[^/]+\/message$/.test(cleanEventPath)
     || /\/session\/[^/]+\/command$/.test(cleanEventPath)
+    || /\/session\/[^/]+\/summarize$/.test(cleanEventPath)
+    || /\/session\/[^/]+\/shell$/.test(cleanEventPath)
     || /\/question\/[^/]+\/reply$/.test(cleanEventPath)
     || /\/permission\/[^/]+\/reply$/.test(cleanEventPath)
+
+  //// Busy is released only when the response body finishes streaming, so the
+  //// automation watcher never runs an instance reload (dispose) while an
+  //// in-flight message/command is still being produced.
+  if (isLongRunning) {
+    markRequestBusy()
+  }   
   const releaseBusy = (() => {
-    const released = () => {
-      if (isLongRunning) clearRequestBusy()
-    }
-    let done = false
-    return () => {
-      if (done) return
-      done = true
-      released()
-    }
+    busy?.release()
   })()
 
   try {
@@ -267,12 +268,6 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     let response: Response | null = null
     let lastError: unknown = null
 
-    // Busy is released only when the response body finishes streaming, so the
-    // automation watcher never runs an instance reload (dispose) while an
-    // in-flight message/command is still being produced.
-    if (isLongRunning) {
-      markRequestBusy()
-    }
     const connectDeadline = Date.now() + 15_000
     for (let attempt = 1; attempt <= 30; attempt++) {
       try {
