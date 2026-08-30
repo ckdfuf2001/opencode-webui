@@ -88,7 +88,7 @@ function expandGlobalTargets(): string[] {
 }
 
 function executeReload(): void {
-    / 마지막 관문. 여기까지 오는 사이에 요청이 시작됐으면 dispose 하지 않는다.
+  // 마지막 관문. 여기까지 오는 사이에 요청이 시작됐으면 dispose 하지 않는다.
   if (isOpenCodeServerBusy()) {
     scheduleRestart(BUSY_RETRY_MS)
     return

@@ -196,15 +196,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     || /\/question\/[^/]+\/reply$/.test(cleanEventPath)
     || /\/permission\/[^/]+\/reply$/.test(cleanEventPath)
 
-  //// Busy is released only when the response body finishes streaming, so the
-  //// automation watcher never runs an instance reload (dispose) while an
-  //// in-flight message/command is still being produced.
-  if (isLongRunning) {
-    markRequestBusy()
-  }   
-  const releaseBusy = (() => {
-    busy?.release()
-  })()
+  // Busy 는 응답 본문 스트리밍이 끝날 때만 해제된다. 그래야 automation watcher 가
+  // 처리 중인 요청 위로 instance reload(dispose) 를 실행하지 않는다.
+  const busy: BusyToken | null = isLongRunning ? acquireBusy() : null
+  const releaseBusy = () => { busy?.release() }
 
   try {
     const headers = ensureServerAuth({})
