@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   searchMessages,
   expandMessage,
@@ -15,6 +16,7 @@ import {
   type MessageExpandResult,
   type CommitDetail,
 } from '@/api/search'
+import { listRepos } from '@/api/repos'
 import { Search as SearchIcon, History, GitCommit, ExternalLink } from 'lucide-react'
 
 function Snippet({ text }: { text: string }) {
@@ -38,22 +40,29 @@ export function Search() {
   const [q, setQ] = useState('')
   const [activeTab, setActiveTab] = useState<'messages' | 'commits'>('messages')
   const [submittedQ, setSubmittedQ] = useState('')
+  const [selectedRepoId, setSelectedRepoId] = useState<string>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [expandedData, setExpandedData] = useState<MessageExpandResult | null>(null)
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null)
   const [detailSha, setDetailSha] = useState<string | null>(null)
 
   const trimmed = q.trim()
+  const repoIdParam = selectedRepoId === 'all' ? undefined : parseInt(selectedRepoId, 10)
+
+  const { data: repos } = useQuery({
+    queryKey: ['repos'],
+    queryFn: listRepos,
+  })
 
   const messagesQuery = useQuery({
-    queryKey: ['search-messages', submittedQ, activeTab],
-    queryFn: () => searchMessages({ q: submittedQ, k: 20 }),
+    queryKey: ['search-messages', submittedQ, activeTab, selectedRepoId],
+    queryFn: () => searchMessages({ q: submittedQ, k: 20, repoId: repoIdParam }),
     enabled: !!submittedQ && activeTab === 'messages',
   })
 
   const commitsQuery = useQuery({
-    queryKey: ['search-commits', submittedQ, activeTab],
-    queryFn: () => searchCommits({ q: submittedQ, k: 20 }),
+    queryKey: ['search-commits', submittedQ, activeTab, selectedRepoId],
+    queryFn: () => searchCommits({ q: submittedQ, k: 20, repoId: repoIdParam }),
     enabled: !!submittedQ && activeTab === 'commits',
   })
 
@@ -98,26 +107,41 @@ export function Search() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-background">
+    <div className="h-dvh flex flex-col bg-gradient-to-br from-background via-background to-background overflow-hidden">
       <Header title="Search" backTo="/" />
-      <div className="container mx-auto p-4 max-w-4xl space-y-4">
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="검색어 (한글 부분일치 지원, trigram) — 엔터로 검색"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSearch()
-              }}
-              className="pl-9"
-            />
+      <div className="flex-1 overflow-y-auto">
+        <div className="container mx-auto p-4 max-w-4xl space-y-4">
+          <div className="flex gap-2 flex-wrap">
+            <div className="relative flex-1 min-w-[200px]">
+              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="검색어 (한글 부분일치 지원, trigram) — 엔터로 검색"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSearch()
+                }}
+                className="pl-9"
+              />
+            </div>
+            <Select value={selectedRepoId} onValueChange={setSelectedRepoId}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="레포 선택" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">전체 레포</SelectItem>
+                <SelectItem value="0">host (opencode-webui)</SelectItem>
+                {repos?.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id)}>
+                    {r.localPath} (#{r.id})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={handleSearch} disabled={!trimmed}>
+              Search
+            </Button>
           </div>
-          <Button onClick={handleSearch} disabled={!trimmed}>
-            Search
-          </Button>
-        </div>
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'messages' | 'commits')}>
           <TabsList>
@@ -248,6 +272,7 @@ export function Search() {
             )}
           </TabsContent>
         </Tabs>
+        </div>
       </div>
     </div>
   )
