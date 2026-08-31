@@ -6,10 +6,12 @@ import { Header } from "@/components/layout/Header";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Button } from "@/components/ui/button";
-import { Plus, FolderOpen, Terminal } from "lucide-react";
+import { Plus, FolderOpen, Terminal, Search } from "lucide-react";
 import { OPENCODE_API_ENDPOINT } from "@/config";
+import { useNavigate } from "react-router-dom";
 
 export function Repos() {
+  const navigate = useNavigate();
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
@@ -42,6 +44,15 @@ export function Repos() {
               title="Commands"
             >
               <Terminal className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate('/search')}
+              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
+              title="Search"
+            >
+              <Search className="w-4 h-4" />
             </Button>
             <Button
               onClick={() => setAddRepoOpen(true)}

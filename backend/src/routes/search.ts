@@ -12,8 +12,10 @@ import {
   getCommitDetail,
   indexRepoCommits,
   indexAllRepos,
+  HOST_REPO_ID,
 } from '../services/git-indexer'
 import { getRepoById } from '../db/queries'
+import { listAllIndexedRepos } from '../services/git-indexer'
 import { logger } from '../utils/logger'
 
 const SearchSchema = z.object({ q: z.string().max(500).optional(), k: z.coerce.number().int().min(1).max(50).optional() })
@@ -32,11 +34,11 @@ export function createSearchRoutes(db: Database) {
         k: c.req.query('k') ? Number(c.req.query('k')) : undefined,
       })
       const repoIdRaw = c.req.query('repoId')
-      const repoId = repoIdRaw ? parseInt(repoIdRaw, 10) : undefined
+      const repoId = repoIdRaw != null && repoIdRaw !== '' ? parseInt(repoIdRaw, 10) : undefined
       const sessionId = c.req.query('sessionId') || undefined
       const hits = searchMessages(db, parsed.q || '', {
         k: parsed.k,
-        repoId: repoId && !Number.isNaN(repoId) ? repoId : undefined,
+        repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
         sessionId,
       })
       return c.json({ hits })
@@ -87,10 +89,10 @@ export function createSearchRoutes(db: Database) {
         k: c.req.query('k') ? Number(c.req.query('k')) : undefined,
       })
       const repoIdRaw = c.req.query('repoId')
-      const repoId = repoIdRaw ? parseInt(repoIdRaw, 10) : undefined
+      const repoId = repoIdRaw != null && repoIdRaw !== '' ? parseInt(repoIdRaw, 10) : undefined
       const hits = searchCommits(db, parsed.q || '', {
         k: parsed.k,
-        repoId: repoId && !Number.isNaN(repoId) ? repoId : undefined,
+        repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
       })
       return c.json({ hits })
     } catch (error) {
@@ -125,7 +127,10 @@ export function createSearchRoutes(db: Database) {
       const body = await c.req.json().catch(() => ({}))
       const parsed = ReindexCommitsSchema.parse(body ?? {})
       if (parsed.repoId != null) {
-        const repo = getRepoById(db, parsed.repoId)
+        const repo =
+          parsed.repoId === HOST_REPO_ID
+            ? listAllIndexedRepos(db).find((r) => r.id === HOST_REPO_ID) ?? null
+            : getRepoById(db, parsed.repoId)
         if (!repo) return c.json({ error: 'Repo not found' }, 404)
         const n = await indexRepoCommits(db, repo, { force: parsed.force })
         return c.json({ repoId: parsed.repoId, indexed: n })
@@ -144,7 +149,10 @@ export function createSearchRoutes(db: Database) {
 
 async function tryIndexSingleCommit(db: Database, repoId: number, sha: string): Promise<void> {
   try {
-    const repo = getRepoById(db, repoId)
+    const repo =
+      repoId === HOST_REPO_ID
+        ? listAllIndexedRepos(db).find((r) => r.id === HOST_REPO_ID) ?? null
+        : getRepoById(db, repoId)
     if (!repo) return
     // 단일 커밋은 최신 이력 재인덱스로 커버한다.
     await indexRepoCommits(db, repo, { force: true })

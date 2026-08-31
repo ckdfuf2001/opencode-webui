@@ -4,6 +4,7 @@ import { Toaster } from 'sonner'
 import { Repos } from './pages/Repos'
 import { RepoDetail } from './pages/RepoDetail'
 import { SessionDetail } from './pages/SessionDetail'
+import { Search } from './pages/Search'
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
@@ -28,6 +29,7 @@ function AppContent() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Repos />} />
+        <Route path="/search" element={<Search />} />
         <Route path="/repos/:id" element={<RepoDetail />} />
         <Route path="/repos/:id/sessions/:sessionId" element={<SessionDetail />} />
         <Route path="/session/:sessionId" element={<SessionDetail />} />

@@ -3,6 +3,41 @@ import { listRepos, getRepoById } from '../db/queries'
 import type { Repo } from '../types/repo'
 import { executeCommand } from '../utils/process'
 import { logger } from '../utils/logger'
+import path from 'node:path'
+import fs from 'node:fs'
+
+export const HOST_REPO_ID = 0
+export const HOST_REPO_LOCAL_PATH = '__host__'
+
+function getHostRepo(): Repo | null {
+  const fullPath = path.resolve(process.cwd())
+  try {
+    if (!fs.existsSync(path.join(fullPath, '.git'))) return null
+  } catch {
+    return null
+  }
+  return {
+    id: HOST_REPO_ID,
+    localPath: HOST_REPO_LOCAL_PATH,
+    fullPath,
+    branch: undefined,
+    defaultBranch: 'main',
+    cloneStatus: 'ready',
+    clonedAt: 0,
+  } as Repo
+}
+
+export function listAllIndexedRepos(db: Database): Repo[] {
+  const repos = listRepos(db)
+  const host = getHostRepo()
+  if (host) repos.push(host)
+  return repos
+}
+
+function resolveRepoForIndex(db: Database, repoId: number): Repo | null {
+  if (repoId === HOST_REPO_ID) return getHostRepo()
+  return getRepoById(db, repoId)
+}
 
 interface ParsedCommit {
   sha: string
@@ -77,7 +112,7 @@ export async function indexRepoCommits(db: Database, repo: Repo, opts: { force?:
 
 export async function indexAllRepos(db: Database, opts: { force?: boolean } = {}): Promise<{ repoId: number; indexed: number }[]> {
   const results: { repoId: number; indexed: number }[] = []
-  for (const repo of listRepos(db)) {
+  for (const repo of listAllIndexedRepos(db)) {
     try {
       const n = await indexRepoCommits(db, repo, opts)
       results.push({ repoId: repo.id, indexed: n })
