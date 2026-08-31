@@ -183,7 +183,11 @@ export function Search() {
                     </span>
                     {hit.sessionId && (
                       <Link
-                        to={`/session/${hit.sessionId}`}
+                        to={
+                          hit.repoId != null && hit.repoId !== 0
+                            ? `/repos/${hit.repoId}/sessions/${hit.sessionId}`
+                            : `/session/${hit.sessionId}`
+                        }
                         className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1 ml-auto"
                       >
                         세션 열기 <ExternalLink className="w-3 h-3" />
