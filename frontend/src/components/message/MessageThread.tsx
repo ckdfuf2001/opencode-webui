@@ -122,7 +122,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 </span>
                 {msg.info.time && (
                   <span className="text-xs text-muted-foreground">
-                    {new Date(msg.info.time.created).toLocaleTimeString()}
+                    {new Date(msg.info.time.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                   </span>
                 )}
                 {streaming && (
