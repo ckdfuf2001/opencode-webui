@@ -246,23 +246,26 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       let realUserArrived = false;
       if (optimistic) {
         const optimisticCreated = optimistic.info.time?.created ?? 0;
-        const optimisticText = optimistic.parts
-          .map((p) => (p.type === "text" ? (p as { text?: string }).text ?? "" : ""))
+        const getSignature = (parts: MessageWithParts["parts"]) => parts
+          .map((p) => {
+            const t = (p as { type?: string }).type
+            if (t === "text") return ((p as { text?: string }).text ?? "").trim()
+            if (t === "file") return ((p as { filename?: string }).filename ?? "").trim()
+            return ""
+          })
+          .filter(Boolean)
           .join("\n")
-          .trim();
+        const optimisticSig = getSignature(optimistic.parts as unknown as MessageWithParts["parts"]);
         // 클라이언트(특히 모바일) 시계가 서버보다 몇 초 어긋나면 created >= 비교로는
         // 실제 유저 메시지를 못 찾아 낙관 카드가 남아 duplicated 로 보였다.
-        // 시계 오차 5초 허용 + 텍스트 일치로 판정한다.
+        // 시계 오차 5초 허용 + 시그니처(텍스트+파일명) 일치로 판정한다.
         realUserArrived = result.some((m) => {
           if (m.info.role !== "user" || m.info.id === optimistic.info.id) return false;
           const created = m.info.time?.created ?? 0;
           if (created < optimisticCreated - 5000) return false;
-          if (!optimisticText) return true;
-          const text = m.parts
-            .map((p) => (p.type === "text" ? (p as { text?: string }).text ?? "" : ""))
-            .join("\n")
-            .trim();
-          return text === optimisticText;
+          if (!optimisticSig) return true;
+          const text = getSignature(m.parts as unknown as MessageWithParts["parts"]);
+          return text === optimisticSig;
         });
       }
       if (optimistic && !realUserArrived && !result.some((m) => m.info.id === optimistic.info.id)) {
@@ -551,12 +554,13 @@ const createOptimisticUserMessage = (
         sessionID,
       }];
     }
+    const fileUrl = part.path.startsWith("file:") ? part.path : `file:///${part.path.replace(/\\/g, "/").replace(/ /g, "%20")}`
     return [{
       id: `${optimisticID}_part_${index}`,
       type: "file" as const,
       mime: mimeForFilename(part.name),
       filename: part.name,
-      url: part.path,
+      url: fileUrl,
       messageID: optimisticID,
       sessionID,
     }];
