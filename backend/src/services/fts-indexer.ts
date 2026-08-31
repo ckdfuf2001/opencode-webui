@@ -2,6 +2,27 @@ import type { Database } from 'bun:sqlite'
 import { getOpenCodeDbPath } from './opencode-db'
 import { resolveRepoId } from './command-runs'
 import { logger } from '../utils/logger'
+import path from 'node:path'
+import fs from 'node:fs'
+
+const HOST_REPO_ID = 0
+function isHostDirectory(dir: string): boolean {
+  try {
+    const host = path.resolve(process.cwd())
+    if (!fs.existsSync(path.join(host, '.git'))) return false
+    const norm = dir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const hostNorm = host.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    if (norm === hostNorm) return true
+    if (norm.startsWith(hostNorm + '/')) {
+      const reposPrefix = (hostNorm + '/workspace/repos/').toLowerCase()
+      if (norm.startsWith(reposPrefix)) return false
+      return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
 
 const SNIPPET_SIZE = 24
 
@@ -19,7 +40,8 @@ export async function indexSessionMessages(db: Database, sessionId: string): Pro
       .query('SELECT directory FROM session WHERE id = ?')
       .get(sessionId) as { directory: string | null } | undefined
     if (!sess || !sess.directory) return 0
-    const repoId = resolveRepoId(db, sess.directory)
+    let repoId = resolveRepoId(db, sess.directory)
+    if (repoId == null && isHostDirectory(sess.directory)) repoId = HOST_REPO_ID
 
     db.query('DELETE FROM session_messages_fts WHERE session_id = ?').run(sessionId)
 

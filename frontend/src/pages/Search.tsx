@@ -177,7 +177,7 @@ export function Search() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="outline">{hit.role}</Badge>
                     <Badge variant="secondary">turn {hit.turnIndex}</Badge>
-                    {hit.repoId != null && <Badge variant="secondary" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</Badge>}
+                    <Badge variant="secondary" title={hit.repoId == null ? 'unknown (재색인 필요)' : repoName(hit.repoId)}>{hit.repoId == null ? 'unknown' : repoName(hit.repoId)}</Badge>
                     <span className="text-xs text-muted-foreground">
                       {new Date(hit.ts).toLocaleString()}
                     </span>
