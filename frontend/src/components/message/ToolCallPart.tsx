@@ -246,12 +246,40 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
           )}
 
           {part.state.status === 'error' && (
-            <div className="text-sm">
-              <div className="text-red-400 mb-1">Error:</div>
-              <pre className="bg-accent p-2 rounded text-xs overflow-x-auto text-red-300">
-                {part.state.error}
-              </pre>
-            </div>
+            <>
+              {part.tool === 'bash' ? (
+                <div className="text-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="text-zinc-400">Command:</div>
+                    <CopyButton 
+                      content={typeof part.state.input?.command === 'string' ? part.state.input.command : ''} 
+                      title="Copy command" 
+                    />
+                  </div>
+                  <div className="bg-accent p-2 rounded text-xs overflow-x-auto">
+                    <span className="text-green-400">$</span> {typeof part.state.input?.command === 'string' ? part.state.input.command : ''}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm">
+                  <div className="text-zinc-400 mb-1">Input:</div>
+                  <ClickableJson json={part.state.input} onFileClick={onFileClick} />
+                </div>
+              )}
+              <div className="text-sm">
+                <div className="text-zinc-400 mb-1">Output:</div>
+                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors text-red-300" 
+                     onClick={() => part.state.status === 'error' && navigator.clipboard.writeText(part.state.error)}
+                     title="Click to copy output">
+                  {part.state.error}
+                </pre>
+              </div>
+              {part.state.time && (
+                <div className="text-xs text-zinc-500">
+                  Duration: {((part.state.time.end - part.state.time.start) / 1000).toFixed(2)}s
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

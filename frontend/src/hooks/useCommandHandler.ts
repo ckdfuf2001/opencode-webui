@@ -131,8 +131,13 @@ export function useCommandHandler({
           const result = await client.summarizeSession(sessionID, providerID, modelID)
           // axios 인터셉터가 timeout 을 조용히 {} 로 삼키므로 성공을 단정하지 않는다.
           const isEmpty = !result || (typeof result === 'object' && Object.keys(result).length === 0)
+          // upstream 은 성공 시 boolean 을 반환한다. 명시적 false 는 요약 실패를 뜻한다.
+          const failed = result === false
           if (isEmpty) {
             showToast.warning('요약 응답이 비어 있습니다. 타임아웃일 수 있으니 메시지 목록을 확인하세요.')
+            hasError = true
+          } else if (failed) {
+            showToast.warning('요약(compact)이 완료되지 않았습니다. 컨텍스트가 너무 커서 실패했을 수 있으니 이전 대화 잘라내기를 시도하세요.')
             hasError = true
           } else {
             showToast.success('컨텍스트를 요약했습니다.')

@@ -218,13 +218,28 @@ export function SessionDetail() {
     if (!sessionId) return;
     setIsCompacting(true);
     try {
-      const modelStr = ctx.currentModel || "opencode/muse-spark-1.2-contributor-free";
+      // ctx.currentModel 은 preferences.defaultModel 을 우선하고, 없으면 최신
+      // assistant 메시지의 providerID/modelID 로부터 유도된다. 그것조차 없으면
+      // 실제 대화 메시지의 model 메타데이터를 역방향으로 탐색한다. 그마저 없으면
+      // 하드코딩된 모델로 조용히 진행하는 대신 명확한 오류를 던진다.
+      let modelStr = ctx.currentModel;
+      if (!modelStr && messages?.length) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const info = (messages[i] as any)?.info;
+          if (info && info.providerID && info.modelID) {
+            modelStr = `${info.providerID}/${info.modelID}`;
+            break;
+          }
+        }
+      }
+      if (!modelStr) throw new Error("모델 정보가 없습니다. 모델을 먼저 선택한 후 요약(compact)을 실행하세요.");
       const slashIdx = modelStr.indexOf("/");
-      if (slashIdx === -1) throw new Error("모델 정보가 없습니다. 모델을 먼저 선택하세요.");
+      if (slashIdx === -1) throw new Error(`모델 정보가 올바르지 않습니다 (${modelStr}). 모델을 다시 선택하세요.`);
       const providerID = modelStr.slice(0, slashIdx);
       const modelID = modelStr.slice(slashIdx + 1);
       if (!providerID || !modelID) throw new Error("모델 정보가 올바르지 않습니다.");
-      await summarizeSession.mutateAsync({ sessionID: sessionId, providerID, modelID });
+      const ok = await summarizeSession.mutateAsync({ sessionID: sessionId, providerID, modelID });
+      if (ok === false) throw new Error("서버가 요약(compact)을 완료하지 못했습니다. 다시 시도하거나 이전 대화 잘라내기를 사용하세요.");
       showToast.success("세션을 요약(compact)했습니다. 컨텍스트가 정리되었습니다.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
     } catch (e) {
@@ -232,7 +247,7 @@ export function SessionDetail() {
     } finally {
       setIsCompacting(false);
     }
-  }, [sessionId, summarizeSession, ctx.currentModel]);
+  }, [sessionId, summarizeSession, ctx.currentModel, messages]);
 
   const handleAutoTruncate = useCallback(async () => {
     if (!messages || !sessionId) return;
