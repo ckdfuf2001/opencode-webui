@@ -292,8 +292,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
                 const { buildRecall } = await import('./recall')
                 const { resolveRepoId } = await import('./command-runs')
                 const repoId = directory ? resolveRepoId(proxyDb, directory) : null
-                const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
-                const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: topK, repoId: repoId ?? undefined, sessionId: sessionIdFromPath })
+                const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: topK, repoId: repoId ?? undefined })
                 if (block) {
                   firstText.text = `${block}\n\n${text}`
                   body = JSON.stringify(parsed)

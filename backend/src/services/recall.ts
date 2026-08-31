@@ -22,7 +22,7 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
   const hits: RecallHit[] = []
 
   if (opts.includeMessages !== false) {
-    const msgs = searchMessagesUnion(db, q, perKind, opts)
+    const msgs = searchMessagesUnion(db, q, perKind, { repoId: opts.repoId })
     for (const m of msgs) {
       hits.push({
         kind: 'message',
@@ -57,11 +57,11 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
 function searchMessagesUnion(db: Database, q: string, k: number, opts: RecallOptions) {
   const tokens = tokenize(q)
   if (tokens.length === 0) return []
-  if (tokens.length === 1) return searchMessages(db, q, { k, repoId: opts.repoId, sessionId: opts.sessionId })
+  if (tokens.length === 1) return searchMessages(db, q, { k, repoId: opts.repoId })
   const seen = new Set<string>()
   const out: ReturnType<typeof searchMessages> = []
   for (const tok of tokens) {
-    const hits = searchMessages(db, tok, { k, repoId: opts.repoId, sessionId: opts.sessionId })
+    const hits = searchMessages(db, tok, { k, repoId: opts.repoId })
     for (const h of hits) {
       if (seen.has(h.messageId)) continue
       seen.add(h.messageId)
@@ -70,27 +70,43 @@ function searchMessagesUnion(db: Database, q: string, k: number, opts: RecallOpt
     }
   }
   if (out.length > 0) return out.slice(0, k)
-  return searchMessages(db, q, { k, repoId: opts.repoId, sessionId: opts.sessionId })
+  return searchMessages(db, q, { k, repoId: opts.repoId })
 }
 
 function searchCommitsUnion(db: Database, q: string, k: number, opts: RecallOptions) {
-  const tokens = tokenize(q)
-  if (tokens.length === 0) return []
-  if (tokens.length === 1) return searchCommits(db, q, { k, repoId: opts.repoId })
-  const seen = new Set<string>()
-  const out: ReturnType<typeof searchCommits> = []
-  for (const tok of tokens) {
-    const hits = searchCommits(db, tok, { k, repoId: opts.repoId })
-    for (const h of hits) {
-      const key = `${h.repoId}:${h.sha}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push(h)
-      if (out.length >= k) return out
+  const doSearch = (repoId: number | null | undefined) => {
+    const tokens = tokenize(q)
+    if (tokens.length === 0) return [] as ReturnType<typeof searchCommits>
+    if (tokens.length === 1) return searchCommits(db, q, { k, repoId })
+    const seenLocal = new Set<string>()
+    const outLocal: ReturnType<typeof searchCommits> = []
+    for (const tok of tokens) {
+      const hits = searchCommits(db, tok, { k, repoId })
+      for (const h of hits) {
+        const key = `${h.repoId}:${h.sha}`
+        if (seenLocal.has(key)) continue
+        seenLocal.add(key)
+        outLocal.push(h)
+        if (outLocal.length >= k) return outLocal
+      }
     }
+    if (outLocal.length > 0) return outLocal.slice(0, k)
+    return searchCommits(db, q, { k, repoId })
   }
-  if (out.length > 0) return out.slice(0, k)
-  return searchCommits(db, q, { k, repoId: opts.repoId })
+
+  const primary = doSearch(opts.repoId)
+  if (opts.repoId == null || opts.repoId === 0) return primary
+  const hostHits = doSearch(0)
+  const seen = new Set(primary.map((h) => `${h.repoId}:${h.sha}`))
+  const merged = [...primary]
+  for (const h of hostHits) {
+    const key = `${h.repoId}:${h.sha}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(h)
+    if (merged.length >= k) break
+  }
+  return merged.slice(0, k)
 }
 
 function tokenize(q: string): string[] {

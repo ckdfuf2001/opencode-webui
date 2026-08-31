@@ -9,9 +9,8 @@ import { useFileSearch } from '@/hooks/useFileSearch'
 import { useUserBash } from '@/stores/userBashStore'
 import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
 import { ChatQueueStrip } from './ChatQueueStrip'
-import { ChevronDown, Search } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { useContextUsage } from '@/hooks/useContextUsage'
-import { recall } from '@/api/search'
 
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
 import { FileSuggestions } from './FileSuggestions'
@@ -92,7 +91,6 @@ export function PromptInput({
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
   const [isBashMode, setIsBashMode] = useState(false)
-  const [isRecalling, setIsRecalling] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [suggestionQuery, setSuggestionQuery] = useState('')
   const [suggestionPosition, setSuggestionPosition] = useState({ bottom: 0, left: 0, width: 0, maxHeight: 256 })
@@ -374,36 +372,6 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const handleModeToggle = () => {
     const newMode = currentMode === 'plan' ? 'build' : 'plan'
     updateSettings({ mode: newMode })
-  }
-
-  const handleRecall = async () => {
-    const q = prompt.trim()
-    if (!q) {
-      showToast.error('Recall: 프롬프트를 먼저 입력하세요')
-      return
-    }
-    if (isRecalling) return
-    setIsRecalling(true)
-    try {
-      const res = await recall(q, { k: 6 })
-      if (!res.block) {
-        showToast.warning('Recall: 관련 기억 없음')
-        return
-      }
-      setPrompt((prev) => (prev ? `${prev}\n\n${res.block}` : res.block))
-      showToast.success(`Recall: ${res.hits.length}건 삽입`)
-      requestAnimationFrame(() => {
-        if (textareaRef.current) {
-          textareaRef.current.focus()
-          textareaRef.current.style.height = 'auto'
-          textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
-        }
-      })
-    } catch (e) {
-      showToast.error((e as Error).message || 'Recall failed')
-    } finally {
-      setIsRecalling(false)
-    }
   }
 
   const resolveFilePath = (relativePath: string): string => {
@@ -892,15 +860,6 @@ useEffect(() => {
               Stop
             </button>
           )}
-          <button
-            onClick={handleRecall}
-            disabled={isRecalling || !prompt.trim()}
-            className="px-2 py-1.5 rounded-lg text-xs font-medium border bg-muted hover:bg-accent disabled:opacity-50 flex items-center gap-1"
-            title="Recall related memories to prompt"
-          >
-            <Search className="w-3.5 h-3.5" />
-            Recall
-          </button>
           <button
             data-submit-prompt
             onClick={showStop ? handleQueue : handleSubmit}
