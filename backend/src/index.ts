@@ -20,6 +20,7 @@ import { createConfigFileRoutes } from './routes/config-files'
 import { createProvidersRoutes } from './routes/providers'
 import { createPreviewRoutes } from './routes/preview'
 import { createCommandRunRoutes } from './routes/command-runs'
+import { createSearchRoutes } from './routes/search'
 import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
 import { createChatQueueRoutes } from './routes/chat-queue'
@@ -27,6 +28,7 @@ import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-fronten
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionStatusPoller, stopSessionStatusPoller } from './services/session-status'
+import { startGitCommitIndexer, stopGitCommitIndexer } from './services/git-indexer'
 import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
@@ -249,6 +251,7 @@ app.route('/api/registry', createRegistryRoutes())
 app.route('/api/config-files', createConfigFileRoutes(db))
 app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
+app.route('/api/search', createSearchRoutes(db))
 app.route('/api/session-status', createSessionStatusRoutes(db))
 app.route('/api/chat-queue', createChatQueueRoutes())
 app.route('/api/logs', createClientLogRoutes())
@@ -388,6 +391,7 @@ const shutdown = async (signal: string) => {
   if (scheduleRunner) clearInterval(scheduleRunner)
   stopSessionStatusPoller()
   stopAutomationWatcher()
+  stopGitCommitIndexer()
   try {
     await opencodeServerManager.stop()
     logger.info('OpenCode server stopped')
@@ -501,5 +505,8 @@ logger.info('Schedule runner started')
 
 startSessionStatusPoller(db)
 logger.info('Session status poller started')
+
+startGitCommitIndexer(db)
+logger.info('Git commit indexer started')
 
 startAutomationWatcher()

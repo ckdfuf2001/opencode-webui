@@ -220,6 +220,79 @@ export function runMigrations(db: Database): void {
       logger.debug('untracked_suggestions table may already exist:', e)
     }
 
+    // ── 전체 대화 검색 (Hermes 세션 검색 계층) ─────────────────────────
+    // FTS5 trigram : 한글 부분일치 필수. 인덱스는 opencode DB의 message/part를
+    // idle 시점에 pull하여 채운다 (per-message rebuild 전략).
+    try {
+      db.run(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS session_messages_fts USING fts5(
+          text,
+          session_id UNINDEXED,
+          message_id UNINDEXED,
+          role UNINDEXED,
+          repo_id UNINDEXED,
+          turn_index UNINDEXED,
+          ts UNINDEXED,
+          tokenize='trigram'
+        )
+      `)
+    } catch (e) {
+      logger.debug('session_messages_fts table may not be creatable:', e)
+    }
+
+    // ── git 커밋 메타데이터 인덱스 (검색의 척추) ─────────────────────────
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS git_commits (
+          sha TEXT NOT NULL,
+          repo_id INTEGER NOT NULL,
+          subject TEXT NOT NULL,
+          body TEXT,
+          author TEXT,
+          branch TEXT,
+          committed_at INTEGER NOT NULL,
+          files_json TEXT NOT NULL,
+          insertions INTEGER,
+          deletions INTEGER,
+          PRIMARY KEY (repo_id, sha)
+        )
+      `)
+      db.run('CREATE INDEX IF NOT EXISTS idx_commit_time ON git_commits(repo_id, committed_at DESC)')
+    } catch (e) {
+      logger.debug('git_commits table may already exist:', e)
+    }
+
+    try {
+      db.run(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS git_commits_fts USING fts5(
+          subject,
+          body,
+          files,
+          sha UNINDEXED,
+          repo_id UNINDEXED,
+          committed_at UNINDEXED,
+          tokenize='trigram'
+        )
+      `)
+    } catch (e) {
+      logger.debug('git_commits_fts table may not be creatable:', e)
+    }
+
+    // git 인덱서 증분 커서
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS repo_index_state (
+          repo_id INTEGER NOT NULL,
+          branch TEXT NOT NULL,
+          last_sha TEXT,
+          last_indexed_at INTEGER,
+          PRIMARY KEY (repo_id, branch)
+        )
+      `)
+    } catch (e) {
+      logger.debug('repo_index_state table may already exist:', e)
+    }
+
     logger.info('Database migrations completed successfully')
   } catch (error) {
     logger.error('Failed to run database migrations:', error)

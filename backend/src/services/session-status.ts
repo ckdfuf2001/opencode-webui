@@ -4,6 +4,7 @@ import { ensureServerAuth } from './opencode-auth'
 import { resolveRepoId } from './command-runs'
 import * as crDb from '../db/command-run-queries'
 import { flushReadyQueues } from './chat-queue'
+import { indexSessionMessages } from './fts-indexer'
 import { listRepos } from '../db/queries'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import {
@@ -87,6 +88,9 @@ export function startSessionStatusPoller(db: Database): void {
           } catch (error) {
             logger.warn(`Failed to finish command runs for session ${row.sessionId}:`, error)
           }
+          // busy→idle 전이를 기회로 세션 대화를 FTS 인덱스에 반영한다 (비동기).
+          indexSessionMessages(db, row.sessionId)
+            .catch((error) => logger.warn(`Failed to index session ${row.sessionId}:`, error))
         }
         markSessionStatusIdle(db, row.sessionId, now)
       }
