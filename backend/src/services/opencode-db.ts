@@ -218,18 +218,37 @@ export async function deleteSessionMessage(
 
     db.exec('BEGIN IMMEDIATE')
     try {
+      // opencode message table has no parent_id column - parentID is stored inside data JSON (assistant messages have data.parentID)
+      const allMsgs = db
+        .query<{ id: string; data: string }, string>('SELECT id, data FROM message WHERE session_id = ?')
+        .all(sessionId)
+      const childrenByParent = new Map<string, string[]>()
+      for (const row of allMsgs) {
+        try {
+          const parsed = JSON.parse(row.data) as { parentID?: string }
+          if (parsed.parentID) {
+            const list = childrenByParent.get(parsed.parentID)
+            if (list) list.push(row.id)
+            else childrenByParent.set(parsed.parentID, [row.id])
+          }
+        } catch {
+          // ignore malformed data
+        }
+      }
       const ids = new Set<string>([messageId])
       let frontier = [messageId]
       while (frontier.length > 0) {
-        const placeholders = frontier.map(() => '?').join(',')
-        const children = db
-          .query<{ id: string }, string[]>(
-            `SELECT id FROM message WHERE session_id = ? AND parent_id IN (${placeholders})`,
-          )
-          .all(sessionId, ...frontier)
-        const newChildren = children.filter((c) => !ids.has(c.id))
-        for (const c of newChildren) ids.add(c.id)
-        frontier = newChildren.map((c) => c.id)
+        const next: string[] = []
+        for (const pid of frontier) {
+          const children = childrenByParent.get(pid) ?? []
+          for (const cid of children) {
+            if (!ids.has(cid)) {
+              ids.add(cid)
+              next.push(cid)
+            }
+          }
+        }
+        frontier = next
       }
       const idList = [...ids]
 
