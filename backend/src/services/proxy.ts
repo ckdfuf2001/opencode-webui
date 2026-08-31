@@ -359,13 +359,16 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       releaseBusy()
       const bodyText = await response.text().catch(() => '')
       const lower = bodyText.toLowerCase()
+      // Only treat as timeout if status is 504/408, or 5xx with timeout wording.
+      // Previously any 4xx containing the word "timeout" in body was misclassified as 504 (false positives during normal operation).
       const isTimeoutResponse =
         response.status === 504 ||
         response.status === 408 ||
-        lower.includes('timeout') ||
-        lower.includes('timed out') ||
-        lower.includes('deadline exceeded') ||
-        lower.includes('deadline')
+        (response.status >= 500 &&
+          (lower.includes('timeout') ||
+            lower.includes('timed out') ||
+            lower.includes('deadline exceeded') ||
+            lower.includes('deadline')))
       if (isTimeoutResponse) {
         // opencode 내부 타임아웃은 300s (5분), proxy 타임아웃(600s)과 구분한다.
         const opencodeHint = ' - OpenCode internal timeout (300s / 5분). The session turn is too long or the model is still generating. Please retry or reduce context.'
@@ -497,9 +500,9 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     if (err?.name === 'TimeoutError') {
       const alive = await opencodeServerManager.checkHealth().catch(() => false)
       const source = alive ? 'Backend proxy' : 'Backend'
-      // proxy 타임아웃은 600s (10분), opencode 내부 타임아웃(300s/5분)과 구분한다.
+      // proxy 타임아웃은 600s, opencode 내부 타임아웃(300s/5분)과 구분한다.
       const hint = alive
-        ? 'OpenCode server is alive but the request timed out (600s / 10분). Proxy timeout — the session turn is too long or the model is still generating. Please retry or reduce context.'
+        ? 'OpenCode server is alive but the request timed out (600s). Proxy timeout — the session turn is too long or the model is still generating. Please retry or reduce context.'
         : 'OpenCode server is not reachable (health check failed). It may have crashed or the port is blocked.'
       logger.debug(`[${source}] Proxy request timed out:`, err)
       return new Response(JSON.stringify({ error: `[${source}] Gateway Timeout (504): ${rawMsg} - ${hint}`, code: 'TIMEOUT', alive, source, timeoutMs: 600_000, timeoutSource: 'proxy' }), {
