@@ -185,22 +185,16 @@ export function searchCommits(
   }
   const order = where[0] === '1 = 1' ? 'c.committed_at DESC' : 'bm25(git_commits_fts)'
   const sql = `
-    SELECT c.sha AS sha, c.repo_id AS rid, c.subject AS subject, c.author AS author,
-           c.committed_at AS ct
+    SELECT c.sha AS sha, c.repo_id AS repoId, c.subject AS subject, c.author AS author,
+           c.committed_at AS committedAt
     FROM git_commits_fts
     JOIN git_commits c ON c.repo_id = git_commits_fts.repo_id AND c.sha = git_commits_fts.sha
     WHERE ${where.join(' AND ')}
     ORDER BY ${order}
     LIMIT ?`
   params.push(k)
-  const rows = db.query(sql).all(...(params as any[])) as RepoLogRow[]
-  return rows.map((r) => ({
-    sha: r.sha,
-    repoId: r.repoId,
-    subject: r.subject,
-    author: r.author,
-    committedAt: r.committedAt,
-  }))
+  const rows = db.query(sql).all(...(params as any[])) as CommitSearchHit[]
+  return rows
 }
 
 export function getCommitDetail(db: Database, repoId: number, sha: string): RepoLogRow | null {
