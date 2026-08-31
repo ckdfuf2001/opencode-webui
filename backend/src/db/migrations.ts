@@ -293,6 +293,34 @@ export function runMigrations(db: Database): void {
       logger.debug('repo_index_state table may already exist:', e)
     }
 
+    try {
+      const orphans = db
+        .query(
+          `SELECT DISTINCT repo_id FROM session_messages_fts WHERE repo_id IS NOT NULL AND repo_id != 0 AND repo_id NOT IN (SELECT id FROM repos)`,
+        )
+        .all() as { repo_id: number }[]
+      if (orphans.length > 0) {
+        const ids = orphans.map((r) => r.repo_id)
+        logger.info(`Pruning orphaned search index for deleted repos: ${ids.join(', ')}`)
+        for (const { repo_id } of orphans) {
+          try {
+            db.query('DELETE FROM session_messages_fts WHERE repo_id = ?').run(repo_id)
+          } catch {}
+          try {
+            db.query('DELETE FROM git_commits_fts WHERE repo_id = ?').run(repo_id)
+          } catch {}
+          try {
+            db.query('DELETE FROM git_commits WHERE repo_id = ?').run(repo_id)
+          } catch {}
+          try {
+            db.query('DELETE FROM repo_index_state WHERE repo_id = ?').run(repo_id)
+          } catch {}
+        }
+      }
+    } catch (e) {
+      logger.debug('orphan prune skipped:', e)
+    }
+
     logger.info('Database migrations completed successfully')
   } catch (error) {
     logger.error('Failed to run database migrations:', error)
