@@ -17,20 +17,13 @@ $version = if ($VersionOverride) { $VersionOverride } else { (Get-Content (Join-
 if (-not $version -or $version -notmatch '^\d+\.\d+\.\d+') { throw "invalid version: $version" }
 Write-Output "[package] version $version"
 
-# 0. 사전 정리: 실행 중인 exe 락 방지, 이전 산출물 정리
+# 0. 사전 정리: 이전 산출물 정리 — 절대 실행 중인 백엔드/opencode 프로세스를 죽이지 않는다.
 $exePath = Join-Path $release 'opencode-webui.exe'
 if (Test-Path $exePath) {
   try {
-    # 실행 중이면 stop 스크립트로 종료 시도 (파일 락 해제)
-    $running = Get-Process opencode-webui -ErrorAction SilentlyContinue
-    if ($running) {
-      Write-Output '[package 0/7] stopping running opencode-webui.exe...'
-      & (Join-Path $PSScriptRoot 'stop_opencode_webui_exe.bat') | Out-Null
-      Start-Sleep -Seconds 2
-    }
     Remove-Item $exePath -Force -ErrorAction Stop
   } catch {
-    throw "release/opencode-webui.exe is locked (is it running?). Stop it and retry. $_"
+    throw "release/opencode-webui.exe is locked (is it running?). Stop it manually and retry. $_"
   }
 }
 # 이전 zip 정리 (두 네이밍 모두)
