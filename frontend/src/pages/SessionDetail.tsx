@@ -152,11 +152,15 @@ export function SessionDetail() {
     if (was && !isStreaming) {
       playCompletionTick();
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
+      // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
       // 폴링 지연(2s) 고려해 3.5초 뒤 재확인한다.
       const timer = setTimeout(() => {
         const cur = messagesRef.current;
         if (!cur || cur.length === 0) return;
-        const last = cur[cur.length - 1];
+        const last = cur[cur.length - 1] as any;
+        const errName = last.info?.error?.name ?? last.info?.error?.data?.name
+        const isAborted = errName === "MessageAbortedError" || last.info?.finish === "aborted" || (last.parts?.some((p: any) => p.type === "step-finish" && p.reason === "aborted"))
+        if (isAborted) return;
         const hasVisible = last.parts.some((p: any) => {
           if (p.type === "text" && typeof p.text === "string" && p.text.trim()) return true;
           if (p.type === "tool" || p.type === "patch" || p.type === "file" || p.type === "agent" || p.type === "reasoning") return true;

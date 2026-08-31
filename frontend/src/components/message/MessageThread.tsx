@@ -90,7 +90,14 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
       {visibleMessages.map((msg) => {
         const streaming = isMessageStreaming(msg)
         const thinking = isMessageThinking(msg)
-        const isError = isErrorMessage(msg)
+        const isAborted = (() => {
+          const errName = (msg.info as any)?.error?.name ?? (msg.info as any)?.error?.data?.name
+          if (errName === "MessageAbortedError") return true
+          if ((msg.info as any)?.finish === "aborted") return true
+          if (msg.parts?.some((p: any) => p.type === "step-finish" && p.reason === "aborted")) return true
+          return false
+        })()
+        const isError = !isAborted && isErrorMessage(msg)
         const isLength = (() => {
           const finish = (msg.info as any)?.finish
           const errName = (msg.info as any)?.error?.name
@@ -105,20 +112,22 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
               id={`message-${msg.info.id}`}
               className={`flex flex-col group ${highlightedMessageID === msg.info.id ? 'message-highlight' : ''}`}
             >
-            <div
+              <div
               className={`w-full rounded-lg p-1.5 ${
                 isLength
                   ? 'bg-red-500/20 border border-red-500/50 animate-pulse'
-                  : isError
-                    ? 'bg-red-600/15 border border-red-600/40'
-                    : msg.info.role === 'user'
-                      ? 'bg-blue-600/20 border border-blue-600/30'
-                      : 'bg-card/50 border border-border'
+                  : isAborted
+                    ? 'bg-zinc-500/10 border border-zinc-500/30'
+                    : isError
+                      ? 'bg-red-600/15 border border-red-600/40'
+                      : msg.info.role === 'user'
+                        ? 'bg-blue-600/20 border border-blue-600/30'
+                        : 'bg-card/50 border border-border'
               } ${streaming ? 'animate-pulse-subtle' : ''}`}
             >
               <div className="flex items-center gap-2 mb-1">
-                <span className={`text-xs font-medium ${isLength ? 'text-red-500 font-bold' : isError ? 'text-red-400' : 'text-zinc-400'}`}>
-                  {isLength ? 'Truncated due to context limit' : isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
+                <span className={`text-xs font-medium ${isLength ? 'text-red-500 font-bold' : isAborted ? 'text-zinc-400' : isError ? 'text-red-400' : 'text-zinc-400'}`}>
+                  {isLength ? 'Truncated due to context limit' : isAborted ? 'Canceled' : isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
                 </span>
                 {msg.info.time && (
                   <span className="text-xs text-muted-foreground">
