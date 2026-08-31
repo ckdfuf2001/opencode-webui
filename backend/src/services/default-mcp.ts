@@ -69,10 +69,9 @@ function buildAgentBrowserMcp(
   }
 }
 
-export function repoAgentBrowserSession(localPath: string): string {
-  const slug = localPath.replace(/[\\/]/g, '-').replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
-  const safeSlug = slug || `repo-${Date.now().toString(36)}`
-  return `repo-${safeSlug}`
+export function repoAgentBrowserSession(_localPath: string): string {
+  // single session: all repos share namespace == session
+  return AGENT_BROWSER_NAMESPACE
 }
 
 export function writeRepoOpenCodeConfig(localPath: string): boolean {
@@ -87,7 +86,7 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   } catch {
     existing = {}
   }
-  const session = repoAgentBrowserSession(localPath)
+  const session = AGENT_BROWSER_NAMESPACE
   const mcpEntry = buildAgentBrowserMcp(AGENT_BROWSER_NAMESPACE, session)
   const existingMcp = (existing.mcp && typeof existing.mcp === 'object') ? (existing.mcp as Record<string, unknown>) : {}
   const existingAgentBrowser = existingMcp['agent-browser'] as { enabled?: boolean } | undefined
