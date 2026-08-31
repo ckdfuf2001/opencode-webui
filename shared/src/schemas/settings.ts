@@ -50,6 +50,8 @@ export const UserPreferencesSchema = z.object({
   opencodeBin: z.string().optional(),
   tts: TTSConfigSchema.optional(),
   repoTrackPaths: z.array(z.string()).default(DEFAULT_REPO_TRACK_PATHS),
+  autoRecallEnabled: z.boolean().default(true),
+  recallTopK: z.number().int().min(1).max(10).default(4),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -73,6 +75,8 @@ export const DEFAULT_USER_PREFERENCES = {
   gitToken: undefined,
   tts: DEFAULT_TTS_CONFIG,
   repoTrackPaths: DEFAULT_REPO_TRACK_PATHS,
+  autoRecallEnabled: true,
+  recallTopK: 4,
 };
 
 export const SettingsResponseSchema = z.object({

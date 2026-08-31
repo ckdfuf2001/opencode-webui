@@ -44,6 +44,8 @@ export interface UserPreferences {
   opencodeBin?: string
   tts?: TTSConfig
   repoTrackPaths?: string[]
+  autoRecallEnabled?: boolean
+  recallTopK?: number
 }
 
 export interface SettingsResponse {
@@ -111,4 +113,6 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   gitToken: undefined,
   tts: DEFAULT_TTS_CONFIG,
   repoTrackPaths: ['.opencode', 'scripts'],
+  autoRecallEnabled: true,
+  recallTopK: 4,
 }

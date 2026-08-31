@@ -276,14 +276,28 @@ export async function proxyRequest(request: Request, method: string, pathname: s
             }
           } else if (!commandName && !text.includes('<memory-recall>') && !text.includes('[run-context]') && text.trim().length >= 4) {
             try {
-              const { buildRecall } = await import('./recall')
-              const { resolveRepoId } = await import('./command-runs')
-              const repoId = directory ? resolveRepoId(proxyDb, directory) : null
-              const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
-              const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: 4, repoId: repoId ?? undefined, sessionId: sessionIdFromPath })
-              if (block) {
-                firstText.text = `${block}\n\n${text}`
-                body = JSON.stringify(parsed)
+              const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+              let enabled = true
+              let topK = 4
+              if (prefRow) {
+                try {
+                  const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
+                  if (p.autoRecallEnabled === false) enabled = false
+                  if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
+                } catch {}
+              }
+              if (!enabled) {
+                // auto recall disabled by user preference
+              } else {
+                const { buildRecall } = await import('./recall')
+                const { resolveRepoId } = await import('./command-runs')
+                const repoId = directory ? resolveRepoId(proxyDb, directory) : null
+                const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
+                const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: topK, repoId: repoId ?? undefined, sessionId: sessionIdFromPath })
+                if (block) {
+                  firstText.text = `${block}\n\n${text}`
+                  body = JSON.stringify(parsed)
+                }
               }
             } catch (e) {
               logger.debug('memory recall injection skipped:', e)

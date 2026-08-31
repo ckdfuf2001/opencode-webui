@@ -118,6 +118,41 @@ export function GeneralSettings() {
           />
         </div>
 
+        <div className="rounded-lg border border-border p-4 space-y-3">
+          <div className="flex flex-row items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="autoRecallEnabled" className="text-base">Auto memory recall</Label>
+              <p className="text-sm text-muted-foreground">
+                Automatically inject related past messages and commits into prompts
+              </p>
+            </div>
+            <Switch
+              id="autoRecallEnabled"
+              checked={preferences?.autoRecallEnabled ?? true}
+              onCheckedChange={(checked) => updateSettings({ autoRecallEnabled: checked })}
+            />
+          </div>
+          {(preferences?.autoRecallEnabled ?? true) && (
+            <div className="space-y-2">
+              <Label htmlFor="recallTopK">Recall top K</Label>
+              <Select
+                value={String(preferences?.recallTopK ?? 4)}
+                onValueChange={(v) => updateSettings({ recallTopK: parseInt(v, 10) })}
+              >
+                <SelectTrigger id="recallTopK">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => (
+                    <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">Number of memory hits injected (messages + commits combined)</p>
+            </div>
+          )}
+        </div>
+
         <div className="space-y-2">
           <Label htmlFor="gitToken">GitHub Personal Access Token</Label>
           <Input
