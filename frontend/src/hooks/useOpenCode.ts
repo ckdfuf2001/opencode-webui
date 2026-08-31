@@ -10,6 +10,7 @@ import type { paths } from "../api/opencode-types";
 import { showToast } from "@/lib/toast"
 import { markSessionIdle } from "./useSessionActivity"
 import { listSessionStatuses } from "@/api/session-status"
+import { stripMemoryRecall } from "@/lib/stripRecall"
 
 type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
@@ -249,7 +250,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         const getSignature = (parts: MessageWithParts["parts"]) => parts
           .map((p) => {
             const t = (p as { type?: string }).type
-            if (t === "text") return ((p as { text?: string }).text ?? "").trim()
+            if (t === "text") return stripMemoryRecall(((p as { text?: string }).text ?? "").trim())
             if (t === "file") return ((p as { filename?: string }).filename ?? "").trim()
             return ""
           })

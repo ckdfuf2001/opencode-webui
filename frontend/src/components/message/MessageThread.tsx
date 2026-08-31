@@ -4,13 +4,16 @@ import { CornerDownLeft, Scissors, Eraser, X } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
+import { stripMemoryRecall } from '@/lib/stripRecall'
 
 function getMessageTextContent(msg: MessageWithParts): string {
-  return msg.parts
-    .filter(p => p.type === 'text')
-    .map(p => p.text || '')
-    .join('\n\n')
-    .trim()
+  return stripMemoryRecall(
+    msg.parts
+      .filter(p => p.type === 'text')
+      .map(p => p.text || '')
+      .join('\n\n')
+      .trim(),
+  )
 }
 
 function getEditablePrompt(msg: MessageWithParts): string {
@@ -20,7 +23,7 @@ function getEditablePrompt(msg: MessageWithParts): string {
       const filename = p.filename || p.url?.replace(/^file:\/{2,3}/, '').split('/').pop() || 'File'
       lines.push(`@"${filename}"`)
     } else if (p.type === 'text' && p.text) {
-      const text = p.text.trim()
+      const text = stripMemoryRecall(p.text.trim())
       if (!text) continue
       if (/^Called the \w+ tool with the following input:/i.test(text)) continue
       lines.push(text.replace(MENTION_PATTERN, (m, quoted, single, unquoted) => quoted || single ? m : `@"${unquoted}"`))
@@ -175,20 +178,30 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {msg.parts.map((part, index) => (
-                    <div key={`${msg.info.id}-${part.id}-${index}`}>
-                      <MessagePart
-                        part={part}
-                        role={msg.info.role}
-                        allParts={msg.parts}
-                        partIndex={index}
-                        onFileClick={onFileClick}
-                        messageTextContent={msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined}
-                        directory={directory}
-                        messageStreaming={streaming}
-                      />
-                    </div>
-                  ))}
+                  {msg.parts
+                    .map((part) => {
+                      if ((part as { type?: string }).type === 'text' && typeof (part as { text?: string }).text === 'string') {
+                        const t = stripMemoryRecall((part as { text: string }).text)
+                        if (!t) return null
+                        return { ...part, text: t } as typeof part
+                      }
+                      return part
+                    })
+                    .filter(Boolean)
+                    .map((part, index) => (
+                      <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`}>
+                        <MessagePart
+                          part={part as typeof msg.parts[number]}
+                          role={msg.info.role}
+                          allParts={msg.parts}
+                          partIndex={index}
+                          onFileClick={onFileClick}
+                          messageTextContent={msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined}
+                          directory={directory}
+                          messageStreaming={streaming}
+                        />
+                      </div>
+                    ))}
                 </div>
               )}
             </div>
