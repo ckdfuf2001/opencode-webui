@@ -93,8 +93,8 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
         <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-3 py-2 bg-background border border-border rounded text-xs whitespace-nowrap z-10 shadow-lg min-w-[200px]">
           <div>{totalTokens.toLocaleString()} / {contextLimit.toLocaleString()} tokens</div>
           <div className="text-muted-foreground">{percentage.toFixed(1)}% used</div>
-          {isWarning && <div className="text-yellow-600 dark:text-yellow-400 font-medium mt-1">경고: 곧 한도 도달 — 대화 정리 필요</div>}
-          {isCritical && <div className="text-red-500 font-bold mt-1">초과: 전송 차단됨 — Scissors로 잘라내거나 compact 실행</div>}
+          {isWarning && <div className="text-yellow-600 dark:text-yellow-400 font-medium mt-1">Warning: limit close — clean up the conversation</div>}
+          {isCritical && <div className="text-red-500 font-bold mt-1">Exceeded: sending blocked — use Scissors to truncate or run compact</div>}
         </div>
       )}
     </div>

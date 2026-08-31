@@ -55,6 +55,13 @@ export interface TruncateResult {
   remainingMessages: number
 }
 
+export interface DeleteResult {
+  messagesRemoved: number
+  partsRemoved: number
+  eventsRemoved: number
+  remainingMessages: number
+}
+
 export async function truncateSessionMessages(
   sessionId: string,
   cursorMessageId: string,
@@ -112,46 +119,7 @@ export async function truncateSessionMessages(
         .query('SELECT data FROM message WHERE session_id = ?')
         .all(sessionId) as { data: string }[]
 
-      let cost = 0
-      let tokensInput = 0
-      let tokensOutput = 0
-      let tokensReasoning = 0
-      let tokensCacheRead = 0
-      let tokensCacheWrite = 0
-      let lastUpdated = cursorTime
-      for (const row of remaining) {
-        try {
-          const data = JSON.parse(row.data) as {
-            cost?: number
-            tokens?: {
-              input?: number
-              output?: number
-              reasoning?: number
-              cache?: { read?: number; write?: number }
-            }
-            time?: { created?: number }
-          }
-          if (typeof data.cost === 'number') cost += data.cost
-          const t = data.tokens
-          if (t) {
-            tokensInput += t.input ?? 0
-            tokensOutput += t.output ?? 0
-            tokensReasoning += t.reasoning ?? 0
-            tokensCacheRead += t.cache?.read ?? 0
-            tokensCacheWrite += t.cache?.write ?? 0
-          }
-          if (data.time?.created) lastUpdated = Math.max(lastUpdated, data.time.created)
-        } catch {
-          // ignore malformed message data
-        }
-      }
-
-      db.query(
-        `UPDATE session
-         SET cost = ?, tokens_input = ?, tokens_output = ?, tokens_reasoning = ?,
-             tokens_cache_read = ?, tokens_cache_write = ?, time_updated = ?
-         WHERE id = ?`,
-      ).run(cost, tokensInput, tokensOutput, tokensReasoning, tokensCacheRead, tokensCacheWrite, lastUpdated, sessionId)
+      recomputeSessionMeta(db, sessionId, cursorTime)
 
       db.exec('COMMIT')
 
@@ -163,6 +131,141 @@ export async function truncateSessionMessages(
         partsRemoved,
         eventsRemoved: 0,
         todoRemoved,
+        remainingMessages: remaining.length,
+      }
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Recompute the session-level aggregate (cost, token counts, updated time)
+ * from the currently remaining messages in the session.
+ */
+function recomputeSessionMeta(db: Database, sessionId: string, fallbackTime: number) {
+  const remaining = db
+    .query('SELECT data FROM message WHERE session_id = ?')
+    .all(sessionId) as { data: string }[]
+
+  let cost = 0
+  let tokensInput = 0
+  let tokensOutput = 0
+  let tokensReasoning = 0
+  let tokensCacheRead = 0
+  let tokensCacheWrite = 0
+  let lastUpdated = fallbackTime
+  for (const row of remaining) {
+    try {
+      const data = JSON.parse(row.data) as {
+        cost?: number
+        tokens?: {
+          input?: number
+          output?: number
+          reasoning?: number
+          cache?: { read?: number; write?: number }
+        }
+        time?: { created?: number }
+      }
+      if (typeof data.cost === 'number') cost += data.cost
+      const t = data.tokens
+      if (t) {
+        tokensInput += t.input ?? 0
+        tokensOutput += t.output ?? 0
+        tokensReasoning += t.reasoning ?? 0
+        tokensCacheRead += t.cache?.read ?? 0
+        tokensCacheWrite += t.cache?.write ?? 0
+      }
+      if (data.time?.created) lastUpdated = Math.max(lastUpdated, data.time.created)
+    } catch {
+      // ignore malformed message data
+    }
+  }
+
+  db.query(
+    `UPDATE session
+     SET cost = ?, tokens_input = ?, tokens_output = ?, tokens_reasoning = ?,
+         tokens_cache_read = ?, tokens_cache_write = ?, time_updated = ?
+     WHERE id = ?`,
+  ).run(cost, tokensInput, tokensOutput, tokensReasoning, tokensCacheRead, tokensCacheWrite, lastUpdated, sessionId)
+}
+
+/**
+ * Delete a single message plus its descendant subtree (the message's own turn,
+ * e.g. the user message and the assistant replies it produced) while keeping
+ * later independent turns intact. Unlike truncate, this does not remove every
+ * message after the cursor — only the message and its children.
+ */
+export async function deleteSessionMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<DeleteResult | null> {
+  const dbPath = await getOpenCodeDbPath()
+  if (!dbPath) return null
+
+  const db = new Database(dbPath)
+  try {
+    const target = db
+      .query('SELECT id FROM message WHERE session_id = ? AND id = ?')
+      .get(sessionId, messageId) as { id: string } | null
+    if (!target) {
+      logger.warn(`Delete: target message ${messageId} not found in session ${sessionId}`)
+      return null
+    }
+
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const ids = new Set<string>([messageId])
+      let frontier = [messageId]
+      while (frontier.length > 0) {
+        const placeholders = frontier.map(() => '?').join(',')
+        const children = db
+          .query<{ id: string }, string[]>(
+            `SELECT id FROM message WHERE session_id = ? AND parent_id IN (${placeholders})`,
+          )
+          .all(sessionId, ...frontier)
+        const newChildren = children.filter((c) => !ids.has(c.id))
+        for (const c of newChildren) ids.add(c.id)
+        frontier = newChildren.map((c) => c.id)
+      }
+      const idList = [...ids]
+
+      let partsRemoved = 0
+      let messagesRemoved = 0
+      if (idList.length > 0) {
+        const partResult = db
+          .query<{ changes: number }, string[]>(
+            'DELETE FROM part WHERE message_id IN (SELECT value FROM json_each(?))',
+          )
+          .run(JSON.stringify(idList))
+        partsRemoved = Number(partResult.changes ?? 0)
+
+        const msgResult = db
+          .query<{ changes: number }, string[]>(
+            'DELETE FROM message WHERE session_id = ? AND id IN (SELECT value FROM json_each(?))',
+          )
+          .run(sessionId, JSON.stringify(idList))
+        messagesRemoved = Number(msgResult.changes ?? 0)
+      }
+
+      recomputeSessionMeta(db, sessionId, Date.now())
+
+      const remaining = db
+        .query('SELECT id FROM message WHERE session_id = ?')
+        .all(sessionId) as { id: string }[]
+
+      db.exec('COMMIT')
+
+      logger.info(
+        `Deleted turn of message ${messageId} in session ${sessionId}: removed ${messagesRemoved} messages, ${partsRemoved} parts`,
+      )
+      return {
+        messagesRemoved,
+        partsRemoved,
+        eventsRemoved: 0,
         remainingMessages: remaining.length,
       }
     } catch (error) {

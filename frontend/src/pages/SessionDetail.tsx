@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
 import { useSettings } from "@/hooks/useSettings";
@@ -115,6 +115,7 @@ export function SessionDetail() {
   const abortSession = useAbortSession(opcodeUrl, repoDirectory);
   const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
   const truncateSession = useTruncateSession(opcodeUrl, repoDirectory);
+  const deleteMessageMutation = useDeleteMessage(opcodeUrl, repoDirectory);
   const summarizeSession = useSummarizeSession(opcodeUrl, repoDirectory);
   const ctx = useContextUsage(opcodeUrl, sessionId, repoDirectory);
   const { open: openSettings } = useSettingsDialog();
@@ -165,7 +166,7 @@ export function SessionDetail() {
         const isUserWithoutReply = last.info.role === "user";
         if ((isEmptyAssistant || isUserWithoutReply) && last.info.id !== lastBillingToastRef.current) {
           showToast.error(
-            "LLM 응답이 비어있습니다. Free quota 만료, 타임아웃 또는 provider 오류일 수 있습니다. 모델/키를 확인하세요. (https://opencode.ai/zen / https://openrouter.ai/credits)",
+            "The LLM response was empty. This may be due to a free quota, timeout, or provider error. Check your model/key. (https://opencode.ai/zen / https://openrouter.ai/credits)",
             { duration: 10000 },
           );
         }
@@ -208,7 +209,7 @@ export function SessionDetail() {
     lastLengthToastRef.current = lengthMsg.info.id;
     const pct = ctx.usagePercentage ? Math.round(ctx.usagePercentage) : 0;
     showToast.error(
-      `컨텍스트 한도 초과로 응답이 잘렸습니다 (finish=length, ${pct ? pct + "%" : "한도 초과"}). 요약(compact) 또는 이전 대화 잘라내기로 정리하세요.`,
+      `The response was truncated because the context limit was exceeded (finish=length, ${pct ? pct + "%" : "limit exceeded"}). Clean up with summarize (compact) or truncating previous messages.`,
       { duration: 8000 }
     );
     setLengthModal({ open: true, messageId: lengthMsg.info.id });
@@ -232,18 +233,18 @@ export function SessionDetail() {
           }
         }
       }
-      if (!modelStr) throw new Error("모델 정보가 없습니다. 모델을 먼저 선택한 후 요약(compact)을 실행하세요.");
+      if (!modelStr) throw new Error("No model info found. Select a model first, then run summarize (compact).");
       const slashIdx = modelStr.indexOf("/");
-      if (slashIdx === -1) throw new Error(`모델 정보가 올바르지 않습니다 (${modelStr}). 모델을 다시 선택하세요.`);
+      if (slashIdx === -1) throw new Error(`Invalid model info (${modelStr}). Select a model again.`);
       const providerID = modelStr.slice(0, slashIdx);
       const modelID = modelStr.slice(slashIdx + 1);
-      if (!providerID || !modelID) throw new Error("모델 정보가 올바르지 않습니다.");
+      if (!providerID || !modelID) throw new Error("Invalid model info.");
       const ok = await summarizeSession.mutateAsync({ sessionID: sessionId, providerID, modelID });
-      if (ok === false) throw new Error("서버가 요약(compact)을 완료하지 못했습니다. 다시 시도하거나 이전 대화 잘라내기를 사용하세요.");
-      showToast.success("세션을 요약(compact)했습니다. 컨텍스트가 정리되었습니다.", { duration: 4000 });
+      if (ok === false) throw new Error("The server could not complete summarize (compact). Try again, or truncate earlier messages instead.");
+      showToast.success("Session summarized (compact). Context cleaned up.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
     } catch (e) {
-      showToast.error((e as Error).message || "요약(compact)에 실패했습니다. 수동으로 잘라내기를 시도하세요.");
+      showToast.error((e as Error).message || "Summarize (compact) failed. Try truncating earlier messages manually.");
     } finally {
       setIsCompacting(false);
     }
@@ -264,11 +265,11 @@ export function SessionDetail() {
     try {
       const res = await truncateSession.mutateAsync({ sessionID: sessionId, messageID: cursorId });
       if (res?.success) {
-        showToast.success(`이전 대화 ${res.messagesRemoved ?? ""}개를 잘라냈습니다. 다시 시도하세요.`);
+        showToast.success(`Truncated ${res.messagesRemoved ?? ""} previous message(s). Try again.`);
         setLengthModal({ open: false, messageId: null });
       }
     } catch (e) {
-      showToast.error((e as Error).message || "잘라내기에 실패했습니다.");
+      showToast.error((e as Error).message || "Failed to truncate messages.");
     }
   }, [messages, sessionId, truncateSession]);
 
@@ -480,6 +481,22 @@ export function SessionDetail() {
     handleResendEdit(messageID)
   }, [sessionId, handleResendEdit]);
 
+  const handleDeleteMessage = useCallback(async (messageID: string) => {
+    if (!sessionId) return
+    try {
+      const result = await deleteMessageMutation.mutateAsync({ sessionID: sessionId, messageID })
+      if (!result?.success) {
+        showToast.error('Failed to delete message')
+        return
+      }
+      setHiddenAfterID(null)
+      setInjectedPrompt(null)
+      showToast.success('Message (this turn) deleted')
+    } catch (error) {
+      showToast.error((error as Error).message || 'Failed to delete message')
+    }
+  }, [sessionId, deleteMessageMutation]);
+
   const handleInjectedPromptConsumed = useCallback(() => {
     setInjectedPrompt(null)
   }, []);
@@ -602,6 +619,7 @@ if (results.length > 0) {
                 onFileClick={handleFileClick}
                 onEditMessage={handleEditMessage}
                 onTruncate={handleTruncate}
+                onDelete={handleDeleteMessage}
                 hiddenAfterID={hiddenAfterID}
                 onCancelEdit={handleCancelEdit}
                 highlightedMessageID={highlightedMessageID}
@@ -744,33 +762,33 @@ if (results.length > 0) {
 
       <Dialog open={lengthModal.open} onOpenChange={(o) => setLengthModal({ open: o, messageId: o ? lengthModal.messageId : null })}>
         <DialogContent className="max-w-lg">
-          <DialogTitle>컨텍스트 한도 초과</DialogTitle>
+          <DialogTitle>Context limit exceeded</DialogTitle>
           <div className="mt-2 space-y-3 text-sm">
             <p className="text-muted-foreground">
-              모델 응답이 <span className="font-mono font-bold text-red-500">finish=length</span> 로 잘렸습니다. 컨텍스트가 한도({ctx.contextLimit ? `${ctx.contextLimit.toLocaleString()} tokens` : "초과"})를 넘어 더 이상 정상 생성이 불가합니다.
-              {ctx.usagePercentage ? ` 현재 ${Math.round(ctx.usagePercentage)}% (${ctx.totalTokens.toLocaleString()} tokens) 사용 중.` : ""}
+              The model response was truncated with <span className="font-mono font-bold text-red-500">finish=length</span>. The context has reached its limit ({ctx.contextLimit ? `${ctx.contextLimit.toLocaleString()} tokens` : "exceeded"}), so normal generation is no longer possible.
+              {ctx.usagePercentage ? ` Currently using ${Math.round(ctx.usagePercentage)}% (${ctx.totalTokens.toLocaleString()} tokens).` : ""}
             </p>
-            <p className="text-xs text-muted-foreground">요약(compact)은 서버에서 대화를 요약해 컨텍스트를 줄입니다. 실패하면 이전 대화를 잘라내세요.</p>
+            <p className="text-xs text-muted-foreground">Summarize (compact) reduces context by summarizing the conversation on the server. If it fails, truncate earlier messages instead.</p>
             <div className="flex gap-2 justify-end pt-2">
               <button
                 onClick={() => setLengthModal({ open: false, messageId: null })}
                 className="px-3 py-1.5 rounded-md border text-sm"
               >
-                닫기
+                Close
               </button>
               <button
                 onClick={handleAutoTruncate}
                 disabled={truncateSession.isPending}
                 className="px-3 py-1.5 rounded-md bg-yellow-500/10 border border-yellow-500/30 text-yellow-700 dark:text-yellow-400 text-sm disabled:opacity-50"
               >
-                {truncateSession.isPending ? "처리 중..." : "이전 대화 잘라내기"}
+                {truncateSession.isPending ? "Processing..." : "Truncate previous messages"}
               </button>
               <button
                 onClick={handleCompact}
                 disabled={isCompacting || summarizeSession.isPending}
                 className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm disabled:opacity-50"
               >
-                {isCompacting || summarizeSession.isPending ? "요약 중..." : "요약(compact) 실행"}
+                {isCompacting || summarizeSession.isPending ? "Summarizing..." : "Run summarize (compact)"}
               </button>
             </div>
           </div>

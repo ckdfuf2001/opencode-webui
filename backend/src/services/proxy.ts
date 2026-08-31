@@ -2,7 +2,7 @@ import { logger } from '../utils/logger'
 import { getConfigPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
-import { truncateSessionMessages } from './opencode-db'
+import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
@@ -177,11 +177,47 @@ async function handleTruncate(request: Request, sessionId: string): Promise<Resp
   }
 }
 
+async function handleDelete(request: Request, sessionId: string): Promise<Response> {
+  try {
+    const body = (await request.json().catch(() => null)) as { messageID?: string } | null
+    const messageID = body?.messageID
+    if (!messageID) {
+      return new Response(JSON.stringify({ error: 'messageID is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    const result = await deleteSessionMessage(sessionId, messageID)
+    if (!result) {
+      return new Response(JSON.stringify({ error: 'Failed to delete message' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ success: true, ...result }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  } catch (error) {
+    logger.error('Failed to delete message:', error)
+    return new Response(JSON.stringify({ error: 'Failed to delete message' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+}
+
 export async function proxyRequest(request: Request, method: string, pathname: string, query: Record<string, string>) {
   const truncateMatch = pathname.match(/^\/api\/opencode\/session\/([^/]+)\/truncate$/)
   const truncateSessionId = truncateMatch?.[1]
   if (method === 'POST' && truncateSessionId) {
     return handleTruncate(request, truncateSessionId)
+  }
+
+  const deleteMatch = pathname.match(/^\/api\/opencode\/session\/([^/]+)\/delete$/)
+  const deleteSessionId = deleteMatch?.[1]
+  if (method === 'POST' && deleteSessionId) {
+    return handleDelete(request, deleteSessionId)
   }
 
   const search = query ? '?' + new URLSearchParams(query).toString() : ''

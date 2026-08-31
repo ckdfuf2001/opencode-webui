@@ -147,6 +147,13 @@ export class OpenCodeClient {
     return response.data
   }
 
+  async deleteMessage(sessionID: string, messageID: string) {
+    const response = await this.client.post(`/session/${sessionID}/delete`, {
+      messageID
+    })
+    return response.data
+  }
+
   async summarizeSession(sessionID: string, providerID: string, modelID: string) {
     const response = await this.client.post(`/session/${sessionID}/summarize`, { providerID, modelID })
     return response.data

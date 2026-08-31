@@ -198,11 +198,11 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const handleSubmit = async () => {
     if (!prompt.trim() || disabled) return
     if (isContextCritical || willExceed) {
-      showToast.error(`컨텍스트 ${Math.round(usage)}% 초과 — 전송 차단됨. Scissors로 이전 대화를 잘라내거나 새 세션으로 이동하세요. (${totalTokens.toLocaleString()} / ${contextLimit?.toLocaleString()} tokens)`, { duration: 6000 })
+      showToast.error(`Context ${Math.round(usage)}% exceeded — send blocked. Use Scissors to truncate previous messages or start a new session. (${totalTokens.toLocaleString()} / ${contextLimit?.toLocaleString()} tokens)`, { duration: 6000 })
       return
     }
     if (isContextWarning) {
-      showToast.warning(`컨텍스트 ${Math.round(usage)}% — 곧 한도에 도달합니다. 불필요한 대화는 잘라내세요.`, { duration: 4000 })
+      showToast.warning(`Context ${Math.round(usage)}% — the limit is close. Truncate unnecessary messages.`, { duration: 4000 })
     }
 
     if (isBashMode) {
@@ -287,7 +287,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const handleQueue = async () => {
     if (!prompt.trim() || disabled) return
     if (isContextCritical || willExceed) {
-      showToast.error(`컨텍스트 ${Math.round(usage)}% 초과 — 큐 적재 차단됨. 먼저 대화를 정리하세요.`, { duration: 6000 })
+      showToast.error(`Context ${Math.round(usage)}% exceeded — queueing blocked. Clean up the conversation first.`, { duration: 6000 })
       return
     }
     const parts = await buildValidatedParts()
@@ -760,10 +760,10 @@ useEffect(() => {
         <div className={`mb-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between ${isContextCritical || willExceed ? 'bg-red-500/15 border border-red-500/40 text-red-400' : 'bg-yellow-500/15 border border-yellow-500/40 text-yellow-600 dark:text-yellow-400'}`}>
           <span>
             {isContextCritical || willExceed
-              ? `컨텍스트 초과 ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — 전송이 차단됩니다. Scissors(가위)로 이전 대화를 잘라내거나 새 세션을 시작하세요.`
-              : `컨텍스트 경고 ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — 곧 한도에 도달합니다.`}
+              ? `Context exceeded ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — sending is blocked. Use Scissors to truncate previous messages or start a new session.`
+              : `Context warning ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — the limit is close.`}
           </span>
-          {willExceed && <span className="ml-2 font-mono text-[10px] opacity-70">예상 {Math.round(projectedUsage)}%</span>}
+          {willExceed && <span className="ml-2 font-mono text-[10px] opacity-70">projected {Math.round(projectedUsage)}%</span>}
         </div>
       )}
       <textarea
@@ -871,7 +871,7 @@ useEffect(() => {
                   ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
                   : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
             }`}
-            title={isContextCritical || willExceed ? '컨텍스트 초과로 전송 차단' : showStop ? 'Queue message' : 'Send'}
+            title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? 'Queue message' : 'Send'}
           >
             {isContextCritical || willExceed ? 'Blocked' : showStop ? 'Queue' : 'Send'}
           </button>

@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { MessagePart } from './MessagePart'
-import { CornerDownLeft, Scissors, X } from 'lucide-react'
+import { CornerDownLeft, Scissors, Eraser, X } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
@@ -41,6 +41,7 @@ interface MessageThreadProps {
   onFileClick?: (filePath: string, lineNumber?: number) => void
   onEditMessage?: (messageID: string, text: string) => void
   onTruncate?: (messageID: string) => void
+  onDelete?: (messageID: string) => void
   hiddenAfterID?: string | null
   onCancelEdit?: () => void
   highlightedMessageID?: string | null
@@ -57,7 +58,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading }: MessageThreadProps) {
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
@@ -117,7 +118,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
             >
               <div className="flex items-center gap-2 mb-1">
                 <span className={`text-xs font-medium ${isLength ? 'text-red-500 font-bold' : isError ? 'text-red-400' : 'text-zinc-400'}`}>
-                  {isLength ? '컨텍스트 초과로 잘림' : isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
+                  {isLength ? 'Truncated due to context limit' : isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
                 </span>
                 {msg.info.time && (
                   <span className="text-xs text-muted-foreground">
@@ -147,16 +148,17 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                     <Scissors className="w-3.5 h-3.5" />
                   </button>
                 )}
+                {msg.info.role === 'user' && onDelete && (
+                  <button
+                    onClick={() => onDelete(msg.info.id)}
+                    className="p-1 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-500 cursor-pointer"
+                    title="Delete this message turn"
+                  >
+                    <Eraser className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               
-              {isLength && (
-                <div className="mb-2 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 flex items-center justify-between">
-                  <span>응답이 컨텍스트 한도(length)로 잘렸습니다 — 이전 대화를 잘라내거나 요약 후 재시도하세요.</span>
-                  {onTruncate && (
-                    <button onClick={() => onTruncate(msg.info.id)} className="ml-2 px-2 py-0.5 rounded bg-red-500 text-white text-xs hover:bg-red-600">잘라내기</button>
-                  )}
-                </div>
-              )}
               {thinking ? (
                 <div className="flex items-center gap-2 text-zinc-500">
                   <span className="animate-pulse">▋</span>

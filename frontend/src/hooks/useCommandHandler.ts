@@ -124,7 +124,7 @@ export function useCommandHandler({
         case 'summarize': {
           const [providerID, modelID] = (preferences?.defaultModel ?? '').split('/')
           if (!providerID || !modelID) {
-            showToast.warning('먼저 모델을 선택하세요. 요약에는 providerID/modelID 가 필요합니다.')
+            showToast.warning('Select a model first. Summarize requires providerID/modelID.')
             hasError = true
             break
           }
@@ -134,19 +134,32 @@ export function useCommandHandler({
           // upstream 은 성공 시 boolean 을 반환한다. 명시적 false 는 요약 실패를 뜻한다.
           const failed = result === false
           if (isEmpty) {
-            showToast.warning('요약 응답이 비어 있습니다. 타임아웃일 수 있으니 메시지 목록을 확인하세요.')
+            showToast.warning('The summarize response was empty. This may be a timeout — check the message list.')
             hasError = true
           } else if (failed) {
-            showToast.warning('요약(compact)이 완료되지 않았습니다. 컨텍스트가 너무 커서 실패했을 수 있으니 이전 대화 잘라내기를 시도하세요.')
+            showToast.warning('Summarize (compact) did not complete. It may have failed because the context is too large — try truncating previous messages.')
             hasError = true
           } else {
-            showToast.success('컨텍스트를 요약했습니다.')
+            showToast.warning('Context summarized — handled autonomously by the WebUI.')
           }
           await queryClient.invalidateQueries({ queryKey: ['messages', opcodeUrl, sessionID] })
           await queryClient.invalidateQueries({ queryKey: ['session', opcodeUrl, sessionID] })
           break
         }
-        case 'share':
+        case 'share': {
+          try {
+            await navigator.clipboard.writeText(window.location.href)
+          } catch {
+            const ta = document.createElement('textarea')
+            ta.value = window.location.href
+            document.body.appendChild(ta)
+            ta.select()
+            document.execCommand('copy')
+            document.body.removeChild(ta)
+          }
+          showToast.warning('Share link copied to clipboard — handled by the WebUI.')
+          break
+        }
         case 'unshare':
         case 'export':
         case 'undo':
