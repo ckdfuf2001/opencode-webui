@@ -22,7 +22,7 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
   const hits: RecallHit[] = []
 
   if (opts.includeMessages !== false) {
-    const msgs = searchMessages(db, q, { k: perKind, repoId: opts.repoId, sessionId: opts.sessionId })
+    const msgs = searchMessagesUnion(db, q, perKind, opts)
     for (const m of msgs) {
       hits.push({
         kind: 'message',
@@ -33,7 +33,7 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
   }
 
   if (opts.includeCommits !== false) {
-    const commits = searchCommits(db, q, { k: perKind, repoId: opts.repoId })
+    const commits = searchCommitsUnion(db, q, perKind, opts)
     for (const c of commits) {
       hits.push({
         kind: 'commit',
@@ -52,4 +52,50 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
   }
   lines.push('</memory-recall>')
   return { block: lines.join('\n'), hits }
+}
+
+function searchMessagesUnion(db: Database, q: string, k: number, opts: RecallOptions) {
+  const tokens = tokenize(q)
+  if (tokens.length === 0) return []
+  if (tokens.length === 1) return searchMessages(db, q, { k, repoId: opts.repoId, sessionId: opts.sessionId })
+  const seen = new Set<string>()
+  const out: ReturnType<typeof searchMessages> = []
+  for (const tok of tokens) {
+    const hits = searchMessages(db, tok, { k, repoId: opts.repoId, sessionId: opts.sessionId })
+    for (const h of hits) {
+      if (seen.has(h.messageId)) continue
+      seen.add(h.messageId)
+      out.push(h)
+      if (out.length >= k) return out
+    }
+  }
+  if (out.length > 0) return out.slice(0, k)
+  return searchMessages(db, q, { k, repoId: opts.repoId, sessionId: opts.sessionId })
+}
+
+function searchCommitsUnion(db: Database, q: string, k: number, opts: RecallOptions) {
+  const tokens = tokenize(q)
+  if (tokens.length === 0) return []
+  if (tokens.length === 1) return searchCommits(db, q, { k, repoId: opts.repoId })
+  const seen = new Set<string>()
+  const out: ReturnType<typeof searchCommits> = []
+  for (const tok of tokens) {
+    const hits = searchCommits(db, tok, { k, repoId: opts.repoId })
+    for (const h of hits) {
+      const key = `${h.repoId}:${h.sha}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(h)
+      if (out.length >= k) return out
+    }
+  }
+  if (out.length > 0) return out.slice(0, k)
+  return searchCommits(db, q, { k, repoId: opts.repoId })
+}
+
+function tokenize(q: string): string[] {
+  return q
+    .split(/\s+/)
+    .map((t) => t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim())
+    .filter((t) => t.length > 1)
 }

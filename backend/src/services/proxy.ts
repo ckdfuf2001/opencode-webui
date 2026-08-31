@@ -274,6 +274,20 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               firstText.text = `${block}\n\n${text}`
               body = JSON.stringify(parsed)
             }
+          } else if (!commandName && !text.includes('<memory-recall>') && !text.includes('[run-context]') && text.trim().length >= 4) {
+            try {
+              const { buildRecall } = await import('./recall')
+              const { resolveRepoId } = await import('./command-runs')
+              const repoId = directory ? resolveRepoId(proxyDb, directory) : null
+              const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
+              const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: 4, repoId: repoId ?? undefined, sessionId: sessionIdFromPath })
+              if (block) {
+                firstText.text = `${block}\n\n${text}`
+                body = JSON.stringify(parsed)
+              }
+            } catch (e) {
+              logger.debug('memory recall injection skipped:', e)
+            }
           }
         }
       } catch (e) {
