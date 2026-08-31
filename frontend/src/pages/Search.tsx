@@ -136,7 +136,7 @@ export function Search() {
                 <SelectValue placeholder="레포 선택" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Repositorys</SelectItem>
+                <SelectItem value="all">All Repositories</SelectItem>
                 <SelectItem value="0">host (opencode-webui)</SelectItem>
                 {repos?.map((r) => (
                   <SelectItem key={r.id} value={String(r.id)}>
