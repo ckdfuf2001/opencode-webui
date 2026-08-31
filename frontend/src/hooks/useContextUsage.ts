@@ -91,27 +91,18 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
       }
     }
     
-    // Get the latest assistant message for current context usage
+    // Cumulative session usage: sum all assistant message tokens (input+output+reasoning+cache)
     const assistantMessages = messages.filter(isAssistantMessage)
-    let latestAssistantMessage = assistantMessages[assistantMessages.length - 1]
-    
-    // If the latest message has 0 tokens (still being created), use the previous one
-    if (latestAssistantMessage) {
-      const latestTokens = latestAssistantMessage.info.tokens.input + latestAssistantMessage.info.tokens.output + latestAssistantMessage.info.tokens.reasoning
-      if (latestTokens === 0 && assistantMessages.length > 1) {
-        latestAssistantMessage = assistantMessages[assistantMessages.length - 2]
-      }
-    }
-    
     let totalTokens = 0
-    if (latestAssistantMessage) {
-      // The latest message contains the total context usage
-      totalTokens = latestAssistantMessage.info.tokens.input + latestAssistantMessage.info.tokens.output + latestAssistantMessage.info.tokens.reasoning
-      
-      // If no model in preferences, use the model from the message
-      if (!currentModel && 'modelID' in latestAssistantMessage.info && 'providerID' in latestAssistantMessage.info) {
-        currentModel = `${latestAssistantMessage.info.providerID}/${latestAssistantMessage.info.modelID}`
-      }
+    for (const m of assistantMessages) {
+      const t = m.info.tokens
+      totalTokens += (t.input ?? 0) + (t.output ?? 0) + (t.reasoning ?? 0) + (t.cache?.read ?? 0) + (t.cache?.write ?? 0)
+    }
+
+    // Determine current model from the latest assistant message if not set in preferences
+    const latestAssistantMessage = assistantMessages[assistantMessages.length - 1]
+    if (!currentModel && latestAssistantMessage && 'modelID' in latestAssistantMessage.info && 'providerID' in latestAssistantMessage.info) {
+      currentModel = `${latestAssistantMessage.info.providerID}/${latestAssistantMessage.info.modelID}`
     }
 
     // Find the model configuration from providers data
