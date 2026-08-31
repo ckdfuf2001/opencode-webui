@@ -54,6 +54,13 @@ export function Search() {
     queryFn: listRepos,
   })
 
+  const repoName = (id: number | null | undefined) => {
+    if (id == null) return String(id)
+    if (id === 0) return 'host (opencode-webui)'
+    const r = repos?.find((x) => x.id === id)
+    return r ? `${r.localPath} (#${r.id})` : `repo #${id}`
+  }
+
   const messagesQuery = useQuery({
     queryKey: ['search-messages', submittedQ, activeTab, selectedRepoId],
     queryFn: () => searchMessages({ q: submittedQ, k: 20, repoId: repoIdParam }),
@@ -170,7 +177,7 @@ export function Search() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="outline">{hit.role}</Badge>
                     <Badge variant="secondary">turn {hit.turnIndex}</Badge>
-                    {hit.repoId != null && <Badge variant="secondary">{hit.repoId === 0 ? 'host' : `repo ${hit.repoId}`}</Badge>}
+                    {hit.repoId != null && <Badge variant="secondary" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</Badge>}
                     <span className="text-xs text-muted-foreground">
                       {new Date(hit.ts).toLocaleString()}
                     </span>
@@ -232,7 +239,7 @@ export function Search() {
                 <Card key={`${hit.repoId}-${hit.sha}`} className="p-4 space-y-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{hit.sha.slice(0, 7)}</code>
-                    {hit.repoId != null && <Badge variant="secondary">{hit.repoId === 0 ? 'host' : `repo ${hit.repoId}`}</Badge>}
+                    {hit.repoId != null && <Badge variant="secondary" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</Badge>}
                     <span className="text-xs text-muted-foreground">{hit.author}</span>
                     <span className="text-xs text-muted-foreground">
                       {new Date(hit.committedAt).toLocaleString()}
