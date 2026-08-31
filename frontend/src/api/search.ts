@@ -123,3 +123,13 @@ export async function reindexCommits(repoId?: number): Promise<unknown> {
   if (!res.ok) throw new Error('Failed to reindex commits')
   return res.json()
 }
+
+export async function recall(q: string, opts: { k?: number; repoId?: number; sessionId?: string } = {}): Promise<{ block: string; hits: { kind: string; snippet: string; meta: string }[] }> {
+  const sp = new URLSearchParams({ q })
+  if (opts.k != null) sp.set('k', String(opts.k))
+  if (opts.repoId != null) sp.set('repoId', String(opts.repoId))
+  if (opts.sessionId) sp.set('sessionId', opts.sessionId)
+  const res = await fetch(`${API_BASE_URL}/api/search/recall?${sp.toString()}`)
+  if (!res.ok) throw new Error('Failed to recall')
+  return res.json()
+}

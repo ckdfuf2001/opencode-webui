@@ -16,6 +16,7 @@ import {
 } from '../services/git-indexer'
 import { getRepoById } from '../db/queries'
 import { listAllIndexedRepos } from '../services/git-indexer'
+import { buildRecall } from '../services/recall'
 import { logger } from '../utils/logger'
 
 const SearchSchema = z.object({ q: z.string().max(500).optional(), k: z.coerce.number().int().min(1).max(50).optional() })
@@ -141,6 +142,27 @@ export function createSearchRoutes(db: Database) {
       if (error instanceof z.ZodError) return c.json({ error: 'Invalid body', details: error.issues }, 400)
       logger.error('Failed to reindex commits:', error)
       return c.json({ error: 'Failed to reindex commits' }, 500)
+    }
+  })
+
+  app.get('/recall', async (c) => {
+    try {
+      const q = c.req.query('q') ?? ''
+      if (!q.trim()) return c.json({ block: '', hits: [] })
+      const kRaw = c.req.query('k')
+      const k = kRaw ? parseInt(kRaw, 10) : undefined
+      const repoIdRaw = c.req.query('repoId')
+      const repoId = repoIdRaw != null && repoIdRaw !== '' ? parseInt(repoIdRaw, 10) : undefined
+      const sessionId = c.req.query('sessionId') || undefined
+      const result = buildRecall(db, q, {
+        k: k != null && !Number.isNaN(k) ? k : undefined,
+        repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
+        sessionId,
+      })
+      return c.json(result)
+    } catch (error) {
+      logger.error('Failed to recall:', error)
+      return c.json({ error: 'Failed to recall' }, 500)
     }
   })
 
