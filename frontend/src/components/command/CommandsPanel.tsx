@@ -788,10 +788,10 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           />
         </div>
 
-        {/* 필터 + 필터 옆 클립보드/채팅 — 서치 페이지와 동일 */}
-        <div className="flex flex-wrap items-center gap-1.5">
+        {/* 필터 + recall block(오버레이) + Copy/Chat — block은 copy/chat 왼쪽에, 오버레이 표시 */}
+        <div className="flex flex-wrap items-center gap-1.5 relative">
           <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-            <SelectTrigger className="w-[160px] h-7 text-xs">
+            <SelectTrigger className="w-[150px] h-7 text-xs">
               <SelectValue placeholder="레포 선택" />
             </SelectTrigger>
             <SelectContent>
@@ -806,7 +806,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           </Select>
 
           <Select value={k} onValueChange={setK}>
-            <SelectTrigger className="w-[90px] h-7 text-xs">
+            <SelectTrigger className="w-[85px] h-7 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -817,8 +817,18 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </SelectContent>
           </Select>
 
-          {/* 필터 옆 clipboard / use in chat */}
           <div className="flex items-center gap-1 ml-auto">
+            {filteredBlock && (
+              <button
+                onClick={() => setBlockOpen((v) => !v)}
+                className={`inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border ${blockOpen ? 'bg-primary/10 border-primary/30 text-primary' : 'bg-background hover:bg-muted border-border'}`}
+                title="Recall block overlay"
+              >
+                <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
+                Recall block
+                <span className="text-[10px] text-muted-foreground hidden sm:inline">{kind !== 'all' ? `· ${kind}` : ''} · {filteredBlock.length}c</span>
+              </button>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -839,6 +849,20 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <MessageSquarePlus className="w-3 h-3" /> Chat
             </Button>
           </div>
+
+          {blockOpen && filteredBlock && (
+            <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl">
+              <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
+                <span className="text-[11px] font-medium">Recall block {kind !== 'all' ? `(${kind})` : ''}</span>
+                <button onClick={() => setBlockOpen(false)} className="text-muted-foreground hover:text-foreground p-0.5">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto">
+                {filteredBlock}
+              </pre>
+            </div>
+          )}
         </div>
 
         <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')}>
@@ -856,25 +880,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             {` · ${filteredHits.length}/${data?.hits.length ?? 0} hits`}
             {kind !== 'all' ? ` · ${kind}` : ''}
           </p>
-        )}
-
-        {/* recall block — 필터 옆, 접은 상태 (단일 Copy/Chat) */}
-        {filteredBlock && (
-          <div className="rounded-md border border-primary/20 bg-primary/5">
-            <button
-              onClick={() => setBlockOpen((v) => !v)}
-              className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left"
-            >
-              <ChevronRight className={`w-3 h-3 text-primary transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
-              <span className="text-[11px] font-medium text-primary">Recall block {kind !== 'all' ? `(${kind})` : ''}</span>
-              <span className="text-[10px] text-muted-foreground">· {filteredBlock.length} chars · {blockOpen ? '접기' : '펼치기'}</span>
-            </button>
-            {blockOpen && (
-              <pre className="mx-2 mb-2 text-[11px] whitespace-pre-wrap break-words font-mono bg-background/60 rounded p-2 border border-border max-h-32 overflow-y-auto">
-                {filteredBlock}
-              </pre>
-            )}
-          </div>
         )}
       </div>
 
