@@ -821,8 +821,8 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </Select>
           </div>
 
-          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 */}
-          <div className="inline-flex items-center rounded-md border bg-background shrink-0 overflow-hidden divide-x divide-border">
+          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 하위 느낌, 아이콘만, 파란 배경 제거 */}
+          <div className="inline-flex items-center rounded-md border bg-background shrink-0 overflow-hidden">
             <button
               onClick={() => filteredBlock && setBlockOpen((v) => !v)}
               disabled={!filteredBlock}
@@ -832,22 +832,24 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
               Recalls
             </button>
-            <button
-              onClick={() => copyText(filteredBlock, 'Recalls copied')}
-              disabled={!filteredBlock}
-              className="inline-flex items-center gap-1 text-xs h-7 px-2 shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Copy Recalls to clipboard"
-            >
-              <Clipboard className="w-3 h-3" /> Copy
-            </button>
-            <button
-              onClick={() => useInChat(filteredBlock)}
-              disabled={!filteredBlock}
-              className="inline-flex items-center gap-1 text-xs h-7 px-2 shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Use Recalls in chat"
-            >
-              <MessageSquarePlus className="w-3 h-3" /> Chat
-            </button>
+            <div className="flex items-center gap-0.5 px-1 ml-0.5 border-l bg-muted/20">
+              <button
+                onClick={() => copyText(filteredBlock, 'Recalls copied')}
+                disabled={!filteredBlock}
+                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-background border border-transparent hover:border-border disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Copy Recalls"
+              >
+                <Clipboard className="w-3 h-3" />
+              </button>
+              <button
+                onClick={() => useInChat(filteredBlock)}
+                disabled={!filteredBlock}
+                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-background border border-transparent hover:border-border disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Use Recalls in chat"
+              >
+                <MessageSquarePlus className="w-3 h-3" />
+              </button>
+            </div>
           </div>
 
           {blockOpen && filteredBlock && (
