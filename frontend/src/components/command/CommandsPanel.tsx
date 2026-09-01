@@ -788,34 +788,38 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           />
         </div>
 
-        {/* 필터부터 chat까지 한 줄, All/Chat/Git은 아래 줄 유지 */}
-        <div className="flex items-center gap-1.5 relative flex-nowrap overflow-x-auto scrollbar-none py-0.5">
-          <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-            <SelectTrigger className="w-[160px] min-w-[130px] h-7 text-xs shrink-0">
-              <SelectValue placeholder="레포 선택" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Repositories</SelectItem>
-              <SelectItem value="0">host (opencode-webui)</SelectItem>
-              {repos?.map((r) => (
-                <SelectItem key={r.id} value={String(r.id)}>
-                  {r.localPath} (#{r.id})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* 필터부터 chat까지 한 줄(스크롤 없이 100% 조정, 필터 min 없음) */}
+        <div className="flex items-center gap-1 relative w-full py-0.5">
+          <div className="flex-1 min-w-0">
+            <Select value={selectedRepo} onValueChange={setSelectedRepo}>
+              <SelectTrigger className="w-full h-7 text-xs">
+                <SelectValue placeholder="레포 선택" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Repositories</SelectItem>
+                <SelectItem value="0">host (opencode-webui)</SelectItem>
+                {repos?.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id)}>
+                    {r.localPath} (#{r.id})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-          <Select value={k} onValueChange={setK}>
-            <SelectTrigger className="w-[85px] h-7 text-xs shrink-0">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="5">5 hits</SelectItem>
-              <SelectItem value="8">8 hits</SelectItem>
-              <SelectItem value="10">10 hits</SelectItem>
-              <SelectItem value="20">20 hits</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="w-[72px] shrink-0">
+            <Select value={k} onValueChange={setK}>
+              <SelectTrigger className="w-full h-7 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="5">5 hits</SelectItem>
+                <SelectItem value="8">8 hits</SelectItem>
+                <SelectItem value="10">10 hits</SelectItem>
+                <SelectItem value="20">20 hits</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {filteredBlock && (
             <button
@@ -825,13 +829,12 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             >
               <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
               Recalls
-              <span className="text-[10px] text-muted-foreground hidden sm:inline">{kind !== 'all' ? `· ${kind}` : ''} · {filteredBlock.length}c</span>
             </button>
           )}
           <Button
             size="sm"
             variant="outline"
-            className="h-7 text-xs gap-1 shrink-0"
+            className="h-7 text-xs gap-1 shrink-0 px-2"
             disabled={!filteredBlock}
             onClick={() => copyText(filteredBlock, 'Recalls copied')}
             title="Copy Recalls to clipboard"
@@ -840,7 +843,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           </Button>
           <Button
             size="sm"
-            className="h-7 text-xs gap-1 shrink-0"
+            className="h-7 text-xs gap-1 shrink-0 px-2"
             disabled={!filteredBlock}
             onClick={() => useInChat(filteredBlock)}
             title="Use Recalls in chat"
