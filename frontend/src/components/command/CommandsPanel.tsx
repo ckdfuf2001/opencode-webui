@@ -824,8 +824,8 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           {/* 필터와 Recalls 사이 띄우는 영역 */}
           <div className="w-2 shrink-0" aria-hidden />
 
-          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 두 버튼 붙이고 내부 버튼처럼 외부와 여백 */}
-          <div className="inline-flex items-center gap-1 rounded-md border border-input bg-background shrink-0 p-1">
+          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 외곽 h-7로 필터와 동일, 안쪽 두 버튼 더 작게 */}
+          <div className="inline-flex items-center gap-1 rounded-md border border-input bg-background shrink-0 h-7 px-1">
             <button
               onClick={() => filteredBlock && setBlockOpen((v) => !v)}
               disabled={!filteredBlock}
@@ -839,18 +839,18 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <button
                 onClick={() => copyText(filteredBlock, 'Recalls copied')}
                 disabled={!filteredBlock}
-                className="inline-flex items-center gap-1 text-xs h-6 px-2 rounded-none border-r border-input shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-0.5 text-xs h-5 px-1.5 rounded-none border-r border-input shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Copy Recalls"
               >
-                <Clipboard className="w-3 h-3" /> <span className="text-[11px]">Copy</span>
+                <Clipboard className="w-2.5 h-2.5" /> <span className="text-[10px]">Copy</span>
               </button>
               <button
                 onClick={() => useInChat(filteredBlock)}
                 disabled={!filteredBlock}
-                className="inline-flex items-center gap-1 text-xs h-6 px-2 rounded-none shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-0.5 text-xs h-5 px-1.5 rounded-none shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Use Recalls in chat"
               >
-                <MessageSquarePlus className="w-3 h-3" /> <span className="text-[11px]">Chat</span>
+                <MessageSquarePlus className="w-2.5 h-2.5" /> <span className="text-[10px]">Chat</span>
               </button>
             </div>
           </div>
