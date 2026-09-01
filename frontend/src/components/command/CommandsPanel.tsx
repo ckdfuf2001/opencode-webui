@@ -1019,7 +1019,14 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     </button>
                   </div>
                   {expandedId === h.messageId && expandedData ? (
-                    <div onClick={(e) => e.stopPropagation()} className="space-y-1.5">
+                    <div className="relative space-y-1.5 pt-6">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
+                        className="absolute top-0 right-0 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background/90 backdrop-blur shadow hover:bg-muted"
+                        title="Chat으로 이동"
+                      >
+                        <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
+                      </button>
                       {expandedData.rows.map((row) => (
                         <div key={row.messageId} className={`p-2 rounded text-xs ${row.messageId === expandedData.center.messageId ? 'bg-accent border border-input' : 'bg-muted/30'}`}>
                           <div className="flex gap-2 text-[10px] text-muted-foreground mb-1">
@@ -1029,32 +1036,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                           <div className="whitespace-pre-wrap break-words">{row.text ? highlightSnippet(row.text) : '(empty)'}</div>
                         </div>
                       ))}
-                      <div className="flex gap-1.5 pt-1 flex-wrap">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); const t = expandedData ? expandedData.rows.map((r) => r.text).join('\n\n') : h.snippet; copyText(t, 'Copied expanded content') }}
-                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
-                        >
-                          <Copy className="w-3 h-3" /> Copy
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); const t = expandedData ? expandedData.rows.map((r) => r.text).join('\n\n') : h.snippet; useInChat(t) }}
-                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
-                        >
-                          <MessageSquarePlus className="w-3 h-3" /> Chat
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
-                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted ml-auto"
-                        >
-                          <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleExpand(h.messageId!) }}
-                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
-                        >
-                          <History className="w-3 h-3" /> 접기
-                        </button>
-                      </div>
                     </div>
                   ) : (
                     <>

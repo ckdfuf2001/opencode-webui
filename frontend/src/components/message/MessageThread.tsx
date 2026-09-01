@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { MessagePart } from './MessagePart'
-import { CornerDownLeft, Scissors, Eraser, X } from 'lucide-react'
+import { CornerDownLeft, Scissors, Eraser, X, Copy } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
@@ -14,6 +14,14 @@ function getMessageTextContent(msg: MessageWithParts): string {
       .join('\n\n')
       .trim(),
   )
+}
+
+function getRawMessageTextContent(msg: MessageWithParts): string {
+  return msg.parts
+    .filter(p => p.type === 'text')
+    .map(p => p.text || '')
+    .join('\n\n')
+    .trim()
 }
 
 function getEditablePrompt(msg: MessageWithParts): string {
@@ -142,10 +150,22 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                     <span className="animate-pulse">●</span> <span className="shine-loading">Generating...</span>
                   </span>
                 )}
+                {msg.info.role === 'user' && !streaming && (
+                  <button
+                    onClick={() => {
+                      const raw = getRawMessageTextContent(msg)
+                      navigator.clipboard.writeText(raw).catch(() => {})
+                    }}
+                    className="ml-auto p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+                    title="Copy (including <memory-recall>)"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 {msg.info.role === 'user' && onEditMessage && !streaming && (
                   <button
                     onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg))}
-                    className="ml-auto p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+                    className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
                     title="Edit and resend"
                   >
                     <CornerDownLeft className="w-3.5 h-3.5" />
