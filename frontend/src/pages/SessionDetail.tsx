@@ -541,6 +541,14 @@ export function SessionDetail() {
     }))
   }, [sessionId]);
 
+  const handleRecallUseInChat = useCallback((text: string) => {
+    // Recall 검색 결과를 채팅 입력으로 보낸다 — PromptInput이 injectedPrompt를 소비
+    setInjectedPrompt((prev) => ({
+      token: (prev?.token ?? 0) + 1,
+      text,
+    }))
+  }, []);
+
   const handleInjectedConsumed = useCallback(() => {
     setInjectedCommand(null)
   }, []);
@@ -867,6 +875,7 @@ if (results.length > 0) {
         repoId={repoId}
         onExecuteCommand={handleExecuteCommand}
         onScrollToMessage={scrollToMessage}
+        onUseInChat={handleRecallUseInChat}
       />
 
       <PermissionRulesDialog

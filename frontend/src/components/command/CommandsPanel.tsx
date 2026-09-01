@@ -28,6 +28,9 @@ import {
   ListChecks,
   MoreHorizontal,
   Calendar as CalendarIcon,
+  Brain,
+  Clipboard,
+  MessageSquarePlus,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -62,6 +65,7 @@ interface CommandsPanelProps {
   global?: boolean
   onExecuteCommand?: (command: CommandWithScope, run: boolean, args: string) => void
   onScrollToMessage?: (messageID: string) => void
+  onUseInChat?: (text: string) => void
 }
 
 interface RunSessionMeta {
@@ -686,7 +690,150 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
   )
 }
 
-export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, repoId, global = sessionID === '', onExecuteCommand, onScrollToMessage }: CommandsPanelProps) {
+function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sessionId: string; onUseInChat?: (text: string) => void }) {
+  const [q, setQ] = useState('')
+  const [submittedQ, setSubmittedQ] = useState('')
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['recall', submittedQ, repoId, sessionId],
+    queryFn: async () => {
+      const { recall } = await import('@/api/search')
+      return recall(submittedQ, { k: 8, repoId: repoId ?? undefined, sessionId: sessionId || undefined })
+    },
+    enabled: !!submittedQ,
+  })
+
+  const handleSearch = () => {
+    const t = q.trim()
+    if (!t) return
+    setSubmittedQ(t)
+  }
+
+  const copyText = async (text: string, label = 'Copied to clipboard') => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast.success(label)
+    } catch {
+      showToast.error('Failed to copy')
+    }
+  }
+
+  const useInChat = (text: string) => {
+    onUseInChat?.(text)
+    showToast.success('Added to chat input')
+  }
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="p-3 pb-0 flex-shrink-0 space-y-2">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+              placeholder="Recall search (FTS) — messages & commits, trigram"
+              className="w-full h-8 pl-8 pr-3 rounded-md bg-muted/40 border border-border text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+          <Button size="sm" className="h-8 text-xs" onClick={handleSearch} disabled={!q.trim()}>
+            Search
+          </Button>
+        </div>
+        {submittedQ && (
+          <p className="text-[11px] text-muted-foreground">
+            Query: <span className="font-mono font-medium text-foreground">&quot;{submittedQ}&quot;</span>
+            {repoId != null ? ` · repo #${repoId}` : ' · all repos'}
+          </p>
+        )}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+        {!submittedQ ? (
+          <div className="flex flex-col items-center justify-center h-full px-6 text-center">
+            <Brain className="w-8 h-8 mb-2 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">Recall (FTS) — 최근 대화·커밋에서 관련 기억을 찾습니다.</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">검색 후 클립보드 복사, 채팅에서 사용 가능</p>
+          </div>
+        ) : isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : isError ? (
+          <p className="text-sm text-destructive">검색 실패: {(error as Error).message}</p>
+        ) : !data || data.hits.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <Search className="w-8 h-8 mb-2 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">결과 없음</p>
+          </div>
+        ) : (
+          <>
+            {data.block && (
+              <div className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-primary">Recall block</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => copyText(data.block, 'Block copied')}
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted"
+                    >
+                      <Clipboard className="w-3 h-3" /> Copy
+                    </button>
+                    <button
+                      onClick={() => useInChat(data.block)}
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+                    >
+                      <MessageSquarePlus className="w-3 h-3" /> Use in chat
+                    </button>
+                  </div>
+                </div>
+                <pre className="text-[11px] whitespace-pre-wrap break-words font-mono bg-background/60 rounded p-2 border border-border max-h-40 overflow-y-auto">
+                  {data.block}
+                </pre>
+              </div>
+            )}
+            <div className="space-y-2">
+              {data.hits.map((h, i) => (
+                <div key={i} className="rounded-md border border-border bg-background p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] border ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400 border-blue-500/30' : 'bg-amber-500/15 text-amber-400 border-amber-500/30'}`}>
+                      {h.kind}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground truncate flex-1" title={h.meta}>{h.meta}</span>
+                  </div>
+                  <p className="text-xs text-foreground break-words whitespace-pre-wrap">{h.snippet}</p>
+                  <div className="flex gap-1.5 pt-1">
+                    <button
+                      onClick={() => copyText(h.snippet)}
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted"
+                    >
+                      <Copy className="w-3 h-3" /> Copy
+                    </button>
+                    <button
+                      onClick={() => useInChat(h.snippet)}
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted"
+                    >
+                      <MessageSquarePlus className="w-3 h-3" /> Use in chat
+                    </button>
+                    <button
+                      onClick={() => copyText(`- [${h.kind}] ${h.snippet} — ${h.meta}`)}
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted ml-auto"
+                      title="Copy as recall line"
+                    >
+                      <Clipboard className="w-3 h-3" /> Copy line
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, repoId, global = sessionID === '', onExecuteCommand, onScrollToMessage, onUseInChat }: CommandsPanelProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   // ???경???덉뵬??띿쓺 "??湲?筌ㅼ뮇??: 疫꿸퀗而???????곷섧?紐꾨퓠???⑥쥙???? ??낅뮉??
@@ -698,7 +845,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const setRunMessage = useSetCommandRunMessage()
   const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
   const { data: config } = useConfig(opcodeUrl, directory)
-  const [tab, setTab] = useState<'runs' | 'explorer'>('runs')
+  const [tab, setTab] = useState<'runs' | 'explorer' | 'recall'>('runs')
   const [expanded, setExpanded] = useState<Record<string, { steps: boolean; response: boolean }>>({})
   const [createOpen, setCreateOpen] = useState(false)
   const [createType, setCreateType] = useState<ExplorerResourceType>('command')
@@ -1294,13 +1441,24 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               <Search className="w-3.5 h-3.5 mr-1" />
               Explorer
             </Button>
+            <Button
+              variant={tab === 'recall' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setTab('recall')}
+              className="text-xs h-7"
+            >
+              <Brain className="w-3.5 h-3.5 mr-1" />
+              Recall
+            </Button>
             <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground hover:text-foreground hover:bg-muted">
               <X className="w-4 h-4" />
             </Button>
           </div>
         </div>
 
-        {tab === 'explorer' ? (
+        {tab === 'recall' ? (
+          <RecallPanel repoId={repoId} sessionId={sessionID} onUseInChat={onUseInChat} />
+        ) : tab === 'explorer' ? (
           <CommandExplorer commands={commands} skills={skills} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} commandContentLookup={commandContentLookup} skillContentLookup={skillContentLookup} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
         ) : (
           <div className="flex-1 min-h-0 flex flex-col">
