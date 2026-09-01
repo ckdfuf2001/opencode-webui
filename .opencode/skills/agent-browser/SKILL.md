@@ -18,4 +18,5 @@ description: Browser automation via agent-browser MCP. Use when opening pages, t
 ## Troubleshooting
 
 - blank on read -> add session or enable AGENT_BROWSER_AUTO_SESSION=1.
+- **No session specified (English):** If you call `agent_browser_*` without `session` and multiple sessions are open, the daemon now returns `No session specified. Open sessions: <list>. Please specify session, e.g. session: "<name>"` in English and lists `auto-*`/`repo-*` sessions. Pass the shown `session` on the next call.
 - MCP error -32001 Request timed out on first open -> daemon cold start, backend warmup should have prevented; check AGENT_BROWSER_SESSION=default agent-browser session info --json for active/browserLaunched.
