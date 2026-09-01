@@ -89,8 +89,10 @@ export class OpenCodeClient {
             const timeoutSec = isProviderTimeout ? 300 : 600
             const msg = `${source} timeout (${timeoutSec}s): ${isProviderTimeout ? 'LLM provider did not respond' : 'OpenCode server did not respond'} - backend is ${healthy ? 'alive' : 'not alive'} at port ${port}`
             console.warn(`[${source}] ${msg}`, error)
-            showToast.warning(`[${source}] ${msg}`)
-            return Promise.resolve({})
+            if (!healthy) {
+              showToast.warning(`[${source}] ${msg}`)
+            }
+            return Promise.reject(error)
           } catch (checkError) {
             console.error('Health check error:', checkError)
           }

@@ -107,6 +107,19 @@ function isAbortCancellation(error: unknown): boolean {
   return false
 }
 
+function isProxyTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const anyErr = error as Record<string, unknown>
+  const status = (anyErr.response as { status?: number } | undefined)?.status
+  if (status === 504) {
+    const data = (anyErr.response as { data?: unknown } | undefined)?.data as Record<string, unknown> | undefined
+    const msg = ((data?.error as string) || (data?.message as string) || (anyErr.message as string) || '').toLowerCase()
+    if (msg.includes('proxy timeout') || msg.includes('600s') || msg.includes('gateway timeout')) return true
+  }
+  const msg = ((anyErr.message as string) || '').toLowerCase()
+  return msg.includes('[backend proxy] gateway timeout') || msg.includes('proxy timeout')
+}
+
 // Format server error similar to OpenCode's formatServerError - 40x provider-agnostic
 function extractProviderMessage(data: unknown): string | undefined {
   if (!data || typeof data !== "object") return undefined
@@ -678,7 +691,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
-      if (!isAbortCancellation(error)) {
+      if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {
         showToast.error(formatted, { duration: 8000 });
       }
     },
@@ -815,7 +828,7 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
-      if (!isAbortCancellation(error)) {
+      if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {
         showToast.error(formatted, { duration: 8000 });
       }
     },

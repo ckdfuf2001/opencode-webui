@@ -108,7 +108,7 @@ export function SessionDetail() {
       .reduce((sum, s) => sum + (s.pendingPermissions ?? 0), 0);
   }, [dbStatuses, sessionId, descendantIDs]);
   const lastMessage = messages?.[messages.length - 1];
-  const isStreaming = (!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy;
+  const isStreaming = isConnected && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy);
   const effectiveAutoScroll = autoScrollOverride ?? (preferences?.autoScroll ?? true);
   const { data: session, isLoading: sessionLoading } = useSession(opcodeUrl, sessionId, repoDirectory);
   useReconcileOrphanedStreams(opcodeUrl, repoDirectory);
