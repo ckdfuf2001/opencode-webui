@@ -281,9 +281,22 @@ export function Search() {
                   </div>
                   {expandedId === hit.messageId && expandedData && (
                     <div className="border-t pt-3 space-y-2 mt-2">
-                      <pre className="whitespace-pre-wrap break-words bg-muted/40 p-2 rounded text-xs font-mono">
-                        {JSON.stringify(expandedData, null, 2)}
-                      </pre>
+                      {expandedData.rows.map((row) => (
+                        <div
+                          key={row.messageId}
+                          className={`p-2 rounded text-sm ${
+                            row.messageId === expandedData.center.messageId
+                              ? 'bg-accent border border-border'
+                              : 'bg-muted/40'
+                          }`}
+                        >
+                          <div className="flex gap-2 text-xs text-muted-foreground mb-1">
+                            <span>{row.role}</span>
+                            <span>#{row.turnIndex}</span>
+                          </div>
+                          <div className="whitespace-pre-wrap break-words text-sm">{row.text || '(empty)'}</div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </Card>
@@ -349,9 +362,25 @@ export function Search() {
                   )}
                   {detailSha === hit.sha && commitDetail && (
                     <div className="border-t pt-3 space-y-2 mt-2 text-sm">
-                      <pre className="whitespace-pre-wrap break-words bg-muted/40 p-2 rounded text-xs font-mono">
-                        {JSON.stringify(commitDetail, null, 2)}
-                      </pre>
+                      {commitDetail.body && (
+                        <pre className="whitespace-pre-wrap break-words bg-muted/40 p-2 rounded text-xs">
+                          {commitDetail.body}
+                        </pre>
+                      )}
+                      {commitDetail.files.length > 0 && (
+                        <div>
+                          <div className="text-xs text-muted-foreground mb-1">
+                            files ({commitDetail.files.length})
+                          </div>
+                          <ul className="text-xs space-y-0.5 list-disc list-inside">
+                            {commitDetail.files.map((f) => (
+                              <li key={f} className="break-all">
+                                {f}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   )}
                 </Card>
