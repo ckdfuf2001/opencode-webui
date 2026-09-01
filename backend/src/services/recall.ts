@@ -14,6 +14,12 @@ export interface RecallHit {
   kind: 'message' | 'commit'
   snippet: string
   meta: string
+  repoId?: number | null
+  sessionId?: string
+  messageId?: string
+  turnIndex?: number
+  ts?: number
+  sha?: string
 }
 
 export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): { block: string; hits: RecallHit[] } {
@@ -28,6 +34,11 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
         kind: 'message',
         snippet: m.snippet.replace(/\[|\]/g, ''),
         meta: `${m.role} turn ${m.turnIndex} ${new Date(m.ts).toLocaleDateString()} session ${m.sessionId.slice(0, 8)}`,
+        repoId: m.repoId,
+        sessionId: m.sessionId,
+        messageId: m.messageId,
+        turnIndex: m.turnIndex,
+        ts: m.ts,
       })
     }
   }
@@ -39,6 +50,8 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
         kind: 'commit',
         snippet: `${c.sha.slice(0, 7)} ${c.subject}`,
         meta: `${c.author ?? ''} ${new Date(c.committedAt).toLocaleDateString()} ${c.repoId === 0 ? 'host' : `repo ${c.repoId}`}`.trim(),
+        repoId: c.repoId,
+        sha: c.sha,
       })
     }
   }

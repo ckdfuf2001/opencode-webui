@@ -124,7 +124,7 @@ export async function reindexCommits(repoId?: number): Promise<unknown> {
   return res.json()
 }
 
-export async function recall(q: string, opts: { k?: number; repoId?: number; sessionId?: string } = {}): Promise<{ block: string; hits: { kind: string; snippet: string; meta: string }[] }> {
+export async function recall(q: string, opts: { k?: number; repoId?: number; sessionId?: string } = {}): Promise<{ block: string; hits: { kind: string; snippet: string; meta: string; repoId?: number | null; sessionId?: string; messageId?: string; turnIndex?: number; ts?: number; sha?: string }[] }> {
   const sp = new URLSearchParams({ q })
   if (opts.k != null) sp.set('k', String(opts.k))
   if (opts.repoId != null) sp.set('repoId', String(opts.repoId))

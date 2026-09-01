@@ -774,6 +774,27 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     return r ? `${r.localPath} (#${r.id})` : `repo #${id}`
   }
 
+  const navigateRecall = useNavigate()
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedData, setExpandedData] = useState<import('@/api/search').MessageExpandResult | null>(null)
+
+  const handleExpand = async (messageId: string) => {
+    if (expandedId === messageId) { setExpandedId(null); setExpandedData(null); return }
+    try {
+      const { expandMessage } = await import('@/api/search')
+      const data = await expandMessage(messageId, 3)
+      setExpandedId(messageId)
+      setExpandedData(data)
+    } catch { /* ignore */ }
+  }
+
+  const handleGoChat = (hit: typeof filteredHits[number]) => {
+    if (hit.kind !== 'message' || !hit.sessionId) return
+    const rid = hit.repoId
+    if (rid != null && rid !== 0) navigateRecall(`/repos/${rid}/sessions/${hit.sessionId}`)
+    else navigateRecall(`/session/${hit.sessionId}`)
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="p-3 pb-0 flex-shrink-0 space-y-2">
@@ -910,35 +931,62 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           <>
             <div className="space-y-2">
               {filteredHits.map((h, i) => (
-                <div key={i} className="rounded-md border border-border bg-background p-2.5 space-y-1.5">
-                  <div className="flex items-center gap-1.5">
+                <div key={i} className="rounded-md border border-input bg-background p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] border ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400 border-blue-500/30' : 'bg-amber-500/15 text-amber-400 border-amber-500/30'}`}>
                       {h.kind === 'message' ? 'chat' : 'git'}
                     </span>
-                    <span className="text-[11px] text-muted-foreground truncate flex-1" title={h.meta}>{h.meta}</span>
+                    {h.repoId != null && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/40 truncate max-w-[140px]" title={repoName(h.repoId)}>
+                        {repoName(h.repoId)}
+                      </span>
+                    )}
+                    <span className="text-[11px] text-muted-foreground truncate flex-1 min-w-0" title={h.meta}>{h.meta}</span>
                   </div>
                   <p className="text-xs text-foreground break-words whitespace-pre-wrap">{h.snippet}</p>
-                  <div className="flex gap-1.5 pt-1">
+                  <div className="flex gap-1.5 pt-1 flex-wrap">
                     <button
                       onClick={() => copyText(h.snippet)}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted"
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
                     >
                       <Copy className="w-3 h-3" /> Copy
                     </button>
                     <button
                       onClick={() => useInChat(h.snippet)}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted"
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
                     >
                       <MessageSquarePlus className="w-3 h-3" /> Use in chat
                     </button>
-                    <button
-                      onClick={() => copyText(`- [${h.kind}] ${h.snippet} — ${h.meta}`)}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted ml-auto"
-                      title="Copy as recall line"
-                    >
-                      <Clipboard className="w-3 h-3" /> Copy line
-                    </button>
+                    {h.kind === 'message' && h.sessionId && (
+                      <button
+                        onClick={() => handleGoChat(h)}
+                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
+                      >
+                        <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
+                      </button>
+                    )}
+                    {h.kind === 'message' && h.messageId && (
+                      <button
+                        onClick={() => handleExpand(h.messageId!)}
+                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted ml-auto"
+                      >
+                        <History className="w-3 h-3" /> {expandedId === h.messageId ? '접기' : '전후 보기'}
+                      </button>
+                    )}
                   </div>
+                  {h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData && (
+                    <div className="border-t border-input pt-2 mt-1 space-y-1.5">
+                      {expandedData.rows.map((row) => (
+                        <div key={row.messageId} className={`p-2 rounded text-xs ${row.messageId === expandedData.center.messageId ? 'bg-accent border border-input' : 'bg-muted/30'}`}>
+                          <div className="flex gap-2 text-[10px] text-muted-foreground mb-1">
+                            <span>{row.role}</span>
+                            <span>#{row.turnIndex}</span>
+                          </div>
+                          <div className="whitespace-pre-wrap break-words">{row.text || '(empty)'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
