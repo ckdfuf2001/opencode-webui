@@ -824,8 +824,8 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           {/* 필터와 Recalls 사이 띄우는 영역 */}
           <div className="w-2 shrink-0" aria-hidden />
 
-          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 구분선 없음, 테두리 연하게 */}
-          <div className="inline-flex items-center rounded-md border border-border/40 bg-background shrink-0 overflow-hidden">
+          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 외곽은 필터와 동일, 안쪽 Copy/Chat만 연한 테두리 */}
+          <div className="inline-flex items-center rounded-md border bg-background shrink-0 overflow-hidden">
             <button
               onClick={() => filteredBlock && setBlockOpen((v) => !v)}
               disabled={!filteredBlock}
@@ -839,7 +839,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <button
                 onClick={() => copyText(filteredBlock, 'Recalls copied')}
                 disabled={!filteredBlock}
-                className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded border border-border/40 shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Copy Recalls"
               >
                 <Clipboard className="w-3 h-3" /> <span className="text-[11px]">Copy</span>
@@ -847,7 +847,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <button
                 onClick={() => useInChat(filteredBlock)}
                 disabled={!filteredBlock}
-                className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded border border-border/40 shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Use Recalls in chat"
               >
                 <MessageSquarePlus className="w-3 h-3" /> <span className="text-[11px]">Chat</span>
