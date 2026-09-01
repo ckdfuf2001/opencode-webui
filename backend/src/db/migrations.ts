@@ -22,7 +22,8 @@ export function runMigrations(db: Database): void {
             last_pulled INTEGER,
             opencode_config_name TEXT,
             is_worktree BOOLEAN DEFAULT FALSE,
-            is_local BOOLEAN DEFAULT FALSE
+            is_local BOOLEAN DEFAULT FALSE,
+            skill_auto_update BOOLEAN DEFAULT FALSE
           )
         `)
         
@@ -76,7 +77,8 @@ export function runMigrations(db: Database): void {
       { name: 'last_pulled', sql: 'ALTER TABLE repos ADD COLUMN last_pulled INTEGER' },
       { name: 'opencode_config_name', sql: 'ALTER TABLE repos ADD COLUMN opencode_config_name TEXT' },
       { name: 'is_worktree', sql: 'ALTER TABLE repos ADD COLUMN is_worktree BOOLEAN DEFAULT FALSE' },
-      { name: 'is_local', sql: 'ALTER TABLE repos ADD COLUMN is_local BOOLEAN DEFAULT FALSE' }
+      { name: 'is_local', sql: 'ALTER TABLE repos ADD COLUMN is_local BOOLEAN DEFAULT FALSE' },
+      { name: 'skill_auto_update', sql: 'ALTER TABLE repos ADD COLUMN skill_auto_update BOOLEAN DEFAULT FALSE' }
     ]
     
     for (const column of requiredColumns) {

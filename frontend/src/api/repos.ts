@@ -140,6 +140,22 @@ export async function listBranches(id: number): Promise<{ local: string[], remot
   return response.json()
 }
 
+export async function getSkillAutoUpdate(id: number): Promise<{ enabled: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/skill-auto-update`)
+  if (!response.ok) throw new Error('Failed to get skill auto update')
+  return response.json()
+}
+
+export async function setSkillAutoUpdate(id: number, enabled: boolean): Promise<{ enabled: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/skill-auto-update`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!response.ok) throw new Error('Failed to set skill auto update')
+  return response.json()
+}
+
 export async function applyRepoTrackingAll(): Promise<{ success: boolean; applied: number }> {
   const response = await fetch(`${API_BASE_URL}/api/repos/tracking/apply-all`, {
     method: 'POST',

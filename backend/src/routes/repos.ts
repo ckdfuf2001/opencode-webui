@@ -342,6 +342,34 @@ export function createRepoRoutes(database: Database) {
       return c.json({ error: error.message }, 500)
     }
   })
+
+  app.get('/:id/skill-auto-update', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const enabled = db.getSkillAutoUpdate(database, id)
+      return c.json({ enabled })
+    } catch (error: any) {
+      logger.error('Failed to get skill auto update:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
+
+  app.patch('/:id/skill-auto-update', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const body = await c.req.json() as { enabled?: boolean }
+      if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled boolean required' }, 400)
+      db.setSkillAutoUpdate(database, id, body.enabled)
+      return c.json({ enabled: body.enabled })
+    } catch (error: any) {
+      logger.error('Failed to set skill auto update:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
   
   return app
 }

@@ -11,6 +11,7 @@ export interface Repo {
   lastPulled?: number
   openCodeConfigName?: string
   isWorktree?: boolean
+  skillAutoUpdate?: boolean
 }
 
 import type { components } from './opencode-types'

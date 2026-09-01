@@ -15,6 +15,7 @@ export const RepoSchema = z.object({
   openCodeConfigName: z.string().optional(),
   isWorktree: z.boolean().optional(),
   isLocal: z.boolean().optional(),
+  skillAutoUpdate: z.boolean().optional(),
 })
 
 export const CreateRepoRequestSchema = z.object({

@@ -282,7 +282,19 @@ export async function proxyRequest(request: Request, method: string, pathname: s
                 const { getAndClearPendingSkillCheck } = await import('./command-hooks')
                 const pending = getAndClearPendingSkillCheck(sessionIdFromPath)
                 if (pending) {
-                  skillBlock = `<skill-memory-check>\nLast ${pending.kind} "${pending.commandName}" completed with status "${pending.status}".\nPlease evaluate if skill or memory needs update and if there are improvements. If yes, ask the user in chat for approval before updating (in Korean, concise).\n</skill-memory-check>\n\n`
+                  let auto = false
+                  try {
+                    const repoIdForCheck = directory ? (await import('./command-runs')).resolveRepoId(proxyDb, directory) : null
+                    if (repoIdForCheck != null) {
+                      const row = proxyDb.query('SELECT skill_auto_update FROM repos WHERE id = ?').get(repoIdForCheck) as { skill_auto_update?: number } | undefined
+                      auto = Boolean(row?.skill_auto_update)
+                    }
+                  } catch {}
+                  if (auto) {
+                    skillBlock = `<skill-memory-check>\nLast ${pending.kind} "${pending.commandName}" completed with status "${pending.status}". Skill auto update is ENABLED for this repo. Please evaluate if skill or memory needs update and if there are improvements, update directly without asking user.\n</skill-memory-check>\n\n`
+                  } else {
+                    skillBlock = `<skill-memory-check>\nLast ${pending.kind} "${pending.commandName}" completed with status "${pending.status}".\nPlease evaluate if skill or memory needs update and if there are improvements. If yes, ask the user in chat for approval before updating (in Korean, concise).\n</skill-memory-check>\n\n`
+                  }
                 }
               } catch {}
             }

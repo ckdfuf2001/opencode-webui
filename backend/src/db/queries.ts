@@ -19,6 +19,7 @@ export interface RepoRow {
   opencode_config_name?: string
   is_worktree?: number
   is_local?: number
+  skill_auto_update?: number
 }
 
 function rowToRepo(row: RepoRow): Repo {
@@ -35,6 +36,7 @@ function rowToRepo(row: RepoRow): Repo {
     openCodeConfigName: row.opencode_config_name,
     isWorktree: row.is_worktree ? Boolean(row.is_worktree) : undefined,
     isLocal: row.is_local ? Boolean(row.is_local) : undefined,
+    skillAutoUpdate: row.skill_auto_update ? Boolean(row.skill_auto_update) : undefined,
   }
 }
 
@@ -176,4 +178,15 @@ export function deleteRepoCascade(db: Database, id: number): void {
     )
   }
   logger.info(`Cleaned search/git index for repo ${id}`)
+}
+
+export function getSkillAutoUpdate(db: Database, id: number): boolean {
+  const row = db.prepare('SELECT skill_auto_update FROM repos WHERE id = ?').get(id) as
+    | { skill_auto_update?: number | null }
+    | undefined
+  return Boolean(row?.skill_auto_update)
+}
+
+export function setSkillAutoUpdate(db: Database, id: number, enabled: boolean): void {
+  db.prepare('UPDATE repos SET skill_auto_update = ? WHERE id = ?').run(enabled ? 1 : 0, id)
 }

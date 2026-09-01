@@ -5,8 +5,12 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePermissionRules, useCreatePermissionRule, useDeletePermissionRule } from '@/hooks/usePermissionRules'
 import { refreshAutoApproveData } from '@/hooks/useAutoApprovePermissions'
+import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 
@@ -35,6 +39,20 @@ export function PermissionRulesDialog({
   const [pattern, setPattern] = useState('')
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const queryClient = useQueryClient()
+  const { data: skillAuto } = useQuery({
+    queryKey: ['skill-auto-update', repoId],
+    queryFn: () => getSkillAutoUpdate(repoId),
+    enabled: open && !!repoId,
+  })
+  const skillMut = useMutation({
+    mutationFn: (enabled: boolean) => setSkillAutoUpdate(repoId, enabled),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['skill-auto-update', repoId], data)
+      showToast.success(data.enabled ? 'Skill auto update enabled' : 'Skill auto update disabled')
+    },
+    onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to update'),
+  })
 
   const resetForm = () => {
     setPermission('bash')
@@ -91,6 +109,18 @@ export function PermissionRulesDialog({
           Requests matching these rules are approved automatically without showing a prompt.
           Rules are scoped to this project.
         </p>
+
+        <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3">
+          <div className="space-y-0.5">
+            <Label className="text-sm font-medium">Skill / Command auto update</Label>
+            <p className="text-xs text-muted-foreground">When enabled, skill and command updates from memory are applied automatically without asking in chat.</p>
+          </div>
+          <Switch
+            checked={skillAuto?.enabled ?? false}
+            onCheckedChange={(v) => skillMut.mutate(v)}
+            disabled={skillMut.isPending}
+          />
+        </div>
 
         <div className="space-y-2 rounded-lg border border-border bg-card p-3">
           <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
