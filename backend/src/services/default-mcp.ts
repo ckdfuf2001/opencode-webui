@@ -46,10 +46,7 @@ function resolveAgentBrowser(): AgentBrowserInfo | null {
   }
 }
 
-function buildAgentBrowserMcp(
-  namespace: string = AGENT_BROWSER_NAMESPACE,
-  session: string = namespace,
-): Record<string, unknown> {
+function buildAgentBrowserMcp(namespace: string = AGENT_BROWSER_NAMESPACE): Record<string, unknown> {
   const info = resolveAgentBrowser()
   if (!info) return {}
   const env: Record<string, string> = {}
@@ -57,7 +54,7 @@ function buildAgentBrowserMcp(
     env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
   }
   env.AGENT_BROWSER_NAMESPACE = namespace
-  env.AGENT_BROWSER_SESSION = session
+  env.AGENT_BROWSER_SESSION = namespace
   env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
   return {
     'agent-browser': {
@@ -69,7 +66,7 @@ function buildAgentBrowserMcp(
   }
 }
 
-export function repoAgentBrowserSession(localPath: string): string {
+export function repoAgentBrowserNamespace(localPath: string): string {
   const slug = localPath.replace(/[\\/]/g, '-').replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
   const safeSlug = slug || `repo-${Date.now().toString(36)}`
   return `repo-${safeSlug}`
@@ -87,17 +84,12 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   } catch {
     existing = {}
   }
-  const session = repoAgentBrowserSession(localPath)
-  const mcpEntry = buildAgentBrowserMcp(AGENT_BROWSER_NAMESPACE, session)
+  const namespace = repoAgentBrowserNamespace(localPath)
+  const mcpEntry = buildAgentBrowserMcp(namespace)
   const existingMcp = (existing.mcp && typeof existing.mcp === 'object') ? (existing.mcp as Record<string, unknown>) : {}
-  const existingAgentBrowser = existingMcp['agent-browser'] as { enabled?: boolean } | undefined
-  const agentBrowserEntry = mcpEntry['agent-browser'] as { enabled: boolean }
-  if (existingAgentBrowser?.enabled === false) {
-    agentBrowserEntry.enabled = false
-  }
   const content = { ...existing, mcp: { ...existingMcp, ...mcpEntry } }
   writeFileSync(configPath, JSON.stringify(content, null, 2))
-  logger.info(`Wrote per-repo OpenCode config '${configPath}' with agent-browser session '${session}'`)
+  logger.info(`Wrote per-repo OpenCode config '${configPath}' with agent-browser namespace '${namespace}'`)
   return true
 }
 
