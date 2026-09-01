@@ -198,18 +198,29 @@ export function SessionDetail() {
     }
   }, [messages, isBillingQuotaMessage]);
 
-  // 컨텍스트 초과(length) 자동 관리: finish=length 또는 MessageOutputLengthError 감지
+  // 컨텍스트 초과(length) 자동 관리: current use 기준 — 이미 compact 등으로 여유가 생겼으면 히스토리 length는 무시
   useEffect(() => {
     if (!messages || messages.length === 0) return;
-    const lengthMsg = messages.find((m: any) => {
-      const finish = (m.info as any)?.finish
-      const errName = (m.info as any)?.error?.name
-      if (finish === "length" || errName === "MessageOutputLengthError") return true;
-      if (m.parts?.some((p: any) => p.type === "step-finish" && p.reason === "length")) return true;
-      return false;
-    }) as any;
+    if (ctx.isLoading) return;
+    // current use가 85% 미만이면 정상으로 간주 — 새로고침/재접속 시 오래된 length 토스트 억제
+    if (ctx.usagePercentage != null && ctx.usagePercentage < 85) return;
+    // 가장 최근 length 메시지 찾기
+    let lengthIdx = -1;
+    let lengthMsg: any = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m: any = messages[i];
+      const finish = (m.info as any)?.finish;
+      const errName = (m.info as any)?.error?.name;
+      const isLength = finish === "length" || errName === "MessageOutputLengthError" || m.parts?.some((p: any) => p.type === "step-finish" && p.reason === "length");
+      if (isLength) { lengthIdx = i; lengthMsg = m; break; }
+    }
     if (!lengthMsg) return;
     if (lastLengthToastRef.current === lengthMsg.info.id) return;
+    // length 이후에 정상 assistant 응답이 있으면 이미 회복(compact/truncate)으로 간주
+    const hasRecoveryAfter = messages.slice(lengthIdx + 1).some((m: any) => m.info.role === "assistant" && (m.info as any)?.finish !== "length" && !(m.info as any)?.error);
+    const isRecent = lengthIdx >= messages.length - 3;
+    if (hasRecoveryAfter && !isRecent) return;
+    if (hasRecoveryAfter && ctx.usagePercentage != null && ctx.usagePercentage < 90) return;
     lastLengthToastRef.current = lengthMsg.info.id;
     const pct = ctx.usagePercentage ? Math.round(ctx.usagePercentage) : 0;
     showToast.error(
@@ -217,7 +228,7 @@ export function SessionDetail() {
       { duration: 8000 }
     );
     setLengthModal({ open: true, messageId: lengthMsg.info.id });
-  }, [messages, ctx.usagePercentage]);
+  }, [messages, ctx.usagePercentage, ctx.isLoading]);
 
   const handleCompact = useCallback(async () => {
     if (!sessionId) return;
