@@ -31,11 +31,14 @@ import {
   Brain,
   Clipboard,
   MessageSquarePlus,
+  GitCommit,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useConfig } from '@/hooks/useOpenCode'
 import { useCommandRunView, useDeleteCommandRun, useSetCommandRunMessage } from '@/hooks/useCommandRuns'
@@ -692,21 +695,43 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
 
 function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sessionId: string; onUseInChat?: (text: string) => void }) {
   const [q, setQ] = useState('')
-  const [submittedQ, setSubmittedQ] = useState('')
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['recall', submittedQ, repoId, sessionId],
+  const [debouncedQ, setDebouncedQ] = useState('')
+  const [selectedRepo, setSelectedRepo] = useState<string>(repoId != null ? String(repoId) : 'all')
+  const [k, setK] = useState<string>('8')
+  const [kind, setKind] = useState<'all' | 'message' | 'commit'>('all')
+
+  // sync when repoId prop changes (e.g. navigating to different repo)
+  useEffect(() => {
+    if (repoId != null) setSelectedRepo(String(repoId))
+  }, [repoId])
+
+  // live search — debounced, no Search button
+  useEffect(() => {
+    const t = q.trim()
+    if (!t) { setDebouncedQ(''); return }
+    const id = setTimeout(() => setDebouncedQ(t), 350)
+    return () => clearTimeout(id)
+  }, [q])
+
+  const repoIdParam = selectedRepo === 'all' ? undefined : parseInt(selectedRepo, 10)
+  const kParam = parseInt(k, 10)
+
+  const { data: repos } = useQuery({
+    queryKey: ['repos'],
     queryFn: async () => {
-      const { recall } = await import('@/api/search')
-      return recall(submittedQ, { k: 8, repoId: repoId ?? undefined, sessionId: sessionId || undefined })
+      const { listRepos } = await import('@/api/repos')
+      return listRepos()
     },
-    enabled: !!submittedQ,
   })
 
-  const handleSearch = () => {
-    const t = q.trim()
-    if (!t) return
-    setSubmittedQ(t)
-  }
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['recall', debouncedQ, repoIdParam, kParam, sessionId],
+    queryFn: async () => {
+      const { recall } = await import('@/api/search')
+      return recall(debouncedQ, { k: kParam, repoId: repoIdParam, sessionId: sessionId || undefined })
+    },
+    enabled: !!debouncedQ,
+  })
 
   const copyText = async (text: string, label = 'Copied to clipboard') => {
     try {
@@ -722,38 +747,122 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     showToast.success('Added to chat input')
   }
 
+  // 서치 페이지와 동일한 필터 후 hits
+  const filteredHits = useMemo(() => {
+    if (!data?.hits) return []
+    if (kind === 'all') return data.hits
+    return data.hits.filter((h) => h.kind === kind)
+  }, [data?.hits, kind])
+
+  // 필터 옆 클립보드/채팅 버튼은 전체 블록 또는 필터된 결과 기준
+  const filteredBlock = useMemo(() => {
+    if (!data?.block || !data?.hits) return ''
+    if (kind === 'all') return data.block
+    if (filteredHits.length === 0) return ''
+    const lines = ['<memory-recall>', `query: "${debouncedQ}"`]
+    for (const h of filteredHits) lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta}`)
+    lines.push('</memory-recall>')
+    return lines.join('\n')
+  }, [data?.block, data?.hits, filteredHits, kind, debouncedQ])
+
+  const repoName = (id: number | null | undefined) => {
+    if (id == null) return `repo #${id}`
+    if (id === 0) return 'host (opencode-webui)'
+    const r = repos?.find((x) => x.id === id)
+    return r ? `${r.localPath} (#${r.id})` : `repo #${id}`
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="p-3 pb-0 flex-shrink-0 space-y-2">
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
-              placeholder="Recall search (FTS) — messages & commits, trigram"
-              className="w-full h-8 pl-8 pr-3 rounded-md bg-muted/40 border border-border text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-          </div>
-          <Button size="sm" className="h-8 text-xs" onClick={handleSearch} disabled={!q.trim()}>
-            Search
-          </Button>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') setDebouncedQ(q.trim()) }}
+            placeholder="Recall search — messages & commits (trigram, 자동 검색)"
+            className="w-full h-8 pl-8 pr-3 rounded-md bg-muted/40 border border-border text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          />
         </div>
-        {submittedQ && (
+
+        {/* 필터 + 필터 옆 클립보드/채팅 — 서치 페이지와 동일 */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Select value={selectedRepo} onValueChange={setSelectedRepo}>
+            <SelectTrigger className="w-[160px] h-7 text-xs">
+              <SelectValue placeholder="레포 선택" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Repositories</SelectItem>
+              <SelectItem value="0">host (opencode-webui)</SelectItem>
+              {repos?.map((r) => (
+                <SelectItem key={r.id} value={String(r.id)}>
+                  {r.localPath} (#{r.id})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={k} onValueChange={setK}>
+            <SelectTrigger className="w-[90px] h-7 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="5">5 hits</SelectItem>
+              <SelectItem value="8">8 hits</SelectItem>
+              <SelectItem value="10">10 hits</SelectItem>
+              <SelectItem value="20">20 hits</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* 필터 옆 clipboard / use in chat */}
+          <div className="flex items-center gap-1 ml-auto">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs gap-1"
+              disabled={!filteredBlock}
+              onClick={() => copyText(filteredBlock, 'Recall block copied')}
+              title="Copy recall block to clipboard"
+            >
+              <Clipboard className="w-3 h-3" /> Copy
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 text-xs gap-1"
+              disabled={!filteredBlock}
+              onClick={() => useInChat(filteredBlock)}
+              title="Use recall block in chat"
+            >
+              <MessageSquarePlus className="w-3 h-3" /> Chat
+            </Button>
+          </div>
+        </div>
+
+        <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')}>
+          <TabsList className="h-7">
+            <TabsTrigger value="all" className="text-xs h-6 px-2">All</TabsTrigger>
+            <TabsTrigger value="message" className="text-xs h-6 px-2 gap-1"><History className="w-3 h-3" /> Chat</TabsTrigger>
+            <TabsTrigger value="commit" className="text-xs h-6 px-2 gap-1"><GitCommit className="w-3 h-3" /> Git</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {debouncedQ && (
           <p className="text-[11px] text-muted-foreground">
-            Query: <span className="font-mono font-medium text-foreground">&quot;{submittedQ}&quot;</span>
-            {repoId != null ? ` · repo #${repoId}` : ' · all repos'}
+            Query: <span className="font-mono font-medium text-foreground">&quot;{debouncedQ}&quot;</span>
+            {selectedRepo !== 'all' ? ` · ${repoName(repoIdParam ?? null)}` : ' · all repos'}
+            {` · ${filteredHits.length}/${data?.hits.length ?? 0} hits`}
+            {kind !== 'all' ? ` · ${kind}` : ''}
           </p>
         )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-        {!submittedQ ? (
+        {!debouncedQ ? (
           <div className="flex flex-col items-center justify-center h-full px-6 text-center">
             <Brain className="w-8 h-8 mb-2 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">Recall (FTS) — 최근 대화·커밋에서 관련 기억을 찾습니다.</p>
-            <p className="text-xs text-muted-foreground/70 mt-1">검색 후 클립보드 복사, 채팅에서 사용 가능</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">서치 페이지와 동일: 레포/갯수 필터, git/chat 구분, 클립보드·채팅 사용</p>
           </div>
         ) : isLoading ? (
           <div className="flex items-center justify-center py-8">
@@ -761,26 +870,26 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           </div>
         ) : isError ? (
           <p className="text-sm text-destructive">검색 실패: {(error as Error).message}</p>
-        ) : !data || data.hits.length === 0 ? (
+        ) : !data || filteredHits.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
             <Search className="w-8 h-8 mb-2 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">결과 없음</p>
           </div>
         ) : (
           <>
-            {data.block && (
+            {filteredBlock && (
               <div className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-primary">Recall block</span>
+                  <span className="text-[11px] font-medium text-primary">Recall block {kind !== 'all' ? `(${kind})` : ''}</span>
                   <div className="flex gap-1.5">
                     <button
-                      onClick={() => copyText(data.block, 'Block copied')}
+                      onClick={() => copyText(filteredBlock, 'Block copied')}
                       className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted"
                     >
                       <Clipboard className="w-3 h-3" /> Copy
                     </button>
                     <button
-                      onClick={() => useInChat(data.block)}
+                      onClick={() => useInChat(filteredBlock)}
                       className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
                     >
                       <MessageSquarePlus className="w-3 h-3" /> Use in chat
@@ -788,16 +897,16 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                   </div>
                 </div>
                 <pre className="text-[11px] whitespace-pre-wrap break-words font-mono bg-background/60 rounded p-2 border border-border max-h-40 overflow-y-auto">
-                  {data.block}
+                  {filteredBlock}
                 </pre>
               </div>
             )}
             <div className="space-y-2">
-              {data.hits.map((h, i) => (
+              {filteredHits.map((h, i) => (
                 <div key={i} className="rounded-md border border-border bg-background p-2.5 space-y-1.5">
                   <div className="flex items-center gap-1.5">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] border ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400 border-blue-500/30' : 'bg-amber-500/15 text-amber-400 border-amber-500/30'}`}>
-                      {h.kind}
+                      {h.kind === 'message' ? 'chat' : 'git'}
                     </span>
                     <span className="text-[11px] text-muted-foreground truncate flex-1" title={h.meta}>{h.meta}</span>
                   </div>
