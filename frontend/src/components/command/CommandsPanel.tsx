@@ -978,37 +978,37 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             <div className="space-y-2">
               {filteredHits.map((h, i) => (
                 <div key={i} onClick={() => h.kind === 'message' && h.messageId && handleExpand(h.messageId)} className="rounded-md border border-input bg-background p-2.5 space-y-1.5 cursor-pointer hover:border-primary/30">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] border ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400 border-blue-500/30' : 'bg-amber-500/15 text-amber-400 border-amber-500/30'}`}>
+                  <div className="flex items-center gap-0 flex-nowrap overflow-hidden rounded-md bg-muted/20">
+                    <span className={`px-1.5 py-1 text-[10px] ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400' : 'bg-amber-500/15 text-amber-400'} shrink-0`}>
                       {h.kind === 'message' ? 'chat' : 'git'}
                     </span>
                     {h.ts && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/30 whitespace-nowrap" title={new Date(h.ts).toLocaleString()}>
-                        {new Date(h.ts).toLocaleString()}
+                      <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">
+                        {new Date(h.ts).toLocaleString('ko-KR', { hour12: false })}
                       </span>
                     )}
                     {h.repoId != null && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/40 truncate max-w-[110px]" title={repoName(h.repoId)}>
+                      <span className="px-1.5 py-1 text-[10px] bg-muted/40 truncate max-w-[110px] shrink-0" title={repoName(h.repoId)}>
                         {repoName(h.repoId)}
                       </span>
                     )}
                     {h.sessionId && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/30 truncate max-w-[90px]" title={h.sessionId}>
+                      <span className="px-1.5 py-1 text-[10px] bg-muted/30 truncate max-w-[90px] shrink-0" title={h.sessionId}>
                         session {h.sessionId.slice(0, 8)}
                       </span>
                     )}
                     <span className="flex-1 min-w-0" />
                     <button
                       onClick={(e) => { e.stopPropagation(); copyText(h.snippet) }}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
+                      className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted"
                     >
-                      <Copy className="w-3 h-3" /> Copy
+                      <Copy className="w-2.5 h-2.5" /> Copy
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); useInChat(h.snippet) }}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
+                      className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted"
                     >
-                      <MessageSquarePlus className="w-3 h-3" /> Chat
+                      <MessageSquarePlus className="w-2.5 h-2.5" /> Chat
                     </button>
                   </div>
                   <p className="text-xs text-foreground break-words whitespace-pre-wrap">{highlightSnippet(h.snippet)}</p>
