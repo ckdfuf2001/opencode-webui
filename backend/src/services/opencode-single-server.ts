@@ -755,8 +755,10 @@ export async function prepareBackendPort(port: number): Promise<number> {
  */
 export function installWindowsShutdownWatchdog(): void {
   if (process.platform !== 'win32') return
-  if (ENV.SERVER.NODE_ENV === 'production') return
   if (typeof process.env.TEMP !== 'string') return
+  // exe와 npm run dev 동일 동작: dev 전용 watchdog 제거 (이전에는 production에서만 미설치, dev에서 과다 kill)
+  // 필요 시 ENV로 제어 가능하나 기본은 미설치로 통일
+  return
 
   const script = [
     '$ErrorActionPreference = "SilentlyContinue"',
