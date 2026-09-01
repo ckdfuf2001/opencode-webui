@@ -799,6 +799,27 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     return r ? `${r.localPath} (#${r.id})` : `repo #${id}`
   }
 
+  const highlightSnippet = (text: string) => {
+    const q = debouncedQ.trim()
+    if (!q) return text
+    const tokens = q.split(/\s+/).map((t) => t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()).filter((t) => t.length >= 1)
+    if (tokens.length === 0) return text
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp(`(${tokens.map(esc).join('|')})`, 'gi')
+    const parts = text.split(pattern)
+    // Use a Set for case-insensitive check
+    const lowerTokens = new Set(tokens.map((t) => t.toLowerCase()))
+    return parts.map((part, i) =>
+      part && lowerTokens.has(part.toLowerCase()) ? (
+        <span key={i} className="bg-blue-500/20 text-blue-600 dark:text-blue-400 font-medium rounded px-0.5">
+          {part}
+        </span>
+      ) : (
+        <span key={i}>{part}</span>
+      )
+    )
+  }
+
   const navigateRecall = useNavigate()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [expandedData, setExpandedData] = useState<import('@/api/search').MessageExpandResult | null>(null)
@@ -962,14 +983,16 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                       {h.kind === 'message' ? 'chat' : 'git'}
                     </span>
                     {h.repoId != null && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/40 truncate max-w-[140px]" title={repoName(h.repoId)}>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/40 truncate max-w-[110px]" title={repoName(h.repoId)}>
                         {repoName(h.repoId)}
                       </span>
                     )}
-                    <span className="text-[11px] text-muted-foreground truncate flex-1 min-w-0" title={h.meta}>{h.meta}</span>
-                  </div>
-                  <p className="text-xs text-foreground break-words whitespace-pre-wrap">{h.snippet}</p>
-                  <div className="flex gap-1.5 pt-1 flex-wrap">
+                    {h.sessionId && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/30 truncate max-w-[90px]" title={h.sessionId}>
+                        session {h.sessionId.slice(0, 8)}
+                      </span>
+                    )}
+                    <span className="flex-1 min-w-0" />
                     <button
                       onClick={(e) => { e.stopPropagation(); copyText(h.snippet) }}
                       className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
@@ -980,8 +1003,14 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                       onClick={(e) => { e.stopPropagation(); useInChat(h.snippet) }}
                       className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
                     >
-                      <MessageSquarePlus className="w-3 h-3" /> Use in chat
+                      <MessageSquarePlus className="w-3 h-3" /> Chat
                     </button>
+                  </div>
+                  <p className="text-xs text-foreground break-words whitespace-pre-wrap">{highlightSnippet(h.snippet)}</p>
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span>{h.kind === 'message' ? `${h.role ?? ''} turn ${h.turnIndex ?? ''}` : h.meta} · {h.ts ? new Date(h.ts).toLocaleString() : ''}</span>
+                  </div>
+                  <div className="flex gap-1.5 pt-1 flex-wrap">
                     {h.kind === 'message' && h.sessionId && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}

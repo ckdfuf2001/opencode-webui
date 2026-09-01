@@ -20,6 +20,7 @@ export interface RecallHit {
   turnIndex?: number
   ts?: number
   sha?: string
+  role?: string
 }
 
 export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): { block: string; hits: RecallHit[] } {
@@ -39,6 +40,7 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
         messageId: m.messageId,
         turnIndex: m.turnIndex,
         ts: m.ts,
+        role: m.role,
       })
     }
   }
