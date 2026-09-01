@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
 import { Copy, Check } from 'lucide-react'
+import { toast } from 'sonner'
 import type { components } from '@/api/opencode-types'
 import 'highlight.js/styles/github-dark.css'
 
@@ -114,6 +115,31 @@ export function TextPart({ part }: TextPartProps) {
           },
           li({ children }) {
             return <li className="text-foreground my-0.5 md:my-1">{children}</li>
+          },
+          a({ children, href }) {
+            const isSessionLink = typeof href === 'string' && href.startsWith('?session=')
+            if (isSessionLink) {
+              const session = href!.slice('?session='.length)
+              return (
+                <a
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    navigator.clipboard.writeText(session).then(() => {
+                      toast.success(`Copied session: ${session}`)
+                    }).catch(() => {
+                      toast.info(`Session: ${session}`)
+                    })
+                    // Also dispatch to fill chat input if present
+                    window.dispatchEvent(new CustomEvent('agent-browser:fill-session', { detail: session }))
+                  }}
+                  className="text-primary underline hover:text-primary/80 cursor-pointer"
+                >
+                  {children}
+                </a>
+              )
+            }
+            return <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:text-primary/80">{children}</a>
           }
         }}
       >
