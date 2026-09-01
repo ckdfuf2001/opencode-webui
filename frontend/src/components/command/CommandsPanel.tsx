@@ -824,8 +824,8 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           {/* 필터와 Recalls 사이 띄우는 영역 */}
           <div className="w-2 shrink-0" aria-hidden />
 
-          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 구분선 없음 */}
-          <div className="inline-flex items-center rounded-md border bg-background shrink-0 overflow-hidden">
+          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 구분선 없음, 테두리 연하게 */}
+          <div className="inline-flex items-center rounded-md border border-border/40 bg-background shrink-0 overflow-hidden">
             <button
               onClick={() => filteredBlock && setBlockOpen((v) => !v)}
               disabled={!filteredBlock}
