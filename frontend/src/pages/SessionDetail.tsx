@@ -88,6 +88,76 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
+  // 윈도잉: 첫 진입/컴팩트 후 최근 N개만 보이고 위로 스크롤 시 점진 로딩
+  const INITIAL_VISIBLE = 25;
+  const LOAD_STEP = 25;
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+  const visibleCountRef = useRef(visibleCount);
+  useEffect(() => { visibleCountRef.current = visibleCount }, [visibleCount]);
+  // 세션 변경 시 초기화
+  useEffect(() => { setVisibleCount(INITIAL_VISIBLE) }, [sessionId]);
+  // 컴팩트/트렁케이트 등으로 메시지가 크게 줄면(예: summarize) 다시 최근만 보이게
+  const prevMsgLenRef = useRef<number>(0);
+  useEffect(() => {
+    const len = messages?.length ?? 0;
+    const prev = prevMsgLenRef.current;
+    prevMsgLenRef.current = len;
+    // 길이가 큰 폭으로 줄었을 때(컴팩트) 초기화
+    if (prev > 0 && len > 0 && len < prev - 10) {
+      setVisibleCount(INITIAL_VISIBLE);
+    } else if (len > 0 && prev === 0) {
+      // 첫 로드도 최근만
+      setVisibleCount(INITIAL_VISIBLE);
+    }
+  }, [messages?.length]);
+  const baseMessages = useMemo(() => {
+    if (!messages) return undefined;
+    const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1;
+    return editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages;
+  }, [messages, hiddenAfterID]);
+  const visibleMessages = useMemo(() => {
+    if (!baseMessages) return undefined;
+    if (baseMessages.length <= visibleCount) return baseMessages;
+    return baseMessages.slice(-visibleCount);
+  }, [baseMessages, visibleCount]);
+  const hasMore = (baseMessages?.length ?? 0) > visibleCount;
+  const hiddenCount = (baseMessages?.length ?? 0) - visibleCount;
+  const handleLoadMore = useCallback(() => {
+    const c = messageContainerRef.current;
+    if (!c || !baseMessages) {
+      setVisibleCount((p) => Math.min(p + LOAD_STEP, baseMessages?.length ?? p + LOAD_STEP));
+      return;
+    }
+    const prevHeight = c.scrollHeight;
+    const prevTop = c.scrollTop;
+    setVisibleCount((p) => Math.min(p + LOAD_STEP, baseMessages.length));
+    // 스크롤 점프 방지: 높이 증가분만큼 scrollTop 보정
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const newHeight = c.scrollHeight;
+        c.scrollTop = prevTop + (newHeight - prevHeight);
+      });
+    });
+  }, [baseMessages]);
+  // 위로 스크롤 시 자동 로딩 (throttle 200ms)
+  useEffect(() => {
+    const c = messageContainerRef.current;
+    if (!c || !hasMore) return;
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        if (!c) return;
+        if (c.scrollTop < 160 && hasMore) {
+          handleLoadMore();
+        }
+      });
+    };
+    c.addEventListener("scroll", onScroll, { passive: true });
+    return () => c.removeEventListener("scroll", onScroll);
+  }, [hasMore, handleLoadMore]);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -258,6 +328,12 @@ export function SessionDetail() {
       if (ok === false) throw new Error("The server could not complete summarize (compact). Try again, or truncate earlier messages instead.");
       showToast.success("Session summarized (compact). Context cleaned up.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
+      setVisibleCount(INITIAL_VISIBLE);
+      // 컴팩트 후에는 최근만 보이고 하단으로
+      requestAnimationFrame(() => {
+        const c = messageContainerRef.current;
+        if (c) c.scrollTop = c.scrollHeight;
+      });
     } catch (e) {
       showToast.error((e as Error).message || "Summarize (compact) failed. Try truncating earlier messages manually.");
     } finally {
@@ -636,12 +712,22 @@ if (results.length > 0) {
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
           <UntrackedSuggestionBanner />
           <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
+            {hasMore && baseMessages && (
+              <div className="sticky top-0 z-10 flex justify-center py-2 bg-gradient-to-b from-background to-transparent">
+                <button
+                  onClick={handleLoadMore}
+                  className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
+                >
+                  Load more — {hiddenCount} older message{hiddenCount !== 1 ? "s" : ""} hidden · click or scroll up
+                </button>
+              </div>
+            )}
             {opcodeUrl && repoDirectory && (
               <MessageThread 
                 opcodeUrl={opcodeUrl} 
                 sessionID={sessionId} 
                 directory={repoDirectory}
-                messages={messages}
+                messages={visibleMessages}
                 isLoading={messagesLoading}
                 onFileClick={handleFileClick}
                 onEditMessage={handleEditMessage}
