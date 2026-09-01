@@ -101,20 +101,17 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   return true
 }
 
-const warmUpFlights = new Map<string, Promise<boolean>>()
+let warmUpInFlight: Promise<boolean> | null = null
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
   session?: string,
 ): Promise<boolean> {
-  const key = `${namespace}:${session ?? namespace}`
-  const existing = warmUpFlights.get(key)
-  if (existing) return existing
-  const flight = doWarmUp(namespace, session).finally(() => {
-    warmUpFlights.delete(key)
+  if (warmUpInFlight) return warmUpInFlight
+  warmUpInFlight = doWarmUp(namespace, session).finally(() => {
+    warmUpInFlight = null
   })
-  warmUpFlights.set(key, flight)
-  return flight
+  return warmUpInFlight
 }
 
 async function doWarmUp(
@@ -142,15 +139,10 @@ async function doWarmUp(
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value
   }
+  delete env.AGENT_BROWSER_SESSION
+  delete env.AGENT_BROWSER_NAMESPACE
   delete env.AGENT_BROWSER_EXECUTABLE_PATH
   delete env.AGENT_BROWSER_IDLE_TIMEOUT_MS
-  // single session: keep namespace/session consistent so daemon doesn't fork default vs opencode
-  env.AGENT_BROWSER_NAMESPACE = namespace
-  env.AGENT_BROWSER_SESSION = sessionName
-  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
-  if (info.executablePath && existsSync(info.executablePath)) {
-    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
-  }
   const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
