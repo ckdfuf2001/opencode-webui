@@ -788,10 +788,10 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           />
         </div>
 
-        {/* 필터 + recall block(오버레이) + Copy/Chat — block은 copy/chat 왼쪽에, 오버레이 표시 */}
-        <div className="flex flex-wrap items-center gap-1.5 relative">
+        {/* 필터부터 chat까지 한 줄 — Recalls 오버레이는 copy/chat 왼쪽 */}
+        <div className="flex items-center gap-1.5 relative flex-nowrap overflow-x-auto scrollbar-none py-0.5">
           <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-            <SelectTrigger className="w-[150px] h-7 text-xs">
+            <SelectTrigger className="w-[120px] min-w-[110px] h-7 text-xs shrink-0">
               <SelectValue placeholder="레포 선택" />
             </SelectTrigger>
             <SelectContent>
@@ -806,7 +806,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           </Select>
 
           <Select value={k} onValueChange={setK}>
-            <SelectTrigger className="w-[85px] h-7 text-xs">
+            <SelectTrigger className="w-[70px] h-7 text-xs shrink-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -817,43 +817,49 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </SelectContent>
           </Select>
 
-          <div className="flex items-center gap-1 ml-auto">
-            {filteredBlock && (
-              <button
-                onClick={() => setBlockOpen((v) => !v)}
-                className={`inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border ${blockOpen ? 'bg-primary/10 border-primary/30 text-primary' : 'bg-background hover:bg-muted border-border'}`}
-                title="Recall block overlay"
-              >
-                <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
-                Recall block
-                <span className="text-[10px] text-muted-foreground hidden sm:inline">{kind !== 'all' ? `· ${kind}` : ''} · {filteredBlock.length}c</span>
-              </button>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs gap-1"
-              disabled={!filteredBlock}
-              onClick={() => copyText(filteredBlock, 'Recall block copied')}
-              title="Copy recall block to clipboard"
+          <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')} className="shrink-0">
+            <TabsList className="h-7">
+              <TabsTrigger value="all" className="text-xs h-6 px-2">All</TabsTrigger>
+              <TabsTrigger value="message" className="text-xs h-6 px-1.5 gap-1"><History className="w-3 h-3" /> Chat</TabsTrigger>
+              <TabsTrigger value="commit" className="text-xs h-6 px-1.5 gap-1"><GitCommit className="w-3 h-3" /> Git</TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          {filteredBlock && (
+            <button
+              onClick={() => setBlockOpen((v) => !v)}
+              className={`inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border shrink-0 ${blockOpen ? 'bg-primary/10 border-primary/30 text-primary' : 'bg-background hover:bg-muted border-border'}`}
+              title="Recalls overlay"
             >
-              <Clipboard className="w-3 h-3" /> Copy
-            </Button>
-            <Button
-              size="sm"
-              className="h-7 text-xs gap-1"
-              disabled={!filteredBlock}
-              onClick={() => useInChat(filteredBlock)}
-              title="Use recall block in chat"
-            >
-              <MessageSquarePlus className="w-3 h-3" /> Chat
-            </Button>
-          </div>
+              <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
+              Recalls
+              <span className="text-[10px] text-muted-foreground hidden sm:inline">{kind !== 'all' ? `· ${kind}` : ''} · {filteredBlock.length}c</span>
+            </button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1 shrink-0"
+            disabled={!filteredBlock}
+            onClick={() => copyText(filteredBlock, 'Recalls copied')}
+            title="Copy Recalls to clipboard"
+          >
+            <Clipboard className="w-3 h-3" /> Copy
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs gap-1 shrink-0"
+            disabled={!filteredBlock}
+            onClick={() => useInChat(filteredBlock)}
+            title="Use Recalls in chat"
+          >
+            <MessageSquarePlus className="w-3 h-3" /> Chat
+          </Button>
 
           {blockOpen && filteredBlock && (
             <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl">
               <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
-                <span className="text-[11px] font-medium">Recall block {kind !== 'all' ? `(${kind})` : ''}</span>
+                <span className="text-[11px] font-medium">Recalls {kind !== 'all' ? `(${kind})` : ''}</span>
                 <button onClick={() => setBlockOpen(false)} className="text-muted-foreground hover:text-foreground p-0.5">
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -864,14 +870,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </div>
           )}
         </div>
-
-        <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')}>
-          <TabsList className="h-7">
-            <TabsTrigger value="all" className="text-xs h-6 px-2">All</TabsTrigger>
-            <TabsTrigger value="message" className="text-xs h-6 px-2 gap-1"><History className="w-3 h-3" /> Chat</TabsTrigger>
-            <TabsTrigger value="commit" className="text-xs h-6 px-2 gap-1"><GitCommit className="w-3 h-3" /> Git</TabsTrigger>
-          </TabsList>
-        </Tabs>
 
         {debouncedQ && (
           <p className="text-[11px] text-muted-foreground">
