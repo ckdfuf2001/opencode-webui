@@ -791,19 +791,19 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     return data.hits.filter((h) => h.kind === kind)
   }, [data?.hits, kind])
 
-  // 필터 옆 클립보드/채팅 버튼은 전체 블록 또는 필터된 결과 기준 — 레포명 포함, 전후보기 확장 시 해당 히트는 전후 내용으로 교체
+  // 필터 옆 클립보드/채팅 버튼은 전체 블록 — 정제: 상세보기와 동일 양식, 전후 확장 시 해당 히트는 전후 전체로
   const filteredBlock = useMemo(() => {
     if (!data?.hits) return ''
     if (filteredHits.length === 0) return ''
-    const lines = ['<memory-recall>', `query: "${debouncedQ}"`]
+    const lines = ['=======', '<memory-recall>', `query: "${debouncedQ}"`]
     for (const h of filteredHits) {
-      const repo = h.repoId != null ? ` repo ${repoName(h.repoId)}` : ''
-      // 전후보기 확장된 히트는 snippet 대신 전후 내용 전체로
-      let snippet = h.snippet
+      const repo = repoName(h.repoId)
       if (h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData) {
-        snippet = expandedData.rows.map((r) => `[${r.role}#${r.turnIndex}] ${r.text}`).join(' | ')
+        lines.push(`- [${h.kind}] ${repo} session ${h.sessionId?.slice(0,8) ?? ''}`)
+        for (const r of expandedData.rows) lines.push(`${r.role} #${r.turnIndex}\n${r.text}`)
+      } else {
+        lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta} repo ${repo}`)
       }
-      lines.push(`- [${h.kind}] ${snippet} — ${h.meta}${repo}`)
     }
     lines.push('</memory-recall>')
     return lines.join('\n')
@@ -1006,8 +1006,9 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     )}
                     <span className="flex-1 min-w-0" />
                     <button
-                      onClick={(e) => { e.stopPropagation(); const t = (expandedId === h.messageId && expandedData) ? expandedData.rows.map((r) => r.text).join('\n\n') : h.snippet; copyText(t) }}
+                      onClick={(e) => { e.stopPropagation(); const t = (expandedId === h.messageId && expandedData) ? `user #${expandedData.rows[0]?.turnIndex ?? ''}\n${expandedData.rows.map((r) => `${r.role} #${r.turnIndex}\n${r.text}`).join('\n---\n')}` : `user #${h.turnIndex ?? ''} ${repoName(h.repoId)}\n${h.snippet}\n-- ${h.meta}`; copyText(t) }}
                       className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted"
+                      title="정제된 카피"
                     >
                       <Copy className="w-2.5 h-2.5" /> Copy
                     </button>
@@ -1019,49 +1020,38 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     </button>
                   </div>
                   {expandedId === h.messageId && expandedData ? (
-                    <div className="relative space-y-1.5 pt-6">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
-                        className="absolute top-0 right-0 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background/90 backdrop-blur shadow hover:bg-muted"
-                        title="Chat으로 이동"
-                      >
-                        <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
-                      </button>
-                      {expandedData.rows.map((row) => (
-                        <div key={row.messageId} className={`p-2 rounded text-xs ${row.messageId === expandedData.center.messageId ? 'bg-accent border border-input' : 'bg-muted/30'}`}>
-                          <div className="flex gap-2 text-[10px] text-muted-foreground mb-1">
-                            <span>{row.role}</span>
-                            <span>#{row.turnIndex}</span>
+                    <div className="space-y-1.5">
+                      {expandedData.rows.map((row) => {
+                        const isCenter = row.messageId === expandedData.center.messageId
+                        return (
+                          <div key={row.messageId} className={`p-2 rounded text-xs relative ${isCenter ? 'bg-accent border border-input' : 'bg-muted/30'}`}>
+                            <div className="flex gap-2 text-[10px] text-muted-foreground mb-1 pr-20">
+                              <span>{row.role}</span>
+                              <span>#{row.turnIndex}</span>
+                            </div>
+                            {isCenter && h.sessionId && (
+                              <a
+                                href={h.repoId != null && h.repoId !== 0 ? `/repos/${h.repoId}/sessions/${h.sessionId}#message-${h.messageId}` : `/session/${h.sessionId}#message-${h.messageId}`}
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleGoChat(h) }}
+                                className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 backdrop-blur border border-input shadow-sm hover:bg-muted text-primary"
+                                title="Chat으로 이동"
+                              >
+                                <CornerDownLeft className="w-2.5 h-2.5" /> chat으로 이동
+                              </a>
+                            )}
+                            <div className="whitespace-pre-wrap break-words">{row.text ? highlightSnippet(row.text) : '(empty)'}</div>
                           </div>
-                          <div className="whitespace-pre-wrap break-words">{row.text ? highlightSnippet(row.text) : '(empty)'}</div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   ) : (
-                    <>
-                      <p className="text-xs text-foreground break-words whitespace-pre-wrap">{highlightSnippet(h.snippet)}</p>
-                      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <span>{h.kind === 'message' ? `${h.role ?? ''} turn ${h.turnIndex ?? ''}`.trim() : h.meta}</span>
+                    <div className="p-2 rounded text-xs bg-accent border border-input">
+                      <div className="flex gap-2 text-[10px] text-muted-foreground mb-1">
+                        <span>{h.role ?? h.kind}</span>
+                        <span>#{h.turnIndex ?? ''}</span>
                       </div>
-                      <div className="flex gap-1.5 pt-1 flex-wrap">
-                        {h.kind === 'message' && h.sessionId && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
-                            className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
-                          >
-                            <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
-                          </button>
-                        )}
-                        {h.kind === 'message' && h.messageId && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleExpand(h.messageId!) }}
-                            className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted ml-auto"
-                          >
-                            <History className="w-3 h-3" /> 전후 보기
-                          </button>
-                        )}
-                      </div>
-                    </>
+                      <div className="whitespace-pre-wrap break-words">{highlightSnippet(h.snippet)}</div>
+                    </div>
                   )}
                 </div>
               ))}
