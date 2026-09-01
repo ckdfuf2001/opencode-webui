@@ -788,11 +788,11 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           />
         </div>
 
-        {/* 필터부터 chat까지 한 줄(스크롤 없이 100% 조정, 필터 min 없음) */}
+        {/* 필터부터 chat까지 한 줄(스크롤 없이 100% 조정, 필터 min 없음) — Recalls가 Copy/Chat을 포함한 통일 그룹 */}
         <div className="flex items-center gap-1 relative w-full py-0.5">
           <div className="flex-1 min-w-0">
             <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-              <SelectTrigger className="w-full h-7 text-xs">
+              <SelectTrigger className="w-full h-7 text-xs min-w-0 [&>span]:truncate">
                 <SelectValue placeholder="레포 선택" />
               </SelectTrigger>
               <SelectContent>
@@ -807,7 +807,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </Select>
           </div>
 
-          <div className="w-[72px] shrink-0">
+          <div className="w-[68px] shrink-0">
             <Select value={k} onValueChange={setK}>
               <SelectTrigger className="w-full h-7 text-xs">
                 <SelectValue />
@@ -821,35 +821,34 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </Select>
           </div>
 
-          {filteredBlock && (
+          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 */}
+          <div className="inline-flex items-center rounded-md border bg-background shrink-0 overflow-hidden divide-x divide-border">
             <button
-              onClick={() => setBlockOpen((v) => !v)}
-              className={`inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border shrink-0 ${blockOpen ? 'bg-primary/10 border-primary/30 text-primary' : 'bg-background hover:bg-muted border-border'}`}
-              title="Recalls overlay"
+              onClick={() => filteredBlock && setBlockOpen((v) => !v)}
+              disabled={!filteredBlock}
+              className={`inline-flex items-center gap-1 text-xs h-7 px-2 shrink-0 ${blockOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted'} disabled:opacity-40 disabled:cursor-not-allowed`}
+              title={filteredBlock ? 'Recalls overlay' : 'No recalls to show'}
             >
               <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
               Recalls
             </button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs gap-1 shrink-0 px-2"
-            disabled={!filteredBlock}
-            onClick={() => copyText(filteredBlock, 'Recalls copied')}
-            title="Copy Recalls to clipboard"
-          >
-            <Clipboard className="w-3 h-3" /> Copy
-          </Button>
-          <Button
-            size="sm"
-            className="h-7 text-xs gap-1 shrink-0 px-2"
-            disabled={!filteredBlock}
-            onClick={() => useInChat(filteredBlock)}
-            title="Use Recalls in chat"
-          >
-            <MessageSquarePlus className="w-3 h-3" /> Chat
-          </Button>
+            <button
+              onClick={() => copyText(filteredBlock, 'Recalls copied')}
+              disabled={!filteredBlock}
+              className="inline-flex items-center gap-1 text-xs h-7 px-2 shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Copy Recalls to clipboard"
+            >
+              <Clipboard className="w-3 h-3" /> Copy
+            </button>
+            <button
+              onClick={() => useInChat(filteredBlock)}
+              disabled={!filteredBlock}
+              className="inline-flex items-center gap-1 text-xs h-7 px-2 shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Use Recalls in chat"
+            >
+              <MessageSquarePlus className="w-3 h-3" /> Chat
+            </button>
+          </div>
 
           {blockOpen && filteredBlock && (
             <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl">
