@@ -747,6 +747,8 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     showToast.success('Added to chat input')
   }
 
+  const [blockOpen, setBlockOpen] = useState(false)
+
   // 서치 페이지와 동일한 필터 후 hits
   const filteredHits = useMemo(() => {
     if (!data?.hits) return []
@@ -855,6 +857,25 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             {kind !== 'all' ? ` · ${kind}` : ''}
           </p>
         )}
+
+        {/* recall block — 필터 옆, 접은 상태 (단일 Copy/Chat) */}
+        {filteredBlock && (
+          <div className="rounded-md border border-primary/20 bg-primary/5">
+            <button
+              onClick={() => setBlockOpen((v) => !v)}
+              className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left"
+            >
+              <ChevronRight className={`w-3 h-3 text-primary transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
+              <span className="text-[11px] font-medium text-primary">Recall block {kind !== 'all' ? `(${kind})` : ''}</span>
+              <span className="text-[10px] text-muted-foreground">· {filteredBlock.length} chars · {blockOpen ? '접기' : '펼치기'}</span>
+            </button>
+            {blockOpen && (
+              <pre className="mx-2 mb-2 text-[11px] whitespace-pre-wrap break-words font-mono bg-background/60 rounded p-2 border border-border max-h-32 overflow-y-auto">
+                {filteredBlock}
+              </pre>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
@@ -877,30 +898,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           </div>
         ) : (
           <>
-            {filteredBlock && (
-              <div className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-primary">Recall block {kind !== 'all' ? `(${kind})` : ''}</span>
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={() => copyText(filteredBlock, 'Block copied')}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-background hover:bg-muted"
-                    >
-                      <Clipboard className="w-3 h-3" /> Copy
-                    </button>
-                    <button
-                      onClick={() => useInChat(filteredBlock)}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
-                    >
-                      <MessageSquarePlus className="w-3 h-3" /> Use in chat
-                    </button>
-                  </div>
-                </div>
-                <pre className="text-[11px] whitespace-pre-wrap break-words font-mono bg-background/60 rounded p-2 border border-border max-h-40 overflow-y-auto">
-                  {filteredBlock}
-                </pre>
-              </div>
-            )}
             <div className="space-y-2">
               {filteredHits.map((h, i) => (
                 <div key={i} className="rounded-md border border-border bg-background p-2.5 space-y-1.5">
