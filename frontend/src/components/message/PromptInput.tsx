@@ -62,6 +62,8 @@ interface PromptInputProps {
   onResendEdit?: (messageID: string) => Promise<boolean>
   autoScrollEnabled?: boolean
   onAutoScrollChange?: (enabled: boolean) => void
+  onCompact?: () => void
+  onNewSession?: () => void
 }
 
 export function PromptInput({ 
@@ -86,7 +88,9 @@ export function PromptInput({
   editTargetMessageID,
   onResendEdit,
   autoScrollEnabled,
-  onAutoScrollChange
+  onAutoScrollChange,
+  onCompact,
+  onNewSession
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -757,13 +761,31 @@ useEffect(() => {
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 mx-2 mb-2 w-[90%] max-w-4xl">
       <ChatQueueStrip sessionID={sessionID} />
       {(isContextWarning || isContextCritical || willExceed) && contextLimit && (
-        <div className={`mb-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between ${isContextCritical || willExceed ? 'bg-red-500/15 border border-red-500/40 text-red-400' : 'bg-yellow-500/15 border border-yellow-500/40 text-yellow-600 dark:text-yellow-400'}`}>
-          <span>
+        <div className={`mb-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 ${isContextCritical || willExceed ? 'bg-red-500/15 border border-red-500/40 text-red-400' : 'bg-yellow-500/15 border border-yellow-500/40 text-yellow-600 dark:text-yellow-400'}`}>
+          <span className="flex-1 min-w-0">
             {isContextCritical || willExceed
-              ? `Context exceeded ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — sending is blocked. Use Scissors to truncate previous messages or start a new session.`
+              ? `Context exceeded ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — sending is blocked.`
               : `Context warning ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — the limit is close.`}
           </span>
-          {willExceed && <span className="ml-2 font-mono text-[10px] opacity-70">projected {Math.round(projectedUsage)}%</span>}
+          <div className="flex gap-1.5 flex-shrink-0">
+            {onCompact && (
+              <button
+                onClick={onCompact}
+                className="px-2 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90"
+              >
+                Compact
+              </button>
+            )}
+            {onNewSession && (
+              <button
+                onClick={onNewSession}
+                className="px-2 py-1 rounded-md bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-700"
+              >
+                New Session
+              </button>
+            )}
+          </div>
+          {willExceed && <span className="ml-2 font-mono text-[10px] opacity-70 hidden sm:inline">projected {Math.round(projectedUsage)}%</span>}
         </div>
       )}
       <textarea

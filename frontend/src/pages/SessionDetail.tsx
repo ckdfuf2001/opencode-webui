@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession } from "@/hooks/useOpenCode";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
 import { useSettings } from "@/hooks/useSettings";
@@ -276,6 +276,18 @@ export function SessionDetail() {
       showToast.error((e as Error).message || "Failed to truncate messages.");
     }
   }, [messages, sessionId, truncateSession]);
+
+  const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
+  const handleNewSession = useCallback(async () => {
+    try {
+      const s = await createSessionMutation.mutateAsync({});
+      setLengthModal({ open: false, messageId: null });
+      navigate(`/repos/${repoId}/sessions/${s.id}`);
+      showToast.success("New session created");
+    } catch (e) {
+      showToast.error((e as Error).message || "Failed to create new session");
+    }
+  }, [createSessionMutation, navigate, repoId]);
 
   const { scrollToBottom } = useAutoScroll({
     containerRef: messageContainerRef,
@@ -681,6 +693,8 @@ if (results.length > 0) {
                 onResendEdit={handleResendEdit}
                 autoScrollEnabled={effectiveAutoScroll}
                 onAutoScrollChange={setAutoScrollOverride}
+                onCompact={handleCompact}
+                onNewSession={handleNewSession}
               />
             </div>
             </div>
@@ -773,7 +787,7 @@ if (results.length > 0) {
               {ctx.usagePercentage ? ` Currently using ${Math.round(ctx.usagePercentage)}% (${ctx.totalTokens.toLocaleString()} tokens).` : ""}
             </p>
             <p className="text-xs text-muted-foreground">Summarize (compact) reduces context by summarizing the conversation on the server. If it fails, truncate earlier messages instead.</p>
-            <div className="flex gap-2 justify-end pt-2">
+            <div className="flex gap-2 justify-end pt-2 flex-wrap">
               <button
                 onClick={() => setLengthModal({ open: false, messageId: null })}
                 className="px-3 py-1.5 rounded-md border text-sm"
@@ -792,7 +806,14 @@ if (results.length > 0) {
                 disabled={isCompacting || summarizeSession.isPending}
                 className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm disabled:opacity-50"
               >
-                {isCompacting || summarizeSession.isPending ? "Summarizing..." : "Run summarize (compact)"}
+                {isCompacting || summarizeSession.isPending ? "Summarizing..." : "Compact"}
+              </button>
+              <button
+                onClick={handleNewSession}
+                disabled={createSessionMutation.isPending}
+                className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm disabled:opacity-50 hover:bg-blue-700"
+              >
+                {createSessionMutation.isPending ? "Creating..." : "New Session"}
               </button>
             </div>
           </div>

@@ -20,12 +20,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import type { ProviderWithModels, Model } from "@/api/providers";
 import { showToast } from "@/lib/toast";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 
 interface ModelSelectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   opcodeUrl?: string | null;
   directory?: string;
+  forDefault?: boolean;
 }
 
 export function ModelSelectDialog({
@@ -33,17 +36,32 @@ export function ModelSelectDialog({
   onOpenChange,
   opcodeUrl,
   directory,
+  forDefault = false,
 }: ModelSelectDialogProps) {
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const [useAsDefault, setUseAsDefault] = useState(false);
   const { preferences, updateSettings } = useSettings();
   const client = useOpenCodeClient(opcodeUrl);
   const queryClient = useQueryClient();
   const { sessionId } = useParams<{ sessionId: string }>();
 
-  const currentModel = preferences?.defaultModel || "";
+  // 세션에서는 세션 모델을 현재 모델로 표시, 없으면 default fallback
+  const sessionModelKey = ((): string | null => {
+    if (!sessionId) return null;
+    try {
+      const data: any = queryClient.getQueryData(["opencode", "session", opcodeUrl, sessionId, directory]);
+      if (data?.model?.providerID && data?.model?.id) return `${data.model.providerID}/${data.model.id}`;
+    } catch {}
+    return null;
+  })();
+  const currentModel = forDefault
+    ? preferences?.defaultModel || ""
+    : sessionId
+      ? sessionModelKey || preferences?.defaultModel || ""
+      : preferences?.defaultModel || "";
 
   const loadProviders = useCallback(async () => {
     try {
@@ -65,6 +83,8 @@ export function ModelSelectDialog({
   useEffect(() => {
     if (open) {
       loadProviders();
+      // 다이얼로그 열 때마다 "Use as default" 초기화
+      setUseAsDefault(false);
     }
   }, [open, loadProviders]);
 
@@ -112,11 +132,8 @@ export function ModelSelectDialog({
   const handleModelSelect = async (providerId: string, modelId: string) => {
     const newModel = `${providerId}/${modelId}`;
 
-    // Update settings for future sessions
-    updateSettings({ defaultModel: newModel });
-
-    // If we're in a session, try to update the current session's model
-    if (sessionId && client) {
+    // 세션 전용: 기본은 세션에만 적용, 위에 "Use as default" 체크 시에만 전체(default)에도 적용
+    if (sessionId && client && !forDefault) {
       const sessionKey = ["opencode", "session", opcodeUrl, sessionId, directory] as const;
       const sessionsKey = ["opencode", "sessions", opcodeUrl, directory] as const;
       // 낙천 업데이트: 현재 모델이 존재하지 않는(지원 중단된) 모델이어도
@@ -152,7 +169,16 @@ export function ModelSelectDialog({
           `Failed to switch model: ${error instanceof Error ? error.message : "unknown error"}`,
           { duration: 6000 },
         );
+        onOpenChange(false);
+        return;
       }
+      // 체크된 경우에만 전체(default)에도 적용
+      if (useAsDefault) {
+        updateSettings({ defaultModel: newModel });
+      }
+    } else {
+      // 세션이 아니거나 forDefault=true인 경우: default만 갱신
+      updateSettings({ defaultModel: newModel });
     }
 
     onOpenChange(false);
@@ -189,6 +215,24 @@ export function ModelSelectDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Use as default — 세션에서만 노출, 체크 시에만 전체 적용 */}
+          {sessionId && !forDefault && (
+            <div className="flex items-center gap-2 px-1 py-1.5 rounded-md bg-[#0a0a0a] border border-[#333]">
+              <Checkbox
+                id="use-as-default"
+                checked={useAsDefault}
+                onCheckedChange={(v) => setUseAsDefault(v === true)}
+                className="border-zinc-500 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+              />
+              <Label htmlFor="use-as-default" className="text-sm text-zinc-300 cursor-pointer flex-1">
+                Use as default <span className="text-zinc-500">— also update default model for new sessions</span>
+              </Label>
+              {preferences?.defaultModel && (
+                <span className="text-xs text-zinc-500 font-mono truncate max-w-[180px]">{preferences.defaultModel}</span>
+              )}
+            </div>
+          )}
+
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400" />
@@ -338,14 +382,27 @@ export function ModelSelectDialog({
           </div>
 
           {/* Current Selection */}
-          {currentModel && (
-            <div className="pt-4 border-t border-[#333]">
-              <p className="text-sm text-zinc-400">
-                Current model:{" "}
-                <span className="text-white font-medium">{currentModel}</span>
-              </p>
-            </div>
-          )}
+          <div className="pt-4 border-t border-[#333] space-y-1">
+            {sessionId && !forDefault ? (
+              <>
+                <p className="text-sm text-zinc-400">
+                  Session model: <span className="text-white font-medium">{sessionModelKey || "— (uses default)"}</span>
+                </p>
+                <p className="text-sm text-zinc-400">
+                  Default model: <span className="text-zinc-300 font-medium">{preferences?.defaultModel || "—"}</span>
+                </p>
+                {currentModel && (
+                  <p className="text-xs text-zinc-500">Selected (highlighted): {currentModel}</p>
+                )}
+              </>
+            ) : (
+              currentModel && (
+                <p className="text-sm text-zinc-400">
+                  Current model: <span className="text-white font-medium">{currentModel}</span>
+                </p>
+              )
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>
