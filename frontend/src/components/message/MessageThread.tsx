@@ -199,64 +199,27 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
               ) : (
                 <div className="space-y-2">
                   {msg.parts
-                    .flatMap((part, partIdx) => {
-                      if ((part as { type?: string }).type !== 'text' || typeof (part as { text?: string }).text !== 'string') {
-                        return [{ part, idx: partIdx, subIdx: 0 }]
+                    .map((part) => {
+                      if ((part as { type?: string }).type === 'text' && typeof (part as { text?: string }).text === 'string') {
+                        const t = stripMemoryRecall((part as { text: string }).text)
+                        if (!t) return null
+                        return { ...part, text: t } as typeof part
                       }
-                      const raw = (part as { text: string }).text
-                      if (!raw.includes('<memory-recall>')) {
-                        const t = stripMemoryRecall(raw)
-                        if (!t) return []
-                        return [{ part: { ...part, text: t } as typeof part, idx: partIdx, subIdx: 0 }]
-                      }
-                      // split into recall blocks and normal text, render recall as visible block
-                      const segs: { type: 'text' | 'recall'; content: string }[] = []
-                      let last = 0
-                      const re = /<memory-recall>[\s\S]*?<\/memory-recall>/g
-                      let m: RegExpExecArray | null
-                      while ((m = re.exec(raw)) !== null) {
-                        const before = raw.slice(last, m.index).trim()
-                        if (before) segs.push({ type: 'text', content: stripMemoryRecall(before) })
-                        segs.push({ type: 'recall', content: m[0] })
-                        last = m.index + m[0].length
-                      }
-                      const tail = raw.slice(last).trim()
-                      if (tail) {
-                        const t = stripMemoryRecall(tail)
-                        if (t) segs.push({ type: 'text', content: t })
-                      }
-                      if (segs.length === 0) return []
-                      return segs
-                        .filter((s) => s.content)
-                        .map((s, subIdx) => {
-                          if (s.type === 'recall') {
-                            return { part: { type: 'recall-block', text: s.content } as unknown as typeof part, idx: partIdx, subIdx, isRecall: true }
-                          }
-                          return { part: { ...part, text: s.content } as typeof part, idx: partIdx, subIdx }
-                        })
+                      return part
                     })
                     .filter(Boolean)
-                    .map(({ part, idx, subIdx, isRecall }: any) => (
-                      <div key={`${msg.info.id}-${(part as { id: string }).id ?? idx}-${idx}-${subIdx}`}>
-                        {isRecall ? (
-                          <div className="my-2">
-                            <div className="text-[11px] text-muted-foreground tracking-widest text-center py-1">=======</div>
-                            <div className="rounded-md border border-dashed border-primary/30 bg-primary/5 p-2.5 font-mono text-xs whitespace-pre-wrap break-words">
-                              {part.text}
-                            </div>
-                          </div>
-                        ) : (
-                          <MessagePart
-                            part={part as typeof msg.parts[number]}
-                            role={msg.info.role}
-                            allParts={msg.parts}
-                            partIndex={idx}
-                            onFileClick={onFileClick}
-                            messageTextContent={msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined}
-                            directory={directory}
-                            messageStreaming={streaming}
-                          />
-                        )}
+                    .map((part, index) => (
+                      <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`}>
+                        <MessagePart
+                          part={part as typeof msg.parts[number]}
+                          role={msg.info.role}
+                          allParts={msg.parts}
+                          partIndex={index}
+                          onFileClick={onFileClick}
+                          messageTextContent={msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined}
+                          directory={directory}
+                          messageStreaming={streaming}
+                        />
                       </div>
                     ))}
                 </div>

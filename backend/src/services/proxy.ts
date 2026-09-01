@@ -274,6 +274,40 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               firstText.text = `${block}\n\n${text}`
               body = JSON.stringify(parsed)
             }
+            // recall은 스킬/커맨드 실행 시에만 주입 (일반 채팅에는 주입 안 함)
+            try {
+              const argsText = text.replace(/^\/[a-zA-Z0-9_-]+\s*/, '').trim()
+              const q = (argsText.length >= 2 ? argsText : text).slice(0, 500)
+              if (q.length >= 2) {
+                const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+                let enabled = true
+                let topK = 4
+                if (prefRow) {
+                  try {
+                    const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
+                    if (p.autoRecallEnabled === false) enabled = false
+                    if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
+                  } catch {}
+                }
+                if (enabled) {
+                  const { buildRecall } = await import('./recall')
+                  const { resolveRepoId } = await import('./command-runs')
+                  const repoId = directory ? resolveRepoId(proxyDb, directory) : null
+                  const { block } = buildRecall(proxyDb, q, { k: topK, repoId: repoId ?? undefined })
+                  if (block) {
+                    const cur = JSON.parse(body) as { parts?: { type?: string; text?: string }[] }
+                    const curFirst = cur?.parts?.find((p) => p.type === 'text' && typeof p.text === 'string') as { text: string } | undefined
+                    if (curFirst) {
+                      curFirst.text = `${block}\n\n${curFirst.text}`
+                      body = JSON.stringify(cur)
+                      firstText.text = curFirst.text
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              logger.debug('memory recall injection (command) skipped:', e)
+            }
           } else if (!text.includes('<memory-recall>') && !text.includes('<skill-memory-check>') && !text.includes('[run-context]')) {
             const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
             let skillBlock = ''
@@ -299,7 +333,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               } catch {}
             }
             let recallBlock = ''
-            if (!commandName && text.trim().length >= 4) {
+            if (commandName && text.trim().length >= 4) {
               try {
                 const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
                 let enabled = true
