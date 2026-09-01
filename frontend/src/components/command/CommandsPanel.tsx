@@ -735,10 +735,35 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
 
   const copyText = async (text: string, label = 'Copied to clipboard') => {
     try {
-      await navigator.clipboard.writeText(text)
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        if (!ok) throw new Error('execCommand failed')
+      }
       showToast.success(label)
     } catch {
-      showToast.error('Failed to copy')
+      // fallback try execCommand again if clipboard failed
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+        showToast.success(label)
+      } catch {
+        showToast.error('Failed to copy')
+      }
     }
   }
 
@@ -931,7 +956,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           <>
             <div className="space-y-2">
               {filteredHits.map((h, i) => (
-                <div key={i} className="rounded-md border border-input bg-background p-2.5 space-y-1.5">
+                <div key={i} onClick={() => h.kind === 'message' && h.messageId && handleExpand(h.messageId)} className="rounded-md border border-input bg-background p-2.5 space-y-1.5 cursor-pointer hover:border-primary/30">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] border ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400 border-blue-500/30' : 'bg-amber-500/15 text-amber-400 border-amber-500/30'}`}>
                       {h.kind === 'message' ? 'chat' : 'git'}
@@ -946,20 +971,20 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                   <p className="text-xs text-foreground break-words whitespace-pre-wrap">{h.snippet}</p>
                   <div className="flex gap-1.5 pt-1 flex-wrap">
                     <button
-                      onClick={() => copyText(h.snippet)}
+                      onClick={(e) => { e.stopPropagation(); copyText(h.snippet) }}
                       className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
                     >
                       <Copy className="w-3 h-3" /> Copy
                     </button>
                     <button
-                      onClick={() => useInChat(h.snippet)}
+                      onClick={(e) => { e.stopPropagation(); useInChat(h.snippet) }}
                       className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
                     >
                       <MessageSquarePlus className="w-3 h-3" /> Use in chat
                     </button>
                     {h.kind === 'message' && h.sessionId && (
                       <button
-                        onClick={() => handleGoChat(h)}
+                        onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
                         className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
                       >
                         <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
@@ -967,7 +992,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     )}
                     {h.kind === 'message' && h.messageId && (
                       <button
-                        onClick={() => handleExpand(h.messageId!)}
+                        onClick={(e) => { e.stopPropagation(); handleExpand(h.messageId!) }}
                         className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted ml-auto"
                       >
                         <History className="w-3 h-3" /> {expandedId === h.messageId ? '접기' : '전후 보기'}
@@ -975,7 +1000,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     )}
                   </div>
                   {h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData && (
-                    <div className="border-t border-input pt-2 mt-1 space-y-1.5">
+                    <div onClick={(e) => e.stopPropagation()} className="border-t border-input pt-2 mt-1 space-y-1.5">
                       {expandedData.rows.map((row) => (
                         <div key={row.messageId} className={`p-2 rounded text-xs ${row.messageId === expandedData.center.messageId ? 'bg-accent border border-input' : 'bg-muted/30'}`}>
                           <div className="flex gap-2 text-[10px] text-muted-foreground mb-1">
