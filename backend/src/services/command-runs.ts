@@ -90,7 +90,7 @@ export async function recordRunStart(
   }
 
   await store.insertRun(db, run, input.directory ?? null)
-  firePreCommandHooks(run)
+  firePreCommandHooks(run, db)
 
   // 버전이 없는 기록(파일은 있으나 git 추적 제외)이면 include 여부 질의용 suggestion 생성
   if (run.kind !== 'command' && run.kind !== 'skill') {
@@ -179,7 +179,7 @@ export async function finishRun(
   const run = await store.getRunById(db, id)
   await store.markFinished(db, id, status)
   if (run) {
-    firePostCommandHooks(run, status)
+    firePostCommandHooks(run, status, db)
   }
 }
 
