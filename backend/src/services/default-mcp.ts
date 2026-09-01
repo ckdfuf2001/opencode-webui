@@ -101,17 +101,20 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   return true
 }
 
-let warmUpInFlight: Promise<boolean> | null = null
+const warmUpFlights = new Map<string, Promise<boolean>>()
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
   session?: string,
 ): Promise<boolean> {
-  if (warmUpInFlight) return warmUpInFlight
-  warmUpInFlight = doWarmUp(namespace, session).finally(() => {
-    warmUpInFlight = null
+  const key = `${namespace}:${session ?? namespace}`
+  const existing = warmUpFlights.get(key)
+  if (existing) return existing
+  const flight = doWarmUp(namespace, session).finally(() => {
+    warmUpFlights.delete(key)
   })
-  return warmUpInFlight
+  warmUpFlights.set(key, flight)
+  return flight
 }
 
 async function doWarmUp(
@@ -143,6 +146,12 @@ async function doWarmUp(
   delete env.AGENT_BROWSER_NAMESPACE
   delete env.AGENT_BROWSER_EXECUTABLE_PATH
   delete env.AGENT_BROWSER_IDLE_TIMEOUT_MS
+  env.AGENT_BROWSER_NAMESPACE = namespace
+  env.AGENT_BROWSER_SESSION = sessionName
+  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
+  if (info.executablePath && existsSync(info.executablePath)) {
+    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
+  }
   const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
