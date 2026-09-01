@@ -166,6 +166,55 @@ export function createSearchRoutes(db: Database) {
     }
   })
 
+  // 인덱스 삭제 — 다중 선택
+  app.delete('/messages/index', async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { messageIds?: string[]; sessionIds?: string[] }
+      const ids = Array.isArray(body.messageIds) ? body.messageIds.filter((v) => typeof v === 'string' && v) : []
+      const sids = Array.isArray(body.sessionIds) ? body.sessionIds.filter((v) => typeof v === 'string' && v) : []
+      if (ids.length === 0 && sids.length === 0) return c.json({ error: 'messageIds or sessionIds required' }, 400)
+      let deleted = 0
+      if (ids.length > 0) {
+        const stmt = db.prepare('DELETE FROM session_messages_fts WHERE message_id = ?')
+        for (const mid of ids) { try { deleted += stmt.run(mid).changes } catch {} }
+      }
+      if (sids.length > 0) {
+        const stmt2 = db.prepare('DELETE FROM session_messages_fts WHERE session_id = ?')
+        for (const sid of sids) { try { deleted += stmt2.run(sid).changes } catch {} }
+      }
+      return c.json({ deleted })
+    } catch (error) {
+      logger.error('Failed to delete message index:', error)
+      return c.json({ error: 'Failed to delete message index' }, 500)
+    }
+  })
+
+  app.delete('/commits/index', async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { shas?: string[]; commits?: { sha: string; repoId: number }[] }
+      const shas = Array.isArray(body.shas) ? body.shas : []
+      const commits = Array.isArray(body.commits) ? body.commits : []
+      if (shas.length === 0 && commits.length === 0) return c.json({ error: 'shas or commits required' }, 400)
+      let deleted = 0
+      if (commits.length > 0) {
+        for (const it of commits) {
+          if (!it?.sha || it.repoId == null) continue
+          try { deleted += db.prepare('DELETE FROM git_commits_fts WHERE sha = ? AND repo_id = ?').run(it.sha, it.repoId).changes } catch {}
+          try { deleted += db.prepare('DELETE FROM git_commits WHERE sha = ? AND repo_id = ?').run(it.sha, it.repoId).changes } catch {}
+        }
+      } else {
+        for (const sha of shas) {
+          try { deleted += db.prepare('DELETE FROM git_commits_fts WHERE sha = ?').run(sha).changes } catch {}
+          try { deleted += db.prepare('DELETE FROM git_commits WHERE sha = ?').run(sha).changes } catch {}
+        }
+      }
+      return c.json({ deleted })
+    } catch (error) {
+      logger.error('Failed to delete commit index:', error)
+      return c.json({ error: 'Failed to delete commit index' }, 500)
+    }
+  })
+
   return app
 }
 

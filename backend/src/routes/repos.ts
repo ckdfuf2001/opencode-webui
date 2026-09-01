@@ -179,11 +179,13 @@ export function createRepoRoutes(database: Database) {
         throw deleteErr
       }
 
+      const withIndexParam = c.req.query('withIndex')
+      const withIndex = withIndexParam == null ? true : withIndexParam !== 'false' && withIndexParam !== '0'
       // Delete the DB rows inside a short, serialized transaction. The cascade
       // also removes schedules, permission rules and command runs owned by the
       // repo so no orphaned rows survive in SQLite.
       await withTransactionAsync(database, async (tx) => {
-        db.deleteRepoCascade(tx, id)
+        db.deleteRepoCascade(tx, id, { withIndex })
       })
 
       logger.info(`Repo deleted in ${Date.now() - startedAt}ms (repo id ${id})`)

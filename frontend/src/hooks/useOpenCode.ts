@@ -412,15 +412,16 @@ export const useDeleteSession = (opcodeUrl: string | null | undefined, directory
   const client = useOpenCodeClient(opcodeUrl, directory);
 
   return useMutation({
-    mutationFn: async (sessionIDs: string | string[]) => {
+    mutationFn: async (arg: string | string[] | { ids: string | string[]; withIndex?: boolean }) => {
       if (!client) {
         throw new Error('OpenCode client not available');
       }
-      
-      const ids = Array.isArray(sessionIDs) ? sessionIDs : [sessionIDs]
+      const withIndex = typeof arg === 'object' && !Array.isArray(arg) && 'ids' in arg ? (arg.withIndex !== false) : true
+      const rawIds = typeof arg === 'object' && !Array.isArray(arg) && 'ids' in arg ? arg.ids : (arg as string | string[])
+      const ids = Array.isArray(rawIds) ? rawIds : [rawIds]
       
       const deletePromises = ids.map(async (sessionID) => {
-        await client.deleteSession(sessionID);
+        await client.deleteSession(sessionID, { withIndex });
       })
       
       const results = await Promise.allSettled(deletePromises)
@@ -433,7 +434,8 @@ export const useDeleteSession = (opcodeUrl: string | null | undefined, directory
       return results
     },
     onSuccess: (_data, variables) => {
-      const ids = Array.isArray(variables) ? variables : [variables];
+      const raw = typeof variables === 'object' && !Array.isArray(variables) && variables !== null && 'ids' in (variables as any) ? (variables as any).ids : variables
+      const ids = Array.isArray(raw) ? raw : [raw];
       const sessionsKey = ["opencode", "sessions", opcodeUrl, directory] as const;
       const current = queryClient.getQueryData<{ id: string }[]>(sessionsKey);
       if (current) {

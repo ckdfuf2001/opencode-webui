@@ -693,7 +693,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
   )
 }
 
-function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sessionId: string; onUseInChat?: (text: string) => void }) {
+function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: { repoId?: number; sessionId: string; onUseInChat?: (text: string) => void; opcodeUrl?: string | null; directory?: string }) {
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [selectedRepo, setSelectedRepo] = useState<string>(repoId != null ? String(repoId) : 'all')
@@ -840,12 +840,23 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     } catch { /* ignore */ }
   }
 
-  const handleGoChat = (hit: typeof filteredHits[number]) => {
-    if (hit.kind !== 'message' || !hit.sessionId) return
-    const rid = hit.repoId
-    const hash = hit.messageId ? `#message-${hit.messageId}` : ''
-    if (rid != null && rid !== 0) navigateRecall(`/repos/${rid}/sessions/${hit.sessionId}${hash}`)
-    else navigateRecall(`/session/${hit.sessionId}${hash}`)
+  const handleOpenChat = async (hit: typeof filteredHits[number]) => {
+    const text = (expandedId === hit.messageId && expandedData) ? expandedData.rows.map((r) => r.text).join('\n\n') : hit.snippet
+    try {
+      const targetRepo = repos?.find((r) => r.id === hit.repoId)
+      const targetDir = targetRepo?.localPath || directory
+      const client = createOpenCodeClient(opcodeUrl ?? '', targetDir)
+      const newSession = await client.createSession({ title: `Recall` } as any)
+      if (text) sessionStorage.setItem(`pendingPrompt:${newSession.id}`, text)
+      const base = hit.repoId != null && hit.repoId !== 0 ? `/repos/${hit.repoId}/sessions/${newSession.id}` : `/session/${newSession.id}`
+      navigateRecall(base)
+      showToast.success('open chat — new session')
+    } catch {
+      const rid = hit.repoId
+      const hash = hit.messageId ? `#message-${hit.messageId}` : ''
+      if (rid != null && rid !== 0) navigateRecall(`/repos/${rid}/sessions/${hit.sessionId}${hash}`)
+      else navigateRecall(`/session/${hit.sessionId}${hash}`)
+    }
   }
 
   return (
@@ -991,7 +1002,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     </span>
                     {h.ts && (
                       <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">
-                        {new Date(h.ts).toLocaleString('ko-KR', { hour12: false })}
+                        {new Date(h.ts).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </span>
                     )}
                     {h.repoId != null && (
@@ -1030,14 +1041,13 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                               <span>#{row.turnIndex}</span>
                             </div>
                             {isCenter && h.sessionId && (
-                              <a
-                                href={h.repoId != null && h.repoId !== 0 ? `/repos/${h.repoId}/sessions/${h.sessionId}#message-${h.messageId}` : `/session/${h.sessionId}#message-${h.messageId}`}
-                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleGoChat(h) }}
-                                className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 backdrop-blur border border-input shadow-sm hover:bg-muted text-primary"
-                                title="Chat으로 이동"
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleOpenChat(h) }}
+                                className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 backdrop-blur border border-input shadow-sm hover:bg-muted text-primary underline"
+                                title="open chat — new session"
                               >
-                                <CornerDownLeft className="w-2.5 h-2.5" /> chat으로 이동
-                              </a>
+                                <CornerDownLeft className="w-2.5 h-2.5" /> open chat
+                              </button>
                             )}
                             <div className="whitespace-pre-wrap break-words">{row.text ? highlightSnippet(row.text) : '(empty)'}</div>
                           </div>
@@ -1687,7 +1697,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'recall' ? (
-          <RecallPanel repoId={repoId} sessionId={sessionID} onUseInChat={onUseInChat} />
+          <RecallPanel repoId={repoId} sessionId={sessionID} onUseInChat={onUseInChat} opcodeUrl={opcodeUrl} directory={directory} />
         ) : tab === 'explorer' ? (
           <CommandExplorer commands={commands} skills={skills} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} commandContentLookup={commandContentLookup} skillContentLookup={skillContentLookup} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
         ) : (

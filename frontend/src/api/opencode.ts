@@ -138,8 +138,9 @@ export class OpenCodeClient {
     return response.data
   }
 
-  async deleteSession(sessionID: string) {
-    await this.client.delete(`/session/${sessionID}`)
+  async deleteSession(sessionID: string, opts?: { withIndex?: boolean }) {
+    const qs = opts?.withIndex === false ? '?withIndex=false' : ''
+    await this.client.delete(`/session/${sessionID}${qs}`)
   }
 
   async truncateSession(sessionID: string, messageID: string) {

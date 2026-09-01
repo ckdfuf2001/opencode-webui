@@ -152,22 +152,25 @@ export function deleteRepo(db: Database, id: number): void {
   stmt.run(id)
 }
 
-export function deleteRepoCascade(db: Database, id: number): void {
+export function deleteRepoCascade(db: Database, id: number, opts?: { withIndex?: boolean }): void {
   const schedules = deleteSchedulesByRepo(db, id)
   const rules = deletePermissionRulesByRepo(db, id)
   const runs = deleteCommandRunsByRepo(db, id)
-  try {
-    db.query('DELETE FROM session_messages_fts WHERE repo_id = ?').run(id)
-  } catch {}
-  try {
-    db.query('DELETE FROM git_commits_fts WHERE repo_id = ?').run(id)
-  } catch {}
-  try {
-    db.query('DELETE FROM git_commits WHERE repo_id = ?').run(id)
-  } catch {}
-  try {
-    db.query('DELETE FROM repo_index_state WHERE repo_id = ?').run(id)
-  } catch {}
+  const withIndex = opts?.withIndex !== false
+  if (withIndex) {
+    try {
+      db.query('DELETE FROM session_messages_fts WHERE repo_id = ?').run(id)
+    } catch {}
+    try {
+      db.query('DELETE FROM git_commits_fts WHERE repo_id = ?').run(id)
+    } catch {}
+    try {
+      db.query('DELETE FROM git_commits WHERE repo_id = ?').run(id)
+    } catch {}
+    try {
+      db.query('DELETE FROM repo_index_state WHERE repo_id = ?').run(id)
+    } catch {}
+  }
   try {
     db.query('DELETE FROM untracked_suggestions WHERE repo_id = ?').run(id)
   } catch {}

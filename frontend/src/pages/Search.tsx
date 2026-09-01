@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Header } from '@/components/layout/Header'
 import { Input } from '@/components/ui/input'
@@ -8,16 +8,19 @@ import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   searchMessages,
   expandMessage,
   searchCommits,
   getCommitDetail,
+  deleteMessageIndexes,
+  deleteCommitIndexes,
   type MessageExpandResult,
   type CommitDetail,
 } from '@/api/search'
 import { listRepos } from '@/api/repos'
-import { Search as SearchIcon, History, GitCommit, ExternalLink } from 'lucide-react'
+import { Search as SearchIcon, History, GitCommit, ExternalLink, Trash2 } from 'lucide-react'
 
 function Snippet({ text }: { text: string }) {
   const parts = text.split(/(\[.*?\])/g)
@@ -45,6 +48,9 @@ export function Search() {
   const [expandedData, setExpandedData] = useState<MessageExpandResult | null>(null)
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null)
   const [detailSha, setDetailSha] = useState<string | null>(null)
+  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set())
+  const [selectedCommits, setSelectedCommits] = useState<Set<string>>(new Set())
+  const queryClient = useQueryClient()
 
   const trimmed = q.trim()
   const repoIdParam = selectedRepoId === 'all' ? undefined : parseInt(selectedRepoId, 10)
@@ -113,6 +119,21 @@ export function Search() {
     }
   }
 
+  const deleteMessagesMutation = useMutation({
+    mutationFn: (ids: string[]) => deleteMessageIndexes(ids),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['search-messages'] })
+      setSelectedMessages(new Set())
+    },
+  })
+  const deleteCommitsMutation = useMutation({
+    mutationFn: (commits: { sha: string; repoId: number }[]) => deleteCommitIndexes(commits),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['search-commits'] })
+      setSelectedCommits(new Set())
+    },
+  })
+
   return (
     <div className="h-dvh flex flex-col bg-gradient-to-br from-background via-background to-background overflow-hidden">
       <Header title="Search" backTo="/" />
@@ -172,9 +193,28 @@ export function Search() {
             ) : (messagesQuery.data?.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground py-8 text-center">결과 없음</p>
             ) : (
-              messagesQuery.data!.map((hit) => (
+              <>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={selectedMessages.size > 0 && selectedMessages.size === messagesQuery.data!.length}
+                    onCheckedChange={(v) => {
+                      if (v) setSelectedMessages(new Set(messagesQuery.data!.map((h) => h.messageId)))
+                      else setSelectedMessages(new Set())
+                    }}
+                  />
+                  <span className="text-xs text-muted-foreground">전체 선택</span>
+                  <Button variant="destructive" size="sm" disabled={selectedMessages.size === 0 || deleteMessagesMutation.isPending} onClick={() => deleteMessagesMutation.mutate(Array.from(selectedMessages))} className="ml-auto gap-1">
+                    <Trash2 className="w-3.5 h-3.5" /> 인덱스 삭제 ({selectedMessages.size})
+                  </Button>
+                </div>
+                {messagesQuery.data!.map((hit) => (
                 <Card key={hit.messageId} className="p-4 space-y-2">
                   <div className="flex items-center gap-2 flex-wrap">
+                    <Checkbox checked={selectedMessages.has(hit.messageId)} onCheckedChange={(v) => {
+                      const next = new Set(selectedMessages)
+                      if (v) next.add(hit.messageId); else next.delete(hit.messageId)
+                      setSelectedMessages(next)
+                    }} />
                     <Badge variant="outline">{hit.role}</Badge>
                     <Badge variant="secondary">turn {hit.turnIndex}</Badge>
                     <Badge variant="secondary" title={hit.repoId == null ? 'unknown (재색인 필요)' : repoName(hit.repoId)}>{hit.repoId == null ? 'unknown' : repoName(hit.repoId)}</Badge>
@@ -223,7 +263,8 @@ export function Search() {
                     </div>
                   )}
                 </Card>
-              ))
+              ))}
+              </>
             )}
           </TabsContent>
 
@@ -239,9 +280,35 @@ export function Search() {
             ) : (commitsQuery.data?.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground py-8 text-center">결과 없음</p>
             ) : (
-              commitsQuery.data!.map((hit) => (
+              <>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={selectedCommits.size > 0 && selectedCommits.size === commitsQuery.data!.length}
+                    onCheckedChange={(v) => {
+                      if (v) setSelectedCommits(new Set(commitsQuery.data!.map((h) => `${h.repoId}:${h.sha}`)))
+                      else setSelectedCommits(new Set())
+                    }}
+                  />
+                  <span className="text-xs text-muted-foreground">전체 선택</span>
+                  <Button variant="destructive" size="sm" disabled={selectedCommits.size === 0 || deleteCommitsMutation.isPending} onClick={() => {
+                    const commits = Array.from(selectedCommits).map((k) => {
+                      const [repoId, sha] = k.split(':')
+                      return { repoId: parseInt(repoId, 10), sha }
+                    }).filter((c) => !Number.isNaN(c.repoId) && c.sha)
+                    deleteCommitsMutation.mutate(commits)
+                  }} className="ml-auto gap-1">
+                    <Trash2 className="w-3.5 h-3.5" /> 인덱스 삭제 ({selectedCommits.size})
+                  </Button>
+                </div>
+                {commitsQuery.data!.map((hit) => (
                 <Card key={`${hit.repoId}-${hit.sha}`} className="p-4 space-y-2">
                   <div className="flex items-center gap-2 flex-wrap">
+                    <Checkbox checked={selectedCommits.has(`${hit.repoId}:${hit.sha}`)} onCheckedChange={(v) => {
+                      const next = new Set(selectedCommits)
+                      const key = `${hit.repoId}:${hit.sha}`
+                      if (v) next.add(key); else next.delete(key)
+                      setSelectedCommits(next)
+                    }} />
                     <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{hit.sha.slice(0, 7)}</code>
                     {hit.repoId != null && <Badge variant="secondary" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</Badge>}
                     <span className="text-xs text-muted-foreground">{hit.author}</span>
@@ -279,7 +346,8 @@ export function Search() {
                     </div>
                   )}
                 </Card>
-              ))
+              ))}
+              </>
             )}
           </TabsContent>
         </Tabs>

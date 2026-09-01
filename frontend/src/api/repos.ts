@@ -42,8 +42,9 @@ export async function getRepo(id: number): Promise<Repo> {
   return response.json()
 }
 
-export async function deleteRepo(id: number): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/repos/${id}`, {
+export async function deleteRepo(id: number, opts?: { withIndex?: boolean }): Promise<void> {
+  const qs = opts?.withIndex === false ? '?withIndex=false' : ''
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}${qs}`, {
     method: 'DELETE',
   })
 

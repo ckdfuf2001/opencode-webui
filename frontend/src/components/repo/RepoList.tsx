@@ -64,7 +64,7 @@ export function RepoList() {
   }, {});
 
   const deleteMutation = useMutation({
-    mutationFn: deleteRepo,
+    mutationFn: ({ id, withIndex }: { id: number; withIndex: boolean }) => deleteRepo(id, { withIndex }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["repos"] });
       setDeleteDialogOpen(false);
@@ -73,8 +73,8 @@ export function RepoList() {
   });
 
   const batchDeleteMutation = useMutation({
-    mutationFn: async (repoIds: number[]) => {
-      await Promise.all(repoIds.map((id) => deleteRepo(id)));
+    mutationFn: async ({ ids, withIndex }: { ids: number[]; withIndex: boolean }) => {
+      await Promise.all(ids.map((id) => deleteRepo(id, { withIndex })));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["repos"] });
@@ -267,11 +267,12 @@ export function RepoList() {
       <DeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
-        onConfirm={() => {
+        onConfirm={(withIndex) => {
+          const wi = withIndex ?? true
           if (repoToDelete) {
-            deleteMutation.mutate(repoToDelete);
+            deleteMutation.mutate({ id: repoToDelete, withIndex: wi });
           } else if (selectedRepos.size > 0) {
-            batchDeleteMutation.mutate(Array.from(selectedRepos));
+            batchDeleteMutation.mutate({ ids: Array.from(selectedRepos), withIndex: wi });
           }
         }}
         onCancel={() => {
@@ -289,6 +290,7 @@ export function RepoList() {
             : "Are you sure you want to delete this repository? This will remove all local files. This action cannot be undone."
         }
         isDeleting={deleteMutation.isPending || batchDeleteMutation.isPending}
+        withIndexOption
       />
     </>
   );

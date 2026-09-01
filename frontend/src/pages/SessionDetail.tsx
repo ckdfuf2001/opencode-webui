@@ -50,6 +50,15 @@ export function SessionDetail() {
   const [injectedCommand, setInjectedCommand] = useState<{ token: number; text: string; run?: boolean } | null>(null);
   const [injectedFile, setInjectedFile] = useState<InjectedFile | null>(null);
   const [injectedPrompt, setInjectedPrompt] = useState<{ token: number; text: string } | null>(null);
+  useEffect(() => {
+    if (!sessionId) return
+    const key = `pendingPrompt:${sessionId}`
+    const pending = sessionStorage.getItem(key)
+    if (pending) {
+      sessionStorage.removeItem(key)
+      setInjectedPrompt({ token: Date.now(), text: pending })
+    }
+  }, [sessionId])
   const [hiddenAfterID, setHiddenAfterID] = useState<string | null>(null);
   const [highlightedMessageID, setHighlightedMessageID] = useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();

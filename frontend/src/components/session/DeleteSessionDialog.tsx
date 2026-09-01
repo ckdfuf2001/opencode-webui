@@ -3,7 +3,7 @@ import { DeleteDialog } from '@/components/ui/delete-dialog'
 interface DeleteSessionDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onConfirm: () => void
+  onConfirm: (withIndex?: boolean) => void
   onCancel: () => void
   isDeleting?: boolean
   sessionCount?: number
@@ -25,6 +25,7 @@ export function DeleteSessionDialog({ open, onOpenChange, onConfirm, onCancel, i
       title={title}
       description={description}
       isDeleting={isDeleting}
+      withIndexOption
     />
   )
 }

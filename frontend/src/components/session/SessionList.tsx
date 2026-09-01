@@ -166,9 +166,11 @@ export const SessionList = ({
     setDeleteDialogOpen(true);
   };
 
-  const confirmDelete = async () => {
+  const confirmDelete = async (withIndex?: boolean) => {
     if (sessionToDelete) {
-      await deleteSession.mutateAsync(sessionToDelete);
+      const wi = withIndex ?? true
+      const ids = Array.isArray(sessionToDelete) ? sessionToDelete : [sessionToDelete]
+      await deleteSession.mutateAsync({ ids, withIndex: wi } as any);
       setDeleteDialogOpen(false);
       setSessionToDelete(null);
       setSelectedSessions(new Set());

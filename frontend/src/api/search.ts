@@ -133,3 +133,23 @@ export async function recall(q: string, opts: { k?: number; repoId?: number; ses
   if (!res.ok) throw new Error('Failed to recall')
   return res.json()
 }
+
+export async function deleteMessageIndexes(messageIds: string[]): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/search/messages/index`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageIds }),
+  })
+  if (!res.ok) throw new Error('Failed to delete message indexes')
+  return res.json()
+}
+
+export async function deleteCommitIndexes(commits: { sha: string; repoId: number }[]): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/search/commits/index`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commits }),
+  })
+  if (!res.ok) throw new Error('Failed to delete commit indexes')
+  return res.json()
+}

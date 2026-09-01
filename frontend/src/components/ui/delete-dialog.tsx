@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -6,12 +7,13 @@ import { AlertTriangle } from 'lucide-react'
 interface DeleteDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onConfirm: () => void
+  onConfirm: (withIndex?: boolean) => void
   onCancel: () => void
   title: string
   description: string
   itemName?: string
   isDeleting?: boolean
+  withIndexOption?: boolean
 }
 
 export function DeleteDialog({ 
@@ -22,8 +24,10 @@ export function DeleteDialog({
   title, 
   description, 
   itemName,
-  isDeleting = false 
+  isDeleting = false,
+  withIndexOption = false,
 }: DeleteDialogProps) {
+  const [withIndex, setWithIndex] = useState(true)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-w-[90%] sm:max-w-sm '>
@@ -42,6 +46,13 @@ export function DeleteDialog({
             </AlertDescription>
           </Alert>
         )}
+
+        {withIndexOption && (
+          <label className="flex items-center gap-2 text-sm py-2">
+            <input type="checkbox" checked={withIndex} onChange={(e) => setWithIndex(e.target.checked)} className="rounded" />
+            인덱스도 함께 삭제
+          </label>
+        )}
         
         <DialogFooter className='gap-2'>
           <Button variant="outline" onClick={onCancel} disabled={isDeleting}>
@@ -49,12 +60,12 @@ export function DeleteDialog({
           </Button>
           <Button 
             variant="destructive" 
-            onClick={onConfirm} 
+            onClick={() => onConfirm(withIndexOption ? withIndex : undefined)} 
             disabled={isDeleting}
             className="bg-red-600 hover:bg-red-700 text-white font-semibold border-red-600"
           >
             {isDeleting && 'Deleting...'}
-            {!isDeleting && (title.includes('Configuration') ? 'Delete Configuration' : 'Delete')}
+            {!isDeleting && (title.includes('Configuration') ? 'Delete Configuration' : withIndexOption && withIndex ? 'Delete with index' : 'Delete')}
           </Button>
         </DialogFooter>
       </DialogContent>

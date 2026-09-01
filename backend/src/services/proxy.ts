@@ -405,6 +405,21 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     }
     if (!response) throw lastError
 
+    // 세션 삭제 시 인덱스 함께 삭제 (withIndex=false면 스킵)
+    if (response.ok && method === 'DELETE' && proxyDb) {
+      const sessionDeleteMatch = cleanEventPath.match(/^\/session\/([^/?]+)$/)
+      if (sessionDeleteMatch) {
+        const withIndexParam = (query as Record<string, string>)?.withIndex
+        const withIndex = withIndexParam == null ? true : withIndexParam !== 'false' && withIndexParam !== '0'
+        if (withIndex) {
+          const sid = sessionDeleteMatch[1]
+          try { proxyDb.query('DELETE FROM session_messages_fts WHERE session_id = ?').run(sid) } catch {}
+          try { proxyDb.query('DELETE FROM session_messages_fts_idx WHERE session_id = ?').run(sid) } catch {}
+          try { proxyDb.query('DELETE FROM session_status WHERE session_id = ?').run(sid) } catch {}
+        }
+      }
+    }
+
     const responseHeaders: Record<string, string> = {}
     response.headers.forEach((value, key) => {
       const lower = key.toLowerCase()
