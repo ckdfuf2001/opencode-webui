@@ -824,18 +824,18 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           {/* 필터와 Recalls 사이 띄우는 영역 */}
           <div className="w-2 shrink-0" aria-hidden />
 
-          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — Copy/Chat 딱 붙임, 위아래 줄이고 테두리 동일 */}
-          <div className="inline-flex items-stretch rounded-md border border-input bg-background shrink-0 overflow-hidden">
+          {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 두 버튼 붙이고 내부 버튼처럼 외부와 여백 */}
+          <div className="inline-flex items-center gap-1 rounded-md border border-input bg-background shrink-0 p-1">
             <button
               onClick={() => filteredBlock && setBlockOpen((v) => !v)}
               disabled={!filteredBlock}
-              className={`inline-flex items-center gap-1 text-xs h-6 px-2 shrink-0 border-r border-input ${blockOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted'} disabled:opacity-40 disabled:cursor-not-allowed`}
+              className={`inline-flex items-center gap-1 text-xs h-6 px-2 rounded shrink-0 ${blockOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted'} disabled:opacity-40 disabled:cursor-not-allowed`}
               title={filteredBlock ? 'Recalls overlay' : 'No recalls to show'}
             >
               <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
               Recalls
             </button>
-            <div className="flex items-stretch gap-0">
+            <div className="inline-flex items-center rounded overflow-hidden border border-input shrink-0">
               <button
                 onClick={() => copyText(filteredBlock, 'Recalls copied')}
                 disabled={!filteredBlock}
