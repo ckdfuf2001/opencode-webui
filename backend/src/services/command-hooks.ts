@@ -19,6 +19,16 @@ export interface CommandHookCall {
 const MAX_RECENT = 50
 const recentCalls: CommandHookCall[] = []
 
+const pendingSkillChecks = new Map<string, { commandName: string; status: string; at: number; kind: string }>()
+
+export function getAndClearPendingSkillCheck(sessionId: string): { commandName: string; status: string; kind: string } | null {
+  const v = pendingSkillChecks.get(sessionId)
+  if (!v) return null
+  pendingSkillChecks.delete(sessionId)
+  if (Date.now() - v.at > 5 * 60 * 1000) return null
+  return v
+}
+
 export function getRecentHookCalls(): CommandHookCall[] {
   return [...recentCalls]
 }
@@ -72,6 +82,9 @@ async function postCommand(run: CommandRun, status: Exclude<CommandRunStatus, 's
   logger.info(
     `[post-command] ${run.commandName} status=${status} (run=${run.id}, origin=${run.origin}, session=${run.sessionId})`
   )
+  if ((run.kind === 'skill' || run.kind === 'command') && run.commandName) {
+    pendingSkillChecks.set(run.sessionId, { commandName: run.commandName, status, at: Date.now(), kind: run.kind })
+  }
   if (db && run.repoId != null && status === 'completed') {
     try {
       const { indexRepoCommits, listAllIndexedRepos, HOST_REPO_ID } = await import('./git-indexer')

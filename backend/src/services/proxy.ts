@@ -274,32 +274,46 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               firstText.text = `${block}\n\n${text}`
               body = JSON.stringify(parsed)
             }
-          } else if (!commandName && !text.includes('<memory-recall>') && !text.includes('[run-context]') && text.trim().length >= 4) {
-            try {
-              const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
-              let enabled = true
-              let topK = 4
-              if (prefRow) {
-                try {
-                  const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
-                  if (p.autoRecallEnabled === false) enabled = false
-                  if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
-                } catch {}
-              }
-              if (!enabled) {
-                // auto recall disabled by user preference
-              } else {
-                const { buildRecall } = await import('./recall')
-                const { resolveRepoId } = await import('./command-runs')
-                const repoId = directory ? resolveRepoId(proxyDb, directory) : null
-                const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: topK, repoId: repoId ?? undefined })
-                if (block) {
-                  firstText.text = `${block}\n\n${text}`
-                  body = JSON.stringify(parsed)
+          } else if (!text.includes('<memory-recall>') && !text.includes('<skill-memory-check>') && !text.includes('[run-context]')) {
+            const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
+            let skillBlock = ''
+            if (sessionIdFromPath) {
+              try {
+                const { getAndClearPendingSkillCheck } = await import('./command-hooks')
+                const pending = getAndClearPendingSkillCheck(sessionIdFromPath)
+                if (pending) {
+                  skillBlock = `<skill-memory-check>\nLast ${pending.kind} "${pending.commandName}" completed with status "${pending.status}".\nPlease evaluate if skill or memory needs update and if there are improvements. If yes, ask the user in chat for approval before updating (in Korean, concise).\n</skill-memory-check>\n\n`
                 }
+              } catch {}
+            }
+            let recallBlock = ''
+            if (!commandName && text.trim().length >= 4) {
+              try {
+                const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+                let enabled = true
+                let topK = 4
+                if (prefRow) {
+                  try {
+                    const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
+                    if (p.autoRecallEnabled === false) enabled = false
+                    if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
+                  } catch {}
+                }
+                if (enabled) {
+                  const { buildRecall } = await import('./recall')
+                  const { resolveRepoId } = await import('./command-runs')
+                  const repoId = directory ? resolveRepoId(proxyDb, directory) : null
+                  const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: topK, repoId: repoId ?? undefined })
+                  if (block) recallBlock = `${block}\n\n`
+                }
+              } catch (e) {
+                logger.debug('memory recall injection skipped:', e)
               }
-            } catch (e) {
-              logger.debug('memory recall injection skipped:', e)
+            }
+            const combined = `${skillBlock}${recallBlock}`
+            if (combined) {
+              firstText.text = `${combined}${text}`
+              body = JSON.stringify(parsed)
             }
           }
         }
