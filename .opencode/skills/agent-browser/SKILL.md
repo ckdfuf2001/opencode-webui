@@ -20,3 +20,7 @@ description: Browser automation via agent-browser MCP. Use when opening pages, t
 - blank on read -> add session or enable AGENT_BROWSER_AUTO_SESSION=1.
 - **No session specified (English):** If you call `agent_browser_*` without `session` and multiple sessions are open, the daemon now returns `No session specified. Open sessions: <list>. Please specify session, e.g. session: "<name>"` in English and lists `auto-*`/`repo-*` sessions. Pass the shown `session` on the next call.
 - MCP error -32001 Request timed out on first open -> daemon cold start, backend warmup should have prevented; check AGENT_BROWSER_SESSION=default agent-browser session info --json for active/browserLaunched.
+
+## Closing
+
+- **Always close after use:** Call `agent_browser_close` (or `agent-browser close` / `close --all`) when the task is done. Idle sessions auto-close after `AGENT_BROWSER_IDLE_TIMEOUT_MS` (default 1h, `86400000` in this repo), but explicit close frees the `Chrome` `BrowserContext` immediately and prevents `6`+ `agent-browser`/`11`+ `chrome` accumulation.

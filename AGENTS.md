@@ -60,7 +60,7 @@
 - **Agent-browser MCP is a singleton by default**: opencode does NOT forward the `env` field
   of an MCP entry to the spawned `agent-browser.exe mcp` child (verified 2026-08),
   and agent-browser ignores the `--session`/`--executable-path` CLI args when
-  resolving its daemon in MCP mode. So `agent_browser_*` calls without an explicit `session` always run as `default` (namespace `opencode`, bundled chromium) — `read` on a fresh `default` returns blank. Per-repo `opencode.json` files are still written (`writeRepoOpenCodeConfig()`, unique `repo-<localPath>` session) but the session is stripped by opencode, so you must pass `session` explicitly (e.g. `session: "repo-Test"`) or enable `AGENT_BROWSER_AUTO_SESSION=1` in the patched `ckdfuf2001/agent-browser` (`auto-<cwd-hash>` per repo) so `default` is auto-split.
+  resolving its daemon in MCP mode. So `agent_browser_*` calls without an explicit `session` always run as `default` (namespace `opencode`, bundled chromium) — `read` on a fresh `default` returns blank. Per-repo `opencode.json` files are still written (`writeRepoOpenCodeConfig()`, unique `repo-<localPath>` session) but the session is stripped by opencode, so you must pass `session` explicitly (e.g. `session: "repo-Test"`) or enable `AGENT_BROWSER_AUTO_SESSION=1` in the patched `ckdfuf2001/agent-browser` (`auto-<cwd-hash>` per repo) so `default` is auto-split. **Close after use:** call `agent_browser_close` when done; otherwise `AGENT_BROWSER_IDLE_TIMEOUT_MS` (24h) will auto-close.
 - **Warm-up matches the real MCP spawn**: on a cold start the daemon inherits the
   MCP server's stdout pipe and `tools/call` hangs until the browser launches → the
   "first open fails" / `MCP error -32001: Request timed out` (~60s) symptom. The
