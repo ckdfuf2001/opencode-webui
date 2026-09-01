@@ -1031,30 +1031,19 @@ function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: {
                   </div>
                   {expandedId === h.messageId && expandedData ? (
                     <div className="space-y-1.5">
-                      {expandedData.rows.map((row) => {
-                        const isCenter = row.messageId === expandedData.center.messageId
-                        return (
-                          <div key={row.messageId} className={`p-2 rounded text-xs relative ${isCenter ? 'bg-accent border border-input' : 'bg-muted/30'}`}>
-                            <div className="flex gap-2 text-[10px] text-muted-foreground mb-1 pr-20">
-                              <span>{row.role}</span>
-                              <span>#{row.turnIndex}</span>
-                            </div>
-                            {isCenter && h.sessionId && (
-                              <a
-                                href={handleOpenChatHref(h)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 backdrop-blur border border-input shadow-sm hover:bg-muted text-primary underline"
-                                title="open chat (new tab, Ctrl+click)"
-                              >
-                                <CornerDownLeft className="w-2.5 h-2.5" /> open chat
-                              </a>
-                            )}
-                            <div className="whitespace-pre-wrap break-words">{row.text ? highlightSnippet(row.text) : '(empty)'}</div>
-                          </div>
-                        )
-                      })}
+                      <a
+                        href={handleOpenChatHref(h)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 backdrop-blur border border-input shadow-sm hover:bg-muted text-primary underline"
+                        title="open chat (new tab, Ctrl+click)"
+                      >
+                        <CornerDownLeft className="w-2.5 h-2.5" /> open chat
+                      </a>
+                      <pre className="whitespace-pre-wrap break-words bg-muted/40 p-2 rounded text-xs font-mono">
+                        {JSON.stringify(expandedData, null, 2)}
+                      </pre>
                     </div>
                   ) : (
                     <div className="p-2 rounded text-xs bg-accent border border-input">

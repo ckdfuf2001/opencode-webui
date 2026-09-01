@@ -61,13 +61,9 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
 
   if (hits.length === 0) return { block: '', hits }
 
-  const lines = ['<memory-recall>']
-  lines.push(`query: "${q}"`)
-  for (const h of hits) {
-    lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta}`)
-  }
-  lines.push('</memory-recall>')
-  return { block: lines.join('\n'), hits }
+  // PRE 탐색과 API 모두 JSON 형태 — block도 JSON 배열을 <memory-recall>로 감싸서 반환
+  const block = `<memory-recall>\n${JSON.stringify(hits, null, 2)}\n</memory-recall>`
+  return { block, hits }
 }
 
 function searchMessagesUnion(db: Database, q: string, k: number, opts: RecallOptions) {
