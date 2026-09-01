@@ -34,7 +34,7 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
       hits.push({
         kind: 'message',
         snippet: m.snippet.replace(/\[|\]/g, ''),
-        meta: `${m.role} turn ${m.turnIndex} ${new Date(m.ts).toLocaleDateString()} session ${m.sessionId.slice(0, 8)}`,
+        meta: `${m.role} turn ${m.turnIndex} ${new Date(m.ts).toLocaleDateString()} repo ${m.repoId ?? ''} session ${m.sessionId.slice(0, 8)}`,
         repoId: m.repoId,
         sessionId: m.sessionId,
         messageId: m.messageId,

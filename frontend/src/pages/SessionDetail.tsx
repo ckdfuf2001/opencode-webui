@@ -438,15 +438,21 @@ export function SessionDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
-    const msgID = searchParams.get('msg');
+    const msgFromQuery = searchParams.get('msg');
+    const hash = window.location.hash;
+    const msgFromHash = hash.startsWith('#message-') ? hash.slice(9) : hash.startsWith('#msg=') ? hash.slice(5) : null;
+    const msgID = msgFromQuery || msgFromHash;
     if (!msgID) return;
-    if (!messages) return;
-    const found = messages.some((m) => m.info.id === msgID);
-    setSearchParams({}, { replace: true });
-    if (found) {
-      requestAnimationFrame(() => scrollToMessage(msgID));
-    }
-  }, [searchParams, setSearchParams, messages, scrollToMessage]);
+    if (!messages || !baseMessages) return;
+    const idx = baseMessages.findIndex((m) => m.info.id === msgID);
+    if (idx === -1) return;
+    // ensure window includes target when navigating via hash/?msg
+    const need = baseMessages.length - idx;
+    if (need > visibleCount) setVisibleCount(Math.min(baseMessages.length, need + 5));
+    if (msgFromQuery) setSearchParams({}, { replace: true });
+    requestAnimationFrame(() => scrollToMessage(msgID));
+    if (msgFromHash) history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, [searchParams, setSearchParams, messages, baseMessages, visibleCount, scrollToMessage]);
 
   const handleFileClick = useCallback(async (filePath: string) => {
     const normalizedFilePath = filePath.replace(/\\/g, '/')

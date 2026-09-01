@@ -772,6 +772,16 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     showToast.success('Added to chat input')
   }
 
+  const repoName = (id: number | null | undefined) => {
+    if (id == null) return `repo #${id}`
+    if (id === 0) return 'host (opencode-webui)'
+    const r = repos?.find((x) => x.id === id)
+    return r ? `${r.localPath} (#${r.id})` : `repo #${id}`
+  }
+
+  const navigateRecall = useNavigate()
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedData, setExpandedData] = useState<import('@/api/search').MessageExpandResult | null>(null)
   const [blockOpen, setBlockOpen] = useState(false)
 
   // 서치 페이지와 동일한 필터 후 hits
@@ -781,23 +791,23 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     return data.hits.filter((h) => h.kind === kind)
   }, [data?.hits, kind])
 
-  // 필터 옆 클립보드/채팅 버튼은 전체 블록 또는 필터된 결과 기준
+  // 필터 옆 클립보드/채팅 버튼은 전체 블록 또는 필터된 결과 기준 — 레포명 포함, 전후보기 확장 시 해당 히트는 전후 내용으로 교체
   const filteredBlock = useMemo(() => {
-    if (!data?.block || !data?.hits) return ''
-    if (kind === 'all') return data.block
+    if (!data?.hits) return ''
     if (filteredHits.length === 0) return ''
     const lines = ['<memory-recall>', `query: "${debouncedQ}"`]
-    for (const h of filteredHits) lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta}`)
+    for (const h of filteredHits) {
+      const repo = h.repoId != null ? ` repo ${repoName(h.repoId)}` : ''
+      // 전후보기 확장된 히트는 snippet 대신 전후 내용 전체로
+      let snippet = h.snippet
+      if (h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData) {
+        snippet = expandedData.rows.map((r) => `[${r.role}#${r.turnIndex}] ${r.text}`).join(' | ')
+      }
+      lines.push(`- [${h.kind}] ${snippet} — ${h.meta}${repo}`)
+    }
     lines.push('</memory-recall>')
     return lines.join('\n')
-  }, [data?.block, data?.hits, filteredHits, kind, debouncedQ])
-
-  const repoName = (id: number | null | undefined) => {
-    if (id == null) return `repo #${id}`
-    if (id === 0) return 'host (opencode-webui)'
-    const r = repos?.find((x) => x.id === id)
-    return r ? `${r.localPath} (#${r.id})` : `repo #${id}`
-  }
+  }, [data?.hits, filteredHits, debouncedQ, repos, expandedId, expandedData])
 
   const highlightSnippet = (text: string) => {
     const q = debouncedQ.trim()
@@ -820,10 +830,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     )
   }
 
-  const navigateRecall = useNavigate()
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [expandedData, setExpandedData] = useState<import('@/api/search').MessageExpandResult | null>(null)
-
   const handleExpand = async (messageId: string) => {
     if (expandedId === messageId) { setExpandedId(null); setExpandedData(null); return }
     try {
@@ -837,8 +843,9 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
   const handleGoChat = (hit: typeof filteredHits[number]) => {
     if (hit.kind !== 'message' || !hit.sessionId) return
     const rid = hit.repoId
-    if (rid != null && rid !== 0) navigateRecall(`/repos/${rid}/sessions/${hit.sessionId}`)
-    else navigateRecall(`/session/${hit.sessionId}`)
+    const hash = hit.messageId ? `#message-${hit.messageId}` : ''
+    if (rid != null && rid !== 0) navigateRecall(`/repos/${rid}/sessions/${hit.sessionId}${hash}`)
+    else navigateRecall(`/session/${hit.sessionId}${hash}`)
   }
 
   return (
@@ -999,52 +1006,81 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     )}
                     <span className="flex-1 min-w-0" />
                     <button
-                      onClick={(e) => { e.stopPropagation(); copyText(h.snippet) }}
+                      onClick={(e) => { e.stopPropagation(); const t = (expandedId === h.messageId && expandedData) ? expandedData.rows.map((r) => r.text).join('\n\n') : h.snippet; copyText(t) }}
                       className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted"
                     >
                       <Copy className="w-2.5 h-2.5" /> Copy
                     </button>
                     <button
-                      onClick={(e) => { e.stopPropagation(); useInChat(h.snippet) }}
+                      onClick={(e) => { e.stopPropagation(); const t = (expandedId === h.messageId && expandedData) ? expandedData.rows.map((r) => r.text).join('\n\n') : h.snippet; useInChat(t) }}
                       className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted"
                     >
                       <MessageSquarePlus className="w-2.5 h-2.5" /> Chat
                     </button>
                   </div>
-                  <p className="text-xs text-foreground break-words whitespace-pre-wrap">{highlightSnippet(h.snippet)}</p>
-                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <span>{h.kind === 'message' ? `${h.role ?? ''} turn ${h.turnIndex ?? ''}`.trim() : h.meta}</span>
-                  </div>
-                  <div className="flex gap-1.5 pt-1 flex-wrap">
-                    {h.kind === 'message' && h.sessionId && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
-                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
-                      >
-                        <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
-                      </button>
-                    )}
-                    {h.kind === 'message' && h.messageId && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleExpand(h.messageId!) }}
-                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted ml-auto"
-                      >
-                        <History className="w-3 h-3" /> {expandedId === h.messageId ? '접기' : '전후 보기'}
-                      </button>
-                    )}
-                  </div>
-                  {h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData && (
-                    <div onClick={(e) => e.stopPropagation()} className="border-t border-input pt-2 mt-1 space-y-1.5">
+                  {expandedId === h.messageId && expandedData ? (
+                    <div onClick={(e) => e.stopPropagation()} className="space-y-1.5">
                       {expandedData.rows.map((row) => (
                         <div key={row.messageId} className={`p-2 rounded text-xs ${row.messageId === expandedData.center.messageId ? 'bg-accent border border-input' : 'bg-muted/30'}`}>
                           <div className="flex gap-2 text-[10px] text-muted-foreground mb-1">
                             <span>{row.role}</span>
                             <span>#{row.turnIndex}</span>
                           </div>
-                          <div className="whitespace-pre-wrap break-words">{row.text || '(empty)'}</div>
+                          <div className="whitespace-pre-wrap break-words">{row.text ? highlightSnippet(row.text) : '(empty)'}</div>
                         </div>
                       ))}
+                      <div className="flex gap-1.5 pt-1 flex-wrap">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); const t = expandedData ? expandedData.rows.map((r) => r.text).join('\n\n') : h.snippet; copyText(t, 'Copied expanded content') }}
+                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
+                        >
+                          <Copy className="w-3 h-3" /> Copy
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); const t = expandedData ? expandedData.rows.map((r) => r.text).join('\n\n') : h.snippet; useInChat(t) }}
+                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
+                        >
+                          <MessageSquarePlus className="w-3 h-3" /> Chat
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
+                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted ml-auto"
+                        >
+                          <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleExpand(h.messageId!) }}
+                          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
+                        >
+                          <History className="w-3 h-3" /> 접기
+                        </button>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-foreground break-words whitespace-pre-wrap">{highlightSnippet(h.snippet)}</p>
+                      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <span>{h.kind === 'message' ? `${h.role ?? ''} turn ${h.turnIndex ?? ''}`.trim() : h.meta}</span>
+                      </div>
+                      <div className="flex gap-1.5 pt-1 flex-wrap">
+                        {h.kind === 'message' && h.sessionId && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleGoChat(h) }}
+                            className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted"
+                          >
+                            <CornerDownLeft className="w-3 h-3" /> Chat으로 이동
+                          </button>
+                        )}
+                        {h.kind === 'message' && h.messageId && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleExpand(h.messageId!) }}
+                            className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-input bg-background hover:bg-muted ml-auto"
+                          >
+                            <History className="w-3 h-3" /> 전후 보기
+                          </button>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
               ))}
