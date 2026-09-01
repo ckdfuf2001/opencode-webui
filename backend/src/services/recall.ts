@@ -54,6 +54,7 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
         meta: `${c.author ?? ''} ${new Date(c.committedAt).toLocaleDateString()} ${c.repoId === 0 ? 'host' : `repo ${c.repoId}`}`.trim(),
         repoId: c.repoId,
         sha: c.sha,
+        ts: c.committedAt,
       })
     }
   }

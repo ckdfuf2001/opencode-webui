@@ -992,6 +992,11 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                         session {h.sessionId.slice(0, 8)}
                       </span>
                     )}
+                    {h.ts && (
+                      <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                        {new Date(h.ts).toLocaleString()}
+                      </span>
+                    )}
                     <span className="flex-1 min-w-0" />
                     <button
                       onClick={(e) => { e.stopPropagation(); copyText(h.snippet) }}
@@ -1008,7 +1013,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                   </div>
                   <p className="text-xs text-foreground break-words whitespace-pre-wrap">{highlightSnippet(h.snippet)}</p>
                   <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <span>{h.kind === 'message' ? `${h.role ?? ''} turn ${h.turnIndex ?? ''}` : h.meta} · {h.ts ? new Date(h.ts).toLocaleString() : ''}</span>
+                    <span>{h.kind === 'message' ? `${h.role ?? ''} turn ${h.turnIndex ?? ''}`.trim() : h.meta}</span>
                   </div>
                   <div className="flex gap-1.5 pt-1 flex-wrap">
                     {h.kind === 'message' && h.sessionId && (
