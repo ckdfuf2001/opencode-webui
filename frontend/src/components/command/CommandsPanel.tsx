@@ -835,22 +835,22 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
               Recalls
             </button>
-            <div className="flex items-center gap-0.5 px-1">
+            <div className="flex items-center gap-1 px-1">
               <button
                 onClick={() => copyText(filteredBlock, 'Recalls copied')}
                 disabled={!filteredBlock}
-                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-blue-50 text-blue-600 hover:text-blue-700 dark:hover:bg-blue-950/30 dark:text-blue-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Copy Recalls"
               >
-                <Clipboard className="w-3 h-3" />
+                <Clipboard className="w-3 h-3" /> <span className="text-[11px]">Copy</span>
               </button>
               <button
                 onClick={() => useInChat(filteredBlock)}
                 disabled={!filteredBlock}
-                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-emerald-50 text-emerald-600 hover:text-emerald-700 dark:hover:bg-emerald-950/30 dark:text-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Use Recalls in chat"
               >
-                <MessageSquarePlus className="w-3 h-3" />
+                <MessageSquarePlus className="w-3 h-3" /> <span className="text-[11px]">Chat</span>
               </button>
             </div>
           </div>
