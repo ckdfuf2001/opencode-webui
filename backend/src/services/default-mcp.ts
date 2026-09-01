@@ -87,8 +87,8 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   } catch {
     existing = {}
   }
-  const session = repoAgentBrowserSession(localPath)
-  const mcpEntry = buildAgentBrowserMcp(AGENT_BROWSER_NAMESPACE, session)
+  // 이전 default로 복원: per-repo session 분리 없이 전역 default 공용 (opencode/default)
+  const mcpEntry = buildAgentBrowserMcp()
   const existingMcp = (existing.mcp && typeof existing.mcp === 'object') ? (existing.mcp as Record<string, unknown>) : {}
   const existingAgentBrowser = existingMcp['agent-browser'] as { enabled?: boolean } | undefined
   const agentBrowserEntry = mcpEntry['agent-browser'] as { enabled: boolean }
@@ -97,24 +97,21 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   }
   const content = { ...existing, mcp: { ...existingMcp, ...mcpEntry } }
   writeFileSync(configPath, JSON.stringify(content, null, 2))
-  logger.info(`Wrote per-repo OpenCode config '${configPath}' with agent-browser session '${session}'`)
+  logger.info(`Wrote per-repo OpenCode config '${configPath}' with agent-browser default (opencode)`)
   return true
 }
 
-const warmUpFlights = new Map<string, Promise<boolean>>()
+let warmUpInFlight: Promise<boolean> | null = null
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
   session?: string,
 ): Promise<boolean> {
-  const key = `${namespace}:${session ?? namespace}`
-  const existing = warmUpFlights.get(key)
-  if (existing) return existing
-  const flight = doWarmUp(namespace, session).finally(() => {
-    warmUpFlights.delete(key)
+  if (warmUpInFlight) return warmUpInFlight
+  warmUpInFlight = doWarmUp(namespace, session).finally(() => {
+    warmUpInFlight = null
   })
-  warmUpFlights.set(key, flight)
-  return flight
+  return warmUpInFlight
 }
 
 async function doWarmUp(
@@ -146,12 +143,6 @@ async function doWarmUp(
   delete env.AGENT_BROWSER_NAMESPACE
   delete env.AGENT_BROWSER_EXECUTABLE_PATH
   delete env.AGENT_BROWSER_IDLE_TIMEOUT_MS
-  env.AGENT_BROWSER_NAMESPACE = namespace
-  env.AGENT_BROWSER_SESSION = sessionName
-  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
-  if (info.executablePath && existsSync(info.executablePath)) {
-    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
-  }
   const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
