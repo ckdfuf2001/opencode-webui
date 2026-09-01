@@ -788,10 +788,10 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           />
         </div>
 
-        {/* 필터부터 chat까지 한 줄 — Recalls 오버레이는 copy/chat 왼쪽 */}
+        {/* 필터부터 chat까지 한 줄, All/Chat/Git은 아래 줄 유지 */}
         <div className="flex items-center gap-1.5 relative flex-nowrap overflow-x-auto scrollbar-none py-0.5">
           <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-            <SelectTrigger className="w-[120px] min-w-[110px] h-7 text-xs shrink-0">
+            <SelectTrigger className="w-[160px] min-w-[130px] h-7 text-xs shrink-0">
               <SelectValue placeholder="레포 선택" />
             </SelectTrigger>
             <SelectContent>
@@ -806,7 +806,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           </Select>
 
           <Select value={k} onValueChange={setK}>
-            <SelectTrigger className="w-[70px] h-7 text-xs shrink-0">
+            <SelectTrigger className="w-[85px] h-7 text-xs shrink-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -816,14 +816,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <SelectItem value="20">20 hits</SelectItem>
             </SelectContent>
           </Select>
-
-          <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')} className="shrink-0">
-            <TabsList className="h-7">
-              <TabsTrigger value="all" className="text-xs h-6 px-2">All</TabsTrigger>
-              <TabsTrigger value="message" className="text-xs h-6 px-1.5 gap-1"><History className="w-3 h-3" /> Chat</TabsTrigger>
-              <TabsTrigger value="commit" className="text-xs h-6 px-1.5 gap-1"><GitCommit className="w-3 h-3" /> Git</TabsTrigger>
-            </TabsList>
-          </Tabs>
 
           {filteredBlock && (
             <button
@@ -870,6 +862,14 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </div>
           )}
         </div>
+
+        <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')}>
+          <TabsList className="h-7">
+            <TabsTrigger value="all" className="text-xs h-6 px-2">All</TabsTrigger>
+            <TabsTrigger value="message" className="text-xs h-6 px-1.5 gap-1"><History className="w-3 h-3" /> Chat</TabsTrigger>
+            <TabsTrigger value="commit" className="text-xs h-6 px-1.5 gap-1"><GitCommit className="w-3 h-3" /> Git</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         {debouncedQ && (
           <p className="text-[11px] text-muted-foreground">
