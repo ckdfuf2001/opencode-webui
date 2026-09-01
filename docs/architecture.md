@@ -60,10 +60,8 @@ the user's `~/.config/opencode`.
    resolves the scope of slash commands (`global` vs `project` vs `builtin`).
 4. Each repo directory under `workspace/repos/` gets its own project-level
    `opencode.json` (written/merged by `writeRepoOpenCodeConfig`,
-   `backend/src/services/default-mcp.ts`). It carries only the `agent-browser`
-   MCP override scoped to the shared `opencode` namespace plus that repo's unique
-   session, so every repo's browser instance stays isolated within one daemon
-   (see below). The global `opencode.json` keeps the bare
+   `backend/src/services/default-mcp.ts`). By default it carries the same `agent-browser`
+   MCP as the global config (`namespace=opencode`, `session=opencode`/`default`) so all repos share ONE browser instance. With `AGENT_BROWSER_AUTO_SESSION=1` (patched `ckdfuf2001/agent-browser`), `default`/`opencode` is auto-hashed to `auto-<cwd-hash>` per repo, so `open`/`read` without an explicit `session` no longer returns blank. The global `opencode.json` keeps the bare
    `doc-reader` + `agent-browser` entries for sessions that run outside a repo.
 
 ## Default MCP Servers & agent-browser daemon warm-up
@@ -80,16 +78,7 @@ the user's `~/.config/opencode`.
   `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h).
 
 Namespaces isolate the agent-browser daemon socket
-(`~/.agent-browser/namespaces/<ns>/run`). The global config uses `opencode`; each
-repo under `workspace/repos/` also connects to the `opencode` daemon but pins a
-unique session `repo-<localPath>` (worktree dirs are `repo-<name>-<branch>`),
-derived by `repoAgentBrowserSession()` in `backend/src/services/default-mcp.ts`.
-`writeRepoOpenCodeConfig()` (called on every repo clone/init, and once for all
-existing repos at backend startup) writes/merges that override into the repo root's
-`opencode.json`. Sessions isolate browser instances (cookies/storage/state) within
-the single shared daemon — every repo shares ONE Chrome tree in the `opencode`
-namespace, isolated via CDP browser contexts, so cross-repo tabs
-no longer leak/blank without a Chrome process per repo.
+(`~/.agent-browser/namespaces/<ns>/run`). The global config and all repos use `opencode` namespace. **By default** `AGENT_BROWSER_SESSION` is `opencode`/`default` for everyone, so `agent_browser_*` calls without an explicit `session` go to the same `default` browser — `read` on a fresh `default` returns blank, so you must pass `session` (e.g. `session: "repo-Test"`) or enable `AGENT_BROWSER_AUTO_SESSION=1` in the patched `ckdfuf2001/agent-browser` (`auto-<cwd-hash>` per repo, see `cli/src/flags.rs`). `writeRepoOpenCodeConfig()` still writes a per-repo `opencode.json` but, in default mode, it carries the same `default` session as the global config; per-repo `repo-*` isolation is only active when the env `AGENT_BROWSER_AUTO_SESSION` or an explicit `session` param is used. Sessions, when isolated, share ONE Chrome tree in the `opencode` namespace via CDP browser contexts.
 
 `mergeDefaultMcpEntries(content)` (called from `ensureDefaultConfigExists()` and
 `syncDefaultConfigToDisk()`, `backend/src/index.ts`) guarantees the **global**
@@ -112,13 +101,12 @@ long-lived background **daemon** over a local socket (namespace-scoped under
 `~/.agent-browser/namespaces/<ns>/run`). On a cold start the freshly-spawned
 daemon inherits the MCP server's stdout pipe, so the MCP server never receives
 EOF and `tools/call` waits ~40-75s then times out — the "first open hangs"
-failure mode. `warmUpAgentBrowserDaemon(namespace)` prevents it:
+failure mode. `warmUpAgentBrowserDaemon(namespace, session)` prevents it:
 
 - Called right after the opencode server starts
   (`opencodeServerManager.start().then(...)`, `backend/src/index.ts`) and
   re-called every 60s on a self-healing interval. `warmUpAllAgentBrowserDaemons()`
-  warms the global `opencode` namespace plus one namespace per repo in the DB
-  (deduped), so every repo's first `agent-browser` tool call is fast.
+  warms the `opencode:default` daemon only (single, `v0.3.10` behavior), so the first `agent_browser_open` is fast; per-repo `auto-*` sessions are created lazily on first `open`/`read` with `AGENT_BROWSER_AUTO_SESSION=1`.
 - Runs `<bin> --headed false open about:blank --json` (stdio discarded), which
   spawns + connects the daemon and launches a headless browser.
 - Skips (fast no-op) when `agent-browser session info --json` already reports

@@ -405,15 +405,11 @@ the MCP server and the daemon only talk to each other when both use the same
 namespace. `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h) stops the daemon from
 being evicted between tool calls.
 
-> **Browser sessions are a singleton:** opencode strips the MCP entry's `env`
+> **Browser sessions are a singleton by default:** opencode strips the MCP entry's `env`
 > field when spawning the local MCP, and agent-browser ignores
-> `--session`/`--executable-path` in MCP mode — so every session resolves to the
-> same `default` session in the `opencode` namespace. All repos and the global
-> session therefore share ONE daemon and ONE Chrome tree
-> (`writeRepoOpenCodeConfig()` still writes a per-repo `opencode.json`, but the
-> session it carries is not honored by opencode). An existing `enabled: false`
-> on the agent-browser entry is preserved so a repo can opt out of the MCP. See
-> [`docs/architecture.md`](docs/architecture.md).
+> `--session`/`--executable-path` in MCP mode — so every `agent_browser_*` call without an explicit `session` resolves to the same `default` session in the `opencode` namespace (blank on first `read`). All repos and the global session therefore share ONE daemon and ONE Chrome tree unless a `session` is given. `writeRepoOpenCodeConfig()` still writes a per-repo `opencode.json`, but the session it carries is not honored by opencode.
+>
+> **Fix:** always pass `session` when calling `agent_browser_open`/`read`/`snapshot` etc., e.g. `session: "repo-Test"` or a hash of the repo path. With the patched `ckdfuf2001/agent-browser` (`AGENT_BROWSER_AUTO_SESSION=1` in `mcp.env`), `default`/`opencode` is auto-hashed to `auto-<cwd-hash>` per repo so `read` without an explicit session no longer returns blank. An existing `enabled: false` on the agent-browser entry is preserved so a repo can opt out of the MCP. See [`docs/architecture.md`](docs/architecture.md).
 
 > **Daemon warm-up (why the first `agent_browser_open` no longer hangs):**
 > the agent-browser MCP server talks to a long-lived background daemon over a
