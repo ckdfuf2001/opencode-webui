@@ -789,7 +789,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
         </div>
 
         {/* 필터부터 chat까지 한 줄(스크롤 없이 100% 조정, 필터 min 없음) — Recalls가 Copy/Chat을 포함한 통일 그룹 */}
-        <div className="flex items-center gap-1 relative w-full py-0.5">
+        <div className="flex items-center gap-2 relative w-full py-0.5">
           <div className="flex-1 min-w-0">
             <Select value={selectedRepo} onValueChange={setSelectedRepo}>
               <SelectTrigger className="w-full h-7 text-xs min-w-0 [&>span]:truncate">
@@ -821,6 +821,9 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             </Select>
           </div>
 
+          {/* 필터와 Recalls 사이 띄우는 영역 */}
+          <div className="w-2 shrink-0" aria-hidden />
+
           {/* Recalls가 Copy/Chat을 포함한 통일 그룹 — 구분선 없음 */}
           <div className="inline-flex items-center rounded-md border bg-background shrink-0 overflow-hidden">
             <button
@@ -836,7 +839,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <button
                 onClick={() => copyText(filteredBlock, 'Recalls copied')}
                 disabled={!filteredBlock}
-                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-blue-50 text-blue-600 hover:text-blue-700 dark:hover:bg-blue-950/30 dark:text-blue-400 disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Copy Recalls"
               >
                 <Clipboard className="w-3 h-3" />
@@ -844,7 +847,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
               <button
                 onClick={() => useInChat(filteredBlock)}
                 disabled={!filteredBlock}
-                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center justify-center h-6 w-6 rounded shrink-0 hover:bg-emerald-50 text-emerald-600 hover:text-emerald-700 dark:hover:bg-emerald-950/30 dark:text-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Use Recalls in chat"
               >
                 <MessageSquarePlus className="w-3 h-3" />
@@ -867,11 +870,11 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           )}
         </div>
 
-        <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')}>
-          <TabsList className="h-7">
-            <TabsTrigger value="all" className="text-xs h-6 px-2">All</TabsTrigger>
-            <TabsTrigger value="message" className="text-xs h-6 px-1.5 gap-1"><History className="w-3 h-3" /> Chat</TabsTrigger>
-            <TabsTrigger value="commit" className="text-xs h-6 px-1.5 gap-1"><GitCommit className="w-3 h-3" /> Git</TabsTrigger>
+        <Tabs value={kind} onValueChange={(v) => setKind(v as 'all' | 'message' | 'commit')} className="shrink-0">
+          <TabsList className="h-7 shrink-0 flex-nowrap">
+            <TabsTrigger value="all" className="text-xs h-6 px-2 shrink-0 whitespace-nowrap">All</TabsTrigger>
+            <TabsTrigger value="message" className="text-xs h-6 px-1.5 gap-1 shrink-0 whitespace-nowrap"><History className="w-3 h-3" /> Chat</TabsTrigger>
+            <TabsTrigger value="commit" className="text-xs h-6 px-1.5 gap-1 shrink-0 whitespace-nowrap"><GitCommit className="w-3 h-3" /> Git</TabsTrigger>
           </TabsList>
         </Tabs>
 
