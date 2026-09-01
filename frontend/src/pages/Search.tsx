@@ -20,9 +20,7 @@ import {
   type CommitDetail,
 } from '@/api/search'
 import { listRepos } from '@/api/repos'
-import { Search as SearchIcon, History, GitCommit, ExternalLink, Trash2, Copy, MessageSquarePlus, CornerDownLeft } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { createOpenCodeClient } from '@/api/opencode'
+import { Search as SearchIcon, History, GitCommit, Trash2, Copy, MessageSquarePlus, CornerDownLeft } from 'lucide-react'
 import { showToast } from '@/lib/toast'
 
 function Snippet({ text }: { text: string }) {
@@ -139,11 +137,10 @@ export function Search() {
     },
   })
 
-  const navigate = useNavigate()
   const copyText = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      showToast.success('Copied')
+      showToast.success('Copied JSON')
     } catch {
       const ta = document.createElement('textarea')
       ta.value = text
@@ -151,25 +148,14 @@ export function Search() {
       ta.select()
       document.execCommand('copy')
       document.body.removeChild(ta)
-      showToast.success('Copied')
+      showToast.success('Copied JSON')
     }
   }
-  const handleOpenChat = async (hit: { snippet: string; repoId: number | null; sessionId?: string; messageId?: string }) => {
-    const text = hit.snippet
-    try {
-      const targetRepo = repos?.find((r) => r.id === hit.repoId)
-      const targetDir = targetRepo?.localPath
-      const client = createOpenCodeClient('', targetDir)
-      const newSession = await client.createSession({ title: 'Recall' } as any)
-      if (text) sessionStorage.setItem(`pendingPrompt:${newSession.id}`, text)
-      const base = hit.repoId != null && hit.repoId !== 0 ? `/repos/${hit.repoId}/sessions/${newSession.id}` : `/session/${newSession.id}`
-      navigate(base)
-    } catch {
-      if (hit.sessionId) {
-        const base = hit.repoId != null && hit.repoId !== 0 ? `/repos/${hit.repoId}/sessions/${hit.sessionId}` : `/session/${hit.sessionId}`
-        navigate(base)
-      }
-    }
+  const openChatHref = (hit: { repoId: number | null; sessionId?: string; messageId?: string }) => {
+    if (!hit.sessionId) return '#'
+    const hash = hit.messageId ? `#message-${hit.messageId}` : ''
+    if (hit.repoId != null && hit.repoId !== 0) return `/repos/${hit.repoId}/sessions/${hit.sessionId}${hash}`
+    return `/session/${hit.sessionId}${hash}`
   }
   const highlightSnippet = (text: string) => {
     const qq = submittedQ.trim()
@@ -286,8 +272,8 @@ export function Search() {
                     <span className="px-1.5 py-1 text-[10px] bg-muted/40 truncate max-w-[110px] shrink-0" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</span>
                     {hit.sessionId && <span className="px-1.5 py-1 text-[10px] bg-muted/30 truncate max-w-[90px] shrink-0" title={hit.sessionId}>session {hit.sessionId.slice(0,8)}</span>}
                     <span className="flex-1 min-w-0" />
-                    <button onClick={(e) => { e.stopPropagation(); copyText(hit.snippet) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted" title="Copy"><Copy className="w-2.5 h-2.5" /> Copy</button>
-                    <button onClick={(e) => { e.stopPropagation(); handleOpenChat(hit) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted text-primary" title="open chat"><CornerDownLeft className="w-2.5 h-2.5" /> open chat</button>
+                    <button onClick={(e) => { e.stopPropagation(); copyText(JSON.stringify(hit, null, 2)) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted" title="Copy JSON"><Copy className="w-2.5 h-2.5" /> Copy</button>
+                    <a href={openChatHref(hit)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted text-primary underline" title="open chat (new tab, Ctrl+click)"><CornerDownLeft className="w-2.5 h-2.5" /> open chat</a>
                   </div>
                   <div className="p-2 rounded text-xs bg-accent border border-input">
                     <div className="flex gap-2 text-[10px] text-muted-foreground mb-1"><span>{hit.role}</span><span>#{hit.turnIndex}</span></div>
@@ -366,7 +352,7 @@ export function Search() {
                     <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">{hit.author}</span>
                     <code className="px-1.5 py-1 text-[10px] bg-muted/40 shrink-0">{hit.sha.slice(0, 7)}</code>
                     <span className="flex-1 min-w-0" />
-                    <button onClick={(e) => { e.stopPropagation(); copyText(`${hit.sha} ${hit.subject}`) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted" title="Copy"><Copy className="w-2.5 h-2.5" /> Copy</button>
+                    <button onClick={(e) => { e.stopPropagation(); copyText(JSON.stringify(hit, null, 2)) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted" title="Copy JSON"><Copy className="w-2.5 h-2.5" /> Copy</button>
                   </div>
                   <div className="p-2 rounded text-xs bg-accent border border-input font-medium">{highlightSnippet(hit.subject)}</div>
                   {hit.repoId != null && (

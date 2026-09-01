@@ -791,6 +791,17 @@ function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: {
     return data.hits.filter((h) => h.kind === kind)
   }, [data?.hits, kind])
 
+  const filteredJson = useMemo(() => {
+    if (!filteredHits.length) return ''
+    const arr = filteredHits.map((h) => {
+      if (h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData) {
+        return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, expanded: expandedData.rows }
+      }
+      return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, meta: h.meta }
+    })
+    return JSON.stringify(arr, null, 2)
+  }, [filteredHits, expandedId, expandedData, repos])
+
   // 필터 옆 클립보드/채팅 버튼은 전체 블록 — 정제: 상세보기와 동일 양식, 전후 확장 시 해당 히트는 전후 전체로
   const filteredBlock = useMemo(() => {
     if (!data?.hits) return ''
@@ -840,23 +851,11 @@ function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: {
     } catch { /* ignore */ }
   }
 
-  const handleOpenChat = async (hit: typeof filteredHits[number]) => {
-    const text = (expandedId === hit.messageId && expandedData) ? expandedData.rows.map((r) => r.text).join('\n\n') : hit.snippet
-    try {
-      const targetRepo = repos?.find((r) => r.id === hit.repoId)
-      const targetDir = targetRepo?.localPath || directory
-      const client = createOpenCodeClient(opcodeUrl ?? '', targetDir)
-      const newSession = await client.createSession({ title: `Recall` } as any)
-      if (text) sessionStorage.setItem(`pendingPrompt:${newSession.id}`, text)
-      const base = hit.repoId != null && hit.repoId !== 0 ? `/repos/${hit.repoId}/sessions/${newSession.id}` : `/session/${newSession.id}`
-      navigateRecall(base)
-      showToast.success('open chat — new session')
-    } catch {
-      const rid = hit.repoId
-      const hash = hit.messageId ? `#message-${hit.messageId}` : ''
-      if (rid != null && rid !== 0) navigateRecall(`/repos/${rid}/sessions/${hit.sessionId}${hash}`)
-      else navigateRecall(`/session/${hit.sessionId}${hash}`)
-    }
+  const handleOpenChatHref = (hit: typeof filteredHits[number]) => {
+    if (!hit.sessionId) return '#'
+    const hash = hit.messageId ? `#message-${hit.messageId}` : ''
+    if (hit.repoId != null && hit.repoId !== 0) return `/repos/${hit.repoId}/sessions/${hit.sessionId}${hash}`
+    return `/session/${hit.sessionId}${hash}`
   }
 
   return (
@@ -922,34 +921,34 @@ function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: {
             </button>
             <div className="inline-flex items-center rounded overflow-hidden border border-input shrink-0">
               <button
-                onClick={() => copyText(filteredBlock, 'Recalls copied')}
-                disabled={!filteredBlock}
+                onClick={() => copyText(filteredJson || filteredBlock, 'Recalls copied (JSON)')}
+                disabled={!filteredJson}
                 className="inline-flex items-center gap-0.5 text-xs h-5 px-1.5 rounded-none border-r border-input shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Copy Recalls"
+                title="Copy Recalls JSON"
               >
                 <Clipboard className="w-2.5 h-2.5" /> <span className="text-[10px]">Copy</span>
               </button>
               <button
-                onClick={() => useInChat(filteredBlock)}
-                disabled={!filteredBlock}
+                onClick={() => useInChat(filteredJson || filteredBlock)}
+                disabled={!filteredJson}
                 className="inline-flex items-center gap-0.5 text-xs h-5 px-1.5 rounded-none shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Use Recalls in chat"
+                title="Use Recalls JSON in chat"
               >
                 <MessageSquarePlus className="w-2.5 h-2.5" /> <span className="text-[10px]">Chat</span>
               </button>
             </div>
           </div>
 
-          {blockOpen && filteredBlock && (
+          {blockOpen && filteredJson && (
             <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl">
               <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
-                <span className="text-[11px] font-medium">Recalls {kind !== 'all' ? `(${kind})` : ''}</span>
+                <span className="text-[11px] font-medium">Recalls JSON {kind !== 'all' ? `(${kind})` : ''}</span>
                 <button onClick={() => setBlockOpen(false)} className="text-muted-foreground hover:text-foreground p-0.5">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
               <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto">
-                {filteredBlock}
+                {filteredJson}
               </pre>
             </div>
           )}
@@ -1017,9 +1016,9 @@ function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: {
                     )}
                     <span className="flex-1 min-w-0" />
                     <button
-                      onClick={(e) => { e.stopPropagation(); const t = (expandedId === h.messageId && expandedData) ? `user #${expandedData.rows[0]?.turnIndex ?? ''}\n${expandedData.rows.map((r) => `${r.role} #${r.turnIndex}\n${r.text}`).join('\n---\n')}` : `user #${h.turnIndex ?? ''} ${repoName(h.repoId)}\n${h.snippet}\n-- ${h.meta}`; copyText(t) }}
+                      onClick={(e) => { e.stopPropagation(); const obj = (expandedId === h.messageId && expandedData) ? { repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, expanded: expandedData.rows } : { repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, meta: h.meta }; copyText(JSON.stringify(obj, null, 2), 'Copied JSON') }}
                       className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted"
-                      title="정제된 카피"
+                      title="Copy JSON"
                     >
                       <Copy className="w-2.5 h-2.5" /> Copy
                     </button>
@@ -1041,13 +1040,16 @@ function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: {
                               <span>#{row.turnIndex}</span>
                             </div>
                             {isCenter && h.sessionId && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleOpenChat(h) }}
+                              <a
+                                href={handleOpenChatHref(h)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
                                 className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-background/90 backdrop-blur border border-input shadow-sm hover:bg-muted text-primary underline"
-                                title="open chat — new session"
+                                title="open chat (new tab, Ctrl+click)"
                               >
                                 <CornerDownLeft className="w-2.5 h-2.5" /> open chat
-                              </button>
+                              </a>
                             )}
                             <div className="whitespace-pre-wrap break-words">{row.text ? highlightSnippet(row.text) : '(empty)'}</div>
                           </div>
