@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
+import { ChevronRight, ChevronDown } from 'lucide-react'
 import {
   expandMessage,
   getCommitDetail,
@@ -17,8 +18,91 @@ import {
 } from '@/api/search'
 import { recall } from '@/api/search'
 import { listRepos } from '@/api/repos'
-import { Search as SearchIcon, History, GitCommit, Trash2, Copy, CornerDownLeft } from 'lucide-react'
+import { Search as SearchIcon, History, GitCommit, Trash2, Copy, CornerDownLeft, X } from 'lucide-react'
 import { showToast } from '@/lib/toast'
+
+// JSON collapsible viewer for Recalls overlay
+function JSONViewer({ json }: { json: string }) {
+  const [expanded, setExpanded] = useState(true)
+  let parsed: any
+  try { parsed = JSON.parse(json) } catch { return <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto text-destructive">{json}</pre> }
+  function renderNode(key: string, value: any, depth = 0): React.ReactNode {
+    if (value === null) return <span className="text-muted-foreground">null</span>
+    if (typeof value === 'string') return <span className="text-green-400">"{value}"</span>
+    if (typeof value === 'number' || typeof value === 'boolean') return <span className="text-yellow-400">{String(value)}</span>
+    if (Array.isArray(value)) {
+      const [isOpen, setIsOpen] = useState(true)
+      if (value.length === 0) return <span className="text-muted-foreground">[]</span>
+      return (
+        <div className="ml-4">
+          <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen) }} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+            <ChevronRight className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+            <span>Array[{value.length}]</span>
+          </button>
+          {isOpen && (
+            <div className="ml-2 border-l border-muted/30 pl-2">
+              {value.map((v, i) => (
+                <div key={i} className="flex gap-1">
+                  <span className="text-muted-foreground/50">{i}:</span>
+                  {renderNode(String(i), v, depth + 1)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+    if (typeof value === 'object') {
+      const entries = Object.entries(value)
+      const [isOpen, setIsOpen] = useState(true)
+      if (entries.length === 0) return <span className="text-muted-foreground">{{}}</span>
+      return (
+        <div className="ml-4">
+          <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen) }} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+            <ChevronRight className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+            <span>Object</span>
+          </button>
+          {isOpen && (
+            <div className="ml-2 border-l border-muted/30 pl-2">
+              {entries.map(([k, v]) => (
+                <div key={k} className="flex gap-1">
+                  <span className="text-cyan-400">"{k}":</span>
+                  {renderNode(k, v, depth + 1)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+    return <span className="text-muted-foreground">undefined</span>
+  }
+  return (
+    <div className="font-mono text-[11px]">
+      <div className="flex items-center gap-2 mb-2">
+        <button onClick={() => setExpanded(!expanded)} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+          <ChevronRight className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          <span>{expanded ? '접기' : '펼치기'}</span>
+        </button>
+      </div>
+      {expanded && <div className="ml-2 border-l border-muted/30 pl-2">{renderNode('root', parsed)}</div>}
+    </div>
+  )
+}
+
+// 토크나이저: * 와일드카드 허용, 아니면 2자 이상
+function tokenizeRecall(q: string): string[] {
+  return q
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .map((t) => {
+      if (t === '*') return t
+      if (t.includes('*')) return t
+      return t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()
+    })
+    .filter((t) => t === '*' || t.length >= 2)
+}
 
 export function Search() {
   const [q, setQ] = useState('')
@@ -26,7 +110,7 @@ export function Search() {
   const [submittedQ, setSubmittedQ] = useState('')
   const [selectedRepoId, setSelectedRepoId] = useState<string>('all')
   const [k, setK] = useState('20')
-  const kParam = parseInt(k, 10)
+  const kParam = Math.min(50, Math.max(1, parseInt(k, 10) || 5))
   const [kind, setKind] = useState<'all' | 'message' | 'commit'>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [expandedData, setExpandedData] = useState<MessageExpandResult | null>(null)
@@ -80,6 +164,37 @@ export function Search() {
     if (kind === 'all') return data.hits
     return data.hits.filter((h: any) => h.kind === kind)
   }, [data?.hits, kind])
+
+  // 필터 옆 클립보드/채팅 버튼은 전체 블록 — 정제: 상세보기와 동일 양식, 전후 확장 시 해당 히트는 전후 전체로
+  const filteredBlock = useMemo(() => {
+    if (!data?.hits) return ''
+    if (filteredHits.length === 0) return ''
+    const lines = ['=======', '<memory-recall>', `query: "${effectiveQ}"`]
+    for (const h of filteredHits) {
+      const repo = repoName(h.repoId)
+      if (h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData) {
+        lines.push(`- [${h.kind}] ${repo} session ${h.sessionId?.slice(0,8) ?? ''}`)
+        for (const r of expandedData.rows) lines.push(`${r.role} #${r.turnIndex}\n${r.text}`)
+      } else {
+        lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta} repo ${repo}`)
+      }
+    }
+    lines.push('</memory-recall>')
+    return lines.join('\n')
+  }, [data?.hits, filteredHits, effectiveQ, repos, expandedId, expandedData])
+
+  const filteredJson = useMemo(() => {
+    if (!filteredHits.length) return ''
+    const arr = filteredHits.map((h) => {
+      if (h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData) {
+        return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, expanded: expandedData.rows }
+      }
+      return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, meta: h.meta }
+    })
+    return JSON.stringify(arr, null, 2)
+  }, [filteredHits, expandedId, expandedData, repos])
+
+  const [blockOpen, setBlockOpen] = useState(false)
 
   const copyText = async (text: string) => {
     try {
@@ -222,6 +337,44 @@ export function Search() {
             <Button onClick={handleSearch} disabled={!q.trim()} size="sm" className="h-7 text-xs shrink-0">
               Search
             </Button>
+          </div>
+
+          <div className="flex items-center gap-2 relative w-full py-0.5">
+            <div className="inline-flex items-center gap-1 rounded-md border border-input bg-background shrink-0 h-7 px-1">
+              <button
+                onClick={() => filteredBlock && setBlockOpen((v) => !v)}
+                disabled={!filteredBlock}
+                className={`inline-flex items-center gap-1 text-xs h-6 px-2 rounded shrink-0 ${blockOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                title={filteredBlock ? 'Recalls overlay' : 'No recalls to show'}
+              >
+                <ChevronRight className={`w-3 h-3 transition-transform ${blockOpen ? 'rotate-90' : ''}`} />
+                Recalls
+              </button>
+              <div className="inline-flex items-center rounded overflow-hidden border border-input shrink-0">
+                <button
+                  onClick={() => copyText(filteredJson || filteredBlock, 'Recalls copied (JSON)')}
+                  disabled={!filteredJson}
+                  className="inline-flex items-center gap-0.5 text-xs h-5 px-1.5 rounded-none border-r border-input shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Copy Recalls JSON"
+                >
+                  <Copy className="w-2.5 h-2.5" /> <span className="text-[10px]">Copy</span>
+                </button>
+              </div>
+            </div>
+
+            {blockOpen && filteredJson && (
+              <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl min-w-[500px] max-w-[800px]">
+                <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
+                  <span className="text-[11px] font-medium">Recalls JSON {kind !== 'all' ? `(${kind})` : ''}</span>
+                  <button onClick={() => setBlockOpen(false)} className="text-muted-foreground hover:text-foreground p-0.5">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="p-2.5 max-h-[600px] overflow-y-auto">
+                  <JSONViewer json={filteredJson} />
+                </div>
+              </div>
+            )}
           </div>
 
           <Tabs value={kind} onValueChange={(v) => setKind(v as any)} className="shrink-0">

@@ -128,6 +128,12 @@ function searchCommitsUnion(db: Database, q: string, k: number, opts: RecallOpti
 function tokenize(q: string): string[] {
   return q
     .split(/\s+/)
-    .map((t) => t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim())
-    .filter((t) => t.length > 1)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .map((t) => {
+      if (t === '*') return t
+      if (t.includes('*')) return t
+      return t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()
+    })
+    .filter((t) => t === '*' || t.length >= 2)
 }
