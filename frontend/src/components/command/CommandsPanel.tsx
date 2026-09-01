@@ -982,6 +982,11 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     <span className={`px-1.5 py-0.5 rounded text-[10px] border ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400 border-blue-500/30' : 'bg-amber-500/15 text-amber-400 border-amber-500/30'}`}>
                       {h.kind === 'message' ? 'chat' : 'git'}
                     </span>
+                    {h.ts && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/30 whitespace-nowrap" title={new Date(h.ts).toLocaleString()}>
+                        {new Date(h.ts).toLocaleString()}
+                      </span>
+                    )}
                     {h.repoId != null && (
                       <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/40 truncate max-w-[110px]" title={repoName(h.repoId)}>
                         {repoName(h.repoId)}
@@ -990,11 +995,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     {h.sessionId && (
                       <span className="px-1.5 py-0.5 rounded text-[10px] border border-input bg-muted/30 truncate max-w-[90px]" title={h.sessionId}>
                         session {h.sessionId.slice(0, 8)}
-                      </span>
-                    )}
-                    {h.ts && (
-                      <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                        {new Date(h.ts).toLocaleString()}
                       </span>
                     )}
                     <span className="flex-1 min-w-0" />
