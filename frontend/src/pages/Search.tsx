@@ -20,7 +20,10 @@ import {
   type CommitDetail,
 } from '@/api/search'
 import { listRepos } from '@/api/repos'
-import { Search as SearchIcon, History, GitCommit, ExternalLink, Trash2 } from 'lucide-react'
+import { Search as SearchIcon, History, GitCommit, ExternalLink, Trash2, Copy, MessageSquarePlus, CornerDownLeft } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { createOpenCodeClient } from '@/api/opencode'
+import { showToast } from '@/lib/toast'
 
 function Snippet({ text }: { text: string }) {
   const parts = text.split(/(\[.*?\])/g)
@@ -48,6 +51,8 @@ export function Search() {
   const [expandedData, setExpandedData] = useState<MessageExpandResult | null>(null)
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null)
   const [detailSha, setDetailSha] = useState<string | null>(null)
+  const [k, setK] = useState('20')
+  const kParam = parseInt(k, 10)
   const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set())
   const [selectedCommits, setSelectedCommits] = useState<Set<string>>(new Set())
   const queryClient = useQueryClient()
@@ -68,14 +73,14 @@ export function Search() {
   }
 
   const messagesQuery = useQuery({
-    queryKey: ['search-messages', submittedQ, activeTab, selectedRepoId],
-    queryFn: () => searchMessages({ q: submittedQ, k: 20, repoId: repoIdParam }),
+    queryKey: ['search-messages', submittedQ, activeTab, selectedRepoId, kParam],
+    queryFn: () => searchMessages({ q: submittedQ, k: kParam, repoId: repoIdParam }),
     enabled: !!submittedQ && activeTab === 'messages',
   })
 
   const commitsQuery = useQuery({
-    queryKey: ['search-commits', submittedQ, activeTab, selectedRepoId],
-    queryFn: () => searchCommits({ q: submittedQ, k: 20, repoId: repoIdParam }),
+    queryKey: ['search-commits', submittedQ, activeTab, selectedRepoId, kParam],
+    queryFn: () => searchCommits({ q: submittedQ, k: kParam, repoId: repoIdParam }),
     enabled: !!submittedQ && activeTab === 'commits',
   })
 
@@ -134,51 +139,112 @@ export function Search() {
     },
   })
 
+  const navigate = useNavigate()
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast.success('Copied')
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      showToast.success('Copied')
+    }
+  }
+  const handleOpenChat = async (hit: { snippet: string; repoId: number | null; sessionId?: string; messageId?: string }) => {
+    const text = hit.snippet
+    try {
+      const targetRepo = repos?.find((r) => r.id === hit.repoId)
+      const targetDir = targetRepo?.localPath
+      const client = createOpenCodeClient('', targetDir)
+      const newSession = await client.createSession({ title: 'Recall' } as any)
+      if (text) sessionStorage.setItem(`pendingPrompt:${newSession.id}`, text)
+      const base = hit.repoId != null && hit.repoId !== 0 ? `/repos/${hit.repoId}/sessions/${newSession.id}` : `/session/${newSession.id}`
+      navigate(base)
+    } catch {
+      if (hit.sessionId) {
+        const base = hit.repoId != null && hit.repoId !== 0 ? `/repos/${hit.repoId}/sessions/${hit.sessionId}` : `/session/${hit.sessionId}`
+        navigate(base)
+      }
+    }
+  }
+  const highlightSnippet = (text: string) => {
+    const qq = submittedQ.trim()
+    if (!qq) return text
+    const tokens = qq.split(/\s+/).map((t) => t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()).filter((t) => t.length >= 1)
+    if (tokens.length === 0) return text
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp(`(${tokens.map(esc).join('|')})`, 'gi')
+    const parts = text.split(pattern)
+    const lowerTokens = new Set(tokens.map((t) => t.toLowerCase()))
+    return parts.map((part, i) =>
+      part && lowerTokens.has(part.toLowerCase()) ? (
+        <span key={i} className="bg-blue-500/20 text-blue-600 dark:text-blue-400 font-medium rounded px-0.5">{part}</span>
+      ) : (
+        <span key={i}>{part}</span>
+      )
+    )
+  }
+
   return (
     <div className="h-dvh flex flex-col bg-gradient-to-br from-background via-background to-background overflow-hidden">
       <Header title="Search" backTo="/" />
       <div className="flex-1 overflow-y-auto">
-        <div className="container mx-auto p-4 max-w-4xl space-y-4">
-          <div className="flex gap-2 flex-wrap">
-            <div className="relative flex-1 min-w-[200px]">
-              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="검색어 (한글 부분일치 지원, trigram) — 엔터로 검색"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSearch()
-                }}
-                className="pl-9"
-              />
+        <div className="container mx-auto p-4 max-w-4xl space-y-3">
+          <div className="relative">
+            <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <Input
+              placeholder="검색어 (한글 부분일치 지원, trigram) — 엔터로 검색"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearch()
+              }}
+              className="pl-8 h-8 text-xs"
+            />
+          </div>
+          <div className="flex items-center gap-2 relative w-full py-0.5">
+            <div className="flex-1 min-w-0">
+              <Select value={selectedRepoId} onValueChange={setSelectedRepoId}>
+                <SelectTrigger className="w-full h-7 text-xs min-w-0 [&>span]:truncate">
+                  <SelectValue placeholder="레포 선택" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Repositories</SelectItem>
+                  <SelectItem value="0">host (opencode-webui)</SelectItem>
+                  {repos?.map((r) => (
+                    <SelectItem key={r.id} value={String(r.id)}>
+                      {r.localPath} (#{r.id})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <Select value={selectedRepoId} onValueChange={setSelectedRepoId}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="레포 선택" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Repositories</SelectItem>
-                <SelectItem value="0">host (opencode-webui)</SelectItem>
-                {repos?.map((r) => (
-                  <SelectItem key={r.id} value={String(r.id)}>
-                    {r.localPath} (#{r.id})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button onClick={handleSearch} disabled={!trimmed}>
+            <div className="w-[68px] shrink-0">
+              <Select value={k} onValueChange={setK}>
+                <SelectTrigger className="w-full h-7 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="5">5 hits</SelectItem>
+                  <SelectItem value="8">8 hits</SelectItem>
+                  <SelectItem value="10">10 hits</SelectItem>
+                  <SelectItem value="20">20 hits</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={handleSearch} disabled={!trimmed} size="sm" className="h-7 text-xs shrink-0">
               Search
             </Button>
           </div>
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'messages' | 'commits')}>
-          <TabsList>
-            <TabsTrigger value="messages" className="gap-1.5">
-              <History className="w-4 h-4" /> Messages
-            </TabsTrigger>
-            <TabsTrigger value="commits" className="gap-1.5">
-              <GitCommit className="w-4 h-4" /> Commits
-            </TabsTrigger>
+          <TabsList className="h-7 shrink-0 flex-nowrap">
+            <TabsTrigger value="messages" className="text-xs h-6 px-2 shrink-0 whitespace-nowrap gap-1"><History className="w-3 h-3" /> Messages</TabsTrigger>
+            <TabsTrigger value="commits" className="text-xs h-6 px-1.5 gap-1 shrink-0 whitespace-nowrap"><GitCommit className="w-3 h-3" /> Commits</TabsTrigger>
           </TabsList>
 
           <TabsContent value="messages" className="space-y-3 mt-4">
@@ -208,39 +274,24 @@ export function Search() {
                   </Button>
                 </div>
                 {messagesQuery.data!.map((hit) => (
-                <Card key={hit.messageId} className="p-4 space-y-2">
-                  <div className="flex items-center gap-2 flex-wrap">
+                <Card key={hit.messageId} className="p-2.5 space-y-1.5 border border-input cursor-pointer hover:border-primary/30" onClick={() => handleExpand(hit.messageId)}>
+                  <div className="flex items-center gap-0 flex-nowrap overflow-hidden rounded-md bg-muted/20">
                     <Checkbox checked={selectedMessages.has(hit.messageId)} onCheckedChange={(v) => {
                       const next = new Set(selectedMessages)
                       if (v) next.add(hit.messageId); else next.delete(hit.messageId)
                       setSelectedMessages(next)
-                    }} />
-                    <Badge variant="outline">{hit.role}</Badge>
-                    <Badge variant="secondary">turn {hit.turnIndex}</Badge>
-                    <Badge variant="secondary" title={hit.repoId == null ? 'unknown (재색인 필요)' : repoName(hit.repoId)}>{hit.repoId == null ? 'unknown' : repoName(hit.repoId)}</Badge>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(hit.ts).toLocaleString()}
-                    </span>
-                    {hit.sessionId && (
-                      <Link
-                        to={
-                          hit.repoId != null && hit.repoId !== 0
-                            ? `/repos/${hit.repoId}/sessions/${hit.sessionId}`
-                            : `/session/${hit.sessionId}`
-                        }
-                        className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1 ml-auto"
-                      >
-                        세션 열기 <ExternalLink className="w-3 h-3" />
-                      </Link>
-                    )}
+                    }} onClick={(e) => e.stopPropagation()} className="ml-1.5 mr-1 h-3.5 w-3.5" />
+                    <span className="px-1.5 py-1 text-[10px] bg-blue-500/15 text-blue-400 shrink-0">chat</span>
+                    <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">{new Date(hit.ts).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    <span className="px-1.5 py-1 text-[10px] bg-muted/40 truncate max-w-[110px] shrink-0" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</span>
+                    {hit.sessionId && <span className="px-1.5 py-1 text-[10px] bg-muted/30 truncate max-w-[90px] shrink-0" title={hit.sessionId}>session {hit.sessionId.slice(0,8)}</span>}
+                    <span className="flex-1 min-w-0" />
+                    <button onClick={(e) => { e.stopPropagation(); copyText(hit.snippet) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted" title="Copy"><Copy className="w-2.5 h-2.5" /> Copy</button>
+                    <button onClick={(e) => { e.stopPropagation(); handleOpenChat(hit) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted text-primary" title="open chat"><CornerDownLeft className="w-2.5 h-2.5" /> open chat</button>
                   </div>
-                  <div className="text-sm break-words">
-                    <Snippet text={hit.snippet} />
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => handleExpand(hit.messageId)}>
-                      {expandedId === hit.messageId ? '접기' : '주변 대화 보기'}
-                    </Button>
+                  <div className="p-2 rounded text-xs bg-accent border border-input">
+                    <div className="flex gap-2 text-[10px] text-muted-foreground mb-1"><span>{hit.role}</span><span>#{hit.turnIndex}</span></div>
+                    <div className="whitespace-pre-wrap break-words">{highlightSnippet(hit.snippet)}</div>
                   </div>
                   {expandedId === hit.messageId && expandedData && (
                     <div className="border-t pt-3 space-y-2 mt-2">
@@ -301,22 +352,23 @@ export function Search() {
                   </Button>
                 </div>
                 {commitsQuery.data!.map((hit) => (
-                <Card key={`${hit.repoId}-${hit.sha}`} className="p-4 space-y-2">
-                  <div className="flex items-center gap-2 flex-wrap">
+                <Card key={`${hit.repoId}-${hit.sha}`} className="p-2.5 space-y-1.5 border border-input">
+                  <div className="flex items-center gap-0 flex-nowrap overflow-hidden rounded-md bg-muted/20">
                     <Checkbox checked={selectedCommits.has(`${hit.repoId}:${hit.sha}`)} onCheckedChange={(v) => {
                       const next = new Set(selectedCommits)
                       const key = `${hit.repoId}:${hit.sha}`
                       if (v) next.add(key); else next.delete(key)
                       setSelectedCommits(next)
-                    }} />
-                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{hit.sha.slice(0, 7)}</code>
-                    {hit.repoId != null && <Badge variant="secondary" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</Badge>}
-                    <span className="text-xs text-muted-foreground">{hit.author}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(hit.committedAt).toLocaleString()}
-                    </span>
+                    }} onClick={(e) => e.stopPropagation()} className="ml-1.5 mr-1 h-3.5 w-3.5" />
+                    <span className="px-1.5 py-1 text-[10px] bg-amber-500/15 text-amber-400 shrink-0">git</span>
+                    <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">{new Date(hit.committedAt).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    {hit.repoId != null && <span className="px-1.5 py-1 text-[10px] bg-muted/40 truncate max-w-[110px] shrink-0" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</span>}
+                    <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">{hit.author}</span>
+                    <code className="px-1.5 py-1 text-[10px] bg-muted/40 shrink-0">{hit.sha.slice(0, 7)}</code>
+                    <span className="flex-1 min-w-0" />
+                    <button onClick={(e) => { e.stopPropagation(); copyText(`${hit.sha} ${hit.subject}`) }} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 h-5 shrink-0 hover:bg-muted" title="Copy"><Copy className="w-2.5 h-2.5" /> Copy</button>
                   </div>
-                  <div className="font-medium text-sm">{hit.subject}</div>
+                  <div className="p-2 rounded text-xs bg-accent border border-input font-medium">{highlightSnippet(hit.subject)}</div>
                   {hit.repoId != null && (
                     <Button variant="ghost" size="sm" onClick={() => handleCommitClick(hit.sha, hit.repoId)}>
                       {detailSha === hit.sha ? '접기' : '상세 보기'}
