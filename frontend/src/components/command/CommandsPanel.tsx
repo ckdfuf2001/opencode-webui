@@ -30,7 +30,6 @@ import {
   MoreHorizontal,
   Calendar as CalendarIcon,
   Brain,
-  Clipboard,
   MessageSquarePlus,
   GitCommit,
 } from 'lucide-react'
