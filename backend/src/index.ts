@@ -33,7 +33,7 @@ import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig, repoAgentBrowserSession } from './services/default-mcp'
+import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig } from './services/default-mcp'
 import { migrateConfigMapToFiles } from './services/config-migration'
 import { opencodeServerManager, prepareBackendPort, installWindowsShutdownWatchdog } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
@@ -464,11 +464,7 @@ for (const repo of listRepos(db)) {
 }
 
 async function warmUpAllAgentBrowserDaemons(): Promise<void> {
-  await warmUpAgentBrowserDaemon('opencode', 'default')
-  for (const repo of listRepos(db)) {
-    const session = repoAgentBrowserSession(repo.localPath)
-    await warmUpAgentBrowserDaemon('opencode', session)
-  }
+  await warmUpAgentBrowserDaemon(undefined, 'default')
 }
 
 opencodeServerManager.spawnNow()
