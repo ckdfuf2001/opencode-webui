@@ -343,11 +343,11 @@ export const SessionList = ({
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 flex-shrink-0">
-        <div className="flex items-center gap-1.5 shrink-0 h-8 px-2 mb-3">
-          <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isConnected ? "bg-green-500" : isReconnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`} />
-          <span className="text-xs text-muted-foreground hidden sm:inline">{isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}</span>
-        </div>
         <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center gap-1.5 shrink-0 h-8 px-2">
+            <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isConnected ? "bg-green-500" : isReconnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`} />
+            <span className="text-xs text-muted-foreground hidden sm:inline">{isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}</span>
+          </div>
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
