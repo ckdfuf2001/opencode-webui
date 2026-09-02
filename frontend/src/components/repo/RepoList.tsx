@@ -173,7 +173,8 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
             <Button
               onClick={handleSelectAll}
               variant={selectedRepos.size > 0 ? "default" : "outline"}
-              className="whitespace-nowrap hidden md:flex"
+              size="sm"
+              className="whitespace-nowrap hidden md:flex h-8"
             >
               {filteredRepos.every((repo) => selectedRepos.has(repo.id))
                 ? "Deselect All"
@@ -183,8 +184,9 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           <Button
             onClick={handleBatchDelete}
             variant="destructive"
+            size="sm"
             disabled={selectedRepos.size === 0}
-            className="hidden md:flex whitespace-nowrap"
+            className="hidden md:flex whitespace-nowrap h-8"
           >
             <Trash2 className="w-4 h-4 mr-2" />
             Delete ({selectedRepos.size})
@@ -192,7 +194,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           <Button
             onClick={() => onAddRepo?.()}
             size="sm"
-            className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap"
+            className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap h-8"
           >
             <Plus className="w-4 h-4 mr-1" />
             New Repo
@@ -228,7 +230,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           <Button
             onClick={() => onAddRepo?.()}
             size="icon"
-            className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-9 w-9"
+            className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-8 w-8"
             title="New Repo"
           >
             <Plus className="w-4 h-4" />

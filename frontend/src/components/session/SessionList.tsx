@@ -354,7 +354,8 @@ export const SessionList = ({
             <Button
               onClick={toggleSelectAll}
               variant={selectedSessions.size > 0 ? "default" : "outline"}
-              className="whitespace-nowrap hidden md:flex"
+              size="sm"
+              className="whitespace-nowrap hidden md:flex h-8"
             >
               {filteredSessions.every((session) =>
                 selectedSessions.has(session.id),
@@ -366,8 +367,9 @@ export const SessionList = ({
           <Button
             onClick={handleBulkDelete}
             variant="destructive"
+            size="sm"
             disabled={selectedSessions.size === 0}
-            className="hidden md:flex whitespace-nowrap"
+            className="hidden md:flex whitespace-nowrap h-8"
           >
             <Trash2 className="w-4 h-4 mr-2" />
             Delete ({selectedSessions.size})
@@ -376,7 +378,7 @@ export const SessionList = ({
             onClick={handleCreateSession}
             disabled={createSession.isPending}
             size="sm"
-            className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap"
+            className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap h-8"
           >
             <Plus className="w-4 h-4 mr-1" />
             New Session
@@ -415,7 +417,7 @@ export const SessionList = ({
             onClick={handleCreateSession}
             disabled={createSession.isPending}
             size="icon"
-            className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-9 w-9"
+            className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-8 w-8"
             title="New Session"
           >
             <Plus className="w-4 h-4" />

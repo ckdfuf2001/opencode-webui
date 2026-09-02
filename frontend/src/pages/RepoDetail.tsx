@@ -18,6 +18,7 @@ import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDi
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { Loader2, FolderOpen, GitBranch, Briefcase, CalendarPlus, Settings } from "lucide-react";
 
 export function RepoDetail() {
@@ -159,6 +160,7 @@ export function RepoDetail() {
             </div>
           </div>
            <div className="flex items-center gap-2">
+              <OpenCodeStatus />
               <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
                 <Button
                   variant="ghost"
