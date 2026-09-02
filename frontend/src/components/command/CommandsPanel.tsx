@@ -866,7 +866,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') setDebouncedQ(q.trim()) }}
-            placeholder="Recall search — messages & commits (trigram, 자동 검색)"
+            placeholder="messages & commits search ( min length 2 char, * is supported )"
             className="w-full h-8 pl-8 pr-3 rounded-md bg-muted/40 border border-border text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
@@ -1671,12 +1671,12 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-1 max-w-[320px]">
             <Button
               variant={tab === 'runs' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('runs')}
-              className="text-xs h-7"
+              className="text-xs h-7 flex-1 justify-center"
             >
               <History className="w-3.5 h-3.5 mr-1" />
               History
@@ -1685,7 +1685,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               variant={tab === 'explorer' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('explorer')}
-              className="text-xs h-7"
+              className="text-xs h-7 flex-1 justify-center"
             >
               <Search className="w-3.5 h-3.5 mr-1" />
               Explorer
@@ -1694,15 +1694,15 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               variant={tab === 'recall' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('recall')}
-              className="text-xs h-7"
+              className="text-xs h-7 flex-1 justify-center"
             >
               <Brain className="w-3.5 h-3.5 mr-1" />
               Recall
             </Button>
-            <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground hover:text-foreground hover:bg-muted">
-              <X className="w-4 h-4" />
-            </Button>
           </div>
+          <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground hover:text-foreground hover:bg-muted">
+            <X className="w-4 h-4" />
+          </Button>
         </div>
 
         {tab === 'recall' ? (
