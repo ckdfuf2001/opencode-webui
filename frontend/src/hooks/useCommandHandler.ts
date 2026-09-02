@@ -26,6 +26,35 @@ interface CommandHandlerProps {
 // Commands that exist on the opencode server (v1.18.11)
 const SERVER_COMMANDS = new Set(['init', 'review'])
 
+async function waitForAssistantCompleted(
+  client: ReturnType<typeof createOpenCodeClient>,
+  sessionID: string,
+  startMs: number,
+): Promise<void> {
+  const deadline = Date.now() + 120_000
+  let noCandidateTicks = 0
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 700))
+    try {
+      const msgs = await client.listMessages(sessionID) as unknown as { info: { role: string; time: { created?: number; completed?: number } } }[]
+      if (!msgs || msgs.length === 0) continue
+      const candidates = msgs.filter(
+        (m) => m.info.role === 'assistant' && (m.info.time.created ?? 0) >= startMs - 5_000,
+      )
+      if (candidates.length === 0) {
+        // No new assistant yet — likely command with no LLM output (e.g. quick tool). Don't block long.
+        if (++noCandidateTicks >= 4) return
+        continue
+      }
+      noCandidateTicks = 0
+      const target = candidates[candidates.length - 1]
+      if (target.info.time.completed) return
+    } catch {
+      // transient — keep polling
+    }
+  }
+}
+
 export function useCommandHandler({
   opcodeUrl,
   sessionID,
@@ -177,9 +206,14 @@ export function useCommandHandler({
             const template = (command as { template?: string }).template
             if (source === 'skill') {
               const text = args ? `${template ?? `/${command.name}`}\n\n${args}` : (template ?? `/${command.name}`)
+              const startMs = Date.now()
               await client.sendPrompt(sessionID, { parts: [{ type: 'text', text }] })
+              // 2번: opencode 응답의 time.completed 플래그로 끝 판단 (채팅 분할 대응)
+              await waitForAssistantCompleted(client, sessionID, startMs)
             } else {
+              const startMs = Date.now()
               await client.sendCommand(sessionID, { command: command.name, arguments: args })
+              await waitForAssistantCompleted(client, sessionID, startMs)
             }
           } else {
             showToast.warning(
