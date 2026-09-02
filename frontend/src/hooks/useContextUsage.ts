@@ -98,8 +98,8 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
 
     // If the latest message has 0 tokens (still being created), use the previous one
     if (latestAssistantMessage) {
-      const t = latestAssistantMessage.info.tokens as { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
-      const latestTokens = (t.input ?? 0) + (t.output ?? 0) + (t.reasoning ?? 0) + (t.cache?.read ?? 0) + (t.cache?.write ?? 0)
+      const t = (latestAssistantMessage.info as unknown as { tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } } }).tokens
+      const latestTokens = ((t?.input ?? 0) + (t?.output ?? 0) + (t?.reasoning ?? 0) + (t?.cache?.read ?? 0) + (t?.cache?.write ?? 0))
       if (latestTokens === 0 && assistantMessages.length > 1) {
         latestAssistantMessage = assistantMessages[assistantMessages.length - 2]
       }
@@ -107,8 +107,8 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
 
     let totalTokens = 0
     if (latestAssistantMessage) {
-      const t = latestAssistantMessage.info.tokens as { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
-      totalTokens = (t.input ?? 0) + (t.output ?? 0) + (t.reasoning ?? 0) + (t.cache?.read ?? 0) + (t.cache?.write ?? 0)
+      const t = (latestAssistantMessage.info as unknown as { tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } } }).tokens
+      totalTokens = ((t?.input ?? 0) + (t?.output ?? 0) + (t?.reasoning ?? 0) + (t?.cache?.read ?? 0) + (t?.cache?.write ?? 0))
       if (!currentModel && 'modelID' in latestAssistantMessage.info && 'providerID' in latestAssistantMessage.info) {
         currentModel = `${latestAssistantMessage.info.providerID}/${latestAssistantMessage.info.modelID}`
       }

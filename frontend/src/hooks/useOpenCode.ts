@@ -820,9 +820,29 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           if (typeof parsed.type === "string" && parsed.properties && typeof parsed.properties === "object") { t = parsed.type as string; p = parsed.properties as Record<string, unknown>; }
           else { t = (e as unknown as { type: string }).type || ""; p = parsed as Record<string, unknown>; if (t === "message" && typeof parsed.type === "string") { t = parsed.type as string; p = (parsed.properties as Record<string, unknown>) ?? parsed; } }
           if (t === "message.part.updated") {
-            const part = (p.part ?? p) as MessageWithParts["parts"][number] & { sessionID: string };
-            const delta = p.delta as string | undefined; const sid = (part as { sessionID: string }).sessionID ?? (p.sessionID as string);
-            if (sid !== sessionID) return; sseMergePart(part as MessageWithParts["parts"][number], delta);
+            const part = (p.part ?? p) as MessageWithParts["parts"][number] & { sessionID: string; messageID?: string };
+            const delta = (p.delta as string | undefined) ?? (p.text as string | undefined);
+            const sid = (part as { sessionID: string }).sessionID ?? (p.sessionID as string) ?? (p.sessionId as string);
+            if (sid !== sessionID) return;
+            const mid = (part as { messageID: string }).messageID ?? (p.messageID as string);
+            const partForMerge = mid && !(part as { messageID: string }).messageID ? { ...part, messageID: mid } as MessageWithParts["parts"][number] : part as MessageWithParts["parts"][number];
+            sseMergePart(partForMerge, delta);
+          } else if (t === "message.part.delta") {
+            const sid = (p.sessionID as string) ?? (p.sessionId as string);
+            if (sid !== sessionID) return;
+            const mid = p.messageID as string; const pid = (p.partID as string) ?? (p.id as string); const delta = p.delta as string;
+            if (!mid || !pid || !delta) return;
+            const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+            queryClient.setQueryData<MessageListResponse>(key, (old) => {
+              if (!old) return old; const idx = old.findIndex((m) => m.info.id === mid); if (idx === -1) return old;
+              const msg = old[idx]!; const pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
+              if (pIdx === -1) return old; const existing = msg.parts[pIdx] as { type: string; text?: string };
+              if (existing.type !== "text") return old;
+              const nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+              const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
+              const next = [...old]; next[idx] = { ...msg, parts: nextParts }; return next;
+            });
+            return;
           } else if (t === "message.updated") {
             const info = (p.info ?? p) as MessageWithParts["info"] & { sessionID: string };
             const sid = (info as { sessionID: string }).sessionID ?? (p.sessionID as string);
@@ -1134,23 +1154,45 @@ export const useEphemeralSessionSSE = (
           }
         }
         if (t === "message.part.updated") {
-          const part = (p.part ?? p) as MessageWithParts["parts"][number] & { sessionID: string; messageID: string };
-          const delta = p.delta as string | undefined;
-          const sid = (part as { sessionID: string }).sessionID ?? (p.sessionID as string);
+          const part = (p.part ?? p) as MessageWithParts["parts"][number] & { sessionID: string; messageID: string; id?: string };
+          const delta = (p.delta as string | undefined) ?? (p.text as string | undefined);
+          const sid = (part as { sessionID: string }).sessionID ?? (p.sessionID as string) ?? (p.sessionId as string);
           if (sid !== sessionID) return;
-          if (delta && part && typeof (part as { type: string; text?: string }).text === "string") {
+          const mid = (part as { messageID: string }).messageID ?? (p.messageID as string);
+          const pid = (part as { id: string }).id ?? (p.partID as string) ?? (p.id as string);
+          const partForMerge = mid && !(part as { messageID: string }).messageID ? { ...part, messageID: mid, id: pid ?? (part as { id: string }).id } as MessageWithParts["parts"][number] : part as MessageWithParts["parts"][number];
+          if (delta && partForMerge && typeof (partForMerge as { type: string; text?: string }).text === "string") {
             const existingKey = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
             const old = queryClient.getQueryData<MessageListResponse>(existingKey);
-            const idx = old?.findIndex((m) => m.info.id === (part as { messageID: string }).messageID) ?? -1;
+            const idx = old?.findIndex((m) => m.info.id === (partForMerge as { messageID: string }).messageID) ?? -1;
             if (idx !== -1) {
-              const existingPart = old![idx]!.parts.find((pp) => (pp as { id: string }).id === (part as { id: string }).id) as { text?: string } | undefined;
-              if (existingPart && typeof existingPart.text === "string" && typeof (part as { text?: string }).text === "string" && (part as { text: string }).text === existingPart.text + delta) {
-                mergePart(part, undefined);
+              const existingPart = old![idx]!.parts.find((pp) => (pp as { id: string }).id === (partForMerge as { id: string }).id) as { text?: string } | undefined;
+              if (existingPart && typeof existingPart.text === "string" && typeof (partForMerge as { text?: string }).text === "string" && (partForMerge as { text: string }).text === existingPart.text + delta) {
+                mergePart(partForMerge, undefined);
                 return;
               }
             }
           }
-          mergePart(part as MessageWithParts["parts"][number], delta);
+          mergePart(partForMerge as MessageWithParts["parts"][number], delta);
+        } else if (t === "message.part.delta") {
+          const sid = (p.sessionID as string) ?? (p.sessionId as string);
+          if (sid !== sessionID) return;
+          const mid = p.messageID as string; const pid = (p.partID as string) ?? (p.id as string); const delta = p.delta as string;
+          if (!mid || !pid || !delta) return;
+          const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+          queryClient.setQueryData<MessageListResponse>(key, (old) => {
+            if (!old) return old;
+            const idx = old.findIndex((m) => m.info.id === mid);
+            if (idx === -1) return old;
+            const msg = old[idx]!; const pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
+            if (pIdx === -1) return old;
+            const existing = msg.parts[pIdx] as { type: string; text?: string };
+            if (existing.type !== "text") return old;
+            const nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+            const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
+            const next = [...old]; next[idx] = { ...msg, parts: nextParts }; return next;
+          });
+          return;
         } else if (t === "message.updated") {
           const info = (p.info ?? p) as MessageWithParts["info"] & { sessionID: string };
           const sid = (info as { sessionID: string }).sessionID ?? (p.sessionID as string);
