@@ -63,6 +63,7 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       active_from INTEGER,
       active_until INTEGER,
       agent TEXT,
+      model TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

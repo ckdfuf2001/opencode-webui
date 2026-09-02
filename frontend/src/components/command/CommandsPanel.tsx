@@ -160,10 +160,13 @@ function segmentRun(
   if (oneshot && status === 'running') status = 'completed'
   if (oneshot) lastUpdated = run.startedAt
 
-  const result = assistantMessages.map(assistantText).filter(Boolean).join('\n')
-  if (status === 'running' && assistantMessages.length > 0) {
-    const last = assistantMessages[assistantMessages.length - 1]
-    if ('time' in last.info && 'completed' in last.info.time && last.info.time.completed) status = 'completed'
+  // Response: show last assistant message only, not first; until last is completed, stay running
+  const lastAssistant = assistantMessages.length > 0 ? assistantMessages[assistantMessages.length - 1] : null
+  const result = lastAssistant ? assistantText(lastAssistant) : ''
+  // status already reflects last message's completed/error, but ensure running until last is completed
+  if (status !== 'error' && lastAssistant) {
+    const lastCompleted = 'time' in lastAssistant.info && 'completed' in (lastAssistant.info as { time: { completed?: number } }).time && (lastAssistant.info as { time: { completed?: number } }).time.completed
+    if (!lastCompleted) status = 'running'
   }
 
   const steps = assistantMessages.map(assistantSteps).flat()
@@ -1669,32 +1672,32 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1 w-[320px] shrink-0">
+          <div className="flex items-center gap-1 w-full max-w-[320px] flex-1 min-w-0">
             <Button
               variant={tab === 'runs' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('runs')}
-              className="text-xs h-8 flex-1 justify-center min-w-0"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate"
             >
-              <History className="w-3.5 h-3.5 mr-1" />
+              <History className="w-3.5 h-3.5 mr-1 shrink-0" />
               History
             </Button>
             <Button
               variant={tab === 'explorer' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('explorer')}
-              className="text-xs h-8 flex-1 justify-center min-w-0"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate"
             >
-              <Search className="w-3.5 h-3.5 mr-1" />
+              <Search className="w-3.5 h-3.5 mr-1 shrink-0" />
               Explorer
             </Button>
             <Button
               variant={tab === 'recall' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('recall')}
-              className="text-xs h-8 flex-1 justify-center min-w-0"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate"
             >
-              <Brain className="w-3.5 h-3.5 mr-1" />
+              <Brain className="w-3.5 h-3.5 mr-1 shrink-0" />
               Recall
             </Button>
           </div>

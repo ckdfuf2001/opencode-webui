@@ -13,6 +13,7 @@ export interface Schedule {
   activeFrom?: number
   activeUntil?: number
   agent?: string
+  model?: string
   createdAt: number
   updatedAt: number
 }
@@ -28,6 +29,7 @@ export interface CreateScheduleInput {
   activeFrom?: number
   activeUntil?: number
   agent?: string
+  model?: string
 }
 
 export interface UpdateScheduleInput {
@@ -40,4 +42,5 @@ export interface UpdateScheduleInput {
   activeFrom?: number
   activeUntil?: number
   agent?: string
+  model?: string
 }

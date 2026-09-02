@@ -14,6 +14,7 @@ interface ScheduleRow {
   active_from: number | null
   active_until: number | null
   agent: string | null
+  model: string | null
   created_at: number
   updated_at: number
 }
@@ -32,6 +33,7 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     activeFrom: row.active_from ?? undefined,
     activeUntil: row.active_until ?? undefined,
     agent: row.agent ?? undefined,
+    model: row.model ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -53,8 +55,8 @@ export function getScheduleById(db: Database, id: number): Schedule | null {
 export function createSchedule(db: Database, input: CreateScheduleInput): Schedule {
   const now = Date.now()
   const result = db.prepare(`
-    INSERT INTO schedules (repo_id, name, action, command, prompt, cron, enabled, active_from, active_until, agent, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO schedules (repo_id, name, action, command, prompt, cron, enabled, active_from, active_until, agent, model, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.repoId,
     input.name,
@@ -66,6 +68,7 @@ export function createSchedule(db: Database, input: CreateScheduleInput): Schedu
     input.activeFrom ?? null,
     input.activeUntil ?? null,
     input.agent ?? null,
+    input.model ?? null,
     now,
     now,
   )
@@ -84,7 +87,7 @@ export function updateSchedule(db: Database, id: number, input: UpdateScheduleIn
   db.prepare(`
     UPDATE schedules
     SET name = ?, action = ?, command = ?, prompt = ?, cron = ?, enabled = ?,
-        active_from = ?, active_until = ?, agent = ?, updated_at = ?
+        active_from = ?, active_until = ?, agent = ?, model = ?, updated_at = ?
     WHERE id = ?
   `).run(
     input.name ?? existing.name,
@@ -96,6 +99,7 @@ export function updateSchedule(db: Database, id: number, input: UpdateScheduleIn
     input.activeFrom !== undefined ? input.activeFrom : (existing.activeFrom ?? null),
     input.activeUntil !== undefined ? input.activeUntil : (existing.activeUntil ?? null),
     input.agent !== undefined ? input.agent : (existing.agent ?? null),
+    input.model !== undefined ? input.model : (existing.model ?? null),
     Date.now(),
     id,
   )

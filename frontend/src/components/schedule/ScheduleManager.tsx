@@ -34,6 +34,8 @@ import { ScheduleCalendar } from '@/components/schedule/ScheduleCalendar'
 import { KIND_LABEL, KIND_BADGE, type CalendarMarker } from '@/lib/calendar-marker'
 import { dateKey, cronScheduleKind, monthCalendarRange, scheduleFiresInWindow } from '@/lib/cron'
 import { showToast } from '@/lib/toast'
+import { getProvidersWithModels, formatModelName, formatProviderName } from '@/api/providers'
+import { useSettings } from '@/hooks/useSettings'
 
 function repoNameOf(repo: { repoUrl?: string | null; localPath: string }): string {
   if (repo.repoUrl) return repo.repoUrl.split('/').slice(-1)[0].replace('.git', '')
@@ -60,6 +62,7 @@ const EMPTY_FORM = {
   activeFrom: '',
   activeUntil: '',
   agent: '',
+  model: '',
 }
 
 const CRON_PRESETS: { label: string; value: string }[] = [
@@ -121,6 +124,15 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
     queryFn: () => client!.listAgents(),
     enabled: !!client,
   })
+
+  const { preferences } = useSettings()
+  const { data: providersData } = useQuery({
+    queryKey: ['providers-models'],
+    queryFn: getProvidersWithModels,
+    enabled: active,
+  })
+  const providerOptions = (providersData ?? []).flatMap((p) => p.models.map((m) => ({ value: `${p.id}/${m.id}`, label: `${formatProviderName(p)} / ${formatModelName(m)}` })))
+  const defaultModelLabel = preferences?.defaultModel ? `Default (${preferences.defaultModel})` : 'Default (opencode default)'
 
   const [calendarViewDate, setCalendarViewDate] = useState(() => new Date())
 
@@ -286,6 +298,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
       activeFrom: '',
       activeUntil: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T23:59`,
       agent: '',
+      model: '',
     })
   }
 
@@ -303,6 +316,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
       activeFrom: toDatetimeLocal(schedule.activeFrom),
       activeUntil: toDatetimeLocal(schedule.activeUntil),
       agent: schedule.agent ?? '',
+      model: (schedule as { model?: string }).model ?? '',
     })
   }
 
@@ -331,7 +345,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
       }
       const payload = {
         name: form.name.trim(),
-        action: form.action,
+        action: form.action as ScheduleAction,
         command: form.action === 'command' ? form.command.trim() : undefined,
         prompt: form.action === 'chat' ? form.prompt.trim() : undefined,
         cron: form.cron.trim(),
@@ -339,12 +353,13 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
         activeFrom,
         activeUntil,
         agent: form.agent.trim() || undefined,
+        model: form.agent.trim() ? undefined : (form.model.trim() || undefined),
       }
       if (editingId) {
-        await updateSchedule(editingId, payload)
+        await updateSchedule(editingId, payload as Parameters<typeof updateSchedule>[1])
         showToast.success('Schedule updated.')
       } else {
-        await createSchedule({ repoId: targetRepoId ?? repoId, ...payload })
+        await createSchedule({ repoId: targetRepoId ?? repoId, ...payload } as Parameters<typeof createSchedule>[0])
         showToast.success('Schedule created.')
       }
       resetForm()
@@ -530,6 +545,24 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
           </div>
 
           <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Model {form.agent ? '(follows agent)' : '(optional, default: default model)'}</label>
+            <Select value={form.model || 'default'} onValueChange={(value) => setForm({ ...form, model: value === 'default' ? '' : value })} disabled={!!form.agent}>
+              <SelectTrigger>
+                <SelectValue placeholder={defaultModelLabel} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">{defaultModelLabel}</SelectItem>
+                {providerOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">{form.agent ? 'Agent is selected — model follows the agent.' : 'Batch will run with this model. If empty, uses Default model (not opencode default).'}</p>
+          </div>
+
+          <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Active window</label>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
@@ -703,7 +736,7 @@ export function ScheduleManager({ repoId, opcodeUrl, directory, initialDate, act
                       <span className="font-mono shrink-0">{schedule.cron}</span>
                     </div>
                     <span className="truncate">
-                      {schedule.agent ? `${schedule.agent} · ` : ''}
+                      {schedule.agent ? `${schedule.agent} · ` : (schedule as { model?: string }).model ? `${(schedule as { model?: string }).model} · ` : ''}
                       {schedule.action === 'command' ? (schedule.command ?? '') : (schedule.prompt ?? '').slice(0, 40)}
                       {' · '}last: {formatLastRun(schedule.lastRunAt)}
                     </span>

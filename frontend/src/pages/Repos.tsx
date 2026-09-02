@@ -6,12 +6,14 @@ import { Header } from "@/components/layout/Header";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Button } from "@/components/ui/button";
-import { Plus, FolderOpen, Briefcase } from "lucide-react";
+import { FolderOpen, Briefcase, Settings } from "lucide-react";
 import { OPENCODE_API_ENDPOINT } from "@/config";
+import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 export function Repos() {
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
+  const { open: openSettings } = useSettingsDialog();
 
   const handleCloseFileBrowser = () => {
     setFileBrowserOpen(false);
@@ -46,18 +48,18 @@ export function Repos() {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => setAddRepoOpen(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 h-8 w-8 rounded-none"
-                title="New Repository"
+                onClick={openSettings}
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none"
+                title="Settings"
               >
-                <Plus className="w-4 h-4" />
+                <Settings className="w-4 h-4" />
               </Button>
             </div>
           </div>
         }
       />
       <div className="container mx-auto sm:p-2 p-4">
-        <RepoList />
+        <RepoList onAddRepo={() => setAddRepoOpen(true)} />
       </div>
       <AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoOpen} />
       <CommandsPanel

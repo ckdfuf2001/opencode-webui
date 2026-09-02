@@ -1,12 +1,14 @@
 import { useState, useMemo, Fragment } from "react";
-import { useSessions, useDeleteSession, useSessionStatusMap } from "@/hooks/useOpenCode";
+import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession } from "@/hooks/useOpenCode";
+import { useNavigate } from "react-router-dom";
+import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert, Loader2, ChevronDown, ChevronRight } from "lucide-react";
+import { Trash2, GitBranch, Clock, Search, MoreHorizontal, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface SessionListProps {
@@ -36,7 +38,12 @@ export const SessionList = ({
 }: SessionListProps) => {
   const { data: sessions, isLoading } = useSessions(opcodeUrl, directory);
   const deleteSession = useDeleteSession(opcodeUrl, directory);
-  const { data: dbStatuses } = useSessionStatusMap();
+  const { data: dbStatuses, isError: statusError, isFetching: statusFetching } = useSessionStatusMap();
+  const { data: opencodeHealthy, isError: healthError, isFetching: healthFetching } = useOpencodeHealth();
+  const isConnected = !healthError && !!opencodeHealthy && !statusError && !!dbStatuses;
+  const isReconnecting = (healthError && healthFetching) || (statusError && statusFetching) || (!opencodeHealthy && !healthError);
+  const navigate = useNavigate();
+  const createSession = useCreateSession(opcodeUrl, directory);
   const dbBusyIds = useMemo(() => {
     const set = new Set<string>();
     for (const entry of dbStatuses ?? []) {
@@ -329,9 +336,25 @@ export const SessionList = ({
     );
   };
 
+  const handleCreateSession = async () => {
+    try {
+      const session = await createSession.mutateAsync({} as never)
+      if (session?.id) {
+        const base = sessionHrefBase ?? (directory ? `/repos/${directory.split(/[\\/]/).pop()}/sessions` : '/session')
+        // use onSelectSession if provided, otherwise navigate
+        if (onSelectSession) onSelectSession(session.id)
+        else navigate(`${base}/${session.id}`)
+      }
+    } catch {}
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 flex-shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 h-8 px-2 mb-3">
+          <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isConnected ? "bg-green-500" : isReconnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`} />
+          <span className="text-xs text-muted-foreground hidden sm:inline">{isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}</span>
+        </div>
         <div className="flex items-center gap-3 mb-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -365,6 +388,15 @@ export const SessionList = ({
             <Trash2 className="w-4 h-4 mr-2" />
             Delete ({selectedSessions.size})
           </Button>
+          <Button
+            onClick={handleCreateSession}
+            disabled={createSession.isPending}
+            size="sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4 mr-1" />
+            New Session
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -393,6 +425,10 @@ export const SessionList = ({
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Delete ({selectedSessions.size})
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleCreateSession} disabled={createSession.isPending}>
+                <Plus className="w-4 h-4 mr-2" />
+                New Session
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

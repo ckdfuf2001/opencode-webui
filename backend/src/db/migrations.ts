@@ -113,7 +113,8 @@ export function runMigrations(db: Database): void {
       const scheduleColumns = [
         { name: 'active_from', sql: 'ALTER TABLE schedules ADD COLUMN active_from INTEGER' },
         { name: 'active_until', sql: 'ALTER TABLE schedules ADD COLUMN active_until INTEGER' },
-        { name: 'agent', sql: 'ALTER TABLE schedules ADD COLUMN agent TEXT' }
+        { name: 'agent', sql: 'ALTER TABLE schedules ADD COLUMN agent TEXT' },
+        { name: 'model', sql: 'ALTER TABLE schedules ADD COLUMN model TEXT' }
       ]
       for (const column of scheduleColumns) {
         if (!scheduleTable.some(col => col.name === column.name)) {

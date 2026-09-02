@@ -17,6 +17,7 @@ const CreateScheduleSchema = z.object({
   activeFrom: z.number().optional(),
   activeUntil: z.number().optional(),
   agent: z.string().min(1).max(255).optional(),
+  model: z.string().min(1).max(255).optional(),
 }).refine((data) => {
   if (data.activeFrom !== undefined && data.activeUntil !== undefined && data.activeFrom >= data.activeUntil) {
     return false

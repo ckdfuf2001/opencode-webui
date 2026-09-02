@@ -15,6 +15,7 @@ export interface Schedule {
   activeFrom?: number
   activeUntil?: number
   agent?: string
+  model?: string
   createdAt: number
   updatedAt: number
 }
@@ -30,6 +31,7 @@ export interface ScheduleInput {
   activeFrom?: number
   activeUntil?: number
   agent?: string
+  model?: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

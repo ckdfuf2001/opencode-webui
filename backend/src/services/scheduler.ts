@@ -117,6 +117,35 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
   const session = await createResponse.json() as { id: string }
   const sessionID = session.id
 
+  // 배치 실행은 우리 default 모델로 해야 함 (opencode default가 아님). agent가 있으면 모델은 agent를 따름.
+  let modelToUse: string | undefined = (schedule as { model?: string }).model
+  if (!modelToUse && !schedule.agent) {
+    try {
+      const prefRow = db.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+      if (prefRow) {
+        const pref = JSON.parse(prefRow.preferences) as { defaultModel?: string }
+        if (pref.defaultModel && typeof pref.defaultModel === 'string' && pref.defaultModel.includes('/')) modelToUse = pref.defaultModel
+      }
+    } catch {}
+  }
+  if (modelToUse && !schedule.agent) {
+    const [providerID, ...rest] = modelToUse.split('/')
+    const modelID = rest.join('/')
+    if (providerID && modelID) {
+      try {
+        await fetch(`${base}/session/${sessionID}/model`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ model: { providerID, id: modelID } }),
+          signal: AbortSignal.timeout(10_000),
+        })
+        logger.info(`Applied model ${modelToUse} to batch session ${sessionID} (schedule ${schedule.name})`)
+      } catch (e) {
+        logger.warn(`Failed to apply model ${modelToUse} to batch session ${sessionID}:`, e)
+      }
+    }
+  }
+
   // 달력에 표시될 run 마커를 서버 DB 에 기록한다.
   // repoId 를 확실히 알고 있으므로 directory 역추적이 필요 없다.
   const run = await recordRunStartSafe(db, {

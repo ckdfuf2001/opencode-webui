@@ -7,10 +7,10 @@ import { DeleteDialog } from "@/components/ui/delete-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, GitBranch, Search, Trash2, MoreHorizontal } from "lucide-react";
+import { Loader2, GitBranch, Search, Trash2, MoreHorizontal, Plus } from "lucide-react";
 import { RepoCard } from "./RepoCard";
 
-export function RepoList() {
+export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const queryClient = useQueryClient();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [repoToDelete, setRepoToDelete] = useState<number | null>(null);
@@ -200,6 +200,14 @@ export function RepoList() {
             <Trash2 className="w-4 h-4 mr-2" />
             Delete ({selectedRepos.size})
           </Button>
+          <Button
+            onClick={() => onAddRepo?.()}
+            size="sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4 mr-1" />
+            New Repo
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -226,6 +234,10 @@ export function RepoList() {
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Delete ({selectedRepos.size})
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onAddRepo?.()}>
+                <Plus className="w-4 h-4 mr-2" />
+                New Repo
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
