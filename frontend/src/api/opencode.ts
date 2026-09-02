@@ -188,8 +188,13 @@ export class OpenCodeClient {
     return response.data
   }
 
-  async sendPrompt(sessionID: string, data: SendPromptRequest) {
-    const response = await this.client.post(`/session/${sessionID}/message`, data)
+  async getMessage(sessionID: string, messageID: string) {
+    const response = await this.client.get<MessageListResponse[number]>(`/session/${sessionID}/message/${messageID}`)
+    return response.data
+  }
+
+  async sendPrompt(sessionID: string, data: SendPromptRequest, opts?: { signal?: AbortSignal }) {
+    const response = await this.client.post(`/session/${sessionID}/message`, data, opts?.signal ? { signal: opts.signal } : undefined)
     return response.data
   }
 

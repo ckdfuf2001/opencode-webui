@@ -158,6 +158,12 @@ async function handleTruncate(request: Request, sessionId: string): Promise<Resp
         headers: { 'Content-Type': 'application/json' },
       })
     }
+    if (messageID.startsWith("optimistic_")) {
+      return new Response(JSON.stringify({ success: true, messagesRemoved: 0, partsRemoved: 0, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     const result = await truncateSessionMessages(sessionId, messageID)
     if (!result) {
       return new Response(JSON.stringify({ error: 'Failed to truncate session' }), {

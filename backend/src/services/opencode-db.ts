@@ -66,8 +66,15 @@ export async function truncateSessionMessages(
   sessionId: string,
   cursorMessageId: string,
 ): Promise<TruncateResult | null> {
+  if (cursorMessageId.startsWith("optimistic_")) {
+    logger.info(`Truncate: optimistic cursor ${cursorMessageId} — skipping DB, treated as success`)
+    return { messagesRemoved: 0, partsRemoved: 0, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 0 }
+  }
   const dbPath = await getOpenCodeDbPath()
-  if (!dbPath) return null
+  if (!dbPath) {
+    logger.warn(`Truncate: opencode DB not found for session ${sessionId} — treated as success`)
+    return { messagesRemoved: 0, partsRemoved: 0, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 0 }
+  }
 
   const db = new Database(dbPath)
   try {
@@ -75,8 +82,9 @@ export async function truncateSessionMessages(
       .query('SELECT time_created FROM message WHERE session_id = ? AND id = ?')
       .get(sessionId, cursorMessageId) as { time_created: number } | null
     if (!cursor) {
-      logger.warn(`Truncate: cursor message ${cursorMessageId} not found in session ${sessionId}`)
-      return null
+      logger.warn(`Truncate: cursor message ${cursorMessageId} not found in session ${sessionId} — treated as idempotent success`)
+      const remaining = db.query('SELECT id FROM message WHERE session_id = ?').all(sessionId) as { id: string }[]
+      return { messagesRemoved: 0, partsRemoved: 0, eventsRemoved: 0, todoRemoved: 0, remainingMessages: remaining.length }
     }
     const cursorTime = cursor.time_created
 

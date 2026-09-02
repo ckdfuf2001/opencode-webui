@@ -10,6 +10,7 @@ interface ContextUsageIndicatorProps {
 export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: ContextUsageIndicatorProps) {
   const { totalTokens, contextLimit, usagePercentage, isLoading } = useContextUsage(opcodeUrl, sessionID, directory)
   const [isHovered, setIsHovered] = useState(false)
+  const [isPinned, setIsPinned] = useState(false)
 
   const getUsageColor = (percentage: number) => {
     if (percentage < 50) return 'text-green-500'
@@ -56,11 +57,14 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
   const circumference = 2 * Math.PI * 10
   const strokeDashoffset = circumference - (percentage / 100) * circumference
 
+  const show = isHovered || isPinned
   return (
     <div
-      className={`relative w-5 h-5 flex-shrink-0 group ${isCritical ? 'animate-pulse' : ''}`}
+      className={`relative w-5 h-5 flex-shrink-0 group ${isCritical ? 'animate-pulse' : ''} cursor-pointer`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onClick={() => setIsPinned((v) => !v)}
+      title={isPinned ? "클릭하면 고정 해제" : "클릭하면 고정"}
     >
       <svg className="w-5 h-5 -rotate-90 transform" viewBox="0 0 24 24">
         <circle
@@ -89,8 +93,10 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
       <span className={`absolute inset-0 flex items-center justify-center text-[7px] font-medium ${getUsageColor(percentage)}`}>
         {Math.round(percentage)}%
       </span>
-      {isHovered && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-2 bg-popover border border-border rounded-md text-xs whitespace-nowrap z-50 shadow-xl min-w-[220px] pointer-events-none">
+      {show && (
+        <div
+          className={`absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-2 bg-popover border border-border rounded-md text-xs whitespace-nowrap shadow-xl min-w-[220px] z-[9999] ${isPinned ? "pointer-events-auto" : "pointer-events-none"}`}
+        >
           <div>{totalTokens.toLocaleString()} / {contextLimit.toLocaleString()} tokens</div>
           <div className="text-muted-foreground">{percentage.toFixed(1)}% used</div>
           {isWarning && <div className="text-yellow-600 dark:text-yellow-400 font-medium mt-1">Warning: limit close — clean up the conversation</div>}

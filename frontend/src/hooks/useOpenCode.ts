@@ -16,15 +16,26 @@ type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
 
-/** ?��? abort 직후 ?�링??미처�??�태�??�살??뱃�?가 깜빡?�는 것을 막는 가?? */
+/** ?��? abort 직후 ?�링??미처�??�태�??�살??뱃�?가 깜빡?�는 것을 막는 가?? */
 const RECENTLY_ABORTED_MS = 12_000;
 const recentlyAborted = new Map<string, number>();
 
-/** ?�송 중인 ?��? user 메시지. 2s ?�링??캐시�???��?�도 ?��??�다. */
+/** ?�송 중인 ?��? user 메시지. 2s ?�링??캐시�???��?�도 ?��??�다. */
 const pendingOptimistic = new Map<string, MessageWithParts>();
 
-/** truncate 직후 opencode 메모리�? ??목록???�려�????�어 뷰�? ?��??�는 가??
- *  ?�간???�닌 "?�거??메시지 ID" 기�??�로 걸러 ??메시지??즉시 ?�과?�다. */
+const activeSendControllers = new Map<string, AbortController>();
+
+export function abortActiveSend(sessionID: string): void {
+  const ac = activeSendControllers.get(sessionID)
+  if (ac) {
+    ac.abort()
+    activeSendControllers.delete(sessionID)
+  }
+  pendingOptimistic.delete(sessionID)
+}
+
+/** truncate 직후 opencode 메모리�? ??목록???�려�????�어 뷰�? ?��??�는 가??
+ *  ?�간???�닌 "?�거??메시지 ID" 기�??�로 걸러 ??메시지??즉시 ?�과?�다. */
 const RECENTLY_TRUNCATED_MS = 12_000;
 const recentlyTruncated = new Map<string, { until: number; removedIds: Set<string> }>();
 
@@ -41,7 +52,7 @@ function applyTruncationWindow(
   return data.filter((m) => !entry.removedIds.has(m.info.id));
 }
 
-function isRecentlyAborted(sessionID: string): boolean {
+export function isRecentlyAborted(sessionID: string): boolean {
   const at = recentlyAborted.get(sessionID);
   if (!at) return false;
   if (Date.now() - at > RECENTLY_ABORTED_MS) {
@@ -270,9 +281,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           .filter(Boolean)
           .join("\n")
         const optimisticSig = getSignature(optimistic.parts as unknown as MessageWithParts["parts"]);
-        // ?�라?�언???�히 모바?? ?�계가 ?�버보다 �?�??�긋?�면 created >= 비교로는
-        // ?�제 ?��? 메시지�?�?찾아 ?��? 카드가 ?�아 duplicated �?보�???
-        // ?�계 ?�차 5�??�용 + ?�그?�처(?�스???�일�? ?�치�??�정?�다.
+        // ?�라?�언???�히 모바?? ?�계가 ?�버보다 �?�??�긋?�면 created >= 비교로는
+        // ?�제 ?��? 메시지�?�?찾아 ?��? 카드가 ?�아 duplicated �?보�???
+        // ?�계 ?�차 5�??�용 + ?�그?�처(?�스???�일�? ?�치�??�정?�다.
         realUserArrived = result.some((m) => {
           if (m.info.role !== "user" || m.info.id === optimistic.info.id) return false;
           const created = m.info.time?.created ?? 0;
@@ -299,7 +310,58 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     refetchOnReconnect: false,
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
-    refetchInterval: 700,
+    refetchInterval: (query) => {
+      const data = query.state.data as MessageListResponse | undefined
+      const last = data?.[data.length - 1]
+      const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
+      if (streaming || isRecentlyAborted(sessionID!)) return 2000
+      return 700
+    },
+  });
+};
+
+export const usePollLastMessage = (
+  opcodeUrl: string | null | undefined,
+  sessionID: string | undefined,
+  directory?: string,
+  enabled?: boolean,
+) => {
+  const client = useOpenCodeClient(opcodeUrl, directory);
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory],
+    queryFn: async () => {
+      const all = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory])
+      const last = all?.[all.length - 1]
+      if (!last) return null
+      if (last.info.id.startsWith("optimistic_")) return null
+      if ('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) return null
+      try {
+        const msg = await client!.getMessage(sessionID!, last.info.id)
+        const merged: MessageListResponse = all ? [...all.slice(0, -1), msg as MessageWithParts] : [msg as MessageWithParts]
+        queryClient.setQueryData(["opencode", "messages", opcodeUrl, sessionID, directory], (old: MessageListResponse | undefined) => {
+          if (!old || old.length === 0) return merged
+          const curLast = old[old.length - 1]
+          if (curLast.info.id !== last.info.id) return old
+          const curCompleted = 'completed' in (curLast.info.time as Record<string, unknown>) && Boolean((curLast.info.time as { completed?: number }).completed)
+          const nextCompleted = 'completed' in (msg.info.time as Record<string, unknown>) && Boolean((msg.info as { time: { completed?: number } }).time.completed)
+          if (curLast.parts.length === msg.parts.length && curCompleted === nextCompleted) {
+            const curText = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
+            const nextText = msg.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
+            if (curText === nextText) return old
+          }
+          return [...old.slice(0, -1), msg as MessageWithParts]
+        })
+        return msg
+      } catch {
+        return null
+      }
+    },
+    enabled: !!client && !!sessionID && !!enabled,
+    refetchInterval: 380,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    gcTime: 0,
   });
 };
 
@@ -310,7 +372,7 @@ function reconcileOrphanedStreams(
 ): MessageListResponse {
   if (isBusy) return messages;
   let changed = false;
-  // idle ?�태?�서 ?�트 ?�는 미완�?assistant 메시지???�령 카드?��?�??�거?�다.
+  // idle ?�태?�서 ?�트 ?�는 미완�?assistant 메시지???�령 카드?��?�??�거?�다.
   const filtered = messages.filter((msg) => {
     const ghost =
       msg.info.sessionID === sessionID &&
@@ -475,6 +537,9 @@ export const useTruncateSession = (opcodeUrl: string | null | undefined, directo
   return useMutation({
     mutationFn: async ({ sessionID, messageID }: { sessionID: string; messageID: string }) => {
       if (!client) throw new Error("No client available");
+      if (messageID.startsWith("optimistic_")) {
+        return { success: true, messagesRemoved: 0, partsRemoved: 0, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 0 }
+      }
       return client.truncateSession(sessionID, messageID);
     },
     onMutate: async ({ sessionID, messageID }) => {
@@ -499,7 +564,12 @@ export const useTruncateSession = (opcodeUrl: string | null | undefined, directo
       }
       return { messagesKey, previous };
     },
-    onError: (_error, _variables, context) => {
+    onError: (error, variables, context) => {
+      if (isRecentlyAborted(variables.sessionID)) {
+        return
+      }
+      const msg = (error as { message?: string })?.message ?? ""
+      if (msg.includes("optimistic_")) return
       if (context?.previous) {
         queryClient.setQueryData(context.messagesKey, context.previous);
       }
@@ -633,7 +703,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         contentParts,
         optimisticUserID,
       );
-      // 진행 중인 ?�링(2s)???��? 메시지�???��??깜빡?�는 것을 방�?: in-flight fetch 취소
+      // 진행 중인 ?�링(2s)???��? 메시지�???��??깜빡?�는 것을 방�?: in-flight fetch 취소
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
       pendingOptimistic.set(sessionID, userMessage);
       queryClient.setQueryData<MessageListResponse>(
@@ -679,12 +749,21 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         requestData.agent = agent;
       }
 
-      const response = await client.sendPrompt(sessionID, requestData);
+      const ac = new AbortController()
+      activeSendControllers.set(sessionID, ac)
+      let response: unknown
+      try {
+        response = await client.sendPrompt(sessionID, requestData, { signal: ac.signal });
+      } finally {
+        if (activeSendControllers.get(sessionID) === ac) activeSendControllers.delete(sessionID)
+      }
 
       return { optimisticUserID, response };
     },
     onSettled: (_data, _error, variables) => {
       pendingOptimistic.delete(variables.sessionID);
+      if (activeSendControllers.get(variables.sessionID)) activeSendControllers.delete(variables.sessionID)
+      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
@@ -731,16 +810,33 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       if (!client) throw new Error("No client available");
       await client.abortSession(sessionID);
     },
-    onMutate: (sessionID) => {
+    onMutate: async (sessionID) => {
+      abortActiveSend(sessionID)
       recentlyAborted.set(sessionID, Date.now());
+      await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] })
+      await queryClient.cancelQueries({ queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory] })
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
+      queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory], (old) => {
+        if (!old) return old
+        return old.filter((m) => !m.info.id.startsWith("optimistic_"))
+      })
+      pendingOptimistic.delete(sessionID)
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string; pendingPermissions: number }[]>(['session-status-db'])
       if (statuses) {
         queryClient.setQueryData(['session-status-db'], statuses.map((entry) => entry.sessionId === sessionID ? { ...entry, status: 'idle' as const, pendingPermissions: 0 } : entry))
+      } else {
+        queryClient.setQueryData(['session-status-db'], [{ sessionId: sessionID, status: 'idle', pendingPermissions: 0 } as never])
       }
+      queryClient.setQueryData(['session-status-db'], (old: unknown) => old)
+    },
+    onError: () => {
     },
     onSettled: (_data, _error, sessionID) => {
+      abortActiveSend(sessionID)
+      pendingOptimistic.delete(sessionID)
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
+      queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, directory] })
+      queryClient.invalidateQueries({ queryKey: ['opencode', 'last-message', opcodeUrl, sessionID, directory] })
       queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
       queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
     },
@@ -768,7 +864,7 @@ function markSessionMessagesCompleted(
       continue
     }
     changed = true
-    // �?placeholder(?�트 ?�는 미완�?카드)???�료 처리 ?�???�거?�다.
+    // �?placeholder(?�트 ?�는 미완�?카드)???�료 처리 ?�???�거?�다.
     if (msg.parts.length === 0) continue
     const patchedParts = msg.parts.map((part) => {
       if ((part as { type?: string }).type === 'tool' && (part as { state?: { status?: string } }).state?.status === 'running') {

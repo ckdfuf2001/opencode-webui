@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from 'react'
-import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession } from '@/hooks/useOpenCode'
+import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
@@ -64,6 +64,7 @@ interface PromptInputProps {
   onAutoScrollChange?: (enabled: boolean) => void
   onCompact?: () => void
   onNewSession?: () => void
+  isStreaming?: boolean
 }
 
 export function PromptInput({ 
@@ -90,7 +91,8 @@ export function PromptInput({
   autoScrollEnabled,
   onAutoScrollChange,
   onCompact,
-  onNewSession
+  onNewSession,
+  isStreaming: isStreamingProp
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -285,6 +287,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
 
   const handleStop = () => {
     abortSession.mutate(sessionID)
+    onCancelEdit?.()
   }
 
   // 생성 중 전송 = 큐 적재. 백엔드 폴러가 idle 전환 시 발송한다.
@@ -614,9 +617,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     return !('completed' in msg.info.time && msg.info.time.completed)
   }
 
-  const hasActiveStream = messages?.some(msg => isMessageStreaming(msg)) || false
-  // 전송 POST는 턴이 끝날 때까지 대기하므로 isPending = 생성 중 신호 (폴링보다 즉각적).
-  const showStop = hasActiveStream || sendPrompt.isPending
+  const { data: dbStatusesInner } = useSessionStatusMap()
+  const dbBusyInner = !!sessionID && dbStatusesInner?.some((s) => s.sessionId === sessionID && s.status === 'busy') === true
+  const abortedRecently = isRecentlyAborted(sessionID)
+  const hasActiveStreamLocal = messages?.some(msg => isMessageStreaming(msg)) || false
+  const hasActiveStream = abortedRecently ? false : (isStreamingProp ?? (hasActiveStreamLocal || dbBusyInner))
+  // 전송 POST는 턴이 끝날 때까지 대기하므로 isPending = 생성 중 신호 (폴링보다 즉각적). abort 직후엔 강제로 숨긴다.
+  const showStop = !abortedRecently && (hasActiveStream || sendPrompt.isPending)
 
   const currentMode = preferences?.mode || 'build'
   const modeColor = currentMode === 'plan' ? 'text-yellow-600 dark:text-yellow-500' : 'text-green-600 dark:text-green-500'

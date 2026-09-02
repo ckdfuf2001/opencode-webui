@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted } from "@/hooks/useOpenCode";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
@@ -190,6 +190,10 @@ export function SessionDetail() {
   }, [dbStatuses, sessionId, descendantIDs]);
   const lastMessage = messages?.[messages.length - 1];
   const isStreaming = isConnected && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy);
+  usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
+  useEffect(() => {
+    if (sessionId && isRecentlyAborted(sessionId)) setHiddenAfterID(null)
+  }, [isStreaming, sessionId])
   const effectiveAutoScroll = autoScrollOverride ?? (preferences?.autoScroll ?? true);
   const { data: session, isLoading: sessionLoading } = useSession(opcodeUrl, sessionId, repoDirectory);
   useReconcileOrphanedStreams(opcodeUrl, repoDirectory);
@@ -835,6 +839,7 @@ if (results.length > 0) {
                 onAutoScrollChange={setAutoScrollOverride}
                 onCompact={handleCompact}
                 onNewSession={handleNewSession}
+                isStreaming={isStreaming}
               />
             </div>
             </div>
