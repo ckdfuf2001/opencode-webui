@@ -190,7 +190,7 @@ export function SessionDetailHeader({
             size="icon"
             onClick={onCommandsOpen}
             className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-            title="Desks"
+            title="Commands"
           >
             <Briefcase className="w-4 h-4" />
           </Button>

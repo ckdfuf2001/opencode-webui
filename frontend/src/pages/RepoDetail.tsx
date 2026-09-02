@@ -18,7 +18,7 @@ import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDi
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, FolderOpen, GitBranch, Terminal, CalendarPlus, Settings } from "lucide-react";
+import { Loader2, Plus, FolderOpen, GitBranch, Briefcase, CalendarPlus, Settings } from "lucide-react";
 
 export function RepoDetail() {
   const { id } = useParams<{ id: string }>();
@@ -180,15 +180,15 @@ export function RepoDetail() {
              >
                <FolderOpen className="w-4 h-4" />
              </Button>
-             <Button
-               variant="ghost"
-               size="icon"
-               onClick={() => setCommandsOpen(true)}
-               className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-               title="Commands"
-             >
-               <Terminal className="w-4 h-4" />
-             </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setCommandsOpen(true)}
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
+                title="Commands"
+              >
+                <Briefcase className="w-4 h-4" />
+              </Button>
               <Button
                 onClick={() => handleCreateSession()}
                 disabled={!opcodeUrl || createSessionMutation.isPending}
