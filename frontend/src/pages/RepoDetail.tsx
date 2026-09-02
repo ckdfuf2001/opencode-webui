@@ -141,7 +141,7 @@ export function RepoDetail() {
                 variant="ghost"
                 size="icon"
                 onClick={() => setScheduleOpen(true)}
-                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-7 w-7"
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
                 title="Schedules"
               >
                 <CalendarPlus className="w-4 h-4" />
