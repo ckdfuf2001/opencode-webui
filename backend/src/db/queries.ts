@@ -170,6 +170,16 @@ export function deleteRepoCascade(db: Database, id: number, opts?: { withIndex?:
     try {
       db.query('DELETE FROM repo_index_state WHERE repo_id = ?').run(id)
     } catch {}
+    try {
+      db.query('DELETE FROM session_status WHERE repo_id = ?').run(id)
+    } catch {}
+    try {
+      db.query('DELETE FROM session_messages_fts WHERE repo_id = ?').run(id)
+    } catch {}
+  } else {
+    try {
+      db.query('DELETE FROM session_status WHERE repo_id = ?').run(id)
+    } catch {}
   }
   try {
     db.query('DELETE FROM untracked_suggestions WHERE repo_id = ?').run(id)

@@ -226,7 +226,7 @@ export function Search() {
             <div className="flex-1 min-w-0">
               <Select value={selectedRepoId} onValueChange={setSelectedRepoId}>
                 <SelectTrigger className="w-full h-7 text-xs min-w-0 [&>span]:truncate">
-                  <SelectValue placeholder="레포 선택" />
+                  <SelectValue placeholder="Select repo" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Repositories</SelectItem>
@@ -304,13 +304,13 @@ export function Search() {
           </Tabs>
 
           {!effectiveQ ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">전체 대화·커밋에서 관련 기억을 찾습니다. idle 시점에 자동 인덱싱됩니다.</p>
+            <p className="text-sm text-muted-foreground py-8 text-center">Search related memories in messages and commits. Indexed automatically when idle.</p>
           ) : isLoading ? (
-            <p className="text-sm text-muted-foreground">검색 중…</p>
+            <p className="text-sm text-muted-foreground">Searching...</p>
           ) : isError ? (
-            <p className="text-sm text-destructive">검색 실패: {(error as Error).message}</p>
+            <p className="text-sm text-destructive">Search failed: {(error as Error).message}</p>
           ) : filteredHits.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">결과 없음</p>
+            <p className="text-sm text-muted-foreground py-8 text-center">No results</p>
           ) : (
             <>
               <div className="flex items-center gap-2">
@@ -318,9 +318,9 @@ export function Search() {
                   if (v) setSelectedHits(new Set(filteredHits.map((h: any) => h.kind === 'message' ? h.messageId : `${h.repoId}:${h.sha}`)))
                   else setSelectedHits(new Set())
                 }} />
-                <span className="text-xs text-muted-foreground">전체 선택</span>
+                <span className="text-xs text-muted-foreground">Select all</span>
                 <Button variant="destructive" size="sm" disabled={selectedHits.size === 0 || deleteMessagesMutation.isPending || deleteCommitsMutation.isPending} onClick={handleBulkDelete} className="ml-auto gap-1">
-                  <Trash2 className="w-3.5 h-3.5" /> 인덱스 삭제 ({selectedHits.size})
+                  <Trash2 className="w-3.5 h-3.5" /> Delete index ({selectedHits.size})
                 </Button>
               </div>
               <div className="space-y-2">
@@ -371,7 +371,7 @@ export function Search() {
                         <>
                           <div className="p-2 rounded text-xs bg-accent border border-input font-medium">{highlightSnippet(hit.snippet)}</div>
                           <div className="flex gap-2">
-                            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleCommitClick(hit.sha, hit.repoId) }}>{detailSha === hit.sha ? '접기' : '상세 보기'}</Button>
+                            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleCommitClick(hit.sha, hit.repoId) }}>{detailSha === hit.sha ? 'Collapse' : 'View detail'}</Button>
                           </div>
                           {detailSha === hit.sha && commitDetail && (
                             <div className="border-t pt-3 space-y-2 mt-2 text-sm">

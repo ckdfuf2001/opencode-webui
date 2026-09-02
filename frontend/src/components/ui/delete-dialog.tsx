@@ -50,7 +50,7 @@ export function DeleteDialog({
         {withIndexOption && (
           <label className="flex items-center gap-2 text-sm py-2">
             <input type="checkbox" checked={withIndex} onChange={(e) => setWithIndex(e.target.checked)} className="rounded" />
-            인덱스도 함께 삭제
+            Also delete search index
           </label>
         )}
         
