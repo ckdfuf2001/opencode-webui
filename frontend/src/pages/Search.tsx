@@ -20,88 +20,7 @@ import { listRepos } from '@/api/repos'
 import { Search as SearchIcon, History, GitCommit, Trash2, Copy, CornerDownLeft, X } from 'lucide-react'
 import { showToast } from '@/lib/toast'
 
-// JSON collapsible viewer for Recalls overlay
-function JSONViewer({ json }: { json: string }) {
-  const [expanded, setExpanded] = useState(true)
-  let parsed: any
-  try { parsed = JSON.parse(json) } catch { return <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto text-destructive">{json}</pre> }
-  function renderNode(key: string, value: any, depth = 0): React.ReactNode {
-    if (value === null) return <span className="text-muted-foreground">null</span>
-    if (typeof value === 'string') return <span className="text-green-400">"{value}"</span>
-    if (typeof value === 'number' || typeof value === 'boolean') return <span className="text-yellow-400">{String(value)}</span>
-    if (Array.isArray(value)) {
-      const [isOpen, setIsOpen] = useState(true)
-      if (value.length === 0) return <span className="text-muted-foreground">[]</span>
-      return (
-        <div className="ml-4">
-          <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen) }} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-            <ChevronRight className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-            <span>Array[{value.length}]</span>
-          </button>
-          {isOpen && (
-            <div className="ml-2 border-l border-muted/30 pl-2">
-              {value.map((v, i) => (
-                <div key={i} className="flex gap-1">
-                  <span className="text-muted-foreground/50">{i}:</span>
-                  {renderNode(String(i), v, depth + 1)}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )
-    }
-    if (typeof value === 'object') {
-      const entries = Object.entries(value)
-      const [isOpen, setIsOpen] = useState(true)
-      if (entries.length === 0) return <span className="text-muted-foreground">{{}}</span>
-      return (
-        <div className="ml-4">
-          <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen) }} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-            <ChevronRight className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-            <span>Object</span>
-          </button>
-          {isOpen && (
-            <div className="ml-2 border-l border-muted/30 pl-2">
-              {entries.map(([k, v]) => (
-                <div key={k} className="flex gap-1">
-                  <span className="text-cyan-400">"{k}":</span>
-                  {renderNode(k, v, depth + 1)}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )
-    }
-    return <span className="text-muted-foreground">undefined</span>
-  }
-  return (
-    <div className="font-mono text-[11px]">
-      <div className="flex items-center gap-2 mb-2">
-        <button onClick={() => setExpanded(!expanded)} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-          <ChevronRight className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-          <span>{expanded ? '접기' : '펼치기'}</span>
-        </button>
-      </div>
-      {expanded && <div className="ml-2 border-l border-muted/30 pl-2">{renderNode('root', parsed)}</div>}
-    </div>
-  )
-}
 
-// 토크나이저: * 와일드카드 허용, 아니면 2자 이상
-function tokenizeRecall(q: string): string[] {
-  return q
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0)
-    .map((t) => {
-      if (t === '*') return t
-      if (t.includes('*')) return t
-      return t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()
-    })
-    .filter((t) => t === '*' || t.length >= 2)
-}
 
 export function Search() {
   const [q, setQ] = useState('')
@@ -195,7 +114,7 @@ export function Search() {
 
   const [blockOpen, setBlockOpen] = useState(false)
 
-  const copyText = async (text: string) => {
+  const copyText = async (text: string, _label?: string) => {
     try {
       await navigator.clipboard.writeText(text)
       showToast.success('Copied JSON')
@@ -369,9 +288,9 @@ export function Search() {
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
-                <div className="p-2.5 max-h-[600px] overflow-y-auto">
-                  <JSONViewer json={filteredJson} />
-                </div>
+                <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto">
+                  {filteredJson}
+                </pre>
               </div>
             )}
           </div>

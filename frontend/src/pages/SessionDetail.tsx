@@ -279,13 +279,13 @@ export function SessionDetail() {
     }
   }, [messages, isBillingQuotaMessage]);
 
-  // 컨텍스트 초과(length) 자동 관리: current use 기준 — 이미 compact 등으로 여유가 생겼으면 히스토리 length는 무시
+  // 컨텍스트 초과(length) — 실제 한계 도달 시에만 표시 (오탐 방지)
   useEffect(() => {
     if (!messages || messages.length === 0) return;
     if (ctx.isLoading) return;
-    // current use가 85% 미만이면 정상으로 간주 — 새로고침/재접속 시 오래된 length 토스트 억제
-    if (ctx.usagePercentage != null && ctx.usagePercentage < 85) return;
-    // 가장 최근 length 메시지 찾기
+    if (ctx.usagePercentage == null) return;
+    if (ctx.usagePercentage < 90) return;
+    // 가장 최근 length 메시지 찾기 — 최근 2개 이내만 유효
     let lengthIdx = -1;
     let lengthMsg: any = null;
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -297,11 +297,10 @@ export function SessionDetail() {
     }
     if (!lengthMsg) return;
     if (lastLengthToastRef.current === lengthMsg.info.id) return;
-    // length 이후에 정상 assistant 응답이 있으면 이미 회복(compact/truncate)으로 간주
+    const isRecent = lengthIdx >= messages.length - 2;
+    if (!isRecent) return;
     const hasRecoveryAfter = messages.slice(lengthIdx + 1).some((m: any) => m.info.role === "assistant" && (m.info as any)?.finish !== "length" && !(m.info as any)?.error);
-    const isRecent = lengthIdx >= messages.length - 3;
-    if (hasRecoveryAfter && !isRecent) return;
-    if (hasRecoveryAfter && ctx.usagePercentage != null && ctx.usagePercentage < 90) return;
+    if (hasRecoveryAfter) return;
     lastLengthToastRef.current = lengthMsg.info.id;
     const pct = ctx.usagePercentage ? Math.round(ctx.usagePercentage) : 0;
     showToast.error(

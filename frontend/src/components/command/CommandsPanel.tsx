@@ -53,75 +53,6 @@ import { ScheduleManager } from '@/components/schedule/ScheduleManager'
 import { showToast } from '@/lib/toast'
 import type { MessageWithParts, Part } from '@/api/types'
 
-// JSON collapsible viewer for Recalls overlay
-function JSONViewer({ json }: { json: string }) {
-  const [expanded, setExpanded] = useState(true)
-  let parsed: any
-  try { parsed = JSON.parse(json) } catch { return <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto text-destructive">{json}</pre> }
-  function renderNode(_key: string, value: any, depth = 0): React.ReactNode {
-    if (value === null) return <span className="text-muted-foreground">null</span>
-    if (typeof value === 'string') return <span className="text-green-400">"{value}"</span>
-    if (typeof value === 'number' || typeof value === 'boolean') return <span className="text-yellow-400">{String(value)}</span>
-    if (Array.isArray(value)) {
-      const [isOpen, setIsOpen] = useState(true)
-      if (value.length === 0) return <span className="text-muted-foreground">[]</span>
-      return (
-        <div className="ml-4">
-          <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen) }} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-            <ChevronRight className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-            <span>Array[{value.length}]</span>
-          </button>
-          {isOpen && (
-            <div className="ml-2 border-l border-muted/30 pl-2">
-              {value.map((v, i) => (
-                <div key={i} className="flex gap-1">
-                  <span className="text-muted-foreground/50">{i}:</span>
-                  {renderNode(String(i), v, depth + 1)}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )
-    }
-    if (typeof value === 'object') {
-      const entries = Object.entries(value)
-      const [isOpen, setIsOpen] = useState(true)
-      if (entries.length === 0) return <span className="text-muted-foreground">{{}}</span>
-      return (
-        <div className="ml-4">
-          <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen) }} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-            <ChevronRight className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-            <span>Object</span>
-          </button>
-          {isOpen && (
-            <div className="ml-2 border-l border-muted/30 pl-2">
-              {entries.map(([k, v]) => (
-                <div key={k} className="flex gap-1">
-                  <span className="text-cyan-400">"{k}":</span>
-                  {renderNode(k, v, depth + 1)}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )
-    }
-    return <span className="text-muted-foreground">undefined</span>
-  }
-  return (
-    <div className="font-mono text-[11px]">
-      <div className="flex items-center gap-2 mb-2">
-        <button onClick={() => setExpanded(!expanded)} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-          <ChevronRight className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-          <span>{expanded ? '접기' : '펼치기'}</span>
-        </button>
-      </div>
-      {expanded && <div className="ml-2 border-l border-muted/30 pl-2">{renderNode('root', parsed)}</div>}
-    </div>
-  )
-}
-
 function commandNeedsArgs(command: CommandWithScope): boolean {
   const t = command.template ?? ''
   return /\$(?:ARGUMENTS|\d+)/.test(t)
@@ -848,7 +779,6 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
     return r ? `${r.localPath} (#${r.id})` : `repo #${id}`
   }
 
-  const navigateRecall = useNavigate()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [expandedData, setExpandedData] = useState<import('@/api/search').MessageExpandResult | null>(null)
   const [blockOpen, setBlockOpen] = useState(false)
@@ -1776,7 +1706,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         </div>
 
         {tab === 'recall' ? (
-          <RecallPanel repoId={repoId} sessionId={sessionID} onUseInChat={onUseInChat} opcodeUrl={opcodeUrl} directory={directory} />
+          <RecallPanel repoId={repoId} sessionId={sessionID} onUseInChat={onUseInChat} />
         ) : tab === 'explorer' ? (
           <CommandExplorer commands={commands} skills={skills} agents={agents} mcpServers={mcpServers} plugins={plugins} loading={loading} error={error} commandContentLookup={commandContentLookup} skillContentLookup={skillContentLookup} onExecute={onExecuteCommand} onCreate={(type) => { setCreateType(type); setCreateOpen(true) }} onEdit={handleEdit} onClone={handleClone} onDelete={handleDelete} onBulkDelete={handleBulkDelete} focusCommand={explorerFocus} />
         ) : (

@@ -8,10 +8,7 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Button } from "@/components/ui/button";
 import { Plus, FolderOpen, Terminal } from "lucide-react";
 import { OPENCODE_API_ENDPOINT } from "@/config";
-import { useNavigate } from "react-router-dom";
-
 export function Repos() {
-  const navigate = useNavigate();
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
