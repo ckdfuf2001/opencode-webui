@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listRepos, deleteRepo } from "@/api/repos";
 import { listSchedules } from "@/api/schedules";
 import { useSessionStatusMap } from "@/hooks/useOpenCode";
+import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { DeleteDialog } from "@/components/ui/delete-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,10 @@ export function RepoList() {
     return acc;
   }, {});
 
-  const { data: dbStatuses } = useSessionStatusMap();
+  const { data: dbStatuses, isError: statusError, isFetching: statusFetching } = useSessionStatusMap();
+  const { data: opencodeHealthy, isError: healthError, isFetching: healthFetching } = useOpencodeHealth();
+  const isConnected = !healthError && !!opencodeHealthy && !statusError && !!dbStatuses;
+  const isReconnecting = (healthError && healthFetching) || (statusError && statusFetching) || (!opencodeHealthy && !healthError);
   // 세션 리스트 배지와 동일한 기준(status==='busy')으로 카운트한다.
   // 폴러가 repoId 를 못 채운 경우 directory 로 레포를 역매칭해 누락을 막는다.
   const resolveRepoIdOf = (entry: { repoId?: number | null; directory?: string | null }): number | null => {
@@ -179,6 +183,10 @@ export function RepoList() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10"
             />
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isConnected ? "bg-green-500" : isReconnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`} />
+            <span className="text-xs text-muted-foreground hidden sm:inline">{isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}</span>
           </div>
           {filteredRepos.length > 0 && (
             <Button
