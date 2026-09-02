@@ -170,28 +170,18 @@ export function createRepoRoutes(database: Database) {
               break
             } catch (error) {
               logger.warn(`Background repo file deletion attempt ${attempt}/3 failed:`, error)
-              if (attempt === 1) {
-                releaseAgentBrowserForDirectory(repoDir)
-                await new Promise((resolve) => setTimeout(resolve, 800))
-              } else {
-                await opencodeServerManager.restart().catch((restartError) =>
-                  logger.error('Failed to restart OpenCode server after repo delete:', restartError)
-                )
-              }
+              releaseAgentBrowserForDirectory(repoDir)
+              await new Promise((resolve) => setTimeout(resolve, 600 * attempt))
             }
           }
         } catch (e) {
           logger.error('Background repo file deletion failed:', e)
-        } finally {
-          await opencodeServerManager.start().catch((startError) => logger.error('Failed to start OpenCode server:', startError))
         }
       })
       return response
     } catch (error: any) {
       logger.error('Failed to delete repo:', error)
       return c.json({ error: error.message }, 500)
-    } finally {
-      await opencodeServerManager.start().catch((startError) => logger.error('Failed to start OpenCode server:', startError))
     }
   })
   
