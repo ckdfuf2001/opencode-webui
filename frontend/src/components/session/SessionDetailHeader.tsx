@@ -177,40 +177,44 @@ export function SessionDetailHeader({
               <span className="text-xs text-amber-500 font-medium hidden sm:inline">{pendingPermissions}</span>
             </div>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onFileBrowserOpen}
-            className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-          >
-            <FolderOpen className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onCommandsOpen}
-            className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-            title="Commands"
-          >
-            <Briefcase className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onPermissionRulesOpen}
-            className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-            title="Auto-Approved Permissions"
-          >
-            <ShieldCheck className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onSettingsOpen}
-            className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-          >
-            <Settings className="w-4 h-4" />
-          </Button>
+          <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onFileBrowserOpen}
+              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+              title="Files"
+            >
+              <FolderOpen className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onCommandsOpen}
+              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+              title="Commands"
+            >
+              <Briefcase className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onPermissionRulesOpen}
+              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+              title="Auto-Approved Permissions"
+            >
+              <ShieldCheck className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onSettingsOpen}
+              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none"
+              title="Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
       </div>
     </div>
