@@ -426,6 +426,40 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       }
     }
 
+    // 신규 세션 생성 시 Default 모델 자동 적용 (신규 세션도 defaultModel 따라가도록)
+    if (response.ok && method === 'POST' && cleanEventPath === '/session' && proxyDb) {
+      try {
+        const cloned = response.clone()
+        const text = await cloned.text()
+        const data = JSON.parse(text) as { id?: string; sessionID?: string }
+        const sid = data.id || data.sessionID
+        if (sid) {
+          const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+          if (prefRow) {
+            const pref = JSON.parse(prefRow.preferences) as { defaultModel?: string }
+            const dm = pref.defaultModel
+            if (dm && typeof dm === 'string' && dm.includes('/')) {
+              const [providerID, ...rest] = dm.split('/')
+              const modelID = rest.join('/')
+              if (providerID && modelID) {
+                try {
+                  await fetch(`${opencodeServerManager.getUrl()}/session/${sid}/model`, {
+                    method: 'POST',
+                    headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ model: { providerID, id: modelID } }),
+                    signal: AbortSignal.timeout(10000),
+                  })
+                  logger.info(`Applied default model ${dm} to new session ${sid}`)
+                } catch (e) {
+                  logger.warn(`Failed to apply default model to new session ${sid}:`, e)
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
     const responseHeaders: Record<string, string> = {}
     response.headers.forEach((value, key) => {
       const lower = key.toLowerCase()

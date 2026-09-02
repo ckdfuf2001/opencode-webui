@@ -43,7 +43,7 @@ export function ModelSelectDialog({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [useAsDefault, setUseAsDefault] = useState(false);
-  const { preferences, updateSettings } = useSettings();
+  const { preferences, updateSettingsAsync } = useSettings();
   const client = useOpenCodeClient(opcodeUrl);
   const queryClient = useQueryClient();
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -174,11 +174,11 @@ export function ModelSelectDialog({
       }
       // 체크된 경우에만 전체(default)에도 적용
       if (useAsDefault) {
-        updateSettings({ defaultModel: newModel });
+        try { await updateSettingsAsync({ defaultModel: newModel }); } catch (e) { showToast.error(`Failed to update default: ${e instanceof Error ? e.message : 'unknown'}`); }
       }
     } else {
       // 세션이 아니거나 forDefault=true인 경우: default만 갱신
-      updateSettings({ defaultModel: newModel });
+      try { await updateSettingsAsync({ defaultModel: newModel }); } catch (e) { showToast.error(`Failed to update default: ${e instanceof Error ? e.message : 'unknown'}`); }
     }
 
     onOpenChange(false);
