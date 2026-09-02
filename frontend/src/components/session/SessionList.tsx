@@ -397,13 +397,21 @@ export const SessionList = ({
             <Plus className="w-4 h-4 mr-1" />
             New Session
           </Button>
+          <Button
+            onClick={handleCreateSession}
+            disabled={createSession.isPending}
+            size="icon"
+            className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-9 w-9"
+            title="New Session"
+          >
+            <Plus className="w-4 h-4" />
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
                 size="icon"
                 className="md:hidden"
-                disabled={filteredSessions.length === 0}
               >
                 <MoreHorizontal className="w-4 h-4" />
               </Button>
@@ -425,10 +433,6 @@ export const SessionList = ({
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Delete ({selectedSessions.size})
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleCreateSession} disabled={createSession.isPending}>
-                <Plus className="w-4 h-4 mr-2" />
-                New Session
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

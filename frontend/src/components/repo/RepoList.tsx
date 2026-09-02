@@ -197,6 +197,14 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
             <Plus className="w-4 h-4 mr-1" />
             New Repo
           </Button>
+          <Button
+            onClick={() => onAddRepo?.()}
+            size="icon"
+            className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-9 w-9"
+            title="New Repo"
+          >
+            <Plus className="w-4 h-4" />
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -222,10 +230,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Delete ({selectedRepos.size})
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onAddRepo?.()}>
-                <Plus className="w-4 h-4 mr-2" />
-                New Repo
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
