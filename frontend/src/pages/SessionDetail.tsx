@@ -15,6 +15,7 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession } from "@/hooks/useOpenCode";
+import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
 import { useSettings } from "@/hooks/useSettings";
@@ -172,8 +173,9 @@ export function SessionDetail() {
     isError: statusError,
     isFetching: statusFetching,
   } = useSessionStatusMap();
-  const isConnected = !statusError && !!dbStatuses;
-  const isReconnecting = statusError && statusFetching;
+  const { data: opencodeHealthy, isError: healthError, isFetching: healthFetching } = useOpencodeHealth();
+  const isConnected = !healthError && !!opencodeHealthy && !statusError && !!dbStatuses;
+  const isReconnecting = (healthError && healthFetching) || (statusError && statusFetching) || (!opencodeHealthy && !healthError);
   const dbBusy = !!sessionId && dbStatuses?.some((s) => s.sessionId === sessionId && s.status === "busy") === true;
   // 세션 리스트 배지와 동일한 기준: 이 세션 또는 하위 세션이 busy 면 Working.
   const descendantBusy = !!sessionId && dbStatuses?.some(

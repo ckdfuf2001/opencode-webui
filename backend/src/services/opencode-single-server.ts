@@ -261,6 +261,7 @@ class OpenCodeServerManager {
       this.serverPid = existingProcesses[0]?.pid ?? null
       this.isManaged = false
       this.isHealthy = true
+      this.startHealthMonitor()
       logger.info(`Attaching to existing healthy OpenCode server on port ${candidate}`)
       return
     }
@@ -284,6 +285,7 @@ class OpenCodeServerManager {
     }
 
     this.isHealthy = true
+    this.startHealthMonitor()
     logger.info(`OpenCode server is healthy on port ${candidate}`)
   }
 
@@ -614,6 +616,40 @@ class OpenCodeServerManager {
     return `http://${ENV.OPENCODE.HOST}:${this.port}`
   }
 
+  private healthFailCount = 0
+  private healthMonitor: ReturnType<typeof setInterval> | null = null
+
+  startHealthMonitor(intervalMs = 8000): void {
+    if (this.healthMonitor) return
+    this.healthMonitor = setInterval(async () => {
+      const healthy = await this.checkHealth()
+      if (healthy) {
+        this.healthFailCount = 0
+        if (!this.isHealthy) {
+          this.isHealthy = true
+          logger.info('OpenCode health recovered')
+        }
+        return
+      }
+      this.healthFailCount++
+      this.isHealthy = false
+      logger.warn(`OpenCode health check failed (${this.healthFailCount}/2)`)
+      if (this.healthFailCount >= 2) {
+        this.healthFailCount = 0
+        logger.warn('OpenCode unhealthy — attempting auto restart')
+        try {
+          await this.restart()
+        } catch (e) {
+          logger.error('Auto restart failed:', e)
+        }
+      }
+    }, intervalMs)
+    // Don't keep process alive just for monitor
+    if (this.healthMonitor && typeof (this.healthMonitor as any).unref === 'function') {
+      (this.healthMonitor as any).unref()
+    }
+  }
+
   async checkHealth(): Promise<boolean> {
     try {
       const headers: Record<string, string> = {}
@@ -623,8 +659,11 @@ class OpenCodeServerManager {
         headers,
         signal: AbortSignal.timeout(3000)
       })
-      return response.ok
+      const ok = response.ok
+      this.isHealthy = ok
+      return ok
     } catch {
+      this.isHealthy = false
       return false
     }
   }
