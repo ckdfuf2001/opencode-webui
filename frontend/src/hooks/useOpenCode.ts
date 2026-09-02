@@ -24,12 +24,18 @@ const recentlyAborted = new Map<string, number>();
 const pendingOptimistic = new Map<string, MessageWithParts>();
 
 const activeSendControllers = new Map<string, AbortController>();
+const activeSSEMap = new Map<string, EventSource>();
 
 export function abortActiveSend(sessionID: string): void {
   const ac = activeSendControllers.get(sessionID)
   if (ac) {
     ac.abort()
     activeSendControllers.delete(sessionID)
+  }
+  const es = activeSSEMap.get(sessionID)
+  if (es) {
+    try { es.close(); } catch {}
+    activeSSEMap.delete(sessionID)
   }
   pendingOptimistic.delete(sessionID)
 }
@@ -766,6 +772,65 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         requestData.agent = agent;
       }
 
+      const esUrl = client.getEventSourceURL();
+      let es: EventSource | null = null;
+      const sseMergePart = (part: MessageWithParts["parts"][number], delta?: string) => {
+        const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+        queryClient.setQueryData<MessageListResponse>(key, (old) => {
+          if (!old) return old;
+          const mid = (part as { messageID: string }).messageID;
+          const idx = old.findIndex((m) => m.info.id === mid);
+          if (idx === -1) { queryClient.invalidateQueries({ queryKey: key }); return old; }
+          const msg = old[idx]!;
+          const pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
+          let nextParts: MessageWithParts["parts"];
+          if (pIdx === -1) nextParts = [...msg.parts, part];
+          else {
+            const existing = msg.parts[pIdx] as { type: string; text?: string };
+            let nextPart: typeof part = part;
+            if (delta && existing.type === "text" && typeof existing.text === "string") {
+              const pText = (part as { text?: string }).text ?? "";
+              if (pText === existing.text + delta) nextPart = part;
+              else nextPart = { ...part, text: existing.text + delta } as typeof part;
+            }
+            nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
+          }
+          const next = [...old]; next[idx] = { ...msg, parts: nextParts }; return next;
+        });
+      };
+      const sseMergeMessage = (info: MessageWithParts["info"]) => {
+        const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+        queryClient.setQueryData<MessageListResponse>(key, (old) => {
+          if (!old) return old;
+          const idx = old.findIndex((m) => m.info.id === info.id);
+          if (idx === -1) return [...old, { info, parts: [] } as MessageWithParts];
+          const next = [...old]; next[idx] = { ...next[idx]!, info }; return next;
+        });
+      };
+      const sseHandle = (e: MessageEvent) => {
+        try {
+          const raw = (e as MessageEvent).data as string;
+          let parsed: Record<string, unknown>; try { parsed = JSON.parse(raw) as Record<string, unknown>; } catch { return; }
+          let t: string, p: Record<string, unknown>;
+          if (typeof parsed.type === "string" && parsed.properties && typeof parsed.properties === "object") { t = parsed.type as string; p = parsed.properties as Record<string, unknown>; }
+          else { t = (e as unknown as { type: string }).type || ""; p = parsed as Record<string, unknown>; if (t === "message" && typeof parsed.type === "string") { t = parsed.type as string; p = (parsed.properties as Record<string, unknown>) ?? parsed; } }
+          if (t === "message.part.updated") {
+            const part = (p.part ?? p) as MessageWithParts["parts"][number] & { sessionID: string };
+            const delta = p.delta as string | undefined; const sid = (part as { sessionID: string }).sessionID ?? (p.sessionID as string);
+            if (sid !== sessionID) return; sseMergePart(part as MessageWithParts["parts"][number], delta);
+          } else if (t === "message.updated") {
+            const info = (p.info ?? p) as MessageWithParts["info"] & { sessionID: string };
+            const sid = (info as { sessionID: string }).sessionID ?? (p.sessionID as string);
+            if (sid !== sessionID) return; sseMergeMessage(info as MessageWithParts["info"]);
+          } else if (t === "session.idle") {
+            const sid = (p.sessionID as string) ?? (p.sessionId as string);
+            if (sid && sid !== sessionID) return;
+            queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+          }
+        } catch {}
+      };
+      try { es = new EventSource(esUrl); activeSSEMap.set(sessionID, es); es.onmessage = sseHandle; ["message.part.updated","message.updated","message.removed","session.idle"].forEach((tt) => { try { es!.addEventListener(tt, sseHandle as EventListener); } catch {} }); } catch {}
+
       const ac = new AbortController()
       activeSendControllers.set(sessionID, ac)
       let response: unknown
@@ -773,6 +838,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         response = await client.sendPrompt(sessionID, requestData, { signal: ac.signal });
       } finally {
         if (activeSendControllers.get(sessionID) === ac) activeSendControllers.delete(sessionID)
+        if (es) { try { es.close(); } catch {} activeSSEMap.delete(sessionID); }
       }
 
       return { optimisticUserID, response };
