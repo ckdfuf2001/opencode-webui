@@ -922,7 +922,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                 className="inline-flex items-center gap-0.5 text-xs h-5 px-1.5 rounded-none border-r border-input shrink-0 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Copy Recalls JSON"
               >
-                <Clipboard className="w-2.5 h-2.5" /> <span className="text-[10px]">Copy</span>
+                <Copy className="w-2.5 h-2.5" /> <span className="text-[10px]">Copy</span>
               </button>
               <button
                 onClick={() => useInChat(filteredJson || filteredBlock)}
