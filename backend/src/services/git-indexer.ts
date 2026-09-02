@@ -242,11 +242,17 @@ export function getCommitDetail(db: Database, repoId: number, sha: string): Repo
 }
 
 function buildCommitQueryTokens(q: string): string[] {
-  return q
-    .split(/\s+/)
-    .map((t) => t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim())
-    .filter((t) => t.length > 0)
-    .map((t) => `"${t.replace(/"/g, '""')}"`)
+  const raws = q.split(/\s+/).map((t) => t.trim()).filter((t) => t.length > 0)
+  if (raws.length === 1 && raws[0] === '*') return []
+  return raws.map((t) => {
+    if (t === '*') return null
+    const isPrefix = t.endsWith('*') && t.length > 1
+    const core = isPrefix ? t.slice(0, -1) : t
+    const cleaned = core.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()
+    if (!cleaned) return null
+    if (isPrefix) return `${cleaned.replace(/"/g, '""')}*`
+    return `"${cleaned.replace(/"/g, '""')}"`
+  }).filter((t): t is string => !!t)
 }
 
 async function fetchCommitHistory(repo: Repo, seedSha: string | null): Promise<ParsedCommit[]> {

@@ -253,12 +253,20 @@ export function expandMessage(db: Database, messageId: string, n = 3): { center:
   }
 }
 
-/** FTS5 MATCH 인자로 안전하게 변환. trigram 대응을 위해 토큰별 인용 후 AND 결합. */
+/** FTS5 MATCH 인자로 안전하게 변환. `*` 와일드카드(prefix) 지원. */
 function buildFtsQuery(q: string): string {
-  const tokens = q
-    .split(/\s+/)
-    .map((t) => t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim())
-    .filter((t) => t.length > 0)
+  const rawTokens = q.split(/\s+/).map((t) => t.trim()).filter((t) => t.length > 0)
+  if (rawTokens.length === 0) return '""'
+  if (rawTokens.length === 1 && rawTokens[0] === '*') return '*'
+  const tokens = rawTokens.map((t) => {
+    if (t === '*') return null
+    const isPrefix = t.endsWith('*') && t.length > 1
+    const core = isPrefix ? t.slice(0, -1) : t
+    const cleaned = core.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()
+    if (!cleaned) return null
+    if (isPrefix) return `${cleaned.replace(/"/g, '""')}*`
+    return `"${cleaned.replace(/"/g, '""')}"`
+  }).filter((t): t is string => !!t)
   if (tokens.length === 0) return '""'
-  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(' AND ')
+  return tokens.join(' AND ')
 }
