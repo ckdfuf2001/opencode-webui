@@ -1141,15 +1141,13 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const refreshExplorer = useCallback(async () => {
     setRefreshing(true)
     try {
-      await registryApi.reload(directory)
-    } catch (err) {
-      console.warn('Failed to reload OpenCode instances for refresh:', err)
+      await refresh()
+      queryClient.invalidateQueries({ queryKey: ['registry-list'] })
+      queryClient.invalidateQueries({ queryKey: ['opencode', 'config', opcodeUrl, directory] })
+      window.dispatchEvent(new CustomEvent('opencode:commands-refreshed'))
+    } finally {
+      setRefreshing(false)
     }
-    await refresh()
-    queryClient.invalidateQueries({ queryKey: ['registry-list'] })
-    queryClient.invalidateQueries({ queryKey: ['opencode', 'config', opcodeUrl, directory] })
-    window.dispatchEvent(new CustomEvent('opencode:commands-refreshed'))
-    setRefreshing(false)
   }, [refresh, queryClient, opcodeUrl, directory])
 
   const loadEntry = useCallback(async (type: DialogType, item: { name: string; scope?: string; description?: string; mode?: string; id?: string }): Promise<{ entry: EditingEntry; createType: ExplorerResourceType }> => {
@@ -1654,7 +1652,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
             <Briefcase className="w-4 h-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Desks</h2>
+            <h2 className="text-sm font-semibold">Commands</h2>
             <Button
               variant="ghost"
               size="icon"

@@ -101,17 +101,20 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   return true
 }
 
-let warmUpInFlight: Promise<boolean> | null = null
+const warmUpFlights = new Map<string, Promise<boolean>>()
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
   session?: string,
 ): Promise<boolean> {
-  if (warmUpInFlight) return warmUpInFlight
-  warmUpInFlight = doWarmUp(namespace, session).finally(() => {
-    warmUpInFlight = null
+  const key = `${namespace}:${session ?? namespace}`
+  const existing = warmUpFlights.get(key)
+  if (existing) return existing
+  const p = doWarmUp(namespace, session).finally(() => {
+    warmUpFlights.delete(key)
   })
-  return warmUpInFlight
+  warmUpFlights.set(key, p)
+  return p
 }
 
 async function doWarmUp(
@@ -139,10 +142,12 @@ async function doWarmUp(
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value
   }
-  delete env.AGENT_BROWSER_SESSION
-  delete env.AGENT_BROWSER_NAMESPACE
-  delete env.AGENT_BROWSER_EXECUTABLE_PATH
-  delete env.AGENT_BROWSER_IDLE_TIMEOUT_MS
+  env.AGENT_BROWSER_NAMESPACE = namespace
+  env.AGENT_BROWSER_SESSION = session ?? namespace
+  if (info.executablePath && existsSync(info.executablePath)) {
+    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
+  }
+  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
   const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
