@@ -46,7 +46,7 @@ const useQuestionStore = create<QuestionStore, [['zustand/persist', Pick<Questio
 
 let storeSubscriptionStarted = false
 
-/** ?��? dismiss 직후 ?�링??미처�??�청???�살??깜빡?�는 것을 막는 가?? */
+/** ?��? dismiss 직후 ?�링??미처�??�청???�살??깜빡?�는 것을 막는 가?? */
 const RECENTLY_DISMISSED_MS = 12_000
 const recentlyDismissed = new Map<string, number>()
 
@@ -128,7 +128,7 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
     }
 
     load()
-    const interval = setInterval(load, 700)
+    const interval = setInterval(load, 2000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -154,7 +154,7 @@ export function useQuestionRequests(sessionID?: string) {
     useQuestionStore.setState((state) => ({
       questions: state.questions.filter(q => q.id !== requestID),
     }))
-    // 방패 배�? 카운???�션 ?�태 DB ?�링)??즉시 갱신 ???�음 ?�링(2s)까�? 기다리�? ?�음
+    // 방패 배�? 카운???�션 ?�태 DB ?�링)??즉시 갱신 ???�음 ?�링(2s)까�? 기다리�? ?�음
     queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
   }, [queryClient])
 

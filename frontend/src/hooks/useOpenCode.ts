@@ -251,7 +251,7 @@ export const useSessions = (opcodeUrl: string | null | undefined, directory?: st
     queryKey: ["opencode", "sessions", opcodeUrl, directory],
     queryFn: () => client!.listSessions(),
     enabled: !!client,
-    refetchInterval: 700,
+    refetchInterval: 2000,
   });
 };
 
@@ -338,7 +338,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const last = data?.[data.length - 1]
       const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
       if (streaming) return 2000
-      return 700
+      return 2000
     },
   });
 };
@@ -773,6 +773,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       }
 
       const esUrl = client.getEventSourceURL();
+      console.log("[SSE] opening", esUrl, "for", sessionID);
       let es: EventSource | null = null;
       const sseMergePart = (part: MessageWithParts["parts"][number], delta?: string) => {
         const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
@@ -812,6 +813,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       };
       const sseHandle = (e: MessageEvent) => {
         try {
+          console.log("[SSE] event", (e as unknown as { type: string }).type, (e as MessageEvent).data?.slice?.(0, 200));
           const raw = (e as MessageEvent).data as string;
           let parsed: Record<string, unknown>; try { parsed = JSON.parse(raw) as Record<string, unknown>; } catch { return; }
           let t: string, p: Record<string, unknown>;
@@ -832,7 +834,15 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           }
         } catch {}
       };
-      try { es = new EventSource(esUrl); activeSSEMap.set(sessionID, es); es.onmessage = sseHandle; ["message.part.updated","message.updated","message.removed","session.idle"].forEach((tt) => { try { es!.addEventListener(tt, sseHandle as EventListener); } catch {} }); } catch {}
+      try {
+        es = new EventSource(esUrl);
+        activeSSEMap.set(sessionID, es);
+        console.log("[SSE] opened", esUrl);
+        es.onopen = () => console.log("[SSE] open", sessionID);
+        es.onerror = (ev) => console.log("[SSE] error", sessionID, ev);
+        es.onmessage = sseHandle;
+        ["message.part.updated","message.updated","message.removed","session.idle"].forEach((tt) => { try { es!.addEventListener(tt, sseHandle as EventListener); } catch {} });
+      } catch (err) { console.log("[SSE] failed to open", err); }
 
       const ac = new AbortController()
       activeSendControllers.set(sessionID, ac)
@@ -882,7 +892,7 @@ export const useSessionStatusMap = () => {
   return useQuery({
     queryKey: ["session-status-db"],
     queryFn: listSessionStatuses,
-    refetchInterval: 700,
+    refetchInterval: 2000,
     staleTime: 0,
   });
 };

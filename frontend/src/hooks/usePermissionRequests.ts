@@ -46,7 +46,7 @@ const usePermissionStore = create<PermissionStore, [['zustand/persist', Pick<Per
 
 let storeSubscriptionStarted = false
 
-/** ?��? dismiss 직후 ?�링??미처�??�청???�살??깜빡?�는 것을 막는 가?? */
+/** ?��? dismiss 직후 ?�링??미처�??�청???�살??깜빡?�는 것을 막는 가?? */
 const RECENTLY_DISMISSED_MS = 12_000
 const recentlyDismissed = new Map<string, number>()
 
@@ -209,7 +209,7 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
     }
 
     load()
-    const interval = setInterval(load, 700)
+    const interval = setInterval(load, 2000)
     return () => {
       cancelled = true
       clearInterval(interval)
