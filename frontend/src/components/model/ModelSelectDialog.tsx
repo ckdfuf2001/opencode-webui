@@ -15,7 +15,7 @@ import {
   formatProviderName,
 } from "@/api/providers";
 import { useSettings } from "@/hooks/useSettings";
-import { useOpenCodeClient } from "@/hooks/useOpenCode";
+import { useOpenCodeClient, useSession } from "@/hooks/useOpenCode";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import type { ProviderWithModels, Model } from "@/api/providers";
@@ -47,15 +47,12 @@ export function ModelSelectDialog({
   const client = useOpenCodeClient(opcodeUrl);
   const queryClient = useQueryClient();
   const { sessionId } = useParams<{ sessionId: string }>();
+  const { data: sessionData } = useSession(opcodeUrl ?? null, sessionId ?? "", directory);
 
-  // 세션에서는 세션 모델을 현재 모델로 표시, 없으면 default fallback
-  const sessionModelKey = ((): string | null => {
-    if (!sessionId) return null;
-    try {
-      const data: any = queryClient.getQueryData(["opencode", "session", opcodeUrl, sessionId, directory]);
-      if (data?.model?.providerID && data?.model?.id) return `${data.model.providerID}/${data.model.id}`;
-    } catch {}
-    return null;
+  // 세션에서는 세션 모델을 현재 모델로 표시, 없으면 default fallback — useSession으로 반응형 로딩
+  const sessionModelKey = (() => {
+    const m = (sessionData as unknown as { model?: { providerID: string; id: string } })?.model;
+    return m?.providerID && m?.id ? `${m.providerID}/${m.id}` : null;
   })();
   const currentModel = forDefault
     ? preferences?.defaultModel || ""
@@ -207,14 +204,14 @@ export function ModelSelectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[80vh] bg-[#1a1a1a] border-[#333] text-white">
-        <DialogHeader>
+      <DialogContent className="max-w-4xl h-[80vh] max-h-[85vh] flex flex-col overflow-hidden bg-[#1a1a1a] border-[#333] text-white">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="text-xl font-semibold">
             Select Model
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="flex flex-col flex-1 min-h-0 space-y-4 overflow-hidden">
           {/* Use as default — 세션에서만 노출, 체크 시에만 전체 적용 */}
           {sessionId && !forDefault && (
             <div className="flex items-center gap-2 px-1 py-1.5 rounded-md bg-[#0a0a0a] border border-[#333]">
@@ -278,7 +275,7 @@ export function ModelSelectDialog({
           </div>
 
           {/* Models List */}
-          <div className="min-h-[300px] max-h-[400px] overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
@@ -382,7 +379,7 @@ export function ModelSelectDialog({
           </div>
 
           {/* Current Selection */}
-          <div className="pt-4 border-t border-[#333] space-y-1">
+          <div className="pt-4 border-t border-[#333] space-y-1 shrink-0">
             {sessionId && !forDefault ? (
               <>
                 <p className="text-sm text-zinc-400">
