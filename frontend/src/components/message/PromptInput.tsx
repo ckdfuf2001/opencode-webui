@@ -590,9 +590,8 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         setSuggestionQuery(query)
         setShowSuggestions(true)
         setSelectedCommandIndex(0)
-        // 슬래시 메뉴를 여는 시점에 목록이 오래됐으면 백그라운드로 새로 받는다.
-        // (세션 첫 진입 후 생성된 커맨드/스킬이 안 보이는 문제 방지)
-        refreshIfStale(5_000)
+        // 슬래시 입력 시 항상 백그라운드로 새로 받는다 (커맨드 생성 직후에도 즉시 보이도록)
+        refreshIfStale(0)
 
         if (textareaRef.current) {
           updateSuggestionAnchor(textareaRef.current, 'command')
@@ -794,7 +793,7 @@ useEffect(() => {
         onChange={handleInput}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        onFocus={() => refreshIfStale()}
+        onFocus={() => refreshIfStale(0)}
         placeholder={
           isBashMode
             ? "Enter bash command..."

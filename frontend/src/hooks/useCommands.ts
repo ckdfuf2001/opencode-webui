@@ -278,22 +278,22 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
     }
   }, [fetchCommands])
 
-  // 다른 인스턴스(커맨드 패널 refresh 등)가 목록을 새로 받으면 캐시를 즉시 채택한다.
-  // 인스턴스별 state 는 독립이라, 이 이벤트가 없으면 패널에서 만든 스킬이
-  // 채팅 슬래시 도우미에 새로고침 전까지 안 보였다.
+  // 다른 인스턴스(커맨드 패널 refresh 등)가 목록을 새로 받으면 즉시 재조회한다.
+  // 기존에는 캐시만 채택해 다른 directory의 커맨드가 안 보였고, 스킬(registry-list)과 달리 커맨드는 opencode 서버 재조회가 필요했다.
   useEffect(() => {
     const handler = () => {
-      const cached = commandsCache.get(cacheKey)
-      if (cached && cached.length > 0) setCommands(cached)
+      retryCountRef.current = 0
+      void fetchCommands()
     }
     window.addEventListener('opencode:commands-refreshed', handler)
     return () => window.removeEventListener('opencode:commands-refreshed', handler)
-  }, [cacheKey])
+  }, [cacheKey, fetchCommands])
 
   const refresh = useCallback(() => {
     retryCountRef.current = 0
-    fetchCommands()
-  }, [fetchCommands])
+    if (inFlight && inFlight.key === cacheKey) inFlight = null
+    void fetchCommands()
+  }, [fetchCommands, cacheKey])
 
   /** 입력창 포커스·슬래시 메뉴 오픈에서 호출: 이 디렉터리 목록이 오래됐으면 새로 받는다. */
   const refreshIfStale = useCallback((maxAgeMs = 30_000) => {
@@ -301,7 +301,8 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
     const last = lastSuccessfulFetchByKey.get(cacheKey) ?? 0
     if (Date.now() - last > maxAgeMs) {
       retryCountRef.current = 0
-      fetchCommands()
+      if (inFlight && inFlight.key === cacheKey) inFlight = null
+      void fetchCommands()
     }
   }, [opcodeUrl, cacheKey, fetchCommands])
 
