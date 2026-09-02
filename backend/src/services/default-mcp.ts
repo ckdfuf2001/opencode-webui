@@ -59,6 +59,7 @@ function buildAgentBrowserMcp(
   env.AGENT_BROWSER_NAMESPACE = namespace
   env.AGENT_BROWSER_SESSION = session
   env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
+  env.AGENT_BROWSER_AUTO_SESSION = '1'
   return {
     'agent-browser': {
       type: 'local',
@@ -143,6 +144,7 @@ async function doWarmUp(
   delete env.AGENT_BROWSER_NAMESPACE
   delete env.AGENT_BROWSER_EXECUTABLE_PATH
   delete env.AGENT_BROWSER_IDLE_TIMEOUT_MS
+  delete env.AGENT_BROWSER_AUTO_SESSION
   const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],

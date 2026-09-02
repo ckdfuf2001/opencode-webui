@@ -253,8 +253,6 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       : AbortSignal.timeout(isLongRunning ? 600_000 : 120_000)
 
     let body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
-
-    // 신규 세션 생성 시 body에 model이 없으면 Default 모델을 주입해 처음부터 correct model로 생성되도록
     if (method === 'POST' && cleanEventPath === '/session' && proxyDb) {
       try {
         const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
@@ -266,14 +264,8 @@ export async function proxyRequest(request: Request, method: string, pathname: s
             const modelID = rest.join('/')
             if (providerID && modelID) {
               let parsed: Record<string, unknown> = {}
-              if (body) {
-                try { parsed = JSON.parse(body) as Record<string, unknown> } catch { parsed = {} }
-              }
-              if (!parsed.model) {
-                parsed.model = { providerID, id: modelID }
-                body = JSON.stringify(parsed)
-                logger.info(`Injected default model ${dm} into new session creation`)
-              }
+              if (body) { try { parsed = JSON.parse(body) as Record<string, unknown> } catch { parsed = {} } }
+              if (!parsed.model) { parsed.model = { providerID, id: modelID }; body = JSON.stringify(parsed); logger.info(`Injected default model ${dm} into new session creation`) }
             }
           }
         }
