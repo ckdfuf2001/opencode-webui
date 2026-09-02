@@ -84,8 +84,15 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
     part.state.status === 'completed' &&
     typeof part.state.input?.command === 'string' &&
     userBashCommands.has(part.state.input.command)
-  const defaultExpanded = isUserBashCommand || (preferences?.expandToolCalls ?? false)
+  const shouldAutoExpand = part.tool === 'bash' || isUserBashCommand
+  const defaultExpanded = shouldAutoExpand || (preferences?.expandToolCalls ?? false)
   const [expanded, setExpanded] = useState(defaultExpanded)
+
+  useEffect(() => {
+    if (part.tool === 'bash' && part.state.status === 'completed' && !expanded) {
+      setExpanded(true)
+    }
+  }, [part.tool, part.state.status])
 
   useEffect(() => {
     if (part.tool === 'bash' && expanded && outputRef.current) {
