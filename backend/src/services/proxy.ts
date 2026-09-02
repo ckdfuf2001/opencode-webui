@@ -371,16 +371,22 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     const retryable = (error: unknown): boolean => {
       const code = (error as { cause?: { code?: unknown } })?.cause?.code
         ?? (error as { code?: unknown })?.code
-      if (typeof code !== 'string' || !code) return false
-      const normalized = code.toUpperCase()
-      return normalized === 'ECONNREFUSED'
-        || normalized === 'ECONNRESET'
-        || normalized === 'ENOTFOUND'
-        || normalized === 'EAI_AGAIN'
-        || normalized === 'CONNECTIONREFUSED'
-        || normalized === 'CONNECTIONRESET'
-        || normalized === 'CONNECTIONCLOSED'
-        || normalized === 'UND_ERR_CONNECT_TIMEOUT'
+      const msg = (error as { message?: string })?.message ?? ''
+      if (typeof code === 'string' && code) {
+        const normalized = code.toUpperCase()
+        if (normalized === 'ECONNREFUSED'
+          || normalized === 'ECONNRESET'
+          || normalized === 'ENOTFOUND'
+          || normalized === 'EAI_AGAIN'
+          || normalized === 'CONNECTIONREFUSED'
+          || normalized === 'CONNECTIONRESET'
+          || normalized === 'CONNECTIONCLOSED'
+          || normalized === 'UND_ERR_CONNECT_TIMEOUT'
+          || normalized === 'WSAETIMEDOUT'
+          || normalized.includes('10060')) return true
+      }
+      if (typeof msg === 'string' && (msg.includes('10060') || msg.toLowerCase().includes('wsaetimedout') || msg.toLowerCase().includes('timed out'))) return true
+      return false
     }
 
     let response: Response | null = null
