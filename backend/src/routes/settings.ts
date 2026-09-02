@@ -91,6 +91,17 @@ export function createSettingsRoutes(db: Database) {
         await opencodeServerManager.restart()
       }
 
+      const prevModel = (previous.preferences as Record<string, unknown>).defaultModel as string | undefined
+      const nextModel = (settings.preferences as Record<string, unknown>).defaultModel as string | undefined
+      if (prevModel !== nextModel && typeof nextModel === 'string' && nextModel.includes('/')) {
+        try {
+          await patchOpenCodeConfig({ model: nextModel } as Record<string, unknown>)
+          logger.info(`Patched opencode default model to ${nextModel} (less hassle for new sessions)`)
+        } catch (e) {
+          logger.warn('Failed to patch opencode default model:', e)
+        }
+      }
+
       return c.json(settings)
     } catch (error) {
       logger.error('Failed to update settings:', error)
