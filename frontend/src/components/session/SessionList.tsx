@@ -1,7 +1,6 @@
 import { useState, useMemo, Fragment } from "react";
 import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession } from "@/hooks/useOpenCode";
 import { useNavigate } from "react-router-dom";
-import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -38,10 +37,7 @@ export const SessionList = ({
 }: SessionListProps) => {
   const { data: sessions, isLoading } = useSessions(opcodeUrl, directory);
   const deleteSession = useDeleteSession(opcodeUrl, directory);
-  const { data: dbStatuses, isError: statusError, isFetching: statusFetching } = useSessionStatusMap();
-  const { data: opencodeHealthy, isError: healthError, isFetching: healthFetching } = useOpencodeHealth();
-  const isConnected = !healthError && !!opencodeHealthy && !statusError && !!dbStatuses;
-  const isReconnecting = (healthError && healthFetching) || (statusError && statusFetching) || (!opencodeHealthy && !healthError);
+  const { data: dbStatuses } = useSessionStatusMap();
   const navigate = useNavigate();
   const createSession = useCreateSession(opcodeUrl, directory);
   const dbBusyIds = useMemo(() => {
@@ -344,10 +340,6 @@ export const SessionList = ({
     <div className="flex flex-col h-full">
       <div className="p-4 flex-shrink-0">
         <div className="flex items-center gap-3 mb-3">
-          <div className="flex items-center gap-1.5 shrink-0 h-8 px-2">
-            <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isConnected ? "bg-green-500" : isReconnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`} />
-            <span className="text-xs text-muted-foreground hidden sm:inline">{isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}</span>
-          </div>
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
