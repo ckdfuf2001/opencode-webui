@@ -210,17 +210,23 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
         <div className="bg-card space-y-2 p-2">
           {part.state.status === 'running' && (
             <div className="text-sm space-y-2">
+              {(part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && (
+                <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
+                  <div className="text-[11px] text-yellow-400 mb-1 flex items-center gap-1"><span className="animate-pulse">●</span> Streaming</div>
+                  <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(part.state as unknown as { output?: string }).output || part.state.title || "Waiting for output..."}</pre>
+                </div>
+              )}
               <div>
                 <div className="text-zinc-400 mb-1">Input:</div>
                 <ClickableJson json={part.state.input} onFileClick={onFileClick} />
               </div>
-              {(part.state as unknown as { output?: string }).output && (
+              {(part.state as unknown as { output?: string }).output && !(part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && (
                 <div>
                   <div className="text-zinc-400 mb-1">Output (streaming):</div>
                   <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap">{(part.state as unknown as { output: string }).output}</pre>
                 </div>
               )}
-              {part.state.title && <div className="text-xs text-zinc-400">{part.state.title}</div>}
+              {part.state.title && !(part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && <div className="text-xs text-zinc-400">{part.state.title}</div>}
             </div>
           )}
 
