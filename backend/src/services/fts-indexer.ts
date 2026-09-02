@@ -138,6 +138,39 @@ export function searchMessages(
   opts: { k?: number; repoId?: number | null; sessionId?: string } = {},
 ): MessageSearchHit[] {
   const k = Math.max(1, Math.min(50, opts.k ?? 10))
+  if (q.trim() === '*') {
+    const where: string[] = ['1 = 1']
+    const params: (string | number)[] = []
+    if (opts.repoId != null) {
+      where.push('repo_id = ?')
+      params.push(opts.repoId)
+    }
+    if (opts.sessionId) {
+      where.push('session_id = ?')
+      params.push(opts.sessionId)
+    }
+    const sql = `
+      SELECT session_id AS s, message_id AS m, role AS r, repo_id AS rid,
+             turn_index AS ti, ts AS t,
+             snippet(session_messages_fts, 0, '[', ']', '\u2026', ${SNIPPET_SIZE}) AS snip
+      FROM session_messages_fts
+      WHERE ${where.join(' AND ')}
+      ORDER BY ts DESC
+      LIMIT ?`
+    params.push(k)
+    const rows = db.query(sql).all(...(params as any[])) as Array<{
+      s: string; m: string; r: string; rid: number | null; ti: number; t: number; snip: string
+    }>
+    return rows.map((row) => ({
+      sessionId: row.s,
+      messageId: row.m,
+      role: row.r,
+      repoId: row.rid,
+      turnIndex: row.ti,
+      ts: row.t,
+      snippet: row.snip,
+    }))
+  }
   const query = buildFtsQuery(q)
   const where: string[] = ['session_messages_fts MATCH ?']
   const params: (string | number)[] = [query]

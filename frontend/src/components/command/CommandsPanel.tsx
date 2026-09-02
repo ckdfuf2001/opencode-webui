@@ -1,7 +1,6 @@
 ﻿import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, ChevronDown } from 'lucide-react'
 import {
   Terminal,
   Loader2,
@@ -59,7 +58,7 @@ function JSONViewer({ json }: { json: string }) {
   const [expanded, setExpanded] = useState(true)
   let parsed: any
   try { parsed = JSON.parse(json) } catch { return <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto text-destructive">{json}</pre> }
-  function renderNode(key: string, value: any, depth = 0): React.ReactNode {
+  function renderNode(_key: string, value: any, depth = 0): React.ReactNode {
     if (value === null) return <span className="text-muted-foreground">null</span>
     if (typeof value === 'string') return <span className="text-green-400">"{value}"</span>
     if (typeof value === 'number' || typeof value === 'boolean') return <span className="text-yellow-400">{String(value)}</span>
@@ -121,21 +120,6 @@ function JSONViewer({ json }: { json: string }) {
       {expanded && <div className="ml-2 border-l border-muted/30 pl-2">{renderNode('root', parsed)}</div>}
     </div>
   )
-}
-
-// 토크나이저: * 와일드카드 허용, 아니면 2자 이상
-function tokenizeRecall(q: string): string[] {
-  return q
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0)
-    .map((t) => {
-      if (t === '*') return t
-      // *가 포함된 경우 그대로 유지, 아니면 특수문자 제거
-      if (t.includes('*')) return t
-      return t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim()
-    })
-    .filter((t) => t === '*' || t.length >= 2)
 }
 
 function commandNeedsArgs(command: CommandWithScope): boolean {
@@ -778,7 +762,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
   )
 }
 
-function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: { repoId?: number; sessionId: string; onUseInChat?: (text: string) => void; opcodeUrl?: string | null; directory?: string }) {
+function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sessionId: string; onUseInChat?: (text: string) => void }) {
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [selectedRepo, setSelectedRepo] = useState<string>(repoId != null ? String(repoId) : 'all')
@@ -1021,16 +1005,27 @@ function RecallPanel({ repoId, sessionId, onUseInChat, opcodeUrl, directory }: {
             </div>
           </div>
 
-          {blockOpen && filteredJson && (
-            <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl min-w-[500px] max-w-[800px]">
-              <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
-                <span className="text-[11px] font-medium">Recalls JSON {kind !== 'all' ? `(${kind})` : ''}</span>
+          {blockOpen && filteredHits.length > 0 && (
+            <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl max-h-80 overflow-y-auto">
+              <div className="flex items-center justify-between px-2.5 py-1.5 border-b sticky top-0 bg-background">
+                <span className="text-[11px] font-medium">Recalls JSON {kind !== 'all' ? `(${kind})` : ''} — {filteredHits.length} items</span>
                 <button onClick={() => setBlockOpen(false)} className="text-muted-foreground hover:text-foreground p-0.5">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <div className="p-2.5 max-h-[600px] overflow-y-auto">
-                <JSONViewer json={filteredJson} />
+              <div className="p-2 space-y-1">
+                {filteredHits.map((h: any, idx: number) => (
+                  <details key={idx} className="rounded border border-border bg-muted/20">
+                    <summary className="px-2 py-1 text-[11px] font-mono cursor-pointer flex items-center gap-2">
+                      <span className={`px-1 py-0.5 rounded text-[10px] ${h.kind === 'message' ? 'bg-blue-500/15 text-blue-400' : 'bg-amber-500/15 text-amber-400'}`}>{h.kind}</span>
+                      <span className="truncate flex-1">{h.snippet.slice(0, 60)}</span>
+                      <span className="text-muted-foreground text-[10px]">{h.repoId != null ? `#${h.repoId}` : ''}</span>
+                    </summary>
+                    <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2 bg-background border-t max-h-40 overflow-y-auto">
+                      {JSON.stringify(h, null, 2)}
+                    </pre>
+                  </details>
+                ))}
               </div>
             </div>
           )}

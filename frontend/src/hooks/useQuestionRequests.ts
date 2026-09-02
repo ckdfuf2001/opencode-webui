@@ -46,7 +46,7 @@ const useQuestionStore = create<QuestionStore, [['zustand/persist', Pick<Questio
 
 let storeSubscriptionStarted = false
 
-/** 낙관 dismiss 직후 폴링이 미처리 요청을 되살려 깜빡이는 것을 막는 가드. */
+/** ?��? dismiss 직후 ?�링??미처�??�청???�살??깜빡?�는 것을 막는 가?? */
 const RECENTLY_DISMISSED_MS = 12_000
 const recentlyDismissed = new Map<string, number>()
 
@@ -128,7 +128,7 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
     }
 
     load()
-    const interval = setInterval(load, 2000)
+    const interval = setInterval(load, 700)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -154,7 +154,7 @@ export function useQuestionRequests(sessionID?: string) {
     useQuestionStore.setState((state) => ({
       questions: state.questions.filter(q => q.id !== requestID),
     }))
-    // 방패 배지 카운트(세션 상태 DB 폴링)도 즉시 갱신 — 다음 폴링(2s)까지 기다리지 않음
+    // 방패 배�? 카운???�션 ?�태 DB ?�링)??즉시 갱신 ???�음 ?�링(2s)까�? 기다리�? ?�음
     queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
   }, [queryClient])
 
@@ -169,3 +169,4 @@ export function useQuestionRequests(sessionID?: string) {
     clearAllQuestions,
   }), [currentQuestion, questions.length, dismissQuestion, clearAllQuestions])
 }
+

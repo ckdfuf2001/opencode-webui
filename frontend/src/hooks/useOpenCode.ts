@@ -16,15 +16,15 @@ type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
 
-/** 낙관 abort 직후 폴링이 미처리 상태를 되살려 뱃지가 깜빡이는 것을 막는 가드. */
+/** ?��? abort 직후 ?�링??미처�??�태�??�살??뱃�?가 깜빡?�는 것을 막는 가?? */
 const RECENTLY_ABORTED_MS = 12_000;
 const recentlyAborted = new Map<string, number>();
 
-/** 전송 중인 낙관 user 메시지. 2s 폴링이 캐시를 덮어써도 유지된다. */
+/** ?�송 중인 ?��? user 메시지. 2s ?�링??캐시�???��?�도 ?��??�다. */
 const pendingOptimistic = new Map<string, MessageWithParts>();
 
-/** truncate 직후 opencode 메모리가 옛 목록을 돌려줄 수 있어 뷰를 유지하는 가드.
- *  시간이 아닌 "제거된 메시지 ID" 기준으로 걸러 새 메시지는 즉시 통과된다. */
+/** truncate 직후 opencode 메모리�? ??목록???�려�????�어 뷰�? ?��??�는 가??
+ *  ?�간???�닌 "?�거??메시지 ID" 기�??�로 걸러 ??메시지??즉시 ?�과?�다. */
 const RECENTLY_TRUNCATED_MS = 12_000;
 const recentlyTruncated = new Map<string, { until: number; removedIds: Set<string> }>();
 
@@ -234,7 +234,7 @@ export const useSessions = (opcodeUrl: string | null | undefined, directory?: st
     queryKey: ["opencode", "sessions", opcodeUrl, directory],
     queryFn: () => client!.listSessions(),
     enabled: !!client,
-    refetchInterval: 2000,
+    refetchInterval: 700,
   });
 };
 
@@ -270,9 +270,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           .filter(Boolean)
           .join("\n")
         const optimisticSig = getSignature(optimistic.parts as unknown as MessageWithParts["parts"]);
-        // 클라이언트(특히 모바일) 시계가 서버보다 몇 초 어긋나면 created >= 비교로는
-        // 실제 유저 메시지를 못 찾아 낙관 카드가 남아 duplicated 로 보였다.
-        // 시계 오차 5초 허용 + 시그니처(텍스트+파일명) 일치로 판정한다.
+        // ?�라?�언???�히 모바?? ?�계가 ?�버보다 �?�??�긋?�면 created >= 비교로는
+        // ?�제 ?��? 메시지�?�?찾아 ?��? 카드가 ?�아 duplicated �?보�???
+        // ?�계 ?�차 5�??�용 + ?�그?�처(?�스???�일�? ?�치�??�정?�다.
         realUserArrived = result.some((m) => {
           if (m.info.role !== "user" || m.info.id === optimistic.info.id) return false;
           const created = m.info.time?.created ?? 0;
@@ -299,7 +299,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     refetchOnReconnect: false,
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
-    refetchInterval: 2000,
+    refetchInterval: 700,
   });
 };
 
@@ -310,7 +310,7 @@ function reconcileOrphanedStreams(
 ): MessageListResponse {
   if (isBusy) return messages;
   let changed = false;
-  // idle 상태에서 파트 없는 미완료 assistant 메시지는 유령 카드이므로 제거한다.
+  // idle ?�태?�서 ?�트 ?�는 미완�?assistant 메시지???�령 카드?��?�??�거?�다.
   const filtered = messages.filter((msg) => {
     const ghost =
       msg.info.sessionID === sessionID &&
@@ -633,7 +633,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         contentParts,
         optimisticUserID,
       );
-      // 진행 중인 폴링(2s)이 낙관 메시지를 덮어써 깜빡이는 것을 방지: in-flight fetch 취소
+      // 진행 중인 ?�링(2s)???��? 메시지�???��??깜빡?�는 것을 방�?: in-flight fetch 취소
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
       pendingOptimistic.set(sessionID, userMessage);
       queryClient.setQueryData<MessageListResponse>(
@@ -717,7 +717,7 @@ export const useSessionStatusMap = () => {
   return useQuery({
     queryKey: ["session-status-db"],
     queryFn: listSessionStatuses,
-    refetchInterval: 2000,
+    refetchInterval: 700,
     staleTime: 0,
   });
 };
@@ -768,7 +768,7 @@ function markSessionMessagesCompleted(
       continue
     }
     changed = true
-    // 빈 placeholder(파트 없는 미완료 카드)는 완료 처리 대신 제거한다.
+    // �?placeholder(?�트 ?�는 미완�?카드)???�료 처리 ?�???�거?�다.
     if (msg.parts.length === 0) continue
     const patchedParts = msg.parts.map((part) => {
       if ((part as { type?: string }).type === 'tool' && (part as { state?: { status?: string } }).state?.status === 'running') {
@@ -859,3 +859,4 @@ export const useConfig = (opcodeUrl: string | null | undefined, directory?: stri
     enabled: !!client,
   });
 };
+

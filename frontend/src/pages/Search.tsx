@@ -3,11 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Header } from '@/components/layout/Header'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ChevronRight, ChevronDown } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import {
   expandMessage,
   getCommitDetail,

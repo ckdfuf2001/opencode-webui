@@ -152,44 +152,41 @@ export function createRepoRoutes(database: Database) {
         logger.warn('Failed to stop opencode sessions for repo:', error)
       }
 
-      // Remove files OUTSIDE the DB transaction (fs deletion is slow and must not hold the SQLite connection).
-      // On Windows the dir is pinned by processes whose cwd/open handles point
-      // into it (opencode sessions, agent-browser daemon + Chrome, doc reader).
-      // Release those and retry a few times before giving up.
-      let deleteErr: unknown = null
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          await repoService.deleteRepoFiles(database, id)
-          deleteErr = null
-          break
-        } catch (error) {
-          deleteErr = error
-          logger.warn(`Repo file deletion attempt ${attempt}/3 failed:`, error)
-          if (attempt === 1) {
-            releaseAgentBrowserForDirectory(repoDir)
-            await new Promise((resolve) => setTimeout(resolve, 800))
-          } else {
-            await opencodeServerManager.restart().catch((restartError) =>
-              logger.error('Failed to restart OpenCode server after repo delete:', restartError)
-            )
-          }
-        }
-      }
-      if (deleteErr) {
-        throw deleteErr
-      }
-
       const withIndexParam = c.req.query('withIndex')
       const withIndex = withIndexParam == null ? true : withIndexParam !== 'false' && withIndexParam !== '0'
-      // Delete the DB rows inside a short, serialized transaction. The cascade
-      // also removes schedules, permission rules and command runs owned by the
-      // repo so no orphaned rows survive in SQLite.
+      // DB 삭제는 즉시 수행 (빠른 응답), 파일 삭제는 백그라운드로 이동
       await withTransactionAsync(database, async (tx) => {
         db.deleteRepoCascade(tx, id, { withIndex })
       })
-
-      logger.info(`Repo deleted in ${Date.now() - startedAt}ms (repo id ${id})`)
-      return c.json({ success: true })
+      logger.info(`Repo DB deleted in ${Date.now() - startedAt}ms (repo id ${id}), files will be removed in background`)
+      const response = c.json({ success: true })
+      // 백그라운드 파일 삭제 (Windows 핸들 해제 재시도 포함, 응답 후 비동기 실행)
+      setImmediate(async () => {
+        try {
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              await repoService.deleteRepoFiles(database, id)
+              logger.info(`Repo files deleted in background (repo id ${id}, attempt ${attempt})`)
+              break
+            } catch (error) {
+              logger.warn(`Background repo file deletion attempt ${attempt}/3 failed:`, error)
+              if (attempt === 1) {
+                releaseAgentBrowserForDirectory(repoDir)
+                await new Promise((resolve) => setTimeout(resolve, 800))
+              } else {
+                await opencodeServerManager.restart().catch((restartError) =>
+                  logger.error('Failed to restart OpenCode server after repo delete:', restartError)
+                )
+              }
+            }
+          }
+        } catch (e) {
+          logger.error('Background repo file deletion failed:', e)
+        } finally {
+          await opencodeServerManager.start().catch((startError) => logger.error('Failed to start OpenCode server:', startError))
+        }
+      })
+      return response
     } catch (error: any) {
       logger.error('Failed to delete repo:', error)
       return c.json({ error: error.message }, 500)

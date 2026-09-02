@@ -12,7 +12,8 @@ export function useQueuedChats(sessionID?: string | null) {
     queryKey: chatQueueKeys.session(sessionID ?? ''),
     queryFn: () => listQueuedChats(sessionID!),
     enabled: !!sessionID,
-    refetchInterval: 2000,
+    refetchInterval: 600,
+    refetchIntervalInBackground: true,
   })
 }
 
