@@ -780,7 +780,10 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           if (!old) return old;
           const mid = (part as { messageID: string }).messageID;
           const idx = old.findIndex((m) => m.info.id === mid);
-          if (idx === -1) { queryClient.invalidateQueries({ queryKey: key }); return old; }
+          if (idx === -1) {
+            const newMsg = { info: { id: mid, sessionID, role: "assistant", time: { created: Date.now() } } as MessageWithParts["info"], parts: [part] } as MessageWithParts;
+            return [...old, newMsg];
+          }
           const msg = old[idx]!;
           const pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
           let nextParts: MessageWithParts["parts"];
@@ -1068,8 +1071,8 @@ export const useEphemeralSessionSSE = (
         const mid = (part as { messageID: string }).messageID;
         const idx = old.findIndex((m) => m.info.id === mid);
         if (idx === -1) {
-          queryClient.invalidateQueries({ queryKey: key });
-          return old;
+          const newMsg = { info: { id: mid, sessionID, role: "assistant", time: { created: Date.now() } } as MessageWithParts["info"], parts: [part] } as MessageWithParts;
+          return [...old, newMsg];
         }
         const msg = old[idx]!;
         const pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
