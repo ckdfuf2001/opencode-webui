@@ -207,11 +207,20 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
       </button>
 
       {expanded && (
-        <div className="bg-card space-y-2">
+        <div className="bg-card space-y-2 p-2">
           {part.state.status === 'running' && (
-            <div className="text-sm">
-              <div className="text-zinc-400 mb-1">Input:</div>
-              <ClickableJson json={part.state.input} onFileClick={onFileClick} />
+            <div className="text-sm space-y-2">
+              <div>
+                <div className="text-zinc-400 mb-1">Input:</div>
+                <ClickableJson json={part.state.input} onFileClick={onFileClick} />
+              </div>
+              {(part.state as unknown as { output?: string }).output && (
+                <div>
+                  <div className="text-zinc-400 mb-1">Output (streaming):</div>
+                  <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap">{(part.state as unknown as { output: string }).output}</pre>
+                </div>
+              )}
+              {part.state.title && <div className="text-xs text-zinc-400">{part.state.title}</div>}
             </div>
           )}
 
