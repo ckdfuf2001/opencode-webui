@@ -142,6 +142,15 @@ export function flushReadyQueues(busySessions: Set<string>): void {
   }
 }
 
+/** 채팅 완료 이벤트로 즉시 1개 세션의 큐를 발송한다. 폴러 2s 대기 대신 사용한다. */
+export function flushQueueForSession(sessionId: string): void {
+  if (!queues.has(sessionId)) return
+  if (inFlight.has(sessionId)) return
+  if ((failedUntil.get(sessionId) ?? 0) > Date.now()) return
+  const base = opencodeServerManager.getUrl()
+  dispatchHead(base, sessionId)
+}
+
 function requeueFront(sessionID: string, chat: QueuedChat): void {
   const queue = queues.get(sessionID)
   if (queue) {

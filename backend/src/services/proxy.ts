@@ -4,6 +4,7 @@ import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
+import { flushQueueForSession } from './chat-queue'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -584,6 +585,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     if (!isLongRunning || !response.body) {
       releaseBusy()
+      try {
+        const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
+        if (m?.[1]) setTimeout(() => flushQueueForSession(m[1]!), 150)
+      } catch {}
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -606,6 +611,11 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         } finally {
           releaseBusy()
           reader.releaseLock()
+          // 채팅 끝 이벤트로 큐를 즉시 발송 — 2s 폴러 대기 대신
+          try {
+            const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
+            if (m?.[1]) setTimeout(() => flushQueueForSession(m[1]!), 150)
+          } catch {}
         }
       },
       cancel() {

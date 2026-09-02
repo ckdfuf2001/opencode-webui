@@ -381,7 +381,7 @@ export const SessionList = ({
             className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap h-8"
           >
             <Plus className="w-4 h-4 mr-1" />
-            New Session
+            Session
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -418,7 +418,7 @@ export const SessionList = ({
             disabled={createSession.isPending}
             size="icon"
             className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-8 w-8"
-            title="New Session"
+            title="Session"
           >
             <Plus className="w-4 h-4" />
           </Button>

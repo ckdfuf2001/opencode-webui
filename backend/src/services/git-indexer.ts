@@ -170,6 +170,29 @@ export function searchCommits(
   opts: { k?: number; repoId?: number | null } = {},
 ): CommitSearchHit[] {
   const k = Math.max(1, Math.min(50, opts.k ?? 10))
+  const trimmed = q.trim()
+  // 단일 문자 prefix (a*)는 trigram FTS5 prefix로 매칭이 안 되므로 LIKE fallback — fts-indexer/searchMessages 와 동일
+  if (/^\p{L}\*$/u.test(trimmed) || /^\p{N}\*$/u.test(trimmed)) {
+    const prefix = trimmed.slice(0, -1)
+    const like = `${prefix}%`
+    const where: string[] = ['(git_commits_fts.subject LIKE ? OR git_commits_fts.body LIKE ? OR git_commits_fts.files LIKE ?)']
+    const params: (string | number)[] = [like, like, like]
+    if (opts.repoId != null) {
+      where.push('git_commits_fts.repo_id = ?')
+      params.push(opts.repoId)
+    }
+    const sql = `
+    SELECT c.sha AS sha, c.repo_id AS repoId, c.subject AS subject, c.author AS author,
+           c.committed_at AS committedAt
+    FROM git_commits_fts
+    JOIN git_commits c ON c.repo_id = git_commits_fts.repo_id AND c.sha = git_commits_fts.sha
+    WHERE ${where.join(' AND ')}
+    ORDER BY c.committed_at DESC
+    LIMIT ?`
+    params.push(k)
+    const rows = db.query(sql).all(...(params as any[])) as CommitSearchHit[]
+    return rows
+  }
   const tokens = buildCommitQueryTokens(q)
   const where: string[] = []
   const params: (string | number)[] = []

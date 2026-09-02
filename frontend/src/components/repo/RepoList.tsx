@@ -197,7 +197,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
             className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap h-8"
           >
             <Plus className="w-4 h-4 mr-1" />
-            New Repo
+            Repository
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -231,7 +231,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
             onClick={() => onAddRepo?.()}
             size="icon"
             className="bg-blue-600 hover:bg-blue-700 text-white md:hidden h-8 w-8"
-            title="New Repo"
+            title="Repository"
           >
             <Plus className="w-4 h-4" />
           </Button>

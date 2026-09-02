@@ -1651,33 +1651,33 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     <div className="fixed inset-0 z-40" style={{ pointerEvents: open ? 'auto' : 'none' }}>
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       <div className="absolute top-0 right-0 bottom-0 w-[460px] max-w-full flex flex-col bg-background border-l border-border shadow-2xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 pl-3 pr-1 py-3 border-b border-border flex-shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 min-w-0">
             <Briefcase className="w-4 h-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">Commands</h2>
             <Button
               variant="ghost"
               size="icon"
               onClick={() => { refreshExplorer() }}
-              className="text-muted-foreground hover:text-foreground hover:bg-muted"
+              className="text-muted-foreground hover:text-foreground hover:bg-muted shrink-0 h-8 w-8"
               title="Refresh"
               disabled={refreshing}
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
             </Button>
             {runningCount > 0 && (
-              <span className="inline-flex items-center gap-1 text-xs text-amber-500">
+              <span className="inline-flex items-center gap-1 text-xs text-amber-500 shrink-0">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 {runningCount} running
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1 w-full max-w-[320px] flex-1 min-w-0">
+          <div className="flex items-center gap-1 flex-1 max-w-[300px] min-w-0 ml-1 justify-center">
             <Button
               variant={tab === 'runs' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('runs')}
-              className="text-xs h-8 flex-1 justify-center min-w-0 truncate"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-3"
             >
               <History className="w-3.5 h-3.5 mr-1 shrink-0" />
               History
@@ -1686,7 +1686,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               variant={tab === 'explorer' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('explorer')}
-              className="text-xs h-8 flex-1 justify-center min-w-0 truncate"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-3"
             >
               <Search className="w-3.5 h-3.5 mr-1 shrink-0" />
               Explorer
@@ -1695,13 +1695,13 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               variant={tab === 'recall' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('recall')}
-              className="text-xs h-8 flex-1 justify-center min-w-0 truncate"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-3"
             >
               <Brain className="w-3.5 h-3.5 mr-1 shrink-0" />
               Recall
             </Button>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground hover:text-foreground hover:bg-muted">
+          <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground ml-1 shrink-0 h-8 w-8">
             <X className="w-4 h-4" />
           </Button>
         </div>
