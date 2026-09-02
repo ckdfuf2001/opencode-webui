@@ -254,6 +254,32 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     let body = method !== 'GET' && method !== 'HEAD' ? await request.text() : undefined
 
+    // 신규 세션 생성 시 body에 model이 없으면 Default 모델을 주입해 처음부터 correct model로 생성되도록
+    if (method === 'POST' && cleanEventPath === '/session' && proxyDb) {
+      try {
+        const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+        if (prefRow) {
+          const pref = JSON.parse(prefRow.preferences) as { defaultModel?: string }
+          const dm = pref.defaultModel
+          if (dm && typeof dm === 'string' && dm.includes('/')) {
+            const [providerID, ...rest] = dm.split('/')
+            const modelID = rest.join('/')
+            if (providerID && modelID) {
+              let parsed: Record<string, unknown> = {}
+              if (body) {
+                try { parsed = JSON.parse(body) as Record<string, unknown> } catch { parsed = {} }
+              }
+              if (!parsed.model) {
+                parsed.model = { providerID, id: modelID }
+                body = JSON.stringify(parsed)
+                logger.info(`Injected default model ${dm} into new session creation`)
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
     if (method === 'POST' && body && proxyDb && /\/session\/[^/]+\/message$/.test(cleanEventPath)) {
       try {
         const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
@@ -424,40 +450,6 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           try { proxyDb.query('DELETE FROM session_status WHERE session_id = ?').run(sid) } catch {}
         }
       }
-    }
-
-    // 신규 세션 생성 시 Default 모델 자동 적용 (신규 세션도 defaultModel 따라가도록) — opencode default 패치와 함께 이중 보장
-    if (response.ok && method === 'POST' && cleanEventPath === '/session' && proxyDb) {
-      try {
-        const cloned = response.clone()
-        const text = await cloned.text()
-        const data = JSON.parse(text) as { id?: string; sessionID?: string }
-        const sid = data.id || data.sessionID
-        if (sid) {
-          const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
-          if (prefRow) {
-            const pref = JSON.parse(prefRow.preferences) as { defaultModel?: string }
-            const dm = pref.defaultModel
-            if (dm && typeof dm === 'string' && dm.includes('/')) {
-              const [providerID, ...rest] = dm.split('/')
-              const modelID = rest.join('/')
-              if (providerID && modelID) {
-                try {
-                  await fetch(`${opencodeServerManager.getUrl()}/session/${sid}/model`, {
-                    method: 'POST',
-                    headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({ model: { providerID, id: modelID } }),
-                    signal: AbortSignal.timeout(10000),
-                  })
-                  logger.info(`Applied default model ${dm} to new session ${sid}`)
-                } catch (e) {
-                  logger.warn(`Failed to apply default model to new session ${sid}:`, e)
-                }
-              }
-            }
-          }
-        }
-      } catch {}
     }
 
     const responseHeaders: Record<string, string> = {}
