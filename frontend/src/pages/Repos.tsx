@@ -24,24 +24,26 @@ export function Repos() {
         action={
           <div className="flex items-center gap-2">
             <OpenCodeStatus />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setFileBrowserOpen(true)}
-              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-              title="Workspace"
-            >
-              <FolderOpen className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setCommandsOpen(true)}
-              className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-              title="Commands"
-            >
-              <Briefcase className="w-4 h-4" />
-            </Button>
+            <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setFileBrowserOpen(true)}
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+                title="Workspace"
+              >
+                <FolderOpen className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setCommandsOpen(true)}
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none"
+                title="Commands"
+              >
+                <Briefcase className="w-4 h-4" />
+              </Button>
+            </div>
             <Button
               onClick={() => setAddRepoOpen(true)}
               size="sm"

@@ -171,24 +171,35 @@ export function RepoDetail() {
             </div>
           </div>
            <div className="flex items-center gap-2">
-             <Button
-               variant="ghost"
-               size="icon"
-               onClick={() => setFileBrowserOpen(true)}
-               className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-               title="Files"
-             >
-               <FolderOpen className="w-4 h-4" />
-             </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setCommandsOpen(true)}
-                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-                title="Commands"
-              >
-                <Briefcase className="w-4 h-4" />
-              </Button>
+              <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setFileBrowserOpen(true)}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+                  title="Files"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setCommandsOpen(true)}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+                  title="Commands"
+                >
+                  <Briefcase className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={openSettings}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none"
+                  title="Settings"
+                >
+                  <Settings className="w-4 h-4" />
+                </Button>
+              </div>
               <Button
                 onClick={() => handleCreateSession()}
                 disabled={!opcodeUrl || createSessionMutation.isPending}
@@ -197,15 +208,6 @@ export function RepoDetail() {
               >
                 <Plus className="w-4 h-4 sm:mr-2" />
                 <span className="hidden sm:inline">New Session</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={openSettings}
-                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-                title="Settings"
-              >
-                <Settings className="w-4 h-4" />
               </Button>
            </div>
         </div>
