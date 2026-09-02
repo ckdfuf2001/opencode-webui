@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import {
   Terminal,
+  Briefcase,
   Loader2,
   CheckCircle2,
   AlertCircle,
@@ -1652,8 +1653,8 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       <div className="absolute top-0 right-0 bottom-0 w-[460px] max-w-full flex flex-col bg-background border-l border-border shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Commands</h2>
+            <Briefcase className="w-4 h-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Desks</h2>
             <Button
               variant="ghost"
               size="icon"

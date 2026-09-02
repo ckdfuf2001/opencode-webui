@@ -2,7 +2,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
-import { Loader2, Settings, FolderOpen, Terminal, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 
 interface Repo {
@@ -190,9 +190,9 @@ export function SessionDetailHeader({
             size="icon"
             onClick={onCommandsOpen}
             className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-            title="Commands"
+            title="Desks"
           >
-            <Terminal className="w-4 h-4" />
+            <Briefcase className="w-4 h-4" />
           </Button>
           <Button
             variant="ghost"

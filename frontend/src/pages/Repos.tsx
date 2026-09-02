@@ -6,7 +6,7 @@ import { Header } from "@/components/layout/Header";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Button } from "@/components/ui/button";
-import { Plus, FolderOpen, Terminal } from "lucide-react";
+import { Plus, FolderOpen, Briefcase } from "lucide-react";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 export function Repos() {
   const [addRepoOpen, setAddRepoOpen] = useState(false);
@@ -38,9 +38,9 @@ export function Repos() {
               size="icon"
               onClick={() => setCommandsOpen(true)}
               className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8"
-              title="Commands"
+              title="Desks"
             >
-              <Terminal className="w-4 h-4" />
+              <Briefcase className="w-4 h-4" />
             </Button>
             <Button
               onClick={() => setAddRepoOpen(true)}
