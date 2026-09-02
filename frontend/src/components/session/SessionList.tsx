@@ -156,14 +156,6 @@ export const SessionList = ({
     return <div className="p-4 text-sm text-muted-foreground">Loading sessions...</div>;
   }
 
-  if (!sessions || sessions.length === 0) {
-    return (
-      <div className="p-4 text-sm text-muted-foreground">
-        No sessions yet. Create one to get started.
-      </div>
-    );
-  }
-
   const handleDelete = (
     sessionId: string,
     e: React.MouseEvent<HTMLButtonElement>,
@@ -441,7 +433,11 @@ export const SessionList = ({
 
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         <div className="flex flex-col gap-2">
-          {filteredSessions.length === 0 ? (
+          {(!sessions || sessions.length === 0) ? (
+            <div className="text-sm text-muted-foreground text-center py-4">
+              No sessions yet. Create one to get started.
+            </div>
+          ) : filteredSessions.length === 0 ? (
             <div className="text-sm text-muted-foreground text-center py-4">
               No sessions found
             </div>
