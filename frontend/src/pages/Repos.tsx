@@ -38,20 +38,21 @@ export function Repos() {
                 variant="ghost"
                 size="icon"
                 onClick={() => setCommandsOpen(true)}
-                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none"
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
                 title="Commands"
               >
                 <Briefcase className="w-4 h-4" />
               </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAddRepoOpen(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 h-8 w-8 rounded-none"
+                title="New Repository"
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
             </div>
-            <Button
-              onClick={() => setAddRepoOpen(true)}
-              size="sm"
-              className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 hover:scale-105"
-            >
-              <Plus className="w-4 h-4 sm:mr-2" />
-              <span className="hidden sm:inline">Repository</span>
-            </Button>
           </div>
         }
       />

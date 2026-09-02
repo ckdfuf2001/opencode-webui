@@ -1669,12 +1669,12 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1 flex-1 max-w-[320px]">
+          <div className="flex items-center gap-1 w-[320px] shrink-0">
             <Button
               variant={tab === 'runs' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('runs')}
-              className="text-xs h-8 flex-1 justify-center"
+              className="text-xs h-8 flex-1 justify-center min-w-0"
             >
               <History className="w-3.5 h-3.5 mr-1" />
               History
@@ -1683,7 +1683,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               variant={tab === 'explorer' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('explorer')}
-              className="text-xs h-8 flex-1 justify-center"
+              className="text-xs h-8 flex-1 justify-center min-w-0"
             >
               <Search className="w-3.5 h-3.5 mr-1" />
               Explorer
@@ -1692,7 +1692,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               variant={tab === 'recall' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('recall')}
-              className="text-xs h-8 flex-1 justify-center"
+              className="text-xs h-8 flex-1 justify-center min-w-0"
             >
               <Brain className="w-3.5 h-3.5 mr-1" />
               Recall

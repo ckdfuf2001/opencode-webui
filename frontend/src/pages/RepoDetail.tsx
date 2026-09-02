@@ -175,6 +175,16 @@ export function RepoDetail() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  onClick={() => handleCreateSession()}
+                  disabled={!opcodeUrl || createSessionMutation.isPending}
+                  className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 h-8 w-8 rounded-none border-r border-blue-600"
+                  title="New Session"
+                >
+                  <Plus className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setFileBrowserOpen(true)}
                   className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
                   title="Files"
@@ -200,15 +210,6 @@ export function RepoDetail() {
                   <Settings className="w-4 h-4" />
                 </Button>
               </div>
-              <Button
-                onClick={() => handleCreateSession()}
-                disabled={!opcodeUrl || createSessionMutation.isPending}
-                size="sm"
-                className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 hover:scale-105"
-              >
-                <Plus className="w-4 h-4 sm:mr-2" />
-                <span className="hidden sm:inline">New Session</span>
-              </Button>
            </div>
         </div>
       </div>
