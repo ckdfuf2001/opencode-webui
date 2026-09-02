@@ -279,13 +279,14 @@ export function SessionDetail() {
     }
   }, [messages, isBillingQuotaMessage]);
 
-  // 컨텍스트 초과(length) — 실제 한계 도달 시에만 표시 (오탐 방지)
+  const lastCompactAtRef = useRef<number>(0)
+  // 컨텍스트 초과(length) — 실제 한계 도달 시에만 표시 (오탐 방지, compact 후 무시)
   useEffect(() => {
     if (!messages || messages.length === 0) return;
     if (ctx.isLoading) return;
     if (ctx.usagePercentage == null) return;
     if (ctx.usagePercentage < 90) return;
-    // 가장 최근 length 메시지 찾기 — 최근 2개 이내만 유효
+    // 가장 최근 length 메시지 찾기 — 마지막 메시지가 length일 때만 유효
     let lengthIdx = -1;
     let lengthMsg: any = null;
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -297,10 +298,12 @@ export function SessionDetail() {
     }
     if (!lengthMsg) return;
     if (lastLengthToastRef.current === lengthMsg.info.id) return;
-    const isRecent = lengthIdx >= messages.length - 2;
-    if (!isRecent) return;
-    const hasRecoveryAfter = messages.slice(lengthIdx + 1).some((m: any) => m.info.role === "assistant" && (m.info as any)?.finish !== "length" && !(m.info as any)?.error);
-    if (hasRecoveryAfter) return;
+    const isLast = lengthIdx === messages.length - 1;
+    if (!isLast) return;
+    const msgTime = (lengthMsg as any)?.info?.time?.created ?? 0
+    if (msgTime && msgTime < lastCompactAtRef.current) return;
+    const hasAnyAfter = messages.length - 1 > lengthIdx;
+    if (hasAnyAfter) return;
     lastLengthToastRef.current = lengthMsg.info.id;
     const pct = ctx.usagePercentage ? Math.round(ctx.usagePercentage) : 0;
     showToast.error(
@@ -336,6 +339,7 @@ export function SessionDetail() {
       if (!providerID || !modelID) throw new Error("Invalid model info.");
       const ok = await summarizeSession.mutateAsync({ sessionID: sessionId, providerID, modelID });
       if (ok === false) throw new Error("The server could not complete summarize (compact). Try again, or truncate earlier messages instead.");
+      lastCompactAtRef.current = Date.now()
       showToast.success("Session summarized (compact). Context cleaned up.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
       setVisibleCount(INITIAL_VISIBLE);
