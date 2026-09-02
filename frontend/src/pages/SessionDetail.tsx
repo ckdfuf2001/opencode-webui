@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt } from "@/hooks/useOpenCode";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
@@ -306,8 +306,11 @@ export function SessionDetail() {
     if (hasAnyAfter) return;
     lastLengthToastRef.current = lengthMsg.info.id;
     const pct = ctx.usagePercentage ? Math.round(ctx.usagePercentage) : 0;
+    const isOutput = (lengthMsg as unknown as { info: { error?: { name?: string } } }).info?.error?.name === 'MessageOutputLengthError' || (lengthMsg.parts ?? []).some((p: unknown) => (p as { type: string; reason?: string }).type === 'step-finish' && (p as { reason?: string }).reason === 'length')
     showToast.error(
-      `The response was truncated because the context limit was exceeded (finish=length, ${pct ? pct + "%" : "limit exceeded"}). Clean up with summarize (compact) or truncating previous messages.`,
+      isOutput
+        ? `Output limit reached (finish=length${pct ? `, context ${pct}%` : ''}). The model hit its output token limit — try Continue to split and continue.`
+        : `Context limit reached (finish=length, ${pct ? pct + "%" : "limit exceeded"}). Clean up with summarize (compact) or truncating previous messages.`,
       { duration: 8000 }
     );
     setLengthModal({ open: true, messageId: lengthMsg.info.id });
@@ -377,6 +380,18 @@ export function SessionDetail() {
       showToast.error((e as Error).message || "Failed to truncate messages.");
     }
   }, [messages, sessionId, truncateSession]);
+
+  const sendPromptContinue = useSendPrompt(opcodeUrl, repoDirectory)
+  const handleContinueOutput = useCallback(async () => {
+    if (!sessionId) return
+    try {
+      setLengthModal({ open: false, messageId: null })
+      await sendPromptContinue.mutateAsync({ sessionID: sessionId, parts: [{ type: 'text', text: 'Continue from where you left off. Please continue the previous response.' } as never] } as never)
+      showToast.success('Continuing output...')
+    } catch (e) {
+      showToast.error((e as Error).message || 'Failed to continue.')
+    }
+  }, [sessionId, sendPromptContinue])
 
   const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
   const handleNewSession = useCallback(async () => {
@@ -906,13 +921,21 @@ if (results.length > 0) {
 
       <Dialog open={lengthModal.open} onOpenChange={(o) => setLengthModal({ open: o, messageId: o ? lengthModal.messageId : null })}>
         <DialogContent className="max-w-lg">
-          <DialogTitle>Context limit exceeded</DialogTitle>
+          <DialogTitle>{(() => {
+            const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } }; parts?: { type: string; reason?: string }[] } | undefined
+            const isOutput = m?.info?.error?.name === 'MessageOutputLengthError' || (m?.parts ?? []).some((p) => p.type === 'step-finish' && p.reason === 'length')
+            return isOutput ? 'Output limit reached' : 'Context limit exceeded'
+          })()}</DialogTitle>
           <div className="mt-2 space-y-3 text-sm">
             <p className="text-muted-foreground">
-              The model response was truncated with <span className="font-mono font-bold text-red-500">finish=length</span>. The context has reached its limit ({ctx.contextLimit ? `${ctx.contextLimit.toLocaleString()} tokens` : "exceeded"}), so normal generation is no longer possible.
-              {ctx.usagePercentage ? ` Currently using ${Math.round(ctx.usagePercentage)}% (${ctx.totalTokens.toLocaleString()} tokens).` : ""}
+              {(() => {
+                const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } }; parts?: { type: string; reason?: string }[] } | undefined
+                const isOutput = m?.info?.error?.name === 'MessageOutputLengthError' || (m?.parts ?? []).some((p) => p.type === 'step-finish' && p.reason === 'length')
+                if (isOutput) return <>The model hit its <span className="font-mono font-bold text-amber-500">output limit (finish=length)</span>. The response was cut off because the output token limit was reached, not the context window. Try Continue to split and continue.</>
+                return <>The model response was truncated with <span className="font-mono font-bold text-red-500">finish=length</span>. The context has reached its limit ({ctx.contextLimit ? `${ctx.contextLimit.toLocaleString()} tokens` : "exceeded"}), so normal generation is no longer possible.{ctx.usagePercentage ? ` Currently using ${Math.round(ctx.usagePercentage)}% (${ctx.totalTokens.toLocaleString()} tokens).` : ""}</>
+              })()}
             </p>
-            <p className="text-xs text-muted-foreground">Summarize (compact) reduces context by summarizing the conversation on the server. If it fails, truncate earlier messages instead.</p>
+            <p className="text-xs text-muted-foreground">For output limit: Continue will send a follow-up to resume. For context limit: summarize (compact) reduces context by summarizing the conversation on the server. If it fails, truncate earlier messages instead.</p>
             <div className="flex gap-2 justify-end pt-2 flex-wrap">
               <button
                 onClick={() => setLengthModal({ open: false, messageId: null })}
@@ -920,6 +943,13 @@ if (results.length > 0) {
               >
                 Close
               </button>
+              {(() => {
+                const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } }; parts?: { type: string; reason?: string }[] } | undefined
+                const isOutput = m?.info?.error?.name === 'MessageOutputLengthError' || (m?.parts ?? []).some((p) => p.type === 'step-finish' && p.reason === 'length')
+                return isOutput ? (
+                  <button onClick={handleContinueOutput} disabled={sendPromptContinue.isPending} className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm disabled:opacity-50 hover:bg-emerald-700"> {sendPromptContinue.isPending ? 'Continuing...' : 'Continue (split)'} </button>
+                ) : null
+              })()}
               <button
                 onClick={handleAutoTruncate}
                 disabled={truncateSession.isPending}
