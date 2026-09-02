@@ -268,6 +268,18 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     queryFn: async () => {
       const data = await client!.listMessages(sessionID!);
       let result = applyTruncationWindow(sessionID!, data);
+      const cached = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory]);
+      if (cached && result.length > 0 && cached.length > 0) {
+        const cachedLast = cached[cached.length - 1]!;
+        const resultLast = result[result.length - 1]!;
+        if (cachedLast.info.id === resultLast.info.id && cachedLast.parts.length > resultLast.parts.length) {
+          result = [...result.slice(0, -1), cachedLast];
+        } else if (cachedLast.info.id === resultLast.info.id) {
+          const cText = cachedLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
+          const rText = resultLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
+          if (cText.length > rText.length) result = [...result.slice(0, -1), cachedLast];
+        }
+      }
       const optimistic = pendingOptimistic.get(sessionID!);
       let realUserArrived = false;
       if (optimistic) {
@@ -315,11 +327,11 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     refetchInterval: (query) => {
       if (isRecentlyAborted(sessionID!)) return 2000
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
-      if (hasPending) return 380
+      if (hasPending) return 2000
       const data = query.state.data as MessageListResponse | undefined
       const last = data?.[data.length - 1]
       const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
-      if (streaming) return 380
+      if (streaming) return 2000
       return 700
     },
   });
@@ -959,5 +971,140 @@ export const useConfig = (opcodeUrl: string | null | undefined, directory?: stri
     queryFn: () => client!.getConfig(),
     enabled: !!client,
   });
+};
+
+export function hasActiveSend(sessionID: string): boolean {
+  return activeSendControllers.has(sessionID) || pendingOptimistic.has(sessionID)
+}
+
+export const useEphemeralSessionSSE = (
+  opcodeUrl: string | null | undefined,
+  sessionID: string | undefined,
+  directory?: string,
+  enabled?: boolean,
+) => {
+  const client = useOpenCodeClient(opcodeUrl, directory);
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!enabled || !client || !sessionID) return;
+    const url = client.getEventSourceURL();
+    let closed = false;
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource(url);
+    } catch {
+      return;
+    }
+    const mergePart = (part: MessageWithParts["parts"][number], delta?: string) => {
+      const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+      queryClient.setQueryData<MessageListResponse>(key, (old) => {
+        if (!old) return old;
+        const mid = (part as { messageID: string }).messageID;
+        const idx = old.findIndex((m) => m.info.id === mid);
+        if (idx === -1) {
+          queryClient.invalidateQueries({ queryKey: key });
+          return old;
+        }
+        const msg = old[idx]!;
+        const pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
+        let nextParts: MessageWithParts["parts"];
+        if (pIdx === -1) {
+          nextParts = [...msg.parts, part];
+        } else {
+          const existing = msg.parts[pIdx] as { type: string; text?: string };
+          let nextPart: typeof part = part;
+          if (delta && existing.type === "text" && typeof existing.text === "string") {
+            nextPart = { ...part, text: existing.text + delta } as typeof part;
+          }
+          nextParts = [...msg.parts];
+          nextParts[pIdx] = nextPart;
+        }
+        const nextMsg: MessageWithParts = { ...msg, parts: nextParts };
+        const next = [...old];
+        next[idx] = nextMsg;
+        return next;
+      });
+    };
+    const mergeMessage = (info: MessageWithParts["info"]) => {
+      const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+      queryClient.setQueryData<MessageListResponse>(key, (old) => {
+        if (!old) return old;
+        const idx = old.findIndex((m) => m.info.id === info.id);
+        if (idx === -1) return [...old, { info, parts: [] } as MessageWithParts];
+        const next = [...old];
+        next[idx] = { ...next[idx]!, info };
+        return next;
+      });
+    };
+    const handleRaw = (e: MessageEvent) => {
+      try {
+        const raw = (e as MessageEvent).data as string;
+        let parsed: Record<string, unknown>;
+        try { parsed = JSON.parse(raw) as Record<string, unknown>; } catch { return; }
+        let t: string;
+        let p: Record<string, unknown>;
+        if (typeof parsed.type === "string" && parsed.properties && typeof parsed.properties === "object") {
+          t = parsed.type as string;
+          p = parsed.properties as Record<string, unknown>;
+        } else {
+          t = (e as unknown as { type: string }).type || "";
+          p = parsed as Record<string, unknown>;
+          if (t === "message" && typeof parsed.type === "string") {
+            t = parsed.type as string;
+            p = (parsed.properties as Record<string, unknown>) ?? parsed;
+          }
+        }
+        if (t === "message.part.updated") {
+          const part = (p.part ?? p) as MessageWithParts["parts"][number] & { sessionID: string; messageID: string };
+          const delta = p.delta as string | undefined;
+          const sid = (part as { sessionID: string }).sessionID ?? (p.sessionID as string);
+          if (sid !== sessionID) return;
+          if (delta && part && typeof (part as { type: string; text?: string }).text === "string") {
+            const existingKey = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+            const old = queryClient.getQueryData<MessageListResponse>(existingKey);
+            const idx = old?.findIndex((m) => m.info.id === (part as { messageID: string }).messageID) ?? -1;
+            if (idx !== -1) {
+              const existingPart = old![idx]!.parts.find((pp) => (pp as { id: string }).id === (part as { id: string }).id) as { text?: string } | undefined;
+              if (existingPart && typeof existingPart.text === "string" && typeof (part as { text?: string }).text === "string" && (part as { text: string }).text === existingPart.text + delta) {
+                mergePart(part, undefined);
+                return;
+              }
+            }
+          }
+          mergePart(part as MessageWithParts["parts"][number], delta);
+        } else if (t === "message.updated") {
+          const info = (p.info ?? p) as MessageWithParts["info"] & { sessionID: string };
+          const sid = (info as { sessionID: string }).sessionID ?? (p.sessionID as string);
+          if (sid !== sessionID) return;
+          mergeMessage(info as MessageWithParts["info"]);
+        } else if (t === "message.removed") {
+          const sid = p.sessionID as string;
+          const mid = p.messageID as string;
+          if (sid !== sessionID) return;
+          const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+          queryClient.setQueryData<MessageListResponse>(key, (old) => old?.filter((m) => m.info.id !== mid) ?? old);
+        } else if (t === "session.idle" || t === "session.status") {
+          const sid = (p.sessionID as string) ?? (p.sessionId as string);
+          if (sid && sid !== sessionID) return;
+          if (t === "session.idle") {
+            queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+            queryClient.invalidateQueries({ queryKey: ["session-status-db"] });
+          }
+        }
+      } catch {}
+    };
+    es.onmessage = handleRaw;
+    const types = ["message.part.updated", "message.updated", "message.removed", "session.idle", "session.status"];
+    types.forEach((t) => {
+      try { es!.addEventListener(t, handleRaw as EventListener); } catch {}
+    });
+    es.onerror = () => {
+      if (closed) return;
+    };
+    return () => {
+      closed = true;
+      try { es?.close(); } catch {}
+    };
+  }, [enabled, opcodeUrl, sessionID, directory, client, queryClient]);
 };
 

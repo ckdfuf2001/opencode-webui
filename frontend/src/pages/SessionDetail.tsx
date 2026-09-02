@@ -14,7 +14,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend } from "@/hooks/useOpenCode";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
@@ -190,7 +190,9 @@ export function SessionDetail() {
   }, [dbStatuses, sessionId, descendantIDs]);
   const lastMessage = messages?.[messages.length - 1];
   const isStreaming = isConnected && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy);
-  usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
+  const sseEnabled = !!sessionId && (hasActiveSend(sessionId) || isStreaming);
+  usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming && !sseEnabled)
+  useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)
   useEffect(() => {
     if (sessionId && isRecentlyAborted(sessionId)) setHiddenAfterID(null)
   }, [isStreaming, sessionId])
