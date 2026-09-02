@@ -100,18 +100,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
     );
   }
 
-  if (!repos || repos.length === 0) {
-    return (
-      <div className="text-center p-12">
-        <GitBranch className="w-12 h-12 mx-auto mb-4 text-zinc-600" />
-        <p className="text-zinc-500">
-          No repositories yet. Add one to get started.
-        </p>
-      </div>
-    );
-  }
-
-  const dedupedRepos = repos.reduce((acc, repo) => {
+  const dedupedRepos = (repos ?? []).reduce((acc, repo) => {
     if (repo.isWorktree) {
       acc.push(repo);
     } else {
@@ -124,7 +113,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
     }
     
     return acc;
-  }, [] as typeof repos);
+  }, [] as NonNullable<typeof repos>);
 
   const filteredRepos = dedupedRepos.filter((repo) => {
     const repoName = repo.repoUrl 
@@ -214,7 +203,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                 variant="outline"
                 size="icon"
                 className="md:hidden"
-                disabled={filteredRepos.length === 0}
               >
                 <MoreHorizontal className="w-4 h-4" />
               </Button>
@@ -244,7 +232,12 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
         </div>
 
         <div className="h-[calc(100vh-200px)] overflow-y-auto">
-          {filteredRepos.length === 0 ? (
+          {dedupedRepos.length === 0 ? (
+            <div className="text-center p-12">
+              <GitBranch className="w-12 h-12 mx-auto mb-4 text-zinc-600" />
+              <p className="text-zinc-500">No repositories yet. Add one to get started.</p>
+            </div>
+          ) : filteredRepos.length === 0 ? (
             <div className="text-center p-12">
               <Search className="w-12 h-12 mx-auto mb-4 text-zinc-600" />
               <p className="text-zinc-500">
