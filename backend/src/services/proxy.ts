@@ -587,7 +587,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       releaseBusy()
       try {
         const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
-        if (m?.[1]) setTimeout(() => flushQueueForSession(m[1]!), 150)
+        if (m?.[1]) {
+          const dir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
+          setTimeout(() => void flushQueueForSession(m[1]!, dir), 400)
+        }
       } catch {}
       return new Response(response.body, {
         status: response.status,
@@ -611,10 +614,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         } finally {
           releaseBusy()
           reader.releaseLock()
-          // 채팅 끝 이벤트로 큐를 즉시 발송 — 2s 폴러 대기 대신
+          // 대화 전체가 complete(idle) 일 때만 큐 발송 — 제너레이션 단위 발송 방지
           try {
             const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
-            if (m?.[1]) setTimeout(() => flushQueueForSession(m[1]!), 150)
+            if (m?.[1]) {
+              const dir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
+              setTimeout(() => void flushQueueForSession(m[1]!, dir), 400)
+            }
           } catch {}
         }
       },

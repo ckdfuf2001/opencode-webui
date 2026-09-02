@@ -1677,28 +1677,31 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
               variant={tab === 'runs' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('runs')}
-              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-3"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-2 sm:px-3"
+              title="History"
             >
-              <History className="w-3.5 h-3.5 mr-1 shrink-0" />
-              History
+              <History className="w-3.5 h-3.5 shrink-0 sm:mr-1" />
+              <span className="hidden sm:inline">History</span>
             </Button>
             <Button
               variant={tab === 'explorer' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('explorer')}
-              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-3"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-2 sm:px-3"
+              title="Explorer"
             >
-              <Search className="w-3.5 h-3.5 mr-1 shrink-0" />
-              Explorer
+              <Search className="w-3.5 h-3.5 shrink-0 sm:mr-1" />
+              <span className="hidden sm:inline">Explorer</span>
             </Button>
             <Button
               variant={tab === 'recall' ? 'secondary' : 'ghost'}
               size="sm"
               onClick={() => setTab('recall')}
-              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-3"
+              className="text-xs h-8 flex-1 justify-center min-w-0 truncate px-2 sm:px-3"
+              title="Recall"
             >
-              <Brain className="w-3.5 h-3.5 mr-1 shrink-0" />
-              Recall
+              <Brain className="w-3.5 h-3.5 shrink-0 sm:mr-1" />
+              <span className="hidden sm:inline">Recall</span>
             </Button>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground ml-1 shrink-0 h-8 w-8">

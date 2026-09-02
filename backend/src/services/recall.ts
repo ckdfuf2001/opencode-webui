@@ -111,18 +111,7 @@ function searchCommitsUnion(db: Database, q: string, k: number, opts: RecallOpti
   }
 
   const primary = doSearch(opts.repoId)
-  if (opts.repoId == null || opts.repoId === 0) return primary
-  const hostHits = doSearch(0)
-  const seen = new Set(primary.map((h) => `${h.repoId}:${h.sha}`))
-  const merged = [...primary]
-  for (const h of hostHits) {
-    const key = `${h.repoId}:${h.sha}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    merged.push(h)
-    if (merged.length >= k) break
-  }
-  return merged.slice(0, k)
+  return primary
 }
 
 function tokenize(q: string): string[] {

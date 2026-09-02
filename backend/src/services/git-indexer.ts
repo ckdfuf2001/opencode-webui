@@ -53,6 +53,25 @@ interface ParsedCommit {
  * -z 로 커밋을 NUL 청크로 분리해 멀티라인 body 를 안전하게 파싱한다.
  * last_sha 를 시드로 역순(최신→과거)으로 멈춘다.
  */
+function getRepoTrackPaths(db: Database): string[] {
+  try {
+    const row = db.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+    if (row?.preferences) {
+      const parsed = JSON.parse(row.preferences) as { repoTrackPaths?: string[] }
+      if (Array.isArray(parsed.repoTrackPaths)) {
+        const sanitized = parsed.repoTrackPaths.map((p) => p.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')).filter(Boolean)
+        if (sanitized.length > 0) return sanitized
+      }
+    }
+  } catch {}
+  return ['.opencode', 'scripts']
+}
+
+function isTrackedFile(file: string, trackPaths: string[]): boolean {
+  const norm = file.replace(/\\/g, '/')
+  return trackPaths.some((p) => norm === p || norm.startsWith(p + '/'))
+}
+
 export async function indexRepoCommits(db: Database, repo: Repo, opts: { force?: boolean } = {}): Promise<number> {
   const repoId = repo.id
   const branch = repo.branch || repo.defaultBranch || 'HEAD'
@@ -66,6 +85,8 @@ export async function indexRepoCommits(db: Database, repo: Repo, opts: { force?:
 
   const history = await fetchCommitHistory(repo, seedSha)
   if (history.length === 0) return 0
+
+  const trackPaths = getRepoTrackPaths(db)
 
   const upsert = db.prepare(
     `INSERT INTO git_commits
@@ -91,6 +112,12 @@ export async function indexRepoCommits(db: Database, repo: Repo, opts: { force?:
       const filesJson = JSON.stringify(c.files)
       // FTS 행은 sha 기준 제거 후 재삽입한다 (내용 갱신 반영)
       db.query('DELETE FROM git_commits_fts WHERE sha = ? AND repo_id = ?').run(c.sha, repoId)
+      // .git/info/exclude 에서 무시된 경로는 커밋 인덱스에서도 제외 — trackPaths 와 무관한 커밋은 recall에 노출 안 됨
+      if (trackPaths.length > 0 && c.files.length > 0 && !c.files.some((f) => isTrackedFile(f, trackPaths))) {
+        // 기존에 인덱싱된 경우 커밋 메인 테이블에서도 제거하여 오래된 이력 정리
+        try { db.query('DELETE FROM git_commits WHERE sha = ? AND repo_id = ?').run(c.sha, repoId) } catch {}
+        continue
+      }
       upsert.run(c.sha, repoId, c.subject, c.body, c.author, branch, c.committedAt, filesJson)
       upsertFts.run(c.subject, c.body, c.files.join('\n'), c.sha, repoId, c.committedAt)
       count++
@@ -171,6 +198,20 @@ export function searchCommits(
 ): CommitSearchHit[] {
   const k = Math.max(1, Math.min(50, opts.k ?? 10))
   const trimmed = q.trim()
+  const trackPaths = getRepoTrackPaths(db)
+  const needTrackFilter = trackPaths.length > 0
+  const filterByTrack = (rows: (CommitSearchHit & { filesJson?: string })[]): CommitSearchHit[] => {
+    if (!needTrackFilter) return rows
+    return rows.filter((r) => {
+      try {
+        const files: string[] = JSON.parse((r as unknown as { filesJson?: string }).filesJson ?? '[]')
+        if (files.length === 0) return true
+        return files.some((f) => isTrackedFile(f, trackPaths))
+      } catch {
+        return true
+      }
+    })
+  }
   // 단일 문자 prefix (a*)는 trigram FTS5 prefix로 매칭이 안 되므로 LIKE fallback — fts-indexer/searchMessages 와 동일
   if (/^\p{L}\*$/u.test(trimmed) || /^\p{N}\*$/u.test(trimmed)) {
     const prefix = trimmed.slice(0, -1)
@@ -183,15 +224,16 @@ export function searchCommits(
     }
     const sql = `
     SELECT c.sha AS sha, c.repo_id AS repoId, c.subject AS subject, c.author AS author,
-           c.committed_at AS committedAt
+           c.committed_at AS committedAt, c.files_json AS filesJson
     FROM git_commits_fts
     JOIN git_commits c ON c.repo_id = git_commits_fts.repo_id AND c.sha = git_commits_fts.sha
     WHERE ${where.join(' AND ')}
     ORDER BY c.committed_at DESC
     LIMIT ?`
-    params.push(k)
-    const rows = db.query(sql).all(...(params as any[])) as CommitSearchHit[]
-    return rows
+    params.push(needTrackFilter ? k * 3 : k)
+    const rows = db.query(sql).all(...(params as any[])) as (CommitSearchHit & { filesJson?: string })[]
+    const filtered = filterByTrack(rows)
+    return filtered.slice(0, k) as CommitSearchHit[]
   }
   const tokens = buildCommitQueryTokens(q)
   const where: string[] = []
@@ -209,15 +251,16 @@ export function searchCommits(
   const order = where[0] === '1 = 1' ? 'c.committed_at DESC' : 'bm25(git_commits_fts)'
   const sql = `
     SELECT c.sha AS sha, c.repo_id AS repoId, c.subject AS subject, c.author AS author,
-           c.committed_at AS committedAt
+           c.committed_at AS committedAt, c.files_json AS filesJson
     FROM git_commits_fts
     JOIN git_commits c ON c.repo_id = git_commits_fts.repo_id AND c.sha = git_commits_fts.sha
     WHERE ${where.join(' AND ')}
     ORDER BY ${order}
     LIMIT ?`
-  params.push(k)
-  const rows = db.query(sql).all(...(params as any[])) as CommitSearchHit[]
-  return rows
+  params.push(needTrackFilter ? k * 3 : k)
+  const rows = db.query(sql).all(...(params as any[])) as (CommitSearchHit & { filesJson?: string })[]
+  const filtered = filterByTrack(rows)
+  return filtered.slice(0, k) as CommitSearchHit[]
 }
 
 export function getCommitDetail(db: Database, repoId: number, sha: string): RepoLogRow | null {
