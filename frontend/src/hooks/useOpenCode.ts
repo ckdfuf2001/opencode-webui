@@ -261,6 +261,7 @@ export const useSession = (opcodeUrl: string | null | undefined, sessionID: stri
 
 export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
+  const queryClient = useQueryClient();
 
   return useQuery({
     queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory],
@@ -299,9 +300,10 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       if (isRecentlyAborted(sessionID!)) {
         return reconcileOrphanedStreams(result, sessionID!, false);
       }
-      const status = await client!.getSessionStatus().catch(() => null);
-      if (status === null) return result;
-      const isBusy = status[sessionID!]?.type === "busy";
+      const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
+      const isBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
+      const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
+      if (hasPending) return reconcileOrphanedStreams(result, sessionID!, true)
       return reconcileOrphanedStreams(result, sessionID!, isBusy);
     },
     enabled: !!client && !!sessionID,
@@ -311,10 +313,13 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
     refetchInterval: (query) => {
+      if (isRecentlyAborted(sessionID!)) return 2000
+      const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
+      if (hasPending) return 380
       const data = query.state.data as MessageListResponse | undefined
       const last = data?.[data.length - 1]
       const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
-      if (streaming || isRecentlyAborted(sessionID!)) return 2000
+      if (streaming) return 380
       return 700
     },
   });
