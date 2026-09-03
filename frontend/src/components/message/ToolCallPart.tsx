@@ -205,17 +205,19 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
         ) : null}
         <span className="text-muted-foreground text-xs ml-auto">({part.state.status})</span>
       </button>
+      {part.state.status === 'running' && (part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && (
+        <div className="bg-card p-2">
+          <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
+            <div className="text-[11px] text-yellow-400 mb-1 flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</div>
+            <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(part.state as unknown as { output?: string }).output || part.state.title || (part.state.input as Record<string, unknown>)?.command as string || "Running..."}</pre>
+          </div>
+        </div>
+      )}
 
       {expanded && (
         <div className="bg-card space-y-2 p-2">
           {part.state.status === 'running' && (
             <div className="text-sm space-y-2">
-              {(part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && (
-                <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
-                  <div className="text-[11px] text-yellow-400 mb-1 flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</div>
-                  <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(part.state as unknown as { output?: string }).output || part.state.title || (part.state.input as Record<string, unknown>)?.command as string || "Running..."}</pre>
-                </div>
-              )}
               <div>
                 <div className="text-zinc-400 mb-1">Input:</div>
                 <ClickableJson json={part.state.input} onFileClick={onFileClick} />
