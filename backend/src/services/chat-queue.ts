@@ -197,6 +197,32 @@ async function dispatchQueuedChat(
     // fall back to workspace directory
   }
 
+  // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다
+  const trimmed = chat.text.trim()
+  const cmdMatch = trimmed.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
+  if (cmdMatch) {
+    const cmd = cmdMatch[1] ?? ''
+    const args = cmdMatch[2] ?? ''
+    try {
+      const cmdRes = await fetch(`${base}/session/${sessionID}/command?directory=${directoryParam}`, {
+        method: 'POST',
+        headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ command: cmd, arguments: args }),
+        signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+      })
+      if (cmdRes.ok) {
+        void cmdRes.text().catch(() => {})
+        logger.info(`Queued command /${cmd} dispatched via /command for session ${sessionID}`)
+        return true
+      }
+      const body = await cmdRes.text().catch(() => '')
+      // 커맨드가 아니거나 서버가 모르면 /message 로 폴백
+      logger.warn(`Queued command /${cmd} via /command rejected HTTP ${cmdRes.status} ${body.slice(0, 200)} — fallback to /message`)
+    } catch (e) {
+      logger.warn(`Queued command /${cmdMatch[1]} dispatch error, fallback to /message:`, e)
+    }
+  }
+
   const sendRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
     method: 'POST',
     headers: ensureServerAuth({ 'Content-Type': 'application/json' }),

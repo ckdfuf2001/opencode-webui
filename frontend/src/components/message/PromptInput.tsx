@@ -235,9 +235,14 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       const command = filterCommands(commandName)[0]
       
       if (command) {
-        // 생성 중 커맨드는 큐에 적재 — 텍스트로 큐에 넣으면 idle 시 sendPrompt로 /커맨드 형식 그대로 발송된다
+        // 생성 중 커맨드는 큐에 적재 — 스킬은 템플릿 전체를, 일반 커맨드는 /name args를 큐에 넣는다
+        // 배치(큐)는 opencode의 /command 엔드포인트로 실행되어 설명이 아닌 실제 수행이 된다
         if (hasActiveStream || sendPrompt.isPending) {
-          const text = prompt.trim()
+          const isSkill = (command as { source?: string }).source === 'skill'
+          const args = commandMatch[2] ?? ''
+          const text = isSkill
+            ? (args ? `${(command as { template?: string }).template ?? `/${command.name}`}\n\n${args}` : ((command as { template?: string }).template ?? `/${command.name}`))
+            : prompt.trim()
           if (text) {
             enqueueQueued.mutate({ sessionID, text })
             setPrompt('')
