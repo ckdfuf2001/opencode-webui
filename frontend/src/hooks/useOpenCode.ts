@@ -393,9 +393,8 @@ function reconcileOrphanedStreams(
   sessionID: string,
   isBusy: boolean,
 ): MessageListResponse {
-  if (isBusy) return messages;
   let changed = false;
-  // idle ?�태?�서 ?�트 ?�는 미완�?assistant 메시지???�령 카드?��?�??�거?�다.
+  // Always filter ghost (0-part incomplete assistant) to prevent empty area duplicate
   const filtered = messages.filter((msg) => {
     const ghost =
       msg.info.sessionID === sessionID &&
@@ -405,6 +404,7 @@ function reconcileOrphanedStreams(
     if (ghost) changed = true;
     return !ghost;
   });
+  if (isBusy) return changed ? filtered : messages;
   const updated = filtered.map((msg): MessageWithParts => {
     if (msg.info.sessionID !== sessionID) return msg;
     if (msg.info.role !== "assistant") return msg;
@@ -806,7 +806,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         queryClient.setQueryData<MessageListResponse>(key, (old) => {
           if (!old) return old;
           const idx = old.findIndex((m) => m.info.id === info.id);
-          if (idx === -1) return [...old, { info, parts: [] } as MessageWithParts];
+          if (idx === -1) return old;
           const next = [...old]; next[idx] = { ...next[idx]!, info }; return next;
         });
       };
@@ -1126,7 +1126,7 @@ export const useEphemeralSessionSSE = (
       queryClient.setQueryData<MessageListResponse>(key, (old) => {
         if (!old) return old;
         const idx = old.findIndex((m) => m.info.id === info.id);
-        if (idx === -1) return [...old, { info, parts: [] } as MessageWithParts];
+        if (idx === -1) return old;
         const next = [...old];
         next[idx] = { ...next[idx]!, info };
         return next;

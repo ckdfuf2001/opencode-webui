@@ -212,8 +212,8 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
             <div className="text-sm space-y-2">
               {(part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && (
                 <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
-                  <div className="text-[11px] text-yellow-400 mb-1 flex items-center gap-1"><span className="animate-pulse">●</span> Streaming</div>
-                  <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(part.state as unknown as { output?: string }).output || part.state.title || "Waiting for output..."}</pre>
+                  <div className="text-[11px] text-yellow-400 mb-1 flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</div>
+                  <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(part.state as unknown as { output?: string }).output || part.state.title || (part.state.input as Record<string, unknown>)?.command as string || "Running..."}</pre>
                 </div>
               )}
               <div>
