@@ -834,9 +834,16 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             queryClient.setQueryData<MessageListResponse>(key, (old) => {
               if (!old) return old; const idx = old.findIndex((m) => m.info.id === mid); if (idx === -1) return old;
               const msg = old[idx]!; const pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
-              if (pIdx === -1) return old; const existing = msg.parts[pIdx] as { type: string; text?: string };
-              if (existing.type !== "text") return old;
-              const nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+              if (pIdx === -1) return old;
+              const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
+              let nextPart: MessageWithParts["parts"][number];
+              if (existing.type === "text") {
+                nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+              } else if (existing.type === "tool") {
+                const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
+                const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+                nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+              } else return old;
               const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
               const next = [...old]; next[idx] = { ...msg, parts: nextParts }; return next;
             });
@@ -1183,9 +1190,15 @@ export const useEphemeralSessionSSE = (
             if (idx === -1) return old;
             const msg = old[idx]!; const pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
             if (pIdx === -1) return old;
-            const existing = msg.parts[pIdx] as { type: string; text?: string };
-            if (existing.type !== "text") return old;
-            const nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+            const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
+            let nextPart: MessageWithParts["parts"][number];
+            if (existing.type === "text") {
+              nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+            } else if (existing.type === "tool") {
+              const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
+              const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+              nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+            } else return old;
             const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
             const next = [...old]; next[idx] = { ...msg, parts: nextParts }; return next;
           });
