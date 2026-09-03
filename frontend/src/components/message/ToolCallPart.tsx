@@ -6,7 +6,8 @@ import { detectFileReferences } from '@/lib/fileReferences'
 import { Copy } from 'lucide-react'
 
 function CopyButton({ content, title, className = "" }: { content: string; title: string; className?: string }) {
-  const handleCopy = async () => {
+  const handleCopy = async (e?: React.MouseEvent) => {
+    e?.stopPropagation()
     try {
       await navigator.clipboard.writeText(content)
     } catch (error) {
@@ -80,6 +81,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   const { preferences } = useSettings()
   const { userBashCommands } = useUserBash()
   const outputRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const isUserBashCommand = part.tool === 'bash' && 
     part.state.status === 'completed' &&
     typeof part.state.input?.command === 'string' &&
@@ -158,8 +160,9 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   }, [isUserBashCommand])
 
   useEffect(() => {
-    if (part.tool === 'bash' && expanded && outputRef.current) {
-      outputRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (part.tool === 'bash' && expanded) {
+      const el = containerRef.current ?? outputRef.current
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
   }, [expanded, part.tool])
 
@@ -243,7 +246,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   }
 
   return (
-    <div className="border border-border rounded-lg overflow-hidden my-2">
+    <div ref={containerRef} className="border border-border rounded-lg overflow-hidden my-2">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full px-4 py-2 bg-card hover:bg-card-hover text-left flex items-center gap-2 text-sm min-w-0"
@@ -270,7 +273,11 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
       </button>
 
       {expanded && (
-        <div className="bg-card space-y-2 p-2">
+        <div
+          className="bg-card space-y-2 p-2"
+          onClick={() => { if (part.tool === 'bash') setExpanded(!expanded) }}
+          style={part.tool === 'bash' ? { cursor: 'pointer' } : undefined}
+        >
           {part.state.status === 'running' && (
             (part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') ? (
               <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
@@ -347,10 +354,11 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
                 </div>
               )}
               <div className="text-sm" ref={outputRef}>
-                <div className="text-zinc-400 mb-1">Output:</div>
-                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors" 
-                     onClick={() => part.state.status === 'completed' && navigator.clipboard.writeText(part.state.output)}
-                     title="Click to copy output">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="text-zinc-400">Output:</div>
+                  <CopyButton content={part.state.status === 'completed' ? part.state.output : ''} title="Copy output" />
+                </div>
+                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap">
                   {part.state.status === 'completed' ? part.state.output : ''}
                 </pre>
               </div>
@@ -384,10 +392,11 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
                 </div>
               )}
               <div className="text-sm">
-                <div className="text-zinc-400 mb-1">Output:</div>
-                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors text-red-300" 
-                     onClick={() => part.state.status === 'error' && navigator.clipboard.writeText(part.state.error)}
-                     title="Click to copy output">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="text-zinc-400">Output:</div>
+                  <CopyButton content={part.state.status === 'error' ? part.state.error : ''} title="Copy output" />
+                </div>
+                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap text-red-300">
                   {part.state.error}
                 </pre>
               </div>
