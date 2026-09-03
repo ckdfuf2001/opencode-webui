@@ -1,4 +1,5 @@
 import { Menu } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface BackButtonProps {
   to?: string;
@@ -9,22 +10,28 @@ interface BackButtonProps {
 export function BackButton({ to = "/", className = "", onClick }: BackButtonProps) {
   if (onClick) {
     return (
-      <button
+      <Button
+        variant="ghost"
+        size="icon"
         onClick={onClick}
-        className={`text-zinc-400 hover:text-zinc-100 transition-all duration-200 hover:scale-105 border border-zinc-700 rounded-md px-2 py-1 ${className}`}
+        className={`h-8 w-8 shrink-0 ${className}`}
         title="메뉴"
       >
         <Menu className="w-4 h-4" />
-      </button>
+      </Button>
     );
   }
   return (
-    <a
-      href={to}
-      className={`text-zinc-400 hover:text-zinc-100 transition-all duration-200 hover:scale-105 border border-zinc-700 rounded-md px-2 py-1 flex items-center justify-center ${className}`}
+    <Button
+      variant="ghost"
+      size="icon"
+      className={`h-8 w-8 shrink-0 ${className}`}
       title="메뉴"
+      asChild
     >
-      <Menu className="w-4 h-4" />
-    </a>
+      <a href={to} className="flex items-center justify-center">
+        <Menu className="w-4 h-4" />
+      </a>
+    </Button>
   );
 }

@@ -1,4 +1,4 @@
-import { Settings } from "lucide-react";
+import { Menu, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -9,9 +9,10 @@ interface HeaderProps {
   title: string;
   backTo?: string;
   action?: ReactNode;
+  onMenuClick?: () => void;
 }
 
-export function Header({ title, backTo, action }: HeaderProps) {
+export function Header({ title, backTo, action, onMenuClick }: HeaderProps) {
   const { open: openSettings } = useSettingsDialog();
   const theme = useTheme();
 
@@ -19,8 +20,14 @@ export function Header({ title, backTo, action }: HeaderProps) {
     <header className="sticky top-0 z-10 bg-gradient-to-b from-background via-background to-background border-b border-border backdrop-blur-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between py-2">
-          <div className="flex items-center gap-4">
-            {backTo && <BackButton to={backTo} />}
+          <div className="flex items-center gap-2 sm:gap-4">
+            {onMenuClick ? (
+              <Button variant="ghost" size="icon" onClick={onMenuClick} className="h-8 w-8 shrink-0" title="메뉴">
+                <Menu className="w-4 h-4" />
+              </Button>
+            ) : backTo ? (
+              <BackButton to={backTo} />
+            ) : null}
             <div className="flex items-center gap-2">
               {title === "OpenCode" ? (
                 <img 

@@ -6,7 +6,7 @@ import { Header } from "@/components/layout/Header";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Button } from "@/components/ui/button";
-import { FolderOpen, Briefcase, Settings, Menu } from "lucide-react";
+import { FolderOpen, Briefcase, Settings } from "lucide-react";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
@@ -25,11 +25,9 @@ export function Repos() {
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-background">
       <Header
         title="OpenCode"
+        onMenuClick={() => setNavOpen(true)}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => setNavOpen(true)} className="h-8 w-8" title="메뉴">
-              <Menu className="w-4 h-4" />
-            </Button>
             <OpenCodeStatus />
             <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
               <Button
