@@ -734,6 +734,8 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
       return recall(debouncedQ, { k: kParam, repoId: repoIdParam, sessionId: sessionId || undefined })
     },
     enabled: !!debouncedQ,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
   })
 
   const copyText = async (text: string, label = 'Copied to clipboard') => {

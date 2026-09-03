@@ -100,14 +100,17 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
-  // 윈도잉: 첫 진입/컴팩트 후 최근 N개만 보이고 위로 스크롤 시 점진 로딩
-  const INITIAL_VISIBLE = 25;
-  const LOAD_STEP = 25;
+  // 윈도잉: 첫 진입/컴팩트 후 최근 N개만 보이고 위로 스크롤 시 점진 로딩 — 메모리 절약을 위해 15로 축소
+  const INITIAL_VISIBLE = 15;
+  const LOAD_STEP = 15;
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
   const visibleCountRef = useRef(visibleCount);
   useEffect(() => { visibleCountRef.current = visibleCount }, [visibleCount]);
-  // 세션 변경 시 초기화
-  useEffect(() => { setVisibleCount(INITIAL_VISIBLE) }, [sessionId]);
+  // 세션 변경 시 초기화 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE)
+    queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
+  }, [sessionId, queryClient]);
   // 컴팩트/트렁케이트 등으로 메시지가 크게 줄면(예: summarize) 다시 최근만 보이게
   const prevMsgLenRef = useRef<number>(0);
   useEffect(() => {

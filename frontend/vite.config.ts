@@ -28,6 +28,7 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       assetsInlineLimit: 4096,
+      chunkSizeWarningLimit: 600,
       rollupOptions: {
         output: {
           assetFileNames: (assetInfo) => {
@@ -35,6 +36,11 @@ export default defineConfig(({ mode }) => {
               return "manifest.json";
             }
             return "assets/[name]-[hash][extname]";
+          },
+          manualChunks: {
+            pdf: ["pdfjs-dist"],
+            xlsx: ["xlsx", "jszip"],
+            monaco: ["@monaco-editor/react"],
           },
         },
       },
