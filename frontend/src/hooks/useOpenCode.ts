@@ -787,7 +787,12 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             return [...old, newMsg];
           }
           const msg = old[idx]!;
-          const pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
+          let pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
+          // Fallback for tool: id may change across updates, match by tool + running status
+          if (pIdx === -1 && (part as { type: string }).type === "tool") {
+            const toolName = (part as { tool: string }).tool;
+            pIdx = msg.parts.findIndex((p) => (p as { type: string; tool?: string }).type === "tool" && (p as { tool: string }).tool === toolName && (p as { state?: { status?: string } }).state?.status === "running");
+          }
           let nextParts: MessageWithParts["parts"];
           if (pIdx === -1) nextParts = [...msg.parts, part];
           else {
@@ -835,8 +840,11 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
             queryClient.setQueryData<MessageListResponse>(key, (old) => {
               if (!old) return old; const idx = old.findIndex((m) => m.info.id === mid); if (idx === -1) return old;
-              const msg = old[idx]!; const pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
-              if (pIdx === -1) return old;
+              const msg = old[idx]!; let pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
+              if (pIdx === -1) {
+                pIdx = msg.parts.findIndex((pp) => (pp as { type: string; state?: { status?: string } }).type === "tool" && (pp as { state?: { status?: string } }).state?.status === "running");
+                if (pIdx === -1) return old;
+              }
               const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
               let nextPart: MessageWithParts["parts"][number];
               if (existing.type === "text") {
@@ -1111,7 +1119,11 @@ export const useEphemeralSessionSSE = (
           return [...old, newMsg];
         }
         const msg = old[idx]!;
-        const pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
+        let pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
+        if (pIdx === -1 && (part as { type: string }).type === "tool") {
+          const toolName = (part as { tool: string }).tool;
+          pIdx = msg.parts.findIndex((p) => (p as { type: string; tool?: string }).type === "tool" && (p as { tool: string }).tool === toolName && (p as { state?: { status?: string } }).state?.status === "running");
+        }
         let nextParts: MessageWithParts["parts"];
         if (pIdx === -1) {
           nextParts = [...msg.parts, part];
@@ -1190,8 +1202,11 @@ export const useEphemeralSessionSSE = (
             if (!old) return old;
             const idx = old.findIndex((m) => m.info.id === mid);
             if (idx === -1) return old;
-            const msg = old[idx]!; const pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
-            if (pIdx === -1) return old;
+            const msg = old[idx]!; let pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
+            if (pIdx === -1) {
+              pIdx = msg.parts.findIndex((pp) => (pp as { type: string; state?: { status?: string } }).type === "tool" && (pp as { state?: { status?: string } }).state?.status === "running");
+              if (pIdx === -1) return old;
+            }
             const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
             let nextPart: MessageWithParts["parts"][number];
             if (existing.type === "text") {
