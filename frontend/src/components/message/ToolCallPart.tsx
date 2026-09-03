@@ -89,19 +89,17 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [ptyOutput, setPtyOutput] = useState<string | null>(null)
 
-  // PTY streaming for bash while running: poll tool id via backend SSE and append
+  // PTY streaming for bash while running: direct PTY run via backend (opencode doesn't stream)
   useEffect(() => {
     if (part.tool !== 'bash' || part.state.status !== 'running') {
       setPtyOutput(null)
       return
     }
-    const sid = (part as unknown as { sessionID: string }).sessionID
-    const mid = (part as unknown as { messageID: string }).messageID
-    const pid = (part as unknown as { id: string }).id
-    if (!sid || !mid || !pid) return
+    const cmd = (part.state.input as Record<string, unknown>)?.command as string | undefined
+    if (!cmd) return
     let cur = (part.state as unknown as { output?: string }).output ?? ''
     setPtyOutput(cur || null)
-    const url = `/api/pty/${sid}/${mid}/${pid}/stream`
+    const url = `/api/pty/run?command=${encodeURIComponent(cmd)}`
     let es: EventSource | null = null
     try {
       es = new EventSource(url)
@@ -121,7 +119,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
       es.addEventListener('pty.done', onDelta as EventListener)
     } catch {}
     return () => { try { es?.close() } catch {} }
-  }, [part.tool, part.state.status, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id])
+  }, [part.tool, part.state.status, (part.state.input as Record<string, unknown>)?.command as string])
 
   useEffect(() => {
     if (part.tool === 'bash' && part.state.status === 'completed' && !expanded) {

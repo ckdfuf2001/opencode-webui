@@ -1,9 +1,68 @@
 import { Hono } from 'hono'
+import { spawn } from 'node:child_process'
 import { opencodeServerManager } from '../services/opencode-single-server'
 import { ensureServerAuth } from '../services/opencode-auth'
 
 export function createPtyRoutes() {
   const app = new Hono()
+
+  // Direct PTY run for bash streaming (when opencode doesn't stream)
+  app.get('/run', async (c) => {
+    const command = c.req.query('command')
+    const directory = c.req.query('directory')
+    if (!command) return c.json({ error: 'command required' }, 400)
+
+    let closed = false
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder()
+        const send = (event: string, data: string) => {
+          if (closed) return
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`))
+        }
+        c.req.raw.signal?.addEventListener('abort', () => {
+          closed = true
+          try { controller.close() } catch {}
+        })
+
+        const isWin = process.platform === 'win32'
+        const shell = isWin ? 'cmd.exe' : 'bash'
+        const args = isWin ? ['/c', command] : ['-c', command]
+        const proc = spawn(shell, args, {
+          cwd: directory || process.cwd(),
+          env: process.env,
+          windowsHide: true,
+        })
+
+        proc.stdout?.on('data', (chunk: Buffer) => {
+          send('pty.delta', JSON.stringify({ delta: chunk.toString() }))
+        })
+        proc.stderr?.on('data', (chunk: Buffer) => {
+          send('pty.delta', JSON.stringify({ delta: chunk.toString() }))
+        })
+        proc.on('close', (code) => {
+          send('pty.done', JSON.stringify({ code }))
+          try { controller.close() } catch {}
+          closed = true
+        })
+        proc.on('error', (err) => {
+          send('pty.done', JSON.stringify({ error: String(err) }))
+          try { controller.close() } catch {}
+          closed = true
+        })
+      },
+      cancel() { closed = true },
+    })
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      },
+    })
+  })
 
   app.get('/:sessionId/:messageId/:partId/stream', async (c) => {
     const sessionId = c.req.param('sessionId')
