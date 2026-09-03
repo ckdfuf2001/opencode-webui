@@ -19,6 +19,9 @@ import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDi
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
+import { NavigationTree } from "@/components/navigation/NavigationTree";
+import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Loader2, FolderOpen, GitBranch, Briefcase, CalendarPlus, Settings } from "lucide-react";
 
 export function RepoDetail() {
@@ -32,6 +35,8 @@ export function RepoDetail() {
   const [switchConfigOpen, setSwitchConfigOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
+  const [navOpen, setNavOpen] = useState(false);
+  const [addRepoOpen, setAddRepoOpen] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const { open: openSettings } = useSettingsDialog();
 
@@ -121,7 +126,7 @@ export function RepoDetail() {
       <div className="sticky top-0 z-10 border-b border-border bg-gradient-to-b from-background via-background to-background backdrop-blur-sm px-4 py-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <BackButton />
+            <BackButton onClick={() => setNavOpen(true)} />
             <div className="flex items-center gap-2">
               <h1 className="text-base font-semibold bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
                 {repoName}
@@ -265,6 +270,13 @@ export function RepoDetail() {
           basePath={repo.localPath}
           repoName={repoName}
         />
+      <Dialog open={navOpen} onOpenChange={setNavOpen}>
+        <DialogContent className="max-w-sm max-h-[80vh] overflow-y-auto">
+          <DialogTitle>네비게이션</DialogTitle>
+          <NavigationTree onNavigate={() => setNavOpen(false)} onNewRepo={() => { setNavOpen(false); setAddRepoOpen(true) }} />
+        </DialogContent>
+      </Dialog>
+      <AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoOpen} />
     </div>
   );
 }
