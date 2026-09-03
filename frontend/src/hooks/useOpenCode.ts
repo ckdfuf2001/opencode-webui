@@ -796,12 +796,20 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           let nextParts: MessageWithParts["parts"];
           if (pIdx === -1) nextParts = [...msg.parts, part];
           else {
-            const existing = msg.parts[pIdx] as { type: string; text?: string };
+            const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
             let nextPart: typeof part = part;
-            if (delta && existing.type === "text" && typeof existing.text === "string") {
-              const pText = (part as { text?: string }).text ?? "";
-              if (pText === existing.text + delta) nextPart = part;
-              else nextPart = { ...part, text: existing.text + delta } as typeof part;
+            if (delta) {
+              if (existing.type === "text" && typeof existing.text === "string") {
+                const pText = (part as { text?: string }).text ?? "";
+                if (pText === existing.text + delta) nextPart = part;
+                else nextPart = { ...part, text: existing.text + delta } as typeof part;
+              } else if (existing.type === "tool") {
+                const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
+                const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+                const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
+                if (partOut === cur + delta) nextPart = part;
+                else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+              }
             }
             nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
           }
@@ -1128,10 +1136,18 @@ export const useEphemeralSessionSSE = (
         if (pIdx === -1) {
           nextParts = [...msg.parts, part];
         } else {
-          const existing = msg.parts[pIdx] as { type: string; text?: string };
+          const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
           let nextPart: typeof part = part;
-          if (delta && existing.type === "text" && typeof existing.text === "string") {
-            nextPart = { ...part, text: existing.text + delta } as typeof part;
+          if (delta) {
+            if (existing.type === "text" && typeof existing.text === "string") {
+              nextPart = { ...part, text: existing.text + delta } as typeof part;
+            } else if (existing.type === "tool") {
+              const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
+              const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+              const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
+              if (partOut === cur + delta) nextPart = part;
+              else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+            }
           }
           nextParts = [...msg.parts];
           nextParts[pIdx] = nextPart;
