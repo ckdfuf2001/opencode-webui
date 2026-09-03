@@ -16,7 +16,7 @@ export function NavigationPanel({ open, onClose, onNewRepo }: NavigationPanelPro
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       <div className="absolute top-0 left-0 bottom-0 w-full sm:w-[380px] sm:max-w-[85vw] flex flex-col bg-background border-r sm:border-r border-border shadow-2xl">
         <div className="flex items-center justify-between px-3 py-3 border-b border-border flex-shrink-0">
-          <h2 className="text-sm font-semibold">네비게이션</h2>
+          <h2 className="text-sm font-semibold">Workspace</h2>
           <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
             <X className="w-4 h-4" />
           </Button>
