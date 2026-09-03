@@ -308,7 +308,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         realUserArrived = result.some((m) => {
           if (m.info.role !== "user" || m.info.id === optimistic.info.id) return false;
           const created = m.info.time?.created ?? 0;
-          if (created < optimisticCreated - 5000) return false;
+          if (Math.abs(created - optimisticCreated) > 30000) return false;
           if (!optimisticSig) return true;
           const text = getSignature(m.parts as unknown as MessageWithParts["parts"]);
           return text === optimisticSig;
@@ -319,6 +319,19 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       }
       if (optimistic && !realUserArrived && !result.some((m) => m.info.id === optimistic.info.id)) {
         result = [...result, optimistic];
+      }
+      // Handle optimistic assistant placeholder (for immediate LLM area with correct model)
+      const hasOptimisticAssistant = result.some((m) => m.info.id.startsWith('optimistic_assistant_'))
+      const hasRealAssistantAfterUser = result.some((m) => m.info.role === 'assistant' && !m.info.id.startsWith('optimistic_') && (m.info.time?.created ?? 0) >= (optimistic?.info.time?.created ?? 0) - 1000)
+      if (hasOptimisticAssistant && hasRealAssistantAfterUser) {
+        result = result.filter((m) => !m.info.id.startsWith('optimistic_assistant_'))
+      } else if (!hasOptimisticAssistant) {
+        // Also check cached optimistic assistant that may be in queryClient but not in result
+        const cachedHasOptimisticAssistant = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory])?.some((m) => m.info.id.startsWith('optimistic_assistant_'))
+        const serverHasRealAssistant = result.some((m) => m.info.role === 'assistant' && !m.info.id.startsWith('optimistic_') && m.parts.length > 0)
+        if (cachedHasOptimisticAssistant && serverHasRealAssistant) {
+          queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory], (old) => old?.filter((m) => !m.info.id.startsWith('optimistic_assistant_')) ?? old)
+        }
       }
       if (isRecentlyAborted(sessionID!)) {
         return reconcileOrphanedStreams(result, sessionID!, false);
@@ -399,15 +412,18 @@ function reconcileOrphanedStreams(
   isBusy: boolean,
 ): MessageListResponse {
   let changed = false;
-  // Always filter ghost (0-part incomplete assistant) to prevent empty area duplicate
-  const filtered = messages.filter((msg) => {
+  // Filter ghost (0-part incomplete assistant) except keep last one when busy to show Generating placeholder
+  const filtered = messages.filter((msg, idx) => {
     const ghost =
       msg.info.sessionID === sessionID &&
       msg.info.role === "assistant" &&
       !("completed" in msg.info.time && msg.info.time.completed) &&
       msg.parts.length === 0;
-    if (ghost) changed = true;
-    return !ghost;
+    if (!ghost) return true;
+    // Keep last ghost when busy (optimistic assistant placeholder)
+    if (isBusy && idx === messages.length - 1) return true;
+    changed = true;
+    return false;
   });
   if (isBusy) return changed ? filtered : messages;
   const updated = filtered.map((msg): MessageWithParts => {
@@ -734,9 +750,23 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       // 진행 중인 ?�링(2s)???��? 메시지�???��??깜빡?�는 것을 방�?: in-flight fetch 취소
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
       pendingOptimistic.set(sessionID, userMessage);
+      // Create optimistic assistant placeholder with correct model so LLM area shows immediately with right model name
+      const assistantOptimisticID = `optimistic_assistant_${Date.now()}_${Math.random()}`
+      const modelForAssistant = model ?? (() => { try { return localStorage.getItem('opencode-default-model') ?? '' } catch { return '' } })()
+      const [assistantProviderID, assistantModelID] = modelForAssistant.includes('/') ? modelForAssistant.split('/', 2) as [string, string] : [undefined, undefined] as unknown as [string, string]
+      const assistantPlaceholder: MessageWithParts = {
+        info: {
+          id: assistantOptimisticID,
+          role: "assistant" as const,
+          sessionID,
+          time: { created: Date.now() + 1 },
+          ...(assistantModelID ? { modelID: assistantModelID, providerID: assistantProviderID } : {}),
+        } as unknown as MessageWithParts["info"],
+        parts: [],
+      } as MessageWithParts
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
-        (old) => [...(old || []), userMessage],
+        (old) => [...(old || []), userMessage, assistantPlaceholder],
       );
 
       const requestData: SendPromptRequest = {
