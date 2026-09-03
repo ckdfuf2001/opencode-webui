@@ -90,14 +90,23 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   const [ptyOutput, setPtyOutput] = useState<string | null>(null)
   const [ptyIntervalMs, setPtyIntervalMs] = useState<number>(() => {
     try {
-      const v = Number(localStorage.getItem('ptyIntervalMs') ?? '200')
-      return [100, 200, 500, 1000, 2000].includes(v) ? v : 200
-    } catch { return 200 }
+      const v = Number(localStorage.getItem('ptyIntervalMs') ?? '1000')
+      return [1000, 3000, 5000, 10000, 60000].includes(v) ? v : 1000
+    } catch { return 1000 }
+  })
+  const [ptyTimeoutMs, setPtyTimeoutMs] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem('ptyTimeoutMs') ?? '120000')
+      return [30000, 60000, 120000, 300000, 600000].includes(v) ? v : 120000
+    } catch { return 120000 }
   })
 
   useEffect(() => {
     try { localStorage.setItem('ptyIntervalMs', String(ptyIntervalMs)) } catch {}
   }, [ptyIntervalMs])
+  useEffect(() => {
+    try { localStorage.setItem('ptyTimeoutMs', String(ptyTimeoutMs)) } catch {}
+  }, [ptyTimeoutMs])
 
   // PTY streaming for bash while running: only when expanded to save connection
   useEffect(() => {
@@ -132,6 +141,15 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
     } catch {}
     return () => { try { es?.close() } catch {} }
   }, [part.tool, part.state.status, expanded, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs])
+
+  // Sync ptyOutput with opencode's metadata.output polling (for when SSE delta not yet arrived, or after refresh)
+  useEffect(() => {
+    if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded) return
+    const serverOut = (part.state as unknown as { output?: string; metadata?: { output?: string } }).output ?? (part.state as unknown as { metadata?: { output?: string } }).metadata?.output ?? ''
+    if (serverOut && serverOut.length > (ptyOutput?.length ?? 0)) {
+      setPtyOutput(serverOut)
+    }
+  }, [part.tool, part.state.status, expanded, (part.state as unknown as { output?: string; metadata?: { output?: string } }).output, (part.state as unknown as { metadata?: { output?: string } }).metadata?.output])
 
   useEffect(() => {
     if (isUserBashCommand && !expanded) {
@@ -258,6 +276,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
               <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
                 <div className="text-[11px] text-yellow-400 mb-1 flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</span>
+                  <div className="flex items-center gap-1">
                   <select
                     value={ptyIntervalMs}
                     onChange={(e) => setPtyIntervalMs(Number(e.target.value))}
@@ -265,12 +284,26 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
                     className="bg-black border border-yellow-500/30 rounded px-1 py-0.5 text-[10px] text-yellow-300"
                     title="Refresh interval"
                   >
-                    <option value={100}>100ms</option>
-                    <option value={200}>200ms</option>
-                    <option value={500}>500ms</option>
-                    <option value={1000}>1000ms</option>
-                    <option value={2000}>2000ms</option>
+                    <option value={1000}>1s</option>
+                    <option value={3000}>3s</option>
+                    <option value={5000}>5s</option>
+                    <option value={10000}>10s</option>
+                    <option value={60000}>1m</option>
                   </select>
+                    <select
+                      value={ptyTimeoutMs}
+                      onChange={(e) => setPtyTimeoutMs(Number(e.target.value))}
+                      onClick={(e) => e.stopPropagation()}
+                      className="bg-black border border-yellow-500/30 rounded px-1 py-0.5 text-[10px] text-yellow-300"
+                      title="Timeout for next bash (current run uses original timeout)"
+                    >
+                      <option value={30000}>30s timeout</option>
+                      <option value={60000}>60s timeout</option>
+                      <option value={120000}>120s timeout</option>
+                      <option value={300000}>300s timeout</option>
+                      <option value={600000}>600s timeout</option>
+                    </select>
+                  </div>
                 </div>
                 <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(ptyOutput ?? (part.state as unknown as { output?: string; metadata?: { output?: string } }).output ?? (part.state as unknown as { metadata?: { output?: string } }).metadata?.output ?? part.state.title ?? (part.state.input as Record<string, unknown>)?.command as string) || "Running..."}</pre>
               </div>

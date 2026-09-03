@@ -69,7 +69,7 @@ export function createPtyRoutes() {
     const messageId = c.req.param('messageId')
     const partId = c.req.param('partId')
     const directory = c.req.query('directory')
-    const intervalMs = Math.min(2000, Math.max(100, Number(c.req.query('interval') ?? '200') || 200))
+    const intervalMs = Math.min(60000, Math.max(1000, Number(c.req.query('interval') ?? '1000') || 1000))
 
     const opencodeUrl = opencodeServerManager.getUrl()
 
