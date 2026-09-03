@@ -15,7 +15,7 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend } from "@/hooks/useOpenCode";
-import { NavigationTree } from "@/components/navigation/NavigationTree";
+import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
@@ -938,12 +938,7 @@ if (results.length > 0) {
         repoId={repoId}
       />
 
-      <Dialog open={navOpen} onOpenChange={setNavOpen}>
-        <DialogContent className="max-w-sm max-h-[80vh] overflow-y-auto">
-          <DialogTitle>네비게이션</DialogTitle>
-          <NavigationTree onNavigate={() => setNavOpen(false)} onNewRepo={() => { setNavOpen(false); setAddRepoOpen(true) }} />
-        </DialogContent>
-      </Dialog>
+      <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
       <AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoOpen} />
 
       <Dialog open={lengthModal.open} onOpenChange={(o) => setLengthModal({ open: o, messageId: o ? lengthModal.messageId : null })}>

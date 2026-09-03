@@ -5,12 +5,11 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { Header } from "@/components/layout/Header";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
-import { NavigationTree } from "@/components/navigation/NavigationTree";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { FolderOpen, Briefcase, Settings, Menu } from "lucide-react";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
+import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 export function Repos() {
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
@@ -80,12 +79,7 @@ export function Repos() {
         basePath=""
         repoName="Workspace Root"
       />
-      <Dialog open={navOpen} onOpenChange={setNavOpen}>
-        <DialogContent className="max-w-sm max-h-[80vh] overflow-y-auto">
-          <DialogTitle>네비게이션</DialogTitle>
-          <NavigationTree onNavigate={() => setNavOpen(false)} onNewRepo={() => { setNavOpen(false); setAddRepoOpen(true) }} />
-        </DialogContent>
-      </Dialog>
+      <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
     </div>
   );
 }

@@ -19,9 +19,8 @@ import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDi
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
-import { NavigationTree } from "@/components/navigation/NavigationTree";
+import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Loader2, FolderOpen, GitBranch, Briefcase, CalendarPlus, Settings } from "lucide-react";
 
 export function RepoDetail() {
@@ -270,12 +269,7 @@ export function RepoDetail() {
           basePath={repo.localPath}
           repoName={repoName}
         />
-      <Dialog open={navOpen} onOpenChange={setNavOpen}>
-        <DialogContent className="max-w-sm max-h-[80vh] overflow-y-auto">
-          <DialogTitle>네비게이션</DialogTitle>
-          <NavigationTree onNavigate={() => setNavOpen(false)} onNewRepo={() => { setNavOpen(false); setAddRepoOpen(true) }} />
-        </DialogContent>
-      </Dialog>
+      <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
       <AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoOpen} />
     </div>
   );
