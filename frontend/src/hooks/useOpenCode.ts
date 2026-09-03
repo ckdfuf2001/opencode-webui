@@ -773,7 +773,6 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       }
 
       const esUrl = client.getEventSourceURL();
-      console.log("[SSE] opening", esUrl, "for", sessionID);
       let es: EventSource | null = null;
       const sseMergePart = (part: MessageWithParts["parts"][number], delta?: string) => {
         const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
@@ -813,7 +812,6 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       };
       const sseHandle = (e: MessageEvent) => {
         try {
-          console.log("[SSE] event", (e as unknown as { type: string }).type, (e as MessageEvent).data?.slice?.(0, 200));
           const raw = (e as MessageEvent).data as string;
           let parsed: Record<string, unknown>; try { parsed = JSON.parse(raw) as Record<string, unknown>; } catch { return; }
           let t: string, p: Record<string, unknown>;
@@ -857,12 +855,9 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       try {
         es = new EventSource(esUrl);
         activeSSEMap.set(sessionID, es);
-        console.log("[SSE] opened", esUrl);
-        es.onopen = () => console.log("[SSE] open", sessionID);
-        es.onerror = (ev) => console.log("[SSE] error", sessionID, ev);
         es.onmessage = sseHandle;
         ["message.part.updated","message.updated","message.removed","session.idle"].forEach((tt) => { try { es!.addEventListener(tt, sseHandle as EventListener); } catch {} });
-      } catch (err) { console.log("[SSE] failed to open", err); }
+      } catch {}
 
       const ac = new AbortController()
       activeSendControllers.set(sessionID, ac)
@@ -1086,6 +1081,8 @@ export const useEphemeralSessionSSE = (
   const queryClient = useQueryClient();
   useEffect(() => {
     if (!enabled || !client || !sessionID) return;
+    // Per-send SSE (useSendPrompt) already covers streaming during POST — avoid double connection
+    if (activeSSEMap.has(sessionID)) return;
     const url = client.getEventSourceURL();
     let closed = false;
     let es: EventSource | null = null;
