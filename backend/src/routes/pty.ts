@@ -96,9 +96,9 @@ export function createPtyRoutes() {
             const res = await fetch(url.toString(), { headers: ensureServerAuth({}) as Record<string, string> })
             if (res.ok) {
               const msg = await res.json() as { info?: { id: string }; parts?: Array<{ id: string; type: string; tool?: string; state?: { status?: string; output?: string } }> }
-              const part = msg.parts?.find((p) => p.id === partId)
+              const part = msg.parts?.find((p) => p.id === partId) as { id: string; state?: { status?: string; output?: string; metadata?: { output?: string } } } | undefined
               if (part) {
-                const cur = typeof part.state?.output === 'string' ? part.state.output : ''
+                const cur = typeof part.state?.output === 'string' ? part.state.output : typeof part.state?.metadata?.output === 'string' ? part.state.metadata.output : ''
                 if (cur.length > prev.length && cur.startsWith(prev)) {
                   const delta = cur.slice(prev.length)
                   prev = cur

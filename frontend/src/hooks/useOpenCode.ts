@@ -283,8 +283,8 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         } else if (cachedLast.info.id === resultLast.info.id) {
           const cText = cachedLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
           const rText = resultLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
-          const cTool = cachedLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string } }).state?.output ?? "")).join("");
-          const rTool = resultLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string } }).state?.output ?? "")).join("");
+          const cTool = cachedLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "")).join("");
+          const rTool = resultLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "")).join("");
           if (cText.length > rText.length || cTool.length > rTool.length) result = [...result.slice(0, -1), cachedLast];
         }
       }
@@ -796,7 +796,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           let nextParts: MessageWithParts["parts"];
           if (pIdx === -1) nextParts = [...msg.parts, part];
           else {
-            const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
+            const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
             let nextPart: typeof part = part;
             if (delta) {
               if (existing.type === "text" && typeof existing.text === "string") {
@@ -804,11 +804,20 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
                 if (pText === existing.text + delta) nextPart = part;
                 else nextPart = { ...part, text: existing.text + delta } as typeof part;
               } else if (existing.type === "tool") {
-                const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
-                const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
-                const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
-                if (partOut === cur + delta) nextPart = part;
-                else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+                const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
+                const isRunning = (st as { status?: string }).status === 'running';
+                if (isRunning) {
+                  const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
+                  const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
+                  const partMetaOut = (part as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "";
+                  if (partMetaOut === curMeta + delta) nextPart = part;
+                  else nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as typeof part;
+                } else {
+                  const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+                  const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
+                  if (partOut === cur + delta) nextPart = part;
+                  else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+                }
               }
             }
             nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
@@ -853,14 +862,21 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
                 pIdx = msg.parts.findIndex((pp) => (pp as { type: string; state?: { status?: string } }).type === "tool" && (pp as { state?: { status?: string } }).state?.status === "running");
                 if (pIdx === -1) return old;
               }
-              const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
+              const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
               let nextPart: MessageWithParts["parts"][number];
               if (existing.type === "text") {
                 nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
               } else if (existing.type === "tool") {
-                const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
-                const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
-                nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+                const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
+                const isRunning = (st as { status?: string }).status === 'running';
+                if (isRunning) {
+                  const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
+                  const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
+                  nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as MessageWithParts["parts"][number];
+                } else {
+                  const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+                  nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+                }
               } else return old;
               const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
               const next = [...old]; next[idx] = { ...msg, parts: nextParts }; return next;
@@ -1136,17 +1152,26 @@ export const useEphemeralSessionSSE = (
         if (pIdx === -1) {
           nextParts = [...msg.parts, part];
         } else {
-          const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
+          const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
           let nextPart: typeof part = part;
           if (delta) {
             if (existing.type === "text" && typeof existing.text === "string") {
               nextPart = { ...part, text: existing.text + delta } as typeof part;
             } else if (existing.type === "tool") {
-              const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
-              const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
-              const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
-              if (partOut === cur + delta) nextPart = part;
-              else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+              const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
+              const isRunning = (st as { status?: string }).status === 'running';
+              if (isRunning) {
+                const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
+                const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
+                const partMetaOut = (part as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "";
+                if (partMetaOut === curMeta + delta) nextPart = part;
+                else nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as typeof part;
+              } else {
+                const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+                const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
+                if (partOut === cur + delta) nextPart = part;
+                else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+              }
             }
           }
           nextParts = [...msg.parts];
@@ -1223,14 +1248,21 @@ export const useEphemeralSessionSSE = (
               pIdx = msg.parts.findIndex((pp) => (pp as { type: string; state?: { status?: string } }).type === "tool" && (pp as { state?: { status?: string } }).state?.status === "running");
               if (pIdx === -1) return old;
             }
-            const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string } };
+            const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
             let nextPart: MessageWithParts["parts"][number];
             if (existing.type === "text") {
               nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
             } else if (existing.type === "tool") {
-              const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {};
-              const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
-              nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+              const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
+              const isRunning = (st as { status?: string }).status === 'running';
+              if (isRunning) {
+                const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
+                const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
+                nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as MessageWithParts["parts"][number];
+              } else {
+                const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
+                nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+              }
             } else return old;
             const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
             const next = [...old]; next[idx] = { ...msg, parts: nextParts }; return next;
