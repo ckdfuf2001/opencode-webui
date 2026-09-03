@@ -86,6 +86,7 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
             <div className="space-y-2">
               <label className="text-sm text-zinc-400">Repository URL</label>
               <Input
+                autoFocus
                 placeholder="https://github.com/user/repo.git"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
@@ -97,6 +98,7 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
             <div className="space-y-2">
               <label className="text-sm text-zinc-400">Local Path</label>
               <Input
+                autoFocus
                 placeholder="my-local-project"
                 value={localPath}
                 onChange={(e) => setLocalPath(e.target.value)}

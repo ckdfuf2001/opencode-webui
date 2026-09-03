@@ -60,6 +60,18 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     return dbStatuses.filter(s => s.repoId === repoId || s.directory === repo.fullPath).reduce((acc, s) => acc + (s.pendingPermissions ?? 0), 0)
   }
 
+  const handleNewSession = async (repoId: number, directory?: string) => {
+    try {
+      const { createOpenCodeClient } = await import('@/api/opencode')
+      const client = createOpenCodeClient(OPENCODE_API_ENDPOINT, directory)
+      const session = await client.createSession({})
+      navigate(`/repos/${repoId}/sessions/${session.id}`)
+      onNavigate?.()
+      // Focus title after navigation — SessionDetailHeader will handle via sessionStorage flag
+      sessionStorage.setItem(`newSessionFocus:${session.id}`, '1')
+    } catch {}
+  }
+
   return (
     <div className="flex flex-col gap-1 py-2">
       {/* Home */}
@@ -114,7 +126,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
                   variant="ghost"
                   size="icon"
                   className="h-6 w-6 shrink-0"
-                  onClick={() => navigate(`/repos/${repo.id}`)}
+                  onClick={() => handleNewSession(repo.id, repo.fullPath)}
                   title="새 세션"
                 >
                   <Plus className="w-3 h-3" />

@@ -3,7 +3,7 @@ import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicato
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
 import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface Repo {
   id: number;
@@ -57,6 +57,14 @@ export function SessionDetailHeader({
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(sessionTitle);
   const isWorking = isStreaming;
+
+  useEffect(() => {
+    if (sessionStorage.getItem(`newSessionFocus:${sessionId}`)) {
+      sessionStorage.removeItem(`newSessionFocus:${sessionId}`)
+      setIsEditing(true)
+      setEditTitle(sessionTitle)
+    }
+  }, [sessionId])
 
   if (repo.cloneStatus !== 'ready') {
     return (
