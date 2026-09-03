@@ -314,6 +314,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           return text === optimisticSig;
         });
       }
+      if (realUserArrived) {
+        pendingOptimistic.delete(sessionID!)
+      }
       if (optimistic && !realUserArrived && !result.some((m) => m.info.id === optimistic.info.id)) {
         result = [...result, optimistic];
       }
@@ -335,11 +338,11 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     refetchInterval: (query) => {
       if (isRecentlyAborted(sessionID!)) return 2000
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
-      if (hasPending) return 2000
+      if (hasPending) return 500
       const data = query.state.data as MessageListResponse | undefined
       const last = data?.[data.length - 1]
       const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
-      if (streaming) return 2000
+      if (streaming) return 1000
       return 2000
     },
   });
@@ -913,9 +916,16 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       return { optimisticUserID, response };
     },
     onSettled: (_data, _error, variables) => {
-      pendingOptimistic.delete(variables.sessionID);
       if (activeSendControllers.get(variables.sessionID)) activeSendControllers.delete(variables.sessionID)
       queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
+      // keep pendingOptimistic until real user message arrives (handled in useMessages) to avoid flicker
+      setTimeout(() => {
+        if (pendingOptimistic.has(variables.sessionID)) {
+          const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
+          const hasReal = cur?.some((m) => m.info.role === "user" && !m.info.id.startsWith("optimistic_") && (m.info.time?.created ?? 0) >= (pendingOptimistic.get(variables.sessionID)?.info.time?.created ?? 0) - 5000)
+          if (hasReal) pendingOptimistic.delete(variables.sessionID)
+        }
+      }, 8000)
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
@@ -924,19 +934,14 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
+      pendingOptimistic.delete(sessionID)
       if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {
         showToast.error(formatted, { duration: 8000 });
       }
     },
-    onSuccess: (data, variables) => {
+    onSuccess: (_data, variables) => {
       const { sessionID } = variables;
-      const { optimisticUserID } = data;
-
-      queryClient.setQueryData<MessageListResponse>(
-        ["opencode", "messages", opcodeUrl, sessionID, directory],
-        (old) => old?.filter((msg) => msg.info.id !== optimisticUserID) || [],
-      );
-
+      // keep optimistic until real arrives to avoid flicker (dedup in useMessages)
       queryClient.invalidateQueries({
         queryKey: ["opencode", "session", opcodeUrl, sessionID, directory],
       });
@@ -1069,7 +1074,14 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
       return { optimisticUserID, response };
     },
     onSettled: (_data, _error, variables) => {
-      pendingOptimistic.delete(variables.sessionID);
+      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
+      setTimeout(() => {
+        if (pendingOptimistic.has(variables.sessionID)) {
+          const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
+          const hasReal = cur?.some((m) => m.info.role === "user" && !m.info.id.startsWith("optimistic_") && (m.info.time?.created ?? 0) >= (pendingOptimistic.get(variables.sessionID)?.info.time?.created ?? 0) - 5000)
+          if (hasReal) pendingOptimistic.delete(variables.sessionID)
+        }
+      }, 8000)
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
@@ -1078,19 +1090,13 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
         ["opencode", "messages", opcodeUrl, sessionID, directory],
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
+      pendingOptimistic.delete(sessionID)
       if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {
         showToast.error(formatted, { duration: 8000 });
       }
     },
-    onSuccess: (data, variables) => {
+    onSuccess: (_data, variables) => {
       const { sessionID } = variables;
-      const { optimisticUserID } = data;
-
-      queryClient.setQueryData<MessageListResponse>(
-        ["opencode", "messages", opcodeUrl, sessionID, directory],
-        (old) => old?.filter((msg) => msg.info.id !== optimisticUserID) || [],
-      );
-
       queryClient.invalidateQueries({
         queryKey: ["opencode", "session", opcodeUrl, sessionID, directory],
       });
