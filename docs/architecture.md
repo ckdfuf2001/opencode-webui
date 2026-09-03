@@ -7,10 +7,10 @@ on the workspace, configuration and rules layout that differs from upstream.
 ## Process Topology
 
 ```
-Browser (React/PWA, :5173) → Backend (Bun + Hono, :5002) → OpenCode server (opencode serve, :5552)
-                                    ↑                                 ↑
-                              SSE proxy                          SSE source
-                           REST proxy (:5002 → :5552)          REST API
+Browser (React/PWA, :5173) → Backend (Bun + Hono, :5001 dev / :5003 docker) → OpenCode server (opencode serve, :5552)
+                                     ↑                                 ↑
+                               SSE proxy                          SSE source
+                            REST proxy (:5001 → :5552)          REST API
 ```
 
 - **Backend** owns the workspace directory, the SQLite database, the git

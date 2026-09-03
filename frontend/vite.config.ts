@@ -41,6 +41,7 @@ export default defineConfig(({ mode }) => {
             pdf: ["pdfjs-dist"],
             xlsx: ["xlsx", "jszip"],
             monaco: ["@monaco-editor/react"],
+            vendor: ["react", "react-dom", "@tanstack/react-query"],
           },
         },
       },

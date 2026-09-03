@@ -7,9 +7,10 @@ import { createRegistryRoutes } from '../../src/routes/registry'
 
 let tempDir = ''
 
-vi.mock('@opencode-webui/shared', () => ({
-  getConfigPath: () => tempDir,
-}))
+vi.mock('@opencode-webui/shared', async () => {
+  const actual = await vi.importActual<typeof import('@opencode-webui/shared')>('@opencode-webui/shared')
+  return { ...actual, getConfigPath: () => tempDir }
+})
 
 function createApp(): Hono {
   const app = new Hono()

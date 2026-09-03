@@ -443,7 +443,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         const withIndexParam = (query as Record<string, string>)?.withIndex
         const withIndex = withIndexParam == null ? true : withIndexParam !== 'false' && withIndexParam !== '0'
         if (withIndex) {
-          const sid = sessionDeleteMatch[1]
+          const sid = sessionDeleteMatch[1]!
           try { proxyDb.query('DELETE FROM session_messages_fts WHERE session_id = ?').run(sid) } catch {}
           try { proxyDb.query('DELETE FROM session_messages_fts_idx WHERE session_id = ?').run(sid) } catch {}
           try { proxyDb.query('DELETE FROM session_status WHERE session_id = ?').run(sid) } catch {}

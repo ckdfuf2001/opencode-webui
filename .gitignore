@@ -27,3 +27,7 @@ bin/agent-browser/chromium/**/Dictionaries/
 release/
 backend/generated/
 backend/src/generated/
+
+# Portable builds at repo root
+opencode-webui-portable*.zip
+*.zip

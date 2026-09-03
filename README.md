@@ -158,7 +158,7 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/opencode-webui.git
+git clone https://github.com/ckdfuf2001/opencode-webui.git
 cd opencode-webui
 
 # Start with Docker Compose (single container)
@@ -258,7 +258,7 @@ docker exec -it opencode-web sh
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/opencode-webui.git
+git clone https://github.com/ckdfuf2001/opencode-webui.git
 cd opencode-webui
 
 # Pull the vendored binaries (opencode/agent-browser/chromium) from Git LFS
@@ -330,7 +330,7 @@ already there. To use these tools in chat:
          "D:\\path\\to\\opencode_web\\backend\\scripts\\doc_reader_mcp.py"
 ],
         "env": {
-          "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5002",
+          "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5001",
           "OPCODE_WEBUI_WORKSPACE": "D:\\path\\to\\opencode_web\\workspace"
        }
      }
@@ -496,7 +496,7 @@ git worktree root). The register dialog writes commands, skills, plugins
 ### Data Flow
 
 ```
-Browser (React) → Backend (Hono, :5002) → OpenCode Server (Bun, :5552)
+Browser (React) → Backend (Hono, :5001 dev / :5003 docker) → OpenCode Server (Bun, :5552)
      ↑                  ↑                        ↑
   SSE client        SSE proxy              SSE source
   React Query       REST proxy             REST API

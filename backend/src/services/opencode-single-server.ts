@@ -1,6 +1,7 @@
 import { spawn, execSync } from 'child_process'
 import { existsSync, writeFileSync, rmSync } from 'fs'
 import { createServer } from 'node:net'
+import os from 'os'
 import path from 'path'
 import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
@@ -813,7 +814,7 @@ export function installWindowsShutdownWatchdog(): void {
     'Get-Process soffice.bin, ffmpeg, soffice, libreoffice -ErrorAction SilentlyContinue | Stop-Process -Force',
   ].join('\n')
 
-  const scriptPath = path.join(process.env.TEMP, `opencode-webui-watchdog-${process.pid}.ps1`)
+  const scriptPath = path.join(process.env.TEMP ?? os.tmpdir(), `opencode-webui-watchdog-${process.pid}.ps1`)
   try {
     writeFileSync(scriptPath, script, 'utf8')
     const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
