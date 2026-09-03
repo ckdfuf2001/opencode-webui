@@ -89,18 +89,20 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [ptyOutput, setPtyOutput] = useState<string | null>(null)
   const [ptyIntervalMs, setPtyIntervalMs] = useState<number>(() => {
-    const v = Number(localStorage.getItem('ptyIntervalMs') ?? '200')
-    return [100, 200, 500, 1000, 2000].includes(v) ? v : 200
+    try {
+      const v = Number(localStorage.getItem('ptyIntervalMs') ?? '200')
+      return [100, 200, 500, 1000, 2000].includes(v) ? v : 200
+    } catch { return 200 }
   })
 
   useEffect(() => {
-    localStorage.setItem('ptyIntervalMs', String(ptyIntervalMs))
+    try { localStorage.setItem('ptyIntervalMs', String(ptyIntervalMs)) } catch {}
   }, [ptyIntervalMs])
 
-  // PTY streaming for bash while running: opencode updates metadata.output incrementally via ctx.metadata
+  // PTY streaming for bash while running: only when expanded to save connection
   useEffect(() => {
-    if (part.tool !== 'bash' || part.state.status !== 'running') {
-      setPtyOutput(null)
+    if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded) {
+      if (part.tool === 'bash' && part.state.status !== 'running') setPtyOutput(null)
       return
     }
     const sid = (part as unknown as { sessionID: string }).sessionID
@@ -129,7 +131,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
       es.addEventListener('pty.done', onDelta as EventListener)
     } catch {}
     return () => { try { es?.close() } catch {} }
-  }, [part.tool, part.state.status, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs])
+  }, [part.tool, part.state.status, expanded, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs])
 
   useEffect(() => {
     if (part.tool === 'bash' && part.state.status === 'completed' && !expanded) {
@@ -248,46 +250,45 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
         ) : null}
         <span className="text-muted-foreground text-xs ml-auto">({part.state.status})</span>
       </button>
-      {part.state.status === 'running' && (part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && (
-        <div className="bg-card p-2">
-          <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
-            <div className="text-[11px] text-yellow-400 mb-1 flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</span>
-              <select
-                value={ptyIntervalMs}
-                onChange={(e) => setPtyIntervalMs(Number(e.target.value))}
-                onClick={(e) => e.stopPropagation()}
-                className="bg-black border border-yellow-500/30 rounded px-1 py-0.5 text-[10px] text-yellow-300"
-                title="Refresh interval"
-              >
-                <option value={100}>100ms</option>
-                <option value={200}>200ms</option>
-                <option value={500}>500ms</option>
-                <option value={1000}>1000ms</option>
-                <option value={2000}>2000ms</option>
-              </select>
-            </div>
-            <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(ptyOutput ?? (part.state as unknown as { output?: string; metadata?: { output?: string } }).output ?? (part.state as unknown as { metadata?: { output?: string } }).metadata?.output ?? part.state.title ?? (part.state.input as Record<string, unknown>)?.command as string) || "Running..."}</pre>
-          </div>
-        </div>
-      )}
 
       {expanded && (
         <div className="bg-card space-y-2 p-2">
           {part.state.status === 'running' && (
-            <div className="text-sm space-y-2">
-              <div>
-                <div className="text-zinc-400 mb-1">Input:</div>
-                <ClickableJson json={part.state.input} onFileClick={onFileClick} />
-              </div>
-              {(part.state as unknown as { output?: string }).output && !(part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && (
-                <div>
-                  <div className="text-zinc-400 mb-1">Output (streaming):</div>
-                  <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap">{(part.state as unknown as { output: string }).output}</pre>
+            (part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') ? (
+              <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
+                <div className="text-[11px] text-yellow-400 mb-1 flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</span>
+                  <select
+                    value={ptyIntervalMs}
+                    onChange={(e) => setPtyIntervalMs(Number(e.target.value))}
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-black border border-yellow-500/30 rounded px-1 py-0.5 text-[10px] text-yellow-300"
+                    title="Refresh interval"
+                  >
+                    <option value={100}>100ms</option>
+                    <option value={200}>200ms</option>
+                    <option value={500}>500ms</option>
+                    <option value={1000}>1000ms</option>
+                    <option value={2000}>2000ms</option>
+                  </select>
                 </div>
-              )}
-              {part.state.title && !(part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') && <div className="text-xs text-zinc-400">{part.state.title}</div>}
-            </div>
+                <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(ptyOutput ?? (part.state as unknown as { output?: string; metadata?: { output?: string } }).output ?? (part.state as unknown as { metadata?: { output?: string } }).metadata?.output ?? part.state.title ?? (part.state.input as Record<string, unknown>)?.command as string) || "Running..."}</pre>
+              </div>
+            ) : (
+              <div className="text-sm space-y-2">
+                <div>
+                  <div className="text-zinc-400 mb-1">Input:</div>
+                  <ClickableJson json={part.state.input} onFileClick={onFileClick} />
+                </div>
+                {(part.state as unknown as { output?: string }).output && (
+                  <div>
+                    <div className="text-zinc-400 mb-1">Output (streaming):</div>
+                    <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap">{(part.state as unknown as { output: string }).output}</pre>
+                  </div>
+                )}
+                {part.state.title && <div className="text-xs text-zinc-400">{part.state.title}</div>}
+              </div>
+            )
           )}
 
           {part.state.status === 'completed' && (
