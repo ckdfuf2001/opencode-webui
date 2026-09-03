@@ -390,11 +390,15 @@ export const usePollLastMessage = (
           if (curLast.info.id !== last.info.id) return old
           const curCompleted = 'completed' in (curLast.info.time as Record<string, unknown>) && Boolean((curLast.info.time as { completed?: number }).completed)
           const nextCompleted = 'completed' in (msg.info.time as Record<string, unknown>) && Boolean((msg.info as { time: { completed?: number } }).time.completed)
-          if (curLast.parts.length === msg.parts.length && curCompleted === nextCompleted) {
-            const curText = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
-            const nextText = msg.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
-            if (curText === nextText) return old
-          }
+          // SSE가 앞서 나가 있으면 폴링 결과가 덮어쓰지 않도록 보존 — 이전에는 동일 텍스트일 때만 유지해 SSE 증분이 날아갔다
+          const curText = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
+          const nextText = msg.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
+          const curTool = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
+          const nextTool = msg.parts.filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
+          if (curLast.parts.length === msg.parts.length && curCompleted === nextCompleted && curText === nextText && curTool === nextTool) return old
+          // SSE가 더 길면 서버 응답이 lagging — 덮어쓰지 않는다
+          if (curText.length > nextText.length || curTool.length > nextTool.length) return old
+          // 서버가 더 길거나 완료 상태가 바뀌었을 때만 교체
           return [...old.slice(0, -1), msg as MessageWithParts]
         })
         return msg
