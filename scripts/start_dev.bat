@@ -19,8 +19,10 @@ REM kill any previous dev instance first to avoid port conflicts
 call "%~dp0stop_dev.bat" >nul 2>&1
 
 echo [DEV START] starting pnpm dev ^> logs\dev.log ^(also logs\dev.err.log^)
-REM Use start /B with PID file for reliable background and logging
-powershell -NoProfile -Command "$p = Start-Process -FilePath 'pnpm' -ArgumentList 'dev' -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -RedirectStandardOutput 'logs\dev.log' -RedirectStandardError 'logs\dev.err.log' -PassThru; $p.Id | Out-File -Encoding ascii logs\dev.pid; Write-Host ('[DEV START] pid ' + $p.Id)"
+REM Use cmd /c with proper redirection so concurrently/bun/vite output is fully captured to logs
+powershell -NoProfile -Command "$cmd = 'pnpm dev 1^> logs\dev.log 2^> logs\dev.err.log'; $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $cmd) -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru; $p.Id | Out-File -Encoding ascii logs\dev.pid; Write-Host ('[DEV START] pid ' + $p.Id + ' (cmd /c pnpm dev)')"
+REM Also ensure logs are flushed and contain output
+powershell -NoProfile -Command "Start-Sleep -Milliseconds 500; if (Test-Path 'logs\dev.log') { Write-Host ('[DEV START] log size ' + (Get-Item 'logs\dev.log').Length + ' bytes') }"
 
 REM wait a bit and check health (extend to 30s, check both ports and longer timeout)
 for /L %%i in (1,1,30) do (
