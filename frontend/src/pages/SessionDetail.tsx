@@ -291,8 +291,6 @@ export function SessionDetail() {
   useEffect(() => {
     if (!messages || messages.length === 0) return;
     if (ctx.isLoading) return;
-    if (ctx.usagePercentage == null) return;
-    if (ctx.usagePercentage < 90) return;
     // 가장 최근 length 메시지 찾기 — 마지막 메시지가 length일 때만 유효
     let lengthIdx = -1;
     let lengthMsg: any = null;
@@ -311,17 +309,25 @@ export function SessionDetail() {
     if (msgTime && msgTime < lastCompactAtRef.current) return;
     const hasAnyAfter = messages.length - 1 > lengthIdx;
     if (hasAnyAfter) return;
+    // Output vs Context 구분: MessageOutputLengthError만 output, 나머지는 context (step-finish length는 usage로 구분)
+    const errName = (lengthMsg as any)?.info?.error?.name as string | undefined;
+    const isOutput = errName === 'MessageOutputLengthError';
+    const isContext = !isOutput;
+    // Context limit는 usage가 높을 때만 유효, Output limit는 usage와 무관
+    if (isContext && (ctx.usagePercentage == null || ctx.usagePercentage < 85)) return;
     lastLengthToastRef.current = lengthMsg.info.id;
     const pct = ctx.usagePercentage ? Math.round(ctx.usagePercentage) : 0;
-    const isOutput = (lengthMsg as unknown as { info: { error?: { name?: string } } }).info?.error?.name === 'MessageOutputLengthError' || (lengthMsg.parts ?? []).some((p: unknown) => (p as { type: string; reason?: string }).type === 'step-finish' && (p as { reason?: string }).reason === 'length')
+    const total = ctx.totalTokens ?? 0;
+    const limit = ctx.contextLimit ?? 0;
+    const dbg = ` [dbg: usage ${pct}% (${total.toLocaleString()}/${limit ? limit.toLocaleString() : '?'}) tokens, finish=${(lengthMsg as any)?.info?.finish ?? 'length'}, error=${errName ?? 'none'}, isLast=${isLast}, idx=${lengthIdx}/${messages.length - 1}]`;
     showToast.error(
       isOutput
-        ? `Output limit reached (finish=length${pct ? `, context ${pct}%` : ''}). The model hit its output token limit — try Continue to split and continue.`
-        : `Context limit reached (finish=length, ${pct ? pct + "%" : "limit exceeded"}). Clean up with summarize (compact) or truncating previous messages.`,
+        ? `Output limit reached (finish=length). The model hit its output token limit — try Continue to split and continue.${dbg}`
+        : `Context limit reached (finish=length, ${pct ? pct + "%" : "limit exceeded"}). Clean up with summarize (compact) or truncating previous messages.${dbg}`,
       { duration: 8000 }
     );
     setLengthModal({ open: true, messageId: lengthMsg.info.id });
-  }, [messages, ctx.usagePercentage, ctx.isLoading]);
+  }, [messages, ctx.usagePercentage, ctx.isLoading, ctx.totalTokens, ctx.contextLimit]);
 
   const handleCompact = useCallback(async () => {
     if (!sessionId) return;
@@ -930,15 +936,15 @@ if (results.length > 0) {
       <Dialog open={lengthModal.open} onOpenChange={(o) => setLengthModal({ open: o, messageId: o ? lengthModal.messageId : null })}>
         <DialogContent className="max-w-lg">
           <DialogTitle>{(() => {
-            const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } }; parts?: { type: string; reason?: string }[] } | undefined
-            const isOutput = m?.info?.error?.name === 'MessageOutputLengthError' || (m?.parts ?? []).some((p) => p.type === 'step-finish' && p.reason === 'length')
+            const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } } } | undefined
+            const isOutput = m?.info?.error?.name === 'MessageOutputLengthError'
             return isOutput ? 'Output limit reached' : 'Context limit exceeded'
           })()}</DialogTitle>
           <div className="mt-2 space-y-3 text-sm">
             <p className="text-muted-foreground">
               {(() => {
-                const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } }; parts?: { type: string; reason?: string }[] } | undefined
-                const isOutput = m?.info?.error?.name === 'MessageOutputLengthError' || (m?.parts ?? []).some((p) => p.type === 'step-finish' && p.reason === 'length')
+                const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } } } | undefined
+                const isOutput = m?.info?.error?.name === 'MessageOutputLengthError'
                 if (isOutput) return <>The model hit its <span className="font-mono font-bold text-amber-500">output limit (finish=length)</span>. The response was cut off because the output token limit was reached, not the context window. Try Continue to split and continue.</>
                 return <>The model response was truncated with <span className="font-mono font-bold text-red-500">finish=length</span>. The context has reached its limit ({ctx.contextLimit ? `${ctx.contextLimit.toLocaleString()} tokens` : "exceeded"}), so normal generation is no longer possible.{ctx.usagePercentage ? ` Currently using ${Math.round(ctx.usagePercentage)}% (${ctx.totalTokens.toLocaleString()} tokens).` : ""}</>
               })()}
@@ -952,8 +958,8 @@ if (results.length > 0) {
                 Close
               </button>
               {(() => {
-                const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } }; parts?: { type: string; reason?: string }[] } | undefined
-                const isOutput = m?.info?.error?.name === 'MessageOutputLengthError' || (m?.parts ?? []).some((p) => p.type === 'step-finish' && p.reason === 'length')
+                const m = messages?.find((x: unknown) => (x as { info: { id: string } }).info.id === lengthModal.messageId) as unknown as { info: { error?: { name?: string } } } | undefined
+                const isOutput = m?.info?.error?.name === 'MessageOutputLengthError'
                 return isOutput ? (
                   <button onClick={handleContinueOutput} disabled={sendPromptContinue.isPending} className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm disabled:opacity-50 hover:bg-emerald-700"> {sendPromptContinue.isPending ? 'Continuing...' : 'Continue (split)'} </button>
                 ) : null
