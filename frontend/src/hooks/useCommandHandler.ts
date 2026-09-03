@@ -204,6 +204,18 @@ export function useCommandHandler({
           if (isServerCommand) {
             const source = (command as { source?: string; template?: string }).source
             const template = (command as { template?: string }).template
+            // 커맨드도 채팅처럼 낙관적 유저 메시지를 먼저 보여준다 — 빈 카드 방지
+            const optimisticID = `optimistic_user_${Date.now()}_${Math.random()}`
+            const displayText = args ? `/${command.name} ${args}` : `/${command.name}`
+            const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const
+            try {
+              await queryClient.cancelQueries({ queryKey: key })
+              const optimisticMsg = {
+                info: { id: optimisticID, role: "user", sessionID, time: { created: Date.now() } },
+                parts: [{ id: `${optimisticID}_part_0`, type: "text" as const, text: displayText, messageID: optimisticID, sessionID }],
+              }
+              queryClient.setQueryData(key, (old: unknown) => [...((old as unknown[]) ?? []), optimisticMsg as unknown])
+            } catch {}
             if (source === 'skill') {
               const text = args ? `${template ?? `/${command.name}`}\n\n${args}` : (template ?? `/${command.name}`)
               const startMs = Date.now()
@@ -215,6 +227,8 @@ export function useCommandHandler({
               await client.sendCommand(sessionID, { command: command.name, arguments: args })
               await waitForAssistantCompleted(client, sessionID, startMs)
             }
+            // 실패 시 낙관 카드 제거는 useMessages 폴링/dedup이 처리, 성공 시에도 서버 메시지가 오면 dedup으로 교체
+            queryClient.invalidateQueries({ queryKey: key })
           } else {
             showToast.warning(
               `Unknown command: "/${command.name}". Available: ${[...serverCommandNames].join(', ')}`
