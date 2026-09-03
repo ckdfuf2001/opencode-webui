@@ -97,7 +97,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   const [ptyTimeoutMs, setPtyTimeoutMs] = useState<number>(() => {
     try {
       const v = Number(localStorage.getItem('ptyTimeoutMs') ?? '120000')
-      return [30000, 60000, 120000, 300000, 600000].includes(v) ? v : 120000
+      return [0, 30000, 60000, 120000, 300000, 600000].includes(v) ? v : 120000
     } catch { return 120000 }
   })
 
@@ -295,11 +295,12 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
                       onChange={(e) => setPtyTimeoutMs(Number(e.target.value))}
                       onClick={(e) => e.stopPropagation()}
                       className="bg-black border border-yellow-500/30 rounded px-1 py-0.5 text-[10px] text-yellow-300"
-                      title="Timeout for next bash (current run uses original timeout)"
+                      title={ptyTimeoutMs === 0 ? "No timeout (unlimited) — next bash will not auto-terminate" : "Timeout for next bash (current run uses opencode default 120s unless LLM overrode)"}
                     >
+                      <option value={0}>∞ unlimited</option>
                       <option value={30000}>30s timeout</option>
                       <option value={60000}>60s timeout</option>
-                      <option value={120000}>120s timeout</option>
+                      <option value={120000}>120s timeout (opencode default)</option>
                       <option value={300000}>300s timeout</option>
                       <option value={600000}>600s timeout</option>
                     </select>
