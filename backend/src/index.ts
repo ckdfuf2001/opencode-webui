@@ -24,6 +24,7 @@ import { createSearchRoutes } from './routes/search'
 import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
 import { createChatQueueRoutes } from './routes/chat-queue'
+import { createPtyRoutes } from './routes/pty'
 import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
@@ -254,6 +255,7 @@ app.route('/api/command-runs', createCommandRunRoutes(db))
 app.route('/api/search', createSearchRoutes(db))
 app.route('/api/session-status', createSessionStatusRoutes(db))
 app.route('/api/chat-queue', createChatQueueRoutes())
+app.route('/api/pty', createPtyRoutes())
 app.route('/api/logs', createClientLogRoutes())
 
 app.get('/api/openapi.json', (c) => c.json(openApiSpec))

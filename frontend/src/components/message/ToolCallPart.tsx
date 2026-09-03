@@ -87,6 +87,41 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
   const shouldAutoExpand = part.tool === 'bash' || isUserBashCommand
   const defaultExpanded = shouldAutoExpand || (preferences?.expandToolCalls ?? false)
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const [ptyOutput, setPtyOutput] = useState<string | null>(null)
+
+  // PTY streaming for bash while running: poll tool id via backend SSE and append
+  useEffect(() => {
+    if (part.tool !== 'bash' || part.state.status !== 'running') {
+      setPtyOutput(null)
+      return
+    }
+    const sid = (part as unknown as { sessionID: string }).sessionID
+    const mid = (part as unknown as { messageID: string }).messageID
+    const pid = (part as unknown as { id: string }).id
+    if (!sid || !mid || !pid) return
+    let cur = (part.state as unknown as { output?: string }).output ?? ''
+    setPtyOutput(cur || null)
+    const url = `/api/pty/${sid}/${mid}/${pid}/stream`
+    let es: EventSource | null = null
+    try {
+      es = new EventSource(url)
+      const onDelta = (e: MessageEvent) => {
+        try {
+          const d = JSON.parse((e as MessageEvent).data) as { delta?: string; output?: string }
+          if (typeof d.output === 'string') {
+            cur = d.output
+            setPtyOutput(cur)
+          } else if (typeof d.delta === 'string') {
+            cur += d.delta
+            setPtyOutput(cur)
+          }
+        } catch {}
+      }
+      es.addEventListener('pty.delta', onDelta as EventListener)
+      es.addEventListener('pty.done', onDelta as EventListener)
+    } catch {}
+    return () => { try { es?.close() } catch {} }
+  }, [part.tool, part.state.status, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id])
 
   useEffect(() => {
     if (part.tool === 'bash' && part.state.status === 'completed' && !expanded) {
@@ -209,7 +244,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
         <div className="bg-card p-2">
           <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
             <div className="text-[11px] text-yellow-400 mb-1 flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</div>
-            <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(part.state as unknown as { output?: string }).output || part.state.title || (part.state.input as Record<string, unknown>)?.command as string || "Running..."}</pre>
+            <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(ptyOutput ?? (part.state as unknown as { output?: string }).output ?? part.state.title ?? (part.state.input as Record<string, unknown>)?.command as string) || "Running..."}</pre>
           </div>
         </div>
       )}
