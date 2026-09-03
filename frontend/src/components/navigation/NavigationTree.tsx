@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listRepos } from '@/api/repos'
 import { useSessions, useSessionStatusMap } from '@/hooks/useOpenCode'
 import { OPENCODE_API_ENDPOINT } from '@/config'
@@ -15,6 +15,7 @@ interface NavigationTreeProps {
 export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
   const navigate = useNavigate()
   const location = useLocation()
+  const queryClient = useQueryClient()
   const [expandedRepos, setExpandedRepos] = useState<Set<number>>(() => {
     const m = location.pathname.match(/\/repos\/(\d+)/)
     return m ? new Set([parseInt(m[1], 10)]) : new Set()
@@ -64,11 +65,10 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     try {
       const { createOpenCodeClient } = await import('@/api/opencode')
       const client = createOpenCodeClient(OPENCODE_API_ENDPOINT, directory)
-      const session = await client.createSession({})
-      navigate(`/repos/${repoId}/sessions/${session.id}`)
-      onNavigate?.()
-      // Focus title after navigation — SessionDetailHeader will handle via sessionStorage flag
-      sessionStorage.setItem(`newSessionFocus:${session.id}`, '1')
+      await client.createSession({})
+      queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, directory] })
+      // Just attach to tree — do not navigate
+      setExpandedRepos(prev => new Set([...prev, repoId]))
     } catch {}
   }
 
