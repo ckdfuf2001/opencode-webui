@@ -191,7 +191,8 @@ export function SessionDetail() {
   const lastMessage = messages?.[messages.length - 1];
   const isStreaming = isConnected && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy);
   const sseEnabled = !!sessionId && (hasActiveSend(sessionId) || isStreaming);
-  usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming && !sseEnabled)
+  // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
+  usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)
   useEffect(() => {
     if (sessionId && isRecentlyAborted(sessionId)) setHiddenAfterID(null)
