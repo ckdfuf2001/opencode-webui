@@ -308,10 +308,14 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         realUserArrived = result.some((m) => {
           if (m.info.role !== "user" || m.info.id === optimistic.info.id) return false;
           const created = m.info.time?.created ?? 0;
-          if (Math.abs(created - optimisticCreated) > 30000) return false;
+          if (Math.abs(created - optimisticCreated) > 60000) return false;
+          // Relax text check: if time is close, consider arrived even if signature differs slightly (e.g. file mentions)
           if (!optimisticSig) return true;
           const text = getSignature(m.parts as unknown as MessageWithParts["parts"]);
-          return text === optimisticSig;
+          if (text === optimisticSig) return true;
+          // Fallback: if time close and both are user, consider arrived to avoid duplicate
+          if (Math.abs(created - optimisticCreated) < 5000) return true;
+          return false;
         });
       }
       if (realUserArrived) {
@@ -721,6 +725,15 @@ const mentionFor = (part: ContentPart & { name: string; path: string }): string 
 export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: string) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
+  // Use default model for optimistic assistant placeholder so LLM area shows correct model immediately
+  let defaultModel: string | undefined
+  try {
+    const settingsData = queryClient.getQueryData<{ preferences?: { defaultModel?: string } }>(["settings"])
+    defaultModel = settingsData?.preferences?.defaultModel
+    if (!defaultModel) {
+      try { defaultModel = localStorage.getItem('opencode-default-model') ?? undefined } catch {}
+    }
+  } catch {}
 
   return useMutation({
     mutationFn: async ({
@@ -752,7 +765,17 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       pendingOptimistic.set(sessionID, userMessage);
       // Create optimistic assistant placeholder with correct model so LLM area shows immediately with right model name
       const assistantOptimisticID = `optimistic_assistant_${Date.now()}_${Math.random()}`
-      const modelForAssistant = model ?? (() => { try { return localStorage.getItem('opencode-default-model') ?? '' } catch { return '' } })()
+      let modelForAssistant = model ?? defaultModel ?? ''
+      if (!modelForAssistant) {
+        try {
+          const lastMsgs = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory])
+          const lastAssistant = [...(lastMsgs ?? [])].reverse().find(m => m.info.role === 'assistant' && (m.info as { modelID?: string }).modelID)
+          if (lastAssistant) {
+            const info = lastAssistant.info as { providerID?: string; modelID?: string }
+            if (info.providerID && info.modelID) modelForAssistant = `${info.providerID}/${info.modelID}`
+          }
+        } catch {}
+      }
       const [assistantProviderID, assistantModelID] = modelForAssistant.includes('/') ? modelForAssistant.split('/', 2) as [string, string] : [undefined, undefined] as unknown as [string, string]
       const assistantPlaceholder: MessageWithParts = {
         info: {
