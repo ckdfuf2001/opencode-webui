@@ -96,19 +96,15 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
       return [1000, 3000, 5000, 10000, 60000].includes(v) ? v : 1000
     } catch { return 1000 }
   })
-  const [ptyTimeoutMs, setPtyTimeoutMs] = useState<number>(() => {
-    try {
-      const v = Number(localStorage.getItem('ptyTimeoutMs') ?? '120000')
-      return [0, 30000, 60000, 120000, 300000, 600000].includes(v) ? v : 120000
-    } catch { return 120000 }
-  })
+  const ptyTimeoutMs = (() => {
+    const t = (part.state.input as Record<string, unknown>)?.timeout as number | undefined
+    if (typeof t === 'number' && t > 0) return t
+    return 120000
+  })()
 
   useEffect(() => {
     try { localStorage.setItem('ptyIntervalMs', String(ptyIntervalMs)) } catch {}
   }, [ptyIntervalMs])
-  useEffect(() => {
-    try { localStorage.setItem('ptyTimeoutMs', String(ptyTimeoutMs)) } catch {}
-  }, [ptyTimeoutMs])
 
   // PTY streaming for bash while running: only when expanded to save connection
   useEffect(() => {
@@ -284,32 +280,19 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
                 <div className="text-[11px] text-yellow-400 mb-1 flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</span>
                   <div className="flex items-center gap-1">
-                  <select
-                    value={ptyIntervalMs}
-                    onChange={(e) => setPtyIntervalMs(Number(e.target.value))}
-                    onClick={(e) => e.stopPropagation()}
-                    className="bg-black border border-yellow-500/30 rounded px-1 py-0.5 text-[10px] text-yellow-300"
-                    title="Refresh interval"
-                  >
-                    <option value={1000}>1s</option>
-                    <option value={3000}>3s</option>
-                    <option value={5000}>5s</option>
-                    <option value={10000}>10s</option>
-                    <option value={60000}>1m</option>
-                  </select>
+                    <span className="text-[10px] text-zinc-400">{ptyTimeoutMs === 0 ? '∞' : `${Math.round(ptyTimeoutMs/1000)}s`} timeout</span>
                     <select
-                      value={ptyTimeoutMs}
-                      onChange={(e) => setPtyTimeoutMs(Number(e.target.value))}
+                      value={ptyIntervalMs}
+                      onChange={(e) => setPtyIntervalMs(Number(e.target.value))}
                       onClick={(e) => e.stopPropagation()}
                       className="bg-black border border-yellow-500/30 rounded px-1 py-0.5 text-[10px] text-yellow-300"
-                      title={ptyTimeoutMs === 0 ? "No timeout (unlimited) — next bash will not auto-terminate" : "Timeout for next bash (current run uses opencode default 120s unless LLM overrode)"}
+                      title="Refresh interval"
                     >
-                      <option value={0}>∞ unlimited</option>
-                      <option value={30000}>30s timeout</option>
-                      <option value={60000}>60s timeout</option>
-                      <option value={120000}>120s timeout (opencode default)</option>
-                      <option value={300000}>300s timeout</option>
-                      <option value={600000}>600s timeout</option>
+                      <option value={1000}>1s</option>
+                      <option value={3000}>3s</option>
+                      <option value={5000}>5s</option>
+                      <option value={10000}>10s</option>
+                      <option value={60000}>1m</option>
                     </select>
                   </div>
                 </div>
