@@ -69,6 +69,7 @@ export function createPtyRoutes() {
     const messageId = c.req.param('messageId')
     const partId = c.req.param('partId')
     const directory = c.req.query('directory')
+    const intervalMs = Math.min(2000, Math.max(100, Number(c.req.query('interval') ?? '200') || 200))
 
     const opencodeUrl = opencodeServerManager.getUrl()
 
@@ -115,7 +116,7 @@ export function createPtyRoutes() {
               }
             }
           } catch {}
-          await new Promise((r) => setTimeout(r, 200))
+          await new Promise((r) => setTimeout(r, intervalMs))
         }
         try { controller.close() } catch {}
       },
