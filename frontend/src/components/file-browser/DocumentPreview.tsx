@@ -47,7 +47,11 @@ function useRawFile(path: string, enabled = true) {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      setData(null)
+      setStatus('idle')
+      return
+    }
     let cancelled = false
     setStatus('loading')
     setData(null)
@@ -69,6 +73,8 @@ function useRawFile(path: string, enabled = true) {
       })
     return () => {
       cancelled = true
+      setData(null)
+      setStatus('idle')
     }
   }, [path, enabled])
 
@@ -82,6 +88,7 @@ function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
 
   useEffect(() => {
     if (!enabled) {
+      setData(null)
       setStatus('unavailable')
       return
     }
@@ -111,6 +118,8 @@ function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
       })
     return () => {
       cancelled = true
+      setData(null)
+      setStatus('unavailable')
     }
   }, [path, refreshKey, enabled])
 
@@ -124,6 +133,7 @@ function useExtractedText(path: string, refreshKey = 0, enabled = true) {
 
   useEffect(() => {
     if (!enabled) {
+      setData(null)
       setStatus('unavailable')
       return
     }
@@ -156,6 +166,8 @@ function useExtractedText(path: string, refreshKey = 0, enabled = true) {
       })
     return () => {
       cancelled = true
+      setData(null)
+      setStatus('unavailable')
     }
   }, [path, refreshKey, enabled])
 
@@ -172,6 +184,7 @@ function PdfPage({ pdf, pageNumber, zoom = 1, containerWidth = null }: { pdf: an
     setLoading(true)
     ;(async () => {
       const page = await pdf.getPage(pageNumber)
+      if (cancelled) { try { page.cleanup?.() } catch {} ; return }
       const canvas = canvasRef.current
       if (!canvas) return
       const avail = wrapRef.current?.getBoundingClientRect().width ?? 0
@@ -187,12 +200,20 @@ function PdfPage({ pdf, pageNumber, zoom = 1, containerWidth = null }: { pdf: an
       if (!ctx) return
       const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined
       await page.render({ canvasContext: ctx, transform, viewport }).promise
+      try { page.cleanup?.() } catch {}
       if (!cancelled) setLoading(false)
     })().catch(() => {
       if (!cancelled) setLoading(false)
     })
     return () => {
       cancelled = true
+      const canvas = canvasRef.current
+      if (canvas) {
+        const ctx = canvas.getContext('2d')
+        ctx?.clearRect(0, 0, canvas.width, canvas.height)
+        canvas.width = 0
+        canvas.height = 0
+      }
     }
   }, [pdf, pageNumber, zoom, containerWidth])
 
@@ -317,13 +338,16 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
         pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
         doc = await pdfjs.getDocument({ data: data.slice(0) }).promise
         if (!cancelled) setPdf(doc)
+        else doc?.destroy?.()
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load PDF')
       }
     })()
     return () => {
       cancelled = true
-      doc?.destroy?.()
+      if (doc) doc.destroy?.()
+      setPdf(null)
+      setError(null)
     }
   }, [data])
 
@@ -545,6 +569,8 @@ function DocxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
     })()
     return () => {
       cancelled = true
+      setHtml('')
+      setError(null)
     }
   }, [data])
 
@@ -632,6 +658,8 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
     })()
     return () => {
       cancelled = true
+      setHtml('')
+      setError(null)
     }
   }, [data])
 
@@ -688,6 +716,8 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
     })()
     return () => {
       cancelled = true
+      setSlides([])
+      setError(null)
     }
   }, [data])
 
