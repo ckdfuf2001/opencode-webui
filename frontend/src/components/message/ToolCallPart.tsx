@@ -35,6 +35,7 @@ type ToolPart = components['schemas']['ToolPart']
 interface ToolCallPartProps {
   part: ToolPart
   onFileClick?: (filePath: string, lineNumber?: number) => void
+  directory?: string
 }
 
 function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (filePath: string) => void }) {
@@ -77,11 +78,12 @@ function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (fi
   return <pre className="bg-accent p-2 rounded text-xs overflow-x-auto">{parts}</pre>
 }
 
-export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
+export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps) {
   const { preferences } = useSettings()
   const { userBashCommands } = useUserBash()
   const outputRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const ptyPreRef = useRef<HTMLPreElement>(null)
   const isUserBashCommand = part.tool === 'bash' && 
     part.state.status === 'completed' &&
     typeof part.state.input?.command === 'string' &&
@@ -118,7 +120,8 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
     if (!sid || !mid || !pid) return
     let cur = (part.state as unknown as { output?: string; metadata?: { output?: string } }).output ?? (part.state as unknown as { metadata?: { output?: string } }).metadata?.output ?? ''
     setPtyOutput(cur || null)
-    const url = `/api/pty/${sid}/${mid}/${pid}/stream?interval=${ptyIntervalMs}`
+    const dirQs = directory ? `&directory=${encodeURIComponent(directory)}` : ''
+    const url = `/api/pty/${sid}/${mid}/${pid}/stream?interval=${ptyIntervalMs}${dirQs}`
     let es: EventSource | null = null
     try {
       es = new EventSource(url)
@@ -138,7 +141,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
       es.addEventListener('pty.done', onDelta as EventListener)
     } catch {}
     return () => { try { es?.close() } catch {} }
-  }, [part.tool, part.state.status, expanded, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs])
+  }, [part.tool, part.state.status, expanded, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs, directory])
 
   // Sync ptyOutput with opencode's metadata.output polling (for when SSE delta not yet arrived, or after refresh)
   useEffect(() => {
@@ -161,6 +164,16 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
   }, [expanded, part.tool])
+
+  // follow streaming output — keep the tool card in view as new lines arrive
+  useEffect(() => {
+    if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded || !ptyOutput) return
+    const el = outputRef.current ?? containerRef.current
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    // if the bash output itself scrolls, keep it pinned to bottom
+    const pre = ptyPreRef.current
+    if (pre) pre.scrollTop = pre.scrollHeight
+  }, [ptyOutput, part.tool, part.state.status, expanded])
 
   const getStatusColor = () => {
     switch (part.state.status) {
@@ -296,7 +309,7 @@ export function ToolCallPart({ part, onFileClick }: ToolCallPartProps) {
                     </select>
                   </div>
                 </div>
-                <pre className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto min-h-[24px]">{(ptyOutput ?? (part.state as unknown as { output?: string; metadata?: { output?: string } }).output ?? (part.state as unknown as { metadata?: { output?: string } }).metadata?.output ?? part.state.title ?? (part.state.input as Record<string, unknown>)?.command as string) || "Running..."}</pre>
+                <pre ref={ptyPreRef} className="text-xs font-mono text-green-300 whitespace-pre-wrap overflow-x-auto overflow-y-auto max-h-[320px] min-h-[24px]">{(ptyOutput ?? (part.state as unknown as { output?: string; metadata?: { output?: string } }).output ?? (part.state as unknown as { metadata?: { output?: string } }).metadata?.output ?? part.state.title ?? (part.state.input as Record<string, unknown>)?.command as string) || "Running..."}</pre>
               </div>
             ) : (
               <div className="text-sm space-y-2">

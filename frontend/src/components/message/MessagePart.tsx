@@ -197,7 +197,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'patch':
       return <PatchPart part={part} />
     case 'tool':
-      return <ToolCallPart part={part} onFileClick={onFileClick} />
+      return <ToolCallPart part={part} onFileClick={onFileClick} directory={directory} />
     case 'reasoning': {
       if (!part.text?.trim()) return null
       // 이 메시지에 text 파트가 없다면 reasoning 이 사실상 답변이다.

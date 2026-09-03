@@ -235,7 +235,18 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       const command = filterCommands(commandName)[0]
       
       if (command) {
-        
+        // 생성 중 커맨드는 큐에 적재 — 텍스트로 큐에 넣으면 idle 시 sendPrompt로 /커맨드 형식 그대로 발송된다
+        if (hasActiveStream || sendPrompt.isPending) {
+          const text = prompt.trim()
+          if (text) {
+            enqueueQueued.mutate({ sessionID, text })
+            setPrompt('')
+            setAttachedFiles(new Map())
+            onSubmitted?.()
+            if (textareaRef.current) textareaRef.current.style.height = 'auto'
+          }
+          return
+        }
         executeCommand(command, commandMatch[2] ?? '')
         setPrompt('')
         if (textareaRef.current) {

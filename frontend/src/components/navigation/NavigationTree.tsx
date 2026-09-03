@@ -75,10 +75,19 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     <div className="flex flex-col gap-1 py-2">
       {/* Repo List Header */}
       <div className="flex items-center gap-1 px-2">
-        <div className="flex-1 flex items-center gap-2 px-2 py-1 text-xs font-semibold text-muted-foreground">
+        <a
+          href="/"
+          onClick={(e) => {
+            if (e.ctrlKey || e.metaKey) return
+            e.preventDefault()
+            navigate('/')
+            onNavigate?.()
+          }}
+          className="flex-1 flex items-center gap-2 px-2 py-1 text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-accent rounded"
+        >
           <FolderGit2 className="w-3 h-3" />
-          Repositorys
-        </div>
+          repositories
+        </a>
         <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => onNewRepo?.()} title="새 레포">
           <Plus className="w-3 h-3" />
         </Button>
