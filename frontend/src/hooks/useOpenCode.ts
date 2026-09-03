@@ -283,7 +283,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         } else if (cachedLast.info.id === resultLast.info.id) {
           const cText = cachedLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
           const rText = resultLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
-          if (cText.length > rText.length) result = [...result.slice(0, -1), cachedLast];
+          const cTool = cachedLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string } }).state?.output ?? "")).join("");
+          const rTool = resultLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string } }).state?.output ?? "")).join("");
+          if (cText.length > rText.length || cTool.length > rTool.length) result = [...result.slice(0, -1), cachedLast];
         }
       }
       const optimistic = pendingOptimistic.get(sessionID!);
