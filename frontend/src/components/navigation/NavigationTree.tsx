@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { listRepos } from '@/api/repos'
@@ -15,7 +15,10 @@ interface NavigationTreeProps {
 export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
   const navigate = useNavigate()
   const location = useLocation()
-  const [expandedRepos, setExpandedRepos] = useState<Set<number>>(new Set())
+  const [expandedRepos, setExpandedRepos] = useState<Set<number>>(() => {
+    const m = location.pathname.match(/\/repos\/(\d+)/)
+    return m ? new Set([parseInt(m[1], 10)]) : new Set()
+  })
 
   const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos })
   const { data: dbStatuses } = useSessionStatusMap()
@@ -28,6 +31,17 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
       return next
     })
   }
+
+  // Auto-expand current repo when location changes
+  useEffect(() => {
+    const m = location.pathname.match(/\/repos\/(\d+)/)
+    if (m) {
+      const id = parseInt(m[1], 10)
+      if (!expandedRepos.has(id)) {
+        setExpandedRepos(prev => new Set([...prev, id]))
+      }
+    }
+  }, [location.pathname])
 
   const isHomeActive = location.pathname === '/'
   const isRepoActive = (repoId: number) => location.pathname === `/repos/${repoId}` || location.pathname.startsWith(`/repos/${repoId}/`)
