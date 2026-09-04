@@ -14,24 +14,52 @@ export async function ensurePushPermission(): Promise<NotificationPermission | n
   }
 }
 
-export function sendPushNotification(title: string, opts?: NotificationOptions): void {
+export async function sendPushNotification(title: string, opts?: NotificationOptions): Promise<void> {
   try {
     if (!isPushSupported()) return
-    if (Notification.permission !== 'granted') {
-      // 권한이 default면 백그라운드에서 요청은 차단되므로 조용히 스킵
-      return
-    }
-    const n = new Notification(title, {
+    if (Notification.permission !== 'granted') return
+    const baseOpts: NotificationOptions & { renotify?: boolean } = {
+      badge: '/favicon.svg',
+      icon: '/favicon.svg',
       requireInteraction: false,
       silent: false,
       ...opts,
-    } as NotificationOptions)
+    }
+    // 유튜브 등도 ServiceWorker showNotification을 사용 — 백그라운드/다른 탭에서도 OS 알림이 뜨도록
+    if ('serviceWorker' in navigator) {
+      try {
+        // 이미 등록된 SW가 있으면 그대로 사용
+        const ready = await Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise<null>((res) => setTimeout(() => res(null), 400)),
+        ])
+        if (ready) {
+          await (ready as ServiceWorkerRegistration).showNotification(title, baseOpts)
+          return
+        }
+      } catch {}
+      // SW가 없으면 최소 SW를 동적으로 등록해 OS 알림 시도
+      try {
+        const swCode = `self.addEventListener('notificationclick', function(e){e.notification.close(); e.waitUntil(clients.matchAll({type:'window'}).then(function(cs){ if(cs.length>0) return cs[0].focus(); return clients.openWindow('/'); }));}); self.addEventListener('push', function(e){});`
+        const blob = new Blob([swCode], { type: 'text/javascript' })
+        const url = URL.createObjectURL(blob)
+        const reg = await navigator.serviceWorker.register(url, { scope: '/' })
+        await navigator.serviceWorker.ready
+        await reg.showNotification(title, baseOpts)
+        return
+      } catch {}
+    }
+    const n = new Notification(title, baseOpts as NotificationOptions)
     n.onclick = () => {
       try { window.focus() } catch {}
       n.close()
     }
     setTimeout(() => { try { n.close() } catch {} }, 7000)
   } catch {}
+}
+
+export function triggerTestPush(): void {
+  void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상적으로 동작합니다.', tag: 'test-push' } as NotificationOptions)
 }
 
 // per-session overrides stored in localStorage

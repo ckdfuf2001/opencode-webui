@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Plus, ShieldCheck, X, Volume2, Bell } from 'lucide-react'
+import { Loader2, Plus, ShieldCheck, X, Volume2, Bell, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -14,7 +14,7 @@ import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
-import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, getEffectiveSound, getEffectivePush, getEffectiveSkillAuto } from '@/lib/notifications'
+import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, sendPushNotification, getEffectiveSound, getEffectivePush, getEffectiveSkillAuto } from '@/lib/notifications'
 
 interface PermissionRulesDialogProps {
   open: boolean
@@ -46,6 +46,7 @@ export function PermissionRulesDialog({
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [ruleScope, setRuleScope] = useState<'repo' | 'session'>(scope === 'session' ? 'session' : 'repo')
+  const [notifyExpanded, setNotifyExpanded] = useState(false)
   const queryClient = useQueryClient()
   const { data: skillAuto } = useQuery({
     queryKey: ['skill-auto-update', repoId ?? 'global'],
@@ -238,179 +239,6 @@ export function PermissionRulesDialog({
           </div>
         </div>
 
-        <div className="rounded-lg border border-border bg-card p-3 space-y-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Volume2 className="w-4 h-4" /> 알림/스킬 설정 ({scope==='global'?'전역':scope==='repo'?'레포':'세션'}에서 수정)
-          </div>
-          <div className="space-y-3">
-            {/* 글로벌 */}
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm">완료 소리 (글로벌)</Label>
-                <p className="text-xs text-muted-foreground">응답 완료 시 효과음 · 전역 기본값</p>
-              </div>
-              <Switch
-                checked={globalSoundOn}
-                onCheckedChange={(v) => updateSettings({ completionSoundEnabled: v })}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm">취소 시에도 소리 (글로벌)</Label>
-                <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음 재생</p>
-              </div>
-              <Switch
-                checked={preferences?.completionSoundOnCancel !== false}
-                onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림 (글로벌)</Label>
-                <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림으로 완료/권한 요청' : '미지원 브라우저'}</p>
-              </div>
-              <Switch
-                checked={globalPushOn}
-                disabled={!isPushSupported()}
-                onCheckedChange={async (v) => {
-                  if (v) {
-                    const perm = await ensurePushPermission()
-                    if (perm !== 'granted') {
-                      showToast.error('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.')
-                      return
-                    }
-                    try { new Notification('알림 테스트', { body: 'PC 푸시 알림이 활성화되었습니다.', tag: 'test-push' }) } catch {}
-                  }
-                  updateSettings({ pushNotificationEnabled: v })
-                }}
-              />
-            </div>
-
-            {/* 레포 오버라이드 (레포/세션 스콥에서 편집 가능) */}
-            {repoId !== undefined && (
-              <div className="border-t border-border pt-3 space-y-3">
-                <div className="text-xs font-medium text-muted-foreground">레포 오버라이드 (레포 #{repoId})</div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">레포 소리</Label>
-                    <p className="text-xs text-muted-foreground">전역 {globalSoundOn?'ON':'OFF'} → 레포 {repoSoundOverride===undefined?'상속':repoSoundOverride?'ON':'OFF'} → 적용 {soundEff.effective?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn}
-                    onCheckedChange={(v) => {
-                      const next = v === globalSoundOn ? undefined : v
-                      setRepoOverride(repoId, { soundEnabled: next })
-                      setRepoSoundOverrideState(next)
-                    }}
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">레포 PC 푸시</Label>
-                    <p className="text-xs text-muted-foreground">전역 {globalPushOn?'ON':'OFF'} → 레포 {repoPushOverride===undefined?'상속':repoPushOverride?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn}
-                    disabled={!isPushSupported()}
-                    onCheckedChange={async (v) => {
-                      if (v && isPushSupported() && Notification.permission !== 'granted') {
-                        const perm = await ensurePushPermission()
-                        if (perm !== 'granted') { showToast.error('알림 권한 거부'); return }
-                      }
-                      const next = v === globalPushOn ? undefined : v
-                      setRepoOverride(repoId, { pushEnabled: next })
-                      setRepoPushOverrideState(next)
-                    }}
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm font-medium">Skill / Command auto update (레포)</Label>
-                    <p className="text-xs text-muted-foreground">레포 스콥 · DB에 저장</p>
-                  </div>
-                  <Switch
-                    checked={skillAuto?.enabled ?? false}
-                    onCheckedChange={(v) => skillMut.mutate(v)}
-                    disabled={skillMut.isPending}
-                  />
-                </div>
-                {repoSkillOverride !== undefined && (
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">레포 스킬 로컬 오버라이드</Label>
-                      <p className="text-xs text-muted-foreground">DB {skillAuto?.enabled?'ON':'OFF'} → 로컬 {repoSkillOverride?'ON':'OFF'}</p>
-                    </div>
-                    <Switch
-                      checked={repoSkillOverride}
-                      onCheckedChange={(v) => {
-                        const next = v === (skillAuto?.enabled ?? false) ? undefined : v
-                        setRepoOverride(repoId, { skillAutoEnabled: next })
-                        setRepoSkillOverrideState(next)
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 세션 오버라이드 */}
-            {sessionId && (
-              <div className="border-t border-border pt-3 space-y-3">
-                <div className="text-xs font-medium text-muted-foreground">세션 오버라이드 ({sessionId.slice(0,8)})</div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">세션 소리</Label>
-                    <p className="text-xs text-muted-foreground">레포 {repoSoundOverride===undefined? (globalSoundOn?'ON':'OFF') : repoSoundOverride?'ON':'OFF'} → 세션 {sessionSoundOverride===undefined?'상속':sessionSoundOverride?'ON':'OFF'} → 적용 {soundEff.effective?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={sessionSoundOverride !== undefined ? sessionSoundOverride : (repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn)}
-                    onCheckedChange={(v) => {
-                      const parent = repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn
-                      const next = v === parent ? undefined : v
-                      setSessionOverride(sessionId, { soundEnabled: next })
-                      setSessionSoundOverrideState(next)
-                    }}
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">세션 PC 푸시</Label>
-                    <p className="text-xs text-muted-foreground">레포 {repoPushOverride===undefined? (globalPushOn?'ON':'OFF') : repoPushOverride?'ON':'OFF'} → 세션 {sessionPushOverride===undefined?'상속':sessionPushOverride?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)}
-                    disabled={!isPushSupported()}
-                    onCheckedChange={async (v) => {
-                      if (v && isPushSupported() && Notification.permission !== 'granted') {
-                        const perm = await ensurePushPermission()
-                        if (perm !== 'granted') { showToast.error('알림 권한 거부'); return }
-                      }
-                      const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn
-                      const next = v === parent ? undefined : v
-                      setSessionOverride(sessionId, { pushEnabled: next })
-                      setSessionPushOverrideState(next)
-                    }}
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">세션 스킬 오토</Label>
-                    <p className="text-xs text-muted-foreground">레포 {skillEff.repo?'ON':'OFF'} → 세션 {sessionSkillOverride===undefined?'상속':sessionSkillOverride?'ON':'OFF'} → 적용 {skillEff.effective?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={sessionSkillOverride !== undefined ? sessionSkillOverride : skillEff.repo}
-                    onCheckedChange={(v) => {
-                      const parent = skillEff.repo
-                      const next = v === parent ? undefined : v
-                      setSessionOverride(sessionId, { skillAutoEnabled: next })
-                      setSessionSkillOverrideState(next)
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
 
         <div className="space-y-2 rounded-lg border border-border bg-card p-3">
           <div className="flex items-center justify-between">
@@ -539,6 +367,197 @@ export function PermissionRulesDialog({
         {scope === 'global' && (
           <p className="text-xs text-muted-foreground text-center py-2">전역에서는 알림/스킬 전역값만 설정합니다. Permission 룰은 레포 또는 세션 패널에서 추가하세요.</p>
         )}
+        {/* 알림·스킬 설정 - 맨 아래, 클릭 시 상세 ON/OFF */}
+        <div className="rounded-lg border border-border bg-card p-3">
+          <button type="button" onClick={()=>setNotifyExpanded(!notifyExpanded)} className="w-full flex items-center justify-between text-left">
+            <span className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> 알림·스킬 설정 <Badge variant="outline" className="text-xs ml-1">${scope==='global'?'전역':scope==='repo'?'레포':'세션'}</Badge></span>
+            <span className="flex items-center gap-2">
+              <Badge variant={soundEff.effective?'default':'outline'} className="text-xs">소리 {soundEff.effective?'ON':'OFF'}</Badge>
+              <Badge variant={pushEff.effective?'default':'outline'} className="text-xs">푸시 {pushEff.effective?'ON':'OFF'}</Badge>
+              <Badge variant={skillEff.effective?'default':'outline'} className="text-xs">스킬 {skillEff.effective?'ON':'OFF'}</Badge>
+              <ChevronDown className={`w-4 h-4 transition-transform ${notifyExpanded?'rotate-180':''}`} />
+            </span>
+          </button>
+          {notifyExpanded && <div className="mt-3 space-y-3">
+            <div className="space-y-3">
+            {/* 글로벌 */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">완료 소리 (글로벌)</Label>
+                <p className="text-xs text-muted-foreground">응답 완료 시 효과음 · 전역 기본값</p>
+              </div>
+              <Switch
+                checked={globalSoundOn}
+                onCheckedChange={(v) => updateSettings({ completionSoundEnabled: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">취소 시에도 소리 (글로벌)</Label>
+                <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음 재생</p>
+              </div>
+              <Switch
+                checked={preferences?.completionSoundOnCancel !== false}
+                onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림 (글로벌)</Label>
+                <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림으로 완료/권한 요청' : '미지원 브라우저'}</p>
+                {Notification.permission === 'denied' && (
+                  <p className="text-xs text-destructive">브라우저에서 차단됨 — 주소창 자물쇠 → 사이트 설정 → 알림 허용으로 변경 (브라우저 설정은 코드로 강제 변경 불가)</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {globalPushOn && (
+                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상입니다.', tag: 'test-push' })}>테스트</Button>
+                )}
+                <Switch
+                  checked={globalPushOn}
+                  disabled={!isPushSupported()}
+                  onCheckedChange={async (v) => {
+                    if (v) {
+                      const perm = await ensurePushPermission()
+                      if (perm !== 'granted') {
+                        showToast.error('알림 권한이 거부되었습니다. 주소창 왼쪽 자물쇠 → 사이트 설정 → 알림 허용으로 수동 변경해야 합니다. (브라우저 보안상 코드로 강제 변경 불가)')
+                        return
+                      }
+                      void sendPushNotification('알림 테스트', { body: 'PC 푸시 알림이 활성화되었습니다.', tag: 'test-push' })
+                    }
+                    updateSettings({ pushNotificationEnabled: v })
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* 레포 오버라이드 (레포/세션 스콥에서 편집 가능) */}
+            {repoId !== undefined && (
+              <div className="border-t border-border pt-3 space-y-3">
+                <div className="text-xs font-medium text-muted-foreground">레포 오버라이드 (레포 #{repoId})</div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm">레포 소리</Label>
+                    <p className="text-xs text-muted-foreground">전역 {globalSoundOn?'ON':'OFF'} → 레포 {repoSoundOverride===undefined?'상속':repoSoundOverride?'ON':'OFF'} → 적용 {soundEff.effective?'ON':'OFF'}</p>
+                  </div>
+                  <Switch
+                    checked={repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn}
+                    onCheckedChange={(v) => {
+                      const next = v === globalSoundOn ? undefined : v
+                      setRepoOverride(repoId, { soundEnabled: next })
+                      setRepoSoundOverrideState(next)
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm">레포 PC 푸시</Label>
+                    <p className="text-xs text-muted-foreground">전역 {globalPushOn?'ON':'OFF'} → 레포 {repoPushOverride===undefined?'상속':repoPushOverride?'ON':'OFF'}</p>
+                  </div>
+                  <Switch
+                    checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn}
+                    disabled={!isPushSupported()}
+                    onCheckedChange={async (v) => {
+                      if (v && isPushSupported() && Notification.permission !== 'granted') {
+                        const perm = await ensurePushPermission()
+                        if (perm !== 'granted') { showToast.error('알림 권한 거부'); return }
+                      }
+                      const next = v === globalPushOn ? undefined : v
+                      setRepoOverride(repoId, { pushEnabled: next })
+                      setRepoPushOverrideState(next)
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm font-medium">Skill / Command auto update (레포)</Label>
+                    <p className="text-xs text-muted-foreground">레포 스콥 · DB에 저장</p>
+                  </div>
+                  <Switch
+                    checked={skillAuto?.enabled ?? false}
+                    onCheckedChange={(v) => skillMut.mutate(v)}
+                    disabled={skillMut.isPending}
+                  />
+                </div>
+                {repoSkillOverride !== undefined && (
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm">레포 스킬 로컬 오버라이드</Label>
+                      <p className="text-xs text-muted-foreground">DB {skillAuto?.enabled?'ON':'OFF'} → 로컬 {repoSkillOverride?'ON':'OFF'}</p>
+                    </div>
+                    <Switch
+                      checked={repoSkillOverride}
+                      onCheckedChange={(v) => {
+                        const next = v === (skillAuto?.enabled ?? false) ? undefined : v
+                        setRepoOverride(repoId, { skillAutoEnabled: next })
+                        setRepoSkillOverrideState(next)
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 세션 오버라이드 */}
+            {sessionId && (
+              <div className="border-t border-border pt-3 space-y-3">
+                <div className="text-xs font-medium text-muted-foreground">세션 오버라이드 ({sessionId.slice(0,8)})</div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm">세션 소리</Label>
+                    <p className="text-xs text-muted-foreground">레포 {repoSoundOverride===undefined? (globalSoundOn?'ON':'OFF') : repoSoundOverride?'ON':'OFF'} → 세션 {sessionSoundOverride===undefined?'상속':sessionSoundOverride?'ON':'OFF'} → 적용 {soundEff.effective?'ON':'OFF'}</p>
+                  </div>
+                  <Switch
+                    checked={sessionSoundOverride !== undefined ? sessionSoundOverride : (repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn)}
+                    onCheckedChange={(v) => {
+                      const parent = repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn
+                      const next = v === parent ? undefined : v
+                      setSessionOverride(sessionId, { soundEnabled: next })
+                      setSessionSoundOverrideState(next)
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm">세션 PC 푸시</Label>
+                    <p className="text-xs text-muted-foreground">레포 {repoPushOverride===undefined? (globalPushOn?'ON':'OFF') : repoPushOverride?'ON':'OFF'} → 세션 {sessionPushOverride===undefined?'상속':sessionPushOverride?'ON':'OFF'}</p>
+                  </div>
+                  <Switch
+                    checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)}
+                    disabled={!isPushSupported()}
+                    onCheckedChange={async (v) => {
+                      if (v && isPushSupported() && Notification.permission !== 'granted') {
+                        const perm = await ensurePushPermission()
+                        if (perm !== 'granted') { showToast.error('알림 권한 거부'); return }
+                      }
+                      const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn
+                      const next = v === parent ? undefined : v
+                      setSessionOverride(sessionId, { pushEnabled: next })
+                      setSessionPushOverrideState(next)
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm">세션 스킬 오토</Label>
+                    <p className="text-xs text-muted-foreground">레포 {skillEff.repo?'ON':'OFF'} → 세션 {sessionSkillOverride===undefined?'상속':sessionSkillOverride?'ON':'OFF'} → 적용 {skillEff.effective?'ON':'OFF'}</p>
+                  </div>
+                  <Switch
+                    checked={sessionSkillOverride !== undefined ? sessionSkillOverride : skillEff.repo}
+                    onCheckedChange={(v) => {
+                      const parent = skillEff.repo
+                      const next = v === parent ? undefined : v
+                      setSessionOverride(sessionId, { skillAutoEnabled: next })
+                      setSessionSkillOverrideState(next)
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+          </div>}
+        </div>
+
       </DialogContent>
     </Dialog>
   )
