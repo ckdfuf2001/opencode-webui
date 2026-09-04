@@ -146,30 +146,51 @@ useEffect(() => {
   }
 
   const handleUpload = useCallback(async (files: FileList) => {
-    const formData = new FormData()
-    formData.append('file', files[0])
-    
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/files/${currentPath}`, {
-        method: 'POST',
-        body: formData,
-      })
-      
-      if (!response.ok) {
-        const body = await response.json().catch(() => null)
-        throw new Error(body?.error || `Upload failed: ${response.statusText}`)
+    const fileArray = Array.from(files)
+    if (fileArray.length === 0) return
+    let successCount = 0
+    let failCount = 0
+    let lastResult: { name?: string; path?: string } | null = null
+    let lastError: string | null = null
+    for (const file of fileArray) {
+      const formData = new FormData()
+      formData.append('file', file)
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/files/${currentPath}`, {
+          method: 'POST',
+          body: formData,
+        })
+        if (!response.ok) {
+          const body = await response.json().catch(() => null)
+          throw new Error(body?.error || `Upload failed: ${response.statusText}`)
+        }
+        lastResult = await response.json().catch(() => null)
+        successCount++
+      } catch (err) {
+        failCount++
+        lastError = err instanceof Error ? err.message : 'Upload failed'
       }
-      
-      const result = await response.json().catch(() => null)
-      showToast.success(`Uploaded "${result?.name || files[0].name}" to ${currentPath || '/'}`, {
-        description: result?.path ? result.path : undefined,
-        duration: 5000,
-      })
+    }
+    if (successCount > 0) {
+      if (fileArray.length === 1) {
+        showToast.success(`Uploaded "${lastResult?.name || fileArray[0].name}" to ${currentPath || '/'}`, {
+          description: lastResult?.path ? lastResult.path : undefined,
+          duration: 5000,
+        })
+      } else {
+        showToast.success(`Uploaded ${successCount} file(s) to ${currentPath || '/'}`, {
+          description: failCount > 0 ? `${failCount} failed` : undefined,
+          duration: 5000,
+        })
+      }
       await loadFiles(currentPath)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed'
+    }
+    if (failCount > 0 && successCount === 0) {
+      const message = lastError || 'Upload failed'
       showToast.error(message.startsWith('Upload failed') ? message : `Upload failed: ${message}`)
       setError(message)
+    } else if (failCount > 0) {
+      showToast.error(`${failCount} file(s) failed to upload`)
     }
   }, [currentPath])
 
