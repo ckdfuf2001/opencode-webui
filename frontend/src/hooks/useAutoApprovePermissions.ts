@@ -4,6 +4,7 @@ import { listRepos } from '@/api/repos'
 import { OPENCODE_API_ENDPOINT } from '@/config'
 import { permissionEvents } from './usePermissionRequests'
 import type { Permission, PermissionRule } from '@/api/types'
+import { getSessionPermissionRules } from '@/lib/notifications'
 
 const client = createOpenCodeClient(OPENCODE_API_ENDPOINT)
 
@@ -71,6 +72,35 @@ async function refreshData(): Promise<void> {
 
 async function handlePermissionAdd(permission: Permission): Promise<void> {
   if (recentlyProcessed.has(permission.id)) return
+
+  // 세션 로컬 룰 우선 확인 (로컬스토리지)
+  if (permission.sessionID) {
+    const sessRules = getSessionPermissionRules(permission.sessionID) as unknown as PermissionRule[]
+    if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) {
+      // 세션 룰이 매칭되면 즉시 승인
+    } else if (sessRules.length > 0) {
+      // 세션 룰이 있지만 매칭 실패 → 아래 레포/전역 룰로 폴백
+    } else {
+      // 세션 룰 없음 → 레포 룰 확인
+    }
+    // 세션 룰 매칭 시 바로 승인 시도, 아니면 아래로
+    if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) {
+      recentlyProcessed.add(permission.id)
+      setTimeout(() => { recentlyProcessed.delete(permission.id) }, 60_000)
+      try {
+        if (permission.v2) {
+          await client.respondToPermissionV2(permission.id, 'always')
+        } else {
+          await client.respondToPermission(permission.sessionID, permission.id, 'always')
+        }
+        permissionEvents.emit({ type: 'remove', permissionID: permission.id })
+      } catch (error) {
+        recentlyProcessed.delete(permission.id)
+        console.error('Failed to auto-approve permission (session):', error)
+      }
+      return
+    }
+  }
 
   // directory 정규화: 윈도우 백슬래시, 트레일링 슬래시, 대소문자 무시
   const normalizeDir = (d: string) => d.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()

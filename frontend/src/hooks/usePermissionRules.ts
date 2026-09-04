@@ -5,11 +5,11 @@ import {
   deletePermissionRule,
 } from '@/api/permission-rules'
 
-export function usePermissionRules(repoId: number) {
+export function usePermissionRules(repoId?: number) {
   return useQuery({
-    queryKey: ['permission-rules', repoId],
+    queryKey: ['permission-rules', repoId ?? 'global'],
     queryFn: () => listPermissionRules(repoId),
-    enabled: !!repoId,
+    enabled: repoId !== undefined && repoId !== null && !!repoId,
   })
 }
 

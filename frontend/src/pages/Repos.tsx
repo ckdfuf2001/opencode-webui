@@ -6,15 +6,17 @@ import { Header } from "@/components/layout/Header";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { Button } from "@/components/ui/button";
-import { FolderOpen, Briefcase, Settings } from "lucide-react";
+import { FolderOpen, Briefcase, Settings, ShieldCheck } from "lucide-react";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
+import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 export function Repos() {
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [permissionRulesOpen, setPermissionRulesOpen] = useState(false);
   const { open: openSettings } = useSettingsDialog();
 
   const handleCloseFileBrowser = () => {
@@ -51,6 +53,15 @@ export function Repos() {
               <Button
                 variant="ghost"
                 size="icon"
+                onClick={() => setPermissionRulesOpen(true)}
+                className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+                title="Auto-Approved Permissions (전역)"
+              >
+                <ShieldCheck className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={openSettings}
                 className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none"
                 title="Settings"
@@ -78,6 +89,7 @@ export function Repos() {
         repoName="Workspace Root"
       />
       <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
+      <PermissionRulesDialog open={permissionRulesOpen} onOpenChange={setPermissionRulesOpen} />
     </div>
   );
 }

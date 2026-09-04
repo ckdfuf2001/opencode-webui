@@ -36,9 +36,13 @@ export function sendPushNotification(title: string, opts?: NotificationOptions):
 
 // per-session overrides stored in localStorage
 const OVERRIDES_KEY = 'opencode-session-notify-overrides'
+const REPO_OVERRIDES_KEY = 'opencode-repo-notify-overrides'
+const SESSION_PERM_KEY = 'opencode-session-permission-rules'
 
-type SessionOverride = { soundEnabled?: boolean; pushEnabled?: boolean }
+type SessionOverride = { soundEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
+type RepoOverride = { soundEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
 type OverridesMap = Record<string, SessionOverride>
+type RepoOverridesMap = Record<string, RepoOverride>
 
 function readOverrides(): OverridesMap {
   try {
@@ -56,6 +60,22 @@ function writeOverrides(map: OverridesMap): void {
   } catch {}
 }
 
+function readRepoOverrides(): RepoOverridesMap {
+  try {
+    const raw = localStorage.getItem(REPO_OVERRIDES_KEY)
+    if (!raw) return {}
+    return JSON.parse(raw) as RepoOverridesMap
+  } catch {
+    return {}
+  }
+}
+
+function writeRepoOverrides(map: RepoOverridesMap): void {
+  try {
+    localStorage.setItem(REPO_OVERRIDES_KEY, JSON.stringify(map))
+  } catch {}
+}
+
 export function getSessionOverride(sessionId: string): SessionOverride {
   return readOverrides()[sessionId] ?? {}
 }
@@ -64,33 +84,117 @@ export function setSessionOverride(sessionId: string, patch: SessionOverride): v
   const map = readOverrides()
   const cur = map[sessionId] ?? {}
   const next = { ...cur, ...patch }
-  // if both undefined, remove entry to keep storage clean
-  if (next.soundEnabled === undefined && next.pushEnabled === undefined) {
+  if (next.soundEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
     delete map[sessionId]
   } else {
     map[sessionId] = next
   }
   writeOverrides(map)
-  // dispatch event so other hooks can react
   window.dispatchEvent(new CustomEvent('opencode:session-notify-changed', { detail: { sessionId, patch } }))
 }
 
-export function shouldPlaySound(sessionId: string | undefined, isCancel: boolean, prefs: { completionSoundEnabled?: boolean; completionSoundOnCancel?: boolean }): boolean {
+export function getRepoOverride(repoId: number | string): RepoOverride {
+  return readRepoOverrides()[String(repoId)] ?? {}
+}
+
+export function setRepoOverride(repoId: number | string, patch: RepoOverride): void {
+  const map = readRepoOverrides()
+  const cur = map[String(repoId)] ?? {}
+  const next = { ...cur, ...patch }
+  if (next.soundEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
+    delete map[String(repoId)]
+  } else {
+    map[String(repoId)] = next
+  }
+  writeRepoOverrides(map)
+  window.dispatchEvent(new CustomEvent('opencode:repo-notify-changed', { detail: { repoId, patch } }))
+}
+
+// 세션별 permission rule (로컬)
+export interface SessionPermissionRule { id: string; permission: string; pattern: string; createdAt: number }
+export function getSessionPermissionRules(sessionId: string): SessionPermissionRule[] {
+  try {
+    const raw = localStorage.getItem(SESSION_PERM_KEY)
+    const map = raw ? JSON.parse(raw) as Record<string, SessionPermissionRule[]> : {}
+    return map[sessionId] ?? []
+  } catch { return [] }
+}
+export function addSessionPermissionRule(sessionId: string, rule: Omit<SessionPermissionRule, 'id' | 'createdAt'>): SessionPermissionRule {
+  const map = (() => { try { const r = localStorage.getItem(SESSION_PERM_KEY); return r ? JSON.parse(r) as Record<string, SessionPermissionRule[]> : {} } catch { return {} } })()
+  const list = map[sessionId] ?? []
+  const created: SessionPermissionRule = { id: `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`, createdAt: Date.now(), ...rule }
+  list.push(created)
+  map[sessionId] = list
+  try { localStorage.setItem(SESSION_PERM_KEY, JSON.stringify(map)) } catch {}
+  window.dispatchEvent(new CustomEvent('opencode:session-perm-changed', { detail: { sessionId } }))
+  return created
+}
+export function deleteSessionPermissionRule(sessionId: string, ruleId: string): void {
+  try {
+    const raw = localStorage.getItem(SESSION_PERM_KEY)
+    const map = raw ? JSON.parse(raw) as Record<string, SessionPermissionRule[]> : {}
+    const list = (map[sessionId] ?? []).filter(r => r.id !== ruleId)
+    if (list.length === 0) delete map[sessionId]
+    else map[sessionId] = list
+    localStorage.setItem(SESSION_PERM_KEY, JSON.stringify(map))
+    window.dispatchEvent(new CustomEvent('opencode:session-perm-changed', { detail: { sessionId } }))
+  } catch {}
+}
+
+export function shouldPlaySound(sessionId: string | undefined, isCancel: boolean, prefs: { completionSoundEnabled?: boolean; completionSoundOnCancel?: boolean }, repoId?: number | string): boolean {
   if (isCancel && prefs.completionSoundOnCancel === false) return false
+  // 세션 > 레포 > 전역 순으로 우선순위
   if (sessionId) {
     const ov = getSessionOverride(sessionId)
     if (ov.soundEnabled === true) return true
     if (ov.soundEnabled === false) return false
   }
+  if (repoId !== undefined && repoId !== null) {
+    const rov = getRepoOverride(repoId)
+    if (rov.soundEnabled === true) return true
+    if (rov.soundEnabled === false) return false
+  }
   if (prefs.completionSoundEnabled === false) return false
   return true
 }
 
-export function shouldPush(sessionId: string | undefined, prefs: { pushNotificationEnabled?: boolean }): boolean {
+export function shouldPush(sessionId: string | undefined, prefs: { pushNotificationEnabled?: boolean }, repoId?: number | string): boolean {
   if (sessionId) {
     const ov = getSessionOverride(sessionId)
     if (ov.pushEnabled === true) return true
     if (ov.pushEnabled === false) return false
   }
+  if (repoId !== undefined && repoId !== null) {
+    const rov = getRepoOverride(repoId)
+    if (rov.pushEnabled === true) return true
+    if (rov.pushEnabled === false) return false
+  }
   return prefs.pushNotificationEnabled === true
+}
+
+export function getEffectiveSound(repoId: number | string | undefined, sessionId: string | undefined, prefs: { completionSoundEnabled?: boolean }): { global: boolean; repo?: boolean; session?: boolean; effective: boolean } {
+  const global = prefs.completionSoundEnabled !== false
+  const repo = repoId !== undefined ? getRepoOverride(repoId).soundEnabled : undefined
+  const session = sessionId ? getSessionOverride(sessionId).soundEnabled : undefined
+  let effective = global
+  if (repo !== undefined) effective = repo
+  if (session !== undefined) effective = session
+  return { global, repo, session, effective }
+}
+export function getEffectivePush(repoId: number | string | undefined, sessionId: string | undefined, prefs: { pushNotificationEnabled?: boolean }): { global: boolean; repo?: boolean; session?: boolean; effective: boolean } {
+  const global = prefs.pushNotificationEnabled === true
+  const repo = repoId !== undefined ? getRepoOverride(repoId).pushEnabled : undefined
+  const session = sessionId ? getSessionOverride(sessionId).pushEnabled : undefined
+  let effective = global
+  if (repo !== undefined) effective = repo
+  if (session !== undefined) effective = session
+  return { global, repo, session, effective }
+}
+export function getEffectiveSkillAuto(repoId: number | string | undefined, sessionId: string | undefined, repoSkillAuto: boolean | undefined): { repo: boolean; session?: boolean; effective: boolean } {
+  const repo = repoSkillAuto ?? false
+  const repoOv = repoId !== undefined ? getRepoOverride(repoId).skillAutoEnabled : undefined
+  const sessOv = sessionId ? getSessionOverride(sessionId).skillAutoEnabled : undefined
+  let effective = repoOv !== undefined ? repoOv : repo
+  if (sessOv !== undefined) effective = sessOv
+  return { repo, session: sessOv, effective }
 }

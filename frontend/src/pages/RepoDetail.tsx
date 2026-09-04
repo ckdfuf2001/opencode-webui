@@ -21,7 +21,8 @@ import { Badge } from "@/components/ui/badge";
 import { OpenCodeStatus } from "@/components/opencode/OpenCodeStatus";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
-import { Loader2, FolderOpen, GitBranch, Briefcase, CalendarPlus, Settings } from "lucide-react";
+import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
+import { Loader2, FolderOpen, GitBranch, Briefcase, CalendarPlus, Settings, ShieldCheck } from "lucide-react";
 
 export function RepoDetail() {
   const { id } = useParams<{ id: string }>();
@@ -36,6 +37,7 @@ export function RepoDetail() {
   const [filePanelWidth, setFilePanelWidth] = useState(380);
   const [navOpen, setNavOpen] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
+  const [permissionRulesOpen, setPermissionRulesOpen] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const { open: openSettings } = useSettingsDialog();
 
@@ -187,6 +189,15 @@ export function RepoDetail() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  onClick={() => setPermissionRulesOpen(true)}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border"
+                  title="Auto-Approved Permissions (레포)"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={openSettings}
                   className="text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none"
                   title="Settings"
@@ -194,7 +205,7 @@ export function RepoDetail() {
                   <Settings className="w-4 h-4" />
                 </Button>
               </div>
-           </div>
+            </div>
         </div>
       </div>
 
@@ -271,6 +282,7 @@ export function RepoDetail() {
         />
       <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
       <AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoOpen} />
+      <PermissionRulesDialog open={permissionRulesOpen} onOpenChange={setPermissionRulesOpen} repoId={repoId} />
     </div>
   );
 }
