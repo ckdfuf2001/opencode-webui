@@ -982,6 +982,7 @@ if (results.length > 0) {
         open={permissionRulesOpen}
         onOpenChange={setPermissionRulesOpen}
         repoId={repoId}
+        sessionId={sessionId}
       />
 
       <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />

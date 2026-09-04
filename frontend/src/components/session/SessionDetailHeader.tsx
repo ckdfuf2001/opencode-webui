@@ -2,10 +2,8 @@ import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
-import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert, Volume2, VolumeX, Bell, BellOff } from "lucide-react";
+import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useState, useEffect } from "react";
-import { getSessionOverride, setSessionOverride, isPushSupported } from "@/lib/notifications";
-import { useSettings } from "@/hooks/useSettings";
 
 interface Repo {
   id: number;
@@ -59,25 +57,6 @@ export function SessionDetailHeader({
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(sessionTitle);
   const isWorking = isStreaming;
-  const { preferences } = useSettings();
-  const [sessionSoundOverride, setSessionSoundOverride] = useState<boolean | undefined>(undefined);
-  const [sessionPushOverride, setSessionPushOverride] = useState<boolean | undefined>(undefined);
-  useEffect(() => {
-    const ov = getSessionOverride(sessionId);
-    setSessionSoundOverride(ov.soundEnabled);
-    setSessionPushOverride(ov.pushEnabled);
-    const handler = () => {
-      const o = getSessionOverride(sessionId);
-      setSessionSoundOverride(o.soundEnabled);
-      setSessionPushOverride(o.pushEnabled);
-    };
-    window.addEventListener('opencode:session-notify-changed', handler);
-    return () => window.removeEventListener('opencode:session-notify-changed', handler);
-  }, [sessionId]);
-  const globalSoundOn = preferences?.completionSoundEnabled !== false;
-  const globalPushOn = preferences?.pushNotificationEnabled === true;
-  const effectiveSoundOn = sessionSoundOverride === false ? false : sessionSoundOverride === true ? true : globalSoundOn;
-  const effectivePushOn = sessionPushOverride === false ? false : sessionPushOverride === true ? true : globalPushOn;
 
   useEffect(() => {
     if (sessionStorage.getItem(`newSessionFocus:${sessionId}`)) {
@@ -209,30 +188,6 @@ export function SessionDetailHeader({
             </div>
           )}
           <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                setSessionOverride(sessionId, { soundEnabled: effectiveSoundOn ? false : true });
-              }}
-              className={`hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border ${effectiveSoundOn ? 'text-foreground' : 'text-muted-foreground opacity-60'}`}
-              title={effectiveSoundOn ? '세션 소리 끄기 (글로벌: ' + (globalSoundOn ? 'ON' : 'OFF') + ')' : '세션 소리 켜기 (글로벌: ' + (globalSoundOn ? 'ON' : 'OFF') + ')'}
-            >
-              {effectiveSoundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                if (!isPushSupported()) return;
-                setSessionOverride(sessionId, { pushEnabled: effectivePushOn ? false : true });
-              }}
-              className={`hover:bg-accent transition-all duration-200 h-8 w-8 rounded-none border-r border-border ${effectivePushOn ? 'text-foreground' : 'text-muted-foreground opacity-60'}`}
-              title={effectivePushOn ? '세션 푸시 끄기 (글로벌: ' + (globalPushOn ? 'ON' : 'OFF') + ')' : '세션 푸시 켜기 (글로벌: ' + (globalPushOn ? 'ON' : 'OFF') + ')'}
-              disabled={!isPushSupported()}
-            >
-              {effectivePushOn ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-            </Button>
             <Button
               variant="ghost"
               size="icon"

@@ -17,17 +17,20 @@ export async function ensurePushPermission(): Promise<NotificationPermission | n
 export function sendPushNotification(title: string, opts?: NotificationOptions): void {
   try {
     if (!isPushSupported()) return
-    if (Notification.permission !== 'granted') return
+    if (Notification.permission !== 'granted') {
+      // 권한이 default면 백그라운드에서 요청은 차단되므로 조용히 스킵
+      return
+    }
     const n = new Notification(title, {
-      icon: '/favicon.ico',
-      badge: '/favicon.ico',
+      requireInteraction: false,
+      silent: false,
       ...opts,
-    })
+    } as NotificationOptions)
     n.onclick = () => {
-      window.focus()
+      try { window.focus() } catch {}
       n.close()
     }
-    setTimeout(() => n.close(), 6000)
+    setTimeout(() => { try { n.close() } catch {} }, 7000)
   } catch {}
 }
 
@@ -73,18 +76,21 @@ export function setSessionOverride(sessionId: string, patch: SessionOverride): v
 }
 
 export function shouldPlaySound(sessionId: string | undefined, isCancel: boolean, prefs: { completionSoundEnabled?: boolean; completionSoundOnCancel?: boolean }): boolean {
-  if (prefs.completionSoundEnabled === false) return false
   if (isCancel && prefs.completionSoundOnCancel === false) return false
-  if (!sessionId) return true
-  const ov = getSessionOverride(sessionId)
-  if (ov.soundEnabled === false) return false
+  if (sessionId) {
+    const ov = getSessionOverride(sessionId)
+    if (ov.soundEnabled === true) return true
+    if (ov.soundEnabled === false) return false
+  }
+  if (prefs.completionSoundEnabled === false) return false
   return true
 }
 
 export function shouldPush(sessionId: string | undefined, prefs: { pushNotificationEnabled?: boolean }): boolean {
-  if (prefs.pushNotificationEnabled !== true) return false
-  if (!sessionId) return true
-  const ov = getSessionOverride(sessionId)
-  if (ov.pushEnabled === false) return false
-  return true
+  if (sessionId) {
+    const ov = getSessionOverride(sessionId)
+    if (ov.pushEnabled === true) return true
+    if (ov.pushEnabled === false) return false
+  }
+  return prefs.pushNotificationEnabled === true
 }

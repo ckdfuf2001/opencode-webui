@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Loader2, Plus, ShieldCheck, X } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Loader2, Plus, ShieldCheck, X, Volume2, Bell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -13,11 +13,14 @@ import { refreshAutoApproveData } from '@/hooks/useAutoApprovePermissions'
 import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
+import { useSettings } from '@/hooks/useSettings'
+import { getSessionOverride, setSessionOverride, isPushSupported, ensurePushPermission } from '@/lib/notifications'
 
 interface PermissionRulesDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   repoId: number
+  sessionId?: string
 }
 
 const PERMISSION_TYPES = ['bash', 'edit', 'webfetch', 'read', 'external_directory', '*']
@@ -31,6 +34,7 @@ export function PermissionRulesDialog({
   open,
   onOpenChange,
   repoId,
+  sessionId,
 }: PermissionRulesDialogProps) {
   const { data: rules = [], isLoading } = usePermissionRules(repoId)
   const createRule = useCreatePermissionRule()
@@ -53,6 +57,33 @@ export function PermissionRulesDialog({
     },
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to update'),
   })
+
+  // 알림 설정 (세션 상단 permission 패널에 글로벌/세션별 소리·PC 푸시)
+  const { preferences, updateSettings } = useSettings()
+  const [sessionSoundOverride, setSessionSoundOverrideState] = useState<boolean | undefined>(undefined)
+  const [sessionPushOverride, setSessionPushOverrideState] = useState<boolean | undefined>(undefined)
+  useEffect(() => {
+    if (!open) return
+    if (!sessionId) {
+      setSessionSoundOverrideState(undefined)
+      setSessionPushOverrideState(undefined)
+      return
+    }
+    const ov = getSessionOverride(sessionId)
+    setSessionSoundOverrideState(ov.soundEnabled)
+    setSessionPushOverrideState(ov.pushEnabled)
+    const handler = () => {
+      const o = getSessionOverride(sessionId)
+      setSessionSoundOverrideState(o.soundEnabled)
+      setSessionPushOverrideState(o.pushEnabled)
+    }
+    window.addEventListener('opencode:session-notify-changed', handler)
+    return () => window.removeEventListener('opencode:session-notify-changed', handler)
+  }, [open, sessionId])
+  const globalSoundOn = preferences?.completionSoundEnabled !== false
+  const globalPushOn = preferences?.pushNotificationEnabled === true
+  const effectiveSoundOn = sessionId ? (sessionSoundOverride === false ? false : sessionSoundOverride === true ? true : globalSoundOn) : globalSoundOn
+  const effectivePushOn = sessionId ? (sessionPushOverride === false ? false : sessionPushOverride === true ? true : globalPushOn) : globalPushOn
 
   const resetForm = () => {
     setPermission('bash')
@@ -120,6 +151,101 @@ export function PermissionRulesDialog({
             onCheckedChange={(v) => skillMut.mutate(v)}
             disabled={skillMut.isPending}
           />
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-3 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Volume2 className="w-4 h-4" /> 알림 설정
+          </div>
+          <p className="text-xs text-muted-foreground">세션 상단의 Permission 패널에서 소리·PC 푸시를 세션별/글로벌로 제어합니다.</p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">완료 소리 (글로벌)</Label>
+                <p className="text-xs text-muted-foreground">응답 완료 시 짧은 효과음</p>
+              </div>
+              <Switch
+                checked={globalSoundOn}
+                onCheckedChange={(v) => updateSettings({ completionSoundEnabled: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">취소 시에도 소리</Label>
+                <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음 재생</p>
+              </div>
+              <Switch
+                checked={preferences?.completionSoundOnCancel !== false}
+                onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림 (글로벌)</Label>
+                <p className="text-xs text-muted-foreground">{isPushSupported() ? '브라우저 OS 알림으로 완료/권한 요청 알림' : '이 브라우저는 푸시 알림 미지원'}</p>
+              </div>
+              <Switch
+                checked={globalPushOn}
+                disabled={!isPushSupported()}
+                onCheckedChange={async (v) => {
+                  if (v) {
+                    const perm = await ensurePushPermission()
+                    if (perm !== 'granted') {
+                      showToast.error('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.')
+                      return
+                    }
+                    try { new Notification('알림 테스트', { body: 'PC 푸시 알림이 활성화되었습니다.', tag: 'test-push' }) } catch {}
+                  }
+                  updateSettings({ pushNotificationEnabled: v })
+                }}
+              />
+            </div>
+            {sessionId && (
+              <>
+                <div className="border-t border-border pt-3 space-y-3">
+                  <div className="text-xs font-medium text-muted-foreground">현재 세션 오버라이드</div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm">세션 소리</Label>
+                      <p className="text-xs text-muted-foreground">이 세션만 {effectiveSoundOn ? 'ON' : 'OFF'} (글로벌 {globalSoundOn ? 'ON' : 'OFF'})</p>
+                    </div>
+                    <Switch
+                      checked={effectiveSoundOn}
+                      onCheckedChange={(v) => {
+                        if (sessionId) {
+                          setSessionOverride(sessionId, { soundEnabled: v })
+                          setSessionSoundOverrideState(v)
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm">세션 PC 푸시</Label>
+                      <p className="text-xs text-muted-foreground">이 세션만 {effectivePushOn ? 'ON' : 'OFF'} (글로벌 {globalPushOn ? 'ON' : 'OFF'})</p>
+                    </div>
+                    <Switch
+                      checked={effectivePushOn}
+                      disabled={!isPushSupported()}
+                      onCheckedChange={async (v) => {
+                        if (v && isPushSupported() && Notification.permission !== 'granted') {
+                          const perm = await ensurePushPermission()
+                          if (perm !== 'granted') {
+                            showToast.error('알림 권한이 거부되었습니다.')
+                            return
+                          }
+                        }
+                        if (sessionId) {
+                          setSessionOverride(sessionId, { pushEnabled: v })
+                          setSessionPushOverrideState(v)
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="space-y-2 rounded-lg border border-border bg-card p-3">
