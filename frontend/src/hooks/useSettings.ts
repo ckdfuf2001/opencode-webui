@@ -9,6 +9,9 @@ export function useSettings(userId = 'default') {
     queryKey: ['settings', userId],
     queryFn: () => settingsApi.getSettings(userId),
     staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
   })
 
   const updateMutation = useMutation({

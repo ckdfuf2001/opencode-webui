@@ -41,11 +41,12 @@ export function useCommandRunView(
     queryKey: commandRunKeys.view(scope, repoId, sessionId, start, end),
     queryFn: () => fetchCommandRunView({ scope, repoId, sessionId, start, end }),
     enabled,
-    // ?좎뼵???대쭅: 而댄룷?뚰듃 ?섎챸怨?臾닿??섍쾶 ?듭뀡??利됱떆 ?곸슜?쒕떎.
-    refetchOnMount: 'always',
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     refetchInterval: enabled ? 5_000 : false,
-    refetchIntervalInBackground: true,
-    staleTime: 0,
+    refetchIntervalInBackground: false,
+    staleTime: 5000,
   })
 }
 /** ?щ젰 酉?6二??덈룄?? 踰붿쐞??run 紐⑸줉. */
@@ -60,6 +61,8 @@ export function useCommandRunsInRange(start: Date, end: Date, enabled = true) {
     },
     enabled,
     staleTime: 15_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 }
 
@@ -68,6 +71,9 @@ export function useCommandRunsBySession(sessionId: string, enabled = true) {
     queryKey: commandRunKeys.session(sessionId),
     queryFn: () => listCommandRunsBySession(sessionId),
     enabled: enabled && !!sessionId,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: 5000,
   })
 }
 

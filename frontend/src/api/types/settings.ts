@@ -46,6 +46,9 @@ export interface UserPreferences {
   repoTrackPaths?: string[]
   autoRecallEnabled?: boolean
   recallTopK?: number
+  completionSoundEnabled?: boolean
+  completionSoundOnCancel?: boolean
+  pushNotificationEnabled?: boolean
 }
 
 export interface SettingsResponse {
@@ -115,4 +118,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   repoTrackPaths: ['.opencode', 'scripts'],
   autoRecallEnabled: true,
   recallTopK: 4,
+  completionSoundEnabled: true,
+  completionSoundOnCancel: true,
+  pushNotificationEnabled: false,
 }

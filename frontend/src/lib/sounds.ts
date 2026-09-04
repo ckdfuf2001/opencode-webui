@@ -6,11 +6,15 @@ let ctx: AudioContext | null = null
  * user gesture before audio may play — if the context is still suspended the
  * sound is skipped silently.
  */
-export function playCompletionTick(): void {
+export async function playCompletionTick(): Promise<void> {
   try {
     ctx ??= new AudioContext()
     if (ctx.state === 'suspended') {
-      void ctx.resume()
+      try {
+        await ctx.resume()
+      } catch {
+        return
+      }
       if (ctx.state === 'suspended') return
     }
     const now = ctx.currentTime
@@ -29,4 +33,9 @@ export function playCompletionTick(): void {
   } catch {
     // audio unavailable — never break the app over a sound
   }
+}
+
+export function playCancelTick(): Promise<void> {
+  // cancel uses same tick but slightly lower pitch so user can distinguish if needed
+  return playCompletionTick()
 }

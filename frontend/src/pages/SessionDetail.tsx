@@ -20,6 +20,7 @@ import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
+import { shouldPlaySound, shouldPush, sendPushNotification } from "@/lib/notifications";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -244,8 +245,18 @@ export function SessionDetail() {
   useEffect(() => {
     const was = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
-    if (was && !isStreaming) {
-      playCompletionTick();
+    // cancel/abort 시에도 완료음 재생 — was가 true였다면 streaming이 꺼질 때(또는 abort 직후) 모두 재생
+    const aborted = sessionId ? isRecentlyAborted(sessionId) : false;
+    const isCancel = aborted;
+    const canSound = shouldPlaySound(sessionId, isCancel, preferences ?? {});
+    const canPush = shouldPush(sessionId, preferences ?? {});
+    if (was && (!isStreaming || aborted)) {
+      if (canSound) void playCompletionTick();
+      if (canPush) {
+        const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
+        const body = sessionId ?? ''
+        sendPushNotification(title, { body, tag: sessionId })
+      }
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
       // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
       // 폴링 지연(2s) 고려해 3.5초 뒤 재확인한다.
@@ -272,7 +283,39 @@ export function SessionDetail() {
       }, 3500);
       return () => clearTimeout(timer);
     }
-  }, [isStreaming]);
+  }, [isStreaming, preferences, sessionId]);
+
+  // 권한 요청 도착 시 소리/푸시 (세션별/글로벌 설정 따름)
+  const prevPermissionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const pid = currentPermission?.id ?? null;
+    if (pid && pid !== prevPermissionIdRef.current) {
+      prevPermissionIdRef.current = pid;
+      if (shouldPlaySound(sessionId, false, preferences ?? {})) void playCompletionTick();
+      if (shouldPush(sessionId, preferences ?? {})) {
+        const title = '승인이 필요합니다';
+        const body = (currentPermission as unknown as { pattern?: string[]; permission?: string })?.pattern?.[0] ?? (currentPermission as unknown as { permission?: string })?.permission ?? sessionId ?? '';
+        sendPushNotification(title, { body, tag: `perm-${pid}` });
+      }
+    } else if (!pid) {
+      prevPermissionIdRef.current = null;
+    }
+  }, [currentPermission?.id, preferences, sessionId, currentPermission]);
+
+  // 질문 요청 도착 시에도 동일하게 알림
+  const prevQuestionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const qid = currentQuestion?.id ?? null;
+    if (qid && qid !== prevQuestionIdRef.current) {
+      prevQuestionIdRef.current = qid;
+      if (shouldPlaySound(sessionId, false, preferences ?? {})) void playCompletionTick();
+      if (shouldPush(sessionId, preferences ?? {})) {
+        sendPushNotification('질문이 도착했습니다', { body: sessionId ?? '', tag: `q-${qid}` });
+      }
+    } else if (!qid) {
+      prevQuestionIdRef.current = null;
+    }
+  }, [currentQuestion?.id, preferences, sessionId, currentQuestion]);
 
   // billing 문구가 assistant 텍스트에 직접 포함된 경우(스트리밍 본문으로 전달)에도 토스트
   useEffect(() => {

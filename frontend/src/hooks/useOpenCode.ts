@@ -12,6 +12,7 @@ import { markSessionIdle } from "./useSessionActivity"
 import { listSessionStatuses } from "@/api/session-status"
 import { stripMemoryRecall } from "@/lib/stripRecall"
 
+
 type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
@@ -252,6 +253,9 @@ export const useSessions = (opcodeUrl: string | null | undefined, directory?: st
     queryFn: () => client!.listSessions(),
     enabled: !!client,
     refetchInterval: 2000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: 5000,
   });
 };
 
@@ -262,6 +266,9 @@ export const useSession = (opcodeUrl: string | null | undefined, sessionID: stri
     queryKey: ["opencode", "session", opcodeUrl, sessionID, directory],
     queryFn: () => client!.getSession(sessionID!),
     enabled: !!client && !!sessionID,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: 5000,
   });
 };
 
@@ -347,11 +354,12 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       return reconcileOrphanedStreams(result, sessionID!, isBusy);
     },
     enabled: !!client && !!sessionID,
-    refetchOnMount: true,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
+    staleTime: 2000,
     refetchInterval: (query) => {
       if (isRecentlyAborted(sessionID!)) return 2000
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
@@ -1011,7 +1019,9 @@ export const useSessionStatusMap = () => {
     queryKey: ["session-status-db"],
     queryFn: listSessionStatuses,
     refetchInterval: 2000,
-    staleTime: 0,
+    staleTime: 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 };
 
@@ -1168,6 +1178,9 @@ export const useConfig = (opcodeUrl: string | null | undefined, directory?: stri
     queryKey: ["opencode", "config", opcodeUrl, directory],
     queryFn: () => client!.getConfig(),
     enabled: !!client,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: 60_000,
   });
 };
 

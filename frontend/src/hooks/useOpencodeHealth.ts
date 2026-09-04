@@ -11,7 +11,9 @@ export function useOpencodeHealth() {
       return data.opencode === 'healthy' && data.status !== 'unhealthy'
     },
     refetchInterval: 3000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: 1,
   })
 }

@@ -52,6 +52,9 @@ export const UserPreferencesSchema = z.object({
   repoTrackPaths: z.array(z.string()).default(DEFAULT_REPO_TRACK_PATHS),
   autoRecallEnabled: z.boolean().default(true),
   recallTopK: z.number().int().min(1).max(10).default(4),
+  completionSoundEnabled: z.boolean().default(true),
+  completionSoundOnCancel: z.boolean().default(true),
+  pushNotificationEnabled: z.boolean().default(false),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -77,6 +80,9 @@ export const DEFAULT_USER_PREFERENCES = {
   repoTrackPaths: DEFAULT_REPO_TRACK_PATHS,
   autoRecallEnabled: true,
   recallTopK: 4,
+  completionSoundEnabled: true,
+  completionSoundOnCancel: true,
+  pushNotificationEnabled: false,
 };
 
 export const SettingsResponseSchema = z.object({

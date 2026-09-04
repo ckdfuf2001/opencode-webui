@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { TTSSettings } from './TTSSettings'
+import { isPushSupported, ensurePushPermission } from '@/lib/notifications'
 
 export function GeneralSettings() {
   const { preferences, isLoading, updateSettings, isUpdating } = useSettings()
@@ -116,6 +117,55 @@ export function GeneralSettings() {
             checked={preferences?.expandToolCalls ?? false}
             onCheckedChange={(checked) => updateSettings({ expandToolCalls: checked })}
           />
+        </div>
+
+        <div className="rounded-lg border border-border p-4 space-y-4">
+          <h3 className="text-base font-medium">완료 알림</h3>
+          <div className="flex flex-row items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="completionSoundEnabled" className="text-sm">완료 소리 (글로벌)</Label>
+              <p className="text-xs text-muted-foreground">응답이 끝나면 짧은 알림음을 재생</p>
+            </div>
+            <Switch
+              id="completionSoundEnabled"
+              checked={preferences?.completionSoundEnabled ?? true}
+              onCheckedChange={(checked) => updateSettings({ completionSoundEnabled: checked })}
+            />
+          </div>
+          <div className="flex flex-row items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="completionSoundOnCancel" className="text-sm">취소 시에도 소리</Label>
+              <p className="text-xs text-muted-foreground">Stop/cancel 했을 때도 완료음 재생</p>
+            </div>
+            <Switch
+              id="completionSoundOnCancel"
+              checked={preferences?.completionSoundOnCancel ?? true}
+              onCheckedChange={(checked) => updateSettings({ completionSoundOnCancel: checked })}
+            />
+          </div>
+          <div className="flex flex-row items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="pushNotificationEnabled" className="text-sm">PC 푸시 알림 (글로벌)</Label>
+              <p className="text-xs text-muted-foreground">
+                {isPushSupported() ? '브라우저 알림으로 완료/권한요청을 알림' : '이 브라우저는 푸시 알림을 지원하지 않음'}
+              </p>
+            </div>
+            <Switch
+              id="pushNotificationEnabled"
+              checked={preferences?.pushNotificationEnabled ?? false}
+              onCheckedChange={async (checked) => {
+                if (checked) {
+                  const perm = await ensurePushPermission()
+                  if (perm !== 'granted') {
+                    showToast.error('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.')
+                    return
+                  }
+                }
+                updateSettings({ pushNotificationEnabled: checked })
+              }}
+              disabled={!isPushSupported()}
+            />
+          </div>
         </div>
 
         <div className="rounded-lg border border-border p-4 space-y-3">

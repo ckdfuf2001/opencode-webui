@@ -456,7 +456,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       return { relativePath, mention, name: file.name }
     })
 
-    setPrompt(prev => `${prev}${insertions.map(i => i.mention).join(' ')} `.trimStart())
+    setPrompt(prev => `${prev ? `${prev} ` : ''}${insertions.map(i => i.mention).join(' ')} `)
     setAttachedFiles(prev => {
       const next = new Map(prev)
       for (const i of insertions) {
@@ -747,27 +747,33 @@ useEffect(() => {
 
   useEffect(() => {
     if (!injectedFile || injectedFile.files.length === 0) return
-    const el = textareaRef.current
-    let nextPrompt = prompt
-    const nextAttached = new Map(attachedFiles)
-    for (const file of injectedFile.files) {
+    const mentions = injectedFile.files.map((file) => {
       const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      const mention = `@"${relativePath}"`
-      nextPrompt = `${nextPrompt}${mention} `.trimStart()
-      nextAttached.set(relativePath.toLowerCase(), {
-        path: resolveFilePath(relativePath),
-        name: file.name,
+      return { relativePath, mention: `@"${relativePath}"`, name: file.name }
+    })
+    setPrompt((prev) => {
+      const prefix = prev ? `${prev} ` : ''
+      return `${prefix}${mentions.map((m) => m.mention).join(' ')} `.trimStart()
+    })
+    setAttachedFiles((prev) => {
+      const next = new Map(prev)
+      for (const m of mentions) {
+        next.set(m.relativePath.toLowerCase(), {
+          path: resolveFilePath(m.relativePath),
+          name: m.name,
+        })
+      }
+      return next
+    })
+    const el = textareaRef.current
+    if (el) {
+      requestAnimationFrame(() => {
+        el.focus()
+        el.style.height = 'auto'
+        el.style.height = `${el.scrollHeight}px`
       })
     }
-    setPrompt(nextPrompt)
-    setAttachedFiles(nextAttached)
-    if (el) {
-      el.focus()
-      el.style.height = 'auto'
-      el.style.height = `${el.scrollHeight}px`
-    }
     onInjectedFileConsumed?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [injectedFile, onInjectedFileConsumed])
 
   useEffect(() => {
