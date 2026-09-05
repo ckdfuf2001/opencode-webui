@@ -251,7 +251,7 @@ export function PermissionRulesDialog({
 
         <div className="space-y-2 rounded-lg border border-border bg-card p-3">
           <div className="flex items-center justify-between">
-            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <div className="text-sm font-medium">
               Tool Permission
             </div>
             {scope==='session' && (
@@ -397,7 +397,7 @@ export function PermissionRulesDialog({
         </div>        {/* 알림·스킬 설정 - 맨 아래, 클릭 시 상세 ON/OFF */}
         <div className="rounded-lg border border-border bg-card p-3">
           <button type="button" onClick={()=>setNotifyExpanded(!notifyExpanded)} className="w-full flex items-center justify-between text-left">
-            <span className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> 알림·스킬 설정 <Badge variant="outline" className="text-xs ml-1">${scope==='global'?'전역':scope==='repo'?'레포':'세션'}</Badge></span>
+            <span className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> Notification <Badge variant="outline" className="text-xs ml-1">${scope==='global'?'전역':scope==='repo'?'레포':'세션'}</Badge></span>
             <span className="flex items-center gap-2">
               <Badge variant={soundEff.effective?'default':'outline'} className="text-xs">소리 {soundEff.effective?'ON':'OFF'}</Badge>
               <Badge variant={pushEff.effective?'default':'outline'} className="text-xs">푸시 {pushEff.effective?'ON':'OFF'}</Badge>
