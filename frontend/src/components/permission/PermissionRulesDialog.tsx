@@ -75,14 +75,17 @@ export function PermissionRulesDialog({
   const [sessionSoundOverride, setSessionSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionCancelOverride, setSessionCancelOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionPushOverride, setSessionPushOverrideState] = useState<boolean | undefined>(undefined)
+  const [sessionSkillOverride, setSessionSkillOverrideState] = useState<boolean | undefined>(undefined)
   const [repoSoundOverride, setRepoSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [repoCancelOverride, setRepoCancelOverrideState] = useState<boolean | undefined>(undefined)
   const [repoPushOverride, setRepoPushOverrideState] = useState<boolean | undefined>(undefined)
   const [notifyTab, setNotifyTab] = useState<'global' | 'repo' | 'session'>(scope)
+  const [skillTab, setSkillTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
   useEffect(() => {
     if (!open) return
     setNotifyTab(scope)
+    setSkillTab(scope)
     // repo overrides
     if (repoId !== undefined) {
       const rov = getRepoOverride(repoId)
@@ -100,11 +103,13 @@ export function PermissionRulesDialog({
       setSessionSoundOverrideState(ov.soundEnabled)
       setSessionCancelOverrideState(ov.soundOnCancelEnabled)
       setSessionPushOverrideState(ov.pushEnabled)
+      setSessionSkillOverrideState(ov.skillAutoEnabled)
       setSessionPermRules(getSessionPermissionRules(sessionId))
     } else {
       setSessionSoundOverrideState(undefined)
       setSessionCancelOverrideState(undefined)
       setSessionPushOverrideState(undefined)
+      setSessionSkillOverrideState(undefined)
       setSessionPermRules([])
     }
     const handler = () => {
@@ -119,6 +124,7 @@ export function PermissionRulesDialog({
         setSessionSoundOverrideState(ov.soundEnabled)
         setSessionCancelOverrideState(ov.soundOnCancelEnabled)
         setSessionPushOverrideState(ov.pushEnabled)
+        setSessionSkillOverrideState(ov.skillAutoEnabled)
         setSessionPermRules(getSessionPermissionRules(sessionId))
       }
     }
@@ -236,16 +242,52 @@ export function PermissionRulesDialog({
         </div>
         <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-4">
 
-        <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3">
-          <div className="space-y-0.5">
-            <Label className="text-sm font-medium">Skill / Command auto update</Label>
-            <p className="text-xs text-muted-foreground">When enabled, skill and command updates from memory are applied automatically without asking in chat.</p>
+        <div className="rounded-lg border border-border bg-card p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">Skill / Command auto update</div>
+            <div className="flex items-center gap-1 rounded-md bg-muted p-0.5">
+              <Button variant={skillTab==='global'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" onClick={() => setSkillTab('global')}>글로벌</Button>
+              <Button variant={skillTab==='repo'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" disabled={repoId===undefined} onClick={() => setSkillTab('repo')}>레포</Button>
+              <Button variant={skillTab==='session'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" disabled={!sessionId} onClick={() => setSkillTab('session')}>세션</Button>
+            </div>
           </div>
-          <Switch
-            checked={skillAuto?.enabled ?? false}
-            onCheckedChange={(v) => skillMut.mutate(v)}
-            disabled={skillMut.isPending}
-          />
+          {skillTab==='global' && (
+            <p className="text-xs text-muted-foreground">Skill / Command auto update는 레포 단위 서버 설정입니다. 레포 탭에서 변경하세요.</p>
+          )}
+          {skillTab==='repo' && (
+            repoId===undefined ? (
+              <p className="text-xs text-muted-foreground">레포를 선택해야 변경할 수 있습니다.</p>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm">자동 업데이트 (레포 #{repoId})</Label>
+                  <p className="text-xs text-muted-foreground">When enabled, skill and command updates from memory are applied automatically without asking in chat.</p>
+                </div>
+                <Switch
+                  checked={skillAuto?.enabled ?? false}
+                  onCheckedChange={(v) => skillMut.mutate(v)}
+                  disabled={skillMut.isPending}
+                />
+              </div>
+            )
+          )}
+          {skillTab==='session' && sessionId && (
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">이 세션에서만</Label>
+                <p className="text-xs text-muted-foreground">상위 {(skillAuto?.enabled ?? false)?'ON':'OFF'} → 적용 {(sessionSkillOverride ?? (skillAuto?.enabled ?? false))?'ON':'OFF'}{sessionSkillOverride===undefined?' (상속)':''} · 로컬스토리지</p>
+              </div>
+              <Switch
+                checked={sessionSkillOverride !== undefined ? sessionSkillOverride : (skillAuto?.enabled ?? false)}
+                onCheckedChange={(v) => {
+                  const parent = skillAuto?.enabled ?? false
+                  const next = v === parent ? undefined : v
+                  setSessionOverride(sessionId!, { skillAutoEnabled: next })
+                  setSessionSkillOverrideState(next)
+                }}
+              />
+            </div>
+          )}
         </div>
 
         <div className="space-y-2 rounded-lg border border-border bg-card p-3">
@@ -254,15 +296,10 @@ export function PermissionRulesDialog({
               Tool Permission
             </div>
             {scope==='session' && (
-              <Select value={ruleScope} onValueChange={(v) => setRuleScope(v as 'repo'|'session')}>
-                <SelectTrigger className="w-28 h-7 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="repo">레포</SelectItem>
-                  <SelectItem value="session">세션</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-1 rounded-md bg-muted p-0.5">
+                <Button variant={ruleScope==='repo'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" onClick={() => setRuleScope('repo')}>레포</Button>
+                <Button variant={ruleScope==='session'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" onClick={() => setRuleScope('session')}>세션</Button>
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2">
