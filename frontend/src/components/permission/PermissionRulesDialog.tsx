@@ -221,22 +221,22 @@ export function PermissionRulesDialog({
     }}>
       <DialogContent className="max-w-xl max-h-[90vh] p-0 gap-0 flex flex-col overflow-hidden">
         <div className="shrink-0 px-6 py-4 border-b bg-background space-y-2">
-          <DialogHeader className="flex-row items-center gap-2 w-full p-0">
+          <DialogHeader className="flex-row items-center justify-between gap-2 w-full p-0">
             <DialogTitle className="flex-1">
               <span className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-primary" />
                 Auto-Approved Permissions
+                {scope!=='global' && (
+                  <Badge variant="secondary" className="text-xs font-mono">
+                    #Repo {repoId}{scope==='session' ? ` · #${String(sessionId).slice(0,4)}` : ''}
+                  </Badge>
+                )}
               </span>
             </DialogTitle>
-          </DialogHeader>
-          <div className="flex items-center gap-2">
-            <Badge variant={scope==='global'?'default':scope==='repo'?'secondary':'outline'} className="text-xs">
-              {scope==='global' ? '전역' : scope==='repo' ? `레포 #${repoId}` : `세션`}
+            <Badge variant={scope==='global'?'default':scope==='repo'?'secondary':'outline'} className="text-xs shrink-0">
+              {scope==='global' ? '전역' : scope==='repo' ? 'Repo' : 'Session'}
             </Badge>
-            <span className="text-xs text-muted-foreground">
-              {scope==='global' ? '전역' : scope==='repo' ? '레포 스콥' : '세션 스콥'}
-            </span>
-          </div>
+          </DialogHeader>
         </div>
         <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-4">
 
@@ -255,7 +255,7 @@ export function PermissionRulesDialog({
         <div className="space-y-2 rounded-lg border border-border bg-card p-3">
           <div className="flex items-center justify-between">
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              New rule {scope==='global' ? '(전역에선 레포 선택 후 추가)' : scope==='repo' ? '(레포 스콥)' : '(레포/세션 선택)'}
+              Tool Permission
             </div>
             {scope==='session' && (
               <Select value={ruleScope} onValueChange={(v) => setRuleScope(v as 'repo'|'session')}>
@@ -299,9 +299,7 @@ export function PermissionRulesDialog({
             {scope==='session' && ruleScope==='session' ? '세션 룰: 이 세션에서만 자동 승인 (로컬스토리지).' : scope==='session' && ruleScope==='repo' ? '레포 룰: 이 레포의 모든 세션에서 자동 승인 (DB).' : ''} 
             Supports glob patterns: <code className="font-mono">*</code> and <code className="font-mono">**</code>. Choose "Any" to match every permission type.
           </p>
-        </div>
-
-        {/* 레포 룰 */}
+{/* 레포 룰 */}
         {scope !== 'global' && (
           <>
             <div className="text-xs font-medium text-muted-foreground">레포 룰 (DB) — {rulesFiltered.length}개</div>
@@ -316,7 +314,7 @@ export function PermissionRulesDialog({
             ) : (
               <div className="space-y-2">
                 {rulesFiltered.map((rule) => (
-                  {editingRepoId===rule.id ? (
+                  editingRepoId===rule.id ? (
                     <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-primary bg-card p-2">
                       <Select value={editRepoPermission} onValueChange={setEditRepoPermission}>
                         <SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger>
@@ -361,7 +359,7 @@ export function PermissionRulesDialog({
             ) : (
               <div className="space-y-2">
                 {sessionPermRules.map((rule) => (
-                  {editingSessionId===rule.id ? (
+                  editingSessionId===rule.id ? (
                     <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-amber-500 bg-amber-50 p-2">
                       <Select value={editSessionPermission} onValueChange={setEditSessionPermission}>
                         <SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger>
@@ -399,7 +397,7 @@ export function PermissionRulesDialog({
         {scope === 'global' && (
           <p className="text-xs text-muted-foreground text-center py-2">전역에서는 알림/스킬 전역값만 설정합니다. Permission 룰은 레포 또는 세션 패널에서 추가하세요.</p>
         )}
-        {/* 알림·스킬 설정 - 맨 아래, 클릭 시 상세 ON/OFF */}
+        </div>        {/* 알림·스킬 설정 - 맨 아래, 클릭 시 상세 ON/OFF */}
         <div className="rounded-lg border border-border bg-card p-3">
           <button type="button" onClick={()=>setNotifyExpanded(!notifyExpanded)} className="w-full flex items-center justify-between text-left">
             <span className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> 알림·스킬 설정 <Badge variant="outline" className="text-xs ml-1">${scope==='global'?'전역':scope==='repo'?'레포':'세션'}</Badge></span>
