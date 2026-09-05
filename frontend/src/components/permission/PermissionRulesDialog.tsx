@@ -390,12 +390,12 @@ export function PermissionRulesDialog({
                 <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림으로 완료/권한 요청' : '미지원 브라우저'}</p>
                 {Notification.permission === 'denied' && (
                   <p className="text-xs text-destructive flex flex-col gap-1">
-                    <span>브라우저에서 차단됨 — edge://는 웹에서 직접 열기 차단되어 about:blank#blocked가 뜹니다.</span>
+                    <span>브라우저에서 차단됨 — edge://는 웹에서 직접 열기 차단됨</span>
                     <span className="flex items-center gap-2">
                       <code className="text-xs bg-muted px-1 py-0.5 rounded">{getNotificationSettingsUrl()}</code>
-                      <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={async () => { const url=getNotificationSettingsUrl(); try { await navigator.clipboard.writeText(url); showToast.success('클립보드에 복사됨 — 새탭 주소창에 붙여넣어 이동하세요.'); } catch { showToast.info(getNotificationSettingsHelp()); } }}>복사</Button>
+                      <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => { openNotificationSettings(); }}>새탭 열기</Button>
                     </span>
-                    <span className="text-xs text-muted-foreground">새탭을 열고 주소창에 붙여넣어 이동하세요. 또는 주소창 자물쇠 → 사이트 권한 → 알림</span>
+                    <span className="text-xs text-muted-foreground">새탭이 열리면 주소가 자동으로 들어가 있습니다. Enter로 이동하세요.</span>
                   </p>
                 )}
               </div>

@@ -81,11 +81,23 @@ export function getNotificationSettingsHelp(): string {
 }
 
 export function openNotificationSettings(): boolean {
-  // edge:// / chrome://는 웹에서 href/window.open 모두 about:blank#blocked로 차단됨 — 절대 직접 열지 않고 클립보드 복사 + 안내만
   const url = getNotificationSettingsUrl()
   if (!url) return false
+  // edge:// / chrome://는 웹에서 직접 열면 about:blank#blocked로 차단됨 — 새탭에 안내 페이지를 열어 값을 넣어줌
   if (url.startsWith('edge://') || url.startsWith('chrome://')) {
     try { void navigator.clipboard?.writeText(url) } catch {}
+    try {
+      const w = window.open('about:blank', '_blank')
+      if (w) {
+        const esc = url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>알림 설정</title><style>body{font-family:system-ui;padding:32px;max-width:640px;margin:40px auto;line-height:1.6}code{background:#f1f5f9;padding:6px 10px;border-radius:6px;word-break:break-all;display:block;margin:12px 0;font-size:14px}button{margin-top:12px;padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer}button:hover{background:#1d4ed8}.muted{color:#64748b;font-size:13px;margin-top:16px}</style></head><body><h2>브라우저 알림 설정</h2><p>아래 주소를 <b>클립보드에 복사</b>했습니다. 새탭을 열고 주소창에 <b>붙여넣기(Ctrl+V)</b> 후 Enter로 이동하세요.</p><code id="u">${esc}</code><button onclick="navigator.clipboard.writeText(document.getElementById('u').textContent).then(()=>{this.textContent='복사됨!'; setTimeout(()=>this.textContent='복사',1500)})">복사</button><p class="muted">또는 주소창 왼쪽 자물쇠 → 사이트 권한 → 알림 에서 허용으로 변경</p><p class="muted">브라우저 보안상 웹에서 edge://를 직접 열 수 없어 새탭에 값을 넣어드렸습니다.</p></body></html>`
+        w.document.open()
+        w.document.write(html)
+        w.document.close()
+        try { w.focus() } catch {}
+        return true
+      }
+    } catch {}
     return false
   }
   try {
