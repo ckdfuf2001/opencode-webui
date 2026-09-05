@@ -52,7 +52,6 @@ export function PermissionRulesDialog({
   const [editSessionPermission, setEditSessionPermission] = useState('bash')
   const [editSessionPattern, setEditSessionPattern] = useState('')
   const [ruleScope, setRuleScope] = useState<'repo' | 'session'>(scope === 'session' ? 'session' : 'repo')
-  const [notifyExpanded, setNotifyExpanded] = useState(false)
   const queryClient = useQueryClient()
   const { data: skillAuto } = useQuery({
     queryKey: ['skill-auto-update', repoId ?? 'global'],
@@ -394,170 +393,90 @@ export function PermissionRulesDialog({
         {scope === 'global' && (
           <p className="text-xs text-muted-foreground text-center py-2">전역에서는 알림/스킬 전역값만 설정합니다. Permission 룰은 레포 또는 세션 패널에서 추가하세요.</p>
         )}
-        </div>        {/* 알림·스킬 설정 - 맨 아래, 클릭 시 상세 ON/OFF */}
-        <div className="rounded-lg border border-border bg-card p-3">
-          <button type="button" onClick={()=>setNotifyExpanded(!notifyExpanded)} className="w-full flex items-center justify-between text-left">
-            <span className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> Notification <Badge variant="outline" className="text-xs ml-1">${scope==='global'?'전역':scope==='repo'?'레포':'세션'}</Badge></span>
-            <span className="flex items-center gap-2">
-              <Badge variant={soundEff.effective?'default':'outline'} className="text-xs">소리 {soundEff.effective?'ON':'OFF'}</Badge>
-              <Badge variant={pushEff.effective?'default':'outline'} className="text-xs">푸시 {pushEff.effective?'ON':'OFF'}</Badge>
-              <Badge variant={skillEff.effective?'default':'outline'} className="text-xs">스킬 {skillEff.effective?'ON':'OFF'}</Badge>
-              <ChevronDown className={`w-4 h-4 transition-transform ${notifyExpanded?'rotate-180':''}`} />
-            </span>
-          </button>
-          {notifyExpanded && <div className="mt-3 space-y-3">
-            <div className="space-y-3">
-            {/* 글로벌 */}
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm">완료 소리 (글로벌)</Label>
-                <p className="text-xs text-muted-foreground">응답 완료 시 효과음 · 전역 기본값</p>
-              </div>
-              <Switch
-                checked={globalSoundOn}
-                onCheckedChange={(v) => updateSettings({ completionSoundEnabled: v })}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm">취소 시에도 소리 (글로벌)</Label>
-                <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음 재생</p>
-              </div>
-              <Switch
-                checked={preferences?.completionSoundOnCancel !== false}
-                onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림 (글로벌)</Label>
-                <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림으로 완료/권한 요청' : '미지원 브라우저'}</p>
-                {Notification.permission === 'denied' && (
-                  <p className="text-xs text-destructive flex flex-col gap-1">
-                    <span>브라우저에서 차단됨 — edge://는 웹에서 직접 열기 차단됨</span>
-                    <span className="flex items-center gap-2">
-                      <code className="text-xs bg-muted px-1 py-0.5 rounded">{getNotificationSettingsUrl()}</code>
-                      <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => { openNotificationSettings(); }}>새탭 열기</Button>
-                    </span>
-                    <span className="text-xs text-muted-foreground">새탭이 열리면 주소가 자동으로 들어가 있습니다. Enter로 이동하세요.</span>
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {globalPushOn && (
-                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상입니다.', tag: 'test-push' })}>테스트</Button>
-                )}
-                <Switch
-                  checked={globalPushOn}
-                  disabled={!isPushSupported()}
-                  onCheckedChange={async (v) => {
-                    if (v) {
-                      const perm = await ensurePushPermission()
-                      if (perm !== 'granted') {
-                        openNotificationSettings()
-                        showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.')
-                        return
-                      }
-                      void sendPushNotification('알림 테스트', { body: 'PC 푸시 알림이 활성화되었습니다.', tag: 'test-push' })
-                    }
-                    updateSettings({ pushNotificationEnabled: v })
-                  }}
-                />
-              </div>
-            </div>
-            {/* 현재 위치 기준 효과 요약 - 상세 설정展开 시에만 보임 */}
-            <div className="rounded border border-dashed p-2 grid grid-cols-5 gap-1 text-xs">
-              <div className="font-medium"></div><div className="text-center text-muted-foreground">전역</div><div className="text-center text-muted-foreground">레포</div><div className="text-center text-muted-foreground">세션</div><div className="text-center font-bold">적용</div>
-              <div>소리</div><div className="text-center"><Badge variant={globalSoundOn?'default':'outline'} className="text-xs px-1">{globalSoundOn?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={repoSoundOverride===undefined?'outline':repoSoundOverride?'default':'destructive'} className="text-xs px-1">{repoSoundOverride===undefined?'—':repoSoundOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={sessionSoundOverride===undefined?'outline':sessionSoundOverride?'default':'destructive'} className="text-xs px-1">{sessionSoundOverride===undefined?'—':sessionSoundOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={soundEff.effective?'default':'destructive'} className="text-xs px-1">{soundEff.effective?'ON':'OFF'}</Badge></div>
-              <div>푸시</div><div className="text-center"><Badge variant={globalPushOn?'default':'outline'} className="text-xs px-1">{globalPushOn?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={repoPushOverride===undefined?'outline':repoPushOverride?'default':'destructive'} className="text-xs px-1">{repoPushOverride===undefined?'—':repoPushOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={sessionPushOverride===undefined?'outline':sessionPushOverride?'default':'destructive'} className="text-xs px-1">{sessionPushOverride===undefined?'—':sessionPushOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={pushEff.effective?'default':'destructive'} className="text-xs px-1">{pushEff.effective?'ON':'OFF'}</Badge></div>
-            </div>
-
-            {/* 레포 오버라이드 (레포/세션 스콥에서 편집 가능) */}
-            {repoId !== undefined && (
-              <div className="border-t border-border pt-3 space-y-3">
-                <div className="text-xs font-medium text-muted-foreground">레포 오버라이드 (레포 #{repoId})</div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">레포 소리</Label>
-                    <p className="text-xs text-muted-foreground">전역 {globalSoundOn?'ON':'OFF'} → 레포 {repoSoundOverride===undefined?'상속':repoSoundOverride?'ON':'OFF'} → 적용 {soundEff.effective?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn}
-                    onCheckedChange={(v) => {
-                      const next = v === globalSoundOn ? undefined : v
-                      setRepoOverride(repoId, { soundEnabled: next })
-                      setRepoSoundOverrideState(next)
-                    }}
-                  />
+        </div>        <div className="rounded-lg border border-border bg-card p-3 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> Notification</div>
+          {scope==='global' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm">완료 소리</Label>
+                  <p className="text-xs text-muted-foreground">응답 완료 시 효과음</p>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">레포 PC 푸시</Label>
-                    <p className="text-xs text-muted-foreground">전역 {globalPushOn?'ON':'OFF'} → 레포 {repoPushOverride===undefined?'상속':repoPushOverride?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn}
-                    disabled={!isPushSupported()}
-                    onCheckedChange={async (v) => {
-                      if (v && isPushSupported() && Notification.permission !== 'granted') {
-                        const perm = await ensurePushPermission()
-                        if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return }
-                      }
-                      const next = v === globalPushOn ? undefined : v
-                      setRepoOverride(repoId, { pushEnabled: next })
-                      setRepoPushOverrideState(next)
-                    }}
-                  />
+                <Switch checked={globalSoundOn} onCheckedChange={(v) => updateSettings({ completionSoundEnabled: v })} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm">취소 소리</Label>
+                  <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음</p>
                 </div>
-</div>
-            )}
-
-            {/* 세션 오버라이드 */}
-            {sessionId && (
-              <div className="border-t border-border pt-3 space-y-3">
-                <div className="text-xs font-medium text-muted-foreground">세션 오버라이드 ({sessionId.slice(0,8)})</div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">세션 소리</Label>
-                    <p className="text-xs text-muted-foreground">레포 {repoSoundOverride===undefined? (globalSoundOn?'ON':'OFF') : repoSoundOverride?'ON':'OFF'} → 세션 {sessionSoundOverride===undefined?'상속':sessionSoundOverride?'ON':'OFF'} → 적용 {soundEff.effective?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={sessionSoundOverride !== undefined ? sessionSoundOverride : (repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn)}
-                    onCheckedChange={(v) => {
-                      const parent = repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn
-                      const next = v === parent ? undefined : v
-                      setSessionOverride(sessionId, { soundEnabled: next })
-                      setSessionSoundOverrideState(next)
-                    }}
-                  />
+                <Switch checked={preferences?.completionSoundOnCancel !== false} onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림</Label>
+                  <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림으로 완료/권한 요청' : '미지원 브라우저'}</p>
+                  {Notification.permission === 'denied' && (
+                    <p className="text-xs text-destructive flex flex-col gap-1">
+                      <span>브라우저에서 차단됨</span>
+                      <span className="flex items-center gap-2">
+                        <code className="text-xs bg-muted px-1 py-0.5 rounded">{getNotificationSettingsUrl()}</code>
+                        <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => { openNotificationSettings(); }}>새탭 열기</Button>
+                      </span>
+                    </p>
+                  )}
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">세션 PC 푸시</Label>
-                    <p className="text-xs text-muted-foreground">레포 {repoPushOverride===undefined? (globalPushOn?'ON':'OFF') : repoPushOverride?'ON':'OFF'} → 세션 {sessionPushOverride===undefined?'상속':sessionPushOverride?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)}
-                    disabled={!isPushSupported()}
-                    onCheckedChange={async (v) => {
-                      if (v && isPushSupported() && Notification.permission !== 'granted') {
-                        const perm = await ensurePushPermission()
-                        if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return }
-                      }
-                      const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn
-                      const next = v === parent ? undefined : v
-                      setSessionOverride(sessionId, { pushEnabled: next })
-                      setSessionPushOverrideState(next)
-                    }}
-                  />
+                <div className="flex items-center gap-2">
+                  {globalPushOn && (
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상입니다.', tag: 'test-push' })}>테스트</Button>
+                  )}
+                  <Switch checked={globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v) { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } void sendPushNotification('알림 테스트', { body: 'PC 푸시 알림이 활성화되었습니다.', tag: 'test-push' }); } updateSettings({ pushNotificationEnabled: v }); }} />
                 </div>
-</div>
-            )}
-          </div>
-          </div>}
+              </div>
+            </>
+          )}
+          {scope==='repo' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm">완료 소리</Label>
+                  <p className="text-xs text-muted-foreground">이 레포에서만</p>
+                </div>
+                <Switch checked={repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn} onCheckedChange={(v) => { const next = v === globalSoundOn ? undefined : v; setRepoOverride(repoId!, { soundEnabled: next }); setRepoSoundOverrideState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림</Label>
+                  <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림' : '미지원'}</p>
+                  {Notification.permission === 'denied' && (
+                    <p className="text-xs text-destructive flex items-center gap-2"><code className="text-xs bg-muted px-1 py-0.5 rounded">{getNotificationSettingsUrl()}</code><Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => { openNotificationSettings(); }}>새탭 열기</Button></p>
+                  )}
+                </div>
+                <Switch checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } } const next = v === globalPushOn ? undefined : v; setRepoOverride(repoId!, { pushEnabled: next }); setRepoPushOverrideState(next); }} />
+              </div>
+            </>
+          )}
+          {scope==='session' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm">완료 소리</Label>
+                  <p className="text-xs text-muted-foreground">이 세션에서만</p>
+                </div>
+                <Switch checked={sessionSoundOverride !== undefined ? sessionSoundOverride : (repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn)} onCheckedChange={(v) => { const parent = repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { soundEnabled: next }); setSessionSoundOverrideState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림</Label>
+                  <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림' : '미지원'}</p>
+                  {Notification.permission === 'denied' && (
+                    <p className="text-xs text-destructive flex items-center gap-2"><code className="text-xs bg-muted px-1 py-0.5 rounded">{getNotificationSettingsUrl()}</code><Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => { openNotificationSettings(); }}>새탭 열기</Button></p>
+                  )}
+                </div>
+                <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } } const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
+              </div>
+            </>
+          )}
         </div>
-
-              </div>
       </DialogContent>
     </Dialog>
   )
