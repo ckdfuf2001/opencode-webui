@@ -81,14 +81,9 @@ export function getNotificationSettingsHelp(): string {
 }
 
 export function openNotificationSettings(): boolean {
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-  let url = ''
-  if (ua.includes('Edg')) url = 'edge://settings/privacy/sitePermissions/allPermissions/popups'
-  else if (ua.includes('Chrome') && !ua.includes('Edg')) url = 'chrome://settings/content/notifications'
-  else if (ua.includes('Firefox')) url = 'about:preferences#privacy'
-  else if (ua.includes('Safari') && !ua.includes('Chrome')) url = ''
+  // edge:// / chrome://는 웹에서 href/window.open 모두 about:blank#blocked로 차단됨 — 절대 직접 열지 않고 클립보드 복사 + 안내만
+  const url = getNotificationSettingsUrl()
   if (!url) return false
-  // edge:// / chrome://는 웹 페이지에서 window.open이 차단됨 — 클립보드에 복사하고 안내로 대체
   if (url.startsWith('edge://') || url.startsWith('chrome://')) {
     try { void navigator.clipboard?.writeText(url) } catch {}
     return false
