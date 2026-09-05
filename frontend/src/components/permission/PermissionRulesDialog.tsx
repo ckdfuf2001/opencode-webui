@@ -191,26 +191,24 @@ export function PermissionRulesDialog({
       onOpenChange(next)
     }}>
       <DialogContent className="max-w-xl max-h-[90vh] p-0 gap-0 flex flex-col overflow-hidden">
-        <DialogHeader className="flex-row items-center gap-2 w-full">
-          <DialogTitle className="flex-1">
-            <span className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-primary" />
-              Auto-Approved Permissions
-            </span>
-          </DialogTitle>
-        </DialogHeader>
-        <div className="shrink-0 px-6 pt-2 pb-3 border-b bg-background">
+        <div className="shrink-0 px-6 py-4 border-b bg-background space-y-2">
+          <DialogHeader className="flex-row items-center gap-2 w-full p-0">
+            <DialogTitle className="flex-1">
+              <span className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-primary" />
+                Auto-Approved Permissions
+              </span>
+            </DialogTitle>
+          </DialogHeader>
           <div className="flex items-center gap-2">
-
-          <Badge variant={scope==='global'?'default':scope==='repo'?'secondary':'outline'} className="text-xs">
-            {scope==='global' ? '전역' : scope==='repo' ? `레포 #${repoId}` : `세션 ${sessionId?.slice(0,8)} · 레포 #${repoId}`}
-          </Badge>
-          <span className="text-xs text-muted-foreground">
-            {scope==='global' ? '전역 설정 · 모든 프로젝트에 적용' : scope==='repo' ? '레포 스콥 · 이 레포의 세션에 적용' : '세션 스콥 · 이 세션에만 적용 (레포/전역 상속)'}
-          </span>
-        
+            <Badge variant={scope==='global'?'default':scope==='repo'?'secondary':'outline'} className="text-xs">
+              {scope==='global' ? '전역' : scope==='repo' ? `레포 #${repoId}` : `세션`}
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              {scope==='global' ? '전역' : scope==='repo' ? '레포 스콥' : '세션 스콥'}
+            </span>
           </div>
-</div>
+        </div>
         <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-4">
 
         <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3">
