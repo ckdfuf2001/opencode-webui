@@ -30,26 +30,26 @@ const queryClient = new QueryClient({
 })
 
 function PushPrompt() {
-  const { preferences, updateSettings } = useSettings()
+  const { updateSettings } = useSettings()
   const [visible, setVisible] = useState(false)
   useEffect(() => {
     if (!isPushSupported()) return
+    // 처음 접속(default)일 때만 배너 표시 — 이전에 허용/거부한 적 없으면
     if (Notification.permission !== 'default') return
     if (localStorage.getItem('opencode-push-prompt-dismissed')) return
-    // 전역 푸시가 꺼져 있어도 처음 한 번은 물어봄 (유튜브처럼)
-    const t = setTimeout(() => setVisible(true), 1200)
-    return () => clearTimeout(t)
-  }, [preferences])
+    // 즉시 표시 (유튜브처럼 첫 방문 시 배너)
+    setVisible(true)
+  }, [])
   if (!visible) return null
   return (
-    <div className="sticky top-0 z-40 bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between gap-3">
-      <div className="flex items-center gap-2 text-sm">
-        <Bell className="w-4 h-4 text-amber-600" />
-        <span>PC 알림을 허용하면 응답 완료·권한 요청을 브라우저/OS 알림으로 받을 수 있습니다.</span>
+    <div className="fixed top-0 left-0 right-0 z-[100] bg-amber-500 border-b border-amber-600 px-4 py-3 flex items-center justify-between gap-3 shadow-lg">
+      <div className="flex items-center gap-2 text-sm text-white">
+        <Bell className="w-4 h-4" />
+        <span>PC 알림을 허용하면 응답 완료·권한 요청을 OS 알림으로 받을 수 있습니다. 브라우저 허용 팝업이 뜹니다.</span>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { localStorage.setItem('opencode-push-prompt-dismissed','1'); setVisible(false); }}>나중에</Button>
-        <Button size="sm" className="h-7 text-xs" onClick={async () => {
+        <Button variant="outline" size="sm" className="h-7 text-xs bg-white text-amber-700 hover:bg-amber-50" onClick={() => { localStorage.setItem('opencode-push-prompt-dismissed','1'); setVisible(false); }}>나중에</Button>
+        <Button size="sm" className="h-7 text-xs bg-white text-amber-700 hover:bg-amber-100 font-bold" onClick={async () => {
           const perm = await ensurePushPermission()
           if (perm === 'granted') {
             updateSettings({ pushNotificationEnabled: true })
@@ -57,6 +57,9 @@ function PushPrompt() {
             setVisible(false)
           } else if (perm === 'denied') {
             localStorage.setItem('opencode-push-prompt-dismissed','1')
+            setVisible(false)
+          } else {
+            // default인데 닫은 경우 — 다음에 다시 물어보도록 flag 안 남김
             setVisible(false)
           }
         }}>허용</Button>
