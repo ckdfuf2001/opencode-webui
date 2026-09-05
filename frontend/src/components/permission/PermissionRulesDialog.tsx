@@ -14,7 +14,7 @@ import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
-import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, sendPushNotification, openNotificationSettings, getNotificationSettingsHelp, getNotificationSettingsUrl, getEffectiveSound, getEffectivePush, getEffectiveSkillAuto } from '@/lib/notifications'
+import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, sendPushNotification, openNotificationSettings, getNotificationSettingsHelp, getNotificationSettingsUrl } from '@/lib/notifications'
 
 interface PermissionRulesDialogProps {
   open: boolean
@@ -83,27 +83,33 @@ export function PermissionRulesDialog({
     if (repoId !== undefined) {
       const rov = getRepoOverride(repoId)
       setRepoSoundOverrideState(rov.soundEnabled)
-      setRepoPushOverrideState(rov.pushEnabled)    } else {
+      setRepoPushOverrideState(rov.pushEnabled)
+    } else {
       setRepoSoundOverrideState(undefined)
-      setRepoPushOverrideState(undefined)    }
+      setRepoPushOverrideState(undefined)
+    }
     // session overrides
     if (sessionId) {
       const ov = getSessionOverride(sessionId)
       setSessionSoundOverrideState(ov.soundEnabled)
-      setSessionPushOverrideState(ov.pushEnabled)      setSessionPermRules(getSessionPermissionRules(sessionId))
+      setSessionPushOverrideState(ov.pushEnabled)
+      setSessionPermRules(getSessionPermissionRules(sessionId))
     } else {
       setSessionSoundOverrideState(undefined)
-      setSessionPushOverrideState(undefined)      setSessionPermRules([])
+      setSessionPushOverrideState(undefined)
+      setSessionPermRules([])
     }
     const handler = () => {
       if (repoId !== undefined) {
         const rov = getRepoOverride(repoId)
         setRepoSoundOverrideState(rov.soundEnabled)
-        setRepoPushOverrideState(rov.pushEnabled)      }
+        setRepoPushOverrideState(rov.pushEnabled)
+      }
       if (sessionId) {
         const ov = getSessionOverride(sessionId)
         setSessionSoundOverrideState(ov.soundEnabled)
-        setSessionPushOverrideState(ov.pushEnabled)        setSessionPermRules(getSessionPermissionRules(sessionId))
+        setSessionPushOverrideState(ov.pushEnabled)
+        setSessionPermRules(getSessionPermissionRules(sessionId))
       }
     }
     window.addEventListener('opencode:session-notify-changed', handler)
@@ -205,15 +211,208 @@ export function PermissionRulesDialog({
         <div className="shrink-0 px-6 py-4 border-b bg-background space-y-2">
           <DialogHeader className="flex-row items-center gap-2 w-full p-0">
             <DialogTitle className="flex-1">
-              <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
-                    </p>
+              <span className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-primary" />
+                Auto-Approved Permissions
+                {scope!=='global' && (
+                  <Badge variant="secondary" className="text-xs font-mono">
+                    #Repo {repoId}
+                  </Badge>
+                )}
+              </span>
+            </DialogTitle>
+          </DialogHeader>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-4">
+
+        <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3">
+          <div className="space-y-0.5">
+            <Label className="text-sm font-medium">Skill / Command auto update</Label>
+            <p className="text-xs text-muted-foreground">When enabled, skill and command updates from memory are applied automatically without asking in chat.</p>
+          </div>
+          <Switch
+            checked={skillAuto?.enabled ?? false}
+            onCheckedChange={(v) => skillMut.mutate(v)}
+            disabled={skillMut.isPending}
+          />
+        </div>
+
+        <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">
+              Tool Permission
+            </div>
+            {scope==='session' && (
+              <Select value={ruleScope} onValueChange={(v) => setRuleScope(v as 'repo'|'session')}>
+                <SelectTrigger className="w-28 h-7 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="repo">레포</SelectItem>
+                  <SelectItem value="session">세션</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Select value={permission} onValueChange={setPermission}>
+              <SelectTrigger className="w-40 bg-background border-border">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PERMISSION_TYPES.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {getPermissionLabel(type)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              value={pattern}
+              onChange={(e) => setPattern(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleAdd()
+              }}
+              placeholder="e.g. npm run build, **/*.ts, *"
+              className="font-mono text-xs flex-1"
+            />
+            <Button size="icon" className="h-9 w-9 shrink-0" onClick={() => void handleAdd()} disabled={saving || scope==='global'}>
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {scope==='session' && ruleScope==='session' ? '세션 룰: 이 세션에서만 자동 승인 (로컬스토리지).' : scope==='session' && ruleScope==='repo' ? '레포 룰: 이 레포의 모든 세션에서 자동 승인 (DB).' : ''} 
+            Supports glob patterns: <code className="font-mono">*</code> and <code className="font-mono">**</code>. Choose "Any" to match every permission type.
+          </p>
+{/* 레포 룰 */}
+        {scope !== 'global' && (
+          <>
+            <div className="text-xs font-medium text-muted-foreground">레포 룰 (DB) — {rulesFiltered.length}개</div>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : rulesFiltered.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">
+                레포 룰 없음. 위에서 추가하거나 permission 요청에서 "Allow Always" 클릭.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {rulesFiltered.map((rule) => (
+                  editingRepoId===rule.id ? (
+                    <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-primary bg-card p-2">
+                      <Select value={editRepoPermission} onValueChange={setEditRepoPermission}>
+                        <SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>{PERMISSION_TYPES.map(t=>(<SelectItem key={t} value={t}>{getPermissionLabel(t)}</SelectItem>))}</SelectContent>
+                      </Select>
+                      <Input autoFocus value={editRepoPattern} onChange={e=>setEditRepoPattern(e.target.value)} onBlur={()=>void handleSaveRepoEdit(rule.id)} onKeyDown={e=>{ if(e.key==='Enter') void handleSaveRepoEdit(rule.id); if(e.key==='Escape') setEditingRepoId(null); }} placeholder="pattern" className="font-mono text-xs flex-1 h-7" />
+                      <Button size="sm" className="h-7 px-2" onClick={()=>void handleSaveRepoEdit(rule.id)}>저장</Button>
+                    </div>
+                  ) : (
+                    <div key={rule.id} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card p-2.5 cursor-pointer hover:border-primary/50" onClick={()=>{ setEditingRepoId(rule.id); setEditRepoPermission(rule.permission); setEditRepoPattern(rule.pattern); }}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Badge variant="outline" className="text-[10px] shrink-0">
+                          {getPermissionLabel(rule.permission)}
+                        </Badge>
+                        <span className="text-xs font-mono truncate">{rule.pattern}</span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={(e)=>{ e.stopPropagation(); void handleDelete(rule); }}
+                        disabled={deletingId === rule.id}
+                        title="Remove rule"
+                      >
+                        {deletingId === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                      </Button>
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* 세션 룰 */}
+        {scope === 'session' && (
+          <>
+            <div className="text-xs font-medium text-muted-foreground mt-2">세션 룰 (로컬) — {sessionPermRules.length}개 {sessionPermRules.length>0 && <span className="font-normal">· 이 세션에서만 동작, 레포보다 우선</span>}</div>
+            {sessionPermRules.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">세션 전용 룰 없음.</p>
+            ) : (
+              <div className="space-y-2">
+                {sessionPermRules.map((rule) => (
+                  editingSessionId===rule.id ? (
+                    <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-amber-500 bg-amber-50 p-2">
+                      <Select value={editSessionPermission} onValueChange={setEditSessionPermission}>
+                        <SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>{PERMISSION_TYPES.map(t=>(<SelectItem key={t} value={t}>{getPermissionLabel(t)}</SelectItem>))}</SelectContent>
+                      </Select>
+                      <Input autoFocus value={editSessionPattern} onChange={e=>setEditSessionPattern(e.target.value)} onBlur={()=>handleSaveSessionEdit(rule.id)} onKeyDown={e=>{ if(e.key==='Enter') handleSaveSessionEdit(rule.id); if(e.key==='Escape') setEditingSessionId(null); }} placeholder="pattern" className="font-mono text-xs flex-1 h-7" />
+                      <Button size="sm" className="h-7 px-2" onClick={()=>handleSaveSessionEdit(rule.id)}>저장</Button>
+                    </div>
+                  ) : (
+                    <div key={rule.id} className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 cursor-pointer hover:border-amber-500/60" onClick={()=>{ setEditingSessionId(rule.id); setEditSessionPermission(rule.permission); setEditSessionPattern(rule.pattern); }}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Badge variant="outline" className="text-[10px] shrink-0">
+                          {getPermissionLabel(rule.permission)}
+                        </Badge>
+                        <span className="text-xs font-mono truncate">{rule.pattern}</span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={(e)=>{ e.stopPropagation(); handleDeleteSessionRule(rule.id); }}
+                        title="Remove session rule"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {scope === 'global' && (
+          <p className="text-xs text-muted-foreground text-center py-2">전역에서는 알림/스킬 전역값만 설정합니다. Permission 룰은 레포 또는 세션 패널에서 추가하세요.</p>
+        )}
+        </div>        <div className="rounded-lg border border-border bg-card p-3 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> Notification</div>
+          {scope==='global' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm">완료 소리</Label>
+                  <p className="text-xs text-muted-foreground">응답 완료 시 효과음</p>
+                </div>
+                <Switch checked={globalSoundOn} onCheckedChange={(v) => updateSettings({ completionSoundEnabled: v })} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm">취소 소리</Label>
+                  <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음</p>
+                </div>
+                <Switch checked={preferences?.completionSoundOnCancel !== false} onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification (requires pre-allow in browser settings)</Label>
+                  <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS notification (requires pre-allow in browser settings)' : '미지원 브라우저'}</p>
+                  {Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
                   {globalPushOn && (
-                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void sendPushNotification('테스트 알림', { body: 'OS notification (requires pre-allow in browser settings)이 정상입니다.', tag: 'test-push' })}>테스트</Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상입니다.', tag: 'test-push' })}>테스트</Button>
                   )}
-                  <Switch checked={globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v) { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } void sendPushNotification('알림 테스트', { body: 'OS notification (requires pre-allow in browser settings)이 활성화되었습니다.', tag: 'test-push' }); } updateSettings({ pushNotificationEnabled: v }); }} />
+                  <Switch checked={globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v) { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } void sendPushNotification('알림 테스트', { body: 'PC 푸시 알림이 활성화되었습니다.', tag: 'test-push' }); } updateSettings({ pushNotificationEnabled: v }); }} />
                 </div>
               </div>
             </>
@@ -232,7 +431,7 @@ export function PermissionRulesDialog({
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification (requires pre-allow in browser settings)</Label>
                   <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS notification (requires pre-allow in browser settings)' : '미지원'}</p>
                   {Notification.permission === 'denied' && (
-                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                                        <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <Switch checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } } const next = v === globalPushOn ? undefined : v; setRepoOverride(repoId!, { pushEnabled: next }); setRepoPushOverrideState(next); }} />
@@ -253,14 +452,14 @@ export function PermissionRulesDialog({
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification (requires pre-allow in browser settings)</Label>
                   <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS notification (requires pre-allow in browser settings)' : '미지원'}</p>
                   {Notification.permission === 'denied' && (
-                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                                        <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } } const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
               </div>
             </>
             )}
-        </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
