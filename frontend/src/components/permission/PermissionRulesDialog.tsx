@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Plus, ShieldCheck, X, Volume2, Bell, ChevronDown } from 'lucide-react'
+import { Loader2, Plus, ShieldCheck, X, Volume2, Bell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -74,10 +74,8 @@ export function PermissionRulesDialog({
   const { preferences, updateSettings } = useSettings()
   const [sessionSoundOverride, setSessionSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionPushOverride, setSessionPushOverrideState] = useState<boolean | undefined>(undefined)
-  const [sessionSkillOverride, setSessionSkillOverrideState] = useState<boolean | undefined>(undefined)
   const [repoSoundOverride, setRepoSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [repoPushOverride, setRepoPushOverrideState] = useState<boolean | undefined>(undefined)
-  const [repoSkillOverride, setRepoSkillOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
   useEffect(() => {
     if (!open) return
@@ -85,39 +83,27 @@ export function PermissionRulesDialog({
     if (repoId !== undefined) {
       const rov = getRepoOverride(repoId)
       setRepoSoundOverrideState(rov.soundEnabled)
-      setRepoPushOverrideState(rov.pushEnabled)
-      setRepoSkillOverrideState(rov.skillAutoEnabled)
-    } else {
+      setRepoPushOverrideState(rov.pushEnabled)    } else {
       setRepoSoundOverrideState(undefined)
-      setRepoPushOverrideState(undefined)
-      setRepoSkillOverrideState(undefined)
-    }
+      setRepoPushOverrideState(undefined)    }
     // session overrides
     if (sessionId) {
       const ov = getSessionOverride(sessionId)
       setSessionSoundOverrideState(ov.soundEnabled)
-      setSessionPushOverrideState(ov.pushEnabled)
-      setSessionSkillOverrideState(ov.skillAutoEnabled)
-      setSessionPermRules(getSessionPermissionRules(sessionId))
+      setSessionPushOverrideState(ov.pushEnabled)      setSessionPermRules(getSessionPermissionRules(sessionId))
     } else {
       setSessionSoundOverrideState(undefined)
-      setSessionPushOverrideState(undefined)
-      setSessionSkillOverrideState(undefined)
-      setSessionPermRules([])
+      setSessionPushOverrideState(undefined)      setSessionPermRules([])
     }
     const handler = () => {
       if (repoId !== undefined) {
         const rov = getRepoOverride(repoId)
         setRepoSoundOverrideState(rov.soundEnabled)
-        setRepoPushOverrideState(rov.pushEnabled)
-        setRepoSkillOverrideState(rov.skillAutoEnabled)
-      }
+        setRepoPushOverrideState(rov.pushEnabled)      }
       if (sessionId) {
         const ov = getSessionOverride(sessionId)
         setSessionSoundOverrideState(ov.soundEnabled)
-        setSessionPushOverrideState(ov.pushEnabled)
-        setSessionSkillOverrideState(ov.skillAutoEnabled)
-        setSessionPermRules(getSessionPermissionRules(sessionId))
+        setSessionPushOverrideState(ov.pushEnabled)        setSessionPermRules(getSessionPermissionRules(sessionId))
       }
     }
     window.addEventListener('opencode:session-notify-changed', handler)
@@ -130,9 +116,6 @@ export function PermissionRulesDialog({
     }
   }, [open, repoId, sessionId])
   // effective values with hierarchy display
-  const soundEff = getEffectiveSound(repoId, sessionId, preferences ?? {})
-  const pushEff = getEffectivePush(repoId, sessionId, preferences ?? {})
-  const skillEff = getEffectiveSkillAuto(repoId, sessionId, skillAuto?.enabled)
   const globalSoundOn = preferences?.completionSoundEnabled !== false
   const globalPushOn = preferences?.pushNotificationEnabled === true
 
@@ -476,7 +459,6 @@ export function PermissionRulesDialog({
               </div>
             </>
             )}
-          </div>
         </div>
         </div>
       </DialogContent>
