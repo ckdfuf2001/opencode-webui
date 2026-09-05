@@ -255,7 +255,7 @@ export function SessionDetail() {
       if (canPush) {
         const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
         const body = sessionId ?? ''
-        sendPushNotification(title, { body, tag: sessionId })
+        sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`)
       }
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
       // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
@@ -295,7 +295,7 @@ export function SessionDetail() {
       if (shouldPush(sessionId, preferences ?? {}, repoId)) {
         const title = '승인이 필요합니다';
         const body = (currentPermission as unknown as { pattern?: string[]; permission?: string })?.pattern?.[0] ?? (currentPermission as unknown as { permission?: string })?.permission ?? sessionId ?? '';
-        sendPushNotification(title, { body, tag: `perm-${pid}` });
+        sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
       }
     } else if (!pid) {
       prevPermissionIdRef.current = null;
@@ -310,7 +310,7 @@ export function SessionDetail() {
       prevQuestionIdRef.current = qid;
       if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
       if (shouldPush(sessionId, preferences ?? {}, repoId)) {
-        sendPushNotification('질문이 도착했습니다', { body: sessionId ?? '', tag: `q-${qid}` });
+        sendPushNotification('질문이 도착했습니다', { body: sessionId ?? '', tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
       }
     } else if (!qid) {
       prevQuestionIdRef.current = null;

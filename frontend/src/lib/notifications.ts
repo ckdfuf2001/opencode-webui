@@ -14,7 +14,7 @@ export async function ensurePushPermission(): Promise<NotificationPermission | n
   }
 }
 
-export async function sendPushNotification(title: string, opts?: NotificationOptions): Promise<void> {
+export async function sendPushNotification(title: string, opts?: NotificationOptions, url?: string): Promise<void> {
   try {
     if (!isPushSupported()) return
     if (Notification.permission !== 'granted') return
@@ -24,6 +24,7 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
       requireInteraction: false,
       silent: false,
       ...opts,
+      data: { ...((opts as unknown as { data?: Record<string, unknown> } | undefined)?.data ?? {}), ...(url ? { url } : {}) },
     }
     // 유튜브 등도 ServiceWorker showNotification을 사용 — 백그라운드/다른 탭에서도 OS 알림이 뜨도록
     if ('serviceWorker' in navigator) {
@@ -40,7 +41,7 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
       } catch {}
       // SW가 없으면 최소 SW를 동적으로 등록해 OS 알림 시도
       try {
-        const swCode = `self.addEventListener('notificationclick', function(e){e.notification.close(); e.waitUntil(clients.matchAll({type:'window'}).then(function(cs){ if(cs.length>0) return cs[0].focus(); return clients.openWindow('/'); }));}); self.addEventListener('push', function(e){});`
+        const swCode = `self.addEventListener('notificationclick', function(e){e.notification.close(); var url=(e.notification.data&&e.notification.data.url)||'/'; var target=url; try{target=new URL(url,self.registration.scope).href;}catch(_){} e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){ for(var i=0;i<cs.length;i++){ try{ if(cs[i].url&&cs[i].url.indexOf(target)!==-1) return cs[i].focus(); }catch(_){} } if(cs.length>0){ var c=cs[0]; try{ if(c.navigate) return c.navigate(target).then(function(cc){return cc.focus();}); }catch(_){} return c.focus(); } return clients.openWindow(target); }));}); self.addEventListener('push', function(e){});`
         const blob = new Blob([swCode], { type: 'text/javascript' })
         const url = URL.createObjectURL(blob)
         const reg = await navigator.serviceWorker.register(url, { scope: '/' })
@@ -51,7 +52,10 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
     }
     const n = new Notification(title, baseOpts as NotificationOptions)
     n.onclick = () => {
-      try { window.focus() } catch {}
+      try {
+        window.focus()
+        if (url) window.location.href = url
+      } catch {}
       n.close()
     }
     setTimeout(() => { try { n.close() } catch {} }, 7000)
