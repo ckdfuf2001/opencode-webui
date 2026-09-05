@@ -14,7 +14,7 @@ import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
-import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, sendPushNotification, openNotificationSettings, getNotificationSettingsHelp, getEffectiveSound, getEffectivePush, getEffectiveSkillAuto } from '@/lib/notifications'
+import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, sendPushNotification, openNotificationSettings, getNotificationSettingsHelp, getNotificationSettingsUrl, getEffectiveSound, getEffectivePush, getEffectiveSkillAuto } from '@/lib/notifications'
 
 interface PermissionRulesDialogProps {
   open: boolean
@@ -391,7 +391,9 @@ export function PermissionRulesDialog({
                 {Notification.permission === 'denied' && (
                   <p className="text-xs text-destructive flex items-center gap-2">
                     브라우저에서 차단됨
-                    <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => { const ok=openNotificationSettings(); if(!ok) showToast.info(getNotificationSettingsHelp()); }}>설정 열기</Button>
+                    <Button asChild variant="outline" size="sm" className="h-6 text-xs px-2">
+                      <a href={getNotificationSettingsUrl()} target="_blank" rel="noopener noreferrer">설정 열기</a>
+                    </Button>
                   </p>
                 )}
               </div>
@@ -406,7 +408,8 @@ export function PermissionRulesDialog({
                     if (v) {
                       const perm = await ensurePushPermission()
                       if (perm !== 'granted') {
-                        showToast.error('알림 권한이 거부되었습니다. 주소창 왼쪽 자물쇠 → 사이트 설정 → 알림 허용으로 수동 변경해야 합니다. (브라우저 보안상 코드로 강제 변경 불가)')
+                        openNotificationSettings()
+                        showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.')
                         return
                       }
                       void sendPushNotification('알림 테스트', { body: 'PC 푸시 알림이 활성화되었습니다.', tag: 'test-push' })
@@ -452,7 +455,7 @@ export function PermissionRulesDialog({
                     onCheckedChange={async (v) => {
                       if (v && isPushSupported() && Notification.permission !== 'granted') {
                         const perm = await ensurePushPermission()
-                        if (perm !== 'granted') { showToast.error('알림 권한 거부'); return }
+                        if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return }
                       }
                       const next = v === globalPushOn ? undefined : v
                       setRepoOverride(repoId, { pushEnabled: next })
@@ -493,7 +496,7 @@ export function PermissionRulesDialog({
                     onCheckedChange={async (v) => {
                       if (v && isPushSupported() && Notification.permission !== 'granted') {
                         const perm = await ensurePushPermission()
-                        if (perm !== 'granted') { showToast.error('알림 권한 거부'); return }
+                        if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return }
                       }
                       const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn
                       const next = v === parent ? undefined : v

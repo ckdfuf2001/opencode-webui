@@ -62,6 +62,15 @@ export function triggerTestPush(): void {
   void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상적으로 동작합니다.', tag: 'test-push' } as NotificationOptions)
 }
 
+export function getNotificationSettingsUrl(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (ua.includes('Edg')) return 'edge://settings/privacy/sitePermissions/allPermissions/popups'
+  if (ua.includes('Chrome') && !ua.includes('Edg')) return 'chrome://settings/content/notifications'
+  if (ua.includes('Firefox')) return 'about:preferences#privacy'
+  if (ua.includes('Safari') && !ua.includes('Chrome')) return ''
+  return ''
+}
+
 export function getNotificationSettingsHelp(): string {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
   if (ua.includes('Edg')) return 'Edge: edge://settings/privacy/sitePermissions/allPermissions/popups 또는 주소창 자물쇠 → 사이트 권한 → 알림'
@@ -79,6 +88,11 @@ export function openNotificationSettings(): boolean {
   else if (ua.includes('Firefox')) url = 'about:preferences#privacy'
   else if (ua.includes('Safari') && !ua.includes('Chrome')) url = ''
   if (!url) return false
+  // edge:// / chrome://는 웹 페이지에서 window.open이 차단됨 — 클립보드에 복사하고 안내로 대체
+  if (url.startsWith('edge://') || url.startsWith('chrome://')) {
+    try { void navigator.clipboard?.writeText(url) } catch {}
+    return false
+  }
   try {
     const w = window.open(url, '_blank')
     if (!w || w.closed) return false
