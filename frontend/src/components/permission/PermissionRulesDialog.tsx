@@ -14,7 +14,7 @@ import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
-import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, sendPushNotification, getEffectiveSound, getEffectivePush, getEffectiveSkillAuto } from '@/lib/notifications'
+import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, sendPushNotification, openNotificationSettings, getNotificationSettingsHelp, getEffectiveSound, getEffectivePush, getEffectiveSkillAuto } from '@/lib/notifications'
 
 interface PermissionRulesDialogProps {
   open: boolean
@@ -389,7 +389,10 @@ export function PermissionRulesDialog({
                 <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> PC 푸시 알림 (글로벌)</Label>
                 <p className="text-xs text-muted-foreground">{isPushSupported() ? 'OS 알림으로 완료/권한 요청' : '미지원 브라우저'}</p>
                 {Notification.permission === 'denied' && (
-                  <p className="text-xs text-destructive">브라우저에서 차단됨 — 주소창 자물쇠 → 사이트 설정 → 알림 허용으로 변경 (브라우저 설정은 코드로 강제 변경 불가)</p>
+                  <p className="text-xs text-destructive flex items-center gap-2">
+                    브라우저에서 차단됨
+                    <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => { const ok=openNotificationSettings(); if(!ok) showToast.info(getNotificationSettingsHelp()); }}>설정 열기</Button>
+                  </p>
                 )}
               </div>
               <div className="flex items-center gap-2">

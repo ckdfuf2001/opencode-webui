@@ -62,6 +62,33 @@ export function triggerTestPush(): void {
   void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상적으로 동작합니다.', tag: 'test-push' } as NotificationOptions)
 }
 
+export function getNotificationSettingsHelp(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (ua.includes('Edg')) return 'Edge: edge://settings/content/notifications 또는 주소창 자물쇠 → 사이트 권한 → 알림'
+  if (ua.includes('Chrome') && !ua.includes('Edg')) return 'Chrome: chrome://settings/content/notifications 또는 주소창 자물쇠 → 사이트 설정 → 알림'
+  if (ua.includes('Firefox')) return 'Firefox: about:preferences#privacy → 권한 → 알림 → 설정'
+  if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari: 설정 → 웹사이트 → 알림'
+  return '브라우저 주소창 자물쇠 → 사이트 설정 → 알림'
+}
+
+export function openNotificationSettings(): boolean {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  let url = ''
+  if (ua.includes('Edg')) url = 'edge://settings/content/notifications'
+  else if (ua.includes('Chrome') && !ua.includes('Edg')) url = 'chrome://settings/content/notifications'
+  else if (ua.includes('Firefox')) url = 'about:preferences#privacy'
+  else if (ua.includes('Safari') && !ua.includes('Chrome')) url = ''
+  if (!url) return false
+  try {
+    const w = window.open(url, '_blank')
+    // chrome://는 웹에서 열리지 않아 null이거나 차단됨
+    if (!w || w.closed) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
 // per-session overrides stored in localStorage
 const OVERRIDES_KEY = 'opencode-session-notify-overrides'
 const REPO_OVERRIDES_KEY = 'opencode-repo-notify-overrides'

@@ -10,7 +10,7 @@ import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
 import { startAutoApprover } from './hooks/useAutoApprovePermissions'
 import { useSettings } from './hooks/useSettings'
-import { isPushSupported, ensurePushPermission, sendPushNotification } from './lib/notifications'
+import { isPushSupported, ensurePushPermission, sendPushNotification, openNotificationSettings, getNotificationSettingsHelp } from './lib/notifications'
 import { useState, useEffect } from 'react'
 import { Button } from './components/ui/button'
 import { Bell } from 'lucide-react'
@@ -58,8 +58,12 @@ function PushPrompt() {
           } else if (perm === 'denied') {
             localStorage.setItem('opencode-push-prompt-dismissed','1')
             setVisible(false)
+            const ok = openNotificationSettings()
+            if (!ok) {
+              const { showToast } = await import('./lib/toast')
+              showToast.info(getNotificationSettingsHelp())
+            }
           } else {
-            // default인데 닫은 경우 — 다음에 다시 물어보도록 flag 안 남김
             setVisible(false)
           }
         }}>허용</Button>
