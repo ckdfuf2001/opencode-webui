@@ -475,7 +475,9 @@ export function PermissionRulesDialog({
                 <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { openNotificationSettings(); showToast.error(getNotificationSettingsHelp() + ' — URL이 클립보드에 복사되었습니다. 새탭 주소창에 붙여넣어 이동하세요.'); return; } } const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
               </div>
             </>
-          )}
+            )}
+          </div>
+        </div>
         </div>
       </DialogContent>
     </Dialog>
