@@ -221,21 +221,18 @@ export function PermissionRulesDialog({
     }}>
       <DialogContent className="max-w-xl max-h-[90vh] p-0 gap-0 flex flex-col overflow-hidden">
         <div className="shrink-0 px-6 py-4 border-b bg-background space-y-2">
-          <DialogHeader className="flex-row items-center justify-between gap-2 w-full p-0">
+          <DialogHeader className="flex-row items-center gap-2 w-full p-0">
             <DialogTitle className="flex-1">
               <span className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-primary" />
                 Auto-Approved Permissions
                 {scope!=='global' && (
                   <Badge variant="secondary" className="text-xs font-mono">
-                    #Repo {repoId}{scope==='session' ? ` · #${String(sessionId).slice(0,4)}` : ''}
+                    #Repo {repoId}
                   </Badge>
                 )}
               </span>
             </DialogTitle>
-            <Badge variant={scope==='global'?'default':scope==='repo'?'secondary':'outline'} className="text-xs shrink-0">
-              {scope==='global' ? '전역' : scope==='repo' ? 'Repo' : 'Session'}
-            </Badge>
           </DialogHeader>
         </div>
         <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-4">
