@@ -114,8 +114,8 @@ const OVERRIDES_KEY = 'opencode-session-notify-overrides'
 const REPO_OVERRIDES_KEY = 'opencode-repo-notify-overrides'
 const SESSION_PERM_KEY = 'opencode-session-permission-rules'
 
-type SessionOverride = { soundEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
-type RepoOverride = { soundEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
+type SessionOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
+type RepoOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
 type OverridesMap = Record<string, SessionOverride>
 type RepoOverridesMap = Record<string, RepoOverride>
 
@@ -159,7 +159,7 @@ export function setSessionOverride(sessionId: string, patch: SessionOverride): v
   const map = readOverrides()
   const cur = map[sessionId] ?? {}
   const next = { ...cur, ...patch }
-  if (next.soundEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
+  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
     delete map[sessionId]
   } else {
     map[sessionId] = next
@@ -176,7 +176,7 @@ export function setRepoOverride(repoId: number | string, patch: RepoOverride): v
   const map = readRepoOverrides()
   const cur = map[String(repoId)] ?? {}
   const next = { ...cur, ...patch }
-  if (next.soundEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
+  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
     delete map[String(repoId)]
   } else {
     map[String(repoId)] = next
@@ -217,7 +217,26 @@ export function deleteSessionPermissionRule(sessionId: string, ruleId: string): 
 }
 
 export function shouldPlaySound(sessionId: string | undefined, isCancel: boolean, prefs: { completionSoundEnabled?: boolean; completionSoundOnCancel?: boolean }, repoId?: number | string): boolean {
-  if (isCancel && prefs.completionSoundOnCancel === false) return false
+  if (isCancel) {
+    // 세션 > 레포 > 전역 순으로 취소음 우선순위
+    if (sessionId) {
+      const ov = getSessionOverride(sessionId)
+      if (ov.soundOnCancelEnabled === true) { /* fall through to sound check */ }
+      else if (ov.soundOnCancelEnabled === false) return false
+      else {
+        if (repoId !== undefined && repoId !== null) {
+          const rov = getRepoOverride(repoId)
+          if (rov.soundOnCancelEnabled === true) { /* fall through */ }
+          else if (rov.soundOnCancelEnabled === false) return false
+          else if (prefs.completionSoundOnCancel === false) return false
+        } else if (prefs.completionSoundOnCancel === false) return false
+      }
+    } else if (repoId !== undefined && repoId !== null) {
+      const rov = getRepoOverride(repoId)
+      if (rov.soundOnCancelEnabled === false) return false
+      if (rov.soundOnCancelEnabled === undefined && prefs.completionSoundOnCancel === false) return false
+    } else if (prefs.completionSoundOnCancel === false) return false
+  }
   // 세션 > 레포 > 전역 순으로 우선순위
   if (sessionId) {
     const ov = getSessionOverride(sessionId)
@@ -251,6 +270,15 @@ export function getEffectiveSound(repoId: number | string | undefined, sessionId
   const global = prefs.completionSoundEnabled !== false
   const repo = repoId !== undefined ? getRepoOverride(repoId).soundEnabled : undefined
   const session = sessionId ? getSessionOverride(sessionId).soundEnabled : undefined
+  let effective = global
+  if (repo !== undefined) effective = repo
+  if (session !== undefined) effective = session
+  return { global, repo, session, effective }
+}
+export function getEffectiveSoundOnCancel(repoId: number | string | undefined, sessionId: string | undefined, prefs: { completionSoundOnCancel?: boolean }): { global: boolean; repo?: boolean; session?: boolean; effective: boolean } {
+  const global = prefs.completionSoundOnCancel !== false
+  const repo = repoId !== undefined ? getRepoOverride(repoId).soundOnCancelEnabled : undefined
+  const session = sessionId ? getSessionOverride(sessionId).soundOnCancelEnabled : undefined
   let effective = global
   if (repo !== undefined) effective = repo
   if (session !== undefined) effective = session

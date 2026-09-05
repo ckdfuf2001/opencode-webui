@@ -73,29 +73,37 @@ export function PermissionRulesDialog({
   // 알림/스킬 설정: 전역/레포/세션 계층
   const { preferences, updateSettings } = useSettings()
   const [sessionSoundOverride, setSessionSoundOverrideState] = useState<boolean | undefined>(undefined)
+  const [sessionCancelOverride, setSessionCancelOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionPushOverride, setSessionPushOverrideState] = useState<boolean | undefined>(undefined)
   const [repoSoundOverride, setRepoSoundOverrideState] = useState<boolean | undefined>(undefined)
+  const [repoCancelOverride, setRepoCancelOverrideState] = useState<boolean | undefined>(undefined)
   const [repoPushOverride, setRepoPushOverrideState] = useState<boolean | undefined>(undefined)
+  const [notifyTab, setNotifyTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
   useEffect(() => {
     if (!open) return
+    setNotifyTab(scope)
     // repo overrides
     if (repoId !== undefined) {
       const rov = getRepoOverride(repoId)
       setRepoSoundOverrideState(rov.soundEnabled)
+      setRepoCancelOverrideState(rov.soundOnCancelEnabled)
       setRepoPushOverrideState(rov.pushEnabled)
     } else {
       setRepoSoundOverrideState(undefined)
+      setRepoCancelOverrideState(undefined)
       setRepoPushOverrideState(undefined)
     }
     // session overrides
     if (sessionId) {
       const ov = getSessionOverride(sessionId)
       setSessionSoundOverrideState(ov.soundEnabled)
+      setSessionCancelOverrideState(ov.soundOnCancelEnabled)
       setSessionPushOverrideState(ov.pushEnabled)
       setSessionPermRules(getSessionPermissionRules(sessionId))
     } else {
       setSessionSoundOverrideState(undefined)
+      setSessionCancelOverrideState(undefined)
       setSessionPushOverrideState(undefined)
       setSessionPermRules([])
     }
@@ -103,11 +111,13 @@ export function PermissionRulesDialog({
       if (repoId !== undefined) {
         const rov = getRepoOverride(repoId)
         setRepoSoundOverrideState(rov.soundEnabled)
+        setRepoCancelOverrideState(rov.soundOnCancelEnabled)
         setRepoPushOverrideState(rov.pushEnabled)
       }
       if (sessionId) {
         const ov = getSessionOverride(sessionId)
         setSessionSoundOverrideState(ov.soundEnabled)
+        setSessionCancelOverrideState(ov.soundOnCancelEnabled)
         setSessionPushOverrideState(ov.pushEnabled)
         setSessionPermRules(getSessionPermissionRules(sessionId))
       }
@@ -123,6 +133,7 @@ export function PermissionRulesDialog({
   }, [open, repoId, sessionId])
   // effective values with hierarchy display
   const globalSoundOn = preferences?.completionSoundEnabled !== false
+  const globalCancelOn = preferences?.completionSoundOnCancel !== false
   const globalPushOn = preferences?.pushNotificationEnabled === true
 
   const resetForm = () => {
@@ -382,23 +393,31 @@ export function PermissionRulesDialog({
         {scope === 'global' && (
           <p className="text-xs text-muted-foreground text-center py-2">전역에서는 알림/스킬 전역값만 설정합니다. Permission 룰은 레포 또는 세션 패널에서 추가하세요.</p>
         )}
-        </div>        <div className="rounded-lg border border-border bg-card p-3 space-y-3">
-          <div className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> Notification</div>
-          {scope==='global' && (
+        </div>
+        <div className="rounded-lg border border-border bg-card p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium"><Volume2 className="w-4 h-4" /> Notification</div>
+            <div className="flex items-center gap-1 rounded-md bg-muted p-0.5">
+              <Button variant={notifyTab==='global'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" onClick={() => setNotifyTab('global')}>글로벌</Button>
+              <Button variant={notifyTab==='repo'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" disabled={repoId===undefined} onClick={() => setNotifyTab('repo')}>레포</Button>
+              <Button variant={notifyTab==='session'?'default':'ghost'} size="sm" className="h-6 text-xs px-2" disabled={!sessionId} onClick={() => setNotifyTab('session')}>세션</Button>
+            </div>
+          </div>
+          {notifyTab==='global' && (
             <>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm">완료 소리</Label>
-                  <p className="text-xs text-muted-foreground">응답 완료 시 효과음</p>
+                  <p className="text-xs text-muted-foreground">응답 완료 시 효과음 · 전역 기본값</p>
                 </div>
                 <Switch checked={globalSoundOn} onCheckedChange={(v) => updateSettings({ completionSoundEnabled: v })} />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm">취소 소리</Label>
-                  <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음</p>
+                  <p className="text-xs text-muted-foreground">Abort/cancel 때도 완료음 · 전역 기본값</p>
                 </div>
-                <Switch checked={preferences?.completionSoundOnCancel !== false} onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })} />
+                <Switch checked={globalCancelOn} onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })} />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
@@ -416,40 +435,54 @@ export function PermissionRulesDialog({
               </div>
             </>
           )}
-          {scope==='repo' && (
+          {notifyTab==='repo' && repoId!==undefined && (
             <>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm">완료 소리</Label>
-                  <p className="text-xs text-muted-foreground">이 레포에서만</p>
+                  <p className="text-xs text-muted-foreground">전역 {globalSoundOn?'ON':'OFF'} → 적용 {(repoSoundOverride ?? globalSoundOn)?'ON':'OFF'}{repoSoundOverride===undefined?' (상속)':''}</p>
                 </div>
                 <Switch checked={repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn} onCheckedChange={(v) => { const next = v === globalSoundOn ? undefined : v; setRepoOverride(repoId!, { soundEnabled: next }); setRepoSoundOverrideState(next); }} />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
+                  <Label className="text-sm">취소 소리</Label>
+                  <p className="text-xs text-muted-foreground">전역 {globalCancelOn?'ON':'OFF'} → 적용 {(repoCancelOverride ?? globalCancelOn)?'ON':'OFF'}{repoCancelOverride===undefined?' (상속)':''}</p>
+                </div>
+                <Switch checked={repoCancelOverride !== undefined ? repoCancelOverride : globalCancelOn} onCheckedChange={(v) => { const next = v === globalCancelOn ? undefined : v; setRepoOverride(repoId!, { soundOnCancelEnabled: next }); setRepoCancelOverrideState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification (requires pre-allow in browser settings)</Label>
                   {Notification.permission === 'denied' && (
-                                        <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <Switch checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsHelp()); return; } } const next = v === globalPushOn ? undefined : v; setRepoOverride(repoId!, { pushEnabled: next }); setRepoPushOverrideState(next); }} />
               </div>
             </>
           )}
-          {scope==='session' && (
+          {notifyTab==='session' && sessionId && (
             <>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm">완료 소리</Label>
-                  <p className="text-xs text-muted-foreground">이 세션에서만</p>
+                  <p className="text-xs text-muted-foreground">상위 {(repoSoundOverride ?? globalSoundOn)?'ON':'OFF'} → 적용 {(sessionSoundOverride ?? (repoSoundOverride ?? globalSoundOn))?'ON':'OFF'}{sessionSoundOverride===undefined?' (상속)':''}</p>
                 </div>
                 <Switch checked={sessionSoundOverride !== undefined ? sessionSoundOverride : (repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn)} onCheckedChange={(v) => { const parent = repoSoundOverride !== undefined ? repoSoundOverride : globalSoundOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { soundEnabled: next }); setSessionSoundOverrideState(next); }} />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
+                  <Label className="text-sm">취소 소리</Label>
+                  <p className="text-xs text-muted-foreground">상위 {(repoCancelOverride ?? globalCancelOn)?'ON':'OFF'} → 적용 {(sessionCancelOverride ?? (repoCancelOverride ?? globalCancelOn))?'ON':'OFF'}{sessionCancelOverride===undefined?' (상속)':''}</p>
+                </div>
+                <Switch checked={sessionCancelOverride !== undefined ? sessionCancelOverride : (repoCancelOverride !== undefined ? repoCancelOverride : globalCancelOn)} onCheckedChange={(v) => { const parent = repoCancelOverride !== undefined ? repoCancelOverride : globalCancelOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { soundOnCancelEnabled: next }); setSessionCancelOverrideState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification (requires pre-allow in browser settings)</Label>
                   {Notification.permission === 'denied' && (
-                                        <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsHelp()); return; } } const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
