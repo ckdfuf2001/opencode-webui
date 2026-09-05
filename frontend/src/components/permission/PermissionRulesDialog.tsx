@@ -190,55 +190,40 @@ export function PermissionRulesDialog({
       if (!next) resetForm()
       onOpenChange(next)
     }}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader className="flex-row items-center justify-start gap-2 sm:text-left">
-          <DialogTitle>
+      <DialogContent className="max-w-xl max-h-[90vh] p-0 gap-0 flex flex-col overflow-hidden">
+        <DialogHeader className="flex-row items-center gap-2 w-full">
+          <DialogTitle className="flex-1">
             <span className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-primary" />
               Auto-Approved Permissions
             </span>
           </DialogTitle>
         </DialogHeader>
+        <div className="shrink-0 px-6 pt-2 pb-3 border-b bg-background">
+          <div className="flex items-center gap-2">
 
-        <div className="flex items-center gap-2">
           <Badge variant={scope==='global'?'default':scope==='repo'?'secondary':'outline'} className="text-xs">
             {scope==='global' ? '전역' : scope==='repo' ? `레포 #${repoId}` : `세션 ${sessionId?.slice(0,8)} · 레포 #${repoId}`}
           </Badge>
           <span className="text-xs text-muted-foreground">
             {scope==='global' ? '전역 설정 · 모든 프로젝트에 적용' : scope==='repo' ? '레포 스콥 · 이 레포의 세션에 적용' : '세션 스콥 · 이 세션에만 적용 (레포/전역 상속)'}
           </span>
-        </div>
-
-        <p className="text-xs text-muted-foreground">
-          Requests matching these rules are approved automatically without showing a prompt.
-          {scope==='global' ? ' 전역에서는 알림/스킬 설정만, permission 룰은 레포/세션에서 추가하세요.' : scope==='repo' ? ' 레포 스콥 룰은 이 레포의 모든 세션에서 동작합니다.' : ' 세션 스콥 룰은 이 세션에서만 동작하며 레포/전역을 오버라이드합니다.'}
-        </p>
-
-        {/* 계층값 요약 */}
-        <div className="rounded-lg border border-border bg-card p-3 space-y-2">
-          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">계층별 값 (디폴트 · 레포 · 세션 → Effective)</div>
-          <div className="grid grid-cols-5 gap-2 text-xs">
-            <div className="font-medium">항목</div><div className="text-center">디폴트/전역</div><div className="text-center">레포</div><div className="text-center">세션</div><div className="text-center font-bold">적용값</div>
-            <div>완료 소리</div>
-            <div className="text-center"><Badge variant={globalSoundOn?'default':'outline'} className="text-xs px-1">{globalSoundOn ? 'ON' : 'OFF'}</Badge></div>
-            <div className="text-center">{repoId !== undefined ? <Badge variant={repoSoundOverride===undefined?'outline':repoSoundOverride?'default':'destructive'} className="text-xs px-1">{repoSoundOverride===undefined ? '—' : repoSoundOverride ? 'ON' : 'OFF'}</Badge> : <span className="text-muted-foreground">—</span>}</div>
-            <div className="text-center">{sessionId ? <Badge variant={sessionSoundOverride===undefined?'outline':sessionSoundOverride?'default':'destructive'} className="text-xs px-1">{sessionSoundOverride===undefined ? '—' : sessionSoundOverride ? 'ON' : 'OFF'}</Badge> : <span className="text-muted-foreground">—</span>}</div>
-            <div className="text-center"><Badge variant={soundEff.effective?'default':'destructive'} className="text-xs px-1">{soundEff.effective ? 'ON' : 'OFF'}</Badge></div>
-
-            <div>PC 푸시</div>
-            <div className="text-center"><Badge variant={globalPushOn?'default':'outline'} className="text-xs px-1">{globalPushOn ? 'ON' : 'OFF'}</Badge></div>
-            <div className="text-center">{repoId !== undefined ? <Badge variant={repoPushOverride===undefined?'outline':repoPushOverride?'default':'destructive'} className="text-xs px-1">{repoPushOverride===undefined ? '—' : repoPushOverride ? 'ON' : 'OFF'}</Badge> : <span className="text-muted-foreground">—</span>}</div>
-            <div className="text-center">{sessionId ? <Badge variant={sessionPushOverride===undefined?'outline':sessionPushOverride?'default':'destructive'} className="text-xs px-1">{sessionPushOverride===undefined ? '—' : sessionPushOverride ? 'ON' : 'OFF'}</Badge> : <span className="text-muted-foreground">—</span>}</div>
-            <div className="text-center"><Badge variant={pushEff.effective?'default':'destructive'} className="text-xs px-1">{pushEff.effective ? 'ON' : 'OFF'}</Badge></div>
-
-            <div>스킬 오토</div>
-            <div className="text-center"><Badge variant="outline" className="text-xs px-1">OFF</Badge></div>
-            <div className="text-center"><Badge variant={skillAuto?.enabled?'default':'outline'} className="text-xs px-1">{skillAuto?.enabled ? 'ON' : 'OFF'}</Badge></div>
-            <div className="text-center">{sessionId ? <Badge variant={sessionSkillOverride===undefined?'outline':sessionSkillOverride?'default':'destructive'} className="text-xs px-1">{sessionSkillOverride===undefined ? '—' : sessionSkillOverride ? 'ON' : 'OFF'}</Badge> : <span className="text-muted-foreground">—</span>}</div>
-            <div className="text-center"><Badge variant={skillEff.effective?'default':'outline'} className="text-xs px-1">{skillEff.effective ? 'ON' : 'OFF'}</Badge></div>
+        
           </div>
-        </div>
+</div>
+        <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-4">
 
+        <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3">
+          <div className="space-y-0.5">
+            <Label className="text-sm font-medium">Skill / Command auto update</Label>
+            <p className="text-xs text-muted-foreground">When enabled, skill and command updates from memory are applied automatically without asking in chat.</p>
+          </div>
+          <Switch
+            checked={skillAuto?.enabled ?? false}
+            onCheckedChange={(v) => skillMut.mutate(v)}
+            disabled={skillMut.isPending}
+          />
+        </div>
 
         <div className="space-y-2 rounded-lg border border-border bg-card p-3">
           <div className="flex items-center justify-between">
@@ -430,6 +415,12 @@ export function PermissionRulesDialog({
                 />
               </div>
             </div>
+            {/* 현재 위치 기준 효과 요약 - 상세 설정展开 시에만 보임 */}
+            <div className="rounded border border-dashed p-2 grid grid-cols-5 gap-1 text-xs">
+              <div className="font-medium"></div><div className="text-center text-muted-foreground">전역</div><div className="text-center text-muted-foreground">레포</div><div className="text-center text-muted-foreground">세션</div><div className="text-center font-bold">적용</div>
+              <div>소리</div><div className="text-center"><Badge variant={globalSoundOn?'default':'outline'} className="text-xs px-1">{globalSoundOn?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={repoSoundOverride===undefined?'outline':repoSoundOverride?'default':'destructive'} className="text-xs px-1">{repoSoundOverride===undefined?'—':repoSoundOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={sessionSoundOverride===undefined?'outline':sessionSoundOverride?'default':'destructive'} className="text-xs px-1">{sessionSoundOverride===undefined?'—':sessionSoundOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={soundEff.effective?'default':'destructive'} className="text-xs px-1">{soundEff.effective?'ON':'OFF'}</Badge></div>
+              <div>푸시</div><div className="text-center"><Badge variant={globalPushOn?'default':'outline'} className="text-xs px-1">{globalPushOn?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={repoPushOverride===undefined?'outline':repoPushOverride?'default':'destructive'} className="text-xs px-1">{repoPushOverride===undefined?'—':repoPushOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={sessionPushOverride===undefined?'outline':sessionPushOverride?'default':'destructive'} className="text-xs px-1">{sessionPushOverride===undefined?'—':sessionPushOverride?'ON':'OFF'}</Badge></div><div className="text-center"><Badge variant={pushEff.effective?'default':'destructive'} className="text-xs px-1">{pushEff.effective?'ON':'OFF'}</Badge></div>
+            </div>
 
             {/* 레포 오버라이드 (레포/세션 스콥에서 편집 가능) */}
             {repoId !== undefined && (
@@ -468,34 +459,7 @@ export function PermissionRulesDialog({
                     }}
                   />
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm font-medium">Skill / Command auto update (레포)</Label>
-                    <p className="text-xs text-muted-foreground">레포 스콥 · DB에 저장</p>
-                  </div>
-                  <Switch
-                    checked={skillAuto?.enabled ?? false}
-                    onCheckedChange={(v) => skillMut.mutate(v)}
-                    disabled={skillMut.isPending}
-                  />
-                </div>
-                {repoSkillOverride !== undefined && (
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">레포 스킬 로컬 오버라이드</Label>
-                      <p className="text-xs text-muted-foreground">DB {skillAuto?.enabled?'ON':'OFF'} → 로컬 {repoSkillOverride?'ON':'OFF'}</p>
-                    </div>
-                    <Switch
-                      checked={repoSkillOverride}
-                      onCheckedChange={(v) => {
-                        const next = v === (skillAuto?.enabled ?? false) ? undefined : v
-                        setRepoOverride(repoId, { skillAutoEnabled: next })
-                        setRepoSkillOverrideState(next)
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
+</div>
             )}
 
             {/* 세션 오버라이드 */}
@@ -537,27 +501,13 @@ export function PermissionRulesDialog({
                     }}
                   />
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm">세션 스킬 오토</Label>
-                    <p className="text-xs text-muted-foreground">레포 {skillEff.repo?'ON':'OFF'} → 세션 {sessionSkillOverride===undefined?'상속':sessionSkillOverride?'ON':'OFF'} → 적용 {skillEff.effective?'ON':'OFF'}</p>
-                  </div>
-                  <Switch
-                    checked={sessionSkillOverride !== undefined ? sessionSkillOverride : skillEff.repo}
-                    onCheckedChange={(v) => {
-                      const parent = skillEff.repo
-                      const next = v === parent ? undefined : v
-                      setSessionOverride(sessionId, { skillAutoEnabled: next })
-                      setSessionSkillOverrideState(next)
-                    }}
-                  />
-                </div>
-              </div>
+</div>
             )}
           </div>
           </div>}
         </div>
 
+              </div>
       </DialogContent>
     </Dialog>
   )
