@@ -343,7 +343,7 @@ export function PermissionRulesDialog({
                         {deletingId === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
                       </Button>
                     </div>
-                  )}
+                  )
                 ))}
               </div>
             )}
@@ -387,7 +387,7 @@ export function PermissionRulesDialog({
                         <X className="w-3.5 h-3.5" />
                       </Button>
                     </div>
-                  )}
+                  )
                 ))}
               </div>
             )}
