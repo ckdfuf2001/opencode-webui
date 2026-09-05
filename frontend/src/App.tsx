@@ -10,7 +10,7 @@ import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
 import { startAutoApprover } from './hooks/useAutoApprovePermissions'
 import { useSettings } from './hooks/useSettings'
-import { isPushSupported, ensurePushPermission, sendPushNotification, openNotificationSettings, getNotificationSettingsHelp } from './lib/notifications'
+import { isPushSupported, ensurePushPermission, sendPushNotification } from './lib/notifications'
 import { useState, useEffect } from 'react'
 import { Button } from './components/ui/button'
 import { Bell } from 'lucide-react'
@@ -30,16 +30,19 @@ const queryClient = new QueryClient({
 })
 
 function PushPrompt() {
-  const { updateSettings } = useSettings()
+  const { preferences, isLoading, updateSettings } = useSettings()
   const [visible, setVisible] = useState(false)
   useEffect(() => {
+    if (isLoading || !preferences) return
     if (!isPushSupported()) return
+    // 이미 앱에서 허용됨 — 배너 표시 안 함
+    if (preferences.pushNotificationEnabled === true) { setVisible(false); return }
     // 처음 접속(default)일 때만 배너 표시 — 이전에 허용/거부한 적 없으면
-    if (Notification.permission !== 'default') return
+    if (Notification.permission !== 'default') { setVisible(false); return }
     if (localStorage.getItem('opencode-push-prompt-dismissed')) return
     // 즉시 표시 (유튜브처럼 첫 방문 시 배너)
     setVisible(true)
-  }, [])
+  }, [isLoading, preferences])
   if (!visible) return null
   return (
     <div className="fixed top-0 left-0 right-0 z-[100] bg-amber-500 border-b border-amber-600 px-4 py-3 flex items-center justify-between gap-3 shadow-lg">
@@ -58,11 +61,6 @@ function PushPrompt() {
           } else if (perm === 'denied') {
             localStorage.setItem('opencode-push-prompt-dismissed','1')
             setVisible(false)
-            const ok = openNotificationSettings()
-            if (!ok) {
-              const { showToast } = await import('./lib/toast')
-              showToast.info(getNotificationSettingsHelp())
-            }
           } else {
             setVisible(false)
           }
