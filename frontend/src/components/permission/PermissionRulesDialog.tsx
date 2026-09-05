@@ -45,6 +45,12 @@ export function PermissionRulesDialog({
   const [pattern, setPattern] = useState('')
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [editingRepoId, setEditingRepoId] = useState<number | null>(null)
+  const [editRepoPermission, setEditRepoPermission] = useState('bash')
+  const [editRepoPattern, setEditRepoPattern] = useState('')
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const [editSessionPermission, setEditSessionPermission] = useState('bash')
+  const [editSessionPattern, setEditSessionPattern] = useState('')
   const [ruleScope, setRuleScope] = useState<'repo' | 'session'>(scope === 'session' ? 'session' : 'repo')
   const [notifyExpanded, setNotifyExpanded] = useState(false)
   const queryClient = useQueryClient()
@@ -184,6 +190,29 @@ export function PermissionRulesDialog({
     refreshAutoApproveData()
     showToast.success('세션 룰 제거됨')
   }
+  const handleSaveRepoEdit = async (id: number) => {
+    if (!editRepoPattern.trim()) { setEditingRepoId(null); return }
+    const orig = rulesFiltered.find(r=>r.id===id)
+    if (!orig || (orig.pattern===editRepoPattern.trim() && orig.permission===editRepoPermission)) { setEditingRepoId(null); return }
+    try {
+      await deleteRule.mutateAsync({ id, repoId: repoId! })
+      await createRule.mutateAsync({ repoId: repoId!, permission: editRepoPermission, pattern: editRepoPattern.trim() })
+      refreshAutoApproveData()
+      showToast.success('수정됨')
+    } catch (e) { showToast.error(e instanceof Error?e.message:'수정 실패') }
+    setEditingRepoId(null)
+  }
+  const handleSaveSessionEdit = (id: string) => {
+    if (!editSessionPattern.trim() || !sessionId) { setEditingSessionId(null); return }
+    const orig = sessionPermRules.find(r=>r.id===id)
+    if (!orig || (orig.pattern===editSessionPattern.trim() && orig.permission===editSessionPermission)) { setEditingSessionId(null); return }
+    deleteSessionPermissionRule(sessionId, id)
+    addSessionPermissionRule(sessionId, { permission: editSessionPermission, pattern: editSessionPattern.trim() })
+    setSessionPermRules(getSessionPermissionRules(sessionId))
+    refreshAutoApproveData()
+    showToast.success('수정됨')
+    setEditingSessionId(null)
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => {
@@ -285,28 +314,38 @@ export function PermissionRulesDialog({
                 레포 룰 없음. 위에서 추가하거나 permission 요청에서 "Allow Always" 클릭.
               </p>
             ) : (
-              <div className="space-y-2 max-h-[20vh] overflow-y-auto pr-1">
+              <div className="space-y-2">
                 {rulesFiltered.map((rule) => (
-                  <div key={rule.id} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card p-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Badge variant="outline" className="text-[10px] shrink-0">
-                        {getPermissionLabel(rule.permission)}
-                      </Badge>
-                      <span className="text-xs font-mono truncate">{rule.pattern}</span>
-                      <Badge variant="secondary" className="text-[10px]">레포</Badge>
+                  {editingRepoId===rule.id ? (
+                    <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-primary bg-card p-2">
+                      <Select value={editRepoPermission} onValueChange={setEditRepoPermission}>
+                        <SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>{PERMISSION_TYPES.map(t=>(<SelectItem key={t} value={t}>{getPermissionLabel(t)}</SelectItem>))}</SelectContent>
+                      </Select>
+                      <Input autoFocus value={editRepoPattern} onChange={e=>setEditRepoPattern(e.target.value)} onBlur={()=>void handleSaveRepoEdit(rule.id)} onKeyDown={e=>{ if(e.key==='Enter') void handleSaveRepoEdit(rule.id); if(e.key==='Escape') setEditingRepoId(null); }} placeholder="pattern" className="font-mono text-xs flex-1 h-7" />
+                      <Button size="sm" className="h-7 px-2" onClick={()=>void handleSaveRepoEdit(rule.id)}>저장</Button>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
-                      onClick={() => void handleDelete(rule)}
-                      disabled={deletingId === rule.id}
-                      title="Remove rule"
-                    >
-                      {deletingId === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
-                    </Button>
-                  </div>
+                  ) : (
+                    <div key={rule.id} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card p-2.5 cursor-pointer hover:border-primary/50" onClick={()=>{ setEditingRepoId(rule.id); setEditRepoPermission(rule.permission); setEditRepoPattern(rule.pattern); }}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Badge variant="outline" className="text-[10px] shrink-0">
+                          {getPermissionLabel(rule.permission)}
+                        </Badge>
+                        <span className="text-xs font-mono truncate">{rule.pattern}</span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={(e)=>{ e.stopPropagation(); void handleDelete(rule); }}
+                        disabled={deletingId === rule.id}
+                        title="Remove rule"
+                      >
+                        {deletingId === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                      </Button>
+                    </div>
+                  )}
                 ))}
               </div>
             )}
@@ -320,27 +359,37 @@ export function PermissionRulesDialog({
             {sessionPermRules.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">세션 전용 룰 없음.</p>
             ) : (
-              <div className="space-y-2 max-h-[20vh] overflow-y-auto pr-1">
+              <div className="space-y-2">
                 {sessionPermRules.map((rule) => (
-                  <div key={rule.id} className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Badge variant="outline" className="text-[10px] shrink-0">
-                        {getPermissionLabel(rule.permission)}
-                      </Badge>
-                      <span className="text-xs font-mono truncate">{rule.pattern}</span>
-                      <Badge className="text-[10px] bg-amber-500">세션</Badge>
+                  {editingSessionId===rule.id ? (
+                    <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-amber-500 bg-amber-50 p-2">
+                      <Select value={editSessionPermission} onValueChange={setEditSessionPermission}>
+                        <SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>{PERMISSION_TYPES.map(t=>(<SelectItem key={t} value={t}>{getPermissionLabel(t)}</SelectItem>))}</SelectContent>
+                      </Select>
+                      <Input autoFocus value={editSessionPattern} onChange={e=>setEditSessionPattern(e.target.value)} onBlur={()=>handleSaveSessionEdit(rule.id)} onKeyDown={e=>{ if(e.key==='Enter') handleSaveSessionEdit(rule.id); if(e.key==='Escape') setEditingSessionId(null); }} placeholder="pattern" className="font-mono text-xs flex-1 h-7" />
+                      <Button size="sm" className="h-7 px-2" onClick={()=>handleSaveSessionEdit(rule.id)}>저장</Button>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
-                      onClick={() => handleDeleteSessionRule(rule.id)}
-                      title="Remove session rule"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
+                  ) : (
+                    <div key={rule.id} className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 cursor-pointer hover:border-amber-500/60" onClick={()=>{ setEditingSessionId(rule.id); setEditSessionPermission(rule.permission); setEditSessionPattern(rule.pattern); }}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Badge variant="outline" className="text-[10px] shrink-0">
+                          {getPermissionLabel(rule.permission)}
+                        </Badge>
+                        <span className="text-xs font-mono truncate">{rule.pattern}</span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={(e)=>{ e.stopPropagation(); handleDeleteSessionRule(rule.id); }}
+                        title="Remove session rule"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  )}
                 ))}
               </div>
             )}
