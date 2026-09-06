@@ -867,7 +867,11 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
             let nextPart: typeof part = part;
             if (delta) {
-              if (existing.type === "text" && typeof existing.text === "string") {
+              if (existing.type === "reasoning" && typeof existing.text === "string") {
+                const pText = (part as { text?: string }).text ?? "";
+                if (pText === existing.text + delta) nextPart = part;
+                else nextPart = { ...existing, text: existing.text + delta } as unknown as typeof part;
+              } else if (existing.type === "text" && typeof existing.text === "string") {
                 const pText = (part as { text?: string }).text ?? "";
                 if (pText === existing.text + delta) nextPart = part;
                 else nextPart = { ...part, text: existing.text + delta } as typeof part;
@@ -932,7 +936,9 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
               }
               const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
               let nextPart: MessageWithParts["parts"][number];
-              if (existing.type === "text") {
+              if (existing.type === "reasoning") {
+                nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+              } else if (existing.type === "text") {
                 nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
               } else if (existing.type === "tool") {
                 const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;

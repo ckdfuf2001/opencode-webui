@@ -21,7 +21,7 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
     const baseOpts: NotificationOptions & { renotify?: boolean } = {
       badge: '/favicon.svg',
       icon: '/favicon.svg',
-      requireInteraction: false,
+      requireInteraction: true,
       silent: false,
       ...opts,
       data: { ...((opts as unknown as { data?: Record<string, unknown> } | undefined)?.data ?? {}), ...(url ? { url } : {}) },
@@ -58,7 +58,7 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
       } catch {}
       n.close()
     }
-    setTimeout(() => { try { n.close() } catch {} }, 7000)
+    setTimeout(() => { try { n.close() } catch {} }, 15000)
   } catch {}
 }
 

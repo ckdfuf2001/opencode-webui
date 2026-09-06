@@ -212,22 +212,10 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       const hasContextPart = hasTextPart || hasOtherVisiblePart || !!allParts?.some((p) => p.type === 'snapshot');
       const noContextNoTool = !hasToolPart && !hasContextPart;
 
-      // showReasoning on이면 무조건 보임: noContextNoTool/answer는 펼쳐서, 그 외는 접힌 상태
+      // showReasoning on이면 무조건 보임: 열려있을 때만 찍히도록 open 유지
       if (showReasoning) {
-        if (reasoningIsAnswer || noContextNoTool) {
-          return (
-            <details open className="border border-border rounded-lg my-2">
-              <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
-                Reasoning
-              </summary>
-              <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
-                {part.text}
-              </div>
-            </details>
-          )
-        }
         return (
-          <details className="border border-border rounded-lg my-2">
+          <details open className="border border-border rounded-lg my-2">
             <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
               Reasoning
             </summary>

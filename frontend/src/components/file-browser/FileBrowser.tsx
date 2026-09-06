@@ -38,15 +38,16 @@ interface FileBrowserProps {
 export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState(basePath)
   const queryClient = useQueryClient()
-  const { data: files } = useQuery<FileInfo, Error>({
-    queryKey: ['files'],
+  const { data: files, isLoading: queryLoading } = useQuery<FileInfo, Error>({
+    queryKey: ['files', currentPath],
     queryFn: async () => {
-      if (!currentPath) return null
-      const response = await fetch(`${API_BASE_URL}/api/files/${currentPath}`)
+      if (!currentPath && currentPath !== '') return null
+      const path = currentPath || basePath || '.'
+      const response = await fetch(`${API_BASE_URL}/api/files/${path}`)
       if (!response.ok) throw new Error('Failed to load files')
       return response.json()
     },
-    enabled: !!currentPath,
+    enabled: true,
     staleTime: 60 * 1000,
   })
   
@@ -359,7 +360,7 @@ useEffect(() => {
             )}
             
             <div className="flex-1 overflow-y-auto min-h-0">
-              {loading ? (
+              {(loading || queryLoading) ? (
                 <div className="flex items-center justify-center h-64">
                   <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
                 </div>
@@ -373,6 +374,7 @@ useEffect(() => {
                   onRename={handleRename}
                   currentPath={currentPath}
                   basePath={basePath}
+                  isLoading={loading || queryLoading}
                 />
               )}
             </div>
@@ -392,7 +394,7 @@ useEffect(() => {
           )}
         </div>
 
-{/* Mobile: File Preview Modal */}
+ {/* Mobile: File Preview Modal */}
         <MobileFilePreviewModal 
           isOpen={isMobile && isPreviewModalOpen}
           onClose={handleCloseModal}
@@ -462,7 +464,7 @@ useEffect(() => {
               />
             </div>
             
-            {loading ? (
+            {(loading || queryLoading) ? (
               <div className="flex items-center justify-center h-64">
                 <RefreshCw className="w-6 h-6 animate-spin" />
               </div>
@@ -477,6 +479,7 @@ useEffect(() => {
                   onRename={handleRename}
                   currentPath={currentPath}
                   basePath={basePath}
+                  isLoading={loading || queryLoading}
                 />
               </div>
             )}

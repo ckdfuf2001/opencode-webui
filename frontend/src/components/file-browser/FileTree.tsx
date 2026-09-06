@@ -226,7 +226,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   )
 }
 
-export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, currentPath = '', basePath = '' }: FileTreeProps) {
+export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, currentPath = '', basePath = '', isLoading = false }: FileTreeProps & { isLoading?: boolean }) {
   const handleGoUp = () => {
     // If currentPath has content and is different from basePath, go up
     if (currentPath !== basePath) {
@@ -251,7 +251,13 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
         </div>
       )}
       
-      {files.length === 0 ? (
+      {isLoading ? (
+        <div className="flex flex-col gap-2 py-4 px-2">
+          <div className="h-4 bg-muted rounded animate-pulse w-3/4" />
+          <div className="h-4 bg-muted rounded animate-pulse w-1/2" />
+          <div className="h-4 bg-muted rounded animate-pulse w-2/3" />
+        </div>
+      ) : files.length === 0 ? (
         <div className="text-center text-muted-foreground py-8">
           No files in this directory
         </div>

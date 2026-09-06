@@ -254,7 +254,9 @@ export function SessionDetail() {
       if (canSound) void playCompletionTick();
       if (canPush) {
         const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
-        const body = sessionId ?? ''
+        const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
+        const sessLabel = (session as unknown as { title?: string })?.title || 'Untitled Session';
+        const body = `${repoLabel} · ${sessLabel}`;
         sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`)
       }
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
@@ -283,24 +285,31 @@ export function SessionDetail() {
       }, 3500);
       return () => clearTimeout(timer);
     }
-  }, [isStreaming, preferences, sessionId]);
+  }, [isStreaming, preferences, sessionId, repo, session, repoId, id]);
 
-  // 권한 요청 도착 시 소리/푸시 (세션별/글로벌 설정 따름)
+  // 권한 요청 도착 시 소리/푸시 (세션별/글로벌 설정 따름) — 자동승인이면 띄우지 않음
   const prevPermissionIdRef = useRef<string | null>(null);
   useEffect(() => {
     const pid = currentPermission?.id ?? null;
     if (pid && pid !== prevPermissionIdRef.current) {
       prevPermissionIdRef.current = pid;
-      if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
-      if (shouldPush(sessionId, preferences ?? {}, repoId)) {
-        const title = '승인이 필요합니다';
-        const body = (currentPermission as unknown as { pattern?: string[]; permission?: string })?.pattern?.[0] ?? (currentPermission as unknown as { permission?: string })?.permission ?? sessionId ?? '';
-        sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
-      }
+      // 자동승인이 처리할 시간을 주고, 그 뒤에도 남아있을 때만 알림
+      setTimeout(() => {
+        if (prevPermissionIdRef.current !== pid) return;
+        if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
+        if (shouldPush(sessionId, preferences ?? {}, repoId)) {
+          const title = '승인이 필요합니다';
+          const pattern = (currentPermission as unknown as { pattern?: string[]; permission?: string })?.pattern?.[0] ?? (currentPermission as unknown as { permission?: string })?.permission ?? '';
+          const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : `repo ${repoId}`;
+          const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
+          const body = `${repoLabel} · ${sessLabel}${pattern ? ` — ${pattern}` : ''}`;
+          sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
+        }
+      }, 700);
     } else if (!pid) {
       prevPermissionIdRef.current = null;
     }
-  }, [currentPermission?.id, preferences, sessionId, repoId, currentPermission]);
+  }, [currentPermission?.id, preferences, sessionId, repoId, currentPermission, repo, session]);
 
   // 질문 요청 도착 시에도 동일하게 알림
   const prevQuestionIdRef = useRef<string | null>(null);
@@ -310,12 +319,15 @@ export function SessionDetail() {
       prevQuestionIdRef.current = qid;
       if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
       if (shouldPush(sessionId, preferences ?? {}, repoId)) {
-        sendPushNotification('질문이 도착했습니다', { body: sessionId ?? '', tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
+        const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
+        const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
+        const body = `${repoLabel} · ${sessLabel}`;
+        sendPushNotification('질문이 도착했습니다', { body, tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
       }
     } else if (!qid) {
       prevQuestionIdRef.current = null;
     }
-  }, [currentQuestion?.id, preferences, sessionId, repoId, currentQuestion]);
+  }, [currentQuestion?.id, preferences, sessionId, repoId, currentQuestion, repo, session, id]);
 
   // billing 문구가 assistant 텍스트에 직접 포함된 경우(스트리밍 본문으로 전달)에도 토스트
   useEffect(() => {
