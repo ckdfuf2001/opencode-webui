@@ -49,6 +49,7 @@ export interface UserPreferences {
   completionSoundEnabled?: boolean
   completionSoundOnCancel?: boolean
   pushNotificationEnabled?: boolean
+  pushNotificationDuration?: number
 }
 
 export interface SettingsResponse {
@@ -121,4 +122,5 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   completionSoundEnabled: true,
   completionSoundOnCancel: true,
   pushNotificationEnabled: false,
+  pushNotificationDuration: 0,
 }

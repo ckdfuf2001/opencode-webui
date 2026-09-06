@@ -55,6 +55,7 @@ export const UserPreferencesSchema = z.object({
   completionSoundEnabled: z.boolean().default(true),
   completionSoundOnCancel: z.boolean().default(true),
   pushNotificationEnabled: z.boolean().default(false),
+  pushNotificationDuration: z.number().int().min(0).max(86400).default(0),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -83,6 +84,7 @@ export const DEFAULT_USER_PREFERENCES = {
   completionSoundEnabled: true,
   completionSoundOnCancel: true,
   pushNotificationEnabled: false,
+  pushNotificationDuration: 0,
 };
 
 export const SettingsResponseSchema = z.object({

@@ -14,14 +14,16 @@ export async function ensurePushPermission(): Promise<NotificationPermission | n
   }
 }
 
-export async function sendPushNotification(title: string, opts?: NotificationOptions, url?: string): Promise<void> {
+export async function sendPushNotification(title: string, opts?: NotificationOptions, url?: string, durationSec?: number): Promise<void> {
   try {
     if (!isPushSupported()) return
     if (Notification.permission !== 'granted') return
+    const duration = typeof durationSec === 'number' ? durationSec : (() => { try { const raw = localStorage.getItem('opencode-push-duration'); if (raw != null) { const n = parseInt(raw, 10); if (!Number.isNaN(n) && n >= 0) return n; } } catch {} return 0 })()
+    const requireInteraction = duration === 0
     const baseOpts: NotificationOptions & { renotify?: boolean } = {
       badge: '/favicon.svg',
       icon: '/favicon.svg',
-      requireInteraction: true,
+      requireInteraction,
       silent: false,
       ...opts,
       data: { ...((opts as unknown as { data?: Record<string, unknown> } | undefined)?.data ?? {}), ...(url ? { url } : {}) },
@@ -36,6 +38,14 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
         ])
         if (ready) {
           await (ready as ServiceWorkerRegistration).showNotification(title, baseOpts)
+          if (duration > 0) {
+            setTimeout(async () => {
+              try {
+                const notifs = await (ready as ServiceWorkerRegistration).getNotifications({ tag: (opts as unknown as { tag?: string })?.tag ?? undefined } as never)
+                notifs.forEach((nn) => { try { nn.close() } catch {} })
+              } catch {}
+            }, duration * 1000)
+          }
           return
         }
       } catch {}
@@ -47,6 +57,14 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
         const reg = await navigator.serviceWorker.register(url, { scope: '/' })
         await navigator.serviceWorker.ready
         await reg.showNotification(title, baseOpts)
+        if (duration > 0) {
+          setTimeout(async () => {
+            try {
+              const notifs = await reg.getNotifications({ tag: (opts as unknown as { tag?: string })?.tag ?? undefined } as never)
+              notifs.forEach((nn) => { try { nn.close() } catch {} })
+            } catch {}
+          }, duration * 1000)
+        }
         return
       } catch {}
     }
@@ -58,7 +76,9 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
       } catch {}
       n.close()
     }
-    setTimeout(() => { try { n.close() } catch {} }, 15000)
+    if (duration > 0) {
+      setTimeout(() => { try { n.close() } catch {} }, duration * 1000)
+    }
   } catch {}
 }
 

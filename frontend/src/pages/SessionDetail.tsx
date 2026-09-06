@@ -260,7 +260,7 @@ export function SessionDetail() {
           const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
           const sessLabel = (session as unknown as { title?: string })?.title || 'Untitled Session';
           const body = `${repoLabel} · ${sessLabel}`;
-          sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`)
+          sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0)
         }
       }, 800);
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
@@ -307,7 +307,7 @@ export function SessionDetail() {
           const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : `repo ${repoId}`;
           const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
           const body = `${repoLabel} · ${sessLabel}${pattern ? ` — ${pattern}` : ''}`;
-          sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
+          sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
         }
       }, 700);
     } else if (!pid) {
@@ -326,7 +326,7 @@ export function SessionDetail() {
         const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
         const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
         const body = `${repoLabel} · ${sessLabel}`;
-        sendPushNotification('질문이 도착했습니다', { body, tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`);
+        sendPushNotification('질문이 도착했습니다', { body, tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
       }
     } else if (!qid) {
       prevQuestionIdRef.current = null;
