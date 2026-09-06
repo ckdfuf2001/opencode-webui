@@ -1,5 +1,5 @@
 export function isPushSupported(): boolean {
-  return typeof window !== 'undefined' && 'Notification' in window
+  return typeof window !== 'undefined' && 'Notification' in window && window.isSecureContext
 }
 
 export async function ensurePushPermission(): Promise<NotificationPermission | null> {
