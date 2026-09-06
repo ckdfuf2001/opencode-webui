@@ -240,9 +240,9 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
           <span className={isError ? "text-red-400" : "text-green-400"}>{isError ? "✗" : "✓"}</span>
           <span className="font-medium">$</span>
           <span className="text-zinc-300">{command}</span>
-          {part.state.time && (
+          {(part.state as unknown as { time?: { start: number; end: number } }).time?.end && (
             <span className="text-muted-foreground text-xs ml-auto">
-              {((part.state.time.end - part.state.time.start) / 1000).toFixed(2)}s
+              {(((part.state as unknown as { time: { start: number; end: number } }).time.end - (part.state as unknown as { time: { start: number; end: number } }).time.start) / 1000).toFixed(2)}s
             </span>
           )}
         </div>
