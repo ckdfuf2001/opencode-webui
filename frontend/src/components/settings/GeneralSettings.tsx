@@ -167,26 +167,24 @@ export function GeneralSettings() {
               disabled={!isPushSupported()}
             />
           </div>
-          {preferences?.pushNotificationEnabled && (
-            <div className="flex items-center gap-2">
-              <Label htmlFor="pushDuration" className="text-xs">유지 시간(초, 0=닫기 전까지)</Label>
-              <Input
-                id="pushDuration"
-                type="number"
-                min={0}
-                max={86400}
-                placeholder="0"
-                className="w-24 h-7 text-xs"
-                value={String(preferences?.pushNotificationDuration ?? 0)}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10)
-                  const n = Number.isNaN(v) ? 0 : Math.max(0, Math.min(86400, v))
-                  updateSettings({ pushNotificationDuration: n })
-                  try { localStorage.setItem('opencode-push-duration', String(n)) } catch {}
-                }}
-              />
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <Label htmlFor="pushDuration" className="text-xs">유지 시간(초, 0=닫기 전까지) — 세션/레포 알림에도 적용</Label>
+            <Input
+              id="pushDuration"
+              type="number"
+              min={0}
+              max={86400}
+              placeholder="0"
+              className="w-24 h-7 text-xs"
+              value={String(preferences?.pushNotificationDuration ?? 0)}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                const n = Number.isNaN(v) ? 0 : Math.max(0, Math.min(86400, v))
+                updateSettings({ pushNotificationDuration: n })
+                try { localStorage.setItem('opencode-push-duration', String(n)) } catch {}
+              }}
+            />
+          </div>
         </div>
 
         <div className="rounded-lg border border-border p-4 space-y-3">
