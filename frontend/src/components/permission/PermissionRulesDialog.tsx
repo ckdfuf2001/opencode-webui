@@ -457,6 +457,15 @@ export function PermissionRulesDialog({
                 </div>
                 <Switch checked={globalCancelOn} onCheckedChange={(v) => updateSettings({ completionSoundOnCancel: v })} />
               </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
+                  {Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
+                </div>
+                <Switch checked={globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v) { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } updateSettings({ pushNotificationEnabled: v }); }} />
+              </div>
             </>
           )}
           {notifyTab==='repo' && repoId!==undefined && (

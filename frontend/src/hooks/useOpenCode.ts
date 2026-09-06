@@ -993,14 +993,23 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
     onSettled: (_data, _error, variables) => {
       if (activeSendControllers.get(variables.sessionID)) activeSendControllers.delete(variables.sessionID)
       queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
-      // keep pendingOptimistic until real user message arrives (handled in useMessages) to avoid flicker
+      // keep pendingOptimistic until real user message with content arrives to avoid flicker (빈 영역 방지)
       setTimeout(() => {
         if (pendingOptimistic.has(variables.sessionID)) {
           const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
-          const hasReal = cur?.some((m) => m.info.role === "user" && !m.info.id.startsWith("optimistic_") && (m.info.time?.created ?? 0) >= (pendingOptimistic.get(variables.sessionID)?.info.time?.created ?? 0) - 5000)
+          const pending = pendingOptimistic.get(variables.sessionID)
+          const pendingText = (pending?.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
+          const hasReal = cur?.some((m) => {
+            if (m.info.role !== "user" || m.info.id.startsWith("optimistic_")) return false
+            if ((m.info.time?.created ?? 0) < (pending?.info.time?.created ?? 0) - 5000) return false
+            const text = (m.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
+            if (!text) return false
+            if (pendingText && text !== pendingText) return false
+            return true
+          })
           if (hasReal) pendingOptimistic.delete(variables.sessionID)
         }
-      }, 8000)
+      }, 4000)
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
@@ -1155,10 +1164,19 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
       setTimeout(() => {
         if (pendingOptimistic.has(variables.sessionID)) {
           const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
-          const hasReal = cur?.some((m) => m.info.role === "user" && !m.info.id.startsWith("optimistic_") && (m.info.time?.created ?? 0) >= (pendingOptimistic.get(variables.sessionID)?.info.time?.created ?? 0) - 5000)
+          const pending = pendingOptimistic.get(variables.sessionID)
+          const pendingText = (pending?.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
+          const hasReal = cur?.some((m) => {
+            if (m.info.role !== "user" || m.info.id.startsWith("optimistic_")) return false
+            if ((m.info.time?.created ?? 0) < (pending?.info.time?.created ?? 0) - 5000) return false
+            const text = (m.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
+            if (!text) return false
+            if (pendingText && text !== pendingText) return false
+            return true
+          })
           if (hasReal) pendingOptimistic.delete(variables.sessionID)
         }
-      }, 8000)
+      }, 4000)
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
