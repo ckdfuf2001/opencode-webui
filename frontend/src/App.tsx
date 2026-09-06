@@ -37,12 +37,15 @@ function PushPrompt() {
     if (!isPushSupported()) return
     // 이미 앱에서 허용됨 — 배너 표시 안 함
     if (preferences.pushNotificationEnabled === true) { setVisible(false); return }
-    // 처음 접속(default)일 때만 배너 표시 — 이전에 허용/거부한 적 없으면
-    if (Notification.permission !== 'default') { setVisible(false); return }
+    // 브라우저에서 이미 허용/거부됨 — 배너 표시 안 함
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'default') { setVisible(false); return }
     if (localStorage.getItem('opencode-push-prompt-dismissed')) return
     // 즉시 표시 (유튜브처럼 첫 방문 시 배너)
     setVisible(true)
   }, [isLoading, preferences])
+  // 렌더 시점에서도 허용 상태면 즉시 숨김 (effect 지연으로 인한 깜빡임 방지)
+  if (preferences?.pushNotificationEnabled === true) return null
+  if (typeof window !== 'undefined' && typeof Notification !== 'undefined' && Notification.permission !== 'default') return null
   if (!visible) return null
   return (
     <div className="fixed top-0 left-0 right-0 z-[100] bg-amber-500 border-b border-amber-600 px-4 py-3 flex items-center justify-between gap-3 shadow-lg">

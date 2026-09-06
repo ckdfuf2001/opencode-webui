@@ -68,7 +68,7 @@ export function triggerTestPush(): void {
 
 export function getNotificationSettingsUrl(): string {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-  if (ua.includes('Edg')) return 'edge://settings/privacy/sitePermissions/allPermissions/popups'
+  if (ua.includes('Edg')) return 'edge://settings/privacy/sitePermissions/allPermissions/notifications'
   if (ua.includes('Chrome') && !ua.includes('Edg')) return 'chrome://settings/content/notifications'
   if (ua.includes('Firefox')) return 'about:preferences#privacy'
   if (ua.includes('Safari') && !ua.includes('Chrome')) return ''
@@ -77,7 +77,7 @@ export function getNotificationSettingsUrl(): string {
 
 export function getNotificationSettingsHelp(): string {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-  if (ua.includes('Edg')) return 'Edge: edge://settings/privacy/sitePermissions/allPermissions/popups 또는 주소창 자물쇠 → 사이트 권한 → 알림'
+  if (ua.includes('Edg')) return 'Edge: edge://settings/privacy/sitePermissions/allPermissions/notifications 또는 주소창 자물쇠 → 사이트 권한 → 알림'
   if (ua.includes('Chrome') && !ua.includes('Edg')) return 'Chrome: chrome://settings/content/notifications 또는 주소창 자물쇠 → 사이트 설정 → 알림'
   if (ua.includes('Firefox')) return 'Firefox: about:preferences#privacy → 권한 → 알림 → 설정'
   if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari: 설정 → 웹사이트 → 알림'
