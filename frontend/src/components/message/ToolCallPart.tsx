@@ -85,7 +85,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
   const containerRef = useRef<HTMLDivElement>(null)
   const ptyPreRef = useRef<HTMLPreElement>(null)
   const isUserBashCommand = part.tool === 'bash' && 
-    part.state.status === 'completed' &&
+    (part.state.status === 'completed' || part.state.status === 'error') &&
     typeof part.state.input?.command === 'string' &&
     userBashCommands.has(part.state.input.command)
   const shouldAutoExpand = isUserBashCommand
@@ -111,7 +111,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
   // PTY streaming for bash while running: only when expanded to save connection
   useEffect(() => {
     if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded) {
-      if (part.tool === 'bash' && part.state.status !== 'running') setPtyOutput(null)
+      if (part.tool === 'bash' && part.state.status === 'completed') setPtyOutput(null)
       return
     }
     const sid = (part as unknown as { sessionID: string }).sessionID
@@ -232,14 +232,15 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
 
   if (isUserBashCommand) {
     const command = part.state.input.command as string
-    const output = part.state.status === 'completed' ? part.state.output : ''
+    const output = (part.state as unknown as { output?: string; error?: string }).output ?? (part.state as unknown as { error?: string }).error ?? ptyOutput ?? ''
+    const isError = part.state.status === 'error'
     return (
       <div ref={outputRef} className="my-2">
         <div className="flex items-center gap-2 text-sm mb-2">
-          <span className="text-green-400">✓</span>
+          <span className={isError ? "text-red-400" : "text-green-400"}>{isError ? "✗" : "✓"}</span>
           <span className="font-medium">$</span>
           <span className="text-zinc-300">{command}</span>
-          {part.state.status === 'completed' && part.state.time && (
+          {part.state.time && (
             <span className="text-muted-foreground text-xs ml-auto">
               {((part.state.time.end - part.state.time.start) / 1000).toFixed(2)}s
             </span>
