@@ -966,6 +966,11 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
             queryClient.invalidateQueries({ queryKey: ["session-status-db"] });
             queryClient.invalidateQueries({ queryKey: ["sessions", opcodeUrl, directory] });
+            // 즉시 Working 마크 해제 — 2s 폴링 대기 없이 캐시에서 직접 제거
+            queryClient.setQueryData(["session-status-db"], (old: unknown) => {
+              if (!Array.isArray(old)) return old;
+              return (old as Array<{ sessionId: string; status: string }>).filter((s) => s.sessionId !== sid);
+            });
           }
         } catch {}
       };

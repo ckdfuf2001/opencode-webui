@@ -246,7 +246,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
           )}
         </div>
         <pre className="bg-accent p-3 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors" 
-             onClick={() => navigator.clipboard.writeText(output)}
+             onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(output); }}
              title="Click to copy output">
           {output}
         </pre>
