@@ -251,14 +251,18 @@ export function SessionDetail() {
     const canSound = shouldPlaySound(sessionId, isCancel, preferences ?? {}, repoId);
     const canPush = shouldPush(sessionId, preferences ?? {}, repoId);
     if (was && (!isStreaming || aborted)) {
-      if (canSound) void playCompletionTick();
-      if (canPush) {
-        const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
-        const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
-        const sessLabel = (session as unknown as { title?: string })?.title || 'Untitled Session';
-        const body = `${repoLabel} · ${sessLabel}`;
-        sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`)
-      }
+      // 첫 채팅 등에서 polling/SSE 경합으로 isStreaming이 잠깐 false→true로 튀는 경우 이중 트리거 방지 — 800ms 디바운스
+      const debounce = setTimeout(() => {
+        if (prevStreamingRef.current) return;
+        if (canSound) void playCompletionTick();
+        if (canPush) {
+          const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
+          const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
+          const sessLabel = (session as unknown as { title?: string })?.title || 'Untitled Session';
+          const body = `${repoLabel} · ${sessLabel}`;
+          sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`)
+        }
+      }, 800);
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
       // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
       // 폴링 지연(2s) 고려해 3.5초 뒤 재확인한다.
@@ -283,7 +287,7 @@ export function SessionDetail() {
           );
         }
       }, 3500);
-      return () => clearTimeout(timer);
+      return () => { clearTimeout(debounce); clearTimeout(timer); };
     }
   }, [isStreaming, preferences, sessionId, repo, session, repoId, id]);
 
