@@ -1,5 +1,5 @@
 import { useState, useMemo, Fragment } from "react";
-import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession } from "@/hooks/useOpenCode";
+import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession, isRecentlyAborted } from "@/hooks/useOpenCode";
 import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -43,7 +43,7 @@ export const SessionList = ({
   const dbBusyIds = useMemo(() => {
     const set = new Set<string>();
     for (const entry of dbStatuses ?? []) {
-      if (entry.status === "busy") set.add(entry.sessionId);
+      if (entry.status === "busy" && !isRecentlyAborted(entry.sessionId)) set.add(entry.sessionId);
     }
     return set;
   }, [dbStatuses]);

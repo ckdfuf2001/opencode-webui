@@ -236,6 +236,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     || /\/session\/[^/]+\/command$/.test(cleanEventPath)
     || /\/session\/[^/]+\/summarize$/.test(cleanEventPath)
     || /\/session\/[^/]+\/shell$/.test(cleanEventPath)
+    || /\/session\/[^/]+\/abort$/.test(cleanEventPath)
     || /\/question\/[^/]+\/reply$/.test(cleanEventPath)
     || /\/permission\/[^/]+\/reply$/.test(cleanEventPath)
 
