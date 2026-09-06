@@ -324,10 +324,13 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       if (realUserArrived) {
         pendingOptimistic.delete(sessionID!)
       }
-      // sending placeholder 정리: 실제 유저 메시지가 도착했거나 서버 데이터에 포함된 경우 제거
+      // sending placeholder는 응답이 화면에 뿌려질 때까지 유지 — user가 서버에 반영되고 assistant 응답이 시작되면 교체
       const hasSendingPlaceholder = result.some((m) => m.info.id.startsWith("optimistic_sending_"))
       if (hasSendingPlaceholder && realUserArrived) {
-        result = result.filter((m) => !m.info.id.startsWith("optimistic_sending_"))
+        const hasAssistantResponse = result.some((m) => m.info.role === "assistant" && !m.info.id.startsWith("optimistic_") && (m.info.time?.created ?? 0) >= (optimistic?.info.time?.created ?? 0) - 1000 && m.parts.length > 0)
+        if (hasAssistantResponse) {
+          result = result.filter((m) => !m.info.id.startsWith("optimistic_sending_"))
+        }
       }
       // pendingOptimistic은 화면에 직접 추가하지 않음 (빈 sending 영역으로 대체했음)
       // Handle optimistic assistant placeholder (for immediate LLM area with correct model)
@@ -978,38 +981,23 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
     onSettled: (_data, _error, variables) => {
       if (activeSendControllers.get(variables.sessionID)) activeSendControllers.delete(variables.sessionID)
       queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
-      // sending placeholder 정리: 종료 후에도 남아있지 않도록
-      const cleanupSending = () => {
-        queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => {
-          if (!old) return old
-          if (!old.some((m) => m.info.id.startsWith("optimistic_sending_"))) return old
-          return old.filter((m) => !m.info.id.startsWith("optimistic_sending_"))
-        })
-      }
-      setTimeout(cleanupSending, 800)
+      // sending은 서버에 정상 반영되어 화면에 뿌려질 때까지 유지 — useMessages의 realUserArrived에서 교체
+      // 실패/타임아웃 대비해 30초 뒤에만 강제 정리 (너무 일찍 지우지 않음)
       setTimeout(() => {
-        if (pendingOptimistic.has(variables.sessionID)) {
-          const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
-          const pending = pendingOptimistic.get(variables.sessionID)
-          if (!pending) { cleanupSending(); return }
-          const real = cur?.find((m) => {
-            if (m.info.role !== "user" || m.info.id.startsWith("optimistic_sending_") || m.info.id.startsWith("optimistic_")) return false
-            const created = m.info.time?.created ?? 0
-            if (Math.abs(created - (pending.info.time?.created ?? 0)) > 60000) return false
-            return true
-          })
-          if (real) {
-            pendingOptimistic.delete(variables.sessionID)
-            cleanupSending()
-          } else {
-            // 서버 반영 없이 종료된 경우 placeholder 제거하고 optimistic도 버림
-            pendingOptimistic.delete(variables.sessionID)
-            cleanupSending()
-          }
-        } else {
-          cleanupSending()
+        if (!pendingOptimistic.has(variables.sessionID)) return
+        const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
+        const pending = pendingOptimistic.get(variables.sessionID)
+        if (!pending) return
+        const real = cur?.find((m) => {
+          if (m.info.role !== "user" || m.info.id.startsWith("optimistic_sending_") || m.info.id.startsWith("optimistic_")) return false
+          if (Math.abs((m.info.time?.created ?? 0) - (pending.info.time?.created ?? 0)) > 60000) return false
+          return true
+        })
+        if (!real) {
+          queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => old?.filter((m) => !m.info.id.startsWith("optimistic_sending_")) ?? old)
+          pendingOptimistic.delete(variables.sessionID)
         }
-      }, 2000)
+      }, 30000)
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
