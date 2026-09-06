@@ -207,10 +207,17 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       if (!part.text?.trim()) {
         if (isLiveEarly) {
           return (
-            <div className="flex items-center gap-2 text-xs text-zinc-500 my-1">
-              <span className="animate-pulse">▋</span>
-              <span className="shine-loading">Reasoning...</span>
-            </div>
+            <details className="border border-border rounded-lg my-2">
+              <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
+                Reasoning
+              </summary>
+              <div className="p-4 bg-muted/50 text-sm text-foreground/80">
+                <span className="flex items-center gap-2 text-xs text-zinc-500">
+                  <span className="animate-pulse">▋</span>
+                  <span className="shine-loading">Reasoning...</span>
+                </span>
+              </div>
+            </details>
           )
         }
         return null
@@ -227,10 +234,10 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       const hasContextPart = hasTextPart || hasOtherVisiblePart || !!allParts?.some((p) => p.type === 'snapshot');
       const noContextNoTool = !hasToolPart && !hasContextPart;
 
-      // showReasoning on이면 무조건 보임: 열려있을 때만 찍히도록 open 유지
+      // showReasoning on이면 항상 접힘으로 보임
       if (showReasoning) {
         return (
-          <details open className="border border-border rounded-lg my-2">
+          <details className="border border-border rounded-lg my-2">
             <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
               Reasoning
             </summary>
