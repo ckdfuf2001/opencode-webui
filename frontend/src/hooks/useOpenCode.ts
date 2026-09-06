@@ -309,18 +309,14 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           .filter(Boolean)
           .join("\n")
         const optimisticSig = getSignature(optimistic.parts as unknown as MessageWithParts["parts"]);
-        // ?�라?�언???�히 모바?? ?�계가 ?�버보다 �?�??�긋?�면 created >= 비교로는
-        // ?�제 ?��? 메시지�?�?찾아 ?��? 카드가 ?�아 duplicated �?보�???
-        // ?�계 ?�차 5�??�용 + ?�그?�처(?�스???�일�? ?�치�??�정?�다.
         realUserArrived = result.some((m) => {
           if (m.info.role !== "user" || m.info.id === optimistic.info.id) return false;
+          if (m.info.id.startsWith("optimistic_sending_")) return false;
           const created = m.info.time?.created ?? 0;
           if (Math.abs(created - optimisticCreated) > 60000) return false;
-          // Relax text check: if time is close, consider arrived even if signature differs slightly (e.g. file mentions)
           if (!optimisticSig) return true;
           const text = getSignature(m.parts as unknown as MessageWithParts["parts"]);
           if (text === optimisticSig) return true;
-          // Fallback: if time close and both are user, consider arrived to avoid duplicate
           if (Math.abs(created - optimisticCreated) < 5000) return true;
           return false;
         });
@@ -328,9 +324,12 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       if (realUserArrived) {
         pendingOptimistic.delete(sessionID!)
       }
-      if (optimistic && !realUserArrived && !result.some((m) => m.info.id === optimistic.info.id)) {
-        result = [...result, optimistic];
+      // sending placeholder 정리: 실제 유저 메시지가 도착했거나 서버 데이터에 포함된 경우 제거
+      const hasSendingPlaceholder = result.some((m) => m.info.id.startsWith("optimistic_sending_"))
+      if (hasSendingPlaceholder && realUserArrived) {
+        result = result.filter((m) => !m.info.id.startsWith("optimistic_sending_"))
       }
+      // pendingOptimistic은 화면에 직접 추가하지 않음 (빈 sending 영역으로 대체했음)
       // Handle optimistic assistant placeholder (for immediate LLM area with correct model)
       const hasOptimisticAssistant = result.some((m) => m.info.id.startsWith('optimistic_assistant_'))
       const hasRealAssistantAfterUser = result.some((m) => m.info.role === 'assistant' && !m.info.id.startsWith('optimistic_') && (m.info.time?.created ?? 0) >= (optimistic?.info.time?.created ?? 0) - 1000)
@@ -772,36 +771,22 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         contentParts,
         optimisticUserID,
       );
-      // 진행 중인 ?�링(2s)???��? 메시지�???��??깜빡?�는 것을 방�?: in-flight fetch 취소
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
       pendingOptimistic.set(sessionID, userMessage);
-      // Create optimistic assistant placeholder with correct model so LLM area shows immediately with right model name
-      const assistantOptimisticID = `optimistic_assistant_${Date.now()}_${Math.random()}`
-      let modelForAssistant = model ?? defaultModel ?? ''
-      if (!modelForAssistant) {
-        try {
-          const lastMsgs = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory])
-          const lastAssistant = [...(lastMsgs ?? [])].reverse().find(m => m.info.role === 'assistant' && (m.info as { modelID?: string }).modelID)
-          if (lastAssistant) {
-            const info = lastAssistant.info as { providerID?: string; modelID?: string }
-            if (info.providerID && info.modelID) modelForAssistant = `${info.providerID}/${info.modelID}`
-          }
-        } catch {}
-      }
-      const [assistantProviderID, assistantModelID] = modelForAssistant.includes('/') ? modelForAssistant.split('/', 2) as [string, string] : [undefined, undefined] as unknown as [string, string]
-      const assistantPlaceholder: MessageWithParts = {
+      // 빈 영역 sending placeholder만 표시 (내 채팅은 서버에 정상 반영될 때 교체)
+      const sendingPlaceholderID = `optimistic_sending_${optimisticUserID}`
+      const sendingPlaceholder: MessageWithParts = {
         info: {
-          id: assistantOptimisticID,
-          role: "assistant" as const,
+          id: sendingPlaceholderID,
+          role: "user" as const,
           sessionID,
-          time: { created: Date.now() + 1 },
-          ...(assistantModelID ? { modelID: assistantModelID, providerID: assistantProviderID } : {}),
+          time: { created: Date.now() },
         } as unknown as MessageWithParts["info"],
         parts: [],
       } as MessageWithParts
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
-        (old) => [...(old || []), userMessage, assistantPlaceholder],
+        (old) => [...(old || []), sendingPlaceholder],
       );
 
       const requestData: SendPromptRequest = {
@@ -993,29 +978,38 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
     onSettled: (_data, _error, variables) => {
       if (activeSendControllers.get(variables.sessionID)) activeSendControllers.delete(variables.sessionID)
       queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
-      // keep pendingOptimistic until real user message with content arrives to avoid flicker (빈 영역 방지)
+      // sending placeholder 정리: 종료 후에도 남아있지 않도록
+      const cleanupSending = () => {
+        queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => {
+          if (!old) return old
+          if (!old.some((m) => m.info.id.startsWith("optimistic_sending_"))) return old
+          return old.filter((m) => !m.info.id.startsWith("optimistic_sending_"))
+        })
+      }
+      setTimeout(cleanupSending, 800)
       setTimeout(() => {
         if (pendingOptimistic.has(variables.sessionID)) {
           const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
           const pending = pendingOptimistic.get(variables.sessionID)
-          const pendingText = (pending?.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
+          if (!pending) { cleanupSending(); return }
           const real = cur?.find((m) => {
-            if (m.info.role !== "user" || m.info.id.startsWith("optimistic_")) return false
-            if ((m.info.time?.created ?? 0) < (pending?.info.time?.created ?? 0) - 5000) return false
-            const text = (m.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
-            if (!text) return false
-            if (pendingText && text !== pendingText) return false
+            if (m.info.role !== "user" || m.info.id.startsWith("optimistic_sending_") || m.info.id.startsWith("optimistic_")) return false
+            const created = m.info.time?.created ?? 0
+            if (Math.abs(created - (pending.info.time?.created ?? 0)) > 60000) return false
             return true
           })
           if (real) {
-            queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => {
-              if (!old) return old
-              return old.map((msg) => msg.info.id === pending!.info.id ? { ...msg, info: { ...msg.info, id: real.info.id } } : msg)
-            })
             pendingOptimistic.delete(variables.sessionID)
+            cleanupSending()
+          } else {
+            // 서버 반영 없이 종료된 경우 placeholder 제거하고 optimistic도 버림
+            pendingOptimistic.delete(variables.sessionID)
+            cleanupSending()
           }
+        } else {
+          cleanupSending()
         }
-      }, 4000)
+      }, 2000)
     },
     onError: (error, variables) => {
       const { sessionID } = variables;
@@ -1067,7 +1061,7 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
       queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory], (old) => {
         if (!old) return old
-        return old.filter((m) => !m.info.id.startsWith("optimistic_"))
+        return old.filter((m) => !m.info.id.startsWith("optimistic_") && !m.info.id.startsWith("optimistic_sending_"))
       })
       pendingOptimistic.delete(sessionID)
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string; pendingPermissions: number }[]>(['session-status-db'])
@@ -1195,7 +1189,7 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
       const formatted = formatServerError(error)
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],
-        (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
+        (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_") && !msg.info.id.startsWith("optimistic_sending_")),
       );
       pendingOptimistic.delete(sessionID)
       if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {

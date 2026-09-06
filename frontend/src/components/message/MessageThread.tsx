@@ -99,6 +99,16 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   return (
     <div className="flex flex-col space-y-2 p-2 overflow-x-hidden">
       {visibleMessages.map((msg) => {
+        if (msg.info.id.startsWith("optimistic_sending_")) {
+          return (
+            <div key={msg.info.id} className="flex justify-center py-3">
+              <span className="text-xs text-muted-foreground flex items-center gap-2 px-3 py-1.5 rounded-full border bg-card/50">
+                <span className="h-3 w-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
+                sending...
+              </span>
+            </div>
+          )
+        }
         const streaming = isMessageStreaming(msg)
         const thinking = isMessageThinking(msg)
         const isAborted = (() => {
@@ -148,7 +158,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 {msg.info.id.startsWith("optimistic_") && (
                   <span className="text-xs text-amber-400 flex items-center gap-1">
                     <span className="h-3 w-3 animate-spin rounded-full border border-amber-400 border-t-transparent" />
-                    전송 중...
+                    sending...
                   </span>
                 )}
                 {streaming && (

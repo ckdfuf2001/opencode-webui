@@ -13,7 +13,7 @@ const MAX_QUEUE_LENGTH = 20
 const MAX_TEXT_LENGTH = 16_000
 const REQUEST_TIMEOUT_MS = 4_000
 const SEND_HEADERS_TIMEOUT_MS = 30_000
-const FLUSH_RETRY_BACKOFF_MS = 15_000
+const FLUSH_RETRY_BACKOFF_MS = 5_000
 
 // In-memory, per-session FIFO of user messages typed while the assistant was
 // still generating. The session status poller (2s) flushes them one at a time
@@ -142,27 +142,12 @@ export function flushReadyQueues(busySessions: Set<string>): void {
   }
 }
 
-/** 채팅 완료 이벤트로 1개 세션의 큐를 발송한다. 대화 전체가 complete(idle) 일 때만 발송한다. */
-export async function flushQueueForSession(sessionId: string, directory?: string): Promise<void> {
+/** 채팅 완료 이벤트로 1개 세션의 큐를 즉시 발송한다. */
+export function flushQueueForSession(sessionId: string): void {
   if (!queues.has(sessionId)) return
   if (inFlight.has(sessionId)) return
   if ((failedUntil.get(sessionId) ?? 0) > Date.now()) return
-  // 제너레이션 1회 끝이 아니라 대화 전체가 idle 일 때만 발송한다.
-  if (directory) {
-    try {
-      const base = opencodeServerManager.getUrl()
-      const res = await fetch(`${base}/session/status?directory=${encodeURIComponent(directory)}`, {
-        headers: ensureServerAuth({}),
-        signal: AbortSignal.timeout(2000),
-      })
-      if (res.ok) {
-        const map = (await res.json()) as Record<string, { type?: string }>
-        if (map[sessionId]?.type === 'busy') return
-      }
-    } catch {}
-  }
-  const base = opencodeServerManager.getUrl()
-  dispatchHead(base, sessionId)
+  dispatchHead(opencodeServerManager.getUrl(), sessionId)
 }
 
 function requeueFront(sessionID: string, chat: QueuedChat): void {

@@ -595,8 +595,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       try {
         const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
         if (m?.[1]) {
-          const dir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
-          setTimeout(() => void flushQueueForSession(m[1]!, dir), 400)
+          setTimeout(() => flushQueueForSession(m[1]!), 150)
         }
       } catch {}
       return new Response(response.body, {
@@ -621,12 +620,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         } finally {
           releaseBusy()
           reader.releaseLock()
-          // 대화 전체가 complete(idle) 일 때만 큐 발송 — 제너레이션 단위 발송 방지
           try {
             const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
             if (m?.[1]) {
-              const dir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
-              setTimeout(() => void flushQueueForSession(m[1]!, dir), 400)
+              setTimeout(() => flushQueueForSession(m[1]!), 150)
             }
           } catch {}
         }

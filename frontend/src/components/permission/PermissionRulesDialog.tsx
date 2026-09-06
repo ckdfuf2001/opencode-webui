@@ -341,11 +341,7 @@ export function PermissionRulesDialog({
               <div className="flex items-center justify-center py-6">
                 <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
               </div>
-            ) : rulesFiltered.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">
-                레포 룰 없음. 위에서 추가하거나 permission 요청에서 "Allow Always" 클릭.
-              </p>
-            ) : (
+            ) : rulesFiltered.length === 0 ? null : (
               <div className="space-y-2">
                 {rulesFiltered.map((rule) => (
                   editingRepoId===rule.id ? (
@@ -388,9 +384,7 @@ export function PermissionRulesDialog({
         {scope === 'session' && (
           <>
             <div className="text-xs font-medium text-muted-foreground mt-2">세션 룰 (로컬) — {sessionPermRules.length}개 {sessionPermRules.length>0 && <span className="font-normal">· 이 세션에서만 동작, 레포보다 우선</span>}</div>
-            {sessionPermRules.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-4">세션 전용 룰 없음.</p>
-            ) : (
+            {sessionPermRules.length === 0 ? null : (
               <div className="space-y-2">
                 {sessionPermRules.map((rule) => (
                   editingSessionId===rule.id ? (

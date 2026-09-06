@@ -9,7 +9,7 @@ export function usePermissionRules(repoId?: number) {
   return useQuery({
     queryKey: ['permission-rules', repoId ?? 'global'],
     queryFn: () => listPermissionRules(repoId),
-    enabled: repoId !== undefined && repoId !== null && !!repoId,
+    enabled: true,
   })
 }
 
