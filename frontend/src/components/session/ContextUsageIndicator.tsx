@@ -19,34 +19,34 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
     return 'text-red-500'
   }
 
-  if (isLoading || !contextLimit) {
+  if (isLoading) {
     return (
       <div className="flex items-center gap-2">
-        <div className="relative w-5 h-5 flex-shrink-0 opacity-50" title="Context limit not available">
+        <div className="relative w-5 h-5 flex-shrink-0 opacity-50" title="Loading context">
           <svg className="w-5 h-5 -rotate-90 transform" viewBox="0 0 24 24">
-            <circle
-              className="text-muted-foreground/30"
-              strokeWidth="2.5"
-              stroke="currentColor"
-              fill="transparent"
-              r="10"
-              cx="12"
-              cy="12"
-            />
-            <circle
-              className="text-muted-foreground"
-              strokeWidth="2.5"
-              strokeDasharray={2 * Math.PI * 10}
-              strokeDashoffset={2 * Math.PI * 10}
-              strokeLinecap="round"
-              stroke="currentColor"
-              fill="transparent"
-              r="10"
-              cx="12"
-              cy="12"
-            />
+            <circle className="text-muted-foreground/30" strokeWidth="2.5" stroke="currentColor" fill="transparent" r="10" cx="12" cy="12" />
+            <circle className="text-muted-foreground" strokeWidth="2.5" strokeDasharray={2 * Math.PI * 10} strokeDashoffset={2 * Math.PI * 10} strokeLinecap="round" stroke="currentColor" fill="transparent" r="10" cx="12" cy="12" />
           </svg>
         </div>
+      </div>
+    )
+  }
+  if (!contextLimit) {
+    return (
+      <div className="flex items-center gap-2 group relative">
+        <div className="relative w-5 h-5 flex-shrink-0 opacity-60 cursor-pointer" title={`${totalTokens.toLocaleString()} tokens - limit not available`} onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)} onClick={() => setIsPinned((v) => !v)}>
+          <svg className="w-5 h-5 -rotate-90 transform" viewBox="0 0 24 24">
+            <circle className="text-muted-foreground/30" strokeWidth="2.5" stroke="currentColor" fill="transparent" r="10" cx="12" cy="12" />
+            <circle className="text-muted-foreground/60" strokeWidth="2.5" strokeDasharray={2 * Math.PI * 10} strokeDashoffset={2 * Math.PI * 10 * 0.85} strokeLinecap="round" stroke="currentColor" fill="transparent" r="10" cx="12" cy="12" />
+          </svg>
+          <span className="absolute inset-0 flex items-center justify-center text-[6px] font-medium text-muted-foreground">?</span>
+        </div>
+        {(isHovered || isPinned) && (
+          <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-2 bg-popover border border-border rounded-md text-xs whitespace-nowrap shadow-xl min-w-[180px] z-[9999]">
+            <div>{totalTokens.toLocaleString()} tokens</div>
+            <div className="text-muted-foreground">Context limit not available</div>
+          </div>
+        )}
       </div>
     )
   }
