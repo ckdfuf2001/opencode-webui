@@ -199,7 +199,22 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'tool':
       return <ToolCallPart part={part} onFileClick={onFileClick} directory={directory} />
     case 'reasoning': {
-      if (!part.text?.trim()) return null
+      const isLiveEarly =
+        messageStreaming &&
+        !!allParts &&
+        allParts.length > 0 &&
+        allParts[allParts.length - 1]?.id === part.id
+      if (!part.text?.trim()) {
+        if (isLiveEarly) {
+          return (
+            <div className="flex items-center gap-2 text-xs text-zinc-500 my-1">
+              <span className="animate-pulse">▋</span>
+              <span className="shine-loading">Reasoning...</span>
+            </div>
+          )
+        }
+        return null
+      }
       // 이 메시지에 text 파트가 없다면 reasoning 이 사실상 답변이다.
       // (big-pickle 등 일부 모델은 답변 전체를 reasoning 으로 출력한다)
       // 접거나 숨기지 않고 본문처럼 바로 보여준다.
