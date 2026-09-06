@@ -292,15 +292,21 @@ export function SessionDetail() {
     }
   }, [isStreaming, preferences, sessionId, repo, session, repoId, id]);
 
-  // 권한 요청 도착 시 소리/푸시 (세션별/글로벌 설정 따름) — 자동승인이면 띄우지 않음
+  // 권한 요청 도착 시 소리/푸시 — 자동승인 대상이면 OS 푸시 생략 (툴 알림 전 선조치)
   const prevPermissionIdRef = useRef<string | null>(null);
   useEffect(() => {
     const pid = currentPermission?.id ?? null;
     if (pid && pid !== prevPermissionIdRef.current) {
       prevPermissionIdRef.current = pid;
-      // 자동승인이 처리할 시간을 주고, 그 뒤에도 남아있을 때만 알림
-      setTimeout(() => {
+      const permSnapshot = currentPermission
+      setTimeout(async () => {
         if (prevPermissionIdRef.current !== pid) return;
+        try {
+          const { isPermissionAutoApprovable } = await import('@/hooks/useAutoApprovePermissions')
+          if (permSnapshot && isPermissionAutoApprovable(permSnapshot as unknown as never)) return
+        } catch {}
+        // 스냅샷 시점과 현재가 다른 권한이면 무시 (이미 자동승인으로 제거된 경우)
+        if (currentPermission?.id !== pid) return
         if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
         if (shouldPush(sessionId, preferences ?? {}, repoId)) {
           const title = '승인이 필요합니다';
@@ -310,7 +316,7 @@ export function SessionDetail() {
           const body = `${repoLabel} · ${sessLabel}${pattern ? ` — ${pattern}` : ''}`;
           sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
         }
-      }, 700);
+      }, 1200);
     } else if (!pid) {
       prevPermissionIdRef.current = null;
     }
@@ -506,6 +512,23 @@ export function SessionDetail() {
       })
     }
   }, [currentPermission, currentQuestion, scrollToBottom])
+
+  // 세션 첫 진입/새로고침 시 맨 위에 있으면 맨 아래로 스크롤
+  const initialScrollDoneRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!messages || messages.length === 0) return
+    if (!visibleMessages || visibleMessages.length === 0) return
+    if (initialScrollDoneRef.current === sessionId) return
+    initialScrollDoneRef.current = sessionId!
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const c = messageContainerRef.current
+        if (!c) return
+        if (c.scrollTop < 120) scrollToBottom()
+      })
+    })
+  }, [messages?.length, visibleMessages, sessionId, scrollToBottom])
+  useEffect(() => { initialScrollDoneRef.current = null }, [sessionId])
 
   useKeyboardShortcuts({
     openModelDialog: () => setModelDialogOpen(true),

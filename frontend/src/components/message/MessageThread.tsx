@@ -94,12 +94,17 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   }
 
   const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1
-  const visibleMessages = editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages
+  const baseVisible = editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages
+  const hasSending = baseVisible.some((m) => m.info.id.startsWith("optimistic_sending_"))
+  const visibleMessages = hasSending
+    ? baseVisible.filter((m) => !(m.info.role === "assistant" && m.parts.length === 0 && !("completed" in m.info.time && (m.info.time as { completed?: number }).completed)))
+    : baseVisible
 
   return (
     <div className="flex flex-col space-y-2 p-2 overflow-x-hidden">
       {visibleMessages.map((msg) => {
-        if (msg.info.id.startsWith("optimistic_sending_")) {
+        const isSendingPlaceholder = msg.info.id.startsWith("optimistic_sending_")
+        if (isSendingPlaceholder && msg.parts.length === 0) {
           return (
             <div key={msg.info.id} className="flex justify-center py-3">
               <span className="text-xs text-muted-foreground flex items-center gap-2 px-3 py-1.5 rounded-full border bg-card/50">

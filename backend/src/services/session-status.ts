@@ -15,8 +15,8 @@ import {
 } from '../db/session-status-queries'
 import { logger } from '../utils/logger'
 
-const POLL_INTERVAL_MS = 2_000
-const FETCH_TIMEOUT_MS = 5_000
+const POLL_INTERVAL_MS = 1_000
+const FETCH_TIMEOUT_MS = 2_500
 const IDLE_ROW_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 interface DirectorySnapshot {

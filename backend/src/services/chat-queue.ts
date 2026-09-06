@@ -11,9 +11,9 @@ export interface QueuedChat {
 
 const MAX_QUEUE_LENGTH = 20
 const MAX_TEXT_LENGTH = 16_000
-const REQUEST_TIMEOUT_MS = 4_000
+const REQUEST_TIMEOUT_MS = 2_000
 const SEND_HEADERS_TIMEOUT_MS = 30_000
-const FLUSH_RETRY_BACKOFF_MS = 5_000
+const FLUSH_RETRY_BACKOFF_MS = 2_000
 
 // In-memory, per-session FIFO of user messages typed while the assistant was
 // still generating. The session status poller (2s) flushes them one at a time
@@ -165,22 +165,7 @@ async function dispatchQueuedChat(
   chat: QueuedChat,
 ): Promise<boolean> {
   const headers = ensureServerAuth({})
-  let directoryParam = encodeURIComponent(getWorkspacePath())
-
-  try {
-    const sessionRes = await fetch(`${base}/session/${sessionID}`, {
-      headers,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
-    if (sessionRes.ok) {
-      const session = await sessionRes.json() as { directory?: string }
-      if (session.directory) {
-        directoryParam = encodeURIComponent(session.directory)
-      }
-    }
-  } catch {
-    // fall back to workspace directory
-  }
+  const directoryParam = encodeURIComponent(getWorkspacePath())
 
   // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다
   const trimmed = chat.text.trim()

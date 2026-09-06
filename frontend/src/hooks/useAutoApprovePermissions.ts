@@ -142,6 +142,24 @@ async function handlePermissionAdd(permission: Permission): Promise<void> {
   }
 }
 
+export function isPermissionAutoApprovable(permission: Permission): boolean {
+  if (permission.sessionID) {
+    const sessRules = getSessionPermissionRules(permission.sessionID) as unknown as PermissionRule[]
+    if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) return true
+  }
+  const normalizeDir = (d: string) => d.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  let candidateRules: PermissionRule[] | undefined
+  if (permission.directory) {
+    const normalized = normalizeDir(permission.directory)
+    for (const [dir, id] of repoByDirectory.entries()) {
+      if (normalizeDir(dir) === normalized) { candidateRules = rulesByRepo.get(id); break }
+    }
+  }
+  if (!candidateRules || candidateRules.length === 0) candidateRules = Array.from(rulesByRepo.values()).flat()
+  if (!candidateRules || candidateRules.length === 0) return false
+  return candidateRules.some(rule => ruleMatches(rule, permission))
+}
+
 export function refreshAutoApproveData(): void {
   void refreshData()
 }
