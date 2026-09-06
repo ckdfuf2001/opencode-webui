@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Plus, ShieldCheck, X } from 'lucide-react'
+import { Loader2, Plus, ShieldCheck, X, Volume2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -71,16 +71,18 @@ export function PermissionRulesDialog({
   })
 
   // 알림/스킬 설정: 전역/레포/세션 계층
-  const { preferences } = useSettings()
+  const { preferences, updateSettings } = useSettings()
   const [sessionSoundOverride, setSessionSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionCancelOverride, setSessionCancelOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionSkillOverride, setSessionSkillOverrideState] = useState<boolean | undefined>(undefined)
   const [repoSoundOverride, setRepoSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [repoCancelOverride, setRepoCancelOverrideState] = useState<boolean | undefined>(undefined)
+  const [notifyTab, setNotifyTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [skillTab, setSkillTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
   useEffect(() => {
     if (!open) return
+    setNotifyTab(scope)
     setSkillTab(scope)
     // repo overrides
     if (repoId !== undefined) {
