@@ -999,7 +999,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
           const pending = pendingOptimistic.get(variables.sessionID)
           const pendingText = (pending?.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
-          const hasReal = cur?.some((m) => {
+          const real = cur?.find((m) => {
             if (m.info.role !== "user" || m.info.id.startsWith("optimistic_")) return false
             if ((m.info.time?.created ?? 0) < (pending?.info.time?.created ?? 0) - 5000) return false
             const text = (m.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
@@ -1007,7 +1007,13 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             if (pendingText && text !== pendingText) return false
             return true
           })
-          if (hasReal) pendingOptimistic.delete(variables.sessionID)
+          if (real) {
+            queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => {
+              if (!old) return old
+              return old.map((msg) => msg.info.id === pending!.info.id ? { ...msg, info: { ...msg.info, id: real.info.id } } : msg)
+            })
+            pendingOptimistic.delete(variables.sessionID)
+          }
         }
       }, 4000)
     },
@@ -1166,7 +1172,7 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
           const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
           const pending = pendingOptimistic.get(variables.sessionID)
           const pendingText = (pending?.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
-          const hasReal = cur?.some((m) => {
+          const real = cur?.find((m) => {
             if (m.info.role !== "user" || m.info.id.startsWith("optimistic_")) return false
             if ((m.info.time?.created ?? 0) < (pending?.info.time?.created ?? 0) - 5000) return false
             const text = (m.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
@@ -1174,7 +1180,13 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
             if (pendingText && text !== pendingText) return false
             return true
           })
-          if (hasReal) pendingOptimistic.delete(variables.sessionID)
+          if (real) {
+            queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => {
+              if (!old) return old
+              return old.map((msg) => msg.info.id === pending!.info.id ? { ...msg, info: { ...msg.info, id: real.info.id } } : msg)
+            })
+            pendingOptimistic.delete(variables.sessionID)
+          }
         }
       }, 4000)
     },

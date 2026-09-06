@@ -145,6 +145,12 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                     {new Date(msg.info.time.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                   </span>
                 )}
+                {msg.info.id.startsWith("optimistic_") && (
+                  <span className="text-xs text-amber-400 flex items-center gap-1">
+                    <span className="h-3 w-3 animate-spin rounded-full border border-amber-400 border-t-transparent" />
+                    전송 중...
+                  </span>
+                )}
                 {streaming && (
                   <span className="text-xs text-blue-400 flex items-center gap-1">
                     <span className="animate-pulse">●</span> <span className="shine-loading">Generating...</span>
