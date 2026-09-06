@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Plus, ShieldCheck, X, Volume2 } from 'lucide-react'
+import { Loader2, Plus, ShieldCheck, X, Volume2, Bell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -14,7 +14,7 @@ import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
-import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule } from '@/lib/notifications'
+import { getSessionOverride, setSessionOverride, getRepoOverride, setRepoOverride, getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule, isPushSupported, ensurePushPermission, getNotificationSettingsUrl } from '@/lib/notifications'
 
 interface PermissionRulesDialogProps {
   open: boolean
@@ -74,14 +74,17 @@ export function PermissionRulesDialog({
   const { preferences, updateSettings } = useSettings()
   const [sessionSoundOverride, setSessionSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionCancelOverride, setSessionCancelOverrideState] = useState<boolean | undefined>(undefined)
+  const [sessionPushOverride, setSessionPushOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionSkillOverride, setSessionSkillOverrideState] = useState<boolean | undefined>(undefined)
   const [repoSoundOverride, setRepoSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [repoCancelOverride, setRepoCancelOverrideState] = useState<boolean | undefined>(undefined)
+  const [repoPushOverride, setRepoPushOverrideState] = useState<boolean | undefined>(undefined)
   const [notifyTab, setNotifyTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [skillTab, setSkillTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
   useEffect(() => {
     if (!open) return
+    setNotifyTab(scope)
     setNotifyTab(scope)
     setSkillTab(scope)
     // repo overrides
@@ -89,20 +92,24 @@ export function PermissionRulesDialog({
       const rov = getRepoOverride(repoId)
       setRepoSoundOverrideState(rov.soundEnabled)
       setRepoCancelOverrideState(rov.soundOnCancelEnabled)
+      setRepoPushOverrideState(rov.pushEnabled)
     } else {
       setRepoSoundOverrideState(undefined)
       setRepoCancelOverrideState(undefined)
+      setRepoPushOverrideState(undefined)
     }
     // session overrides
     if (sessionId) {
       const ov = getSessionOverride(sessionId)
       setSessionSoundOverrideState(ov.soundEnabled)
       setSessionCancelOverrideState(ov.soundOnCancelEnabled)
+      setSessionPushOverrideState(ov.pushEnabled)
       setSessionSkillOverrideState(ov.skillAutoEnabled)
       setSessionPermRules(getSessionPermissionRules(sessionId))
     } else {
       setSessionSoundOverrideState(undefined)
       setSessionCancelOverrideState(undefined)
+      setSessionPushOverrideState(undefined)
       setSessionSkillOverrideState(undefined)
       setSessionPermRules([])
     }
@@ -111,11 +118,13 @@ export function PermissionRulesDialog({
         const rov = getRepoOverride(repoId)
         setRepoSoundOverrideState(rov.soundEnabled)
         setRepoCancelOverrideState(rov.soundOnCancelEnabled)
+        setRepoPushOverrideState(rov.pushEnabled)
       }
       if (sessionId) {
         const ov = getSessionOverride(sessionId)
         setSessionSoundOverrideState(ov.soundEnabled)
         setSessionCancelOverrideState(ov.soundOnCancelEnabled)
+        setSessionPushOverrideState(ov.pushEnabled)
         setSessionSkillOverrideState(ov.skillAutoEnabled)
         setSessionPermRules(getSessionPermissionRules(sessionId))
       }
@@ -132,6 +141,7 @@ export function PermissionRulesDialog({
   // effective values with hierarchy display
   const globalSoundOn = preferences?.completionSoundEnabled !== false
   const globalCancelOn = preferences?.completionSoundOnCancel !== false
+  const globalPushOn = preferences?.pushNotificationEnabled === true
 
   const resetForm = () => {
     setPermission('bash')
@@ -465,6 +475,15 @@ export function PermissionRulesDialog({
                 </div>
                 <Switch checked={repoCancelOverride !== undefined ? repoCancelOverride : globalCancelOn} onCheckedChange={(v) => { const next = v === globalCancelOn ? undefined : v; setRepoOverride(repoId!, { soundOnCancelEnabled: next }); setRepoCancelOverrideState(next); }} />
               </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
+                  {Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
+                </div>
+                <Switch checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const next = v === globalPushOn ? undefined : v; setRepoOverride(repoId!, { pushEnabled: next }); setRepoPushOverrideState(next); }} />
+              </div>
             </>
           )}
           {notifyTab==='session' && sessionId && (
@@ -482,6 +501,15 @@ export function PermissionRulesDialog({
                   <p className="text-xs text-muted-foreground">상위 {(repoCancelOverride ?? globalCancelOn)?'ON':'OFF'} → 적용 {(sessionCancelOverride ?? (repoCancelOverride ?? globalCancelOn))?'ON':'OFF'}{sessionCancelOverride===undefined?' (상속)':''}</p>
                 </div>
                 <Switch checked={sessionCancelOverride !== undefined ? sessionCancelOverride : (repoCancelOverride !== undefined ? repoCancelOverride : globalCancelOn)} onCheckedChange={(v) => { const parent = repoCancelOverride !== undefined ? repoCancelOverride : globalCancelOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { soundOnCancelEnabled: next }); setSessionCancelOverrideState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
+                  {Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
+                </div>
+                <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
               </div>
             </>
             )}
