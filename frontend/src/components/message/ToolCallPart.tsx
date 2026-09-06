@@ -283,9 +283,8 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
 
       {expanded && (
         <div
-          className="bg-card space-y-2 p-2"
-          onClick={() => { if (part.tool === 'bash') setExpanded(!expanded) }}
-          style={part.tool === 'bash' ? { cursor: 'pointer' } : undefined}
+          className="bg-card space-y-2 p-2 cursor-pointer"
+          onClick={() => setExpanded(false)}
         >
           {part.state.status === 'running' && (
             (part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') ? (

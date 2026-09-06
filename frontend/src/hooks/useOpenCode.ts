@@ -964,6 +964,8 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             const sid = (p.sessionID as string) ?? (p.sessionId as string);
             if (sid && sid !== sessionID) return;
             queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+            queryClient.invalidateQueries({ queryKey: ["session-status-db"] });
+            queryClient.invalidateQueries({ queryKey: ["sessions", opcodeUrl, directory] });
           }
         } catch {}
       };

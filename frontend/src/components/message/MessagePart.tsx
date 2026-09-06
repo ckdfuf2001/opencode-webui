@@ -212,14 +212,17 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       const hasContextPart = hasTextPart || hasOtherVisiblePart || !!allParts?.some((p) => p.type === 'snapshot');
       const noContextNoTool = !hasToolPart && !hasContextPart;
 
-      // showReasoning on이면 항상 접힘으로 보임
+      // showReasoning on이면 항상 접힘으로 보임 — bash처럼 어딜 눌러도 닫히고 복사 버튼은 우측
       if (showReasoning) {
         return (
           <details className="border border-border rounded-lg my-2">
-            <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium">
-              Reasoning
+            <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium flex items-center justify-between gap-2">
+              <span>Reasoning</span>
+              <span onClick={(e) => e.preventDefault()}>
+                <CopyButton content={copyableContent} title="Copy reasoning" />
+              </span>
             </summary>
-            <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap">
+            <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap cursor-pointer" onClick={(e) => { const d = (e.currentTarget.closest('details') as HTMLDetailsElement); if (d) d.open = false; }}>
               {part.text}
             </div>
           </details>
