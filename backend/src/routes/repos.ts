@@ -184,6 +184,184 @@ export function createRepoRoutes(database: Database) {
       return c.json({ error: error.message }, 500)
     }
   })
+
+  app.post('/:id/clone', async (c) => {
+    try {
+      const sourceId = parseInt(c.req.param('id'))
+      const body = await c.req.json().catch(() => ({})) as { newLocalPath?: string; newName?: string }
+      const rawName = (body.newLocalPath || body.newName || '').trim()
+      if (!rawName) return c.json({ error: 'newLocalPath is required' }, 400)
+      const newLocalPath = rawName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/\/+$/, '')
+      if (!newLocalPath) return c.json({ error: 'invalid newLocalPath' }, 400)
+      const sourceRepo = db.getRepoById(database, sourceId)
+      if (!sourceRepo) return c.json({ error: 'Source repo not found' }, 404)
+      if (db.getRepoByLocalPath(database, newLocalPath)) return c.json({ error: 'Target path already exists' }, 409)
+      const sourcePath = path.resolve(getReposPath(), path.basename(sourceRepo.localPath))
+      const destPath = path.resolve(getReposPath(), newLocalPath)
+      const fs = await import('fs/promises')
+      try { await fs.access(destPath); return c.json({ error: 'Target directory already exists on disk' }, 409) } catch {}
+      await fs.mkdir(destPath, { recursive: true })
+      // git-tracked only: md, scripts, .opencode, opencode.json
+      let tracked: string[] = []
+      try {
+        const out = await executeCommand(['git', '-C', sourcePath, 'ls-files'], { silent: true })
+        tracked = out.split('\n').map(s => s.trim()).filter(Boolean)
+      } catch {
+        tracked = []
+      }
+      const allowed = tracked.filter(p => {
+        if (p.includes('chat_uploads')) return false
+        if (p.endsWith('.md')) return true
+        if (p.startsWith('scripts/')) return true
+        if (p.startsWith('.opencode/')) return true
+        if (p === 'opencode.json' || p === 'opencode.jsonc') return true
+        if (p.startsWith('opencode/')) return true
+        return false
+      })
+      for (const rel of allowed) {
+        try {
+          const srcFile = path.join(sourcePath, rel)
+          const destFile = path.join(destPath, rel)
+          await fs.mkdir(path.dirname(destFile), { recursive: true })
+          await fs.copyFile(srcFile, destFile)
+        } catch (e) { logger.warn(`clone copy skip ${rel}:`, e) }
+      }
+      // also copy opencode folder if exists but not tracked? ensure at least .opencode if present
+      // copy permission rules and skill setting
+      const newRepo = db.createRepo(database, {
+        localPath: newLocalPath,
+        branch: sourceRepo.branch,
+        defaultBranch: sourceRepo.defaultBranch || 'main',
+        cloneStatus: 'ready',
+        clonedAt: Date.now(),
+        isLocal: true,
+      })
+      try {
+        const { listPermissionRules, createPermissionRule } = await import('../db/permission-rule-queries')
+        const rules = listPermissionRules(database, sourceId)
+        for (const r of rules) {
+          try { createPermissionRule(database, { repoId: newRepo.id, permission: r.permission, pattern: r.pattern }) } catch {}
+        }
+      } catch {}
+      try {
+        const skill = db.getSkillAutoUpdate(database, sourceId)
+        if (skill) db.setSkillAutoUpdate(database, newRepo.id, skill)
+      } catch {}
+      try {
+        const { writeRepoOpenCodeConfig } = await import('../services/default-mcp')
+        writeRepoOpenCodeConfig(newLocalPath)
+      } catch {}
+      const currentBranch = await repoService.getCurrentBranch(newRepo).catch(() => null)
+      return c.json({ ...newRepo, currentBranch })
+    } catch (error: any) {
+      logger.error('Failed to clone repo:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
+
+  app.get('/:id/export', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const sourcePath = path.resolve(getReposPath(), path.basename(repo.localPath))
+      let tracked: string[] = []
+      try {
+        const out = await executeCommand(['git', '-C', sourcePath, 'ls-files'], { silent: true })
+        tracked = out.split('\n').map(s => s.trim()).filter(Boolean)
+      } catch { tracked = [] }
+      const allowed = tracked.filter(p => {
+        if (p.includes('chat_uploads')) return false
+        if (p.endsWith('.md')) return true
+        if (p.startsWith('scripts/')) return true
+        if (p.startsWith('.opencode/')) return true
+        if (p === 'opencode.json' || p === 'opencode.jsonc') return true
+        if (p.startsWith('opencode/')) return true
+        return false
+      })
+      const fs = await import('fs/promises')
+      const files: Record<string, string> = {}
+      for (const rel of allowed) {
+        try {
+          const content = await fs.readFile(path.join(sourcePath, rel), 'utf-8')
+          if (content.length < 500000) files[rel] = content
+        } catch {}
+      }
+      const { listPermissionRules } = await import('../db/permission-rule-queries')
+      const rules = listPermissionRules(database, id)
+      const skillEnabled = db.getSkillAutoUpdate(database, id)
+      return c.json({
+        version: 1,
+        exportedAt: Date.now(),
+        repo: { repoUrl: repo.repoUrl, localPath: repo.localPath, branch: repo.branch, defaultBranch: repo.defaultBranch, isLocal: repo.isLocal },
+        permissionRules: rules.map(r => ({ permission: r.permission, pattern: r.pattern })),
+        skillAutoUpdate: skillEnabled,
+        files,
+      })
+    } catch (error: any) {
+      logger.error('Failed to export repo:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
+
+  app.post('/import', async (c) => {
+    try {
+      const body = await c.req.json() as { newLocalPath?: string; data?: any; exportData?: any }
+      const data = body.data || body.exportData || body
+      const rawName = (body.newLocalPath || data.repo?.localPath || '').trim()
+      const newLocalPath = rawName ? rawName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/\/+$/, '') : `imported-${Date.now()}`
+      if (db.getRepoByLocalPath(database, newLocalPath)) return c.json({ error: 'Target path already exists' }, 409)
+      const destPath = path.resolve(getReposPath(), newLocalPath)
+      const fs = await import('fs/promises')
+      try { await fs.access(destPath); return c.json({ error: 'Target directory already exists on disk' }, 409) } catch {}
+      await fs.mkdir(destPath, { recursive: true })
+      // write files
+      const files = (data.files || {}) as Record<string, string>
+      for (const [rel, content] of Object.entries(files)) {
+        if (typeof content !== 'string') continue
+        if (rel.includes('..')) continue
+        try {
+          const destFile = path.join(destPath, rel)
+          await fs.mkdir(path.dirname(destFile), { recursive: true })
+          await fs.writeFile(destFile, content, 'utf-8')
+        } catch {}
+      }
+      const repoUrl = data.repo?.repoUrl || null
+      const branch = data.repo?.branch || undefined
+      const defaultBranch = data.repo?.defaultBranch || 'main'
+      const isLocal = true
+      // init git if not already a repo and source was git
+      try { await executeCommand(['git', '-C', destPath, 'rev-parse', '--git-dir'], { silent: true }) } catch {
+        try { await executeCommand(['git', 'init'], destPath) } catch {}
+      }
+      const newRepo = db.createRepo(database, {
+        repoUrl: repoUrl || undefined,
+        localPath: newLocalPath,
+        branch,
+        defaultBranch,
+        cloneStatus: 'ready',
+        clonedAt: Date.now(),
+        isLocal,
+      })
+      // restore permission rules
+      try {
+        const { createPermissionRule } = await import('../db/permission-rule-queries')
+        for (const r of (data.permissionRules || [])) {
+          try { createPermissionRule(database, { repoId: newRepo.id, permission: r.permission, pattern: r.pattern }) } catch {}
+        }
+      } catch {}
+      try { if (typeof data.skillAutoUpdate === 'boolean') db.setSkillAutoUpdate(database, newRepo.id, data.skillAutoUpdate) } catch {}
+      try {
+        const { writeRepoOpenCodeConfig } = await import('../services/default-mcp')
+        writeRepoOpenCodeConfig(newLocalPath)
+      } catch {}
+      const currentBranch = await repoService.getCurrentBranch(newRepo).catch(() => null)
+      return c.json({ ...newRepo, currentBranch })
+    } catch (error: any) {
+      logger.error('Failed to import repo:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
   
   app.post('/:id/pull', async (c) => {
     try {

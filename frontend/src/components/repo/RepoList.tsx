@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listRepos, deleteRepo } from "@/api/repos";
+import { listRepos, deleteRepo, importRepo } from "@/api/repos";
 import { listSchedules } from "@/api/schedules";
 import { useSessionStatusMap } from "@/hooks/useOpenCode";
 import { DeleteDialog } from "@/components/ui/delete-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, GitBranch, Search, Trash2, MoreHorizontal, Plus } from "lucide-react";
+import { Loader2, GitBranch, Search, Trash2, MoreHorizontal, Plus, Upload } from "lucide-react";
 import { RepoCard } from "./RepoCard";
+import { showToast } from "@/lib/toast";
 import { clearRepoNotifyData } from "@/lib/notifications";
 
 export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
@@ -85,6 +86,21 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
       setSelectedRepos(new Set());
     },
   });
+
+  const importMut = useMutation({
+    mutationFn: async (file: File) => {
+      const text = await file.text()
+      const json = JSON.parse(text)
+      const name = window.prompt('가져올 레포의 새 디렉토리명:', json.repo?.localPath ? `${json.repo.localPath}-imported` : `imported-${Date.now()}`)
+      if (!name) throw new Error('cancelled')
+      return importRepo(json, name.trim())
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["repos"] })
+      showToast.success('Import 완료')
+    },
+    onError: (e: any) => { if (e.message !== 'cancelled') showToast.error(e.message) },
+  })
 
   if (isLoading && !repos) {
     return (
@@ -195,6 +211,26 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
             Delete ({selectedRepos.size})
           </Button>
           <Button
+            onClick={() => {
+              const inp = document.createElement('input')
+              inp.type = 'file'
+              inp.accept = '.json,application/json'
+              inp.onchange = () => {
+                const f = inp.files?.[0]
+                if (f) importMut.mutate(f)
+              }
+              inp.click()
+            }}
+            size="sm"
+            variant="outline"
+            disabled={importMut.isPending}
+            className="hidden md:flex whitespace-nowrap h-8"
+            title="Export된 JSON으로 레포 가져오기"
+          >
+            {importMut.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Upload className="w-4 h-4 mr-1" />}
+            Import
+          </Button>
+          <Button
             onClick={() => onAddRepo?.()}
             size="sm"
             className="bg-blue-600 hover:bg-blue-700 text-white hidden md:flex whitespace-nowrap h-8"
@@ -220,6 +256,16 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                     : "Select All"}
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem onClick={() => {
+                const inp = document.createElement('input')
+                inp.type = 'file'
+                inp.accept = '.json,application/json'
+                inp.onchange = () => { const f = inp.files?.[0]; if (f) importMut.mutate(f) }
+                inp.click()
+              }}>
+                <Upload className="w-4 h-4 mr-2" />
+                Import
+              </DropdownMenuItem>
               <DropdownMenuItem 
                 onClick={handleBatchDelete}
                 disabled={selectedRepos.size === 0}

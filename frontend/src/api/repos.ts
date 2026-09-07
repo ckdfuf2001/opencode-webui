@@ -169,3 +169,38 @@ export async function applyRepoTrackingAll(): Promise<{ success: boolean; applie
 
   return response.json()
 }
+
+export async function cloneRepo(id: number, newLocalPath: string): Promise<Repo> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/clone`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newLocalPath }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to clone repo')
+  }
+  return response.json()
+}
+
+export async function exportRepo(id: number): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/export`)
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to export repo')
+  }
+  return response.json()
+}
+
+export async function importRepo(exportData: any, newLocalPath?: string): Promise<Repo> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newLocalPath, data: exportData }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to import repo')
+  }
+  return response.json()
+}

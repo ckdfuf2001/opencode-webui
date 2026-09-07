@@ -1,13 +1,16 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert } from "lucide-react";
+import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AddBranchWorkspaceDialog } from "./AddBranchWorkspaceDialog";
 import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
 import { OPENCODE_API_ENDPOINT } from "@/config";
+import { cloneRepo, exportRepo } from "@/api/repos";
+import { cloneRepoNotifyData } from "@/lib/notifications";
+import { showToast } from "@/lib/toast";
 
 interface RepoCardProps {
   repo: {
@@ -44,6 +47,34 @@ export function RepoCard({
   const queryClient = useQueryClient();
   const [addBranchOpen, setAddBranchOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const cloneMut = useMutation({
+    mutationFn: async () => {
+      const newName = window.prompt(`복제할 새 레포 이름 (디렉토리명):`, `${repo.localPath}-copy`)
+      if (!newName) throw new Error('cancelled')
+      const created = await cloneRepo(repo.id, newName.trim())
+      try { cloneRepoNotifyData(repo.id, created.id) } catch {}
+      return created
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["repos"] })
+      showToast.success('레포 복제 완료 (md/scripts/.opencode, 권한 설정 포함, 채팅 제외)')
+    },
+    onError: (e: any) => { if (e.message !== 'cancelled') showToast.error(e.message) },
+  })
+  const exportMut = useMutation({
+    mutationFn: () => exportRepo(repo.id),
+    onSuccess: (data) => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${repo.localPath}-export-${Date.now()}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast.success('Export 다운로드 완료')
+    },
+    onError: (e: any) => showToast.error(e.message),
+  })
   const repoName = repo.repoUrl 
     ? repo.repoUrl.split("/").slice(-1)[0].replace(".git", "")
     : repo.localPath || "Local Repo";
@@ -198,6 +229,27 @@ export function RepoCard({
             >
               <CalendarClock className="w-4 h-4" />
               <span className="text-xs tabular-nums">{scheduleCount}</span>
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={(e) => { e.stopPropagation(); cloneMut.mutate() }}
+              disabled={!isReady || cloneMut.isPending}
+              className="h-10 sm:h-9 w-10 p-0"
+              title="Clone (md/scripts/.opencode만, 채팅 제외)"
+            >
+              {cloneMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={(e) => { e.stopPropagation(); exportMut.mutate() }}
+              disabled={!isReady || exportMut.isPending}
+              className="h-10 sm:h-9 w-10 p-0"
+              title="Export 설정 (JSON)"
+            >
+              {exportMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
             </Button>
 
             <Button
