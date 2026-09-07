@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Loader2, GitBranch, Search, Trash2, MoreHorizontal, Plus } from "lucide-react";
 import { RepoCard } from "./RepoCard";
+import { clearRepoNotifyData } from "@/lib/notifications";
 
 export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const queryClient = useQueryClient();
@@ -65,7 +66,8 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
 
   const deleteMutation = useMutation({
     mutationFn: ({ id, withIndex }: { id: number; withIndex: boolean }) => deleteRepo(id, { withIndex }),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
+      try { clearRepoNotifyData(vars.id) } catch {}
       queryClient.invalidateQueries({ queryKey: ["repos"] });
       setDeleteDialogOpen(false);
       setRepoToDelete(null);
@@ -76,7 +78,8 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
     mutationFn: async ({ ids, withIndex }: { ids: number[]; withIndex: boolean }) => {
       await Promise.all(ids.map((id) => deleteRepo(id, { withIndex })));
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
+      try { for (const id of (vars as { ids: number[] }).ids) clearRepoNotifyData(id) } catch {}
       queryClient.invalidateQueries({ queryKey: ["repos"] });
       setDeleteDialogOpen(false);
       setSelectedRepos(new Set());

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Plus, ShieldCheck, X, Volume2, Bell } from 'lucide-react'
+import { Loader2, Plus, ShieldCheck, X, Volume2, Bell, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -74,17 +74,20 @@ export function PermissionRulesDialog({
   const { preferences, updateSettings } = useSettings()
   const [sessionSoundOverride, setSessionSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionCancelOverride, setSessionCancelOverrideState] = useState<boolean | undefined>(undefined)
+  const [sessionQuestionSound, setSessionQuestionSoundState] = useState<boolean | undefined>(undefined)
   const [sessionPushOverride, setSessionPushOverrideState] = useState<boolean | undefined>(undefined)
+  const [sessionQuestionPush, setSessionQuestionPushState] = useState<boolean | undefined>(undefined)
   const [sessionSkillOverride, setSessionSkillOverrideState] = useState<boolean | undefined>(undefined)
   const [repoSoundOverride, setRepoSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [repoCancelOverride, setRepoCancelOverrideState] = useState<boolean | undefined>(undefined)
+  const [repoQuestionSound, setRepoQuestionSoundState] = useState<boolean | undefined>(undefined)
   const [repoPushOverride, setRepoPushOverrideState] = useState<boolean | undefined>(undefined)
+  const [repoQuestionPush, setRepoQuestionPushState] = useState<boolean | undefined>(undefined)
   const [notifyTab, setNotifyTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [skillTab, setSkillTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
   useEffect(() => {
     if (!open) return
-    setNotifyTab(scope)
     setNotifyTab(scope)
     setSkillTab(scope)
     // repo overrides
@@ -92,24 +95,32 @@ export function PermissionRulesDialog({
       const rov = getRepoOverride(repoId)
       setRepoSoundOverrideState(rov.soundEnabled)
       setRepoCancelOverrideState(rov.soundOnCancelEnabled)
+      setRepoQuestionSoundState(rov.questionSoundEnabled)
       setRepoPushOverrideState(rov.pushEnabled)
+      setRepoQuestionPushState(rov.questionPushEnabled)
     } else {
       setRepoSoundOverrideState(undefined)
       setRepoCancelOverrideState(undefined)
+      setRepoQuestionSoundState(undefined)
       setRepoPushOverrideState(undefined)
+      setRepoQuestionPushState(undefined)
     }
     // session overrides
     if (sessionId) {
       const ov = getSessionOverride(sessionId)
       setSessionSoundOverrideState(ov.soundEnabled)
       setSessionCancelOverrideState(ov.soundOnCancelEnabled)
+      setSessionQuestionSoundState(ov.questionSoundEnabled)
       setSessionPushOverrideState(ov.pushEnabled)
+      setSessionQuestionPushState(ov.questionPushEnabled)
       setSessionSkillOverrideState(ov.skillAutoEnabled)
       setSessionPermRules(getSessionPermissionRules(sessionId))
     } else {
       setSessionSoundOverrideState(undefined)
       setSessionCancelOverrideState(undefined)
+      setSessionQuestionSoundState(undefined)
       setSessionPushOverrideState(undefined)
+      setSessionQuestionPushState(undefined)
       setSessionSkillOverrideState(undefined)
       setSessionPermRules([])
     }
@@ -118,13 +129,17 @@ export function PermissionRulesDialog({
         const rov = getRepoOverride(repoId)
         setRepoSoundOverrideState(rov.soundEnabled)
         setRepoCancelOverrideState(rov.soundOnCancelEnabled)
+        setRepoQuestionSoundState(rov.questionSoundEnabled)
         setRepoPushOverrideState(rov.pushEnabled)
+        setRepoQuestionPushState(rov.questionPushEnabled)
       }
       if (sessionId) {
         const ov = getSessionOverride(sessionId)
         setSessionSoundOverrideState(ov.soundEnabled)
         setSessionCancelOverrideState(ov.soundOnCancelEnabled)
+        setSessionQuestionSoundState(ov.questionSoundEnabled)
         setSessionPushOverrideState(ov.pushEnabled)
+        setSessionQuestionPushState(ov.questionPushEnabled)
         setSessionSkillOverrideState(ov.skillAutoEnabled)
         setSessionPermRules(getSessionPermissionRules(sessionId))
       }
@@ -141,7 +156,9 @@ export function PermissionRulesDialog({
   // effective values with hierarchy display
   const globalSoundOn = preferences?.completionSoundEnabled !== false
   const globalCancelOn = preferences?.completionSoundOnCancel !== false
+  const globalQuestionSoundOn = preferences?.questionSoundEnabled !== false
   const globalPushOn = preferences?.pushNotificationEnabled === true
+  const globalQuestionPushOn = preferences?.questionPushEnabled !== false
 
   const resetForm = () => {
     setPermission('bash')
@@ -453,12 +470,28 @@ export function PermissionRulesDialog({
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
+                  <Label className="text-sm">질문 소리</Label>
+                  <p className="text-xs text-muted-foreground">질문 도착 시 효과음 · 전역 기본값</p>
+                </div>
+                <Switch checked={globalQuestionSoundOn} onCheckedChange={(v) => updateSettings({ questionSoundEnabled: v })} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
                   {Notification.permission === 'denied' && (
                     <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <Switch checked={globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v) { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } updateSettings({ pushNotificationEnabled: v }); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><HelpCircle className="w-3 h-3" /> 질문 OS 알림</Label>
+                  {Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
+                </div>
+                <Switch checked={globalQuestionPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v) { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } updateSettings({ questionPushEnabled: v }); }} />
               </div>
             </>
           )}
@@ -480,12 +513,28 @@ export function PermissionRulesDialog({
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
+                  <Label className="text-sm">질문 소리</Label>
+                  <p className="text-xs text-muted-foreground">전역 {globalQuestionSoundOn?'ON':'OFF'} → 적용 {(repoQuestionSound ?? globalQuestionSoundOn)?'ON':'OFF'}{repoQuestionSound===undefined?' (상속)':''}</p>
+                </div>
+                <Switch checked={repoQuestionSound !== undefined ? repoQuestionSound : globalQuestionSoundOn} onCheckedChange={(v) => { const next = v === globalQuestionSoundOn ? undefined : v; setRepoOverride(repoId!, { questionSoundEnabled: next }); setRepoQuestionSoundState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
                   {Notification.permission === 'denied' && (
                     <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <Switch checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const next = v === globalPushOn ? undefined : v; setRepoOverride(repoId!, { pushEnabled: next }); setRepoPushOverrideState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><HelpCircle className="w-3 h-3" /> 질문 OS 알림</Label>
+                  {Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
+                </div>
+                <Switch checked={repoQuestionPush !== undefined ? repoQuestionPush : globalQuestionPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const next = v === globalQuestionPushOn ? undefined : v; setRepoOverride(repoId!, { questionPushEnabled: next }); setRepoQuestionPushState(next); }} />
               </div>
             </>
           )}
@@ -507,12 +556,28 @@ export function PermissionRulesDialog({
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
+                  <Label className="text-sm">질문 소리</Label>
+                  <p className="text-xs text-muted-foreground">상위 {(repoQuestionSound ?? globalQuestionSoundOn)?'ON':'OFF'} → 적용 {(sessionQuestionSound ?? (repoQuestionSound ?? globalQuestionSoundOn))?'ON':'OFF'}{sessionQuestionSound===undefined?' (상속)':''}</p>
+                </div>
+                <Switch checked={sessionQuestionSound !== undefined ? sessionQuestionSound : (repoQuestionSound !== undefined ? repoQuestionSound : globalQuestionSoundOn)} onCheckedChange={(v) => { const parent = repoQuestionSound !== undefined ? repoQuestionSound : globalQuestionSoundOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { questionSoundEnabled: next }); setSessionQuestionSoundState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
                   {Notification.permission === 'denied' && (
                     <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
                 <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm flex items-center gap-1"><HelpCircle className="w-3 h-3" /> 질문 OS 알림</Label>
+                  {Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
+                </div>
+                <Switch checked={sessionQuestionPush !== undefined ? sessionQuestionPush : (repoQuestionPush !== undefined ? repoQuestionPush : globalQuestionPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const parent = repoQuestionPush !== undefined ? repoQuestionPush : globalQuestionPushOn; const next = v === parent ? undefined : v; setSessionOverride(sessionId!, { questionPushEnabled: next }); setSessionQuestionPushState(next); }} />
               </div>
             </>
             )}

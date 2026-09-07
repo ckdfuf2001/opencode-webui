@@ -138,8 +138,8 @@ const OVERRIDES_KEY = 'opencode-session-notify-overrides'
 const REPO_OVERRIDES_KEY = 'opencode-repo-notify-overrides'
 const SESSION_PERM_KEY = 'opencode-session-permission-rules'
 
-type SessionOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
-type RepoOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
+type SessionOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; questionSoundEnabled?: boolean; pushEnabled?: boolean; questionPushEnabled?: boolean; skillAutoEnabled?: boolean }
+type RepoOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; questionSoundEnabled?: boolean; pushEnabled?: boolean; questionPushEnabled?: boolean; skillAutoEnabled?: boolean }
 type OverridesMap = Record<string, SessionOverride>
 type RepoOverridesMap = Record<string, RepoOverride>
 
@@ -183,7 +183,7 @@ export function setSessionOverride(sessionId: string, patch: SessionOverride): v
   const map = readOverrides()
   const cur = map[sessionId] ?? {}
   const next = { ...cur, ...patch }
-  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
+  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.questionSoundEnabled === undefined && next.pushEnabled === undefined && next.questionPushEnabled === undefined && next.skillAutoEnabled === undefined) {
     delete map[sessionId]
   } else {
     map[sessionId] = next
@@ -200,7 +200,7 @@ export function setRepoOverride(repoId: number | string, patch: RepoOverride): v
   const map = readRepoOverrides()
   const cur = map[String(repoId)] ?? {}
   const next = { ...cur, ...patch }
-  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
+  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.questionSoundEnabled === undefined && next.pushEnabled === undefined && next.questionPushEnabled === undefined && next.skillAutoEnabled === undefined) {
     delete map[String(repoId)]
   } else {
     map[String(repoId)] = next
@@ -324,4 +324,121 @@ export function getEffectiveSkillAuto(repoId: number | string | undefined, sessi
   let effective = repoOv !== undefined ? repoOv : repo
   if (sessOv !== undefined) effective = sessOv
   return { repo, session: sessOv, effective }
+}
+export function shouldPlayQuestionSound(sessionId: string | undefined, prefs: { completionSoundEnabled?: boolean; questionSoundEnabled?: boolean }, repoId?: number | string): boolean {
+  if (prefs.questionSoundEnabled === false) {
+    // global off -> check override
+    if (sessionId) {
+      const ov = getSessionOverride(sessionId)
+      if (ov.questionSoundEnabled === true) { /* fallthrough to master sound */ } else if (ov.questionSoundEnabled === false) return false
+      else {
+        if (repoId !== undefined && repoId !== null) {
+          const rov = getRepoOverride(repoId)
+          if (rov.questionSoundEnabled === true) { /* fallthrough */ } else if (rov.questionSoundEnabled === false) return false
+          else return false
+        } else return false
+      }
+    } else if (repoId !== undefined && repoId !== null) {
+      const rov = getRepoOverride(repoId)
+      if (rov.questionSoundEnabled === true) { /* fallthrough */ } else if (rov.questionSoundEnabled === false) return false
+      else return false
+    } else return false
+  } else {
+    // global on -> check override false
+    if (sessionId) {
+      const ov = getSessionOverride(sessionId)
+      if (ov.questionSoundEnabled === false) return false
+      if (ov.questionSoundEnabled === undefined && repoId !== undefined && repoId !== null) {
+        const rov = getRepoOverride(repoId)
+        if (rov.questionSoundEnabled === false) return false
+      }
+    } else if (repoId !== undefined && repoId !== null) {
+      const rov = getRepoOverride(repoId)
+      if (rov.questionSoundEnabled === false) return false
+    }
+  }
+  return shouldPlaySound(sessionId, false, prefs, repoId)
+}
+export function shouldQuestionPush(sessionId: string | undefined, prefs: { pushNotificationEnabled?: boolean; questionPushEnabled?: boolean }, repoId?: number | string): boolean {
+  if (prefs.questionPushEnabled === false) {
+    if (sessionId) {
+      const ov = getSessionOverride(sessionId)
+      if (ov.questionPushEnabled === true) { /* fallthrough */ } else if (ov.questionPushEnabled === false) return false
+      else {
+        if (repoId !== undefined && repoId !== null) {
+          const rov = getRepoOverride(repoId)
+          if (rov.questionPushEnabled === true) { /* fallthrough */ } else if (rov.questionPushEnabled === false) return false
+          else return false
+        } else return false
+      }
+    } else if (repoId !== undefined && repoId !== null) {
+      const rov = getRepoOverride(repoId)
+      if (rov.questionPushEnabled === true) { /* fallthrough */ } else if (rov.questionPushEnabled === false) return false
+      else return false
+    } else return false
+  } else {
+    if (sessionId) {
+      const ov = getSessionOverride(sessionId)
+      if (ov.questionPushEnabled === false) return false
+      if (ov.questionPushEnabled === undefined && repoId !== undefined && repoId !== null) {
+        const rov = getRepoOverride(repoId)
+        if (rov.questionPushEnabled === false) return false
+      }
+    } else if (repoId !== undefined && repoId !== null) {
+      const rov = getRepoOverride(repoId)
+      if (rov.questionPushEnabled === false) return false
+    }
+  }
+  return shouldPush(sessionId, prefs, repoId)
+}
+export function getEffectiveQuestionSound(repoId: number | string | undefined, sessionId: string | undefined, prefs: { questionSoundEnabled?: boolean }): { global: boolean; repo?: boolean; session?: boolean; effective: boolean } {
+  const global = prefs.questionSoundEnabled !== false
+  const repo = repoId !== undefined ? getRepoOverride(repoId).questionSoundEnabled : undefined
+  const session = sessionId ? getSessionOverride(sessionId).questionSoundEnabled : undefined
+  let effective = global
+  if (repo !== undefined) effective = repo
+  if (session !== undefined) effective = session
+  return { global, repo, session, effective }
+}
+export function getEffectiveQuestionPush(repoId: number | string | undefined, sessionId: string | undefined, prefs: { questionPushEnabled?: boolean }): { global: boolean; repo?: boolean; session?: boolean; effective: boolean } {
+  const global = prefs.questionPushEnabled !== false
+  const repo = repoId !== undefined ? getRepoOverride(repoId).questionPushEnabled : undefined
+  const session = sessionId ? getSessionOverride(sessionId).questionPushEnabled : undefined
+  let effective = global
+  if (repo !== undefined) effective = repo
+  if (session !== undefined) effective = session
+  return { global, repo, session, effective }
+}
+export function clearSessionNotifyData(sessionId: string): void {
+  try {
+    const map = readOverrides()
+    if (map[sessionId]) { delete map[sessionId]; writeOverrides(map) }
+  } catch {}
+  try {
+    const raw = localStorage.getItem(SESSION_PERM_KEY)
+    if (raw) {
+      const m = JSON.parse(raw) as Record<string, unknown>
+      if (m[sessionId]) { delete m[sessionId]; localStorage.setItem(SESSION_PERM_KEY, JSON.stringify(m)) }
+    }
+  } catch {}
+  try { window.dispatchEvent(new CustomEvent('opencode:session-notify-changed', { detail: { sessionId } })); window.dispatchEvent(new CustomEvent('opencode:session-perm-changed', { detail: { sessionId } })) } catch {}
+}
+export function clearRepoNotifyData(repoId: number | string): void {
+  try {
+    const map = readRepoOverrides()
+    const k = String(repoId)
+    if (map[k]) { delete map[k]; writeRepoOverrides(map) }
+  } catch {}
+  try { window.dispatchEvent(new CustomEvent('opencode:repo-notify-changed', { detail: { repoId } })) } catch {}
+}
+export function cloneRepoNotifyData(sourceRepoId: number | string, targetRepoId: number | string): void {
+  try {
+    const map = readRepoOverrides()
+    const src = map[String(sourceRepoId)]
+    if (src) {
+      map[String(targetRepoId)] = { ...src }
+      writeRepoOverrides(map)
+      window.dispatchEvent(new CustomEvent('opencode:repo-notify-changed', { detail: { repoId: targetRepoId } }))
+    }
+  } catch {}
 }

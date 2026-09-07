@@ -48,8 +48,10 @@ export interface UserPreferences {
   recallTopK?: number
   completionSoundEnabled?: boolean
   completionSoundOnCancel?: boolean
+  questionSoundEnabled?: boolean
   pushNotificationEnabled?: boolean
   pushNotificationDuration?: number
+  questionPushEnabled?: boolean
 }
 
 export interface SettingsResponse {
@@ -121,6 +123,8 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   recallTopK: 4,
   completionSoundEnabled: true,
   completionSoundOnCancel: true,
+  questionSoundEnabled: true,
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
+  questionPushEnabled: true,
 }

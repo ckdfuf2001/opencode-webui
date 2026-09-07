@@ -9,6 +9,7 @@ import type {
 import type { paths } from "../api/opencode-types";
 import { showToast } from "@/lib/toast"
 import { markSessionIdle } from "./useSessionActivity"
+import { clearSessionNotifyData } from "@/lib/notifications"
 import { listSessionStatuses } from "@/api/session-status"
 import { stripMemoryRecall } from "@/lib/stripRecall"
 
@@ -576,6 +577,9 @@ export const useDeleteSession = (opcodeUrl: string | null | undefined, directory
     onSuccess: (_data, variables) => {
       const raw = typeof variables === 'object' && !Array.isArray(variables) && variables !== null && 'ids' in (variables as any) ? (variables as any).ids : variables
       const ids = Array.isArray(raw) ? raw : [raw];
+      try {
+        for (const sid of ids) clearSessionNotifyData(String(sid))
+      } catch {}
       const sessionsKey = ["opencode", "sessions", opcodeUrl, directory] as const;
       const current = queryClient.getQueryData<{ id: string }[]>(sessionsKey);
       if (current) {

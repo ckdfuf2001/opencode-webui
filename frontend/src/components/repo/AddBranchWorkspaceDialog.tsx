@@ -45,7 +45,6 @@ export function AddBranchWorkspaceDialog({
   };
 
   const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.stopPropagation();
     setUseWorktree(e.target.checked);
   };
 
@@ -82,17 +81,10 @@ export function AddBranchWorkspaceDialog({
                 onChange={handleCheckboxChange}
                 disabled={mutation.isPending}
                 className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-600 focus:ring-2 cursor-pointer accent-blue-600"
-                onClick={(e) => e.stopPropagation()}
               />
               <label
                 htmlFor="worktree-checkbox"
                 className="text-sm text-zinc-400 cursor-pointer select-none"
-                onClick={(e) => {
-                  e.preventDefault();
-                  if (!mutation.isPending) {
-                    setUseWorktree(!useWorktree);
-                  }
-                }}
               >
                 Create as worktree
               </label>

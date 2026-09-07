@@ -20,7 +20,7 @@ import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
-import { shouldPlaySound, shouldPush, sendPushNotification } from "@/lib/notifications";
+import { shouldPlaySound, shouldPush, shouldPlayQuestionSound, shouldQuestionPush, sendPushNotification } from "@/lib/notifications";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -328,8 +328,8 @@ export function SessionDetail() {
     const qid = currentQuestion?.id ?? null;
     if (qid && qid !== prevQuestionIdRef.current) {
       prevQuestionIdRef.current = qid;
-      if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
-      if (shouldPush(sessionId, preferences ?? {}, repoId)) {
+      if (shouldPlayQuestionSound(sessionId, preferences ?? {}, repoId)) void playCompletionTick();
+      if (shouldQuestionPush(sessionId, preferences ?? {}, repoId)) {
         const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
         const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
         const body = `${repoLabel} · ${sessLabel}`;
@@ -513,20 +513,22 @@ export function SessionDetail() {
     }
   }, [currentPermission, currentQuestion, scrollToBottom])
 
-  // 세션 첫 진입/새로고침 시 맨 위에 있으면 맨 아래로 스크롤
+  // 세션 첫 진입/새로고침 시 항상 맨 아래로 스크롤
   const initialScrollDoneRef = useRef<string | null>(null)
   useEffect(() => {
     if (!messages || messages.length === 0) return
     if (!visibleMessages || visibleMessages.length === 0) return
     if (initialScrollDoneRef.current === sessionId) return
     initialScrollDoneRef.current = sessionId!
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const c = messageContainerRef.current
-        if (!c) return
-        if (c.scrollTop < 120) scrollToBottom()
-      })
-    })
+    // 새로고침 감지 시 브라우저 복원 스크롤을 덮어쓰도록 약간 지연 후 강제 하단
+    const doScroll = () => {
+      const c = messageContainerRef.current
+      if (!c) return
+      scrollToBottom()
+    }
+    requestAnimationFrame(() => requestAnimationFrame(doScroll))
+    const t = setTimeout(doScroll, 250)
+    return () => clearTimeout(t)
   }, [messages?.length, visibleMessages, sessionId, scrollToBottom])
   useEffect(() => { initialScrollDoneRef.current = null }, [sessionId])
 
