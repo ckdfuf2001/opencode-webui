@@ -377,11 +377,13 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     staleTime: 2000,
     refetchInterval: (query) => {
       if (isRecentlyAborted(sessionID!)) return 2000
-      const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
-      if (hasPending) return 500
       const data = query.state.data as MessageListResponse | undefined
-      const last = data?.[data.length - 1]
+      const last = data?.[data.length - 1] as unknown as { info: { role: string; time: Record<string, unknown> }; parts: { type: string }[] } | undefined
+      const hasReasoning = !!last?.parts?.some((p) => p.type === 'reasoning')
+      const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
+      if (hasPending) return hasReasoning ? 500 : 1500
       const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
+      if (hasReasoning && streaming) return 500
       if (streaming) return 1000
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
       const dbBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
