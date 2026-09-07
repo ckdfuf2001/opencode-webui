@@ -158,6 +158,8 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
     }
   }, [isUserBashCommand])
 
+
+
   useEffect(() => {
     if (part.tool === 'bash' && expanded) {
       const el = containerRef.current ?? outputRef.current
@@ -229,6 +231,11 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
 
   const previewText = getPreviewText()
   const isFileTool = ['read', 'write', 'edit'].includes(part.tool)
+  // 실행 중 경과시간 — 부모가 스트리밍·폴링으로 리렌더할 때마다 갱신된다 (새 폴링 없음).
+  const runningStartedAt = (part.state as unknown as { time?: { start?: number } }).time?.start
+  const runningElapsedSec = part.state.status === 'running' && typeof runningStartedAt === 'number'
+    ? Math.max(0, Math.floor((Date.now() - runningStartedAt) / 1000))
+    : null
 
   if (isUserBashCommand) {
     const command = part.state.input.command as string
@@ -279,7 +286,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
         ) : previewText ? (
           <span className="text-zinc-400 text-xs truncate">{previewText}</span>
         ) : null}
-        <span className="text-muted-foreground text-xs ml-auto">({part.state.status})</span>
+        <span className="text-muted-foreground text-xs ml-auto">({part.state.status}{runningElapsedSec !== null ? ` · ${runningElapsedSec}s` : ''})</span>
       </button>
 
       {expanded && (
