@@ -375,14 +375,17 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
     staleTime: 2000,
-    refetchInterval: () => {
+    refetchInterval: (query) => {
       if (isRecentlyAborted(sessionID!)) return 2000
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
-      // 생성 중 전체 목록 폴링은 SSE의 보조로만 둔다. 250메시지/3MB 세션에서 500ms
-      // 폴링은 opencode 이벤트루프를 포화시켜(실측 starttransfer 0.83s) POST 수락·
-      // SSE 방출·MCP 실행을 전부 늦춘다. 첫 내용은 SSE 미지-message fast-pull이
-      // 즉시 당겨오므로 폴링을 늦춰도 체감이 유지된다.
-      if (hasPending) return 1500
+      if (hasPending) return 500
+      const data = query.state.data as MessageListResponse | undefined
+      const last = data?.[data.length - 1]
+      const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
+      if (streaming) return 1000
+      const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
+      const dbBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
+      if (dbBusy) return 1000
       return 2000
     },
   });
