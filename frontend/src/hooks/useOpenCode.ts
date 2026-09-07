@@ -43,17 +43,26 @@ export function abortActiveSend(sessionID: string): void {
 }
 
 /** SSE가 서버에만 있는 새 메시지를 가리키면 가짜 카드를 만들지 않고 목록 refetch를
- *  앞당겨 첫 내용을 빨리 가져온다. 세션당 800ms 쓰로틀로 refetch 폭주를 막는다. */
+ *  앞당겨 첫 내용을 빨리 가져온다. reasoning은 시작 지연이 크므로 300ms,
+ *  그 외는 세션당 800ms 쓰로틀로 refetch 폭주를 막는다. */
 const lastFastPullAt = new Map<string, number>();
+const lastReasoningPullAt = new Map<string, number>();
 function fastPullMessages(
   queryClient: ReturnType<typeof useQueryClient>,
   opcodeUrl: string | null | undefined,
   sessionID: string,
   directory?: string,
+  isReasoning: boolean = false,
 ) {
   const now = Date.now();
-  if (now - (lastFastPullAt.get(sessionID) ?? 0) < 800) return;
-  lastFastPullAt.set(sessionID, now);
+  // reasoning SSE는 별도 300ms 쓰로틀 — 시작 지연 체감이 크므로 더 자주 당긴다
+  if (isReasoning) {
+    if (now - (lastReasoningPullAt.get(sessionID) ?? 0) < 300) return;
+    lastReasoningPullAt.set(sessionID, now);
+  } else {
+    if (now - (lastFastPullAt.get(sessionID) ?? 0) < 800) return;
+    lastFastPullAt.set(sessionID, now);
+  }
   queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
 }
 
@@ -863,7 +872,12 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           if (!old) return old;
           const mid = (part as { messageID: string }).messageID;
           const idx = old.findIndex((m) => m.info.id === mid);
-          if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
+          if (idx === -1) {
+            // reasoning 이벤트는 별도 쓰로틀(300ms)로 더 빨리 당긴다 — 시작 체감 개선
+            const pt = (part as { type?: string }).type
+            fastPullMessages(queryClient, opcodeUrl, sessionID, directory, pt === 'reasoning')
+            return old
+          }
           const msg = old[idx]!;
           let pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
           // Fallback for tool: id may change across updates, match by tool + running status
@@ -912,7 +926,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         queryClient.setQueryData<MessageListResponse>(key, (old) => {
           if (!old) return old;
           const idx = old.findIndex((m) => m.info.id === info.id);
-          if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
+          if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory, true); return old; }
           const next = [...old]; next[idx] = { ...next[idx]!, info }; return next;
         });
       };
