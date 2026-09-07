@@ -129,10 +129,10 @@ async function doWarmUp(
     }
     return true
   }
-  if (isAgentBrowserMcpChildRunning(namespace)) {
+  if (isAgentBrowserMcpChildRunning(namespace, sessionName)) {
     if (agentBrowserWarmState !== 'warm') {
       agentBrowserWarmState = 'warm'
-      logger.info(`Agent-browser MCP child already running (namespace: ${namespace}); skipping warm-up spawn`)
+      logger.info(`Agent-browser MCP child already running (namespace: ${namespace}, session: ${sessionName}); skipping warm-up spawn`)
     }
     return true
   }
@@ -277,12 +277,14 @@ function isAgentBrowserDaemonWarm(binPath: string, namespace: string, session?: 
   }
 }
 
-function isAgentBrowserMcpChildRunning(namespace: string): boolean {
+function isAgentBrowserMcpChildRunning(namespace: string, session?: string): boolean {
   try {
     const marker = `--namespace ${namespace}`
+    const sessionMarker = session ? session : ''
     if (process.platform === 'win32') {
+      const sessionFilter = sessionMarker ? ` -and $_.CommandLine -like '*${sessionMarker}*'` : ''
       const script = [
-        `$ps = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'agent-browser.exe' -and $_.CommandLine -like '*mcp*--namespace ${namespace}*' }`,
+        `$ps = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'agent-browser.exe' -and $_.CommandLine -like '*mcp*--namespace ${namespace}*'` + sessionFilter + ` }`,
         'if ($ps) { Write-Output "1" } else { Write-Output "0" }',
       ].join('\n')
       const output = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
@@ -297,7 +299,7 @@ function isAgentBrowserMcpChildRunning(namespace: string): boolean {
       timeout: 10_000,
       stdio: ['ignore', 'pipe', 'ignore'],
     })
-    return output.split('\n').some((line) => line.includes('agent-browser') && line.includes('mcp') && line.includes(marker))
+    return output.split('\n').some((line) => line.includes('agent-browser') && line.includes('mcp') && line.includes(marker) && (!sessionMarker || line.includes(sessionMarker)))
   } catch {
     return false
   }
