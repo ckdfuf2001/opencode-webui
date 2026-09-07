@@ -467,12 +467,15 @@ for (const repo of listRepos(db)) {
   }
 }
 
-async function warmUpAllAgentBrowserDaemons(): Promise<void> {
-  await warmUpAgentBrowserDaemon(undefined, 'default')
+async function warmUpAllAgentBrowserDaemons(db: Database): Promise<void> {
+  const { repoAgentBrowserSession } = await import('./services/default-mcp')
+  const repos = listRepos(db)
+  // 레포별 세션을 전부 warm-up (default 세션만 하면 repo-xxx 세션이 cold라 후속 호출 타임아웃)
+  await Promise.allSettled(repos.map((r) => warmUpAgentBrowserDaemon(undefined, repoAgentBrowserSession(r.localPath))))
 }
 
 opencodeServerManager.spawnNow()
-warmUpAllAgentBrowserDaemons().catch((error) => {
+warmUpAllAgentBrowserDaemons(db).catch((error) => {
   logger.error('Agent-browser daemon warm-up error:', error)
 })
 
