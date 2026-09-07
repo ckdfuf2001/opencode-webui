@@ -31,3 +31,7 @@ backend/src/generated/
 # Portable builds at repo root
 opencode-webui-portable*.zip
 *.zip
+
+# dev runner runtime state (never commit)
+/logs/
+*.pid

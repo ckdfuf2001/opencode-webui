@@ -1,7 +1,13 @@
+import type { Database } from 'bun:sqlite'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
+
+let queueDb: Database | null = null
+export function setChatQueueDb(db: Database): void {
+  queueDb = db
+}
 
 export interface QueuedChat {
   id: string
@@ -24,6 +30,10 @@ const inFlight = new Set<string>()
 // 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
 // workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.
 const queueDirs = new Map<string, string>()
+// 마지막으로 busy 가 관측된 시각. generation이 끝나는 순간이 아니라 working
+// 표시가 꺼진 뒤에 발송되도록 idle grace를 둔다 (상태 전이·폴러 지연 흡수).
+const lastBusyAt = new Map<string, number>()
+const IDLE_GRACE_MS = 4_000
 
 export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
@@ -99,7 +109,13 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if (!queue || queue.length === 0) return
   const next = queue[0]
   if (!next) return
-  if (await isSessionBusy(sessionID)) return
+  if (await isSessionBusy(sessionID)) {
+    lastBusyAt.set(sessionID, Date.now())
+    return
+  }
+  // generation 종료 직후가 아니라 working 표시가 꺼진 뒤에 발송한다.
+  // 상태 전이·폴러 지연 동안의 플래핑 발송을 막는다.
+  if (Date.now() - (lastBusyAt.get(sessionID) ?? 0) < IDLE_GRACE_MS) return
 
   // await 동안 다른 발송 경로(폴러 / proxy flush)가 이 slot 을 선점했을 수 있으므로 재검사.
   if (inFlight.has(sessionID)) return
@@ -162,9 +178,21 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
  * - 상태를 확인할 수 없으면 보수적으로 busy 로 취급해 발송을 보류한다
  *   (상태 폴러가 idle 전환 후 재시도).
  */
+/** 큐 저장 → DB(session_status) → workspace 순으로 세션의 실제 디렉터리를 구한다.
+ *  프론트가 구버전이라 directory 없이 enqueue해도 DB에서 찾아 오판을 막는다. */
+function resolveQueueDir(sessionID: string): string {
+  const remembered = queueDirs.get(sessionID)
+  if (remembered) return remembered
+  try {
+    const row = queueDb?.query('SELECT directory FROM session_status WHERE session_id = ?').get(sessionID) as { directory?: string } | undefined
+    if (row?.directory) return row.directory
+  } catch {}
+  return getWorkspacePath()
+}
+
 async function isSessionBusy(sessionID: string): Promise<boolean> {
   const base = opencodeServerManager.getUrl()
-  const directory = queueDirs.get(sessionID) ?? getWorkspacePath()
+  const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
   try {
     const res = await fetch(`${base}/session/status?directory=${directoryParam}`, {
@@ -178,6 +206,12 @@ async function isSessionBusy(sessionID: string): Promise<boolean> {
     return true
   }
   if (await hasPendingInteraction(base, directory, sessionID)) return true
+  // DB(session_status)도 본다 — 프론트 Working 배지와 같은 소스라 working이
+  // 끝난 뒤에 발송된다. opencode 순간 장애·전이 구간의 오판을 막는다.
+  try {
+    const row = queueDb?.query('SELECT status FROM session_status WHERE session_id = ?').get(sessionID) as { status?: string } | undefined
+    if (row?.status === 'busy') return true
+  } catch {}
   return false
 }
 
@@ -206,7 +240,10 @@ export function flushReadyQueues(busySessions: Set<string>): void {
   const base = opencodeServerManager.getUrl()
 
   for (const [sessionID] of [...queues]) {
-    if (busySessions.has(sessionID)) continue
+    if (busySessions.has(sessionID)) {
+      lastBusyAt.set(sessionID, Date.now())
+      continue
+    }
     void dispatchHead(base, sessionID)
   }
 }
@@ -235,7 +272,7 @@ async function dispatchQueuedChat(
   chat: QueuedChat,
 ): Promise<boolean> {
   const headers = ensureServerAuth({})
-  const directory = queueDirs.get(sessionID) ?? getWorkspacePath()
+  const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
 
   // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다

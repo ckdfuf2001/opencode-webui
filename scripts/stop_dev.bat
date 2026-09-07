@@ -23,7 +23,7 @@ for %%P in (5002 5001 5173 3000) do (
 )
 
 REM 3) Kill concurrently/node that was started from this folder (cwd in CommandLine)
-powershell -NoProfile -Command "$cwd = (Get-Location).Path; $esc = $cwd -replace '\','\\'; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like '*concurrently*' -and $_.CommandLine -like ('*' + $cwd + '*') } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null; Write-Host ('[DEV STOP] killed concurrently PID ' + $_.ProcessId) }"
+powershell -NoProfile -Command "$cwd = (Get-Location).Path; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like '*concurrently*' -and $_.CommandLine -like ('*' + $cwd + '*') } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null; Write-Host ('[DEV STOP] killed concurrently PID ' + $_.ProcessId) }"
 powershell -NoProfile -Command "$cwd = (Get-Location).Path; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like '*vite*' -and $_.CommandLine -like ('*' + $cwd + '*') } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null; Write-Host ('[DEV STOP] killed vite PID ' + $_.ProcessId) }"
 powershell -NoProfile -Command "$cwd = (Get-Location).Path; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'bun.exe' -and ($_.CommandLine -like '*backend/src/index.ts*' -or $_.ExecutablePath -like ($cwd + '*')) } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null; Write-Host ('[DEV STOP] killed bun PID ' + $_.ProcessId) }"
 

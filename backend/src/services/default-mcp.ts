@@ -140,11 +140,16 @@ async function doWarmUp(
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value
   }
-  delete env.AGENT_BROWSER_SESSION
-  delete env.AGENT_BROWSER_NAMESPACE
-  delete env.AGENT_BROWSER_EXECUTABLE_PATH
-  delete env.AGENT_BROWSER_IDLE_TIMEOUT_MS
-  delete env.AGENT_BROWSER_AUTO_SESSION
+  // warmup으로 띄우는 데몬이 실제 사용 데몬과 같은 설정이어야 한다.
+  // env를 비우면(strip) session 데몬이 다른 설정으로 떠서
+  // "started concurrently with different daemon configuration" 충돌이 난다.
+  if (info.executablePath && existsSync(info.executablePath)) {
+    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
+  }
+  env.AGENT_BROWSER_NAMESPACE = namespace
+  env.AGENT_BROWSER_SESSION = sessionName
+  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
+  env.AGENT_BROWSER_AUTO_SESSION = '1'
   const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],

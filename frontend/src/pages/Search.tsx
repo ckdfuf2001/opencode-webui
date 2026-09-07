@@ -336,7 +336,7 @@ export function Search() {
                           setSelectedHits(next)
                         }} onClick={(e) => e.stopPropagation()} className="ml-1.5 mr-1 h-3.5 w-3.5" />
                         <span className={`px-1.5 py-1 text-[10px] ${isMessage ? 'bg-blue-500/15 text-blue-400' : 'bg-amber-500/15 text-amber-400'} shrink-0`}>{isMessage ? 'chat' : 'git'}</span>
-                        {hit.ts && <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">{new Date(hit.ts).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
+                        {hit.ts && <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">{new Date(hit.ts).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
                         {hit.repoId != null && <span className="px-1.5 py-1 text-[10px] bg-muted/40 truncate max-w-[110px] shrink-0" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</span>}
                         {hit.sessionId && <span className="px-1.5 py-1 text-[10px] bg-muted/30 truncate max-w-[90px] shrink-0" title={hit.sessionId}>session {hit.sessionId.slice(0,8)}</span>}
                         {!isMessage && hit.sha && <code className="px-1.5 py-1 text-[10px] bg-muted/40 shrink-0">{hit.sha.slice(0,7)}</code>}

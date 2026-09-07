@@ -374,19 +374,14 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     gcTime: 10 * 60 * 1000,
     placeholderData: (previousData) => previousData,
     staleTime: 2000,
-    refetchInterval: (query) => {
+    refetchInterval: () => {
       if (isRecentlyAborted(sessionID!)) return 2000
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
-      if (hasPending) return 500
-      const data = query.state.data as MessageListResponse | undefined
-      const last = data?.[data.length - 1]
-      const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
-      if (streaming) return 1000
-      // 세션이 busy(생성 중)면 다른 세션/큐 발송 내용이 뜰 때까지 느린 2s 폴링으로
-      // 대기하지 않도록 500ms로 당긴다.
-      const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
-      const dbBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
-      if (dbBusy) return 500
+      // 생성 중 전체 목록 폴링은 SSE의 보조로만 둔다. 250메시지/3MB 세션에서 500ms
+      // 폴링은 opencode 이벤트루프를 포화시켜(실측 starttransfer 0.83s) POST 수락·
+      // SSE 방출·MCP 실행을 전부 늦춘다. 첫 내용은 SSE 미지-message fast-pull이
+      // 즉시 당겨오므로 폴링을 늦춰도 체감이 유지된다.
+      if (hasPending) return 1500
       return 2000
     },
   });
@@ -470,9 +465,11 @@ function reconcileOrphanedStreams(
     changed = true;
     const parts = msg.parts.map((part) => {
       if (part.type === "tool" && part.state?.status === "running") {
+        // input/command/output은 유지하고 상태만 error로 뒤집는다.
+        // 통째로 갈아엎으면 중단된 툴의 명령이 화면에서 사라진다.
         return {
           ...part,
-          state: { status: "error" as const, error: "Run was interrupted" },
+          state: { ...part.state, status: "error" as const, error: "Run was interrupted" },
         } as MessageWithParts["parts"][number];
       }
       return part;
@@ -1118,7 +1115,9 @@ function markSessionMessagesCompleted(
     if (msg.parts.length === 0) continue
     const patchedParts = msg.parts.map((part) => {
       if ((part as { type?: string }).type === 'tool' && (part as { state?: { status?: string } }).state?.status === 'running') {
-        return { ...part, state: { status: 'error' as const, error: 'Run was interrupted' } } as typeof part
+        // input/command/output 유지 — 상태만 error로 (통째로 갈아엎으면 명령이 사라진다)
+        const st = (part as { state?: Record<string, unknown> }).state ?? {}
+        return { ...part, state: { ...st, status: 'error' as const, error: 'Run was interrupted' } } as typeof part
       }
       return part
     })

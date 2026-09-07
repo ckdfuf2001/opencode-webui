@@ -41,6 +41,7 @@ import { cleanupOrphanedDirectories } from './services/repo'
 import { listRepos } from './db/queries'
 import { openApiSpec } from './services/api-docs'
 import { proxyRequest, setProxyDb } from './services/proxy'
+import { setChatQueueDb } from './services/chat-queue'
 import { logger } from './utils/logger'
 import { 
   getWorkspacePath, 
@@ -112,6 +113,7 @@ app.use('/*', cors({
 
 const db = initializeDatabase(DB_PATH)
 setProxyDb(db)
+setChatQueueDb(db)
 
 void migrateCommandRunsToFiles(db).catch((error) => {
   logger.error('Command runs file migration failed (will retry on next boot):', error)

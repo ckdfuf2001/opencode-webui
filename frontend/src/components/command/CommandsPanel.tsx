@@ -1013,7 +1013,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
                     </span>
                     {h.ts && (
                       <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">
-                        {new Date(h.ts).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        {new Date(h.ts).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </span>
                     )}
                     {h.repoId != null && (
