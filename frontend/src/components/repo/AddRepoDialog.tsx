@@ -79,12 +79,12 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[500px] bg-[#141414] border-[#2a2a2a]">
-        <DialogHeader className="flex flex-row items-center justify-between space-y-0">
-          <DialogTitle className="text-xl bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader className="flex flex-row items-center justify-between space-y-0 pr-8">
+          <DialogTitle>
             Add Repository
           </DialogTitle>
-          <Button type="button" variant="outline" size="sm" className="h-7 text-xs border-[#2a2a2a] text-zinc-400 hover:bg-[#1a1a1a] hover:text-white" onClick={() => {
+          <Button type="button" variant="outline" size="sm" className="h-7 text-xs shrink-0" onClick={() => {
             const inp = document.createElement('input')
             inp.type = 'file'
             inp.accept = '.json,application/json'
@@ -95,26 +95,26 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
           </Button>
         </DialogHeader>
         {importData && (
-          <div className="mt-3 p-3 rounded-md border border-blue-500/30 bg-blue-500/10 space-y-2">
-            <p className="text-xs text-zinc-300">Export: <span className="font-mono text-white">{importData.repo?.localPath || 'unknown'}</span> — 새 이름 지정</p>
+          <div className="mt-3 p-3 rounded-md border border-border bg-muted/50 space-y-2">
+            <p className="text-xs text-muted-foreground">Export: <span className="font-mono text-foreground">{importData.repo?.localPath || 'unknown'}</span> — 새 이름 지정</p>
             <Input
               placeholder="새 디렉토리명"
               value={importName}
               onChange={(e) => setImportName(e.target.value)}
-              className="bg-[#1a1a1a] border-[#2a2a2a] text-white h-8 text-sm"
+              className="h-8 text-sm"
             />
             <div className="flex gap-2">
-              <Button size="sm" className="flex-1 h-7 bg-blue-600 hover:bg-blue-700" disabled={!importName.trim() || importMut.isPending} onClick={() => importMut.mutate({ data: importData, name: importName })}>
+              <Button size="sm" className="flex-1 h-7" disabled={!importName.trim() || importMut.isPending} onClick={() => importMut.mutate({ data: importData, name: importName })}>
                 {importMut.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null} 가져오기
               </Button>
-              <Button size="sm" variant="outline" className="h-7 border-[#2a2a2a]" onClick={() => { setImportData(null); setImportName('') }}>취소</Button>
+              <Button size="sm" variant="outline" className="h-7" onClick={() => { setImportData(null); setImportName('') }}>취소</Button>
             </div>
-            {importMut.isError && <p className="text-xs text-red-400">{(importMut.error as Error).message}</p>}
+            {importMut.isError && <p className="text-xs text-destructive">{(importMut.error as Error).message}</p>}
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4 mt-4">
           <div className="space-y-2">
-            <label className="text-sm text-zinc-400">Repository Type</label>
+            <label className="text-sm text-muted-foreground">Repository Type</label>
             <div className="flex gap-4">
               <label className="flex items-center space-x-2 cursor-pointer">
                 <input
@@ -124,9 +124,8 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
                   checked={repoType === 'remote'}
                   onChange={(e) => setRepoType(e.target.value as 'remote')}
                   disabled={mutation.isPending}
-                  className="text-blue-600 bg-[#1a1a1a] border-[#2a2a2a]"
                 />
-                <span className="text-sm text-white">Remote Repository</span>
+                <span className="text-sm">Remote Repository</span>
               </label>
               <label className="flex items-center space-x-2 cursor-pointer">
                 <input
@@ -136,52 +135,48 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
                   checked={repoType === 'local'}
                   onChange={(e) => setRepoType(e.target.value as 'local')}
                   disabled={mutation.isPending}
-                  className="text-blue-600 bg-[#1a1a1a] border-[#2a2a2a]"
                 />
-                <span className="text-sm text-white">Local Repository</span>
+                <span className="text-sm">Local Repository</span>
               </label>
             </div>
           </div>
 
           {repoType === 'remote' ? (
             <div className="space-y-2">
-              <label className="text-sm text-zinc-400">Repository URL</label>
+              <label className="text-sm text-muted-foreground">Repository URL</label>
               <Input
                 autoFocus
                 placeholder="https://github.com/user/repo.git"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 disabled={mutation.isPending}
-                className="bg-[#1a1a1a] border-[#2a2a2a] text-white placeholder:text-zinc-500"
               />
             </div>
           ) : (
             <div className="space-y-2">
-              <label className="text-sm text-zinc-400">Local Path</label>
+              <label className="text-sm text-muted-foreground">Local Path</label>
               <Input
                 autoFocus
                 placeholder="my-local-project"
                 value={localPath}
                 onChange={(e) => setLocalPath(e.target.value)}
                 disabled={mutation.isPending}
-                className="bg-[#1a1a1a] border-[#2a2a2a] text-white placeholder:text-zinc-500"
               />
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 Directory name will be created in the repos folder
               </p>
             </div>
           )}
           
           <div className="space-y-2">
-            <label className="text-sm text-zinc-400">Branch</label>
+            <label className="text-sm text-muted-foreground">Branch</label>
             <Input
               placeholder="Optional - uses default if empty"
               value={branch}
               onChange={(e) => setBranch(e.target.value)}
               disabled={mutation.isPending}
-              className="bg-[#1a1a1a] border-[#2a2a2a] text-white placeholder:text-zinc-500"
             />
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-muted-foreground">
               {branch 
                 ? repoType === 'remote' 
                   ? `Clones repository directly to '${branch}' branch`
@@ -196,7 +191,7 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
           <Button 
             type="submit" 
             disabled={(!repoUrl && repoType === 'remote') || (!localPath && repoType === 'local') || mutation.isPending}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+            className="w-full"
           >
             {mutation.isPending ? (
               <>
@@ -208,7 +203,7 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
             )}
           </Button>
           {mutation.isError && (
-            <p className="text-sm text-red-400">
+            <p className="text-sm text-destructive">
               {mutation.error.message}
             </p>
           )}
