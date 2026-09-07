@@ -20,7 +20,7 @@ import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
-import { shouldPlaySound, shouldPush, shouldPlayQuestionSound, shouldQuestionPush, sendPushNotification } from "@/lib/notifications";
+import { shouldPlaySound, shouldPush, sendPushNotification } from "@/lib/notifications";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -328,8 +328,8 @@ export function SessionDetail() {
     const qid = currentQuestion?.id ?? null;
     if (qid && qid !== prevQuestionIdRef.current) {
       prevQuestionIdRef.current = qid;
-      if (shouldPlayQuestionSound(sessionId, preferences ?? {}, repoId)) void playCompletionTick();
-      if (shouldQuestionPush(sessionId, preferences ?? {}, repoId)) {
+      if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
+      if (shouldPush(sessionId, preferences ?? {}, repoId)) {
         const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
         const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
         const body = `${repoLabel} · ${sessLabel}`;

@@ -54,10 +54,8 @@ export const UserPreferencesSchema = z.object({
   recallTopK: z.number().int().min(1).max(10).default(4),
   completionSoundEnabled: z.boolean().default(true),
   completionSoundOnCancel: z.boolean().default(true),
-  questionSoundEnabled: z.boolean().default(true),
   pushNotificationEnabled: z.boolean().default(false),
   pushNotificationDuration: z.number().int().min(0).max(86400).default(0),
-  questionPushEnabled: z.boolean().default(true),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -85,10 +83,8 @@ export const DEFAULT_USER_PREFERENCES = {
   recallTopK: 4,
   completionSoundEnabled: true,
   completionSoundOnCancel: true,
-  questionSoundEnabled: true,
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
-  questionPushEnabled: true,
 };
 
 export const SettingsResponseSchema = z.object({
