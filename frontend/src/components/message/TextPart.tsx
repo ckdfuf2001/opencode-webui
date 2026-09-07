@@ -1,5 +1,5 @@
 import React from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
@@ -45,6 +45,7 @@ function CodeBlock({ children, className, ...props }: CodeBlockProps) {
       setTimeout(() => setCopied(false), 2000)
     } catch (error) {
       console.error('Failed to copy code:', error)
+      toast.error('코드 복사에 실패했습니다')
     }
   }
 
@@ -65,6 +66,74 @@ function CodeBlock({ children, className, ...props }: CodeBlockProps) {
 }
 
 export function TextPart({ part }: TextPartProps) {
+  // 렌더러 정의는 mount당 1회 고정한다. inline 정의는 매 렌더마다 새 컴포넌트
+  // 타입이 되어 스트리밍 델타마다 마크다운 전체가 리마운트되고, 코드블록 복사
+  // 버튼 상태·드래그 선택이 날아간다 ("카피가 제대로 안됨"의 원인).
+  const components = React.useMemo<Components>(() => ({
+    code({ className, children, ...props }) {
+      const isInline = !className || !className.includes('language-')
+      if (isInline) {
+        return (
+          <code className={className || "bg-accent px-1.5 py-0.5 rounded text-sm text-foreground"} {...props}>
+            {children}
+          </code>
+        )
+      }
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      )
+    },
+    pre({ children }) {
+      return (
+        <CodeBlock>
+          {children}
+        </CodeBlock>
+      )
+    },
+    p({ children }) {
+      return <p className="text-foreground my-0.5 md:my-1">{children}</p>
+    },
+    strong({ children }) {
+      return <strong className="font-semibold text-foreground">{children}</strong>
+    },
+    ul({ children }) {
+      return <ul className="list-disc text-foreground my-0.5 md:my-1">{children}</ul>
+    },
+    ol({ children }) {
+      return <ol className="list-decimal text-foreground my-0.5 md:my-1">{children}</ol>
+    },
+    li({ children }) {
+      return <li className="text-foreground my-0.5 md:my-1">{children}</li>
+    },
+    a({ children, href }) {
+      const isSessionLink = typeof href === 'string' && href.startsWith('?session=')
+      if (isSessionLink) {
+        const session = href!.slice('?session='.length)
+        return (
+          <a
+            href={href}
+            onClick={(e) => {
+              e.preventDefault()
+              navigator.clipboard.writeText(session).then(() => {
+                toast.success(`Copied session: ${session}`)
+              }).catch(() => {
+                toast.info(`Session: ${session}`)
+              })
+              // Also dispatch to fill chat input if present
+              window.dispatchEvent(new CustomEvent('agent-browser:fill-session', { detail: session }))
+            }}
+            className="text-primary underline hover:text-primary/80 cursor-pointer"
+          >
+            {children}
+          </a>
+        )
+      }
+      return <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:text-primary/80">{children}</a>
+    }
+  }), [])
+
   if (!part.text || part.text.trim() === '') {
     return (
       <div className="text-muted-foreground italic text-sm">
@@ -78,70 +147,7 @@ export function TextPart({ part }: TextPartProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, rehypeRaw]}
-        components={{
-          code({ className, children, ...props }) {
-            const isInline = !className || !className.includes('language-')
-            if (isInline) {
-              return (
-                <code className={className || "bg-accent px-1.5 py-0.5 rounded text-sm text-foreground"} {...props}>
-                  {children}
-                </code>
-              )
-            }
-            return (
-              <code className={className} {...props}>
-                {children}
-              </code>
-            )
-          },
-          pre({ children }) {
-            return (
-              <CodeBlock>
-                {children}
-              </CodeBlock>
-            )
-          },
-          p({ children }) {
-            return <p className="text-foreground my-0.5 md:my-1">{children}</p>
-          },
-          strong({ children }) {
-            return <strong className="font-semibold text-foreground">{children}</strong>
-          },
-          ul({ children }) {
-            return <ul className="list-disc text-foreground my-0.5 md:my-1">{children}</ul>
-          },
-          ol({ children }) {
-            return <ol className="list-decimal text-foreground my-0.5 md:my-1">{children}</ol>
-          },
-          li({ children }) {
-            return <li className="text-foreground my-0.5 md:my-1">{children}</li>
-          },
-          a({ children, href }) {
-            const isSessionLink = typeof href === 'string' && href.startsWith('?session=')
-            if (isSessionLink) {
-              const session = href!.slice('?session='.length)
-              return (
-                <a
-                  href={href}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    navigator.clipboard.writeText(session).then(() => {
-                      toast.success(`Copied session: ${session}`)
-                    }).catch(() => {
-                      toast.info(`Session: ${session}`)
-                    })
-                    // Also dispatch to fill chat input if present
-                    window.dispatchEvent(new CustomEvent('agent-browser:fill-session', { detail: session }))
-                  }}
-                  className="text-primary underline hover:text-primary/80 cursor-pointer"
-                >
-                  {children}
-                </a>
-              )
-            }
-            return <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:text-primary/80">{children}</a>
-          }
-        }}
+        components={components}
       >
         {part.text}
       </ReactMarkdown>
