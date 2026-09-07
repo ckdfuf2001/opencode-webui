@@ -17,6 +17,8 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
   const [repoUrl, setRepoUrl] = useState('')
   const [localPath, setLocalPath] = useState('')
   const [branch, setBranch] = useState('')
+  const [importData, setImportData] = useState<any | null>(null)
+  const [importName, setImportName] = useState('')
   const queryClient = useQueryClient()
 
   const mutation = useMutation({
@@ -38,20 +40,35 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
   })
 
   const importMut = useMutation({
-    mutationFn: async (file: File) => {
-      const text = await file.text()
-      const json = JSON.parse(text)
-      const name = window.prompt('가져올 레포의 새 디렉토리명:', json.repo?.localPath ? `${json.repo.localPath}-imported` : `imported-${Date.now()}`)
-      if (!name) throw new Error('cancelled')
-      return importRepo(json, name.trim())
+    mutationFn: async ({ data, name }: { data: any; name: string }) => {
+      return importRepo(data, name.trim())
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['repos'] })
       showToast.success('Import 완료')
+      setImportData(null)
+      setImportName('')
       onOpenChange(false)
     },
     onError: (e: any) => { if (e.message !== 'cancelled') showToast.error(e.message) },
   })
+
+  const handleImportFile = async (file: File) => {
+    try {
+      const text = await file.text()
+      const json = JSON.parse(text)
+      setImportData(json)
+      setImportName(json.repo?.localPath ? `${json.repo.localPath}-imported` : `imported-${Date.now()}`)
+    } catch (e: any) {
+      showToast.error(e.message || 'JSON 파싱 실패')
+    }
+  }
+
+  // 다이얼로그 닫힐 때 import 상태 초기화
+  const handleOpenChange = (next: boolean) => {
+    if (!next) { setImportData(null); setImportName('') }
+    onOpenChange(next)
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -61,13 +78,40 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[500px] bg-[#141414] border-[#2a2a2a]">
-        <DialogHeader>
+        <DialogHeader className="flex flex-row items-center justify-between space-y-0">
           <DialogTitle className="text-xl bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
             Add Repository
           </DialogTitle>
+          <Button type="button" variant="outline" size="sm" className="h-7 text-xs border-[#2a2a2a] text-zinc-400 hover:bg-[#1a1a1a] hover:text-white" onClick={() => {
+            const inp = document.createElement('input')
+            inp.type = 'file'
+            inp.accept = '.json,application/json'
+            inp.onchange = () => { const f = inp.files?.[0]; if (f) void handleImportFile(f) }
+            inp.click()
+          }}>
+            <Upload className="w-3 h-3 mr-1" /> Import
+          </Button>
         </DialogHeader>
+        {importData && (
+          <div className="mt-3 p-3 rounded-md border border-blue-500/30 bg-blue-500/10 space-y-2">
+            <p className="text-xs text-zinc-300">Export: <span className="font-mono text-white">{importData.repo?.localPath || 'unknown'}</span> — 새 이름 지정</p>
+            <Input
+              placeholder="새 디렉토리명"
+              value={importName}
+              onChange={(e) => setImportName(e.target.value)}
+              className="bg-[#1a1a1a] border-[#2a2a2a] text-white h-8 text-sm"
+            />
+            <div className="flex gap-2">
+              <Button size="sm" className="flex-1 h-7 bg-blue-600 hover:bg-blue-700" disabled={!importName.trim() || importMut.isPending} onClick={() => importMut.mutate({ data: importData, name: importName })}>
+                {importMut.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null} 가져오기
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 border-[#2a2a2a]" onClick={() => { setImportData(null); setImportName('') }}>취소</Button>
+            </div>
+            {importMut.isError && <p className="text-xs text-red-400">{(importMut.error as Error).message}</p>}
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="space-y-4 mt-4">
           <div className="space-y-2">
             <label className="text-sm text-zinc-400">Repository Type</label>
@@ -167,23 +211,6 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
             <p className="text-sm text-red-400">
               {mutation.error.message}
             </p>
-          )}
-          <div className="relative py-1">
-            <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-[#2a2a2a]" /></div>
-            <div className="relative flex justify-center text-xs"><span className="bg-[#141414] px-2 text-zinc-500">또는</span></div>
-          </div>
-          <Button type="button" variant="outline" className="w-full border-[#2a2a2a] text-zinc-300 hover:bg-[#1a1a1a]" disabled={importMut.isPending} onClick={() => {
-            const inp = document.createElement('input')
-            inp.type = 'file'
-            inp.accept = '.json,application/json'
-            inp.onchange = () => { const f = inp.files?.[0]; if (f) importMut.mutate(f) }
-            inp.click()
-          }}>
-            {importMut.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-            Export JSON으로 가져오기
-          </Button>
-          {importMut.isError && (
-            <p className="text-sm text-red-400">{(importMut.error as Error).message}</p>
           )}
         </form>
       </DialogContent>
