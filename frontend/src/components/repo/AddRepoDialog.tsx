@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { createRepo } from '@/api/repos'
+import { createRepo, importRepo } from '@/api/repos'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Upload } from 'lucide-react'
+import { showToast } from '@/lib/toast'
 
 interface AddRepoDialogProps {
   open: boolean
@@ -34,6 +35,22 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
       setRepoType('remote')
       onOpenChange(false)
     },
+  })
+
+  const importMut = useMutation({
+    mutationFn: async (file: File) => {
+      const text = await file.text()
+      const json = JSON.parse(text)
+      const name = window.prompt('가져올 레포의 새 디렉토리명:', json.repo?.localPath ? `${json.repo.localPath}-imported` : `imported-${Date.now()}`)
+      if (!name) throw new Error('cancelled')
+      return importRepo(json, name.trim())
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['repos'] })
+      showToast.success('Import 완료')
+      onOpenChange(false)
+    },
+    onError: (e: any) => { if (e.message !== 'cancelled') showToast.error(e.message) },
   })
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -150,6 +167,23 @@ export function AddRepoDialog({ open, onOpenChange }: AddRepoDialogProps) {
             <p className="text-sm text-red-400">
               {mutation.error.message}
             </p>
+          )}
+          <div className="relative py-1">
+            <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-[#2a2a2a]" /></div>
+            <div className="relative flex justify-center text-xs"><span className="bg-[#141414] px-2 text-zinc-500">또는</span></div>
+          </div>
+          <Button type="button" variant="outline" className="w-full border-[#2a2a2a] text-zinc-300 hover:bg-[#1a1a1a]" disabled={importMut.isPending} onClick={() => {
+            const inp = document.createElement('input')
+            inp.type = 'file'
+            inp.accept = '.json,application/json'
+            inp.onchange = () => { const f = inp.files?.[0]; if (f) importMut.mutate(f) }
+            inp.click()
+          }}>
+            {importMut.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Export JSON으로 가져오기
+          </Button>
+          {importMut.isError && (
+            <p className="text-sm text-red-400">{(importMut.error as Error).message}</p>
           )}
         </form>
       </DialogContent>

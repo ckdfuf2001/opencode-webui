@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, MoreHorizontal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -106,10 +107,11 @@ export function RepoCard({
           : "border-border hover:border-border hover:shadow-blue-900/20"
       }`}
     >
-      <div className="p-2 sm:p-6">
+       <div className="p-2 sm:p-6">
          <div className="mb-4">
-           <div className="flex items-center gap-2 mb-2">
-{onSelect && (
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2 min-w-0">
+ {onSelect && (
                 <Checkbox
                   id="select-repo"
                   checked={isSelected}
@@ -167,6 +169,22 @@ export function RepoCard({
                 <span className="text-xs font-medium text-amber-500 tabular-nums">{pendingCount}</span>
               </div>
             )}
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <MoreHorizontal className="w-4 h-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                  <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending}>
+                    <Copy className="w-4 h-4 mr-2" /> Clone (md/scripts/.opencode)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending}>
+                    <Download className="w-4 h-4 mr-2" /> Export 설정
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
           </div>
           <p className="text-sm text-muted-foreground truncate flex items-center gap-1">
               <GitBranch className="w-3 h-3" />
@@ -229,27 +247,6 @@ export function RepoCard({
             >
               <CalendarClock className="w-4 h-4" />
               <span className="text-xs tabular-nums">{scheduleCount}</span>
-            </Button>
-
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={(e) => { e.stopPropagation(); cloneMut.mutate() }}
-              disabled={!isReady || cloneMut.isPending}
-              className="h-10 sm:h-9 w-10 p-0"
-              title="Clone (md/scripts/.opencode만, 채팅 제외)"
-            >
-              {cloneMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={(e) => { e.stopPropagation(); exportMut.mutate() }}
-              disabled={!isReady || exportMut.isPending}
-              className="h-10 sm:h-9 w-10 p-0"
-              title="Export 설정 (JSON)"
-            >
-              {exportMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
             </Button>
 
             <Button
