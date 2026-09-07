@@ -244,7 +244,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
             ? (args ? `${(command as { template?: string }).template ?? `/${command.name}`}\n\n${args}` : ((command as { template?: string }).template ?? `/${command.name}`))
             : prompt.trim()
           if (text) {
-            enqueueQueued.mutate({ sessionID, text })
+            enqueueQueued.mutate({ sessionID, text, directory })
             setPrompt('')
             setAttachedFiles(new Map())
             onSubmitted?.()
@@ -275,7 +275,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         .filter((text) => text.trim().length > 0)
         .join('\n')
       if (text.trim()) {
-        enqueueQueued.mutate({ sessionID, text })
+        enqueueQueued.mutate({ sessionID, text, directory })
         setPrompt('')
         setAttachedFiles(new Map())
         onSubmitted?.()
@@ -319,7 +319,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       .filter((text) => text.trim().length > 0)
       .join('\n')
     if (!text.trim()) return
-    enqueueQueued.mutate({ sessionID, text })
+    enqueueQueued.mutate({ sessionID, text, directory })
     setPrompt('')
     setAttachedFiles(new Map())
     onSubmitted?.()

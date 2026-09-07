@@ -5,6 +5,7 @@ import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
   text: z.string().trim().min(1).max(16_000),
+  directory: z.string().min(1).max(1024).optional(),
 })
 
 const MoveChatSchema = z.object({
@@ -29,7 +30,7 @@ export function createChatQueueRoutes() {
       const sessionId = c.req.param('sessionId')
       const body = await c.req.json()
       const validated = EnqueueChatSchema.parse(body)
-      const queue = enqueueQueuedChat(sessionId, validated.text)
+      const queue = enqueueQueuedChat(sessionId, validated.text, validated.directory)
       return c.json(queue, 201)
     } catch (error: any) {
       if (error?.name === 'ZodError') {

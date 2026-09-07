@@ -595,7 +595,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       try {
         const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
         if (m?.[1]) {
-          setTimeout(() => flushQueueForSession(m[1]!), 150)
+          setTimeout(() => flushQueueForSession(m[1]!, query['directory'] ? decodeURIComponent(query['directory']) : undefined), 150)
         }
       } catch {}
       return new Response(response.body, {
@@ -623,7 +623,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           try {
             const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
             if (m?.[1]) {
-              setTimeout(() => flushQueueForSession(m[1]!), 150)
+              setTimeout(() => flushQueueForSession(m[1]!, query['directory'] ? decodeURIComponent(query['directory']) : undefined), 150)
             }
           } catch {}
         }

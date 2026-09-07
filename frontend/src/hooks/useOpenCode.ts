@@ -41,6 +41,21 @@ export function abortActiveSend(sessionID: string): void {
   pendingOptimistic.delete(sessionID)
 }
 
+/** SSE가 서버에만 있는 새 메시지를 가리키면 가짜 카드를 만들지 않고 목록 refetch를
+ *  앞당겨 첫 내용을 빨리 가져온다. 세션당 800ms 쓰로틀로 refetch 폭주를 막는다. */
+const lastFastPullAt = new Map<string, number>();
+function fastPullMessages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  opcodeUrl: string | null | undefined,
+  sessionID: string,
+  directory?: string,
+) {
+  const now = Date.now();
+  if (now - (lastFastPullAt.get(sessionID) ?? 0) < 800) return;
+  lastFastPullAt.set(sessionID, now);
+  queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+}
+
 /** truncate 직후 opencode 메모리�? ??목록???�려�????�어 뷰�? ?��??�는 가??
  *  ?�간???�닌 "?�거??메시지 ID" 기�??�로 걸러 ??메시지??즉시 ?�과?�다. */
 const RECENTLY_TRUNCATED_MS = 12_000;
@@ -314,6 +329,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           if (m.info.id.startsWith("optimistic_sending_")) return false;
           const created = m.info.time?.created ?? 0;
           if (Math.abs(created - optimisticCreated) > 60000) return false;
+          // 이전 턴의 user 메시지를 이번 전송으로 오인하지 않도록 서버 반영 시각은
+          // optimistic 생성 시각 이후여야 한다 (클록 오차 2s 허용).
+          if (created < optimisticCreated - 2000) return false;
           if (!optimisticSig) return true;
           const text = getSignature(m.parts as unknown as MessageWithParts["parts"]);
           if (text === optimisticSig) return true;
@@ -321,37 +339,31 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           return false;
         });
       }
+      if (optimistic && !realUserArrived) {
+        // 서버에 아직 반영된 user 메시지가 없으면 sending placeholder를 refetch
+        // 결과에 다시 붙인다. 첫 refetch(500ms)에서 내 채팅이 사라졌다 나타나는
+        // 깜빡임 없이 "내 채팅(sending) → 서버 반영 시 교체"로 안정되게 유지된다.
+        result = [...result, {
+          info: {
+            id: `optimistic_sending_${optimistic.info.id}`,
+            role: "user" as const,
+            sessionID: sessionID!,
+            time: { created: optimistic.info.time?.created ?? Date.now() },
+          } as MessageWithParts["info"],
+          parts: optimistic.parts,
+        } as MessageWithParts];
+      } else if (result.some((m) => m.info.id.startsWith("optimistic_sending_"))) {
+        result = result.filter((m) => !m.info.id.startsWith("optimistic_sending_"))
+      }
       if (realUserArrived) {
         pendingOptimistic.delete(sessionID!)
-      }
-      // sending placeholder는 응답이 화면에 뿌려질 때까지 유지 — user가 서버에 반영되고 assistant 응답이 시작되면 교체
-      const hasSendingPlaceholder = result.some((m) => m.info.id.startsWith("optimistic_sending_"))
-      if (hasSendingPlaceholder && realUserArrived) {
-        const hasAssistantResponse = result.some((m) => m.info.role === "assistant" && !m.info.id.startsWith("optimistic_") && (m.info.time?.created ?? 0) >= (optimistic?.info.time?.created ?? 0) - 1000 && m.parts.length > 0)
-        if (hasAssistantResponse) {
-          result = result.filter((m) => !m.info.id.startsWith("optimistic_sending_"))
-        }
-      }
-      // pendingOptimistic은 화면에 직접 추가하지 않음 (빈 sending 영역으로 대체했음)
-      // Handle optimistic assistant placeholder (for immediate LLM area with correct model)
-      const hasOptimisticAssistant = result.some((m) => m.info.id.startsWith('optimistic_assistant_'))
-      const hasRealAssistantAfterUser = result.some((m) => m.info.role === 'assistant' && !m.info.id.startsWith('optimistic_') && (m.info.time?.created ?? 0) >= (optimistic?.info.time?.created ?? 0) - 1000)
-      if (hasOptimisticAssistant && hasRealAssistantAfterUser) {
-        result = result.filter((m) => !m.info.id.startsWith('optimistic_assistant_'))
-      } else if (!hasOptimisticAssistant) {
-        // Also check cached optimistic assistant that may be in queryClient but not in result
-        const cachedHasOptimisticAssistant = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory])?.some((m) => m.info.id.startsWith('optimistic_assistant_'))
-        const serverHasRealAssistant = result.some((m) => m.info.role === 'assistant' && !m.info.id.startsWith('optimistic_') && m.parts.length > 0)
-        if (cachedHasOptimisticAssistant && serverHasRealAssistant) {
-          queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory], (old) => old?.filter((m) => !m.info.id.startsWith('optimistic_assistant_')) ?? old)
-        }
-      }
-      if (isRecentlyAborted(sessionID!)) {
-        return reconcileOrphanedStreams(result, sessionID!, false);
       }
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
       const isBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
+      if (isRecentlyAborted(sessionID!)) {
+        return reconcileOrphanedStreams(result, sessionID!, false);
+      }
       if (hasPending) return reconcileOrphanedStreams(result, sessionID!, true)
       return reconcileOrphanedStreams(result, sessionID!, isBusy);
     },
@@ -370,6 +382,11 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const last = data?.[data.length - 1]
       const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
       if (streaming) return 1000
+      // 세션이 busy(생성 중)면 다른 세션/큐 발송 내용이 뜰 때까지 느린 2s 폴링으로
+      // 대기하지 않도록 500ms로 당긴다.
+      const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
+      const dbBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
+      if (dbBusy) return 500
       return 2000
     },
   });
@@ -430,7 +447,9 @@ function reconcileOrphanedStreams(
   isBusy: boolean,
 ): MessageListResponse {
   let changed = false;
-  // Filter ghost (0-part incomplete assistant) except keep last one when busy to show Generating placeholder
+  // 0-part 미완료 assistant(ghost)는 busy 동안 마지막 것만 유지해 LLM 응답 영역을
+  // 바로 보여준다 (서버에 턴이 생긴 honest 신호 — 가짜 카드가 아니다).
+  // idle이 되면 제거해 잔류 팬텀을 막고, 캐시에 없는 파트의 SSE 팬텀 생성은 merge 단계에서 차단한다.
   const filtered = messages.filter((msg, idx) => {
     const ghost =
       msg.info.sessionID === sessionID &&
@@ -438,7 +457,7 @@ function reconcileOrphanedStreams(
       !("completed" in msg.info.time && msg.info.time.completed) &&
       msg.parts.length === 0;
     if (!ghost) return true;
-    // Keep last ghost when busy (optimistic assistant placeholder)
+    // busy 동안 마지막 ghost는 유지 (LLM 응답 영역 즉시 표시)
     if (isBusy && idx === messages.length - 1) return true;
     changed = true;
     return false;
@@ -838,7 +857,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           if (!old) return old;
           const mid = (part as { messageID: string }).messageID;
           const idx = old.findIndex((m) => m.info.id === mid);
-          if (idx === -1) return old;
+          if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
           const msg = old[idx]!;
           let pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
           // Fallback for tool: id may change across updates, match by tool + running status
@@ -887,7 +906,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         queryClient.setQueryData<MessageListResponse>(key, (old) => {
           if (!old) return old;
           const idx = old.findIndex((m) => m.info.id === info.id);
-          if (idx === -1) return old;
+          if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
           const next = [...old]; next[idx] = { ...next[idx]!, info }; return next;
         });
       };
@@ -913,7 +932,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             if (!mid || !pid || !delta) return;
             const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
             queryClient.setQueryData<MessageListResponse>(key, (old) => {
-              if (!old) return old; const idx = old.findIndex((m) => m.info.id === mid); if (idx === -1) return old;
+              if (!old) return old; const idx = old.findIndex((m) => m.info.id === mid); if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
               const msg = old[idx]!; let pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
               if (pIdx === -1) {
                 pIdx = msg.parts.findIndex((pp) => (pp as { type: string; state?: { status?: string } }).type === "tool" && (pp as { state?: { status?: string } }).state?.status === "running");
@@ -1236,10 +1255,9 @@ export const useEphemeralSessionSSE = (
         if (!old) return old;
         const mid = (part as { messageID: string }).messageID;
         const idx = old.findIndex((m) => m.info.id === mid);
-        if (idx === -1) {
-          const newMsg = { info: { id: mid, sessionID, role: "assistant", time: { created: Date.now() } } as MessageWithParts["info"], parts: [part] } as MessageWithParts;
-          return [...old, newMsg];
-        }
+        // 캐시에 없는 message id의 파트는 추정 role 로 새 카드를 만들지 않고,
+        // 목록 refetch를 앞당겨 서버의 실제 메시지를 빨리 가져온다.
+        if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
         const msg = old[idx]!;
         let pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
         if (pIdx === -1 && (part as { type: string }).type === "tool") {
@@ -1286,7 +1304,7 @@ export const useEphemeralSessionSSE = (
       queryClient.setQueryData<MessageListResponse>(key, (old) => {
         if (!old) return old;
         const idx = old.findIndex((m) => m.info.id === info.id);
-        if (idx === -1) return old;
+        if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
         const next = [...old];
         next[idx] = { ...next[idx]!, info };
         return next;
@@ -1340,7 +1358,7 @@ export const useEphemeralSessionSSE = (
           queryClient.setQueryData<MessageListResponse>(key, (old) => {
             if (!old) return old;
             const idx = old.findIndex((m) => m.info.id === mid);
-            if (idx === -1) return old;
+            if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
             const msg = old[idx]!; let pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
             if (pIdx === -1) {
               pIdx = msg.parts.findIndex((pp) => (pp as { type: string; state?: { status?: string } }).type === "tool" && (pp as { state?: { status?: string } }).state?.status === "running");

@@ -29,8 +29,8 @@ export async function listQueuedChats(sessionID: string): Promise<QueuedChat[]> 
   return request<QueuedChat[]>(`/${encodeURIComponent(sessionID)}`)
 }
 
-export async function enqueueQueuedChat(sessionID: string, text: string): Promise<QueuedChat[]> {
-  return request<QueuedChat[]>(`/${encodeURIComponent(sessionID)}`, jsonInit('POST', { text }))
+export async function enqueueQueuedChat(sessionID: string, text: string, directory?: string): Promise<QueuedChat[]> {
+  return request<QueuedChat[]>(`/${encodeURIComponent(sessionID)}`, jsonInit('POST', { text, directory }))
 }
 
 export async function removeQueuedChat(sessionID: string, id: string): Promise<void> {

@@ -21,17 +21,21 @@ const FLUSH_RETRY_BACKOFF_MS = 2_000
 const queues = new Map<string, QueuedChat[]>()
 const failedUntil = new Map<string, number>()
 const inFlight = new Set<string>()
+// 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
+// workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.
+const queueDirs = new Map<string, string>()
 
 export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
 }
 
-export function enqueueQueuedChat(sessionID: string, text: string): QueuedChat[] {
+export function enqueueQueuedChat(sessionID: string, text: string, directory?: string): QueuedChat[] {
   const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
   const queue = queues.get(sessionID) ?? []
   queue.push({ id: crypto.randomUUID(), text: trimmed, createdAt: Date.now() })
   while (queue.length > MAX_QUEUE_LENGTH) queue.shift()
   queues.set(sessionID, queue)
+  if (directory) queueDirs.set(sessionID, directory)
   logger.info(`Queued chat message for session ${sessionID} (position ${queue.length})`)
   return [...queue]
 }
@@ -42,7 +46,10 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
   const index = queue.findIndex((item) => item.id === id)
   if (index === -1) return false
   queue.splice(index, 1)
-  if (queue.length === 0) queues.delete(sessionID)
+  if (queue.length === 0) {
+    queues.delete(sessionID)
+    queueDirs.delete(sessionID)
+  }
   return true
 }
 
@@ -69,6 +76,7 @@ export function clearQueuedChats(sessionID: string): number {
   if (!queue) return 0
   const count = queue.length
   queues.delete(sessionID)
+  queueDirs.delete(sessionID)
   logger.info(`Cleared ${count} queued chat(s) for session ${sessionID}`)
   return count
 }
@@ -78,21 +86,35 @@ export function clearQueuedChats(sessionID: string): number {
  * per cycle: sending starts a new turn, so the rest wait until the poller sees
  * the session idle again. Dispatch failures re-queue the item at the front
  * with a backoff so a broken OpenCode server cannot spin the flusher.
+ *
+ * Idle gate: opens a /session/status check BEFORE handing the message to
+ * OpenCode so the next queued message is not pushed while the previous
+ * answer is still generating. While busy the head stays queued and the
+ * status poller retries once the session goes idle.
  */
-function dispatchHead(base: string, sessionID: string): void {
-  const queue = queues.get(sessionID)
-  if (!queue || queue.length === 0) return
+async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if (inFlight.has(sessionID)) return
   if ((failedUntil.get(sessionID) ?? 0) > Date.now()) return
-
+  const queue = queues.get(sessionID)
+  if (!queue || queue.length === 0) return
   const next = queue[0]
   if (!next) return
+  if (await isSessionBusy(sessionID)) return
+
+  // await 동안 다른 발송 경로(폴러 / proxy flush)가 이 slot 을 선점했을 수 있으므로 재검사.
+  if (inFlight.has(sessionID)) return
+  if ((failedUntil.get(sessionID) ?? 0) > Date.now()) return
+  const current = queues.get(sessionID)
+  if (!current || current.length === 0 || current[0]?.id !== next.id) return
 
   // Optimistic removal: the strip must clear as soon as the message is
   // handed to OpenCode, not when the generated answer finishes. Failures
   // put the item back at the front with a backoff.
-  queue.splice(0, 1)
-  if (queue.length === 0) queues.delete(sessionID)
+  current.splice(0, 1)
+  if (current.length === 0) {
+    queues.delete(sessionID)
+    queueDirs.delete(sessionID)
+  }
 
   inFlight.add(sessionID)
   logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
@@ -131,23 +153,71 @@ function dispatchHead(base: string, sessionID: string): void {
     })
 }
 
-/** 세션 상태 폴러(2s)가 매 틱 호출한다. idle 세션의 큐 헤드를 순차 발송한다. */
+/**
+ * 세션이 실제 working 중인지 확인한다. 이전 답변이 끝나기 전에 큐 헤드를 미리
+ * 밀어넣지 않도록 dispatchHead 가 매 발송 전 호출한다.
+ * - 세션의 실제 디렉터리로 조회한다 (workspace 고정 조회는 repo 세션을 idle 로 오판).
+ * - generation(busy)뿐 아니라 승인 대기(permission/question)도 working 으로 취급해
+ *   working이 끝난 뒤에 발송한다.
+ * - 상태를 확인할 수 없으면 보수적으로 busy 로 취급해 발송을 보류한다
+ *   (상태 폴러가 idle 전환 후 재시도).
+ */
+async function isSessionBusy(sessionID: string): Promise<boolean> {
+  const base = opencodeServerManager.getUrl()
+  const directory = queueDirs.get(sessionID) ?? getWorkspacePath()
+  const directoryParam = encodeURIComponent(directory)
+  try {
+    const res = await fetch(`${base}/session/status?directory=${directoryParam}`, {
+      headers: ensureServerAuth({}),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    if (!res.ok) return true
+    const map = (await res.json()) as Record<string, { type?: string }>
+    if (map[sessionID]?.type === 'busy') return true
+  } catch {
+    return true
+  }
+  if (await hasPendingInteraction(base, directory, sessionID)) return true
+  return false
+}
+
+/** 승인 대기(permission/question) 중인 세션은 생성 중이 아니어도 working 으로 취급한다. */
+async function hasPendingInteraction(base: string, directory: string, sessionID: string): Promise<boolean> {
+  const directoryParam = encodeURIComponent(directory)
+  for (const kind of ['permission', 'question'] as const) {
+    try {
+      const res = await fetch(`${base}/${kind}?directory=${directoryParam}`, {
+        headers: ensureServerAuth({}),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
+      if (!res.ok) continue
+      const list = (await res.json()) as Array<{ sessionID?: string }>
+      if (Array.isArray(list) && list.some((item) => item?.sessionID === sessionID)) return true
+    } catch {
+      // 조회 실패는 working 아님으로 간주하고 다음으로 (보수적 차단은 status 체크가 담당)
+    }
+  }
+  return false
+}
+
+/** 세션 상태 폴러(1s)가 매 틱 호출한다. idle 세션의 큐 헤드를 순차 발송한다. */
 export function flushReadyQueues(busySessions: Set<string>): void {
   if (queues.size === 0) return
   const base = opencodeServerManager.getUrl()
 
   for (const [sessionID] of [...queues]) {
     if (busySessions.has(sessionID)) continue
-    dispatchHead(base, sessionID)
+    void dispatchHead(base, sessionID)
   }
 }
 
-/** 채팅 완료 이벤트로 1개 세션의 큐를 즉시 발송한다. */
-export function flushQueueForSession(sessionId: string): void {
+/** 채팅 완료 이벤트로 1개 세션의 큐를 즉시 발송한다. 세션이 여전히 working 중이면 발송을 건너뛰고 폴러가 이어받는다. */
+export function flushQueueForSession(sessionId: string, directory?: string): void {
   if (!queues.has(sessionId)) return
   if (inFlight.has(sessionId)) return
   if ((failedUntil.get(sessionId) ?? 0) > Date.now()) return
-  dispatchHead(opencodeServerManager.getUrl(), sessionId)
+  if (directory) queueDirs.set(sessionId, directory)
+  void dispatchHead(opencodeServerManager.getUrl(), sessionId)
 }
 
 function requeueFront(sessionID: string, chat: QueuedChat): void {
@@ -165,7 +235,8 @@ async function dispatchQueuedChat(
   chat: QueuedChat,
 ): Promise<boolean> {
   const headers = ensureServerAuth({})
-  const directoryParam = encodeURIComponent(getWorkspacePath())
+  const directory = queueDirs.get(sessionID) ?? getWorkspacePath()
+  const directoryParam = encodeURIComponent(directory)
 
   // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다
   const trimmed = chat.text.trim()
