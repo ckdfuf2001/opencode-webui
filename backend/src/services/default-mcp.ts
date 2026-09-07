@@ -383,23 +383,46 @@ export function killLingeringAgentBrowser(): void {
 // project directory as their working directory. That working directory is a
 // handle on the repo folder: recursive rm then fails with EBUSY/EPERM even
 // after the opencode server is restarted, because the detached daemon and its
-// Chrome tree outlive the MCP children. Kill the whole tree (daemon, MCP
-// children, chrome, doc reader) before deleting a repo so the handles release.
-export function releaseAgentBrowserForDirectory(_directory: string): void {
+// Chrome tree outlive the MCP children.
+// Previous implementation killed *all* agent-browser/chrome processes, which
+// breaks browsing in other repos (open works but snapshot/click fail because
+// the shared daemon is gone). Now we only touch the session that belongs to
+// the deleted repo — other sessions stay warm.
+export function releaseAgentBrowserForDirectory(directory: string): void {
   if (process.platform !== 'win32') {
     return
   }
   if (typeof process.env.TEMP !== 'string') {
     return
   }
+  let session = ''
+  try {
+    const localPath = path.basename(directory)
+    session = repoAgentBrowserSession(localPath)
+  } catch {
+    session = ''
+  }
+  // If we cannot derive the session, do nothing — killing all sessions is worse than leaking one handle.
+  if (!session) {
+    logger.info(`Skip agent-browser release: cannot derive session for ${directory}`)
+    return
+  }
+  const escapedSession = session.replace(/'/g, "''")
   const script = [
     '$ErrorActionPreference = "SilentlyContinue"',
+    `$session = '${escapedSession}'`,
     '$processes = Get-CimInstance Win32_Process | Where-Object {',
-    "  ($_.Name -eq 'agent-browser.exe') -or",
-    "  ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*agent-browser*') -or",
-    "  ($_.CommandLine -like '*doc_reader_mcp.py*')",
+    "  ($_.Name -eq 'agent-browser.exe' -and $_.CommandLine -like \"*$session*\") -or",
+    "  ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*agent-browser*' -and $_.CommandLine -like \"*$session*\")",
     '}',
     'foreach ($process in $processes) {',
+    '  taskkill /PID $process.ProcessId /T /F | Out-Null',
+    '}',
+    // doc_reader is per-repo working directory but shares the same session filter would miss it;
+    // only kill doc_reader if its command line contains the repo directory
+    `$dir = '${directory.replace(/'/g, "''")}'`,
+    '$docProcs = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*doc_reader_mcp.py*" -and $_.CommandLine -like "*$dir*" }',
+    'foreach ($process in $docProcs) {',
     '  taskkill /PID $process.ProcessId /T /F | Out-Null',
     '}',
   ].join('\n')
@@ -410,9 +433,9 @@ export function releaseAgentBrowserForDirectory(_directory: string): void {
       stdio: 'ignore',
       timeout: 20_000,
     })
-    logger.info(`Released agent-browser handles for directory: ${_directory}`)
+    logger.info(`Released agent-browser handles for directory: ${directory} (session: ${session})`)
   } catch {
-    logger.warn(`Failed to release agent-browser handles for directory: ${_directory}`)
+    logger.warn(`Failed to release agent-browser handles for directory: ${directory}`)
   } finally {
     try {
       rmSync(scriptPath, { force: true })
