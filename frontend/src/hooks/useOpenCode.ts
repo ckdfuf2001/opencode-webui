@@ -42,6 +42,28 @@ export function abortActiveSend(sessionID: string): void {
   pendingOptimistic.delete(sessionID)
 }
 
+/**
+ * cancel 시점에 잡아둔 인스턴스만 중단한다. abort POST가 늦게 끝나
+ * onSettled가 돌 때 사용자가 이미 새로 보낸 턴이 있으면, 그 턴의
+ * AbortController/EventSource는 절대 건드리지 않는다 (신규 메시지 오폭 방지).
+ * map에 잡아둔 것과 같은 인스턴스가 남아 있을 때만 엔트리를 지운다.
+ */
+export function abortSpecificSend(
+  sessionID: string,
+  targets?: { ac?: AbortController | null; es?: EventSource | null },
+): void {
+  const ac = targets?.ac
+  if (ac) {
+    try { ac.abort() } catch {}
+    if (activeSendControllers.get(sessionID) === ac) activeSendControllers.delete(sessionID)
+  }
+  const es = targets?.es
+  if (es) {
+    try { es.close(); } catch {}
+    if (activeSSEMap.get(sessionID) === es) activeSSEMap.delete(sessionID)
+  }
+}
+
 /** SSE가 서버에만 있는 새 메시지를 가리키면 가짜 카드를 만들지 않고 목록 refetch를
  *  앞당겨 첫 내용을 빨리 가져온다. reasoning은 시작 지연이 크므로 300ms,
  *  그 외는 세션당 800ms 쓰로틀로 refetch 폭주를 막는다. */
@@ -381,7 +403,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    gcTime: 10 * 60 * 1000,
+    // 복귀 시 캐시가 날아가 스피너 + 처음부터 다시 로드되는 체감을 줄이려 30분 유지.
+    // 세션 전환 시 inactive 쿼리는 SessionDetail에서 직접 제거하므로 메모리 누수 없음.
+    gcTime: 30 * 60 * 1000,
     placeholderData: (previousData) => previousData,
     staleTime: 2000,
     refetchInterval: (query) => {
@@ -1081,6 +1105,11 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       await client.abortSession(sessionID);
     },
     onMutate: async (sessionID) => {
+      // 늦게 끝나는 abort POST의 onSettled가 cancel 직후 새로 보낸 턴을
+      // 죽이지 않도록, 지금 진행 중인 인스턴스를 잡아둔다 (context로 전달).
+      const acAtAbort = activeSendControllers.get(sessionID)
+      const esAtAbort = activeSSEMap.get(sessionID)
+      const pendingAtAbort = pendingOptimistic.get(sessionID)
       abortActiveSend(sessionID)
       recentlyAborted.set(sessionID, Date.now());
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] })
@@ -1098,13 +1127,21 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
         queryClient.setQueryData(['session-status-db'], [{ sessionId: sessionID, status: 'idle', pendingPermissions: 0 } as never])
       }
       queryClient.setQueryData(['session-status-db'], (old: unknown) => old)
+      return { acAtAbort, esAtAbort, pendingAtAbort }
     },
     onError: () => {
     },
-    onSettled: (_data, _error, sessionID) => {
-      abortActiveSend(sessionID)
-      pendingOptimistic.delete(sessionID)
-      markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
+    onSettled: (_data, _error, sessionID, context) => {
+      const ctx = context as { acAtAbort?: AbortController; esAtAbort?: EventSource; pendingAtAbort?: MessageWithParts } | undefined
+      // cancel 이후 새로 시작된 전송은 건드리지 않는다 — 잡아둔 것만 정리
+      abortSpecificSend(sessionID, { ac: ctx?.acAtAbort, es: ctx?.esAtAbort })
+      if (ctx?.pendingAtAbort && pendingOptimistic.get(sessionID) === ctx.pendingAtAbort) {
+        pendingOptimistic.delete(sessionID)
+      }
+      // 새 턴이 이미 돌고 있으면 메시지 상태도 새 턴 소유 — 완료 마킹 생략
+      if (!activeSendControllers.has(sessionID)) {
+        markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
+      }
       queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionID, directory] })
       queryClient.invalidateQueries({ queryKey: ['opencode', 'last-message', opcodeUrl, sessionID, directory] })
       queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })

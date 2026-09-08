@@ -101,52 +101,82 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
-  // 윈도잉: 첫 진입/컴팩트 후 최근 N개만 보이고 위로 스크롤 시 점진 로딩 — 메모리 절약을 위해 15로 축소
-  const INITIAL_VISIBLE = 15;
+  // 윈도잉: DOM에는 항상 최대 WINDOW_SIZE개만 유지 (메모리/DOM 절약).
+  // windowStart === null이면 하단 고정(마지막 N개). 위로 스크롤하면 윈도우가
+  // 위로 이동하고 아래쪽은 DOM에서 빠진다. 새로고침/세션 진입은 하단 고정.
+  // LOAD_STEP만큼 겹치며 이동하므로 위·아래로 일부 버퍼가 항상 남는다.
+  const WINDOW_SIZE = 30;
   const LOAD_STEP = 15;
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
-  const visibleCountRef = useRef(visibleCount);
-  useEffect(() => { visibleCountRef.current = visibleCount }, [visibleCount]);
-  // 세션 변경 시 초기화 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
+  const [windowStart, setWindowStart] = useState<number | null>(null);
+  const windowStartRef = useRef<number | null>(null);
+  useEffect(() => { windowStartRef.current = windowStart }, [windowStart]);
+  const baseLenRef = useRef(0);
+  const prevMsgLenRef = useRef<number>(0);
+  // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
   useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE)
+    setWindowStart(null)
+    prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
-  // 컴팩트/트렁케이트 등으로 메시지가 크게 줄면(예: summarize) 다시 최근만 보이게
-  const prevMsgLenRef = useRef<number>(0);
-  useEffect(() => {
-    const len = messages?.length ?? 0;
-    const prev = prevMsgLenRef.current;
-    prevMsgLenRef.current = len;
-    // 길이가 큰 폭으로 줄었을 때(컴팩트) 초기화
-    if (prev > 0 && len > 0 && len < prev - 10) {
-      setVisibleCount(INITIAL_VISIBLE);
-    } else if (len > 0 && prev === 0) {
-      // 첫 로드도 최근만
-      setVisibleCount(INITIAL_VISIBLE);
-    }
-  }, [messages?.length]);
   const baseMessages = useMemo(() => {
     if (!messages) return undefined;
     const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1;
     return editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages;
   }, [messages, hiddenAfterID]);
+  useEffect(() => { baseLenRef.current = baseMessages?.length ?? 0 }, [baseMessages?.length]);
+  // 길이 변화 처리: 대량 감소(컴팩트/트렁케이트) → 하단 고정,
+  // 새 메시지 도착 → 내가 보낸 턴이면 하단 고정, 위를 보고 있었으면 화면 고정
+  useEffect(() => {
+    const len = baseMessages?.length ?? 0;
+    const prev = prevMsgLenRef.current;
+    prevMsgLenRef.current = len;
+    if (len === 0 || prev === 0) return; // 첫 로드/세션전환: 하단 고정 유지
+    if (len < prev - 10) {
+      setWindowStart(null);
+      return;
+    }
+    if (len <= prev) return;
+    const last = baseMessages?.[len - 1];
+    const lastIsUser = !!last && (last.info.role === 'user' || last.info.id.startsWith('optimistic'));
+    if (lastIsUser) {
+      setWindowStart(null);
+      return;
+    }
+    const c = messageContainerRef.current;
+    const nearBottom = c ? c.scrollTop + c.clientHeight >= c.scrollHeight - 160 : true;
+    if (nearBottom) {
+      setWindowStart((p) => (p === null ? p : null));
+    } else {
+      // 위를 보고 있었으면 같은 메시지들이 보이도록 윈도우 시작점 고정
+      setWindowStart((p) => (p !== null ? p : Math.max(0, prev - WINDOW_SIZE)));
+    }
+  }, [baseMessages?.length]);
+  const maxStart = Math.max(0, (baseMessages?.length ?? 0) - WINDOW_SIZE);
+  const start = windowStart === null ? maxStart : Math.min(windowStart, maxStart);
   const visibleMessages = useMemo(() => {
     if (!baseMessages) return undefined;
-    if (baseMessages.length <= visibleCount) return baseMessages;
-    return baseMessages.slice(-visibleCount);
-  }, [baseMessages, visibleCount]);
-  const hasMore = (baseMessages?.length ?? 0) > visibleCount;
-  const hiddenCount = (baseMessages?.length ?? 0) - visibleCount;
-  const handleLoadMore = useCallback(() => {
+    if (baseMessages.length <= WINDOW_SIZE) return baseMessages;
+    return baseMessages.slice(start, start + WINDOW_SIZE);
+  }, [baseMessages, start]);
+  const hasMore = start > 0;
+  const hiddenCount = start;
+  // 윈도우를 위로 LOAD_STEP 이동 (스크롤 점프 방지 보정 포함)
+  const shiftWindowUp = useCallback(() => {
     const c = messageContainerRef.current;
-    if (!c || !baseMessages) {
-      setVisibleCount((p) => Math.min(p + LOAD_STEP, baseMessages?.length ?? p + LOAD_STEP));
+    const len = baseLenRef.current;
+    if (!c || len === 0) {
+      setWindowStart((prev) => {
+        const cur = prev ?? Math.max(0, len - WINDOW_SIZE);
+        return Math.max(0, cur - LOAD_STEP);
+      });
       return;
     }
     const prevHeight = c.scrollHeight;
     const prevTop = c.scrollTop;
-    setVisibleCount((p) => Math.min(p + LOAD_STEP, baseMessages.length));
+    setWindowStart((prev) => {
+      const cur = prev ?? Math.max(0, len - WINDOW_SIZE);
+      return Math.max(0, cur - LOAD_STEP);
+    });
     // 스크롤 점프 방지: 높이 증가분만큼 scrollTop 보정
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -154,11 +184,12 @@ export function SessionDetail() {
         c.scrollTop = prevTop + (newHeight - prevHeight);
       });
     });
-  }, [baseMessages]);
-  // 위로 스크롤 시 자동 로딩 (throttle 200ms)
+  }, []);
+  const handleLoadMore = shiftWindowUp;
+  // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달 → 하단 고정(위쪽 DOM 해제)
   useEffect(() => {
     const c = messageContainerRef.current;
-    if (!c || !hasMore) return;
+    if (!c) return;
     let ticking = false;
     const onScroll = () => {
       if (ticking) return;
@@ -166,14 +197,27 @@ export function SessionDetail() {
       requestAnimationFrame(() => {
         ticking = false;
         if (!c) return;
-        if (c.scrollTop < 160 && hasMore) {
-          handleLoadMore();
+        if (c.scrollTop < 160) {
+          const len = baseLenRef.current;
+          const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+          if (cur > 0) shiftWindowUp();
+        } else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 120) {
+          if (windowStartRef.current !== null) {
+            setWindowStart(null);
+            // 위쪽 DOM이 빠지며 높이가 줄면 하단에 핀 고정
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const cc = messageContainerRef.current;
+                if (cc) cc.scrollTop = cc.scrollHeight;
+              });
+            });
+          }
         }
       });
     };
     c.addEventListener("scroll", onScroll, { passive: true });
     return () => c.removeEventListener("scroll", onScroll);
-  }, [hasMore, handleLoadMore]);
+  }, [shiftWindowUp]);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -431,7 +475,7 @@ export function SessionDetail() {
       lastCompactAtRef.current = Date.now()
       showToast.success("Session summarized (compact). Context cleaned up.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
-      setVisibleCount(INITIAL_VISIBLE);
+      setWindowStart(null);
       // 컴팩트 후에는 최근만 보이고 하단으로
       requestAnimationFrame(() => {
         const c = messageContainerRef.current;
@@ -514,12 +558,17 @@ export function SessionDetail() {
   }, [currentPermission, currentQuestion, scrollToBottom])
 
   // 세션 첫 진입/새로고침 시 항상 맨 아래로 스크롤
+  // (?msg= / #message- 로 특정 메시지 지정 진입 시에는 그쪽을 우선한다)
   const initialScrollDoneRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!messages || messages.length === 0) return
-    if (!visibleMessages || visibleMessages.length === 0) return
+    if (!baseMessages || baseMessages.length === 0) return
     if (initialScrollDoneRef.current === sessionId) return
     initialScrollDoneRef.current = sessionId!
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      const h = window.location.hash
+      if (sp.get('msg') || h.startsWith('#message-') || h.startsWith('#msg=')) return
+    } catch {}
     // 새로고침 감지 시 브라우저 복원 스크롤을 덮어쓰도록 약간 지연 후 강제 하단
     const doScroll = () => {
       const c = messageContainerRef.current
@@ -529,7 +578,7 @@ export function SessionDetail() {
     requestAnimationFrame(() => requestAnimationFrame(doScroll))
     const t = setTimeout(doScroll, 250)
     return () => clearTimeout(t)
-  }, [messages?.length, visibleMessages, sessionId, scrollToBottom])
+  }, [baseMessages?.length, windowStart, sessionId, scrollToBottom])
   useEffect(() => { initialScrollDoneRef.current = null }, [sessionId])
 
   useKeyboardShortcuts({
@@ -580,13 +629,16 @@ export function SessionDetail() {
     if (!messages || !baseMessages) return;
     const idx = baseMessages.findIndex((m) => m.info.id === msgID);
     if (idx === -1) return;
-    // ensure window includes target when navigating via hash/?msg
-    const need = baseMessages.length - idx;
-    if (need > visibleCount) setVisibleCount(Math.min(baseMessages.length, need + 5));
+    // ensure window includes target when navigating via hash/?msg (위쪽에 버퍼 5개)
+    const len = baseMessages.length;
+    const curStart = windowStart ?? Math.max(0, len - WINDOW_SIZE);
+    if (idx < curStart || idx >= curStart + WINDOW_SIZE) {
+      setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
+    }
     if (msgFromQuery) setSearchParams({}, { replace: true });
     requestAnimationFrame(() => scrollToMessage(msgID));
     if (msgFromHash) history.replaceState(null, '', window.location.pathname + window.location.search);
-  }, [searchParams, setSearchParams, messages, baseMessages, visibleCount, scrollToMessage]);
+  }, [searchParams, setSearchParams, messages, baseMessages, windowStart, scrollToMessage]);
 
   const handleFileClick = useCallback(async (filePath: string) => {
     const normalizedFilePath = filePath.replace(/\\/g, '/')

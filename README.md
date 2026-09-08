@@ -650,4 +650,16 @@ Command 단위 업무 자동화에 맞게 얹는 것을 목표로 한다.
 것을 막기 위해 (1) 주입 컨텍스트는 관측 사실만, (2) 처방 반영은 승인 게이트
 통과 시에만, (3) 연속 실패 감지 시 개선 루프 중단 후 롤백 제안.
 
+## Windows 서비스로 개발 서버 자동시작
 
+`scripts\register_dev_service.bat` — Windows 내장 `sc.exe` + `cmd.exe`만 사용
+(외부 exe 불필요). `sc create opencode-webui-dev` 로 `cmd /c npm run dev` 를
+백그라운드 등록하고 `start= auto` 라 부팅마다 자동시작. 로그는 `logs\dev-service.log`.
+
+관리자 cmd에서:
+
+```cmd
+scripts\register_dev_service.bat install
+scripts\register_dev_service.bat status
+scripts\register_dev_service.bat uninstall
+```
