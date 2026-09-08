@@ -20,7 +20,10 @@ call "%~dp0stop_dev.bat" >nul 2>&1
 
 echo [DEV START] starting pnpm dev ^> logs\dev.log ^(also logs\dev.err.log^)
 REM Use cmd /c with proper redirection so concurrently/bun/vite output is fully captured to logs
-powershell -NoProfile -Command "$cmd = 'pnpm dev 1^> logs\dev.log 2^> logs\dev.err.log'; $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $cmd) -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru; $p.Id | Out-File -Encoding ascii logs\dev.pid; Write-Host ('[DEV START] pid ' + $p.Id + ' (cmd /c pnpm dev)')"
+REM < NUL gives the hidden process EOF on stdin so pnpm's occasional confirm
+REM prompt (e.g. reinstall question) resolves with the default instead of
+REM hanging forever on a hidden console that can never receive a keypress.
+powershell -NoProfile -Command "$cmd = 'pnpm dev < NUL 1^> logs\dev.log 2^> logs\dev.err.log'; $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $cmd) -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru; $p.Id | Out-File -Encoding ascii logs\dev.pid; Write-Host ('[DEV START] pid ' + $p.Id + ' (cmd /c pnpm dev)')"
 REM Also ensure logs are flushed and contain output
 powershell -NoProfile -Command "Start-Sleep -Milliseconds 500; if (Test-Path 'logs\dev.log') { Write-Host ('[DEV START] log size ' + (Get-Item 'logs\dev.log').Length + ' bytes') }"
 

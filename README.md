@@ -650,16 +650,24 @@ Command 단위 업무 자동화에 맞게 얹는 것을 목표로 한다.
 것을 막기 위해 (1) 주입 컨텍스트는 관측 사실만, (2) 처방 반영은 승인 게이트
 통과 시에만, (3) 연속 실패 감지 시 개선 루프 중단 후 롤백 제안.
 
-## Windows 서비스로 개발 서버 자동시작
+## Windows 자동시작으로 개발 서버 상시 구동
 
-`scripts\register_dev_service.bat` — Windows 내장 `sc.exe` + `cmd.exe`만 사용
-(외부 exe 불필요). `sc create opencode-webui-dev` 로 `cmd /c npm run dev` 를
-백그라운드 등록하고 `start= auto` 라 부팅마다 자동시작. 로그는 `logs\dev-service.log`.
+`scripts\register_dev_service.bat` — Windows 내장 기능만 사용 (외부 exe 불필요,
+관리자 권한 불필요, Task Scheduler 미사용). 사용자 시작프로그램 폴더에 hidden
+VBS(`<프로젝트폴더명>-dev.vbs`)를 등록해 로그온 시 `scripts\start_dev.bat`
+(hidden `pnpm dev` + 헬스체크)를 자동실행. 로그는 `logs\dev.log`.
 
-관리자 cmd에서:
+일반 cmd에서:
 
 ```cmd
 scripts\register_dev_service.bat install
+scripts\register_dev_service.bat install "D:\path\to\project"
 scripts\register_dev_service.bat status
 scripts\register_dev_service.bat uninstall
 ```
+
+- 프로젝트 경로 생략 시 bat 파일 기준 상위 폴더 사용. VBS 파일명은
+  `<프로젝트폴더명>-dev.vbs`라 프로젝트마다 따로 등록 가능.
+- dev 백엔드 5001 + vite 5173. 운영/portable(5002)은 `stop` 시에도 건드리지 않음.
+- 예전 `sc.exe` 방식은 `cmd.exe`가 서비스 프로토콜이 없어 1053으로 시작 불가해 폐기.
+- bat 파일은 반드시 CP949 + CRLF 로 저장 (UTF-8 BOM/LF 는 cmd 파서가 깨뜨림).

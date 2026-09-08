@@ -14,8 +14,9 @@ if exist "logs\dev.pid" (
   del /f /q "logs\dev.pid" >nul 2>&1
 )
 
-REM 2) Kill by port (5002 backend, 5173 vite) — most reliable for orphaned servers
-for %%P in (5002 5001 5173 3000) do (
+REM 2) Kill by port (dev only: 5001 backend, 5173 vite) — most reliable for orphaned servers
+REM NOTE: 5002는 운영/portable 서버 포트이므로 절대 죽이지 않는다 (자동시작이 운영을 죽이는 사고 방지)
+for %%P in (5001 5173) do (
   for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%%P " ^| findstr "LISTENING"') do (
     echo [DEV STOP] killing port %%P PID %%a
     taskkill /PID %%a /T /F >nul 2>&1

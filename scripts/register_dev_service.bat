@@ -1,32 +1,38 @@
 @echo off
 REM ============================================================
-REM  opencode-webui dev stack - Windows Service (sc.exe) register
+REM  opencode-webui dev stack - Windows ÀÚµ¿½ÃÀÛ µî·Ï
 REM ------------------------------------------------------------
-REM  Usage (Admin cmd required):
-REM    scripts\register_dev_service.bat install   - create + auto-start service
-REM    scripts\register_dev_service.bat start     - sc start
-REM    scripts\register_dev_service.bat stop      - sc stop
-REM    scripts\register_dev_service.bat status    - sc query
-REM    scripts\register_dev_service.bat uninstall - stop + delete
+REM  Usage (°ü¸®ÀÚ ±ÇÇÑ ºÒÇÊ¿ä, ÀÏ¹İ cmd¿¡¼­ ½ÇÇà):
+REM    scripts\register_dev_service.bat install [ÇÁ·ÎÁ§Æ®°æ·Î]   - ½ÃÀÛÇÁ·Î±×·¥ µî·Ï + Áö±İ ½ÃÀÛ
+REM    scripts\register_dev_service.bat start [ÇÁ·ÎÁ§Æ®°æ·Î]     - Áö±İ ½ÃÀÛ (start_dev.bat)
+REM    scripts\register_dev_service.bat stop [ÇÁ·ÎÁ§Æ®°æ·Î]      - ÁßÁö (stop_dev.bat)
+REM    scripts\register_dev_service.bat status [ÇÁ·ÎÁ§Æ®°æ·Î]    - µî·Ï »óÅÂ + Çï½º + ·Î±× tail
+REM    scripts\register_dev_service.bat uninstall [ÇÁ·ÎÁ§Æ®°æ·Î] - ½ÃÀÛÇÁ·Î±×·¥ ÇØÁ¦ + ÁßÁö
 REM
-REM  What it does:
-REM    sc create opencode-webui-dev binPath= "cmd.exe /c ..." start= auto
-REM    PROJECT_DIRì—ì„œ ë°±ê·¸ë¼ìš´ë“œë¡œ "npm run dev" ì‹¤í–‰ (logs\dev-service.log ê¸°ë¡)
-REM    ì‹œì‘ ìœ í˜• auto = ìœˆë„ìš° ë¶€íŒ…(ì‹œì‘)ë§ˆë‹¤ ìë™ ì‹¤í–‰
+REM  ÇÁ·ÎÁ§Æ®°æ·Î »ı·« ½Ã ÀÌ bat ÆÄÀÏ ±âÁØ »óÀ§ Æú´õ(=ÇÁ·ÎÁ§Æ® ·çÆ®) »ç¿ë.
+REM  ¿¹: scripts\register_dev_service.bat install "D:\my project\webui"
 REM
-REM  NOTE:
-REM    Windows ë‚´ì¥ sc.exe + cmd.exeë§Œ ì‚¬ìš© (ì™¸ë¶€ exe/NSSM/WinSW ë¶ˆí•„ìš”).
-REM    start= auto ë¼ ë¶€íŒ…(ì‹œì‘)ë§ˆë‹¤ ìë™ ì‹¤í–‰.
-REM    ì°¸ê³ : cmd.exeëŠ” ì„œë¹„ìŠ¤ í”„ë¡œí† ì½œì„ êµ¬í˜„í•˜ì§€ ì•Šì•„ í™˜ê²½ì— ë”°ë¼
-REM    sc start ì‹œ 1053ì´ ë‚  ìˆ˜ ìˆìŒ. ê·¸ ê²½ìš° statusë¡œ ë“±ë¡ ìƒíƒœ í™•ì¸ í›„
-REM    start ì¬ì‹œë„ ë˜ëŠ” ë¡œê·¸(logs\dev-service.log) í™•ì¸.
+REM  ¹æ½Ä: »ç¿ëÀÚ ½ÃÀÛÇÁ·Î±×·¥ Æú´õ¿¡ hidden VBS µî·Ï (·Î±×¿Â ½Ã ÀÚµ¿½ÇÇà).
+REM  VBS ÆÄÀÏ¸í: ÇÁ·ÎÁ§Æ®Æú´õ¸í-dev.vbs (ÇÁ·ÎÁ§Æ®¸¶´Ù µû·Î µî·Ï °¡´É).
+REM  ÀÌÀ¯: sc.exe + cmd.exe Á¶ÇÕÀº ¼­ºñ½º ÇÁ·ÎÅäÄİÀÌ ¾ø¾î 1053 ¿À·ù·Î
+REM  ½ÃÀÛÇÒ ¼ö ¾ø´Ù. ¿ÜºÎ exe ¾øÀÌ ³»Àå ±â´É¸¸À¸·Î µ¿ÀÛÇÏ´Â ¹æ½ÄÀÌ
+REM  ½ÃÀÛÇÁ·Î±×·¥ µî·ÏÀÌ´Ù. Task Scheduler´Â »ç¿ëÇÏÁö ¾ÊÀ½.
+REM  ½ÇÁ¦ ±¸µ¿Àº scripts\start_dev.bat (hidden pnpm dev + Çï½ºÃ¼Å©)¸¦ Àç»ç¿ë.
+REM  ·Î±×: logs\dev.log / logs\dev.err.log, pid: logs\dev.pid
+REM
+REM  ÁÖÀÇ: ÀÌ ÆÄÀÏÀº CP949 + CRLF ·Î ÀúÀåÇØ¾ß ÇÑ´Ù. UTF-8 BOM/LF ·Î
+REM  ÀúÀåÇÏ¸é cmd.exe ÆÄ¼­°¡ ±úÁ® ¿Àµ¿ÀÛÇÑ´Ù.
 REM ============================================================
 setlocal
-
-set SERVICE_NAME=opencode-webui-dev
-set PROJECT_DIR=C:\Users\oh\Documents\Default Project\opencode-webui
-set LOG_FILE=%PROJECT_DIR%\logs\dev-service.log
-set CMD_EXE=%SystemRoot%\System32\cmd.exe
+if "%~2"=="" (
+  for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
+) else (
+  for %%I in ("%~2") do set "PROJECT_DIR=%%~fI"
+)
+for %%I in ("%PROJECT_DIR%") do set "PROJ_NAME=%%~nI"
+set "SERVICE_NAME=%PROJ_NAME%-dev"
+set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "VBS_FILE=%STARTUP_DIR%\%SERVICE_NAME%.vbs"
 
 if "%~1"=="" goto :usage
 if /i "%~1"=="install" goto :install
@@ -36,107 +42,122 @@ if /i "%~1"=="stop" goto :stop
 if /i "%~1"=="status" goto :status
 goto :usage
 
-:check_admin
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-  echo [SERVICE] ERROR: ê´€ë¦¬ì ê¶Œí•œ cmdì—ì„œ ì‹¤í–‰í•˜ì„¸ìš”. (ìš°í´ë¦­ - ê´€ë¦¬ì ê¶Œí•œìœ¼ë¡œ ì‹¤í–‰^)
+:check_project
+if not exist "%PROJECT_DIR%\package.json" (
+  echo [SERVICE] ERROR: ÇÁ·ÎÁ§Æ® °æ·Î°¡ Àß¸øµÊ: "%PROJECT_DIR%"
+  echo [SERVICE] HINT: package.jsonÀÌ ÀÖ´Â Æú´õ¸¦ ÁöÁ¤ÇÏ¼¼¿ä.
+  exit /b 1
+)
+if not exist "%PROJECT_DIR%\scripts\start_dev.bat" (
+  echo [SERVICE] ERROR: start_dev.bat ¾øÀ½: "%PROJECT_DIR%\scripts\start_dev.bat"
   exit /b 1
 )
 exit /b 0
 
 :install
-call :check_admin
+call :check_project
 if %errorlevel% neq 0 exit /b 1
+if not exist "%PROJECT_DIR%\logs" mkdir "%PROJECT_DIR%\logs" >nul 2>&1
 
-if not exist "%PROJECT_DIR%\package.json" (
-  echo [SERVICE] ERROR: PROJECT_DIRì´ ì˜ëª»ë¨: "%PROJECT_DIR%"
-  exit /b 1
-)
-if not exist "%PROJECT_DIR%\logs" mkdir "%PROJECT_DIR%\logs"
-
-echo [SERVICE] ê¸°ì¡´ ì„œë¹„ìŠ¤ í™•ì¸/ì •ë¦¬: %SERVICE_NAME%
+REM ±¸¹æ½Ä(sc ¼­ºñ½º) ÀÜÀç Á¤¸® - °ü¸®ÀÚ ¾Æ´Ò ¼ö ÀÖÀ¸´Ï ½ÇÆĞÇØµµ °è¼Ó
 sc query "%SERVICE_NAME%" >nul 2>&1
 if %errorlevel% equ 0 (
-  echo [SERVICE] ê¸°ì¡´ ì„œë¹„ìŠ¤ ë°œê²¬ - ì¤‘ì§€ í›„ ì‚­ì œí•©ë‹ˆë‹¤.
+  echo [SERVICE] ±¸¹æ½Ä sc ¼­ºñ½º ¹ß°ß - »èÁ¦ ½ÃµµÇÕ´Ï´Ù.
   sc stop "%SERVICE_NAME%" >nul 2>&1
   timeout /t 2 /nobreak >nul
   sc delete "%SERVICE_NAME%" >nul 2>&1
-  timeout /t 2 /nobreak >nul
+  if errorlevel 1 (
+    echo [SERVICE] WARN: sc »èÁ¦ ½ÇÆĞ - °ü¸®ÀÚ ±ÇÇÑ ÇÊ¿ä. ½ÃÀÛÇÁ·Î±×·¥ µî·ÏÀº °è¼ÓÇÕ´Ï´Ù.
+  ) else (
+    echo [SERVICE] ±¸¹æ½Ä sc ¼­ºñ½º »èÁ¦ ¿Ï·á.
+  )
 )
 
-echo [SERVICE] ë“±ë¡ ì¤‘...
-echo [SERVICE] PROJECT_DIR: %PROJECT_DIR%
-echo [SERVICE] LOG_FILE   : %LOG_FILE%
-
-REM binPathëŠ” cmd.exe /c ë¡œ ë°±ê·¸ë¼ìš´ë“œ ì‹¤í–‰. start= auto ë¡œ ë¶€íŒ…ë§ˆë‹¤ ìë™ì‹œì‘.
-REM sc ë¬¸ë²• ì£¼ì˜: "binPath=" ì™€ "start=" ë’¤ì— ê³µë°± í•„ìˆ˜.
-sc create "%SERVICE_NAME%" binPath= "%CMD_EXE% /c cd /d \"%PROJECT_DIR%\" ^& npm run dev ^>^> \"%LOG_FILE%\" 2^>^&1" DisplayName= "opencode-webui dev (npm run dev)" start= auto
-if %errorlevel% neq 0 (
-  echo [SERVICE] ERROR: sc create ì‹¤íŒ¨ (code %errorlevel%^)
+if not exist "%STARTUP_DIR%" mkdir "%STARTUP_DIR%" >nul 2>&1
+echo [SERVICE] ÇÁ·ÎÁ§Æ®: "%PROJECT_DIR%"
+echo [SERVICE] ½ÃÀÛÇÁ·Î±×·¥ µî·Ï: "%VBS_FILE%"
+REM ÁÖÀÇ: °ıÈ£ ºí·Ï ¾ÈÀÇ echo ¹®Àå¿¡ ÀÖ´Â °ıÈ£´Â ²À ^ ·Î ÀÌ½ºÄÉÀÌÇÁ
+(
+echo Set sh = CreateObject^("WScript.Shell"^)
+echo sh.Run^ "cmd /c ""%PROJECT_DIR%\scripts\start_dev.bat"""^, 0, False
+) > "%VBS_FILE%"
+if not exist "%VBS_FILE%" (
+  echo [SERVICE] ERROR: VBS »ı¼º ½ÇÆĞ
   exit /b 1
 )
-
-REM ì‹¤íŒ¨ ì‹œ ìë™ ì¬ì‹œì‘ (1ë¶„ ê°„ê²© 3íšŒ) + ì„¤ëª…
-sc failure "%SERVICE_NAME%" reset= 86400 actions= restart/60000/restart/60000/restart/60000 >nul 2>&1
-sc description "%SERVICE_NAME%" "opencode-webui dev stack (cmd.exe /c npm run dev). Logs: logs\dev-service.log." >nul 2>&1
-
-echo [SERVICE] ë“±ë¡ ì™„ë£Œ. ì„œë¹„ìŠ¤ë¥¼ ì‹œì‘í•©ë‹ˆë‹¤...
-sc start "%SERVICE_NAME%"
-if %errorlevel% neq 0 (
-  echo.
-  echo [SERVICE] WARN: sc start ì‹¤íŒ¨ (code %errorlevel%^). 1053ì´ë©´ cmd.exe íŠ¹ì„±ìƒ ë‚  ìˆ˜ ìˆìŒ.
-  echo [SERVICE] WARN: ìƒíƒœ í™•ì¸: sc query "%SERVICE_NAME%"
-  echo [SERVICE] WARN: ë¡œê·¸ í™•ì¸: "%LOG_FILE%"
-  exit /b 2
-)
-
-echo [SERVICE] ì‹œì‘ë¨. ë¡œê·¸: "%LOG_FILE%"
-echo [SERVICE] ìƒíƒœ: sc query "%SERVICE_NAME%"
-sc query "%SERVICE_NAME%"
-exit /b 0
+echo [SERVICE] µî·Ï ¿Ï·á - Windows ·Î±×¿Â ½Ã ÀÚµ¿½ÇÇà, Ã¢ ¼û±è.
+echo [SERVICE] Áö±İ ½ÃÀÛÇÕ´Ï´Ù...
+call :start_now
+exit /b %errorlevel%
 
 :start
-call :check_admin
+call :check_project
 if %errorlevel% neq 0 exit /b 1
-sc start "%SERVICE_NAME%"
+call :start_now
+exit /b %errorlevel%
+
+:start_now
+call "%PROJECT_DIR%\scripts\start_dev.bat"
 exit /b %errorlevel%
 
 :stop
-call :check_admin
+call :check_project
 if %errorlevel% neq 0 exit /b 1
-sc stop "%SERVICE_NAME%"
+call "%PROJECT_DIR%\scripts\stop_dev.bat"
 exit /b %errorlevel%
 
 :status
-sc query "%SERVICE_NAME%"
-echo.
-if exist "%LOG_FILE%" (
-  echo [SERVICE] ë¡œê·¸: "%LOG_FILE%"
-  type "%LOG_FILE%"
+call :check_project
+if %errorlevel% neq 0 exit /b 1
+if exist "%VBS_FILE%" (
+  echo [SERVICE] ½ÃÀÛÇÁ·Î±×·¥ µî·ÏµÊ: "%VBS_FILE%"
 ) else (
-  echo [SERVICE] ë¡œê·¸ ì•„ì§ ì—†ìŒ: "%LOG_FILE%"
+  echo [SERVICE] ½ÃÀÛÇÁ·Î±×·¥ ¹Ìµî·Ï - install ÇÊ¿ä
+)
+echo.
+echo [SERVICE] Çï½º Ã¼Å©: 5002 / 5001 /api/health
+curl -sf -m 3 "http://127.0.0.1:5002/api/health" >nul 2>&1
+if not errorlevel 1 (
+  echo [SERVICE] RUNNING - backend 5002 ÀÀ´ä
+) else (
+  curl -sf -m 3 "http://127.0.0.1:5001/api/health" >nul 2>&1
+  if not errorlevel 1 (
+    echo [SERVICE] RUNNING - backend 5001 ÀÀ´ä
+  ) else (
+    echo [SERVICE] NOT RUNNING - Çï½º ¹«ÀÀ´ä
+  )
+)
+echo.
+if exist "%PROJECT_DIR%\logs\dev.log" (
+  echo [SERVICE] ·Î±× tail - logs\dev.log ¸¶Áö¸· 30ÁÙ:
+  powershell -NoProfile -Command "Get-Content -LiteralPath '%PROJECT_DIR%\logs\dev.log' -Tail 30"
+) else (
+  echo [SERVICE] ·Î±× ¾ÆÁ÷ ¾øÀ½: "%PROJECT_DIR%\logs\dev.log"
 )
 exit /b 0
 
 :uninstall
-call :check_admin
+call :check_project
 if %errorlevel% neq 0 exit /b 1
-echo [SERVICE] ì¤‘ì§€ í›„ ì‚­ì œ: %SERVICE_NAME%
-sc stop "%SERVICE_NAME%" >nul 2>&1
-timeout /t 2 /nobreak >nul
-sc delete "%SERVICE_NAME%"
+echo [SERVICE] ½ÃÀÛÇÁ·Î±×·¥ ÇØÁ¦: "%VBS_FILE%"
+if exist "%VBS_FILE%" del /f /q "%VBS_FILE%" >nul 2>&1
+echo [SERVICE] dev ÇÁ·Î¼¼½º ÁßÁö...
+call "%PROJECT_DIR%\scripts\stop_dev.bat" >nul 2>&1
+sc query "%SERVICE_NAME%" >nul 2>&1
 if %errorlevel% equ 0 (
-  echo [SERVICE] ì‚­ì œ ì™„ë£Œ.
-) else (
-  echo [SERVICE] ì‚­ì œ ì‹¤íŒ¨ ë˜ëŠ” ì„œë¹„ìŠ¤ ì—†ìŒ (code %errorlevel%^)
+  echo [SERVICE] ±¸¹æ½Ä sc ¼­ºñ½º ÀÜÀç »èÁ¦ ½Ãµµ...
+  sc stop "%SERVICE_NAME%" >nul 2>&1
+  timeout /t 2 /nobreak >nul
+  sc delete "%SERVICE_NAME%" >nul 2>&1
 )
-exit /b %errorlevel%
+echo [SERVICE] ÇØÁ¦ ¿Ï·á.
+exit /b 0
 
 :usage
-echo Usage (ê´€ë¦¬ì cmd^):
-echo   scripts\register_dev_service.bat install   - ë“±ë¡ + ìë™ì‹œì‘(auto^) + ì‹œì‘
-echo   scripts\register_dev_service.bat status    - ìƒíƒœ + ë¡œê·¸ tail
-echo   scripts\register_dev_service.bat start     - ì‹œì‘
-echo   scripts\register_dev_service.bat stop      - ì¤‘ì§€
-echo   scripts\register_dev_service.bat uninstall - ì¤‘ì§€ + ì‚­ì œ
+echo Usage - ÀÏ¹İ cmd, ÇÁ·ÎÁ§Æ®°æ·Î »ı·« ½Ã bat ±âÁØ »óÀ§ Æú´õ:
+echo   scripts\register_dev_service.bat install ["D:\path\to\project"]   - ½ÃÀÛÇÁ·Î±×·¥ µî·Ï + Áö±İ ½ÃÀÛ
+echo   scripts\register_dev_service.bat status ["D:\path\to\project"]    - µî·Ï »óÅÂ + Çï½º + ·Î±× tail
+echo   scripts\register_dev_service.bat start ["D:\path\to\project"]     - Áö±İ ½ÃÀÛ
+echo   scripts\register_dev_service.bat stop ["D:\path\to\project"]      - ÁßÁö
+echo   scripts\register_dev_service.bat uninstall ["D:\path\to\project"] - ½ÃÀÛÇÁ·Î±×·¥ ÇØÁ¦ + ÁßÁö
 exit /b 1
