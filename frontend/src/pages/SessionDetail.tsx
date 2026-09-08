@@ -559,6 +559,8 @@ export function SessionDetail() {
 
   // 세션 첫 진입/새로고침 시 항상 맨 아래로 스크롤
   // (?msg= / #message- 로 특정 메시지 지정 진입 시에는 그쪽을 우선한다)
+  // 한두 번 쏘고 끝내면 이미지·후속 렌더로 높이가 바뀌어 중간에 멈추므로,
+  // 레이아웃이 확정될 때까지 하단에 핀 고정한다 (최대 3.5s, 사용자 스크롤 시 중단).
   const initialScrollDoneRef = useRef<string | null>(null)
   useEffect(() => {
     if (!baseMessages || baseMessages.length === 0) return
@@ -569,15 +571,53 @@ export function SessionDetail() {
       const h = window.location.hash
       if (sp.get('msg') || h.startsWith('#message-') || h.startsWith('#msg=')) return
     } catch {}
-    // 새로고침 감지 시 브라우저 복원 스크롤을 덮어쓰도록 약간 지연 후 강제 하단
-    const doScroll = () => {
-      const c = messageContainerRef.current
-      if (!c) return
-      scrollToBottom()
+    // 브라우저의 새로고침 스크롤 복원이 끼어들지 못하게 수동 모드
+    try { history.scrollRestoration = 'manual' } catch {}
+    const c = messageContainerRef.current
+    if (!c) return
+    let stopped = false
+    const stop = () => { stopped = true }
+    const pin = () => {
+      const cc = messageContainerRef.current
+      if (cc) scrollToBottom()
     }
-    requestAnimationFrame(() => requestAnimationFrame(doScroll))
-    const t = setTimeout(doScroll, 250)
-    return () => clearTimeout(t)
+    pin()
+    // 컨테이너 내 이미지 로드가 끝나도 하단 유지 (capture 단계)
+    const onLoadCapture = (e: Event) => {
+      if (stopped) return
+      if ((e.target as HTMLElement)?.tagName === 'IMG') pin()
+    }
+    c.addEventListener('load', onLoadCapture, true)
+    const detachUserStop = () => {
+      c.removeEventListener('wheel', stop)
+      c.removeEventListener('touchmove', stop)
+      c.removeEventListener('pointerdown', stop)
+    }
+    c.addEventListener('wheel', stop, { passive: true })
+    c.addEventListener('touchmove', stop, { passive: true })
+    c.addEventListener('pointerdown', stop)
+    const t0 = Date.now()
+    let lastH = -1
+    let stable = 0
+    const cleanup = () => {
+      clearInterval(iv)
+      c.removeEventListener('load', onLoadCapture, true)
+      detachUserStop()
+    }
+    const iv = setInterval(() => {
+      const cc = messageContainerRef.current
+      if (stopped || !cc || Date.now() - t0 > 3500) { cleanup(); return }
+      pin()
+      const h = cc.scrollHeight
+      if (h === lastH) {
+        stable++
+        if (stable >= 3) cleanup()
+      } else {
+        stable = 0
+        lastH = h
+      }
+    }, 250)
+    return cleanup
   }, [baseMessages?.length, windowStart, sessionId, scrollToBottom])
   useEffect(() => { initialScrollDoneRef.current = null }, [sessionId])
 
