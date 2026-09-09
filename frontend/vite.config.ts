@@ -5,12 +5,21 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { DEFAULTS } from "../shared/src/config/defaults";
 
-function getBuildMeta(): { sha: string; time: string } {
+function getBuildMeta(): { sha: string; time: string; tag: string } {
   try {
     const sha = execSync("git rev-parse --short HEAD", { encoding: "utf8", timeout: 5000 }).trim();
-    if (/^[0-9a-f]{4,}$/.test(sha)) return { sha, time: new Date().toISOString() };
+    let tag = "";
+    try {
+      tag = execSync("git tag --points-at HEAD", { encoding: "utf8", timeout: 5000 })
+        .split("\n")
+        .map((t) => t.trim())
+        .filter((t) => /^v\d/.test(t))
+        .sort()
+        .pop() ?? "";
+    } catch {}
+    if (/^[0-9a-f]{4,}$/.test(sha)) return { sha, time: new Date().toISOString(), tag };
   } catch {}
-  return { sha: "dev", time: new Date().toISOString() };
+  return { sha: "dev", time: new Date().toISOString(), tag: "" };
 }
 const buildMeta = getBuildMeta();
 
@@ -24,6 +33,7 @@ export default defineConfig(({ mode }) => {
     define: {
       __BUILD_SHA__: JSON.stringify(buildMeta.sha),
       __BUILD_TIME__: JSON.stringify(buildMeta.time),
+      __BUILD_TAG__: JSON.stringify(buildMeta.tag),
     },
     resolve: {
       alias: {
