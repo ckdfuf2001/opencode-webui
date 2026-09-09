@@ -16,7 +16,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
 
   if (minimized) {
     return (
-      <div className="w-full max-w-3xl px-4 pb-1">
+      <div className="w-full max-w-4xl px-4 pb-1">
         <button
           type="button"
           onClick={() => setMinimized(false)}
@@ -32,7 +32,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
   }
 
   return (
-    <div className="w-full max-w-3xl px-4 pb-1">
+    <div className="w-full max-w-4xl px-4 pb-1">
       <div className="rounded-lg border bg-muted/40 px-3 py-2 text-xs">
         <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
           <Clock className="h-3 w-3" />
