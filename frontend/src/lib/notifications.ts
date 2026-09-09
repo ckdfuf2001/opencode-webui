@@ -25,6 +25,8 @@ export async function sendPushNotification(title: string, opts?: NotificationOpt
       icon: '/favicon.svg',
       requireInteraction,
       silent: false,
+      // 같은 tag(sessionId) 교체 시 조용히 바뀌어 취소 알림이 안 온 것처럼 보임 → 항상 재알림
+      renotify: true,
       ...opts,
       data: { ...((opts as unknown as { data?: Record<string, unknown> } | undefined)?.data ?? {}), ...(url ? { url } : {}) },
     }
