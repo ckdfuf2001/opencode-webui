@@ -114,11 +114,18 @@ export function SessionDetail() {
   const LOAD_STEP = 15;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
-  useEffect(() => { windowStartRef.current = windowStart }, [windowStart]);
+  // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
+  // 한 번에 최상단까지 날아가며 와다다 떨리던 원인)
+  const shiftPendingRef = useRef(false);
+  useEffect(() => {
+    windowStartRef.current = windowStart;
+    shiftPendingRef.current = false;
+  }, [windowStart]);
   const prevMsgLenRef = useRef<number>(0);
   // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
   useEffect(() => {
     setWindowStart(null)
+    shiftPendingRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
@@ -159,14 +166,17 @@ export function SessionDetail() {
   const markDisengagedRef = useRef<(() => void) | null>(null);
   // 윈도우 위로 이동. 위치 보정은 네이티브 overflow-anchor가 담당하므로
   // 여기서는 추종 해제 + 시작점 이동만 한다.
+  // 이전 이동이 커밋되기 전 중복 이동 금지 (rAF마다 쌓여 한 번에
+  // 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftWindowUp = useCallback(() => {
+    if (shiftPendingRef.current) return;
     const len = baseMessages?.length ?? 0;
     if (len === 0) return;
+    const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+    if (cur <= 0) return;
     markDisengagedRef.current?.();
-    setWindowStart((prev) => {
-      const cur = prev ?? Math.max(0, len - WINDOW_SIZE);
-      return Math.max(0, cur - LOAD_STEP);
-    });
+    shiftPendingRef.current = true;
+    setWindowStart(Math.max(0, cur - LOAD_STEP));
   }, [baseMessages?.length]);
   const handleLoadMore = shiftWindowUp;
   // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달(스크롤 가능할 때만) → 하단 고정
