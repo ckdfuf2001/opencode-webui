@@ -276,8 +276,11 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       if (!truncated) return
     }
 
-    // 응답 생성 중에는 전송 대신 큐에 적재한다. 백엔드 폴러가 idle 전환 시 발송한다.
-    if (hasActiveStream || sendPrompt.isPending) {
+    // 응답 생성 중이거나 cancel 처리 중에는 전송 대신 큐에 적재한다.
+    // cancel 직후 프론트는 idle로 보여도 서버가 abort 중이라 직접 보내면 유실/역전된다.
+    // 백엔드 폴러가 실제 idle 확인 후 순서대로 발송한다.
+    const aborting = abortSession.isPending || isRecentlyAborted(sessionID)
+    if (hasActiveStream || sendPrompt.isPending || aborting) {
       const text = parts
         .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
         .filter((text) => text.trim().length > 0)
