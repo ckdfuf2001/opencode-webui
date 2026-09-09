@@ -209,13 +209,12 @@ export function SessionDetail() {
         // 방향으로 겹침 해소: 짧은 내용에서 위·아래 영역이 겹쳐도
         // 내려가며 들어올 때만 복귀, 올라가며 닿을 때는 이전 로드만 한다.
         const st = c.scrollTop;
-        const maxScroll = c.scrollHeight - c.clientHeight;
         const goingUp = st < lastScrollTopRef.current - 2;
         const goingDown = st > lastScrollTopRef.current + 2;
         lastScrollTopRef.current = st;
-        // 엣지는 % 기준: 위 15% / 아래 85%. 바닥에 닿으면 맨 끝 유지(하단 고정).
-        const ratio = maxScroll > 0 ? st / maxScroll : 0;
-        const nearBottom = ratio >= 0.85;
+        // 엣지는 px 기준 유지 (%는 내용 길이에 따라 엣지 진입 자체가 안 됨).
+        // 위 450px + 올라가는 중이면 이전 로드, 아래 300px + 내려가는 중이면 하단 고정.
+        const nearBottom = st + c.clientHeight >= c.scrollHeight - 300;
         const wasNear = wasNearBottomRef.current;
         wasNearBottomRef.current = nearBottom;
         if (nearBottom && !wasNear && goingDown && !navLockRef.current && windowStartRef.current !== null) {
@@ -226,7 +225,7 @@ export function SessionDetail() {
               if (cc) cc.scrollTop = cc.scrollHeight;
             });
           });
-        } else if (ratio <= 0.15 && goingUp) {
+        } else if (st < 450 && goingUp) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) shiftWindowUp();
