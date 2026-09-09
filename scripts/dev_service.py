@@ -86,9 +86,17 @@ def svc_log(msg):
 
 
 def build_env():
-    """LocalSystem에는 H:\\nodejs, 사용자 npm-global이 PATH에 없으므로 보강."""
+    """LocalSystem PATH에는 사용자 영역(node/npm-global/python)이 없으므로 보강.
+    특히 python은 이 서비스가 도는 인터프리터 경로를 그대로 쓴다."""
     env = dict(os.environ)
     extra = []
+    try:
+        py_dir = os.path.dirname(sys.executable)
+        for cand in (py_dir, os.path.join(py_dir, "Scripts")):
+            if cand and os.path.isdir(cand):
+                extra.append(cand)
+    except Exception:
+        pass
     for cand in (r"H:\nodejs",
                  os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "nodejs")):
         if cand and os.path.isdir(cand):
