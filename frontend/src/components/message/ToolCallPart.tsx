@@ -32,6 +32,35 @@ function CopyButton({ content, title, className = "" }: { content: string; title
 
 type ToolPart = components['schemas']['ToolPart']
 
+/** 거대 툴 출력 렌더 상한 — 100KB+ <pre>가 폴링마다 레이아웃을 잡아먹어
+ *  긴 세션에서 채팅/취소가 버벅이는 주범이다. 기본은 앞부분만 그리고
+ *  펼치기/복사로는 전체에 접근한다. */
+const OUTPUT_RENDER_LIMIT = 6000
+
+function CappedOutput({ text, red }: { text: string; red?: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  if (text.length <= OUTPUT_RENDER_LIMIT) {
+    return (
+      <pre className={`bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap ${red ? 'text-red-300' : ''}`}>
+        {text}
+      </pre>
+    )
+  }
+  return (
+    <div>
+      <pre className={`bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap max-h-[320px] overflow-y-auto ${red ? 'text-red-300' : ''}`}>
+        {expanded ? text : text.slice(0, OUTPUT_RENDER_LIMIT)}
+      </pre>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="mt-1 text-[11px] text-blue-400 hover:text-blue-300 cursor-pointer"
+      >
+        {expanded ? 'Collapse' : `Show full output (${text.length.toLocaleString()} chars)`}
+      </button>
+    </div>
+  )
+}
+
 interface ToolCallPartProps {
   part: ToolPart
   onFileClick?: (filePath: string, lineNumber?: number) => void
@@ -356,9 +385,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
                   <div className="text-zinc-400">Output:</div>
                   <CopyButton content={part.state.status === 'completed' ? part.state.output : ''} title="Copy output" />
                 </div>
-                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap">
-                  {part.state.status === 'completed' ? part.state.output : ''}
-                </pre>
+                <CappedOutput text={part.state.status === 'completed' ? (part.state.output ?? '') : ''} />
               </div>
               {part.state.time && (
                 <div className="text-xs text-zinc-500">
@@ -394,9 +421,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
                   <div className="text-zinc-400">Output:</div>
                   <CopyButton content={part.state.status === 'error' ? part.state.error : ''} title="Copy output" />
                 </div>
-                <pre className="bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap text-red-300">
-                  {part.state.error}
-                </pre>
+                <CappedOutput text={part.state.status === 'error' ? (part.state.error ?? '') : ''} red />
               </div>
               {part.state.time && (
                 <div className="text-xs text-zinc-500">

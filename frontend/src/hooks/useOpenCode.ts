@@ -65,6 +65,27 @@ export function abortSpecificSend(
   }
 }
 
+/** 거대 문자열 join 없이 길이만 합산 — 폴링마다 MB급 join 할당 방지.
+ *  join('').length === 각 길이의 합이므로 길이 비교 판정 결과는 동일하다. */
+function textPartsLength(parts: MessageWithParts["parts"]): number {
+  let n = 0
+  for (const p of parts) {
+    if ((p as { type?: string }).type !== "text") continue
+    n += ((p as { text?: string }).text ?? "").length
+  }
+  return n
+}
+
+function toolOutputLength(parts: MessageWithParts["parts"]): number {
+  let n = 0
+  for (const p of parts) {
+    if ((p as { type?: string }).type !== "tool") continue
+    const st = (p as { state?: { output?: string; metadata?: { output?: string } } }).state
+    n += (st?.output ?? st?.metadata?.output ?? "").length
+  }
+  return n
+}
+
 /** SSE가 서버에만 있는 새 메시지를 가리키면 가짜 카드를 만들지 않고 목록 refetch를
  *  앞당겨 첫 내용을 빨리 가져온다. reasoning은 시작 지연이 크므로 300ms,
  *  그 외는 세션당 800ms 쓰로틀로 refetch 폭주를 막는다. */
@@ -340,11 +361,12 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         if (cachedLast.info.id === resultLast.info.id && cachedLast.parts.length > resultLast.parts.length) {
           result = [...result.slice(0, -1), cachedLast];
         } else if (cachedLast.info.id === resultLast.info.id) {
-          const cText = cachedLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
-          const rText = resultLast.parts.filter((p) => (p as { type: string }).type === "text").map((p) => (p as { text: string }).text ?? "").join("");
-          const cTool = cachedLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "")).join("");
-          const rTool = resultLast.parts.filter((p) => (p as { type: string }).type === "tool").map((p) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "")).join("");
-          if (cText.length > rText.length || cTool.length > rTool.length) result = [...result.slice(0, -1), cachedLast];
+          // 길이 합산으로만 비교 — join은 거대 할당이라 길이 판정에는 쓰지 않는다
+          const cTextLen = textPartsLength(cachedLast.parts);
+          const rTextLen = textPartsLength(resultLast.parts);
+          const cToolLen = toolOutputLength(cachedLast.parts);
+          const rToolLen = toolOutputLength(resultLast.parts);
+          if (cTextLen > rTextLen || cToolLen > rToolLen) result = [...result.slice(0, -1), cachedLast];
         }
       }
       const optimistic = pendingOptimistic.get(sessionID!);
@@ -457,13 +479,20 @@ export const usePollLastMessage = (
           const curCompleted = 'completed' in (curLast.info.time as Record<string, unknown>) && Boolean((curLast.info.time as { completed?: number }).completed)
           const nextCompleted = 'completed' in (msg.info.time as Record<string, unknown>) && Boolean((msg.info as { time: { completed?: number } }).time.completed)
           // SSE가 앞서 나가 있으면 폴링 결과가 덮어쓰지 않도록 보존 — 이전에는 동일 텍스트일 때만 유지해 SSE 증분이 날아갔다
-          const curText = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
-          const nextText = msg.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
-          const curTool = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
-          const nextTool = msg.parts.filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
-          if (curLast.parts.length === msg.parts.length && curCompleted === nextCompleted && curText === nextText && curTool === nextTool) return old
+          // 길이가 다르면 join 없이 판정 (스트리밍 중 99%는 이 경로), 같을 때만 내용 동등 확인
+          const curTextLen = textPartsLength(curLast.parts)
+          const nextTextLen = textPartsLength(msg.parts as MessageWithParts["parts"])
+          const curToolLen = toolOutputLength(curLast.parts)
+          const nextToolLen = toolOutputLength(msg.parts as MessageWithParts["parts"])
+          if (curLast.parts.length === msg.parts.length && curCompleted === nextCompleted && curTextLen === nextTextLen && curToolLen === nextToolLen) {
+            const curText = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
+            const nextText = (msg.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
+            const curTool = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
+            const nextTool = (msg.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
+            if (curText === nextText && curTool === nextTool) return old
+          }
           // SSE가 더 길면 서버 응답이 lagging — 덮어쓰지 않는다
-          if (curText.length > nextText.length || curTool.length > nextTool.length) return old
+          if (curTextLen > nextTextLen || curToolLen > nextToolLen) return old
           // 서버가 더 길거나 완료 상태가 바뀌었을 때만 교체
           return [...old.slice(0, -1), msg as MessageWithParts]
         })

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import { useMessages } from './useOpenCode'
 import { useSettings } from './useSettings'
 import { useQuery } from '@tanstack/react-query'
@@ -43,11 +43,26 @@ interface Provider {
 // 사용량에서 제외한다 — 새 ID 메시지(그 이후)부터 다시 잰다.
 const compactAtBySession = new Map<string, number>()
 
+// mark만 쓰고 끝내면 useMemo가 재계산되지 않아 컴팩트 전 값이 화면에
+// 그대로 남는다 (SessionDetail 경로는 onSuccess 무효화→재계산이 mark보다
+// 먼저 일어나서 구버전으로 굳는다). 버전 통지로 강제 재계산한다.
+let compactVersion = 0
+const compactListeners = new Set<() => void>()
+function subscribeCompact(cb: () => void): () => void {
+  compactListeners.add(cb)
+  return () => { compactListeners.delete(cb) }
+}
+function getCompactVersion(): number {
+  return compactVersion
+}
+
 export function markSessionCompacted(sessionID: string, at: number = Date.now()): void {
   compactAtBySession.set(sessionID, at)
   try {
     sessionStorage.setItem(`compactAt:${sessionID}`, String(at))
   } catch { /* ignore */ }
+  compactVersion += 1
+  compactListeners.forEach((l) => { try { l() } catch { /* ignore */ } })
 }
 
 function getSessionCompactedAt(sessionID: string | undefined): number | null {
@@ -90,6 +105,8 @@ async function fetchProviders(opcodeUrl: string): Promise<ProvidersResponse> {
 export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string): ContextUsage => {
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionID, directory)
   const { preferences } = useSettings()
+  // 컴팩트 기준점 변경 시 재계산 (deps에 포함)
+  const compactVer = useSyncExternalStore(subscribeCompact, getCompactVersion)
 
   const { data: providersData } = useQuery({
     queryKey: ['providers', opcodeUrl],
@@ -188,5 +205,5 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
       currentModel,
       isLoading: false
     }
-  }, [messages, messagesLoading, preferences?.defaultModel, providersData, sessionID])
+  }, [messages, messagesLoading, preferences?.defaultModel, providersData, sessionID, compactVer])
 }
