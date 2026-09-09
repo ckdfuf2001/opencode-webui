@@ -133,6 +133,8 @@ export function PromptInput({
   
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const pendingRunRef = useRef<string | null>(null)
+  // Ctrl+Enter 연타 시 async 준비 구간 중복 실행 방지
+  const submitGuardRef = useRef(false)
   const handleSubmitRef = useRef<() => Promise<void>>(async () => {})
   const sendPrompt = useSendPrompt(opcodeUrl, directory)
   const sendShell = useSendShell(opcodeUrl, directory)
@@ -212,6 +214,10 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     if (isContextWarning) {
       showToast.warning(`Context ${Math.round(usage)}% — the limit is close. Truncate unnecessary messages.`, { duration: 4000 })
     }
+
+    if (submitGuardRef.current) return
+    submitGuardRef.current = true
+    try {
 
     if (isBashMode) {
       const command = prompt.startsWith('!') ? prompt.slice(1) : prompt
@@ -325,6 +331,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     onSubmitted?.()
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
+    }
+    } finally {
+      submitGuardRef.current = false
     }
   }
 
