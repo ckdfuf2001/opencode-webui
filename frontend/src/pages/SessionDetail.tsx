@@ -190,6 +190,25 @@ export function SessionDetail() {
     setWindowStart(Math.max(0, cur - LOAD_STEP));
   }, [baseMessages?.length]);
   const handleLoadMore = shiftWindowUp;
+  // 맨 아래 도달 검증 핀: 리액트 커밋 지연으로 덜 내려갔으면 최대 4회 재시도.
+  // 사용자가 위로 움직이면 즉시 중단한다. 찐 마지막일 때만 맨 아래로 간다.
+  const pinBottomVerified = useCallback(() => {
+    let tries = 0;
+    let lastTop = -1;
+    const attempt = () => {
+      const cc = messageContainerRef.current;
+      if (!cc) return;
+      const cur = cc.scrollTop;
+      if (lastTop >= 0 && cur < lastTop - 4) return; // 사용자 개입 → 중단
+      cc.scrollTop = cc.scrollHeight;
+      lastTop = cc.scrollTop;
+      tries++;
+      if (tries < 4 && cc.scrollTop + cc.clientHeight < cc.scrollHeight - 40) {
+        setTimeout(attempt, 120);
+      }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(attempt));
+  }, []);
   // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달(스크롤 가능할 때만) → 하단 고정
   useEffect(() => {
     const c = messageContainerRef.current;
@@ -219,12 +238,7 @@ export function SessionDetail() {
         wasNearBottomRef.current = nearBottom;
         if (nearBottom && !wasNear && goingDown && !navLockRef.current && windowStartRef.current !== null) {
           setWindowStart(null);
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const cc = messageContainerRef.current;
-              if (cc) cc.scrollTop = cc.scrollHeight;
-            });
-          });
+          pinBottomVerified();
         } else if (st < 450 && goingUp) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
@@ -234,7 +248,7 @@ export function SessionDetail() {
     };
     c.addEventListener("scroll", onScroll, { passive: true });
     return () => c.removeEventListener("scroll", onScroll);
-  }, [shiftWindowUp]);
+  }, [shiftWindowUp, pinBottomVerified]);
   const {
     data: dbStatuses,
     isError: statusError,
