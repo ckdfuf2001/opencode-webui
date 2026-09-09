@@ -30,14 +30,13 @@ if %errorlevel%==0 (
   exit /b 1
 )
 
-REM Bun
+REM Bun (optional since dev backend runs on node; only needed for dev:bun fallback)
 where bun >nul 2>nul
 if %errorlevel%==0 (
   echo   [+] Bun is installed
 ) else (
-  echo   [x] Bun is NOT installed.
-  echo       Install it from: https://bun.sh
-  exit /b 1
+  echo   [.] Bun not found - skipping (node dev does not need it).
+  echo       Only required for: dev:bun fallback. Install from https://bun.sh if needed.
 )
 
 REM pnpm
@@ -159,10 +158,14 @@ if not exist "%ENV_FILE%" (
 
 echo.
 echo [6/7] Verifying runtime...
+call node --version >nul 2>nul
+if %errorlevel% neq 0 (
+  echo   [x] node --version failed.
+  exit /b 1
+)
 call bun --version >nul 2>nul
 if %errorlevel% neq 0 (
-  echo   [x] bun --version failed.
-  exit /b 1
+  echo   [.] bun --version skipped (not installed; node dev does not need it).
 )
 
 echo.
