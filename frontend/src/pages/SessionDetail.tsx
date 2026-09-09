@@ -32,6 +32,7 @@ import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
+import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
 import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
 
 interface InjectedFile {
@@ -67,6 +68,7 @@ export function SessionDetail() {
   const [highlightedMessageID, setHighlightedMessageID] = useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [globalUpload, setGlobalUpload] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
   const [autoScrollOverride, setAutoScrollOverride] = useState<boolean | null>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
@@ -864,25 +866,28 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
     const results: { name: string; path: string }[] = []
     let lastError: string | null = null
 
-    for (const file of Array.from(files)) {
-      const formData = new FormData()
-      formData.append('file', file)
+    const allFiles = Array.from(files)
+    const freshFiles = allFiles.filter((f) => !isUploadInFlight(f))
+    if (freshFiles.length < allFiles.length) {
+      showToast.info(`이미 업로드 중인 ${allFiles.length - freshFiles.length}개 파일은 제외합니다`)
+    }
+    if (freshFiles.length === 0) return
+
+    for (let i = 0; i < freshFiles.length; i++) {
+      const file = freshFiles[i]
+      setGlobalUpload({ name: file.name, loaded: 0, total: file.size || 1, index: i + 1, count: freshFiles.length })
       try {
-        const res = await fetch(`${API_BASE_URL}/api/files/${uploadDir}`, {
-          method: 'POST',
-          body: formData,
+        const data = await uploadFileWithProgress(`${API_BASE_URL}/api/files/${uploadDir}`, file, (loaded, total) => {
+          setGlobalUpload({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: freshFiles.length })
         })
-        if (!res.ok) {
-          const body = await res.json().catch(() => null)
-          if (!lastError) lastError = body?.error || `Upload failed: ${res.statusText}`
-          continue
-        }
-        const data = await res.json().catch(() => null)
         const savedName: string = data?.name || file.name
         results.push({ name: savedName, path: `chat_uploads/${savedName}` })
-      } catch {
-        if (!lastError) lastError = 'Upload failed'
+      } catch (e) {
+        if (e instanceof DuplicateUploadError) continue
+        if (!lastError) lastError = e instanceof Error ? e.message : 'Upload failed'
         continue
+      } finally {
+        setGlobalUpload(null)
       }
     }
 
@@ -1047,6 +1052,20 @@ if (results.length > 0) {
                 isStreaming={isStreaming}
               />
             </div>
+            </div>
+          )}
+          {globalUpload && (
+            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-40 w-[320px] max-w-[80%] px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400 backdrop-blur-md">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="truncate">업로드 중 {globalUpload.index}/{globalUpload.count} — {globalUpload.name}</span>
+                <span className="font-mono shrink-0">{Math.round((globalUpload.loaded / Math.max(globalUpload.total, 1)) * 100)}%</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-[width]"
+                  style={{ width: `${Math.min(100, Math.round((globalUpload.loaded / Math.max(globalUpload.total, 1)) * 100))}%` }}
+                />
+              </div>
             </div>
           )}
         </div>

@@ -50,6 +50,76 @@ export async function fetchFileRange(path: string, startLine: number, endLine: n
   return response.json()
 }
 
+export interface UploadProgress {
+  loaded: number
+  total: number
+}
+
+// 같은 파일 중복 업로드 방지용 (붙여넣기 연타 대응)
+const inFlightUploads = new Set<string>()
+
+export function uploadFileKey(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`
+}
+
+export function isUploadInFlight(file: File): boolean {
+  return inFlightUploads.has(uploadFileKey(file))
+}
+
+export class DuplicateUploadError extends Error {
+  constructor(fileName: string) {
+    super(`"${fileName}" 이미 업로드 중입니다`)
+    this.name = 'DuplicateUploadError'
+  }
+}
+
+// fetch에는 업로드 진행률이 없어 XHR로 전송한다
+export function uploadFileWithProgress(
+  url: string,
+  file: File,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<any> {
+  const key = uploadFileKey(file)
+  if (inFlightUploads.has(key)) return Promise.reject(new DuplicateUploadError(file.name))
+  inFlightUploads.add(key)
+  return new Promise((resolve, reject) => {
+    const done = () => inFlightUploads.delete(key)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', url)
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded, e.total)
+    }
+    xhr.onload = () => {
+      done()
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText))
+        } catch {
+          resolve(null)
+        }
+      } else {
+        try {
+          const body = JSON.parse(xhr.responseText)
+          reject(new Error(body?.error || `Upload failed: ${xhr.statusText}`))
+        } catch {
+          reject(new Error(`Upload failed: ${xhr.statusText}`))
+        }
+      }
+    }
+    xhr.onerror = () => {
+      done()
+      reject(new Error('Upload failed'))
+    }
+    xhr.onabort = () => {
+      done()
+      reject(new Error('Upload cancelled'))
+    }
+    const formData = new FormData()
+    formData.append('file', file)
+    xhr.send(formData)
+  })
+}
+
 export async function applyFilePatches(path: string, patches: PatchOperation[]): Promise<{ success: boolean; totalLines: number }> {
   const response = await fetch(`${API_BASE_URL}/api/files/${path}`, {
     method: 'PATCH',

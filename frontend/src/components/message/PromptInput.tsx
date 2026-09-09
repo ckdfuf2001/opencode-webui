@@ -18,7 +18,7 @@ import { detectMentionTrigger, parsePromptToParts, getFilename, MENTION_PATTERN 
 import { getModel, formatModelName } from '@/api/providers'
 import type { components } from '@/api/opencode-types'
 import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
-import { getFileStat } from '@/api/files'
+import { getFileStat, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from '@/api/files'
 import { showToast } from '@/lib/toast'
 import {
   DropdownMenu,
@@ -101,6 +101,7 @@ export function PromptInput({
   const [suggestionQuery, setSuggestionQuery] = useState('')
   const [suggestionPosition, setSuggestionPosition] = useState({ bottom: 0, left: 0, width: 0, maxHeight: 256 })
   const [attachedFiles, setAttachedFiles] = useState(new Map<string, FileInfo>())
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null)
   const [showFileSuggestions, setShowFileSuggestions] = useState(false)
   const [fileQuery, setFileQuery] = useState('')
   const [fileSuggestionPosition, setFileSuggestionPosition] = useState({ bottom: 0, left: 0, width: 0, maxHeight: 256 })
@@ -417,26 +418,28 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       return
     }
 
+    const fresh = files.filter((f) => !isUploadInFlight(f))
+    if (fresh.length < files.length) {
+      showToast.info(`이미 업로드 중인 ${files.length - fresh.length}개 파일은 제외합니다`)
+    }
+    if (fresh.length === 0) return
     const uploaded: { name: string; path: string }[] = []
     let failures = 0
-    for (const file of files) {
-      const formData = new FormData()
-      formData.append('file', file)
+    for (let i = 0; i < fresh.length; i++) {
+      const file = fresh[i]
+      setUploadProgress({ name: file.name, loaded: 0, total: file.size || 1, index: i + 1, count: fresh.length })
       try {
-        const res = await fetch(`${API_BASE_URL}/api/files/${uploadDir}`, {
-          method: 'POST',
-          body: formData,
+        const data = await uploadFileWithProgress(`${API_BASE_URL}/api/files/${uploadDir}`, file, (loaded, total) => {
+          setUploadProgress({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: fresh.length })
         })
-        if (!res.ok) {
-          failures++
-          continue
-        }
-        const data = await res.json().catch(() => null)
         const savedName: string = data?.name || file.name
         uploaded.push({ name: savedName, path: `chat_uploads/${savedName}` })
-      } catch {
+      } catch (e) {
+        if (e instanceof DuplicateUploadError) continue
         failures++
         continue
+      } finally {
+        setUploadProgress(null)
       }
     }
 
@@ -445,7 +448,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       return
     }
     if (failures > 0) {
-      showToast.error(`${failures} of ${files.length} file(s) failed to upload`)
+      showToast.error(`${failures} of ${fresh.length} file(s) failed to upload`)
     }
     showToast.success(`Uploaded ${uploaded.length} file(s) to project`, { duration: 5000 })
 
@@ -788,6 +791,20 @@ useEffect(() => {
   return (
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 mx-2 mb-2 w-[90%] max-w-4xl">
       <ChatQueueStrip sessionID={sessionID} />
+      {uploadProgress && (
+        <div className="mb-2 px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
+            <span className="font-mono shrink-0">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
+            <div
+              className="h-full bg-blue-500 transition-[width]"
+              style={{ width: `${Math.min(100, Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100))}%` }}
+            />
+          </div>
+        </div>
+      )}
       {(isContextWarning || isContextCritical || willExceed) && contextLimit && (
         <div className={`mb-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 ${isContextCritical || willExceed ? 'bg-red-500/15 border border-red-500/40 text-red-400' : 'bg-yellow-500/15 border border-yellow-500/40 text-yellow-600 dark:text-yellow-400'}`}>
           <span className="flex-1 min-w-0">

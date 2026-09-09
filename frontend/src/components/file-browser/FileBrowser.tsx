@@ -11,7 +11,7 @@ import { FolderOpen, Upload, RefreshCw } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { useMobile } from '@/hooks/useMobile'
-import { useFile } from '@/api/files'
+import { useFile, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from '@/api/files'
 import { showToast } from '@/lib/toast'
 
 const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
@@ -58,6 +58,7 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false)
   
@@ -149,32 +150,34 @@ useEffect(() => {
   const handleUpload = useCallback(async (files: FileList) => {
     const fileArray = Array.from(files)
     if (fileArray.length === 0) return
+    const freshFiles = fileArray.filter((f) => !isUploadInFlight(f))
+    if (freshFiles.length < fileArray.length) {
+      showToast.info(`이미 업로드 중인 ${fileArray.length - freshFiles.length}개 파일은 제외합니다`)
+    }
+    if (freshFiles.length === 0) return
     let successCount = 0
     let failCount = 0
     let lastResult: { name?: string; path?: string } | null = null
     let lastError: string | null = null
-    for (const file of fileArray) {
-      const formData = new FormData()
-      formData.append('file', file)
+    for (let i = 0; i < freshFiles.length; i++) {
+      const file = freshFiles[i]
+      setUploadProgress({ name: file.name, loaded: 0, total: file.size || 1, index: i + 1, count: freshFiles.length })
       try {
-        const response = await fetch(`${API_BASE_URL}/api/files/${currentPath}`, {
-          method: 'POST',
-          body: formData,
+        lastResult = await uploadFileWithProgress(`${API_BASE_URL}/api/files/${currentPath}`, file, (loaded, total) => {
+          setUploadProgress({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: freshFiles.length })
         })
-        if (!response.ok) {
-          const body = await response.json().catch(() => null)
-          throw new Error(body?.error || `Upload failed: ${response.statusText}`)
-        }
-        lastResult = await response.json().catch(() => null)
         successCount++
       } catch (err) {
+        if (err instanceof DuplicateUploadError) continue
         failCount++
         lastError = err instanceof Error ? err.message : 'Upload failed'
+      } finally {
+        setUploadProgress(null)
       }
     }
     if (successCount > 0) {
-      if (fileArray.length === 1) {
-        showToast.success(`Uploaded "${lastResult?.name || fileArray[0].name}" to ${currentPath || '/'}`, {
+      if (freshFiles.length === 1) {
+        showToast.success(`Uploaded "${lastResult?.name || freshFiles[0].name}" to ${currentPath || '/'}`, {
           description: lastResult?.path ? lastResult.path : undefined,
           duration: 5000,
         })
@@ -353,6 +356,20 @@ useEffect(() => {
               />
             </div>
             
+            {uploadProgress && (
+              <div className="px-1 py-2 text-xs text-blue-600 dark:text-blue-400 flex-shrink-0">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
+                  <span className="font-mono shrink-0">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 transition-[width]"
+                    style={{ width: `${Math.min(100, Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            )}
             {error && (
               <div className="text-sm text-destructive bg-destructive/10 p-2 rounded mb-4 flex-shrink-0">
                 {error}
@@ -435,6 +452,20 @@ useEffect(() => {
             </Button>
           </div>
           
+          {uploadProgress && (
+            <div className="px-1 py-2 text-xs text-blue-600 dark:text-blue-400">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
+                <span className="font-mono shrink-0">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-[width]"
+                  style={{ width: `${Math.min(100, Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100))}%` }}
+                />
+              </div>
+            </div>
+          )}
           {error && (
             <div className="text-sm text-destructive bg-destructive/10 p-2 rounded">
               {error}

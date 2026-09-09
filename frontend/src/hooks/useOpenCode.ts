@@ -12,6 +12,7 @@ import { markSessionIdle } from "./useSessionActivity"
 import { clearSessionNotifyData } from "@/lib/notifications"
 import { listSessionStatuses } from "@/api/session-status"
 import { stripMemoryRecall } from "@/lib/stripRecall"
+import { API_BASE_URL } from "@/config"
 
 
 type SendPromptRequest = NonNullable<
@@ -326,7 +327,11 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
   return useQuery({
     queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory],
     queryFn: async () => {
-      const data = await client!.listMessages(sessionID!);
+      // 백엔드 캐시를 경유해 가져온다 — 프론트 폴링이 opencode 이벤트루프를 때리지 않는다
+      const dirQs = directory ? `?directory=${encodeURIComponent(directory)}` : '';
+      const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}${dirQs}`);
+      if (!res.ok) throw new Error('Failed to load messages');
+      const data = (await res.json()) as MessageListResponse;
       let result = applyTruncationWindow(sessionID!, data);
       const cached = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory]);
       if (cached && result.length > 0 && cached.length > 0) {
