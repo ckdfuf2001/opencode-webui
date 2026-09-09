@@ -110,8 +110,9 @@ export function SessionDetail() {
   // 위치 보정은 브라우저 네이티브 overflow-anchor에 맡긴다 (키가 msg.info.id로
   // 안정적이라 prepend 시 뷰가 제자리에 유지된다). 수동 scrollTop 보정 금지 —
   // 네이티브 앵커와 이중 보정되면 오히려 튄다.
-  const WINDOW_SIZE = 25;
-  const LOAD_STEP = 15;
+  // 보여주는 개수는 절반 수준으로 축소 (위·아래 이동 시 6개씩 추가 로드)
+  const WINDOW_SIZE = 12;
+  const LOAD_STEP = 6;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
@@ -119,6 +120,10 @@ export function SessionDetail() {
   const shiftPendingRef = useRef(false);
   // 하단 근처 여부 (엣지 트리거용: 근처 진입 시 1회만 복귀)
   const wasNearBottomRef = useRef(false);
+  // 마지막 관측 scrollTop (이동 방향 판단용)
+  const lastScrollTopRef = useRef(0);
+  // 검색 이동 애니메이션 중에는 엣지 반응 금지 (타겟이 윈도우 밖으로 밀려나지 않게)
+  const navLockRef = useRef(false);
   useEffect(() => {
     windowStartRef.current = windowStart;
     shiftPendingRef.current = false;
@@ -129,6 +134,8 @@ export function SessionDetail() {
     setWindowStart(null)
     shiftPendingRef.current = false
     wasNearBottomRef.current = false
+    lastScrollTopRef.current = 0
+    navLockRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
@@ -173,15 +180,13 @@ export function SessionDetail() {
   // 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftWindowUp = useCallback(() => {
     if (shiftPendingRef.current) return;
+    if (navLockRef.current) return;
     const len = baseMessages?.length ?? 0;
     if (len === 0) return;
     const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
     if (cur <= 0) return;
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
-    // 보상 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않도록 근처로 표시
-    // (다음 실제 스크롤 이벤트에서 위치로 재계산된다)
-    wasNearBottomRef.current = true;
     setWindowStart(Math.max(0, cur - LOAD_STEP));
   }, [baseMessages?.length]);
   const handleLoadMore = shiftWindowUp;
@@ -201,23 +206,27 @@ export function SessionDetail() {
         // 엣지 여유를 넉넉히 둬서 버퍼가 먼저 보이고 로드가 따라오게 한다.
         // 위: 450px 전에 미리 로드 (15개 추가분이 쿠션이 됨)
         // 아래: 300px 근처 진입 시 1회만 하단 고정 복귀 (계속 머물러도 반복 안 함)
-        const nearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 300;
+        // 방향으로 겹침 해소: 짧은 내용에서 위·아래 영역이 겹쳐도
+        // 내려가며 들어올 때만 복귀, 올라가며 닿을 때는 이전 로드만 한다.
+        const st = c.scrollTop;
+        const goingUp = st < lastScrollTopRef.current - 2;
+        const goingDown = st > lastScrollTopRef.current + 2;
+        lastScrollTopRef.current = st;
+        const nearBottom = st + c.clientHeight >= c.scrollHeight - 300;
         const wasNear = wasNearBottomRef.current;
         wasNearBottomRef.current = nearBottom;
-        if (c.scrollTop < 450) {
+        if (nearBottom && !wasNear && goingDown && !navLockRef.current && windowStartRef.current !== null) {
+          setWindowStart(null);
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const cc = messageContainerRef.current;
+              if (cc) cc.scrollTop = cc.scrollHeight;
+            });
+          });
+        } else if (st < 450 && goingUp) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) shiftWindowUp();
-        } else if (nearBottom && !wasNear) {
-          if (windowStartRef.current !== null) {
-            setWindowStart(null);
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const cc = messageContainerRef.current;
-                if (cc) cc.scrollTop = cc.scrollHeight;
-              });
-            });
-          }
         }
       });
     };
@@ -703,11 +712,14 @@ export function SessionDetail() {
     const idx = baseMessages.findIndex((m) => m.info.id === msgID);
     if (idx === -1) return;
     // ensure window includes target when navigating via hash/?msg (위쪽에 버퍼 5개)
+    // 이동 애니메이션 동안 엣지 반응 금지 (타겟이 윈도우 밖으로 밀려나지 않게)
     const len = baseMessages.length;
     const curStart = windowStart ?? Math.max(0, len - WINDOW_SIZE);
     if (idx < curStart || idx >= curStart + WINDOW_SIZE) {
       setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
     }
+    navLockRef.current = true;
+    setTimeout(() => { navLockRef.current = false }, 1500);
     if (msgFromQuery) setSearchParams({}, { replace: true });
     requestAnimationFrame(() => scrollToMessage(msgID));
     if (msgFromHash) history.replaceState(null, '', window.location.pathname + window.location.search);
