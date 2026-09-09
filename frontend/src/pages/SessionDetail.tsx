@@ -892,11 +892,17 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
     }
     if (freshFiles.length === 0) return
 
+    // 영역을 즉시 띄우고 (첫 paint 확보), 진행 콜백은 스로틀로 렌더 폭풍 방지
+    setGlobalUpload({ name: freshFiles[0].name, loaded: 0, total: freshFiles[0].size || 1, index: 1, count: freshFiles.length })
+    let lastProgAt = 0
     for (let i = 0; i < freshFiles.length; i++) {
       const file = freshFiles[i]
       setGlobalUpload({ name: file.name, loaded: 0, total: file.size || 1, index: i + 1, count: freshFiles.length })
       try {
         const data = await uploadFileWithProgress(`${API_BASE_URL}/api/files/${uploadDir}`, file, (loaded, total) => {
+          const now = Date.now()
+          if (now - lastProgAt < 150) return
+          lastProgAt = now
           setGlobalUpload({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: freshFiles.length })
         })
         const savedName: string = data?.name || file.name
@@ -905,10 +911,9 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
         if (e instanceof DuplicateUploadError) continue
         if (!lastError) lastError = e instanceof Error ? e.message : 'Upload failed'
         continue
-      } finally {
-        setGlobalUpload(null)
       }
     }
+    setGlobalUpload(null)
 
 if (results.length > 0) {
       setInjectedFile((prev) => ({

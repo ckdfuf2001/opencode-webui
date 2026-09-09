@@ -159,11 +159,17 @@ useEffect(() => {
     let failCount = 0
     let lastResult: { name?: string; path?: string } | null = null
     let lastError: string | null = null
+    // 영역을 즉시 띄우고 (첫 paint 확보), 진행 콜백은 스로틀로 렌더 폭풍 방지
+    setUploadProgress({ name: freshFiles[0].name, loaded: 0, total: freshFiles[0].size || 1, index: 1, count: freshFiles.length })
+    let lastProgAt = 0
     for (let i = 0; i < freshFiles.length; i++) {
       const file = freshFiles[i]
       setUploadProgress({ name: file.name, loaded: 0, total: file.size || 1, index: i + 1, count: freshFiles.length })
       try {
         lastResult = await uploadFileWithProgress(`${API_BASE_URL}/api/files/${currentPath}`, file, (loaded, total) => {
+          const now = Date.now()
+          if (now - lastProgAt < 150) return
+          lastProgAt = now
           setUploadProgress({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: freshFiles.length })
         })
         successCount++
@@ -171,10 +177,9 @@ useEffect(() => {
         if (err instanceof DuplicateUploadError) continue
         failCount++
         lastError = err instanceof Error ? err.message : 'Upload failed'
-      } finally {
-        setUploadProgress(null)
       }
     }
+    setUploadProgress(null)
     if (successCount > 0) {
       if (freshFiles.length === 1) {
         showToast.success(`Uploaded "${lastResult?.name || freshFiles[0].name}" to ${currentPath || '/'}`, {

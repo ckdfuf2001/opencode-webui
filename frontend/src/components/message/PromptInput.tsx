@@ -451,11 +451,17 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     if (fresh.length === 0) return
     const uploaded: { name: string; path: string }[] = []
     let failures = 0
+    // 영역을 즉시 띄우고 (첫 paint 확보), 진행 콜백은 스로틀로 렌더 폭풍 방지
+    setUploadProgress({ name: fresh[0].name, loaded: 0, total: fresh[0].size || 1, index: 1, count: fresh.length })
+    let lastProgAt = 0
     for (let i = 0; i < fresh.length; i++) {
       const file = fresh[i]
       setUploadProgress({ name: file.name, loaded: 0, total: file.size || 1, index: i + 1, count: fresh.length })
       try {
         const data = await uploadFileWithProgress(`${API_BASE_URL}/api/files/${uploadDir}`, file, (loaded, total) => {
+          const now = Date.now()
+          if (now - lastProgAt < 150) return
+          lastProgAt = now
           setUploadProgress({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: fresh.length })
         })
         const savedName: string = data?.name || file.name
@@ -464,10 +470,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         if (e instanceof DuplicateUploadError) continue
         failures++
         continue
-      } finally {
-        setUploadProgress(null)
       }
     }
+    setUploadProgress(null)
 
     if (uploaded.length === 0) {
       showToast.error('Upload failed')
