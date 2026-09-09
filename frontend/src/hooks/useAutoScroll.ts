@@ -20,6 +20,7 @@ interface UseAutoScrollOptions<T extends Message> {
 
 interface UseAutoScrollReturn {
   scrollToBottom: () => void
+  markDisengaged: () => void
 }
 
 export function useAutoScroll<T extends Message>({
@@ -42,6 +43,14 @@ export function useAutoScroll<T extends Message>({
     containerRef.current.scrollTop = containerRef.current.scrollHeight
     onScrollStateChange?.(false)
   }, [containerRef, onScrollStateChange])
+
+  // 히스토리 열람(Load more·검색 이동 등) 시 자동 추종이 하단으로
+  // 끌어당기지 않도록 사용자가 위를 본 것으로 표시한다.
+  const markDisengaged = useCallback(() => {
+    userScrolledAtRef.current = Date.now()
+    userDisengagedRef.current = true
+    onScrollStateChange?.(true)
+  }, [onScrollStateChange])
 
   useEffect(() => {
     lastMessageCountRef.current = 0
@@ -180,5 +189,5 @@ export function useAutoScroll<T extends Message>({
     requestAnimationFrame(() => scrollToBottom())
   }, [messages, containerRef, scrollToBottom, enabled])
 
-  return { scrollToBottom }
+  return { scrollToBottom, markDisengaged }
 }

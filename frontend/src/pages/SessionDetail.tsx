@@ -160,11 +160,15 @@ export function SessionDetail() {
   }, [baseMessages, start]);
   const hasMore = start > 0;
   const hiddenCount = start;
-  // 윈도우 위로 이동: 이동 전 위치를 기록하고 layout effect에서 DOM 확정 후 1회 보정
+  // useAutoScroll의 추종 해제 함수 (아래 useAutoScroll 선언 뒤에 연결)
+  const markDisengagedRef = useRef<(() => void) | null>(null);
+  // 윈도우 위로 이동: 이동 전 위치를 기록하고 layout effect에서 DOM 확정 후 1회 보정.
+  // 동시에 자동 추종을 끊어 다음 폴링이 하단으로 끌어당기지 않게 한다.
   const shiftWindowUp = useCallback(() => {
     const c = messageContainerRef.current;
     const len = baseMessages?.length ?? 0;
     if (!c || len === 0) return;
+    markDisengagedRef.current?.();
     shiftAnchorRef.current = { prevTop: c.scrollTop, prevHeight: c.scrollHeight };
     lastShiftAtRef.current = Date.now();
     setWindowStart((prev) => {
@@ -572,13 +576,14 @@ export function SessionDetail() {
     }
   }, [createSessionMutation, navigate, repoId]);
 
-  const { scrollToBottom } = useAutoScroll({
+  const { scrollToBottom, markDisengaged } = useAutoScroll({
     containerRef: messageContainerRef,
     messages,
     sessionId,
     enabled: effectiveAutoScroll,
     onScrollStateChange: setShowScrollButton
   });
+  useEffect(() => { markDisengagedRef.current = markDisengaged }, [markDisengaged]);
 
   // 세션 변경 시 세션별 임시 오버라이드는 초기화 (설정 기본값으로 복귀)
   useEffect(() => {
@@ -612,7 +617,7 @@ export function SessionDetail() {
     const c = messageContainerRef.current
     if (!c) return
     let stopped = false
-    const stop = () => { stopped = true }
+    const stop = () => { stopped = true; markDisengaged() }
     const pin = () => {
       if (stopped) return
       const cc = messageContainerRef.current
@@ -676,10 +681,11 @@ export function SessionDetail() {
 
   const scrollToMessage = useCallback((messageID: string) => {
     setHighlightedMessageID(messageID);
+    markDisengaged();
     requestAnimationFrame(() => {
       document.getElementById(`message-${messageID}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-  }, []);
+  }, [markDisengaged]);
 
   const [searchParams, setSearchParams] = useSearchParams();
 
