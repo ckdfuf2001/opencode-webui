@@ -35,8 +35,8 @@ where bun >nul 2>nul
 if %errorlevel%==0 (
   echo   [+] Bun is installed
 ) else (
-  echo   [.] Bun not found - skipping (node dev does not need it).
-  echo       Only required for: dev:bun fallback. Install from https://bun.sh if needed.
+  echo   [.] Bun not found - skipping. Node dev does not need it.
+  echo       Only required for dev:bun fallback. Install from https://bun.sh if needed.
 )
 
 REM pnpm
@@ -165,7 +165,7 @@ if %errorlevel% neq 0 (
 )
 call bun --version >nul 2>nul
 if %errorlevel% neq 0 (
-  echo   [.] bun --version skipped (not installed; node dev does not need it).
+  echo   [.] bun check skipped - not installed. Node dev does not need it.
 )
 
 echo.
