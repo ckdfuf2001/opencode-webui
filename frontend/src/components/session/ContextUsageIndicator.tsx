@@ -53,7 +53,7 @@ export function ContextUsageIndicator({ opcodeUrl, sessionID, directory }: Conte
 
   const percentage = Math.min(usagePercentage || 0, 100)
   const isCritical = percentage >= 95
-  const isWarning = percentage >= 85 && percentage < 95
+  const isWarning = percentage >= 90 && percentage < 95
   const circumference = 2 * Math.PI * 10
   const strokeDashoffset = circumference - (percentage / 100) * circumference
 

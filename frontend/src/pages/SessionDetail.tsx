@@ -7,6 +7,10 @@ import { MessageThread, isMessageStreaming } from "@/components/message/MessageT
 import { PromptInput } from "@/components/message/PromptInput";
 import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
+import { SessionJumpDialog } from "@/components/session/SessionJumpDialog";
+import { SessionMoreMenu } from "@/components/session/SessionMoreMenu";
+import { buildSessionMarkdown, buildSessionText, buildSessionHtml, sessionFileName, downloadTextFile, printSessionPdf } from "@/lib/sessionExport";
+import type { SessionExportFormat } from "@/lib/sessionExport";
 import { SessionList } from "@/components/session/SessionList";
 import { PermissionRequestCard } from "@/components/session/PermissionRequestCard";
 import { QuestionRequestCard } from "@/components/session/QuestionRequestCard";
@@ -27,7 +31,7 @@ import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useQuestionRequests, useLoadPendingQuestions } from "@/hooks/useQuestionRequests";
 import { usePermissionRequests, useLoadPendingPermissions, collectDescendantIDs } from "@/hooks/usePermissionRequests";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
-import { useContextUsage } from "@/hooks/useContextUsage";
+import { useContextUsage, markSessionCompacted } from "@/hooks/useContextUsage";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse } from "@/api/types";
@@ -49,6 +53,7 @@ export function SessionDetail() {
   const queryClient = useQueryClient()
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false);
+  const [jumpOpen, setJumpOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [permissionRulesOpen, setPermissionRulesOpen] = useState(false);
@@ -122,6 +127,10 @@ export function SessionDetail() {
   // 경계 왕복(나왔다 사라졌다) 방지: shift 직후 앵커 정착 스크롤이
   // 반대쪽 엣지로 보여도 쿨다운 동안은 추가 shift 금지
   const lastShiftAtRef = useRef(0);
+  // 프로그램 이동(smooth scrollIntoView) 중에는 엣지 반응 금지.
+  // 안 그러면 애니메이션 도중 윈도우가 움직여 타겟이 언마운트되고
+  // 스크롤이 중간에 멈춘다. wheel이 오면 사용자가 개입한 것이므로 해제.
+  const navLockUntilRef = useRef(0);
   // 하단 근처 여부 (엣지 트리거용: 근처 진입 시 1회만 복귀)
   const wasNearBottomRef = useRef(false);
   useEffect(() => {
@@ -143,6 +152,9 @@ export function SessionDetail() {
     const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1;
     return editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages;
   }, [messages, hiddenAfterID]);
+  // scrollToMessage(콜백)에서 최신 목록을 읽기 위한 미러
+  const baseMessagesRef = useRef(baseMessages);
+  useEffect(() => { baseMessagesRef.current = baseMessages; }, [baseMessages]);
   // 길이 변화 처리: 대량 감소(컴팩트/트렁케이트) → 하단 고정,
   // 내가 보낸 턴이면 하단 고정, 위를 보고 있었으면 화면 유지
   useEffect(() => {
@@ -237,6 +249,8 @@ export function SessionDetail() {
       requestAnimationFrame(() => {
         ticking = false;
         if (!c) return;
+        // 프로그램 이동 중 엣지 shift 금지 (타겟 언마운트 방지)
+        if (Date.now() < navLockUntilRef.current) return;
         const scrollable = c.scrollHeight > c.clientHeight + 40;
         if (!scrollable) return;
         // 위를 우선: 짧은 내용에서 위·아래가 동시에 근처여도 위로만 간다 (왕복 루프 방지)
@@ -264,6 +278,8 @@ export function SessionDetail() {
     };
     // 끝에 닿은 상태에서 방향키로/휠로 더 미는 경우 scroll이 안 나므로 여기서 직접 이동
     const onWheel = (e: WheelEvent) => {
+      // 사용자 휠 개입이면 프로그램 이동 락 해제
+      navLockUntilRef.current = 0;
       if (e.deltaY < 0 && c.scrollTop <= 0) {
         const len = baseMessages?.length ?? 0;
         const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
@@ -571,6 +587,7 @@ export function SessionDetail() {
       const ok = await summarizeSession.mutateAsync({ sessionID: sessionId, providerID, modelID });
       if (ok === false) throw new Error("The server could not complete summarize (compact). Try again, or truncate earlier messages instead.");
       lastCompactAtRef.current = Date.now()
+      markSessionCompacted(sessionId)
       showToast.success("Session summarized (compact). Context cleaned up.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
       setWindowStart(null);
@@ -622,6 +639,29 @@ export function SessionDetail() {
   }, [sessionId, sendPromptContinue])
 
   const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
+  // ... 메뉴: 전체 내려받기 (윈도우와 무관하게 전체 메시지 기준)
+  const handleExportFile = useCallback((format: SessionExportFormat | 'pdf') => {
+    const list = messagesRef.current ?? messages;
+    if (!list || list.length === 0) {
+      showToast.error('No messages to export yet.');
+      return;
+    }
+    const title = (session as unknown as { title?: string })?.title || 'Untitled Session';
+    if (format === 'pdf') {
+      if (!printSessionPdf(list, title)) {
+        showToast.error('Popup blocked — allow popups for this site to print/PDF.');
+      }
+      return;
+    }
+    const content = format === 'md'
+      ? buildSessionMarkdown(list, title)
+      : format === 'html'
+        ? buildSessionHtml(list, title, true)
+        : buildSessionText(list, title);
+    const mime = format === 'html' ? 'text/html' : format === 'md' ? 'text/markdown' : 'text/plain';
+    downloadTextFile(sessionFileName(title, format), content, mime);
+    showToast.success(`Exported ${list.length} message(s) as .${format}`);
+  }, [messages, session]);
   const handleNewSession = useCallback(async () => {
     try {
       const s = await createSessionMutation.mutateAsync({});
@@ -739,12 +779,33 @@ export function SessionDetail() {
 
   
 
+  // 로그/검색/런 패널에서 해당 채팅으로 이동. 타겟이 윈도우 밖이면
+  // 먼저 포함되게 옮기고(커밋 후 엘리먼트가 생긴다), 최대 12프레임 재시도한다.
   const scrollToMessage = useCallback((messageID: string) => {
     setHighlightedMessageID(messageID);
     markDisengaged();
-    requestAnimationFrame(() => {
-      document.getElementById(`message-${messageID}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+    navLockUntilRef.current = Date.now() + 1200;
+    const list = baseMessagesRef.current;
+    if (list) {
+      const idx = list.findIndex((m) => m.info.id === messageID);
+      if (idx >= 0) {
+        const len = list.length;
+        const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+        if (idx < cur || idx >= cur + WINDOW_SIZE) {
+          setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
+        }
+      }
+    }
+    let tries = 0;
+    const attempt = () => {
+      const el = document.getElementById(`message-${messageID}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      if (tries++ < 12) requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(attempt));
   }, [markDisengaged]);
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -758,16 +819,12 @@ export function SessionDetail() {
     if (!messages || !baseMessages) return;
     const idx = baseMessages.findIndex((m) => m.info.id === msgID);
     if (idx === -1) return;
-    // ensure window includes target when navigating via hash/?msg (위쪽에 버퍼 5개)
-    const len = baseMessages.length;
-    const curStart = windowStart ?? Math.max(0, len - WINDOW_SIZE);
-    if (idx < curStart || idx >= curStart + WINDOW_SIZE) {
-      setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
-    }
+    // 윈도우 포함 + 스크롤 재시도는 scrollToMessage가 담당하므로
+    // 여기서는 파라미터만 소비한다 (재실행돼도 clear済라 바로 리턴, 루프 없음)
     if (msgFromQuery) setSearchParams({}, { replace: true });
-    requestAnimationFrame(() => scrollToMessage(msgID));
     if (msgFromHash) history.replaceState(null, '', window.location.pathname + window.location.search);
-  }, [searchParams, setSearchParams, messages, baseMessages, windowStart, scrollToMessage]);
+    scrollToMessage(msgID);
+  }, [searchParams, setSearchParams, messages, baseMessages, scrollToMessage]);
 
   const handleFileClick = useCallback(async (filePath: string) => {
     const normalizedFilePath = filePath.replace(/\\/g, '/')
@@ -1045,21 +1102,47 @@ if (results.length > 0) {
         onSessionTitleUpdate={handleSessionTitleUpdate}
         onNavOpen={() => setNavOpen(true)}
       />
+      {ctx.contextLimit != null && (ctx.usagePercentage ?? 0) >= 90 && (
+        <div className={`px-4 py-1.5 text-xs flex items-center gap-2 border-b shrink-0 ${(ctx.usagePercentage ?? 0) >= 95 ? 'bg-red-500/10 border-red-500/30 text-red-400' : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-600 dark:text-yellow-400'}`}>
+          <span className="flex-1 min-w-0 truncate">
+            {(ctx.usagePercentage ?? 0) >= 95
+              ? `Context ${Math.round(ctx.usagePercentage ?? 0)}% (${ctx.totalTokens.toLocaleString()} / ${ctx.contextLimit.toLocaleString()}) — sending is blocked. Compact or start a new session.`
+              : `Context ${Math.round(ctx.usagePercentage ?? 0)}% (${ctx.totalTokens.toLocaleString()} / ${ctx.contextLimit.toLocaleString()}) — compact을 권장합니다.`}
+          </span>
+          <button
+            onClick={handleCompact}
+            disabled={isCompacting}
+            className="px-2 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 disabled:opacity-50 shrink-0"
+          >
+            {isCompacting ? 'Compacting…' : 'Compact'}
+          </button>
+          <button
+            onClick={() => handleNewSession()}
+            className="px-2 py-1 rounded-md bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-700 shrink-0"
+          >
+            New Session
+          </button>
+        </div>
+      )}
 
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
           <UntrackedSuggestionBanner />
           <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-28 overscroll-contain">
-            {hasMore && baseMessages && (
-              <div className="sticky top-0 z-10 flex justify-center py-2 bg-gradient-to-b from-background to-transparent">
+            {/* 상단 고정 바: Load more + … 나란히 중앙 */}
+            <div className="sticky top-0 z-10 flex items-center justify-center gap-2 py-2 bg-gradient-to-b from-background to-transparent">
+              {hasMore && baseMessages && (
                 <button
                   onClick={handleLoadMore}
                   className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
                 >
                   Load more — {hiddenCount} older message{hiddenCount !== 1 ? "s" : ""} hidden · click or scroll up
                 </button>
+              )}
+              <div className="rounded-full border bg-card shadow-sm">
+                <SessionMoreMenu onExport={handleExportFile} onOpenJump={() => setJumpOpen(true)} />
               </div>
-            )}
+            </div>
             {opcodeUrl && repoDirectory && (
               <MessageThread 
                 opcodeUrl={opcodeUrl} 
@@ -1245,6 +1328,12 @@ if (results.length > 0) {
         onExecuteCommand={handleExecuteCommand}
         onScrollToMessage={scrollToMessage}
         onUseInChat={handleRecallUseInChat}
+      />
+      <SessionJumpDialog
+        open={jumpOpen}
+        onClose={() => setJumpOpen(false)}
+        messages={messages}
+        onJump={scrollToMessage}
       />
 
       <PermissionRulesDialog

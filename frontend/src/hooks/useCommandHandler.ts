@@ -6,6 +6,7 @@ import { useCreateSession } from '@/hooks/useOpenCode'
 import type { CommandWithScope } from '@/hooks/useCommands'
 import { useCreateCommandRun, useFinishCommandRun } from '@/hooks/useCommandRuns'
 import { useSettings } from '@/hooks/useSettings'
+import { markSessionCompacted } from '@/hooks/useContextUsage'
 import { showToast } from '@/lib/toast'
 import type { components } from '@/api/opencode-types'
 
@@ -169,6 +170,7 @@ export function useCommandHandler({
             showToast.warning('Summarize (compact) did not complete. It may have failed because the context is too large — try truncating previous messages.')
             hasError = true
           } else {
+            markSessionCompacted(sessionID)
             showToast.warning('Context summarized — handled autonomously by the WebUI.')
           }
           await queryClient.invalidateQueries({ queryKey: ['messages', opcodeUrl, sessionID] })

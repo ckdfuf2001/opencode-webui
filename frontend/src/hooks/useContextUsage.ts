@@ -36,6 +36,41 @@ interface Provider {
   models: Record<string, ProviderModel>
 }
 
+// 컴팩트 기준점: opencode summarize는 기존 메시지를 지우지 않고 요약
+// 메시지만 추가한다 (새 ID로 append). 그래서 컴팩트 이전 assistant의
+// 큰 토큰이 사용량 계산에 계속 잡혀 "줄었다가 다음 채팅에 다시 90%+"로
+// 튀게 된다. 컴팩트 성공 시점을 세션별로 기록하고, 그 이전 생성 메시지는
+// 사용량에서 제외한다 — 새 ID 메시지(그 이후)부터 다시 잰다.
+const compactAtBySession = new Map<string, number>()
+
+export function markSessionCompacted(sessionID: string, at: number = Date.now()): void {
+  compactAtBySession.set(sessionID, at)
+  try {
+    sessionStorage.setItem(`compactAt:${sessionID}`, String(at))
+  } catch { /* ignore */ }
+}
+
+function getSessionCompactedAt(sessionID: string | undefined): number | null {
+  if (!sessionID) return null
+  const mem = compactAtBySession.get(sessionID)
+  if (mem != null) return mem
+  try {
+    const raw = sessionStorage.getItem(`compactAt:${sessionID}`)
+    if (raw != null) {
+      const n = Number(raw)
+      if (Number.isFinite(n) && n > 0) {
+        compactAtBySession.set(sessionID, n)
+        return n
+      }
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+function createdAt(m: MessageListItem): number {
+  return (m.info as unknown as { time?: { created?: number } }).time?.created ?? 0
+}
+
 interface ProvidersResponse {
   providers: Provider[]
 }
@@ -91,9 +126,17 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
       }
     }
     
+    // 컴팩트 이전 메시지는 제외한다. 요약 메시지 자체(컴팩트 시점 이전
+    // 생성)도 제외 — 컴팩트 성공 이후의 새 ID 메시지부터 다시 잰다.
+    // (created 없는 메시지는 0으로 취급되어 제외된다)
+    const compactAt = getSessionCompactedAt(sessionID)
+    const effectiveMessages = compactAt != null
+      ? messages.filter((m) => createdAt(m) > compactAt)
+      : messages
+
     // Context window usage: latest assistant message's tokens represent current window.
     // Summing all messages inflates to 900%+ — must use single turn, not cumulative.
-    const assistantMessages = messages.filter(isAssistantMessage)
+    const assistantMessages = effectiveMessages.filter(isAssistantMessage)
     let latestAssistantMessage = assistantMessages[assistantMessages.length - 1]
 
     // If the latest message has 0 tokens (still being created), use the previous one
@@ -145,5 +188,5 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
       currentModel,
       isLoading: false
     }
-  }, [messages, messagesLoading, preferences?.defaultModel, providersData])
+  }, [messages, messagesLoading, preferences?.defaultModel, providersData, sessionID])
 }

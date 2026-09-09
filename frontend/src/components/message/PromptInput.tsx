@@ -91,8 +91,6 @@ export function PromptInput({
   onResendEdit,
   autoScrollEnabled,
   onAutoScrollChange,
-  onCompact,
-  onNewSession,
   isStreaming: isStreamingProp
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
@@ -166,7 +164,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const { addUserBashCommand } = useUserBash()
   const { totalTokens, contextLimit, usagePercentage } = useContextUsage(opcodeUrl, sessionID, directory)
   const usage = usagePercentage ?? 0
-  const isContextWarning = usage >= 85 && usage < 95
+  const isContextWarning = usage >= 90 && usage < 95
   const isContextCritical = usage >= 95
   const estimatedInputTokens = Math.ceil(prompt.length / 4)
   const projectedUsage = contextLimit ? ((totalTokens + estimatedInputTokens) / contextLimit) * 100 : 0
@@ -848,31 +846,13 @@ useEffect(() => {
           </div>
         </div>
       )}
-      {(isContextWarning || isContextCritical || willExceed) && contextLimit && (
-        <div className={`mb-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 ${isContextCritical || willExceed ? 'bg-red-500/15 border border-red-500/40 text-red-400' : 'bg-yellow-500/15 border border-yellow-500/40 text-yellow-600 dark:text-yellow-400'}`}>
+      {/* 컨텍스트 경고는 헤더 아래 최상단 배너로 이동 (SessionDetail).
+          여기는 전송 차단/토스트 로직만 유지한다. */}
+      {(isContextCritical || willExceed) && contextLimit && (
+        <div className="mb-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 bg-red-500/15 border border-red-500/40 text-red-400">
           <span className="flex-1 min-w-0">
-            {isContextCritical || willExceed
-              ? `Context exceeded ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — sending is blocked.`
-              : `Context warning ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — the limit is close.`}
+            {`Context exceeded ${Math.round(usage)}% (${totalTokens.toLocaleString()} / ${contextLimit.toLocaleString()}) — sending is blocked.`}
           </span>
-          <div className="flex gap-1.5 flex-shrink-0">
-            {onCompact && (
-              <button
-                onClick={onCompact}
-                className="px-2 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90"
-              >
-                Compact
-              </button>
-            )}
-            {onNewSession && (
-              <button
-                onClick={onNewSession}
-                className="px-2 py-1 rounded-md bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-700"
-              >
-                New Session
-              </button>
-            )}
-          </div>
           {willExceed && <span className="ml-2 font-mono text-[10px] opacity-70 hidden sm:inline">projected {Math.round(projectedUsage)}%</span>}
         </div>
       )}
