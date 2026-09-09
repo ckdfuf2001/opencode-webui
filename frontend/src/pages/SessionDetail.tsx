@@ -209,10 +209,13 @@ export function SessionDetail() {
         // 방향으로 겹침 해소: 짧은 내용에서 위·아래 영역이 겹쳐도
         // 내려가며 들어올 때만 복귀, 올라가며 닿을 때는 이전 로드만 한다.
         const st = c.scrollTop;
+        const maxScroll = c.scrollHeight - c.clientHeight;
         const goingUp = st < lastScrollTopRef.current - 2;
         const goingDown = st > lastScrollTopRef.current + 2;
         lastScrollTopRef.current = st;
-        const nearBottom = st + c.clientHeight >= c.scrollHeight - 300;
+        // 엣지는 % 기준: 위 15% / 아래 85%. 바닥에 닿으면 맨 끝 유지(하단 고정).
+        const ratio = maxScroll > 0 ? st / maxScroll : 0;
+        const nearBottom = ratio >= 0.85;
         const wasNear = wasNearBottomRef.current;
         wasNearBottomRef.current = nearBottom;
         if (nearBottom && !wasNear && goingDown && !navLockRef.current && windowStartRef.current !== null) {
@@ -223,7 +226,7 @@ export function SessionDetail() {
               if (cc) cc.scrollTop = cc.scrollHeight;
             });
           });
-        } else if (st < 450 && goingUp) {
+        } else if (ratio <= 0.15 && goingUp) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) shiftWindowUp();
@@ -627,7 +630,10 @@ export function SessionDetail() {
     const c = messageContainerRef.current
     if (!c) return
     let stopped = false
-    const stop = () => { stopped = true; markDisengaged() }
+    // 진입 핀 중단만 하고 추종 상태는 건드리지 않는다.
+    // 여기서 해제해버리면 하단에 있는데도 이후 폴링 추종이 안 살아난다.
+    // (위치 기반 해제 로직이 휠/드래그/키/터치를 모두 커버한다)
+    const stop = () => { stopped = true }
     const pin = () => {
       if (stopped) return
       const cc = messageContainerRef.current
