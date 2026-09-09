@@ -202,11 +202,14 @@ export function SessionDetail() {
         if (skipShiftRef.current) { skipShiftRef.current = false; return; }
         const scrollable = c.scrollHeight > c.clientHeight + 40;
         if (!scrollable) return;
-        if (c.scrollTop < 160) {
+        // 엣지 여유를 넉넉히 둬서 버퍼가 먼저 보이고 로드가 따라오게 한다.
+        // 위: 450px 전에 미리 로드 (25개 추가분 ≈ 1500px+ 가 쿠션이 됨)
+        // 아래: 300px 전에 하단 고정 복귀
+        if (c.scrollTop < 450) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) shiftWindowUp();
-        } else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 120) {
+        } else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 300) {
           // 위로 이동 직후 보정 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않는다
           if (windowStartRef.current !== null && Date.now() - lastShiftAtRef.current > 600) {
             setWindowStart(null);
