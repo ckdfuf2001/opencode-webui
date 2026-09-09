@@ -222,12 +222,24 @@ export function SessionDetail() {
       pinBottomVerified();
     };
     let ticking = false;
+    const paintDbg = () => {
+      const el = scrollDbgRef.current;
+      if (!el) return;
+      const len = baseMessages?.length ?? 0;
+      const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+      const disengagedNow = !(c.scrollTop + c.clientHeight >= c.scrollHeight - 40);
+      el.textContent =
+        `[DBG] st=${Math.round(c.scrollTop)} sh=${c.scrollHeight} ch=${c.clientHeight}` +
+        ` total=${len} start=${windowStartRef.current ?? 'null(bottom)'} cur=${cur} more=${cur > 0}` +
+        ` dis=${disengagedNow ? 1 : 0} navlock=${navLockRef.current ? 1 : 0}`;
+    };
     const onScroll = () => {
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(() => {
         ticking = false;
         if (!c) return;
+        paintDbg();
         if (c.scrollHeight <= c.clientHeight + 40) return;
         if (c.scrollTop <= 0) atTopEdge();
         else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 1) atBottomEdge();
@@ -240,6 +252,7 @@ export function SessionDetail() {
     };
     c.addEventListener("scroll", onScroll, { passive: true });
     c.addEventListener("wheel", onWheel, { passive: true });
+    paintDbg();
     return () => {
       c.removeEventListener("scroll", onScroll);
       c.removeEventListener("wheel", onWheel);
@@ -606,6 +619,8 @@ export function SessionDetail() {
     onScrollStateChange: setShowScrollButton
   });
   useEffect(() => { markDisengagedRef.current = markDisengaged }, [markDisengaged]);
+  // 진단용 스크롤 상태 오버레이 (직접 DOM 갱신, 리렌더 없음) — 진단 후 제거 예정
+  const scrollDbgRef = useRef<HTMLDivElement | null>(null);
 
   // 세션 변경 시 세션별 임시 오버라이드는 초기화 (설정 기본값으로 복귀)
   useEffect(() => {
@@ -1120,6 +1135,10 @@ if (results.length > 0) {
               </div>
             </div>
           )}
+          <div
+            ref={scrollDbgRef}
+            className="absolute bottom-1 left-2 z-40 font-mono text-[10px] text-lime-400 bg-black/70 px-1.5 py-0.5 rounded pointer-events-none select-none"
+          />
         </div>
 
         {fileBrowserOpen && (

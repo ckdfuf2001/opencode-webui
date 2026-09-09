@@ -21,6 +21,7 @@ interface UseAutoScrollOptions<T extends Message> {
 interface UseAutoScrollReturn {
   scrollToBottom: () => void
   markDisengaged: () => void
+  isDisengaged: () => boolean
 }
 
 export function useAutoScroll<T extends Message>({
@@ -51,6 +52,9 @@ export function useAutoScroll<T extends Message>({
     userDisengagedRef.current = true
     onScrollStateChange?.(true)
   }, [onScrollStateChange])
+
+  // 진단용: 현재 추종 해제 여부 (리렌더 없이 읽는다)
+  const isDisengaged = useCallback(() => userDisengagedRef.current, [])
 
   useEffect(() => {
     lastMessageCountRef.current = 0
@@ -195,5 +199,5 @@ export function useAutoScroll<T extends Message>({
     requestAnimationFrame(() => scrollToBottom())
   }, [messages, containerRef, scrollToBottom, enabled])
 
-  return { scrollToBottom, markDisengaged }
+  return { scrollToBottom, markDisengaged, isDisengaged }
 }
