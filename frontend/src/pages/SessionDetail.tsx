@@ -110,8 +110,8 @@ export function SessionDetail() {
   // 위치 보정은 브라우저 네이티브 overflow-anchor에 맡긴다 (키가 msg.info.id로
   // 안정적이라 prepend 시 뷰가 제자리에 유지된다). 수동 scrollTop 보정 금지 —
   // 네이티브 앵커와 이중 보정되면 오히려 튄다.
-  const WINDOW_SIZE = 25;
-  const LOAD_STEP = 7;
+  const WINDOW_SIZE = 10;
+  const LOAD_STEP = 5;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
