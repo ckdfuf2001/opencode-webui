@@ -116,12 +116,14 @@ export function SessionDetail() {
   useEffect(() => { windowStartRef.current = windowStart }, [windowStart]);
   const shiftAnchorRef = useRef<{ prevTop: number; prevHeight: number } | null>(null);
   const skipShiftRef = useRef(false);
+  const lastShiftAtRef = useRef(0);
   const prevMsgLenRef = useRef<number>(0);
   // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
   useEffect(() => {
     setWindowStart(null)
     shiftAnchorRef.current = null
     skipShiftRef.current = false
+    lastShiftAtRef.current = 0
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
@@ -164,6 +166,7 @@ export function SessionDetail() {
     const len = baseMessages?.length ?? 0;
     if (!c || len === 0) return;
     shiftAnchorRef.current = { prevTop: c.scrollTop, prevHeight: c.scrollHeight };
+    lastShiftAtRef.current = Date.now();
     setWindowStart((prev) => {
       const cur = prev ?? Math.max(0, len - WINDOW_SIZE);
       return Math.max(0, cur - LOAD_STEP);
@@ -200,7 +203,8 @@ export function SessionDetail() {
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) shiftWindowUp();
         } else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 120) {
-          if (windowStartRef.current !== null) {
+          // 위로 이동 직후 보정 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않는다
+          if (windowStartRef.current !== null && Date.now() - lastShiftAtRef.current > 600) {
             setWindowStart(null);
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
@@ -615,7 +619,13 @@ export function SessionDetail() {
       if (cc) scrollToBottom()
     }
     pin()
-    const t = setTimeout(pin, 300)
+    // 첫 페인트·이미지·브라우저 복원 스크롤이 늦게 와도 하단에 닿도록
+    // 2.5초간 300ms마다 반복 핀 (사용자 스크롤이 오면 즉시 영구 중단)
+    const t0 = Date.now()
+    const iv = setInterval(() => {
+      if (stopped || Date.now() - t0 > 2500) { clearInterval(iv); return }
+      pin()
+    }, 300)
     // 컨테이너 내 이미지 로드가 끝나도 하단 유지 (capture 단계)
     const onLoadCapture = (e: Event) => {
       if ((e.target as HTMLElement)?.tagName === 'IMG') pin()
@@ -625,7 +635,7 @@ export function SessionDetail() {
     c.addEventListener('touchmove', stop, { passive: true })
     c.addEventListener('pointerdown', stop)
     return () => {
-      clearTimeout(t)
+      clearInterval(iv)
       c.removeEventListener('load', onLoadCapture, true)
       c.removeEventListener('wheel', stop)
       c.removeEventListener('touchmove', stop)
