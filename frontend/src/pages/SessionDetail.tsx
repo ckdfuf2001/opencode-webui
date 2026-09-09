@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -101,64 +101,88 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
-  // 점진 로딩: 첫 진입/컴팩트 후 최근 N개만 보이고 위로 스크롤 시 점진 로딩.
-  // 아래쪽 DOM을 제거하는 슬라이딩 윈도우는 휠 스크롤을 무력화하므로 사용하지 않는다.
-  const INITIAL_VISIBLE = 30;
-  const LOAD_STEP = 30;
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+  // 슬라이딩 윈도우: DOM에는 항상 최대 WINDOW_SIZE개만 유지 (메모리/DOM 절약).
+  // - windowStart === null: 하단 고정(마지막 N개)
+  // - 위로 스크롤하면 윈도우가 위로 이동(LOAD_STEP), 아래쪽 DOM은 해제
+  // - 맨 아래 도달하면 하단 고정으로 복귀
+  // 휠이 먹통이 되지 않도록 프로그램 스크롤 보정은 layout effect에서
+  // DOM 확정 후 1회만 수행하고, 그로 인한 scroll 이벤트 1회는 스킵한다.
+  const WINDOW_SIZE = 50;
+  const LOAD_STEP = 25;
+  const [windowStart, setWindowStart] = useState<number | null>(null);
+  const windowStartRef = useRef<number | null>(null);
+  useEffect(() => { windowStartRef.current = windowStart }, [windowStart]);
+  const shiftAnchorRef = useRef<{ prevTop: number; prevHeight: number } | null>(null);
+  const skipShiftRef = useRef(false);
   const prevMsgLenRef = useRef<number>(0);
-  // 세션 변경 시 초기화 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
+  // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
   useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE)
+    setWindowStart(null)
+    shiftAnchorRef.current = null
+    skipShiftRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
-  // 컴팩트/트렁케이트 등으로 메시지가 크게 줄면 다시 최근만 보이게
-  useEffect(() => {
-    const len = messages?.length ?? 0;
-    const prev = prevMsgLenRef.current;
-    prevMsgLenRef.current = len;
-    // 길이가 큰 폭으로 줄었을 때(컴팩트) 초기화
-    if (prev > 0 && len > 0 && len < prev - 10) {
-      setVisibleCount(INITIAL_VISIBLE);
-    } else if (len > 0 && prev === 0) {
-      // 첫 로드도 최근만
-      setVisibleCount(INITIAL_VISIBLE);
-    }
-  }, [messages?.length]);
   const baseMessages = useMemo(() => {
     if (!messages) return undefined;
     const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1;
     return editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages;
   }, [messages, hiddenAfterID]);
-  const visibleMessages = useMemo(() => {
-    if (!baseMessages) return undefined;
-    if (baseMessages.length <= visibleCount) return baseMessages;
-    return baseMessages.slice(-visibleCount);
-  }, [baseMessages, visibleCount]);
-  const hasMore = (baseMessages?.length ?? 0) > visibleCount;
-  const hiddenCount = (baseMessages?.length ?? 0) - visibleCount;
-  const handleLoadMore = useCallback(() => {
-    const c = messageContainerRef.current;
-    if (!c || !baseMessages) {
-      setVisibleCount((p) => Math.min(p + LOAD_STEP, baseMessages?.length ?? p + LOAD_STEP));
+  // 길이 변화 처리: 대량 감소(컴팩트/트렁케이트) → 하단 고정,
+  // 내가 보낸 턴이면 하단 고정, 위를 보고 있었으면 화면 유지
+  useEffect(() => {
+    const len = baseMessages?.length ?? 0;
+    const prev = prevMsgLenRef.current;
+    prevMsgLenRef.current = len;
+    if (len === 0 || prev === 0) return; // 첫 로드/세션전환: 하단 고정 유지
+    if (len < prev - 10) {
+      setWindowStart(null);
       return;
     }
-    const prevHeight = c.scrollHeight;
-    const prevTop = c.scrollTop;
-    setVisibleCount((p) => Math.min(p + LOAD_STEP, baseMessages.length));
-    // 스크롤 점프 방지: 높이 증가분만큼 scrollTop 보정
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const newHeight = c.scrollHeight;
-        c.scrollTop = prevTop + (newHeight - prevHeight);
-      });
+    if (len <= prev) return;
+    const last = baseMessages?.[len - 1];
+    const lastIsUser = !!last && (last.info.role === 'user' || last.info.id.startsWith('optimistic'));
+    if (lastIsUser) {
+      setWindowStart(null);
+    }
+    // 어시스턴트 스트리밍 증가분은 시작점 유지 → 화면 고정 (아무것도 안 함)
+  }, [baseMessages?.length]);
+  const maxStart = Math.max(0, (baseMessages?.length ?? 0) - WINDOW_SIZE);
+  const start = windowStart === null ? maxStart : Math.min(windowStart, maxStart);
+  const visibleMessages = useMemo(() => {
+    if (!baseMessages) return undefined;
+    if (baseMessages.length <= WINDOW_SIZE) return baseMessages;
+    return baseMessages.slice(start, start + WINDOW_SIZE);
+  }, [baseMessages, start]);
+  const hasMore = start > 0;
+  const hiddenCount = start;
+  // 윈도우 위로 이동: 이동 전 위치를 기록하고 layout effect에서 DOM 확정 후 1회 보정
+  const shiftWindowUp = useCallback(() => {
+    const c = messageContainerRef.current;
+    const len = baseMessages?.length ?? 0;
+    if (!c || len === 0) return;
+    shiftAnchorRef.current = { prevTop: c.scrollTop, prevHeight: c.scrollHeight };
+    setWindowStart((prev) => {
+      const cur = prev ?? Math.max(0, len - WINDOW_SIZE);
+      return Math.max(0, cur - LOAD_STEP);
     });
-  }, [baseMessages]);
-  // 위로 스크롤 시 자동 로딩 (rAF throttle)
+  }, [baseMessages?.length]);
+  const handleLoadMore = shiftWindowUp;
+  // DOM 확정 후 스크롤 점프 보정 (paint 전 동기 실행 → 화면 떨림 없음)
+  useLayoutEffect(() => {
+    const anchor = shiftAnchorRef.current;
+    if (!anchor) return;
+    shiftAnchorRef.current = null;
+    const c = messageContainerRef.current;
+    if (!c) return;
+    c.scrollTop = anchor.prevTop + (c.scrollHeight - anchor.prevHeight);
+    // 이 프로그램 스크롤로 인한 scroll 이벤트는 윈도우 이동으로 해석하지 않는다
+    skipShiftRef.current = true;
+  }, [windowStart]);
+  // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달(스크롤 가능할 때만) → 하단 고정
   useEffect(() => {
     const c = messageContainerRef.current;
-    if (!c || !hasMore) return;
+    if (!c) return;
     let ticking = false;
     const onScroll = () => {
       if (ticking) return;
@@ -166,14 +190,29 @@ export function SessionDetail() {
       requestAnimationFrame(() => {
         ticking = false;
         if (!c) return;
-        if (c.scrollTop < 160 && hasMore) {
-          handleLoadMore();
+        if (skipShiftRef.current) { skipShiftRef.current = false; return; }
+        const scrollable = c.scrollHeight > c.clientHeight + 40;
+        if (!scrollable) return;
+        if (c.scrollTop < 160) {
+          const len = baseMessages?.length ?? 0;
+          const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+          if (cur > 0) shiftWindowUp();
+        } else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 120) {
+          if (windowStartRef.current !== null) {
+            setWindowStart(null);
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const cc = messageContainerRef.current;
+                if (cc) cc.scrollTop = cc.scrollHeight;
+              });
+            });
+          }
         }
       });
     };
     c.addEventListener("scroll", onScroll, { passive: true });
     return () => c.removeEventListener("scroll", onScroll);
-  }, [hasMore, handleLoadMore]);
+  }, [shiftWindowUp]);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -431,7 +470,7 @@ export function SessionDetail() {
       lastCompactAtRef.current = Date.now()
       showToast.success("Session summarized (compact). Context cleaned up.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
-      setVisibleCount(INITIAL_VISIBLE);
+      setWindowStart(null);
       // 컴팩트 후에는 최근만 보이고 하단으로
       requestAnimationFrame(() => {
         const c = messageContainerRef.current;
@@ -607,11 +646,14 @@ export function SessionDetail() {
     if (idx === -1) return;
     // ensure window includes target when navigating via hash/?msg (위쪽에 버퍼 5개)
     const len = baseMessages.length;
-    setVisibleCount((p) => Math.max(p, len - idx + 5));
+    const curStart = windowStart ?? Math.max(0, len - WINDOW_SIZE);
+    if (idx < curStart || idx >= curStart + WINDOW_SIZE) {
+      setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
+    }
     if (msgFromQuery) setSearchParams({}, { replace: true });
     requestAnimationFrame(() => scrollToMessage(msgID));
     if (msgFromHash) history.replaceState(null, '', window.location.pathname + window.location.search);
-  }, [searchParams, setSearchParams, messages, baseMessages, scrollToMessage]);
+  }, [searchParams, setSearchParams, messages, baseMessages, windowStart, scrollToMessage]);
 
   const handleFileClick = useCallback(async (filePath: string) => {
     const normalizedFilePath = filePath.replace(/\\/g, '/')
