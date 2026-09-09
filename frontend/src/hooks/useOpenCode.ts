@@ -468,7 +468,10 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
       const dbBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
       if (dbBusy) return 1000
-      return 2000
+      // 완전 idle이면 10초로 늦춘다 — 2초마다 전체 목록 파싱이 긴 세션에서
+      // 힙을 계속 부풀리는 주범이다. 스트리밍/전송/busy는 위에서 빠른 주기 유지.
+      // (TUI 등 외부 변경은 최대 10초 늦게 반영, 상태 배지는 별도 2초 폴링 유지)
+      return 10000
     },
   });
 };

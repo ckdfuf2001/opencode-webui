@@ -35,8 +35,7 @@ type ToolPart = components['schemas']['ToolPart']
  *  펼치기/복사로는 전체에 접근한다. */
 const OUTPUT_RENDER_LIMIT = 6000
 
-function CappedOutput({ text, red }: { text: string; red?: boolean }) {
-  const [expanded, setExpanded] = useState(false)
+export function CappedOutput({ text, red }: { text: string; red?: boolean }) {  const [expanded, setExpanded] = useState(false)
   if (text.length <= OUTPUT_RENDER_LIMIT) {
     return (
       <pre className={`bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap ${red ? 'text-red-300' : ''}`}>

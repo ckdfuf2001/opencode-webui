@@ -3,7 +3,7 @@ import type { components } from '@/api/opencode-types'
 import { Copy, Volume2, Square, Loader2 } from 'lucide-react'
 import { TextPart } from './TextPart'
 import { PatchPart } from './PatchPart'
-import { ToolCallPart } from './ToolCallPart'
+import { ToolCallPart, CappedOutput } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
 import { useSettings } from '@/hooks/useSettings'
 import { getFileStat } from '@/api/files'
@@ -267,7 +267,8 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'snapshot':
       return (
         <div className="border border-border rounded-lg p-4 my-2 bg-muted/50">
-          <div className="text-xs text-muted-foreground font-mono">Snapshot: {part.snapshot}</div>
+          <div className="text-xs text-muted-foreground font-mono mb-2">Snapshot</div>
+          <CappedOutput text={part.snapshot || ''} />
         </div>
       )
     case 'agent':
