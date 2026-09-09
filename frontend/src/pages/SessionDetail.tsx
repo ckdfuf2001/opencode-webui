@@ -117,6 +117,8 @@ export function SessionDetail() {
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
   // 한 번에 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftPendingRef = useRef(false);
+  // 하단 근처 여부 (엣지 트리거용: 근처 진입 시 1회만 복귀)
+  const wasNearBottomRef = useRef(false);
   useEffect(() => {
     windowStartRef.current = windowStart;
     shiftPendingRef.current = false;
@@ -126,6 +128,7 @@ export function SessionDetail() {
   useEffect(() => {
     setWindowStart(null)
     shiftPendingRef.current = false
+    wasNearBottomRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
@@ -176,6 +179,9 @@ export function SessionDetail() {
     if (cur <= 0) return;
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
+    // 보상 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않도록 근처로 표시
+    // (다음 실제 스크롤 이벤트에서 위치로 재계산된다)
+    wasNearBottomRef.current = true;
     setWindowStart(Math.max(0, cur - LOAD_STEP));
   }, [baseMessages?.length]);
   const handleLoadMore = shiftWindowUp;
@@ -194,12 +200,15 @@ export function SessionDetail() {
         if (!scrollable) return;
         // 엣지 여유를 넉넉히 둬서 버퍼가 먼저 보이고 로드가 따라오게 한다.
         // 위: 450px 전에 미리 로드 (15개 추가분이 쿠션이 됨)
-        // 아래: 300px 전에 하단 고정 복귀
+        // 아래: 300px 근처 진입 시 1회만 하단 고정 복귀 (계속 머물러도 반복 안 함)
+        const nearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 300;
+        const wasNear = wasNearBottomRef.current;
+        wasNearBottomRef.current = nearBottom;
         if (c.scrollTop < 450) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) shiftWindowUp();
-        } else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 300) {
+        } else if (nearBottom && !wasNear) {
           if (windowStartRef.current !== null) {
             setWindowStart(null);
             requestAnimationFrame(() => {
@@ -616,12 +625,15 @@ export function SessionDetail() {
       if (cc) scrollToBottom()
     }
     pin()
-    // 첫 페인트·이미지·브라우저 복원 스크롤이 늦게 와도 하단에 닿도록
-    // 2.5초간 300ms마다 반복 핀 (사용자 스크롤이 오면 즉시 영구 중단)
+    // 컨텐츠가 늘어나는 동안(최대 8s) 하단 유지 — 늦은 페인트·이미지·복원
+    // 스크롤 대응. 커졌을 때만 핀하므로 휠과 싸우지 않고,
+    // 사용자 스크롤이 오면 즉시 영구 중단한다.
     const t0 = Date.now()
+    let lastH = c.scrollHeight
     const iv = setInterval(() => {
-      if (stopped || Date.now() - t0 > 2500) { clearInterval(iv); return }
-      pin()
+      const cc = messageContainerRef.current
+      if (stopped || !cc || Date.now() - t0 > 8000) { clearInterval(iv); return }
+      if (cc.scrollHeight !== lastH) { lastH = cc.scrollHeight; pin() }
     }, 300)
     // 컨테이너 내 이미지 로드가 끝나도 하단 유지 (capture 단계)
     const onLoadCapture = (e: Event) => {
