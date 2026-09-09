@@ -111,12 +111,17 @@ export function SessionDetail() {
   // 안정적이라 prepend 시 뷰가 제자리에 유지된다). 수동 scrollTop 보정 금지 —
   // 네이티브 앵커와 이중 보정되면 오히려 튄다.
   const WINDOW_SIZE = 10;
-  const LOAD_STEP = 5;
+  const LOAD_STEP = 2;
+  const EDGE_PX = 225;
+  const SHIFT_COOLDOWN_MS = 500;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
   // 한 번에 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftPendingRef = useRef(false);
+  // 경계 왕복(나왔다 사라졌다) 방지: shift 직후 앵커 정착 스크롤이
+  // 반대쪽 엣지로 보여도 쿨다운 동안은 추가 shift 금지
+  const lastShiftAtRef = useRef(0);
   // 하단 근처 여부 (엣지 트리거용: 근처 진입 시 1회만 복귀)
   const wasNearBottomRef = useRef(false);
   useEffect(() => {
@@ -128,6 +133,7 @@ export function SessionDetail() {
   useEffect(() => {
     setWindowStart(null)
     shiftPendingRef.current = false
+    lastShiftAtRef.current = 0
     wasNearBottomRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
@@ -173,19 +179,54 @@ export function SessionDetail() {
   // 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftWindowUp = useCallback(() => {
     if (shiftPendingRef.current) return;
+    if (Date.now() - lastShiftAtRef.current < SHIFT_COOLDOWN_MS) return;
     const len = baseMessages?.length ?? 0;
     if (len === 0) return;
     const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
     if (cur <= 0) return;
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
+    lastShiftAtRef.current = Date.now();
     // 보상 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않도록 근처로 표시
     // (다음 실제 스크롤 이벤트에서 위치로 재계산된다)
     wasNearBottomRef.current = true;
     setWindowStart(Math.max(0, cur - LOAD_STEP));
   }, [baseMessages?.length]);
+  // 윈도우 아래로 이동 (단계별, 끝에서만 하단 고정 복귀).
+  // 위쪽 DOM을 해제하고 아래쪽을 붙이므로 스크롤 위치는 네이티브
+  // overflow-anchor가 유지한다. 최신 근처면 null로 스냅 + 하단 핀.
+  const shiftWindowDown = useCallback(() => {
+    if (shiftPendingRef.current) return;
+    if (Date.now() - lastShiftAtRef.current < SHIFT_COOLDOWN_MS) return;
+    const len = baseMessages?.length ?? 0;
+    if (len === 0) return;
+    const cur = windowStartRef.current;
+    if (cur === null) return; // 이미 하단 고정
+    const maxS = Math.max(0, len - WINDOW_SIZE);
+    if (cur >= maxS) {
+      setWindowStart(null);
+      return;
+    }
+    markDisengagedRef.current?.();
+    shiftPendingRef.current = true;
+    lastShiftAtRef.current = Date.now();
+    const next = cur + LOAD_STEP;
+    if (next >= maxS) {
+      setWindowStart(null);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const cc = messageContainerRef.current;
+          if (cc) cc.scrollTop = cc.scrollHeight;
+        });
+      });
+    } else {
+      setWindowStart(next);
+    }
+  }, [baseMessages?.length]);
   const handleLoadMore = shiftWindowUp;
-  // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달(스크롤 가능할 때만) → 하단 고정
+  // 스크롤 감지: 위 근처 → 위로 2개, 아래 근처 → 아래로 2개(끝에서만 하단 고정)
+  // + 끝에 닿은 채 더 밀어도(wheel) 페이지가 넘어가게 wheel도 처리한다.
+  // (scroll만으로는 scrollTop=0/맨밑에서 더 밀 때 이벤트가 안 나서 멈춰 보임)
   useEffect(() => {
     const c = messageContainerRef.current;
     if (!c) return;
@@ -198,32 +239,47 @@ export function SessionDetail() {
         if (!c) return;
         const scrollable = c.scrollHeight > c.clientHeight + 40;
         if (!scrollable) return;
-        // 엣지 여유를 넉넉히 둬서 버퍼가 먼저 보이고 로드가 따라오게 한다.
-        // 위: 450px 전에 미리 로드 (15개 추가분이 쿠션이 됨)
-        // 아래: 300px 근처 진입 시 1회만 하단 고정 복귀 (계속 머물러도 반복 안 함)
-        const nearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 1;
-        const wasNear = wasNearBottomRef.current;
-        wasNearBottomRef.current = nearBottom;
-        if (c.scrollTop < 450) {
+        // 위를 우선: 짧은 내용에서 위·아래가 동시에 근처여도 위로만 간다 (왕복 루프 방지)
+        if (c.scrollTop < EDGE_PX) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
-          if (cur > 0) shiftWindowUp();
-        } else if (nearBottom && !wasNear) {
-          if (windowStartRef.current !== null) {
-            setWindowStart(null);
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const cc = messageContainerRef.current;
-                if (cc) cc.scrollTop = cc.scrollHeight;
-              });
-            });
+          if (cur > 0) {
+            wasNearBottomRef.current = true;
+            shiftWindowUp();
+            return;
           }
+        }
+        const distToBottom = c.scrollHeight - (c.scrollTop + c.clientHeight);
+        if (distToBottom < EDGE_PX) {
+          if (windowStartRef.current !== null) {
+            wasNearBottomRef.current = true;
+            shiftWindowDown();
+          } else {
+            wasNearBottomRef.current = true;
+          }
+        } else {
+          wasNearBottomRef.current = false;
         }
       });
     };
+    // 끝에 닿은 상태에서 방향키로/휠로 더 미는 경우 scroll이 안 나므로 여기서 직접 이동
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0 && c.scrollTop <= 0) {
+        const len = baseMessages?.length ?? 0;
+        const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+        if (cur > 0) shiftWindowUp();
+      } else if (e.deltaY > 0) {
+        const distToBottom = c.scrollHeight - (c.scrollTop + c.clientHeight);
+        if (distToBottom <= 1 && windowStartRef.current !== null) shiftWindowDown();
+      }
+    };
     c.addEventListener("scroll", onScroll, { passive: true });
-    return () => c.removeEventListener("scroll", onScroll);
-  }, [shiftWindowUp]);
+    c.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      c.removeEventListener("scroll", onScroll);
+      c.removeEventListener("wheel", onWheel);
+    };
+  }, [shiftWindowUp, shiftWindowDown]);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -1041,6 +1097,30 @@ if (results.length > 0) {
                   onRespond={handlePermissionResponse}
                   onDismiss={dismissPermission}
                 />
+              </div>
+            )}
+            {windowStart !== null && baseMessages && (
+              <div className="sticky bottom-0 z-10 flex justify-center gap-2 py-2 bg-gradient-to-t from-background to-transparent">
+                <button
+                  onClick={shiftWindowDown}
+                  className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
+                >
+                  Show newer · scroll down
+                </button>
+                <button
+                  onClick={() => {
+                    setWindowStart(null);
+                    requestAnimationFrame(() => {
+                      requestAnimationFrame(() => {
+                        const cc = messageContainerRef.current;
+                        if (cc) cc.scrollTop = cc.scrollHeight;
+                      });
+                    });
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
+                >
+                  Back to latest
+                </button>
               </div>
             )}
           </div>
