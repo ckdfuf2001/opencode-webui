@@ -110,16 +110,15 @@ export function SessionDetail() {
   // 위치 보정은 브라우저 네이티브 overflow-anchor에 맡긴다 (키가 msg.info.id로
   // 안정적이라 prepend 시 뷰가 제자리에 유지된다). 수동 scrollTop 보정 금지 —
   // 네이티브 앵커와 이중 보정되면 오히려 튄다.
-  // 보여주는 개수는 절반 수준으로 축소 (위·아래 이동 시 6개씩 추가 로드)
-  const WINDOW_SIZE = 12;
-  const LOAD_STEP = 6;
+  const WINDOW_SIZE = 25;
+  const LOAD_STEP = 7;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
   // 한 번에 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftPendingRef = useRef(false);
-  // 검색 이동 애니메이션 중에는 엣지 반응 금지 (타겟이 윈도우 밖으로 밀려나지 않게)
-  const navLockRef = useRef(false);
+  // 하단 근처 여부 (엣지 트리거용: 근처 진입 시 1회만 복귀)
+  const wasNearBottomRef = useRef(false);
   useEffect(() => {
     windowStartRef.current = windowStart;
     shiftPendingRef.current = false;
@@ -129,7 +128,7 @@ export function SessionDetail() {
   useEffect(() => {
     setWindowStart(null)
     shiftPendingRef.current = false
-    navLockRef.current = false
+    wasNearBottomRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
@@ -174,90 +173,57 @@ export function SessionDetail() {
   // 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftWindowUp = useCallback(() => {
     if (shiftPendingRef.current) return;
-    if (navLockRef.current) return;
     const len = baseMessages?.length ?? 0;
     if (len === 0) return;
     const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
     if (cur <= 0) return;
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
+    // 보상 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않도록 근처로 표시
+    // (다음 실제 스크롤 이벤트에서 위치로 재계산된다)
+    wasNearBottomRef.current = true;
     setWindowStart(Math.max(0, cur - LOAD_STEP));
   }, [baseMessages?.length]);
   const handleLoadMore = shiftWindowUp;
-  // 맨 아래 도달 검증 핀: 리액트 커밋 지연으로 덜 내려갔으면 최대 4회 재시도.
-  // 사용자가 위로 움직이면 즉시 중단한다. 찐 마지막일 때만 맨 아래로 간다.
-  const pinBottomVerified = useCallback(() => {
-    let tries = 0;
-    let lastTop = -1;
-    const attempt = () => {
-      const cc = messageContainerRef.current;
-      if (!cc) return;
-      const cur = cc.scrollTop;
-      if (lastTop >= 0 && cur < lastTop - 4) return; // 사용자 개입 → 중단
-      cc.scrollTop = cc.scrollHeight;
-      lastTop = cc.scrollTop;
-      tries++;
-      if (tries < 4 && cc.scrollTop + cc.clientHeight < cc.scrollHeight - 40) {
-        setTimeout(attempt, 120);
-      }
-    };
-    requestAnimationFrame(() => requestAnimationFrame(attempt));
-  }, []);
-  // 스크롤 감지: 완전 끝에서만 반응한다 (px/% 구간이 아니라 끝점 기준).
-  // - 맨 위(scrollTop 0)에 닿으면 이전 로드, 맨 아래(딱 맞음)에 닿으면 하단 고정 복귀
-  // - 관성으로 미끄러져 닿아도(scroll 이벤트), 끝에 대고 밀어도(wheel 이벤트) 동작
+  // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달(스크롤 가능할 때만) → 하단 고정
   useEffect(() => {
     const c = messageContainerRef.current;
     if (!c) return;
-    const atTopEdge = () => {
-      if (navLockRef.current) return;
-      const len = baseMessages?.length ?? 0;
-      const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
-      if (cur > 0) shiftWindowUp();
-    };
-    const atBottomEdge = () => {
-      if (navLockRef.current) return;
-      if (windowStartRef.current === null) return;
-      setWindowStart(null);
-      pinBottomVerified();
-    };
     let ticking = false;
-    const paintDbg = () => {
-      const el = scrollDbgRef.current;
-      if (!el) return;
-      const len = baseMessages?.length ?? 0;
-      const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
-      const disengagedNow = !(c.scrollTop + c.clientHeight >= c.scrollHeight - 40);
-      el.textContent =
-        `[DBG] st=${Math.round(c.scrollTop)} sh=${c.scrollHeight} ch=${c.clientHeight}` +
-        ` total=${len} start=${windowStartRef.current ?? 'null(bottom)'} cur=${cur} more=${cur > 0}` +
-        ` dis=${disengagedNow ? 1 : 0} navlock=${navLockRef.current ? 1 : 0}`;
-    };
     const onScroll = () => {
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(() => {
         ticking = false;
         if (!c) return;
-        paintDbg();
-        if (c.scrollHeight <= c.clientHeight + 40) return;
-        if (c.scrollTop <= 0) atTopEdge();
-        else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 1) atBottomEdge();
+        const scrollable = c.scrollHeight > c.clientHeight + 40;
+        if (!scrollable) return;
+        // 엣지 여유를 넉넉히 둬서 버퍼가 먼저 보이고 로드가 따라오게 한다.
+        // 위: 450px 전에 미리 로드 (15개 추가분이 쿠션이 됨)
+        // 아래: 300px 근처 진입 시 1회만 하단 고정 복귀 (계속 머물러도 반복 안 함)
+        const nearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 1;
+        const wasNear = wasNearBottomRef.current;
+        wasNearBottomRef.current = nearBottom;
+        if (c.scrollTop < 450) {
+          const len = baseMessages?.length ?? 0;
+          const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+          if (cur > 0) shiftWindowUp();
+        } else if (nearBottom && !wasNear) {
+          if (windowStartRef.current !== null) {
+            setWindowStart(null);
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const cc = messageContainerRef.current;
+                if (cc) cc.scrollTop = cc.scrollHeight;
+              });
+            });
+          }
+        }
       });
     };
-    const onWheel = (e: WheelEvent) => {
-      if (navLockRef.current) return;
-      if (e.deltaY < 0 && c.scrollTop <= 0) atTopEdge();
-      else if (e.deltaY > 0 && c.scrollTop + c.clientHeight >= c.scrollHeight - 1) atBottomEdge();
-    };
     c.addEventListener("scroll", onScroll, { passive: true });
-    c.addEventListener("wheel", onWheel, { passive: true });
-    paintDbg();
-    return () => {
-      c.removeEventListener("scroll", onScroll);
-      c.removeEventListener("wheel", onWheel);
-    };
-  }, [shiftWindowUp, pinBottomVerified, baseMessages?.length]);
+    return () => c.removeEventListener("scroll", onScroll);
+  }, [shiftWindowUp]);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -619,8 +585,6 @@ export function SessionDetail() {
     onScrollStateChange: setShowScrollButton
   });
   useEffect(() => { markDisengagedRef.current = markDisengaged }, [markDisengaged]);
-  // 진단용 스크롤 상태 오버레이 (직접 DOM 갱신, 리렌더 없음) — 진단 후 제거 예정
-  const scrollDbgRef = useRef<HTMLDivElement | null>(null);
 
   // 세션 변경 시 세션별 임시 오버라이드는 초기화 (설정 기본값으로 복귀)
   useEffect(() => {
@@ -654,9 +618,6 @@ export function SessionDetail() {
     const c = messageContainerRef.current
     if (!c) return
     let stopped = false
-    // 진입 핀 중단만 하고 추종 상태는 건드리지 않는다.
-    // 여기서 해제해버리면 하단에 있는데도 이후 폴링 추종이 안 살아난다.
-    // (위치 기반 해제 로직이 휠/드래그/키/터치를 모두 커버한다)
     const stop = () => { stopped = true }
     const pin = () => {
       if (stopped) return
@@ -742,14 +703,11 @@ export function SessionDetail() {
     const idx = baseMessages.findIndex((m) => m.info.id === msgID);
     if (idx === -1) return;
     // ensure window includes target when navigating via hash/?msg (위쪽에 버퍼 5개)
-    // 이동 애니메이션 동안 엣지 반응 금지 (타겟이 윈도우 밖으로 밀려나지 않게)
     const len = baseMessages.length;
     const curStart = windowStart ?? Math.max(0, len - WINDOW_SIZE);
     if (idx < curStart || idx >= curStart + WINDOW_SIZE) {
       setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
     }
-    navLockRef.current = true;
-    setTimeout(() => { navLockRef.current = false }, 1500);
     if (msgFromQuery) setSearchParams({}, { replace: true });
     requestAnimationFrame(() => scrollToMessage(msgID));
     if (msgFromHash) history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -1135,10 +1093,6 @@ if (results.length > 0) {
               </div>
             </div>
           )}
-          <div
-            ref={scrollDbgRef}
-            className="absolute bottom-1 left-2 z-40 font-mono text-[10px] text-lime-400 bg-black/70 px-1.5 py-0.5 rounded pointer-events-none select-none"
-          />
         </div>
 
         {fileBrowserOpen && (
