@@ -109,8 +109,9 @@ export function SessionDetail() {
   // - 맨 아래 도달하면 하단 고정으로 복귀
   // 휠이 먹통이 되지 않도록 프로그램 스크롤 보정은 layout effect에서
   // DOM 확정 후 1회만 수행하고, 그로 인한 scroll 이벤트 1회는 스킵한다.
-  const WINDOW_SIZE = 50;
-  const LOAD_STEP = 25;
+  // 고정 개수만 보여준다 (절반으로 축소): 위쪽 15개씩 추가 로드, 나머지는 버퍼 해제
+  const WINDOW_SIZE = 25;
+  const LOAD_STEP = 15;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   useEffect(() => { windowStartRef.current = windowStart }, [windowStart]);

@@ -97,11 +97,17 @@ export function useAutoScroll<T extends Message>({
       }
     }
 
+    // 추종 여부는 제스처가 아니라 위치로 판단한다 — 휠/드래그/키보드/터치
+    // 어떤 수단으로든 아래를 벗어나면 추종 해제, 맨 아래면 추종 재개.
+    // (기존 제스처 감지로는 스크롤바 드래그·스페이스·터치가 빠져 다음 폴링에 끌려내려갔다)
     const handleScroll = () => {
-      if (container.scrollTop + container.clientHeight >= container.scrollHeight) {
+      if (container.scrollTop + container.clientHeight >= container.scrollHeight - 40) {
         userScrolledAtRef.current = 0
         userDisengagedRef.current = false
         onScrollStateChange?.(false)
+      } else if (!userDisengagedRef.current) {
+        userDisengagedRef.current = true
+        onScrollStateChange?.(true)
       }
     }
     
