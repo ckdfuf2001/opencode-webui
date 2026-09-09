@@ -19,6 +19,9 @@ export function useFile(path: string | undefined) {
     enabled: !!path,
     retry: 3,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
+    // 파일 본문까지 통째로 들고 있어 inactive 캐시가 쌓이면 크다.
+    // staleTime 0이라 마운트 시 어차피 재조회하므로 1분만 유지해도 동작 동일.
+    gcTime: 60 * 1000,
   })
 }
 

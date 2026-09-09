@@ -247,6 +247,7 @@ async function hasPendingInteraction(base: string, directory: string, sessionID:
 
 /** 세션 상태 폴러(1s)가 매 틱 호출한다. idle 세션의 큐 헤드를 순차 발송한다. */
 export function flushReadyQueues(busySessions: Set<string>): void {
+  pruneIdleSessionState()
   if (queues.size === 0) return
   const base = opencodeServerManager.getUrl()
 
@@ -256,6 +257,19 @@ export function flushReadyQueues(busySessions: Set<string>): void {
       continue
     }
     void dispatchHead(base, sessionID)
+  }
+}
+
+/** 큐가 사라진 세션의 보조 상태는 정리한다 (세션ID별 무한 누적 방지).
+ *  숫자 몇 개 수준이지만 장시간 uptime에서 쌓인다. */
+const IDLE_STATE_TTL_MS = 60 * 60 * 1000
+function pruneIdleSessionState(): void {
+  const now = Date.now()
+  for (const [sid, until] of failedUntil) {
+    if (!queues.has(sid) && until <= now) failedUntil.delete(sid)
+  }
+  for (const [sid, at] of lastBusyAt) {
+    if (!queues.has(sid) && now - at > IDLE_STATE_TTL_MS) lastBusyAt.delete(sid)
   }
 }
 
