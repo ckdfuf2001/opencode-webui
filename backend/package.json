@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun --watch src/index.ts",
+    "dev": "node --watch --disable-warning=ExperimentalWarning --experimental-transform-types --import ../scripts/node-compat/register.mjs src/index.ts",
+    "dev:bun": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "build": "bun build src/index.ts --outdir=dist --target=bun",
     "test": "vitest",

@@ -21,7 +21,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     return m ? new Set([parseInt(m[1], 10)]) : new Set()
   })
 
-  const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos })
+  const { data: repos, isLoading: reposLoading } = useQuery({ queryKey: ['repos'], queryFn: listRepos })
   const { data: dbStatuses } = useSessionStatusMap()
 
   const toggleRepo = (repoId: number) => {
@@ -142,7 +142,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
           )
         })}
         {(!repos || repos.length === 0) && (
-          <div className="px-4 py-2 text-xs text-muted-foreground">레포가 없습니다</div>
+          <div className="px-4 py-2 text-xs text-muted-foreground">{reposLoading || !repos ? '로딩 중...' : '레포가 없습니다'}</div>
         )}
       </div>
     </div>
@@ -152,10 +152,13 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
 function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; directory?: string; onNavigate?: () => void }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, directory)
+  const { data: sessions, isLoading: sessionsLoading } = useSessions(OPENCODE_API_ENDPOINT, directory)
   const { data: dbStatuses } = useSessionStatusMap()
 
-  if (!sessions || sessions.length === 0) {
+  if (!sessions) {
+    return <div className="ml-8 px-2 py-1 text-xs text-muted-foreground">{sessionsLoading ? '로딩 중...' : '세션 없음'}</div>
+  }
+  if (sessions.length === 0) {
     return <div className="ml-8 px-2 py-1 text-xs text-muted-foreground">세션 없음</div>
   }
 

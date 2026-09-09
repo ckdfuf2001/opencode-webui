@@ -502,7 +502,7 @@ healthCheckInterval = setInterval(() => {
 
 let agentBrowserWarmupInterval: NodeJS.Timeout | null = null
 agentBrowserWarmupInterval = setInterval(() => {
-  warmUpAllAgentBrowserDaemons().catch((error) => {
+  warmUpAllAgentBrowserDaemons(db).catch((error) => {
     logger.error('Agent-browser daemon re-warm-up error:', error)
   })
 }, 60_000)
