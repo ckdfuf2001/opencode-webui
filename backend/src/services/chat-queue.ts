@@ -17,7 +17,7 @@ export interface QueuedChat {
 
 const MAX_QUEUE_LENGTH = 20
 const MAX_TEXT_LENGTH = 16_000
-const REQUEST_TIMEOUT_MS = 2_000
+const REQUEST_TIMEOUT_MS = 1_500
 const SEND_HEADERS_TIMEOUT_MS = 30_000
 const FLUSH_RETRY_BACKOFF_MS = 2_000
 
@@ -32,8 +32,9 @@ const inFlight = new Set<string>()
 const queueDirs = new Map<string, string>()
 // 마지막으로 busy 가 관측된 시각. generation이 끝나는 순간이 아니라 working
 // 표시가 꺼진 뒤에 발송되도록 idle grace를 둔다 (상태 전이·폴러 지연 흡수).
+// 폴러가 1s 주기라 1.2s면 충분하다 — 4s는 cancel 후 체감을 크게 늦춘다.
 const lastBusyAt = new Map<string, number>()
-const IDLE_GRACE_MS = 4_000
+const IDLE_GRACE_MS = 1_200
 
 export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
@@ -190,10 +191,7 @@ function resolveQueueDir(sessionID: string): string {
   return getWorkspacePath()
 }
 
-async function isSessionBusy(sessionID: string): Promise<boolean> {
-  const base = opencodeServerManager.getUrl()
-  const directory = resolveQueueDir(sessionID)
-  const directoryParam = encodeURIComponent(directory)
+async function checkOpencodeBusy(base: string, directoryParam: string, sessionID: string): Promise<boolean> {
   try {
     const res = await fetch(`${base}/session/status?directory=${directoryParam}`, {
       headers: ensureServerAuth({}),
@@ -201,11 +199,23 @@ async function isSessionBusy(sessionID: string): Promise<boolean> {
     })
     if (!res.ok) return true
     const map = (await res.json()) as Record<string, { type?: string }>
-    if (map[sessionID]?.type === 'busy') return true
+    return map[sessionID]?.type === 'busy'
   } catch {
     return true
   }
-  if (await hasPendingInteraction(base, directory, sessionID)) return true
+}
+
+async function isSessionBusy(sessionID: string): Promise<boolean> {
+  const base = opencodeServerManager.getUrl()
+  const directory = resolveQueueDir(sessionID)
+  const directoryParam = encodeURIComponent(directory)
+  // status/permission/question을 병렬 조회 — 순차 3연속 타임아웃(최대 6s)이
+  // cancel 직후 opencode가 느릴 때 큐를 장시간 묶어두던 원인
+  const [opencodeBusy, pending] = await Promise.all([
+    checkOpencodeBusy(base, directoryParam, sessionID),
+    hasPendingInteraction(base, directory, sessionID),
+  ])
+  if (opencodeBusy || pending) return true
   // DB(session_status)도 본다 — 프론트 Working 배지와 같은 소스라 working이
   // 끝난 뒤에 발송된다. opencode 순간 장애·전이 구간의 오판을 막는다.
   try {
@@ -218,20 +228,21 @@ async function isSessionBusy(sessionID: string): Promise<boolean> {
 /** 승인 대기(permission/question) 중인 세션은 생성 중이 아니어도 working 으로 취급한다. */
 async function hasPendingInteraction(base: string, directory: string, sessionID: string): Promise<boolean> {
   const directoryParam = encodeURIComponent(directory)
-  for (const kind of ['permission', 'question'] as const) {
+  const results = await Promise.all((['permission', 'question'] as const).map(async (kind) => {
     try {
       const res = await fetch(`${base}/${kind}?directory=${directoryParam}`, {
         headers: ensureServerAuth({}),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       })
-      if (!res.ok) continue
+      if (!res.ok) return false
       const list = (await res.json()) as Array<{ sessionID?: string }>
-      if (Array.isArray(list) && list.some((item) => item?.sessionID === sessionID)) return true
+      return Array.isArray(list) && list.some((item) => item?.sessionID === sessionID)
     } catch {
       // 조회 실패는 working 아님으로 간주하고 다음으로 (보수적 차단은 status 체크가 담당)
+      return false
     }
-  }
-  return false
+  }))
+  return results.some(Boolean)
 }
 
 /** 세션 상태 폴러(1s)가 매 틱 호출한다. idle 세션의 큐 헤드를 순차 발송한다. */
