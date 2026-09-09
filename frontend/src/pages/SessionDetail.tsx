@@ -118,10 +118,6 @@ export function SessionDetail() {
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
   // 한 번에 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftPendingRef = useRef(false);
-  // 하단 근처 여부 (엣지 트리거용: 근처 진입 시 1회만 복귀)
-  const wasNearBottomRef = useRef(false);
-  // 마지막 관측 scrollTop (이동 방향 판단용)
-  const lastScrollTopRef = useRef(0);
   // 검색 이동 애니메이션 중에는 엣지 반응 금지 (타겟이 윈도우 밖으로 밀려나지 않게)
   const navLockRef = useRef(false);
   useEffect(() => {
@@ -133,8 +129,6 @@ export function SessionDetail() {
   useEffect(() => {
     setWindowStart(null)
     shiftPendingRef.current = false
-    wasNearBottomRef.current = false
-    lastScrollTopRef.current = 0
     navLockRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
@@ -209,10 +203,24 @@ export function SessionDetail() {
     };
     requestAnimationFrame(() => requestAnimationFrame(attempt));
   }, []);
-  // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달(스크롤 가능할 때만) → 하단 고정
+  // 스크롤 감지: 완전 끝에서만 반응한다 (px/% 구간이 아니라 끝점 기준).
+  // - 맨 위(scrollTop 0)에 닿으면 이전 로드, 맨 아래(딱 맞음)에 닿으면 하단 고정 복귀
+  // - 관성으로 미끄러져 닿아도(scroll 이벤트), 끝에 대고 밀어도(wheel 이벤트) 동작
   useEffect(() => {
     const c = messageContainerRef.current;
     if (!c) return;
+    const atTopEdge = () => {
+      if (navLockRef.current) return;
+      const len = baseMessages?.length ?? 0;
+      const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+      if (cur > 0) shiftWindowUp();
+    };
+    const atBottomEdge = () => {
+      if (navLockRef.current) return;
+      if (windowStartRef.current === null) return;
+      setWindowStart(null);
+      pinBottomVerified();
+    };
     let ticking = false;
     const onScroll = () => {
       if (ticking) return;
@@ -220,35 +228,23 @@ export function SessionDetail() {
       requestAnimationFrame(() => {
         ticking = false;
         if (!c) return;
-        const scrollable = c.scrollHeight > c.clientHeight + 40;
-        if (!scrollable) return;
-        // 엣지 여유를 넉넉히 둬서 버퍼가 먼저 보이고 로드가 따라오게 한다.
-        // 위: 450px 전에 미리 로드 (15개 추가분이 쿠션이 됨)
-        // 아래: 300px 근처 진입 시 1회만 하단 고정 복귀 (계속 머물러도 반복 안 함)
-        // 방향으로 겹침 해소: 짧은 내용에서 위·아래 영역이 겹쳐도
-        // 내려가며 들어올 때만 복귀, 올라가며 닿을 때는 이전 로드만 한다.
-        const st = c.scrollTop;
-        const goingUp = st < lastScrollTopRef.current - 2;
-        const goingDown = st > lastScrollTopRef.current + 2;
-        lastScrollTopRef.current = st;
-        // 엣지는 px 기준 유지 (%는 내용 길이에 따라 엣지 진입 자체가 안 됨).
-        // 위 450px + 올라가는 중이면 이전 로드, 아래 300px + 내려가는 중이면 하단 고정.
-        const nearBottom = st + c.clientHeight >= c.scrollHeight - 300;
-        const wasNear = wasNearBottomRef.current;
-        wasNearBottomRef.current = nearBottom;
-        if (nearBottom && !wasNear && goingDown && !navLockRef.current && windowStartRef.current !== null) {
-          setWindowStart(null);
-          pinBottomVerified();
-        } else if (st < 450 && goingUp) {
-          const len = baseMessages?.length ?? 0;
-          const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
-          if (cur > 0) shiftWindowUp();
-        }
+        if (c.scrollHeight <= c.clientHeight + 40) return;
+        if (c.scrollTop <= 0) atTopEdge();
+        else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 1) atBottomEdge();
       });
     };
+    const onWheel = (e: WheelEvent) => {
+      if (navLockRef.current) return;
+      if (e.deltaY < 0 && c.scrollTop <= 0) atTopEdge();
+      else if (e.deltaY > 0 && c.scrollTop + c.clientHeight >= c.scrollHeight - 1) atBottomEdge();
+    };
     c.addEventListener("scroll", onScroll, { passive: true });
-    return () => c.removeEventListener("scroll", onScroll);
-  }, [shiftWindowUp, pinBottomVerified]);
+    c.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      c.removeEventListener("scroll", onScroll);
+      c.removeEventListener("wheel", onWheel);
+    };
+  }, [shiftWindowUp, pinBottomVerified, baseMessages?.length]);
   const {
     data: dbStatuses,
     isError: statusError,
