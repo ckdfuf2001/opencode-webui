@@ -8,6 +8,7 @@ import { useFileSearch } from '@/hooks/useFileSearch'
 
 import { useUserBash } from '@/stores/userBashStore'
 import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
+import { listQueuedChats } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
 import { ChevronDown } from 'lucide-react'
 import { useContextUsage } from '@/hooks/useContextUsage'
@@ -285,6 +286,31 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         }
       }
       return
+    }
+
+    // 백엔드 큐에 대기 중인 메시지가 있으면 순서 보존을 위해 뒤에 적재한다.
+    // (cancel 후 바로 보내면 새 채팅이 먼저 뜨고 큐 내용이 나중에 위로 뜨는 역전 방지)
+    try {
+      const pending = await listQueuedChats(sessionID).catch(() => [])
+      if (pending.length > 0) {
+        const text = parts
+          .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
+          .filter((t) => t.trim().length > 0)
+          .join('\n')
+        if (text.trim()) {
+          enqueueQueued.mutate({ sessionID, text, directory })
+          setPrompt('')
+          setAttachedFiles(new Map())
+          onSubmitted?.()
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto'
+          }
+          showToast.info(`앞선 대기열 ${pending.length}개 뒤에 추가됨 (순서 유지)`)
+        }
+        return
+      }
+    } catch {
+      // 조회 실패 시 기존대로 직접 전송 (fail-open)
     }
 
     sendPrompt.mutate({
