@@ -1140,7 +1140,8 @@ if (results.length > 0) {
                   onClick={handleLoadMore}
                   className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
                 >
-                  Load more — {hiddenCount} older message{hiddenCount !== 1 ? "s" : ""} hidden · click or scroll up
+                  <span className="sm:hidden">Load more</span>
+                  <span className="hidden sm:inline">Load more — {hiddenCount} older message{hiddenCount !== 1 ? "s" : ""} hidden · click or scroll up</span>
                 </button>
               )}
               <SessionMoreMenu
@@ -1194,7 +1195,8 @@ if (results.length > 0) {
                   onClick={shiftWindowDown}
                   className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
                 >
-                  Show newer · scroll down
+                  <span className="sm:hidden">Show newer</span>
+                  <span className="hidden sm:inline">Show newer · scroll down</span>
                 </button>
                 <button
                   onClick={() => {
@@ -1208,7 +1210,8 @@ if (results.length > 0) {
                   }}
                   className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
                 >
-                  Back to latest
+                  <span className="sm:hidden">Back</span>
+                  <span className="hidden sm:inline">Back to latest</span>
                 </button>
               </div>
             )}
