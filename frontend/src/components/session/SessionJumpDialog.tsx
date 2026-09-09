@@ -38,7 +38,10 @@ export function SessionJumpDialog({ open, onClose, messages, onJump }: SessionJu
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+      <DialogContent
+        className="max-w-lg max-h-[80vh] flex flex-col"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DialogTitle>Search / Go to message</DialogTitle>
         <input
           value={q}
@@ -56,7 +59,7 @@ export function SessionJumpDialog({ open, onClose, messages, onJump }: SessionJu
             return (
               <button
                 key={info.id}
-                onClick={() => { onJump(info.id); onClose() }}
+                onClick={() => onJump(info.id)}
                 className="w-full text-left px-2 py-1.5 rounded-md hover:bg-accent flex items-baseline gap-2 cursor-pointer"
               >
                 <span className="text-[10px] font-mono text-muted-foreground w-8 shrink-0">#{i + 1}</span>

@@ -803,7 +803,7 @@ export function SessionDetail() {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
-      if (tries++ < 12) requestAnimationFrame(attempt);
+      if (tries++ < 30) requestAnimationFrame(attempt);
     };
     requestAnimationFrame(() => requestAnimationFrame(attempt));
   }, [markDisengaged]);
@@ -1139,9 +1139,11 @@ if (results.length > 0) {
                   Load more — {hiddenCount} older message{hiddenCount !== 1 ? "s" : ""} hidden · click or scroll up
                 </button>
               )}
-              <div className="rounded-full border bg-card shadow-sm">
-                <SessionMoreMenu onExport={handleExportFile} onOpenJump={() => setJumpOpen(true)} />
-              </div>
+              <SessionMoreMenu
+                onExport={handleExportFile}
+                onOpenJump={() => setJumpOpen(true)}
+                triggerClassName="inline-flex items-center px-2 py-1.5 rounded-full border bg-card shadow-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+              />
             </div>
             {opcodeUrl && repoDirectory && (
               <MessageThread 
@@ -1333,7 +1335,12 @@ if (results.length > 0) {
         open={jumpOpen}
         onClose={() => setJumpOpen(false)}
         messages={messages}
-        onJump={scrollToMessage}
+        onJump={(id) => {
+          // 모달(스크롤 잠금·포커스 복원·닫힘 애니메이션)이 끝난 뒤 이동해야
+          // smooth 스크롤이 중간에 끊기거나 무시되지 않는다.
+          setJumpOpen(false);
+          setTimeout(() => scrollToMessage(id), 250);
+        }}
       />
 
       <PermissionRulesDialog

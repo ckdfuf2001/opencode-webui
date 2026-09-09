@@ -12,14 +12,18 @@ import type { SessionExportFormat } from '@/lib/sessionExport'
 interface SessionMoreMenuProps {
   onExport: (format: SessionExportFormat | 'pdf') => void
   onOpenJump: () => void
+  triggerClassName?: string
 }
 
-export function SessionMoreMenu({ onExport, onOpenJump }: SessionMoreMenuProps) {
+const DEFAULT_TRIGGER =
+  'h-8 w-8 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer'
+
+export function SessionMoreMenu({ onExport, onOpenJump, triggerClassName }: SessionMoreMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+          className={triggerClassName ?? DEFAULT_TRIGGER}
           title="More actions (download / jump / search)"
         >
           <MoreHorizontal className="w-4 h-4" />
