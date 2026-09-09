@@ -294,6 +294,18 @@ export function SessionDetail() {
       // 첫 채팅 등에서 polling/SSE 경합으로 isStreaming이 잠깐 false→true로 튀는 경우 이중 트리거 방지 — 800ms 디바운스
       const debounce = setTimeout(() => {
         if (prevStreamingRef.current) return;
+        if (!isCancel) {
+          // working 공백(연결 흔들림·자식 세션 종료 등)에 complete가 아닌데 발송하지 않도록
+          // 마지막 어시스턴트 메시지 finished + DB busy 아님을 재확인한다
+          const cur = messagesRef.current;
+          const last = cur?.[cur.length - 1] as any;
+          const lastDone = !!last && last.info?.role === 'assistant' && !!((last.info?.time as any)?.completed);
+          if (!lastDone) return;
+          try {
+            const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"]);
+            if (statuses?.some((s) => s.sessionId === sessionId && s.status === 'busy') === true) return;
+          } catch {}
+        }
         if (canSound) void playCompletionTick();
         if (canPush) {
           const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
