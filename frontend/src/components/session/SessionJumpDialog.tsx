@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import type { MessageWithParts } from '@/api/types'
 import { stripMemoryRecall } from '@/lib/stripRecall'
+import { formatChatTime } from '@/lib/chatTime'
 
 interface SessionJumpDialogProps {
   open: boolean
@@ -69,7 +70,7 @@ export function SessionJumpDialog({ open, onClose, messages, onJump }: SessionJu
                 <span className="text-xs truncate flex-1">{preview}</span>
                 {info.time?.created ? (
                   <span className="text-[10px] text-muted-foreground shrink-0">
-                    {new Date(info.time.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                    {formatChatTime(info.time.created)}
                   </span>
                 ) : null}
               </button>

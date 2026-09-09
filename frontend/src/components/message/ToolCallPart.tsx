@@ -48,7 +48,9 @@ function CappedOutput({ text, red }: { text: string; red?: boolean }) {
   }
   return (
     <div>
-      <pre className={`bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap max-h-[320px] overflow-y-auto ${red ? 'text-red-300' : ''}`}>
+      {/* 접힌 상태는 overflow-hidden: 안에 세로 스크롤을 만들면 휠이
+          안쪽에 갇혀 바깥 채팅 스크롤이 안 되는 느낌이 든다 */}
+      <pre className={`bg-accent p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap ${expanded ? '' : 'max-h-[240px] overflow-hidden'} ${red ? 'text-red-300' : ''}`}>
         {expanded ? text : text.slice(0, OUTPUT_RENDER_LIMIT)}
       </pre>
       <button

@@ -10,7 +10,8 @@ import {
   ChevronDown,
   MoreHorizontal,
   Trash2,
-  Edit3
+  Edit3,
+  Download
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -27,6 +28,7 @@ interface FileTreeProps {
   selectedFile: FileInfo | null
   onDelete: (path: string) => void
   onRename: (oldPath: string, newPath: string) => void
+  onDownload?: (file: FileInfo) => void
   currentPath?: string
   basePath?: string
 }
@@ -39,9 +41,10 @@ interface TreeNodeProps {
   selectedFile?: FileInfo | null
   onDelete?: (path: string) => void
   onRename?: (oldPath: string, newPath: string) => void
+  onDownload?: (file: FileInfo) => void
 }
 
-function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename }: TreeNodeProps) {
+function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
@@ -188,6 +191,12 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               <Edit3 className="w-4 h-4 mr-2" />
               Rename
             </DropdownMenuItem>
+            {onDownload && (
+              <DropdownMenuItem onClick={() => onDownload(file)}>
+                <Download className="w-4 h-4 mr-2" />
+                {file.isDirectory ? 'Download as ZIP' : 'Download'}
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={handleDelete} className="text-red-600">
               <Trash2 className="w-4 h-4 mr-2" />
               Delete
@@ -208,6 +217,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               selectedFile={selectedFile}
               onDelete={onDelete}
               onRename={onRename}
+              onDownload={onDownload}
             />
           ))}
         </div>
@@ -226,7 +236,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   )
 }
 
-export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, currentPath = '', basePath = '', isLoading = false }: FileTreeProps & { isLoading?: boolean }) {
+export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false }: FileTreeProps & { isLoading?: boolean }) {
   const handleGoUp = () => {
     // If currentPath has content and is different from basePath, go up
     if (currentPath !== basePath) {
@@ -272,6 +282,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
             selectedFile={selectedFile}
             onDelete={onDelete}
             onRename={onRename}
+            onDownload={onDownload}
             
           />
         ))

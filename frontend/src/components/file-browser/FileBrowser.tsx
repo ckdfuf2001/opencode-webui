@@ -12,6 +12,7 @@ import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { useMobile } from '@/hooks/useMobile'
 import { useFile, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from '@/api/files'
+import { downloadSingleFile, downloadFolderAsZip } from '@/lib/fileDownload'
 import { showToast } from '@/lib/toast'
 
 const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
@@ -256,6 +257,21 @@ useEffect(() => {
     }
   }, [currentPath])
 
+  const handleDownload = useCallback(async (file: FileInfo) => {
+    try {
+      if (file.isDirectory) {
+        showToast.info(`Preparing ZIP for ${file.name}…`)
+        const { files: n } = await downloadFolderAsZip(file.path, file.name)
+        showToast.success(`Downloaded ${file.name}.zip (${n} file(s))`)
+      } else {
+        await downloadSingleFile(file.path, file.name)
+        showToast.success(`Downloaded ${file.name}`)
+      }
+    } catch (err) {
+      showToast.error(err instanceof Error ? err.message : 'Download failed')
+    }
+  }, [])
+
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -394,6 +410,7 @@ useEffect(() => {
                   selectedFile={selectedFile}
                   onDelete={handleDelete}
                   onRename={handleRename}
+                  onDownload={handleDownload}
                   currentPath={currentPath}
                   basePath={basePath}
                   isLoading={loading || queryLoading}
@@ -513,6 +530,7 @@ useEffect(() => {
                   selectedFile={selectedFile}
                   onDelete={handleDelete}
                   onRename={handleRename}
+                  onDownload={handleDownload}
                   currentPath={currentPath}
                   basePath={basePath}
                   isLoading={loading || queryLoading}

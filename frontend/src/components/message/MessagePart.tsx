@@ -249,15 +249,17 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           allParts.length > 0 &&
           allParts[allParts.length - 1]?.id === part.id
         if (!isLive) return null
-        // live 추론은 인디케이터만 보여주지 않고 스트리밍 텍스트도 함께 보여줘
-        // "생각중" 상태에서 멈춰 보이는 느낌을 줄인다 (높이 제한 + 스크롤).
+        // live 추론은 인디케이터 + 스트리밍 텍스트를 함께 보여준다.
+        // 바깥 스크롤을 그대로 따라가게 안쪽 고정 스크롤박스를 두지 않는다
+        // (max-h+overflow-y는 휠을 안쪽에 가두고 자동 추종도 안 돼서
+        //  "열려 있는데 AUTO SCROLL 안 됨"처럼 보인다).
         return (
           <div className="my-1 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
             <div className="flex items-center gap-2 text-xs text-zinc-500">
               <span className="animate-pulse">▋</span>
               <span className="shine-loading">Reasoning...</span>
             </div>
-            <div className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-sm text-foreground/70">
+            <div className="mt-1 whitespace-pre-wrap text-sm text-foreground/70">
               {part.text}
             </div>
           </div>

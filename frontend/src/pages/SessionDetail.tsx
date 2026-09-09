@@ -698,7 +698,9 @@ export function SessionDetail() {
 
   // 세션 첫 진입/새로고침 시 맨 아래로 스크롤 (?msg= / #message- 지정 진입은 그쪽 우선).
   // 반복 interval로 하단을 계속 강제하면 휠 스크롤과 싸우므로,
-  // 즉시 1회 + 이미지 로드 시에만 핀하고 사용자 스크롤이 오면 영구 중단한다.
+  // 즉시 1회 + 콘텐츠가 커질 때만 핀하고 실제 스크롤 제스처가 오면 영구 중단한다.
+  // (pointerdown/click은 중단 조건에서 제외 — 클릭 한 번에 보호가 풀리면
+  //  뒤늦은 이미지·폰트 성장을 못 따라가 새로고침 시 아래로 안 간다)
   const initialScrollDoneRef = useRef<string | null>(null)
   useEffect(() => {
     if (!baseMessages || baseMessages.length === 0) return
@@ -735,16 +737,18 @@ export function SessionDetail() {
     const onLoadCapture = (e: Event) => {
       if ((e.target as HTMLElement)?.tagName === 'IMG') pin()
     }
+    // 웹폰트 스왑으로 늦게 자라는 높이도 따라간다 (1회성)
+    try {
+      (document as Document).fonts?.ready.then(() => pin()).catch(() => {})
+    } catch {}
     c.addEventListener('load', onLoadCapture, true)
     c.addEventListener('wheel', stop, { passive: true })
     c.addEventListener('touchmove', stop, { passive: true })
-    c.addEventListener('pointerdown', stop)
     return () => {
       clearInterval(iv)
       c.removeEventListener('load', onLoadCapture, true)
       c.removeEventListener('wheel', stop)
       c.removeEventListener('touchmove', stop)
-      c.removeEventListener('pointerdown', stop)
     }
   }, [baseMessages?.length, sessionId, scrollToBottom])
   useEffect(() => { initialScrollDoneRef.current = null }, [sessionId])

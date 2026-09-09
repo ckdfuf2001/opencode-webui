@@ -5,6 +5,7 @@ import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
 import { stripMemoryRecall } from '@/lib/stripRecall'
+import { formatChatTime } from '@/lib/chatTime'
 
 function getMessageTextContent(msg: MessageWithParts): string {
   return stripMemoryRecall(
@@ -156,8 +157,8 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                   {isLength ? 'Truncated due to context limit' : isAborted ? 'Canceled' : isError ? 'Error' : msg.info.role === 'user' ? 'You' : (msg.info.role === 'assistant' && 'modelID' in msg.info ? msg.info.modelID : 'Assistant')}
                 </span>
                 {msg.info.time && (
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(msg.info.time.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                  <span className="text-xs text-muted-foreground" title={new Date(msg.info.time.created).toLocaleString()}>
+                    {formatChatTime(msg.info.time.created)}
                   </span>
                 )}
                 {msg.info.id.startsWith("optimistic_") && (
