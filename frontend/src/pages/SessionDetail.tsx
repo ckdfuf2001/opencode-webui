@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -103,28 +103,22 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
-  // 슬라이딩 윈도우: DOM에는 항상 최대 WINDOW_SIZE개만 유지 (메모리/DOM 절약).
+  // 고정 개수만 보여준다: DOM에는 항상 최대 WINDOW_SIZE개 (메모리/DOM 절약).
   // - windowStart === null: 하단 고정(마지막 N개)
   // - 위로 스크롤하면 윈도우가 위로 이동(LOAD_STEP), 아래쪽 DOM은 해제
   // - 맨 아래 도달하면 하단 고정으로 복귀
-  // 휠이 먹통이 되지 않도록 프로그램 스크롤 보정은 layout effect에서
-  // DOM 확정 후 1회만 수행하고, 그로 인한 scroll 이벤트 1회는 스킵한다.
-  // 고정 개수만 보여준다 (절반으로 축소): 위쪽 15개씩 추가 로드, 나머지는 버퍼 해제
+  // 위치 보정은 브라우저 네이티브 overflow-anchor에 맡긴다 (키가 msg.info.id로
+  // 안정적이라 prepend 시 뷰가 제자리에 유지된다). 수동 scrollTop 보정 금지 —
+  // 네이티브 앵커와 이중 보정되면 오히려 튄다.
   const WINDOW_SIZE = 25;
   const LOAD_STEP = 15;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   useEffect(() => { windowStartRef.current = windowStart }, [windowStart]);
-  const shiftAnchorRef = useRef<{ prevTop: number; prevHeight: number } | null>(null);
-  const skipShiftRef = useRef(false);
-  const lastShiftAtRef = useRef(0);
   const prevMsgLenRef = useRef<number>(0);
   // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
   useEffect(() => {
     setWindowStart(null)
-    shiftAnchorRef.current = null
-    skipShiftRef.current = false
-    lastShiftAtRef.current = 0
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
   }, [sessionId, queryClient]);
@@ -163,32 +157,18 @@ export function SessionDetail() {
   const hiddenCount = start;
   // useAutoScroll의 추종 해제 함수 (아래 useAutoScroll 선언 뒤에 연결)
   const markDisengagedRef = useRef<(() => void) | null>(null);
-  // 윈도우 위로 이동: 이동 전 위치를 기록하고 layout effect에서 DOM 확정 후 1회 보정.
-  // 동시에 자동 추종을 끊어 다음 폴링이 하단으로 끌어당기지 않게 한다.
+  // 윈도우 위로 이동. 위치 보정은 네이티브 overflow-anchor가 담당하므로
+  // 여기서는 추종 해제 + 시작점 이동만 한다.
   const shiftWindowUp = useCallback(() => {
-    const c = messageContainerRef.current;
     const len = baseMessages?.length ?? 0;
-    if (!c || len === 0) return;
+    if (len === 0) return;
     markDisengagedRef.current?.();
-    shiftAnchorRef.current = { prevTop: c.scrollTop, prevHeight: c.scrollHeight };
-    lastShiftAtRef.current = Date.now();
     setWindowStart((prev) => {
       const cur = prev ?? Math.max(0, len - WINDOW_SIZE);
       return Math.max(0, cur - LOAD_STEP);
     });
   }, [baseMessages?.length]);
   const handleLoadMore = shiftWindowUp;
-  // DOM 확정 후 스크롤 점프 보정 (paint 전 동기 실행 → 화면 떨림 없음)
-  useLayoutEffect(() => {
-    const anchor = shiftAnchorRef.current;
-    if (!anchor) return;
-    shiftAnchorRef.current = null;
-    const c = messageContainerRef.current;
-    if (!c) return;
-    c.scrollTop = anchor.prevTop + (c.scrollHeight - anchor.prevHeight);
-    // 이 프로그램 스크롤로 인한 scroll 이벤트는 윈도우 이동으로 해석하지 않는다
-    skipShiftRef.current = true;
-  }, [windowStart]);
   // 스크롤 감지: 맨 위 근처 → 윈도우 위로 이동, 맨 아래 도달(스크롤 가능할 때만) → 하단 고정
   useEffect(() => {
     const c = messageContainerRef.current;
@@ -200,19 +180,17 @@ export function SessionDetail() {
       requestAnimationFrame(() => {
         ticking = false;
         if (!c) return;
-        if (skipShiftRef.current) { skipShiftRef.current = false; return; }
         const scrollable = c.scrollHeight > c.clientHeight + 40;
         if (!scrollable) return;
         // 엣지 여유를 넉넉히 둬서 버퍼가 먼저 보이고 로드가 따라오게 한다.
-        // 위: 450px 전에 미리 로드 (25개 추가분 ≈ 1500px+ 가 쿠션이 됨)
+        // 위: 450px 전에 미리 로드 (15개 추가분이 쿠션이 됨)
         // 아래: 300px 전에 하단 고정 복귀
         if (c.scrollTop < 450) {
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) shiftWindowUp();
         } else if (c.scrollTop + c.clientHeight >= c.scrollHeight - 300) {
-          // 위로 이동 직후 보정 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않는다
-          if (windowStartRef.current !== null && Date.now() - lastShiftAtRef.current > 600) {
+          if (windowStartRef.current !== null) {
             setWindowStart(null);
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {

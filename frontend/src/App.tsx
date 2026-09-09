@@ -14,6 +14,7 @@ import { isPushSupported, ensurePushPermission, sendPushNotification } from './l
 import { useState, useEffect } from 'react'
 import { Button } from './components/ui/button'
 import { Bell } from 'lucide-react'
+import { BUILD_SHA, logBuildInfo } from './lib/build-info'
 
 startAutoApprover()
 
@@ -76,10 +77,14 @@ function PushPrompt() {
 function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
+  useEffect(() => { logBuildInfo() }, [])
 
   return (
     <BrowserRouter>
       <PushPrompt />
+      <div className="pointer-events-none fixed bottom-1 right-2 z-[5] text-[10px] text-muted-foreground/50 select-none" title="build">
+        {BUILD_SHA}
+      </div>
       <Routes>
         <Route path="/" element={<Repos />} />
         <Route path="/search" element={<Search />} />

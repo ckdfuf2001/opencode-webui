@@ -110,7 +110,9 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
     if (latestAssistantMessage) {
       const t = (latestAssistantMessage.info as unknown as { tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } } }).tokens
       totalTokens = ((t?.input ?? 0) + (t?.output ?? 0) + (t?.reasoning ?? 0) + (t?.cache?.read ?? 0) + (t?.cache?.write ?? 0))
-      usageTokens = ((t?.input ?? 0) + (t?.output ?? 0))
+      // reasoning/cache도 컨텍스트를 차지하므로 포함한다.
+      // input+output만 보면 reasoning 모델은 바가 오르지 않는다.
+      usageTokens = totalTokens
       if (!currentModel && 'modelID' in latestAssistantMessage.info && 'providerID' in latestAssistantMessage.info) {
         currentModel = `${latestAssistantMessage.info.providerID}/${latestAssistantMessage.info.modelID}`
       }
@@ -132,7 +134,7 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
       }
     }
 
-    // truncated 판단은 input+output 기준으로 — reasoning/cache 포함으로 오탐 방지, 표기는 totalTokens 원복
+    // 최신 단일 턴 기준 (전체 합산이던 900%+ 뻥튀기는 위에서 해결됨)
     const rawPercentage = contextLimit ? (usageTokens / contextLimit) * 100 : null
     const usagePercentage = rawPercentage != null ? Math.min(100, Math.max(0, rawPercentage)) : null
 

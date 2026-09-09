@@ -1,8 +1,18 @@
 import path from "path";
+import { execSync } from "node:child_process";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { DEFAULTS } from "../shared/src/config/defaults";
+
+function getBuildMeta(): { sha: string; time: string } {
+  try {
+    const sha = execSync("git rev-parse --short HEAD", { encoding: "utf8", timeout: 5000 }).trim();
+    if (/^[0-9a-f]{4,}$/.test(sha)) return { sha, time: new Date().toISOString() };
+  } catch {}
+  return { sha: "dev", time: new Date().toISOString() };
+}
+const buildMeta = getBuildMeta();
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
@@ -11,6 +21,10 @@ export default defineConfig(({ mode }) => {
   return {
     envDir: path.resolve(__dirname, ".."),
     plugins: [react(), tailwindcss()],
+    define: {
+      __BUILD_SHA__: JSON.stringify(buildMeta.sha),
+      __BUILD_TIME__: JSON.stringify(buildMeta.time),
+    },
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
