@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react"
 import { ChevronDown, ChevronUp, Terminal, Copy } from "lucide-react"
 import { API_BASE_URL } from "@/config"
+import { copyTextToClipboard } from "@/lib/clipboard"
 
 async function fetchText(path: string): Promise<string> {
   const r = await fetch(`${API_BASE_URL}${path}`)
@@ -41,7 +42,7 @@ export function OutputPreview({ isStreaming }: { isStreaming?: boolean }) {
   }, [text, open])
 
   const copy = () => {
-    navigator.clipboard.writeText(text).catch(() => {})
+    void copyTextToClipboard(text)
   }
 
   return (

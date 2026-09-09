@@ -3,16 +3,14 @@ import type { components } from '@/api/opencode-types'
 import { useSettings } from '@/hooks/useSettings'
 import { useUserBash } from '@/stores/userBashStore'
 import { detectFileReferences } from '@/lib/fileReferences'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import { Copy } from 'lucide-react'
 
 function CopyButton({ content, title, className = "" }: { content: string; title: string; className?: string }) {
   const handleCopy = async (e?: React.MouseEvent) => {
     e?.stopPropagation()
-    try {
-      await navigator.clipboard.writeText(content)
-    } catch (error) {
-      console.error('Failed to copy content:', error)
-    }
+    const ok = await copyTextToClipboard(content)
+    if (!ok) console.error('Failed to copy content')
   }
 
   if (!content.trim()) {
@@ -280,7 +278,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
           )}
         </div>
         <pre className="bg-accent p-3 rounded text-xs overflow-x-auto whitespace-pre-wrap cursor-pointer hover:bg-accent/80 transition-colors" 
-             onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(output); }}
+             onClick={(e) => { e.stopPropagation(); void copyTextToClipboard(output); }}
              title="Click to copy output">
           {output}
         </pre>

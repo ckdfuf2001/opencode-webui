@@ -6,6 +6,7 @@ import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
 import { stripMemoryRecall } from '@/lib/stripRecall'
 import { formatChatTime } from '@/lib/chatTime'
+import { copyTextToClipboard } from '@/lib/clipboard'
 
 function getMessageTextContent(msg: MessageWithParts): string {
   return stripMemoryRecall(
@@ -176,7 +177,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                   <button
                     onClick={() => {
                       const raw = getRawMessageTextContent(msg)
-                      navigator.clipboard.writeText(raw).catch(() => {})
+                      void copyTextToClipboard(raw)
                     }}
                     className="ml-auto p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
                     title="Copy (including <memory-recall>)"

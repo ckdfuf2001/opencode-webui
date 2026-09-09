@@ -7,6 +7,7 @@ import { ToolCallPart } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
 import { useSettings } from '@/hooks/useSettings'
 import { getFileStat } from '@/api/files'
+import { copyTextToClipboard } from '@/lib/clipboard'
 
 type Part = components['schemas']['Part']
 
@@ -58,11 +59,8 @@ function getCopyableContent(part: Part, allParts?: Part[]): string {
 
 function CopyButton({ content, title, className = "" }: { content: string; title: string; className?: string }) {
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content)
-    } catch (error) {
-      console.error('Failed to copy content:', error)
-    }
+    const ok = await copyTextToClipboard(content)
+    if (!ok) console.error('Failed to copy content')
   }
 
   if (!content.trim()) {

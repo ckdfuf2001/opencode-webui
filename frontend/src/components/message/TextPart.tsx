@@ -5,6 +5,7 @@ import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
 import { Copy, Check } from 'lucide-react'
 import { toast } from 'sonner'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import type { components } from '@/api/opencode-types'
 import 'highlight.js/styles/github-dark.css'
 
@@ -39,12 +40,11 @@ function CodeBlock({ children, className, ...props }: CodeBlockProps) {
   const codeContent = extractTextContent(children)
   
   const handleCopyCode = async () => {
-    try {
-      await navigator.clipboard.writeText(codeContent)
+    const ok = await copyTextToClipboard(codeContent)
+    if (ok) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch (error) {
-      console.error('Failed to copy code:', error)
+    } else {
       toast.error('코드 복사에 실패했습니다')
     }
   }
@@ -116,10 +116,9 @@ export function TextPart({ part }: TextPartProps) {
             href={href}
             onClick={(e) => {
               e.preventDefault()
-              navigator.clipboard.writeText(session).then(() => {
-                toast.success(`Copied session: ${session}`)
-              }).catch(() => {
-                toast.info(`Session: ${session}`)
+              void copyTextToClipboard(session).then((ok) => {
+                if (ok) toast.success(`Copied session: ${session}`)
+                else toast.info(`Session: ${session}`)
               })
               // Also dispatch to fill chat input if present
               window.dispatchEvent(new CustomEvent('agent-browser:fill-session', { detail: session }))
