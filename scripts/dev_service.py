@@ -13,6 +13,7 @@
     python scripts\\dev_service.py stop         ; 서비스 중지
     python scripts\\dev_service.py remove       ; 서비스 삭제
     python scripts\\dev_service.py debug        ; 콘솔에서 직접 실행 (관리자 불필요)
+    python scripts\\dev_service.py run          ; SCM 없이 구동 루프만 실행 (설치 전 검증용)
 """
 import glob
 import os
@@ -34,6 +35,39 @@ SVC_LOG = os.path.join(LOGS_DIR, "dev-service.log")
 
 SERVICE_NAME = "opencode-webui-dev"
 SERVICE_DISPLAY = "opencode-webui dev (pnpm dev)"
+
+# 헬스 워치독: node --watch는 백엔드 크래시 시 종료 대신 파일변경 대기로
+# 멈추므로, 프로세스는 살아있어도 응답이 없으면 트리를 죽이고 재기동한다.
+# (테스트용으로 DEV_SVC_GRACE_S / DEV_SVC_FAILS 환경변수로 조정 가능)
+HEALTH_GRACE_S = int(os.environ.get("DEV_SVC_GRACE_S", "180"))
+HEALTH_FAILS = int(os.environ.get("DEV_SVC_FAILS", "6"))
+HEALTH_EVERY_S = 15
+# 부팅 후 한 번도 healthy를 못 보면 이 시간 후 재기동 (부팅 hang 대비)
+NEVER_HEALTHY_S = int(os.environ.get("DEV_SVC_NEVER_S", "300"))
+
+
+def read_env_port():
+    try:
+        with open(os.path.join(PROJECT_DIR, ".env"), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("PORT="):
+                    return int(line.split("=", 1)[1].strip().strip("\"'"))
+    except Exception:
+        pass
+    return 5001
+
+
+def health_ok(port):
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:%d/api/health" % port, timeout=5
+        ) as r:
+            return r.status == 200
+    except Exception:
+        return False
 
 
 def svc_log(msg):
@@ -104,7 +138,10 @@ class DevService(win32serviceutil.ServiceFramework):
 
     def SvcStop(self):
         svc_log("stop requested")
-        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        try:
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        except Exception:
+            pass  # console(run) 모드에서는 SCM 핸들이 없음
         self.stop_event.set()
         child, self.child = self.child, None
         if child is not None:
@@ -159,12 +196,39 @@ class DevService(win32serviceutil.ServiceFramework):
                 self.child = child
                 svc_log("pnpm dev started (pid %s)" % child.pid)
                 start_t = time.time()
+                port = read_env_port()
+                fails = 0
+                ever_healthy = False
+                ticks = 0
                 while not self.stop_event.is_set():
                     rc = child.poll()
                     if rc is not None:
                         break
                     if self.stop_event.wait(3):
                         break
+                    ticks += 1
+                    if ticks * 3 < HEALTH_EVERY_S:
+                        continue
+                    ticks = 0
+                    if time.time() - start_t < HEALTH_GRACE_S:
+                        continue
+                    if health_ok(port):
+                        fails = 0
+                        ever_healthy = True
+                    else:
+                        fails += 1
+                        svc_log("health check failed (%d/%d)" % (fails, HEALTH_FAILS))
+                        dead_long = (not ever_healthy) and (
+                            time.time() - start_t > NEVER_HEALTHY_S
+                        )
+                        if (ever_healthy and fails >= HEALTH_FAILS) or dead_long:
+                            svc_log("backend unresponsive, killing tree to respawn")
+                            kill_tree(child.pid)
+                            try:
+                                child.wait(timeout=20)
+                            except Exception:
+                                pass
+                            break
                 self.child = None
                 try:
                     out.close()
@@ -192,8 +256,29 @@ class DevService(win32serviceutil.ServiceFramework):
         svc_log("run loop ended")
 
 
+def console_main():
+    """SCM 등록 없이 같은 구동 루프를 콘솔에서 실행 (설치 전 검증용)."""
+    # ServiceFramework.__init__은 SCM에 핸들러 등록을 시도하므로 우회 생성
+    svc = DevService.__new__(DevService)
+    svc.stop_event = threading.Event()
+    svc.child = None
+    svc.backoff = 5
+    try:
+        svc.SvcDoRun()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            svc.SvcStop()
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         print(__doc__)
         sys.exit(2)
-    win32serviceutil.HandleCommandLine(DevService)
+    if sys.argv[1] == "run":
+        console_main()
+    else:
+        win32serviceutil.HandleCommandLine(DevService)

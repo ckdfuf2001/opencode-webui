@@ -650,24 +650,33 @@ Command 단위 업무 자동화에 맞게 얹는 것을 목표로 한다.
 것을 막기 위해 (1) 주입 컨텍스트는 관측 사실만, (2) 처방 반영은 승인 게이트
 통과 시에만, (3) 연속 실패 감지 시 개선 루프 중단 후 롤백 제안.
 
-## Windows 자동시작으로 개발 서버 상시 구동
+## Windows 서비스로 개발 서버 상시 구동 (bun 불필요)
 
-`scripts\register_dev_service.bat` — Windows 내장 기능만 사용 (외부 exe 불필요,
-관리자 권한 불필요, Task Scheduler 미사용). 사용자 시작프로그램 폴더에 hidden
-VBS(`<프로젝트폴더명>-dev.vbs`)를 등록해 로그온 시 `scripts\start_dev.bat`
-(hidden `pnpm dev` + 헬스체크)를 자동실행. 로그는 `logs\dev.log`.
-
-일반 cmd에서:
+`scripts\register_dev_service.bat` + `scripts\dev_service.py` — pywin32 기반
+진짜 Windows 서비스(SCM). 외부 exe, NSSM, Task Scheduler 불필요
+(이미 설치된 Python + pywin32만 사용). `install`/`start`/`stop`/`uninstall`은
+관리자 cmd, `status`는 일반 cmd에서도 된다.
 
 ```cmd
 scripts\register_dev_service.bat install
 scripts\register_dev_service.bat install "D:\path\to\project"
 scripts\register_dev_service.bat status
-scripts\register_dev_service.bat uninstall
 ```
 
-- 프로젝트 경로 생략 시 bat 파일 기준 상위 폴더 사용. VBS 파일명은
-  `<프로젝트폴더명>-dev.vbs`라 프로젝트마다 따로 등록 가능.
+- 프로젝트 경로 생략 시 bat 파일 기준 상위 폴더 사용.
+- 서비스는 `pnpm dev` 를 직접 띄우고 헬스 워치독(5001 `/api/health`)으로 감시,
+  크래시·무응답 시 트리를 죽이고 재기동. 로그는 `logs\dev-service.log`.
 - dev 백엔드 5001 + vite 5173. 운영/portable(5002)은 `stop` 시에도 건드리지 않음.
-- 예전 `sc.exe` 방식은 `cmd.exe`가 서비스 프로토콜이 없어 1053으로 시작 불가해 폐기.
-- bat 파일은 반드시 CP949 + CRLF 로 저장 (UTF-8 BOM/LF 는 cmd 파서가 깨뜨림).
+- 예전 `sc.exe + cmd.exe` 방식은 ServiceMain이 없어 1053으로 시작 불가해 폐기.
+
+### bun 없이 node로 dev 구동
+
+보안팀에서 bun이 차단된 환경에서도 `npm run dev`가 동작한다.
+`scripts\node-compat\` 심이 `bun:sqlite`를 내장 `node:sqlite`로,
+확장자 없는 상대 import를 `.ts` 탐색으로 매핑해 node 24에서 그대로 구동.
+`dev:backend` 기본값이 node이며 bun용은 `dev:backend:bun`으로 유지.
+
+### bat 파일 저장 규칙
+
+bat 파일은 반드시 CP949 + CRLF 로 저장 (UTF-8 BOM/LF 는 cmd 파서가 깨뜨림).
+괄호 블록 안 `echo` 문장의 괄호는 `^` 로 이스케이프.
