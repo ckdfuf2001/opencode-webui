@@ -331,6 +331,30 @@ export function SessionDetail() {
     }
   }, [isStreaming, preferences, sessionId, repo, session, repoId, id]);
 
+  // 첫 답변 완료 시 서버가 생성한 제목을 헤더에 동적 반영 (제목 없을 때만 refetch)
+  const prevStreamingForTitleRef = useRef(false);
+  useEffect(() => {
+    const was = prevStreamingForTitleRef.current;
+    prevStreamingForTitleRef.current = isStreaming;
+    if (was && !isStreaming && sessionId) {
+      const needTitle = () => {
+        const cur = queryClient.getQueryData<{ title?: string }>(["opencode", "session", opcodeUrl, sessionId, repoDirectory]);
+        const t = cur?.title;
+        return !t || t === 'Untitled Session';
+      };
+      if (!needTitle()) return;
+      queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
+      queryClient.invalidateQueries({ queryKey: ["opencode", "sessions", opcodeUrl, repoDirectory] });
+      // 서버 제목 생성이 늦을 수 있어 4초 뒤 한 번 더 확인
+      const timer = setTimeout(() => {
+        if (needTitle()) {
+          queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
+        }
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [isStreaming, sessionId, opcodeUrl, repoDirectory, queryClient]);
+
   // 권한 요청 도착 시 소리/푸시 — 자동승인 대상이면 OS 푸시 생략 (툴 알림 전 선조치)
   const prevPermissionIdRef = useRef<string | null>(null);
   useEffect(() => {
