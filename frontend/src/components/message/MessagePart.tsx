@@ -127,8 +127,28 @@ function resolveMentionPath(mentionText: string, directory?: string): string {
     : `${normalizedDir}/chat_uploads/${mentionText}`
 }
 
-function FileMention({
-  part,
+function mentionCandidates(mentionText: string, directory?: string): string[] {
+  const primary = resolveMentionPath(mentionText, directory)
+  if (!directory || mentionText.includes('/') || /^[a-zA-Z]:[\\/]/.test(mentionText) || mentionText.startsWith('/') || mentionText.startsWith('file:')) {
+    return [primary]
+  }
+  const normalizedDir = directory.replace(/\\/g, '/')
+  return [primary, `${normalizedDir}/${mentionText}`]
+}
+
+async function resolveExistingMentionPath(mentionText: string, directory?: string): Promise<string | null> {
+  for (const candidate of mentionCandidates(mentionText, directory)) {
+    try {
+      const stat = await getFileStat(candidate)
+      if (stat.exists && !stat.isDirectory) return candidate
+    } catch {
+      // 다음 후보 시도
+    }
+  }
+  return null
+}
+
+function FileMention({  part,
   mentionText,
   directory,
   onFileClick,
@@ -138,23 +158,20 @@ function FileMention({
   directory?: string
   onFileClick?: (filePath: string, lineNumber?: number) => void
 }) {
-  const [isFile, setIsFile] = useState<boolean | null>(null)
+  const [resolvedPath, setResolvedPath] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    getFileStat(resolveMentionPath(mentionText, directory))
-      .then((stat) => {
-        if (!cancelled) setIsFile(stat.exists && !stat.isDirectory)
-      })
-      .catch(() => {
-        if (!cancelled) setIsFile(false)
-      })
+    setResolvedPath(null)
+    void resolveExistingMentionPath(mentionText, directory).then((found) => {
+      if (!cancelled) setResolvedPath(found)
+    })
     return () => {
       cancelled = true
     }
   }, [mentionText, directory])
 
-  if (isFile !== true) {
+  if (resolvedPath === null) {
     return <TextPart part={part} />
   }
 

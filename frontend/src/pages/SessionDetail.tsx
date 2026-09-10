@@ -1292,7 +1292,7 @@ if (results.length > 0) {
 
         {fileBrowserOpen && (
           <div
-            className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors"
+            className="w-1.5 shrink-0 cursor-col-resize bg-border/50 hover:bg-blue-500/70 active:bg-blue-500 transition-colors"
             onMouseDown={handleResizeStart}
             title="Drag to resize"
           />

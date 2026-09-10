@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, MoreHorizontal } from "lucide-react";
+import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -173,7 +173,7 @@ export function RepoCard({
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <MoreHorizontal className="w-4 h-4" />
+                    <Ellipsis className="w-4 h-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>

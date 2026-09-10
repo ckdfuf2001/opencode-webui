@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useSettings } from '@/hooks/useSettings'
 import { useTTS } from '@/hooks/useTTS'
-import { Loader2, Volume2, Square, CheckCircle, XCircle } from 'lucide-react'
+import { Loader2, Volume2, Square, CheckCircle, CircleX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -272,7 +272,7 @@ export function TTSSettings() {
                   </p>
                   {ttsError && (
                     <p className="text-sm text-destructive flex items-center gap-1">
-                      <XCircle className="h-4 w-4" />
+                      <CircleX className="h-4 w-4" />
                       {ttsError}
                     </p>
                   )}

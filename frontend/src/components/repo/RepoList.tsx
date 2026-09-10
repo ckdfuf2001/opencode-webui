@@ -7,7 +7,7 @@ import { DeleteDialog } from "@/components/ui/delete-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, GitBranch, Search, Trash2, MoreHorizontal, Plus } from "lucide-react";
+import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus } from "lucide-react";
 import { RepoCard } from "./RepoCard";
 import { clearRepoNotifyData } from "@/lib/notifications";
 
@@ -209,7 +209,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                 size="icon"
                 className="md:hidden"
               >
-                <MoreHorizontal className="w-4 h-4" />
+                <Ellipsis className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">

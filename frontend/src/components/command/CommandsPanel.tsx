@@ -27,7 +27,7 @@ import {
   RefreshCw,
   Copy,
   ListChecks,
-  MoreHorizontal,
+  Ellipsis,
   Calendar as CalendarIcon,
   Brain,
   MessageSquarePlus,
@@ -480,7 +480,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant={bulkSelection.size > 0 ? 'default' : 'outline'} size="sm" className="h-8 text-xs flex-shrink-0" title="Bulk actions">
-                <MoreHorizontal className="w-3.5 h-3.5" />
+                <Ellipsis className="w-3.5 h-3.5" />
                 {bulkSelection.size > 0 && `(${bulkSelection.size})`}
               </Button>
             </DropdownMenuTrigger>
@@ -1752,7 +1752,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="History actions">
-                      <MoreHorizontal className="w-3.5 h-3.5" />
+                      <Ellipsis className="w-3.5 h-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">

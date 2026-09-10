@@ -2,16 +2,18 @@ import { useState, useRef, useEffect, memo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
-import { 
-  File, 
-  Folder, 
-  FolderOpen, 
-  ChevronRight, 
+import {
+  File,
+  Folder,
+  FolderOpen,
+  ChevronRight,
   ChevronDown,
-  MoreHorizontal,
+  Ellipsis,
   Trash2,
-  Edit3,
-  Download
+  PenLine,
+  Download,
+  Globe,
+  ListPlus
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -20,6 +22,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { FileInfo } from '@/types/files'
+import { isBrowserViewable, openHtmlInNewTab } from '@/lib/html-view'
+import { upsertHtmlPage } from '@/api/html-pages'
+import { showToast } from '@/lib/toast'
 
 interface FileTreeProps {
   files: FileInfo[]
@@ -50,6 +55,15 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   const [editName, setEditName] = useState(file.name)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const handleRegisterPage = async () => {
+    try {
+      await upsertHtmlPage({ name: file.name, kind: 'file', path: file.path })
+      showToast.success(`관리 페이지에 등록: ${file.name}`)
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : '등록 실패')
+    }
+  }
 
   useEffect(() => {
     if (editing) {
@@ -181,16 +195,28 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             <Button
               variant="ghost"
               size="sm"
-              className="w-6 h-6 p-0 opacity-0 group-hover:opacity-100"
+              className="w-6 h-6 p-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
             >
-              <MoreHorizontal className="w-3 h-3" />
+              <Ellipsis className="w-3 h-3" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
             <DropdownMenuItem onClick={handleRename}>
-              <Edit3 className="w-4 h-4 mr-2" />
+              <PenLine className="w-4 h-4 mr-2" />
               Rename
             </DropdownMenuItem>
+            {!file.isDirectory && isBrowserViewable(file.name) && (
+              <DropdownMenuItem onClick={() => openHtmlInNewTab(file.path, file.name)}>
+                <Globe className="w-4 h-4 mr-2" />
+                브라우저로 열기
+              </DropdownMenuItem>
+            )}
+            {!file.isDirectory && isBrowserViewable(file.name) && (
+              <DropdownMenuItem onClick={() => void handleRegisterPage()}>
+                <ListPlus className="w-4 h-4 mr-2" />
+                관리 페이지로 등록
+              </DropdownMenuItem>
+            )}
             {onDownload && (
               <DropdownMenuItem onClick={() => onDownload(file)}>
                 <Download className="w-4 h-4 mr-2" />
@@ -251,7 +277,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
   const showGoUp = currentPath && currentPath !== basePath
 
   return (
-    <div className="overflow-y-auto">
+    <div className="min-w-max">
       {showGoUp && (
         <div 
           className="flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer"

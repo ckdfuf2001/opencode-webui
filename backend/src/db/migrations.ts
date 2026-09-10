@@ -324,6 +324,21 @@ export function runMigrations(db: Database): void {
       logger.debug('orphan prune skipped:', e)
     }
 
+    // ── HTML 뷰어 관리 페이지 ─────────────────────────
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS html_pages (
+          name TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          path TEXT NOT NULL DEFAULT '',
+          html TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER NOT NULL
+        )
+      `)
+    } catch (e) {
+      logger.debug('html_pages table may already exist:', e)
+    }
+
     logger.info('Database migrations completed successfully')
   } catch (error) {
     logger.error('Failed to run database migrations:', error)

@@ -1,4 +1,4 @@
-import { MoreHorizontal, FileText, FileType, FileCode2, Printer, ListOrdered } from 'lucide-react'
+import { Ellipsis, FileText, FileType, FileCode2, Printer, ListOrdered } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,7 +26,7 @@ export function SessionMoreMenu({ onExport, onOpenJump, triggerClassName }: Sess
           className={triggerClassName ?? DEFAULT_TRIGGER}
           title="More actions (download / jump / search)"
         >
-          <MoreHorizontal className="w-4 h-4" />
+          <Ellipsis className="w-4 h-4" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">

@@ -25,6 +25,72 @@ const clampToBasePath = (path: string, base: string): string => {
   return basePath
 }
 
+interface DroppedItem {
+  file: File
+  relativePath: string
+}
+
+function dropItemEntry(item: DataTransferItem): FileSystemEntry | null {
+  const getAsEntry = (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry
+  if (typeof getAsEntry !== 'function') return null
+  try {
+    return getAsEntry.call(item)
+  } catch {
+    return null
+  }
+}
+
+function readDirEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+  return new Promise((resolve, reject) => {
+    const all: FileSystemEntry[] = []
+    const pump = (): void => {
+      reader.readEntries((batch) => {
+        if (batch.length === 0) {
+          resolve(all)
+          return
+        }
+        all.push(...batch)
+        pump()
+      }, reject)
+    }
+    pump()
+  })
+}
+
+// 폴더 드롭을 지원한다. 디렉터리를 File 로 바로 업로드하면
+// 브라우저가 읽기를 거부해 net::ERR_ACCESS_DENIED 가 난다.
+// FileSystemEntry 순회로 파일만 골라 상대경로와 함께 수집한다.
+async function collectDropItems(dataTransfer: DataTransfer): Promise<{ files: DroppedItem[]; dirs: string[] }> {
+  const files: DroppedItem[] = []
+  const dirs: string[] = []
+  const items = Array.from(dataTransfer.items ?? [])
+  const walk = async (entry: FileSystemEntry, rel: string): Promise<void> => {
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) =>
+        (entry as FileSystemFileEntry).file(resolve, reject),
+      )
+      files.push({ file, relativePath: rel })
+    } else if (entry.isDirectory) {
+      if (rel) dirs.push(rel)
+      const children = await readDirEntries((entry as FileSystemDirectoryEntry).createReader())
+      for (const child of children) {
+        await walk(child, rel ? `${rel}/${child.name}` : child.name)
+      }
+    }
+  }
+  for (const item of items) {
+    if (item.kind !== 'file') continue
+    const entry = dropItemEntry(item)
+    if (!entry) continue
+    try {
+      await walk(entry, entry.name)
+    } catch {
+      // 읽을 수 없는 항목은 건너뛴다
+    }
+  }
+  return { files, dirs }
+}
+
 
 
 
@@ -163,6 +229,85 @@ useEffect(() => {
   const handleRefresh = () => {
     loadFiles(currentPath)
   }
+
+  const ensureDropDirs = useCallback(async (dirs: string[]) => {
+    const unique = [...new Set(dirs.map((d) => normalizePath(d)).filter(Boolean))]
+    for (const dir of unique) {
+      const target = normalizePath(`${currentPath}/${dir}`)
+      const response = await fetch(`${API_BASE_URL}/api/files/${target}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'folder' }),
+      })
+      if (!response.ok) {
+        throw new Error(`Create folder failed: ${dir}`)
+      }
+    }
+  }, [currentPath])
+
+  const handleUploadItems = useCallback(async (items: DroppedItem[], dirs: string[]) => {
+    const freshItems = items.filter(({ file }) => !isUploadInFlight(file))
+    if (freshItems.length === 0 && dirs.length === 0) return
+    if (freshItems.length < items.length) {
+      showToast.info(`이미 업로드 중인 ${items.length - freshItems.length}개 파일은 제외합니다`)
+    }
+    setLoading(true)
+    setError(null)
+    let successCount = 0
+    let failCount = 0
+    let lastError: string | null = null
+    try {
+      const parentDirs = freshItems.map(({ relativePath }) => {
+        const parts = normalizePath(relativePath).split('/')
+        parts.pop()
+        return parts.join('/')
+      })
+      await ensureDropDirs([...dirs, ...parentDirs])
+      setUploadProgress({ name: freshItems[0]?.file.name ?? '', loaded: 0, total: freshItems[0]?.file.size || 1, index: 1, count: freshItems.length })
+      let lastProgAt = 0
+      for (let i = 0; i < freshItems.length; i++) {
+        const { file, relativePath } = freshItems[i]
+        const parts = normalizePath(relativePath).split('/')
+        parts.pop()
+        const dir = parts.join('/')
+        const target = dir ? normalizePath(`${currentPath}/${dir}`) : currentPath
+        setUploadProgress({ name: relativePath, loaded: 0, total: file.size || 1, index: i + 1, count: freshItems.length })
+        try {
+          await uploadFileWithProgress(`${API_BASE_URL}/api/files/${target}`, file, (loaded, total) => {
+            const now = Date.now()
+            if (now - lastProgAt < 150) return
+            lastProgAt = now
+            setUploadProgress({ name: relativePath, loaded, total: total || file.size || 1, index: i + 1, count: freshItems.length })
+          })
+          successCount++
+        } catch (err) {
+          if (err instanceof DuplicateUploadError) continue
+          failCount++
+          lastError = err instanceof Error ? err.message : 'Upload failed'
+        }
+      }
+    } catch (err) {
+      failCount++
+      lastError = err instanceof Error ? err.message : 'Upload failed'
+    } finally {
+      setLoading(false)
+      setUploadProgress(null)
+    }
+    if (successCount > 0 || dirs.length > 0) {
+      showToast.success(`Uploaded ${successCount} file(s) to ${currentPath || '/'}`, {
+        description: failCount > 0 ? `${failCount} failed` : undefined,
+        duration: 5000,
+      })
+      await loadFiles(currentPath)
+    }
+    if (failCount > 0 && successCount === 0) {
+      const message = lastError || 'Upload failed'
+      showToast.error(message.startsWith('Upload failed') ? message : `Upload failed: ${message}`)
+      setError(message)
+    } else if (failCount > 0) {
+      showToast.error(`${failCount} file(s) failed to upload`)
+    }
+  }, [currentPath, ensureDropDirs])
 
   const handleUpload = useCallback(async (files: FileList) => {
     const fileArray = Array.from(files)
@@ -315,9 +460,13 @@ useEffect(() => {
     e.stopPropagation()
     setIsDragging(false)
 
-    const droppedFiles = e.dataTransfer.files
-    if (droppedFiles.length > 0) {
-      await handleUpload(droppedFiles)
+    const { files, dirs } = await collectDropItems(e.dataTransfer)
+    if (files.length > 0 || dirs.length > 0) {
+      await handleUploadItems(files, dirs)
+    } else if (e.dataTransfer.files.length > 0) {
+      await handleUpload(e.dataTransfer.files)
+    } else {
+      showToast.info('드롭한 항목에서 업로드할 파일을 찾지 못했습니다')
     }
   }
 
@@ -372,8 +521,8 @@ useEffect(() => {
         )}
         
         {/* Mobile: Full width file listing, Desktop: Split view */}
-        <div className="flex-1 flex overflow-hidden min-h-0 h-full min-h-[600px]">
-          <div className={`${isMobile ? 'w-full' : 'w-[30%] min-w-[160px]'} border-r border-border px-4 flex flex-col min-h-0 h-full`}>
+        <div className="flex-1 flex overflow-hidden min-h-0">
+          <div className={`${isMobile ? 'w-full' : 'w-[30%] min-w-[160px]'} border-r border-border px-4 flex flex-col min-h-0`}>
             <div className="sticky top-0 z-20 bg-background flex flex-col gap-2 py-3 flex-shrink-0 pointer-events-auto">
               <div className="flex items-center justify-between pointer-events-auto">
                 <Button variant="outline" size="sm" onClick={handleRefresh} className="pointer-events-auto">
@@ -413,7 +562,7 @@ useEffect(() => {
               </div>
             )}
             
-            <div className="flex-1 overflow-y-auto min-h-0">
+            <div className="flex-1 overflow-y-auto overflow-x-scroll min-h-0">
               {(loading || queryLoading) ? (
                 <div className="flex items-center justify-center h-64">
                   <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -538,7 +687,7 @@ useEffect(() => {
                 <RefreshCw className="w-6 h-6 animate-spin" />
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto min-h-0">
+              <div className="flex-1 overflow-y-auto overflow-x-scroll min-h-0">
                 <FileTree
                   files={filteredFiles || []}
                   onFileSelect={handleFileSelect}

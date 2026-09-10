@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, memo } from 'react'
 import { Button } from '@/components/ui/button'
-import { Download, X, Edit3, Save, X as XIcon, WrapText, RefreshCw, Maximize2, Minimize2 } from 'lucide-react'
+import { Download, X, PenLine, Save, X as XIcon, WrapText, RefreshCw, Maximize2, Minimize2 } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { VirtualizedTextView, type VirtualizedTextViewHandle } from '@/components/ui/virtualized-text-view'
@@ -352,7 +352,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
               
               {isTextFile && viewMode !== 'edit' && (
                 <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleEdit() }} className="h-7 w-7 p-0">
-                  <Edit3 className="w-3 h-3" />
+                  <PenLine className="w-3 h-3" />
                 </Button>
               )}
               
