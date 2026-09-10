@@ -15,6 +15,7 @@ import { SessionList } from "@/components/session/SessionList";
 import { PermissionRequestCard } from "@/components/session/PermissionRequestCard";
 import { QuestionRequestCard } from "@/components/session/QuestionRequestCard";
 import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
+import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -73,6 +74,7 @@ export function SessionDetail() {
   const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false);
   const [jumpOpen, setJumpOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
+  const [fileBrowserFullscreenOpen, setFileBrowserFullscreenOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [permissionRulesOpen, setPermissionRulesOpen] = useState(false);
   const [injectedCommand, setInjectedCommand] = useState<{ token: number; text: string; run?: boolean } | null>(null);
@@ -873,11 +875,20 @@ export function SessionDetail() {
       } else if (repo?.localPath && normalizedFilePath.startsWith('chat_uploads/')) {
         pathToOpen = `${repo.localPath}/${normalizedFilePath}`
       } else if (repo?.localPath && !normalizedFilePath.includes('/')) {
-        const candidate = `${repo.localPath}/chat_uploads/${normalizedFilePath}`
-        const exists = await fetch(`${API_BASE_URL}/api/files/${candidate}`)
-          .then((res) => res.ok)
-          .catch(() => false)
-        pathToOpen = exists ? candidate : normalizedFilePath
+        const candidates = [
+          `${repo.localPath}/chat_uploads/${normalizedFilePath}`,
+          `${repo.localPath}/${normalizedFilePath}`,
+          normalizedFilePath,
+        ]
+        for (const candidate of candidates) {
+          const exists = await fetch(`${API_BASE_URL}/api/files/${candidate}`)
+            .then((res) => res.ok)
+            .catch(() => false)
+          if (exists) {
+            pathToOpen = candidate
+            break
+          }
+        }
       }
     }
     
@@ -1305,9 +1316,18 @@ if (results.length > 0) {
             initialSelectedFile={selectedFilePath}
             width={filePanelWidth}
             onClose={handleFileBrowserClose}
+            onOpenFullscreen={() => setFileBrowserFullscreenOpen(true)}
           />
         )}
       </div>
+
+      <FileBrowserSheet
+        isOpen={fileBrowserFullscreenOpen}
+        onClose={() => setFileBrowserFullscreenOpen(false)}
+        basePath={repo?.localPath}
+        repoName={repo?.repoUrl?.split("/").pop()?.replace(".git", "") || repo?.localPath || "Repository"}
+        initialSelectedFile={selectedFilePath}
+      />
 
       <ModelSelectDialog
         open={modelDialogOpen}

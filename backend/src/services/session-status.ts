@@ -14,7 +14,6 @@ import {
   upsertSessionStatus,
 } from '../db/session-status-queries'
 import { logger } from '../utils/logger'
-
 const POLL_INTERVAL_MS = 1_000
 const FETCH_TIMEOUT_MS = 2_500
 const IDLE_ROW_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -95,6 +94,14 @@ export function startSessionStatusPoller(db: Database): void {
         markSessionStatusIdle(db, row.sessionId, now)
       }
 
+      // 등록되지 않은 디렉터리 세션의 승인 대기/작업 중은 디렉터리별 조회에 안 잡힌다.
+      // 전역 조회로 보완하지 않으면 승인 카드가 뜨지 않아 영원히 멈춘 것처럼 보인다.
+      try {
+        await mergeGlobalFallback(db, snapshots, touched, busySessionIds, now)
+      } catch (error) {
+        logger.debug('Global session fallback skipped:', error)
+      }
+
       pruneIdleSessionStatus(db, IDLE_ROW_TTL_MS, now)
 
       // idle 이 된 세션의 채팅 큐 헤드를 발송한다 (SSE session.idle 대체).
@@ -153,8 +160,9 @@ async function collectDirectorySnapshots(db: Database): Promise<Map<string, Dire
   return snapshots
 }
 
-async function fetchBusySessions(directory: string): Promise<Set<string>> {
-  const url = `${opencodeServerManager.getUrl()}/session/status?directory=${encodeURIComponent(directory)}`
+async function fetchBusySessions(directory?: string): Promise<Set<string>> {
+  const qs = directory ? `?directory=${encodeURIComponent(directory)}` : ''
+  const url = `${opencodeServerManager.getUrl()}/session/status${qs}`
   const response = await fetch(url, {
     headers: ensureServerAuth({}),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -172,8 +180,9 @@ interface PendingItemLike {
   sessionID?: string
 }
 
-async function fetchPendingCounts(directory: string, kind: 'permission' | 'question'): Promise<Map<string, number>> {
-  const url = `${opencodeServerManager.getUrl()}/${kind}?directory=${encodeURIComponent(directory)}`
+async function fetchPendingCounts(directory: string | undefined, kind: 'permission' | 'question'): Promise<Map<string, number>> {
+  const qs = directory ? `?directory=${encodeURIComponent(directory)}` : ''
+  const url = `${opencodeServerManager.getUrl()}/${kind}${qs}`
   const response = await fetch(url, {
     headers: ensureServerAuth({}),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -188,4 +197,48 @@ async function fetchPendingCounts(directory: string, kind: 'permission' | 'quest
     counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1)
   }
   return counts
+}
+
+async function mergeGlobalFallback(
+  db: Database,
+  snapshots: Map<string, DirectorySnapshot>,
+  touched: Set<string>,
+  busySessionIds: Set<string>,
+  now: number,
+): Promise<void> {
+  const [globalBusy, globalPerm, globalQ] = await Promise.all([
+    fetchBusySessions(undefined),
+    fetchPendingCounts(undefined, 'permission'),
+    fetchPendingCounts(undefined, 'question'),
+  ])
+  const knownBusy = new Set<string>()
+  const knownPending = new Set<string>()
+  for (const snapshot of snapshots.values()) {
+    for (const id of snapshot.busySessionIds) knownBusy.add(id)
+    for (const id of snapshot.pendingPermissions.keys()) knownPending.add(id)
+  }
+  const mergedPending = new Map<string, number>(globalPerm)
+  for (const [id, count] of globalQ) mergedPending.set(id, (mergedPending.get(id) ?? 0) + count)
+
+  const existing = new Map(listSessionStatus(db).map((row) => [row.sessionId, row]))
+  const consider = new Set<string>([...globalBusy, ...mergedPending.keys()])
+  for (const sessionId of consider) {
+    if (touched.has(sessionId)) continue
+    if (knownBusy.has(sessionId) || knownPending.has(sessionId)) continue
+    const prev = existing.get(sessionId)
+    const directory = prev?.directory ?? 'global'
+    const pending = mergedPending.get(sessionId) ?? 0
+    const busy = globalBusy.has(sessionId) || pending > 0
+    logger.info(`Session ${sessionId} tracked via global fallback (busy=${busy}, pending=${pending})`)
+    upsertSessionStatus(db, {
+      sessionId,
+      directory,
+      repoId: resolveRepoId(db, directory),
+      status: busy ? 'busy' : 'idle',
+      pendingPermissions: pending,
+      updatedAt: now,
+    })
+    touched.add(sessionId)
+    if (busy) busySessionIds.add(sessionId)
+  }
 }

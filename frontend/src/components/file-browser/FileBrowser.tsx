@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { FileTree } from './FileTree'
 import { FileOperations } from './FileOperations'
@@ -12,6 +12,8 @@ import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { useMobile } from '@/hooks/useMobile'
 import { useFile, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, FileApiError } from '@/api/files'
+import { listHtmlPages } from '@/api/html-pages'
+import { normalizeTreePath } from '@/lib/tree-path'
 import { downloadSingleFile, downloadFolderAsZip } from '@/lib/fileDownload'
 import { showToast } from '@/lib/toast'
 
@@ -144,6 +146,23 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const isMobile = useMobile()
+
+  const { data: managedPages = [] } = useQuery({
+    queryKey: ['html-pages'],
+    queryFn: listHtmlPages,
+    staleTime: 60 * 1000,
+  })
+  const browserOpenPaths = useMemo(() => new Set(
+    managedPages.filter((p) => p.kind === 'file' && p.path).map((p) => normalizeTreePath(p.path)),
+  ), [managedPages])
+
+  // 채팅에서 파일을 열면 해당 파일의 디렉터리로 트리를 이동시킨다.
+  useEffect(() => {
+    if (!initialSelectedFile || !initialSelectedFile.includes('/')) return
+    const dir = normalizePath(initialSelectedFile).split('/').slice(0, -1).join('/')
+    const clamped = clampToBasePath(dir, basePath)
+    setCurrentPath((prev) => (prev === clamped ? prev : clamped))
+  }, [initialSelectedFile, basePath])
 
    const { data: initialFileData, error: initialFileError } = useFile(initialSelectedFile)
   const initialErrorToastedRef = useRef<string | null>(null)
@@ -579,6 +598,7 @@ useEffect(() => {
                   currentPath={currentPath}
                   basePath={basePath}
                   isLoading={loading || queryLoading}
+                  browserOpenPaths={browserOpenPaths}
                 />
               )}
             </div>
@@ -699,6 +719,7 @@ useEffect(() => {
                   currentPath={currentPath}
                   basePath={basePath}
                   isLoading={loading || queryLoading}
+                  browserOpenPaths={browserOpenPaths}
                 />
               </div>
             )}

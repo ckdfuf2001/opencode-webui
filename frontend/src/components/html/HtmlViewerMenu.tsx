@@ -134,7 +134,7 @@ export function HtmlViewerMenu() {
         type="button"
         title="HTML viewer"
         onClick={() => { setMenuOpen((v) => !v); resetForms() }}
-        className="fixed bottom-4 left-4 z-[60] w-10 h-10 rounded-full border border-border bg-card shadow-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-card-hover transition-colors"
+        className="fixed bottom-4 left-0 z-[60] w-10 h-10 rounded-r-full border border-l-0 border-border bg-card shadow-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-card-hover transition-all -translate-x-1/2 hover:translate-x-0"
       >
         <Globe className="w-5 h-5" />
       </button>

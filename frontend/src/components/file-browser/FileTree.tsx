@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import type { FileInfo } from '@/types/files'
 import { isBrowserViewable, openHtmlInNewTab } from '@/lib/html-view'
+import { normalizeTreePath } from '@/lib/tree-path'
 import { upsertHtmlPage } from '@/api/html-pages'
 import { showToast } from '@/lib/toast'
 
@@ -36,6 +37,8 @@ interface FileTreeProps {
   onDownload?: (file: FileInfo) => void
   currentPath?: string
   basePath?: string
+  isLoading?: boolean
+  browserOpenPaths?: Set<string>
 }
 
 interface TreeNodeProps {
@@ -47,14 +50,24 @@ interface TreeNodeProps {
   onDelete?: (path: string) => void
   onRename?: (oldPath: string, newPath: string) => void
   onDownload?: (file: FileInfo) => void
+  browserOpenPaths?: Set<string>
 }
 
-function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload }: TreeNodeProps) {
+function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const isSelected = !!selectedFile?.path && normalizeTreePath(selectedFile.path) === normalizeTreePath(file.path)
+  const isBrowserOpen = !file.isDirectory && (browserOpenPaths?.has(normalizeTreePath(file.path)) ?? false)
+
+  useEffect(() => {
+    if (isSelected) {
+      rowRef.current?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [isSelected])
 
   const handleRegisterPage = async () => {
     try {
@@ -145,9 +158,10 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
 
   return (
     <div>
-      <div 
+      <div
+        ref={rowRef}
         className={`flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer group ${
-          selectedFile?.path === file.path ? 'bg-muted' : ''
+          isSelected ? 'bg-blue-500/15' : ''
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
       >
@@ -186,7 +200,10 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               className="h-6 text-sm"
             />
           ) : (
-            <span className="text-sm truncate">{file.name}</span>
+            <span className={`text-sm truncate ${isSelected ? 'text-blue-400 font-medium' : isBrowserOpen ? 'text-emerald-400' : ''}`}>{file.name}</span>
+          )}
+          {isBrowserOpen && !editing && (
+            <Globe className="w-3 h-3 shrink-0 text-emerald-400" />
           )}
         </div>
         
@@ -244,6 +261,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               onDelete={onDelete}
               onRename={onRename}
               onDownload={onDownload}
+              browserOpenPaths={browserOpenPaths}
             />
           ))}
         </div>
@@ -262,7 +280,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   )
 }
 
-export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false }: FileTreeProps & { isLoading?: boolean }) {
+export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths }: FileTreeProps) {
   const handleGoUp = () => {
     // If currentPath has content and is different from basePath, go up
     if (currentPath !== basePath) {
@@ -309,7 +327,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
             onDelete={onDelete}
             onRename={onRename}
             onDownload={onDownload}
-            
+            browserOpenPaths={browserOpenPaths}
           />
         ))
       )}
