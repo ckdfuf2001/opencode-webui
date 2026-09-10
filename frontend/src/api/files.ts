@@ -32,7 +32,7 @@ async function fetchFile(path: string): Promise<FileInfo> {
 }
 
 export function useFile(path: string | undefined) {
-  return useQuery({
+  return useQuery<FileInfo, Error>({
     queryKey: ['file', path],
     queryFn: () => path ? fetchFile(path) : Promise.reject(new FileApiError('No file path provided', 400)),
     enabled: !!path,
