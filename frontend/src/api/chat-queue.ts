@@ -4,7 +4,7 @@ export interface QueuedChat {
   id: string
   text: string
   createdAt: number
-  status: 'queued' | 'sending'
+  status: 'queued' | 'sending' | 'failed'
 }
 
 export interface EnqueueChatOptions {

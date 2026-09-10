@@ -13,7 +13,7 @@ export interface QueuedChat {
   id: string
   text: string
   createdAt: number
-  status: 'queued' | 'sending'
+  status: 'queued' | 'sending' | 'failed'
   model?: { providerID: string; modelID: string }
   agent?: string
 }
@@ -34,6 +34,11 @@ const FLUSH_RETRY_BACKOFF_MS = 2_000
 // whenever the session is idle again. Lost on backend restart by design.
 const queues = new Map<string, QueuedChat[]>()
 const failedUntil = new Map<string, number>()
+// 연속 실패 횟수. 상한을 넘기면 failed로 고정하고 자동 재시도를 멈춘다
+// (폴더명 변경 등으로 디렉터리가 깨졌을 때 수십 번 중복 발송 방지).
+// failed 헤드는 순서 유지를 위해 다음 항목을 막는다. 사용자가 X로 지우면 해제.
+const failCount = new Map<string, number>()
+const MAX_CONSECUTIVE_FAILURES = 8
 const inFlight = new Set<string>()
 // 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
 // workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.
@@ -74,6 +79,8 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
   if (queue.length === 0) {
     queues.delete(sessionID)
     queueDirs.delete(sessionID)
+    failCount.delete(sessionID)
+    failedUntil.delete(sessionID)
   }
   return true
 }
@@ -106,6 +113,8 @@ export function clearQueuedChats(sessionID: string): number {
   const count = queue.length
   queues.delete(sessionID)
   queueDirs.delete(sessionID)
+  failCount.delete(sessionID)
+  failedUntil.delete(sessionID)
   logger.info(`Cleared ${count} queued chat(s) for session ${sessionID}`)
   return count
 }
@@ -133,6 +142,8 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if (!queue || queue.length === 0) return
   const next = queue[0]
   if (!next) return
+  // failed는 자동 재시도 안 함. 순서 유지를 위해 뒤 항목도 막는다. X로 직접 지워야 해제.
+  if (next.status === 'failed') return
   if (next.status === 'sending') {
     // 전송은 됐는데 응답 미확인 상태. 세션이 idle이면 턴이 끝난 것으로 보고 제거(확정).
     if (await isSessionBusy(sessionID)) {
@@ -145,6 +156,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       queueDirs.delete(sessionID)
     }
     failedUntil.delete(sessionID)
+    failCount.delete(sessionID)
     logger.info(`Confirmed queued chat delivered to session ${sessionID} (idle observed)`)
     return
   }
@@ -174,25 +186,24 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       if (sent) {
         removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
+        failCount.delete(sessionID)
         logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
       } else {
-        markHeadQueued(sessionID, next.id)
-        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        recordFailure(sessionID, next.id)
       }
     })
     .catch((error) => {
       logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
       // OpenCode는 턴이 끝나야 응답 헤더를 보낼 수 있어 타임아웃은 거의 확실히
-      // 전달됐다는 뜻이다. sending 유지 → idle 관찰 시 제거(확정).
-      // 연결 자체가 안 된 경우만 queued로 되돌린다 (중복 전송 방지).
+      // 전달됐다는 뜻이다. sending 유지 → idle 관찰 시 제거(확정). 타임아웃은 실패로 세지 않는다.
+      // 연결 자체가 안 됐거나 그 외 에러는 실패로 센다 (중복 전송 방지 + 상한).
       const name = (error as { name?: string })?.name
       const code = ((error as { cause?: { code?: unknown } })?.cause?.code
         ?? (error as { code?: unknown })?.code) as string | undefined
       const connectError = typeof code === 'string'
         && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code.toUpperCase())
       if (connectError || (name !== 'TimeoutError' && name !== 'AbortError')) {
-        markHeadQueued(sessionID, next.id)
-        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        recordFailure(sessionID, next.id)
       } else {
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
       }
@@ -200,6 +211,21 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
     .finally(() => {
       inFlight.delete(sessionID)
     })
+}
+
+function recordFailure(sessionID: string, id: string): void {
+  const count = (failCount.get(sessionID) ?? 0) + 1
+  failCount.set(sessionID, count)
+  if (count >= MAX_CONSECUTIVE_FAILURES) {
+    const queue = queues.get(sessionID)
+    if (queue && queue[0]?.id === id) {
+      queue[0]!.status = 'failed'
+    }
+    logger.error(`Queued chat for session ${sessionID} failed ${count} times in a row; marked failed, auto-retry stopped`)
+    return
+  }
+  markHeadQueued(sessionID, id)
+  failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
 }
 
 function removeHeadIf(sessionID: string, id: string): void {
