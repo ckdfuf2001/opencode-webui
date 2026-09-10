@@ -68,7 +68,7 @@ function CodeBlock({ children, className, ...props }: CodeBlockProps) {
 export function TextPart({ part }: TextPartProps) {
   // 초대용량 텍스트는 자르고 펼치기 버튼을 둔다. 긴 세션에서 마크다운
   // 전체 파싱이 힙을 계속 불리는 주범이라 60KB 넘으면 20KB만 렌더한다.
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = React.useState(false)
   const text = part.text || ''
   const tooLong = text.length > 60000
   const shown = !tooLong || expanded ? text : text.slice(0, 20000)
