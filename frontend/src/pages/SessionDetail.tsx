@@ -1153,7 +1153,7 @@ if (results.length > 0) {
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
           <UntrackedSuggestionBanner />
-          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain" style={{ paddingBottom: inputH + (windowStart !== null ? 76 : 24) }}>
+          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain" style={{ paddingBottom: inputH + 20 }}>
             {/* 상단 고정 바: Load more + … 나란히 중앙 */}
             <div className="sticky top-0 z-10 flex items-center justify-center gap-2 py-2 bg-gradient-to-b from-background to-transparent">
               {hasMore && baseMessages && (
@@ -1210,30 +1210,30 @@ if (results.length > 0) {
                 />
               </div>
             )}
-            {windowStart !== null && baseMessages && (
-              <div className="sticky z-10 flex justify-center gap-2 py-2 bg-gradient-to-t from-background to-transparent" style={{ bottom: inputH }}>
-                <button
-                  onClick={shiftWindowDown}
-                  className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
-                >
-                  <span className="sm:hidden">Show newer</span>
-                  <span className="hidden sm:inline">Show newer · scroll down</span>
-                </button>
-                <button
-                  onClick={() => {
-                    pendingLatestPinRef.current = true;
-                    setWindowStart(null);
-                  }}
-                  className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
-                >
-                  <span className="sm:hidden">Back</span>
-                  <span className="hidden sm:inline">Back to latest</span>
-                </button>
-              </div>
-            )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div ref={inputWrapRef} className={`absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none ${windowStart !== null ? "bg-background/80 backdrop-blur-sm" : ""}`}>
+            <div ref={inputWrapRef} className={`absolute bottom-0 left-0 right-0 flex flex-col items-center pb-1 pointer-events-none ${windowStart !== null ? "pt-6 bg-gradient-to-t from-background/90 via-background/60 to-transparent backdrop-blur-sm" : ""}`}>
+              {windowStart !== null && baseMessages && (
+                <div className="flex justify-center gap-2 py-1 pointer-events-auto">
+                  <button
+                    onClick={shiftWindowDown}
+                    className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
+                  >
+                    <span className="sm:hidden">Show newer</span>
+                    <span className="hidden sm:inline">Show newer · scroll down</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      pendingLatestPinRef.current = true;
+                      setWindowStart(null);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
+                  >
+                    <span className="sm:hidden">Back</span>
+                    <span className="hidden sm:inline">Back to latest</span>
+                  </button>
+                </div>
+              )}
               <div className="contents pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
