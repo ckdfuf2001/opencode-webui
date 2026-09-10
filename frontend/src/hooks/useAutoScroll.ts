@@ -82,7 +82,11 @@ export function useAutoScroll<T extends Message>({
 
     const handlePointerMove = (e: PointerEvent) => {
       if (pointerStartYRef.current === null) return
-      if (e.clientY > pointerStartYRef.current) {
+      // hover 드리프트는 무시: 버튼 눌림(드래그/터치) 중에만 판단한다.
+      // 마우스를 입력창 쪽으로 내리는 것만으로 추종이 풀리던 버그 수정.
+      if (e.pointerType === 'mouse' && e.buttons === 0) return
+      // 위로 드래그 = 과거 보기 → 추종 해제. 아래로는 추종 유지.
+      if (e.clientY < pointerStartYRef.current) {
         markDisengaged()
       }
     }

@@ -31,7 +31,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
             <Clock className="h-3 w-3 shrink-0" />
           )}
           {sendingItem ? (
-            <span className="truncate">Sending... {sendingItem.text}</span>
+            <span className="truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : (
             <span className="shrink-0">Waiting to send</span>
           )}
@@ -52,7 +52,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
             <Clock className="h-3 w-3 shrink-0" />
           )}
           {sendingItem ? (
-            <span className="min-w-0 flex-1 truncate">Sending... {sendingItem.text}</span>
+            <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : (
             <span className="flex-1">Waiting to send</span>
           )}

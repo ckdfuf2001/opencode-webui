@@ -72,9 +72,9 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
 }
 
 export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID }: MessageThreadProps) {
-  const [windowSize, setWindowSize] = useState(30)
+  const [windowSize, setWindowSize] = useState(20)
   useEffect(() => {
-    setWindowSize(30)
+    setWindowSize(20)
   }, [sessionID])
   const editIndex = (hiddenAfterID && messages) ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1
   const baseVisible = editIndex >= 0 && messages ? messages.slice(0, editIndex + 1) : (messages ?? [])
@@ -136,7 +136,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
       {hiddenCount > 0 && (
         <div className="flex justify-center py-1">
           <button
-            onClick={() => setWindowSize((w) => w + 50)}
+            onClick={() => setWindowSize((w) => w + 30)}
             className="text-xs px-3 py-1.5 rounded-full border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             Show {hiddenCount} earlier messages

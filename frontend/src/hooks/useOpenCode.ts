@@ -452,7 +452,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     refetchOnReconnect: false,
     // 복�? ??캐시가 ?�아가 ?�피??+ 처음부???�시 로드?�는 체감??줄이??30�??��?.
     // ?�션 ?�환 ??inactive 쿼리??SessionDetail?�서 직접 ?�거?��?�?메모�??�수 ?�음.
-    gcTime: 5 * 60 * 1000,
+    gcTime: 2 * 60 * 1000,
     placeholderData: (previousData) => previousData,
     staleTime: 2000,
     refetchInterval: (query) => {

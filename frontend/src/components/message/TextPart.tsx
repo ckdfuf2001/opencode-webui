@@ -67,11 +67,11 @@ function CodeBlock({ children, className, ...props }: CodeBlockProps) {
 
 export function TextPart({ part }: TextPartProps) {
   // 초대용량 텍스트는 자르고 펼치기 버튼을 둔다. 긴 세션에서 마크다운
-  // 전체 파싱이 힙을 계속 불리는 주범이라 60KB 넘으면 20KB만 렌더한다.
+  // 전체 파싱이 힙을 계속 불리는 주범이라 50KB 넘으면 15KB만 렌더한다.
   const [expanded, setExpanded] = React.useState(false)
   const text = part.text || ''
-  const tooLong = text.length > 60000
-  const shown = !tooLong || expanded ? text : text.slice(0, 20000)
+  const tooLong = text.length > 50000
+  const shown = !tooLong || expanded ? text : text.slice(0, 15000)
   // 렌더러 정의는 mount당 1회 고정한다. inline 정의는 매 렌더마다 새 컴포넌트
   // 타입이 되어 스트리밍 델타마다 마크다운 전체가 리마운트되고, 코드블록 복사
   // 버튼 상태·드래그 선택이 날아간다 ("카피가 제대로 안됨"의 원인).
