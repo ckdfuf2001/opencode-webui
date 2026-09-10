@@ -118,6 +118,8 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
   const sessionID = session.id
 
   // 배치 실행은 우리 default 모델로 해야 함 (opencode default가 아님). agent가 있으면 모델은 agent를 따름.
+  // opencode 스펙에 POST /session/{id}/model 은 없음. 모델은 POST /session/{id}/message body 의
+  // { providerID, modelID } 로 전달해야 적용된다 (UI useOpenCode.ts 와 동일).
   let modelToUse: string | undefined = (schedule as { model?: string }).model
   if (!modelToUse && !schedule.agent) {
     try {
@@ -128,21 +130,15 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
       }
     } catch {}
   }
+  let modelPayload: { providerID: string; modelID: string } | undefined
   if (modelToUse && !schedule.agent) {
-    const [providerID, ...rest] = modelToUse.split('/')
-    const modelID = rest.join('/')
+    const slashIdx = modelToUse.indexOf('/')
+    const providerID = slashIdx > 0 ? modelToUse.slice(0, slashIdx) : ''
+    const modelID = slashIdx > 0 ? modelToUse.slice(slashIdx + 1) : ''
     if (providerID && modelID) {
-      try {
-        await fetch(`${base}/session/${sessionID}/model`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ model: { providerID, id: modelID } }),
-          signal: AbortSignal.timeout(10_000),
-        })
-        logger.info(`Applied model ${modelToUse} to batch session ${sessionID} (schedule ${schedule.name})`)
-      } catch (e) {
-        logger.warn(`Failed to apply model ${modelToUse} to batch session ${sessionID}:`, e)
-      }
+      modelPayload = { providerID, modelID }
+    } else {
+      logger.warn(`Invalid model format "${modelToUse}" for schedule ${schedule.name}, expected "provider/model"`)
     }
   }
 
@@ -158,7 +154,7 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
   })
 
   const text = schedule.action === 'command' ? `/${prompt}` : prompt
-  void sendSchedulePrompt(base, sessionID, schedule.agent, text, headers, directoryParam, schedule.name)
+  void sendSchedulePrompt(base, sessionID, schedule.agent, modelPayload, text, headers, directoryParam, schedule.name)
     .then(() => {
       if (run) finishRunSafe(db, run.id, 'completed')
     })
@@ -174,6 +170,7 @@ async function sendSchedulePrompt(
   base: string,
   sessionID: string,
   agent: string | undefined,
+  model: { providerID: string; modelID: string } | undefined,
   text: string,
   headers: Record<string, string>,
   directoryParam: string,
@@ -182,6 +179,10 @@ async function sendSchedulePrompt(
   const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text }] }
   if (agent) {
     messageBody.agent = agent
+  }
+  if (model) {
+    messageBody.model = model
+    logger.info(`Batch "${scheduleName}" sends message with model ${model.providerID}/${model.modelID} to session ${sessionID}`)
   }
   markRequestBusy()
   try {
