@@ -165,8 +165,17 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const projectedUsage = contextLimit ? ((totalTokens + estimatedInputTokens) / contextLimit) * 100 : 0
   const willExceed = contextLimit ? projectedUsage >= 95 : false
 
-  const buildValidatedParts = async (): Promise<ContentPart[]> => {
-    if (attachedFiles.size === 0) return parsePromptToParts(prompt, attachedFiles)
+  // 파일 파트는 텍스트로 바꿀 때 위치가 포함되어야 나중에 칩으로 인식된다.
+  // 파일명만 넣으면("...") 존재 확인이 안 돼 아이콘 표시도 안 된다.
+  const partToText = (part: ContentPart): string => {
+    if (part.type === 'text') return part.content
+    const norm = part.path.replace(/\\/g, '/')
+    const dir = (directory ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+    const rel = dir && norm.startsWith(dir + '/') ? norm.slice(dir.length + 1) : part.name
+    return `@"${rel}"`
+  }
+
+  const buildValidatedParts = async (): Promise<ContentPart[]> => {    if (attachedFiles.size === 0) return parsePromptToParts(prompt, attachedFiles)
 
     const mentionedKeys = new Set<string>()
     for (const match of prompt.matchAll(MENTION_PATTERN)) {
@@ -275,7 +284,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     const aborting = abortSession.isPending || isRecentlyAborted(sessionID)
     if (hasActiveStream || sendPrompt.isPending || aborting) {
       const text = parts
-        .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
+        .map(partToText)
         .filter((text) => text.trim().length > 0)
         .join('\n')
       if (text.trim()) {
@@ -296,7 +305,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       const pending = await listQueuedChats(sessionID).catch(() => [])
       if (pending.length > 0) {
         const text = parts
-          .map((part) => part.type === 'text' ? part.content : `@"${part.name}"`)
+          .map(partToText)
           .filter((t) => t.trim().length > 0)
           .join('\n')
         if (text.trim()) {
@@ -347,7 +356,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     }
     const parts = await buildValidatedParts()
     const text = parts
-      .map((part) => (part.type === 'text' ? part.content : `@"${part.name}"`))
+      .map(partToText)
       .filter((text) => text.trim().length > 0)
       .join('\n')
     if (!text.trim()) return

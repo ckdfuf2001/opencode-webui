@@ -844,10 +844,13 @@ const mentionFor = (part: ContentPart & { name: string; path: string }): string 
   const path = part.path.replace(/^file:\/{2,3}/, "").replace(/\\/g, "/")
   const chatIdx = path.indexOf("/chat_uploads/")
   if (chatIdx >= 0) {
-    return `@"${path.slice(chatIdx + 1)}"`
+    // workspace 기준 상대경로를 유지한다. 레포 prefix를 떼면 존재 확인이 안 돼 칩이 안 뜬다.
+    const reposIdx = path.indexOf("/repos/")
+    const rel = reposIdx >= 0 ? path.slice(reposIdx + "/repos/".length) : path.slice(chatIdx + 1)
+    return `@"${rel}"`
   }
   const reposIdx = path.indexOf("/repos/")
-  const rel = reposIdx >= 0 ? path.slice(reposIdx + "/repos/".length).split("/").slice(1).join("/") : part.name
+  const rel = reposIdx >= 0 ? path.slice(reposIdx + "/repos/".length) : part.name
   return `@"${rel}"`
 };
 

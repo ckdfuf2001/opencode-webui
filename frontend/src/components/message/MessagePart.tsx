@@ -1,4 +1,4 @@
-import { memo, useState, useEffect } from 'react'
+import { memo, useState, useEffect, type ReactNode } from 'react'
 import type { components } from '@/api/opencode-types'
 import { Copy, Volume2, Square, Loader2 } from 'lucide-react'
 import { TextPart } from './TextPart'
@@ -129,8 +129,13 @@ function resolveMentionPath(mentionText: string, directory?: string): string {
 
 function mentionCandidates(mentionText: string, directory?: string): string[] {
   const primary = resolveMentionPath(mentionText, directory)
-  if (!directory || mentionText.includes('/') || /^[a-zA-Z]:[\\/]/.test(mentionText) || mentionText.startsWith('/') || mentionText.startsWith('file:')) {
+  if (!directory) return [primary]
+  if (/^[a-zA-Z]:[\\/]/.test(mentionText) || mentionText.startsWith('/') || mentionText.startsWith('file:')) {
     return [primary]
+  }
+  if (mentionText.includes('/')) {
+    // 레포 기준 상대경로면 workspace 기준 그대로도 시도 (이미 레포 prefix 포함 등)
+    return primary === mentionText ? [primary] : [primary, mentionText]
   }
   const normalizedDir = directory.replace(/\\/g, '/')
   return [primary, `${normalizedDir}/${mentionText}`]
@@ -202,12 +207,28 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         }
       }
       const text = part.text || ''
-      const mentionMatch = text.match(/@(?:"([^"]*)"|'([^']*)'|(\S+))/)
-      if (!mentionMatch) {
+      // 멘션(@...)만 칩으로 바꾸고 앞뒤 텍스트는 그대로 렌더한다.
+      // 예전에는 텍스트 전체가 칩 하나로 바뀌어 앞뒤 말이 날아갔다.
+      const nodes: ReactNode[] = []
+      let last = 0
+      for (const m of text.matchAll(/@(?:"([^"]*)"|'([^']*)'|(\S+))/g)) {
+        const idx = m.index ?? 0
+        if (idx > last) {
+          nodes.push(<TextPart key={`t${last}`} part={{ ...part, text: text.slice(last, idx) } as typeof part} />)
+        }
+        const mentionText = m[1] ?? m[2] ?? m[3]
+        if (mentionText) {
+          nodes.push(<FileMention key={`m${idx}`} part={part} mentionText={mentionText} directory={directory} onFileClick={onFileClick} />)
+        }
+        last = idx + m[0].length
+      }
+      if (nodes.length === 0) {
         return <TextPart part={part} />
       }
-      const mentionText = mentionMatch[1] ?? mentionMatch[2] ?? mentionMatch[3]
-      return <FileMention part={part} mentionText={mentionText} directory={directory} onFileClick={onFileClick} />
+      if (last < text.length) {
+        nodes.push(<TextPart key="t-end" part={{ ...part, text: text.slice(last) } as typeof part} />)
+      }
+      return <>{nodes}</>
     }
     case 'patch':
       return <PatchPart part={part} />
@@ -308,13 +329,23 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           ? `chat_uploads/${part.filename}`
           : ''
         : part.url?.replace(/^file:\/{2,3}/, '') || part.filename || ''
+      // 이미지以外은 파일명만으로는 어느 파일인지 알 수 없어 클릭해도 못 찾는다.
+      // 레포 기준 상대경로를 칩에 표시한다 (이미지는 기존대로 파일명만).
+      const ext = (part.filename?.split('.').pop() ?? '').toLowerCase()
+      const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)
+      const normTarget = fileClickTarget.replace(/\\/g, '/')
+      const normDir = (directory ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+      const label = !isImage && normDir && normTarget.startsWith(normDir + '/')
+        ? normTarget.slice(normDir.length + 1)
+        : part.filename || 'File'
       return (
-        <span 
+        <span
           className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
           onClick={() => onFileClick?.(fileClickTarget)}
+          title={fileClickTarget}
         >
           <span className="text-blue-400">@</span>
-          <span className="font-medium">{part.filename || 'File'}</span>
+          <span className="font-medium">{label}</span>
         </span>
       )
     }

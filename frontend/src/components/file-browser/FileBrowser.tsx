@@ -192,12 +192,17 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   ), [managedPages])
 
   // 채팅에서 파일을 열면 해당 파일의 디렉터리로 트리를 이동시킨다.
+  // basePath 로드와 레이스가 나지 않게 이 effect 하나로 통합한다.
   useEffect(() => {
-    if (!initialSelectedFile || !initialSelectedFile.includes('/')) return
-    const dir = normalizePath(initialSelectedFile).split('/').slice(0, -1).join('/')
-    const clamped = clampToBasePath(dir, basePath)
-    setCurrentPath((prev) => (prev === clamped ? prev : clamped))
-  }, [initialSelectedFile, basePath])
+    if (initialSelectedFile?.includes('/')) {
+      const dir = normalizePath(initialSelectedFile).split('/').slice(0, -1).join('/')
+      if (dir) {
+        void loadFiles(dir)
+        return
+      }
+    }
+    void loadFiles(basePath)
+  }, [basePath, initialSelectedFile])
 
    const { data: initialFileData, error: initialFileError } = useFile(initialSelectedFile)
   const initialErrorToastedRef = useRef<string | null>(null)
@@ -524,9 +529,7 @@ useEffect(() => {
     }
   }
 
-  useEffect(() => {
-    loadFiles(basePath)
-  }, [basePath])
+  // NOTE: initialSelectedFile 이동은 위 effect에서 함께 처리 (레이스 방지)
 
   useEffect(() => {
     const handleFileSaved = (event: CustomEvent<{ path: string; content: string }>) => {

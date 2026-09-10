@@ -874,12 +874,18 @@ export function SessionDetail() {
         pathToOpen = normalizedFilePath.substring(workspaceReposPath.length + 1)
       } else if (repo?.localPath && normalizedFilePath.startsWith('chat_uploads/')) {
         pathToOpen = `${repo.localPath}/${normalizedFilePath}`
-      } else if (repo?.localPath && !normalizedFilePath.includes('/')) {
-        const candidates = [
-          `${repo.localPath}/chat_uploads/${normalizedFilePath}`,
-          `${repo.localPath}/${normalizedFilePath}`,
-          normalizedFilePath,
-        ]
+      } else if (repo?.localPath && !/^[a-zA-Z]:[\\/]/.test(normalizedFilePath) && !normalizedFilePath.startsWith('/')) {
+        const candidates = normalizedFilePath.includes('/')
+          ? [
+              `${repo.localPath}/${normalizedFilePath}`,
+              `${repo.localPath}/chat_uploads/${normalizedFilePath}`,
+              normalizedFilePath,
+            ]
+          : [
+              `${repo.localPath}/chat_uploads/${normalizedFilePath}`,
+              `${repo.localPath}/${normalizedFilePath}`,
+              normalizedFilePath,
+            ]
         for (const candidate of candidates) {
           const exists = await fetch(`${API_BASE_URL}/api/files/${candidate}`)
             .then((res) => res.ok)
