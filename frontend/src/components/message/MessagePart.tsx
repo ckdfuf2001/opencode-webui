@@ -218,7 +218,10 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         }
         const mentionText = m[1] ?? m[2] ?? m[3]
         if (mentionText) {
-          nodes.push(<FileMention key={`m${idx}`} part={part} mentionText={mentionText} directory={directory} onFileClick={onFileClick} />)
+          // 폴백용으로는 멘션 구간만 넘긴다. 원문 전체를 넘기면 존재 확인 실패 시
+          // 앞뒤 텍스트와 합쳐져 중복으로 보인다.
+          const mentionPart = { ...part, text: m[0] } as typeof part
+          nodes.push(<FileMention key={`m${idx}`} part={mentionPart} mentionText={mentionText} directory={directory} onFileClick={onFileClick} />)
         }
         last = idx + m[0].length
       }

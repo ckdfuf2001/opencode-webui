@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats } from '../services/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
   text: z.string().trim().min(1).max(16_000),
   directory: z.string().min(1).max(1024).optional(),
+  model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }).optional(),
+  agent: z.string().min(1).max(255).optional(),
 })
 
 const MoveChatSchema = z.object({
@@ -30,7 +32,13 @@ export function createChatQueueRoutes() {
       const sessionId = c.req.param('sessionId')
       const body = await c.req.json()
       const validated = EnqueueChatSchema.parse(body)
-      const queue = enqueueQueuedChat(sessionId, validated.text, validated.directory)
+      const queue = enqueueQueuedChat(sessionId, validated.text, validated.directory, {
+        model: validated.model,
+        agent: validated.agent,
+      })
+      // 폴러(1초)를 기다리지 않고 즉시 발송 시도 — idle이면 바로 나간다.
+      flushQueueForSession(sessionId, validated.directory)
+      return c.json(queue, 201)
       return c.json(queue, 201)
     } catch (error: any) {
       if (error?.name === 'ZodError') {

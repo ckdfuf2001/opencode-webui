@@ -139,7 +139,9 @@ export function PromptInput({
 const { data: config } = useConfig(opcodeUrl)
 const { preferences, updateSettings } = useSettings()
 const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory)
-  const { executeCommand } = useCommandHandler({
+  // 슬래시 커맨드도 큐 경유로 바뀌어 executeCommand 직접 호출은 없다.
+  // (훅 자체는 유지 — 내부 콜백/상태 초기화용)
+  useCommandHandler({
     opcodeUrl,
     sessionID,
     directory,
@@ -173,6 +175,17 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     const dir = (directory ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
     const rel = dir && norm.startsWith(dir + '/') ? norm.slice(dir.length + 1) : part.name
     return `@"${rel}"`
+  }
+
+  // 첫 전송도 큐 경유라 모델/에이전트 선택이 큐에 타야 한다 (직접 전송과 동일값).
+  const queueDispatchOpts = (): { model?: { providerID: string; modelID: string }; agent?: string } => {
+    const slash = currentModel.indexOf('/')
+    const providerID = slash > 0 ? currentModel.slice(0, slash) : ''
+    const modelID = slash > 0 ? currentModel.slice(slash + 1) : ''
+    return {
+      ...(providerID && modelID ? { model: { providerID, modelID } } : {}),
+      ...(currentMode ? { agent: currentMode } : {}),
+    }
   }
 
   const buildValidatedParts = async (): Promise<ContentPart[]> => {    if (attachedFiles.size === 0) return parsePromptToParts(prompt, attachedFiles)
@@ -245,27 +258,19 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       const command = filterCommands(commandName)[0]
       
       if (command) {
-        // 생성 중 커맨드는 큐에 적재 — 스킬은 템플릿 전체를, 일반 커맨드는 /name args를 큐에 넣는다
+        // 커맨드도 큐 경유 — 스킬은 템플릿 전체를, 일반 커맨드는 /name args를 큐에 넣는다
         // 배치(큐)는 opencode의 /command 엔드포인트로 실행되어 설명이 아닌 실제 수행이 된다
-        if (hasActiveStream || sendPrompt.isPending) {
-          const isSkill = (command as { source?: string }).source === 'skill'
-          const args = commandMatch[2] ?? ''
-          const text = isSkill
-            ? (args ? `${(command as { template?: string }).template ?? `/${command.name}`}\n\n${args}` : ((command as { template?: string }).template ?? `/${command.name}`))
-            : prompt.trim()
-          if (text) {
-            enqueueQueued.mutate({ sessionID, text, directory })
-            setPrompt('')
-            setAttachedFiles(new Map())
-            onSubmitted?.()
-            if (textareaRef.current) textareaRef.current.style.height = 'auto'
-          }
-          return
-        }
-        executeCommand(command, commandMatch[2] ?? '')
-        setPrompt('')
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto'
+        const isSkill = (command as { source?: string }).source === 'skill'
+        const args = commandMatch[2] ?? ''
+        const text = isSkill
+          ? (args ? `${(command as { template?: string }).template ?? `/${command.name}`}\n\n${args}` : ((command as { template?: string }).template ?? `/${command.name}`))
+          : prompt.trim()
+        if (text) {
+          enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
+          setPrompt('')
+          setAttachedFiles(new Map())
+          onSubmitted?.()
+          if (textareaRef.current) textareaRef.current.style.height = 'auto'
         }
         return
       }
@@ -288,7 +293,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         .filter((text) => text.trim().length > 0)
         .join('\n')
       if (text.trim()) {
-        enqueueQueued.mutate({ sessionID, text, directory })
+        enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
         setPrompt('')
         setAttachedFiles(new Map())
         onSubmitted?.()
@@ -309,7 +314,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           .filter((t) => t.trim().length > 0)
           .join('\n')
         if (text.trim()) {
-          enqueueQueued.mutate({ sessionID, text, directory })
+          enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
           setPrompt('')
           setAttachedFiles(new Map())
           onSubmitted?.()
@@ -324,12 +329,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       // 조회 실패 시 기존대로 직접 전송 (fail-open)
     }
 
-    sendPrompt.mutate({
-      sessionID,
-      parts,
-      model: currentModel,
-      agent: currentMode
-    })
+    // 첫 전송도 큐 경유: 스트립에 sending 표시가 뜨고 응답 확인 후 제거된다.
+    const finalText = parts
+      .map(partToText)
+      .filter((t) => t.trim().length > 0)
+      .join('\n')
+    if (!finalText.trim()) return
+    enqueueQueued.mutate({ sessionID, text: finalText, directory, ...queueDispatchOpts() })
 
     setPrompt('')
     setAttachedFiles(new Map())
@@ -360,7 +366,8 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       .filter((text) => text.trim().length > 0)
       .join('\n')
     if (!text.trim()) return
-    enqueueQueued.mutate({ sessionID, text, directory })
+    // 첫 전송도 큐 경유: 스트립에 sending 표시가 뜨고 응답 확인 후 제거된다.
+    enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
     setPrompt('')
     setAttachedFiles(new Map())
     onSubmitted?.()

@@ -11,6 +11,8 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
   const removeChat = useRemoveQueuedChat()
   const moveChat = useMoveQueuedChat()
   const [minimized, setMinimized] = useState(true)
+  const sendingItem = items.find((item) => item.status === 'sending')
+  const restItems = sendingItem ? items.filter((item) => item.id !== sendingItem.id) : items
 
   if (items.length === 0) return null
 
@@ -20,12 +22,21 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
         <button
           type="button"
           onClick={() => setMinimized(false)}
-          className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
+          className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
           title="Expand queue"
         >
-          <Clock className="h-3 w-3" />
-          Waiting to send ({items.length})
-          <ChevronRight className="h-3 w-3" />
+          {sendingItem ? (
+            <Clock className="h-3 w-3 shrink-0 animate-spin" />
+          ) : (
+            <Clock className="h-3 w-3 shrink-0" />
+          )}
+          {sendingItem ? (
+            <span className="truncate">Sending... {sendingItem.text}</span>
+          ) : (
+            <span className="shrink-0">Waiting to send</span>
+          )}
+          <span className="shrink-0">({restItems.length})</span>
+          <ChevronRight className="h-3 w-3 shrink-0" />
         </button>
       </div>
     )
@@ -35,8 +46,17 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
     <div className="w-full max-w-4xl px-4 pb-1">
       <div className="rounded-lg border bg-muted/40 px-3 py-2 text-xs">
         <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
-          <Clock className="h-3 w-3" />
-          <span className="flex-1">Waiting to send ({items.length})</span>
+          {sendingItem ? (
+            <Clock className="h-3 w-3 shrink-0 animate-spin" />
+          ) : (
+            <Clock className="h-3 w-3 shrink-0" />
+          )}
+          {sendingItem ? (
+            <span className="min-w-0 flex-1 truncate">Sending... {sendingItem.text}</span>
+          ) : (
+            <span className="flex-1">Waiting to send</span>
+          )}
+          <span className="shrink-0">({restItems.length})</span>
           <button
             type="button"
             aria-label="Minimize queue"
@@ -47,10 +67,10 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           </button>
         </div>
         <ul className="space-y-1">
-          {items.map((item, index) => (
-            <li key={item.id} className="group flex items-start gap-2">
+          {restItems.map((item, index) => (
+            <li key={item.id} className="group flex items-center gap-2">
               <span className="shrink-0 text-muted-foreground">{index + 1}.</span>
-              <span className="line-clamp-2 min-w-0 flex-1 break-words text-foreground/80">
+              <span className="min-w-0 flex-1 truncate break-words text-foreground/80">
                 {item.text}
               </span>
               <span className="flex shrink-0 items-center gap-0.5">

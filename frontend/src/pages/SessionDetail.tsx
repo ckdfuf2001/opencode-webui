@@ -4,6 +4,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getRepo } from "@/api/repos";
 import { MessageThread, isMessageStreaming } from "@/components/message/MessageThread";
+import { SendingPill } from "@/components/message/SendingPill";
 import { PromptInput } from "@/components/message/PromptInput";
 import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
@@ -209,8 +210,17 @@ export function SessionDetail() {
     }
     // 어시스턴트 스트리밍 증가분은 시작점 유지 → 화면 고정 (아무것도 안 함)
   }, [baseMessages?.length]);
+  // 짧은 메시지만 있으면 윈도우 자체가 무의미 → stale windowStart 정리
+  useEffect(() => {
+    if ((baseMessages?.length ?? 0) <= WINDOW_SIZE && windowStart !== null) {
+      setWindowStart(null)
+    }
+  }, [baseMessages?.length, windowStart]);
   const maxStart = Math.max(0, (baseMessages?.length ?? 0) - WINDOW_SIZE);
   const start = windowStart === null ? maxStart : Math.min(windowStart, maxStart);
+  // 윈도우가 최신까지 포함하면 Show newer/Back to latest가 무의미하다.
+  // 짧은 메시지만 있을 때 맨 아래인데도 버튼이 남는 원인이 이것이다.
+  const tailVisible = start + WINDOW_SIZE >= (baseMessages?.length ?? 0);
   const visibleMessages = useMemo(() => {
     if (!baseMessages) return undefined;
     if (baseMessages.length <= WINDOW_SIZE) return baseMessages;
@@ -1239,7 +1249,12 @@ if (results.length > 0) {
           </div>
           {opcodeUrl && repoDirectory && (
             <div ref={inputWrapRef} className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-1 pointer-events-none">
-              {windowStart !== null && baseMessages && (
+              <SendingPill
+                sessionID={sessionId}
+                busy={dbBusy || descendantBusy}
+                lastIsUser={lastMessage?.info.role === "user"}
+              />
+              {windowStart !== null && baseMessages && !tailVisible && (
                 <div className="flex justify-center gap-2 py-1 pointer-events-auto">
                   <button
                     onClick={shiftWindowDown}

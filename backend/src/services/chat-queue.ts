@@ -13,6 +13,14 @@ export interface QueuedChat {
   id: string
   text: string
   createdAt: number
+  status: 'queued' | 'sending'
+  model?: { providerID: string; modelID: string }
+  agent?: string
+}
+
+export interface EnqueueOptions {
+  model?: { providerID: string; modelID: string }
+  agent?: string
 }
 
 const MAX_QUEUE_LENGTH = 20
@@ -32,18 +40,24 @@ const inFlight = new Set<string>()
 const queueDirs = new Map<string, string>()
 // 마지막으로 busy 가 관측된 시각. generation이 끝나는 순간이 아니라 working
 // 표시가 꺼진 뒤에 발송되도록 idle grace를 둔다 (상태 전이·폴러 지연 흡수).
-// 폴러가 1s 주기라 1.2s면 충분하다 — 4s는 cancel 후 체감을 크게 늦춘다.
 const lastBusyAt = new Map<string, number>()
-const IDLE_GRACE_MS = 1_200
+const IDLE_GRACE_MS = 600
 
 export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
 }
 
-export function enqueueQueuedChat(sessionID: string, text: string, directory?: string): QueuedChat[] {
+export function enqueueQueuedChat(sessionID: string, text: string, directory?: string, opts?: EnqueueOptions): QueuedChat[] {
   const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
   const queue = queues.get(sessionID) ?? []
-  queue.push({ id: crypto.randomUUID(), text: trimmed, createdAt: Date.now() })
+  queue.push({
+    id: crypto.randomUUID(),
+    text: trimmed,
+    createdAt: Date.now(),
+    status: 'queued',
+    ...(opts?.model ? { model: opts.model } : {}),
+    ...(opts?.agent ? { agent: opts.agent } : {}),
+  })
   while (queue.length > MAX_QUEUE_LENGTH) queue.shift()
   queues.set(sessionID, queue)
   if (directory) queueDirs.set(sessionID, directory)
@@ -67,17 +81,21 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
 /**
  * 대기열 순서 변경. toTop 이면 맨 앞(최우선)으로, 아니면 한 칸 위로.
  * 이미 첫 항목이거나 id 를 못 찾으면 현재 큐를 그대로 돌려준다(변화 없음).
+ * 전송 중(sending)인 헤드는 발송 슬롯이라 건드리지 않는다: sending 항목
+ * 자체는 이동 불가, 다른 항목도 헤드 앞으로 못 간다 (최소 index 1).
  */
 export function moveQueuedChat(sessionID: string, id: string, toTop: boolean): QueuedChat[] | null {
   const queue = queues.get(sessionID)
   if (!queue) return null
   const index = queue.findIndex((item) => item.id === id)
   if (index <= 0) return [...queue]
+  if (queue[index]?.status === 'sending') return [...queue]
+  const headLocked = queue[0]?.status === 'sending'
   const removed = queue.splice(index, 1)
   const item = removed[0]
   if (!item) return [...queue]
-  if (toTop) queue.unshift(item)
-  else queue.splice(index - 1, 0, item)
+  if (toTop) queue.splice(headLocked ? 1 : 0, 0, item)
+  else queue.splice(Math.max(index - 1, headLocked ? 1 : 0), 0, item)
   return [...queue]
 }
 
@@ -98,6 +116,11 @@ export function clearQueuedChats(sessionID: string): number {
  * the session idle again. Dispatch failures re-queue the item at the front
  * with a backoff so a broken OpenCode server cannot spin the flusher.
  *
+ * Removal is confirm-based: the head is marked `sending` and STAYS visible
+ * until the turn is confirmed — HTTP 2xx (opencode answers after the turn)
+ * removes it immediately, a timeout keeps it `sending` until the session
+ * goes idle again (turn finished), and only connect errors go back to queued.
+ *
  * Idle gate: opens a /session/status check BEFORE handing the message to
  * OpenCode so the next queued message is not pushed while the previous
  * answer is still generating. While busy the head stays queued and the
@@ -110,6 +133,21 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if (!queue || queue.length === 0) return
   const next = queue[0]
   if (!next) return
+  if (next.status === 'sending') {
+    // 전송은 됐는데 응답 미확인 상태. 세션이 idle이면 턴이 끝난 것으로 보고 제거(확정).
+    if (await isSessionBusy(sessionID)) {
+      lastBusyAt.set(sessionID, Date.now())
+      return
+    }
+    queue.splice(0, 1)
+    if (queue.length === 0) {
+      queues.delete(sessionID)
+      queueDirs.delete(sessionID)
+    }
+    failedUntil.delete(sessionID)
+    logger.info(`Confirmed queued chat delivered to session ${sessionID} (idle observed)`)
+    return
+  }
   if (await isSessionBusy(sessionID)) {
     lastBusyAt.set(sessionID, Date.now())
     return
@@ -124,14 +162,9 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   const current = queues.get(sessionID)
   if (!current || current.length === 0 || current[0]?.id !== next.id) return
 
-  // Optimistic removal: the strip must clear as soon as the message is
-  // handed to OpenCode, not when the generated answer finishes. Failures
-  // put the item back at the front with a backoff.
-  current.splice(0, 1)
-  if (current.length === 0) {
-    queues.delete(sessionID)
-    queueDirs.delete(sessionID)
-  }
+  // 제거는 확정 후에만: sending 표시 후 응답 확인(HTTP 2xx 즉시, 타임아웃은 idle 관찰) 시 제거.
+  // 실패(연결 에러·거부)는 queued로 되돌리고 backoff.
+  next.status = 'sending'
 
   inFlight.add(sessionID)
   logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
@@ -139,35 +172,50 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   void dispatchQueuedChat(base, sessionID, next)
     .then((sent) => {
       if (sent) {
+        removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
         logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
       } else {
-        requeueFront(sessionID, next)
+        markHeadQueued(sessionID, next.id)
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
       }
     })
     .catch((error) => {
       logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
-      // OpenCode may not return response headers until the whole turn has
-      // finished generating. A timeout therefore means the request almost
-      // certainly REACHED OpenCode — treat it as delivered instead of
-      // re-queuing, otherwise the message would be sent twice.
+      // OpenCode는 턴이 끝나야 응답 헤더를 보낼 수 있어 타임아웃은 거의 확실히
+      // 전달됐다는 뜻이다. sending 유지 → idle 관찰 시 제거(확정).
+      // 연결 자체가 안 된 경우만 queued로 되돌린다 (중복 전송 방지).
       const name = (error as { name?: string })?.name
       const code = ((error as { cause?: { code?: unknown } })?.cause?.code
         ?? (error as { code?: unknown })?.code) as string | undefined
       const connectError = typeof code === 'string'
         && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code.toUpperCase())
-      if (connectError) {
-        requeueFront(sessionID, next)
+      if (connectError || (name !== 'TimeoutError' && name !== 'AbortError')) {
+        markHeadQueued(sessionID, next.id)
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
-      } else if (name !== 'TimeoutError' && name !== 'AbortError') {
-        requeueFront(sessionID, next)
+      } else {
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
       }
     })
     .finally(() => {
       inFlight.delete(sessionID)
     })
+}
+
+function removeHeadIf(sessionID: string, id: string): void {
+  const queue = queues.get(sessionID)
+  if (!queue || queue[0]?.id !== id) return
+  queue.splice(0, 1)
+  if (queue.length === 0) {
+    queues.delete(sessionID)
+    queueDirs.delete(sessionID)
+  }
+}
+
+function markHeadQueued(sessionID: string, id: string): void {
+  const queue = queues.get(sessionID)
+  if (!queue || queue[0]?.id !== id) return
+  queue[0]!.status = 'queued'
 }
 
 /**
@@ -282,15 +330,6 @@ export function flushQueueForSession(sessionId: string, directory?: string): voi
   void dispatchHead(opencodeServerManager.getUrl(), sessionId)
 }
 
-function requeueFront(sessionID: string, chat: QueuedChat): void {
-  const queue = queues.get(sessionID)
-  if (queue) {
-    queue.unshift(chat)
-  } else {
-    queues.set(sessionID, [chat])
-  }
-}
-
 async function dispatchQueuedChat(
   base: string,
   sessionID: string,
@@ -307,10 +346,13 @@ async function dispatchQueuedChat(
     const cmd = cmdMatch[1] ?? ''
     const args = cmdMatch[2] ?? ''
     try {
+      const cmdBody: Record<string, unknown> = { command: cmd, arguments: args }
+      if (chat.agent) cmdBody.agent = chat.agent
+      if (chat.model) cmdBody.model = `${chat.model.providerID}/${chat.model.modelID}`
       const cmdRes = await fetch(`${base}/session/${sessionID}/command?directory=${directoryParam}`, {
         method: 'POST',
         headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ command: cmd, arguments: args }),
+        body: JSON.stringify(cmdBody),
         signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
       })
       if (cmdRes.ok) {
@@ -326,10 +368,13 @@ async function dispatchQueuedChat(
     }
   }
 
+  const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text: chat.text }] }
+  if (chat.agent) messageBody.agent = chat.agent
+  if (chat.model) messageBody.model = chat.model
   const sendRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
     method: 'POST',
     headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ parts: [{ type: 'text', text: chat.text }] }),
+    body: JSON.stringify(messageBody),
     signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
   })
 

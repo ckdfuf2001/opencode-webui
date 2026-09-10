@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat } from '@/api/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, type EnqueueChatOptions } from '@/api/chat-queue'
 import { showToast } from '@/lib/toast'
 
 export const chatQueueKeys = {
@@ -41,8 +41,8 @@ export function useEnqueueQueuedChat() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ sessionID, text, directory }: { sessionID: string; text: string; directory?: string }) =>
-      enqueueQueuedChat(sessionID, text, directory),
+    mutationFn: ({ sessionID, text, directory, model, agent }: { sessionID: string; text: string; directory?: string } & EnqueueChatOptions) =>
+      enqueueQueuedChat(sessionID, text, directory, { model, agent }),
     onSuccess: (queue, { sessionID }) => {
       queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
     },

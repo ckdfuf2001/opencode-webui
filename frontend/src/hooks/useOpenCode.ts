@@ -894,7 +894,8 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       );
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
       pendingOptimistic.set(sessionID, userMessage);
-      // ??채팅 ?�에 sending ?�시 (LLM 쪽�? ?��?, ?�버 반영 ??교체)
+      // sending 중에는 내용 없이 빈 sending 마크만 같은 위치에 둔다.
+      // 실 메시지는 서버 반영 후 교체된다.
       const sendingPlaceholderID = `optimistic_sending_${optimisticUserID}`
       const sendingPlaceholder: MessageWithParts = {
         info: {
@@ -903,7 +904,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           sessionID,
           time: { created: Date.now() },
         } as unknown as MessageWithParts["info"],
-        parts: userMessage.parts,
+        parts: [],
       } as MessageWithParts
       queryClient.setQueryData<MessageListResponse>(
         ["opencode", "messages", opcodeUrl, sessionID, directory],

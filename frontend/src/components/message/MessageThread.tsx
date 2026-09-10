@@ -145,15 +145,9 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
       )}
       {visibleMessages.map(({ msg, parts, assistantText }) => {
         const isSendingPlaceholder = msg.info.id.startsWith("optimistic_sending_")
-        if (isSendingPlaceholder && msg.parts.length === 0) {
-          return (
-            <div key={msg.info.id} className="flex justify-center py-3">
-              <span className="text-xs text-muted-foreground flex items-center gap-2 px-3 py-1.5 rounded-full border bg-card/50">
-                <span className="h-3 w-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
-                sending...
-              </span>
-            </div>
-          )
+        // sending 표시는 입력창 위 오버레이(SendingPill)가 담당. 본문에는 그리지 않는다.
+        if (isSendingPlaceholder) {
+          return null
         }
         const streaming = isMessageStreaming(msg)
         const thinking = isMessageThinking(msg)

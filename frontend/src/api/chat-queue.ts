@@ -4,6 +4,12 @@ export interface QueuedChat {
   id: string
   text: string
   createdAt: number
+  status: 'queued' | 'sending'
+}
+
+export interface EnqueueChatOptions {
+  model?: { providerID: string; modelID: string }
+  agent?: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -29,8 +35,8 @@ export async function listQueuedChats(sessionID: string): Promise<QueuedChat[]> 
   return request<QueuedChat[]>(`/${encodeURIComponent(sessionID)}`)
 }
 
-export async function enqueueQueuedChat(sessionID: string, text: string, directory?: string): Promise<QueuedChat[]> {
-  return request<QueuedChat[]>(`/${encodeURIComponent(sessionID)}`, jsonInit('POST', { text, directory }))
+export async function enqueueQueuedChat(sessionID: string, text: string, directory?: string, opts?: EnqueueChatOptions): Promise<QueuedChat[]> {
+  return request<QueuedChat[]>(`/${encodeURIComponent(sessionID)}`, jsonInit('POST', { text, directory, ...opts }))
 }
 
 export async function removeQueuedChat(sessionID: string, id: string): Promise<void> {
