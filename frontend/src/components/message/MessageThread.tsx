@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { MessagePart } from './MessagePart'
 import { CornerDownLeft, Scissors, Eraser, X, Copy } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
@@ -59,6 +59,7 @@ interface MessageThreadProps {
   onCancelEdit?: () => void
   highlightedMessageID?: string | null
   isLoading?: boolean
+  sessionID?: string
 }
 
 export const isMessageStreaming = (msg: MessageWithParts): boolean => {
@@ -71,7 +72,40 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID }: MessageThreadProps) {
+  const [windowSize, setWindowSize] = useState(30)
+  useEffect(() => {
+    setWindowSize(30)
+  }, [sessionID])
+  const editIndex = (hiddenAfterID && messages) ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1
+  const baseVisible = editIndex >= 0 && messages ? messages.slice(0, editIndex + 1) : (messages ?? [])
+  const prepared = useMemo(() => baseVisible.map((msg) => {
+    const parts = msg.parts
+      .map((part) => {
+        if ((part as { type?: string }).type === 'text' && typeof (part as { text?: string }).text === 'string') {
+          const original = (part as { text: string }).text
+          const t = stripMemoryRecall(original)
+          if (!t) return null
+          if (t === original) return part
+          return { ...part, text: t } as typeof part
+        }
+        return part
+      })
+      .filter(Boolean)
+    const assistantText = msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined
+    return { msg, parts, assistantText }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [messages, hiddenAfterID])
+  const hasSending = baseVisible.some((m) => m.info.id.startsWith("optimistic_sending_"))
+  const preVisible = hasSending
+    ? prepared.filter(({ msg }) => !(msg.info.role === "assistant" && msg.parts.length === 0 && !("completed" in msg.info.time && (msg.info.time as { completed?: number }).completed)))
+    : prepared
+  const highlightedIdx = highlightedMessageID ? preVisible.findIndex(({ msg }) => msg.info.id === highlightedMessageID) : -1
+  useEffect(() => {
+    if (highlightedIdx >= 0 && highlightedIdx < preVisible.length - windowSize) {
+      setWindowSize(preVisible.length - highlightedIdx)
+    }
+  }, [highlightedMessageID, highlightedIdx, preVisible, windowSize])
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
@@ -95,16 +129,22 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
     )
   }
 
-  const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1
-  const baseVisible = editIndex >= 0 ? messages.slice(0, editIndex + 1) : messages
-  const hasSending = baseVisible.some((m) => m.info.id.startsWith("optimistic_sending_"))
-  const visibleMessages = hasSending
-    ? baseVisible.filter((m) => !(m.info.role === "assistant" && m.parts.length === 0 && !("completed" in m.info.time && (m.info.time as { completed?: number }).completed)))
-    : baseVisible
+  const hiddenCount = Math.max(0, preVisible.length - windowSize)
+  const visibleMessages = hiddenCount > 0 ? preVisible.slice(-windowSize) : preVisible
 
   return (
     <div className="flex flex-col space-y-2 p-2 overflow-x-hidden">
-      {visibleMessages.map((msg) => {
+      {hiddenCount > 0 && (
+        <div className="flex justify-center py-1">
+          <button
+            onClick={() => setWindowSize((w) => w + 50)}
+            className="text-xs px-3 py-1.5 rounded-full border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            Show {hiddenCount} earlier messages
+          </button>
+        </div>
+      )}
+      {visibleMessages.map(({ msg, parts, assistantText }) => {
         const isSendingPlaceholder = msg.info.id.startsWith("optimistic_sending_")
         if (isSendingPlaceholder && msg.parts.length === 0) {
           return (
@@ -221,17 +261,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {msg.parts
-                    .map((part) => {
-                      if ((part as { type?: string }).type === 'text' && typeof (part as { text?: string }).text === 'string') {
-                        const t = stripMemoryRecall((part as { text: string }).text)
-                        if (!t) return null
-                        return { ...part, text: t } as typeof part
-                      }
-                      return part
-                    })
-                    .filter(Boolean)
-                    .map((part, index) => (
+                  {parts.map((part, index) => (
                       <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`}>
                         <MessagePart
                           part={part as typeof msg.parts[number]}
@@ -239,7 +269,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                           allParts={msg.parts}
                           partIndex={index}
                           onFileClick={onFileClick}
-                          messageTextContent={msg.info.role === 'assistant' ? getMessageTextContent(msg) : undefined}
+                          messageTextContent={assistantText}
                           directory={directory}
                           messageStreaming={streaming}
                         />

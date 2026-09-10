@@ -66,6 +66,12 @@ function CodeBlock({ children, className, ...props }: CodeBlockProps) {
 }
 
 export function TextPart({ part }: TextPartProps) {
+  // 초대용량 텍스트는 자르고 펼치기 버튼을 둔다. 긴 세션에서 마크다운
+  // 전체 파싱이 힙을 계속 불리는 주범이라 60KB 넘으면 20KB만 렌더한다.
+  const [expanded, setExpanded] = useState(false)
+  const text = part.text || ''
+  const tooLong = text.length > 60000
+  const shown = !tooLong || expanded ? text : text.slice(0, 20000)
   // 렌더러 정의는 mount당 1회 고정한다. inline 정의는 매 렌더마다 새 컴포넌트
   // 타입이 되어 스트리밍 델타마다 마크다운 전체가 리마운트되고, 코드블록 복사
   // 버튼 상태·드래그 선택이 날아간다 ("카피가 제대로 안됨"의 원인).
@@ -170,8 +176,16 @@ export function TextPart({ part }: TextPartProps) {
         rehypePlugins={[rehypeHighlight, rehypeRaw]}
         components={components}
       >
-        {part.text}
+        {shown}
       </ReactMarkdown>
+      {tooLong && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 text-xs px-2 py-1 rounded border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        >
+          {expanded ? '접기' : `전체 보기 (${(text.length / 1024).toFixed(0)}KB)`}
+        </button>
+      )}
     </div>
   )
 }
