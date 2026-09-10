@@ -132,9 +132,25 @@ export function SessionDetail() {
   const navLockUntilRef = useRef(0);
   // 하단 근처 여부 (엣지 트리거용: 근처 진입 시 1회만 복귀)
   const wasNearBottomRef = useRef(false);
+  // Back to latest 요청 플래그: setWindowStart(null) 커밋 후에 스크롤해야
+  // 옛 scrollHeight 기준으로 스크롤하는 레이스를 피할 수 있다
+  const pendingLatestPinRef = useRef(false);
   useEffect(() => {
     windowStartRef.current = windowStart;
     shiftPendingRef.current = false;
+  }, [windowStart]);
+  // Back to latest: null 커밋 후(새 DOM 반영 후)에 하단 고정.
+  // double-rAF + 120ms 폴백으로 늦은 페인트까지 커버한다.
+  useEffect(() => {
+    if (!pendingLatestPinRef.current || windowStart !== null) return;
+    pendingLatestPinRef.current = false;
+    const pin = () => {
+      const cc = messageContainerRef.current;
+      if (cc) cc.scrollTop = cc.scrollHeight;
+    };
+    requestAnimationFrame(() => requestAnimationFrame(pin));
+    const t = setTimeout(pin, 120);
+    return () => clearTimeout(t);
   }, [windowStart]);
   const prevMsgLenRef = useRef<number>(0);
   // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
@@ -223,13 +239,8 @@ export function SessionDetail() {
     lastShiftAtRef.current = Date.now();
     const next = cur + LOAD_STEP;
     if (next >= maxS) {
+      pendingLatestPinRef.current = true;
       setWindowStart(null);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const cc = messageContainerRef.current;
-          if (cc) cc.scrollTop = cc.scrollHeight;
-        });
-      });
     } else {
       setWindowStart(next);
     }
@@ -1199,13 +1210,8 @@ if (results.length > 0) {
                 </button>
                 <button
                   onClick={() => {
+                    pendingLatestPinRef.current = true;
                     setWindowStart(null);
-                    requestAnimationFrame(() => {
-                      requestAnimationFrame(() => {
-                        const cc = messageContainerRef.current;
-                        if (cc) cc.scrollTop = cc.scrollHeight;
-                      });
-                    });
                   }}
                   className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
                 >
@@ -1216,7 +1222,7 @@ if (results.length > 0) {
             )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div className="absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none">
+            <div className={`absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none ${windowStart !== null ? "pt-10 bg-gradient-to-t from-background via-background/80 to-transparent" : ""}`}>
               <div className="contents pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
