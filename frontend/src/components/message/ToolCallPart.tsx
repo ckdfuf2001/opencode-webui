@@ -259,6 +259,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
 
   const previewText = getPreviewText()
   const isFileTool = ['read', 'write', 'edit'].includes(part.tool)
+  const inputCopyText = JSON.stringify(part.state.input ?? {}, null, 2)
 
   if (isUserBashCommand) {
     const command = part.state.input.command as string
@@ -344,7 +345,10 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
             ) : (
               <div className="text-sm space-y-2">
                 <div>
-                  <div className="text-zinc-400 mb-1">Input:</div>
+                  <div className="text-zinc-400 mb-1 flex items-center gap-2">
+                    <span>Input:</span>
+                    <CopyButton content={inputCopyText} title="Copy input" />
+                  </div>
                   <ClickableJson json={part.state.input} onFileClick={onFileClick} />
                 </div>
                 {(part.state as unknown as { output?: string }).output && (
@@ -375,7 +379,10 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
                 </div>
               ) : (
                 <div className="text-sm">
-                  <div className="text-zinc-400 mb-1">Input:</div>
+                  <div className="text-zinc-400 mb-1 flex items-center gap-2">
+                    <span>Input:</span>
+                    <CopyButton content={inputCopyText} title="Copy input" />
+                  </div>
                   <ClickableJson json={part.state.input} onFileClick={onFileClick} />
                 </div>
               )}
@@ -411,7 +418,10 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
                 </div>
               ) : (
                 <div className="text-sm">
-                  <div className="text-zinc-400 mb-1">Input:</div>
+                  <div className="text-zinc-400 mb-1 flex items-center gap-2">
+                    <span>Input:</span>
+                    <CopyButton content={inputCopyText} title="Copy input" />
+                  </div>
                   <ClickableJson json={part.state.input} onFileClick={onFileClick} />
                 </div>
               )}

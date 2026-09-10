@@ -8,7 +8,7 @@ interface PatchPartProps {
 }
 
 export function PatchPart({ part }: PatchPartProps) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
   return (
     <div className="border border-border rounded-lg overflow-hidden my-2">
@@ -21,9 +21,9 @@ export function PatchPart({ part }: PatchPartProps) {
         </span>
         <span className="text-muted-foreground text-xs font-mono">{part.hash.slice(0, 8)}</span>
       </button>
-      
+
       {expanded && (
-        <div className="bg-muted/50 p-4">
+        <div className="bg-muted/50 p-4 cursor-pointer" onClick={() => setExpanded(false)} title="Click to collapse">
           <div className="space-y-2">
             {part.files.map((file, index) => (
               <div key={index} className="text-sm">

@@ -4,7 +4,6 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getRepo } from "@/api/repos";
 import { MessageThread, isMessageStreaming } from "@/components/message/MessageThread";
-import { SendingPill } from "@/components/message/SendingPill";
 import { PromptInput } from "@/components/message/PromptInput";
 import { ModelSelectDialog } from "@/components/model/ModelSelectDialog";
 import { SessionDetailHeader } from "@/components/session/SessionDetailHeader";
@@ -1249,11 +1248,6 @@ if (results.length > 0) {
           </div>
           {opcodeUrl && repoDirectory && (
             <div ref={inputWrapRef} className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-1 pointer-events-none">
-              <SendingPill
-                sessionID={sessionId}
-                busy={dbBusy || descendantBusy}
-                lastIsUser={lastMessage?.info.role === "user"}
-              />
               {windowStart !== null && baseMessages && !tailVisible && (
                 <div className="flex justify-center gap-2 py-1 pointer-events-auto">
                   <button
