@@ -13,6 +13,7 @@ export function createPtyRoutes() {
     if (!command) return c.json({ error: 'command required' }, 400)
 
     let closed = false
+    let proc: ReturnType<typeof spawn> | null = null
     const stream = new ReadableStream({
       start(controller) {
         const encoder = new TextEncoder()
@@ -20,19 +21,36 @@ export function createPtyRoutes() {
           if (closed) return
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`))
         }
+        const killProc = () => {
+          try { proc?.kill('SIGKILL') } catch {}
+          proc = null
+        }
         c.req.raw.signal?.addEventListener('abort', () => {
           closed = true
+          killProc()
           try { controller.close() } catch {}
         })
 
         const isWin = process.platform === 'win32'
         const shell = isWin ? 'cmd.exe' : 'bash'
         const args = isWin ? ['/c', command] : ['-c', command]
-        const proc = spawn(shell, args, {
+        proc = spawn(shell, args, {
           cwd: directory || process.cwd(),
           env: process.env,
           windowsHide: true,
         })
+
+        // 절대 상한 15분: 끝나지 않는 명령이 스트림·프로세스를 영원히 붙잡지 않게 한다.
+        const capTimer = setTimeout(() => {
+          if (closed) return
+          send('pty.done', JSON.stringify({ timeout: true }))
+          killProc()
+          closed = true
+          try { controller.close() } catch {}
+        }, 15 * 60 * 1000)
+        if (typeof (capTimer as unknown as { unref?: unknown }).unref === 'function') {
+          (capTimer as unknown as { unref: () => void }).unref()
+        }
 
         proc.stdout?.on('data', (chunk: Buffer) => {
           send('pty.delta', JSON.stringify({ delta: chunk.toString() }))
@@ -41,17 +59,23 @@ export function createPtyRoutes() {
           send('pty.delta', JSON.stringify({ delta: chunk.toString() }))
         })
         proc.on('close', (code) => {
+          clearTimeout(capTimer)
           send('pty.done', JSON.stringify({ code }))
           try { controller.close() } catch {}
           closed = true
         })
         proc.on('error', (err) => {
+          clearTimeout(capTimer)
           send('pty.done', JSON.stringify({ error: String(err) }))
           try { controller.close() } catch {}
           closed = true
         })
       },
-      cancel() { closed = true },
+      cancel() {
+        closed = true
+        try { proc?.kill('SIGKILL') } catch {}
+        proc = null
+      },
     })
 
     return new Response(stream, {
@@ -75,6 +99,12 @@ export function createPtyRoutes() {
 
     let prev = ''
     let closed = false
+    // 폴링 루프 상한: 파트가 영원히 running이면 SSE가 절대 안 끝난다.
+    // (메시지 truncate로 파트 소실·턴 hang 등) 절대 15분 + 파트 5회 연속 미발견 시 종료.
+    const startedAt = Date.now()
+    const MAX_STREAM_MS = 15 * 60 * 1000
+    const MAX_MISSING = 5
+    let missing = 0
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -91,6 +121,10 @@ export function createPtyRoutes() {
 
         // Poll opencode for tool part output
         while (!closed) {
+          if (Date.now() - startedAt > MAX_STREAM_MS) {
+            send('pty.done', JSON.stringify({ output: prev, status: 'timeout', timeout: true }))
+            break
+          }
           try {
             const url = new URL(`${opencodeUrl}/session/${sessionId}/message/${messageId}`)
             if (directory) url.searchParams.set('directory', directory)
@@ -98,7 +132,14 @@ export function createPtyRoutes() {
             if (res.ok) {
               const msg = await res.json() as { info?: { id: string }; parts?: Array<{ id: string; type: string; tool?: string; state?: { status?: string; output?: string } }> }
               const part = msg.parts?.find((p) => p.id === partId) as { id: string; state?: { status?: string; output?: string; metadata?: { output?: string } } } | undefined
-              if (part) {
+              if (!part) {
+                missing++
+                if (missing >= MAX_MISSING) {
+                  send('pty.done', JSON.stringify({ output: prev, status: 'gone' }))
+                  break
+                }
+              } else {
+                missing = 0
                 const cur = typeof part.state?.output === 'string' ? part.state.output : typeof part.state?.metadata?.output === 'string' ? part.state.metadata.output : ''
                 if (cur.length > prev.length && cur.startsWith(prev)) {
                   const delta = cur.slice(prev.length)

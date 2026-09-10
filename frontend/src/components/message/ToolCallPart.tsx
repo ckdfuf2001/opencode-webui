@@ -165,8 +165,13 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
           }
         } catch {}
       }
+      // done 뒤에도 EventSource가 자동 재연결해서 SSE가 영원히 안 끝나므로 명시 close.
+      const onDone = (e: MessageEvent) => {
+        onDelta(e)
+        try { es?.close() } catch {}
+      }
       es.addEventListener('pty.delta', onDelta as EventListener)
-      es.addEventListener('pty.done', onDelta as EventListener)
+      es.addEventListener('pty.done', onDone as EventListener)
     } catch {}
     return () => { try { es?.close() } catch {} }
   }, [part.tool, part.state.status, expanded, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs, directory])
