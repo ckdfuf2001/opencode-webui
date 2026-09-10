@@ -6,6 +6,7 @@ import { FilePreview } from './FilePreview'
 import { MobileFilePreviewModal } from './MobileFilePreviewModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { FolderOpen, Upload, RefreshCw } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
@@ -104,6 +105,24 @@ interface FileBrowserProps {
   onDirectoryLoad?: (info: { workspaceRoot?: string; currentPath: string }) => void
 }
 
+type FileSort = 'name-asc' | 'name-desc' | 'mtime-asc' | 'mtime-desc'
+
+function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as FileSort)}>
+      <SelectTrigger className="h-8 w-[118px] text-xs shrink-0" title="정렬">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="name-asc">이름 오름차순</SelectItem>
+        <SelectItem value="name-desc">이름 내림차순</SelectItem>
+        <SelectItem value="mtime-asc">수정일 오래된순</SelectItem>
+        <SelectItem value="mtime-desc">수정일 최신순</SelectItem>
+      </SelectContent>
+    </Select>
+  )
+}
+
 export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState(basePath)
   const queryClient = useQueryClient()
@@ -138,6 +157,7 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   }, [queryClient])
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [sortBy, setSortBy] = useState<FileSort>('name-asc')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null)
@@ -518,7 +538,26 @@ useEffect(() => {
     }
   }, [isPreviewModalOpen])
 
-  const filteredFiles = files?.children?.filter((file: FileInfo) => file.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  const filteredFiles = useMemo(() => {
+    const q = searchQuery.toLowerCase()
+    const list = (files?.children ?? []).filter((file: FileInfo) => file.name.toLowerCase().includes(q))
+    const mtimeOf = (f: FileInfo): number => {
+      const t = new Date(f.lastModified ?? 0).getTime()
+      return Number.isNaN(t) ? 0 : t
+    }
+    const byName = (a: FileInfo, b: FileInfo) =>
+      a.name.localeCompare(b.name, 'ko', { numeric: true, sensitivity: 'base' })
+    list.sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+      switch (sortBy) {
+        case 'name-desc': return byName(b, a)
+        case 'mtime-asc': return mtimeOf(a) - mtimeOf(b) || byName(a, b)
+        case 'mtime-desc': return mtimeOf(b) - mtimeOf(a) || byName(a, b)
+        default: return byName(a, b)
+      }
+    })
+    return list
+  }, [files, searchQuery, sortBy])
 
   if (embedded) {
     return (
@@ -553,12 +592,15 @@ useEffect(() => {
                   
                 />
               </div>
-              <Input
-                placeholder="Search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1"
-              />
+              <div className="flex items-center gap-1.5">
+                <Input
+                  placeholder="Search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="flex-1 min-w-0"
+                />
+                <FileSortSelect value={sortBy} onChange={setSortBy} />
+              </div>
             </div>
             
             {uploadProgress && (
@@ -694,12 +736,15 @@ useEffect(() => {
                   
                 />
               </div>
-              <Input
-                placeholder="Search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1"
-              />
+              <div className="flex items-center gap-1.5">
+                <Input
+                  placeholder="Search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="flex-1 min-w-0"
+                />
+                <FileSortSelect value={sortBy} onChange={setSortBy} />
+              </div>
             </div>
             
             {(loading || queryLoading) ? (
