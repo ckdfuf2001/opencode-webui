@@ -1211,7 +1211,7 @@ if (results.length > 0) {
               </div>
             )}
             {windowStart !== null && baseMessages && (
-              <div className="sticky z-10 flex justify-center gap-2 py-2 bg-background" style={{ bottom: inputH + 4 }}>
+              <div className="sticky z-10 flex justify-center gap-2 py-2 bg-gradient-to-t from-background to-transparent" style={{ bottom: inputH }}>
                 <button
                   onClick={shiftWindowDown}
                   className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm"
@@ -1233,7 +1233,7 @@ if (results.length > 0) {
             )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div ref={inputWrapRef} className={`absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none ${windowStart !== null ? "bg-background" : ""}`}>
+            <div ref={inputWrapRef} className={`absolute bottom-0 left-0 right-0 flex justify-center pb-1 pointer-events-none ${windowStart !== null ? "bg-background/80 backdrop-blur-sm" : ""}`}>
               <div className="contents pointer-events-auto">
               <PromptInput
                 opcodeUrl={opcodeUrl}
