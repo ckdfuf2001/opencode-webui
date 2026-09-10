@@ -10,6 +10,12 @@ let agentBrowserWarmState: 'warm' | 'cold' | 'unknown' = 'unknown'
 const workspaceBackend = `http://127.0.0.1:${ENV.SERVER.PORT}`
 const AGENT_BROWSER_NAMESPACE = 'opencode'
 const AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
+// 프록시 모드 타임아웃 (arch-to-be: 데몬 15분, 세션 TTL 10분)
+const PROXY_IDLE_TIMEOUT_MS = '900000'
+const PROXY_IDLE_TIMEOUT = '15m'
+const PROXY_SESSION_TTL_MS = '600000'
+const PROXY_SESSION_MAX = '16'
+const PROXY_SESSION_SWEEP_MS = '60000'
 
 function buildDocReaderMcp(): Record<string, unknown> {
   const reader = resolveDocReaderCommand()
@@ -52,6 +58,27 @@ function buildAgentBrowserMcp(
 ): Record<string, unknown> {
   const info = resolveAgentBrowser()
   if (!info) return {}
+  const proxy = resolveAgentBrowserProxy(info)
+  if (proxy) {
+    const env: Record<string, string> = {}
+    if (info.executablePath && existsSync(info.executablePath)) {
+      env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
+    }
+    env.AGENT_BROWSER_NAMESPACE = namespace
+    env.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
+    env.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
+    env.SESSION_TTL_MS = PROXY_SESSION_TTL_MS
+    env.SESSION_MAX = PROXY_SESSION_MAX
+    env.SESSION_SWEEP_MS = PROXY_SESSION_SWEEP_MS
+    return {
+      'agent-browser': {
+        type: 'local',
+        enabled: true,
+        command: proxy.command,
+        env,
+      },
+    }
+  }
   const env: Record<string, string> = {}
   if (info.executablePath && existsSync(info.executablePath)) {
     env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
@@ -68,6 +95,36 @@ function buildAgentBrowserMcp(
       env,
     },
   }
+}
+
+// Session Proxy (mcp-server.mjs, arch-to-be) 해결:
+// 1. 패키징된 컴파일 exe: <cwd>/bin/agent-browser-proxy/agent-browser-proxy.exe
+// 2. dev 폴백: node + backend/scripts/agent-browser-proxy/mcp-server.mjs
+// 둘 다 없으면 null → 기존 바이너리 직결(direct)로 폴백한다.
+function resolveAgentBrowserProxy(info: AgentBrowserInfo): { command: string[] } | null {
+  const proxyExe = path.join(process.cwd(), 'bin', 'agent-browser-proxy', 'agent-browser-proxy.exe')
+  if (existsSync(proxyExe)) {
+    return { command: [proxyExe, '--cli', info.binPath, '--namespace', AGENT_BROWSER_NAMESPACE] }
+  }
+  const proxyMjs = path.join(process.cwd(), 'backend', 'scripts', 'agent-browser-proxy', 'mcp-server.mjs')
+  if (existsSync(proxyMjs) && hasNodeRuntime()) {
+    return { command: ['node', proxyMjs, '--cli', info.binPath, '--namespace', AGENT_BROWSER_NAMESPACE] }
+  }
+  return null
+}
+
+function hasNodeRuntime(): boolean {
+  try {
+    execFileSync('node', ['--version'], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function agentBrowserProxyMode(): boolean {
+  const info = resolveAgentBrowser()
+  return !!info && resolveAgentBrowserProxy(info) !== null
 }
 
 export function repoAgentBrowserSession(localPath: string): string {
@@ -149,11 +206,20 @@ async function doWarmUp(
   if (info.executablePath && existsSync(info.executablePath)) {
     env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
   }
-  env.AGENT_BROWSER_NAMESPACE = namespace
-  env.AGENT_BROWSER_SESSION = sessionName
-  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
-  env.AGENT_BROWSER_AUTO_SESSION = '1'
-  const child = spawn(info.binPath, ['mcp', '--namespace', namespace], {
+  const proxy = resolveAgentBrowserProxy(info)
+  let command: string[]
+  if (proxy) {
+    // 프록시 경유 warmup: 같은 데몬(핀 네임스페이스)을 깨운다.
+    // SESSION 고정은 프록시 설계상 금지이므로 env에 넣지 않는다.
+    command = proxy.command
+  } else {
+    env.AGENT_BROWSER_NAMESPACE = namespace
+    env.AGENT_BROWSER_SESSION = sessionName
+    env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
+    env.AGENT_BROWSER_AUTO_SESSION = '1'
+    command = [info.binPath, 'mcp', '--namespace', namespace]
+  }
+  const child = spawn(command[0]!, command.slice(1), {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -162,7 +228,7 @@ async function doWarmUp(
     const deadline = Date.now() + 240_000
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now()
-      const ok = await openViaMcp(child, remaining)
+      const ok = await openViaMcp(child, remaining, !!proxy, namespace, sessionName)
       if (ok && isAgentBrowserDaemonWarm(info.binPath, namespace, sessionName)) {
         if (agentBrowserWarmState !== 'warm') {
           agentBrowserWarmState = 'warm'
@@ -190,7 +256,13 @@ async function doWarmUp(
   return false
 }
 
-async function openViaMcp(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<boolean> {
+async function openViaMcp(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+  useProxy = false,
+  namespace: string = AGENT_BROWSER_NAMESPACE,
+  session = AGENT_BROWSER_NAMESPACE,
+): Promise<boolean> {
   const stdout = child.stdout
   const stdin = child.stdin
   if (!stdout || !stdin) return false
@@ -244,6 +316,20 @@ async function openViaMcp(child: ReturnType<typeof spawn>, timeoutMs: number): P
   try {
     await send('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'opencode-webui', version: '1.0.0' } })
     await send('tools/list', {})
+    if (useProxy) {
+      // 프록시는 세션 필수: warmup용 세션을 ensure(reuse) 후 open.
+      // warmup 자식의 레지스트리는 버려지고, 데몬/브라우저 기동만 남는다.
+      const warmSession = `warmup-${session}`.slice(0, 64)
+      await send('tools/call', {
+        name: 'agent_browser_session_ensure',
+        arguments: { namespace, session: warmSession, reuse: true },
+      })
+      const res = (await send('tools/call', {
+        name: 'agent_browser_open',
+        arguments: { namespace, session: warmSession, url: 'about:blank' },
+      })) as { isError?: boolean } | undefined
+      return res?.isError !== true
+    }
     const res = (await send('tools/call', {
       name: 'agent_browser_open',
       arguments: { url: 'about:blank' },
@@ -295,7 +381,7 @@ function isAgentBrowserMcpChildRunning(namespace: string): boolean {
     const marker = `--namespace ${namespace}`
     if (process.platform === 'win32') {
       const script = [
-        `$ps = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'agent-browser.exe' -and $_.CommandLine -like '*mcp*--namespace ${namespace}*' }`,
+        `$ps = Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'agent-browser.exe' -and $_.CommandLine -like '*mcp*--namespace ${namespace}*') -or ($_.Name -eq 'agent-browser-proxy.exe') -or ($_.CommandLine -like '*mcp-server.mjs*') }`,
         'if ($ps) { Write-Output "1" } else { Write-Output "0" }',
       ].join('\n')
       const output = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
@@ -310,7 +396,11 @@ function isAgentBrowserMcpChildRunning(namespace: string): boolean {
       timeout: 10_000,
       stdio: ['ignore', 'pipe', 'ignore'],
     })
-    return output.split('\n').some((line) => line.includes('agent-browser') && line.includes('mcp') && line.includes(marker))
+    return output.split('\n').some((line) =>
+      (line.includes('agent-browser') && line.includes('mcp') && line.includes(marker)) ||
+      line.includes('agent-browser-proxy') ||
+      line.includes('mcp-server.mjs'),
+    )
   } catch {
     return false
   }
@@ -344,6 +434,16 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
         if (repairedEnv[key] !== value) {
           repairedEnv[key] = value
           changed = true
+        }
+      }
+      // 프록시 모드에서는 직결 시절 키가 남으면 안 된다 (SESSION 고정 등).
+      // opencode가 env를 전달하지 않아 무해하지만, 혼란 방지를 위해 제거한다.
+      if (id === 'agent-browser' && agentBrowserProxyMode()) {
+        for (const stale of ['AGENT_BROWSER_SESSION', 'AGENT_BROWSER_AUTO_SESSION']) {
+          if (stale in repairedEnv) {
+            delete repairedEnv[stale]
+            changed = true
+          }
         }
       }
       repaired.env = repairedEnv

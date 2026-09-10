@@ -51,30 +51,39 @@
   `backend/src/services/default-mcp.ts` (`mergeDefaultMcpEntries`): missing
   entries are added, and existing entries are **repaired** — command (doc-reader
   must point at `backend/scripts/doc_reader_mcp.py`, never a relative
-  `..\backend\...` path that breaks in per-repo sessions), env vars
-  (agent-browser must keep `AGENT_BROWSER_NAMESPACE=opencode` +
-  `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000`). The user's `enabled` choice is
+  `..\backend\...` path that breaks in per-repo sessions; agent-browser must
+  point at the session proxy, never a stale direct `mcp --namespace` entry),
+  env vars (proxy mode: `AGENT_BROWSER_NAMESPACE=opencode` +
+  `AGENT_BROWSER_IDLE_TIMEOUT_MS=900000` + `SESSION_TTL_MS/SESSION_MAX/SESSION_SWEEP_MS`;
+  stale direct-mode keys `AGENT_BROWSER_SESSION`/`AGENT_BROWSER_AUTO_SESSION`
+  are removed). The user's `enabled` choice is
   PRESERVED (never force `enabled: true`) so the MCP Manager toggle works. Do
   not hand-edit MCPs in `workspace/.config/opencode/opencode.json`; use the app
   UI.
-- **Agent-browser MCP is a singleton by default**: opencode does NOT forward the `env` field
-  of an MCP entry to the spawned `agent-browser.exe mcp` child (verified 2026-08),
-  and agent-browser ignores the `--session`/`--executable-path` CLI args when
-  resolving its daemon in MCP mode. So `agent_browser_*` calls without an explicit `session` always run as `default` (namespace `opencode`, bundled chromium) — `read` on a fresh `default` returns blank. Per-repo `opencode.json` files are still written (`writeRepoOpenCodeConfig()`, unique `repo-<localPath>` session) but the session is stripped by opencode, so you must pass `session` explicitly (e.g. `session: "repo-Test"`) or enable `AGENT_BROWSER_AUTO_SESSION=1` in the patched `ckdfuf2001/agent-browser` (`auto-<cwd-hash>` per repo) so `default` is auto-split. **Close after use:** call `agent_browser_close` when done; otherwise `AGENT_BROWSER_IDLE_TIMEOUT_MS` (24h) will auto-close.
+- **Agent-browser MCP runs through the session proxy by default**: the
+  `agent-browser` MCP entry spawns `backend/scripts/agent-browser-proxy/mcp-server.mjs`
+  (vendored from `ckdfuf2001/agent-browser` `proxy-v2.2.0`; compiled to
+  `bin/agent-browser-proxy/agent-browser-proxy.exe` at package time, built by
+  `scripts/build-agent-browser-proxy.ps1`). One shared daemon (namespace
+  `opencode`), one browser per session. Every `agent_browser_*` call MUST pass
+  an explicit `session` (first mint via `agent_browser_session_ensure`);
+  `default` is rejected by the proxy. If the proxy is unavailable the backend
+  falls back to the direct binary (`agent-browser mcp --namespace opencode`).
+  Opencode does NOT forward the `env` field of an MCP entry to the spawned
+  child (verified 2026-08), so all behavior must come from CLI args, not env.
 - **Warm-up matches the real MCP spawn**: on a cold start the daemon inherits the
   MCP server's stdout pipe and `tools/call` hangs until the browser launches → the
   "first open fails" / `MCP error -32001: Request timed out` (~60s) symptom. The
-  backend pre-warms the `default` session via `warmUpAllAgentBrowserDaemons()`
-  (after opencode server start + every 60s). `warmUpAgentBrowserDaemon()` spawns
-  `agent-browser.exe mcp --namespace opencode` with all `AGENT_BROWSER_*` env vars
-  stripped — exactly like opencode does — and performs a real JSON-RPC
-  `agent_browser_open about:blank` to force the browser launch, then kills the MCP
-  child (the background daemon survives). Do NOT warm with `open --headed false`
-  or `AGENT_BROWSER_IDLE_TIMEOUT_MS`: that produces a different daemon profile and
+  backend pre-warms per-repo sessions via `warmUpAllAgentBrowserDaemons()`
+  (after opencode server start + every 60s). In proxy mode the warm-up spawns
+  the proxy and runs `agent_browser_session_ensure` (reuse) +
+  `agent_browser_open about:blank` on a throwaway `warmup-*` session to force
+  the browser launch, then kills the MCP child (the background daemon survives).
+  Do NOT warm with `open --headed false`: that produces a different daemon profile and
   the MCP restarts it on first use (measured ~45s instead of <300ms). When
   debugging MCP/browser issues, check `AGENT_BROWSER_NAMESPACE=opencode
-  AGENT_BROWSER_SESSION=default agent-browser session info --json` for
-  `active`/`browserLaunched` before blaming the config.
+  agent-browser session info --json` for `active`/`browserLaunched` before blaming the config.
+  Live status is also at `GET /api/mcp/agent-browser/status`.
 - If `bin/agent-browser/.meta.json` or `bin/agent-browser/bin/…` is missing,
   `resolveAgentBrowser()` returns null and the agent-browser MCP entry is not
   registered — run `npm run agent-browser:install` (auto-run by predev).

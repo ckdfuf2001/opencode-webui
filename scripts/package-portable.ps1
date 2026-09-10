@@ -106,6 +106,17 @@ if ($needDocTools -and -not $SkipDocTools) {
   Write-Output '[package 6/7] ok: doc tools already present'
 }
 
+Write-Output '[package 6b/7] agent-browser proxy exe'
+$proxyExe = Join-Path $release 'bin/agent-browser-proxy/agent-browser-proxy.exe'
+if (-not (Test-Path $proxyExe)) {
+  & (Join-Path $PSScriptRoot 'build-agent-browser-proxy.ps1')
+  if ($LASTEXITCODE -ne 0) { throw 'agent-browser proxy build failed' }
+  New-Item -ItemType Directory -Force -Path (Join-Path $release 'bin/agent-browser-proxy') | Out-Null
+  Copy-Item -Force (Join-Path $root 'bin/agent-browser-proxy/agent-browser-proxy.exe') (Join-Path $release 'bin/agent-browser-proxy/agent-browser-proxy.exe')
+} else {
+  Write-Output '[package 6b/7] ok: agent-browser proxy already present'
+}
+
 Write-Output '[package 7/7] launcher scripts'
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.sh') $release
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.bat') $release

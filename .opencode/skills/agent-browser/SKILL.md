@@ -1,26 +1,41 @@
 ﻿---
 name: agent-browser
-description: Browser automation via agent-browser MCP. Use when opening pages, taking snapshots, clicking, filling, reading page text, or debugging blank read. Always pass session or enable AGENT_BROWSER_AUTO_SESSION.
+description: Browser automation via agent-browser session-proxy MCP. Always ensure a session first and reuse it. Never use session "default".
 ---
 
-# Agent-Browser Skill
+# Agent-Browser Skill (session-proxy)
 
-## Sessions
+Backend serves `agent-browser` MCP through `backend/scripts/agent-browser-proxy/mcp-server.mjs`
+(vendored from `ckdfuf2001/agent-browser`, release `proxy-v2.2.0`).
+One shared daemon (namespace `opencode`), one browser per session.
 
-- **Default is singleton:** agent_browser_* without session goes to opencode:default - first read returns blank.
-- **Fix 1 - explicit session:** Pass session: 'repo-<name>' (e.g. 'repo-Test') on every open/read/snapshot/click.
-- **Fix 2 - auto hash (patched ckdfuf2001/agent-browser):** Set AGENT_BROWSER_AUTO_SESSION=1 in mcp.env. Then default/opencode is auto-hashed to auto-<cwd-hash> per repo, so read without explicit session works and is isolated per repo.
+## Sessions (mandatory)
+
+- Every task needs its own session. First call: `agent_browser_session_ensure`
+  with `namespace: "opencode"` and `session: "<task-name>"` (Korean ok).
+  Reuse the SAME session for every follow-up call in the task.
+- NEVER use `session: "default"` — the proxy rejects it (tab/ref collisions).
+- If `ensure` reports EXISTS with open tabs: adopt with `reuse: true` only if it
+  is YOUR browser, otherwise pick a different name.
+- End with `agent_browser_close` when done. Idle sessions auto-close after 10 min
+  (`SESSION_TTL_MS`), daemon after 15 min idle.
 
 ## Warmup
 
-- Backend pre-warms opencode:default after opencode start + every 60s via warmUpAgentBrowserDaemon(). Per-repo auto-* sessions are created lazily on first open.
+- Backend pre-warms the `opencode` daemon after opencode start + every 60s
+  (`warmUpAgentBrowserDaemon()` in `backend/src/services/default-mcp.ts`).
+- First `open` on a cold daemon can take ~35s; the proxy absorbs it.
 
 ## Troubleshooting
 
-- blank on read -> add session or enable AGENT_BROWSER_AUTO_SESSION=1.
-- **No session specified (English):** If you call `agent_browser_*` without `session` and multiple sessions are open, the daemon now returns `No session specified. Open sessions: <list>. Please specify session, e.g. session: "<name>"` in English and lists `auto-*`/`repo-*` sessions. Pass the shown `session` on the next call.
-- MCP error -32001 Request timed out on first open -> daemon cold start, backend warmup should have prevented; check AGENT_BROWSER_SESSION=default agent-browser session info --json for active/browserLaunched.
+- `Unknown pair ... Call agent_browser_session_ensure FIRST` -> ensure the session first.
+- `Missing session` / default rejected -> mint a name via `agent_browser_session_ensure`.
+- `MCP error -32001: Request timed out` -> daemon cold or died; backend re-warms
+  in the background, retry in a few seconds. Status: `GET /api/mcp/agent-browser/status`,
+  manual warm: `POST /api/mcp/agent-browser/warm`.
+- `Single-daemon proxy: namespace is pinned` -> always use `namespace: "opencode"`.
 
 ## Closing
 
-- **Always close after use:** Call `agent_browser_close` (or `agent-browser close` / `close --all`) when the task is done. Idle sessions auto-close after `AGENT_BROWSER_IDLE_TIMEOUT_MS` (default 1h, `86400000` in this repo), but explicit close frees the `Chrome` `BrowserContext` immediately and prevents `6`+ `agent-browser`/`11`+ `chrome` accumulation.
+- Always `agent_browser_close` (or `close --all`) when the task is done.
+  Explicit close frees the browser context immediately instead of waiting for TTL.
