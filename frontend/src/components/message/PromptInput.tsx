@@ -10,7 +10,6 @@ import { useUserBash } from '@/stores/userBashStore'
 import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
 import { listQueuedChats } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
-import { ChevronDown } from 'lucide-react'
 import { useContextUsage } from '@/hooks/useContextUsage'
 
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
@@ -46,8 +45,6 @@ interface PromptInputProps {
   uploadDir?: string
   sessionID: string
   disabled?: boolean
-  showScrollButton?: boolean
-  onScrollToBottom?: () => void
   onShowSessionsDialog?: () => void
   onShowModelsDialog?: () => void
   onShowHelpDialog?: () => void
@@ -74,8 +71,6 @@ export function PromptInput({
   uploadDir,
   sessionID, 
   disabled,
-  showScrollButton,
-  onScrollToBottom,
   onShowSessionsDialog,
   onShowModelsDialog,
   onShowHelpDialog,
@@ -931,15 +926,6 @@ useEffect(() => {
               <span className="hidden sm:inline text-xs text-muted-foreground whitespace-nowrap">Auto Scroll</span>
               <Switch checked={!!autoScrollEnabled} onCheckedChange={onAutoScrollChange} className="scale-75" />
             </div>
-          )}
-          {showScrollButton && (
-            <button
-              onClick={onScrollToBottom}
-              className="p-1.5 rounded-lg bg-muted hover:bg-muted-foreground/20 text-muted-foreground hover:text-foreground transition-colors border border-foreground/30"
-              title="Scroll to bottom"
-            >
-              <ChevronDown className="w-5 h-5" />
-            </button>
           )}
           {showStop && (
             <button

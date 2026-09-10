@@ -72,7 +72,6 @@ export function SessionDetail() {
   const [hiddenAfterID, setHiddenAfterID] = useState<string | null>(null);
   const [highlightedMessageID, setHighlightedMessageID] = useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
-  const [showScrollButton, setShowScrollButton] = useState(false);
   const [globalUpload, setGlobalUpload] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
   const [autoScrollOverride, setAutoScrollOverride] = useState<boolean | null>(null);
@@ -678,7 +677,6 @@ export function SessionDetail() {
     messages,
     sessionId,
     enabled: effectiveAutoScroll,
-    onScrollStateChange: setShowScrollButton
   });
   useEffect(() => { markDisengagedRef.current = markDisengaged }, [markDisengaged]);
 
@@ -1225,8 +1223,6 @@ if (results.length > 0) {
                 uploadDir={`${repo.localPath}/chat_uploads`}
                 sessionID={sessionId}
                 disabled={!isConnected}
-                showScrollButton={showScrollButton}
-                onScrollToBottom={scrollToBottom}
                 onShowModelsDialog={() => setModelDialogOpen(true)}
                 onShowSessionsDialog={() => setSessionsDialogOpen(true)}
                 onShowHelpDialog={() => {
