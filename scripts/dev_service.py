@@ -36,6 +36,16 @@ SVC_LOG = os.path.join(LOGS_DIR, "dev-service.log")
 SERVICE_NAME = "opencode-webui-dev"
 SERVICE_DISPLAY = "opencode-webui dev (pnpm dev)"
 
+# 서비스는 LocalSystem으로 돌고, 세션 DB(opencode.db)는 OS 사용자 프로필
+# 밑에 있다 (예: C:\Users\oh\.local\share\opencode\opencode.db).
+# 그대로 두면 서비스가 systemprofile 쪽 빈 저장소를 봐서
+# "레포는 보이고 세션은 안 보이는" 상태가 된다.
+# install 시점(관리자 cmd = 실제 사용자)의 프로필을 저장해 두고,
+# 실행 시 HOME/USERPROFILE 등을 덮어써서 수동 실행과 같은 저장소를 보게 한다.
+PROFILE_DIR = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "opencode-webui-dev")
+PROFILE_FILE = os.path.join(PROFILE_DIR, "user-profile.env")
+PROFILE_KEYS = ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH")
+
 # 헬스 워치독: node --watch는 백엔드 크래시 시 종료 대신 파일변경 대기로
 # 멈추므로, 프로세스는 살아있어도 응답이 없으면 트리를 죽이고 재기동한다.
 # (테스트용으로 DEV_SVC_GRACE_S / DEV_SVC_FAILS 환경변수로 조정 가능)
@@ -85,6 +95,53 @@ def svc_log(msg):
         print(msg, flush=True)
 
 
+def save_user_profile():
+    """install 시점의 사용자 프로필 경로를 저장 (관리자 cmd = 실제 사용자).
+
+    SCM 서비스는 LocalSystem으로 돌아서 USERPROFILE이 systemprofile이 되는데,
+    opencode 세션 저장소가 사용자 프로필 밑에 있어서 그대로 두면
+    서비스 모드에서 세션 목록이 비어 보인다. 저장된 프로필을 실행 시 덮어쓴다."""
+    try:
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+        lines = []
+        for k in PROFILE_KEYS:
+            v = os.environ.get(k, "")
+            if v:
+                lines.append("%s=%s" % (k, v))
+        if not lines:
+            return
+        with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        svc_log("saved user profile env to %s" % PROFILE_FILE)
+    except Exception as e:
+        svc_log("save user profile failed: %s" % e)
+
+
+def load_user_profile(env):
+    """저장된 사용자 프로필을 실행 환경에 적용. 파일이 없으면 그대로 둔다."""
+    try:
+        if not os.path.isfile(PROFILE_FILE):
+            return env
+        with open(PROFILE_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k in PROFILE_KEYS and v and os.path.isdir(v):
+                    env[k] = v
+        up = env.get("USERPROFILE", "")
+        if up and os.path.isdir(up):
+            # opencode는 $HOME/.local/share 밑에 세션 DB를 둔다
+            env["HOME"] = up
+            env.setdefault("XDG_DATA_HOME", os.path.join(up, ".local", "share"))
+            env.setdefault("XDG_CONFIG_HOME", os.path.join(up, ".config"))
+        svc_log("applied user profile: USERPROFILE=%s" % env.get("USERPROFILE", ""))
+    except Exception as e:
+        svc_log("load user profile failed: %s" % e)
+    return env
+
+
 def build_env():
     """LocalSystem PATH에는 사용자 영역(node/npm-global/python)이 없으므로 보강.
     특히 python은 이 서비스가 도는 인터프리터 경로를 그대로 쓴다."""
@@ -111,6 +168,7 @@ def build_env():
     extra = [p for p in extra if not (p.lower() in seen or seen.add(p.lower()))]
     if extra:
         env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
+    env = load_user_profile(env)
     return env
 
 
@@ -289,4 +347,12 @@ if __name__ == "__main__":
     if sys.argv[1] == "run":
         console_main()
     else:
+        if sys.argv[1] == "install":
+            save_user_profile()
+        elif sys.argv[1] == "remove":
+            try:
+                if os.path.isfile(PROFILE_FILE):
+                    os.remove(PROFILE_FILE)
+            except Exception:
+                pass
         win32serviceutil.HandleCommandLine(DevService)
