@@ -294,7 +294,8 @@ export function SessionDetail() {
       c.removeEventListener("scroll", onScroll);
       c.removeEventListener("wheel", onWheel);
     };
-  }, [shiftWindowUp, shiftWindowDown]);
+    // 컨테이너가 key={sessionId}로 리마운트되므로 세션 변경 시 리스너 재부착
+  }, [shiftWindowUp, shiftWindowDown, sessionId]);
   const {
     data: dbStatuses,
     isError: statusError,

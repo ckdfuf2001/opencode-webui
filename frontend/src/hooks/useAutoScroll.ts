@@ -122,7 +122,7 @@ export function useAutoScroll<T extends Message>({
     container.addEventListener('wheel', handleWheel, { passive: true })
     container.addEventListener('keydown', handleKeyDown)
     container.addEventListener('scroll', handleScroll, { passive: true })
-    
+
     return () => {
       container.removeEventListener('pointerdown', handlePointerDown)
       container.removeEventListener('pointermove', handlePointerMove)
@@ -132,7 +132,8 @@ export function useAutoScroll<T extends Message>({
       container.removeEventListener('keydown', handleKeyDown)
       container.removeEventListener('scroll', handleScroll)
     }
-  }, [containerRef, onScrollStateChange])
+    // 컨테이너가 key={sessionId}로 리마운트되므로 세션 변경 시 리스너 재부착
+  }, [containerRef, onScrollStateChange, sessionId])
 
   // ResizeObserver + MutationObserver: streaming 중 카드가 길어질 때(allow 버튼 등)도 하단까지 따라가게 한다
   // permission/question 카드가 길어져도 버튼이 보이도록 모든 자식의 크기 변화를 감지한다
@@ -165,7 +166,7 @@ export function useAutoScroll<T extends Message>({
       ro.disconnect()
       mo.disconnect()
     }
-  }, [containerRef, enabled])
+  }, [containerRef, enabled, sessionId])
 
   useEffect(() => {
     if (!containerRef?.current || !messages || !enabled) return
