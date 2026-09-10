@@ -24,6 +24,7 @@ import { createSearchRoutes } from './routes/search'
 import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
 import { createChatQueueRoutes } from './routes/chat-queue'
+import { createMcpRoutes } from './routes/mcp'
 import { createSessionMessageRoutes } from './routes/session-messages'
 import { createPtyRoutes } from './routes/pty'
 import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
@@ -258,6 +259,7 @@ app.route('/api/command-runs', createCommandRunRoutes(db))
 app.route('/api/search', createSearchRoutes(db))
 app.route('/api/session-status', createSessionStatusRoutes(db))
   app.route('/api/chat-queue', createChatQueueRoutes())
+  app.route('/api/mcp', createMcpRoutes(db))
   app.route('/api/session-messages', createSessionMessageRoutes())
 app.route('/api/pty', createPtyRoutes())
 app.route('/api/logs', createClientLogRoutes())

@@ -102,17 +102,20 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
   return true
 }
 
-let warmUpInFlight: Promise<boolean> | null = null
+const warmUpInFlight = new Map<string, Promise<boolean>>()
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
   session?: string,
 ): Promise<boolean> {
-  if (warmUpInFlight) return warmUpInFlight
-  warmUpInFlight = doWarmUp(namespace, session).finally(() => {
-    warmUpInFlight = null
+  const key = `${namespace}::${session ?? namespace}`
+  const existing = warmUpInFlight.get(key)
+  if (existing) return existing
+  const flight = doWarmUp(namespace, session).finally(() => {
+    warmUpInFlight.delete(key)
   })
-  return warmUpInFlight
+  warmUpInFlight.set(key, flight)
+  return flight
 }
 
 async function doWarmUp(
@@ -129,12 +132,12 @@ async function doWarmUp(
     }
     return true
   }
+  // MCP 자식 프로세스가 살아 있어도 데몬/브라우저가 cold 면 호출은 32001 로 실패한다.
+  // 예전에는 여기서 warm 으로 오판하고 spawn 을 건너뛰었다. 이제는 건너뛰지 않고
+  // 아래에서 실제 open 으로 데몬을 깨운다. (방금 확인: active:false 인데도
+  // "MCP child already running; skipping" 으로 리턴하던 버그)
   if (isAgentBrowserMcpChildRunning(namespace)) {
-    if (agentBrowserWarmState !== 'warm') {
-      agentBrowserWarmState = 'warm'
-      logger.info(`Agent-browser MCP child already running (namespace: ${namespace}); skipping warm-up spawn`)
-    }
-    return true
+    logger.info(`Agent-browser MCP child running but daemon cold (namespace: ${namespace}, session: ${sessionName}); re-warming`)
   }
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
@@ -255,6 +258,16 @@ async function openViaMcp(child: ReturnType<typeof spawn>, timeoutMs: number): P
     pending.clear()
     waitResponse.catch(() => undefined)
   }
+}
+
+export function getAgentBrowserDaemonStatus(
+  namespace: string = AGENT_BROWSER_NAMESPACE,
+  session?: string,
+): { warm: boolean; mcpChildRunning: boolean; session: string } {
+  const info = resolveAgentBrowser()
+  const sessionName = session ?? namespace
+  const warm = info ? isAgentBrowserDaemonWarm(info.binPath, namespace, sessionName) : false
+  return { warm, mcpChildRunning: isAgentBrowserMcpChildRunning(namespace), session: sessionName }
 }
 
 function sleep(ms: number): Promise<void> {

@@ -2,22 +2,41 @@ import { useQuery } from '@tanstack/react-query'
 import { API_BASE_URL } from '@/config'
 import type { FileInfo, ChunkedFileInfo, PatchOperation } from '@/types/files'
 
+export class FileApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'FileApiError'
+    this.status = status
+  }
+}
+
+export function isNotFoundError(error: unknown): boolean {
+  return error instanceof FileApiError && error.status === 404
+}
+
+function shouldRetryFileQuery(failureCount: number, error: unknown): boolean {
+  const status = (error as { status?: number })?.status
+  if (typeof status === 'number' && status >= 400 && status < 500) return false
+  return failureCount < 2
+}
+
 async function fetchFile(path: string): Promise<FileInfo> {
   const response = await fetch(`${API_BASE_URL}/api/files/${path}`)
-  
+
   if (!response.ok) {
-    throw new Error(`Failed to load file: ${response.statusText}`)
+    throw new FileApiError(`Failed to load file: ${response.statusText || response.status}`, response.status)
   }
-  
+
   return response.json()
 }
 
 export function useFile(path: string | undefined) {
   return useQuery({
     queryKey: ['file', path],
-    queryFn: () => path ? fetchFile(path) : Promise.reject(new Error('No file path provided')),
+    queryFn: () => path ? fetchFile(path) : Promise.reject(new FileApiError('No file path provided', 400)),
     enabled: !!path,
-    retry: 3,
+    retry: shouldRetryFileQuery,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
     // 파일 본문까지 통째로 들고 있어 inactive 캐시가 쌓이면 크다.
     // staleTime 0이라 마운트 시 어차피 재조회하므로 1분만 유지해도 동작 동일.

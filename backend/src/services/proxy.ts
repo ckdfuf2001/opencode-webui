@@ -493,6 +493,32 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       releaseBusy()
       const bodyText = await response.text().catch(() => '')
       const lower = bodyText.toLowerCase()
+      const isMcpTimeout =
+        lower.includes('-32001') ||
+        (lower.includes('mcp') && (lower.includes('timed out') || lower.includes('timeout'))) ||
+        (lower.includes('agent-browser') && (lower.includes('timed out') || lower.includes('timeout')))
+      if (isMcpTimeout) {
+        void import('./default-mcp').then((m) => m.warmUpAgentBrowserDaemon().catch(() => undefined))
+        logger.warn('Agent-browser MCP call failed (likely cold daemon); triggered background re-warm:', bodyText.slice(0, 300))
+        const hint = ' - agent-browser MCP timed out (MCP -32001). The browser daemon was likely cold or died (e.g. after cancel). Background re-warm triggered; please retry in a few seconds. Status: GET /api/mcp/agent-browser/status, warm: POST /api/mcp/agent-browser/warm.'
+        let parsed: Record<string, unknown> | undefined
+        try { parsed = JSON.parse(bodyText) as Record<string, unknown> } catch { parsed = undefined }
+        responseHeaders['Content-Type'] = 'application/json'
+        if (parsed) {
+          const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : bodyText
+          const enriched = { ...parsed, error: `${msg}${hint}`, message: `${msg}${hint}`, retryable: true, mcp: 'agent-browser' }
+          return new Response(JSON.stringify(enriched), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: responseHeaders,
+          })
+        }
+        return new Response(JSON.stringify({ error: `${bodyText}${hint}`, retryable: true, mcp: 'agent-browser' }), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+        })
+      }
       // Only treat as timeout if status is 504/408, or 5xx with timeout wording.
       // Previously any 4xx containing the word "timeout" in body was misclassified as 504 (false positives during normal operation).
       const isTimeoutResponse =

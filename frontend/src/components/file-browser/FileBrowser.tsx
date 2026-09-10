@@ -11,7 +11,7 @@ import { FolderOpen, Upload, RefreshCw } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { useMobile } from '@/hooks/useMobile'
-import { useFile, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from '@/api/files'
+import { useFile, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, FileApiError } from '@/api/files'
 import { downloadSingleFile, downloadFolderAsZip } from '@/lib/fileDownload'
 import { showToast } from '@/lib/toast'
 
@@ -39,21 +39,34 @@ interface FileBrowserProps {
 export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState(basePath)
   const queryClient = useQueryClient()
-  const { data: files, isLoading: queryLoading } = useQuery<FileInfo, Error>({
+  const { data: files, isLoading: queryLoading, error: filesQueryError } = useQuery<FileInfo, Error>({
     queryKey: ['files', currentPath],
     queryFn: async () => {
       if (!currentPath && currentPath !== '') return null
       const path = currentPath || basePath || '.'
       const response = await fetch(`${API_BASE_URL}/api/files/${path}`)
-      if (!response.ok) throw new Error('Failed to load files')
+      if (!response.ok) throw new FileApiError('Failed to load files', response.status)
       return response.json()
     },
     enabled: true,
     staleTime: 60 * 1000,
+    retry: (failureCount, error) => {
+      const status = (error as { status?: number })?.status
+      if (typeof status === 'number' && status >= 400 && status < 500) return false
+      return failureCount < 2
+    },
   })
-  
-  const setFiles = useCallback((data: FileInfo | null) => {
-    queryClient.setQueryData(['files'], data)
+
+  useEffect(() => {
+    if (filesQueryError) {
+      setError(filesQueryError instanceof Error ? filesQueryError.message : 'Failed to load files')
+    } else if (files) {
+      setError(null)
+    }
+  }, [filesQueryError, files])
+
+  const setFiles = useCallback((path: string, data: FileInfo | null) => {
+    queryClient.setQueryData(['files', path], data)
   }, [queryClient])
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -67,6 +80,7 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   const isMobile = useMobile()
 
    const { data: initialFileData, error: initialFileError } = useFile(initialSelectedFile)
+  const initialErrorToastedRef = useRef<string | null>(null)
 
 useEffect(() => {
   if (initialFileData) {
@@ -78,10 +92,12 @@ useEffect(() => {
 }, [initialFileData, isMobile])
 
 useEffect(() => {
-  if (initialFileError) {
-    setError(initialFileError.message)
+  if (initialFileError && initialSelectedFile && initialErrorToastedRef.current !== initialSelectedFile) {
+    initialErrorToastedRef.current = initialSelectedFile
+    showToast.error(initialFileError.message, { duration: 5000 })
+    setSelectedFile(null)
   }
-}, [initialFileError])
+}, [initialFileError, initialSelectedFile])
 
   const loadFiles = async (path: string) => {
     setLoading(true)
@@ -95,7 +111,7 @@ useEffect(() => {
       }
       
       const data = await response.json()
-      setFiles(data)
+      setFiles(resolvedPath, data)
       setCurrentPath(resolvedPath)
       onDirectoryLoad?.({ workspaceRoot: data.workspaceRoot, currentPath: resolvedPath })
     } catch (err) {
@@ -128,7 +144,7 @@ useEffect(() => {
         setIsPreviewModalOpen(true)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load file')
+      showToast.error(err instanceof Error ? err.message : 'Failed to load file', { duration: 5000 })
       setSelectedFile(null)
     } finally {
       setLoading(false)
