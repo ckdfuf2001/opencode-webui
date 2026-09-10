@@ -50,6 +50,13 @@ export function SessionDetail() {
   const repoId = parseInt(id || "0");
   const { preferences, updateSettings } = useSettings();
   const messageContainerRef = useRef<HTMLDivElement>(null);
+  // 로딩 스피너 조기 리턴 때문에 effect 시점에 컨테이너가 없을 수 있어서
+  // 콜백 ref로 실제 노드를 추적하고 리스너 effect 의존성에 넣는다
+  const [containerNode, setContainerNode] = useState<HTMLDivElement | null>(null);
+  const setContainerRefs = useCallback((el: HTMLDivElement | null) => {
+    messageContainerRef.current = el;
+    setContainerNode(el);
+  }, []);
   // 입력창 오버레이 높이: 메시지 하단 패딩 + 이전보기 바 위치 계산용
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const [inputH, setInputH] = useState(120);
@@ -261,7 +268,7 @@ export function SessionDetail() {
   // + 끝에 닿은 채 더 밀어도(wheel) 페이지가 넘어가게 wheel도 처리한다.
   // (scroll만으로는 scrollTop=0/맨밑에서 더 밀 때 이벤트가 안 나서 멈춰 보임)
   useEffect(() => {
-    const c = messageContainerRef.current;
+    const c = containerNode;
     if (!c) return;
     let ticking = false;
     const onScroll = () => {
@@ -316,8 +323,9 @@ export function SessionDetail() {
       c.removeEventListener("scroll", onScroll);
       c.removeEventListener("wheel", onWheel);
     };
-    // 컨테이너가 key={sessionId}로 리마운트되므로 세션 변경 시 리스너 재부착
-  }, [shiftWindowUp, shiftWindowDown, sessionId]);
+    // 컨테이너가 key={sessionId}로 리마운트 + 로딩 후 마운트되므로
+    // 실제 노드 기준으로 리스너 재부착
+  }, [shiftWindowUp, shiftWindowDown, sessionId, containerNode]);
   const {
     data: dbStatuses,
     isError: statusError,
@@ -697,6 +705,7 @@ export function SessionDetail() {
 
   const { scrollToBottom, markDisengaged } = useAutoScroll({
     containerRef: messageContainerRef,
+    containerNode,
     messages,
     sessionId,
     enabled: effectiveAutoScroll,
@@ -1153,7 +1162,7 @@ if (results.length > 0) {
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
           <UntrackedSuggestionBanner />
-          <div key={sessionId} ref={messageContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain" style={{ paddingBottom: inputH + 20 }}>
+          <div key={sessionId} ref={setContainerRefs} className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain" style={{ paddingBottom: inputH + 20 }}>
             {/* 상단 고정 바: Load more + … 나란히 중앙 */}
             <div className="sticky top-0 z-10 flex items-center justify-center gap-2 py-2 bg-gradient-to-b from-background to-transparent">
               {hasMore && baseMessages && (

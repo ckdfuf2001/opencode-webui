@@ -12,6 +12,8 @@ interface Message {
 
 interface UseAutoScrollOptions<T extends Message> {
   containerRef?: React.RefObject<HTMLDivElement | null>
+  // 콜백 ref로 추적한 실제 노드 (로딩 후 마운트/리마운트 시 재부착용)
+  containerNode?: HTMLDivElement | null
   messages?: T[]
   sessionId?: string
   enabled?: boolean
@@ -26,6 +28,7 @@ interface UseAutoScrollReturn {
 
 export function useAutoScroll<T extends Message>({
   containerRef,
+  containerNode,
   messages,
   sessionId,
   enabled = true,
@@ -64,9 +67,8 @@ export function useAutoScroll<T extends Message>({
   }, [sessionId])
 
   useEffect(() => {
-    if (!containerRef?.current) return
-    
-    const container = containerRef.current
+    const container = containerNode ?? containerRef?.current
+    if (!container) return
     
     const markDisengaged = () => {
       userScrolledAtRef.current = Date.now()
@@ -132,14 +134,15 @@ export function useAutoScroll<T extends Message>({
       container.removeEventListener('keydown', handleKeyDown)
       container.removeEventListener('scroll', handleScroll)
     }
-    // 컨테이너가 key={sessionId}로 리마운트되므로 세션 변경 시 리스너 재부착
-  }, [containerRef, onScrollStateChange, sessionId])
+    // 컨테이너가 key={sessionId}로 리마운트 + 로딩 후 마운트되므로
+    // 실제 노드 기준으로 리스너 재부착
+  }, [containerRef, containerNode, onScrollStateChange, sessionId])
 
   // ResizeObserver + MutationObserver: streaming 중 카드가 길어질 때(allow 버튼 등)도 하단까지 따라가게 한다
   // permission/question 카드가 길어져도 버튼이 보이도록 모든 자식의 크기 변화를 감지한다
   useEffect(() => {
-    if (!containerRef?.current || !enabled) return
-    const container = containerRef.current
+    const container = containerNode ?? containerRef?.current
+    if (!container || !enabled) return
     let raf = 0
     const maybeScroll = () => {
       if (userDisengagedRef.current) return
@@ -166,7 +169,7 @@ export function useAutoScroll<T extends Message>({
       ro.disconnect()
       mo.disconnect()
     }
-  }, [containerRef, enabled, sessionId])
+  }, [containerRef, containerNode, enabled, sessionId])
 
   useEffect(() => {
     if (!containerRef?.current || !messages || !enabled) return
