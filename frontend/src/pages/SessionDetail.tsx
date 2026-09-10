@@ -1210,9 +1210,12 @@ if (results.length > 0) {
                 />
               </div>
             )}
+            {windowStart !== null && baseMessages && (
+              <div className="sticky z-10 h-12 pointer-events-none bg-gradient-to-t from-background to-transparent" style={{ bottom: inputH }} />
+            )}
           </div>
           {opcodeUrl && repoDirectory && (
-            <div ref={inputWrapRef} className={`absolute bottom-0 left-0 right-0 flex flex-col items-center pb-1 pointer-events-none ${windowStart !== null ? "pt-6 bg-gradient-to-t from-background/90 via-background/60 to-transparent backdrop-blur-sm" : ""}`}>
+            <div ref={inputWrapRef} className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-1 pointer-events-none">
               {windowStart !== null && baseMessages && (
                 <div className="flex justify-center gap-2 py-1 pointer-events-auto">
                   <button
