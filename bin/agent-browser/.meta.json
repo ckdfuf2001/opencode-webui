@@ -1,5 +1,5 @@
 {
-  "agentBrowserVersion": "0.34.0",
+  "agentBrowserVersion": "v0.34.0-namespace.2",
   "chromiumVersion": "151.0.7922.77",
   "bin": "bin/agent-browser/bin/agent-browser.exe",
   "executable": "bin/agent-browser/chromium/chrome-win64/chrome.exe",

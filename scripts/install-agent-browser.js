@@ -48,41 +48,62 @@ async function json(url) {
 }
 
 async function resolveBinarySource(pkg) {
-  // Prefer the fork's GitHub release first (asset names match the npm binaries),
-  // and fall back to the published npm package when no release asset exists.
+  // 1) fork latest에 플랫폼 raw 바이너리가 있으면 그대로 (직접 다운로드).
+  // 2) 없으면 핀된 네임스페이스 빌드 릴리즈에서 찾는다.
+  //    (latest가 proxy-v2.2.0처럼 zip만 있는 릴리즈일 수 있어서 latest 고정이 깨진다)
+  // 3) proxy 릴리즈의 플랫폼 zip (win32: agent-browser-win32-x64-0.33.2.zip).
+  // 4) 최후: npm upstream (포크 기능 없음).
   if (!process.env.AGENT_BROWSER_VERSION) {
     try {
-      const release = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/latest`)
-      const asset = release?.assets?.find((a) => a.name === pkg)
+      const latest = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/latest`)
+      const asset = latest?.assets?.find((a) => a.name === pkg)
       if (asset?.browser_download_url) {
-        return { version: release.tag_name, url: asset.browser_download_url, tarball: false, source: 'github' }
+        return { version: latest.tag_name, url: asset.browser_download_url, tarball: false, zip: false, source: 'github' }
       }
-      console.warn(
-        '[install-agent-browser] WARN: ' + AGENT_BROWSER_GITHUB_REPO + ' release ' + release?.tag_name +
-        ' has no asset for platform "' + platformKey + '" (' + pkg + ').',
-      )
-      console.warn(
-        '  Falling back to the npm package (upstream agent-browser), which does NOT include',
-      )
-      console.warn(
-        '  the namespace-mode changes. Build the fork on ' + process.platform + ' and add an ' +
-        pkg + ' asset to the release, or run the installer with AGENT_BROWSER_GITHUB_REPO pointing',
-      )
-      console.warn(
-        '  at a fork that ships a ' + pkg + ' asset. See the agent-browser fork README.',
-      )
     } catch {
-      console.warn(
-        '[install-agent-browser] WARN: no reachable release for ' + AGENT_BROWSER_GITHUB_REPO +
-        ', falling back to the npm package (upstream agent-browser, no namespace-mode changes).',
-      )
+      // 아래 폴백 계속
     }
+    const pinnedTag = process.env.AGENT_BROWSER_RELEASE_TAG || 'v0.34.0-namespace.2'
+    try {
+      const pinned = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/tags/${pinnedTag}`)
+      const asset = pinned?.assets?.find((a) => a.name === pkg)
+      if (asset?.browser_download_url) {
+        console.log('[install-agent-browser] using pinned release ' + pinnedTag)
+        return { version: pinned.tag_name, url: asset.browser_download_url, tarball: false, zip: false, source: 'github' }
+      }
+    } catch {
+      // 아래 폴백 계속
+    }
+    const proxyZips = { 'win32-x64': 'agent-browser-win32-x64-0.33.2.zip' }
+    const proxyZip = proxyZips[platformKey]
+    if (proxyZip) {
+      try {
+        const proxyRel = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/tags/proxy-v2.2.0`)
+        const asset = proxyRel?.assets?.find((a) => a.name === proxyZip)
+        if (asset?.browser_download_url) {
+          console.log('[install-agent-browser] using proxy release stock binary ' + proxyZip)
+          return { version: proxyRel.tag_name, url: asset.browser_download_url, tarball: false, zip: true, source: 'github' }
+        }
+      } catch {
+        // 아래 폴백 계속
+      }
+    }
+    console.warn(
+      '[install-agent-browser] WARN: no fork binary found for platform "' + platformKey + '".',
+    )
+    console.warn(
+      '  Falling back to the npm package (upstream agent-browser), which does NOT include',
+    )
+    console.warn(
+      '  the fork changes (session proxy / namespace mode).',
+    )
   }
   const pkgVersion = process.env.AGENT_BROWSER_VERSION || (await json('https://registry.npmjs.org/agent-browser/latest')).version
   return {
     version: pkgVersion,
     url: `https://registry.npmjs.org/agent-browser/-/agent-browser-${pkgVersion}.tgz`,
     tarball: true,
+    zip: false,
     source: 'npm',
   }
 }
@@ -179,6 +200,18 @@ async function installAgentBrowser() {
     const packagedBin = findFile(pkgExtract, [binDef.pkg])
     if (!packagedBin) fail('could not find ' + binDef.pkg + ' inside the npm package')
     copyFileSync(packagedBin, outBin)
+  } else if (source.zip) {
+    const zipPath = join(os.tmpdir(), 'agent-browser-' + source.version + '.zip')
+    await downloadTo(source.url, zipPath)
+
+    const zipExtract = join(os.tmpdir(), 'agent-browser-zip-' + source.version)
+    rmSync(zipExtract, { recursive: true, force: true })
+    mkdirSync(zipExtract, { recursive: true })
+    extractZip(zipPath, zipExtract)
+
+    const zippedBin = findFile(zipExtract, [binDef.bin])
+    if (!zippedBin) fail('could not find ' + binDef.bin + ' inside ' + source.url)
+    copyFileSync(zippedBin, outBin)
   } else {
     await downloadTo(source.url, outBin)
   }
