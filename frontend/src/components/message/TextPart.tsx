@@ -107,6 +107,28 @@ export function TextPart({ part }: TextPartProps) {
     li({ children }) {
       return <li className="text-foreground my-0.5 md:my-1">{children}</li>
     },
+    table({ children }) {
+      return (
+        <div className="my-3 overflow-x-auto rounded-lg border border-border">
+          <table className="w-full border-collapse text-sm">{children}</table>
+        </div>
+      )
+    },
+    thead({ children }) {
+      return <thead className="bg-muted/70">{children}</thead>
+    },
+    tbody({ children }) {
+      return <tbody className="[&>tr:nth-child(even)]:bg-muted/30">{children}</tbody>
+    },
+    tr({ children }) {
+      return <tr className="border-b border-border last:border-0">{children}</tr>
+    },
+    th({ children, style }) {
+      return <th style={style} className="border-r border-border px-3 py-2 text-left font-semibold text-foreground last:border-r-0">{children}</th>
+    },
+    td({ children, style }) {
+      return <td style={style} className="border-r border-border px-3 py-2 align-top text-foreground last:border-r-0">{children}</td>
+    },
     a({ children, href }) {
       const isSessionLink = typeof href === 'string' && href.startsWith('?session=')
       if (isSessionLink) {
