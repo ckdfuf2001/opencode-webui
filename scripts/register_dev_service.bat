@@ -5,6 +5,7 @@ REM ------------------------------------------------------------
 REM  Usage:
 REM    install / uninstall / start / stop 은 관리자 cmd에서 실행.
 REM    status 는 일반 cmd에서도 된다.
+REM    scripts\register_dev_service.bat install-auto  (= install + start=auto enforce)
 REM    scripts\register_dev_service.bat install [프로젝트경로]
 REM    scripts\register_dev_service.bat status [프로젝트경로]
 REM    scripts\register_dev_service.bat start [프로젝트경로]
@@ -38,6 +39,7 @@ set "VBS_FILE=%STARTUP_DIR%\%PROJ_NAME%-dev.vbs"
 
 if "%~1"=="" goto :usage
 if /i "%~1"=="install" goto :install
+if /i "%~1"=="install-auto" goto :install_auto
 if /i "%~1"=="uninstall" goto :uninstall
 if /i "%~1"=="start" goto :start
 if /i "%~1"=="stop" goto :stop
@@ -74,6 +76,14 @@ if errorlevel 1 (
   echo [SERVICE] ERROR: pywin32이 없음. pip install pywin32 후 재시도.
   exit /b 1
 )
+exit /b 0
+
+:install_auto
+call :install
+if %errorlevel% neq 0 exit /b 1
+sc.exe config "%SERVICE_NAME%" start= auto >nul 2>&1
+echo [SERVICE] start mode enforced: auto (service will start on boot)
+sc.exe qc "%SERVICE_NAME%" | findstr /i "START_TYPE" 
 exit /b 0
 
 :install
@@ -161,6 +171,7 @@ goto :wait_loop
 :usage
 echo Usage:
 echo   관리자 cmd: install / uninstall / start / stop, 일반 cmd: status
+echo   scripts\register_dev_service.bat install-auto  (auto-start enforced)
 echo   scripts\register_dev_service.bat install ["D:\path\to\project"]
 echo   scripts\register_dev_service.bat status ["D:\path\to\project"]
 echo   scripts\register_dev_service.bat start ["D:\path\to\project"]
