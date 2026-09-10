@@ -6,9 +6,14 @@ import { FilePreview } from './FilePreview'
 import { MobileFilePreviewModal } from './MobileFilePreviewModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { FolderOpen, Upload, RefreshCw } from 'lucide-react'
+import { FolderOpen, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { useMobile } from '@/hooks/useMobile'
@@ -108,18 +113,28 @@ interface FileBrowserProps {
 type FileSort = 'name-asc' | 'name-desc' | 'mtime-asc' | 'mtime-desc'
 
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
+  const items: { value: FileSort; label: string }[] = [
+    { value: 'name-asc', label: 'Name ascending' },
+    { value: 'name-desc', label: 'Name descending' },
+    { value: 'mtime-desc', label: 'Date newest' },
+    { value: 'mtime-asc', label: 'Date oldest' },
+  ]
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as FileSort)}>
-      <SelectTrigger className="h-8 w-[118px] text-xs shrink-0" title="정렬">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="name-asc">이름 오름차순</SelectItem>
-        <SelectItem value="name-desc">이름 내림차순</SelectItem>
-        <SelectItem value="mtime-asc">수정일 오래된순</SelectItem>
-        <SelectItem value="mtime-desc">수정일 최신순</SelectItem>
-      </SelectContent>
-    </Select>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Sort">
+          <ArrowUpDown className="w-4 h-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {items.map((item) => (
+          <DropdownMenuItem key={item.value} onClick={() => onChange(item.value)}>
+            <Check className={`w-4 h-4 mr-2 ${value === item.value ? 'opacity-100' : 'opacity-0'}`} />
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
