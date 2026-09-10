@@ -59,7 +59,6 @@ interface MessageThreadProps {
   onCancelEdit?: () => void
   highlightedMessageID?: string | null
   isLoading?: boolean
-  sessionID?: string
 }
 
 export const isMessageStreaming = (msg: MessageWithParts): boolean => {
