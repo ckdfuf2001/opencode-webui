@@ -95,6 +95,7 @@ export function SessionDetail() {
   const [globalUpload, setGlobalUpload] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
   const [autoScrollOverride, setAutoScrollOverride] = useState<boolean | null>(null);
+  const effectiveAutoScroll = autoScrollOverride ?? (preferences?.autoScroll ?? true);
   const splitContainerRef = useRef<HTMLDivElement>(null);
 
   const { data: repo, isLoading: repoLoading } = useQuery({
@@ -190,7 +191,8 @@ export function SessionDetail() {
   const baseMessagesRef = useRef(baseMessages);
   useEffect(() => { baseMessagesRef.current = baseMessages; }, [baseMessages]);
   // 길이 변화 처리: 대량 감소(컴팩트/트렁케이트) → 하단 고정,
-  // 내가 보낸 턴이면 하단 고정, 위를 보고 있었으면 화면 유지
+  // ON이면 새 메시지가 오면 히스토리 열람 중이라도 최신으로 복귀 + 핀.
+  // OFF면 내가 보낸 턴만 하단 고정, 나머지는 화면 유지.
   useEffect(() => {
     const len = baseMessages?.length ?? 0;
     const prev = prevMsgLenRef.current;
@@ -201,13 +203,18 @@ export function SessionDetail() {
       return;
     }
     if (len <= prev) return;
+    if (effectiveAutoScroll) {
+      pendingLatestPinRef.current = true;
+      setWindowStart(null);
+      return;
+    }
     const last = baseMessages?.[len - 1];
     const lastIsUser = !!last && (last.info.role === 'user' || last.info.id.startsWith('optimistic'));
     if (lastIsUser) {
       setWindowStart(null);
     }
-    // 어시스턴트 스트리밍 증가분은 시작점 유지 → 화면 고정 (아무것도 안 함)
-  }, [baseMessages?.length]);
+    // OFF + 어시스턴트 스트리밍 증가분은 시작점 유지 → 화면 고정 (아무것도 안 함)
+  }, [baseMessages?.length, effectiveAutoScroll]);
   // 짧은 메시지만 있으면 윈도우 자체가 무의미 → stale windowStart 정리
   useEffect(() => {
     if ((baseMessages?.length ?? 0) <= WINDOW_SIZE && windowStart !== null) {
@@ -386,7 +393,6 @@ export function SessionDetail() {
   useEffect(() => {
     if (sessionId && isRecentlyAborted(sessionId)) setHiddenAfterID(null)
   }, [isStreaming, sessionId])
-  const effectiveAutoScroll = autoScrollOverride ?? (preferences?.autoScroll ?? true);
   const { data: session, isLoading: sessionLoading } = useSession(opcodeUrl, sessionId, repoDirectory);
   useReconcileOrphanedStreams(opcodeUrl, repoDirectory);
   const abortSession = useAbortSession(opcodeUrl, repoDirectory);

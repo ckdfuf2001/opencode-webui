@@ -45,6 +45,9 @@ export function useAutoScroll<T extends Message>({
   const pointerStartYRef = useRef<number | null>(null)
   const nodeRef = useRef<HTMLDivElement | null>(null)
   nodeRef.current = containerNode ?? containerRef?.current ?? null
+  // 리스너에서 최신 enabled를 읽기 위한 미러 (ON이면 해제 금지, OFF일 때만 해제)
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
 
   const scrollToBottom = useCallback(() => {
     const el = containerRef?.current ?? nodeRef.current
@@ -78,6 +81,8 @@ export function useAutoScroll<T extends Message>({
     if (!container) return
     
     const markDisengaged = () => {
+      // ON이면 해제 금지: 새 내용이 오면 항상 따라간다. 해제는 OFF일 때만.
+      if (enabledRef.current) return
       userScrolledAtRef.current = Date.now()
       userDisengagedRef.current = true
       onScrollStateChange?.(true)
@@ -122,12 +127,18 @@ export function useAutoScroll<T extends Message>({
       }
     }
 
-    // 추종 여부는 제스처가 아니라 위치로 판단한다 — 휠/드래그/키보드/터치
-    // 어떤 수단으로든 아래를 벗어나면 추종 해제, 맨 아래면 추종 재개.
-    // (기존 제스처 감지로는 스크롤바 드래그·스페이스·터치가 빠져 다음 폴링에 끌려내려갔다)
-    // 히스테리시스로 "애매하게 위"에서는 추종을 유지한다: NEAR 이하면 복귀,
+    // ON이면 위치와 무관하게 항상 추종(해제 금지). OFF일 때만 위치로 판단한다.
+    // OFF + 히스테리시스로 "애매하게 위"에서는 유지한다: NEAR 이하면 복귀,
     // FAR을 넘어야 해제, 사이는 현상 유지.
     const handleScroll = () => {
+      if (enabledRef.current) {
+        if (userDisengagedRef.current) {
+          userDisengagedRef.current = false
+          onScrollStateChange?.(false)
+        }
+        userScrolledAtRef.current = 0
+        return
+      }
       const distToBottom = container.scrollHeight - (container.scrollTop + container.clientHeight)
       if (distToBottom <= NEAR_BOTTOM_PX) {
         if (userDisengagedRef.current) {
