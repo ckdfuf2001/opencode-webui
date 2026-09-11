@@ -202,6 +202,9 @@ const warmUpInFlight = new Map<string, Promise<boolean>>()
 // 병렬 웜업은 Chrome 동시 기동(10060/OOM)만 부른다. 진행 중인 웜업이
 // 있으면 새 세션도 거기에 붙는다.
 let globalWarmUpInFlight: Promise<boolean> | null = null
+// 좀비 데몬 판정용: warm=false 상태에서 웜업 연속 실패 횟수.
+// idle(웜업 시도 없음)은 카운트하지 않으므로, 멀쩡한 탭을 죽이지 않는다.
+let consecutiveWarmFailures = 0
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
@@ -552,7 +555,10 @@ export function listAgentBrowserDaemons(): AgentBrowserDaemonInfo[] {
  *    (수정 전 바이너리 시절의 세션별 데몬 잔해 수습).
  *    정리는 taskkill /T 로 크롬 트리까지 함께 죽인다.
  * 3. 살아있는 데몬이 하나도 없으면 기존 warm-up으로 1개를 깨운다.
- * Chrome을 선제 기동하지는 않는다: recover는 다음 ensure 호출에 맡긴다 (lazy).
+ * 4. 데몬은 살아있는데 브라우저가 안 뜬 채(warm=false) 웜업이 3틱 연속 실패하면
+ *    좀비로 보고 네임스페이스 데몬을 죽이고 사이드카를 지운다. 다음 틱이 깨끗하게
+ *    respawn한다. idle(웜업 시도 없음)은 카운트하지 않으므로 사용 중인 탭은 안전.
+ * Chrome 선제 기동은 첫 사용 전에 미리 해둔다: recover는 lazy + 주기 웜업 병행.
  */
 export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> {
   const empty: SupervisionResult = { daemons: [], cleanedStale: [], culled: [], warmed: false }
@@ -598,14 +604,34 @@ export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> 
     const stillHealthy = (await refreshLiveness(daemons, culled)).filter((d) => d.alive && d.portOpen)
     if (stillHealthy.length === 0) {
       warmed = await warmUpAgentBrowserDaemon().catch(() => false)
+      consecutiveWarmFailures = warmed ? 0 : consecutiveWarmFailures + 1
     }
   } else {
     // pid+포트는 살아있는데 브라우저가 한 번도 안 뜬 좀비 데몬(구버전 잔해,
-    // 콜드킬 반쪽 Chrome 등)은 기존 검사에 "정상"으로 보인다. 죽이지는 않고
-    // 웜업만 걸어본다 — 전역 뮤텍스라 이미 도는 웜업에 그냥 붙는다.
+    // 콜드킬 반쪽 Chrome 등)은 기존 검사에 "정상"으로 보인다. 먼저 웜업만
+    // 걸어본다 — 전역 뮤텍스라 이미 도는 웜업에 그냥 붙는다.
+    // 웜업이 3틱 연속 실패하면(아무것도 안 쓰는 idle이 아니라 실제로 아픈 것)
+    // 네임스페이스 데몬을 죽이고 사이드카를 지운다. 다음 틱이 깨끗하게 respawn.
     try {
       if (!getAgentBrowserDaemonStatus().warm) {
         warmed = await warmUpAgentBrowserDaemon().catch(() => false)
+        if (warmed) {
+          consecutiveWarmFailures = 0
+        } else if ((consecutiveWarmFailures += 1) >= 3) {
+          for (const daemon of namespaced) {
+            if (daemon.pid !== null) {
+              killProcessTree(daemon.pid)
+              culled.push(daemon.pid)
+            }
+            deleteDaemonSidecars(daemon.dir, daemon.key)
+          }
+          consecutiveWarmFailures = 0
+          logger.warn(
+            `Agent-browser daemon never launched a browser (${AGENT_BROWSER_NAMESPACE}); culled zombie daemon, will respawn next tick`
+          )
+        }
+      } else {
+        consecutiveWarmFailures = 0
       }
     } catch {
       // 상태 조회 실패는 다음 틱으로
