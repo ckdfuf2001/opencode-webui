@@ -321,7 +321,6 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           if (textareaRef.current) {
             textareaRef.current.style.height = 'auto'
           }
-          showToast.info(`앞선 대기열 ${pending.length}개 뒤에 추가됨 (순서 유지)`)
         }
         return
       }
