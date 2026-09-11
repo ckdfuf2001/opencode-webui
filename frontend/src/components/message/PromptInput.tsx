@@ -39,6 +39,32 @@ type SessionWithModel = components['schemas']['Session'] & {
   }
 }
 
+// 저장된 단축키 문자열('Ctrl+M' 등)과 키보드 이벤트 매칭.
+// e.code(KeyM 등)도 함께 봐서 한글 자판·IME 상태에서도 글자 단축키가 먹게 한다.
+function matchStoredShortcut(
+  e: { ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; key: string; code: string },
+  stored?: string,
+): boolean {
+  if (!stored) return false
+  const parts = stored.split('+').map((p) => p.trim().toLowerCase()).filter(Boolean)
+  if (parts.length === 0) return false
+  const wantCtrl = parts.includes('ctrl')
+  const wantMeta = parts.includes('cmd') || parts.includes('meta') || parts.includes('win')
+  const wantAlt = parts.includes('alt')
+  const wantShift = parts.includes('shift')
+  const keyParts = parts.filter((p) => !['ctrl', 'cmd', 'meta', 'win', 'alt', 'shift'].includes(p))
+  if (keyParts.length !== 1) return false
+  let wantKey = keyParts[0]!
+  if (wantKey === 'esc') wantKey = 'escape'
+  if (wantKey === 'return') wantKey = 'enter'
+  if (wantKey === 'space') wantKey = ' '
+  if (e.ctrlKey !== wantCtrl || e.metaKey !== wantMeta || e.altKey !== wantAlt || e.shiftKey !== wantShift) return false
+  if (e.key.toLowerCase() === wantKey) return true
+  const codeMatch = e.code.match(/^(?:Key|Digit)(.+)$/)
+  if (codeMatch && codeMatch[1]!.toLowerCase() === wantKey) return true
+  return false
+}
+
 interface PromptInputProps {
   opcodeUrl: string
   directory?: string
@@ -534,6 +560,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 모델 변경 단축키는 입력창에서 직접 처리한다 (전역 매칭을 타지 않아 확실하게 동작).
+    // preventDefault로 전역 핸들러 중복 실행도 막는다.
+    if (matchStoredShortcut(e, selectModelKs)) {
+      e.preventDefault()
+      onShowModelsDialog?.()
+      return
+    }
     // 생성 중 Esc는 입력 삭제가 아니라 중단이다 (전역 abort 단축키와 동일 동작)
     if (e.key === 'Escape' && showStop && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault()
