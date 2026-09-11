@@ -24,16 +24,20 @@ export function SessionMoreMenu({ onExport, onOpenJump, triggerClassName }: Sess
       <DropdownMenuTrigger asChild>
         <button
           className={triggerClassName ?? DEFAULT_TRIGGER}
-          title="More actions (download / jump / search)"
+          title="More actions (search / jump / download)"
         >
           <span className="inline-flex items-center gap-1">
-            <Download className="w-4 h-4" />
-            <span className="text-muted-foreground/60 text-xs leading-none select-none">/</span>
             <Search className="w-4 h-4" />
+            <span className="text-muted-foreground/60 text-xs leading-none select-none">/</span>
+            <Download className="w-4 h-4" />
           </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={onOpenJump} className="text-xs cursor-pointer">
+          <ListOrdered className="w-3.5 h-3.5 mr-2" /> Search / Go to message…
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-xs text-muted-foreground font-medium">Download all</DropdownMenuLabel>
         <DropdownMenuItem onClick={() => onExport('md')} className="text-xs cursor-pointer">
           <FileText className="w-3.5 h-3.5 mr-2" /> Markdown (.md)
@@ -46,10 +50,6 @@ export function SessionMoreMenu({ onExport, onOpenJump, triggerClassName }: Sess
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onExport('pdf')} className="text-xs cursor-pointer">
           <Printer className="w-3.5 h-3.5 mr-2" /> PDF (print)
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={onOpenJump} className="text-xs cursor-pointer">
-          <ListOrdered className="w-3.5 h-3.5 mr-2" /> Search / Go to message…
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
