@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Check } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -108,10 +108,15 @@ export function QuestionRequestCard({
   const [selections, setSelections] = useState<QuestionSelection[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [action, setAction] = useState<'reply' | 'reject' | null>(null)
+  const [page, setPage] = useState(0)
 
+  const total = question.questions.length
+  // 질문이 바뀌면(다른 요청) 첫 페이지부터 보여준다
+  const questionId = question.id
   useEffect(() => {
     setSelections(question.questions.map(() => ({ selected: [], custom: '' })))
-  }, [question])
+    setPage(0)
+  }, [questionId])
 
   const handleReply = async () => {
     const answers = question.questions.map((_q, i) => {
@@ -163,40 +168,110 @@ export function QuestionRequestCard({
     }
   }
 
+  const safePage = Math.min(page, Math.max(total - 1, 0))
+  const current = question.questions[safePage]
+  const allAnswered = question.questions.every((_q, i) => {
+    const sel = selections[i] || { selected: [], custom: '' }
+    return sel.selected.length > 0 || sel.custom.trim().length > 0
+  })
+  const isFirst = safePage === 0
+  const isLast = safePage === total - 1
+
   return (
     <div className="w-full rounded-lg p-1.5 bg-card/60 border border-primary/30 animate-pulse-subtle">
       <div className="mb-1 flex items-center gap-2">
         <span className="text-xs font-medium text-primary">Question</span>
+        {total > 1 && (
+          <span className="inline-flex items-center gap-0.5 text-xs text-muted-foreground">
+            <span>(</span>
+            <button
+              type="button"
+              aria-label="Previous question"
+              disabled={isFirst || isLoading}
+              onClick={() => setPage(safePage - 1)}
+              className="rounded p-0.5 hover:bg-accent disabled:pointer-events-none disabled:opacity-30"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <span className="font-mono tabular-nums">{safePage + 1}/{total}</span>
+            <button
+              type="button"
+              aria-label="Next question"
+              disabled={isLast || isLoading}
+              onClick={() => setPage(safePage + 1)}
+              className="rounded p-0.5 hover:bg-accent disabled:pointer-events-none disabled:opacity-30"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+            <span>)</span>
+          </span>
+        )}
       </div>
-      <div className="space-y-4">
-        {question.questions.map((q, i) => (
-          <QuestionPrompt
-            key={i}
-            q={q}
-            selection={selections[i] || { selected: [], custom: '' }}
-            onSelectionChange={(next) =>
-              setSelections(prev => prev.map((s, idx) => (idx === i ? next : s)))
-            }
-          />
-        ))}
-      </div>
+      {current && (
+        <QuestionPrompt
+          q={current}
+          selection={selections[safePage] || { selected: [], custom: '' }}
+          onSelectionChange={(next) =>
+            setSelections(prev => prev.map((s, idx) => (idx === safePage ? next : s)))
+          }
+        />
+      )}
       <div className="mt-3 flex justify-end gap-2">
-        <Button
-          variant="outline"
-          onClick={handleReject}
-          disabled={isLoading}
-          className={cn(action === 'reject' && "opacity-70")}
-        >
-          {action === 'reject' ? 'Rejecting...' : 'Dismiss'}
-        </Button>
-        <Button
-          variant="default"
-          onClick={handleReply}
-          disabled={isLoading}
-          className={cn(action === 'reply' && "opacity-70")}
-        >
-          {action === 'reply' ? 'Submitting...' : 'Submit'}
-        </Button>
+        {total <= 1 || isLast ? (
+          <>
+            <Button
+              variant="outline"
+              onClick={handleReject}
+              disabled={isLoading}
+              className={cn(action === 'reject' && "opacity-70")}
+            >
+              {action === 'reject' ? 'Rejecting...' : 'Dismiss'}
+            </Button>
+            <Button
+              variant="default"
+              onClick={handleReply}
+              disabled={isLoading || !allAnswered}
+              className={cn(action === 'reply' && "opacity-70")}
+            >
+              {action === 'reply' ? 'Submitting...' : 'Submit'}
+            </Button>
+          </>
+        ) : isFirst ? (
+          <>
+            <Button
+              variant="outline"
+              onClick={handleReject}
+              disabled={isLoading}
+              className={cn(action === 'reject' && "opacity-70")}
+            >
+              {action === 'reject' ? 'Rejecting...' : 'Dismiss'}
+            </Button>
+            <Button
+              variant="default"
+              onClick={() => setPage(safePage + 1)}
+              disabled={isLoading}
+            >
+              Next
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              variant="outline"
+              onClick={() => setPage(safePage - 1)}
+              disabled={isLoading}
+            >
+              Prev
+            </Button>
+            <Button
+              variant="default"
+              onClick={() => setPage(safePage + 1)}
+              disabled={isLoading}
+            >
+              Next
+            </Button>
+          </>
+        )}
       </div>
     </div>
   )
