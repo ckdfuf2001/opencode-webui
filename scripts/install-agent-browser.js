@@ -12,9 +12,26 @@ const metaFile = join(outDir, '.meta.json')
 
 const AGENT_BROWSER_GITHUB_REPO = process.env.AGENT_BROWSER_GITHUB_REPO || 'ckdfuf2001/agent-browser'
 
-// 이 레포가 기대하는 포크 릴리즈 태그. 로컬 meta가 이것과 다르면
-// (오래된 바이너리) setup-dev/portable 빌드 시 자동 갱신된다.
-// 수동 업데이트 후에는 여기도 함께 올려야 setup-dev가 다운그레이드하지 않는다.
+// 원본(upstream) 우선: npm/MCP용 기본 바이너리는 vercel-labs 릴리즈에서 받는다.
+// 포크 에셋은 AGENT_BROWSER_VERSION 지정 또는 upstream 실패 시 폴백으로만 쓴다.
+const UPSTREAM_REPO = process.env.AGENT_BROWSER_UPSTREAM_REPO || 'vercel-labs/agent-browser'
+const UPSTREAM_ASSET_NAMES = {
+  'win32-x64': ['agent-browser-win32-x64.exe'],
+  'darwin-x64': ['agent-browser-darwin-x64'],
+  'darwin-arm64': ['agent-browser-darwin-arm64'],
+  'linux-x64': ['agent-browser-linux-x64'],
+  'linux-arm64': ['agent-browser-linux-arm64'],
+}
+
+async function resolveUpstreamLatest() {
+  const names = UPSTREAM_ASSET_NAMES[platformKey] || []
+  const latest = await json(`https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest`)
+  const asset = (latest?.assets || []).find((a) => names.includes(a.name) && a.browser_download_url)
+  if (!asset) throw new Error('no upstream asset for platform "' + platformKey + '"')
+  return { version: latest.tag_name, url: asset.browser_download_url }
+}
+
+// (구 포크 핀: AGENT_BROWSER_RELEASE_TAG 지정 시 fork 폴백에서 사용)
 const PINNED_TAG = process.env.AGENT_BROWSER_RELEASE_TAG || 'v0.35'
 
 const platformKey = `${os.platform()}-${os.arch()}`
@@ -63,12 +80,19 @@ async function json(url) {
 }
 
 async function resolveBinarySource(pkg) {
-  // 1) fork latest에 플랫폼 raw 바이너리가 있으면 그대로 (직접 다운로드).
-  //    v0.35처럼 generic 이름(agent-browser.exe)만 있는 릴리즈도 후보로 찾는다.
-  // 2) 없으면 핀된 네임스페이스 빌드 릴리즈에서 찾는다.
-  //    (latest가 proxy-v2.2.0처럼 zip만 있는 릴리즈일 수 있어서 latest 고정이 깨진다)
-  // 3) proxy 릴리즈의 플랫폼 zip (win32: agent-browser-win32-x64-0.33.2.zip).
-  // 4) 최후: npm upstream (포크 기능 없음).
+  // 1) 원본 upstream latest (기본). 포크의 namespace 모드는 upstream에 없음에
+  //    유의 — 우리 프록시는 세션별 데몬(upstream 모델)으로 동작한다.
+  // 2) 없으면 핀된 포크 릴리즈에서 찾는다.
+  // 3) 최후: npm upstream (포크 기능 없음).
+  if (!process.env.AGENT_BROWSER_VERSION) {
+    try {
+      const up = await resolveUpstreamLatest()
+      console.log('[install-agent-browser] using upstream ' + up.version)
+      return { version: up.version, url: up.url, tarball: false, zip: false, source: 'upstream' }
+    } catch (e) {
+      console.warn('[install-agent-browser] WARN: upstream resolve failed (' + ((e && e.message) || e) + '), trying fork fallback')
+    }
+  }
   const candidates = AGENT_BROWSER_ASSET_NAMES[platformKey] || [pkg]
   const findAsset = (release) => {
     if (!release?.assets) return null
@@ -208,15 +232,34 @@ async function installAgentBrowser() {
     }
   }
 
-  if (!force && existsSync(outBin) && meta?.executable && existsSync(join(root, meta.executable))) {
+  const present =
+    !force && existsSync(outBin) && meta?.executable && existsSync(join(root, meta.executable))
+
+  if (present) {
     if (!installedBinaryRuns()) {
-      console.log('[install-agent-browser] present binary does not run, reinstalling ' + PINNED_TAG + '...')
-    } else if (!meta.agentBrowserVersion || meta.agentBrowserVersion !== PINNED_TAG) {
-      console.log('[install-agent-browser] outdated (' + (meta.agentBrowserVersion || 'unknown') + ' != pinned ' + PINNED_TAG + '), updating...')
-    } else {
+      console.log('[install-agent-browser] present binary does not run, reinstalling...')
+    } else if (!process.argv.includes('--auto-upgrade')) {
       console.log('[install-agent-browser] agent-browser already present (' + binaryLabel(meta.agentBrowserVersion) + (meta.binaryVersion ? ' / binary ' + meta.binaryVersion : '') + ').')
       console.log('  Update with: npm run agent-browser:update')
       return
+    } else {
+      // --auto-upgrade (setup-dev 기동 단계): latest와 다르면 재설치.
+      // 네트워크 실패면 경고만 하고 기존 유지 (fail-open).
+      let want = null
+      try {
+        want = process.env.AGENT_BROWSER_VERSION
+          ? { version: process.env.AGENT_BROWSER_VERSION }
+          : await resolveUpstreamLatest()
+      } catch (e) {
+        console.warn('[install-agent-browser] WARN: auto-upgrade check failed (' + ((e && e.message) || e) + '), keeping present install')
+        return
+      }
+      const wantTag = want.version.startsWith('v') ? want.version : 'v' + want.version
+      if (meta.agentBrowserVersion === wantTag && meta.source === 'upstream') {
+        console.log('[install-agent-browser] already at latest (' + wantTag + ').')
+        return
+      }
+      console.log('[install-agent-browser] updating ' + (meta.agentBrowserVersion || 'unknown') + ' -> ' + wantTag + '...')
     }
   }
 
@@ -274,8 +317,8 @@ async function installAgentBrowser() {
   const chromeExe = findFile(chromeDir, CHROME_EXE_NAMES[process.platform])
   if (!chromeExe) fail('could not locate the Chromium executable')
 
-  // --version은 업스트림 버전(예: v0.35 포크 = 내부 0.34.0 기반)을 보여준다.
-  // 포크 태그와 구분되도록 둘 다 기록한다.
+  // --version은 내부 버전(포크 태그와 다를 수 있음)을 보여준다.
+  // 릴리즈 태그와 구분되도록 둘 다 + 출처 기록한다.
   let installedBinaryVersion = null
   try {
     const out = execFileSync(outBin, ['--version'], { encoding: 'utf8', timeout: 15000 })
@@ -291,6 +334,7 @@ async function installAgentBrowser() {
       {
         agentBrowserVersion: binaryVersion,
         binaryVersion: installedBinaryVersion,
+        source: source.source || 'unknown',
         chromiumVersion,
         bin: rel(outBin),
         executable: rel(chromeExe),

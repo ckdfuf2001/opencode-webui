@@ -51,25 +51,20 @@
   `backend/src/services/default-mcp.ts` (`mergeDefaultMcpEntries`): missing
   entries are added, and existing entries are **repaired** — command (doc-reader
   must point at `backend/scripts/doc_reader_mcp.py`, never a relative
-  `..\backend\...` path that breaks in per-repo sessions; agent-browser must
-  point at the session proxy, never a stale direct `mcp --namespace` entry),
-  env vars (proxy mode: `AGENT_BROWSER_NAMESPACE=opencode` +
+   `..\backend\...` path that breaks in per-repo sessions; agent-browser must
+   point at the stock native `mcp` entry `[bin, 'mcp', '--namespace', 'opencode']`),
+  env vars ( `AGENT_BROWSER_NAMESPACE=opencode` +
   `AGENT_BROWSER_IDLE_TIMEOUT_MS=900000` + `SESSION_TTL_MS/SESSION_MAX/SESSION_SWEEP_MS`;
   stale direct-mode keys `AGENT_BROWSER_SESSION`/`AGENT_BROWSER_AUTO_SESSION`
   are removed). The user's `enabled` choice is
   PRESERVED (never force `enabled: true`) so the MCP Manager toggle works. Do
   not hand-edit MCPs in `workspace/.config/opencode/opencode.json`; use the app
   UI.
-- **Agent-browser MCP runs through the session proxy by default**: the
-  `agent-browser` MCP entry spawns `backend/scripts/agent-browser-proxy/mcp-server.mjs`
-  (vendored from `ckdfuf2001/agent-browser` `proxy-v2.2.0` + opencode-webui 2.3.0
-  addition; compiled to
-  `bin/agent-browser-proxy/agent-browser-proxy.exe` at package time, built by
-  `scripts/build-agent-browser-proxy.ps1`). One shared daemon (namespace
-  `opencode`), one browser per session. Every `agent_browser_*` call MUST pass
-  an explicit `session` (first mint via `agent_browser_session_ensure`);
-  `default` is rejected by the proxy. If the proxy is unavailable the backend
-  falls back to the direct binary (`agent-browser mcp --namespace opencode`).
+- **Agent-browser MCP is the stock native `mcp`** (upstream
+  `vercel-labs/agent-browser`, vendored binary + Chromium in `bin/`): the
+  `agent-browser` MCP entry spawns `[bin, 'mcp', '--namespace', 'opencode']`.
+  No session proxy — every `agent_browser_*` call passes `namespace` + `session`
+  directly and each session owns its daemon+browser (upstream model).
   Opencode does NOT forward the `env` field of an MCP entry to the spawned
   child (verified 2026-08), so all behavior must come from CLI args, not env —
   EXCEPT the daemon identity env below, which the backend injects into the
@@ -85,24 +80,22 @@
 - **Warm-up matches the real MCP spawn**: on a cold start the daemon inherits the
   MCP server's stdout pipe and `tools/call` hangs until the browser launches → the
   "first open fails" / `MCP error -32001: Request timed out` (~60s) symptom.
-  agent-browser v0.35 fixes this class in-binary (temp-file MCP output, reuse
+  agent-browser 0.37.1 fixes this class in-binary (temp-file MCP output, reuse
   live daemon PID unconditionally), but the backend still pre-warms so the
-  first real `open` is fast. Namespace mode shares ONE daemon + ONE Chrome
-  across every session (per-session isolation is a lazy CDP BrowserContext),
-  so the backend warms the shared daemon ONCE via `warmUpAllAgentBrowserDaemons()`
-  (after opencode server start + every 60s) — never per-repo in parallel:
-  parallel warmups contend on first launch and leak a Chrome tree per daemon
-  restart (dozens of `chrome for testing` processes → OOM). In proxy mode the
-  warm-up spawns the proxy and runs `agent_browser_session_ensure` (reuse) +
-  `agent_browser_open about:blank` on a throwaway `warmup-opencode` session to force
-  the browser launch, then kills the MCP child (the background daemon survives).
+  first real `open` is fast. Each session owns its daemon+browser (upstream model, sidecars keyed by session),
+  so the backend warms ONCE via warmUpAllAgentBrowserDaemons()
+  (after opencode server start) - never per-repo in parallel:
+  parallel warmups contend on first launch and leak Chrome trees
+  (dozens of chrome for testing processes = OOM). The warm-up spawns
+  a throwaway native MCP child and runs
+  agent_browser_open about:blank on a throwaway warmup-opencode session to force
+  the browser launch, then kills the MCP child (the session daemon survives).
   Same-key calls attach to the in-flight warmup, so the 60s tick never piles on.
-  The 60s tick runs `superviseAgentBrowserDaemon()`: it deletes sidecars of
+  The 60s tick runs superviseAgentBrowserDaemon(): it deletes sidecars of
   dead pids (zombie port 10060 방지) and of deaf-but-alive daemons, warms when
   no daemon is alive (5-min retry backoff on failure), and NEVER kills a live
-  process — kill wars were the flicker/10061 source. Proxy-side, every sweep
-  verifies the pinned daemon port and drops stale sidecars so the next call
-  respawns lazily instead of 10060ing. A browser is pre-warmed (startup + when
+  process - kill wars were the flicker/10061 source. Stale session targets
+  self-heal on next call instead of 10060ing. A browser is pre-warmed (startup + when
   cold), never force-launched per call.
 - Socket dir is install-scoped (`.agent-browser-home` under the install root,
   `AGENT_BROWSER_SOCKET_DIR`): portable/other installs never share the daemon. Live daemon list is at

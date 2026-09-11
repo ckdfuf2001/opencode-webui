@@ -109,7 +109,7 @@ bun --version >/dev/null 2>&1
 
 echo
 echo "[7/7] Installing agent-browser..."
-node scripts/install-agent-browser.js || echo "  [.] agent-browser setup skipped - run: npm run agent-browser:install"
+node scripts/install-agent-browser.js --auto-upgrade || echo "  [.] agent-browser setup skipped - run: npm run agent-browser:install"
 
 echo
 echo "=========================================="

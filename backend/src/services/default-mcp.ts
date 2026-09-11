@@ -15,9 +15,6 @@ const AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
 // 프록시 모드 타임아웃 (arch-to-be: 데몬 15분, 세션 TTL 10분)
 const PROXY_IDLE_TIMEOUT_MS = '900000'
 const PROXY_IDLE_TIMEOUT = '15m'
-const PROXY_SESSION_TTL_MS = '600000'
-const PROXY_SESSION_MAX = '16'
-const PROXY_SESSION_SWEEP_MS = '60000'
 
 function buildDocReaderMcp(): Record<string, unknown> {
   const reader = resolveDocReaderCommand()
@@ -80,12 +77,7 @@ export function agentBrowserEnv(): Record<string, string> {
   env.AGENT_BROWSER_NAMESPACE = AGENT_BROWSER_NAMESPACE
   env.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
   env.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
-  // opencode가 띄우는 프록시 자식도 같은 세션 TTL/상한을 쓰게 서버 env로 전파.
-  // 없으면 프록시 기본값이 적용돼 백엔드 기대와 어긋난다.
-  env.SESSION_TTL_MS = PROXY_SESSION_TTL_MS
-  env.SESSION_MAX = PROXY_SESSION_MAX
-  env.SESSION_SWEEP_MS = PROXY_SESSION_SWEEP_MS
-  // opencode 자식(프록시→CLI→데몬→Chrome) 전체가 corp 프록시를 우회하게.
+  // opencode 자식(native MCP→CLI→데몬→Chrome) 전체가 corp 프록시를 우회하게.
   // 서버 env 상속이 유일한 통로라 여기서 박는다.
   env.NO_PROXY = withLoopbackBypass(process.env.NO_PROXY)
   env.no_proxy = withLoopbackBypass(process.env.no_proxy)
@@ -93,7 +85,6 @@ export function agentBrowserEnv(): Record<string, string> {
   const scoped = getScopedSocketDir()
   if (scoped) {
     env.AGENT_BROWSER_SOCKET_DIR = scoped
-    env.SESSION_STORE = path.join(scoped, 'proxy-sessions.json')
   }
   return env
 }
@@ -158,39 +149,16 @@ function resolveAgentBrowser(): AgentBrowserInfo | null {
 
 function buildAgentBrowserMcp(
   namespace: string = AGENT_BROWSER_NAMESPACE,
-  session: string = namespace,
 ): Record<string, unknown> {
+  // 원본 native MCP 직접 등록. 세션은 호출마다 전달한다 (서버 env 세션 고정 금지).
   const info = resolveAgentBrowser()
   if (!info) return {}
-  const proxy = resolveAgentBrowserProxy(info)
-  if (proxy) {
-    const env: Record<string, string> = {}
-    if (info.executablePath && existsSync(info.executablePath)) {
-      env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
-    }
-    env.AGENT_BROWSER_NAMESPACE = namespace
-    env.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
-    env.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
-    env.SESSION_TTL_MS = PROXY_SESSION_TTL_MS
-    env.SESSION_MAX = PROXY_SESSION_MAX
-    env.SESSION_SWEEP_MS = PROXY_SESSION_SWEEP_MS
-    return {
-      'agent-browser': {
-        type: 'local',
-        enabled: true,
-        command: proxy.command,
-        env,
-      },
-    }
-  }
   const env: Record<string, string> = {}
   if (info.executablePath && existsSync(info.executablePath)) {
     env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
   }
   env.AGENT_BROWSER_NAMESPACE = namespace
-  env.AGENT_BROWSER_SESSION = session
   env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
-  env.AGENT_BROWSER_AUTO_SESSION = '1'
   return {
     'agent-browser': {
       type: 'local',
@@ -199,36 +167,6 @@ function buildAgentBrowserMcp(
       env,
     },
   }
-}
-
-// Session Proxy (mcp-server.mjs, arch-to-be) 해결:
-// 1. 패키징된 컴파일 exe: <cwd>/bin/agent-browser-proxy/agent-browser-proxy.exe
-// 2. dev 폴백: node + backend/scripts/agent-browser-proxy/mcp-server.mjs
-// 둘 다 없으면 null → 기존 바이너리 직결(direct)로 폴백한다.
-function resolveAgentBrowserProxy(info: AgentBrowserInfo): { command: string[] } | null {
-  const proxyExe = path.join(process.cwd(), 'bin', 'agent-browser-proxy', 'agent-browser-proxy.exe')
-  if (existsSync(proxyExe)) {
-    return { command: [proxyExe, '--cli', info.binPath, '--namespace', AGENT_BROWSER_NAMESPACE] }
-  }
-  const proxyMjs = path.join(process.cwd(), 'backend', 'scripts', 'agent-browser-proxy', 'mcp-server.mjs')
-  if (existsSync(proxyMjs) && hasNodeRuntime()) {
-    return { command: ['node', proxyMjs, '--cli', info.binPath, '--namespace', AGENT_BROWSER_NAMESPACE] }
-  }
-  return null
-}
-
-function hasNodeRuntime(): boolean {
-  try {
-    execFileSync('node', ['--version'], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] })
-    return true
-  } catch {
-    return false
-  }
-}
-
-export function agentBrowserProxyMode(): boolean {
-  const info = resolveAgentBrowser()
-  return !!info && resolveAgentBrowserProxy(info) !== null
 }
 
 // 레포별 opencode.json의 agent-browser 항목 제거.
@@ -346,19 +284,11 @@ async function doWarmUp(
   if (info.executablePath && existsSync(info.executablePath)) {
     env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
   }
-  const proxy = resolveAgentBrowserProxy(info)
   let command: string[]
-  if (proxy) {
-    // 프록시 경유 warmup: 같은 데몬(핀 네임스페이스)을 깨운다.
-    // SESSION 고정은 프록시 설계상 금지이므로 env에 넣지 않는다.
-    command = proxy.command
-  } else {
-    env.AGENT_BROWSER_NAMESPACE = namespace
-    env.AGENT_BROWSER_SESSION = sessionName
-    env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
-    env.AGENT_BROWSER_AUTO_SESSION = '1'
-    command = [info.binPath, 'mcp', '--namespace', namespace]
-  }
+  env.AGENT_BROWSER_NAMESPACE = namespace
+  env.AGENT_BROWSER_SESSION = sessionName
+  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
+  command = [info.binPath, 'mcp', '--namespace', namespace]
   const child = spawn(command[0]!, command.slice(1), {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -371,7 +301,7 @@ async function doWarmUp(
     const deadline = Date.now() + 120_000
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now()
-      const ok = await openViaMcp(child, remaining, !!proxy, namespace, sessionName)
+      const ok = await openViaMcp(child, remaining, namespace, sessionName)
       if (ok && isAgentBrowserDaemonWarm(info.binPath, namespace, sessionName)) {
         if (agentBrowserWarmState !== 'warm') {
           agentBrowserWarmState = 'warm'
@@ -402,7 +332,6 @@ async function doWarmUp(
 async function openViaMcp(
   child: ReturnType<typeof spawn>,
   timeoutMs: number,
-  useProxy = false,
   namespace: string = AGENT_BROWSER_NAMESPACE,
   session = AGENT_BROWSER_NAMESPACE,
 ): Promise<boolean> {
@@ -459,23 +388,12 @@ async function openViaMcp(
   try {
     await send('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'opencode-webui', version: '1.0.0' } })
     await send('tools/list', {})
-    if (useProxy) {
-      // 프록시는 세션 필수: warmup용 세션을 ensure(reuse) 후 open.
-      // warmup 자식의 레지스트리는 버려지고, 데몬/브라우저 기동만 남는다.
-      const warmSession = `warmup-${session}`.slice(0, 64)
-      await send('tools/call', {
-        name: 'agent_browser_session_ensure',
-        arguments: { namespace, session: warmSession, reuse: true },
-      })
-      const res = (await send('tools/call', {
-        name: 'agent_browser_open',
-        arguments: { namespace, session: warmSession, url: 'about:blank' },
-      })) as { isError?: boolean } | undefined
-      return res?.isError !== true
-    }
+    // native MCP: 세션을 인자로 직접 넘긴다 (session_ensure 없음).
+    // warmup 자식의 레지스트리는 버려지고, 데몬/브라우저 기동만 남는다.
+    const warmSession = `warmup-${session}`.slice(0, 64)
     const res = (await send('tools/call', {
       name: 'agent_browser_open',
-      arguments: { url: 'about:blank' },
+      arguments: { namespace, session: warmSession, url: 'about:blank' },
     })) as { isError?: boolean } | undefined
     return res?.isError !== true
   } catch (error) {
@@ -886,10 +804,12 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
           changed = true
         }
       }
-      // 프록시 모드에서는 직결 시절 키가 남으면 안 된다 (SESSION 고정 등).
-      // opencode가 env를 전달하지 않아 무해하지만, 혼란 방지를 위해 제거한다.
-      if (id === 'agent-browser' && agentBrowserProxyMode()) {
-        for (const stale of ['AGENT_BROWSER_SESSION', 'AGENT_BROWSER_AUTO_SESSION']) {
+      // 구 프록시 시절 키는 제거한다 (SESSION 고정·TTL·STORE 등).
+      // native MCP는 세션을 호출마다 받으므로 서버 env 세션 고정이 있으면
+      // 모든 호출이 한 브라우저로 꼬인다. opencode가 env를 전달하지 않아
+      // 무해한 경우도 있지만 혼란 방지를 위해 제거한다.
+      if (id === 'agent-browser') {
+        for (const stale of ['AGENT_BROWSER_SESSION', 'AGENT_BROWSER_AUTO_SESSION', 'SESSION_TTL_MS', 'SESSION_MAX', 'SESSION_SWEEP_MS', 'SESSION_STORE']) {
           if (stale in repairedEnv) {
             delete repairedEnv[stale]
             changed = true

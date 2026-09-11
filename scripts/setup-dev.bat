@@ -170,7 +170,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo [7/7] Installing agent-browser...
-call node scripts\install-agent-browser.js
+call node scripts\install-agent-browser.js --auto-upgrade
 if %errorlevel% neq 0 (
   echo   [x] agent-browser setup failed. Continue? (or run: npm run agent-browser:install)
 )

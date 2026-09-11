@@ -43,51 +43,23 @@ const defaultMcp = {
 
 const agentBrowserMeta = join(root, 'bin', 'agent-browser', '.meta.json')
 
-function resolveProxyCommand(binPath) {
-  // 패키징된 컴파일 exe 우선, dev는 node+mjs 폴백 (arch-to-be 프록시 방식)
-  const proxyExe = join(root, 'bin', 'agent-browser-proxy', 'agent-browser-proxy.exe')
-  if (existsSync(proxyExe)) {
-    return [proxyExe, '--cli', binPath, '--namespace', 'opencode']
-  }
-  const proxyMjs = join(root, 'backend', 'scripts', 'agent-browser-proxy', 'mcp-server.mjs')
-  if (existsSync(proxyMjs)) {
-    return ['node', proxyMjs, '--cli', binPath, '--namespace', 'opencode']
-  }
-  return null
-}
-
 if (existsSync(agentBrowserMeta)) {
   const meta = JSON.parse(readFileSync(agentBrowserMeta, 'utf8'))
   const binPath = join(root, meta.bin)
   if (existsSync(binPath)) {
-    const proxyCommand = resolveProxyCommand(binPath)
+    // 원본 native MCP 직접 등록 (세션 프록시 폐기)
+    const env = {}
     const executablePath = join(root, meta.executable)
-    if (proxyCommand) {
-      const env = {}
-      if (existsSync(executablePath)) {
-        env.AGENT_BROWSER_EXECUTABLE_PATH = executablePath
-      }
-      env.AGENT_BROWSER_NAMESPACE = 'opencode'
-      env.AGENT_BROWSER_IDLE_TIMEOUT_MS = '900000'
-      env.AGENT_BROWSER_IDLE_TIMEOUT = '15m'
-      env.SESSION_TTL_MS = '600000'
-      env.SESSION_MAX = '16'
-      env.SESSION_SWEEP_MS = '60000'
-      defaultMcp['agent-browser'] = { type: 'local', enabled: true, command: proxyCommand, env }
-      console.log('  [+] agent-browser via session proxy')
-    } else {
-      const env = {}
-      if (existsSync(executablePath)) {
-        env.AGENT_BROWSER_EXECUTABLE_PATH = executablePath
-      }
-      env.AGENT_BROWSER_NAMESPACE = 'opencode'
-      env.AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
-      defaultMcp['agent-browser'] = {
-        type: 'local',
-        enabled: true,
-        command: [binPath, 'mcp', '--namespace', 'opencode'],
-        env,
-      }
+    if (existsSync(executablePath)) {
+      env.AGENT_BROWSER_EXECUTABLE_PATH = executablePath
+    }
+    env.AGENT_BROWSER_NAMESPACE = 'opencode'
+    env.AGENT_BROWSER_IDLE_TIMEOUT_MS = '86400000'
+    defaultMcp['agent-browser'] = {
+      type: 'local',
+      enabled: true,
+      command: [binPath, 'mcp', '--namespace', 'opencode'],
+      env,
     }
     console.log(`  [+] Found agent-browser binary (${meta.agentBrowserVersion === 'vendor' ? 'vendor' : 'v' + (meta.agentBrowserVersion ?? '?')})`)
   }

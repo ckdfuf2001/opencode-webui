@@ -376,32 +376,25 @@ install is required**:
   (`workspace/.config/opencode/opencode.json`) at startup using the vendored
   binary (`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk`).
 
-The entry spawns the session proxy
-(`backend/scripts/agent-browser-proxy/mcp-server.mjs`, compiled to
-`bin/agent-browser-proxy/agent-browser-proxy.exe`), not the binary directly.
-One shared daemon (namespace `opencode`); every `agent_browser_*` call must pass
-an explicit `session` (mint one via `agent_browser_session_ensure` first, reuse it
-for the whole task). Per-session isolation is a lazy CDP BrowserContext on the
-shared Chrome — no extra Chrome tree per session:
+The entry spawns the stock native MCP directly (upstream
+`vercel-labs/agent-browser`, vendored binary + Chromium in `bin/`).
+Each session owns its daemon+browser; every `agent_browser_*` call passes
+`namespace` + `session` directly (no ensure step):
 
 ```json
 "mcp": {
   "agent-browser": {
     "type": "local",
     "command": [
-      "<root>/bin/agent-browser-proxy/agent-browser-proxy.exe",
-      "--cli",
       "<root>/bin/agent-browser/bin/agent-browser.exe",
+      "mcp",
       "--namespace",
       "opencode"
     ],
     "env": {
       "AGENT_BROWSER_EXECUTABLE_PATH": "<root>/bin/agent-browser/chromium/chrome-win64/chrome.exe",
       "AGENT_BROWSER_NAMESPACE": "opencode",
-      "AGENT_BROWSER_IDLE_TIMEOUT_MS": "900000",
-      "SESSION_TTL_MS": "600000",
-      "SESSION_MAX": "16",
-      "SESSION_SWEEP_MS": "60000"
+      "AGENT_BROWSER_IDLE_TIMEOUT_MS": "900000"
     }
   }
 }
@@ -412,34 +405,25 @@ shared Chrome — no extra Chrome tree per session:
 > `AGENT_BROWSER_NAMESPACE=opencode` + `AGENT_BROWSER_EXECUTABLE_PATH` (vendored
 > Chromium) + idle timeouts into the opencode **server** spawn env
 > (`agentBrowserEnv()` in `backend/src/services/default-mcp.ts`); server →
-> proxy → short-lived CLI → daemon all inherit it, so every caller shares ONE
-> daemon/Chrome with ONE config fingerprint. Without this each session forks its
-> own daemon+Chrome and fingerprint drift causes restart wars (10060s) and leaks
-> (dozens of `chrome for testing` → OOM).
+> native MCP → short-lived CLI → daemon all inherit it.
 
-> **Daemon supervision (the MCP stays managed):** neither the proxy nor the CLI
-> supervises the daemon — the backend does. Every 60s
-> `superviseAgentBrowserDaemon()` enumerates daemon sidecars, deletes stale ones
-> (dead pid → zombie-port 10060 방지), culls extra live daemons down to one
-> (`taskkill /T` takes the leaked Chrome tree with it), and warms only when none
-> is alive. The proxy additionally verifies the daemon port on every sweep and
-> drops stale sidecars so the next call respawns lazily instead of 10060ing.
-> Supervision never launches a browser proactively — recovery stays lazy.
+> **Daemon supervision (the MCP stays managed):** the backend does it. Every 60s
+> `superviseAgentBrowserDaemon()` deletes sidecars of dead pids
+> (dead pid → zombie-port 10060 방지) and of deaf-but-alive daemons, and warms
+> only when no daemon is alive. It NEVER kills a live process.
 > Live daemon list: `GET /api/mcp/agent-browser/status` (`daemons` array);
-> manual reconcile: `POST /api/mcp/agent-browser/supervise`.
+> manual reconcile: `POST /api/mcp/agent-browser/supervise`;
+> launch-path diagnosis: `GET /api/mcp/agent-browser/diagnose`.
 
 > **Daemon warm-up (why the first `agent_browser_open` is fast):**
 > the agent-browser MCP server talks to a long-lived background daemon over a
-> local socket. On a cold start the daemon inherits the MCP server's stdout
-> pipe, so the MCP server never sees EOF and a `tools/call` waits ~60s then
-> times out (`MCP error -32001: Request timed out`) — fixed in-binary since
-> agent-browser v0.35, but the backend still pre-warms so the first tool call
+> local socket. The backend pre-warms so the first tool call
 > is fast:
 > - `backend/src/services/default-mcp.ts` → `warmUpAgentBrowserDaemon()` spawns
->   the proxy (same spawn as the real MCP) and performs a real JSON-RPC
->   `agent_browser_session_ensure` + `agent_browser_open about:blank` on a
->   throwaway `warmup-opencode` session to force the browser launch, then kills
->   the MCP client (the background daemon survives).
+>   a throwaway native MCP child and performs a real JSON-RPC
+>   `agent_browser_open about:blank` on a throwaway `warmup-opencode` session
+>   to force the browser launch, then kills the MCP client (the session daemon
+>   survives).
 >   `backend/src/index.ts` runs this once after the opencode server starts;
 >   the 60s tick runs the supervisor above instead of a blind re-warm.
 > - Warming with `open --headed false` produces a different daemon profile, so
