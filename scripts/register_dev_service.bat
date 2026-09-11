@@ -79,12 +79,11 @@ if errorlevel 1 (
 exit /b 0
 
 :install_auto
+set "WANT_AUTO=1"
 call :install
-if %errorlevel% neq 0 exit /b 1
-sc.exe config "%SERVICE_NAME%" start= auto >nul 2>&1
-echo [SERVICE] start mode enforced: auto (service will start on boot)
-sc.exe qc "%SERVICE_NAME%" | findstr /i "START_TYPE" 
-exit /b 0
+set "RC=%errorlevel%"
+set "WANT_AUTO="
+exit /b %RC%
 
 :install
 call :check_admin
@@ -100,6 +99,11 @@ sc.exe query "%SERVICE_NAME%" >nul 2>&1
 if errorlevel 1 (
   echo [SERVICE] ERROR: 서비스 등록 실패. 위 메시지를 확인하세요.
   exit /b 1
+)
+if "%WANT_AUTO%"=="1" (
+  sc.exe config "%SERVICE_NAME%" start= auto >nul 2>&1
+  sc.exe qc "%SERVICE_NAME%" | findstr /i "START_TYPE"
+  echo [SERVICE] start mode enforced: auto
 )
 sc.exe failure "%SERVICE_NAME%" reset= 86400 actions= restart/60000/restart/60000/restart/60000 >nul 2>&1
 if exist "%VBS_FILE%" del /f /q "%VBS_FILE%" >nul 2>&1
