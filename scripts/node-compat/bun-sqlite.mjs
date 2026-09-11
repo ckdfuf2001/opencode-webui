@@ -8,18 +8,25 @@
 //   run() 결과 { changes, lastInsertRowid } (Number로 정규화)
 import { DatabaseSync } from 'node:sqlite';
 
+// node:sqlite는 boolean 바인딩을 거부하지만 bun:sqlite는 0/1로 받아준다.
+// 런타임별 동작 통일을 위해 여기서 강제한다 (backend 전체가 ?1:0 컨벤션이지만
+// 실수로 boolean이 넘어와도 node에서 터지지 않게).
+function bindable(params) {
+  return params.map((v) => (typeof v === 'boolean' ? (v ? 1 : 0) : v));
+}
+
 class Statement {
   constructor(inner) {
     this._inner = inner;
   }
   all(...params) {
-    return this._inner.all(...params);
+    return this._inner.all(...bindable(params));
   }
   get(...params) {
-    return this._inner.get(...params);
+    return this._inner.get(...bindable(params));
   }
   run(...params) {
-    const r = this._inner.run(...params);
+    const r = this._inner.run(...bindable(params));
     return {
       changes: Number(r.changes ?? 0),
       lastInsertRowid: Number(r.lastInsertRowid ?? 0),
@@ -43,7 +50,7 @@ export class Database {
     // DDL/트랜잭션용. 바인딩이 있으면 prepare().run(), 없으면 exec()
     // (node prepare는 다중문 불가, exec는 바인딩 불가라 구분).
     if (params.length > 0) {
-      const r = this._db.prepare(String(sql)).run(...params);
+      const r = this._db.prepare(String(sql)).run(...bindable(params));
       return {
         changes: Number(r.changes ?? 0),
         lastInsertRowid: Number(r.lastInsertRowid ?? 0),

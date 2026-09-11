@@ -226,7 +226,7 @@ export class SettingsService {
         userId,
         request.name,
         JSON.stringify(contentValidated),
-        shouldBeDefault,
+        shouldBeDefault ? 1 : 0,
         now,
         now
       )
@@ -279,7 +279,7 @@ export class SettingsService {
       )
       .run(
         JSON.stringify(contentValidated),
-        request.isDefault !== undefined ? request.isDefault : existing.is_default,
+        request.isDefault !== undefined ? (request.isDefault ? 1 : 0) : (existing.is_default ? 1 : 0),
         now,
         userId,
         configName
@@ -289,7 +289,7 @@ export class SettingsService {
       id: existing.id,
       name: configName,
       content: contentValidated,
-      isDefault: request.isDefault !== undefined ? request.isDefault : existing.is_default,
+      isDefault: request.isDefault !== undefined ? request.isDefault : Boolean(existing.is_default),
       createdAt: existing.created_at,
       updatedAt: now,
     }
