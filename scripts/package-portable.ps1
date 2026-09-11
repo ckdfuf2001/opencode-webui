@@ -87,7 +87,11 @@ New-Item -ItemType Directory -Force -Path (Join-Path $release 'bin') | Out-Null
 Copy-Item -Force $srcOpencode (Join-Path $release 'bin/opencode.exe')
 $srcAB = Join-Path $root 'bin/agent-browser'
 if (Test-Path $srcAB) {
-  Copy-Item -Recurse -Force $srcAB (Join-Path $release 'bin/agent-browser')
+  # 목적지가 이미 있으면 Copy-Item -Recurse가 중첩 복사(agent-browser/agent-browser)를
+  # 만들므로 먼저 지우고 복사한다.
+  $destAB = Join-Path $release 'bin/agent-browser'
+  if (Test-Path $destAB) { Remove-Item -Recurse -Force $destAB }
+  Copy-Item -Recurse -Force $srcAB $destAB
 } else {
   Write-Output '[package 5/7] WARN: bin/agent-browser missing - browser automation disabled in portable'
 }
