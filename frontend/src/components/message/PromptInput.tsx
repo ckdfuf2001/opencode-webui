@@ -165,10 +165,10 @@ export function PromptInput({
 const { data: config } = useConfig(opcodeUrl)
 const { preferences, updateSettings } = useSettings()
 const ks = preferences?.keyboardShortcuts
-const submitKs = ks?.submit ?? 'Ctrl+Enter'
 const abortKs = ks?.abort ?? 'Escape'
 const toggleModeKs = ks?.toggleMode ?? 'Tab'
 const selectModelKs = ks?.selectModel ?? 'Ctrl+M'
+// 전송은 웹 표준 Ctrl+Enter 고정 (설정값과 무관하게 표시·동작 통일)
 const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory)
   // 슬래시 커맨드도 큐 경유로 바뀌어 executeCommand 직접 호출은 없다.
   // (훅 자체는 유지 — 내부 콜백/상태 초기화용)
@@ -969,7 +969,7 @@ useEffect(() => {
                 Keyboard Shortcuts
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                <span className="font-mono">Cmd/Ctrl+Enter</span>{' '}- Send message
+                <span className="font-mono">Ctrl+Enter</span>{' '}- Send message
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
                 <span className="font-mono">@"</span> - Mention files
@@ -1007,7 +1007,7 @@ useEffect(() => {
                   ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
                   : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
             }`}
-            title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? `Queue message (${submitKs})` : `Send (${submitKs})`}
+            title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? 'Queue message (Ctrl+Enter)' : 'Send (Ctrl+Enter)'}
           >
             {isContextCritical || willExceed ? 'Blocked' : 'Send'}
           </button>
