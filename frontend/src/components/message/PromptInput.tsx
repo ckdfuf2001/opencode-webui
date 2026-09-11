@@ -138,6 +138,11 @@ export function PromptInput({
   const session = sessionData.data as SessionWithModel | undefined
 const { data: config } = useConfig(opcodeUrl)
 const { preferences, updateSettings } = useSettings()
+const ks = preferences?.keyboardShortcuts
+const submitKs = ks?.submit ?? 'Ctrl+Enter'
+const abortKs = ks?.abort ?? 'Escape'
+const toggleModeKs = ks?.toggleMode ?? 'Tab'
+const selectModelKs = ks?.selectModel ?? 'Ctrl+M'
 const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory)
   // 슬래시 커맨드도 큐 경유로 바뀌어 executeCommand 직접 호출은 없다.
   // (훅 자체는 유지 — 내부 콜백/상태 초기화용)
@@ -893,6 +898,7 @@ useEffect(() => {
         <div className="flex gap-1.5 items-center flex-1 min-w-0">
           <button
             onClick={handleModeToggle}
+            title={isBashMode ? 'Bash mode (Esc to exit)' : `Switch build/plan (${toggleModeKs})`}
             className={`px-2 py-1 rounded-md text-xs font-medium border w-14 flex-shrink-0 ${
               isBashMode 
                 ? 'bg-purple-500/10 border-purple-500/30 text-purple-600 dark:text-purple-400' 
@@ -904,7 +910,7 @@ useEffect(() => {
 <div className="flex items-center space-x-2 min-w-0">
   <button
     onClick={onShowModelsDialog}
-    title={modelName || 'Select model'}
+    title={modelName ? `${modelName} (${selectModelKs})` : `Select model (${selectModelKs})`}
     className="px-2 py-1 rounded-md text-xs font-medium border bg-muted border-border text-muted-foreground hover:bg-muted-foreground/10 transition-colors cursor-pointer max-w-[80px] sm:max-w-[120px] truncate shrink min-w-0"
   >
     {modelName.length > 12 ? modelName.substring(0, 10) + '...' : modelName || 'Select model'}
@@ -946,7 +952,7 @@ useEffect(() => {
             <button
               onClick={handleStop}
               className="px-4 py-1.5 rounded-lg text-sm font-medium bg-destructive hover:bg-destructive/90 text-destructive-foreground transition-colors"
-              title="Stop generating"
+              title={`Stop generating (${abortKs})`}
             >
               Stop
             </button>
@@ -962,7 +968,7 @@ useEffect(() => {
                   ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
                   : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
             }`}
-            title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : 'Send'}
+            title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? `Queue message (${submitKs})` : `Send (${submitKs})`}
           >
             {isContextCritical || willExceed ? 'Blocked' : 'Send'}
           </button>
