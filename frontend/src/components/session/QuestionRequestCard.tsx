@@ -217,7 +217,7 @@ export function QuestionRequestCard({
         />
       )}
       <div className="mt-3 flex justify-end gap-2">
-        {total <= 1 || isLast ? (
+        {total <= 1 ? (
           <>
             <Button
               variant="outline"
@@ -226,6 +226,24 @@ export function QuestionRequestCard({
               className={cn(action === 'reject' && "opacity-70")}
             >
               {action === 'reject' ? 'Rejecting...' : 'Dismiss'}
+            </Button>
+            <Button
+              variant="default"
+              onClick={handleReply}
+              disabled={isLoading || !allAnswered}
+              className={cn(action === 'reply' && "opacity-70")}
+            >
+              {action === 'reply' ? 'Submitting...' : 'Submit'}
+            </Button>
+          </>
+        ) : isLast ? (
+          <>
+            <Button
+              variant="outline"
+              onClick={() => setPage(safePage - 1)}
+              disabled={isLoading}
+            >
+              Prev
             </Button>
             <Button
               variant="default"
