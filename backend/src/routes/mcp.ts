@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { Database } from 'bun:sqlite'
-import { getAgentBrowserDaemonStatus, warmUpAgentBrowserDaemon } from '../services/default-mcp'
+import { getAgentBrowserDaemonStatus, listAgentBrowserDaemons, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon } from '../services/default-mcp'
 import { logger } from '../utils/logger'
 
 export function createMcpRoutes(_db: Database) {
@@ -10,10 +10,27 @@ export function createMcpRoutes(_db: Database) {
     try {
       const session = c.req.query('session') || undefined
       const status = getAgentBrowserDaemonStatus('opencode', session)
-      return c.json({ ...status, namespace: 'opencode', timestamp: new Date().toISOString() })
+      const daemons = listAgentBrowserDaemons().map(({ key, pid, port, alive, namespaced }) => ({
+        key,
+        pid,
+        port,
+        alive,
+        namespaced,
+      }))
+      return c.json({ ...status, daemons, namespace: 'opencode', timestamp: new Date().toISOString() })
     } catch (error) {
       logger.error('Failed to get agent-browser status:', error)
       return c.json({ error: 'Failed to get agent-browser status' }, 500)
+    }
+  })
+
+  app.post('/agent-browser/supervise', async (c) => {
+    try {
+      const result = await superviseAgentBrowserDaemon()
+      return c.json({ ...result, timestamp: new Date().toISOString() })
+    } catch (error) {
+      logger.error('Failed to supervise agent-browser daemon:', error)
+      return c.json({ error: 'Failed to supervise agent-browser daemon' }, 500)
     }
   })
 

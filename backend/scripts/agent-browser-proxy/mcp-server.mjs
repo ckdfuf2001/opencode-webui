@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Vendored from ckdfuf2001/agent-browser branch proxy/session-isolation
-// (release proxy-v2.2.0). See agent-browser_arch-to-be.html for the design.
-// opencode-webui changes: none to the proxy logic itself.
+// (release proxy-v2.2.0) + opencode-webui 2.3.0 addition: sweep-time daemon
+// supervision (liveness probe + stale sidecar cleanup, lazy recovery).
+// See agent-browser_arch-to-be.html for the design.
 // agent-browser MCP proxy - concurrent-session safe (no external deps).
 //
 // Design (same shape as Playwright / Chrome-DevTools MCP):
@@ -29,6 +30,8 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
+import net from "node:net";
+import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 
@@ -164,6 +167,7 @@ async function closeSession(ns, name) {
 }
 
 async function sweep() {
+  try { await superviseDaemon(); } catch (e) { log("daemon check:", (e && e.message) || e); }
   const now = Date.now();
   for (const [key, m] of Array.from(sessions)) {
     if (m.inFlight > 0) continue; // active: never touch
@@ -180,6 +184,62 @@ async function sweep() {
   }
 }
 setInterval(() => { sweep().catch((e) => log("sweep:", (e && e.message) || e)); }, SWEEP_MS);
+
+// ------------------------------------------------------- daemon supervision
+// The CLI owns daemon lifetime (ensure_daemon), but a dead daemon leaves
+// stale sidecars behind: the next call then reads a zombie port and fails
+// with 10060 instead of respawning. Each sweep verifies the pinned namespace
+// daemon (pid alive + port connectable) and removes stale sidecars so the
+// next call recovers lazily. Never launches a browser here.
+function socketBaseDir() {
+  const override = process.env.AGENT_BROWSER_SOCKET_DIR;
+  if (override) return override;
+  const runtime = process.env.XDG_RUNTIME_DIR;
+  if (runtime) return path.join(runtime, "agent-browser");
+  const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+  if (home) return path.join(home, ".agent-browser");
+  return path.join(os.tmpdir(), "agent-browser");
+}
+function daemonRunDir() {
+  return path.join(socketBaseDir(), "namespaces", toSafe(DEFAULT_NS), "run");
+}
+function readSidecarInt(dir, key, suffix) {
+  try {
+    const n = parseInt(fs.readFileSync(path.join(dir, key + "." + suffix), "utf8").trim(), 10);
+    return isNaN(n) ? null : n;
+  } catch (e) { return null; }
+}
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e && e.code === "EPERM"; }
+}
+function portOpen(port, timeoutMs) {
+  return new Promise((resolve) => {
+    const s = net.connect({ host: "127.0.0.1", port });
+    const done = (ok) => { try { s.destroy(); } catch (e) {} resolve(ok); };
+    const timer = setTimeout(() => done(false), timeoutMs || 3000);
+    if (timer.unref) timer.unref();
+    s.on("connect", () => { clearTimeout(timer); done(true); });
+    s.on("error", () => { clearTimeout(timer); done(false); });
+  });
+}
+const DAEMON_SIDECARS = ["pid", "port", "config", "version", "stream"];
+async function superviseDaemon() {
+  const dir = daemonRunDir();
+  const key = toSafe(DEFAULT_NS);
+  const pid = readSidecarInt(dir, key, "pid");
+  if (pid === null) return; // nothing recorded: ensure_daemon owns creation (lazy)
+  if (!pidAlive(pid)) {
+    for (const s of DAEMON_SIDECARS) { try { fs.unlinkSync(path.join(dir, key + "." + s)); } catch (e) {} }
+    log("daemon dead (pid " + pid + "); removed stale sidecars for " + DEFAULT_NS);
+    return;
+  }
+  const port = readSidecarInt(dir, key, "port");
+  if (port !== null && !(await portOpen(port))) {
+    for (const s of DAEMON_SIDECARS) { try { fs.unlinkSync(path.join(dir, key + "." + s)); } catch (e) {} }
+    log("daemon port " + port + " unreachable (pid " + pid + " alive); removed stale sidecars for " + DEFAULT_NS);
+  }
+}
 
 // ----------------------------------------------------------------- helpers
 function fixSelector(sel) {
@@ -523,7 +583,7 @@ async function onMessage(m) {
     if (method === "initialize") return send({ jsonrpc: "2.0", id, result: {
       protocolVersion: params.protocolVersion || PROTOCOL,
       capabilities: { tools: {} },
-      serverInfo: { name: "agent-browser-session-proxy", title: "agent-browser (session-safe)", version: "2.2.0" },
+      serverInfo: { name: "agent-browser-session-proxy", title: "agent-browser (session-safe)", version: "2.3.0" },
       instructions: "Session-isolated browser on ONE shared daemon. Concurrent tasks MUST use different sessions (call agent_browser_session_ensure first). Flow per task: open -> snapshot -> interact with fresh @refs. Idle sessions auto-close; in-flight work is never interrupted.",
     } });
     if (typeof method === "string" && method.indexOf("notifications/") === 0) return;
@@ -564,4 +624,4 @@ process.stdin.on("data", (c) => {
 });
 process.stdin.on("end", () => process.exit(0));
 loadStore();
-log("proxy v2.2 starting (cli=" + CLI + ", default-ns=" + DEFAULT_NS + ", ttl=" + TTL_MS + "ms, max=" + MAX_SESSIONS + ", tools=" + TOOLS.length + ")");
+log("proxy v2.3 starting (cli=" + CLI + ", default-ns=" + DEFAULT_NS + ", ttl=" + TTL_MS + "ms, max=" + MAX_SESSIONS + ", tools=" + TOOLS.length + ")");

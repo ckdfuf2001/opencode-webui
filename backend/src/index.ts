@@ -37,7 +37,7 @@ import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig } from './services/default-mcp'
+import { mergeDefaultMcpEntries, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig } from './services/default-mcp'
 import { migrateConfigMapToFiles } from './services/config-migration'
 import { opencodeServerManager, prepareBackendPort, installWindowsShutdownWatchdog } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
@@ -512,8 +512,8 @@ healthCheckInterval = setInterval(() => {
 
 let agentBrowserWarmupInterval: NodeJS.Timeout | null = null
 agentBrowserWarmupInterval = setInterval(() => {
-  warmUpAllAgentBrowserDaemons(db).catch((error) => {
-    logger.error('Agent-browser daemon re-warm-up error:', error)
+  superviseAgentBrowserDaemon().catch((error) => {
+    logger.error('Agent-browser daemon supervise error:', error)
   })
 }, 60_000)
 

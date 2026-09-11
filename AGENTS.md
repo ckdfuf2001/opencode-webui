@@ -62,7 +62,8 @@
   UI.
 - **Agent-browser MCP runs through the session proxy by default**: the
   `agent-browser` MCP entry spawns `backend/scripts/agent-browser-proxy/mcp-server.mjs`
-  (vendored from `ckdfuf2001/agent-browser` `proxy-v2.2.0`; compiled to
+  (vendored from `ckdfuf2001/agent-browser` `proxy-v2.2.0` + opencode-webui 2.3.0
+  addition; compiled to
   `bin/agent-browser-proxy/agent-browser-proxy.exe` at package time, built by
   `scripts/build-agent-browser-proxy.ps1`). One shared daemon (namespace
   `opencode`), one browser per session. Every `agent_browser_*` call MUST pass
@@ -70,7 +71,17 @@
   `default` is rejected by the proxy. If the proxy is unavailable the backend
   falls back to the direct binary (`agent-browser mcp --namespace opencode`).
   Opencode does NOT forward the `env` field of an MCP entry to the spawned
-  child (verified 2026-08), so all behavior must come from CLI args, not env.
+  child (verified 2026-08), so all behavior must come from CLI args, not env —
+  EXCEPT the daemon identity env below, which the backend injects into the
+  opencode server spawn env so the whole tree inherits it.
+- **Daemon identity comes from server env, not MCP env**: the backend injects
+  `AGENT_BROWSER_NAMESPACE=opencode` + `AGENT_BROWSER_EXECUTABLE_PATH` (vendored
+  Chromium) + `AGENT_BROWSER_IDLE_TIMEOUT_MS=900000` into the opencode server
+  child env (`agentBrowserEnv()` in `backend/src/services/default-mcp.ts`).
+  Server → proxy → short-lived CLI → daemon all inherit it, so every caller
+  shares ONE daemon/Chrome with ONE config fingerprint. Without this each
+  session forks its own daemon+Chrome and fingerprint drift causes
+  restart wars (10060s) and leaks (dozens of `chrome for testing` → OOM).
 - **Warm-up matches the real MCP spawn**: on a cold start the daemon inherits the
   MCP server's stdout pipe and `tools/call` hangs until the browser launches → the
   "first open fails" / `MCP error -32001: Request timed out` (~60s) symptom.
@@ -86,6 +97,15 @@
   `agent_browser_open about:blank` on a throwaway `warmup-opencode` session to force
   the browser launch, then kills the MCP child (the background daemon survives).
   Same-key calls attach to the in-flight warmup, so the 60s tick never piles on.
+  The 60s tick runs `superviseAgentBrowserDaemon()`, not a blind re-warm: it
+  enumerates daemon sidecars, deletes stale ones (dead pid → zombie port 10060
+  방지), culls extra live daemons down to one (taskkill /T takes the leaked
+  Chrome tree too), and only warms when none is alive. Proxy-side, every sweep
+  verifies the pinned daemon port and drops stale sidecars so the next call
+  respawns lazily instead of 10060ing. Never proactively launch a browser from
+  supervision — recovery stays lazy. Live daemon list is at
+  `GET /api/mcp/agent-browser/status` (`daemons` array); manual reconcile is
+  `POST /api/mcp/agent-browser/supervise`.
   Do NOT warm with `open --headed false`: that produces a different daemon profile and
   the MCP restarts it on first use (measured ~45s instead of <300ms). When
   debugging MCP/browser issues, check `AGENT_BROWSER_NAMESPACE=opencode

@@ -6,6 +6,7 @@ import path from 'path'
 import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
+import { agentBrowserEnv } from './default-mcp'
 
 let preferredOpenCodeBin: string | null = null
 let cachedBinary: string | null | undefined
@@ -311,6 +312,9 @@ class OpenCodeServerManager {
           ...process.env,
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
           OPENCODE_CONFIG_DIR: getConfigPath(),
+          // agent-browser 단일 데몬 보장: MCP entry env는 opencode가 전달하지
+          // 않으므로 서버 env 상속으로 네임스페이스·실행파일·지문을 통일한다.
+          ...agentBrowserEnv(),
         },
       }
     )

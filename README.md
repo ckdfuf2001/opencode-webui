@@ -363,8 +363,10 @@ a Chromium build, both vendored by this repo so **no separate download or global
 install is required**:
 
 - `npm run agent-browser:install` — downloads the `agent-browser` release binary
-  (from the npm package) and a matching Chromium (Chrome for Testing) into the
-  git-ignored `bin/agent-browser/`, then records their paths in `.meta.json`.
+  (from the `ckdfuf2001/agent-browser` fork GitHub release) and a matching
+  Chromium (Chrome for Testing) into the vendored `bin/agent-browser/`
+  (git-tracked, Chromium via Git LFS — fresh clones need `git lfs pull`),
+  then records their paths in `.meta.json`.
 - `npm run agent-browser:update` — re-runs the install with `--force` to fetch
   the latest releases (a dedicated update command).
 - The dev setup scripts (`setup-dev.bat` / `setup-dev.sh` / `docker-entrypoint.sh`)
@@ -374,63 +376,76 @@ install is required**:
   (`workspace/.config/opencode/opencode.json`) at startup using the vendored
   binary (`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk`).
 
-The entry pins the namespace and a 24h idle timeout so the MCP server talks to
-the same daemon the backend pre-warms (see below). Note that opencode **does not
-forward the `env` field** to the spawned MCP child — the env values below are
-informational and the session is always resolved as `default`; the `--namespace`
-flag is what actually matters:
+The entry spawns the session proxy
+(`backend/scripts/agent-browser-proxy/mcp-server.mjs`, compiled to
+`bin/agent-browser-proxy/agent-browser-proxy.exe`), not the binary directly.
+One shared daemon (namespace `opencode`); every `agent_browser_*` call must pass
+an explicit `session` (mint one via `agent_browser_session_ensure` first, reuse it
+for the whole task). Per-session isolation is a lazy CDP BrowserContext on the
+shared Chrome — no extra Chrome tree per session:
 
 ```json
 "mcp": {
   "agent-browser": {
     "type": "local",
     "command": [
-      "D:\\path\\to\\opencode_web\\bin\\agent-browser\\bin\\agent-browser.exe",
-      "mcp",
+      "<root>/bin/agent-browser-proxy/agent-browser-proxy.exe",
+      "--cli",
+      "<root>/bin/agent-browser/bin/agent-browser.exe",
       "--namespace",
       "opencode"
     ],
     "env": {
-      "AGENT_BROWSER_EXECUTABLE_PATH": "D:\\path\\to\\opencode_web\\bin\\agent-browser\\chromium\\chrome-win64\\chrome.exe",
+      "AGENT_BROWSER_EXECUTABLE_PATH": "<root>/bin/agent-browser/chromium/chrome-win64/chrome.exe",
       "AGENT_BROWSER_NAMESPACE": "opencode",
-      "AGENT_BROWSER_SESSION": "opencode",
-      "AGENT_BROWSER_IDLE_TIMEOUT_MS": "86400000"
+      "AGENT_BROWSER_IDLE_TIMEOUT_MS": "900000",
+      "SESSION_TTL_MS": "600000",
+      "SESSION_MAX": "16",
+      "SESSION_SWEEP_MS": "60000"
     }
   }
 }
 ```
 
-`AGENT_BROWSER_NAMESPACE=opencode` must match the `--namespace opencode` flag —
-the MCP server and the daemon only talk to each other when both use the same
-namespace. `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h) stops the daemon from
-being evicted between tool calls.
+> opencode does **not** forward the MCP entry's `env` to the spawned child, so
+> daemon identity cannot come from there. The backend injects
+> `AGENT_BROWSER_NAMESPACE=opencode` + `AGENT_BROWSER_EXECUTABLE_PATH` (vendored
+> Chromium) + idle timeouts into the opencode **server** spawn env
+> (`agentBrowserEnv()` in `backend/src/services/default-mcp.ts`); server →
+> proxy → short-lived CLI → daemon all inherit it, so every caller shares ONE
+> daemon/Chrome with ONE config fingerprint. Without this each session forks its
+> own daemon+Chrome and fingerprint drift causes restart wars (10060s) and leaks
+> (dozens of `chrome for testing` → OOM).
 
-> **Browser sessions are a singleton by default:** opencode strips the MCP entry's `env`
-> field when spawning the local MCP, and agent-browser ignores
-> `--session`/`--executable-path` in MCP mode — so every `agent_browser_*` call without an explicit `session` resolves to the same `default` session in the `opencode` namespace (blank on first `read`). All repos and the global session therefore share ONE daemon and ONE Chrome tree unless a `session` is given. `writeRepoOpenCodeConfig()` still writes a per-repo `opencode.json`, but the session it carries is not honored by opencode.
->
-> **Fix:** always pass `session` when calling `agent_browser_open`/`read`/`snapshot` etc., e.g. `session: "repo-Test"` or a hash of the repo path. With the patched `ckdfuf2001/agent-browser` (`AGENT_BROWSER_AUTO_SESSION=1` in `mcp.env`), `default`/`opencode` is auto-hashed to `auto-<cwd-hash>` per repo so `read` without an explicit session no longer returns blank. **Close after use:** call `agent_browser_close` (or `agent-browser close` / `close --all`) when done - idle sessions auto-close after `AGENT_BROWSER_IDLE_TIMEOUT_MS` (24h here) but explicit close frees the `Chrome` `BrowserContext` immediately. An existing `enabled: false` on the agent-browser entry is preserved so a repo can opt out of the MCP. See [`docs/architecture.md`](docs/architecture.md).
+> **Daemon supervision (the MCP stays managed):** neither the proxy nor the CLI
+> supervises the daemon — the backend does. Every 60s
+> `superviseAgentBrowserDaemon()` enumerates daemon sidecars, deletes stale ones
+> (dead pid → zombie-port 10060 방지), culls extra live daemons down to one
+> (`taskkill /T` takes the leaked Chrome tree with it), and warms only when none
+> is alive. The proxy additionally verifies the daemon port on every sweep and
+> drops stale sidecars so the next call respawns lazily instead of 10060ing.
+> Supervision never launches a browser proactively — recovery stays lazy.
+> Live daemon list: `GET /api/mcp/agent-browser/status` (`daemons` array);
+> manual reconcile: `POST /api/mcp/agent-browser/supervise`.
 
-> **Daemon warm-up (why the first `agent_browser_open` no longer hangs):**
+> **Daemon warm-up (why the first `agent_browser_open` is fast):**
 > the agent-browser MCP server talks to a long-lived background daemon over a
 > local socket. On a cold start the daemon inherits the MCP server's stdout
 > pipe, so the MCP server never sees EOF and a `tools/call` waits ~60s then
-> times out (`MCP error -32001: Request timed out`). The backend pre-warms the
-> daemon so the first tool call is fast:
+> times out (`MCP error -32001: Request timed out`) — fixed in-binary since
+> agent-browser v0.35, but the backend still pre-warms so the first tool call
+> is fast:
 > - `backend/src/services/default-mcp.ts` → `warmUpAgentBrowserDaemon()` spawns
->   `agent-browser.exe mcp --namespace opencode` with all `AGENT_BROWSER_*` env
->   vars stripped — identical to how opencode itself spawns the MCP — and
->   performs a real JSON-RPC `agent_browser_open about:blank` to force the
->   browser launch, then kills the MCP client (the background daemon survives).
->   `backend/src/index.ts` runs this after the opencode server starts and every
->   60s (self-heals a dead daemon), skipping when `agent-browser session info`
->   already reports an active browser.
-> - Warming the daemon with `open --headed false` or `AGENT_BROWSER_IDLE_TIMEOUT_MS`
->   produces a different daemon profile, so the MCP restarts it on first use
->   (~45s) — do not do that.
-> - `mergeDefaultMcpEntries` also **repairs env vars** (namespace + idle
->   timeout) on sync, so a config regenerated from the DB keeps them even if a
->   previous version was missing them.
+>   the proxy (same spawn as the real MCP) and performs a real JSON-RPC
+>   `agent_browser_session_ensure` + `agent_browser_open about:blank` on a
+>   throwaway `warmup-opencode` session to force the browser launch, then kills
+>   the MCP client (the background daemon survives).
+>   `backend/src/index.ts` runs this once after the opencode server starts;
+>   the 60s tick runs the supervisor above instead of a blind re-warm.
+> - Warming with `open --headed false` produces a different daemon profile, so
+>   the MCP restarts it on first use (~45s) — do not do that.
+> - `mergeDefaultMcpEntries` also **repairs env vars** on sync, so a config
+>   regenerated from the DB keeps them even if a previous version was missing them.
 
 Options:
 

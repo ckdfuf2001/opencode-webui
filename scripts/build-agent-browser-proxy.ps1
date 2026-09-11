@@ -17,7 +17,7 @@ if (-not (Test-Command bun)) { throw 'bun not found in PATH' }
 
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 Write-Output "[proxy] compiling mcp-server.mjs -> $outExe"
-& bun build --compile --target=bun $mjs --outfile $outExe
+& bun build --compile --target=bun "$mjs" --outfile "$outExe"
 if ($LASTEXITCODE -ne 0) { throw 'proxy compile failed' }
 if (-not (Test-Path $outExe)) { throw 'proxy compile did not produce exe' }
 Write-Output '[proxy] ok'

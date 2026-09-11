@@ -1,6 +1,7 @@
 import path from 'node:path'
+import net from 'node:net'
 import { spawn, execFileSync, execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs'
 import { ENV, getWorkspacePath, getReposPath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 import { resolveDocReaderCommand } from './doc-tools'
@@ -35,6 +36,25 @@ function buildDocReaderMcp(): Record<string, unknown> {
 interface AgentBrowserInfo {
   binPath: string
   executablePath: string
+}
+
+/**
+ * agent-browser 데몬 정체성을 고정하는 env. opencode 서버 spawn env에 넣어
+ * 트리 전체(서버 → MCP 프록시 → 단발 CLI → 데몬)가 같은 네임스페이스·실행파일·
+ * 지문을 공유하게 한다. opencode는 MCP entry의 env를 자식에게 전달하지 않으므로
+ * (2026-08 확인) 서버 env 상속이 유일한 통로다. 없으면 세션마다 데몬+Chrome이
+ * 따로 뜨고 지문 불일치로 재시작 전쟁 → 10060/OOM.
+ */
+export function agentBrowserEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  const info = resolveAgentBrowser()
+  if (info?.executablePath && existsSync(info.executablePath)) {
+    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
+  }
+  env.AGENT_BROWSER_NAMESPACE = AGENT_BROWSER_NAMESPACE
+  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
+  env.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
+  return env
 }
 
 function resolveAgentBrowser(): AgentBrowserInfo | null {
@@ -357,6 +377,226 @@ export function getAgentBrowserDaemonStatus(
   const sessionName = session ?? namespace
   const warm = info ? isAgentBrowserDaemonWarm(info.binPath, namespace, sessionName) : false
   return { warm, mcpChildRunning: isAgentBrowserMcpChildRunning(namespace), session: sessionName }
+}
+
+export interface AgentBrowserDaemonInfo {
+  key: string
+  dir: string
+  pid: number | null
+  port: number | null
+  alive: boolean
+  portOpen: boolean
+  namespaced: boolean
+}
+
+export interface SupervisionResult {
+  daemons: AgentBrowserDaemonInfo[]
+  cleanedStale: string[]
+  culled: number[]
+  warmed: boolean
+}
+
+const DAEMON_SIDECAR_SUFFIXES = ['pid', 'port', 'config', 'version', 'stream'] as const
+
+function agentBrowserSocketBase(): string {
+  const override = process.env.AGENT_BROWSER_SOCKET_DIR
+  if (override) return override
+  const runtimeDir = process.env.XDG_RUNTIME_DIR
+  if (runtimeDir) return path.join(runtimeDir, 'agent-browser')
+  const home = process.env.USERPROFILE || process.env.HOME
+  if (home) return path.join(home, '.agent-browser')
+  return path.join(process.env.TEMP ?? process.env.TMPDIR ?? '/tmp', 'agent-browser')
+}
+
+function agentBrowserRunDir(): string {
+  return path.join(agentBrowserSocketBase(), 'namespaces', AGENT_BROWSER_NAMESPACE, 'run')
+}
+
+function readSidecarInt(dir: string, key: string, suffix: string): number | null {
+  try {
+    const raw = readFileSync(path.join(dir, `${key}.${suffix}`), 'utf8').trim()
+    const parsed = parseInt(raw, 10)
+    return isNaN(parsed) ? null : parsed
+  } catch {
+    return null
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as { code?: string })?.code === 'EPERM'
+  }
+}
+
+function tcpProbe(port: number, timeoutMs = 3_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    const done = (ok: boolean) => {
+      try {
+        socket.destroy()
+      } catch {
+        // ignore
+      }
+      resolve(ok)
+    }
+    const timer = setTimeout(() => done(false), timeoutMs)
+    socket.on('connect', () => {
+      clearTimeout(timer)
+      done(true)
+    })
+    socket.on('error', () => {
+      clearTimeout(timer)
+      done(false)
+    })
+  })
+}
+
+function deleteDaemonSidecars(dir: string, key: string): void {
+  for (const suffix of DAEMON_SIDECAR_SUFFIXES) {
+    try {
+      rmSync(path.join(dir, `${key}.${suffix}`), { force: true })
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function sidecarMtimeMs(dir: string, key: string): number {
+  try {
+    return statSync(path.join(dir, `${key}.pid`)).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+function killProcessTree(pid: number): void {
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 15_000 })
+    } else {
+      process.kill(pid, 'SIGKILL')
+    }
+  } catch {
+    // already gone
+  }
+}
+
+export function listAgentBrowserDaemons(): AgentBrowserDaemonInfo[] {
+  const out: AgentBrowserDaemonInfo[] = []
+  for (const dir of [agentBrowserRunDir(), agentBrowserSocketBase()]) {
+    let entries: string[] = []
+    try {
+      entries = readdirSync(dir)
+    } catch {
+      continue
+    }
+    for (const name of entries) {
+      if (!name.endsWith('.pid')) continue
+      const key = name.slice(0, -4)
+      const pid = readSidecarInt(dir, key, 'pid')
+      out.push({
+        key,
+        dir,
+        pid,
+        port: readSidecarInt(dir, key, 'port'),
+        alive: pid !== null && pidAlive(pid),
+        portOpen: false,
+        namespaced: key === AGENT_BROWSER_NAMESPACE,
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * agent-browser 데몬 관리자. MCP 등록 상태와 무관하게 백엔드가 살아있는 동안
+ * 매 틱(60s) 호출된다:
+ * 1. 죽은 pid의 stale 사이드카를 지운다 (좀비 포트 10060 방지: 다음 ensure가
+ *    새로 띄우도록)
+ * 2. 살아있는 데몬이 2개 이상이면 네임스페이스 데몬 1개만 남기고 정리한다.
+ *    네임스페이스 데몬이 없으면 가장 최근 1개만 살리고 나머지를 정리한다
+ *    (수정 전 바이너리 시절의 세션별 데몬 잔해 수습).
+ *    정리는 taskkill /T 로 크롬 트리까지 함께 죽인다.
+ * 3. 살아있는 데몬이 하나도 없으면 기존 warm-up으로 1개를 깨운다.
+ * Chrome을 선제 기동하지는 않는다: recover는 다음 ensure 호출에 맡긴다 (lazy).
+ */
+export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> {
+  const empty: SupervisionResult = { daemons: [], cleanedStale: [], culled: [], warmed: false }
+  if (!resolveAgentBrowser()) return empty
+  const daemons = listAgentBrowserDaemons()
+  for (const daemon of daemons) {
+    daemon.portOpen = daemon.alive && daemon.port !== null ? await tcpProbe(daemon.port) : false
+  }
+  const cleanedStale: string[] = []
+  const culled: number[] = []
+  for (const daemon of daemons) {
+    if (!daemon.alive) {
+      deleteDaemonSidecars(daemon.dir, daemon.key)
+      cleanedStale.push(daemon.key)
+    }
+  }
+  const healthy = daemons.filter((d) => d.alive && d.portOpen)
+  const namespaced = healthy.filter((d) => d.namespaced)
+  if (namespaced.length >= 1) {
+    const keep = newestFirst(namespaced)[0]!
+    for (const daemon of healthy) {
+      if (daemon === keep) continue
+      if (daemon.pid !== null) {
+        killProcessTree(daemon.pid)
+        culled.push(daemon.pid)
+      }
+      deleteDaemonSidecars(daemon.dir, daemon.key)
+    }
+  } else if (healthy.length >= 1) {
+    const keep = newestFirst(healthy)[0]!
+    for (const daemon of healthy) {
+      if (daemon === keep) continue
+      if (daemon.pid !== null) {
+        killProcessTree(daemon.pid)
+        culled.push(daemon.pid)
+      }
+      deleteDaemonSidecars(daemon.dir, daemon.key)
+    }
+  }
+  let warmed = false
+  const survivors = healthy.length - culled.length
+  if (survivors <= 0) {
+    const stillHealthy = (await refreshLiveness(daemons, culled)).filter((d) => d.alive && d.portOpen)
+    if (stillHealthy.length === 0) {
+      warmed = await warmUpAgentBrowserDaemon().catch(() => false)
+    }
+  }
+  if (cleanedStale.length > 0 || culled.length > 0 || warmed) {
+    logger.info(
+      `Agent-browser supervised (daemons: ${daemons.length}, stale cleaned: [${cleanedStale.join(', ')}], ` +
+        `culled pids: [${culled.join(', ')}], warmed: ${warmed})`,
+    )
+  }
+  return { daemons, cleanedStale, culled, warmed }
+}
+
+function newestFirst(daemons: AgentBrowserDaemonInfo[]): AgentBrowserDaemonInfo[] {
+  return [...daemons].sort((a, b) => sidecarMtimeMs(b.dir, b.key) - sidecarMtimeMs(a.dir, a.key))
+}
+
+async function refreshLiveness(
+  daemons: AgentBrowserDaemonInfo[],
+  culled: number[],
+): Promise<AgentBrowserDaemonInfo[]> {
+  const culledSet = new Set(culled)
+  for (const daemon of daemons) {
+    if (daemon.pid !== null && culledSet.has(daemon.pid)) {
+      daemon.alive = false
+      daemon.portOpen = false
+      continue
+    }
+    daemon.alive = daemon.pid !== null && pidAlive(daemon.pid)
+    daemon.portOpen = daemon.alive && daemon.port !== null ? await tcpProbe(daemon.port) : false
+  }
+  return daemons
 }
 
 function sleep(ms: number): Promise<void> {
