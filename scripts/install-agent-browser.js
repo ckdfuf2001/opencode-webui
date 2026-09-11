@@ -12,6 +12,11 @@ const metaFile = join(outDir, '.meta.json')
 
 const AGENT_BROWSER_GITHUB_REPO = process.env.AGENT_BROWSER_GITHUB_REPO || 'ckdfuf2001/agent-browser'
 
+// 이 레포가 기대하는 포크 릴리즈 태그. 로컬 meta가 이것과 다르면
+// (오래된 바이너리) setup-dev/portable 빌드 시 자동 갱신된다.
+// 수동 업데이트 후에는 여기도 함께 올려야 setup-dev가 다운그레이드하지 않는다.
+const PINNED_TAG = process.env.AGENT_BROWSER_RELEASE_TAG || 'v0.35'
+
 const platformKey = `${os.platform()}-${os.arch()}`
 
 const AGENT_BROWSER_BIN = {
@@ -194,10 +199,25 @@ async function installAgentBrowser() {
 
   const binaryLabel = (v) => (v?.startsWith('v') ? v : 'v' + v)
 
+  function installedBinaryRuns() {
+    try {
+      execFileSync(outBin, ['--version'], { encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'ignore'] })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   if (!force && existsSync(outBin) && meta?.executable && existsSync(join(root, meta.executable))) {
-    console.log('[install-agent-browser] agent-browser already present (' + binaryLabel(meta.agentBrowserVersion) + ').')
-    console.log('  Update with: npm run agent-browser:update')
-    return
+    if (!installedBinaryRuns()) {
+      console.log('[install-agent-browser] present binary does not run, reinstalling ' + PINNED_TAG + '...')
+    } else if (!meta.agentBrowserVersion || meta.agentBrowserVersion !== PINNED_TAG) {
+      console.log('[install-agent-browser] outdated (' + (meta.agentBrowserVersion || 'unknown') + ' != pinned ' + PINNED_TAG + '), updating...')
+    } else {
+      console.log('[install-agent-browser] agent-browser already present (' + binaryLabel(meta.agentBrowserVersion) + (meta.binaryVersion ? ' / binary ' + meta.binaryVersion : '') + ').')
+      console.log('  Update with: npm run agent-browser:update')
+      return
+    }
   }
 
   mkdirSync(binDir, { recursive: true })
@@ -254,11 +274,23 @@ async function installAgentBrowser() {
   const chromeExe = findFile(chromeDir, CHROME_EXE_NAMES[process.platform])
   if (!chromeExe) fail('could not locate the Chromium executable')
 
+  // --version은 업스트림 버전(예: v0.35 포크 = 내부 0.34.0 기반)을 보여준다.
+  // 포크 태그와 구분되도록 둘 다 기록한다.
+  let installedBinaryVersion = null
+  try {
+    const out = execFileSync(outBin, ['--version'], { encoding: 'utf8', timeout: 15000 })
+    const m = String(out).match(/(\d+\.\d+\.\d+)/)
+    if (m) installedBinaryVersion = m[1]
+  } catch {
+    // 메타 기록 실패는 치명적이지 않음
+  }
+
   writeFileSync(
     metaFile,
     JSON.stringify(
       {
         agentBrowserVersion: binaryVersion,
+        binaryVersion: installedBinaryVersion,
         chromiumVersion,
         bin: rel(outBin),
         executable: rel(chromeExe),
