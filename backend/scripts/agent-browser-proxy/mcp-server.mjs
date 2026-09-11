@@ -28,7 +28,7 @@
 //   SESSION_SWEEP_MS  sweeper interval (default "60000")
 //   CALL_TIMEOUT_MS   default per-call timeout (default "60000")
 
-import { spawn, execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import net from "node:net";
 import path from "node:path";
@@ -213,13 +213,6 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (e) { return e && e.code === "EPERM"; }
 }
-function killPidTree(pid) {
-  try {
-    if (process.platform === "win32") execSync("taskkill /PID " + pid + " /T /F", { stdio: "ignore", timeout: 15000 });
-    else process.kill(pid, "SIGKILL");
-    return true;
-  } catch (e) { return false; }
-}
 function portOpen(port, timeoutMs) {
   return new Promise((resolve) => {
     const s = net.connect({ host: "127.0.0.1", port });
@@ -243,11 +236,11 @@ async function superviseDaemon() {
   }
   const port = readSidecarInt(dir, key, "port");
   if (port !== null && !(await portOpen(port))) {
-    // pid는 살아있는데 포트가 닫힘 = 귀먹은 좀비. 사이드카만 지우면 프로세스가
-    // 남아 다음 호출도 망가뜨리므로 직접 죽인다.
-    const killed = pid !== null ? killPidTree(pid) : false;
+    // pid는 살아있는데 포트가 닫힘 = 귀먹은 좀비. 프로세스는 절대 죽이지 않고
+    // 사이드카만 지운다: 다음 호출이 respawn하고 옛 프로세스는 idle 종료.
+    // (kill 전쟁이 flicker의 주범이었음)
     for (const s of DAEMON_SIDECARS) { try { fs.unlinkSync(path.join(dir, key + "." + s)); } catch (e) {} }
-    log("daemon port " + port + " unreachable (pid " + pid + " alive); killed=" + killed + ", removed stale sidecars for " + DEFAULT_NS);
+    log("daemon port " + port + " unreachable (pid " + pid + " alive); removed stale sidecars for " + DEFAULT_NS);
   }
 }
 

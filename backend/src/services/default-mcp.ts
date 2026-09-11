@@ -2,7 +2,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync } from 'node:fs'
 import { ENV, getWorkspacePath, getReposPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 import { resolveDocReaderCommand } from './doc-tools'
@@ -257,9 +257,11 @@ const warmUpInFlight = new Map<string, Promise<boolean>>()
 // 병렬 웜업은 Chrome 동시 기동(10060/OOM)만 부른다. 진행 중인 웜업이
 // 있으면 새 세션도 거기에 붙는다.
 let globalWarmUpInFlight: Promise<boolean> | null = null
-// 좀비 데몬 판정용: warm=false 상태에서 웜업 연속 실패 횟수.
-// idle(웜업 시도 없음)은 카운트하지 않으므로, 멀쩡한 탭을 죽이지 않는다.
-let consecutiveWarmFailures = 0
+// 데몬 없음 상태에서 웜업 재시도 백오프: 망가진 환경에서 매 틱마다
+// Chrome 기동을 반복(프로세스 들락날락)하지 않게 5분 간격.
+let lastWarmAttemptAt = 0
+let lastWarmOk = true
+const WARM_RETRY_COOLDOWN_MS = 5 * 60_000
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
@@ -695,26 +697,6 @@ function deleteDaemonSidecars(dir: string, key: string): void {
   }
 }
 
-function sidecarMtimeMs(dir: string, key: string): number {
-  try {
-    return statSync(path.join(dir, `${key}.pid`)).mtimeMs
-  } catch {
-    return 0
-  }
-}
-
-function killProcessTree(pid: number): void {
-  try {
-    if (process.platform === 'win32') {
-      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 15_000 })
-    } else {
-      process.kill(pid, 'SIGKILL')
-    }
-  } catch {
-    // already gone
-  }
-}
-
 export function listAgentBrowserDaemons(): AgentBrowserDaemonInfo[] {
   const out: AgentBrowserDaemonInfo[] = []
   for (const dir of [agentBrowserRunDir(), agentBrowserSocketBase()]) {
@@ -744,18 +726,15 @@ export function listAgentBrowserDaemons(): AgentBrowserDaemonInfo[] {
 
 /**
  * agent-browser 데몬 관리자. MCP 등록 상태와 무관하게 백엔드가 살아있는 동안
- * 매 틱(60s) 호출된다:
- * 1. 죽은 pid의 stale 사이드카를 지운다 (좀비 포트 10060 방지: 다음 ensure가
- *    새로 띄우도록)
- * 2. 살아있는 데몬이 2개 이상이면 네임스페이스 데몬 1개만 남기고 정리한다.
- *    네임스페이스 데몬이 없으면 가장 최근 1개만 살리고 나머지를 정리한다
- *    (수정 전 바이너리 시절의 세션별 데몬 잔해 수습).
- *    정리는 taskkill /T 로 크롬 트리까지 함께 죽인다.
- * 3. 살아있는 데몬이 하나도 없으면 기존 warm-up으로 1개를 깨운다.
- * 4. 데몬은 살아있는데 브라우저가 안 뜬 채(warm=false) 웜업이 3틱 연속 실패하면
- *    좀비로 보고 네임스페이스 데몬을 죽이고 사이드카를 지운다. 다음 틱이 깨끗하게
- *    respawn한다. idle(웜업 시도 없음)은 카운트하지 않으므로 사용 중인 탭은 안전.
- * Chrome 선제 기동은 첫 사용 전에 미리 해둔다: recover는 lazy + 주기 웜업 병행.
+ * 매 틱(60s) 호출된다. 원칙: 살아있는 데몬은 절대 죽이지 않는다.
+ * kill 전쟁(죽였다 살리기)이 flicker와 10061의 주범이었으므로, 관리는
+ * 죽은 pid의 사이드카 청소 + 다음 호출의 lazy respawn에만 맡긴다.
+ * 1. 죽은 pid의 사이드카를 지운다 (좀비 포트 방지).
+ * 2. pid는 살아있는데 포트가 닫힌 귀먹은 좀비는 사이드카만 지운다.
+ *    프로세스는 건드리지 않는다 — 다음 호출이 깨끗하게 respawn하고,
+ *    옛 프로세스는 idle 종료에 맡긴다.
+ * 3. 살아있는 데몬이 하나도 없으면 warm-up 1회 (실패하면 5분 백오프).
+ *    망가진 환경에서 매 틱 Chrome 기동을 반복하지 않는다.
  */
 export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> {
   const empty: SupervisionResult = { daemons: [], cleanedStale: [], culled: [], warmed: false }
@@ -772,66 +751,21 @@ export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> 
       cleanedStale.push(daemon.key)
     }
   }
-  const healthy = daemons.filter((d) => d.alive && d.portOpen)
-  const namespaced = healthy.filter((d) => d.namespaced)
-  if (namespaced.length >= 1) {
-    const keep = newestFirst(namespaced)[0]!
-    for (const daemon of healthy) {
-      if (daemon === keep) continue
-      if (daemon.pid !== null) {
-        killProcessTree(daemon.pid)
-        culled.push(daemon.pid)
-      }
+  // 귀먹은 좀비(pid 살아있고 포트 닫힘): 프로세스는 절대 죽이지 않고
+  // 사이드카만 지운다. 다음 호출이 respawn하고 옛 프로세스는 idle 종료.
+  for (const daemon of daemons) {
+    if (daemon.alive && daemon.port !== null && !daemon.portOpen) {
       deleteDaemonSidecars(daemon.dir, daemon.key)
-    }
-  } else if (healthy.length >= 1) {
-    const keep = newestFirst(healthy)[0]!
-    for (const daemon of healthy) {
-      if (daemon === keep) continue
-      if (daemon.pid !== null) {
-        killProcessTree(daemon.pid)
-        culled.push(daemon.pid)
-      }
-      deleteDaemonSidecars(daemon.dir, daemon.key)
+      cleanedStale.push(`${daemon.key}:unreachable`)
     }
   }
   let warmed = false
-  const survivors = healthy.length - culled.length
+  const survivors = daemons.filter((d) => d.alive && d.portOpen).length
   if (survivors <= 0) {
-    const stillHealthy = (await refreshLiveness(daemons, culled)).filter((d) => d.alive && d.portOpen)
-    if (stillHealthy.length === 0) {
+    if (lastWarmOk || Date.now() - lastWarmAttemptAt > WARM_RETRY_COOLDOWN_MS) {
+      lastWarmAttemptAt = Date.now()
       warmed = await warmUpAgentBrowserDaemon().catch(() => false)
-      consecutiveWarmFailures = warmed ? 0 : consecutiveWarmFailures + 1
-    }
-  } else {
-    // pid+포트는 살아있는데 브라우저가 한 번도 안 뜬 좀비 데몬(구버전 잔해,
-    // 콜드킬 반쪽 Chrome 등)은 기존 검사에 "정상"으로 보인다. 먼저 웜업만
-    // 걸어본다 — 전역 뮤텍스라 이미 도는 웜업에 그냥 붙는다.
-    // 웜업이 3틱 연속 실패하면(아무것도 안 쓰는 idle이 아니라 실제로 아픈 것)
-    // 네임스페이스 데몬을 죽이고 사이드카를 지운다. 다음 틱이 깨끗하게 respawn.
-    try {
-      if (!getAgentBrowserDaemonStatus().warm) {
-        warmed = await warmUpAgentBrowserDaemon().catch(() => false)
-        if (warmed) {
-          consecutiveWarmFailures = 0
-        } else if ((consecutiveWarmFailures += 1) >= 3) {
-          for (const daemon of namespaced) {
-            if (daemon.pid !== null) {
-              killProcessTree(daemon.pid)
-              culled.push(daemon.pid)
-            }
-            deleteDaemonSidecars(daemon.dir, daemon.key)
-          }
-          consecutiveWarmFailures = 0
-          logger.warn(
-            `Agent-browser daemon never launched a browser (${AGENT_BROWSER_NAMESPACE}); culled zombie daemon, will respawn next tick`
-          )
-        }
-      } else {
-        consecutiveWarmFailures = 0
-      }
-    } catch {
-      // 상태 조회 실패는 다음 틱으로
+      lastWarmOk = warmed
     }
   }
   if (cleanedStale.length > 0 || culled.length > 0 || warmed) {
@@ -841,27 +775,6 @@ export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> 
     )
   }
   return { daemons, cleanedStale, culled, warmed }
-}
-
-function newestFirst(daemons: AgentBrowserDaemonInfo[]): AgentBrowserDaemonInfo[] {
-  return [...daemons].sort((a, b) => sidecarMtimeMs(b.dir, b.key) - sidecarMtimeMs(a.dir, a.key))
-}
-
-async function refreshLiveness(
-  daemons: AgentBrowserDaemonInfo[],
-  culled: number[],
-): Promise<AgentBrowserDaemonInfo[]> {
-  const culledSet = new Set(culled)
-  for (const daemon of daemons) {
-    if (daemon.pid !== null && culledSet.has(daemon.pid)) {
-      daemon.alive = false
-      daemon.portOpen = false
-      continue
-    }
-    daemon.alive = daemon.pid !== null && pidAlive(daemon.pid)
-    daemon.portOpen = daemon.alive && daemon.port !== null ? await tcpProbe(daemon.port) : false
-  }
-  return daemons
 }
 
 function sleep(ms: number): Promise<void> {

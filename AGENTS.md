@@ -97,12 +97,10 @@
   `agent_browser_open about:blank` on a throwaway `warmup-opencode` session to force
   the browser launch, then kills the MCP child (the background daemon survives).
   Same-key calls attach to the in-flight warmup, so the 60s tick never piles on.
-  The 60s tick runs `superviseAgentBrowserDaemon()`: it
-  enumerates daemon sidecars, deletes stale ones (dead pid → zombie port 10060
-  방지), culls extra live daemons down to one (taskkill /T takes the leaked
-  Chrome tree too), warms when no browser is up, and culls the namespace daemon
-  after 3 consecutive failed warmups (zombie that never launches) so the next
-  tick respawns clean. Proxy-side, every sweep
+  The 60s tick runs `superviseAgentBrowserDaemon()`: it deletes sidecars of
+  dead pids (zombie port 10060 방지) and of deaf-but-alive daemons, warms when
+  no daemon is alive (5-min retry backoff on failure), and NEVER kills a live
+  process — kill wars were the flicker/10061 source. Proxy-side, every sweep
   verifies the pinned daemon port and drops stale sidecars so the next call
   respawns lazily instead of 10060ing. A browser is pre-warmed (startup + when
   cold), never force-launched per call.

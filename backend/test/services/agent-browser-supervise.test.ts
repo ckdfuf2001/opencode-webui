@@ -75,7 +75,7 @@ describe('agent-browser supervision', () => {
     expect(keys).not.toContain('repo-stale')
   })
 
-  it('culls extra healthy daemons and keeps the namespace one', async () => {
+  it('leaves live daemons alone (no kill wars)', async () => {
     const dir = runDir(base)
     const main = await listen()
     servers.push(main.server)
@@ -88,9 +88,33 @@ describe('agent-browser supervision', () => {
     writeSidecars(dir, 'repo-legacy', extra.pid!, extraPort.port)
 
     const result = await superviseAgentBrowserDaemon()
-    expect(result.culled).toContain(extra.pid)
+    expect(result.culled).toHaveLength(0)
     expect(result.warmed).toBe(false)
+    expect(extra.exitCode).toBeNull()
     const kept = listAgentBrowserDaemons().map((d) => d.key)
     expect(kept).toContain(NS)
+    expect(kept).toContain('repo-legacy')
+  }, 30000)
+
+  it('cleans sidecars of deaf daemons without killing them', async () => {
+    const dir = runDir(base)
+    // survivors>0 유지용 정상 데몬 (웜업 부트 방지)
+    const main = await listen()
+    servers.push(main.server)
+    writeSidecars(dir, NS, process.pid, main.port)
+    const proc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000000)'])
+    children.push(proc)
+    await new Promise((r) => setTimeout(r, 300))
+    // 살아있지만 포트가 닫힘: 사이드카만 지우고 프로세스는 살린다
+    writeSidecars(dir, 'repo-deaf', proc.pid!, 59999)
+
+    const result = await superviseAgentBrowserDaemon()
+    expect(result.cleanedStale).toContain('repo-deaf:unreachable')
+    expect(result.culled).toHaveLength(0)
+    expect(result.warmed).toBe(false)
+    expect(proc.exitCode).toBeNull()
+    const keys = listAgentBrowserDaemons().map((d) => d.key)
+    expect(keys).toContain(NS)
+    expect(keys).not.toContain('repo-deaf')
   }, 30000)
 })
