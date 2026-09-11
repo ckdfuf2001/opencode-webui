@@ -105,7 +105,9 @@
   tick respawns clean. Proxy-side, every sweep
   verifies the pinned daemon port and drops stale sidecars so the next call
   respawns lazily instead of 10060ing. A browser is pre-warmed (startup + when
-  cold), never force-launched per call. Live daemon list is at
+  cold), never force-launched per call.
+- Socket dir is install-scoped (`.agent-browser-home` under the install root,
+  `AGENT_BROWSER_SOCKET_DIR`): portable/other installs never share the daemon. Live daemon list is at
   `GET /api/mcp/agent-browser/status` (`daemons` array); manual reconcile is
   `POST /api/mcp/agent-browser/supervise`.
   Do NOT warm with `open --headed false`: that produces a different daemon profile and

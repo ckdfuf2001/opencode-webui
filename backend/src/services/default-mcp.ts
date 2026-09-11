@@ -1,5 +1,6 @@
 import path from 'node:path'
 import net from 'node:net'
+import { fileURLToPath } from 'node:url'
 import { spawn, execFileSync, execSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync, mkdirSync } from 'node:fs'
 import { ENV, getWorkspacePath, getReposPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
@@ -59,7 +60,56 @@ export function agentBrowserEnv(): Record<string, string> {
   env.SESSION_TTL_MS = PROXY_SESSION_TTL_MS
   env.SESSION_MAX = PROXY_SESSION_MAX
   env.SESSION_SWEEP_MS = PROXY_SESSION_SWEEP_MS
+  // 설치별 소켓 격리: 다른 설치본(portable 등)과 데몬을 공유하지 않는다.
+  const scoped = getScopedSocketDir()
+  if (scoped) {
+    env.AGENT_BROWSER_SOCKET_DIR = scoped
+    env.SESSION_STORE = path.join(scoped, 'proxy-sessions.json')
+  }
   return env
+}
+
+// 설치별 agent-browser 소켓 디렉터리. 기본 ~/.agent-browser 공유는 다른
+// 설치본의 데몬과 사이드카를 두고 싸우는(10061/좀비) 구조라 격리한다.
+// 명시 env가 있으면 존중, 없으면 설치 루트/.agent-browser-home.
+export function getScopedSocketDir(): string | null {
+  if (process.env.AGENT_BROWSER_SOCKET_DIR) return process.env.AGENT_BROWSER_SOCKET_DIR
+  const root = resolveInstallRoot()
+  return root ? path.join(root, '.agent-browser-home') : null
+}
+
+export function ensureScopedSocketDir(): string | null {
+  const dir = getScopedSocketDir()
+  if (!dir) return null
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {}
+  if (process.env.AGENT_BROWSER_SOCKET_DIR !== dir) {
+    process.env.AGENT_BROWSER_SOCKET_DIR = dir
+  }
+  return dir
+}
+
+function resolveInstallRoot(): string | null {
+  const candidates: string[] = []
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    candidates.push(path.resolve(here, '..', '..', '..'))
+  } catch {}
+  try {
+    candidates.push(process.cwd())
+  } catch {}
+  for (const c of candidates) {
+    try {
+      if (existsSync(path.join(c, 'bin', 'agent-browser', '.meta.json'))) return c
+    } catch {}
+  }
+  for (const c of candidates) {
+    try {
+      if (existsSync(path.join(c, 'package.json'))) return c
+    } catch {}
+  }
+  return null
 }
 
 function resolveAgentBrowser(): AgentBrowserInfo | null {
