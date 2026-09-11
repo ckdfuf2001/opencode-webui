@@ -1,6 +1,10 @@
 import { useRef, useEffect, useCallback } from 'react'
 
 const SCROLL_LOCK_MS = 300
+// 히스테리시스: 맨 아래 근처(<=NEAR)면 추종 유지/복귀, 확실히 멀어져야(>FAR)
+// 추종 해제. 경계에서 들락날락하며 깜빡이는 것 방지.
+const NEAR_BOTTOM_PX = 120
+const FAR_BOTTOM_PX = 200
 
 interface MessageInfo {
   role: string
@@ -101,6 +105,14 @@ export function useAutoScroll<T extends Message>({
     const handleWheel = (e: WheelEvent) => {
       if (e.deltaY < 0) {
         markDisengaged()
+      } else if (e.deltaY > 0) {
+        // 아래로 미는데 이미 맨 아래 근처면 추종 복귀 (스크롤 이벤트에서 재확인)
+        const dist = container.scrollHeight - (container.scrollTop + container.clientHeight)
+        if (dist <= NEAR_BOTTOM_PX) {
+          userScrolledAtRef.current = 0
+          userDisengagedRef.current = false
+          onScrollStateChange?.(false)
+        }
       }
     }
 
@@ -113,14 +125,21 @@ export function useAutoScroll<T extends Message>({
     // 추종 여부는 제스처가 아니라 위치로 판단한다 — 휠/드래그/키보드/터치
     // 어떤 수단으로든 아래를 벗어나면 추종 해제, 맨 아래면 추종 재개.
     // (기존 제스처 감지로는 스크롤바 드래그·스페이스·터치가 빠져 다음 폴링에 끌려내려갔다)
+    // 히스테리시스로 "애매하게 위"에서는 추종을 유지한다: NEAR 이하면 복귀,
+    // FAR을 넘어야 해제, 사이는 현상 유지.
     const handleScroll = () => {
-      if (container.scrollTop + container.clientHeight >= container.scrollHeight - 40) {
+      const distToBottom = container.scrollHeight - (container.scrollTop + container.clientHeight)
+      if (distToBottom <= NEAR_BOTTOM_PX) {
+        if (userDisengagedRef.current) {
+          userDisengagedRef.current = false
+          onScrollStateChange?.(false)
+        }
         userScrolledAtRef.current = 0
-        userDisengagedRef.current = false
-        onScrollStateChange?.(false)
-      } else if (!userDisengagedRef.current) {
-        userDisengagedRef.current = true
-        onScrollStateChange?.(true)
+      } else if (distToBottom > FAR_BOTTOM_PX) {
+        if (!userDisengagedRef.current) {
+          userDisengagedRef.current = true
+          onScrollStateChange?.(true)
+        }
       }
     }
     
