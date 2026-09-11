@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listRepos } from '@/api/repos'
@@ -154,6 +155,55 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
   const location = useLocation()
   const { data: sessions, isLoading: sessionsLoading } = useSessions(OPENCODE_API_ENDPOINT, directory)
   const { data: dbStatuses } = useSessionStatusMap()
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  // 세션트리와 같은 parentID 트리: subagent는 숨겨진 하위로
+  interface NavSessionNode {
+    id: string
+    title?: string
+    parentID?: string
+    children: NavSessionNode[]
+  }
+  const roots: NavSessionNode[] = useMemo(() => {
+    if (!sessions) return []
+    const nodes = new Map<string, NavSessionNode>()
+    for (const s of sessions) {
+      nodes.set(s.id, { id: s.id, title: s.title, parentID: (s as { parentID?: string }).parentID, children: [] })
+    }
+    const rs: NavSessionNode[] = []
+    for (const n of nodes.values()) {
+      const p = n.parentID ? nodes.get(n.parentID) : undefined
+      if (p) p.children.push(n)
+      else rs.push(n)
+    }
+    return rs
+  }, [sessions])
+
+  // 활성 세션이 접힌 하위에 있으면 조상 펼치기
+  useEffect(() => {
+    if (!sessions) return
+    const active = sessions.find(s => location.pathname.includes(s.id))
+    const parentID = (active as { parentID?: string } | undefined)?.parentID
+    if (active && parentID) {
+      const byId = new Map(sessions.map(s => [s.id, s] as const))
+      const chain: string[] = []
+      let cur: string | undefined = parentID
+      while (cur && byId.has(cur)) {
+        chain.push(cur)
+        cur = (byId.get(cur) as { parentID?: string } | undefined)?.parentID
+      }
+      if (chain.length > 0) setExpanded(prev => new Set([...prev, ...chain]))
+    }
+  }, [location.pathname, sessions])
+
+  const toggle = (id: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   if (!sessions) {
     return <div className="ml-8 px-2 py-1 text-xs text-muted-foreground">{sessionsLoading ? '로딩 중...' : '세션 없음'}</div>
@@ -162,31 +212,63 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
     return <div className="ml-8 px-2 py-1 text-xs text-muted-foreground">세션 없음</div>
   }
 
+  const renderRow = (id: string, title?: string) => {
+    const isActive = location.pathname.includes(id)
+    const isBusy = dbStatuses?.some(e => e.sessionId === id && e.status === 'busy')
+    const pending = dbStatuses?.find(e => e.sessionId === id)?.pendingPermissions ?? 0
+    return (
+      <a
+        key={id}
+        href={`/repos/${repoId}/sessions/${id}`}
+        onClick={(e) => {
+          if (e.ctrlKey || e.metaKey) return
+          e.preventDefault()
+          navigate(`/repos/${repoId}/sessions/${id}`)
+          onNavigate?.()
+        }}
+        className={`flex items-center gap-2 px-2 py-1 rounded text-xs truncate hover:bg-accent text-left ${isActive ? 'bg-accent' : ''}`}
+      >
+        <MessageSquare className="w-3 h-3 shrink-0" />
+        <span className="truncate flex-1">{title || 'Untitled'}</span>
+        {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
+        {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
+      </a>
+    )
+  }
+
+  const visibleRoots = roots.slice(0, 10)
+
+  const renderNavNode = (node: NavSessionNode): ReactNode => {
+    const hasChildren = node.children.length > 0
+    const isOpen = expanded.has(node.id)
+    return (
+      <div key={node.id} className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-0.5">
+          {hasChildren ? (
+            <button
+              onClick={() => toggle(node.id)}
+              className="h-5 w-5 flex items-center justify-center hover:bg-accent rounded shrink-0"
+              title={isOpen ? '하위 세션 접기' : '하위 세션 펼치기'}
+            >
+              {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            </button>
+          ) : (
+            <span className="w-5 shrink-0" />
+          )}
+          <div className="flex-1 min-w-0">{renderRow(node.id, node.title)}</div>
+        </div>
+        {hasChildren && isOpen && (
+          <div className="ml-4 border-l border-border pl-1 flex flex-col gap-0.5">
+            {node.children.map((child) => renderNavNode(child))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="ml-6 border-l border-border pl-2 flex flex-col gap-0.5 mt-0.5">
-      {sessions.slice(0, 10).map(s => {
-        const isActive = location.pathname.includes(s.id)
-        const isBusy = dbStatuses?.some(e => e.sessionId === s.id && e.status === 'busy')
-        const pending = dbStatuses?.find(e => e.sessionId === s.id)?.pendingPermissions ?? 0
-        return (
-          <a
-            key={s.id}
-            href={`/repos/${repoId}/sessions/${s.id}`}
-            onClick={(e) => {
-              if (e.ctrlKey || e.metaKey) return
-              e.preventDefault()
-              navigate(`/repos/${repoId}/sessions/${s.id}`)
-              onNavigate?.()
-            }}
-            className={`flex items-center gap-2 px-2 py-1 rounded text-xs truncate hover:bg-accent text-left ${isActive ? 'bg-accent' : ''}`}
-          >
-            <MessageSquare className="w-3 h-3 shrink-0" />
-            <span className="truncate flex-1">{s.title || 'Untitled'}</span>
-            {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
-            {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
-          </a>
-        )
-      })}
+      {visibleRoots.map((node) => renderNavNode(node))}
       {sessions.length > 10 && <div className="px-2 py-1 text-xs text-muted-foreground">+{sessions.length - 10} more</div>}
     </div>
   )
