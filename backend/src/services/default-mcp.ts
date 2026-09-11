@@ -413,6 +413,148 @@ export function getAgentBrowserDaemonStatus(
   return { warm, mcpChildRunning: isAgentBrowserMcpChildRunning(namespace), session: sessionName }
 }
 
+export interface AgentBrowserCheck {
+  name: string
+  ok: boolean
+  detail: string
+}
+
+// 원격 진단용: open 실패 시 추측이 아니라 단계별 기동 경로를 직접 실행해
+// 어디서 막히는지 찍는다. 읽기 전용 + temp 스모크 프로필만 쓴다.
+export async function diagnoseAgentBrowser(): Promise<{ checks: AgentBrowserCheck[]; verdict: string }> {
+  const checks: AgentBrowserCheck[] = []
+  const push = (name: string, ok: boolean, detail: string): void => {
+    checks.push({ name, ok, detail })
+  }
+  const errText = (e: unknown): string =>
+    String((e as { message?: unknown })?.message ?? e).slice(0, 600)
+
+  // 1. 바이너리/메타 (EACCES면 여기서 바로 걸린다)
+  const info = resolveAgentBrowser()
+  if (!info) {
+    push('binary', false, 'meta 또는 실행파일 없음. npm run agent-browser:install 필요')
+  } else {
+    const binOk = existsSync(info.binPath)
+    const exeOk = !!info.executablePath && existsSync(info.executablePath)
+    let ver = ''
+    try {
+      ver = execFileSync(info.binPath, ['--version'], { encoding: 'utf8', timeout: 15000 }).trim()
+    } catch (e) {
+      ver = ''
+      push('binary-run', false, `실행 불가: ${errText(e)} (ACL/백신 차단 가능)`)
+    }
+    if (ver) push('binary-run', true, `${info.binPath} -> ${ver}`)
+    push('binary-files', binOk && exeOk, `bin=${binOk} chromium=${exeOk} (${info.executablePath || 'none'})`)
+  }
+
+  // 2. 소켓 디렉터리 쓰기 가능 여부 (사이드카/프로필 기록 경로)
+  try {
+    const dir = agentBrowserRunDir()
+    mkdirSync(dir, { recursive: true })
+    const probe = path.join(dir, `.writetest-${process.pid}`)
+    writeFileSync(probe, 'ok', 'utf8')
+    rmSync(probe, { force: true })
+    push('socketdir-writable', true, dir)
+  } catch (e) {
+    push('socketdir-writable', false, `쓰기 불가: ${errText(e)} (권한 불일치: 관리자/일반 혼용 확인)`)
+  }
+
+  // 3. 크로뮴 headless 스모크 (데몬과 무관하게 브라우저 자체 기동 확인)
+  // 3b. --no-sandbox 재시도: 기본 실패 + 이거 성공이면 샌드박스/정책 문제 확정
+  if (info?.executablePath && existsSync(info.executablePath)) {
+    const profile = path.join(process.env.TEMP ?? process.env.TMPDIR ?? '/tmp', `ab-smoke-${process.pid}`)
+    const baseArgs = ['--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-gpu']
+    try {
+      const out = execFileSync(
+        info.executablePath,
+        [...baseArgs, `--user-data-dir=${profile}`, '--dump-dom', 'about:blank'],
+        { encoding: 'utf8', timeout: 25000 },
+      )
+      push('chrome-smoke', out.includes('<html'), `dump ${out.trim().length} chars`)
+    } catch (e) {
+      const msg = errText(e)
+      let nosandbox = 'skipped'
+      try {
+        const out2 = execFileSync(
+          info.executablePath,
+          [...baseArgs, '--no-sandbox', `--user-data-dir=${profile}-ns`, '--dump-dom', 'about:blank'],
+          { encoding: 'utf8', timeout: 25000 },
+        )
+        nosandbox = out2.includes('<html') ? 'OK' : `empty (${out2.trim().length} chars)`
+      } catch (e2) {
+        nosandbox = `실패: ${errText(e2)}`
+      } finally {
+        try { rmSync(`${profile}-ns`, { recursive: true, force: true }) } catch {}
+      }
+      const sandbox = /root|administrator|no-sandbox|sandbox/i.test(msg)
+      push('chrome-smoke', false,
+        `기동 실패: ${msg} / --no-sandbox 재시도: ${nosandbox}` +
+        (sandbox ? ' (샌드박스/권한 문제 가능성: 관리자 실행 여부·백신 확인)' : ''))
+    } finally {
+      try { rmSync(profile, { recursive: true, force: true }) } catch {}
+    }
+  } else {
+    push('chrome-smoke', false, 'chromium 실행파일 없음 (LFS 포인터 가능: git lfs pull 확인)')
+  }
+
+  // 4. 데몬 사이드카/프로세스/포트 (네임스페이스 고정 데몬만)
+  try {
+    const found = listAgentBrowserDaemons().filter((d) => d.namespaced)
+    if (found.length === 0) {
+      push('daemon', true, '실행 중인 데몬 없음 (다음 open 때 lazy 기동)')
+    } else {
+      for (const d of found) {
+        const open = d.alive && d.port !== null ? await tcpProbe(d.port) : false
+        d.portOpen = open
+        push('daemon', d.alive && open, `pid=${d.pid} alive=${d.alive} port=${d.port} open=${open}`)
+      }
+    }
+  } catch (e) {
+    push('daemon', false, `조회 실패: ${errText(e)}`)
+  }
+
+  // 5. CLI 세션 인포 (데몬 버전/활성)
+  try {
+    if (!info) throw new Error('no binary')
+    const out = execFileSync(info.binPath, ['session', 'info', '--json'], {
+      env: { ...process.env, AGENT_BROWSER_NAMESPACE: AGENT_BROWSER_NAMESPACE },
+      encoding: 'utf8',
+      timeout: 15000,
+    })
+    const j = JSON.parse(out) as { data?: { active?: boolean; version?: string }; success?: boolean }
+    push('daemon-info', true, `version=${j.data?.version ?? '?'} active=${j.data?.active ?? '?'}`)
+  } catch (e) {
+    push('daemon-info', false, `조회 실패: ${errText(e)}`)
+  }
+
+  // 6. 웜 상태 (데몬 주도 기동이 실제로 되는지 — 직접 스모크와 플래그가
+  //   다를 수 있어 데몬 기준을 우선한다)
+  let warm = false
+  try {
+    warm = getAgentBrowserDaemonStatus().warm
+  } catch {}
+  push('daemon-warm', warm, warm ? 'browser launched' : 'no launched browser')
+
+  const byName = (n: string): AgentBrowserCheck | undefined => checks.find((c) => c.name === n)
+  const hardBlock = ['binary-run', 'binary-files', 'socketdir-writable']
+    .map(byName)
+    .find((c) => c && !c.ok)
+  const smoke = byName('chrome-smoke')
+  let verdict: string
+  if (hardBlock) {
+    verdict = `BLOCKED at ${hardBlock.name}: ${hardBlock.detail}`
+  } else if (warm) {
+    verdict = smoke && !smoke.ok
+      ? `OK (daemon-driven launch works; direct smoke failed — likely flag/env difference): ${smoke.detail.slice(0, 300)}`
+      : 'launch path OK — 데몬·브라우저 기동 가능'
+  } else if (smoke && !smoke.ok) {
+    verdict = `BLOCKED: browser won't launch. ${smoke.detail.slice(0, 500)}`
+  } else {
+    verdict = 'cold but launchable — open 1회로 기동됨 (lazy). 실패 시 supervise 후 재시도'
+  }
+  return { checks, verdict }
+}
+
 export interface AgentBrowserDaemonInfo {
   key: string
   dir: string

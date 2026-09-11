@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { Database } from 'bun:sqlite'
-import { getAgentBrowserDaemonStatus, listAgentBrowserDaemons, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon } from '../services/default-mcp'
+import { getAgentBrowserDaemonStatus, listAgentBrowserDaemons, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon, diagnoseAgentBrowser } from '../services/default-mcp'
 import { logger } from '../utils/logger'
 
 export function createMcpRoutes(_db: Database) {
@@ -34,8 +34,17 @@ export function createMcpRoutes(_db: Database) {
     }
   })
 
-  app.post('/agent-browser/warm', async (c) => {
+  app.get('/agent-browser/diagnose', async (c) => {
     try {
+      const result = await diagnoseAgentBrowser()
+      return c.json({ ...result, timestamp: new Date().toISOString() })
+    } catch (error) {
+      logger.error('Failed to diagnose agent-browser:', error)
+      return c.json({ error: 'Failed to diagnose agent-browser' }, 500)
+    }
+  })
+
+  app.post('/agent-browser/warm', async (c) => {    try {
       const body = await c.req.json().catch(() => ({})) as { session?: string }
       const session = body.session || c.req.query('session') || undefined
       const ok = await warmUpAgentBrowserDaemon('opencode', session)
