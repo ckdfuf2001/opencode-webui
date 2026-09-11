@@ -1,7 +1,10 @@
 import type { Database } from 'bun:sqlite'
+import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { getWorkspacePath } from '@opencode-webui/shared'
+import { getSessionStatusRow } from '../db/session-status-queries'
+import { resolveLiveDirectory } from './command-runs'
 import { logger } from '../utils/logger'
 
 let queueDb: Database | null = null
@@ -254,15 +257,25 @@ function markHeadQueued(sessionID: string, id: string): void {
  *   (상태 폴러가 idle 전환 후 재시도).
  */
 /** 큐 저장 → DB(session_status) → workspace 순으로 세션의 실제 디렉터리를 구한다.
- *  프론트가 구버전이라 directory 없이 enqueue해도 DB에서 찾아 오판을 막는다. */
+ *  프론트가 구버전이라 directory 없이 enqueue해도 DB에서 찾아 오판을 막는다.
+ *  저장된 절대경로는 resolveLiveDirectory 로 현재 기준으로 재해석한다
+ *  (프로젝트 폴더명 변경 후 stale 경로로 opencode 를 때리는 것을 방지). */
 function resolveQueueDir(sessionID: string): string {
   const remembered = queueDirs.get(sessionID)
-  if (remembered) return remembered
+  if (remembered) {
+    try {
+      if (existsSync(remembered)) return remembered
+    } catch {
+      return remembered
+    }
+  }
   try {
-    const row = queueDb?.query('SELECT directory FROM session_status WHERE session_id = ?').get(sessionID) as { directory?: string } | undefined
-    if (row?.directory) return row.directory
+    if (queueDb) {
+      const row = getSessionStatusRow(queueDb, sessionID)
+      if (row?.directory) return resolveLiveDirectory(queueDb, row.directory, row.repoId)
+    }
   } catch {}
-  return getWorkspacePath()
+  return remembered ?? getWorkspacePath()
 }
 
 async function checkOpencodeBusy(base: string, directoryParam: string, sessionID: string): Promise<boolean> {

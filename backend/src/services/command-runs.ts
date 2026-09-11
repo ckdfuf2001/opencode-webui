@@ -1,5 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { getWorkspacePath } from '@opencode-webui/shared'
 import type {
   CommandRun,
   CommandRunOrigin,
@@ -54,6 +56,66 @@ export function resolveRepoId(db: Database, directory?: string | null): number |
   }
 
   return bestId
+}
+
+/**
+ * 저장된 절대 디렉터리를 현재 파일시스템 기준으로 되살린다.
+ * repos.local_path 는 상대경로이므로 프로젝트 폴더명 변경·이동 후에도 현재
+ * repos 기준으로 재해석할 수 있다. session_status/command_runs 에 남은 stale
+ * 절대경로가 ?directory= 에 그대로 들어가 opencode 4xx/5xx → 큐 재시도 폭주를
+ * 일으키던 것을 막는다.
+ * 1. 그대로 존재하면 그대로 사용 (정상 케이스)
+ * 2. repoId 로 현재 fullPath 복원
+ * 3. localPath suffix 로 현재 repo 매칭 (폴더명 변경 대응, 가장 긴 것 우선)
+ * 4. 전부 실패하면 저장값 그대로 (opencode 가 1회 에러 → 큐는 failed 로 멈춤)
+ */
+export function resolveLiveDirectory(
+  db: Database,
+  storedDir?: string | null,
+  repoId?: number | null,
+): string {
+  const workspace = getWorkspacePath()
+  if (!storedDir) return workspace
+  try {
+    if (existsSync(storedDir)) return storedDir
+  } catch {
+    return storedDir
+  }
+  let repos: { id: number; localPath: string; fullPath: string }[] = []
+  try {
+    repos = listRepos(db)
+  } catch {
+    return storedDir
+  }
+  if (repoId != null) {
+    const byId = repos.find((r) => r.id === repoId)
+    if (byId?.fullPath) {
+      try {
+        if (existsSync(byId.fullPath)) return byId.fullPath
+      } catch {
+        // 아래 suffix 매칭으로 계속
+      }
+    }
+  }
+  const target = normalizePath(storedDir).toLowerCase()
+  let best: string | null = null
+  let bestLength = -1
+  for (const repo of repos) {
+    const local = normalizePath(repo.localPath ?? '').toLowerCase()
+    if (!local) continue
+    if ((target === local || target.endsWith(`/${local}`)) && local.length > bestLength) {
+      best = repo.fullPath
+      bestLength = local.length
+    }
+  }
+  if (best) {
+    try {
+      if (existsSync(best)) return best
+    } catch {
+      return storedDir
+    }
+  }
+  return storedDir
 }
 
 export interface RecordRunStartInput extends CreateCommandRunInput {

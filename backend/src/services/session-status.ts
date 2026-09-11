@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { resolveRepoId } from './command-runs'
+import { resolveRepoId, resolveLiveDirectory } from './command-runs'
 import * as crDb from '../db/command-run-queries'
 import { flushReadyQueues } from './chat-queue'
 import { indexSessionMessages } from './fts-indexer'
@@ -75,7 +75,10 @@ export function startSessionStatusPoller(db: Database): void {
 
       for (const row of listSessionStatus(db)) {
         if (touched.has(row.sessionId)) continue
+        // stale 절대경로(폴더명 변경 전)는 현재 스냅샷에 안 잡혀 busy 가 영원히
+        // 유지되므로, 현재 기준으로 재해석한 뒤 조회한다.
         const snapshot = snapshots.get(row.directory)
+          ?? snapshots.get(resolveLiveDirectory(db, row.directory, row.repoId))
         if (!snapshot) continue // 조회 실패 디렉터리는 마지막 상태 유지
         if (row.status === 'busy' && !snapshot.busySessionIds.has(row.sessionId)) {
           logger.info(`Session ${row.sessionId} marked idle by status poller`)
@@ -226,7 +229,8 @@ async function mergeGlobalFallback(
     if (touched.has(sessionId)) continue
     if (knownBusy.has(sessionId) || knownPending.has(sessionId)) continue
     const prev = existing.get(sessionId)
-    const directory = prev?.directory ?? 'global'
+    const rawDir = prev?.directory ?? 'global'
+    const directory = rawDir === 'global' ? rawDir : resolveLiveDirectory(db, rawDir, prev?.repoId ?? null)
     const pending = mergedPending.get(sessionId) ?? 0
     const busy = globalBusy.has(sessionId) || pending > 0
     logger.info(`Session ${sessionId} tracked via global fallback (busy=${busy}, pending=${pending})`)
