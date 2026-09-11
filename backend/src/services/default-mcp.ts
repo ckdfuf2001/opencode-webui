@@ -6,6 +6,9 @@ import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync
 import { ENV, getWorkspacePath, getReposPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 import { resolveDocReaderCommand } from './doc-tools'
+// === BEGIN agent-browser-proxy (optional module; see agent-browser-proxy/README.md) ===
+import { resolveAgentBrowserProxy, agentBrowserProxyEnv } from './agent-browser-proxy'
+// === END agent-browser-proxy ===
 
 let agentBrowserWarmState: 'warm' | 'cold' | 'unknown' = 'unknown'
 
@@ -86,6 +89,9 @@ export function agentBrowserEnv(): Record<string, string> {
   if (scoped) {
     env.AGENT_BROWSER_SOCKET_DIR = scoped
   }
+  // === BEGIN agent-browser-proxy (optional; AGENT_BROWSER_PROXY=1일 때만 SESSION_* 추가) ===
+  Object.assign(env, agentBrowserProxyEnv())
+  // === END agent-browser-proxy ===
   return env
 }
 
@@ -153,6 +159,26 @@ function buildAgentBrowserMcp(
   // 원본 native MCP 직접 등록. 세션은 호출마다 전달한다 (서버 env 세션 고정 금지).
   const info = resolveAgentBrowser()
   if (!info) return {}
+  // === BEGIN agent-browser-proxy (optional; AGENT_BROWSER_PROXY=1일 때만 적용) ===
+  const proxy = resolveAgentBrowserProxy(info.binPath, namespace)
+  if (proxy) {
+    const proxyEnv: Record<string, string> = { ...agentBrowserProxyEnv() }
+    if (info.executablePath && existsSync(info.executablePath)) {
+      proxyEnv.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
+    }
+    proxyEnv.AGENT_BROWSER_NAMESPACE = namespace
+    proxyEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
+    proxyEnv.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
+    return {
+      'agent-browser': {
+        type: 'local',
+        enabled: true,
+        command: proxy.command,
+        env: proxyEnv,
+      },
+    }
+  }
+  // === END agent-browser-proxy ===
   const env: Record<string, string> = {}
   if (info.executablePath && existsSync(info.executablePath)) {
     env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath

@@ -111,6 +111,18 @@ if ($needDocTools -and -not $SkipDocTools) {
 
 # agent-browser는 원본 native MCP 직접 사용 (별도 프록시 없음)
 
+# === BEGIN agent-browser-proxy (optional module; remove this block to drop) ===
+$srcProxy = Join-Path $root 'agent-browser-proxy'
+if (Test-Path (Join-Path $srcProxy 'mcp-server.mjs')) {
+  $destProxy = Join-Path $release 'agent-browser-proxy'
+  if (Test-Path $destProxy) { Remove-Item -Recurse -Force $destProxy }
+  Copy-Item -Recurse -Force $srcProxy $destProxy
+  Write-Output '[package 6/7] agent-browser-proxy included (opt-in via AGENT_BROWSER_PROXY=1)'
+} else {
+  Write-Output '[package 6/7] agent-browser-proxy not present - skipping'
+}
+# === END agent-browser-proxy ===
+
 Write-Output '[package 7/7] launcher scripts'
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.sh') $release
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.bat') $release
