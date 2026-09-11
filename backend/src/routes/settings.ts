@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import { SettingsService } from '../services/settings'
-import { writeActiveOpenCodeConfigFile } from '../services/default-mcp'
+import { writeActiveOpenCodeConfigFile, setActiveOpenCodeConfigModel } from '../services/default-mcp'
 import { patchOpenCodeConfig } from '../services/proxy'
 import { getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { 
@@ -94,11 +94,20 @@ export function createSettingsRoutes(db: Database) {
       const prevModel = (previous.preferences as Record<string, unknown>).defaultModel as string | undefined
       const nextModel = (settings.preferences as Record<string, unknown>).defaultModel as string | undefined
       if (prevModel !== nextModel && typeof nextModel === 'string' && nextModel.includes('/')) {
+        // 파일에 먼저 기록 (opencode는 model을 시작 때만 읽음)
+        setActiveOpenCodeConfigModel(nextModel)
         try {
           await patchOpenCodeConfig({ model: nextModel } as Record<string, unknown>)
           logger.info(`Patched opencode default model to ${nextModel} (less hassle for new sessions)`)
         } catch (e) {
           logger.warn('Failed to patch opencode default model:', e)
+        }
+        // 실행 중 서버는 예전 model을 들고 있으므로 재시작해야 다음 세션부터 적용된다
+        try {
+          await opencodeServerManager.restart()
+          logger.info(`Restarted OpenCode server to apply default model ${nextModel}`)
+        } catch (e) {
+          logger.warn('Failed to restart OpenCode server for default model change:', e)
         }
       }
 

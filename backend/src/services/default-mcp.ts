@@ -924,6 +924,27 @@ export function writeActiveOpenCodeConfigFile(configContent: string): void {
   writeFileSync(configPath, JSON.stringify(merged, null, 2), 'utf8')
 }
 
+// opencode는 `model`을 시작 때만 읽는다. default 변경이 다음 세션부터
+// 적용되게 실행 중 서버 PATCH와 별개로 파일에도 기록한다.
+export function setActiveOpenCodeConfigModel(model: string): void {
+  try {
+    const configPath = getOpenCodeConfigFilePath()
+    let current: Record<string, unknown> = {}
+    try {
+      const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        current = parsed as Record<string, unknown>
+      }
+    } catch {
+      current = {}
+    }
+    writeActiveOpenCodeConfigFile(JSON.stringify({ ...current, model }))
+    logger.info(`Wrote default model '${model}' to ${configPath}`)
+  } catch (error) {
+    logger.warn('Failed to write default model to opencode config file:', error)
+  }
+}
+
 export function killLingeringAgentBrowser(): void {
   if (process.platform !== 'win32') {
     return
