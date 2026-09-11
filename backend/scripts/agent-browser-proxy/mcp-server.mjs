@@ -398,6 +398,36 @@ function clearSessionTarget(ns, s) {
     }
   } catch (e) {}
 }
+function clearDaemonSidecars(ns) {
+  try {
+    const dir = path.join(socketBaseDir(), "namespaces", toSafe(ns), "run");
+    for (const suffix of DAEMON_SIDECARS) {
+      try { fs.unlinkSync(path.join(dir, toSafe(ns) + "." + suffix)); } catch (e) {}
+    }
+  } catch (e) {}
+}
+function pinOnSuccess(ns, session, result) {
+  if (!session || !result || result.isError || result.timeout) return;
+  const cur = readDaemonPid(ns);
+  if (cur === null) return;
+  const prev = daemonPin.get(ns);
+  if (!prev || prev.pid !== cur) {
+    daemonPin.set(ns, { pid: cur });
+    if (prev) log("daemon pin changed " + ns + ": " + prev.pid + " -> " + cur);
+  }
+}
+
+// 데몬 pid 핀: 마지막으로 성공한 호출이 본 데몬을 기록한다.
+// - 핀된 pid가 죽었는데 사이드카가 그대로면 확정 10061 → 선제 청소 후 새 출발
+// - 핀과 다른 살아있는 데몬이면 교체된 것. CLI는 사이드카를 따르므로 호출은
+//   그대로 보내고, 성공 시 핀을 갱신한다 (로그로 교체 추적).
+// - kill은 절대 안 한다 (flicker 주범). 청소는 파일만.
+const daemonPin = new Map(); // ns -> { pid }
+function readDaemonPid(ns) {
+  try {
+    return readSidecarInt(daemonRunDir(), toSafe(ns), "pid");
+  } catch (e) { return null; }
+}
 
 // ---------------------------------------------------------------- MCP wire
 function send(o) { process.stdout.write(JSON.stringify(o) + "\n"); }
@@ -416,6 +446,20 @@ async function execTool(def, a, ns, session, opts) {
     const cmdArgs = def.build(a);
     for (const c of cmdArgs) argv.push(c);
     argv.push("--json");
+    if (session) {
+      // 핀된 데몬이 죽었는데 사이드카가 그대로면 확정 10061. sweep을 기다리지
+      // 말고 선제 청소 후 새 출발한다. 살아있으면 손대지 않는다.
+      const pinned = daemonPin.get(ns);
+      if (pinned) {
+        const cur = readDaemonPid(ns);
+        if (pinned.pid !== cur && !pidAlive(pinned.pid)) {
+          clearDaemonSidecars(ns);
+          clearSessionTarget(ns, session);
+          daemonPin.delete(ns);
+          log("pinned daemon " + pinned.pid + " dead; cleared stale state for fresh respawn");
+        }
+      }
+    }
     const runOnce = () => runCli(argv, tmo + 10000);
     const daemonPid = () => {
       try {
@@ -444,10 +488,15 @@ async function execTool(def, a, ns, session, opts) {
         clearSessionTarget(ns, session);
         touch(ns, session);
         log("stale target cleared for " + ns + "/" + session + ", retrying once");
-        return finish(await runOnce());
+        const r2 = await runOnce();
+        const fr2 = finish(r2);
+        pinOnSuccess(ns, session, fr2);
+        return fr2;
       }
     }
-    return finish(r);
+    const f = finish(r);
+    pinOnSuccess(ns, session, f);
+    return f;
   } finally {
     const m2 = sessions.get(key);
     if (m2) { m2.inFlight = Math.max(0, (m2.inFlight || 1) - 1); m2.lastSeen = Date.now(); }
