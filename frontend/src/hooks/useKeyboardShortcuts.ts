@@ -4,8 +4,12 @@ import { useSettings } from './useSettings'
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
 
 const normalizeShortcut = (shortcut: string): string => {
-  // Convert stored shortcuts to platform-specific format for comparison
-  return shortcut.replace(/Cmd/g, isMac ? 'Cmd' : 'Ctrl')
+  // Convert stored shortcuts to platform-specific format for comparison.
+  // Legacy values recorded as 'Esc'/'Return' are normalized to 'Escape'/'Enter'.
+  return shortcut
+    .replace(/Cmd/g, isMac ? 'Cmd' : 'Ctrl')
+    .replace(/\bEsc\b/g, 'Escape')
+    .replace(/\bReturn\b/g, 'Enter')
 }
 
 const parseEventShortcut = (e: KeyboardEvent): string => {
@@ -23,8 +27,8 @@ const parseEventShortcut = (e: KeyboardEvent): string => {
     else if (mainKey === 'ArrowDown') displayKey = 'Down'
     else if (mainKey === 'ArrowLeft') displayKey = 'Left'
     else if (mainKey === 'ArrowRight') displayKey = 'Right'
-    else if (mainKey === 'Enter') displayKey = 'Return'
-    else if (mainKey === 'Escape') displayKey = 'Esc'
+    else if (mainKey === 'Enter') displayKey = 'Enter'
+    else if (mainKey === 'Escape') displayKey = 'Escape'
     else if (mainKey === 'Tab') displayKey = 'Tab'
     else if (mainKey === 'Backspace') displayKey = 'Backspace'
     else if (mainKey === 'Delete') displayKey = 'Delete'
@@ -59,6 +63,8 @@ export function useKeyboardShortcuts(actions: ShortcutActions = {}) {
   
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // 입력창 자체 핸들러(PromptInput 등)에서 이미 처리한 키는 중복 실행하지 않는다.
+    if (e.defaultPrevented) return
     const shortcut = parseEventShortcut(e)
     if (!shortcut) return
 
@@ -74,7 +80,8 @@ export function useKeyboardShortcuts(actions: ShortcutActions = {}) {
     const target = e.target as HTMLElement
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.contentEditable === 'true' || target.getAttribute('data-file-editor') === 'true') {
       // Allow some shortcuts to work even in input fields (but not in file editor)
-      const allowedInInput = ['submit', 'abort', 'toggleMode']
+      // selectModel도 채팅 입력 중 모델 변경용으로 허용한다.
+      const allowedInInput = ['submit', 'abort', 'toggleMode', 'selectModel']
       const isFileEditor = target.getAttribute('data-file-editor') === 'true'
       const action = Object.entries(shortcuts).find(([, keys]) => normalizeShortcut(keys) === shortcut)?.[0]
       if (!action || !allowedInInput.includes(action) || isFileEditor) {

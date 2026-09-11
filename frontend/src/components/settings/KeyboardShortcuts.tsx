@@ -7,7 +7,10 @@ const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
 const CMD_KEY = isMac ? 'Cmd' : 'Ctrl'
 
 const normalizeShortcut = (shortcut: string): string => {
-  return shortcut.replace(/Cmd/g, CMD_KEY)
+  return shortcut
+    .replace(/Cmd/g, CMD_KEY)
+    .replace(/\bEsc\b/g, 'Escape')
+    .replace(/\bReturn\b/g, 'Enter')
 }
 
 export function KeyboardShortcuts() {
@@ -45,8 +48,8 @@ export function KeyboardShortcuts() {
       else if (mainKey === 'ArrowDown') displayKey = 'Down'
       else if (mainKey === 'ArrowLeft') displayKey = 'Left'
       else if (mainKey === 'ArrowRight') displayKey = 'Right'
-      else if (mainKey === 'Enter') displayKey = 'Return'
-      else if (mainKey === 'Escape') displayKey = 'Esc'
+      else if (mainKey === 'Enter') displayKey = 'Enter'
+      else if (mainKey === 'Escape') displayKey = 'Escape'
       else if (mainKey === 'Tab') displayKey = 'Tab'
       else if (mainKey === 'Backspace') displayKey = 'Backspace'
       else if (mainKey === 'Delete') displayKey = 'Delete'

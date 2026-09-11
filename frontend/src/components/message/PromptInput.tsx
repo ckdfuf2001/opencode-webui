@@ -534,6 +534,12 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 생성 중 Esc는 입력 삭제가 아니라 중단이다 (전역 abort 단축키와 동일 동작)
+    if (e.key === 'Escape' && showStop && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault()
+      handleStop()
+      return
+    }
     if (isBashMode && e.key === 'Escape') {
       e.preventDefault()
       setIsBashMode(false)
