@@ -232,7 +232,7 @@ export class OpenCodeClient {
   }
 
   async switchModel(sessionID: string, model: { id: string; providerID: string }) {
-    await this.client.post(`/api/session/${sessionID}/model`, { model })
+    await this.client.post(`/session/${sessionID}/model`, { model })
   }
 
   async sendShell(sessionID: string, data: ShellRequest) {

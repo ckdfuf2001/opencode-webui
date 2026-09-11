@@ -860,7 +860,8 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
   // Use default model for optimistic assistant placeholder so LLM area shows correct model immediately
   let defaultModel: string | undefined
   try {
-    const settingsData = queryClient.getQueryData<{ preferences?: { defaultModel?: string } }>(["settings"])
+    const settingsData = queryClient.getQueryData<{ preferences?: { defaultModel?: string } }>(["settings", "default"])
+      ?? queryClient.getQueryData<{ preferences?: { defaultModel?: string } }>(["settings"])
     defaultModel = settingsData?.preferences?.defaultModel
     if (!defaultModel) {
       try { defaultModel = localStorage.getItem('opencode-default-model') ?? undefined } catch {}

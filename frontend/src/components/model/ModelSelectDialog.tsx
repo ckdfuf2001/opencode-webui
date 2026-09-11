@@ -128,8 +128,30 @@ export function ModelSelectDialog({
 
   const handleModelSelect = async (providerId: string, modelId: string) => {
     const newModel = `${providerId}/${modelId}`;
+    const shouldUpdateDefault = forDefault || !sessionId || useAsDefault;
 
-    // 세션 전용: 기본은 세션에만 적용, 위에 "Use as default" 체크 시에만 전체(default)에도 적용
+    // default는 세션 전환 성공/실패와 무관하게 먼저 저장한다.
+    // 기존에는 세션 switch 실패 시 early-return 되면서 default 갱신이 스킵됐다.
+    if (shouldUpdateDefault) {
+      try {
+        const updated = await updateSettingsAsync({ defaultModel: newModel });
+        const prefs = (updated as unknown as { preferences?: { defaultModel?: string } })?.preferences;
+        if (prefs?.defaultModel && prefs.defaultModel !== newModel) {
+          throw new Error(`server returned ${prefs.defaultModel}`);
+        }
+        try { localStorage.setItem('opencode-default-model', newModel); } catch {}
+        queryClient.setQueryData(['settings'], (old: unknown) => {
+          if (!old || typeof old !== 'object') return old;
+          return { ...(old as Record<string, unknown>), preferences: { ...((old as { preferences?: object }).preferences ?? {}), defaultModel: newModel } };
+        });
+        await queryClient.invalidateQueries({ queryKey: ['settings'] });
+      } catch (e) {
+        showToast.error(`Failed to update default: ${e instanceof Error ? e.message : 'unknown'}`);
+        return;
+      }
+    }
+
+    // 세션 전용: 기본은 세션에만 적용
     if (sessionId && client && !forDefault) {
       const sessionKey = ["opencode", "session", opcodeUrl, sessionId, directory] as const;
       const sessionsKey = ["opencode", "sessions", opcodeUrl, directory] as const;
@@ -163,19 +185,12 @@ export function ModelSelectDialog({
         if (previous !== undefined) queryClient.setQueryData(sessionKey, previous);
         if (previousSessions !== undefined) queryClient.setQueryData(sessionsKey, previousSessions);
         showToast.error(
-          `Failed to switch model: ${error instanceof Error ? error.message : "unknown error"}`,
+          `Session model not switched (default saved): ${error instanceof Error ? error.message : "unknown error"}`,
           { duration: 6000 },
         );
         onOpenChange(false);
         return;
       }
-      // 체크된 경우에만 전체(default)에도 적용
-      if (useAsDefault) {
-        try { await updateSettingsAsync({ defaultModel: newModel }); } catch (e) { showToast.error(`Failed to update default: ${e instanceof Error ? e.message : 'unknown'}`); }
-      }
-    } else {
-      // 세션이 아니거나 forDefault=true인 경우: default만 갱신
-      try { await updateSettingsAsync({ defaultModel: newModel }); } catch (e) { showToast.error(`Failed to update default: ${e instanceof Error ? e.message : 'unknown'}`); }
     }
 
     onOpenChange(false);

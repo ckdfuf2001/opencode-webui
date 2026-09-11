@@ -1,4 +1,4 @@
-import { Ellipsis, FileText, FileType, FileCode2, Printer, ListOrdered } from 'lucide-react'
+import { Download, Search, FileText, FileType, FileCode2, Printer, ListOrdered } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,7 +26,11 @@ export function SessionMoreMenu({ onExport, onOpenJump, triggerClassName }: Sess
           className={triggerClassName ?? DEFAULT_TRIGGER}
           title="More actions (download / jump / search)"
         >
-          <Ellipsis className="w-4 h-4" />
+          <span className="inline-flex items-center gap-1">
+            <Download className="w-4 h-4" />
+            <span className="text-muted-foreground/60 text-xs leading-none select-none">/</span>
+            <Search className="w-4 h-4" />
+          </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">

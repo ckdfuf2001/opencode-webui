@@ -34,6 +34,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           ) : (
             <Clock className="h-3 w-3 shrink-0" />
           )}
+          <span className="shrink-0 font-semibold">({restItems.length})</span>
           {sendingItem ? (
             <span className="truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : failedItem ? (
@@ -41,7 +42,6 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           ) : (
             <span className="shrink-0">Waiting to send</span>
           )}
-          <span className="shrink-0">({restItems.length})</span>
           <ChevronRight className="h-3 w-3 shrink-0" />
         </button>
       </div>
@@ -59,6 +59,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           ) : (
             <Clock className="h-3 w-3 shrink-0" />
           )}
+          <span className="shrink-0 font-semibold">({restItems.length})</span>
           {sendingItem ? (
             <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : failedItem ? (
@@ -66,7 +67,6 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           ) : (
             <span className="flex-1">Waiting to send</span>
           )}
-          <span className="shrink-0">({restItems.length})</span>
           <button
             type="button"
             aria-label="Minimize queue"

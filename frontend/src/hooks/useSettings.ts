@@ -19,6 +19,12 @@ export function useSettings(userId = 'default') {
       settingsApi.updateSettings({ preferences: updates }, userId),
     onSuccess: (newData) => {
       queryClient.setQueryData(['settings', userId], newData)
+      // 레거시 키(['settings'])를 읽는 호출자(useSendPrompt 등)도 즉시 갱신
+      queryClient.setQueryData(['settings'], newData)
+      const dm = (newData as unknown as { preferences?: { defaultModel?: string } })?.preferences?.defaultModel
+      if (dm) {
+        try { localStorage.setItem('opencode-default-model', dm) } catch {}
+      }
     },
   })
 
