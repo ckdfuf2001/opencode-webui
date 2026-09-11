@@ -779,6 +779,8 @@ export function defaultMcpEntries(): Record<string, unknown> {
 }
 
 export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(content: T): T {
+  // 판단 최소화: 없는 항목은 채우고, 우리 모양이면 루트만 고치고,
+  // 사용자 커스텀은 손대지 않는다.
   const mcp = { ...((content.mcp as Record<string, unknown>) ?? {}) }
   const defaults = defaultMcpEntries()
   for (const [id, entry] of Object.entries(defaults)) {
@@ -787,43 +789,78 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
       mcp[id] = entry
       continue
     }
-    const existingCommand = Array.isArray(existing.command) ? existing.command : []
+    if (id === 'agent-browser') {
+      const fixed = normalizeAgentBrowserEntry(
+        existing,
+        entry as Record<string, unknown>,
+      )
+      if (fixed) {
+        mcp[id] = fixed
+        logger.info(`Repaired default MCP server entry: ${id}`)
+      }
+      continue
+    }
     const defaultCommand = (entry as Record<string, unknown>).command
-    const defaultEnv = (entry as Record<string, unknown>).env as Record<string, string> | undefined
-    const repaired: Record<string, unknown> = { ...existing }
-    let changed = false
+    const existingCommand = Array.isArray(existing.command) ? existing.command : []
     if (JSON.stringify(existingCommand) !== JSON.stringify(defaultCommand)) {
-      repaired.command = defaultCommand
-      changed = true
-    }
-    if (defaultEnv) {
-      const repairedEnv = { ...((existing.env as Record<string, string>) ?? {}) }
-      for (const [key, value] of Object.entries(defaultEnv)) {
-        if (repairedEnv[key] !== value) {
-          repairedEnv[key] = value
-          changed = true
-        }
+      const joined = existingCommand.map(String).join(' ')
+      if (/doc_reader_mcp\.py/.test(joined)) {
+        mcp[id] = { ...existing, command: defaultCommand }
+        logger.info(`Repaired default MCP server entry: ${id}`)
       }
-      // 구 프록시 시절 키는 제거한다 (SESSION 고정·TTL·STORE 등).
-      // native MCP는 세션을 호출마다 받으므로 서버 env 세션 고정이 있으면
-      // 모든 호출이 한 브라우저로 꼬인다. opencode가 env를 전달하지 않아
-      // 무해한 경우도 있지만 혼란 방지를 위해 제거한다.
-      if (id === 'agent-browser') {
-        for (const stale of ['AGENT_BROWSER_SESSION', 'AGENT_BROWSER_AUTO_SESSION', 'SESSION_TTL_MS', 'SESSION_MAX', 'SESSION_SWEEP_MS', 'SESSION_STORE']) {
-          if (stale in repairedEnv) {
-            delete repairedEnv[stale]
-            changed = true
-          }
-        }
-      }
-      repaired.env = repairedEnv
-    }
-    if (changed) {
-      mcp[id] = repaired
-      logger.info(`Repaired default MCP server entry: ${id}`)
     }
   }
   return { ...content, mcp } as T
+}
+
+// agent-browser 항목 정규화. 우리 모양(프록시 잔재, 구 direct, 절대경로 어긋남)
+// 일 때만 현재 바이너리 기준으로 고치고, enabled:false와 사용자 추가 키는 유지.
+// 사용자 커스텀이면 null (손대지 않음).
+function normalizeAgentBrowserEntry(
+  existing: Record<string, unknown>,
+  defaults: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const cmd = Array.isArray(existing.command) ? existing.command.map(String) : []
+  const joined = cmd.join(' ')
+  const isOurs =
+    /mcp-server\.mjs|agent-browser-proxy/.test(joined) ||
+    (/agent-browser(\.exe)?$/i.test(cmd[0] ?? '') && cmd.includes('mcp'))
+  if (!isOurs) return null
+  const next: Record<string, unknown> = { ...existing }
+  let changed = false
+  const defaultCommand = (defaults.command ?? []) as unknown[]
+  if (JSON.stringify(cmd) !== JSON.stringify(defaultCommand)) {
+    next.command = defaultCommand
+    changed = true
+  }
+  const defaultEnv = (defaults.env ?? {}) as Record<string, string>
+  const env = { ...((existing.env as Record<string, string>) ?? {}) } as Record<string, string>
+  for (const [key, value] of Object.entries(defaultEnv)) {
+    if (!(key in env)) {
+      env[key] = value
+      changed = true
+    }
+  }
+  // 우리 항목인데 기록된 크롬 경로가 디스크에 없으면 현재 것으로 교체
+  // (머신 옮기면 절대경로가 깨지므로). 존재하면 손대지 않는다.
+  try {
+    const info = resolveAgentBrowser()
+    const recorded = env.AGENT_BROWSER_EXECUTABLE_PATH
+    if (info?.executablePath && typeof recorded === 'string' && !existsSync(recorded)) {
+      env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
+      changed = true
+    }
+  } catch {}
+  // 우리 구 키만 제거 (SESSION 고정·TTL·STORE 등). 사용자 키는 유지.
+  for (const stale of ['AGENT_BROWSER_SESSION', 'AGENT_BROWSER_AUTO_SESSION', 'SESSION_TTL_MS', 'SESSION_MAX', 'SESSION_SWEEP_MS', 'SESSION_STORE']) {
+    if (stale in env) {
+      delete env[stale]
+      changed = true
+    }
+  }
+  if (!changed) return null
+  next.env = env
+  return next
 }
 
 // 활성화되는 전역 opencode.json을 디스크에 쓸 때 기본 MCP가 빠지지 않게
