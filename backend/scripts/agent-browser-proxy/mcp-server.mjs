@@ -470,10 +470,12 @@ async function execOpenWithVerify(def, a, ns, session) {
   return txt("Open timed out after ~" + firstMs + "ms and verification failed in session \"" + session + "\" (namespace \"" + ns + "\"). The browser may still be starting: wait, then agent_browser_snapshot again with the SAME session and SAME namespace. Do NOT retry open with a different session (that leaks a browser).", true);
 }
 
-// Live daemon probes (fast, warm daemon): which sessions exist, what tabs one has.
+// Live daemon probes (fast when daemon healthy; bounded when sick).
+// EXISTS 경로에서만 쓰이므로 타임아웃을 짧게: opencode 쪽 타임아웃보다
+// 먼저 터져야 "ensure 무응답"으로 보이지 않는다.
 async function daemonSessions(ns) {
   try {
-    const r = await runCli(["--namespace", toSafe(ns), "session", "list", "--json"], 15000);
+    const r = await runCli(["--namespace", toSafe(ns), "session", "list", "--json"], 8000);
     if (r.code !== 0) return [];
     const j = JSON.parse(r.out);
     const arr = (j && j.data && j.data.sessions) || j.sessions || [];
@@ -482,7 +484,7 @@ async function daemonSessions(ns) {
 }
 async function sessionTabs(ns, s) {
   try {
-    const r = await runCli(["--namespace", toSafe(ns), "--session", toSafe(s), "tab", "list", "--json"], 15000);
+    const r = await runCli(["--namespace", toSafe(ns), "--session", toSafe(s), "tab", "list", "--json"], 8000);
     if (r.code !== 0) return "(tab list unavailable)";
     const text = r.out.slice(0, 1500);
     try {
@@ -671,17 +673,32 @@ async function validateRestoredSessions() {
   if (!sessions.size) return;
   const dir = daemonRunDir();
   const key = toSafe(DEFAULT_NS);
-  const pid = readSidecarInt(dir, key, "pid");
-  const port = readSidecarInt(dir, key, "port");
-  const alive = pid !== null && pidAlive(pid);
-  const open = alive && port !== null && (await portOpen(port));
-  if (!open) {
+  // 사이드카 자체가 하나도 없으면(이번 부팅에 데몬이 뜬 적 없음) 이전 잔해 확정 → 파기.
+  // 파일은 있는데 닿지 않으면 기동 중/좀비라서 유지한다: 좀비는 sweep이 죽이고,
+  // 호출 실패는 stale-target 재시도가 살린다. 여기서 파기하면 멀쩡한 세션까지
+  // Unknown-pair로 내몬다 (slow-start 레이스).
+  let anySidecar = false;
+  for (const suffix of [...DAEMON_SIDECARS, "target"]) {
+    try {
+      const entries = fs.readdirSync(dir).filter((f) => f.endsWith("." + suffix));
+      if (entries.length > 0) { anySidecar = true; break; }
+    } catch (e) { /* run dir 없음 = 사이드카 없음 */ }
+  }
+  if (!anySidecar) {
     const n = sessions.size;
     sessions.clear();
     try { fs.unlinkSync(STORE_PATH); } catch (e) {}
-    log("dropped " + n + " restored sessions: namespace daemon not reachable");
-  } else {
-    log("kept " + sessions.size + " restored sessions (daemon reachable)");
+    log("dropped " + n + " restored sessions: no daemon sidecars (fresh boot)");
+    return;
+  }
+  try {
+    const pid = readSidecarInt(dir, key, "pid");
+    const port = readSidecarInt(dir, key, "port");
+    const alive = pid !== null && pidAlive(pid);
+    const open = alive && port !== null && (await portOpen(port));
+    log("kept " + sessions.size + " restored sessions (sidecars present, daemon reachable=" + open + ")");
+  } catch (e) {
+    log("kept " + sessions.size + " restored sessions (validate skipped)");
   }
 }
 log("proxy v2.3 starting (cli=" + CLI + ", default-ns=" + DEFAULT_NS + ", ttl=" + TTL_MS + "ms, max=" + MAX_SESSIONS + ", tools=" + TOOLS.length + ")");
