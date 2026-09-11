@@ -170,11 +170,11 @@ export async function applyRepoTrackingAll(): Promise<{ success: boolean; applie
   return response.json()
 }
 
-export async function cloneRepo(id: number, newLocalPath: string): Promise<Repo> {
+export async function cloneRepo(id: number, newLocalPath: string, opts?: { withIndex?: boolean; withSchedules?: boolean }): Promise<Repo> {
   const response = await fetch(`${API_BASE_URL}/api/repos/${id}/clone`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ newLocalPath }),
+    body: JSON.stringify({ newLocalPath, withIndex: opts?.withIndex ?? true, withSchedules: opts?.withSchedules ?? true }),
   })
   if (!response.ok) {
     const err = await response.json().catch(() => ({}))
@@ -183,8 +183,12 @@ export async function cloneRepo(id: number, newLocalPath: string): Promise<Repo>
   return response.json()
 }
 
-export async function exportRepo(id: number): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/export`)
+export async function exportRepo(id: number, opts?: { withIndex?: boolean; withSchedules?: boolean }): Promise<any> {
+  const qs = new URLSearchParams()
+  if (opts?.withIndex === false) qs.set('withIndex', 'false')
+  if (opts?.withSchedules === false) qs.set('withSchedules', 'false')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/export${suffix}`)
   if (!response.ok) {
     const err = await response.json().catch(() => ({}))
     throw new Error(err.error || 'Failed to export repo')
@@ -192,11 +196,11 @@ export async function exportRepo(id: number): Promise<any> {
   return response.json()
 }
 
-export async function importRepo(exportData: any, newLocalPath?: string): Promise<Repo> {
+export async function importRepo(exportData: any, newLocalPath?: string, opts?: { withIndex?: boolean; withSchedules?: boolean }): Promise<Repo> {
   const response = await fetch(`${API_BASE_URL}/api/repos/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ newLocalPath, data: exportData }),
+    body: JSON.stringify({ newLocalPath, data: exportData, withIndex: opts?.withIndex ?? true, withSchedules: opts?.withSchedules ?? true }),
   })
   if (!response.ok) {
     const err = await response.json().catch(() => ({}))

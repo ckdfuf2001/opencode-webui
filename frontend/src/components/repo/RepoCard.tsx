@@ -52,18 +52,25 @@ export function RepoCard({
     mutationFn: async () => {
       const newName = window.prompt(`복제할 새 레포 이름 (디렉토리명):`, `${repo.localPath}-copy`)
       if (!newName) throw new Error('cancelled')
-      const created = await cloneRepo(repo.id, newName.trim())
+      const withIndex = window.confirm('리콜 인덱스(커밋/대화 검색 기록)도 복사할까요?\n[확인]=복사, [취소]=파일·설정만')
+      const withSchedules = window.confirm('스케줄(예약 실행)도 복사할까요?\n[확인]=복사, [취소]=제외')
+      const created = await cloneRepo(repo.id, newName.trim(), { withIndex, withSchedules })
       try { cloneRepoNotifyData(repo.id, created.id) } catch {}
       return created
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      const stats = data?._cloneStats
       queryClient.invalidateQueries({ queryKey: ["repos"] })
-      showToast.success('레포 복제 완료 (md/scripts/.opencode, 권한 설정 포함, 채팅 제외)')
+      queryClient.invalidateQueries({ queryKey: ["schedules"] })
+      showToast.success(stats ? `레포 복제 완료 (파일:${stats.copiedFiles} 규칙:${stats.copiedRules} 스케줄:${stats.copiedSchedules} 인덱스:${stats.copiedCommits + stats.copiedMessages})` : '레포 복제 완료 (skill/커맨드/스케줄/인덱스 포함)')
     },
     onError: (e: any) => { if (e.message !== 'cancelled') showToast.error(e.message) },
   })
   const exportMut = useMutation({
-    mutationFn: () => exportRepo(repo.id),
+    mutationFn: async () => {
+      const withIndex = window.confirm('Export에 리콜 인덱스(커밋/대화 검색 기록)도 포함할까요?\n[확인]=포함, [취소]=파일·설정만')
+      return exportRepo(repo.id, { withIndex })
+    },
     onSuccess: (data) => {
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -72,7 +79,8 @@ export function RepoCard({
       a.download = `${repo.localPath}-export-${Date.now()}.json`
       a.click()
       URL.revokeObjectURL(url)
-      showToast.success('Export 다운로드 완료')
+      const stats = (data as any)?.stats
+      showToast.success(stats ? `Export 완료 (파일:${stats.files} 스케줄:${stats.schedules} 인덱스:${stats.commits + stats.messages})` : 'Export 다운로드 완료')
     },
     onError: (e: any) => showToast.error(e.message),
   })
@@ -178,10 +186,10 @@ export function RepoCard({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
                   <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending}>
-                    <Copy className="w-4 h-4 mr-2" /> Clone (md/scripts/.opencode)
+                    <Copy className="w-4 h-4 mr-2" /> Clone (skill/커맨드/설정/인덱스)
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending}>
-                    <Download className="w-4 h-4 mr-2" /> Export 설정
+                    <Download className="w-4 h-4 mr-2" /> Export 설정+인덱스
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
