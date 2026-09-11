@@ -54,6 +54,11 @@ export function agentBrowserEnv(): Record<string, string> {
   env.AGENT_BROWSER_NAMESPACE = AGENT_BROWSER_NAMESPACE
   env.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
   env.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
+  // opencode가 띄우는 프록시 자식도 같은 세션 TTL/상한을 쓰게 서버 env로 전파.
+  // 없으면 프록시 기본값이 적용돼 백엔드 기대와 어긋난다.
+  env.SESSION_TTL_MS = PROXY_SESSION_TTL_MS
+  env.SESSION_MAX = PROXY_SESSION_MAX
+  env.SESSION_SWEEP_MS = PROXY_SESSION_SWEEP_MS
   return env
 }
 

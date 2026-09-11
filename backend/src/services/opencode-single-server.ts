@@ -452,20 +452,14 @@ class OpenCodeServerManager {
 
   private async teardownCurrent(): Promise<void> {
     const port = this.port
+    // 트리째 죽인다: opencode가 띄운 MCP 자식(proxy)이 고아가 되면 좀비 누적.
+    // 데몬·크롬은 opencode 자식이 아니라 살아남는다(공유).
     if (this.serverPid) {
-      try {
-        process.kill(this.serverPid, 'SIGKILL')
-      } catch {
-        // already terminated
-      }
+      await this.killPidTreeWindows(this.serverPid, 'OpenCode server')
     }
     const procs = await this.findProcessesByPort(port)
     for (const proc of procs) {
-      try {
-        process.kill(proc.pid, 'SIGKILL')
-      } catch {
-        // already terminated
-      }
+      await this.killPidTreeWindows(proc.pid, `Port ${port} holder`)
     }
     this.serverPid = null
     this.isHealthy = false
@@ -491,9 +485,11 @@ class OpenCodeServerManager {
 
     await new Promise(r => setTimeout(r, 2000))
 
+    // SIGTERM 후에도 살아있으면 트리째 정리: MCP 자식(proxy) 고아 방지.
+    // 데몬·크롬은 opencode 자식이 아니라 살아남는다(공유).
     try {
       process.kill(this.serverPid, 0)
-      process.kill(this.serverPid, 'SIGKILL')
+      await this.killPidTreeWindows(this.serverPid, 'OpenCode server')
     } catch {
       // already terminated
     }
@@ -501,11 +497,7 @@ class OpenCodeServerManager {
     try {
       const procs = await this.findProcessesByPort(this.port)
       for (const proc of procs) {
-        try {
-          process.kill(proc.pid, 'SIGKILL')
-        } catch {
-          // already terminated
-        }
+        await this.killPidTreeWindows(proc.pid, `Port ${this.port} holder`)
       }
     } catch (error) {
       logger.warn('Failed to clean up OpenCode processes on port:', error)

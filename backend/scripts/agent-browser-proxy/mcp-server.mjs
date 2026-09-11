@@ -28,7 +28,7 @@
 //   SESSION_SWEEP_MS  sweeper interval (default "60000")
 //   CALL_TIMEOUT_MS   default per-call timeout (default "60000")
 
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import net from "node:net";
 import path from "node:path";
@@ -213,6 +213,13 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (e) { return e && e.code === "EPERM"; }
 }
+function killPidTree(pid) {
+  try {
+    if (process.platform === "win32") execSync("taskkill /PID " + pid + " /T /F", { stdio: "ignore", timeout: 15000 });
+    else process.kill(pid, "SIGKILL");
+    return true;
+  } catch (e) { return false; }
+}
 function portOpen(port, timeoutMs) {
   return new Promise((resolve) => {
     const s = net.connect({ host: "127.0.0.1", port });
@@ -236,8 +243,11 @@ async function superviseDaemon() {
   }
   const port = readSidecarInt(dir, key, "port");
   if (port !== null && !(await portOpen(port))) {
+    // pid는 살아있는데 포트가 닫힘 = 귀먹은 좀비. 사이드카만 지우면 프로세스가
+    // 남아 다음 호출도 망가뜨리므로 직접 죽인다.
+    const killed = pid !== null ? killPidTree(pid) : false;
     for (const s of DAEMON_SIDECARS) { try { fs.unlinkSync(path.join(dir, key + "." + s)); } catch (e) {} }
-    log("daemon port " + port + " unreachable (pid " + pid + " alive); removed stale sidecars for " + DEFAULT_NS);
+    log("daemon port " + port + " unreachable (pid " + pid + " alive); killed=" + killed + ", removed stale sidecars for " + DEFAULT_NS);
   }
 }
 
@@ -384,6 +394,18 @@ for (const t of TOOLS) {
 }
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
+// 죽은 데몬 target 연결 실패 패턴: 세션 target 사이드카가 가리키는 곳이
+// 없으면 여기로 떨어진다. 스냅샷 ref stale(@e…)과는 무관하므로 재시도 안 함.
+const STALE_TARGET_RE = /10061|ECONNREFUSED|WSAETIMEDOUT|10060|no active page|target (gone|closed|crashed|not found)|CDP\W*connect|connect\W*CDP|browser (closed|crashed|disconnected)/i;
+function clearSessionTarget(ns, s) {
+  try {
+    const dir = path.join(socketBaseDir(), "namespaces", toSafe(ns), "run");
+    for (const suffix of ["target", "engine"]) {
+      try { fs.unlinkSync(path.join(dir, toSafe(s) + "." + suffix)); } catch (e) {}
+    }
+  } catch (e) {}
+}
+
 // ---------------------------------------------------------------- MCP wire
 function send(o) { process.stdout.write(JSON.stringify(o) + "\n"); }
 function txt(text, isError) { return { content: [{ type: "text", text }], isError: !!isError }; }
@@ -401,14 +423,29 @@ async function execTool(def, a, ns, session, opts) {
     const cmdArgs = def.build(a);
     for (const c of cmdArgs) argv.push(c);
     argv.push("--json");
-    const r = await runCli(argv, tmo + 10000);
-    const body = r.out || r.err || "(empty output, exit " + r.code + ")";
-    if (r.code === 124) return { timeout: true, text: body };
-    if (r.code !== 0) {
-      const h = hintFor(body);
-      return txt("Command failed (exit " + r.code + "):\n" + body.slice(0, 3000) + (h ? "\n" + h : ""), true);
+    const runOnce = () => runCli(argv, tmo + 10000);
+    const finish = (rr) => {
+      const b = rr.out || rr.err || "(empty output, exit " + rr.code + ")";
+      if (rr.code === 124) return { timeout: true, text: b };
+      if (rr.code !== 0) {
+        const h = hintFor(b);
+        return txt("Command failed (exit " + rr.code + "):\n" + b.slice(0, 3000) + (h ? "\n" + h : ""), true);
+      }
+      return txt(b.slice(0, 12000));
+    };
+    const r = await runOnce();
+    if (r.code !== 0 && session) {
+      const probe = r.out || r.err || "";
+      if (STALE_TARGET_RE.test(probe)) {
+        // 죽은 데몬의 target에 묶인 세션 (open 성공 / snapshot·tab 10061 비대칭의
+        // 주범). 세션 target/engine 사이드카를 지우고 1회만 재시도한다.
+        clearSessionTarget(ns, session);
+        touch(ns, session);
+        log("stale target cleared for " + ns + "/" + session + ", retrying once");
+        return finish(await runOnce());
+      }
     }
-    return txt(body.slice(0, 12000));
+    return finish(r);
   } finally {
     const m2 = sessions.get(key);
     if (m2) { m2.inFlight = Math.max(0, (m2.inFlight || 1) - 1); m2.lastSeen = Date.now(); }
@@ -627,4 +664,24 @@ process.stdin.on("data", (c) => {
 });
 process.stdin.on("end", () => process.exit(0));
 loadStore();
+// 복구된 세션 검증: 데몬 사이드카가 없거나 닿지 않으면 이전 부팅의 잔해이므로
+// 비운다. 검증 없이 쓰면 죽은 데몬 target으로 첫 호출이 10061 난다.
+setImmediate(() => { validateRestoredSessions().catch((e) => log("store validate:", (e && e.message) || e)); });
+async function validateRestoredSessions() {
+  if (!sessions.size) return;
+  const dir = daemonRunDir();
+  const key = toSafe(DEFAULT_NS);
+  const pid = readSidecarInt(dir, key, "pid");
+  const port = readSidecarInt(dir, key, "port");
+  const alive = pid !== null && pidAlive(pid);
+  const open = alive && port !== null && (await portOpen(port));
+  if (!open) {
+    const n = sessions.size;
+    sessions.clear();
+    try { fs.unlinkSync(STORE_PATH); } catch (e) {}
+    log("dropped " + n + " restored sessions: namespace daemon not reachable");
+  } else {
+    log("kept " + sessions.size + " restored sessions (daemon reachable)");
+  }
+}
 log("proxy v2.3 starting (cli=" + CLI + ", default-ns=" + DEFAULT_NS + ", ttl=" + TTL_MS + "ms, max=" + MAX_SESSIONS + ", tools=" + TOOLS.length + ")");
