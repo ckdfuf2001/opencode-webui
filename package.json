@@ -14,7 +14,7 @@
     "opencode:install": "node scripts/install-opencode.js",
     "agent-browser:install": "node scripts/install-agent-browser.js",
     "agent-browser:update": "node scripts/install-agent-browser.js --force",
-    "dev": "concurrently --kill-others-on-fail \"pnpm:dev:backend\" \"node scripts/wait-backend.js && pnpm:dev:frontend\"",
+    "dev": "concurrently --kill-others-on-fail \"pnpm:dev:backend\" \"node scripts/wait-backend.js && pnpm run dev:frontend\"",
     "dev:backend": "node --watch --disable-warning=ExperimentalWarning --experimental-transform-types --import ./scripts/node-compat/register.mjs backend/src/index.ts",
     "dev:backend:bun": "bun --watch backend/src/index.ts",
     "dev:frontend": "pnpm --filter frontend dev",
