@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import { SettingsService } from '../services/settings'
-import { writeFileContent } from '../services/file-operations'
+import { writeActiveOpenCodeConfigFile } from '../services/default-mcp'
 import { patchOpenCodeConfig } from '../services/proxy'
 import { getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { 
@@ -144,10 +144,8 @@ export function createSettingsRoutes(db: Database) {
       const config = settingsService.createOpenCodeConfig(validated, userId)
       
       if (config.isDefault) {
-        const configPath = getOpenCodeConfigFilePath()
-        const configContent = JSON.stringify(config.content, null, 2)
-        await writeFileContent(configPath, configContent)
-        logger.info(`Wrote default config to: ${configPath}`)
+        writeActiveOpenCodeConfigFile(JSON.stringify(config.content, null, 2))
+        logger.info(`Wrote default config to: ${getOpenCodeConfigFilePath()}`)
         
         await patchOpenCodeConfig(config.content)
       }
@@ -176,10 +174,8 @@ export function createSettingsRoutes(db: Database) {
       }
       
       if (config.isDefault) {
-        const configPath = getOpenCodeConfigFilePath()
-        const configContent = JSON.stringify(config.content, null, 2)
-        await writeFileContent(configPath, configContent)
-        logger.info(`Wrote default config to: ${configPath}`)
+        writeActiveOpenCodeConfigFile(JSON.stringify(config.content, null, 2))
+        logger.info(`Wrote default config to: ${getOpenCodeConfigFilePath()}`)
         
         await patchOpenCodeConfig(config.content)
         
@@ -226,10 +222,8 @@ export function createSettingsRoutes(db: Database) {
         return c.json({ error: 'Config not found' }, 404)
       }
       
-      const configPath = getOpenCodeConfigFilePath()
-      const configContent = JSON.stringify(config.content, null, 2)
-      await writeFileContent(configPath, configContent)
-      logger.info(`Wrote default config '${configName}' to: ${configPath}`)
+      writeActiveOpenCodeConfigFile(JSON.stringify(config.content, null, 2))
+      logger.info(`Wrote default config '${configName}' to: ${getOpenCodeConfigFilePath()}`)
       
       await patchOpenCodeConfig(config.content)
       

@@ -5,9 +5,8 @@ import * as repoService from '../services/repo'
 import * as gitOperations from '../services/git-operations'
 import { SettingsService } from '../services/settings'
 import { applyRepoTracking, applyRepoTrackingForAllRepos } from '../services/repo-tracking'
-import { writeFileContent } from '../services/file-operations'
 import { opencodeServerManager } from '../services/opencode-single-server'
-import { releaseAgentBrowserForDirectory } from '../services/default-mcp'
+import { releaseAgentBrowserForDirectory, writeActiveOpenCodeConfigFile } from '../services/default-mcp'
 import { ensureServerAuth } from '../services/opencode-auth'
 import { logger } from '../utils/logger'
 import { withTransactionAsync } from '../db/transactions'
@@ -312,7 +311,7 @@ export function createRepoRoutes(database: Database) {
 
         if (configContent) {
           const openCodeConfigPath = getOpenCodeConfigFilePath()
-          await writeFileContent(openCodeConfigPath, configContent)
+          writeActiveOpenCodeConfigFile(configContent)
           db.updateRepoConfigName(database, repo.id, openCodeConfigName)
           logger.info(`Applied config '${openCodeConfigName}' to: ${openCodeConfigPath}`)
         }
@@ -692,7 +691,7 @@ export function createRepoRoutes(database: Database) {
       
       const openCodeConfigPath = getOpenCodeConfigFilePath()
       
-      await writeFileContent(openCodeConfigPath, configContent)
+      writeActiveOpenCodeConfigFile(configContent)
       
       db.updateRepoConfigName(database, id, configName)
       

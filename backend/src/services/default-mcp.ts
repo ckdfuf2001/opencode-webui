@@ -1,8 +1,8 @@
 import path from 'node:path'
 import net from 'node:net'
 import { spawn, execFileSync, execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs'
-import { ENV, getWorkspacePath, getReposPath } from '@opencode-webui/shared'
+import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync, mkdirSync } from 'node:fs'
+import { ENV, getWorkspacePath, getReposPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 import { resolveDocReaderCommand } from './doc-tools'
 
@@ -739,6 +739,41 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
     }
   }
   return { ...content, mcp } as T
+}
+
+// 활성화되는 전역 opencode.json을 디스크에 쓸 때 기본 MCP가 빠지지 않게
+// 병합해서 쓴다 (DB 내용은 손대지 않는다). 어떤 이름의 커스텀 config를
+// 선택해도 opencode 세션에는 agent-browser/doc-reader가 노출된다.
+// 사용자가 명시적으로 enabled:false로 끈 항목은 다시 켜지 않는다.
+export function writeActiveOpenCodeConfigFile(configContent: string): void {
+  const configPath = getOpenCodeConfigFilePath()
+  let parsed: Record<string, unknown> | null = null
+  try {
+    parsed = JSON.parse(configContent) as Record<string, unknown>
+  } catch {
+    parsed = null
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    mkdirSync(path.dirname(configPath), { recursive: true })
+    writeFileSync(configPath, configContent, 'utf8')
+    return
+  }
+  const prevDisabled = new Set<string>()
+  try {
+    const mcp = (parsed.mcp ?? {}) as Record<string, { enabled?: boolean }>
+    for (const [id, e] of Object.entries(mcp)) {
+      if (e && typeof e === 'object' && e.enabled === false) prevDisabled.add(id)
+    }
+  } catch {}
+  const merged = mergeDefaultMcpEntries(parsed)
+  try {
+    const mcp = ((merged as Record<string, unknown>).mcp ?? {}) as Record<string, { enabled?: boolean }>
+    for (const id of prevDisabled) {
+      if (mcp[id]) mcp[id].enabled = false
+    }
+  } catch {}
+  mkdirSync(path.dirname(configPath), { recursive: true })
+  writeFileSync(configPath, JSON.stringify(merged, null, 2), 'utf8')
 }
 
 export function killLingeringAgentBrowser(): void {
