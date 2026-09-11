@@ -19,7 +19,10 @@ export const AGENT_BROWSER_PROXY_SESSION_MAX = '16'
 export const AGENT_BROWSER_PROXY_SESSION_SWEEP_MS = '60000'
 
 export function isAgentBrowserProxyEnabled(): boolean {
-  return process.env.AGENT_BROWSER_PROXY === '1'
+  // NOTE: 반드시 전용 이름 사용. `AGENT_BROWSER_PROXY`는 agent-browser 본체의
+  // 프록시 서버 URL 변수라서 값 `1`이 들어가면 Chrome 전체가 프록시 "1"을 타서
+  // 모든 내비게이션이 ERR_PROXY_CONNECTION_FAILED로 죽는다.
+  return process.env.AGENT_BROWSER_SESSION_PROXY === '1'
 }
 
 function resolveProxyMjs(): string | null {

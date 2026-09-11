@@ -16,13 +16,17 @@ Nothing changes unless you opt in. The stock native MCP path is untouched.
 ## Enable
 
 ```powershell
-$env:AGENT_BROWSER_PROXY = "1"
+$env:AGENT_BROWSER_SESSION_PROXY = "1"
 ```
 
-(or set `AGENT_BROWSER_PROXY=1` in `.env` / service env) and restart the
+(or set `AGENT_BROWSER_SESSION_PROXY=1` in `.env` / service env) and restart the
 backend. The backend then registers the MCP entry as
 `node agent-browser-proxy/mcp-server.mjs --cli <agent-browser.exe> --namespace opencode`
 instead of the binary-direct command. Revert to stock by unsetting the flag.
+
+> Do NOT use `AGENT_BROWSER_PROXY` as the flag name: that is agent-browser's
+> own proxy-server URL variable, and a value like `1` routes all of Chrome's
+> traffic through proxy "1" (`ERR_PROXY_CONNECTION_FAILED`).
 
 Optional tuning (defaults shown):
 

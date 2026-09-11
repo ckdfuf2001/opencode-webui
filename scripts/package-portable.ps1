@@ -117,7 +117,7 @@ if (Test-Path (Join-Path $srcProxy 'mcp-server.mjs')) {
   $destProxy = Join-Path $release 'agent-browser-proxy'
   if (Test-Path $destProxy) { Remove-Item -Recurse -Force $destProxy }
   Copy-Item -Recurse -Force $srcProxy $destProxy
-  Write-Output '[package 6/7] agent-browser-proxy included (opt-in via AGENT_BROWSER_PROXY=1)'
+  Write-Output '[package 6/7] agent-browser-proxy included (opt-in via AGENT_BROWSER_SESSION_PROXY=1)'
 } else {
   Write-Output '[package 6/7] agent-browser-proxy not present - skipping'
 }

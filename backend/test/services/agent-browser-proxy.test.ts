@@ -11,7 +11,7 @@ describe('agent-browser-proxy module', () => {
   const saved: Record<string, string | undefined> = {}
 
   beforeEach(() => {
-    for (const key of ['AGENT_BROWSER_PROXY', 'AGENT_BROWSER_PROXY_MJS']) {
+    for (const key of ['AGENT_BROWSER_SESSION_PROXY', 'AGENT_BROWSER_PROXY_MJS']) {
       saved[key] = process.env[key]
       delete process.env[key]
     }
@@ -31,13 +31,13 @@ describe('agent-browser-proxy module', () => {
   })
 
   it('falls back to null when the proxy script is missing', () => {
-    process.env.AGENT_BROWSER_PROXY = '1'
+    process.env.AGENT_BROWSER_SESSION_PROXY = '1'
     process.env.AGENT_BROWSER_PROXY_MJS = 'C:\\definitely\\not\\here\\mcp-server.mjs'
     expect(resolveAgentBrowserProxy('C:\\fake\\agent-browser.exe', 'opencode')).toBeNull()
   })
 
   it('passes SESSION_* env through only when enabled', () => {
-    process.env.AGENT_BROWSER_PROXY = '1'
+    process.env.AGENT_BROWSER_SESSION_PROXY = '1'
     const env = agentBrowserProxyEnv()
     expect(env.SESSION_TTL_MS).toBe('600000')
     expect(env.SESSION_MAX).toBe('16')
@@ -47,7 +47,7 @@ describe('agent-browser-proxy module', () => {
   it('resolves node+mjs command when enabled and the script exists', () => {
     const mjs = fileURLToPath(new URL('../../../agent-browser-proxy/mcp-server.mjs', import.meta.url))
     if (!existsSync(mjs)) return // module folder removed — nothing to resolve
-    process.env.AGENT_BROWSER_PROXY = '1'
+    process.env.AGENT_BROWSER_SESSION_PROXY = '1'
     process.env.AGENT_BROWSER_PROXY_MJS = mjs
     const resolved = resolveAgentBrowserProxy('C:\\bin\\agent-browser.exe', 'opencode')
     // node가 없으면 null 폴백 (어느 쪽이든 크래시 없이 stock direct로 복귀)
