@@ -424,12 +424,21 @@ async function execTool(def, a, ns, session, opts) {
     for (const c of cmdArgs) argv.push(c);
     argv.push("--json");
     const runOnce = () => runCli(argv, tmo + 10000);
+    const daemonPid = () => {
+      try {
+        const p = readSidecarInt(daemonRunDir(), toSafe(ns), "pid");
+        return p === null ? "none" : String(p);
+      } catch (e) { return "unknown"; }
+    };
     const finish = (rr) => {
       const b = rr.out || rr.err || "(empty output, exit " + rr.code + ")";
-      if (rr.code === 124) return { timeout: true, text: b };
+      // 실패는 어느 데몬을 보고 났는지 찍는다: 성공/실패가 데몬 pid와
+      // 상관관계가 있으면 이중 데몬 경합 확정 (flaky 타이밍과 구분됨)
+      const tag = " [daemon pid " + daemonPid() + "]";
+      if (rr.code === 124) return { timeout: true, text: b + tag };
       if (rr.code !== 0) {
         const h = hintFor(b);
-        return txt("Command failed (exit " + rr.code + "):\n" + b.slice(0, 3000) + (h ? "\n" + h : ""), true);
+        return txt("Command failed (exit " + rr.code + ")" + tag + ":\n" + b.slice(0, 3000) + (h ? "\n" + h : ""), true);
       }
       return txt(b.slice(0, 12000));
     };
