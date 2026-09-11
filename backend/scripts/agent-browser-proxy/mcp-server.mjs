@@ -418,8 +418,11 @@ async function execTool(def, a, ns, session, opts) {
 // Cold-start quirk: the first `open` that launches a browser may never return
 // (upstream bug - the browser DOES launch underneath). Bound it, verify with a
 // cheap get_url on the now-warm daemon, and report success either way.
+// Cold Chrome 첫 기동은 Windows에서 25초를 넘기기 쉽다. 여기서 SIGKILL로
+// 자르면 데몬에 반쯤 태어난 브라우저가 남아 target churn + CDP 10060
+// 악순환이 된다. v0.35+ 파이프 행은 해소됐으니 충분히 기다린다.
 async function execOpenWithVerify(def, a, ns, session) {
-  const firstMs = Math.min(Math.max(1000, Number(a.timeoutMs) || CALL_TIMEOUT), 25000);
+  const firstMs = Math.min(Math.max(90000, Number(a.timeoutMs) || CALL_TIMEOUT), 120000);
   const r = await execTool(def, a, ns, session, { timeoutMs: firstMs });
   if (!r.timeout) return r;
   const verify = await execTool(BY_NAME.get("agent_browser_get_url"), { timeoutMs: 15000 }, ns, session);

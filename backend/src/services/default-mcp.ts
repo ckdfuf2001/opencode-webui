@@ -180,6 +180,10 @@ export function writeRepoOpenCodeConfig(localPath: string): boolean {
 }
 
 const warmUpInFlight = new Map<string, Promise<boolean>>()
+// 데몬 웜업 전역 뮤텍스: 세션이 달라도 데몬·Chrome은 공유되므로,
+// 병렬 웜업은 Chrome 동시 기동(10060/OOM)만 부른다. 진행 중인 웜업이
+// 있으면 새 세션도 거기에 붙는다.
+let globalWarmUpInFlight: Promise<boolean> | null = null
 
 export function warmUpAgentBrowserDaemon(
   namespace: string = AGENT_BROWSER_NAMESPACE,
@@ -188,10 +192,19 @@ export function warmUpAgentBrowserDaemon(
   const key = `${namespace}::${session ?? namespace}`
   const existing = warmUpInFlight.get(key)
   if (existing) return existing
+  if (globalWarmUpInFlight) {
+    warmUpInFlight.set(key, globalWarmUpInFlight)
+    globalWarmUpInFlight.finally(() => {
+      if (warmUpInFlight.get(key) === globalWarmUpInFlight) warmUpInFlight.delete(key)
+    })
+    return globalWarmUpInFlight
+  }
   const flight = doWarmUp(namespace, session).finally(() => {
     warmUpInFlight.delete(key)
+    if (globalWarmUpInFlight === flight) globalWarmUpInFlight = null
   })
   warmUpInFlight.set(key, flight)
+  globalWarmUpInFlight = flight
   return flight
 }
 
@@ -567,6 +580,17 @@ export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> 
     const stillHealthy = (await refreshLiveness(daemons, culled)).filter((d) => d.alive && d.portOpen)
     if (stillHealthy.length === 0) {
       warmed = await warmUpAgentBrowserDaemon().catch(() => false)
+    }
+  } else {
+    // pid+포트는 살아있는데 브라우저가 한 번도 안 뜬 좀비 데몬(구버전 잔해,
+    // 콜드킬 반쪽 Chrome 등)은 기존 검사에 "정상"으로 보인다. 죽이지는 않고
+    // 웜업만 걸어본다 — 전역 뮤텍스라 이미 도는 웜업에 그냥 붙는다.
+    try {
+      if (!getAgentBrowserDaemonStatus().warm) {
+        warmed = await warmUpAgentBrowserDaemon().catch(() => false)
+      }
+    } catch {
+      // 상태 조회 실패는 다음 틱으로
     }
   }
   if (cleanedStale.length > 0 || culled.length > 0 || warmed) {

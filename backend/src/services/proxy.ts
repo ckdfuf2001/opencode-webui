@@ -15,6 +15,10 @@ export function setProxyDb(db: Database): void {
   proxyDb = db
 }
 
+// MCP -32001 재웜 폭주 방지: 데몬이 아픈 동안 재시도마다 warmup을 걸면
+// Chrome 병렬 기동 → 10060 악순환이 된다. 30초에 1회만.
+let lastAgentBrowserRewarmAt = 0
+
 const OPENCODE_LOG_PATH = path.join(os.homedir(), '.local', 'share', 'opencode', 'log', 'opencode.log')
 
 /**
@@ -498,7 +502,11 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         (lower.includes('mcp') && (lower.includes('timed out') || lower.includes('timeout'))) ||
         (lower.includes('agent-browser') && (lower.includes('timed out') || lower.includes('timeout')))
       if (isMcpTimeout) {
-        void import('./default-mcp').then((m) => m.warmUpAgentBrowserDaemon().catch(() => undefined))
+        const nowMs = Date.now()
+        if (nowMs - lastAgentBrowserRewarmAt > 30_000) {
+          lastAgentBrowserRewarmAt = nowMs
+          void import('./default-mcp').then((m) => m.warmUpAgentBrowserDaemon().catch(() => undefined))
+        }
         logger.warn('Agent-browser MCP call failed (likely cold daemon); triggered background re-warm:', bodyText.slice(0, 300))
         const hint = ' - agent-browser MCP timed out (MCP -32001). The browser daemon was likely cold or died (e.g. after cancel). Background re-warm triggered; please retry in a few seconds. Status: GET /api/mcp/agent-browser/status, warm: POST /api/mcp/agent-browser/warm.'
         let parsed: Record<string, unknown> | undefined
