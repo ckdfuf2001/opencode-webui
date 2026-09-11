@@ -236,6 +236,12 @@ async function installAgentBrowser() {
     !force && existsSync(outBin) && meta?.executable && existsSync(join(root, meta.executable))
 
   if (present) {
+    // vendor = 수동 관리. 버전 비교 없이 유지 (--force면 재설치).
+    if (meta.agentBrowserVersion === 'vendor') {
+      console.log('[install-agent-browser] vendored install, keeping as-is.')
+      console.log('  Update with: npm run agent-browser:update')
+      return
+    }
     if (!installedBinaryRuns()) {
       console.log('[install-agent-browser] present binary does not run, reinstalling...')
     } else if (!process.argv.includes('--auto-upgrade')) {
