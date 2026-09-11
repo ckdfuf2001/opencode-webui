@@ -225,7 +225,10 @@ async function doWarmUp(
   })
   let succeeded = false
   try {
-    const deadline = Date.now() + 240_000
+    // v0.35+ resolves the cold-start pipe-inheritance hang, so first launch
+    // returns in seconds. Bound the retry loop: overlapping warmup cycles
+    // pile up MCP children and Chrome launches (OOM).
+    const deadline = Date.now() + 120_000
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now()
       const ok = await openViaMcp(child, remaining, !!proxy, namespace, sessionName)

@@ -38,7 +38,7 @@ const failedUntil = new Map<string, number>()
 // (폴더명 변경 등으로 디렉터리가 깨졌을 때 수십 번 중복 발송 방지).
 // failed 헤드는 순서 유지를 위해 다음 항목을 막는다. 사용자가 X로 지우면 해제.
 const failCount = new Map<string, number>()
-const MAX_CONSECUTIVE_FAILURES = 8
+const MAX_CONSECUTIVE_FAILURES = 1
 const inFlight = new Set<string>()
 // 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
 // workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.

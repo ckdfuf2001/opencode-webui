@@ -26,11 +26,10 @@ if (Test-Path $exePath) {
     throw "release/opencode-webui.exe is locked (is it running?). Stop it manually and retry. $_"
   }
 }
-# 이전 zip 정리 (두 네이밍 모두)
+# 이전 zip 정리
 foreach ($old in @(
   (Join-Path $root "opencode-webui-v$version-portable.zip"),
-  (Join-Path $root "opencode-webui-portable-$version-win-x64.zip"),
-  (Join-Path $root "build/opencode-webui-portable-$version-win-x64.zip")
+  (Join-Path $root "opencode-webui-portable-$version-win-x64.zip")
 )) {
   if (Test-Path $old) { Remove-Item $old -Force; Write-Output "[package 0/7] removed old $old" }
 }
@@ -135,20 +134,14 @@ Write-Output '[package zip] create versioned archive (excluding logs/data/worksp
 # Compress-Archive는 release/* 를 그대로 압축하면 logs/data가 포함될 수 있어 임시 목록으로 필터링
 $zipName = "opencode-webui-portable-$version-win-x64.zip"
 $zipPathRoot = Join-Path $root $zipName
-$zipPathBuild = Join-Path $root "build/$zipName"
-foreach ($zp in @($zipPathRoot, $zipPathBuild)) { if (Test-Path $zp) { Remove-Item $zp -Force } }
+if (Test-Path $zipPathRoot) { Remove-Item $zipPathRoot -Force }
 # 제외할 항목 필터
 $items = Get-ChildItem -Path $release -Force | Where-Object { $_.Name -notin @('logs','data','workspace') }
 if (-not $items) { throw 'nothing to package in release/' }
 $tempList = $items | ForEach-Object { $_.FullName }
 Compress-Archive -Path $tempList -DestinationPath $zipPathRoot -Force
-# build 폴더에도 복사 (기존 관성 유지)
-New-Item -ItemType Directory -Force -Path (Join-Path $root 'build') | Out-Null
-Copy-Item -Force $zipPathRoot $zipPathBuild
-foreach ($zp in @($zipPathRoot, $zipPathBuild)) {
-  $z = Get-Item $zp
-  Write-Output ("  {0} ({1:N1} MB) -> {2}" -f $z.Name, ($z.Length / 1MB), $z.FullName)
-}
+$z = Get-Item $zipPathRoot
+Write-Output ("  {0} ({1:N1} MB) -> {2}" -f $z.Name, ($z.Length / 1MB), $z.FullName)
 
 Write-Output ''
 Write-Output 'Portable package ready:'

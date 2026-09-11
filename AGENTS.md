@@ -73,12 +73,19 @@
   child (verified 2026-08), so all behavior must come from CLI args, not env.
 - **Warm-up matches the real MCP spawn**: on a cold start the daemon inherits the
   MCP server's stdout pipe and `tools/call` hangs until the browser launches → the
-  "first open fails" / `MCP error -32001: Request timed out` (~60s) symptom. The
-  backend pre-warms per-repo sessions via `warmUpAllAgentBrowserDaemons()`
-  (after opencode server start + every 60s). In proxy mode the warm-up spawns
-  the proxy and runs `agent_browser_session_ensure` (reuse) +
-  `agent_browser_open about:blank` on a throwaway `warmup-*` session to force
+  "first open fails" / `MCP error -32001: Request timed out` (~60s) symptom.
+  agent-browser v0.35 fixes this class in-binary (temp-file MCP output, reuse
+  live daemon PID unconditionally), but the backend still pre-warms so the
+  first real `open` is fast. Namespace mode shares ONE daemon + ONE Chrome
+  across every session (per-session isolation is a lazy CDP BrowserContext),
+  so the backend warms the shared daemon ONCE via `warmUpAllAgentBrowserDaemons()`
+  (after opencode server start + every 60s) — never per-repo in parallel:
+  parallel warmups contend on first launch and leak a Chrome tree per daemon
+  restart (dozens of `chrome for testing` processes → OOM). In proxy mode the
+  warm-up spawns the proxy and runs `agent_browser_session_ensure` (reuse) +
+  `agent_browser_open about:blank` on a throwaway `warmup-opencode` session to force
   the browser launch, then kills the MCP child (the background daemon survives).
+  Same-key calls attach to the in-flight warmup, so the 60s tick never piles on.
   Do NOT warm with `open --headed false`: that produces a different daemon profile and
   the MCP restarts it on first use (measured ~45s instead of <300ms). When
   debugging MCP/browser issues, check `AGENT_BROWSER_NAMESPACE=opencode

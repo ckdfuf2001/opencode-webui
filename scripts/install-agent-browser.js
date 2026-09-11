@@ -22,6 +22,16 @@ const AGENT_BROWSER_BIN = {
   'linux-arm64': { pkg: 'agent-browser-linux-arm64', bin: 'agent-browser' },
 }
 
+// v0.35 릴리즈는 플랫폼 접미사 없는 generic 이름(agent-browser.exe)으로만
+// 업로드되어 있다. 플랫폼별 후보를 순서대로 찾아본다.
+const AGENT_BROWSER_ASSET_NAMES = {
+  'win32-x64': ['agent-browser-win32-x64.exe', 'agent-browser.exe'],
+  'darwin-x64': ['agent-browser-darwin-x64', 'agent-browser'],
+  'darwin-arm64': ['agent-browser-darwin-arm64', 'agent-browser'],
+  'linux-x64': ['agent-browser-linux-x64', 'agent-browser'],
+  'linux-arm64': ['agent-browser-linux-arm64', 'agent-browser'],
+}
+
 const CHROME_PLATFORM = {
   'win32-x64': 'win64',
   'darwin-x64': 'mac-x64',
@@ -49,25 +59,35 @@ async function json(url) {
 
 async function resolveBinarySource(pkg) {
   // 1) fork latest에 플랫폼 raw 바이너리가 있으면 그대로 (직접 다운로드).
+  //    v0.35처럼 generic 이름(agent-browser.exe)만 있는 릴리즈도 후보로 찾는다.
   // 2) 없으면 핀된 네임스페이스 빌드 릴리즈에서 찾는다.
   //    (latest가 proxy-v2.2.0처럼 zip만 있는 릴리즈일 수 있어서 latest 고정이 깨진다)
   // 3) proxy 릴리즈의 플랫폼 zip (win32: agent-browser-win32-x64-0.33.2.zip).
   // 4) 최후: npm upstream (포크 기능 없음).
+  const candidates = AGENT_BROWSER_ASSET_NAMES[platformKey] || [pkg]
+  const findAsset = (release) => {
+    if (!release?.assets) return null
+    for (const name of candidates) {
+      const asset = release.assets.find((a) => a.name === name)
+      if (asset?.browser_download_url) return asset
+    }
+    return null
+  }
   if (!process.env.AGENT_BROWSER_VERSION) {
     try {
       const latest = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/latest`)
-      const asset = latest?.assets?.find((a) => a.name === pkg)
-      if (asset?.browser_download_url) {
+      const asset = findAsset(latest)
+      if (asset) {
         return { version: latest.tag_name, url: asset.browser_download_url, tarball: false, zip: false, source: 'github' }
       }
     } catch {
       // 아래 폴백 계속
     }
-    const pinnedTag = process.env.AGENT_BROWSER_RELEASE_TAG || 'v0.34.0-namespace.2'
+    const pinnedTag = process.env.AGENT_BROWSER_RELEASE_TAG || 'v0.35'
     try {
       const pinned = await json(`https://api.github.com/repos/${AGENT_BROWSER_GITHUB_REPO}/releases/tags/${pinnedTag}`)
-      const asset = pinned?.assets?.find((a) => a.name === pkg)
-      if (asset?.browser_download_url) {
+      const asset = findAsset(pinned)
+      if (asset) {
         console.log('[install-agent-browser] using pinned release ' + pinnedTag)
         return { version: pinned.tag_name, url: asset.browser_download_url, tarball: false, zip: false, source: 'github' }
       }

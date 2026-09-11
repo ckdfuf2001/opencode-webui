@@ -473,11 +473,15 @@ for (const repo of listRepos(db)) {
   }
 }
 
-async function warmUpAllAgentBrowserDaemons(db: Database): Promise<void> {
-  const { repoAgentBrowserSession } = await import('./services/default-mcp')
-  const repos = listRepos(db)
-  // 레포별 세션을 전부 warm-up (default 세션만 하면 repo-xxx 세션이 cold라 후속 호출 타임아웃)
-  await Promise.allSettled(repos.map((r) => warmUpAgentBrowserDaemon(undefined, repoAgentBrowserSession(r.localPath))))
+async function warmUpAllAgentBrowserDaemons(_db: Database): Promise<void> {
+  // Namespace mode shares ONE daemon + ONE Chrome across every session
+  // (per-session isolation is a cheap CDP BrowserContext created lazily on
+  // first use). Warm the shared daemon once: per-repo parallel warmups only
+  // contend on first launch and, on pre-v0.35 binaries, restart-loop the
+  // daemon and leak a Chrome tree per restart (dozens of chrome processes
+  // → OOM). Same-key calls attach to the in-flight warmup via
+  // warmUpInFlight, so the 60s re-warm tick never piles onto a running cycle.
+  await warmUpAgentBrowserDaemon()
 }
 
 opencodeServerManager.spawnNow()
