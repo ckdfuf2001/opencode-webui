@@ -46,6 +46,31 @@ interface AgentBrowserInfo {
  * (2026-08 확인) 서버 env 상속이 유일한 통로다. 없으면 세션마다 데몬+Chrome이
  * 따로 뜨고 지문 불일치로 재시작 전쟁 → 10060/OOM.
  */
+// 회사 PC의 HTTP_PROXY/HTTPS_PROXY가 loopback(CDP·데몬 포트)까지 물면
+// 타임아웃 지옥이 된다. stateless MCP(sap 등)는 안 타지만 브라우저 스택은
+// 매 호출이 loopback 타이밍이라 직격. bypass를 강제한다.
+const LOOPBACK_BYPASS = ['127.0.0.1', 'localhost']
+
+function withLoopbackBypass(value: string | undefined): string {
+  const parts = (value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  for (const host of LOOPBACK_BYPASS) {
+    if (!parts.some((p) => p.toLowerCase() === host || p === '*')) parts.push(host)
+  }
+  return parts.join(',')
+}
+
+export function ensureLoopbackBypass(): void {
+  try {
+    process.env.NO_PROXY = withLoopbackBypass(process.env.NO_PROXY)
+  } catch {}
+  try {
+    process.env.no_proxy = withLoopbackBypass(process.env.no_proxy)
+  } catch {}
+}
+
 export function agentBrowserEnv(): Record<string, string> {
   const env: Record<string, string> = {}
   const info = resolveAgentBrowser()
@@ -60,6 +85,10 @@ export function agentBrowserEnv(): Record<string, string> {
   env.SESSION_TTL_MS = PROXY_SESSION_TTL_MS
   env.SESSION_MAX = PROXY_SESSION_MAX
   env.SESSION_SWEEP_MS = PROXY_SESSION_SWEEP_MS
+  // opencode 자식(프록시→CLI→데몬→Chrome) 전체가 corp 프록시를 우회하게.
+  // 서버 env 상속이 유일한 통로라 여기서 박는다.
+  env.NO_PROXY = withLoopbackBypass(process.env.NO_PROXY)
+  env.no_proxy = withLoopbackBypass(process.env.no_proxy)
   // 설치별 소켓 격리: 다른 설치본(portable 등)과 데몬을 공유하지 않는다.
   const scoped = getScopedSocketDir()
   if (scoped) {

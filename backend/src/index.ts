@@ -37,7 +37,7 @@ import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon, removeRepoAgentBrowserEntry, ensureScopedSocketDir } from './services/default-mcp'
+import { mergeDefaultMcpEntries, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon, removeRepoAgentBrowserEntry, ensureScopedSocketDir, ensureLoopbackBypass } from './services/default-mcp'
 import { migrateConfigMapToFiles } from './services/config-migration'
 import { opencodeServerManager, prepareBackendPort, installWindowsShutdownWatchdog } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
@@ -488,6 +488,8 @@ const scopedSocketDir = ensureScopedSocketDir()
 if (scopedSocketDir) {
   logger.info(`Agent-browser socket isolated at: ${scopedSocketDir}`)
 }
+// backend 자신의 스폰(CLI 직접 호출·warmup)도 loopback bypass 적용
+ensureLoopbackBypass()
 opencodeServerManager.spawnNow()
 warmUpAllAgentBrowserDaemons(db).catch((error) => {
   logger.error('Agent-browser daemon warm-up error:', error)
