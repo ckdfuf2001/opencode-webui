@@ -19,7 +19,9 @@ function portFromEnvFile() {
   return null
 }
 
-const port = Number(process.env.PORT) || portFromEnvFile() || 5002
+// NOTE: repo .env first. A system-wide PORT (e.g. PORT=5002 from another
+// install) must not make us gate on somebody else's backend.
+const port = portFromEnvFile() || Number(process.env.PORT) || 5002
 const url = `http://127.0.0.1:${port}/api/health`
 const timeoutMs = Number(process.env.WAIT_BACKEND_TIMEOUT_MS) || 180_000
 const intervalMs = 500

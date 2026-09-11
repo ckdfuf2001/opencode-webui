@@ -28,17 +28,20 @@ REM Also ensure logs are flushed and contain output
 powershell -NoProfile -Command "Start-Sleep -Milliseconds 500; if (Test-Path 'logs\dev.log') { Write-Host ('[DEV START] log size ' + (Get-Item 'logs\dev.log').Length + ' bytes') }"
 
 REM wait a bit and check health (extend to 30s, check both ports and longer timeout)
+REM NOTE: repo .env PORT=5001 first. 5002 is checked second because on machines
+REM with a system-wide PORT=5002 (or a second install) it reports the OTHER
+REM backend as healthy while ours is still starting.
 for /L %%i in (1,1,30) do (
   timeout /t 1 /nobreak >nul
-  curl -sf -m 3 "http://127.0.0.1:5002/api/health" >nul 2>&1
-  if not errorlevel 1 (
-    echo [DEV START] healthy - http://127.0.0.1:5002
-    echo [DEV START] logs: logs\dev.log / logs\dev.err.log / pid logs\dev.pid
-    exit /b 0
-  )
   curl -sf -m 3 "http://127.0.0.1:5001/api/health" >nul 2>&1
   if not errorlevel 1 (
     echo [DEV START] healthy - http://127.0.0.1:5001
+    echo [DEV START] logs: logs\dev.log / logs\dev.err.log / pid logs\dev.pid
+    exit /b 0
+  )
+  curl -sf -m 3 "http://127.0.0.1:5002/api/health" >nul 2>&1
+  if not errorlevel 1 (
+    echo [DEV START] healthy - http://127.0.0.1:5002
     echo [DEV START] logs: logs\dev.log / logs\dev.err.log / pid logs\dev.pid
     exit /b 0
   )
