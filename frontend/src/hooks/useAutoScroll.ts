@@ -39,12 +39,15 @@ export function useAutoScroll<T extends Message>({
   const userScrolledAtRef = useRef(0)
   const userDisengagedRef = useRef(false)
   const pointerStartYRef = useRef<number | null>(null)
+  const nodeRef = useRef<HTMLDivElement | null>(null)
+  nodeRef.current = containerNode ?? containerRef?.current ?? null
 
   const scrollToBottom = useCallback(() => {
-    if (!containerRef?.current) return
+    const el = containerRef?.current ?? nodeRef.current
+    if (!el) return
     userScrolledAtRef.current = 0
     userDisengagedRef.current = false
-    containerRef.current.scrollTop = containerRef.current.scrollHeight
+    el.scrollTop = el.scrollHeight
     onScrollStateChange?.(false)
   }, [containerRef, onScrollStateChange])
 
@@ -176,7 +179,8 @@ export function useAutoScroll<T extends Message>({
   }, [containerRef, containerNode, enabled, sessionId])
 
   useEffect(() => {
-    if (!containerRef?.current || !messages || !enabled) return
+    const el = containerRef?.current ?? nodeRef.current
+    if (!el || !messages || !enabled) return
 
     const currentCount = messages.length
     const prevCount = lastMessageCountRef.current

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useMemo } from 'react'
 import { MessagePart } from './MessagePart'
 import { CornerDownLeft, Scissors, Eraser, X, Copy } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
@@ -72,10 +72,10 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
 }
 
 export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID }: MessageThreadProps) {
-  const [windowSize, setWindowSize] = useState(20)
-  useEffect(() => {
-    setWindowSize(20)
-  }, [sessionID])
+  // 윈도우는 SessionDetail이 단일 소유 (WINDOW_SIZE/windowStart).
+  // 여기서 이중으로 자르면 "Show earlier"가 동작 안 하고 스크롤이 튄다.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  void sessionID
   const editIndex = (hiddenAfterID && messages) ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1
   const baseVisible = editIndex >= 0 && messages ? messages.slice(0, editIndex + 1) : (messages ?? [])
   const prepared = useMemo(() => baseVisible.map((msg) => {
@@ -100,11 +100,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
     ? prepared.filter(({ msg }) => !(msg.info.role === "assistant" && msg.parts.length === 0 && !("completed" in msg.info.time && (msg.info.time as { completed?: number }).completed)))
     : prepared
   const highlightedIdx = highlightedMessageID ? preVisible.findIndex(({ msg }) => msg.info.id === highlightedMessageID) : -1
-  useEffect(() => {
-    if (highlightedIdx >= 0 && highlightedIdx < preVisible.length - windowSize) {
-      setWindowSize(preVisible.length - highlightedIdx)
-    }
-  }, [highlightedMessageID, highlightedIdx, preVisible, windowSize])
+  void highlightedIdx
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
@@ -128,21 +124,10 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
     )
   }
 
-  const hiddenCount = Math.max(0, preVisible.length - windowSize)
-  const visibleMessages = hiddenCount > 0 ? preVisible.slice(-windowSize) : preVisible
+  const visibleMessages = preVisible
 
   return (
     <div className="flex flex-col space-y-2 p-2 overflow-x-hidden">
-      {hiddenCount > 0 && (
-        <div className="flex justify-center py-1">
-          <button
-            onClick={() => setWindowSize((w) => w + 30)}
-            className="text-xs px-3 py-1.5 rounded-full border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          >
-            Show {hiddenCount} earlier messages
-          </button>
-        </div>
-      )}
       {visibleMessages.map(({ msg, parts, assistantText }) => {
         const isSendingPlaceholder = msg.info.id.startsWith("optimistic_sending_")
         // sending 표시는 입력창 위 오버레이(SendingPill)가 담당. 본문에는 그리지 않는다.

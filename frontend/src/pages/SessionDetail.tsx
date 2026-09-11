@@ -131,13 +131,12 @@ export function SessionDetail() {
   // - windowStart === null: 하단 고정(마지막 N개)
   // - 위로 스크롤하면 윈도우가 위로 이동(LOAD_STEP), 아래쪽 DOM은 해제
   // - 맨 아래 도달하면 하단 고정으로 복귀
-  // 위치 보정은 브라우저 네이티브 overflow-anchor에 맡긴다 (키가 msg.info.id로
-  // 안정적이라 prepend 시 뷰가 제자리에 유지된다). 수동 scrollTop 보정 금지 —
-  // 네이티브 앵커와 이중 보정되면 오히려 튄다.
-  const WINDOW_SIZE = 10;
-  const LOAD_STEP = 2;
-  const EDGE_PX = 225;
-  const SHIFT_COOLDOWN_MS = 500;
+  // 윈도우 이동 시 scrollHeight가 급변하므로 이동 전후 높이 차만큼
+  // scrollTop을 보정해 시각 위치를 유지한다 (네이티브 앵커만으론 부족).
+  const WINDOW_SIZE = 15;
+  const LOAD_STEP = 5;
+  const EDGE_PX = 160;
+  const SHIFT_COOLDOWN_MS = 150;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
@@ -229,8 +228,24 @@ export function SessionDetail() {
   const hiddenCount = start;
   // useAutoScroll의 추종 해제 함수 (아래 useAutoScroll 선언 뒤에 연결)
   const markDisengagedRef = useRef<(() => void) | null>(null);
-  // 윈도우 위로 이동. 위치 보정은 네이티브 overflow-anchor가 담당하므로
-  // 여기서는 추종 해제 + 시작점 이동만 한다.
+  // 윈도우 이동 후 시각 위치 유지용: 이동 전 scrollHeight를 기록해두고
+  // windowStart 커밋 후 높이 차만큼 scrollTop을 보정한다.
+  const pendingCompensateRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  useEffect(() => {
+    const comp = pendingCompensateRef.current;
+    if (!comp) return;
+    pendingCompensateRef.current = null;
+    const cc = messageContainerRef.current;
+    if (!cc) return;
+    requestAnimationFrame(() => {
+      const c = messageContainerRef.current;
+      if (!c) return;
+      const dh = c.scrollHeight - comp.prevHeight;
+      if (dh !== 0) c.scrollTop = Math.max(0, comp.prevTop + dh);
+    });
+  }, [windowStart]);
+  // 윈도우 위로 이동. 아래쪽 DOM이 해제되고 위쪽이 붙어 scrollHeight가
+  // 커지므로, 위 effect에서 높이 차만큼 보정해 제자리에 유지한다.
   // 이전 이동이 커밋되기 전 중복 이동 금지 (rAF마다 쌓여 한 번에
   // 최상단까지 날아가며 와다다 떨리던 원인)
   const shiftWindowUp = useCallback(() => {
@@ -240,6 +255,8 @@ export function SessionDetail() {
     if (len === 0) return;
     const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
     if (cur <= 0) return;
+    const c = messageContainerRef.current;
+    if (c) pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
     lastShiftAtRef.current = Date.now();
@@ -249,8 +266,8 @@ export function SessionDetail() {
     setWindowStart(Math.max(0, cur - LOAD_STEP));
   }, [baseMessages?.length]);
   // 윈도우 아래로 이동 (단계별, 끝에서만 하단 고정 복귀).
-  // 위쪽 DOM을 해제하고 아래쪽을 붙이므로 스크롤 위치는 네이티브
-  // overflow-anchor가 유지한다. 최신 근처면 null로 스냅 + 하단 핀.
+  // 위쪽 DOM이 해제되어 scrollHeight가 줄므로 동일하게 보정한다.
+  // 최신 근처면 null로 스냅 + 하단 핀.
   const shiftWindowDown = useCallback(() => {
     if (shiftPendingRef.current) return;
     if (Date.now() - lastShiftAtRef.current < SHIFT_COOLDOWN_MS) return;
@@ -263,6 +280,8 @@ export function SessionDetail() {
       setWindowStart(null);
       return;
     }
+    const c = messageContainerRef.current;
+    if (c) pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
     lastShiftAtRef.current = Date.now();
@@ -719,7 +738,9 @@ export function SessionDetail() {
     containerNode,
     messages,
     sessionId,
-    enabled: effectiveAutoScroll,
+    // 히스토리 열람 중(windowStart!==null)에는 자동 추종이 하단으로
+    // 끌어당기지 않게 끈다. 하단 고정이면 다시 켠다.
+    enabled: effectiveAutoScroll && windowStart === null,
   });
   useEffect(() => { markDisengagedRef.current = markDisengaged }, [markDisengaged]);
 
@@ -742,9 +763,15 @@ export function SessionDetail() {
   // 즉시 1회 + 콘텐츠가 커질 때만 핀하고 실제 스크롤 제스처가 오면 영구 중단한다.
   // (pointerdown/click은 중단 조건에서 제외 — 클릭 한 번에 보호가 풀리면
   //  뒤늦은 이미지·폰트 성장을 못 따라가 새로고침 시 아래로 안 간다)
+  // autoScroll 설정이 꺼져도 첫 진입 1회는 맨 아래로 간다.
   const initialScrollDoneRef = useRef<string | null>(null)
   useEffect(() => {
+    try { history.scrollRestoration = 'manual' } catch {}
+    initialScrollDoneRef.current = null
+  }, [sessionId])
+  useEffect(() => {
     if (!baseMessages || baseMessages.length === 0) return
+    if (!visibleMessages || visibleMessages.length === 0) return
     if (initialScrollDoneRef.current === sessionId) return
     initialScrollDoneRef.current = sessionId!
     try {
@@ -752,47 +779,49 @@ export function SessionDetail() {
       const h = window.location.hash
       if (sp.get('msg') || h.startsWith('#message-') || h.startsWith('#msg=')) return
     } catch {}
-    // 브라우저의 새로고침 스크롤 복원이 끼어들지 못하게 수동 모드
-    try { history.scrollRestoration = 'manual' } catch {}
-    const c = messageContainerRef.current
-    if (!c) return
+    const pin = () => {
+      const cc = messageContainerRef.current
+      if (!cc) return
+      // 페인트 이후 높이 기준으로 하단 고정
+      requestAnimationFrame(() => {
+        const c2 = messageContainerRef.current
+        if (c2) c2.scrollTop = c2.scrollHeight
+      })
+    }
     let stopped = false
     const stop = () => { stopped = true }
-    const pin = () => {
-      if (stopped) return
-      const cc = messageContainerRef.current
-      if (cc) scrollToBottom()
-    }
-    pin()
+    const guardedPin = () => { if (!stopped) pin() }
+    guardedPin()
     // 컨텐츠가 늘어나는 동안(최대 8s) 하단 유지 — 늦은 페인트·이미지·복원
     // 스크롤 대응. 커졌을 때만 핀하므로 휠과 싸우지 않고,
     // 사용자 스크롤이 오면 즉시 영구 중단한다.
     const t0 = Date.now()
-    let lastH = c.scrollHeight
+    const cc0 = messageContainerRef.current
+    let lastH = cc0 ? cc0.scrollHeight : 0
     const iv = setInterval(() => {
       const cc = messageContainerRef.current
       if (stopped || !cc || Date.now() - t0 > 8000) { clearInterval(iv); return }
-      if (cc.scrollHeight !== lastH) { lastH = cc.scrollHeight; pin() }
+      if (cc.scrollHeight !== lastH) { lastH = cc.scrollHeight; guardedPin() }
     }, 300)
     // 컨테이너 내 이미지 로드가 끝나도 하단 유지 (capture 단계)
     const onLoadCapture = (e: Event) => {
-      if ((e.target as HTMLElement)?.tagName === 'IMG') pin()
+      if ((e.target as HTMLElement)?.tagName === 'IMG') guardedPin()
     }
     // 웹폰트 스왑으로 늦게 자라는 높이도 따라간다 (1회성)
     try {
-      (document as Document).fonts?.ready.then(() => pin()).catch(() => {})
+      (document as Document).fonts?.ready.then(() => guardedPin()).catch(() => {})
     } catch {}
-    c.addEventListener('load', onLoadCapture, true)
-    c.addEventListener('wheel', stop, { passive: true })
-    c.addEventListener('touchmove', stop, { passive: true })
+    const c = messageContainerRef.current
+    c?.addEventListener('load', onLoadCapture, true)
+    c?.addEventListener('wheel', stop, { passive: true })
+    c?.addEventListener('touchmove', stop, { passive: true })
     return () => {
       clearInterval(iv)
-      c.removeEventListener('load', onLoadCapture, true)
-      c.removeEventListener('wheel', stop)
-      c.removeEventListener('touchmove', stop)
+      c?.removeEventListener('load', onLoadCapture, true)
+      c?.removeEventListener('wheel', stop)
+      c?.removeEventListener('touchmove', stop)
     }
-  }, [baseMessages?.length, sessionId, scrollToBottom])
-  useEffect(() => { initialScrollDoneRef.current = null }, [sessionId])
+  }, [baseMessages?.length, visibleMessages?.length, sessionId])
 
   useKeyboardShortcuts({
     openModelDialog: () => setModelDialogOpen(true),
@@ -1188,7 +1217,7 @@ if (results.length > 0) {
       <div ref={splitContainerRef} className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden flex flex-col relative min-w-0">
           <UntrackedSuggestionBanner />
-          <div key={sessionId} ref={setContainerRefs} className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain" style={{ paddingBottom: inputH + 20 }}>
+          <div key={sessionId} ref={setContainerRefs} className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain" style={{ paddingBottom: inputH + 20, overflowAnchor: 'none' }}>
             {/* 상단 고정 바: Load more + … 나란히 중앙 */}
             <div className="sticky top-0 z-10 flex items-center justify-center gap-2 py-2 bg-gradient-to-b from-background to-transparent">
               {hasMore && baseMessages && (
