@@ -37,7 +37,7 @@ import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
 import { ensureDirectoryExists, writeFileContent, readFileContent, fileExists } from './services/file-operations'
 import { SettingsService } from './services/settings'
-import { mergeDefaultMcpEntries, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon, writeRepoOpenCodeConfig } from './services/default-mcp'
+import { mergeDefaultMcpEntries, superviseAgentBrowserDaemon, warmUpAgentBrowserDaemon, removeRepoAgentBrowserEntry } from './services/default-mcp'
 import { migrateConfigMapToFiles } from './services/config-migration'
 import { opencodeServerManager, prepareBackendPort, installWindowsShutdownWatchdog } from './services/opencode-single-server'
 import { cleanupOrphanedDirectories } from './services/repo'
@@ -465,11 +465,11 @@ opencodeServerManager.setPreferredBinPath(startupSettings.getSettings().preferen
 
 for (const repo of listRepos(db)) {
   try {
-    if (writeRepoOpenCodeConfig(repo.localPath)) {
-      logger.info(`Ensured per-repo OpenCode config for repo ${repo.localPath}`)
+    if (removeRepoAgentBrowserEntry(repo.localPath)) {
+      logger.info(`Removed per-repo agent-browser MCP for repo ${repo.localPath} (single global MCP now)`)
     }
   } catch (error) {
-    logger.warn(`Failed to write per-repo OpenCode config for ${repo.localPath}:`, error)
+    logger.warn(`Failed to remove per-repo agent-browser MCP for ${repo.localPath}:`, error)
   }
 }
 

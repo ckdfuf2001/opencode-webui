@@ -519,8 +519,8 @@ export function createRepoRoutes(database: Database) {
         } catch (e) { logger.warn('clone index copy failed:', e) }
       }
       try {
-        const { writeRepoOpenCodeConfig } = await import('../services/default-mcp')
-        writeRepoOpenCodeConfig(newLocalPath)
+        const { removeRepoAgentBrowserEntry } = await import('../services/default-mcp')
+        removeRepoAgentBrowserEntry(newLocalPath)
       } catch {}
       try {
         const { preferences } = new SettingsService(database).getSettings()
@@ -638,8 +638,8 @@ export function createRepoRoutes(database: Database) {
         } catch (e) { logger.warn('import index restore failed:', e) }
       }
       try {
-        const { writeRepoOpenCodeConfig } = await import('../services/default-mcp')
-        writeRepoOpenCodeConfig(newLocalPath)
+        const { removeRepoAgentBrowserEntry } = await import('../services/default-mcp')
+        removeRepoAgentBrowserEntry(newLocalPath)
       } catch {}
       try {
         const { preferences } = new SettingsService(database).getSettings()

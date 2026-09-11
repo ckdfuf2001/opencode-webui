@@ -163,14 +163,13 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
    `bin/agent-browser/.meta.json` 기준 이진 경로) + `enabled: true` 강제.
    따라서 MCP는 이 파일을 직접 수정하지 말고 앱 설정(또는 DB)으로 관리한다.
    **단, 전역 병합은 repo 루트의 `opencode.json`에는 적용되지 않는다.**
-2b. **레포별 브라우저 격리**: 각 repo 루트(`workspace/repos/<repo>/opencode.json`)에
-   백엔드가 `agent-browser` 항목만 **공용 namespace(`opencode`) + repo 전용 세션
-   (`repo-<localPath>`)으로 직접 기록/병합**한다(`writeRepoOpenCodeConfig()`).
-   repo가 클론/생성될 때마다 쓰고, 백엔드 시작 시 모든 기존 repo에도 보장한다.
-    모든 repo가 데몬 하나(`opencode`)를 공유하되 **세션마다 CDP 브라우저 컨텍스트가
-    분리**되어(쿠키/스토리지/상태 격리, 네임스페이스당 Chrome 트리 1개 공유) 서로의 탭이
-    공유/비는 문제가 없다. 전역 동기화가 이 파일을 덮어쓰지 않으므로 repo 자신의 config
-   키는 보존되고, 기존 `enabled: false`도 보존되어 repo에서 MCP를 끌 수 있다.
+2b. **브라우저 단일 MCP**: `agent-browser` 항목은 전역 설정에만 둔다. 레포별
+   `opencode.json`에 남아 있던 우리 항목은 백엔드가 제거한다
+   (`removeRepoAgentBrowserEntry()` — 사용자 직접 항목·`enabled: false`는 보존,
+   빈 파일은 삭제). repo 생성/클론/임포트와 백엔드 시작 시 모든 기존 repo에
+   정리한다. 모든 repo가 데몬 하나(`opencode`)를 공유하되 **세션마다 CDP 브라우저
+   컨텍스트가 분리**되어(쿠키/스토리지/상태 격리, 네임스페이스당 Chrome 트리 1개
+   공유) 서로의 탭이 공유/비는 문제가 없다.
    브라우저 탭이 비거나 섞이면 `workspace/repos/<repo>/opencode.json`에 repo 전용
    `AGENT_BROWSER_SESSION`이 있는지 먼저 확인한다.
 3. **MCP가 잠시 "disabled"로 보일 수 있다.** 등록 직후 opencode가 서버를 띄우고 도구를

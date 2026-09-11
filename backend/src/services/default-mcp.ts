@@ -147,35 +147,53 @@ export function agentBrowserProxyMode(): boolean {
   return !!info && resolveAgentBrowserProxy(info) !== null
 }
 
-export function repoAgentBrowserSession(localPath: string): string {
-  const slug = localPath.replace(/[\\/]/g, '-').replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
-  const safeSlug = slug || `repo-${Date.now().toString(36)}`
-  return `repo-${safeSlug}`
-}
-
-export function writeRepoOpenCodeConfig(localPath: string): boolean {
-  const info = resolveAgentBrowser()
-  if (!info) return false
+// 레포별 opencode.json의 agent-browser 항목 제거.
+// 전역 설정(syncDefaultConfigToDisk)이 이미 동일한 프록시 항목을 가지고 있어
+// 레포별 중복은 override만 할 뿐 MCP를 하나 더 띄우지 않는다 — 그래도 혼란과
+// 구버전 direct 잔재를 없애기 위해 단일 전역으로 정리한다.
+// - 우리 항목(명령에 agent-browser/mcp-server.mjs 포함)만 제거하고,
+//   사용자가 직접 넣은同名 항목은 건드리지 않는다.
+// - 제거 후 빈 객체만 남으면 파일 자체를 지운다(원래 없던 상태로 복원).
+// - enabled:false 로 꺼둔 레포는 꺼둠을 유지하기 위해 항목을 남긴다.
+// 변경이 있으면 true.
+export function removeRepoAgentBrowserEntry(localPath: string): boolean {
   const repoDir = path.join(getReposPath(), localPath)
   if (!existsSync(repoDir)) return false
   const configPath = path.join(repoDir, 'opencode.json')
-  let existing: Record<string, unknown> = {}
+  let existing: Record<string, unknown>
   try {
     existing = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
   } catch {
-    existing = {}
+    return false
   }
-  const session = repoAgentBrowserSession(localPath)
-  const mcpEntry = buildAgentBrowserMcp(AGENT_BROWSER_NAMESPACE, session)
-  const existingMcp = (existing.mcp && typeof existing.mcp === 'object') ? (existing.mcp as Record<string, unknown>) : {}
-  const existingAgentBrowser = existingMcp['agent-browser'] as { enabled?: boolean } | undefined
-  const agentBrowserEntry = mcpEntry['agent-browser'] as { enabled: boolean }
-  if (existingAgentBrowser?.enabled === false) {
-    agentBrowserEntry.enabled = false
+  if (!existing || typeof existing !== 'object') return false
+  const existingMcp = (existing.mcp && typeof existing.mcp === 'object')
+    ? (existing.mcp as Record<string, unknown>)
+    : null
+  if (!existingMcp || !('agent-browser' in existingMcp)) return false
+  const entry = existingMcp['agent-browser'] as { enabled?: boolean; command?: unknown } | undefined
+  if (entry?.enabled === false) return false
+  const cmd = Array.isArray(entry?.command) ? entry.command.map(String).join(' ') : ''
+  if (!/agent-browser|mcp-server\.mjs/.test(cmd)) {
+    logger.info(`Kept custom agent-browser entry in '${configPath}' (not ours)`)
+    return false
   }
-  const content = { ...existing, mcp: { ...existingMcp, ...mcpEntry } }
-  writeFileSync(configPath, JSON.stringify(content, null, 2))
-  logger.info(`Wrote per-repo OpenCode config '${configPath}' with agent-browser session '${session}'`)
+  const { ['agent-browser']: _removed, ...restMcp } = existingMcp
+  void _removed
+  const { mcp: _mcp, ...rest } = existing
+  void _mcp
+  if (Object.keys(restMcp).length > 0) {
+    writeFileSync(configPath, JSON.stringify({ ...rest, mcp: restMcp }, null, 2))
+  } else if (Object.keys(rest).length > 0) {
+    writeFileSync(configPath, JSON.stringify(rest, null, 2))
+  } else {
+    try {
+      rmSync(configPath, { force: true })
+    } catch {
+      return false
+    }
+  }
+  logger.info(`Removed per-repo agent-browser entry from '${configPath}' (single global MCP now)`)
   return true
 }
 

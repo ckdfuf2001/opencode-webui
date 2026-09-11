@@ -5,7 +5,7 @@ import type { Database } from 'bun:sqlite'
 import type { Repo, CreateRepoInput } from '../types/repo'
 import { logger } from '../utils/logger'
 import { SettingsService } from './settings'
-import { writeRepoOpenCodeConfig, releaseAgentBrowserForDirectory } from './default-mcp'
+import { removeRepoAgentBrowserEntry, releaseAgentBrowserForDirectory } from './default-mcp'
 import { getReposPath } from '@opencode-webui/shared'
 import { stopAutomationWatcher, startAutomationWatcher, suppressAutomationTree, unsuppressAutomationTree } from './automation-watcher'
 import path from 'path'
@@ -102,7 +102,7 @@ export async function initLocalRepo(
     }
     
     db.updateRepoStatus(database, repo.id, 'ready')
-    writeRepoOpenCodeConfig(normalizedPath)
+    removeRepoAgentBrowserEntry(normalizedPath)
     logger.info(`Local git repo ready: ${normalizedPath}`)
     return { ...repo, cloneStatus: 'ready' }
   } catch (error: any) {
@@ -279,7 +279,7 @@ export async function cloneRepo(
           }
           
           db.updateRepoStatus(database, repo.id, 'ready')
-          writeRepoOpenCodeConfig(repo.localPath)
+          removeRepoAgentBrowserEntry(repo.localPath)
           return { ...repo, cloneStatus: 'ready' }
         } else {
           logger.warn(`Invalid repository directory found, removing and recloning: ${baseRepoDirName}`)
@@ -340,7 +340,7 @@ export async function cloneRepo(
     }
     
     db.updateRepoStatus(database, repo.id, 'ready')
-    writeRepoOpenCodeConfig(repo.localPath)
+    removeRepoAgentBrowserEntry(repo.localPath)
     logger.info(`Repo ready: ${repoUrl}${branch ? `#${branch}` : ''}${shouldUseWorktree ? ' (worktree)' : ''}`)
     return { ...repo, cloneStatus: 'ready' }
   } catch (error: any) {

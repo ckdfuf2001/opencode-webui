@@ -58,10 +58,10 @@ the user's `~/.config/opencode`.
    inside the workspace.
 3. `proxy.ts` patches the fetched config before forwarding it to the UI and
    resolves the scope of slash commands (`global` vs `project` vs `builtin`).
-4. Each repo directory under `workspace/repos/` gets its own project-level
-   `opencode.json` (written/merged by `writeRepoOpenCodeConfig`,
-   `backend/src/services/default-mcp.ts`). By default it carries the same `agent-browser`
-   MCP as the global config (`namespace=opencode`, `session=opencode`/`default`) so all repos share ONE browser instance. With `AGENT_BROWSER_AUTO_SESSION=1` (patched `ckdfuf2001/agent-browser`), `default`/`opencode` is auto-hashed to `auto-<cwd-hash>` per repo, so `open`/`read` without an explicit `session` no longer returns blank. The global `opencode.json` keeps the bare
+4. Repo directories under `workspace/repos/` do NOT get their own `agent-browser`
+   MCP entry — the single global entry applies to all repos (per-repo duplicates
+   are removed by `removeRepoAgentBrowserEntry`,
+   `backend/src/services/default-mcp.ts`). With `AGENT_BROWSER_AUTO_SESSION=1` (patched `ckdfuf2001/agent-browser`), `default`/`opencode` is auto-hashed to `auto-<cwd-hash>` per repo, so `open`/`read` without an explicit `session` no longer returns blank. The global `opencode.json` keeps the bare
    `doc-reader` + `agent-browser` entries for sessions that run outside a repo.
 
 ## Default MCP Servers & agent-browser daemon warm-up
@@ -78,7 +78,7 @@ the user's `~/.config/opencode`.
   `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h).
 
 Namespaces isolate the agent-browser daemon socket
-(`~/.agent-browser/namespaces/<ns>/run`). The global config and all repos use `opencode` namespace. **By default** `AGENT_BROWSER_SESSION` is `opencode`/`default` for everyone, so `agent_browser_*` calls without an explicit `session` go to the same `default` browser — `read` on a fresh `default` returns blank, so you must pass `session` (e.g. `session: "repo-Test"`) or enable `AGENT_BROWSER_AUTO_SESSION=1` in the patched `ckdfuf2001/agent-browser` (`auto-<cwd-hash>` per repo, see `cli/src/flags.rs`). `writeRepoOpenCodeConfig()` still writes a per-repo `opencode.json` but, in default mode, it carries the same `default` session as the global config; per-repo `repo-*` isolation is only active when the env `AGENT_BROWSER_AUTO_SESSION` or an explicit `session` param is used. Sessions, when isolated, share ONE Chrome tree in the `opencode` namespace via CDP browser contexts.
+(`~/.agent-browser/namespaces/<ns>/run`). The global config and all repos use `opencode` namespace. **By default** `AGENT_BROWSER_SESSION` is `opencode`/`default` for everyone, so `agent_browser_*` calls without an explicit `session` go to the same `default` browser — `read` on a fresh `default` returns blank, so you must pass `session` (e.g. `session: "repo-Test"`) or enable `AGENT_BROWSER_AUTO_SESSION=1` in the patched `ckdfuf2001/agent-browser` (`auto-<cwd-hash>` per repo, see `cli/src/flags.rs`). Session isolation is per-call (`session` param), not per config file: all repos share ONE Chrome tree in the `opencode` namespace via CDP browser contexts.
 
 `mergeDefaultMcpEntries(content)` (called from `ensureDefaultConfigExists()` and
 `syncDefaultConfigToDisk()`, `backend/src/index.ts`) guarantees the **global**
@@ -92,9 +92,9 @@ config entries exist and **repairs** them on every sync:
    what keeps `AGENT_BROWSER_NAMESPACE` and `AGENT_BROWSER_IDLE_TIMEOUT_MS`
    present in a config regenerated from the DB).
 
-Per-repo `opencode.json` files are written directly by `writeRepoOpenCodeConfig`
-and are **not** re-merged by `syncDefaultConfigToDisk` — the repo root config is
-untouched by the global sync so a repo keeps its own namespace.
+Legacy per-repo `opencode.json` agent-browser entries (if any) are stripped by
+`removeRepoAgentBrowserEntry` on repo create/clone/import and at backend startup —
+the repo root config otherwise keeps the user's own keys.
 
 The agent-browser MCP server spawns the CLI per tool call; that CLI talks to a
 long-lived background **daemon** over a local socket (namespace-scoped under
