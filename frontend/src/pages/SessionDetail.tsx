@@ -779,12 +779,19 @@ export function SessionDetail() {
     if (!baseMessages || baseMessages.length === 0) return
     if (!visibleMessages || visibleMessages.length === 0) return
     if (initialScrollDoneRef.current === sessionId) return
-    initialScrollDoneRef.current = sessionId!
+    // 컨테이너가 아직 마운트 전이면(로딩 스피너) done 표시 없이 빠져나간다.
+    // done부터 찍으면 화면이 붙은 뒤 deps 변화가 없어 재실행이 안 되고 맨 위에 멈춘다.
+    const mounted = messageContainerRef.current ?? containerNode
+    if (!mounted) return
     try {
       const sp = new URLSearchParams(window.location.search)
       const h = window.location.hash
-      if (sp.get('msg') || h.startsWith('#message-') || h.startsWith('#msg=')) return
+      if (sp.get('msg') || h.startsWith('#message-') || h.startsWith('#msg=')) {
+        initialScrollDoneRef.current = sessionId!
+        return
+      }
     } catch {}
+    initialScrollDoneRef.current = sessionId!
     const pin = () => {
       const cc = messageContainerRef.current
       if (!cc) return
@@ -827,7 +834,7 @@ export function SessionDetail() {
       c?.removeEventListener('wheel', stop)
       c?.removeEventListener('touchmove', stop)
     }
-  }, [baseMessages?.length, visibleMessages?.length, sessionId])
+  }, [baseMessages?.length, visibleMessages?.length, sessionId, containerNode])
 
   useKeyboardShortcuts({
     openModelDialog: () => setModelDialogOpen(true),

@@ -210,6 +210,8 @@ export function useAutoScroll<T extends Message>({
 
   useEffect(() => {
     const el = containerRef?.current ?? nodeRef.current
+    // 컨테이너가 로딩 스피너 뒤에 마운트되면 messages 변화 없이도 재실행되도록
+    // containerNode를 deps에 포함한다 (초기 1회 하단 고정이 스킵되던 원인)
     if (!el || !messages || !enabled) return
 
     const currentCount = messages.length
@@ -239,7 +241,7 @@ export function useAutoScroll<T extends Message>({
     }
 
     requestAnimationFrame(() => scrollToBottom())
-  }, [messages, containerRef, scrollToBottom, enabled])
+  }, [messages, containerRef, containerNode, scrollToBottom, enabled])
 
   return { scrollToBottom, markDisengaged, isDisengaged }
 }
