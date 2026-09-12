@@ -821,7 +821,19 @@ export function writeActiveOpenCodeConfigFile(configContent: string): void {
       if (e && typeof e === 'object' && e.enabled === false) prevDisabled.add(id)
     }
   } catch {}
-  const merged = mergeDefaultMcpEntries(parsed)
+  const merged = mergeDefaultMcpEntries(parsed) as Record<string, unknown> & { mcp?: Record<string, unknown> }
+  // 0.8.0+ 마이그레이션: 기존 agent-browser 항목은 제거하고 playwright로 교체 (pull 받은 머신 자동 정리)
+  try {
+    if (merged.mcp && typeof merged.mcp === 'object' && 'agent-browser' in (merged.mcp as Record<string, unknown>)) {
+      const entry = (merged.mcp as Record<string, unknown>)['agent-browser'] as { command?: unknown } | undefined
+      const cmd = Array.isArray(entry?.command) ? (entry.command as unknown[]).map(String).join(' ') : ''
+      // 우리 agent-browser 항목이면 제거 (사용자 커스텀 agent-browser는 cmd에 agent-browser 없으면 유지)
+      if (!cmd || /agent-browser|mcp-server\.mjs/.test(cmd)) {
+        delete (merged.mcp as Record<string, unknown>)['agent-browser']
+        logger.info('Removed stale agent-browser MCP entry (migrated to playwright)')
+      }
+    }
+  } catch {}
   try {
     const mcp = ((merged as Record<string, unknown>).mcp ?? {}) as Record<string, { enabled?: boolean }>
     for (const id of prevDisabled) {
