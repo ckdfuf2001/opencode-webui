@@ -154,42 +154,20 @@ function resolveAgentBrowser(): AgentBrowserInfo | null {
 }
 
 function buildAgentBrowserMcp(
-  namespace: string = AGENT_BROWSER_NAMESPACE,
+  _namespace: string = AGENT_BROWSER_NAMESPACE,
 ): Record<string, unknown> {
-  // 원본 native MCP 직접 등록. 세션은 호출마다 전달한다 (서버 env 세션 고정 금지).
-  const info = resolveAgentBrowser()
-  if (!info) return {}
-  // === BEGIN agent-browser-proxy (optional; AGENT_BROWSER_PROXY=1일 때만 적용) ===
-  const proxy = resolveAgentBrowserProxy(info.binPath, namespace)
-  if (proxy) {
-    const proxyEnv: Record<string, string> = { ...agentBrowserProxyEnv() }
-    if (info.executablePath && existsSync(info.executablePath)) {
-      proxyEnv.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
-    }
-    proxyEnv.AGENT_BROWSER_NAMESPACE = namespace
-    proxyEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
-    proxyEnv.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
-    return {
-      'agent-browser': {
-        type: 'local',
-        enabled: true,
-        command: proxy.command,
-        env: proxyEnv,
-      },
-    }
-  }
-  // === END agent-browser-proxy ===
+  // 0.7.8+: agent-browser → Playwright MCP로 전면 교체. 가볍고 데몬 없는 browser_* 도구 제공.
+  // webfetch로는 불가한 버튼 클릭/스냅샷 시퀀스 지원, --isolated 로 세션 격리 (concurrent 안전).
+  // npx --yes 로 최초 1회 자동 설치, 이후 캐시 재사용.
   const env: Record<string, string> = {}
-  if (info.executablePath && existsSync(info.executablePath)) {
-    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
-  }
-  env.AGENT_BROWSER_NAMESPACE = namespace
-  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = AGENT_BROWSER_IDLE_TIMEOUT_MS
+  // 회사 프록시가 loopback을 물지 않게 bypass 유지 (Playwright도 CDP가 127.0.0.1 사용)
+  env.NO_PROXY = withLoopbackBypass(process.env.NO_PROXY)
+  env.no_proxy = withLoopbackBypass(process.env.no_proxy)
   return {
-    'agent-browser': {
+    playwright: {
       type: 'local',
       enabled: true,
-      command: [info.binPath, 'mcp', '--namespace', namespace],
+      command: ['npx', '--yes', '@playwright/mcp@latest', '--headless', '--isolated'],
       env,
     },
   }
@@ -257,26 +235,11 @@ let lastWarmOk = true
 const WARM_RETRY_COOLDOWN_MS = 5 * 60_000
 
 export function warmUpAgentBrowserDaemon(
-  namespace: string = AGENT_BROWSER_NAMESPACE,
-  session?: string,
+  _namespace: string = AGENT_BROWSER_NAMESPACE,
+  _session?: string,
 ): Promise<boolean> {
-  const key = `${namespace}::${session ?? namespace}`
-  const existing = warmUpInFlight.get(key)
-  if (existing) return existing
-  if (globalWarmUpInFlight) {
-    warmUpInFlight.set(key, globalWarmUpInFlight)
-    globalWarmUpInFlight.finally(() => {
-      if (warmUpInFlight.get(key) === globalWarmUpInFlight) warmUpInFlight.delete(key)
-    })
-    return globalWarmUpInFlight
-  }
-  const flight = doWarmUp(namespace, session).finally(() => {
-    warmUpInFlight.delete(key)
-    if (globalWarmUpInFlight === flight) globalWarmUpInFlight = null
-  })
-  warmUpInFlight.set(key, flight)
-  globalWarmUpInFlight = flight
-  return flight
+  // Playwright MCP는 데몬 웜업 불필요 — 항상 warm으로 간주
+  return Promise.resolve(true)
 }
 
 async function doWarmUp(
@@ -710,44 +673,8 @@ export function listAgentBrowserDaemons(): AgentBrowserDaemonInfo[] {
  *    망가진 환경에서 매 틱 Chrome 기동을 반복하지 않는다.
  */
 export async function superviseAgentBrowserDaemon(): Promise<SupervisionResult> {
-  const empty: SupervisionResult = { daemons: [], cleanedStale: [], culled: [], warmed: false }
-  if (!resolveAgentBrowser()) return empty
-  const daemons = listAgentBrowserDaemons()
-  for (const daemon of daemons) {
-    daemon.portOpen = daemon.alive && daemon.port !== null ? await tcpProbe(daemon.port) : false
-  }
-  const cleanedStale: string[] = []
-  const culled: number[] = []
-  for (const daemon of daemons) {
-    if (!daemon.alive) {
-      deleteDaemonSidecars(daemon.dir, daemon.key)
-      cleanedStale.push(daemon.key)
-    }
-  }
-  // 귀먹은 좀비(pid 살아있고 포트 닫힘): 프로세스는 절대 죽이지 않고
-  // 사이드카만 지운다. 다음 호출이 respawn하고 옛 프로세스는 idle 종료.
-  for (const daemon of daemons) {
-    if (daemon.alive && daemon.port !== null && !daemon.portOpen) {
-      deleteDaemonSidecars(daemon.dir, daemon.key)
-      cleanedStale.push(`${daemon.key}:unreachable`)
-    }
-  }
-  let warmed = false
-  const survivors = daemons.filter((d) => d.alive && d.portOpen).length
-  if (survivors <= 0) {
-    if (lastWarmOk || Date.now() - lastWarmAttemptAt > WARM_RETRY_COOLDOWN_MS) {
-      lastWarmAttemptAt = Date.now()
-      warmed = await warmUpAgentBrowserDaemon().catch(() => false)
-      lastWarmOk = warmed
-    }
-  }
-  if (cleanedStale.length > 0 || culled.length > 0 || warmed) {
-    logger.info(
-      `Agent-browser supervised (daemons: ${daemons.length}, stale cleaned: [${cleanedStale.join(', ')}], ` +
-        `culled pids: [${culled.join(', ')}], warmed: ${warmed})`,
-    )
-  }
-  return { daemons, cleanedStale, culled, warmed }
+  // Playwright MCP는 데몬 supervision 불필요 — no-op (agent-browser 전용 로직 bypass)
+  return { daemons: [], cleanedStale: [], culled: [], warmed: false }
 }
 
 function sleep(ms: number): Promise<void> {
