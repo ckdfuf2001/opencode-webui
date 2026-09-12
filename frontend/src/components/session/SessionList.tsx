@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus, X, StopCircle } from "lucide-react";
+import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus, StopCircle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface SessionListProps {

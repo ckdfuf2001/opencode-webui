@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listRepos } from '@/api/repos'
 import { useSessions, useSessionStatusMap } from '@/hooks/useOpenCode'
 import { OPENCODE_API_ENDPOINT } from '@/config'
-import { FolderGit2, MessageSquare, Plus, ChevronDown, ChevronRight, Loader2, ShieldAlert } from 'lucide-react'
+import { FolderGit2, MessageSquare, Plus, ChevronDown, ChevronRight, Loader2, ShieldAlert, StopCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface NavigationTreeProps {
@@ -61,6 +61,13 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     return dbStatuses.filter(s => s.repoId === repoId || s.directory === repo.fullPath).reduce((acc, s) => acc + (s.pendingPermissions ?? 0), 0)
   }
 
+  const getCancelledCount = (repoId: number) => {
+    if (!dbStatuses || !repos) return 0
+    const repo = repos.find(r => r.id === repoId)
+    if (!repo) return 0
+    return dbStatuses.filter(s => (s as unknown as { isCancelled?: boolean }).isCancelled && (s.repoId === repoId || s.directory === repo.fullPath) && s.status !== 'busy').length
+  }
+
   const handleNewSession = async (repoId: number, directory?: string) => {
     try {
       const { createOpenCodeClient } = await import('@/api/opencode')
@@ -102,6 +109,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
           const isExpanded = expandedRepos.has(repo.id)
           const working = getWorkingCount(repo.id)
           const pending = getPendingCount(repo.id)
+          const cancelled = getCancelledCount(repo.id)
           return (
             <div key={repo.id} className="flex flex-col">
               <div className="flex items-center gap-1 px-2">
@@ -125,6 +133,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
                   <span className="truncate text-xs">{repoName}</span>
                   {working > 0 && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-blue-500"><Loader2 className="w-3 h-3 animate-spin" />{working}</span>}
                   {pending > 0 && !working && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-amber-500"><ShieldAlert className="w-3 h-3" />{pending}</span>}
+                  {cancelled > 0 && !working && !pending && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-gray-500"><StopCircle className="w-3 h-3" />{cancelled}</span>}
                 </a>
                 <Button
                   variant="ghost"
@@ -216,6 +225,7 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
     const isActive = location.pathname.includes(id)
     const isBusy = dbStatuses?.some(e => e.sessionId === id && e.status === 'busy')
     const pending = dbStatuses?.find(e => e.sessionId === id)?.pendingPermissions ?? 0
+    const isCancelled = dbStatuses?.some(e => (e as unknown as { isCancelled?: boolean }).isCancelled && e.sessionId === id && e.status !== 'busy') ?? false
     return (
       <a
         key={id}
@@ -232,6 +242,7 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
         <span className="truncate flex-1">{title || 'Untitled'}</span>
         {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
         {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
+        {isCancelled && !isBusy && !pending && <StopCircle className="w-3 h-3 text-gray-500 shrink-0" />}
       </a>
     )
   }
