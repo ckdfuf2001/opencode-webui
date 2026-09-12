@@ -1191,9 +1191,6 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       const pendingAtAbort = pendingOptimistic.get(sessionID)
       abortActiveSend(sessionID)
       recentlyAborted.set(sessionID, Date.now());
-      markCancelledUntilNextSend(sessionID);
-      // DB에도 cancelled 저장 — 세션 리스트 배찌가 다음 채팅 전까지 유지되게
-      fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'POST' }).catch(() => {})
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] })
       await queryClient.cancelQueries({ queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory] })
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);

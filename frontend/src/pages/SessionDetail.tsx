@@ -391,13 +391,14 @@ export function SessionDetail() {
   const sseEnabled = !!sessionId && !recentlyAborted && (hasActiveSend(sessionId) || isStreaming);
   const hasFailedQueue = (queuedForBadge as unknown as Array<{ status?: string }>)?.some((q) => q.status === 'failed') ?? false
   const dbIsCancelled = !!sessionId && (dbStatuses as unknown as Array<{ sessionId: string; isCancelled?: boolean }>)?.some((s) => s.sessionId === sessionId && s.isCancelled) === true
+  // 사용자 직접 Cancel(MessageAbortedError)은 배찌 제외 — 서버 응답 없음/실패만 표시
+  const lastErrorName = (lastMessage?.info as unknown as { error?: { name?: string } })?.error?.name
   const isLastCancelled = !!lastMessage && (
-    ((lastMessage.info as unknown as { error?: { name?: string } }).error != null) ||
-    ((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') ||
-    (lastMessage.parts?.some((p: unknown) => (p as { type?: string; reason?: string }).type === 'step-finish' && (p as { reason?: string }).reason === 'aborted') ?? false) ||
+    ((lastErrorName != null && lastErrorName !== 'MessageAbortedError')) ||
+    (((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') && lastErrorName !== 'MessageAbortedError') ||
     hasFailedQueue
   )
-  const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && (dbIsCancelled || isCancelledUntilNextSend(sessionId) || recentlyAborted || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
+  const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && (dbIsCancelled || isCancelledUntilNextSend(sessionId) || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
   // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
   usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)

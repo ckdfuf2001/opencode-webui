@@ -288,7 +288,7 @@ export const SessionList = ({
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Working
                     </span>
-                  ) : dbCancelledIds.has(session.id) || isCancelledUntilNextSend(session.id) || isRecentlyAborted(session.id) ? (
+                  ) : dbCancelledIds.has(session.id) || isCancelledUntilNextSend(session.id) ? (
                     <span
                       className="inline-flex items-center gap-1 text-[10px] font-medium text-gray-500 bg-gray-500/10 border border-gray-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
                       title="Last result was cancelled — will show until next chat starts"
