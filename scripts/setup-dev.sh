@@ -100,7 +100,9 @@ if [ ! -f ".env" ]; then
   cp .env.example .env
   echo "  [+] Created .env from .env.example"
 else
-  echo "  [+] .env already exists"
+  echo "  [+] .env already exists — backfilling missing defaults"
+  grep -q "^GOMEMLIMIT=" .env 2>/dev/null || { echo "GOMEMLIMIT=2GiB" >> .env; echo "  [+] Backfilled GOMEMLIMIT=2GiB"; }
+  grep -q "^AGENT_BROWSER_SESSION_PROXY=" .env 2>/dev/null || { echo "AGENT_BROWSER_SESSION_PROXY=1" >> .env; echo "  [+] Backfilled AGENT_BROWSER_SESSION_PROXY=1"; }
 fi
 
 echo

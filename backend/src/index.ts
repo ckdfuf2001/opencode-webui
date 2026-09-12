@@ -73,12 +73,21 @@ async function ensureEnvFile(): Promise<void> {
     // 0.7.2+ 신규 기본값 backfill: 파일에 키가 없고 프로세스 환경에도 없으면
     // 기본 1을 추가한다. 풀만 받고 재시작한 기존 머신도 프록시 모드로 올라온다.
     try {
-      const raw = await readFileContent(envPath)
+      let raw = await readFileContent(envPath)
+      let updated = false
       if (!/^AGENT_BROWSER_SESSION_PROXY\s*=/m.test(raw) && process.env.AGENT_BROWSER_SESSION_PROXY === undefined) {
-        await writeFileContent(envPath, `${raw.replace(/\s*$/, '')}\nAGENT_BROWSER_SESSION_PROXY=1\n`)
+        raw = `${raw.replace(/\s*$/, '')}\nAGENT_BROWSER_SESSION_PROXY=1\n`
         process.env.AGENT_BROWSER_SESSION_PROXY = '1'
         logger.info('Backfilled .env default: AGENT_BROWSER_SESSION_PROXY=1 (session-isolation proxy)')
+        updated = true
       }
+      if (!/^GOMEMLIMIT\s*=/m.test(raw) && process.env.GOMEMLIMIT === undefined) {
+        raw = `${raw.replace(/\s*$/, '')}\nGOMEMLIMIT=2GiB\n`
+        process.env.GOMEMLIMIT = '2GiB'
+        logger.info('Backfilled .env default: GOMEMLIMIT=2GiB (Go soft memory limit)')
+        updated = true
+      }
+      if (updated) await writeFileContent(envPath, raw)
     } catch {}
     return
   }
@@ -94,6 +103,7 @@ async function ensureEnvFile(): Promise<void> {
       `CORS_ORIGIN=http://localhost:${PORT}`,
       `NODE_ENV=development`,
       `AGENT_BROWSER_SESSION_PROXY=1`,
+      `GOMEMLIMIT=2GiB`,
     ].join('\n') + '\n'
     await writeFileContent(envPath, content)
     logger.info('Created .env with defaults (program handling, not script copy)')
