@@ -23,6 +23,18 @@ type SendPromptRequest = NonNullable<
 const RECENTLY_ABORTED_MS = 12_000;
 const recentlyAborted = new Map<string, number>();
 
+/** 캔슬 배찌: 마지막 결과가 캔슬이면 다음 채팅 시작 전까지 유지 */
+const cancelledUntilNextSend = new Set<string>();
+export function markCancelledUntilNextSend(sessionID: string): void {
+  cancelledUntilNextSend.add(sessionID);
+}
+export function clearCancelledUntilNextSend(sessionID: string): void {
+  cancelledUntilNextSend.delete(sessionID);
+}
+export function isCancelledUntilNextSend(sessionID: string): boolean {
+  return cancelledUntilNextSend.has(sessionID);
+}
+
 /** ?�송 중인 ?��? user 메시지. 2s ?�링??캐시�???��?�도 ?��??�다. */
 const pendingOptimistic = new Map<string, MessageWithParts>();
 
@@ -884,6 +896,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
     }) => {
       if (!client) throw new Error("No client available");
 
+      clearCancelledUntilNextSend(sessionID);
       const optimisticUserID = `optimistic_user_${Date.now()}_${Math.random()}`;
 
       const contentParts = parts || [{ type: "text" as const, content: prompt || "", name: "" }];
@@ -1174,6 +1187,7 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       const pendingAtAbort = pendingOptimistic.get(sessionID)
       abortActiveSend(sessionID)
       recentlyAborted.set(sessionID, Date.now());
+      markCancelledUntilNextSend(sessionID);
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] })
       await queryClient.cancelQueries({ queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory] })
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);

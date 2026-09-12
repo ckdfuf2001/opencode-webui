@@ -1,5 +1,5 @@
 import { useState, useMemo, Fragment } from "react";
-import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession, isRecentlyAborted } from "@/hooks/useOpenCode";
+import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession, isRecentlyAborted, isCancelledUntilNextSend } from "@/hooks/useOpenCode";
 import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface SessionListProps {
@@ -279,6 +279,14 @@ export const SessionList = ({
                     >
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Working
+                    </span>
+                  ) : isCancelledUntilNextSend(session.id) || isRecentlyAborted(session.id) ? (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-medium text-gray-500 bg-gray-500/10 border border-gray-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
+                      title="Last result was cancelled — will show until next chat starts"
+                    >
+                      <X className="w-3 h-3" />
+                      Cancelled
                     </span>
                   ) : null}
                   {dbPendingCounts[session.id] ? (

@@ -2,7 +2,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
-import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert, X } from "lucide-react";
 import { useState, useEffect } from "react";
 
 interface Repo {
@@ -24,6 +24,7 @@ interface SessionDetailHeaderProps {
   isConnected: boolean;
   isReconnecting?: boolean;
   isStreaming?: boolean;
+  isCancelled?: boolean;
   /** 이 세션(+하위)의 승인 대기 권한 수. 세션 리스트의 방패 배지와 동일한 데이터. */
   pendingPermissions?: number;
   opcodeUrl: string | null;
@@ -44,6 +45,7 @@ export function SessionDetailHeader({
   isConnected,
   isReconnecting,
   isStreaming,
+  isCancelled = false,
   pendingPermissions = 0,
   opcodeUrl,
   repoDirectory,
@@ -176,6 +178,15 @@ export function SessionDetailHeader({
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
               <span className="text-xs text-blue-500 font-medium hidden sm:inline">Working</span>
+            </div>
+          )}
+          {isCancelled && !isWorking && (
+            <div
+              className="flex items-center gap-1 rounded-full bg-gray-500/10 border border-gray-500/30 px-2 py-0.5"
+              title="Last result was cancelled — will show until next chat starts"
+            >
+              <X className="w-3.5 h-3.5 text-gray-500" />
+              <span className="text-xs text-gray-500 font-medium hidden sm:inline">Cancelled</span>
             </div>
           )}
           {pendingPermissions > 0 && (

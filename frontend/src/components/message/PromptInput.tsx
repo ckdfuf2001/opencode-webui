@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from 'react'
-import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap } from '@/hooks/useOpenCode'
+import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap, clearCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
@@ -307,6 +307,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           ? (args ? `${(command as { template?: string }).template ?? `/${command.name}`}\n\n${args}` : ((command as { template?: string }).template ?? `/${command.name}`))
           : prompt.trim()
         if (text) {
+          clearCancelledUntilNextSend(sessionID)
           enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
           setPrompt('')
           setAttachedFiles(new Map())
@@ -337,6 +338,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         .filter((text) => text.trim().length > 0)
         .join('\n')
       if (text.trim()) {
+        clearCancelledUntilNextSend(sessionID)
         enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
         setPrompt('')
         setAttachedFiles(new Map())
@@ -358,6 +360,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           .filter((t) => t.trim().length > 0)
           .join('\n')
         if (text.trim()) {
+          clearCancelledUntilNextSend(sessionID)
           enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
           setPrompt('')
           setAttachedFiles(new Map())
@@ -378,6 +381,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       .filter((t) => t.trim().length > 0)
       .join('\n')
     if (!finalText.trim()) return
+    clearCancelledUntilNextSend(sessionID)
     enqueueQueued.mutate({ sessionID, text: finalText, directory, ...queueDispatchOpts() })
 
     setPrompt('')
@@ -410,6 +414,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       .join('\n')
     if (!text.trim()) return
     // 첫 전송도 큐 경유: 스트립에 sending 표시가 뜨고 응답 확인 후 제거된다.
+    clearCancelledUntilNextSend(sessionID)
     enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
     setPrompt('')
     setAttachedFiles(new Map())

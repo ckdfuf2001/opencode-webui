@@ -19,7 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend } from "@/hooks/useOpenCode";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
@@ -387,6 +387,8 @@ export function SessionDetail() {
   const recentlyAborted = sessionId ? isRecentlyAborted(sessionId) : false;
   const isStreaming = isConnected && !recentlyAborted && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy || (sessionId ? hasActiveSend(sessionId) : false));
   const sseEnabled = !!sessionId && !recentlyAborted && (hasActiveSend(sessionId) || isStreaming);
+  const isLastCancelled = !!lastMessage && (((lastMessage.info as unknown as { error?: { name?: string } }).error?.name === 'MessageAbortedError') || ((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') || (lastMessage.parts?.some((p: unknown) => (p as { type?: string; reason?: string }).type === 'step-finish' && (p as { reason?: string }).reason === 'aborted') ?? false))
+  const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && (isCancelledUntilNextSend(sessionId) || recentlyAborted || isLastCancelled) && (messages?.length ?? 0) > 0
   // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
   usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)
@@ -1187,6 +1189,7 @@ if (results.length > 0) {
         isConnected={isConnected}
         isReconnecting={isReconnecting}
                 isStreaming={isStreaming}
+                isCancelled={isCancelledBadge}
                 pendingPermissions={headerPendingPermissions}
         opcodeUrl={opcodeUrl}
         repoDirectory={repoDirectory}
