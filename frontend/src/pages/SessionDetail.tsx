@@ -492,25 +492,18 @@ export function SessionDetail() {
     }
   }, [isStreaming, preferences, sessionId, repo, session, repoId, id]);
 
-  // 첫 답변 완료 시 서버가 생성한 제목을 헤더에 동적 반영 (제목 없을 때만 refetch)
+  // 매 턴 완료 시 제목 변경을 동적으로 반영 (A안: 부담 턴당 HTTP 2회, 2초 폴링과 병행)
   const prevStreamingForTitleRef = useRef(false);
   useEffect(() => {
     const was = prevStreamingForTitleRef.current;
     prevStreamingForTitleRef.current = isStreaming;
     if (was && !isStreaming && sessionId) {
-      const needTitle = () => {
-        const cur = queryClient.getQueryData<{ title?: string }>(["opencode", "session", opcodeUrl, sessionId, repoDirectory]);
-        const t = cur?.title;
-        return !t || t === 'Untitled Session';
-      };
-      if (!needTitle()) return;
       queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
       queryClient.invalidateQueries({ queryKey: ["opencode", "sessions", opcodeUrl, repoDirectory] });
-      // 서버 제목 생성이 늦을 수 있어 4초 뒤 한 번 더 확인
+      // 서버 제목 생성이 늦을 수 있어 4초 뒤 한 번 더 확인 (항상 재확인 — Untitled 체크 제거)
       const timer = setTimeout(() => {
-        if (needTitle()) {
-          queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
-        }
+        queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
+        queryClient.invalidateQueries({ queryKey: ["opencode", "sessions", opcodeUrl, repoDirectory] });
       }, 4000);
       return () => clearTimeout(timer);
     }
