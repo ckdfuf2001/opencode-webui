@@ -339,6 +339,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         .join('\n')
       if (text.trim()) {
         clearCancelledUntilNextSend(sessionID)
+        fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
         enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
         setPrompt('')
         setAttachedFiles(new Map())
@@ -382,6 +383,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       .join('\n')
     if (!finalText.trim()) return
     clearCancelledUntilNextSend(sessionID)
+    fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
     enqueueQueued.mutate({ sessionID, text: finalText, directory, ...queueDispatchOpts() })
 
     setPrompt('')
@@ -415,6 +417,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     if (!text.trim()) return
     // 첫 전송도 큐 경유: 스트립에 sending 표시가 뜨고 응답 확인 후 제거된다.
     clearCancelledUntilNextSend(sessionID)
+    fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
     enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
     setPrompt('')
     setAttachedFiles(new Map())

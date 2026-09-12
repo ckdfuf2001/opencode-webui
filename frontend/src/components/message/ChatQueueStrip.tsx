@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, X } from 'lucide-react'
 import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat } from '@/hooks/useChatQueue'
 import { Switch } from '@/components/ui/switch'
+import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
+import { API_BASE_URL } from '@/config'
 
 interface ChatQueueStripProps {
   sessionID: string
@@ -16,6 +18,12 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
   const failedItem = !sendingItem ? items.find((item) => item.status === 'failed') : undefined
   // failed 항목은 목록에 남겨 X로 지울 수 있게 한다. sending만 제목으로 올린다.
   const restItems = sendingItem ? items.filter((item) => item.id !== sendingItem.id) : items
+  useEffect(() => {
+    if (failedItem) {
+      markCancelledUntilNextSend(sessionID)
+      fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'POST' }).catch(() => {})
+    }
+  }, [failedItem, sessionID])
   const [allowInterrupt, setAllowInterrupt] = useState(false)
   useEffect(() => {
     try {

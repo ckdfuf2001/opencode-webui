@@ -176,6 +176,14 @@ export function runMigrations(db: Database): void {
           logger.debug('session_status column pending_permissions might already exist:', error)
         }
       }
+      if (sessionStatusTable.length > 0 && !sessionStatusTable.some(col => col.name === 'is_cancelled')) {
+        logger.info('Adding missing session_status column: is_cancelled')
+        try {
+          db.run('ALTER TABLE session_status ADD COLUMN is_cancelled INTEGER NOT NULL DEFAULT 0')
+        } catch (error) {
+          logger.debug('session_status column is_cancelled might already exist:', error)
+        }
+      }
     } catch (error) {
       logger.debug('session_status table may not exist yet:', error)
     }

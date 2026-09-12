@@ -897,6 +897,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       if (!client) throw new Error("No client available");
 
       clearCancelledUntilNextSend(sessionID);
+      fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
       const optimisticUserID = `optimistic_user_${Date.now()}_${Math.random()}`;
 
       const contentParts = parts || [{ type: "text" as const, content: prompt || "", name: "" }];
@@ -1145,6 +1146,9 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
       pendingOptimistic.delete(sessionID)
+      // 서버 응답 없음(한 번 전송 후 포기)도 캔슬 배찌 대상 — DB에도 저장
+      markCancelledUntilNextSend(sessionID)
+      fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'POST' }).catch(() => {})
       if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {
         showToast.error(formatted, { duration: 8000 });
       }
@@ -1188,6 +1192,8 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       abortActiveSend(sessionID)
       recentlyAborted.set(sessionID, Date.now());
       markCancelledUntilNextSend(sessionID);
+      // DB에도 cancelled 저장 — 세션 리스트 배찌가 다음 채팅 전까지 유지되게
+      fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'POST' }).catch(() => {})
       await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] })
       await queryClient.cancelQueries({ queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory] })
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);

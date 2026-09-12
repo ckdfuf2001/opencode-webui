@@ -8,6 +8,7 @@ export interface SessionStatusEntry {
   repoId: number | null
   status: SessionStatusValue
   pendingPermissions: number
+  isCancelled?: boolean
   updatedAt: number
 }
 

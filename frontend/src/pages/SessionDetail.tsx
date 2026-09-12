@@ -20,6 +20,7 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend } from "@/hooks/useOpenCode";
+import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
@@ -128,6 +129,7 @@ export function SessionDetail() {
   useLoadPendingQuestions(openCodeClient, sessionId);
 
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
+  const { data: queuedForBadge = [] } = useQueuedChats(sessionId ?? '')
   // 고정 개수만 보여준다: DOM에는 항상 최대 WINDOW_SIZE개 (메모리/DOM 절약).
   // - windowStart === null: 하단 고정(마지막 N개)
   // - 위로 스크롤하면 윈도우가 위로 이동(LOAD_STEP), 아래쪽 DOM은 해제
@@ -387,8 +389,15 @@ export function SessionDetail() {
   const recentlyAborted = sessionId ? isRecentlyAborted(sessionId) : false;
   const isStreaming = isConnected && !recentlyAborted && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy || (sessionId ? hasActiveSend(sessionId) : false));
   const sseEnabled = !!sessionId && !recentlyAborted && (hasActiveSend(sessionId) || isStreaming);
-  const isLastCancelled = !!lastMessage && (((lastMessage.info as unknown as { error?: { name?: string } }).error?.name === 'MessageAbortedError') || ((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') || (lastMessage.parts?.some((p: unknown) => (p as { type?: string; reason?: string }).type === 'step-finish' && (p as { reason?: string }).reason === 'aborted') ?? false))
-  const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && (isCancelledUntilNextSend(sessionId) || recentlyAborted || isLastCancelled) && (messages?.length ?? 0) > 0
+  const hasFailedQueue = (queuedForBadge as unknown as Array<{ status?: string }>)?.some((q) => q.status === 'failed') ?? false
+  const dbIsCancelled = !!sessionId && (dbStatuses as unknown as Array<{ sessionId: string; isCancelled?: boolean }>)?.some((s) => s.sessionId === sessionId && s.isCancelled) === true
+  const isLastCancelled = !!lastMessage && (
+    ((lastMessage.info as unknown as { error?: { name?: string } }).error != null) ||
+    ((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') ||
+    (lastMessage.parts?.some((p: unknown) => (p as { type?: string; reason?: string }).type === 'step-finish' && (p as { reason?: string }).reason === 'aborted') ?? false) ||
+    hasFailedQueue
+  )
+  const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && (dbIsCancelled || isCancelledUntilNextSend(sessionId) || recentlyAborted || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
   // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
   usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)

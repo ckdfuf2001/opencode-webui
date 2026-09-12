@@ -126,6 +126,7 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       repo_id INTEGER,
       status TEXT NOT NULL DEFAULT 'idle',
       pending_permissions INTEGER NOT NULL DEFAULT 0,
+      is_cancelled INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL
     );
 
