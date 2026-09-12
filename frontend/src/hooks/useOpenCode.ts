@@ -1150,8 +1150,8 @@ export const useSessionStatusMap = () => {
   return useQuery({
     queryKey: ["session-status-db"],
     queryFn: listSessionStatuses,
-    refetchInterval: 2000,
-    staleTime: 1000,
+    refetchInterval: 1200,
+    staleTime: 800,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });

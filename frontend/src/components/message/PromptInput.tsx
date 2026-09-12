@@ -159,6 +159,16 @@ export function PromptInput({
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
   const enqueueQueued = useEnqueueQueuedChat()
+  const [allowInterrupt, setAllowInterrupt] = useState(false)
+  useEffect(() => {
+    try { setAllowInterrupt(localStorage.getItem(`queue-allow-interrupt:${sessionID}`) === '1') } catch {}
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ sessionID: string; allow: boolean }>
+      if (ce.detail?.sessionID === sessionID) setAllowInterrupt(ce.detail.allow)
+    }
+    window.addEventListener('queue-allow-interrupt', handler as EventListener)
+    return () => window.removeEventListener('queue-allow-interrupt', handler as EventListener)
+  }, [sessionID])
   const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
   const sessionData = useSession(opcodeUrl, sessionID, directory)
   const session = sessionData.data as SessionWithModel | undefined
@@ -319,6 +329,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     // 백엔드 폴러가 실제 idle 확인 후 순서대로 발송한다.
     const aborting = abortSession.isPending || isRecentlyAborted(sessionID)
     if (hasActiveStream || sendPrompt.isPending || aborting) {
+      if (allowInterrupt && hasActiveStream && !aborting) {
+        try { abortSession.mutate(sessionID) } catch {}
+      }
       const text = parts
         .map(partToText)
         .filter((text) => text.trim().length > 0)

@@ -49,7 +49,7 @@ const queueDirs = new Map<string, string>()
 // 마지막으로 busy 가 관측된 시각. generation이 끝나는 순간이 아니라 working
 // 표시가 꺼진 뒤에 발송되도록 idle grace를 둔다 (상태 전이·폴러 지연 흡수).
 const lastBusyAt = new Map<string, number>()
-const IDLE_GRACE_MS = 600
+const IDLE_GRACE_MS = 250
 
 export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
