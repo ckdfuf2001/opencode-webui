@@ -79,6 +79,7 @@ export interface UploadProgress {
 
 // 같은 파일 중복 업로드 방지용 (붙여넣기 연타 대응)
 const inFlightUploads = new Set<string>()
+const inFlightXhrs = new Map<string, XMLHttpRequest>()
 
 export function uploadFileKey(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}`
@@ -86,6 +87,22 @@ export function uploadFileKey(file: File): string {
 
 export function isUploadInFlight(file: File): boolean {
   return inFlightUploads.has(uploadFileKey(file))
+}
+
+export function abortUpload(file: File): boolean {
+  const key = uploadFileKey(file)
+  const xhr = inFlightXhrs.get(key)
+  if (xhr) {
+    try { xhr.abort() } catch {}
+    return true
+  }
+  return false
+}
+
+export function abortAllUploads(): void {
+  for (const xhr of inFlightXhrs.values()) {
+    try { xhr.abort() } catch {}
+  }
 }
 
 export class DuplicateUploadError extends Error {
@@ -105,8 +122,12 @@ export function uploadFileWithProgress(
   if (inFlightUploads.has(key)) return Promise.reject(new DuplicateUploadError(file.name))
   inFlightUploads.add(key)
   return new Promise((resolve, reject) => {
-    const done = () => inFlightUploads.delete(key)
+    const done = () => {
+      inFlightUploads.delete(key)
+      inFlightXhrs.delete(key)
+    }
     const xhr = new XMLHttpRequest()
+    inFlightXhrs.set(key, xhr)
     xhr.open('POST', url)
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress?.(e.loaded, e.total)

@@ -18,7 +18,7 @@ import { detectMentionTrigger, parsePromptToParts, getFilename, MENTION_PATTERN 
 import { getModel, formatModelName } from '@/api/providers'
 import type { components } from '@/api/opencode-types'
 import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
-import { getFileStat, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from '@/api/files'
+import { getFileStat, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
 import { showToast } from '@/lib/toast'
 import {
   DropdownMenu,
@@ -539,6 +539,11 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         const savedName: string = data?.name || file.name
         uploaded.push({ name: savedName, path: `chat_uploads/${savedName}` })
       } catch (e) {
+        if ((e as Error).message === 'Upload cancelled') {
+          setUploadProgress(null)
+          showToast.info('업로드 취소됨')
+          return
+        }
         if (e instanceof DuplicateUploadError) continue
         failures++
         continue
@@ -547,6 +552,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     setUploadProgress(null)
 
     if (uploaded.length === 0) {
+      if (failures === 0) return // cancelled case already handled
       showToast.error('Upload failed')
       return
     }
@@ -578,6 +584,12 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       el.style.height = 'auto'
       el.style.height = `${el.scrollHeight}px`
     }
+  }
+
+  const handleCancelUpload = () => {
+    abortAllUploads()
+    setUploadProgress(null)
+    showToast.info('업로드 취소됨')
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -912,7 +924,10 @@ useEffect(() => {
         <div className="mb-2 px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400">
           <div className="flex items-center justify-between gap-2 mb-1">
             <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
-            <span className="font-mono shrink-0">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className="font-mono">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
+              <button type="button" onClick={handleCancelUpload} className="px-2 py-0.5 rounded bg-red-500/20 hover:bg-red-500/30 text-red-600 dark:text-red-400 border border-red-500/30 text-[11px]">취소</button>
+            </span>
           </div>
           <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
             <div
