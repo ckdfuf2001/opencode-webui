@@ -746,7 +746,8 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
 const sessionModel = session?.model?.providerID && session?.model?.id
     ? `${session.model.providerID}/${session.model.id}`
     : null
-const currentModel = sessionModel || config?.model || preferences?.defaultModel || ''
+// webui 기본값이 opencode 설정보다 우선. opencode 설정 모델은 폴백이다.
+const currentModel = sessionModel || preferences?.defaultModel || config?.model || ''
 
 useEffect(() => {
     const loadModelName = async () => {
