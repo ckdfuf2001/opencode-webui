@@ -108,8 +108,8 @@ echo "[6/7] Verifying bun..."
 bun --version >/dev/null 2>&1
 
 echo
-echo "[7/7] Installing agent-browser..."
-node scripts/install-agent-browser.js --auto-upgrade || echo "  [.] agent-browser setup skipped - run: npm run agent-browser:install"
+echo "[7/7] Verifying agent-browser (pinned, git-vendored, no download)..."
+node scripts/install-agent-browser.js --pinned || echo "  [x] agent-browser pinned files missing - run: git lfs pull"
 
 echo
 echo "=========================================="

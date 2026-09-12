@@ -235,6 +235,20 @@ async function installAgentBrowser() {
   const present =
     !force && existsSync(outBin) && meta?.executable && existsSync(join(root, meta.executable))
 
+  // --pinned: git에 vendored된 바이너리를 무조건 사용. 네트워크/업그레이드 없음.
+  // setup-dev에서 사용하므로 모든 머신이 동일한 바이너리로 동작한다.
+  if (process.argv.includes('--pinned')) {
+    if (present) {
+      if (!installedBinaryRuns()) {
+        console.warn('[install-agent-browser] WARN: pinned binary present but does not run (LFS pointer? run: git lfs pull). Keeping as-is, no download.')
+      } else {
+        console.log('[install-agent-browser] pinned install, keeping as-is (' + binaryLabel(meta.agentBrowserVersion) + (meta.binaryVersion ? ' / binary ' + meta.binaryVersion : '') + ').')
+      }
+      return
+    }
+    fail('pinned agent-browser files missing. They are vendored in git (bin/ is tracked) — run: git lfs pull. Setup never downloads.')
+  }
+
   if (present) {
     // vendor = 수동 관리. 버전 비교 없이 유지 (--force면 재설치).
     if (meta.agentBrowserVersion === 'vendor') {

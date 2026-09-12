@@ -169,10 +169,10 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [7/7] Installing agent-browser...
-call node scripts\install-agent-browser.js --auto-upgrade
+echo [7/7] Verifying agent-browser (pinned, git-vendored, no download)...
+call node scripts\install-agent-browser.js --pinned
 if %errorlevel% neq 0 (
-  echo   [x] agent-browser setup failed. Continue? (or run: npm run agent-browser:install)
+  echo   [x] agent-browser pinned files missing. Run: git lfs pull
 )
 
 echo.
