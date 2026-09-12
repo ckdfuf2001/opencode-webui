@@ -398,6 +398,18 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       }
     }
 
+    // 본문을 재작성한 경우(기본 모델 주입·run-context·recall) 원본
+    // Content-Length와 길이가 어긋나 opencode가 다음 요청 경계를 못 찾아
+    // 행업된다. 재작성 뒤에는 길이를 다시 맞춘다.
+    if (body !== undefined) {
+      for (const k of Object.keys(headers)) {
+        if (k.toLowerCase() === 'content-length' || k.toLowerCase() === 'transfer-encoding') {
+          delete headers[k]
+        }
+      }
+      headers['content-length'] = String(Buffer.byteLength(body))
+    }
+
     const retryable = (error: unknown): boolean => {
       const code = (error as { cause?: { code?: unknown } })?.cause?.code
         ?? (error as { code?: unknown })?.code
