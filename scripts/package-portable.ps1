@@ -138,7 +138,16 @@ Remove-Item (Join-Path $release 'START.bat') -Force -ErrorAction SilentlyContinu
 
 Write-Output ''
 Write-Output '[package zip] create versioned archive (excluding logs/data/workspace)'
-# Compress-Archive는 release/* 를 그대로 압축하면 logs/data가 포함될 수 있어 임시 목록으로 필터링
+# Chromium/elevation_service.exe 잠금 해제: release 폴더를 점유하는 프로세스가 있으면 Compress-Archive가 실패
+Write-Output '[package zip] checking for locks on release/bin/agent-browser'
+try {
+  $locked = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -like "$release*" }
+  foreach ($p in $locked) {
+    Write-Output "  killing lock holder PID $($p.ProcessId) $($p.Name) $($p.ExecutablePath)"
+    taskkill /PID $p.ProcessId /T /F 2>$null | Out-Null
+  }
+  if ($locked) { Start-Sleep -Seconds 2 }
+} catch { Write-Output "  lock check skipped: $_" }
 $zipName = "opencode-webui-portable-$version-win-x64.zip"
 $zipPathRoot = Join-Path $root $zipName
 if (Test-Path $zipPathRoot) { Remove-Item $zipPathRoot -Force }
@@ -146,7 +155,17 @@ if (Test-Path $zipPathRoot) { Remove-Item $zipPathRoot -Force }
 $items = Get-ChildItem -Path $release -Force | Where-Object { $_.Name -notin @('logs','data','workspace') }
 if (-not $items) { throw 'nothing to package in release/' }
 $tempList = $items | ForEach-Object { $_.FullName }
-Compress-Archive -Path $tempList -DestinationPath $zipPathRoot -Force
+try {
+  Compress-Archive -Path $tempList -DestinationPath $zipPathRoot -Force
+} catch {
+  Write-Output "[package zip] first compress failed (likely lock), retry after 3s: $_"
+  Start-Sleep -Seconds 3
+  # 재시도 전 잔여 잠금 재확인
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -like "$release*" } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null }
+  } catch {}
+  Compress-Archive -Path $tempList -DestinationPath $zipPathRoot -Force
+}
 $z = Get-Item $zipPathRoot
 Write-Output ("  {0} ({1:N1} MB) -> {2}" -f $z.Name, ($z.Length / 1MB), $z.FullName)
 

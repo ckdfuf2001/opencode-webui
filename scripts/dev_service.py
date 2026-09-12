@@ -180,6 +180,22 @@ def find_pnpm(env):
     return None
 
 
+def find_bun(env):
+    for name in ("bun.exe", "bun"):
+        p = shutil.which(name, path=env.get("PATH", ""))
+        if p:
+            return p
+    # fallback: well-known install locations (LocalSystem PATH may miss user bun)
+    for cand in (
+        os.path.join(os.environ.get("USERPROFILE", ""), ".bun", "bin", "bun.exe"),
+        r"C:\Users\ckdfu\.bun\bin\bun.exe",
+        os.path.expanduser(r"~\.bun\bin\bun.exe"),
+    ):
+        if cand and os.path.isfile(cand):
+            return cand
+    return None
+
+
 def kill_tree(pid):
     try:
         subprocess.run(
@@ -193,13 +209,15 @@ def kill_tree(pid):
 class DevService(win32serviceutil.ServiceFramework):
     _svc_name_ = SERVICE_NAME
     _svc_display_name_ = SERVICE_DISPLAY
-    _svc_description_ = "opencode-webui dev stack (pnpm dev: backend 5001 + vite 5173). Logs: <root>\\logs\\dev.log"
+    _svc_description_ = "opencode-webui dev stack (bun backend + vite 5173, low-mem). Logs: <root>\\logs\\dev.log"
     _svc_start_type_ = win32service.SERVICE_AUTO_START
 
     def __init__(self, args):
         super().__init__(args)
         self.stop_event = threading.Event()
-        self.child = None
+        self.child = None  # compat: first child pid for legacy callers
+        self.backend = None
+        self.frontend = None
         self.backoff = 5
 
     def SvcStop(self):
@@ -209,29 +227,53 @@ class DevService(win32serviceutil.ServiceFramework):
         except Exception:
             pass  # console(run) 모드에서는 SCM 핸들이 없음
         self.stop_event.set()
-        child, self.child = self.child, None
-        if child is not None:
-            try:
-                if child.poll() is None:
-                    kill_tree(child.pid)
-                    try:
-                        child.wait(timeout=15)
-                    except Exception:
-                        pass
-            except Exception as e:
-                svc_log("stop error: %s" % e)
+        # kill both trees; keep compat self.child
+        for attr in ("frontend", "backend", "child"):
+            child = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if child is not None:
+                try:
+                    if child.poll() is None:
+                        kill_tree(child.pid)
+                        try:
+                            child.wait(timeout=15)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    svc_log("stop error (%s): %s" % (attr, e))
         svc_log("stopped")
 
     def spawn(self, env):
+        """Low-mem spawn: bun --watch backend + vite frontend directly.
+        Returns (backend, frontend, out, err). Avoids concurrently (node) and wait-backend.js (node).
+        Memory: bun 1 + vite 1 (~300MB) vs old pnpm dev 4 nodes (~600MB+)."""
         os.makedirs(LOGS_DIR, exist_ok=True)
         pnpm = find_pnpm(env)
         if not pnpm:
             raise RuntimeError("pnpm not found (PATH=%s)" % env.get("PATH", ""))
+        bun = find_bun(env)
         out = open(OUT_LOG, "ab")
         err = open(ERR_LOG, "ab")
+        backend = None
+        frontend = None
         try:
-            child = subprocess.Popen(
-                [pnpm, "dev"],
+            if bun:
+                backend_cmd = [bun, "--watch", "backend/src/index.ts"]
+                svc_log("spawning backend via bun: %s" % " ".join(backend_cmd))
+            else:
+                # fallback: node --watch with shim (heavier)
+                svc_log("bun not found, fallback to node --watch")
+                backend_cmd = [
+                    "node",
+                    "--watch",
+                    "--disable-warning=ExperimentalWarning",
+                    "--experimental-transform-types",
+                    "--import",
+                    "./scripts/node-compat/register.mjs",
+                    "backend/src/index.ts",
+                ]
+            backend = subprocess.Popen(
+                backend_cmd,
                 cwd=PROJECT_DIR,
                 env=env,
                 stdin=subprocess.DEVNULL,
@@ -239,11 +281,52 @@ class DevService(win32serviceutil.ServiceFramework):
                 stderr=err,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            self.backend = backend
+            self.child = backend  # compat
+            # wait for backend health before starting frontend (replaces node wait-backend.js)
+            port = read_env_port()
+            svc_log("waiting for backend health on %s (python poll, no extra node)" % port)
+            waited = 0
+            while waited < 60 and not self.stop_event.is_set():
+                if health_ok(port):
+                    svc_log("backend healthy, starting frontend")
+                    break
+                if backend.poll() is not None:
+                    svc_log("backend exited early (code %s) before healthy" % backend.poll())
+                    break
+                if self.stop_event.wait(1):
+                    break
+                waited += 1
+            if self.stop_event.is_set():
+                raise RuntimeError("stop requested during backend warmup")
+            # start vite frontend (single node process)
+            frontend_cmd = [pnpm, "run", "dev:frontend"]
+            svc_log("spawning frontend: %s" % " ".join(frontend_cmd))
+            frontend = subprocess.Popen(
+                frontend_cmd,
+                cwd=PROJECT_DIR,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=err,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            self.frontend = frontend
         except Exception:
+            # cleanup on partial failure
+            for p in (frontend, backend):
+                if p is not None and p.poll() is None:
+                    try:
+                        kill_tree(p.pid)
+                    except Exception:
+                        pass
             out.close()
             err.close()
+            self.backend = None
+            self.frontend = None
+            self.child = None
             raise
-        return child, out, err
+        return backend, frontend, out, err
 
     def SvcDoRun(self):
         svc_log("starting in %s" % PROJECT_DIR)
@@ -253,22 +336,51 @@ class DevService(win32serviceutil.ServiceFramework):
         try:
             while not self.stop_event.is_set():
                 try:
-                    child, out, err = self.spawn(env)
+                    backend, frontend, out, err = self.spawn(env)
                 except Exception as e:
                     svc_log("spawn failed: %s" % e)
                     if self.stop_event.wait(30):
                         break
                     continue
-                self.child = child
-                svc_log("pnpm dev started (pid %s)" % child.pid)
+                # keep compat aliases
+                self.backend = backend
+                self.frontend = frontend
+                self.child = backend
+                svc_log("stack started (backend pid %s, frontend pid %s)" % (backend.pid, frontend.pid))
                 start_t = time.time()
                 port = read_env_port()
                 fails = 0
                 ever_healthy = False
                 ticks = 0
                 while not self.stop_event.is_set():
-                    rc = child.poll()
-                    if rc is not None:
+                    rc_b = backend.poll()
+                    rc_f = frontend.poll()
+                    if rc_b is not None:
+                        svc_log("backend exited (code %s), restarting stack" % rc_b)
+                        # also kill frontend tree if still alive
+                        if frontend.poll() is None:
+                            kill_tree(frontend.pid)
+                        break
+                    if rc_f is not None:
+                        svc_log("frontend exited (code %s), restarting frontend only" % rc_f)
+                        # frontend crash shouldn't kill backend; respawn frontend
+                        try:
+                            pnpm = find_pnpm(env)
+                            if pnpm:
+                                frontend = subprocess.Popen(
+                                    [pnpm, "run", "dev:frontend"],
+                                    cwd=PROJECT_DIR,
+                                    env=env,
+                                    stdin=subprocess.DEVNULL,
+                                    stdout=out,
+                                    stderr=err,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                )
+                                self.frontend = frontend
+                                svc_log("frontend respawned pid %s" % frontend.pid)
+                                continue
+                        except Exception as e2:
+                            svc_log("frontend respawn failed: %s" % e2)
                         break
                     if self.stop_event.wait(3):
                         break
@@ -288,13 +400,16 @@ class DevService(win32serviceutil.ServiceFramework):
                             time.time() - start_t > NEVER_HEALTHY_S
                         )
                         if (ever_healthy and fails >= HEALTH_FAILS) or dead_long:
-                            svc_log("backend unresponsive, killing tree to respawn")
-                            kill_tree(child.pid)
+                            svc_log("backend unresponsive, killing backend tree to respawn")
+                            kill_tree(backend.pid)
                             try:
-                                child.wait(timeout=20)
+                                backend.wait(timeout=20)
                             except Exception:
                                 pass
                             break
+                # cleanup handles for this iteration
+                self.backend = None
+                self.frontend = None
                 self.child = None
                 try:
                     out.close()
@@ -305,11 +420,12 @@ class DevService(win32serviceutil.ServiceFramework):
                 except Exception:
                     pass
                 if self.stop_event.is_set():
-                    if child.poll() is None:
-                        kill_tree(child.pid)
+                    for p in (backend, frontend):
+                        if p.poll() is None:
+                            kill_tree(p.pid)
                     break
-                rc = child.poll()
-                svc_log("pnpm dev exited (code %s), restarting in %ss" % (rc, self.backoff))
+                rc = backend.poll()
+                svc_log("stack exited (backend code %s), restarting in %ss" % (rc, self.backoff))
                 if time.time() - start_t > 120:
                     self.backoff = 5
                     healthy_since = time.time()
@@ -328,6 +444,8 @@ def console_main():
     svc = DevService.__new__(DevService)
     svc.stop_event = threading.Event()
     svc.child = None
+    svc.backend = None
+    svc.frontend = None
     svc.backoff = 5
     try:
         svc.SvcDoRun()
