@@ -90,6 +90,10 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           ) : (
             <span className="flex-1">Waiting to send</span>
           )}
+          <div className="ml-auto flex items-center gap-1">
+            <span className="text-[10px] hidden sm:inline text-muted-foreground" title={allowInterrupt ? 'ON: 생성 중에도 바로 전송 (끼어들기)' : 'OFF: 생성 끝난 뒤 순차 전송'}>{allowInterrupt ? '끼어들기 ON' : '끼어들기 OFF'}</span>
+            <Switch checked={allowInterrupt} onCheckedChange={toggleInterrupt} className="scale-75" title={allowInterrupt ? 'ON: 생성 중에도 바로 전송 — 끄려면 클릭' : 'OFF: 생성 끝난 뒤 순차 전송 — 켜려면 클릭'} />
+          </div>
           <button
             type="button"
             aria-label="Minimize queue"
@@ -98,13 +102,6 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           >
             <ChevronDown className="h-3 w-3" />
           </button>
-        </div>
-        <div className="mb-2 flex items-center justify-between gap-2 rounded bg-background/60 px-2 py-1.5 border border-border/50">
-          <div className="flex flex-col">
-            <span className="text-xs font-medium">중간에 끼어들기</span>
-            <span className="text-[10px] text-muted-foreground">{allowInterrupt ? '생성 중에도 바로 전송 (끼어들기)' : '기본: 생성 끝난 뒤 순차 전송'}</span>
-          </div>
-          <Switch checked={allowInterrupt} onCheckedChange={toggleInterrupt} className="scale-75" title={allowInterrupt ? 'ON: 중간에 끼어들기' : 'OFF: 순차 대기'} />
         </div>
         <ul className="space-y-1">
           {restItems.map((item, index) => (

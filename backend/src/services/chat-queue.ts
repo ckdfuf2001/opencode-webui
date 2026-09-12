@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { getWorkspacePath } from '@opencode-webui/shared'
-import { getSessionStatusRow } from '../db/session-status-queries'
+import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
 import { logger } from '../utils/logger'
 
@@ -29,7 +29,7 @@ export interface EnqueueOptions {
 const MAX_QUEUE_LENGTH = 20
 const MAX_TEXT_LENGTH = 16_000
 const REQUEST_TIMEOUT_MS = 1_500
-const SEND_HEADERS_TIMEOUT_MS = 30_000
+const SEND_HEADERS_TIMEOUT_MS = 90_000
 const FLUSH_RETRY_BACKOFF_MS = 2_000
 
 // In-memory, per-session FIFO of user messages typed while the assistant was
@@ -225,6 +225,8 @@ function recordFailure(sessionID: string, id: string): void {
       queue[0]!.status = 'failed'
     }
     logger.error(`Queued chat for session ${sessionID} failed ${count} times in a row; marked failed, auto-retry stopped`)
+    // 서버 응답 없음 등으로 큐가 failed가 되면 Cancelled 배찌가 다음 채팅 전까지 유지되게 DB에도 저장
+    try { if (queueDb) setSessionCancelled(queueDb, sessionID) } catch {}
     return
   }
   markHeadQueued(sessionID, id)
