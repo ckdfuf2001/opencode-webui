@@ -1064,6 +1064,13 @@ export function SessionDetail() {
       }
       setHiddenAfterID(null)
       setInjectedPrompt(null)
+      // edit & resend 후 스크롤이 위로 튀는 것 방지 — 즉시 맨 아래로 고정
+      setWindowStart(null)
+      pendingLatestPinRef.current = true
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const c = messageContainerRef.current
+        if (c) c.scrollTop = c.scrollHeight
+      }))
       return true
     } catch (error) {
       showToast.error((error as Error).message || 'Failed to truncate session')

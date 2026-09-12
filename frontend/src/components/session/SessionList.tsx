@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus, X, Ban } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface SessionListProps {
@@ -293,7 +293,7 @@ export const SessionList = ({
                       className="inline-flex items-center gap-1 text-[10px] font-medium text-gray-500 bg-gray-500/10 border border-gray-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
                       title="Last result was cancelled — will show until next chat starts"
                     >
-                      <X className="w-3 h-3" />
+                      <Ban className="w-3 h-3" />
                       Cancelled
                     </span>
                   ) : null}
