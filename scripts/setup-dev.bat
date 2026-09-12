@@ -177,10 +177,12 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [7/7] Verifying agent-browser (pinned, git-vendored, no download)...
-call node scripts\install-agent-browser.js --pinned
+echo [7/7] Verifying Playwright MCP (npx @playwright/mcp)...
+where npx >nul 2>nul && npx --yes @playwright/mcp --help >nul 2>nul
 if %errorlevel% neq 0 (
-  echo   [x] agent-browser pinned files missing. Run: git lfs pull
+  echo   [.] Playwright MCP not yet cached — first run will auto-install via npx
+) else (
+  echo   [+] Playwright MCP ready
 )
 
 echo.

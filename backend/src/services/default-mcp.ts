@@ -6,9 +6,6 @@ import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync
 import { ENV, getWorkspacePath, getReposPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 import { resolveDocReaderCommand } from './doc-tools'
-// === BEGIN agent-browser-proxy (optional module; see agent-browser-proxy/README.md) ===
-import { resolveAgentBrowserProxy, agentBrowserProxyEnv } from './agent-browser-proxy'
-// === END agent-browser-proxy ===
 
 let agentBrowserWarmState: 'warm' | 'cold' | 'unknown' = 'unknown'
 
@@ -72,26 +69,10 @@ export function ensureLoopbackBypass(): void {
 }
 
 export function agentBrowserEnv(): Record<string, string> {
+  // Playwright MCP용: loopback bypass만 유지 (agent-browser 전용 env 제거)
   const env: Record<string, string> = {}
-  const info = resolveAgentBrowser()
-  if (info?.executablePath && existsSync(info.executablePath)) {
-    env.AGENT_BROWSER_EXECUTABLE_PATH = info.executablePath
-  }
-  env.AGENT_BROWSER_NAMESPACE = AGENT_BROWSER_NAMESPACE
-  env.AGENT_BROWSER_IDLE_TIMEOUT_MS = PROXY_IDLE_TIMEOUT_MS
-  env.AGENT_BROWSER_IDLE_TIMEOUT = PROXY_IDLE_TIMEOUT
-  // opencode 자식(native MCP→CLI→데몬→Chrome) 전체가 corp 프록시를 우회하게.
-  // 서버 env 상속이 유일한 통로라 여기서 박는다.
   env.NO_PROXY = withLoopbackBypass(process.env.NO_PROXY)
   env.no_proxy = withLoopbackBypass(process.env.no_proxy)
-  // 설치별 소켓 격리: 다른 설치본(portable 등)과 데몬을 공유하지 않는다.
-  const scoped = getScopedSocketDir()
-  if (scoped) {
-    env.AGENT_BROWSER_SOCKET_DIR = scoped
-  }
-  // === BEGIN agent-browser-proxy (optional; AGENT_BROWSER_PROXY=1일 때만 SESSION_* 추가) ===
-  Object.assign(env, agentBrowserProxyEnv())
-  // === END agent-browser-proxy ===
   return env
 }
 

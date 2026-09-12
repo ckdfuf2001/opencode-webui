@@ -110,8 +110,12 @@ echo "[6/7] Verifying bun..."
 bun --version >/dev/null 2>&1
 
 echo
-echo "[7/7] Verifying agent-browser (pinned, git-vendored, no download)..."
-node scripts/install-agent-browser.js --pinned || echo "  [x] agent-browser pinned files missing - run: git lfs pull"
+echo "[7/7] Verifying Playwright MCP (npx @playwright/mcp)..."
+if npx --yes @playwright/mcp --help >/dev/null 2>&1; then
+  echo "  [+] Playwright MCP ready"
+else
+  echo "  [.] Playwright MCP not yet cached — first run will auto-install via npx"
+fi
 
 echo
 echo "=========================================="

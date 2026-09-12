@@ -15,16 +15,13 @@ __pycache__/
 
 data/
 workspace/
-# 설치별 agent-browser 소켓/사이드카 (다른 설치본과 데몬 공유 방지)
+# Playwright cache (optional, not agent-browser)
 /.agent-browser-home/
 /config/
 temp/
 
 vendor/*
 !vendor/README.md
-
-# Chromium runtime-generated spellcheck dictionaries
-bin/agent-browser/chromium/**/Dictionaries/
 
 release/
 backend/generated/
