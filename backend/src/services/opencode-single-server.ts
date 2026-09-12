@@ -297,6 +297,9 @@ class OpenCodeServerManager {
     binPath: string,
     isDevelopment: boolean,
   ): void {
+    const memLimit = process.env.GOMEMLIMIT || '(unset)'
+    if (process.env.GOMEMLIMIT) logger.info(`OpenCode GOMEMLIMIT=${process.env.GOMEMLIMIT} (Go soft memory limit)`)
+    else logger.info(`OpenCode GOMEMLIMIT unset (no soft limit) — set GOMEMLIMIT=2GiB in .env to limit to 2GB`)
     logger.info(`Launching OpenCode server on port ${port} (resolved binary: ${binPath})`)
 
     const isKnownPath = path.isAbsolute(binPath) && existsSync(binPath)
