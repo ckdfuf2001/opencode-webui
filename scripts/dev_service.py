@@ -299,12 +299,18 @@ class DevService(win32serviceutil.ServiceFramework):
                 waited += 1
             if self.stop_event.is_set():
                 raise RuntimeError("stop requested during backend warmup")
-            # start vite frontend (single node process)
-            frontend_cmd = [pnpm, "run", "dev:frontend"]
-            svc_log("spawning frontend: %s" % " ".join(frontend_cmd))
+            # start vite frontend — prefer bun (0 node) over pnpm (2 nodes + wrappers)
+            if bun:
+                frontend_cmd = [bun, "run", "dev"]
+                frontend_cwd = os.path.join(PROJECT_DIR, "frontend")
+                svc_log("spawning frontend via bun: %s (cwd=frontend)" % " ".join(frontend_cmd))
+            else:
+                frontend_cmd = [pnpm, "run", "dev:frontend"]
+                frontend_cwd = PROJECT_DIR
+                svc_log("spawning frontend: %s" % " ".join(frontend_cmd))
             frontend = subprocess.Popen(
                 frontend_cmd,
-                cwd=PROJECT_DIR,
+                cwd=frontend_cwd,
                 env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=out,
@@ -365,20 +371,34 @@ class DevService(win32serviceutil.ServiceFramework):
                         svc_log("frontend exited (code %s), restarting frontend only" % rc_f)
                         # frontend crash shouldn't kill backend; respawn frontend
                         try:
-                            pnpm = find_pnpm(env)
-                            if pnpm:
+                            bun2 = find_bun(env)
+                            if bun2:
                                 frontend = subprocess.Popen(
-                                    [pnpm, "run", "dev:frontend"],
-                                    cwd=PROJECT_DIR,
+                                    [bun2, "run", "dev"],
+                                    cwd=os.path.join(PROJECT_DIR, "frontend"),
                                     env=env,
                                     stdin=subprocess.DEVNULL,
                                     stdout=out,
                                     stderr=err,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                                 )
-                                self.frontend = frontend
-                                svc_log("frontend respawned pid %s" % frontend.pid)
-                                continue
+                            else:
+                                pnpm2 = find_pnpm(env)
+                                if pnpm2:
+                                    frontend = subprocess.Popen(
+                                        [pnpm2, "run", "dev:frontend"],
+                                        cwd=PROJECT_DIR,
+                                        env=env,
+                                        stdin=subprocess.DEVNULL,
+                                        stdout=out,
+                                        stderr=err,
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                    )
+                                else:
+                                    raise RuntimeError("no bun/pnpm found for frontend respawn")
+                            self.frontend = frontend
+                            svc_log("frontend respawned pid %s" % frontend.pid)
+                            continue
                         except Exception as e2:
                             svc_log("frontend respawn failed: %s" % e2)
                         break
