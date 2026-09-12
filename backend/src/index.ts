@@ -70,6 +70,16 @@ async function ensureEnvFile(): Promise<void> {
       const envHost = process.env.HOST
       if (envHost) HOST = envHost
     } catch {}
+    // 0.7.2+ 신규 기본값 backfill: 파일에 키가 없고 프로세스 환경에도 없으면
+    // 기본 1을 추가한다. 풀만 받고 재시작한 기존 머신도 프록시 모드로 올라온다.
+    try {
+      const raw = await readFileContent(envPath)
+      if (!/^AGENT_BROWSER_SESSION_PROXY\s*=/m.test(raw) && process.env.AGENT_BROWSER_SESSION_PROXY === undefined) {
+        await writeFileContent(envPath, `${raw.replace(/\s*$/, '')}\nAGENT_BROWSER_SESSION_PROXY=1\n`)
+        process.env.AGENT_BROWSER_SESSION_PROXY = '1'
+        logger.info('Backfilled .env default: AGENT_BROWSER_SESSION_PROXY=1 (session-isolation proxy)')
+      }
+    } catch {}
     return
   }
   try {
@@ -83,6 +93,7 @@ async function ensureEnvFile(): Promise<void> {
       `WORKSPACE_PATH=${getWorkspacePath()}`,
       `CORS_ORIGIN=http://localhost:${PORT}`,
       `NODE_ENV=development`,
+      `AGENT_BROWSER_SESSION_PROXY=1`,
     ].join('\n') + '\n'
     await writeFileContent(envPath, content)
     logger.info('Created .env with defaults (program handling, not script copy)')
