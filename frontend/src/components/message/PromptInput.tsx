@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from 'react'
-import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap, clearCancelledUntilNextSend } from '@/hooks/useOpenCode'
+import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap, clearCancelledUntilNextSend, hasActiveSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
@@ -329,10 +329,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     // cancel 직후 프론트는 idle로 보여도 서버가 abort 중이라 직접 보내면 유실/역전된다.
     // 백엔드 폴러가 실제 idle 확인 후 순서대로 발송한다.
     const aborting = abortSession.isPending || isRecentlyAborted(sessionID)
-    if (hasActiveStream || sendPrompt.isPending || aborting) {
-      if (allowInterrupt && hasActiveStream && !aborting) {
-        try { abortSession.mutate(sessionID) } catch {}
-      }
+    if (hasActiveStreamForQueue || sendPrompt.isPending || aborting) {
       const text = parts
         .map(partToText)
         .filter((text) => text.trim().length > 0)
@@ -769,6 +766,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const abortedRecently = isRecentlyAborted(sessionID)
   const hasActiveStreamLocal = messages?.some(msg => isMessageStreaming(msg)) || false
   const hasActiveStream = abortedRecently ? false : (isStreamingProp ?? (hasActiveStreamLocal || dbBusyInner))
+  const hasActiveStreamForQueue = allowInterrupt ? (hasActiveStreamLocal || hasActiveSend(sessionID)) : hasActiveStream
   // 전송 POST는 턴이 끝날 때까지 대기하므로 isPending = 생성 중 신호 (폴링보다 즉각적). abort 직후엔 강제로 숨긴다.
   const showStop = !abortedRecently && (hasActiveStream || sendPrompt.isPending)
 

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, X } from 'lucide-react'
 import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat } from '@/hooks/useChatQueue'
-import { Switch } from '@/components/ui/switch'
 import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 
@@ -28,14 +27,26 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
   useEffect(() => {
     try {
       const v = localStorage.getItem(`queue-allow-interrupt:${sessionID}`)
-      setAllowInterrupt(v === '1')
+      const enabled = v === '1'
+      setAllowInterrupt(enabled)
+      fetch(`${API_BASE_URL}/api/chat-queue/${encodeURIComponent(sessionID)}/quick-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      }).catch(() => {})
     } catch {}
   }, [sessionID])
-  const toggleInterrupt = (v: boolean) => {
+  const toggleInterrupt = () => {
+    const v = !allowInterrupt
     setAllowInterrupt(v)
     try {
       localStorage.setItem(`queue-allow-interrupt:${sessionID}`, v ? '1' : '0')
       window.dispatchEvent(new CustomEvent('queue-allow-interrupt', { detail: { sessionID, allow: v } }))
+      fetch(`${API_BASE_URL}/api/chat-queue/${encodeURIComponent(sessionID)}/quick-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: v }),
+      }).catch(() => {})
     } catch {}
   }
 
@@ -90,10 +101,14 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           ) : (
             <span className="flex-1">Waiting to send</span>
           )}
-          <div className="ml-auto flex items-center gap-1">
-            <span className="text-[10px] hidden sm:inline text-muted-foreground" title={allowInterrupt ? 'ON: 생성 중에도 바로 전송 (끼어들기)' : 'OFF: 생성 끝난 뒤 순차 전송'}>{allowInterrupt ? '끼어들기 ON' : '끼어들기 OFF'}</span>
-            <Switch checked={allowInterrupt} onCheckedChange={toggleInterrupt} className="scale-75" title={allowInterrupt ? 'ON: 생성 중에도 바로 전송 — 끄려면 클릭' : 'OFF: 생성 끝난 뒤 순차 전송 — 켜려면 클릭'} />
-          </div>
+          <button
+            type="button"
+            onClick={toggleInterrupt}
+            className="ml-auto text-[11px] font-medium px-2 py-0.5 rounded border bg-muted/50 hover:bg-accent transition-colors"
+            title={allowInterrupt ? 'send queue after every generation end' : 'send queue after working end'}
+          >
+            {allowInterrupt ? 'Quick mode' : 'Normal mode'}
+          </button>
           <button
             type="button"
             aria-label="Minimize queue"

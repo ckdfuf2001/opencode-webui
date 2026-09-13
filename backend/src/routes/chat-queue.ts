@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession } from '../services/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, setQuickMode } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
@@ -87,6 +87,20 @@ export function createChatQueueRoutes() {
       if (error instanceof z.ZodError) return c.json({ error: 'Invalid move payload' }, 400)
       logger.error('Failed to move queued chat:', error)
       return c.json({ error: 'Failed to move queued chat' }, 500)
+    }
+  })
+
+  // Quick mode: generation 끝마다 큐 투입 (Normal은 working 끝까지 대기)
+  app.post('/:sessionId/quick-mode', async (c) => {
+    try {
+      const sessionId = c.req.param('sessionId')
+      const body = await c.req.json().catch(() => ({} as Record<string, unknown>))
+      const enabled = !!(body as { enabled?: boolean }).enabled
+      setQuickMode(sessionId, enabled)
+      return c.json({ ok: true, enabled })
+    } catch (error) {
+      logger.error('Failed to set quick mode:', error)
+      return c.json({ error: 'Failed to set quick mode' }, 500)
     }
   })
 
