@@ -44,7 +44,7 @@ export function ModelSelectDialog({
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [useAsDefault, setUseAsDefault] = useState(false);
   const { preferences, updateSettingsAsync } = useSettings();
-  const client = useOpenCodeClient(opcodeUrl);
+  const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
   const { sessionId } = useParams<{ sessionId: string }>();
   const { data: sessionData } = useSession(opcodeUrl ?? null, sessionId ?? "", directory);
