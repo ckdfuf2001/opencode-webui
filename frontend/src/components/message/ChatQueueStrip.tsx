@@ -107,7 +107,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
             className="ml-auto text-[11px] font-medium px-2 py-0.5 rounded border bg-muted/50 hover:bg-accent transition-colors"
             title={allowInterrupt ? 'send queue after every generation end' : 'send queue after working end'}
           >
-            {allowInterrupt ? 'Quick mode' : 'Normal mode'}
+            {allowInterrupt ? 'Quick-Q' : 'Normal-Q'}
           </button>
           <button
             type="button"
