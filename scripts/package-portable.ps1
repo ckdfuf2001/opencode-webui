@@ -26,10 +26,17 @@ if (Test-Path $exePath) {
     throw "release/opencode-webui.exe is locked (is it running?). Stop it manually and retry. $_"
   }
 }
-# 이전 zip 정리
+# 이전 agent-browser 잔재 정리 (Playwright로 교체됨)
+$oldAB = Join-Path $release 'bin/agent-browser'
+if (Test-Path $oldAB) { Remove-Item -Recurse -Force $oldAB; Write-Output "[package 0/7] removed stale $oldAB" }
+$oldProxy = Join-Path $release 'agent-browser-proxy'
+if (Test-Path $oldProxy) { Remove-Item -Recurse -Force $oldProxy; Write-Output "[package 0/7] removed stale $oldProxy" }
+# 이전 zip 정리 (현재 버전만, 루트와 release 모두)
 foreach ($old in @(
   (Join-Path $root "opencode-webui-v$version-portable.zip"),
-  (Join-Path $root "opencode-webui-portable-$version-win-x64.zip")
+  (Join-Path $root "opencode-webui-portable-$version-win-x64.zip"),
+  (Join-Path $release "opencode-webui-v$version-portable.zip"),
+  (Join-Path $release "opencode-webui-portable-$version-win-x64.zip")
 )) {
   if (Test-Path $old) { Remove-Item $old -Force; Write-Output "[package 0/7] removed old $old" }
 }
@@ -117,8 +124,8 @@ Remove-Item (Join-Path $release 'START.bat') -Force -ErrorAction SilentlyContinu
 
 Write-Output ''
 Write-Output '[package zip] create versioned archive (excluding logs/data/workspace)'
-# Chromium/elevation_service.exe 잠금 해제: release 폴더를 점유하는 프로세스가 있으면 Compress-Archive가 실패
-Write-Output '[package zip] checking for locks on release/bin/agent-browser'
+# release 폴더를 점유하는 프로세스가 있으면 Compress-Archive가 실패하므로 정리
+Write-Output '[package zip] checking for locks on release'
 try {
   $locked = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -like "$release*" }
   foreach ($p in $locked) {

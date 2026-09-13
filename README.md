@@ -207,9 +207,9 @@ docker exec -it opencode-web sh
 | Git      | Repository cloning / worktrees                 | [git-scm.com](https://git-scm.com) |
 | Git LFS  | Materializes the vendored binaries in `bin/`      | [git-lfs.com](https://git-lfs.com) |
 
-> **OpenCode, agent-browser and Chromium are vendored under `bin/`** and tracked
+> **OpenCode is vendored under `bin/`** and tracked
 > through Git LFS, so an air-gapped machine needs **no downloads**: a clone
-> pulls the real binaries (`bin/opencode.exe`, `bin/agent-browser/…`) once Git
+> pulls the real binary (`bin/opencode.exe`) once Git
 > LFS is installed. `vendor/` is an optional, **git-ignored offline fallback**:
 > the installers check it first and copy your files from there (no download),
 > and only fall back to a download when `vendor/` is empty. After cloning, run
@@ -261,7 +261,7 @@ docker exec -it opencode-web sh
 git clone https://github.com/ckdfuf2001/opencode-webui.git
 cd opencode-webui
 
-# Pull the vendored binaries (opencode/agent-browser/chromium) from Git LFS
+# Pull the vendored binary (opencode) from Git LFS
 git lfs install && git lfs pull
 
 # Install dependencies (pnpm workspaces)
@@ -276,8 +276,7 @@ npm run dev
 
 `npm run dev` runs a `predev` step that automatically checks that **Bun, pnpm,
 OpenCode and Git** are installed, creates the `workspace/` directory, installs
-dependencies with `pnpm`, copies the vendored **opencode, agent-browser and
-Chromium** from `vendor/` into `bin/` when present (no download), and sets up
+dependencies with `pnpm`, copies the vendored **opencode** from `vendor/` into `bin/` when present (no download), and sets up
 `.env` if missing. The setup is
 **OS-aware**: it uses `scripts/setup-dev.bat` (cmd) on Windows and
 `scripts/setup-dev.sh` on macOS/Linux.
@@ -354,64 +353,22 @@ already there. To use these tools in chat:
 > `edit_document(path, [operations])` (replace / insert_after / insert_before /
 > append / prepend / delete).
 
-#### (Optional) Register the Browser Automation MCP tools
+#### Browser Automation MCP (Playwright)
 
-The `agent-browser` MCP server exposes `agent_browser_*` tools (open, snapshot,
-click, fill, type, screenshot, …) so the assistant can drive a real browser in
-chat. Unlike `doc-reader`, agent-browser is a self-contained native binary plus
-a Chromium build, both vendored by this repo so **no separate download or global
-install is required**:
+Browser automation is now via **Playwright MCP** (`npx --yes @playwright/mcp --headless --isolated`) — no vendored binary or Chromium needed, `npx` auto-installs on first use. It exposes `browser_*` tools (open, snapshot, click, fill, type, screenshot, …) with `--isolated` per-session `BrowserContext` (concurrent safe).
 
-- `npm run agent-browser:install` — downloads the `agent-browser` release binary
-  (from the `ckdfuf2001/agent-browser` fork GitHub release) and a matching
-  Chromium (Chrome for Testing) into the vendored `bin/agent-browser/`
-  (git-tracked, Chromium via Git LFS — fresh clones need `git lfs pull`),
-  then records their paths in `.meta.json`.
-- `npm run agent-browser:update` — re-runs the install with `--force` to fetch
-  the latest releases (a dedicated update command).
-- The dev setup scripts (`setup-dev.bat` / `setup-dev.sh` / `docker-entrypoint.sh`)
-  call the installer automatically (idempotent — skips when already installed).
-  MCP registration itself needs no separate step: the backend merges the
-  `agent-browser` entry into the git-ignored workspace config
-  (`workspace/.config/opencode/opencode.json`) at startup using the vendored
-  binary (`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk`).
-
-The entry spawns the stock native MCP directly (upstream
-`vercel-labs/agent-browser`, vendored binary + Chromium in `bin/`).
-Each session owns its daemon+browser; every `agent_browser_*` call passes
-`namespace` + `session` directly (no ensure step):
+The backend merges the `playwright` entry into the git-ignored workspace config
+(`workspace/.config/opencode/opencode.json`) at startup (`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk`):
 
 ```json
 "mcp": {
-  "agent-browser": {
+  "playwright": {
     "type": "local",
-    "command": [
-      "<root>/bin/agent-browser/bin/agent-browser.exe",
-      "mcp",
-      "--namespace",
-      "opencode"
-    ],
-    "env": {
-      "AGENT_BROWSER_EXECUTABLE_PATH": "<root>/bin/agent-browser/chromium/chrome-win64/chrome.exe",
-      "AGENT_BROWSER_NAMESPACE": "opencode",
-      "AGENT_BROWSER_IDLE_TIMEOUT_MS": "900000"
-    }
+    "command": ["npx", "--yes", "@playwright/mcp@latest", "--headless", "--isolated"],
+    "env": { "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost" }
   }
 }
 ```
-
-> opencode does **not** forward the MCP entry's `env` to the spawned child, so
-> daemon identity cannot come from there. The backend injects
-> `AGENT_BROWSER_NAMESPACE=opencode` + `AGENT_BROWSER_EXECUTABLE_PATH` (vendored
-> Chromium) + idle timeouts into the opencode **server** spawn env
-> (`agentBrowserEnv()` in `backend/src/services/default-mcp.ts`); server →
-> native MCP → short-lived CLI → daemon all inherit it.
-
-> **Daemon supervision (the MCP stays managed):** the backend does it. Every 60s
-> `superviseAgentBrowserDaemon()` deletes sidecars of dead pids
-> (dead pid → zombie-port 10060 방지) and of deaf-but-alive daemons, and warms
-> only when no daemon is alive. It NEVER kills a live process.
-> Live daemon list: `GET /api/mcp/agent-browser/status` (`daemons` array);
 > manual reconcile: `POST /api/mcp/agent-browser/supervise`;
 > launch-path diagnosis: `GET /api/mcp/agent-browser/diagnose`.
 
