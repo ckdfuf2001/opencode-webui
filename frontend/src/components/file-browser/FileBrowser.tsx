@@ -289,6 +289,20 @@ useEffect(() => {
     loadFiles(currentPath)
   }
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ path: string }>).detail
+      if (!detail?.path) { loadFiles(currentPath); return }
+      const changed = detail.path.replace(/\\/g, '/')
+      const cur = currentPath.replace(/\\/g, '/')
+      if (changed === cur || changed.startsWith(cur + '/') || cur.startsWith(changed + '/')) {
+        loadFiles(currentPath)
+      }
+    }
+    window.addEventListener('opencode:files-changed', handler as EventListener)
+    return () => window.removeEventListener('opencode:files-changed', handler as EventListener)
+  }, [currentPath])
+
   const ensureDropDirs = useCallback(async (dirs: string[]) => {
     const unique = [...new Set(dirs.map((d) => normalizePath(d)).filter(Boolean))]
     for (const dir of unique) {
@@ -437,6 +451,7 @@ useEffect(() => {
       }
       
       await loadFiles(currentPath)
+      window.dispatchEvent(new CustomEvent('opencode:files-changed', { detail: { path: currentPath, name, type } }))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Create failed')
     }
