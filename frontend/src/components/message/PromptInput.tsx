@@ -12,6 +12,7 @@ import { listQueuedChats } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
 import { useContextUsage } from '@/hooks/useContextUsage'
 
+import { X } from 'lucide-react'
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
 import { FileSuggestions } from './FileSuggestions'
 import { detectMentionTrigger, parsePromptToParts, getFilename, MENTION_PATTERN } from '@/lib/promptParser'
@@ -924,7 +925,9 @@ useEffect(() => {
             <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
             <span className="flex items-center gap-2 shrink-0">
               <span className="font-mono">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
-              <button type="button" onClick={handleCancelUpload} className="px-2 py-0.5 rounded bg-red-500/20 hover:bg-red-500/30 text-red-600 dark:text-red-400 border border-red-500/30 text-[11px]">취소</button>
+              <button type="button" onClick={handleCancelUpload} className="p-1 rounded hover:bg-red-500/20 text-red-600 dark:text-red-400" title="취소" aria-label="업로드 취소">
+                <X className="w-3.5 h-3.5" />
+              </button>
             </span>
           </div>
           <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
