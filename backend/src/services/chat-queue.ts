@@ -332,6 +332,7 @@ async function checkOpencodeBusy(base: string, directoryParam: string, sessionID
 }
 
 async function isSessionBusy(sessionID: string): Promise<boolean> {
+  if (quickModeSessions.has(sessionID)) return false
   if (recentlyAbortedBackend.has(sessionID)) return false
   const base = opencodeServerManager.getUrl()
   const directory = resolveQueueDir(sessionID)
