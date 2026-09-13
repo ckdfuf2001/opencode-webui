@@ -104,7 +104,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           <button
             type="button"
             onClick={toggleInterrupt}
-            className="ml-auto inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border bg-muted/50 hover:bg-accent transition-colors"
+            className={`ml-auto inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
             title={allowInterrupt ? 'send queue after every generation' : 'send queue after working end'}
           >
             {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
