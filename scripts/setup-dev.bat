@@ -158,10 +158,6 @@ if not exist "%ENV_FILE%" (
     echo GOMEMLIMIT=2GiB>>"%ENV_FILE%"
     echo   [+] Backfilled GOMEMLIMIT=2GiB
   )
-  findstr /r "^AGENT_BROWSER_SESSION_PROXY=" "%ENV_FILE%" >nul 2>nul || (
-    echo AGENT_BROWSER_SESSION_PROXY=1>>"%ENV_FILE%"
-    echo   [+] Backfilled AGENT_BROWSER_SESSION_PROXY=1
-  )
 )
 
 echo.

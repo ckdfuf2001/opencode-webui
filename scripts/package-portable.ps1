@@ -80,21 +80,12 @@ if (-not (Test-Path $exePath)) { throw 'backend compile did not produce exe' }
 Write-Output '[package 4/7] frontend is embedded in the exe'
 Remove-Item (Join-Path $release 'frontend') -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Output '[package 5/7] bin copy (opencode / agent-browser)'
+Write-Output '[package 5/7] bin copy (opencode)'
 $srcOpencode = Join-Path $root 'bin/opencode.exe'
 if (-not (Test-Path $srcOpencode)) { throw 'bin/opencode.exe not found - run pnpm run opencode:install first' }
 New-Item -ItemType Directory -Force -Path (Join-Path $release 'bin') | Out-Null
 Copy-Item -Force $srcOpencode (Join-Path $release 'bin/opencode.exe')
-$srcAB = Join-Path $root 'bin/agent-browser'
-if (Test-Path $srcAB) {
-  # 목적지가 이미 있으면 Copy-Item -Recurse가 중첩 복사(agent-browser/agent-browser)를
-  # 만들므로 먼저 지우고 복사한다.
-  $destAB = Join-Path $release 'bin/agent-browser'
-  if (Test-Path $destAB) { Remove-Item -Recurse -Force $destAB }
-  Copy-Item -Recurse -Force $srcAB $destAB
-} else {
-  Write-Output '[package 5/7] WARN: bin/agent-browser missing - browser automation disabled in portable'
-}
+# browser automation now via Playwright MCP (npx, no bin copy needed)
 
 Write-Output '[package 6/7] doc tools exe'
 $docReader = Join-Path $release 'scripts/doc-reader.exe'
@@ -109,19 +100,7 @@ if ($needDocTools -and -not $SkipDocTools) {
   Write-Output '[package 6/7] ok: doc tools already present'
 }
 
-# agent-browser는 원본 native MCP 직접 사용 (별도 프록시 없음)
-
-# === BEGIN agent-browser-proxy (optional module; remove this block to drop) ===
-$srcProxy = Join-Path $root 'agent-browser-proxy'
-if (Test-Path (Join-Path $srcProxy 'mcp-server.mjs')) {
-  $destProxy = Join-Path $release 'agent-browser-proxy'
-  if (Test-Path $destProxy) { Remove-Item -Recurse -Force $destProxy }
-  Copy-Item -Recurse -Force $srcProxy $destProxy
-  Write-Output '[package 6/7] agent-browser-proxy included (opt-in via AGENT_BROWSER_SESSION_PROXY=1)'
-} else {
-  Write-Output '[package 6/7] agent-browser-proxy not present - skipping'
-}
-# === END agent-browser-proxy ===
+# browser automation via Playwright MCP (npx, no proxy needed)
 
 Write-Output '[package 7/7] launcher scripts'
 Copy-Item -Force (Join-Path $PSScriptRoot 'start_opencode_webui_exe.sh') $release

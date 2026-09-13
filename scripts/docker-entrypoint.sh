@@ -43,11 +43,7 @@ if [ -n "$WORKSPACE_PATH" ]; then
   fi
 fi
 
-# Install the agent-browser binary (MCP config is handled by the backend at startup)
-if [ -f "/app/scripts/install-agent-browser.js" ]; then
-  echo "  [+] Installing agent-browser (binary + Chromium)..."
-  node /app/scripts/install-agent-browser.js || echo "  [.] agent-browser install skipped"
-fi
+# Playwright MCP is used via npx (auto-install on first use, no binary needed)
 
 # Place the domain guide as a global rules file (applies to every session)
 if [ -n "$WORKSPACE_PATH" ]; then

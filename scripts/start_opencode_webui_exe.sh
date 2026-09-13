@@ -42,10 +42,10 @@ if [ -f ./bin/opencode.exe ] || [ -f ./bin/opencode ]; then
 else
   warn "bin/opencode missing — AI sessions unavailable (will also probe PATH at runtime)"
 fi
-if [ -d ./bin/agent-browser ]; then
-  say "ok: agent-browser"
+if command -v npx >/dev/null 2>&1 && npx --yes @playwright/mcp --help >/dev/null 2>&1; then
+  say "ok: playwright"
 else
-  warn "bin/agent-browser missing — browser automation MCP disabled"
+  say "ok: playwright will auto-install on first browser use (npx)"
 fi
 if [ -f ./scripts/doc-reader.exe ]; then
   say "ok: doc-reader.exe"

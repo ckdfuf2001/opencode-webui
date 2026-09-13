@@ -26,7 +26,7 @@ if not exist "logs" mkdir logs
 echo [START] checking prerequisites...
 if not exist "opencode-webui.exe" echo [START] ERROR: opencode-webui.exe not found & exit /b 1
 if exist "bin\opencode.exe" (echo [START] ok: opencode binary) else echo [START] WARN: bin\opencode.exe missing - AI sessions unavailable
-if exist "bin\agent-browser" (echo [START] ok: agent-browser) else echo [START] WARN: bin\agent-browser missing - browser automation disabled
+where npx >nul 2>&1 && npx --yes @playwright/mcp --help >nul 2>&1 && echo [START] ok: playwright || echo [START] WARN: playwright not cached - first browser use will auto-install
 if exist "scripts\doc-reader.exe" (echo [START] ok: doc-reader.exe) else echo [START] WARN: doc-reader.exe missing - python fallback required
 where git >nul 2>&1
 if %errorlevel%==0 (echo [START] ok: git) else echo [START] WARN: git not found - clone/pull features unavailable
