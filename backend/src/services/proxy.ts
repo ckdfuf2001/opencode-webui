@@ -4,7 +4,7 @@ import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
-import { flushQueueForSession } from './chat-queue'
+import { flushQueueForSession, clearSendingOnAbort } from './chat-queue'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -229,6 +229,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
   const deleteSessionId = deleteMatch?.[1]
   if (method === 'POST' && deleteSessionId) {
     return handleDelete(request, deleteSessionId)
+  }
+
+  // abort 시 큐의 sending 표시 즉시 제거 — 다음 채팅이 바로 가게
+  const abortPath = pathname.replace(/^\/api\/opencode/, '')
+  const abortMatch = abortPath.match(/^\/session\/([^/]+)\/abort$/)
+  if (method === 'POST' && abortMatch?.[1]) {
+    try { clearSendingOnAbort(abortMatch[1]!) } catch {}
   }
 
   const search = query ? '?' + new URLSearchParams(query).toString() : ''

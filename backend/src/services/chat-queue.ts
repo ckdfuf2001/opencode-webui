@@ -49,7 +49,8 @@ const queueDirs = new Map<string, string>()
 // 마지막으로 busy 가 관측된 시각. generation이 끝나는 순간이 아니라 working
 // 표시가 꺼진 뒤에 발송되도록 idle grace를 둔다 (상태 전이·폴러 지연 흡수).
 const lastBusyAt = new Map<string, number>()
-const IDLE_GRACE_MS = 600
+const IDLE_GRACE_MS = 350
+const recentlyAbortedBackend = new Set<string>()
 
 export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
@@ -120,6 +121,25 @@ export function clearQueuedChats(sessionID: string): number {
   failedUntil.delete(sessionID)
   logger.info(`Cleared ${count} queued chat(s) for session ${sessionID}`)
   return count
+}
+
+export function clearSendingOnAbort(sessionID: string): void {
+  const queue = queues.get(sessionID)
+  if (queue) {
+    const idx = queue.findIndex((item) => item.status === 'sending')
+    if (idx !== -1) {
+      queue.splice(idx, 1)
+      if (queue.length === 0) {
+        queues.delete(sessionID)
+        queueDirs.delete(sessionID)
+      }
+    }
+  }
+  lastBusyAt.delete(sessionID)
+  failedUntil.delete(sessionID)
+  failCount.delete(sessionID)
+  recentlyAbortedBackend.add(sessionID)
+  setTimeout(() => recentlyAbortedBackend.delete(sessionID), 5000)
 }
 
 /**
@@ -284,15 +304,16 @@ async function checkOpencodeBusy(base: string, directoryParam: string, sessionID
       headers: ensureServerAuth({}),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
-    if (!res.ok) return true
+    if (!res.ok) return false
     const map = (await res.json()) as Record<string, { type?: string }>
     return map[sessionID]?.type === 'busy'
   } catch {
-    return true
+    return false
   }
 }
 
 async function isSessionBusy(sessionID: string): Promise<boolean> {
+  if (recentlyAbortedBackend.has(sessionID)) return false
   const base = opencodeServerManager.getUrl()
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
@@ -303,12 +324,6 @@ async function isSessionBusy(sessionID: string): Promise<boolean> {
     hasPendingInteraction(base, directory, sessionID),
   ])
   if (opencodeBusy || pending) return true
-  // DB(session_status)도 본다 — 프론트 Working 배지와 같은 소스라 working이
-  // 끝난 뒤에 발송된다. opencode 순간 장애·전이 구간의 오판을 막는다.
-  try {
-    const row = queueDb?.query('SELECT status FROM session_status WHERE session_id = ?').get(sessionID) as { status?: string } | undefined
-    if (row?.status === 'busy') return true
-  } catch {}
   return false
 }
 
