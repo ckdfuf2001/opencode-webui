@@ -50,7 +50,11 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    esbuild: {
+      target: 'es2015',
+    },
     build: {
+      target: 'es2015',
       assetsInlineLimit: 4096,
       chunkSizeWarningLimit: 600,
       rollupOptions: {
