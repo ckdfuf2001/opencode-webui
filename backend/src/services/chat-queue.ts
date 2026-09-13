@@ -124,6 +124,8 @@ export function moveQueuedChat(sessionID: string, id: string, toTop: boolean): Q
   return [...queue]
 }
 
+const recentlyAbortedBackend = new Set<string>()
+
 /** 중단(abort) 시 호출: 세션의 대기열 전체를 비운다. */
 export function clearQueuedChats(sessionID: string): number {
   const queue = queues.get(sessionID)
@@ -135,6 +137,26 @@ export function clearQueuedChats(sessionID: string): number {
   failedUntil.delete(sessionID)
   logger.info(`Cleared ${count} queued chat(s) for session ${sessionID}`)
   return count
+}
+
+export function clearSendingOnAbort(sessionID: string): void {
+  const queue = queues.get(sessionID)
+  if (queue) {
+    const idx = queue.findIndex((item) => item.status === 'sending')
+    if (idx !== -1) {
+      queue.splice(idx, 1)
+      if (queue.length === 0) {
+        queues.delete(sessionID)
+        queueDirs.delete(sessionID)
+      }
+      logger.info(`Cleared sending item for session ${sessionID} on abort`)
+    }
+  }
+  lastBusyAt.delete(sessionID)
+  failedUntil.delete(sessionID)
+  failCount.delete(sessionID)
+  recentlyAbortedBackend.add(sessionID)
+  setTimeout(() => recentlyAbortedBackend.delete(sessionID), 5000)
 }
 
 /**
@@ -301,15 +323,16 @@ async function checkOpencodeBusy(base: string, directoryParam: string, sessionID
       headers: ensureServerAuth({}),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
-    if (!res.ok) return true
+    if (!res.ok) return false
     const map = (await res.json()) as Record<string, { type?: string }>
     return map[sessionID]?.type === 'busy'
   } catch {
-    return true
+    return false
   }
 }
 
 async function isSessionBusy(sessionID: string): Promise<boolean> {
+  if (recentlyAbortedBackend.has(sessionID)) return false
   const base = opencodeServerManager.getUrl()
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
