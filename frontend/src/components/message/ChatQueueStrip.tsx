@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, X, ListOrdered } from 'lucide-react'
 import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat } from '@/hooks/useChatQueue'
 import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
@@ -50,7 +50,49 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
     } catch {}
   }
 
-  if (items.length === 0) return null
+  if (items.length === 0) {
+    if (minimized) {
+      return (
+        <div className="w-full max-w-4xl px-4 pb-1">
+          <button
+            type="button"
+            onClick={() => setMinimized(false)}
+            className="inline-flex items-center justify-center w-5 h-5 rounded-full border border-border bg-background/90 hover:bg-muted transition-colors backdrop-blur-sm"
+            title="Queue empty — click to expand"
+            aria-label="Expand queue"
+          >
+            <ChevronRight className="w-3 h-3 text-muted-foreground" />
+          </button>
+        </div>
+      )
+    }
+    return (
+      <div className="w-full max-w-4xl px-4 pb-1">
+        <div className="rounded-xl border border-border bg-background/90 backdrop-blur-sm px-3 py-2 text-xs">
+          <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
+            <Clock className="w-3 h-3 shrink-0" />
+            <span className="flex-1">Queue is empty</span>
+            <button
+              type="button"
+              onClick={toggleInterrupt}
+              className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
+              title={allowInterrupt ? 'send queue after every generation' : 'send queue after working end'}
+            >
+              {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
+            </button>
+            <button
+              type="button"
+              aria-label="Minimize queue"
+              className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground"
+              onClick={() => setMinimized(true)}
+            >
+              <ChevronDown className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (minimized) {
     return (
