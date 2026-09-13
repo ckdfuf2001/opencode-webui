@@ -391,10 +391,12 @@ export function SessionDetail() {
   const sseEnabled = !!sessionId && !recentlyAborted && (hasActiveSend(sessionId) || isStreaming);
   const hasFailedQueue = (queuedForBadge as unknown as Array<{ status?: string }>)?.some((q) => q.status === 'failed') ?? false
   const dbIsCancelled = !!sessionId && (dbStatuses as unknown as Array<{ sessionId: string; isCancelled?: boolean }>)?.some((s) => s.sessionId === sessionId && s.isCancelled) === true
-  // 사용자 직접 Cancel(MessageAbortedError)은 배찌 제외 — 서버 응답 없음/실패만 표시
+  // 사용자 직접 Cancel(MessageAbortedError + recentlyAborted)은 배찌 제외 — 서버 abort/타임아웃/큐 실패만 표시
   const lastErrorName = (lastMessage?.info as unknown as { error?: { name?: string } })?.error?.name
+  const isUserCancel = recentlyAborted && lastErrorName === 'MessageAbortedError'
   const isLastCancelled = !!lastMessage && (
     ((lastErrorName != null && lastErrorName !== 'MessageAbortedError')) ||
+    ((lastErrorName === 'MessageAbortedError' && !isUserCancel)) ||
     (((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') && lastErrorName !== 'MessageAbortedError') ||
     hasFailedQueue
   )

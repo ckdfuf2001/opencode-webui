@@ -3,6 +3,7 @@ import path from 'path'
 import { getConfigPath, getReposPath, getWorkspacePath } from '@opencode-webui/shared'
 import { opencodeServerManager } from './opencode-single-server'
 import { isOpenCodeServerBusy } from './busy-tracker'
+import { hasAnyQueuedChats } from './chat-queue'
 import { logger } from '../utils/logger'
 
 const AUTOMATION_DIRS = ['agents', 'commands', 'skills', 'plugins']
@@ -89,7 +90,7 @@ function expandGlobalTargets(): string[] {
 
 function executeReload(): void {
   // 마지막 관문. 여기까지 오는 사이에 요청이 시작됐으면 dispose 하지 않는다.
-  if (isOpenCodeServerBusy()) {
+  if (isOpenCodeServerBusy() || hasAnyQueuedChats()) {
     scheduleRestart(BUSY_RETRY_MS)
     return
   }
@@ -135,7 +136,7 @@ function scheduleRestart(delayMs = RESTART_DEBOUNCE_MS): void {
     debounceTimer = null
     if (!pendingRestart) return
 
-    if (isOpenCodeServerBusy()) {
+    if (isOpenCodeServerBusy() || hasAnyQueuedChats()) {
       if (Date.now() - deferStartedAt > MAX_DEFER_MS) {
         logger.warn('OpenCode server stayed busy for too long; skipping automation reload')
         pendingRestart = false
@@ -143,7 +144,7 @@ function scheduleRestart(delayMs = RESTART_DEBOUNCE_MS): void {
         pendingDirectories.clear()
         return
       }
-      logger.info('OpenCode server is busy; deferring automation reload')
+      logger.info('OpenCode server is busy or has queued chats; deferring automation reload')
       scheduleRestart(BUSY_RETRY_MS)
       return
     }
@@ -160,8 +161,8 @@ function scheduleRestart(delayMs = RESTART_DEBOUNCE_MS): void {
     debounceTimer = setTimeout(() => {
       debounceTimer = null
       if (!pendingRestart) return
-      if (isOpenCodeServerBusy()) {
-        logger.info('OpenCode server became busy during reload grace; deferring automation reload')
+      if (isOpenCodeServerBusy() || hasAnyQueuedChats()) {
+        logger.info('OpenCode server became busy or has queued chats during reload grace; deferring automation reload')
         scheduleRestart(BUSY_RETRY_MS)
         return
       }

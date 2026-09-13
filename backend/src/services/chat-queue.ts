@@ -58,6 +58,13 @@ export function setQuickMode(sessionID: string, enabled: boolean): void {
 export function isQuickMode(sessionID: string): boolean {
   return quickModeSessions.has(sessionID)
 }
+export function hasAnyQueuedChats(): boolean {
+  return queues.size > 0
+}
+export function hasQueuedChatsForSession(sessionID: string): boolean {
+  const q = queues.get(sessionID)
+  return !!q && q.length > 0
+}
 
 export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
@@ -313,14 +320,9 @@ async function isSessionBusy(sessionID: string): Promise<boolean> {
     hasPendingInteraction(base, directory, sessionID),
   ])
   if (opencodeBusy || pending) return true
-  // Quick mode: generation 끝마다 큐 투입 — DB busy(working 전체)는 무시하고 opencode busy만 본다
+  // Quick mode: generation 끝마다 큐 투입 — DB busy(working 전체)는 무시
   if (quickModeSessions.has(sessionID)) return false
-  // DB(session_status)도 본다 — 프론트 Working 배지와 같은 소스라 working이
-  // 끝난 뒤에 발송된다. opencode 순간 장애·전이 구간의 오판을 막는다.
-  try {
-    const row = queueDb?.query('SELECT status FROM session_status WHERE session_id = ?').get(sessionID) as { status?: string } | undefined
-    if (row?.status === 'busy') return true
-  } catch {}
+  // Normal mode도 opencode가 idle이면 바로 발송 — DB staleness로 sending이 남아 working 계속 뜨던 버그 방지
   return false
 }
 
