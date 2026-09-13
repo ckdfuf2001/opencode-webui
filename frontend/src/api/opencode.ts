@@ -74,6 +74,13 @@ export class OpenCodeClient {
       if (this.directory) {
         config.params = { ...config.params, directory: this.directory }
       }
+      // tmp-log: log all opencode requests for debugging network flood
+      try {
+        const url = `${config.baseURL ?? ''}${config.url ?? ''}`
+        if (url.includes('/session/') || url.includes('/command') || url.includes('/model')) {
+          console.log(`[tmp-log] opencode req ${config.method?.toUpperCase()} ${url} dir=${this.directory ?? ''}`)
+        }
+      } catch {}
       return config
     })
 
@@ -232,7 +239,17 @@ export class OpenCodeClient {
   }
 
   async switchModel(sessionID: string, model: { id: string; providerID: string }) {
-    await this.client.post(`/session/${sessionID}/model`, { model })
+    const start = Date.now()
+    try {
+      console.log(`[tmp-log] switchModel start ${sessionID} -> ${model.providerID}/${model.id}`)
+      await this.client.post(`/session/${sessionID}/model`, { model })
+      console.log(`[tmp-log] switchModel success ${sessionID} ${Date.now() - start}ms`)
+      try { fetch(`${window.location.origin}/api/client-logs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'info', message: `switchModel success ${sessionID} ${model.providerID}/${model.id} ${Date.now()-start}ms` }) }).catch(()=>{}) } catch {}
+    } catch (e) {
+      console.error(`[tmp-log] switchModel failed ${sessionID}`, e)
+      try { fetch(`${window.location.origin}/api/client-logs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'error', message: `switchModel failed ${sessionID} ${String(e)}` }) }).catch(()=>{}) } catch {}
+      throw e
+    }
   }
 
   async sendShell(sessionID: string, data: ShellRequest) {
