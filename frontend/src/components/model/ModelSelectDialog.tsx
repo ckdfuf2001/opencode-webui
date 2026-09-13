@@ -175,12 +175,12 @@ export function ModelSelectDialog({
           id: modelId,
           providerID: providerId,
         });
-        queryClient.invalidateQueries({
-          queryKey: sessionKey,
-        });
-        queryClient.invalidateQueries({
-          queryKey: sessionsKey,
-        });
+        //queryClient.invalidateQueries({
+        //  queryKey: sessionKey,
+        //});
+        //queryClient.invalidateQueries({
+        //  queryKey: sessionsKey,
+        //});
       } catch (error) {
         if (previous !== undefined) queryClient.setQueryData(sessionKey, previous);
         if (previousSessions !== undefined) queryClient.setQueryData(sessionsKey, previousSessions);

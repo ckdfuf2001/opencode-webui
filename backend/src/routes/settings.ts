@@ -94,6 +94,8 @@ export function createSettingsRoutes(db: Database) {
       const prevModel = (previous.preferences as Record<string, unknown>).defaultModel as string | undefined
       const nextModel = (settings.preferences as Record<string, unknown>).defaultModel as string | undefined
       if (prevModel !== nextModel && typeof nextModel === 'string' && nextModel.includes('/')) {
+        /*
+        //Model 은 매번 주입하고 우리화면에서만 보여줌.
         // 파일에 먼저 기록 (sync) — 프록시(proxy.ts:273)가 새 세션에 즉시 주입하므로 세션은 빠름
         setActiveOpenCodeConfigModel(nextModel)
         // 무거운 작업(파일 패치 + 서버 재시작)은 비동기로 — 응답은 즉시 반환해 UI 블로킹 방지
@@ -110,7 +112,7 @@ export function createSettingsRoutes(db: Database) {
           } catch (e) {
             logger.warn('Failed to restart OpenCode server for default model change (async):', e)
           }
-        })()
+        })() */
         logger.info(`Default model changed to ${nextModel} — response returned immediately, restart in background`)
       }
 
