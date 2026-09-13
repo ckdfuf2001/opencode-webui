@@ -7,6 +7,13 @@ import { runMigrations } from './migrations'
 export function initializeDatabase(dbPath: string = './data/opencode.db'): Database {
   mkdirSync(dirname(dbPath), { recursive: true })
   const db = new Database(dbPath)
+  // 동시 읽기/쓰기 충돌(database is locked) 완화: WAL + busy timeout
+  try {
+    db.exec('PRAGMA journal_mode=WAL;')
+    db.exec('PRAGMA busy_timeout=5000;')
+    db.exec('PRAGMA synchronous=NORMAL;')
+    db.exec('PRAGMA foreign_keys=ON;')
+  } catch {}
   
   db.run(`
     CREATE TABLE IF NOT EXISTS repos (

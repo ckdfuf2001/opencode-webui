@@ -136,10 +136,11 @@ export function SessionDetail() {
   // - 맨 아래 도달하면 하단 고정으로 복귀
   // 윈도우 이동 시 scrollHeight가 급변하므로 이동 전후 높이 차만큼
   // scrollTop을 보정해 시각 위치를 유지한다 (네이티브 앵커만으론 부족).
-  const WINDOW_SIZE = 15;
-  const LOAD_STEP = 5;
-  const EDGE_PX = 160;
-  const SHIFT_COOLDOWN_MS = 150;
+  const WINDOW_SIZE = 18;
+  const LOAD_STEP = 6;
+  const EDGE_PX = 80;
+  const EXIT_PX = 220;
+  const SHIFT_COOLDOWN_MS = 320;
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const windowStartRef = useRef<number | null>(null);
   // 이전 이동이 커밋되기 전 중복 이동 방지 (rAF마다 shift가 쌓여
@@ -237,10 +238,38 @@ export function SessionDetail() {
   const hiddenCount = start;
   // useAutoScroll의 추종 해제 함수 (아래 useAutoScroll 선언 뒤에 연결)
   const markDisengagedRef = useRef<(() => void) | null>(null);
-  // 윈도우 이동 후 시각 위치 유지용: 이동 전 scrollHeight를 기록해두고
-  // windowStart 커밋 후 높이 차만큼 scrollTop을 보정한다.
+  // 윈도우 이동 후 시각 위치 유지용: 앵커 메시지 기준 보정.
+  // 기존 scrollHeight 차이 보정은 메시지 높이가 들쭉날쭉하면 오차가 커서
+  // 보정 후에도 여전히 EDGE 안에 남아 연쇄 페이징(자꾸 넘어감)이 발생한다.
+  // 겹치는 구간의 중간 메시지를 앵커로 잡아 그 시각 위치를 유지한다.
+  const pendingAnchorRef = useRef<{ id: string; top: number; prevTop: number } | null>(null);
   const pendingCompensateRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   useEffect(() => {
+    const anchor = pendingAnchorRef.current;
+    if (anchor) {
+      pendingAnchorRef.current = null;
+      pendingCompensateRef.current = null;
+      const cc = messageContainerRef.current;
+      if (!cc) return;
+      requestAnimationFrame(() => {
+        const c = messageContainerRef.current;
+        if (!c) return;
+        const el = document.getElementById(`message-${anchor.id}`);
+        if (el) {
+          const newTop = el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop;
+          const delta = newTop - anchor.top;
+          if (Math.abs(delta) > 2) c.scrollTop = Math.max(0, anchor.prevTop + delta);
+        } else {
+          // 앵커가 사라졌으면(트렁케이트 등) 높이 차이로 폴백
+          const comp = pendingCompensateRef.current;
+          if (comp) {
+            const dh = c.scrollHeight - comp.prevHeight;
+            if (dh !== 0) c.scrollTop = Math.max(0, comp.prevTop + dh);
+          }
+        }
+      });
+      return;
+    }
     const comp = pendingCompensateRef.current;
     if (!comp) return;
     pendingCompensateRef.current = null;
@@ -257,6 +286,8 @@ export function SessionDetail() {
   // 커지므로, 위 effect에서 높이 차만큼 보정해 제자리에 유지한다.
   // 이전 이동이 커밋되기 전 중복 이동 금지 (rAF마다 쌓여 한 번에
   // 최상단까지 날아가며 와다다 떨리던 원인)
+  const lastShiftDirRef = useRef<'up' | 'down' | null>(null);
+  const edgeLockedRef = useRef(false);
   const shiftWindowUp = useCallback(() => {
     if (shiftPendingRef.current) return;
     if (Date.now() - lastShiftAtRef.current < SHIFT_COOLDOWN_MS) return;
@@ -265,15 +296,30 @@ export function SessionDetail() {
     const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
     if (cur <= 0) return;
     const c = messageContainerRef.current;
-    if (c) pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
+    if (c) {
+      // 겹치는 구간의 중간을 앵커로: [cur-LOAD_STEP, cur+WINDOW_SIZE-LOAD_STEP) 와 [cur, cur+WINDOW_SIZE) 겹침 = [cur, cur+WINDOW_SIZE-LOAD_STEP)
+      const anchorIdx = Math.min(len - 1, cur + Math.floor((WINDOW_SIZE - LOAD_STEP) / 2));
+      const anchorId = baseMessages?.[anchorIdx]?.info.id;
+      const anchorEl = anchorId ? document.getElementById(`message-${anchorId}`) : null;
+      if (anchorEl) {
+        const top = anchorEl.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop;
+        pendingAnchorRef.current = { id: anchorId!, top, prevTop: c.scrollTop };
+      } else {
+        pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
+      }
+      pendingCompensateRef.current = pendingAnchorRef.current ? null : { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
+      if (pendingAnchorRef.current) pendingCompensateRef.current = null;
+    }
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
     lastShiftAtRef.current = Date.now();
+    lastShiftDirRef.current = 'up';
+    edgeLockedRef.current = true;
     // 보상 스크롤이 하단 근처에 떨어져도 즉시 복귀하지 않도록 근처로 표시
     // (다음 실제 스크롤 이벤트에서 위치로 재계산된다)
     wasNearBottomRef.current = true;
     setWindowStart(Math.max(0, cur - LOAD_STEP));
-  }, [baseMessages?.length]);
+  }, [baseMessages]);
   // 윈도우 아래로 이동 (단계별, 끝에서만 하단 고정 복귀).
   // 위쪽 DOM이 해제되어 scrollHeight가 줄므로 동일하게 보정한다.
   // 최신 근처면 null로 스냅 + 하단 핀.
@@ -290,10 +336,29 @@ export function SessionDetail() {
       return;
     }
     const c = messageContainerRef.current;
-    if (c) pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
+    if (c) {
+      const next = cur + LOAD_STEP;
+      // 아래로도 겹치는 구간 중간을 앵커로 유지
+      if (next < maxS) {
+        const anchorIdx = Math.min(len - 1, cur + Math.floor((WINDOW_SIZE + LOAD_STEP) / 2));
+        const anchorId = baseMessages?.[anchorIdx]?.info.id;
+        const anchorEl = anchorId ? document.getElementById(`message-${anchorId}`) : null;
+        if (anchorEl) {
+          const top = anchorEl.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop;
+          pendingAnchorRef.current = { id: anchorId!, top, prevTop: c.scrollTop };
+        } else {
+          pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
+        }
+      } else {
+        // 마지막 근처면 높이 보정 대신 하단 핀으로 처리되므로 간단 보정
+        pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
+      }
+    }
     markDisengagedRef.current?.();
     shiftPendingRef.current = true;
     lastShiftAtRef.current = Date.now();
+    lastShiftDirRef.current = 'down';
+    edgeLockedRef.current = true;
     const next = cur + LOAD_STEP;
     if (next >= maxS) {
       pendingLatestPinRef.current = true;
@@ -301,7 +366,7 @@ export function SessionDetail() {
     } else {
       setWindowStart(next);
     }
-  }, [baseMessages?.length]);
+  }, [baseMessages]);
   const handleLoadMore = shiftWindowUp;
   // 스크롤 감지: 위 근처 → 위로 2개, 아래 근처 → 아래로 2개(끝에서만 하단 고정)
   // + 끝에 닿은 채 더 밀어도(wheel) 페이지가 넘어가게 wheel도 처리한다.
@@ -320,8 +385,21 @@ export function SessionDetail() {
         if (Date.now() < navLockUntilRef.current) return;
         const scrollable = c.scrollHeight > c.clientHeight + 40;
         if (!scrollable) return;
+        const distToBottom = c.scrollHeight - (c.scrollTop + c.clientHeight);
+        // 히스테리시스: 페이징 직후 같은 방향으로 자꾸 넘어가는 것 방지.
+        // EDGE 안으로 들어와 페이징한 뒤에는 반대편으로 충분히 빠져나갈 때까지( EXIT_PX ) 재페이징 금지
+        if (edgeLockedRef.current) {
+          const movedAwayUp = lastShiftDirRef.current === 'up' && c.scrollTop > EDGE_PX + EXIT_PX;
+          const movedAwayDown = lastShiftDirRef.current === 'down' && distToBottom > EDGE_PX + EXIT_PX;
+          const movedAwayAny = c.scrollTop > EDGE_PX + EXIT_PX && distToBottom > EDGE_PX + EXIT_PX;
+          if (movedAwayUp || movedAwayDown || movedAwayAny) {
+            edgeLockedRef.current = false;
+            lastShiftDirRef.current = null;
+          }
+        }
         // 위를 우선: 짧은 내용에서 위·아래가 동시에 근처여도 위로만 간다 (왕복 루프 방지)
         if (c.scrollTop < EDGE_PX) {
+          if (edgeLockedRef.current && lastShiftDirRef.current === 'up') return;
           const len = baseMessages?.length ?? 0;
           const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
           if (cur > 0) {
@@ -330,15 +408,15 @@ export function SessionDetail() {
             return;
           }
         }
-        const distToBottom = c.scrollHeight - (c.scrollTop + c.clientHeight);
         if (distToBottom < EDGE_PX) {
+          if (edgeLockedRef.current && lastShiftDirRef.current === 'down') return;
           if (windowStartRef.current !== null) {
             wasNearBottomRef.current = true;
             shiftWindowDown();
           } else {
             wasNearBottomRef.current = true;
           }
-        } else {
+        } else if (c.scrollTop >= EDGE_PX + EXIT_PX && distToBottom >= EDGE_PX + EXIT_PX) {
           wasNearBottomRef.current = false;
         }
       });
