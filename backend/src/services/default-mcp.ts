@@ -137,21 +137,22 @@ function resolveAgentBrowser(): AgentBrowserInfo | null {
 function buildAgentBrowserMcp(
   _namespace: string = AGENT_BROWSER_NAMESPACE,
 ): Record<string, unknown> {
+  // Playwright MCP 주석 — 테스트용으로 비활성화 (GOMEMLIMIT와 분리 테스트)
   // 0.7.8+: agent-browser → Playwright MCP로 전면 교체. 가볍고 데몬 없는 browser_* 도구 제공.
   // webfetch로는 불가한 버튼 클릭/스냅샷 시퀀스 지원, --isolated 로 세션 격리 (concurrent 안전).
   // npx --yes 로 최초 1회 자동 설치, 이후 캐시 재사용.
-  const env: Record<string, string> = {}
-  // 회사 프록시가 loopback을 물지 않게 bypass 유지 (Playwright도 CDP가 127.0.0.1 사용)
-  env.NO_PROXY = withLoopbackBypass(process.env.NO_PROXY)
-  env.no_proxy = withLoopbackBypass(process.env.no_proxy)
-  return {
-    playwright: {
-      type: 'local',
-      enabled: true,
-      command: ['npx', '--yes', '@playwright/mcp@latest', '--headless', '--isolated'],
-      env,
-    },
-  }
+  // const env: Record<string, string> = {}
+  // env.NO_PROXY = withLoopbackBypass(process.env.NO_PROXY)
+  // env.no_proxy = withLoopbackBypass(process.env.no_proxy)
+  // return {
+  //   playwright: {
+  //     type: 'local',
+  //     enabled: true,
+  //     command: ['npx', '--yes', '@playwright/mcp@latest', '--headless', '--isolated'],
+  //     env,
+  //   },
+  // }
+  return {}
 }
 
 // 레포별 opencode.json의 agent-browser 항목 제거.
