@@ -453,7 +453,7 @@ export function PermissionRulesDialog({
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
-                  {Notification.permission === 'denied' && (
+                  {typeof Notification !== 'undefined' && Notification.permission === 'denied' && (
                     <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
@@ -480,7 +480,7 @@ export function PermissionRulesDialog({
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
-                  {Notification.permission === 'denied' && (
+                  {typeof Notification !== 'undefined' && Notification.permission === 'denied' && (
                     <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
@@ -507,7 +507,7 @@ export function PermissionRulesDialog({
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
-                  {Notification.permission === 'denied' && (
+                  {typeof Notification !== 'undefined' && Notification.permission === 'denied' && (
                     <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
                   )}
                 </div>
