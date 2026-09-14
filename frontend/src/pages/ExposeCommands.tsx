@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listExposed, createExposed, updateExposed, deleteExposed, listPublicCommands, listAvailableCommands } from '@/api/expose'
 import { useCommands } from '@/hooks/useCommands'
+import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -39,7 +40,27 @@ export function ExposeCommands() {
 
   const [filter, setFilter] = useState('')
   const [editingEx, setEditingEx] = useState<typeof exposed[number] | null>(null)
-  const [editForm, setEditForm] = useState<{ exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string; argsTemplate: string; exampleArgs: string }>({ exposeName: '', description: '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '' })
+  const [editForm, setEditForm] = useState<{ exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string; argsTemplate: string; exampleArgs: string; enabled: boolean }>({ exposeName: '', description: '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '', enabled: true })
+  const { data: sessionStatuses = [] } = useQuery({
+    queryKey: ['session-status', 'for-expose'],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/session-status`)
+      if (!res.ok) return [] as { sessionId: string; repoId: number | null; directory: string; status: string }[]
+      return res.json() as Promise<{ sessionId: string; repoId: number | null; directory: string; status: string }[]>
+    },
+  })
+  const { data: repos = [] } = useQuery({
+    queryKey: ['repos', 'for-expose'],
+    queryFn: async () => {
+      const { listRepos } = await import('@/api/repos')
+      return listRepos()
+    },
+  })
+  const repoNameById = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const r of repos as any[]) m.set(r.id, (r.localPath ?? '').split('/').pop() || `repo#${r.id}`)
+    return m
+  }, [repos])
   type SortKey = 'exposed'|'name'|'owner'|'desc'|'exposeName'|'exposeDesc'|'session'
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
@@ -136,18 +157,19 @@ export function ExposeCommands() {
     onSuccess: () => invalidate(),
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to update'),
   })
-  const deleteMut = useMutation({
-    mutationFn: deleteExposed,
-    onSuccess: () => invalidate(),
-    onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to delete'),
-  })
+  // kept for future use (delete via dialog)
+  void deleteExposed
 
   const toggle = (cmdName: string, cmdDesc: string, checked: boolean) => {
     const ex = exposedByCommand.get(cmdName)
-    if (checked && !ex) {
-      createMut.mutate({ commandName: cmdName, exposeName: cmdName, description: cmdDesc ?? '' })
-    } else if (!checked && ex) {
-      deleteMut.mutate(ex.id)
+    if (!ex && checked) {
+      createMut.mutate({ commandName: cmdName, exposeName: cmdName, description: cmdDesc ?? '', enabled: true })
+    } else if (ex && checked && !ex.enabled) {
+      updateMut.mutate({ id: ex.id, data: { enabled: true } })
+    } else if (ex && !checked && ex.enabled) {
+      updateMut.mutate({ id: ex.id, data: { enabled: false } })
+    } else if (ex && !checked && !ex.enabled) {
+      // already draft, keep as draft (no-op)
     }
   }
 
@@ -280,9 +302,10 @@ export function ExposeCommands() {
               <tbody className="divide-y">
                 {filtered.map((cmd) => {
                   const ex = exposedByCommand.get(cmd.name)
-                  const checked = !!ex
+                  const checked = !!ex?.enabled
+                  const isDraft = !!ex && !ex.enabled
                   return (
-                    <tr key={cmd.name} className={`hover:bg-muted/20 ${checked ? 'bg-primary/5' : ''}`}>
+                    <tr key={cmd.name} className={`hover:bg-muted/20 ${checked ? 'bg-primary/5' : isDraft ? 'bg-amber-500/5' : ''}`}>
                       <td className="px-2 py-1.5 text-center">
                         <Checkbox checked={checked} onCheckedChange={(v) => toggle(cmd.name, cmd.description ?? '', !!v)} />
                       </td>
@@ -299,8 +322,8 @@ export function ExposeCommands() {
                       <td className="px-2 py-1.5 text-xs font-mono truncate max-w-[180px]" title={ex ? `${ex.titleTemplate ?? ''} ${ex.pinnedSessionId ?? ''}` : ''}>{ex ? (ex.titleTemplate || ex.pinnedSessionId ? `${ex.titleTemplate ?? ''}${ex.titleTemplate && ex.pinnedSessionId ? ' / ' : ''}${ex.pinnedSessionId ?? ''}` : <span className="text-muted-foreground/50">—</span>) : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-center">
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => {
-                          if (ex) { setEditingEx(ex); setEditForm({ exposeName: ex.exposeName, description: ex.description ?? '', sessionMode: ex.sessionMode ?? 'new', titleTemplate: ex.titleTemplate ?? '', pinnedSessionId: ex.pinnedSessionId ?? '', argsTemplate: (ex as any).argsTemplate ?? '', exampleArgs: (ex as any).exampleArgs ?? '' }) }
-                          else { const draft: any = { id: 0, commandName: cmd.name, exposeName: cmd.name, description: cmd.description ?? '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '' }; setEditingEx(draft); setEditForm({ exposeName: cmd.name, description: cmd.description ?? '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '' }) }
+                          if (ex) { setEditingEx(ex); setEditForm({ exposeName: ex.exposeName, description: ex.description ?? '', sessionMode: ex.sessionMode ?? 'new', titleTemplate: ex.titleTemplate ?? '', pinnedSessionId: ex.pinnedSessionId ?? '', argsTemplate: (ex as any).argsTemplate ?? '', exampleArgs: (ex as any).exampleArgs ?? '', enabled: ex.enabled }) }
+                          else { const draft: any = { id: 0, commandName: cmd.name, exposeName: cmd.name, description: cmd.description ?? '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '', enabled: false }; setEditingEx(draft); setEditForm({ exposeName: cmd.name, description: cmd.description ?? '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '', enabled: false }) }
                         }} title="편집"><Pencil className="w-3.5 h-3.5" /></Button>
                       </td>
                     </tr>
@@ -310,7 +333,7 @@ export function ExposeCommands() {
             </table>
           </div>
           <div className="px-3 py-2 border-t text-xs text-muted-foreground bg-muted/10">
-            체크 = 노출 · 편집은 미노출 상태에서도 가능 (편집 저장 시 자동 노출 생성) · 원본 설명이 기본값
+            체크 = 노출(초록) / 미체크지만 행이 있으면 draft(호박) · 편집은 미노출 상태에서도 저장 가능(저장 시 draft로 보관, 체크하면 노출) · 원본 설명이 기본값
           </div>
         </div>
       </div>
@@ -322,6 +345,13 @@ export function ExposeCommands() {
           </DialogHeader>
           {editingEx && (
             <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">노출</Label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{editForm.enabled ? '노출' : '미노출(draft)'}</span>
+                  <Checkbox checked={editForm.enabled} onCheckedChange={v => setEditForm(s => ({ ...s, enabled: !!v }))} />
+                </div>
+              </div>
               <div className="space-y-1">
                 <Label className="text-xs">외부 이름</Label>
                 <Input value={editForm.exposeName} onChange={e => setEditForm(s => ({ ...s, exposeName: e.target.value }))} placeholder="exposeName" className="font-mono text-sm" />
@@ -347,8 +377,18 @@ export function ExposeCommands() {
               </div>
               {editForm.sessionMode === 'reuse' && (
                 <div className="space-y-1">
-                  <Label className="text-xs">고정 세션 ID (선택)</Label>
-                  <Input value={editForm.pinnedSessionId} onChange={e => setEditForm(s => ({ ...s, pinnedSessionId: e.target.value }))} placeholder="sessionId" className="font-mono text-sm" />
+                  <Label className="text-xs">고정 세션 (현재 세션 목록에서 선택)</Label>
+                  <Select value={editForm.pinnedSessionId || '__none__'} onValueChange={v => setEditForm(s => ({ ...s, pinnedSessionId: v === '__none__' ? '' : v }))}>
+                    <SelectTrigger className="h-8 text-sm font-mono"><SelectValue placeholder="세션 선택" /></SelectTrigger>
+                    <SelectContent className="max-h-[200px]">
+                      <SelectItem value="__none__">없음 (호출 시 sessionId 또는 신규)</SelectItem>
+                      {sessionStatuses.slice(0, 50).map(ss => {
+                        const repoName = ss.repoId ? repoNameById.get(ss.repoId) ?? `repo#${ss.repoId}` : 'global'
+                        return <SelectItem key={ss.sessionId} value={ss.sessionId}>{ss.sessionId.slice(0,8)} · {repoName} · {ss.status}</SelectItem>
+                      })}
+                    </SelectContent>
+                  </Select>
+                  <Input value={editForm.pinnedSessionId} onChange={e => setEditForm(s => ({ ...s, pinnedSessionId: e.target.value }))} placeholder="또는 직접 sessionId 입력" className="font-mono text-sm h-7 mt-1" />
                 </div>
               )}
               <div className="space-y-1">
@@ -372,14 +412,14 @@ export function ExposeCommands() {
             <Button onClick={() => {
               if (!editingEx) return
               if ((editingEx as any).id === 0) {
-                // 미노출 상태에서 편집 → 새로 노출 생성 (비활성이어도 설정 저장)
                 const cmdName = (editingEx as any).commandName
-                createMut.mutate({ commandName: cmdName, exposeName: editForm.exposeName.trim() || cmdName, description: editForm.description, sessionMode: editForm.sessionMode, titleTemplate: editForm.titleTemplate, pinnedSessionId: editForm.pinnedSessionId || undefined, argsTemplate: editForm.argsTemplate, exampleArgs: editForm.exampleArgs }, { onSuccess: () => setEditingEx(null) })
+                createMut.mutate({ commandName: cmdName, exposeName: editForm.exposeName.trim() || cmdName, description: editForm.description, enabled: editForm.enabled, sessionMode: editForm.sessionMode, titleTemplate: editForm.titleTemplate, pinnedSessionId: editForm.pinnedSessionId || undefined, argsTemplate: editForm.argsTemplate, exampleArgs: editForm.exampleArgs }, { onSuccess: () => setEditingEx(null) })
                 return
               }
               const payload: any = {}
               if (editForm.exposeName.trim() && editForm.exposeName.trim() !== editingEx.exposeName) payload.exposeName = editForm.exposeName.trim()
               if (editForm.description !== editingEx.description) payload.description = editForm.description
+              if (editForm.enabled !== editingEx.enabled) payload.enabled = editForm.enabled
               if (editForm.sessionMode !== editingEx.sessionMode) payload.sessionMode = editForm.sessionMode
               if (editForm.titleTemplate !== (editingEx.titleTemplate ?? '')) payload.titleTemplate = editForm.titleTemplate
               if ((editForm.pinnedSessionId ?? '') !== (editingEx.pinnedSessionId ?? '')) payload.pinnedSessionId = editForm.pinnedSessionId || null
@@ -387,7 +427,7 @@ export function ExposeCommands() {
               if (editForm.exampleArgs !== ((editingEx as any).exampleArgs ?? '')) payload.exampleArgs = editForm.exampleArgs
               if (Object.keys(payload).length === 0) { setEditingEx(null); return }
               updateMut.mutate({ id: editingEx.id, data: payload }, { onSuccess: () => setEditingEx(null) })
-            }}>{(editingEx as any)?.id === 0 ? '노출 생성' : '저장'}</Button>
+            }}>{(editingEx as any)?.id === 0 ? (editForm.enabled ? '노출 생성' : 'draft 저장') : '저장'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
