@@ -376,6 +376,12 @@ export function HtmlViewerMenu() {
                                   >
                                     새 탭에서 열기
                                   </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="font-normal"
+                                    onSelect={() => { setSelectedPage(p.name); if (url) window.open(url, '_blank', 'width=1280,height=860,noopener') }}
+                                  >
+                                    새 창으로 열기
+                                  </DropdownMenuItem>
                                   <DropdownMenuItem className="font-normal"
                                     onSelect={() => {
                                       if (url) navigator.clipboard.writeText(url).then(() => showToast.success('링크 복사됨')).catch(() => showToast.error('복사 실패'))

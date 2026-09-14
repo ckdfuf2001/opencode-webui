@@ -441,7 +441,7 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
                 ) : (
                   <>
                     <span className="flex-1 truncate">{title}</span>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => { setEditingSid(sid); setEditingTitle(title) }} title="이름 변경"><Pencil className="w-3 h-3" /></Button>
+                    <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => { setEditingSid(sid); setEditingTitle(title) }} title="이름 변경"><span className="text-[10px] font-bold text-muted-foreground">Aa</span></Button>
                     <button
                       className="p-1 rounded hover:bg-background shrink-0"
                       onClick={(e) => {

@@ -474,7 +474,7 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
         {editMode ? (
           isEditing ? null : (
             <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); setEditingSessionId(id); setEditingSessionTitle(title || '') }} title="이름 변경"><Pencil className="w-3 h-3" /></Button>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); setEditingSessionId(id); setEditingSessionTitle(title || '') }} title="이름 변경"><span className="text-[10px] font-bold text-muted-foreground">Aa</span></Button>
               <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); handleDeleteSession(id) }} title="세션 삭제"><Trash2 className="w-3 h-3" /></Button>
             </div>
           )
