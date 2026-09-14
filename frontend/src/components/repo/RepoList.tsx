@@ -1,22 +1,27 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listRepos, deleteRepo } from "@/api/repos";
 import { listSchedules } from "@/api/schedules";
-import { useSessionStatusMap } from "@/hooks/useOpenCode";
+import { useSessionStatusMap, useSessions, useDeleteSession } from "@/hooks/useOpenCode";
 import { DeleteDialog } from "@/components/ui/delete-dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus } from "lucide-react";
+import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare } from "lucide-react";
 import { RepoCard } from "./RepoCard";
 import { clearRepoNotifyData } from "@/lib/notifications";
+import { OPENCODE_API_ENDPOINT } from "@/config";
 
 export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const queryClient = useQueryClient();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [repoToDelete, setRepoToDelete] = useState<number | null>(null);
   const [selectedRepos, setSelectedRepos] = useState<Set<number>>(new Set());
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
+  const [isEditMode, setIsEditMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [pendingBulk, setPendingBulk] = useState<{ repos: number[]; sessions: string[] } | null>(null);
 
   const {
     data: repos,
@@ -131,31 +136,28 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
 
   const handleSelectRepo = (id: number, selected: boolean) => {
     const newSelected = new Set(selectedRepos);
-    if (selected) {
-      newSelected.add(id);
-    } else {
-      newSelected.delete(id);
-    }
+    if (selected) newSelected.add(id); else newSelected.delete(id);
     setSelectedRepos(newSelected);
   };
 
   const handleSelectAll = () => {
-    const allFilteredSelected = filteredRepos.every((repo) =>
-      selectedRepos.has(repo.id),
-    );
-
-    if (allFilteredSelected) {
-      setSelectedRepos(new Set());
-    } else {
-      const filteredIds = filteredRepos.map((repo) => repo.id);
-      setSelectedRepos(new Set([...selectedRepos, ...filteredIds]));
-    }
+    const allFilteredSelected = filteredRepos.every((repo) => selectedRepos.has(repo.id));
+    if (allFilteredSelected) setSelectedRepos(new Set()); else setSelectedRepos(new Set(filteredRepos.map((r) => r.id)));
   };
 
   const handleBatchDelete = () => {
-    if (selectedRepos.size > 0) {
+    if (selectedRepos.size > 0 || selectedSessions.size > 0) {
+      setPendingBulk({ repos: Array.from(selectedRepos), sessions: Array.from(selectedSessions) });
       setDeleteDialogOpen(true);
     }
+  };
+
+  // repo 체크 시 세션 전체 선택/해제 — 자식 세션 목록은 각 RepoCard 세션 패널에서 동기화
+  const handleRepoCheckedWithSessions = (repoId: number, checked: boolean, sessionIds: string[]) => {
+    const nr = new Set(selectedRepos);
+    const ns = new Set(selectedSessions);
+    if (checked) { nr.add(repoId); sessionIds.forEach(id => ns.add(id)); } else { nr.delete(repoId); sessionIds.forEach(id => ns.delete(id)); }
+    setSelectedRepos(nr); setSelectedSessions(ns);
   };
 
 
@@ -172,28 +174,35 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
               className="pl-10"
             />
           </div>
-          {filteredRepos.length > 0 && (
-            <Button
-              onClick={handleSelectAll}
-              variant={selectedRepos.size > 0 ? "default" : "outline"}
-              size="sm"
-              className="whitespace-nowrap hidden md:flex h-8"
-            >
-              {filteredRepos.every((repo) => selectedRepos.has(repo.id))
-                ? "Deselect All"
-                : "Select All"}
-            </Button>
-          )}
-          <Button
-            onClick={handleBatchDelete}
-            variant="destructive"
-            size="sm"
-            disabled={selectedRepos.size === 0}
-            className="hidden md:flex whitespace-nowrap h-8"
-          >
-            <Trash2 className="w-4 h-4 mr-2" />
-            Delete ({selectedRepos.size})
+          {/* 편집 모드 토글 */}
+          <Button variant={isEditMode ? "default" : "outline"} size="sm" className="whitespace-nowrap hidden md:flex h-8" onClick={() => { setIsEditMode(v => !v); if (isEditMode) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) } }}>
+            <Pencil className="w-4 h-4 mr-1" /> {isEditMode ? "완료" : "편집"}
           </Button>
+          {/* 편집 모드: 최상단 Repository 체크 + 삭제 */}
+          {isEditMode ? (
+            <>
+              {filteredRepos.length > 0 && (
+                <label className="hidden md:flex items-center gap-2 text-sm cursor-pointer">
+                  <Checkbox checked={filteredRepos.length > 0 && filteredRepos.every(r => selectedRepos.has(r.id))} onCheckedChange={(v) => handleSelectAll()} />
+                  <span>Repository</span>
+                </label>
+              )}
+              <Button onClick={handleBatchDelete} variant="destructive" size="sm" disabled={selectedRepos.size === 0 && selectedSessions.size === 0} className="hidden md:flex whitespace-nowrap h-8">
+                <Trash2 className="w-4 h-4 mr-2" /> 삭제 ({selectedRepos.size + selectedSessions.size})
+              </Button>
+            </>
+          ) : (
+            <>
+              {filteredRepos.length > 0 && (
+                <Button onClick={handleSelectAll} variant={selectedRepos.size > 0 ? "default" : "outline"} size="sm" className="whitespace-nowrap hidden md:flex h-8">
+                  {filteredRepos.every((repo) => selectedRepos.has(repo.id)) ? "Deselect All" : "Select All"}
+                </Button>
+              )}
+              <Button onClick={handleBatchDelete} variant="destructive" size="sm" disabled={selectedRepos.size === 0} className="hidden md:flex whitespace-nowrap h-8">
+                <Trash2 className="w-4 h-4 mr-2" /> Delete ({selectedRepos.size})
+              </Button>
+            </>
+          )}
           <Button
             onClick={() => onAddRepo?.()}
             size="sm"

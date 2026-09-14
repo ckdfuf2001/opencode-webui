@@ -3,18 +3,16 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis, Star } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { listFavorites, addFavorite, removeFavorite } from "@/api/favorites";
-import { showToast } from "@/lib/toast";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AddBranchWorkspaceDialog } from "./AddBranchWorkspaceDialog";
 import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { cloneRepo, exportRepo } from "@/api/repos";
 import { cloneRepoNotifyData } from "@/lib/notifications";
 import { showToast } from "@/lib/toast";
+import { listFavorites, addFavorite, removeFavorite } from "@/api/favorites";
 
 interface RepoCardProps {
   repo: {
