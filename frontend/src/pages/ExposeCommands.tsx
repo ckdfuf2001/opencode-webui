@@ -326,67 +326,88 @@ export function ExposeCommands() {
             <DialogTitle>편집: /{editingEx?.commandName} → {editingEx?.exposeName}</DialogTitle>
           </DialogHeader>
           {editingEx && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">노출</Label>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">{editForm.enabled ? '노출' : '미노출(draft)'}</span>
-                  <Checkbox checked={editForm.enabled} onCheckedChange={v => setEditForm(s => ({ ...s, enabled: !!v }))} />
+            <div className="space-y-4 max-h-[65vh] overflow-auto pr-1">
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">기본 정보</h4>
+                <div className="flex items-center justify-between rounded border p-2 bg-muted/20">
+                  <Label className="text-xs">노출</Label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">{editForm.enabled ? '노출' : '미노출(draft)'}</span>
+                    <Checkbox checked={editForm.enabled} onCheckedChange={v => setEditForm(s => ({ ...s, enabled: !!v }))} />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">외부 이름</Label>
+                  <Input value={editForm.exposeName} onChange={e => setEditForm(s => ({ ...s, exposeName: e.target.value }))} placeholder="exposeName" className="font-mono text-sm" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">외부 설명</Label>
+                  <Textarea value={editForm.description} onChange={e => setEditForm(s => ({ ...s, description: e.target.value }))} placeholder="외부에 보이는 설명" className="text-sm min-h-[70px]" />
                 </div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">외부 이름</Label>
-                <Input value={editForm.exposeName} onChange={e => setEditForm(s => ({ ...s, exposeName: e.target.value }))} placeholder="exposeName" className="font-mono text-sm" />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">외부 설명</Label>
-                <Textarea value={editForm.description} onChange={e => setEditForm(s => ({ ...s, description: e.target.value }))} placeholder="외부에 보이는 설명" className="text-sm min-h-[70px]" />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">세션 전략</Label>
-                <Select value={editForm.sessionMode} onValueChange={v => setEditForm(s => ({ ...s, sessionMode: v as 'new'|'reuse' }))}>
-                  <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="new">새 세션 (항상 신규)</SelectItem>
-                    <SelectItem value="reuse">기존 세션</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">세션명 템플릿</Label>
-                <Input value={editForm.titleTemplate} onChange={e => setEditForm(s => ({ ...s, titleTemplate: e.target.value }))} placeholder="[EXPOSE] {exposeName} {date}" className="font-mono text-sm" />
-                <p className="text-[11px] text-muted-foreground">변수: {"{exposeName} {commandName} {date} {time}"}</p>
-              </div>
-              {editForm.sessionMode === 'reuse' && (
+
+              <div className="border-t my-2" />
+
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">세션 설정</h4>
                 <div className="space-y-1">
-                  <Label className="text-xs">고정 세션 (세션명 포함 목록에서 선택)</Label>
-                  <Select value={editForm.pinnedSessionId || '__none__'} onValueChange={v => setEditForm(s => ({ ...s, pinnedSessionId: v === '__none__' ? '' : v }))}>
-                    <SelectTrigger className="h-8 text-sm font-mono"><SelectValue placeholder="세션 선택" /></SelectTrigger>
-                    <SelectContent className="max-h-[240px]">
-                      <SelectItem value="__none__">없음 (호출 시 sessionId 또는 신규)</SelectItem>
-                      {sessionStatuses.slice(0, 80).map(ss => (
-                        <SelectItem key={ss.sessionId} value={ss.sessionId} className="font-mono text-xs">
-                          {ss.title} · {ss.sessionId.slice(0,8)} · {ss.repoName} · {ss.status}
-                        </SelectItem>
-                      ))}
+                  <Label className="text-xs">세션 전략</Label>
+                  <Select value={editForm.sessionMode} onValueChange={v => setEditForm(s => ({ ...s, sessionMode: v as 'new'|'reuse' }))}>
+                    <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="new">새 세션 (항상 신규)</SelectItem>
+                      <SelectItem value="reuse">기존 세션</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Input value={editForm.pinnedSessionId} onChange={e => setEditForm(s => ({ ...s, pinnedSessionId: e.target.value }))} placeholder="또는 직접 sessionId 입력" className="font-mono text-sm h-7 mt-1" />
                 </div>
-              )}
-              <div className="space-y-1">
-                <Label className="text-xs">인자 템플릿 (호출 시 args에 적용, 비우면 그대로 전달)</Label>
-                <Input value={editForm.argsTemplate} onChange={e => setEditForm(s => ({ ...s, argsTemplate: e.target.value }))} placeholder='예: --prompt "{args}" 또는 {args} 그대로' className="font-mono text-sm" />
-                <p className="text-[11px] text-muted-foreground">{"{args}"} 가 호출 시 args로 치환됨. 비우면 "/command args" 형태.</p>
+                <div className="space-y-1">
+                  <Label className="text-xs">세션명 템플릿</Label>
+                  <Input value={editForm.titleTemplate} onChange={e => setEditForm(s => ({ ...s, titleTemplate: e.target.value }))} placeholder="[EXPOSE] {exposeName} {date}" className="font-mono text-sm" />
+                  <p className="text-[11px] text-muted-foreground">변수: {"{exposeName} {commandName} {date} {time}"}</p>
+                </div>
+                {editForm.sessionMode === 'reuse' && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">고정 세션 (세션명 포함 목록에서 선택)</Label>
+                    <Select value={editForm.pinnedSessionId || '__none__'} onValueChange={v => setEditForm(s => ({ ...s, pinnedSessionId: v === '__none__' ? '' : v }))}>
+                      <SelectTrigger className="h-8 text-sm font-mono"><SelectValue placeholder="세션 선택" /></SelectTrigger>
+                      <SelectContent className="max-h-[240px]">
+                        <SelectItem value="__none__">없음 (호출 시 sessionId 또는 신규)</SelectItem>
+                        {sessionStatuses.slice(0, 80).map(ss => (
+                          <SelectItem key={ss.sessionId} value={ss.sessionId} className="font-mono text-xs">
+                            {ss.title} · {ss.sessionId.slice(0,8)} · {ss.repoName} · {ss.status}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input value={editForm.pinnedSessionId} onChange={e => setEditForm(s => ({ ...s, pinnedSessionId: e.target.value }))} placeholder="또는 직접 sessionId 입력" className="font-mono text-sm h-7 mt-1" />
+                  </div>
+                )}
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">사용 예시 (문서용)</Label>
-                <Input value={editForm.exampleArgs} onChange={e => setEditForm(s => ({ ...s, exampleArgs: e.target.value }))} placeholder='예: hello world / --file src/app.ts' className="font-mono text-sm" />
-                <p className="text-[11px] text-muted-foreground">GET /api/public/commands에 노출되어 외부 문서에 표시됨.</p>
+
+              <div className="border-t my-2" />
+
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">호출 설정</h4>
+                <div className="space-y-1">
+                  <Label className="text-xs">인자 템플릿 (호출 시 args에 적용, 비우면 그대로 전달)</Label>
+                  <Input value={editForm.argsTemplate} onChange={e => setEditForm(s => ({ ...s, argsTemplate: e.target.value }))} placeholder='예: --prompt "{args}" 또는 {args} 그대로' className="font-mono text-sm" />
+                  <p className="text-[11px] text-muted-foreground">{"{args}"} 가 호출 시 args로 치환됨. 비우면 "/command args" 형태.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">사용 예시 (문서용)</Label>
+                  <Input value={editForm.exampleArgs} onChange={e => setEditForm(s => ({ ...s, exampleArgs: e.target.value }))} placeholder='예: hello world / --file src/app.ts' className="font-mono text-sm" />
+                  <p className="text-[11px] text-muted-foreground">GET /api/public/commands에 노출되어 외부 문서에 표시됨.</p>
+                </div>
               </div>
-              <div className="rounded border bg-muted/30 p-2 text-xs font-mono flex items-center justify-between gap-2">
-                <span className="truncate">POST /api/public/commands/{editingEx.exposeName}/run</span>
-                <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={() => copy(`${window.location.origin}/api/public/commands/${editingEx.exposeName}/run`)}><Copy className="w-3 h-3" /> Copy</Button>
+
+              <div className="border-t my-2" />
+
+              <div className="space-y-1">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">API</h4>
+                <div className="rounded border bg-muted/30 p-2 text-xs font-mono flex items-center justify-between gap-2">
+                  <span className="truncate">POST /api/public/commands/{editingEx.exposeName}/run</span>
+                  <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={() => copy(`${window.location.origin}/api/public/commands/${editingEx.exposeName}/run`)}><Copy className="w-3 h-3" /> Copy</Button>
+                </div>
               </div>
             </div>
           )}
