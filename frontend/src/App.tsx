@@ -24,7 +24,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 30,
-      gcTime: 1000 * 60 * 5,
+      // 미사용 쿼리는 2분 뒤 메모리에서 제거 (개별 gcTime이 우선)
+      gcTime: 1000 * 60 * 2,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
       refetchOnMount: false,
