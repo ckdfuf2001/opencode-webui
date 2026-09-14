@@ -7,7 +7,6 @@ import { useSessions, useSessionStatusMap } from '@/hooks/useOpenCode'
 import { OPENCODE_API_ENDPOINT } from '@/config'
 import { FolderGit2, MessageSquare, Plus, ChevronDown, ChevronRight, Loader2, ShieldAlert, StopCircle, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useQuery } from '@tanstack/react-query'
 import { listFavorites, addFavorite, removeFavorite } from '@/api/favorites'
 import { showToast } from '@/lib/toast'
 
