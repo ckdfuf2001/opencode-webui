@@ -198,13 +198,36 @@ const BUILTIN_COMMANDS: CommandWithScope[] = [
 const COMMANDS_FETCH_TIMEOUT_MS = 12000
 const FETCH_RETRY_DELAY_MS = 5000
 const FETCH_RETRY_MAX = 3
+// 주기 폴링: 커맨드/스킬은 자주 안 바뀌어 120초로 충분 (서버 부하·메모리 절약)
+const COMMANDS_POLL_MS = 120_000
+// 저메모리: 키 상한 + TTL. directory별 무한 누적 방지.
+const COMMANDS_CACHE_MAX_KEYS = 20
+const COMMANDS_CACHE_TTL_MS = 5 * 60_000
 const commandsCache = new Map<string, CommandWithScope[]>()
+const commandsCacheAt = new Map<string, number>()
+function pruneCommandsCache(): void {
+  const now = Date.now()
+  for (const [k, at] of commandsCacheAt) {
+    if (now - at > COMMANDS_CACHE_TTL_MS) {
+      commandsCacheAt.delete(k)
+      commandsCache.delete(k)
+      lastSuccessfulFetchByKey.delete(k)
+    }
+  }
+  while (commandsCache.size > COMMANDS_CACHE_MAX_KEYS) {
+    const oldest = commandsCache.keys().next().value as string | undefined
+    if (!oldest) break
+    commandsCache.delete(oldest)
+    commandsCacheAt.delete(oldest)
+    lastSuccessfulFetchByKey.delete(oldest)
+  }
+}
 // cacheKey 별 마지막 성공 시각. 전역 하나로 쓰면 다른 인스턴스의 성공 직후에
 // 갱신을 건너뛰어 방금 등록한 커맨드/스킬이 슬래시 메뉴에 안 보였다.
 const lastSuccessfulFetchByKey = new Map<string, number>()
 let inFlight: { key: string; token: { done: boolean }; promise: Promise<void> } | null = null
 
-export function useCommands(opcodeUrl: string | null, directory?: string) {
+export function useCommands(opcodeUrl: string | null, directory?: string, sessionID?: string) {
   const [commands, setCommands] = useState<CommandWithScope[]>(BUILTIN_COMMANDS)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -234,6 +257,8 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
           index === self.findIndex((c) => c.name === command.name)
         )
         commandsCache.set(cacheKey, unique)
+        commandsCacheAt.set(cacheKey, Date.now())
+        pruneCommandsCache()
         setCommands(unique)
         setError(null)
         lastAttemptSucceededRef.current = true
@@ -276,7 +301,22 @@ export function useCommands(opcodeUrl: string | null, directory?: string) {
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
     }
-  }, [fetchCommands])
+    // sessionID 변경(세션 열기)마다 재조회. cacheKey는 opcodeUrl|directory 유지로 메모리 절약.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchCommands, sessionID])
+
+  // 주기 폴링: 실패 후 복구·외부에서 등록된 커맨드/스킬 반영. 메모리 추가 사용 없음.
+  useEffect(() => {
+    if (!opcodeUrl) return
+    const id = setInterval(() => {
+      const last = lastSuccessfulFetchByKey.get(cacheKey) ?? 0
+      if (Date.now() - last > COMMANDS_POLL_MS) {
+        retryCountRef.current = 0
+        void fetchCommands()
+      }
+    }, COMMANDS_POLL_MS)
+    return () => clearInterval(id)
+  }, [opcodeUrl, cacheKey, fetchCommands])
 
   // 다른 인스턴스(커맨드 패널 refresh 등)가 목록을 새로 받으면 즉시 재조회한다.
   // 기존에는 캐시만 채택해 다른 directory의 커맨드가 안 보였고, 스킬(registry-list)과 달리 커맨드는 opencode 서버 재조회가 필요했다.

@@ -180,7 +180,7 @@ const abortKs = ks?.abort ?? 'Escape'
 const toggleModeKs = ks?.toggleMode ?? 'Tab'
 const selectModelKs = ks?.selectModel ?? 'Ctrl+M'
 // 전송은 웹 표준 Ctrl+Enter 고정 (설정값과 무관하게 표시·동작 통일)
-const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory)
+const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory, sessionID)
   // 슬래시 커맨드도 큐 경유로 바뀌어 executeCommand 직접 호출은 없다.
   // (훅 자체는 유지 — 내부 콜백/상태 초기화용)
   useCommandHandler({

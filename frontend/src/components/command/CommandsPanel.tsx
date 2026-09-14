@@ -1097,7 +1097,12 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   // ??彛?? useCommandRunView??refetchInterval(?醫롫섧?????????뺣뼄.
   const deleteRun = useDeleteCommandRun()
   const setRunMessage = useSetCommandRunMessage()
-  const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory)
+  const { commands, loading, error, refresh } = useCommands(opcodeUrl ?? null, directory, sessionID)
+  // 패널 오픈마다 재조회 — 마운트 1회만 받으면 새로 등록한 커맨드/스킬이 안 보인다.
+  useEffect(() => {
+    if (open) void refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sessionID])
   const { data: config } = useConfig(opcodeUrl, directory)
   const [tab, setTab] = useState<'runs' | 'explorer' | 'recall'>('runs')
   const [expanded, setExpanded] = useState<Record<string, { steps: boolean; response: boolean }>>({})
