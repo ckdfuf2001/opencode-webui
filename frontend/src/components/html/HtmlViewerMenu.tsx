@@ -4,6 +4,7 @@ import { Globe, X, Trash2, ExternalLink, Plus, Pencil, ArrowLeft, Check, CircleX
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import {
   listHtmlPages,
   upsertHtmlPage,
@@ -29,6 +30,16 @@ export function HtmlViewerMenu() {
   const [renaming, setRenaming] = useState<{ page: HtmlManagedPage; name: string } | null>(null)
 
   const [selectedPage, setSelectedPage] = useState<string | null>(null)
+  // 선택 후 새탭 열림 → 뒤로 돌아왔을 때 파란 선택이 계속 남지 않도록 자동 해제
+  useEffect(() => {
+    if (!selectedPage) return
+    const t = setTimeout(() => setSelectedPage(null), 1500)
+    const onFocus = () => setSelectedPage(null)
+    const onVis = () => { if (document.visibilityState === 'visible') setSelectedPage(null) }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVis)
+    return () => { clearTimeout(t); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onVis) }
+  }, [selectedPage])
 
   const { data: pages = [], isLoading } = useQuery({
     queryKey: ['html-pages'],
@@ -63,6 +74,8 @@ export function HtmlViewerMenu() {
     window.addEventListener('global-escape-close', h as EventListener)
     return () => window.removeEventListener('global-escape-close', h as EventListener)
   }, [menuOpen])
+
+  useEffect(() => { if (!menuOpen) setSelectedPage(null) }, [menuOpen])
 
   const { files: suggestions } = useFileSearch(draft, menuOpen && !!creating, '.')
   const viewableSuggestions = suggestions.filter(isBrowserViewable).slice(0, 6)
@@ -301,14 +314,13 @@ export function HtmlViewerMenu() {
                 orderedPages.map((p, idx) => (
                   <div
                     key={p.name}
-                    draggable={!renaming}
-                    onDragStart={() => setDragIdx(idx)}
-                    onDragOver={(e) => e.preventDefault()}
+                    onDragOver={(e) => { if (dragIdx !== null) e.preventDefault() }}
                     onDrop={(e) => {
                       e.preventDefault()
                       if (dragIdx === null || dragIdx === idx) return
                       const list = [...orderedPages]
                       const [moved] = list.splice(dragIdx, 1)
+                      if (!moved) return
                       list.splice(idx, 0, moved)
                       persistHtmlOrder(list)
                       setDragIdx(null)
@@ -316,7 +328,13 @@ export function HtmlViewerMenu() {
                     onDragEnd={() => setDragIdx(null)}
                     className={`flex items-center gap-1 px-3 py-1.5 hover:bg-muted/50 ${selectedPage === p.name ? 'bg-blue-500/20' : ''} ${dragIdx === idx ? 'opacity-50 ring-2 ring-blue-400' : ''}`}
                   >
-                    <span className="cursor-grab active:cursor-grabbing p-0.5 -ml-1 text-muted-foreground hover:text-foreground shrink-0" onMouseDown={e => e.stopPropagation()}><GripVertical className="w-3 h-3" /></span>
+                    <span
+                      className="cursor-grab active:cursor-grabbing p-0.5 -ml-1 text-muted-foreground hover:text-foreground shrink-0"
+                      title="드래그로 순서 변경"
+                      draggable={!renaming}
+                      onDragStart={(e) => { e.stopPropagation(); setDragIdx(idx) }}
+                      onDragEnd={() => setDragIdx(null)}
+                    ><GripVertical className="w-3 h-3" /></span>
                     {renaming?.page.name === p.name ? (
                       <div className="flex-1 min-w-0 flex items-center gap-1">
                         <Input
@@ -332,18 +350,56 @@ export function HtmlViewerMenu() {
                         <Button size="sm" className="h-6 text-[11px] shrink-0" onClick={() => void saveRename()}>저장</Button>
                       </div>
                     ) : (
-                      <a
-                        href={p.kind === 'file' ? htmlViewUrl(p.path, p.name) : codeUrls.get(p.name)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="새탭으로 열기 (우클릭 메뉴 가능)"
-                        onClick={() => setSelectedPage(p.name)}
-                        className={`flex-1 min-w-0 flex items-center gap-1.5 text-left text-xs rounded px-1 py-0.5 ${selectedPage === p.name ? 'bg-blue-500 text-white' : ''}`}
-                      >
-                        <ExternalLink className={`w-3 h-3 shrink-0 ${selectedPage === p.name ? 'text-white' : 'text-muted-foreground'}`} />
-                        <span className={`shrink-0 ${selectedPage === p.name ? 'text-white' : 'text-muted-foreground'}`}>{p.kind === 'code' ? '⌨' : '📄'}</span>
-                        <span className="truncate font-medium">{p.name}</span>
-                      </a>
+                      <>
+                        {(() => {
+                          const url = p.kind === 'file' ? htmlViewUrl(p.path, p.name) : (codeUrls.get(p.name) ?? '')
+                          return (
+                            <>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="메뉴 - 링크 포함 (우클릭으로 분할 화면 등)" onMouseDown={(e) => e.stopPropagation()}>
+                                    <ExternalLink className="w-2.5 h-2.5 text-muted-foreground" strokeWidth={1.4} />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="start" className="w-56 z-[80]">
+                                  <DropdownMenuItem
+                                    className="font-normal"
+                                    onSelect={() => { setSelectedPage(p.name); if (url) window.location.href = url }}
+                                  >
+                                    <a href={url} onClick={(e) => e.preventDefault()} className="w-full cursor-pointer font-normal">
+                                      이동
+                                    </a>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="font-normal"
+                                    onSelect={() => { setSelectedPage(p.name); if (url) window.open(url, '_blank', 'noopener') }}
+                                  >
+                                    새 탭에서 열기
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem className="font-normal"
+                                    onSelect={() => {
+                                      if (url) navigator.clipboard.writeText(url).then(() => showToast.success('링크 복사됨')).catch(() => showToast.error('복사 실패'))
+                                    }}
+                                  >
+                                    링크 복사
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => setSelectedPage(p.name)}
+                                title="클릭하면 새탭으로 열림"
+                                className={`flex-1 min-w-0 flex items-center gap-1.5 text-left text-xs rounded px-1 py-0.5 ${selectedPage === p.name ? 'bg-blue-500 text-white' : ''}`}
+                              >
+                                <span className={`shrink-0 ${selectedPage === p.name ? 'text-white' : 'text-muted-foreground'}`}>{p.kind === 'code' ? '⌨' : '📄'}</span>
+                                <span className="truncate font-medium">{p.name}</span>
+                              </a>
+                            </>
+                          )
+                        })()}
+                      </>
                     )}
                     {!renaming && p.kind === 'code' && (
                       <Button
@@ -351,6 +407,7 @@ export function HtmlViewerMenu() {
                         variant="ghost"
                         className="h-6 w-6 shrink-0"
                         title="소스 편집"
+                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={() => setEditing({ name: p.name, displayName: p.name, html: p.html })}
                       >
                         <Pencil className="w-3 h-3" />
@@ -362,6 +419,7 @@ export function HtmlViewerMenu() {
                         variant="ghost"
                         className="h-6 w-6 shrink-0"
                         title="관리명 변경"
+                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={() => setRenaming({ page: p, name: p.name })}
                       >
                         <span className="text-[10px] font-bold text-muted-foreground">Aa</span>
@@ -372,6 +430,7 @@ export function HtmlViewerMenu() {
                       variant="ghost"
                       className="h-6 w-6 shrink-0"
                       title="삭제"
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={() => void handleDelete(p)}
                     >
                       <Trash2 className="w-3 h-3" />
