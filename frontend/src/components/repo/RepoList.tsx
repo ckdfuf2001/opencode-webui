@@ -254,7 +254,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           </Button>
         </div>
 
-        <div className="h-[calc(100vh-200px)] overflow-y-auto">
+        <div className="min-h-[300px] max-h-[calc(100vh-120px)] overflow-y-auto pr-1 pb-4">
           {dedupedRepos.length === 0 ? (
             <div className="text-center p-12">
               <GitBranch className="w-12 h-12 mx-auto mb-4 text-zinc-600" />
@@ -386,18 +386,18 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
         </Button>
       </div>
       {sessions && sessions.length > 0 ? (
-        <div className="ml-6 space-y-1 border-l pl-3">
-          {sessions.slice(0, 20).map((s: any) => {
+        <div className="ml-6 space-y-1 border-l pl-3 max-h-[32vh] overflow-y-auto pr-1">
+          {sessions.map((s: any) => {
             const sid = s.id as string;
             const title = (s.title as string) || 'Untitled';
             const checked = selectedSessions.has(sid) || isSelected;
             return (
-              <label key={sid} className="flex items-center gap-2 text-xs cursor-pointer py-0.5 hover:bg-accent rounded px-1">
+              <label key={sid} className="flex items-center gap-2 text-xs cursor-pointer py-1 hover:bg-accent rounded px-1">
                 <Checkbox checked={checked} onCheckedChange={(v) => onSessionChecked(sid, v === true)} />
                 <MessageSquare className="w-3 h-3 text-muted-foreground shrink-0" />
                 <span className="flex-1 truncate">{title}</span>
                 <button
-                  className="p-1 rounded hover:bg-background"
+                  className="p-1 rounded hover:bg-background shrink-0"
                   onClick={(e) => {
                     e.preventDefault();
                     fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(repo.fullPath || '')}`, { method: 'DELETE' })
@@ -411,7 +411,6 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
               </label>
             )
           })}
-          {sessions.length > 20 && <div className="text-xs text-muted-foreground">+ {sessions.length - 20} more</div>}
         </div>
       ) : (
         <div className="ml-6 text-xs text-muted-foreground">세션 없음</div>
