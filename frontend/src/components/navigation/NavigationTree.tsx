@@ -374,6 +374,12 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
     })
   }
 
+  // 훅은 early return보다 항상 먼저 호출되어야 한다 (세션 로딩 전후 훅 개수 불일치 크래시 방지)
+  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites })
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const [editingSessionTitle, setEditingSessionTitle] = useState('')
+  useEffect(() => { if (!editMode) { setEditingSessionId(null); setEditingSessionTitle('') } }, [editMode])
+
   if (!sessions) {
     return <div className="ml-8 px-2 py-1 text-xs text-muted-foreground">{sessionsLoading ? '로딩 중...' : '세션 없음'}</div>
   }
@@ -381,7 +387,6 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
     return <div className="ml-8 px-2 py-1 text-xs text-muted-foreground">세션 없음</div>
   }
 
-  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites })
   const isFav = (id: string) => favs?.some(f => f.sessionId === id)
   const toggleFav = async (id: string, title?: string) => {
     try {
@@ -390,10 +395,6 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
       queryClient.invalidateQueries({ queryKey: ['favorites'] })
     } catch (e:any){ showToast.error(e.message) }
   }
-
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
-  const [editingSessionTitle, setEditingSessionTitle] = useState('')
-  useEffect(() => { if (!editMode) { setEditingSessionId(null); setEditingSessionTitle('') } }, [editMode])
 
   const handleDeleteSession = (sid: string) => {
     fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(directory ?? '')}`, { method: 'DELETE' })

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye, GripVertical } from 'lucide-react'
+import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye, GripVertical, Loader2, ShieldAlert, StopCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
@@ -74,6 +74,12 @@ export function FavoriteSessionsPanel() {
               const repo = repos?.find(r => r.id === f.repoId || r.fullPath === f.directory)
               const status = isRepoFav ? null : dbStatuses?.find(s => s.sessionId === f.sessionId)
               const busy = status?.status === 'busy'
+              // 레포 즐겨찾기: workspace처럼 레포 단위 집계 배찌 (개수 포함)
+              const matchRepo = (s: { repoId?: number | null; directory?: string | null }) =>
+                isRepoFav && (s.repoId === f.repoId || (repo && s.directory === repo.fullPath) || s.directory === f.directory)
+              const repoWorking = isRepoFav ? (dbStatuses?.filter(s => s.status === 'busy' && matchRepo(s)).length ?? 0) : 0
+              const repoPending = isRepoFav ? (dbStatuses?.filter(s => matchRepo(s)).reduce((a, s) => a + (s.pendingPermissions ?? 0), 0) ?? 0) : 0
+              const repoCancelled = isRepoFav ? (dbStatuses?.filter(s => (s as unknown as { isCancelled?: boolean }).isCancelled && s.status !== 'busy' && matchRepo(s)).length ?? 0) : 0
               const isActive = activeId === f.sessionId
               const isDragging = dragIdx === idx
               return (
@@ -116,12 +122,27 @@ export function FavoriteSessionsPanel() {
                         {busy && <span className="text-[10px] px-1.5 py-0 rounded-full bg-amber-500 text-white">Working</span>}
                         {status?.isCancelled && <span className="text-[10px] px-1.5 py-0 rounded-full bg-red-500 text-white">Cancelled</span>}
                         {isRepoFav && <span className="text-[10px] px-1 py-0 rounded bg-muted text-muted-foreground">레포</span>}
+                        {isRepoFav && repoWorking > 0 && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-500" title={`${repoWorking} session(s) working`}>
+                            <Loader2 className="w-3 h-3 animate-spin" />{repoWorking}
+                          </span>
+                        )}
+                        {isRepoFav && repoPending > 0 && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-500" title={`${repoPending} approval(s) pending`}>
+                            <ShieldAlert className="w-3 h-3" />{repoPending}
+                          </span>
+                        )}
+                        {isRepoFav && repoCancelled > 0 && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-gray-500" title={`${repoCancelled} cancelled`}>
+                            <StopCircle className="w-3 h-3" />{repoCancelled}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] text-muted-foreground truncate">{repo?.localPath || f.directory || f.sessionId.slice(0, 8)}</div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                      {!isRepoFav && <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`; window.location.href = url }}>이동</Button>}
-                      {isRepoFav && <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}` : '/'; window.location.href = url }}>이동</Button>}
+                      {!isRepoFav && <Button variant="ghost" size="sm" className="h-6 text-xs px-2" asChild><a href={f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`}>이동</a></Button>}
+                      {isRepoFav && <Button variant="ghost" size="sm" className="h-6 text-xs px-2" asChild><a href={f.repoId ? `/repos/${f.repoId}` : '/'}>이동</a></Button>}
                       <Button variant="ghost" size="icon" className="h-6 w-6" onClick={async () => { try { await removeFavorite(f.sessionId); showToast.success('즐겨찾기 해제'); invalidate(); setActiveId(prev => prev === f.sessionId ? null : prev) } catch (e:any){ showToast.error(e.message) } }} title="삭제"><Trash2 className="w-3.5 h-3.5" /></Button>
                     </div>
                   </div>
@@ -130,7 +151,7 @@ export function FavoriteSessionsPanel() {
                       <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                         <Input
                           autoFocus
-                          placeholder={isRepoFav ? (repoSelectedMap[f.sessionId] ? `${repoSelectedMap[f.sessionId].title} 에 전송...` : "새 세션으로 채팅...") : "미니 채팅..."}
+                          placeholder={isRepoFav ? (repoSelectedMap[f.sessionId] ? `${repoSelectedMap[f.sessionId].title} 에 전송...` : "새 세션으로 채팅...") : "퀵챗..."}
                           value={drafts[f.sessionId] ?? ''}
                           onChange={e => setDrafts(prev => ({ ...prev, [f.sessionId]: e.target.value }))}
                           onKeyDown={e => {
@@ -171,6 +192,28 @@ function extractText(parts: any[] | undefined): string | null {
   return t || null
 }
 
+/** 세션 상태 아이콘 배찌 (이름 텍스트 없이 아이콘만) */
+function SessionBadges({ sessionId }: { sessionId: string }) {
+  const { data: dbStatuses } = useSessionStatusMap()
+  const st = dbStatuses?.find(s => s.sessionId === sessionId)
+  if (!st) return null
+  const busy = st.status === 'busy'
+  const pending = st.pendingPermissions ?? 0
+  const cancelled = (st as unknown as { isCancelled?: boolean }).isCancelled && !busy
+  if (!busy && !pending && !cancelled) return null
+  return (
+    <span className="inline-flex items-center gap-1 shrink-0">
+      {busy && <span title="Working" className="inline-flex"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
+      {pending > 0 && !busy && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-500" title={`${pending} approval(s) pending`}>
+          <ShieldAlert className="w-3 h-3" />{pending}
+        </span>
+      )}
+      {cancelled && !busy && !pending && <span title="Cancelled" className="inline-flex"><StopCircle className="w-3 h-3 text-gray-500" /></span>}
+    </span>
+  )
+}
+
 function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId: string; directory: string; repoId?: number | null; onClose: () => void }) {
   const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, directory || undefined)
   const [expanded, setExpanded] = useState(false)
@@ -198,8 +241,9 @@ function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId:
     <>
       <div className="mt-1 border rounded-md bg-muted/30 p-2 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-medium truncate" title={lastUserText || undefined}>
-            {userSnippet ? `마지막 결과 - ${userSnippet}` : '마지막 결과'}
+          <span className="text-[11px] font-medium truncate flex items-center gap-1.5 min-w-0" title={lastUserText || undefined}>
+            <span className="truncate">{userSnippet ? `마지막 결과 - ${userSnippet}` : '마지막 결과'}</span>
+            <SessionBadges sessionId={sessionId} />
           </span>
           <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onClose}><X className="w-3 h-3" /></Button>
         </div>
@@ -229,8 +273,9 @@ function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId:
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => setExpanded(false)}>
           <div className="bg-card border rounded-lg shadow-2xl w-[720px] max-w-[95vw] max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b gap-2">
-              <span className="text-sm font-semibold truncate" title={lastUserText || undefined}>
-                {userSnippet ? `전체 보기 — ${userSnippet}` : `전체 보기 — ${sessionId.slice(0, 8)}`}
+              <span className="text-sm font-semibold truncate flex items-center gap-2 min-w-0" title={lastUserText || undefined}>
+                <span className="truncate">{userSnippet ? `전체 보기 — ${userSnippet}` : `전체 보기 — ${sessionId.slice(0, 8)}`}</span>
+                <SessionBadges sessionId={sessionId} />
               </span>
               <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setExpanded(false)}><X className="w-4 h-4" /></Button>
             </div>
@@ -286,12 +331,22 @@ function RepoSessionsPopup({ repoId, directory, selectedSessionId, onSessionSele
             const title = (s.title as string) || 'Untitled'
             const st = dbStatuses?.find(x => x.sessionId === sid)
             const busy = st?.status === 'busy'
+            const pending = st?.pendingPermissions ?? 0
+            const cancelled = (st as unknown as { isCancelled?: boolean } | undefined)?.isCancelled && !busy
             return (
               <div key={sid} className="flex items-center gap-2 p-2 rounded border bg-background hover:bg-muted/50 cursor-pointer" onClick={() => onSessionSelect?.(sid, title)}>
                 <MessageSquare className="w-3 h-3 shrink-0 text-muted-foreground" />
                 <span className="flex-1 truncate text-xs font-medium" title={title}>{title}</span>
-                {busy && <span className="text-[10px] px-1 py-0 rounded-full bg-amber-500 text-white">Working</span>}
-                <Button size="sm" className="h-6 text-xs px-2 shrink-0" onClick={(e) => { e.stopPropagation(); const url = repoId ? `/repos/${repoId}/sessions/${sid}` : `/session/${sid}`; window.location.href = url }}>이동</Button>
+                {busy && <span title="Working" className="inline-flex shrink-0"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
+                {pending > 0 && !busy && (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-500 shrink-0" title={`${pending} approval(s) pending`}>
+                    <ShieldAlert className="w-3 h-3" />{pending}
+                  </span>
+                )}
+                {cancelled && !busy && !pending && <span title="Cancelled" className="inline-flex shrink-0"><StopCircle className="w-3 h-3 text-gray-500" /></span>}
+                <Button size="sm" className="h-6 text-xs px-2 shrink-0" asChild>
+                  <a href={repoId ? `/repos/${repoId}/sessions/${sid}` : `/session/${sid}`} onClick={(e) => e.stopPropagation()}>이동</a>
+                </Button>
               </div>
             )
           })}
