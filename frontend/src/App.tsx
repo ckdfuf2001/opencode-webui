@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { Repos } from './pages/Repos'
 import { RepoDetail } from './pages/RepoDetail'
@@ -100,6 +100,16 @@ function AppContent() {
 
   return (
     <BrowserRouter>
+      <AppRoutesWithPanels isOpen={isOpen} close={close} />
+    </BrowserRouter>
+  )
+}
+
+function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => void }) {
+  const location = useLocation()
+  const isExpose = location.pathname === '/expose'
+  return (
+    <>
       <PushPrompt />
       <div className="pointer-events-none fixed bottom-1 right-2 z-[5] text-[10px] text-muted-foreground/50 select-none" title="build">
         {BUILD_LABEL}
@@ -113,15 +123,15 @@ function AppContent() {
         <Route path="/session/:sessionId" element={<SessionDetail />} />
       </Routes>
       <SettingsDialog open={isOpen} onOpenChange={close} />
-      <FavoriteSessionsPanel />
-      <HtmlViewerMenu />
-      <Toaster 
+      {!isExpose && <FavoriteSessionsPanel />}
+      {!isExpose && <HtmlViewerMenu />}
+      <Toaster
         position="bottom-right"
         expand={false}
         richColors
         closeButton
       />
-    </BrowserRouter>
+    </>
   )
 }
 

@@ -10,11 +10,13 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { showToast } from '@/lib/toast'
-import { Copy, Plug, Globe, ArrowUp, ArrowDown, ArrowUpDown, Search, Pencil } from 'lucide-react'
+import { Copy, Plug, Globe, ArrowUp, ArrowDown, ArrowUpDown, Search, Pencil, Home } from 'lucide-react'
 import { getSystemInfo } from '@/api/system'
-import { Header } from '@/components/layout/Header'
+import { useNavigate } from 'react-router-dom'
+import { Button as HeaderButton } from '@/components/ui/button'
 
 export function ExposeCommands() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data: exposed = [] } = useQuery({ queryKey: ['expose', 'commands'], queryFn: listExposed })
   const { data: publicData } = useQuery({ queryKey: ['public', 'commands'], queryFn: listPublicCommands })
@@ -169,7 +171,18 @@ export function ExposeCommands() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header title="Expose Commands" backTo="/" />
+      <header className="sticky top-0 z-10 bg-gradient-to-b from-background via-background to-background border-b border-border backdrop-blur-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between py-2">
+            <div className="flex items-center gap-2">
+              <HeaderButton variant="ghost" size="icon" onClick={() => navigate('/')} className="h-8 w-8 shrink-0" title="홈으로">
+                <Home className="w-4 h-4" />
+              </HeaderButton>
+              <h1 className="text-xl font-semibold bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent truncate">Expose Commands</h1>
+            </div>
+          </div>
+        </div>
+      </header>
       <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
         <div className="rounded-lg border p-3 bg-muted/20 space-y-2">
           <div className="flex flex-wrap items-center gap-3 text-xs">
