@@ -57,3 +57,18 @@ export async function listPublicCommands(): Promise<PublicCommandsResponse> {
   if (!res.ok) throw new Error(`Failed to list public commands (${res.status})`)
   return res.json()
 }
+
+export interface AvailableCommand {
+  name: string
+  description: string
+  scope: 'builtin'|'global'|'project'
+  repoId?: number
+  repoName?: string
+  localPath?: string
+}
+
+export async function listAvailableCommands(): Promise<{ items: AvailableCommand[]; count: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/expose/available-commands`)
+  if (!res.ok) throw new Error(`Failed to list available commands (${res.status})`)
+  return res.json()
+}

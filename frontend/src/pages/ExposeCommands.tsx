@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listExposed, createExposed, updateExposed, deleteExposed, listPublicCommands } from '@/api/expose'
+import { listExposed, createExposed, updateExposed, deleteExposed, listPublicCommands, listAvailableCommands } from '@/api/expose'
 import { useCommands } from '@/hooks/useCommands'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,7 +15,23 @@ export function ExposeCommands() {
   const { data: exposed = [] } = useQuery({ queryKey: ['expose', 'commands'], queryFn: listExposed })
   const { data: publicData } = useQuery({ queryKey: ['public', 'commands'], queryFn: listPublicCommands })
   const { data: system } = useQuery({ queryKey: ['system', 'info'], queryFn: getSystemInfo })
-  const { commands, loading: cmdLoading } = useCommands(null)
+  const { data: avail } = useQuery({ queryKey: ['expose', 'available'], queryFn: listAvailableCommands })
+  const { commands: builtinCmds } = useCommands(null)
+
+  // 파일 기반(global/project) + builtin 합쳐 소유 정보 포함
+  const allCommands = useMemo(() => {
+    const map = new Map<string, { name: string; description: string; scope: 'builtin'|'global'|'project'; repoName?: string; localPath?: string; repoId?: number }>()
+    for (const c of builtinCmds) {
+      if (!map.has(c.name)) map.set(c.name, { name: c.name, description: c.description ?? '', scope: 'builtin' })
+    }
+    for (const item of avail?.items ?? []) {
+      const existing = map.get(item.name)
+      // project/global이 builtin을 덮어씀 (실제 파일이 우선)
+      if (!existing || existing.scope === 'builtin') map.set(item.name, { name: item.name, description: item.description || existing?.description || '', scope: item.scope, repoName: item.repoName, localPath: item.localPath, repoId: item.repoId })
+      else if (existing.scope !== 'project' && item.scope === 'project') map.set(item.name, { name: item.name, description: item.description || existing.description, scope: item.scope, repoName: item.repoName, localPath: item.localPath, repoId: item.repoId })
+    }
+    return [...map.values()].sort((a,b) => a.name.localeCompare(b.name))
+  }, [builtinCmds, avail])
 
   const [filter, setFilter] = useState('')
   const [edits, setEdits] = useState<Record<number, { exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string }>>({})
@@ -28,9 +44,9 @@ export function ExposeCommands() {
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    if (!q) return commands
-    return commands.filter(c => c.name.toLowerCase().includes(q) || (c.description ?? '').toLowerCase().includes(q))
-  }, [commands, filter])
+    if (!q) return allCommands
+    return allCommands.filter(c => c.name.toLowerCase().includes(q) || (c.description ?? '').toLowerCase().includes(q) || (c.repoName ?? '').toLowerCase().includes(q))
+  }, [allCommands, filter])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['expose', 'commands'] })
@@ -94,8 +110,8 @@ export function ExposeCommands() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter name / description" className="h-8 max-w-sm text-sm" />
-          <span className="text-xs text-muted-foreground">{filtered.length} / {commands.length} commands {cmdLoading ? '(loading…)' : ''}</span>
+          <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter name / description / repo" className="h-8 max-w-sm text-sm" />
+          <span className="text-xs text-muted-foreground">{filtered.length} / {allCommands.length} commands</span>
           <span className="ml-auto text-xs text-muted-foreground flex items-center gap-1"><Plug className="w-3 h-3" /> /expose</span>
         </div>
 
@@ -106,6 +122,7 @@ export function ExposeCommands() {
                 <tr>
                   <th className="w-10 px-2 py-2 text-center">노출</th>
                   <th className="text-left px-2 py-2 w-[130px]">커맨드</th>
+                  <th className="text-left px-2 py-2 w-[90px]">소유</th>
                   <th className="text-left px-2 py-2">원본 설명</th>
                   <th className="text-left px-2 py-2 w-[140px]">외부 이름</th>
                   <th className="text-left px-2 py-2 w-[200px]">외부 설명</th>
@@ -134,6 +151,11 @@ export function ExposeCommands() {
                         <Checkbox checked={checked} onCheckedChange={(v) => toggle(cmd.name, cmd.description ?? '', !!v)} />
                       </td>
                       <td className="px-2 py-1.5 font-mono text-xs font-medium">/{cmd.name}</td>
+                      <td className="px-2 py-1.5">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] border ${cmd.scope==='builtin'?'bg-blue-500/10 border-blue-500/30 text-blue-600':cmd.scope==='global'?'bg-purple-500/10 border-purple-500/30 text-purple-600':'bg-amber-500/10 border-amber-500/30 text-amber-700'}`} title={cmd.localPath ?? cmd.scope}>
+                          {cmd.scope==='builtin'?'builtin':cmd.scope==='global'?'global':cmd.repoName ?? 'project'}
+                        </span>
+                      </td>
                       <td className="px-2 py-1.5 text-xs text-muted-foreground truncate max-w-[220px]" title={cmd.description ?? ''}>{cmd.description || '-'}</td>
                       <td className="px-2 py-1.5">
                         {ex ? (

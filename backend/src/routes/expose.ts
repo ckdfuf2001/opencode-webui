@@ -3,10 +3,11 @@ import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import { logger } from '../utils/logger'
 import { getRepoById } from '../db/queries'
-import { getReposPath } from '@opencode-webui/shared'
+import { getReposPath, getConfigPath } from '@opencode-webui/shared'
 import { opencodeServerManager } from '../services/opencode-single-server'
 import { ensureServerAuth } from '../services/opencode-auth'
 import path from 'path'
+import { readdir, readFile } from 'fs/promises'
 
 interface ExposedRow {
   id: number
@@ -130,6 +131,45 @@ export function createExposeRoutes(db: Database) {
     } catch (error) {
       logger.error('Failed to delete exposed command:', error)
       return c.json({ error: 'Failed to delete exposed command' }, 500)
+    }
+  })
+
+  // GET /api/expose/available-commands — 전체 커맨드 목록 + 소유 레포 표시
+  app.get('/available-commands', async (c) => {
+    try {
+      const items: { name: string; description: string; scope: 'builtin'|'global'|'project'; repoId?: number; repoName?: string; localPath?: string }[] = []
+
+      // builtin은 프론트에서 하드코딩, 여기서는 global/project만 반환 — 프론트가 합침
+      const globalRoot = getConfigPath()
+      const collect = async (root: string, scope: 'global'|'project', repoId?: number, repoName?: string, localPath?: string) => {
+        const forCmd = async (dir: string) => {
+          try { return await readdir(dir) } catch { return [] }
+        }
+        for (const dir of [path.join(root, 'commands'), path.join(root, 'command')]) {
+          for (const file of await forCmd(dir)) {
+            if (!file.endsWith('.md')) continue
+            const name = file.replace(/\.md$/, '')
+            if (items.some(i => i.name === name && i.scope === scope && i.repoId === repoId)) continue
+            const raw = await readFile(path.join(dir, file), 'utf-8').catch(() => null)
+            if (raw === null) continue
+            const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+            const desc = m?.[1]?.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
+            items.push({ name, description: desc, scope, repoId, repoName, localPath })
+          }
+        }
+      }
+      await collect(globalRoot, 'global')
+      const repos = db.prepare('SELECT id, local_path FROM repos').all() as { id: number; local_path: string }[]
+      for (const repo of repos) {
+        const repoName = repo.local_path.split('/').pop() || repo.local_path
+        const projectRoot = path.join(getReposPath(), repo.local_path, '.opencode')
+        await collect(projectRoot, 'project', repo.id, repoName, repo.local_path)
+      }
+      // opencode 서버의 동적 커맨드도 포함하려면 /command를 프록시해야 하지만, 여기서는 파일 기반만 반환하고 프론트 useCommands와 합침
+      return c.json({ items, count: items.length })
+    } catch (error) {
+      logger.error('Failed to list available commands:', error)
+      return c.json({ error: 'Failed to list available commands' }, 500)
     }
   })
 
