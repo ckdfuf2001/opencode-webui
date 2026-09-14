@@ -39,7 +39,7 @@ export function ExposeCommands() {
 
   const [filter, setFilter] = useState('')
   const [editingEx, setEditingEx] = useState<typeof exposed[number] | null>(null)
-  const [editForm, setEditForm] = useState<{ exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string }>({ exposeName: '', description: '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '' })
+  const [editForm, setEditForm] = useState<{ exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string; argsTemplate: string; exampleArgs: string }>({ exposeName: '', description: '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '' })
   type SortKey = 'exposed'|'name'|'owner'|'desc'|'exposeName'|'exposeDesc'|'session'
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
@@ -298,7 +298,7 @@ export function ExposeCommands() {
                       <td className="px-2 py-1.5 text-xs">{ex ? <span className={`px-1.5 py-0.5 rounded text-[10px] border ${ex.sessionMode==='new'?'bg-green-500/10 border-green-500/30 text-green-700':'bg-amber-500/10 border-amber-500/30 text-amber-700'}`}>{ex.sessionMode==='new'?'새 세션':'재활용'}</span> : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-xs font-mono truncate max-w-[180px]" title={ex ? `${ex.titleTemplate ?? ''} ${ex.pinnedSessionId ?? ''}` : ''}>{ex ? (ex.titleTemplate || ex.pinnedSessionId ? `${ex.titleTemplate ?? ''}${ex.titleTemplate && ex.pinnedSessionId ? ' / ' : ''}${ex.pinnedSessionId ?? ''}` : <span className="text-muted-foreground/50">—</span>) : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-center">
-                        {ex ? <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingEx(ex); setEditForm({ exposeName: ex.exposeName, description: ex.description ?? '', sessionMode: ex.sessionMode ?? 'new', titleTemplate: ex.titleTemplate ?? '', pinnedSessionId: ex.pinnedSessionId ?? '' }) }} title="편집"><Pencil className="w-3.5 h-3.5" /></Button> : null}
+                        {ex ? <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingEx(ex); setEditForm({ exposeName: ex.exposeName, description: ex.description ?? '', sessionMode: ex.sessionMode ?? 'new', titleTemplate: ex.titleTemplate ?? '', pinnedSessionId: ex.pinnedSessionId ?? '', argsTemplate: (ex as any).argsTemplate ?? '', exampleArgs: (ex as any).exampleArgs ?? '' }) }} title="편집"><Pencil className="w-3.5 h-3.5" /></Button> : null}
                       </td>
                     </tr>
                   )
@@ -348,6 +348,16 @@ export function ExposeCommands() {
                   <Input value={editForm.pinnedSessionId} onChange={e => setEditForm(s => ({ ...s, pinnedSessionId: e.target.value }))} placeholder="sessionId" className="font-mono text-sm" />
                 </div>
               )}
+              <div className="space-y-1">
+                <Label className="text-xs">인자 템플릿 (호출 시 args에 적용, 비우면 그대로 전달)</Label>
+                <Input value={editForm.argsTemplate} onChange={e => setEditForm(s => ({ ...s, argsTemplate: e.target.value }))} placeholder='예: --prompt "{args}" 또는 {args} 그대로' className="font-mono text-sm" />
+                <p className="text-[11px] text-muted-foreground">{"{args}"} 가 호출 시 args로 치환됨. 비우면 "/command args" 형태.</p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">사용 예시 (문서용)</Label>
+                <Input value={editForm.exampleArgs} onChange={e => setEditForm(s => ({ ...s, exampleArgs: e.target.value }))} placeholder='예: hello world / --file src/app.ts' className="font-mono text-sm" />
+                <p className="text-[11px] text-muted-foreground">GET /api/public/commands에 노출되어 외부 문서에 표시됨.</p>
+              </div>
               <div className="rounded border bg-muted/30 p-2 text-xs font-mono flex items-center justify-between gap-2">
                 <span className="truncate">POST /api/public/commands/{editingEx.exposeName}/run</span>
                 <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={() => copy(`${window.location.origin}/api/public/commands/${editingEx.exposeName}/run`)}><Copy className="w-3 h-3" /> Copy</Button>
@@ -364,6 +374,8 @@ export function ExposeCommands() {
               if (editForm.sessionMode !== editingEx.sessionMode) payload.sessionMode = editForm.sessionMode
               if (editForm.titleTemplate !== (editingEx.titleTemplate ?? '')) payload.titleTemplate = editForm.titleTemplate
               if ((editForm.pinnedSessionId ?? '') !== (editingEx.pinnedSessionId ?? '')) payload.pinnedSessionId = editForm.pinnedSessionId || null
+              if (editForm.argsTemplate !== ((editingEx as any).argsTemplate ?? '')) payload.argsTemplate = editForm.argsTemplate
+              if (editForm.exampleArgs !== ((editingEx as any).exampleArgs ?? '')) payload.exampleArgs = editForm.exampleArgs
               if (Object.keys(payload).length === 0) { setEditingEx(null); return }
               updateMut.mutate({ id: editingEx.id, data: payload }, { onSuccess: () => setEditingEx(null) })
             }}>저장</Button>

@@ -375,6 +375,8 @@ export function runMigrations(db: Database): void {
           session_mode TEXT NOT NULL DEFAULT 'new',
           title_template TEXT NOT NULL DEFAULT '',
           pinned_session_id TEXT,
+          args_template TEXT NOT NULL DEFAULT '',
+          example_args TEXT NOT NULL DEFAULT '',
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         )
@@ -391,6 +393,8 @@ export function runMigrations(db: Database): void {
         if (!has('session_mode')) { try { db.run("ALTER TABLE exposed_commands ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'") } catch {} }
         if (!has('title_template')) { try { db.run("ALTER TABLE exposed_commands ADD COLUMN title_template TEXT NOT NULL DEFAULT ''") } catch {} }
         if (!has('pinned_session_id')) { try { db.run('ALTER TABLE exposed_commands ADD COLUMN pinned_session_id TEXT') } catch {} }
+        if (!has('args_template')) { try { db.run("ALTER TABLE exposed_commands ADD COLUMN args_template TEXT NOT NULL DEFAULT ''") } catch {} }
+        if (!has('example_args')) { try { db.run("ALTER TABLE exposed_commands ADD COLUMN example_args TEXT NOT NULL DEFAULT ''") } catch {} }
       }
     } catch (e) {
       logger.debug('exposed_commands migration skip:', e)

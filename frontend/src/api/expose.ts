@@ -9,6 +9,8 @@ export interface ExposedCommand {
   sessionMode: 'new' | 'reuse'
   titleTemplate: string
   pinnedSessionId?: string
+  argsTemplate: string
+  exampleArgs: string
   createdAt: number
   updatedAt: number
 }
@@ -26,7 +28,7 @@ export async function listExposed(): Promise<ExposedCommand[]> {
   return request<ExposedCommand[]>('/commands')
 }
 
-export async function createExposed(input: { commandName: string; exposeName?: string; description?: string; enabled?: boolean; sessionMode?: 'new'|'reuse'; titleTemplate?: string; pinnedSessionId?: string }): Promise<ExposedCommand> {
+export async function createExposed(input: { commandName: string; exposeName?: string; description?: string; enabled?: boolean; sessionMode?: 'new'|'reuse'; titleTemplate?: string; pinnedSessionId?: string; argsTemplate?: string; exampleArgs?: string }): Promise<ExposedCommand> {
   return request<ExposedCommand>('/commands', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -34,7 +36,7 @@ export async function createExposed(input: { commandName: string; exposeName?: s
   })
 }
 
-export async function updateExposed(id: number, input: { exposeName?: string; description?: string; enabled?: boolean; sessionMode?: 'new'|'reuse'; titleTemplate?: string; pinnedSessionId?: string | null }): Promise<ExposedCommand> {
+export async function updateExposed(id: number, input: { exposeName?: string; description?: string; enabled?: boolean; sessionMode?: 'new'|'reuse'; titleTemplate?: string; pinnedSessionId?: string | null; argsTemplate?: string; exampleArgs?: string }): Promise<ExposedCommand> {
   return request<ExposedCommand>(`/commands/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -47,7 +49,7 @@ export async function deleteExposed(id: number): Promise<void> {
 }
 
 export interface PublicCommandsResponse {
-  commands: { name: string; commandName: string; description: string; enabled: boolean; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId?: string }[]
+  commands: { name: string; commandName: string; description: string; enabled: boolean; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId?: string; argsTemplate: string; exampleArgs: string }[]
   count: number
   timestamp: string
 }

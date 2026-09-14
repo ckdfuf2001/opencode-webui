@@ -18,6 +18,8 @@ interface ExposedRow {
   session_mode: string
   title_template: string
   pinned_session_id: string | null
+  args_template: string | null
+  example_args: string | null
   created_at: number
   updated_at: number
 }
@@ -32,6 +34,8 @@ function rowToExpose(row: ExposedRow) {
     sessionMode: (row.session_mode ?? 'new') as 'new' | 'reuse',
     titleTemplate: row.title_template ?? '',
     pinnedSessionId: row.pinned_session_id ?? undefined,
+    argsTemplate: row.args_template ?? '',
+    exampleArgs: row.example_args ?? '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -45,6 +49,8 @@ const CreateExposeSchema = z.object({
   sessionMode: z.enum(['new', 'reuse']).optional(),
   titleTemplate: z.string().max(255).optional(),
   pinnedSessionId: z.string().max(255).optional(),
+  argsTemplate: z.string().max(1000).optional(),
+  exampleArgs: z.string().max(1000).optional(),
 })
 
 const UpdateExposeSchema = z.object({
@@ -54,6 +60,8 @@ const UpdateExposeSchema = z.object({
   sessionMode: z.enum(['new', 'reuse']).optional(),
   titleTemplate: z.string().max(255).optional(),
   pinnedSessionId: z.string().max(255).optional().nullable(),
+  argsTemplate: z.string().max(1000).optional(),
+  exampleArgs: z.string().max(1000).optional(),
 })
 
 export function createExposeRoutes(db: Database) {
@@ -80,8 +88,8 @@ export function createExposeRoutes(db: Database) {
       if (exists) return c.json({ error: `Expose name "${exposeName}" already exists` }, 409)
       const now = Date.now()
       const result = db.prepare(
-        'INSERT INTO exposed_commands (command_name, expose_name, description, enabled, session_mode, title_template, pinned_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(validated.commandName.trim(), exposeName, validated.description ?? '', validated.enabled === false ? 0 : 1, validated.sessionMode ?? 'new', validated.titleTemplate ?? '', validated.pinnedSessionId ?? null, now, now)
+        'INSERT INTO exposed_commands (command_name, expose_name, description, enabled, session_mode, title_template, pinned_session_id, args_template, example_args, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(validated.commandName.trim(), exposeName, validated.description ?? '', validated.enabled === false ? 0 : 1, validated.sessionMode ?? 'new', validated.titleTemplate ?? '', validated.pinnedSessionId ?? null, validated.argsTemplate ?? '', validated.exampleArgs ?? '', now, now)
       const row = db.prepare('SELECT * FROM exposed_commands WHERE id = ?').get(Number(result.lastInsertRowid)) as ExposedRow
       return c.json(rowToExpose(row), 201)
     } catch (error) {
@@ -109,8 +117,10 @@ export function createExposeRoutes(db: Database) {
       const nextMode = validated.sessionMode ?? existing.session_mode
       const nextTitle = validated.titleTemplate !== undefined ? validated.titleTemplate : existing.title_template
       const nextPinned = validated.pinnedSessionId !== undefined ? (validated.pinnedSessionId || null) : existing.pinned_session_id
-      db.prepare('UPDATE exposed_commands SET expose_name = ?, description = ?, enabled = ?, session_mode = ?, title_template = ?, pinned_session_id = ?, updated_at = ? WHERE id = ?')
-        .run(nextExpose, nextDesc, nextEnabled, nextMode, nextTitle, nextPinned, Date.now(), id)
+      const nextArgsTpl = validated.argsTemplate !== undefined ? validated.argsTemplate : (existing.args_template ?? '')
+      const nextExample = validated.exampleArgs !== undefined ? validated.exampleArgs : (existing.example_args ?? '')
+      db.prepare('UPDATE exposed_commands SET expose_name = ?, description = ?, enabled = ?, session_mode = ?, title_template = ?, pinned_session_id = ?, args_template = ?, example_args = ?, updated_at = ? WHERE id = ?')
+        .run(nextExpose, nextDesc, nextEnabled, nextMode, nextTitle, nextPinned, nextArgsTpl, nextExample, Date.now(), id)
       const row = db.prepare('SELECT * FROM exposed_commands WHERE id = ?').get(id) as ExposedRow
       return c.json(rowToExpose(row))
     } catch (error) {
@@ -192,6 +202,8 @@ export function createPublicExposeRoutes(db: Database) {
           sessionMode: r.session_mode ?? 'new',
           titleTemplate: r.title_template ?? '',
           pinnedSessionId: r.pinned_session_id ?? undefined,
+          argsTemplate: r.args_template ?? '',
+          exampleArgs: r.example_args ?? '',
         })),
         count: rows.length,
         timestamp: new Date().toISOString(),
@@ -280,8 +292,12 @@ export function createPublicExposeRoutes(db: Database) {
         sessionId = sess.id
       }
 
-      const args = body.args ?? ''
-      const commandText = args ? `/${row.command_name} ${args}` : `/${row.command_name}`
+      const rawArgs = body.args ?? ''
+      const argsTpl = (row.args_template ?? '').trim()
+      const appliedArgs = argsTpl
+        ? argsTpl.includes('{args}') ? argsTpl.replaceAll('{args}', rawArgs) : `${argsTpl} ${rawArgs}`.trim()
+        : rawArgs
+      const commandText = appliedArgs ? `/${row.command_name} ${appliedArgs}` : `/${row.command_name}`
       const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text: commandText }] }
       if (body.agent) messageBody.agent = body.agent
       if (body.model) {
