@@ -8,10 +8,12 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare } from "lucide-react";
+import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare, Check, X } from "lucide-react";
 import { RepoCard } from "./RepoCard";
 import { clearRepoNotifyData } from "@/lib/notifications";
 import { OPENCODE_API_ENDPOINT } from "@/config";
+import { renameSessionRepo } from "@/api/repos";
+import { showToast } from "@/lib/toast";
 
 export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const queryClient = useQueryClient();
@@ -179,9 +181,9 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
               className="pl-10"
             />
           </div>
-          {/* 편집 모드 토글 */}
-          <Button variant={isEditMode ? "default" : "outline"} size="sm" className="whitespace-nowrap hidden md:flex h-8" onClick={() => { setIsEditMode(v => !v); if (isEditMode) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) } }}>
-            <Pencil className="w-4 h-4 mr-1" /> {isEditMode ? "완료" : "편집"}
+          {/* 편집 모드 토글 - 아이콘만 */}
+          <Button variant={isEditMode ? "default" : "outline"} size="icon" className="hidden md:flex h-8 w-8" onClick={() => { setIsEditMode(v => !v); if (isEditMode) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) } }} title={isEditMode ? "완료" : "편집"}>
+            <Pencil className="w-4 h-4" />
           </Button>
           {/* 편집 모드: 최상단 Repository 체크 + 삭제 */}
           {isEditMode ? (
@@ -189,11 +191,11 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
               {filteredRepos.length > 0 && (
                 <label className="hidden md:flex items-center gap-2 text-sm cursor-pointer">
                   <Checkbox checked={filteredRepos.length > 0 && filteredRepos.every(r => selectedRepos.has(r.id))} onCheckedChange={() => handleSelectAll()} />
-                  <span>Repository</span>
+                  <span>All</span>
                 </label>
               )}
-              <Button onClick={handleBatchDelete} variant="destructive" size="sm" disabled={selectedRepos.size === 0 && selectedSessions.size === 0} className="hidden md:flex whitespace-nowrap h-8">
-                <Trash2 className="w-4 h-4 mr-2" /> 삭제 ({selectedRepos.size + selectedSessions.size})
+              <Button onClick={handleBatchDelete} variant="destructive" size="icon" disabled={selectedRepos.size === 0 && selectedSessions.size === 0} className="hidden md:flex h-8 w-8" title="삭제">
+                <Trash2 className="w-4 h-4" />
               </Button>
             </>
           ) : (
@@ -203,8 +205,8 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                   {filteredRepos.every((repo) => selectedRepos.has(repo.id)) ? "Deselect All" : "Select All"}
                 </Button>
               )}
-              <Button onClick={handleBatchDelete} variant="destructive" size="sm" disabled={selectedRepos.size === 0} className="hidden md:flex whitespace-nowrap h-8">
-                <Trash2 className="w-4 h-4 mr-2" /> Delete ({selectedRepos.size})
+              <Button onClick={handleBatchDelete} variant="destructive" size="icon" disabled={selectedRepos.size === 0} className="hidden md:flex h-8 w-8" title="삭제">
+                <Trash2 className="w-4 h-4" />
               </Button>
             </>
           )}
@@ -277,10 +279,30 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                   selectedSessions={selectedSessions}
                   onRepoChecked={(checked, ids) => handleRepoCheckedWithSessions(repo.id, checked, ids)}
                   onSessionChecked={(sid, checked) => {
+                    const isRepoSelected = selectedRepos.has(repo.id)
+                    if (!checked && isRepoSelected) {
+                      const cachedSessions = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+                      const ids: string[] = (cachedSessions ?? []).map((s: any) => s.id as string)
+                      if (ids.length === 0) {
+                        const n = new Set(selectedSessions); n.delete(sid); setSelectedSessions(n)
+                      } else {
+                        const ns = new Set(ids.filter(id => id !== sid))
+                        setSelectedSessions(ns)
+                      }
+                      setSelectedRepos(prev => { const n = new Set(prev); n.delete(repo.id); return n })
+                      return
+                    }
                     const ns = new Set(selectedSessions);
                     if (checked) ns.add(sid); else ns.delete(sid);
+                    // 전부 체크되면 레포도 체크
+                    const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+                    const ids: string[] = (cached ?? []).map((s: any) => s.id as string)
+                    if (ids.length > 0 && ids.every(id => ns.has(id))) {
+                      setSelectedRepos(prev => new Set([...prev, repo.id]))
+                    } else if (!checked) {
+                      setSelectedRepos(prev => { const n = new Set(prev); n.delete(repo.id); return n })
+                    }
                     setSelectedSessions(ns);
-                    // repo 체크 상태 동기화: 세션 하나라도 해제되면 repo 체크 해제, 전부 체크되면 repo 체크
                   }}
                   onDeleteRepo={(id) => { setRepoToDelete(id); setDeleteDialogOpen(true) }}
                   isDeleting={deleteMutation.isPending && repoToDelete === repo.id}
@@ -372,18 +394,32 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
   onDeleteRepo: (id: number) => void;
   isDeleting: boolean;
 }) {
+  const queryClient = useQueryClient();
   const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, repo.fullPath);
   const sessionIds = useMemo(() => (sessions ?? []).map((s: any) => s.id as string), [sessions]);
+  const [editingSid, setEditingSid] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+
+  const handleSessionRename = async (sid: string) => {
+    const title = editingTitle.trim();
+    if (!title) { showToast.error('제목을 입력하세요'); return }
+    try {
+      try { await renameSessionRepo(repo.id, sid, title) } catch {
+        const { createOpenCodeClient } = await import('@/api/opencode')
+        const client = createOpenCodeClient(OPENCODE_API_ENDPOINT, repo.fullPath)
+        await client.updateSession(sid, { title } as any)
+      }
+      showToast.success('세션 이름 변경됨'); queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath] }); setEditingSid(null)
+    } catch (e:any){ showToast.error(e.message || '이름 변경 실패') }
+  }
 
   return (
     <div className="border rounded-lg bg-card p-3 space-y-2">
       <div className="flex items-center gap-2">
         <Checkbox checked={isSelected} onCheckedChange={(v) => onRepoChecked(v === true, sessionIds)} />
         <GitBranch className="w-4 h-4 text-muted-foreground shrink-0" />
-        <span className="font-medium text-sm flex-1 truncate">{repo.localPath}</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteRepo(repo.id)} disabled={isDeleting} title="레포 삭제">
-          <Trash2 className="w-4 h-4" />
-        </Button>
+        <span className="font-medium text-sm flex-1 truncate" title={repo.localPath}>{repo.localPath}</span>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteRepo(repo.id)} disabled={isDeleting} title="레포 삭제"><Trash2 className="w-4 h-4" /></Button>
       </div>
       {sessions && sessions.length > 0 ? (
         <div className="ml-6 space-y-1 border-l pl-3 max-h-[32vh] overflow-y-auto pr-1">
@@ -391,24 +427,36 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
             const sid = s.id as string;
             const title = (s.title as string) || 'Untitled';
             const checked = selectedSessions.has(sid) || isSelected;
+            const isEditing = editingSid === sid;
             return (
-              <label key={sid} className="flex items-center gap-2 text-xs cursor-pointer py-1 hover:bg-accent rounded px-1">
+              <div key={sid} className="flex items-center gap-2 text-xs py-1 hover:bg-accent rounded px-1">
                 <Checkbox checked={checked} onCheckedChange={(v) => onSessionChecked(sid, v === true)} />
                 <MessageSquare className="w-3 h-3 text-muted-foreground shrink-0" />
-                <span className="flex-1 truncate">{title}</span>
-                <button
-                  className="p-1 rounded hover:bg-background shrink-0"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(repo.fullPath || '')}`, { method: 'DELETE' })
-                      .then(() => window.location.reload())
-                      .catch(() => {})
-                  }}
-                  title="세션 개별 삭제"
-                >
-                  <Trash2 className="w-3 h-3 text-muted-foreground" />
-                </button>
-              </label>
+                {isEditing ? (
+                  <div className="flex-1 flex items-center gap-1 min-w-0">
+                    <Input value={editingTitle} onChange={e => setEditingTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleSessionRename(sid); if (e.key === 'Escape') setEditingSid(null) }} className="h-6 text-xs flex-1" autoFocus />
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleSessionRename(sid)} title="저장"><Check className="w-3 h-3" /></Button>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingSid(null)} title="취소"><X className="w-3 h-3" /></Button>
+                  </div>
+                ) : (
+                  <>
+                    <span className="flex-1 truncate">{title}</span>
+                    <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => { setEditingSid(sid); setEditingTitle(title) }} title="이름 변경"><Pencil className="w-3 h-3" /></Button>
+                    <button
+                      className="p-1 rounded hover:bg-background shrink-0"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(repo.fullPath || '')}`, { method: 'DELETE' })
+                          .then(() => window.location.reload())
+                          .catch(() => {})
+                      }}
+                      title="세션 개별 삭제"
+                    >
+                      <Trash2 className="w-3 h-3 text-muted-foreground" />
+                    </button>
+                  </>
+                )}
+              </div>
             )
           })}
         </div>

@@ -950,6 +950,7 @@ useEffect(() => {
       )}
       <textarea
         ref={textareaRef}
+        data-prompt-input="true"
         value={prompt}
         onChange={handleInput}
         onKeyDown={handleKeyDown}

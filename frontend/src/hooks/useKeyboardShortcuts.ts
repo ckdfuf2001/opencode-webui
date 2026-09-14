@@ -119,10 +119,14 @@ export function useKeyboardShortcuts(actions: ShortcutActions = {}) {
         e.preventDefault()
         actions.submitPrompt?.()
         break
-      case 'abort':
+      case 'abort': {
+        const ae = document.activeElement as HTMLElement | null
+        const isPrompt = ae?.getAttribute('data-prompt-input') === 'true'
+        if (!isPrompt) return
         e.preventDefault()
         actions.abortSession?.()
         break
+      }
       case 'toggleMode':
         e.preventDefault()
         actions.toggleMode?.()

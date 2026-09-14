@@ -5,10 +5,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listRepos } from '@/api/repos'
 import { useSessions, useSessionStatusMap } from '@/hooks/useOpenCode'
 import { OPENCODE_API_ENDPOINT } from '@/config'
-import { FolderGit2, MessageSquare, Plus, ChevronDown, ChevronRight, Loader2, ShieldAlert, StopCircle, Star } from 'lucide-react'
+import { FolderGit2, MessageSquare, Plus, ChevronDown, ChevronRight, Loader2, ShieldAlert, StopCircle, Star, Trash2, Pencil, Check, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
 import { listFavorites, addFavorite, removeFavorite } from '@/api/favorites'
 import { showToast } from '@/lib/toast'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
+import { deleteRepo } from '@/api/repos'
 
 interface NavigationTreeProps {
   onNavigate?: () => void
@@ -23,9 +27,25 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     const m = location.pathname.match(/\/repos\/(\d+)/)
     return m ? new Set([parseInt(m[1], 10)]) : new Set()
   })
+  const [editMode, setEditMode] = useState(false)
+  const [selectedRepos, setSelectedRepos] = useState<Set<number>>(new Set())
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set())
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [pendingBulk, setPendingBulk] = useState<{ repos: number[]; sessions: string[] } | null>(null)
+  const [repoToDelete, setRepoToDelete] = useState<number | null>(null)
 
   const { data: repos, isLoading: reposLoading } = useQuery({ queryKey: ['repos'], queryFn: listRepos })
   const { data: dbStatuses } = useSessionStatusMap()
+  const { data: favsTop } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites })
+  const isRepoFavTop = (rid: number) => favsTop?.some(f => f.sessionId === `repo-${rid}`)
+  const toggleRepoFavTop = async (repo: { id: number; localPath?: string; fullPath?: string }) => {
+    const favId = `repo-${repo.id}`
+    try {
+      if (isRepoFavTop(repo.id)) { await removeFavorite(favId); showToast.success('즐겨찾기 해제') }
+      else { await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.fullPath || '', title: repo.localPath || favId }); showToast.success('즐겨찾기 등록') }
+      queryClient.invalidateQueries({ queryKey: ['favorites'] })
+    } catch (e:any){ showToast.error(e.message) }
+  }
 
   const toggleRepo = (repoId: number) => {
     setExpandedRepos(prev => {
@@ -81,10 +101,33 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     } catch {}
   }
 
+  const handleSelectAll = () => {
+    const allSelected = repos && repos.length > 0 && repos.every(r => selectedRepos.has(r.id))
+    if (allSelected) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) }
+    else { setSelectedRepos(new Set(repos?.map(r => r.id) ?? [])) }
+  }
+  const handleRepoChecked = (repoId: number, checked: boolean, sessionIds: string[]) => {
+    const nr = new Set(selectedRepos); const ns = new Set(selectedSessions)
+    if (checked) { nr.add(repoId); sessionIds.forEach(id => ns.add(id)) } else { nr.delete(repoId); sessionIds.forEach(id => ns.delete(id)) }
+    setSelectedRepos(nr); setSelectedSessions(ns)
+  }
+  const handleBatchDelete = () => {
+    if (selectedRepos.size === 0 && selectedSessions.size === 0) return
+    setPendingBulk({ repos: Array.from(selectedRepos), sessions: Array.from(selectedSessions) })
+    setDeleteDialogOpen(true)
+  }
+
+  useEffect(() => {
+    if (!editMode) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) }
+  }, [editMode])
+
   return (
     <div className="flex flex-col gap-1 py-2">
-      {/* Repo List Header */}
-      <div className="flex items-center gap-1 px-2">
+      {/* Repo List Header - sticky, 바깥 고정 */}
+      <div className="flex items-center gap-1 px-2 sticky top-0 z-10 bg-background py-2 -mt-2 border-b border-border">
+        {editMode && repos && repos.length > 0 && (
+          <Checkbox checked={repos.length > 0 && repos.every(r => selectedRepos.has(r.id))} onCheckedChange={() => handleSelectAll()} title="All" className="shrink-0" />
+        )}
         <a
           href="/"
           onClick={(e) => {
@@ -98,9 +141,24 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
           <FolderGit2 className="w-3 h-3" />
           repositories
         </a>
-        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => onNewRepo?.()} title="새 레포">
-          <Plus className="w-3 h-3" />
+        <Button
+          variant={editMode ? 'default' : 'ghost'}
+          size="icon"
+          className="h-6 w-6 shrink-0"
+          onClick={() => { const next = !editMode; setEditMode(next); if (!next) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) } }}
+          title={editMode ? '편집 완료' : '편집'}
+        >
+          <Pencil className="w-3 h-3" />
         </Button>
+        {editMode ? (
+          <Button variant="destructive" size="icon" className="h-6 w-6 shrink-0" disabled={selectedRepos.size === 0 && selectedSessions.size === 0} onClick={handleBatchDelete} title="삭제">
+            <Trash2 className="w-3 h-3" />
+          </Button>
+        ) : (
+          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => onNewRepo?.()} title="새 레포">
+            <Plus className="w-3 h-3" />
+          </Button>
+        )}
       </div>
 
       {/* Repos */}
@@ -112,15 +170,35 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
           const working = getWorkingCount(repo.id)
           const pending = getPendingCount(repo.id)
           const cancelled = getCancelledCount(repo.id)
+          const isRepoSelected = selectedRepos.has(repo.id)
           return (
             <div key={repo.id} className="flex flex-col">
-              <div className="flex items-center gap-1 px-2">
+              <div className={`flex items-center gap-1 px-2 rounded ${editMode && isRepoSelected ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}>
                 <button
-                  onClick={() => toggleRepo(repo.id)}
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleRepo(repo.id) }}
                   className="h-6 w-6 flex items-center justify-center hover:bg-accent rounded shrink-0"
                 >
                   {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                 </button>
+                {!editMode && (
+                  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleRepoFavTop(repo) }} className={`p-1 rounded hover:bg-background shrink-0 ${isRepoFavTop(repo.id) ? 'text-amber-500' : 'text-muted-foreground'}`} title={isRepoFavTop(repo.id) ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
+                    <Star className={`w-3.5 h-3.5 ${isRepoFavTop(repo.id) ? 'fill-amber-500' : ''}`} />
+                  </button>
+                )}
+                {editMode && (
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={isRepoSelected}
+                      onCheckedChange={(v) => {
+                        const checked = v === true
+                        const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+                        const ids: string[] = (cached ?? []).map((s: any) => s.id as string)
+                        handleRepoChecked(repo.id, checked, ids)
+                      }}
+                    />
+                  </span>
+                )}
                 <a
                   href={`/repos/${repo.id}`}
                   onClick={(e) => {
@@ -137,18 +215,50 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
                   {pending > 0 && !working && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-amber-500"><ShieldAlert className="w-3 h-3" />{pending}</span>}
                   {cancelled > 0 && !working && !pending && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-gray-500"><StopCircle className="w-3 h-3" />{cancelled}</span>}
                 </a>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 shrink-0"
-                  onClick={() => handleNewSession(repo.id, repo.fullPath)}
-                  title="새 세션"
-                >
-                  <Plus className="w-3 h-3" />
-                </Button>
+                {editMode ? (
+                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={(e) => { (e as any).stopPropagation(); setRepoToDelete(repo.id); setDeleteDialogOpen(true) }} title="레포 삭제"><Trash2 className="w-3 h-3" /></Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    onClick={(e) => { (e as any).stopPropagation(); handleNewSession(repo.id, repo.fullPath) }}
+                    title="새 세션"
+                  >
+                    <Plus className="w-3 h-3" />
+                  </Button>
+                )}
               </div>
               {isExpanded && (
-                <RepoSessions repoId={repo.id} directory={repo.fullPath} onNavigate={onNavigate} />
+                <RepoSessions
+                  repoId={repo.id}
+                  directory={repo.fullPath}
+                  onNavigate={onNavigate}
+                  editMode={editMode}
+                  selectedSessions={selectedSessions}
+                  selectedRepos={selectedRepos}
+                  onSessionChecked={(sid, checked) => {
+                    const isRepoSelected = selectedRepos.has(repo.id)
+                    if (!checked && isRepoSelected) {
+                      const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+                      const ids: string[] = (cached ?? []).map((s: any) => s.id as string)
+                      const ns = new Set(ids.filter(id => id !== sid))
+                      setSelectedRepos(prev => { const n = new Set(prev); n.delete(repo.id); return n })
+                      setSelectedSessions(ns)
+                      return
+                    }
+                    const ns = new Set(selectedSessions)
+                    if (checked) ns.add(sid); else ns.delete(sid)
+                    const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+                    const ids: string[] = (cached ?? []).map((s: any) => s.id as string)
+                    if (ids.length > 0 && ids.every(id => ns.has(id))) {
+                      setSelectedRepos(prev => new Set([...prev, repo.id]))
+                    } else if (checked === false) {
+                      setSelectedRepos(prev => { const n = new Set(prev); n.delete(repo.id); return n })
+                    }
+                    setSelectedSessions(ns)
+                  }}
+                />
               )}
             </div>
           )
@@ -157,11 +267,58 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
           <div className="px-4 py-2 text-xs text-muted-foreground">{reposLoading || !repos ? '로딩 중...' : '레포가 없습니다'}</div>
         )}
       </div>
+      <DeleteDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={(withIndex) => {
+          const wi = withIndex ?? true
+          if (repoToDelete != null) {
+            deleteRepo(repoToDelete, { withIndex: wi }).then(() => {
+              queryClient.invalidateQueries({ queryKey: ['repos'] })
+              setSelectedRepos(prev => { const n=new Set(prev); n.delete(repoToDelete); return n })
+            }).catch(e => showToast.error(e instanceof Error ? e.message : '삭제 실패'))
+            setRepoToDelete(null)
+            setDeleteDialogOpen(false)
+          } else if (pendingBulk) {
+            if (pendingBulk.repos.length > 0) {
+              Promise.all(pendingBulk.repos.map(id => deleteRepo(id, { withIndex: wi })))
+                .then(() => queryClient.invalidateQueries({ queryKey: ['repos'] }))
+                .catch(e => showToast.error(e instanceof Error ? e.message : '삭제 실패'))
+            }
+            if (pendingBulk.sessions.length > 0) {
+              const dirBySession = new Map<string, string>()
+              // 세션 삭제는 repo별 directory 필요 — 현재 expanded repos 기준으로 추정
+              pendingBulk.sessions.forEach(sid => {
+                const repo = repos?.find(r => selectedRepos.has(r.id)) || repos?.[0]
+                const dir = repo?.fullPath ?? ''
+                dirBySession.set(sid, dir)
+              })
+              pendingBulk.sessions.forEach(sid => {
+                const dir = dirBySession.get(sid) ?? ''
+                fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(dir)}`, { method: 'DELETE' }).catch(() => {})
+              })
+              setSelectedSessions(new Set())
+            }
+            setSelectedRepos(new Set())
+            setPendingBulk(null)
+            setDeleteDialogOpen(false)
+          }
+        }}
+        onCancel={() => { setDeleteDialogOpen(false); setRepoToDelete(null); setPendingBulk(null) }}
+        title={repoToDelete != null ? '레포지토리 삭제' : pendingBulk ? `삭제 확인 (${pendingBulk.repos.length} 레포, ${pendingBulk.sessions.length} 세션)` : '삭제 확인'}
+        description={repoToDelete != null ? '이 레포지토리를 삭제합니다. 되돌릴 수 없습니다.' : '선택한 항목을 삭제합니다. 이 작업은 되돌릴 수 없습니다.'}
+        isDeleting={false}
+        withIndexOption
+      />
     </div>
   )
 }
 
-function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; directory?: string; onNavigate?: () => void }) {
+function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSessions, selectedRepos, onSessionChecked }: {
+  repoId: number; directory?: string; onNavigate?: () => void;
+  editMode?: boolean; selectedSessions?: Set<string>; selectedRepos?: Set<number>;
+  onSessionChecked?: (sid: string, checked: boolean) => void;
+}) {
   const navigate = useNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
@@ -234,38 +391,97 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
     } catch (e:any){ showToast.error(e.message) }
   }
 
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const [editingSessionTitle, setEditingSessionTitle] = useState('')
+  useEffect(() => { if (!editMode) { setEditingSessionId(null); setEditingSessionTitle('') } }, [editMode])
+
+  const handleDeleteSession = (sid: string) => {
+    fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(directory ?? '')}`, { method: 'DELETE' })
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, directory] })
+        showToast.success('세션 삭제됨')
+      })
+      .catch(e => showToast.error(e instanceof Error ? e.message : '삭제 실패'))
+  }
+  const handleSaveSessionRename = async (sid: string) => {
+    const title = editingSessionTitle.trim()
+    if (!title) { showToast.error('제목을 입력하세요'); return }
+    try {
+      // 우선 백엔드 경유로 시도, 실패 시 opencode 직접 호출
+      const { renameSessionRepo } = await import('@/api/repos')
+      try { await renameSessionRepo(repoId, sid, title) } catch {
+        const { createOpenCodeClient } = await import('@/api/opencode')
+        const client = createOpenCodeClient(OPENCODE_API_ENDPOINT, directory)
+        await client.updateSession(sid, { title } as any)
+      }
+      showToast.success('세션 이름 변경됨')
+      queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, directory] })
+      setEditingSessionId(null)
+    } catch (e:any){ showToast.error(e.message || '이름 변경 실패') }
+  }
+
   const renderRow = (id: string, title?: string) => {
     const isActive = location.pathname.includes(id)
     const isBusy = dbStatuses?.some(e => e.sessionId === id && e.status === 'busy')
     const pending = dbStatuses?.find(e => e.sessionId === id)?.pendingPermissions ?? 0
     const isCancelled = dbStatuses?.some(e => (e as unknown as { isCancelled?: boolean }).isCancelled && e.sessionId === id && e.status !== 'busy') ?? false
     const fav = isFav(id)
+    const isChecked = editMode ? (selectedSessions?.has(id) || selectedRepos?.has(repoId) || false) : false
+    const isEditing = editMode && editingSessionId === id
     return (
-      <div key={id} className={`flex items-center gap-1 pr-1 rounded hover:bg-accent ${isActive ? 'bg-accent' : ''}`}>
-        <a
-          href={`/repos/${repoId}/sessions/${id}`}
-          onClick={(e) => {
-            if (e.ctrlKey || e.metaKey) return
-            e.preventDefault()
-            navigate(`/repos/${repoId}/sessions/${id}`)
-            onNavigate?.()
-          }}
-          className={`flex items-center gap-2 px-2 py-1 text-xs truncate text-left flex-1 min-w-0`}
-        >
-          <MessageSquare className="w-3 h-3 shrink-0" />
-          <span className="truncate flex-1">{title || 'Untitled'}</span>
-          {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
-          {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
-          {isCancelled && !isBusy && !pending && <StopCircle className="w-3 h-3 text-gray-500 shrink-0" />}
-        </a>
-        <button onClick={() => toggleFav(id, title)} className={`p-1 rounded hover:bg-background ${fav ? 'text-amber-500' : 'text-muted-foreground'}`} title={fav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
-          <Star className={`w-3 h-3 ${fav ? 'fill-amber-500' : ''}`} />
-        </button>
+      <div key={id} className={`flex items-center gap-1 pr-1 rounded hover:bg-accent ${isActive ? 'bg-accent' : ''} ${editMode && isChecked ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}>
+        {!editMode && !isEditing && (
+          <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(id, title) }} className={`p-1 rounded hover:bg-background shrink-0 ${fav ? 'text-amber-500' : 'text-muted-foreground'}`} title={fav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
+            <Star className={`w-3 h-3 ${fav ? 'fill-amber-500' : ''}`} />
+          </button>
+        )}
+        {editMode && !isEditing && (
+          <span onClick={(e) => e.stopPropagation()}>
+            <Checkbox
+              checked={isChecked}
+              onCheckedChange={(v) => {
+                const checked = v === true
+                if (onSessionChecked) onSessionChecked(id, checked)
+              }}
+              className="ml-1 shrink-0"
+            />
+          </span>
+        )}
+        {isEditing ? (
+          <div className="flex-1 flex items-center gap-1 min-w-0">
+            <Input value={editingSessionTitle} onChange={e => setEditingSessionTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleSaveSessionRename(id) } if (e.key === 'Escape') setEditingSessionId(null) }} className="h-6 text-xs flex-1" autoFocus />
+            <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => handleSaveSessionRename(id)} title="저장"><Check className="w-3 h-3" /></Button>
+            <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setEditingSessionId(null)} title="취소"><X className="w-3 h-3" /></Button>
+          </div>
+        ) : (
+          <a
+            href={`/repos/${repoId}/sessions/${id}`}
+            onClick={(e) => {
+              if (e.ctrlKey || e.metaKey) return
+              e.preventDefault()
+              navigate(`/repos/${repoId}/sessions/${id}`)
+              onNavigate?.()
+            }}
+            className={`flex items-center gap-2 px-2 py-1 text-xs truncate text-left flex-1 min-w-0`}
+          >
+            <MessageSquare className="w-3 h-3 shrink-0" />
+            <span className="truncate flex-1">{title || 'Untitled'}</span>
+            {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
+            {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
+            {isCancelled && !isBusy && !pending && <StopCircle className="w-3 h-3 text-gray-500 shrink-0" />}
+          </a>
+        )}
+        {editMode ? (
+          isEditing ? null : (
+            <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); setEditingSessionId(id); setEditingSessionTitle(title || '') }} title="이름 변경"><Pencil className="w-3 h-3" /></Button>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); handleDeleteSession(id) }} title="세션 삭제"><Trash2 className="w-3 h-3" /></Button>
+            </div>
+          )
+        ) : null}
       </div>
     )
   }
-
-  const visibleRoots = roots.slice(0, 10)
 
   const renderNavNode = (node: NavSessionNode): ReactNode => {
     const hasChildren = node.children.length > 0
@@ -275,7 +491,8 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
         <div className="flex items-center gap-0.5">
           {hasChildren ? (
             <button
-              onClick={() => toggle(node.id)}
+              type="button"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggle(node.id) }}
               className="h-5 w-5 flex items-center justify-center hover:bg-accent rounded shrink-0"
               title={isOpen ? '하위 세션 접기' : '하위 세션 펼치기'}
             >
@@ -297,8 +514,7 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
 
   return (
     <div className="ml-6 border-l border-border pl-2 flex flex-col gap-0.5 mt-0.5">
-      {visibleRoots.map((node) => renderNavNode(node))}
-      {sessions.length > 10 && <div className="px-2 py-1 text-xs text-muted-foreground">+{sessions.length - 10} more</div>}
+      {roots.map((node) => renderNavNode(node))}
     </div>
   )
 }

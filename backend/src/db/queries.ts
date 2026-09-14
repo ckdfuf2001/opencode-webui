@@ -203,3 +203,8 @@ export function getSkillAutoUpdate(db: Database, id: number): boolean {
 export function setSkillAutoUpdate(db: Database, id: number, enabled: boolean): void {
   db.prepare('UPDATE repos SET skill_auto_update = ? WHERE id = ?').run(enabled ? 1 : 0, id)
 }
+
+export function updateRepoLocalPath(db: Database, id: number, newLocalPath: string): void {
+  const stmt = db.prepare('UPDATE repos SET local_path = ? WHERE id = ?')
+  stmt.run(newLocalPath, id)
+}

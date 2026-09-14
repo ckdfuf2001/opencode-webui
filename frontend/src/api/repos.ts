@@ -53,6 +53,31 @@ export async function deleteRepo(id: number, opts?: { withIndex?: boolean }): Pr
   }
 }
 
+export async function renameRepo(id: number, name: string): Promise<import('./types').Repo> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/rename`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to rename repo')
+  }
+  return response.json()
+}
+
+export async function renameSessionRepo(id: number, sessionId: string, title: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/session/${encodeURIComponent(sessionId)}/rename`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to rename session')
+  }
+}
+
 export async function startServer(id: number, openCodeConfigName?: string): Promise<Repo> {
   const response = await fetch(`${API_BASE_URL}/api/repos/${id}/server/start`, {
     method: 'POST',

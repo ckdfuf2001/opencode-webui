@@ -76,7 +76,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
               type="button"
               onClick={toggleInterrupt}
               className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
-              title={allowInterrupt ? 'send queue after every generation' : 'send queue after working end'}
+              title={allowInterrupt ? 'Send queue after every generation\nInterruption may skip some processing' : 'Send queue after working end'}
             >
               {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
             </button>
@@ -147,7 +147,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
             type="button"
             onClick={toggleInterrupt}
             className={`ml-auto inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
-            title={allowInterrupt ? 'send queue after every generation' : 'send queue after working end'}
+            title={allowInterrupt ? 'Send queue after every generation\nInterruption may skip some processing' : 'Send queue after working end'}
           >
             {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
           </button>
@@ -157,7 +157,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
             className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground"
             onClick={() => setMinimized(true)}
           >
-            <ChevronDown className="h-3 w-3" />
+            <ChevronDown className="w-3 h-3" />
           </button>
         </div>
         <ul className="space-y-1">

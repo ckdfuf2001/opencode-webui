@@ -51,9 +51,13 @@ export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        const ae = document.activeElement as HTMLElement | null
+        if (ae?.getAttribute('data-prompt-input') === 'true') return
         onClose()
       }
     }
+
+    const handleGlobalEscape = () => { if (isOpen) onClose() }
 
     const handleEditModeChange = (event: CustomEvent<{ isEditing: boolean }>) => {
       setIsEditing(event.detail.isEditing)
@@ -61,12 +65,14 @@ export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose
 
     if (isOpen) {
       document.addEventListener('keydown', handleEscape)
+      window.addEventListener('global-escape-close', handleGlobalEscape as EventListener)
       document.addEventListener('editModeChange', handleEditModeChange as EventListener)
       document.body.style.overflow = 'hidden'
     }
 
     return () => {
       document.removeEventListener('keydown', handleEscape)
+      window.removeEventListener('global-escape-close', handleGlobalEscape as EventListener)
       document.removeEventListener('editModeChange', handleEditModeChange as EventListener)
       document.body.style.overflow = 'unset'
     }

@@ -557,10 +557,12 @@ useEffect(() => {
     return () => window.removeEventListener('fileSaved', handleFileSaved as EventListener)
   }, [selectedFile, handleFileSelect])
 
-  // Handle escape key to close modal
+  // Handle escape key to close modal — 채팅창 포커스일 땐 PromptInput이 처리하므로 닫지 않는다
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isPreviewModalOpen) {
+        const ae = document.activeElement as HTMLElement | null
+        if (ae?.getAttribute('data-prompt-input') === 'true') return
         handleCloseModal()
       }
     }

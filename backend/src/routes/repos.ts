@@ -827,6 +827,79 @@ export function createRepoRoutes(database: Database) {
       return c.json({ error: error.message }, 500)
     }
   })
+
+  app.patch('/:id/rename', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const body = await c.req.json() as { name?: string; localPath?: string }
+      const raw = (body.name ?? body.localPath ?? '').trim()
+      if (!raw) return c.json({ error: 'name is required' }, 400)
+      const newLocalPath = raw.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/\/+$/, '')
+      if (!newLocalPath) return c.json({ error: 'invalid name' }, 400)
+      if (newLocalPath === repo.localPath) return c.json(repo)
+      if (db.getRepoByLocalPath(database, newLocalPath)) return c.json({ error: 'Target name already exists' }, 409)
+      const oldPath = path.resolve(getReposPath(), path.basename(repo.localPath))
+      const newPath = path.resolve(getReposPath(), newLocalPath)
+      const fs = await import('fs/promises')
+      try { await fs.access(newPath); return c.json({ error: 'Target directory already exists on disk' }, 409) } catch {}
+      const oldExists = await fs.access(oldPath).then(() => true).catch(() => false)
+      if (oldExists) {
+        await fs.rename(oldPath, newPath)
+      } else {
+        await fs.mkdir(newPath, { recursive: true })
+      }
+      db.updateRepoLocalPath(database, id, newLocalPath)
+      const updated = db.getRepoById(database, id)
+      logger.info(`Repo renamed ${id}: ${repo.localPath} -> ${newLocalPath}`)
+      return c.json(updated)
+    } catch (error: any) {
+      logger.error('Failed to rename repo:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
+
+  app.patch('/:id/session/:sessionId/rename', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const sessionId = c.req.param('sessionId')
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const body = await c.req.json() as { title?: string }
+      const title = (body.title ?? '').trim()
+      if (!title) return c.json({ error: 'title is required' }, 400)
+      const directory = path.resolve(getReposPath(), path.basename(repo.localPath))
+      await opencodeServerManager.ensureRunning()
+      const base = opencodeServerManager.getUrl()
+      const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
+      const res = await fetch(`${base}/session/${sessionId}?directory=${encodeURIComponent(directory)}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ title }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      // opencode may not support PATCH title; fallback to try PUT or POST
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        // try alternate endpoint
+        const res2 = await fetch(`${base}/session/${sessionId}/title?directory=${encodeURIComponent(directory)}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ title }),
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => null)
+        if (!res2 || !res2.ok) {
+          return c.json({ error: `Failed to rename session: ${res.status} ${text.slice(0, 300)}` }, 500)
+        }
+        return c.json(await res2.json().catch(() => ({ success: true })))
+      }
+      return c.json(await res.json().catch(() => ({ success: true })))
+    } catch (error: any) {
+      logger.error('Failed to rename session:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
   
   return app
 }

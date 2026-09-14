@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Globe, X, Trash2, ExternalLink, Plus, Pencil, ArrowLeft, Check, CircleX } from 'lucide-react'
+import { Globe, X, Trash2, ExternalLink, Plus, Pencil, ArrowLeft, Check, CircleX, GripVertical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -28,6 +28,8 @@ export function HtmlViewerMenu() {
   const [editing, setEditing] = useState<{ name: string | null; displayName: string; html: string } | null>(null)
   const [renaming, setRenaming] = useState<{ page: HtmlManagedPage; name: string } | null>(null)
 
+  const [selectedPage, setSelectedPage] = useState<string | null>(null)
+
   const { data: pages = [], isLoading } = useQuery({
     queryKey: ['html-pages'],
     queryFn: listHtmlPages,
@@ -36,6 +38,31 @@ export function HtmlViewerMenu() {
   })
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['html-pages'] })
+
+  // 리스트 순서 드래그 — localStorage 유지
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const orderedPages = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('html-order')
+      if (!raw) return pages
+      const order: string[] = JSON.parse(raw)
+      const map = new Map(pages.map(p => [p.name, p] as const))
+      const sorted: typeof pages = []
+      for (const n of order) { const p = map.get(n); if (p) { sorted.push(p); map.delete(n) } }
+      for (const p of map.values()) sorted.push(p)
+      return sorted
+    } catch { return pages }
+  }, [pages])
+  const persistHtmlOrder = (list: typeof pages) => {
+    try { localStorage.setItem('html-order', JSON.stringify(list.map(p => p.name))) } catch {}
+    queryClient.setQueryData(['html-pages'], list)
+  }
+
+  useEffect(() => {
+    const h = () => { if (menuOpen) { setMenuOpen(false); resetForms() } }
+    window.addEventListener('global-escape-close', h as EventListener)
+    return () => window.removeEventListener('global-escape-close', h as EventListener)
+  }, [menuOpen])
 
   const { files: suggestions } = useFileSearch(draft, menuOpen && !!creating, '.')
   const viewableSuggestions = suggestions.filter(isBrowserViewable).slice(0, 6)
@@ -134,9 +161,9 @@ export function HtmlViewerMenu() {
         type="button"
         title="HTML viewer"
         onClick={() => { setMenuOpen((v) => !v); resetForms() }}
-        className="fixed bottom-4 left-0 z-[60] w-10 h-10 rounded-r-full border border-l-0 border-border bg-card shadow-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-card-hover transition-all -translate-x-1/2 hover:translate-x-0"
+        className={`fixed bottom-4 left-0 z-[60] w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0 ${menuOpen ? 'bg-blue-500 text-white border-blue-600' : 'border-border bg-card text-muted-foreground hover:text-foreground hover:bg-card-hover'}`}
       >
-        <Globe className="w-5 h-5" />
+        <Globe className={`w-5 h-5 ${menuOpen ? 'text-white' : ''}`} />
       </button>
       {menuOpen && (
         <div className="fixed bottom-16 left-4 z-[60] w-[340px] max-w-[88vw] rounded-lg border border-border bg-card shadow-2xl overflow-hidden">
@@ -264,15 +291,32 @@ export function HtmlViewerMenu() {
             <div className="max-h-[40vh] overflow-y-auto">
               {isLoading ? (
                 <p className="px-3 py-4 text-xs text-muted-foreground text-center">불러오는 중...</p>
-              ) : pages.length === 0 ? (
+              ) : orderedPages.length === 0 ? (
                 <p className="px-3 py-4 text-xs text-muted-foreground text-center">
                   + 버튼으로 파일 연결 또는 소스 입력 페이지를 만드세요.
                   <br />
                   탐색기 파일의 ... 메뉴에서도 열 수 있습니다.
                 </p>
               ) : (
-                pages.map((p) => (
-                  <div key={p.name} className="flex items-center gap-1 px-3 py-1.5 hover:bg-muted/50">
+                orderedPages.map((p, idx) => (
+                  <div
+                    key={p.name}
+                    draggable={!renaming}
+                    onDragStart={() => setDragIdx(idx)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      if (dragIdx === null || dragIdx === idx) return
+                      const list = [...orderedPages]
+                      const [moved] = list.splice(dragIdx, 1)
+                      list.splice(idx, 0, moved)
+                      persistHtmlOrder(list)
+                      setDragIdx(null)
+                    }}
+                    onDragEnd={() => setDragIdx(null)}
+                    className={`flex items-center gap-1 px-3 py-1.5 hover:bg-muted/50 ${selectedPage === p.name ? 'bg-blue-500/20' : ''} ${dragIdx === idx ? 'opacity-50 ring-2 ring-blue-400' : ''}`}
+                  >
+                    <span className="cursor-grab active:cursor-grabbing p-0.5 -ml-1 text-muted-foreground hover:text-foreground shrink-0" onMouseDown={e => e.stopPropagation()}><GripVertical className="w-3 h-3" /></span>
                     {renaming?.page.name === p.name ? (
                       <div className="flex-1 min-w-0 flex items-center gap-1">
                         <Input
@@ -293,10 +337,11 @@ export function HtmlViewerMenu() {
                         target="_blank"
                         rel="noopener noreferrer"
                         title="새탭으로 열기 (우클릭 메뉴 가능)"
-                        className="flex-1 min-w-0 flex items-center gap-1.5 text-left text-xs"
+                        onClick={() => setSelectedPage(p.name)}
+                        className={`flex-1 min-w-0 flex items-center gap-1.5 text-left text-xs rounded px-1 py-0.5 ${selectedPage === p.name ? 'bg-blue-500 text-white' : ''}`}
                       >
-                        <ExternalLink className="w-3 h-3 shrink-0 text-muted-foreground" />
-                        <span className="shrink-0 text-muted-foreground">{p.kind === 'code' ? '⌨' : '📄'}</span>
+                        <ExternalLink className={`w-3 h-3 shrink-0 ${selectedPage === p.name ? 'text-white' : 'text-muted-foreground'}`} />
+                        <span className={`shrink-0 ${selectedPage === p.name ? 'text-white' : 'text-muted-foreground'}`}>{p.kind === 'code' ? '⌨' : '📄'}</span>
                         <span className="truncate font-medium">{p.name}</span>
                       </a>
                     )}

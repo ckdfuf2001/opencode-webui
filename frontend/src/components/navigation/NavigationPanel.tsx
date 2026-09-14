@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { NavigationTree } from './NavigationTree'
@@ -9,6 +10,11 @@ interface NavigationPanelProps {
 }
 
 export function NavigationPanel({ open, onClose, onNewRepo }: NavigationPanelProps) {
+  useEffect(() => {
+    const h = () => { if (open) onClose() }
+    window.addEventListener('global-escape-close', h as EventListener)
+    return () => window.removeEventListener('global-escape-close', h as EventListener)
+  }, [open, onClose])
   if (!open) return null
 
   return (

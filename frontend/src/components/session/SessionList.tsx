@@ -7,8 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus, StopCircle } from "lucide-react";
+import { Trash2, GitBranch, Clock, Search, Ellipsis, ShieldAlert, Loader2, ChevronDown, ChevronRight, Plus, StopCircle, Star } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { listFavorites, addFavorite, removeFavorite } from "@/api/favorites";
+import { showToast } from "@/lib/toast";
 
 interface SessionListProps {
   opcodeUrl: string;
@@ -39,7 +42,17 @@ export const SessionList = ({
   const deleteSession = useDeleteSession(opcodeUrl, directory);
   const { data: dbStatuses } = useSessionStatusMap();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const createSession = useCreateSession(opcodeUrl, directory);
+  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites });
+  const isFav = (id: string) => favs?.some(f => f.sessionId === id);
+  const toggleFav = async (id: string, title?: string) => {
+    try {
+      if (isFav(id)) { await removeFavorite(id); showToast.success('즐겨찾기 해제') }
+      else { await addFavorite({ sessionId: id, directory, title: title || id }); showToast.success('즐겨찾기 등록') }
+      queryClient.invalidateQueries({ queryKey: ['favorites'] })
+    } catch (e:any){ showToast.error(e.message) }
+  };
   const dbBusyIds = useMemo(() => {
     const set = new Set<string>();
     for (const entry of dbStatuses ?? []) {
@@ -323,12 +336,24 @@ export const SessionList = ({
                 </div>
               </div>
             </div>
-            <button
-              className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer"
-              onClick={(e) => handleDelete(session.id, e)}
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                className={`h-6 w-6 p-0 bg-transparent border-none cursor-pointer flex items-center justify-center ${isFav(session.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'}`}
+                onClick={(e) => { e.stopPropagation(); toggleFav(session.id, session.title) }}
+                title={isFav(session.id) ? '즐겨찾기 해제' : '즐겨찾기 등록'}
+              >
+                <Star className={`w-4 h-4 ${isFav(session.id) ? 'fill-amber-500' : ''}`} />
+              </button>
+              <button
+                type="button"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer flex items-center justify-center"
+                onClick={(e) => handleDelete(session.id, e)}
+                title="삭제"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </Card>
         {hasChildren && isExpanded && (

@@ -182,24 +182,26 @@ export function RepoCard({
               </div>
             )}
               </div>
-              <Button variant="ghost" size="icon" className={`h-7 w-7 shrink-0 ${isFav ? 'text-amber-500' : ''}`} onClick={async (e) => { e.stopPropagation(); try { if (isFav) await removeFavorite(favId); else await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.fullPath || '', title: repo.localPath || `repo-${repo.id}` }); showToast.success(isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'); queryClient.invalidateQueries({ queryKey: ['favorites'] }) } catch (err:any){ showToast.error(err.message) } }} title={isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
-                <Star className={`w-4 h-4 ${isFav ? 'fill-amber-500' : ''}`} />
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <Ellipsis className="w-4 h-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                  <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending}>
-                    <Copy className="w-4 h-4 mr-2" /> Clone (skill/커맨드/설정/인덱스)
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending}>
-                    <Download className="w-4 h-4 mr-2" /> Export 설정+인덱스
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <div className="flex items-center gap-1 shrink-0">
+                <Button variant="ghost" size="icon" className={`h-7 w-7 ${isFav ? 'text-amber-500' : ''}`} onClick={async (e) => { e.stopPropagation(); try { if (isFav) await removeFavorite(favId); else await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.fullPath || '', title: repo.localPath || `repo-${repo.id}` }); showToast.success(isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'); queryClient.invalidateQueries({ queryKey: ['favorites'] }) } catch (err:any){ showToast.error(err.message) } }} title={isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
+                  <Star className={`w-4 h-4 ${isFav ? 'fill-amber-500' : ''}`} />
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => e.stopPropagation()}>
+                      <Ellipsis className="w-4 h-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending}>
+                      <Copy className="w-4 h-4 mr-2" /> Clone (skill/커맨드/설정/인덱스)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending}>
+                      <Download className="w-4 h-4 mr-2" /> Export 설정+인덱스
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
           </div>
           <p className="text-sm text-muted-foreground truncate flex items-center gap-1">
               <GitBranch className="w-3 h-3" />

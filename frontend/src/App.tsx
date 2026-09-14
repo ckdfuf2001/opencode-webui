@@ -80,6 +80,21 @@ function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
   useEffect(() => { logBuildInfo() }, [])
+  // 전역 Esc: 채팅창 외에서는 열려있는 패널(즐찾/html/workspace/탐색기 등) 모두 닫기 — 레포/세션 리스트에서도 동작해야 하므로 App 레벨에서 처리
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+      if (e.defaultPrevented) return
+      const ae = document.activeElement as HTMLElement | null
+      if (ae?.getAttribute('data-prompt-input') === 'true') return
+      const editor = document.querySelector('[data-file-editor="true"]')
+      if (editor && document.activeElement === editor) return
+      window.dispatchEvent(new CustomEvent('global-escape-close'))
+      e.preventDefault()
+    }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [])
 
   return (
     <BrowserRouter>
