@@ -92,8 +92,9 @@ export function FavoriteSessionsPanel() {
 
 function MiniResultPopup({ sessionId, directory, onClose }: { sessionId: string; directory: string; onClose: () => void }) {
   const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, directory || undefined)
+  const [expanded, setExpanded] = useState(false)
   const lastAssistant = [...(messages ?? [])].reverse().find(m => (m.info as any)?.role === 'assistant')
-  const text = (() => {
+  const lastText = (() => {
     if (!lastAssistant) return null
     const parts = (lastAssistant as any).parts as any[] | undefined
     if (!parts) return null
@@ -101,22 +102,53 @@ function MiniResultPopup({ sessionId, directory, onClose }: { sessionId: string;
     return t || null
   })()
   return (
-    <div className="mt-1 border rounded-md bg-muted/30 p-2 space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium">마지막 결과</span>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}><X className="w-3 h-3" /></Button>
+    <>
+      <div className="mt-1 border rounded-md bg-muted/30 p-2 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-medium">마지막 결과</span>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}><X className="w-3 h-3" /></Button>
+        </div>
+        {isLoading && <div className="text-xs text-muted-foreground">불러오는 중...</div>}
+        {!isLoading && !lastText && <div className="text-xs text-muted-foreground">결과가 없습니다.</div>}
+        {!isLoading && lastText && (
+          <div className="text-xs whitespace-pre-wrap max-h-[20vh] overflow-auto bg-background border rounded p-2">
+            {lastText.slice(0, 4000)}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => setExpanded(true)} disabled={!messages || messages.length === 0}>전체 보기</Button>
+        </div>
       </div>
-      {isLoading && <div className="text-xs text-muted-foreground">불러오는 중...</div>}
-      {!isLoading && !text && <div className="text-xs text-muted-foreground">결과가 없습니다.</div>}
-      {!isLoading && text && (
-        <div className="text-xs whitespace-pre-wrap max-h-[20vh] overflow-auto bg-background border rounded p-2">
-          {text.slice(0, 4000)}
+      {expanded && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => setExpanded(false)}>
+          <div className="bg-card border rounded-lg shadow-2xl w-[720px] max-w-[95vw] max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <span className="text-sm font-semibold">전체 결과 — {sessionId.slice(0, 8)}</span>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(false)}><X className="w-4 h-4" /></Button>
+            </div>
+            <div className="overflow-auto flex-1 p-4 space-y-3 bg-background">
+              {(messages ?? []).length === 0 && <div className="text-sm text-muted-foreground">메시지가 없습니다.</div>}
+              {(messages ?? []).map((m: any) => {
+                const role = (m.info as any)?.role as string
+                const parts = (m.parts ?? []) as any[]
+                const txt = parts.filter(p => p.type === 'text').map(p => p.text).join('\n').trim()
+                if (!txt) return null
+                return (
+                  <div key={(m.info as any)?.id || Math.random()} className={`rounded-lg border p-3 text-sm whitespace-pre-wrap ${role === 'user' ? 'bg-muted/50' : 'bg-card'}`}>
+                    <div className="text-[11px] font-medium mb-1 opacity-60">{role === 'user' ? '사용자' : '어시스턴트'}</div>
+                    <div>{txt.slice(0, 8000)}</div>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="flex justify-end gap-2 p-3 border-t bg-card">
+              <Button variant="outline" size="sm" onClick={() => setExpanded(false)}>닫기</Button>
+              <Button size="sm" onClick={() => { window.location.href = `/session/${sessionId}` }}>세션으로 이동</Button>
+            </div>
+          </div>
         </div>
       )}
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => { window.location.href = `/session/${sessionId}` }}>전체 보기</Button>
-      </div>
-    </div>
+    </>
   )
 }
 
