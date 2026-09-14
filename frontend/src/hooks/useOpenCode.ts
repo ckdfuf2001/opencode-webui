@@ -98,6 +98,32 @@ function toolOutputLength(parts: MessageWithParts["parts"]): number {
   return n
 }
 
+// bash 등 대용량 툴 출력은 메모리에 전부 들고 있으면 힙이 GB 단위로 부푼다.
+// 완료된 툴은 80k까지만 메모리에 유지하고 나머지는 잘라낸다. 전체 보기는 opencode 원본에서 다시 fetch.
+const MAX_TOOL_OUTPUT_KEEP = 80_000
+const TOOL_TRUNCATE_NOTICE = '\n\n…[output truncated for memory — see full log in session]'
+function truncateLargeToolOutputs(messages: MessageListResponse): MessageListResponse {
+  let changed = false
+  const next = messages.map((msg) => {
+    let msgChanged = false
+    const newParts = msg.parts.map((part: any) => {
+      if (part.type !== 'tool' || !part.state) return part
+      const st = part.state as { output?: string; metadata?: { output?: string }; status?: string }
+      const out = st.output ?? st.metadata?.output
+      if (!out || out.length <= MAX_TOOL_OUTPUT_KEEP) return part
+      // running 중에는 자르지 않는다 — 완료/error만 자름 (스트리밍 중 잘리면 이어붙이기 깨짐)
+      if (st.status === 'running') return part
+      msgChanged = true
+      const truncated = out.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${out.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+      if (st.output != null) return { ...part, state: { ...st, output: truncated } }
+      return { ...part, state: { ...st, metadata: { ...(st.metadata ?? {}), output: truncated } } }
+    })
+    if (msgChanged) { changed = true; return { ...msg, parts: newParts } }
+    return msg
+  })
+  return changed ? next as MessageListResponse : messages
+}
+
 /** SSE가 ?�버?�만 ?�는 ??메시지�?가리키�?가�?카드�?만들지 ?�고 목록 refetch�?
  *  ?�당�?�??�용??빨리 가?�온?? reasoning?�??�작 지?�이 ?��?�?300ms,
  *  �??�는 ?�션??800ms ?�로?��?refetch ??���?막는?? */
@@ -362,7 +388,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
   return useQuery({
     queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory],
     queryFn: async () => {
-      // 백엔??캐시�?경유??가?�온?????�론???�링??opencode ?�벤?�루?��? ?�리지 ?�는??
+      // 백엔드 캐시를 경유해 가져온다 — 직접 opencode 호출보다 안정적
       const dirQs = directory ? `?directory=${encodeURIComponent(directory)}` : '';
       const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}${dirQs}`);
       if (!res.ok) throw new Error('Failed to load messages');
@@ -451,6 +477,8 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       if (realUserArrived) {
         pendingOptimistic.delete(sessionID!)
       }
+      // 대용량 bash 출력 즉시 잘라 메모리 폭증 방지 — 완료된 툴만 80k로 truncate
+      result = truncateLargeToolOutputs(result)
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
       const isBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
@@ -464,9 +492,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    // 세션 전환 시 이전 메시지 캐시는 30초만 유지 후 메모리에서 제거.
-    // inactive 쿼리는 SessionDetail에서도 직접 제거한다.
-    gcTime: 30_000,
+    // 세션 전환 시 이전 메시지 캐시는 10초만 유지 후 메모리에서 제거 — bash 등 대용량 툴 출력이 30초 동안 힙을 잡아 7GB까지 가던 원인
+    // idle이면 10초 폴링이라 10초 gcTime이면 다음 폴링 전까지 캐시가 살아있어 깜빡임 없이 유지된다.
+    gcTime: 10_000,
     placeholderData: (previousData) => previousData,
     staleTime: 2000,
     refetchInterval: (query) => {
@@ -1009,12 +1037,25 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
                   const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
                   const partMetaOut = (part as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "";
                   if (partMetaOut === curMeta + delta) nextPart = part;
-                  else nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as typeof part;
+                  else {
+                    let nextOut = curMeta + delta
+                    // running 중에도 힙 폭증 방지: 120k 넘으면 뒤쪽 80k만 유지 (bash 대량 출력 대비)
+                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 1.5) {
+                      nextOut = `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + nextOut.slice(-MAX_TOOL_OUTPUT_KEEP)
+                    }
+                    nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: nextOut } } } as unknown as typeof part;
+                  }
                 } else {
                   const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
                   const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
                   if (partOut === cur + delta) nextPart = part;
-                  else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+                  else {
+                    let nextOut = cur + delta
+                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP) {
+                      nextOut = nextOut.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${nextOut.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                    }
+                    nextPart = { ...existing, state: { ...st, output: nextOut } } as unknown as typeof part;
+                  }
                 }
               }
             }
@@ -1072,10 +1113,18 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
                 if (isRunning) {
                   const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
                   const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
-                  nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as MessageWithParts["parts"][number];
+                  let nextOut = curMeta + delta
+                  if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 1.5) {
+                    nextOut = `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + nextOut.slice(-MAX_TOOL_OUTPUT_KEEP)
+                  }
+                  nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: nextOut } } } as unknown as MessageWithParts["parts"][number];
                 } else {
                   const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
-                  nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+                  let nextOut = cur + delta
+                  if (nextOut.length > MAX_TOOL_OUTPUT_KEEP) {
+                    nextOut = nextOut.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${nextOut.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                  }
+                  nextPart = { ...existing, state: { ...st, output: nextOut } } as unknown as MessageWithParts["parts"][number];
                 }
               } else return old;
               const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;

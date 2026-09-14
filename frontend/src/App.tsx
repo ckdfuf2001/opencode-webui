@@ -25,8 +25,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 30,
-      // 미사용 쿼리는 2분 뒤 메모리에서 제거 (개별 gcTime이 우선)
-      gcTime: 1000 * 60 * 2,
+      // 미사용 쿼리는 30초 뒤 메모리에서 제거 — bash 등 대량 툴 출력이 2분 동안 힙을 잡던 원인
+      gcTime: 1000 * 30,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
       refetchOnMount: false,
