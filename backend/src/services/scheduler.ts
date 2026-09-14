@@ -12,6 +12,19 @@ import path from 'path'
 
 const CHECK_INTERVAL_MS = 30_000
 
+export function isValidCron(cron: string): boolean {
+  const parts = cron.trim().split(/\s+/)
+  if (parts.length !== 5) return false
+  const ranges: [number, number][] = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]]
+  for (let i = 0; i < 5; i++) {
+    const field = parts[i]
+    const [min, max] = ranges[i]!
+    if (!field) return false
+    if (expandField(field, min, max) === null) return false
+  }
+  return true
+}
+
 function expandField(field: string, min: number, max: number): number[] | null {
   const values = new Set<number>()
   for (const part of field.split(',')) {

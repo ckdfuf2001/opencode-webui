@@ -140,8 +140,18 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
     CREATE INDEX IF NOT EXISTS idx_session_status_directory ON session_status(directory);
     CREATE INDEX IF NOT EXISTS idx_session_status_status ON session_status(status);
 
+    CREATE TABLE IF NOT EXISTS exposed_commands (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      command_name TEXT NOT NULL,
+      expose_name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_exposed_enabled ON exposed_commands(enabled);
   
-  `)
+   `)
   
   runMigrations(db)
   

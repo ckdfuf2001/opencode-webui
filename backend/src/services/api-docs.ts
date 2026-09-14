@@ -9,6 +9,7 @@ export const openApiSpec = {
   servers: [{ url: '/' }],
   tags: [
     { name: 'health', description: 'Health and process status' },
+    { name: 'system', description: 'System info (port, version, paths)' },
     { name: 'repos', description: 'Repository and worktree management' },
     { name: 'settings', description: 'User preferences, OpenCode configs, custom commands' },
     { name: 'schedules', description: 'Scheduled prompt/command runner' },
@@ -18,6 +19,8 @@ export const openApiSpec = {
     { name: 'registry', description: 'Register opencode config files (command/skill/tool/agent)' },
     { name: 'preview', description: 'Document preview, text extraction, and in-place editing' },
     { name: 'tts', description: 'Text-to-speech synthesis' },
+    { name: 'expose', description: 'Expose commands externally (MCP-like)' },
+    { name: 'public', description: 'Public MCP-like command discovery & execution' },
     { name: 'opencode', description: 'Proxy to the OpenCode server' },
   ],
   paths: {
@@ -1166,6 +1169,74 @@ export const openApiSpec = {
         responses: { '200': { description: 'SSE stream' } },
       },
     },
+    '/api/system/info': {
+      get: {
+        tags: ['system'],
+        summary: 'System info (version, ports, paths, uptime)',
+        responses: {
+          '200': {
+            description: 'System info',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    version: { type: 'string' },
+                    backend: { type: 'object', properties: { port: { type: 'number' }, host: { type: 'string' }, nodeVersion: { type: 'string' }, uptimeSec: { type: 'number' }, workspacePath: { type: 'string' }, reposPath: { type: 'string' }, configPath: { type: 'string' } } },
+                    opencode: { type: 'object', properties: { port: { type: 'number' }, healthy: { type: 'boolean' } } },
+                    timestamp: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    '/api/expose/commands': {
+      get: {
+        tags: ['expose'],
+        summary: 'List exposed command mappings',
+        responses: { '200': { description: 'Exposed commands', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/ExposedCommand' } } } } } },
+      },
+      post: {
+        tags: ['expose'],
+        summary: 'Expose a command externally (MCP-like)',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { commandName: { type: 'string' }, exposeName: { type: 'string' }, description: { type: 'string' }, enabled: { type: 'boolean' } }, required: ['commandName'] } } } },
+        responses: { '201': { description: 'Created expose', content: { 'application/json': { schema: { $ref: '#/components/schemas/ExposedCommand' } } } }, '409': { description: 'Expose name already exists' } },
+      },
+    },
+    '/api/expose/commands/{id}': {
+      put: {
+        tags: ['expose'],
+        summary: 'Update exposed command',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { exposeName: { type: 'string' }, description: { type: 'string' }, enabled: { type: 'boolean' } } } } } },
+        responses: { '200': { description: 'Updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/ExposedCommand' } } } } },
+      },
+      delete: {
+        tags: ['expose'],
+        summary: 'Delete exposed command',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+        responses: { '200': { description: 'Deleted', content: { 'application/json': { schema: { $ref: '#/components/schemas/Success' } } } } },
+      },
+    },
+    '/api/public/commands': {
+      get: {
+        tags: ['public'],
+        summary: 'Public MCP-like discovery: list enabled exposed commands',
+        responses: { '200': { description: 'Public commands', content: { 'application/json': { schema: { type: 'object', properties: { commands: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, commandName: { type: 'string' }, description: { type: 'string' } } } }, count: { type: 'integer' }, timestamp: { type: 'string' } } } } } } },
+      },
+    },
+    '/api/public/commands/{exposeName}/run': {
+      post: {
+        tags: ['public'],
+        summary: 'Run an exposed command (creates/reuses session and sends /command)',
+        parameters: [{ name: 'exposeName', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { repoId: { type: 'integer' }, directory: { type: 'string' }, args: { type: 'string' }, sessionId: { type: 'string' }, agent: { type: 'string' }, model: { type: 'string' } } } } } },
+        responses: { '200': { description: 'Run started', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, sessionId: { type: 'string' }, exposeName: { type: 'string' } } } } } }, '404': { description: 'Exposed command not found' } },
+      },
+    },
   },
   components: {
     schemas: {
@@ -1283,6 +1354,18 @@ export const openApiSpec = {
           permission: { type: 'string' },
           pattern: { type: 'string' },
           createdAt: { type: 'integer' },
+        },
+      },
+      ExposedCommand: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer' },
+          commandName: { type: 'string' },
+          exposeName: { type: 'string' },
+          description: { type: 'string' },
+          enabled: { type: 'boolean' },
+          createdAt: { type: 'integer' },
+          updatedAt: { type: 'integer' },
         },
       },
     },

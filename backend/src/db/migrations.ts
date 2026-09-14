@@ -363,6 +363,24 @@ export function runMigrations(db: Database): void {
       logger.debug('html_pages table may already exist:', e)
     }
 
+    // ── 외부 커맨드 노출 (MCP-like) ─────────────────────────
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS exposed_commands (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          command_name TEXT NOT NULL,
+          expose_name TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `)
+      db.run('CREATE INDEX IF NOT EXISTS idx_exposed_enabled ON exposed_commands(enabled)')
+    } catch (e) {
+      logger.debug('exposed_commands table may already exist:', e)
+    }
+
     logger.info('Database migrations completed successfully')
   } catch (error) {
     logger.error('Failed to run database migrations:', error)

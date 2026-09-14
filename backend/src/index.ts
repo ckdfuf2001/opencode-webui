@@ -25,6 +25,8 @@ import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
 import { createChatQueueRoutes } from './routes/chat-queue'
 import { createMcpRoutes } from './routes/mcp'
+import { createSystemRoutes } from './routes/system'
+import { createExposeRoutes, createPublicExposeRoutes } from './routes/expose'
 import { createHtmlViewRoutes } from './routes/html-view'
 import { createFavoriteRoutes } from './routes/favorites'
 import { createSessionMessageRoutes } from './routes/session-messages'
@@ -280,9 +282,12 @@ app.route('/api/config-files', createConfigFileRoutes(db))
 app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
 app.route('/api/search', createSearchRoutes(db))
-app.route('/api/session-status', createSessionStatusRoutes(db))
+  app.route('/api/session-status', createSessionStatusRoutes(db))
   app.route('/api/chat-queue', createChatQueueRoutes())
   app.route('/api/mcp', createMcpRoutes(db))
+  app.route('/api/system', createSystemRoutes(db))
+  app.route('/api/expose', createExposeRoutes(db))
+  app.route('/api/public', createPublicExposeRoutes(db))
   app.route('/api/html-view', createHtmlViewRoutes(db))
   app.route('/api/favorites', createFavoriteRoutes(db))
   app.route('/api/session-messages', createSessionMessageRoutes())
