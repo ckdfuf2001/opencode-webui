@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Star, X, Send, Trash2, MessageSquare, FolderGit2 } from 'lucide-react'
+import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
-import { useSendPrompt, useSessionStatusMap } from '@/hooks/useOpenCode'
+import { useSendPrompt, useSessionStatusMap, useMessages } from '@/hooks/useOpenCode'
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import { listRepos } from '@/api/repos'
@@ -13,6 +13,7 @@ export function FavoriteSessionsPanel() {
   const qc = useQueryClient()
   const [pinned, setPinned] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [resultFor, setResultFor] = useState<string | null>(null)
   const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: pinned, staleTime: 10_000 })
   const { data: dbStatuses } = useSessionStatusMap()
   const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos, enabled: pinned })
@@ -67,12 +68,18 @@ export function FavoriteSessionsPanel() {
                       onKeyDown={e => {
                         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.target as HTMLInputElement).nextElementSibling?.dispatchEvent(new MouseEvent('click', { bubbles: true })) }
                       }}
-                      className="h-7 text-xs"
+                      className="h-7 text-xs flex-1"
                     />
                     <MiniSendButton sessionId={f.sessionId} directory={f.directory} draft={drafts[f.sessionId] ?? ''} onSent={() => setDrafts(prev => ({ ...prev, [f.sessionId]: '' }))} />
+                    <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="결과 보기" onClick={() => setResultFor(f.sessionId)} disabled={isRepoFav}>
+                      <Eye className="w-3.5 h-3.5" />
+                    </Button>
                     {!isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`; window.location.href = url }}>열기</Button>}
                     {isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}` : '/'; window.location.href = url }}>열기</Button>}
                   </div>
+                  {resultFor === f.sessionId && !isRepoFav && (
+                    <MiniResultPopup sessionId={f.sessionId} directory={f.directory} onClose={() => setResultFor(null)} />
+                  )}
                 </div>
               )
             })}
@@ -80,6 +87,36 @@ export function FavoriteSessionsPanel() {
         </div>
       )}
     </>
+  )
+}
+
+function MiniResultPopup({ sessionId, directory, onClose }: { sessionId: string; directory: string; onClose: () => void }) {
+  const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, directory || undefined)
+  const lastAssistant = [...(messages ?? [])].reverse().find(m => (m.info as any)?.role === 'assistant')
+  const text = (() => {
+    if (!lastAssistant) return null
+    const parts = (lastAssistant as any).parts as any[] | undefined
+    if (!parts) return null
+    const t = parts.filter(p => p.type === 'text').map(p => (p as any).text).join('\n').trim()
+    return t || null
+  })()
+  return (
+    <div className="mt-1 border rounded-md bg-muted/30 p-2 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-medium">마지막 결과</span>
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}><X className="w-3 h-3" /></Button>
+      </div>
+      {isLoading && <div className="text-xs text-muted-foreground">불러오는 중...</div>}
+      {!isLoading && !text && <div className="text-xs text-muted-foreground">결과가 없습니다.</div>}
+      {!isLoading && text && (
+        <div className="text-xs whitespace-pre-wrap max-h-[20vh] overflow-auto bg-background border rounded p-2">
+          {text.slice(0, 4000)}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => { window.location.href = `/session/${sessionId}` }}>전체 보기</Button>
+      </div>
+    </div>
   )
 }
 
