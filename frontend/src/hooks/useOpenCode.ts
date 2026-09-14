@@ -100,9 +100,9 @@ function toolOutputLength(parts: MessageWithParts["parts"]): number {
 
 // bash 등 대용량 툴 출력은 메모리에 전부 들고 있으면 힙이 GB 단위로 부푼다.
 // 완료된 툴은 80k까지만 메모리에 유지하고 나머지는 잘라낸다. 전체 보기는 opencode 원본에서 다시 fetch.
-const MAX_TOOL_OUTPUT_KEEP = 80_000
-const TOOL_TRUNCATE_NOTICE = '\n\n…[output truncated for memory — see full log in session]'
-function truncateLargeToolOutputs(messages: MessageListResponse): MessageListResponse {
+export const MAX_TOOL_OUTPUT_KEEP = 80_000
+export const TOOL_TRUNCATE_NOTICE = '\n\n…[output truncated for memory — see full log in session]'
+export function truncateLargeToolOutputs(messages: MessageListResponse): MessageListResponse {
   let changed = false
   const next = messages.map((msg) => {
     let msgChanged = false
