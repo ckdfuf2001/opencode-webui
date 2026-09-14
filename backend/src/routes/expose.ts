@@ -183,6 +183,66 @@ export function createExposeRoutes(db: Database) {
     }
   })
 
+  // GET /api/expose/sessions — 고정 세션 선택용: 세션명 포함 목록 (opencode 서버에서 조회, 실패 시 session_status 폴백)
+  app.get('/sessions', async (c) => {
+    try {
+      const repos = db.prepare('SELECT id, local_path FROM repos').all() as { id: number; local_path: string }[]
+      const statusRows = db.prepare('SELECT session_id, repo_id, directory, status, updated_at FROM session_status ORDER BY updated_at DESC LIMIT 100').all() as { session_id: string; repo_id: number | null; directory: string; status: string; updated_at: number }[]
+      const statusById = new Map(statusRows.map(r => [r.session_id, r]))
+      const seen = new Set<string>()
+      const result: { sessionId: string; title: string; repoId: number | null; repoName: string; directory: string; status: string; updatedAt: number }[] = []
+
+      const base = (() => { try { return opencodeServerManager.getUrl() } catch { return null } })()
+      const fetchForDir = async (directory: string) => {
+        if (!base) return []
+        try {
+          const res = await fetch(`${base}/session?directory=${encodeURIComponent(directory)}`, { headers: ensureServerAuth({}), signal: AbortSignal.timeout(3000) })
+          if (!res.ok) return []
+          const list = await res.json() as any[]
+          return Array.isArray(list) ? list : []
+        } catch { return [] }
+      }
+
+      // repo별 opencode 세션 조회 (제목 포함)
+      for (const repo of repos) {
+        const dir = path.join(getReposPath(), repo.local_path)
+        const repoName = repo.local_path.split('/').pop() || repo.local_path
+        const list = await fetchForDir(dir)
+        for (const s of list) {
+          const id = s.id ?? s.sessionID ?? s.session_id
+          if (!id || seen.has(id)) continue
+          seen.add(id)
+          const st = statusById.get(id)
+          result.push({ sessionId: id, title: s.title ?? s.name ?? s.id ?? id.slice(0,8), repoId: repo.id, repoName, directory: dir, status: st?.status ?? 'idle', updatedAt: st?.updated_at ?? Date.now() })
+        }
+      }
+      // global 세션도
+      try {
+        const globalList = await fetchForDir(getReposPath())
+        for (const s of globalList) {
+          const id = s.id ?? s.sessionID ?? s.session_id
+          if (!id || seen.has(id)) continue
+          seen.add(id)
+          const st = statusById.get(id)
+          result.push({ sessionId: id, title: s.title ?? s.name ?? id.slice(0,8), repoId: null, repoName: 'global', directory: getReposPath(), status: st?.status ?? 'idle', updatedAt: st?.updated_at ?? Date.now() })
+        }
+      } catch {}
+      // opencode에서 못 찾은 session_status 행도 포함 (이미 종료된 세션 등)
+      for (const row of statusRows) {
+        if (seen.has(row.session_id)) continue
+        const repoName = row.repo_id ? (repos.find(r => r.id === row.repo_id)?.local_path.split('/').pop() ?? `repo#${row.repo_id}`) : 'global'
+        result.push({ sessionId: row.session_id, title: row.session_id.slice(0,8), repoId: row.repo_id, repoName, directory: row.directory, status: row.status, updatedAt: row.updated_at })
+        seen.add(row.session_id)
+        if (result.length >= 100) break
+      }
+      result.sort((a,b) => b.updatedAt - a.updatedAt)
+      return c.json({ sessions: result.slice(0, 100), count: result.length })
+    } catch (error) {
+      logger.error('Failed to list expose sessions:', error)
+      return c.json({ error: 'Failed to list sessions' }, 500)
+    }
+  })
+
   return app
 }
 

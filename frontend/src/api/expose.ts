@@ -74,3 +74,19 @@ export async function listAvailableCommands(): Promise<{ items: AvailableCommand
   if (!res.ok) throw new Error(`Failed to list available commands (${res.status})`)
   return res.json()
 }
+
+export interface ExposeSession {
+  sessionId: string
+  title: string
+  repoId: number | null
+  repoName: string
+  directory: string
+  status: string
+  updatedAt: number
+}
+
+export async function listExposeSessions(): Promise<{ sessions: ExposeSession[]; count: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/expose/sessions`)
+  if (!res.ok) throw new Error(`Failed to list sessions (${res.status})`)
+  return res.json()
+}

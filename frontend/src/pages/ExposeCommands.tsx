@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listExposed, createExposed, updateExposed, deleteExposed, listPublicCommands, listAvailableCommands } from '@/api/expose'
+import { listExposed, createExposed, updateExposed, deleteExposed, listPublicCommands, listAvailableCommands, listExposeSessions } from '@/api/expose'
 import { useCommands } from '@/hooks/useCommands'
-import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -41,26 +40,11 @@ export function ExposeCommands() {
   const [filter, setFilter] = useState('')
   const [editingEx, setEditingEx] = useState<typeof exposed[number] | null>(null)
   const [editForm, setEditForm] = useState<{ exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string; argsTemplate: string; exampleArgs: string; enabled: boolean }>({ exposeName: '', description: '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '', enabled: true })
-  const { data: sessionStatuses = [] } = useQuery({
-    queryKey: ['session-status', 'for-expose'],
-    queryFn: async () => {
-      const res = await fetch(`${API_BASE_URL}/api/session-status`)
-      if (!res.ok) return [] as { sessionId: string; repoId: number | null; directory: string; status: string }[]
-      return res.json() as Promise<{ sessionId: string; repoId: number | null; directory: string; status: string }[]>
-    },
+  const { data: exposeSessionsData } = useQuery({
+    queryKey: ['expose', 'sessions'],
+    queryFn: listExposeSessions,
   })
-  const { data: repos = [] } = useQuery({
-    queryKey: ['repos', 'for-expose'],
-    queryFn: async () => {
-      const { listRepos } = await import('@/api/repos')
-      return listRepos()
-    },
-  })
-  const repoNameById = useMemo(() => {
-    const m = new Map<number, string>()
-    for (const r of repos as any[]) m.set(r.id, (r.localPath ?? '').split('/').pop() || `repo#${r.id}`)
-    return m
-  }, [repos])
+  const sessionStatuses = exposeSessionsData?.sessions ?? []
   type SortKey = 'exposed'|'name'|'owner'|'desc'|'exposeName'|'exposeDesc'|'session'
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
@@ -198,7 +182,7 @@ export function ExposeCommands() {
           <div className="text-xs font-mono bg-background border rounded p-2 space-y-1">
             <div>호출: <span className="text-primary">POST {publicBase}/:exposeName/run</span></div>
             <div className="text-muted-foreground">body: {"{ repoId?: number, directory?: string, args?: string, sessionId?: string }"} — 체크된 것만 노출, 미체크는 404</div>
-            <div className="text-muted-foreground">세션: <span className="text-foreground">새 세션</span> = 항상 신규 세션 생성(제목 템플릿 적용), <span className="text-foreground">재활용</span> = pinned 세션 또는 호출 시 sessionId 재활용, 없으면 신규</div>
+            <div className="text-muted-foreground">세션: <span className="text-foreground">새 세션</span> = 항상 신규 세션 생성(제목 템플릿 적용), <span className="text-foreground">기존 세션</span> = 고정 세션 또는 호출 시 sessionId 재활용, 없으면 신규</div>
             <div className="text-muted-foreground">제목 템플릿 변수: {"{exposeName} {commandName} {date} {time}"} 예: "[EXPOSE] {"{exposeName}"} - {"{date}"}"</div>
             <div className="text-muted-foreground">예: curl -X POST {publicBase}/my-plan/run -H "Content-Type: application/json" -d '{"{ \"repoId\":1, \"args\":\"hello\" }"}'</div>
           </div>
@@ -318,7 +302,7 @@ export function ExposeCommands() {
                       <td className="px-2 py-1.5 text-xs text-muted-foreground truncate max-w-[200px]" title={cmd.description ?? ''}>{cmd.description || '-'}</td>
                       <td className="px-2 py-1.5 text-xs font-mono truncate max-w-[140px]" title={ex?.exposeName ?? ''}>{ex ? ex.exposeName : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-xs truncate max-w-[200px]" title={ex?.description ?? ''}>{ex ? (ex.description || <span className="text-muted-foreground/50">—</span>) : <span className="text-muted-foreground/50">—</span>}</td>
-                      <td className="px-2 py-1.5 text-xs">{ex ? <span className={`px-1.5 py-0.5 rounded text-[10px] border ${ex.sessionMode==='new'?'bg-green-500/10 border-green-500/30 text-green-700':'bg-amber-500/10 border-amber-500/30 text-amber-700'}`}>{ex.sessionMode==='new'?'새 세션':'재활용'}</span> : <span className="text-muted-foreground/50">—</span>}</td>
+                      <td className="px-2 py-1.5 text-xs">{ex ? <span className={`px-1.5 py-0.5 rounded text-[10px] border ${ex.sessionMode==='new'?'bg-green-500/10 border-green-500/30 text-green-700':'bg-amber-500/10 border-amber-500/30 text-amber-700'}`}>{ex.sessionMode==='new'?'새 세션':'기존 세션'}</span> : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-xs font-mono truncate max-w-[180px]" title={ex ? `${ex.titleTemplate ?? ''} ${ex.pinnedSessionId ?? ''}` : ''}>{ex ? (ex.titleTemplate || ex.pinnedSessionId ? `${ex.titleTemplate ?? ''}${ex.titleTemplate && ex.pinnedSessionId ? ' / ' : ''}${ex.pinnedSessionId ?? ''}` : <span className="text-muted-foreground/50">—</span>) : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-center">
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => {
@@ -366,7 +350,7 @@ export function ExposeCommands() {
                   <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="new">새 세션 (항상 신규)</SelectItem>
-                    <SelectItem value="reuse">재활용 (pinned 또는 호출 시 sessionId)</SelectItem>
+                    <SelectItem value="reuse">기존 세션</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -377,15 +361,16 @@ export function ExposeCommands() {
               </div>
               {editForm.sessionMode === 'reuse' && (
                 <div className="space-y-1">
-                  <Label className="text-xs">고정 세션 (현재 세션 목록에서 선택)</Label>
+                  <Label className="text-xs">고정 세션 (세션명 포함 목록에서 선택)</Label>
                   <Select value={editForm.pinnedSessionId || '__none__'} onValueChange={v => setEditForm(s => ({ ...s, pinnedSessionId: v === '__none__' ? '' : v }))}>
                     <SelectTrigger className="h-8 text-sm font-mono"><SelectValue placeholder="세션 선택" /></SelectTrigger>
-                    <SelectContent className="max-h-[200px]">
+                    <SelectContent className="max-h-[240px]">
                       <SelectItem value="__none__">없음 (호출 시 sessionId 또는 신규)</SelectItem>
-                      {sessionStatuses.slice(0, 50).map(ss => {
-                        const repoName = ss.repoId ? repoNameById.get(ss.repoId) ?? `repo#${ss.repoId}` : 'global'
-                        return <SelectItem key={ss.sessionId} value={ss.sessionId}>{ss.sessionId.slice(0,8)} · {repoName} · {ss.status}</SelectItem>
-                      })}
+                      {sessionStatuses.slice(0, 80).map(ss => (
+                        <SelectItem key={ss.sessionId} value={ss.sessionId} className="font-mono text-xs">
+                          {ss.title} · {ss.sessionId.slice(0,8)} · {ss.repoName} · {ss.status}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <Input value={editForm.pinnedSessionId} onChange={e => setEditForm(s => ({ ...s, pinnedSessionId: e.target.value }))} placeholder="또는 직접 sessionId 입력" className="font-mono text-sm h-7 mt-1" />
