@@ -147,7 +147,7 @@ export function FavoriteSessionsPanel() {
                   )}
                   {resultFor === f.sessionId && !isRepoFav && (
                     <div onClick={e => e.stopPropagation()}>
-                      <MiniResultPopup sessionId={f.sessionId} directory={f.directory} onClose={() => setResultFor(null)} />
+                      <MiniResultPopup sessionId={f.sessionId} directory={f.directory} repoId={f.repoId} onClose={() => setResultFor(null)} />
                     </div>
                   )}
                   {resultFor === f.sessionId && isRepoFav && (
@@ -171,7 +171,7 @@ function extractText(parts: any[] | undefined): string | null {
   return t || null
 }
 
-function MiniResultPopup({ sessionId, directory, onClose }: { sessionId: string; directory: string; onClose: () => void }) {
+function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId: string; directory: string; repoId?: number | null; onClose: () => void }) {
   const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, directory || undefined)
   const [expanded, setExpanded] = useState(false)
   const lastUser = [...(messages ?? [])].reverse().find(m => (m.info as any)?.role === 'user')
@@ -179,6 +179,7 @@ function MiniResultPopup({ sessionId, directory, onClose }: { sessionId: string;
   const lastUserText = extractText((lastUser as any)?.parts)
   const lastAssistantText = extractText((lastAssistant as any)?.parts)
   const userSnippet = lastUserText ? (lastUserText.length > 40 ? lastUserText.slice(0, 40) + '…' : lastUserText) : ''
+  const moveUrl = repoId ? `/repos/${repoId}/sessions/${sessionId}` : `/session/${sessionId}`
   // 마지막 시퀀스: 마지막 user 이후의 user+assistant만 (전체보기용)
   const lastSequence = (() => {
     if (!messages || messages.length === 0) return []
@@ -249,7 +250,9 @@ function MiniResultPopup({ sessionId, directory, onClose }: { sessionId: string;
             </div>
             <div className="flex justify-end gap-2 p-3 border-t bg-card">
               <Button variant="outline" size="sm" onClick={() => setExpanded(false)}>닫기</Button>
-              <Button size="sm" onClick={() => { window.location.href = `/session/${sessionId}` }}>세션으로 이동</Button>
+              <Button size="sm" asChild>
+                <a href={moveUrl}>세션으로 이동</a>
+              </Button>
             </div>
           </div>
         </div>
@@ -264,7 +267,7 @@ function RepoSessionsPopup({ repoId, directory, selectedSessionId, onSessionSele
   if (selectedSessionId) {
     return (
       <div className="mt-1">
-        <MiniResultPopup sessionId={selectedSessionId} directory={directory} onClose={() => onSessionSelect?.(null)} />
+        <MiniResultPopup sessionId={selectedSessionId} directory={directory} repoId={repoId} onClose={() => onSessionSelect?.(null)} />
       </div>
     )
   }
