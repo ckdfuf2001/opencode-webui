@@ -70,8 +70,8 @@ export function FavoriteSessionsPanel() {
                       className="h-7 text-xs"
                     />
                     <MiniSendButton sessionId={f.sessionId} directory={f.directory} draft={drafts[f.sessionId] ?? ''} onSent={() => setDrafts(prev => ({ ...prev, [f.sessionId]: '' }))} />
-                    {!isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { window.location.href = `/repos/${f.repoId ?? ''}/sessions/${f.sessionId}`.replace('//','/') || `/session/${f.sessionId}` }}>열기</Button>}
-                    {isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { window.location.href = `/repos/${f.repoId}` }}>열기</Button>}
+                    {!isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`; window.location.href = url }}>열기</Button>}
+                    {isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}` : '/'; window.location.href = url }}>열기</Button>}
                   </div>
                 </div>
               )
