@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Star, X, Send, Trash2, MessageSquare } from 'lucide-react'
+import { Star, X, Send, Trash2, MessageSquare, FolderGit2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
@@ -12,44 +12,54 @@ import { listRepos } from '@/api/repos'
 export function FavoriteSessionsPanel() {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [pinned, setPinned] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: open, staleTime: 10_000 })
   const { data: dbStatuses } = useSessionStatusMap()
   const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos, enabled: open })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['favorites'] })
+  const isVisible = open || pinned
 
   return (
-    <>
+    <div
+      className="fixed bottom-[72px] left-0 z-[60] flex items-start"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => { if (!pinned) setOpen(false) }}
+    >
       <button
-        onClick={() => setOpen(v => !v)}
-        className="fixed bottom-[88px] left-0 z-40 w-10 h-10 rounded-r-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center shadow-lg"
-        title="즐겨찾기"
+        type="button"
+        onClick={() => setPinned(v => !v)}
+        className={`w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0
+          ${pinned ? 'bg-amber-500 text-white border-amber-600' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:bg-card-hover'}`}
+        title={pinned ? '즐겨찾기 고정 해제' : '즐겨찾기 (호버로 미리보기, 클릭으로 고정)'}
       >
-        <Star className={`w-5 h-5 ${open ? 'fill-white' : ''}`} />
+        <Star className={`w-5 h-5 ${pinned ? 'fill-white' : ''} transition-all`} />
       </button>
-      {open && (
-        <div className="fixed bottom-[88px] left-12 z-40 w-[380px] max-w-[90vw] bg-card border rounded-lg shadow-xl flex flex-col max-h-[60vh]">
-          <div className="flex items-center justify-between px-3 py-2 border-b">
-            <div className="flex items-center gap-2 font-semibold text-sm"><Star className="w-4 h-4 text-amber-500" /> 즐겨찾기</div>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setOpen(false)}><X className="w-4 h-4" /></Button>
+      {isVisible && (
+        <div className="ml-4 w-[340px] max-w-[88vw] rounded-lg border border-border bg-card shadow-2xl overflow-hidden flex flex-col max-h-[60vh]">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+            <span className="text-xs font-semibold">즐겨찾기</span>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setOpen(false); setPinned(false) }}><X className="w-3.5 h-3.5" /></Button>
           </div>
-          <div className="overflow-auto flex-1 p-2 space-y-2">
+          <div className="overflow-auto flex-1 p-2 space-y-2 bg-card">
             {isLoading && <div className="text-xs text-muted-foreground p-2">로딩...</div>}
             {!isLoading && favorites.length === 0 && <div className="text-xs text-muted-foreground p-4 text-center">즐겨찾기한 세션이 없습니다.<br/>워크스페이스/세션 목록에서 별표를 눌러 추가하세요.</div>}
             {favorites.map(f => {
+              const isRepoFav = f.sessionId.startsWith('repo-')
               const repo = repos?.find(r => r.id === f.repoId || r.fullPath === f.directory)
-              const status = dbStatuses?.find(s => s.sessionId === f.sessionId)
+              const status = isRepoFav ? null : dbStatuses?.find(s => s.sessionId === f.sessionId)
               const busy = status?.status === 'busy'
               return (
                 <div key={f.sessionId} className="border rounded-md p-2 space-y-1.5 bg-background">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        {isRepoFav ? <FolderGit2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" /> : <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />}
                         <span className="text-xs font-medium truncate" title={f.title}>{f.title}</span>
                         {busy && <span className="text-[10px] px-1.5 py-0 rounded-full bg-amber-500 text-white">Working</span>}
                         {status?.isCancelled && <span className="text-[10px] px-1.5 py-0 rounded-full bg-red-500 text-white">Cancelled</span>}
+                        {isRepoFav && <span className="text-[10px] px-1 py-0 rounded bg-muted text-muted-foreground">레포</span>}
                       </div>
                       <div className="text-[11px] text-muted-foreground truncate">{repo?.localPath || f.directory || f.sessionId.slice(0, 8)}</div>
                     </div>
@@ -57,7 +67,7 @@ export function FavoriteSessionsPanel() {
                   </div>
                   <div className="flex gap-1">
                     <Input
-                      placeholder="미니 채팅..."
+                      placeholder={isRepoFav ? "새 세션으로 채팅..." : "미니 채팅..."}
                       value={drafts[f.sessionId] ?? ''}
                       onChange={e => setDrafts(prev => ({ ...prev, [f.sessionId]: e.target.value }))}
                       onKeyDown={e => {
@@ -66,7 +76,8 @@ export function FavoriteSessionsPanel() {
                       className="h-7 text-xs"
                     />
                     <MiniSendButton sessionId={f.sessionId} directory={f.directory} draft={drafts[f.sessionId] ?? ''} onSent={() => setDrafts(prev => ({ ...prev, [f.sessionId]: '' }))} />
-                    <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { window.location.href = `/repos/${f.repoId ?? ''}/sessions/${f.sessionId}`.replace('//','/') || `/session/${f.sessionId}` }}>열기</Button>
+                    {!isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { window.location.href = `/repos/${f.repoId ?? ''}/sessions/${f.sessionId}`.replace('//','/') || `/session/${f.sessionId}` }}>열기</Button>}
+                    {isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { window.location.href = `/repos/${f.repoId}` }}>열기</Button>}
                   </div>
                 </div>
               )
@@ -74,7 +85,7 @@ export function FavoriteSessionsPanel() {
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }
 

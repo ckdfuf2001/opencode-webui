@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listRepos, deleteRepo } from "@/api/repos";
 import { listSchedules } from "@/api/schedules";
-import { useSessionStatusMap, useSessions, useDeleteSession } from "@/hooks/useOpenCode";
+import { useSessionStatusMap, useSessions } from "@/hooks/useOpenCode";
 import { DeleteDialog } from "@/components/ui/delete-dialog";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -142,6 +142,11 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
 
   const handleSelectAll = () => {
     const allFilteredSelected = filteredRepos.every((repo) => selectedRepos.has(repo.id));
+    if (isEditMode) {
+      if (allFilteredSelected) { setSelectedRepos(new Set()); setSelectedSessions(new Set()); }
+      else { setSelectedRepos(new Set(filteredRepos.map((r) => r.id))); /* sessions는 각 row에서 repo 선택으로 간주 */ }
+      return
+    }
     if (allFilteredSelected) setSelectedRepos(new Set()); else setSelectedRepos(new Set(filteredRepos.map((r) => r.id)));
   };
 
@@ -183,7 +188,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
             <>
               {filteredRepos.length > 0 && (
                 <label className="hidden md:flex items-center gap-2 text-sm cursor-pointer">
-                  <Checkbox checked={filteredRepos.length > 0 && filteredRepos.every(r => selectedRepos.has(r.id))} onCheckedChange={(v) => handleSelectAll()} />
+                  <Checkbox checked={filteredRepos.length > 0 && filteredRepos.every(r => selectedRepos.has(r.id))} onCheckedChange={() => handleSelectAll()} />
                   <span>Repository</span>
                 </label>
               )}
@@ -262,6 +267,26 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                 No repositories found matching "{searchQuery}"
               </p>
             </div>
+          ) : isEditMode ? (
+            <div className="space-y-2">
+              {filteredRepos.map((repo) => (
+                <EditRepoRow
+                  key={repo.id}
+                  repo={repo}
+                  isSelected={selectedRepos.has(repo.id)}
+                  selectedSessions={selectedSessions}
+                  onRepoChecked={(checked, ids) => handleRepoCheckedWithSessions(repo.id, checked, ids)}
+                  onSessionChecked={(sid, checked) => {
+                    const ns = new Set(selectedSessions);
+                    if (checked) ns.add(sid); else ns.delete(sid);
+                    setSelectedSessions(ns);
+                    // repo 체크 상태 동기화: 세션 하나라도 해제되면 repo 체크 해제, 전부 체크되면 repo 체크
+                  }}
+                  onDeleteRepo={(id) => { setRepoToDelete(id); setDeleteDialogOpen(true) }}
+                  isDeleting={deleteMutation.isPending && repoToDelete === repo.id}
+                />
+              ))}
+            </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-4 w-full">
               {filteredRepos.map((repo) => (
@@ -294,6 +319,22 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           const wi = withIndex ?? true
           if (repoToDelete) {
             deleteMutation.mutate({ id: repoToDelete, withIndex: wi });
+          } else if (pendingBulk) {
+            // 워크스페이스 편집 모드: 레포 + 세션 일괄 삭제
+            if (pendingBulk.repos.length > 0) batchDeleteMutation.mutate({ ids: pendingBulk.repos, withIndex: wi });
+            if (pendingBulk.sessions.length > 0) {
+              // 세션 삭제는 repo별 directory가 필요 — 첫 세션의 repo로 일괄 시도
+              // 간단히 각 세션을 개별 삭제 (withIndex 무시)
+              const firstRepo = filteredRepos.find(r => pendingBulk.repos.includes(r.id)) || filteredRepos[0];
+              const dir = firstRepo?.fullPath;
+              // useDeleteSession은 훅이므로 직접 fetch로 삭제
+              pendingBulk.sessions.forEach(sid => {
+                fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(dir || '')}`, { method: 'DELETE' }).catch(()=>{})
+              })
+              setSelectedSessions(new Set());
+            }
+            setPendingBulk(null);
+            if (pendingBulk.repos.length === 0) { setDeleteDialogOpen(false) }
           } else if (selectedRepos.size > 0) {
             batchDeleteMutation.mutate({ ids: Array.from(selectedRepos), withIndex: wi });
           }
@@ -301,13 +342,16 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
         onCancel={() => {
           setDeleteDialogOpen(false);
           setRepoToDelete(null);
+          setPendingBulk(null);
         }}
         title={
+          pendingBulk ? `삭제 확인 (${pendingBulk.repos.length} 레포, ${pendingBulk.sessions.length} 세션)` :
           selectedRepos.size > 0
             ? "Delete Multiple Repositories"
             : "Delete Repository"
         }
         description={
+          pendingBulk ? `선택한 항목을 삭제합니다. 이 작업은 되돌릴 수 없습니다.` :
           selectedRepos.size > 0
             ? `Are you sure you want to delete ${selectedRepos.size} repositor${selectedRepos.size === 1 ? "y" : "ies"}? This will remove all local files. This action cannot be undone.`
             : "Are you sure you want to delete this repository? This will remove all local files. This action cannot be undone."
@@ -317,4 +361,61 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
       />
     </>
   );
+}
+
+function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSessionChecked, onDeleteRepo, isDeleting }: {
+  repo: { id: number; localPath?: string; fullPath?: string };
+  isSelected: boolean;
+  selectedSessions: Set<string>;
+  onRepoChecked: (checked: boolean, ids: string[]) => void;
+  onSessionChecked: (sid: string, checked: boolean) => void;
+  onDeleteRepo: (id: number) => void;
+  isDeleting: boolean;
+}) {
+  const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, repo.fullPath);
+  const sessionIds = useMemo(() => (sessions ?? []).map((s: any) => s.id as string), [sessions]);
+
+  return (
+    <div className="border rounded-lg bg-card p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <Checkbox checked={isSelected} onCheckedChange={(v) => onRepoChecked(v === true, sessionIds)} />
+        <GitBranch className="w-4 h-4 text-muted-foreground shrink-0" />
+        <span className="font-medium text-sm flex-1 truncate">{repo.localPath}</span>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteRepo(repo.id)} disabled={isDeleting} title="레포 삭제">
+          <Trash2 className="w-4 h-4" />
+        </Button>
+      </div>
+      {sessions && sessions.length > 0 ? (
+        <div className="ml-6 space-y-1 border-l pl-3">
+          {sessions.slice(0, 20).map((s: any) => {
+            const sid = s.id as string;
+            const title = (s.title as string) || 'Untitled';
+            const checked = selectedSessions.has(sid) || isSelected;
+            return (
+              <label key={sid} className="flex items-center gap-2 text-xs cursor-pointer py-0.5 hover:bg-accent rounded px-1">
+                <Checkbox checked={checked} onCheckedChange={(v) => onSessionChecked(sid, v === true)} />
+                <MessageSquare className="w-3 h-3 text-muted-foreground shrink-0" />
+                <span className="flex-1 truncate">{title}</span>
+                <button
+                  className="p-1 rounded hover:bg-background"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(repo.fullPath || '')}`, { method: 'DELETE' })
+                      .then(() => window.location.reload())
+                      .catch(() => {})
+                  }}
+                  title="세션 개별 삭제"
+                >
+                  <Trash2 className="w-3 h-3 text-muted-foreground" />
+                </button>
+              </label>
+            )
+          })}
+          {sessions.length > 20 && <div className="text-xs text-muted-foreground">+ {sessions.length - 20} more</div>}
+        </div>
+      ) : (
+        <div className="ml-6 text-xs text-muted-foreground">세션 없음</div>
+      )}
+    </div>
+  )
 }

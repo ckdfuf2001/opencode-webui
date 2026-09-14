@@ -164,6 +164,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
 function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; directory?: string; onNavigate?: () => void }) {
   const navigate = useNavigate()
   const location = useLocation()
+  const queryClient = useQueryClient()
   const { data: sessions, isLoading: sessionsLoading } = useSessions(OPENCODE_API_ENDPOINT, directory)
   const { data: dbStatuses } = useSessionStatusMap()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
