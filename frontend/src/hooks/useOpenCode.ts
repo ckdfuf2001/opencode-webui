@@ -1045,7 +1045,23 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
 
       const esUrl = client.getEventSourceURL();
       let es: EventSource | null = null;
+      const capIncomingToolPart = (p: any): any => {
+        if (p?.type !== 'tool' || !p?.state) return p
+        const st = p.state as { output?: string; metadata?: { output?: string }; status?: string }
+        const out = st.output ?? st.metadata?.output
+        if (!out) return p
+        const toolName = (p as any).tool ?? ''
+        const isRead = String(toolName).toLowerCase().includes('read')
+        const isRunning = st.status === 'running'
+        const keep = isRunning ? (isRead ? 60_000 : MAX_TOOL_OUTPUT_KEEP * 6) : (isRead ? 10_000 : MAX_TOOL_OUTPUT_KEEP)
+        if (out.length <= keep) return p
+        // pnpm이 한 번에 6GB를 쏘면 힙이 터지므로 들어오자마자 잘라냄
+        const truncated = out.slice(0, keep) + TOOL_TRUNCATE_NOTICE + ` (${out.length - keep} chars omitted)`
+        if (st.output != null) return { ...p, state: { ...st, output: truncated } }
+        return { ...p, state: { ...st, metadata: { ...(st.metadata ?? {}), output: truncated } } }
+      }
       const sseMergePart = (part: MessageWithParts["parts"][number], delta?: string) => {
+        part = capIncomingToolPart(part as any) as MessageWithParts["parts"][number]
         const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
         queryClient.setQueryData<MessageListResponse>(key, (old) => {
           if (!old) return old;
@@ -1085,23 +1101,32 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
                   const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
                   const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
                   const partMetaOut = (part as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "";
-                  if (partMetaOut === curMeta + delta) nextPart = part;
+                  if (partMetaOut === curMeta + delta) nextPart = capIncomingToolPart(part) as typeof part;
                   else {
-                    let nextOut = curMeta + delta
-                    // running 중에도 힙 폭증 방지: 120k(20k*6) 넘으면 뒤쪽 20k만 유지 (pnpm 대량 출력 대비)
-                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 6) {
-                      nextOut = `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + nextOut.slice(-MAX_TOOL_OUTPUT_KEEP)
+                    let nextOut: string
+                    if (delta.length > MAX_TOOL_OUTPUT_KEEP * 6) {
+                      nextOut = `…[delta truncated ${delta.length - MAX_TOOL_OUTPUT_KEEP} chars]\n` + delta.slice(-MAX_TOOL_OUTPUT_KEEP)
+                    } else {
+                      nextOut = curMeta + delta
+                      if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 6) {
+                        nextOut = `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + nextOut.slice(-MAX_TOOL_OUTPUT_KEEP)
+                      }
                     }
                     nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: nextOut } } } as unknown as typeof part;
                   }
                 } else {
                   const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
                   const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
-                  if (partOut === cur + delta) nextPart = part;
+                  if (partOut === cur + delta) nextPart = capIncomingToolPart(part) as typeof part;
                   else {
-                    let nextOut = cur + delta
-                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP) {
-                      nextOut = nextOut.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${nextOut.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                    let nextOut: string
+                    if (delta.length > MAX_TOOL_OUTPUT_KEEP) {
+                      nextOut = delta.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${delta.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                    } else {
+                      nextOut = cur + delta
+                      if (nextOut.length > MAX_TOOL_OUTPUT_KEEP) {
+                        nextOut = nextOut.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${nextOut.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                      }
                     }
                     nextPart = { ...existing, state: { ...st, output: nextOut } } as unknown as typeof part;
                   }
@@ -1162,16 +1187,26 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
                 if (isRunning) {
                   const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
                   const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
-                  let nextOut = curMeta + delta
-                  if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 1.5) {
-                    nextOut = `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + nextOut.slice(-MAX_TOOL_OUTPUT_KEEP)
+                  let nextOut: string
+                  if (delta.length > MAX_TOOL_OUTPUT_KEEP * 6) {
+                    nextOut = `…[delta truncated ${delta.length - MAX_TOOL_OUTPUT_KEEP} chars]\n` + delta.slice(-MAX_TOOL_OUTPUT_KEEP)
+                  } else {
+                    nextOut = curMeta + delta
+                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 6) {
+                      nextOut = `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + nextOut.slice(-MAX_TOOL_OUTPUT_KEEP)
+                    }
                   }
                   nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: nextOut } } } as unknown as MessageWithParts["parts"][number];
                 } else {
                   const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
-                  let nextOut = cur + delta
-                  if (nextOut.length > MAX_TOOL_OUTPUT_KEEP) {
-                    nextOut = nextOut.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${nextOut.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                  let nextOut: string
+                  if (delta.length > MAX_TOOL_OUTPUT_KEEP) {
+                    nextOut = delta.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${delta.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                  } else {
+                    nextOut = cur + delta
+                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP) {
+                      nextOut = nextOut.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${nextOut.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+                    }
                   }
                   nextPart = { ...existing, state: { ...st, output: nextOut } } as unknown as MessageWithParts["parts"][number];
                 }
