@@ -127,7 +127,7 @@ export function ExposeCommands() {
   }
 
   const createMut = useMutation({
-    mutationFn: (c: { commandName: string; exposeName?: string; description?: string }) => createExposed(c),
+    mutationFn: (c: Parameters<typeof createExposed>[0]) => createExposed(c),
     onSuccess: () => { invalidate() },
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to expose'),
   })
@@ -298,7 +298,10 @@ export function ExposeCommands() {
                       <td className="px-2 py-1.5 text-xs">{ex ? <span className={`px-1.5 py-0.5 rounded text-[10px] border ${ex.sessionMode==='new'?'bg-green-500/10 border-green-500/30 text-green-700':'bg-amber-500/10 border-amber-500/30 text-amber-700'}`}>{ex.sessionMode==='new'?'새 세션':'재활용'}</span> : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-xs font-mono truncate max-w-[180px]" title={ex ? `${ex.titleTemplate ?? ''} ${ex.pinnedSessionId ?? ''}` : ''}>{ex ? (ex.titleTemplate || ex.pinnedSessionId ? `${ex.titleTemplate ?? ''}${ex.titleTemplate && ex.pinnedSessionId ? ' / ' : ''}${ex.pinnedSessionId ?? ''}` : <span className="text-muted-foreground/50">—</span>) : <span className="text-muted-foreground/50">—</span>}</td>
                       <td className="px-2 py-1.5 text-center">
-                        {ex ? <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingEx(ex); setEditForm({ exposeName: ex.exposeName, description: ex.description ?? '', sessionMode: ex.sessionMode ?? 'new', titleTemplate: ex.titleTemplate ?? '', pinnedSessionId: ex.pinnedSessionId ?? '', argsTemplate: (ex as any).argsTemplate ?? '', exampleArgs: (ex as any).exampleArgs ?? '' }) }} title="편집"><Pencil className="w-3.5 h-3.5" /></Button> : null}
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => {
+                          if (ex) { setEditingEx(ex); setEditForm({ exposeName: ex.exposeName, description: ex.description ?? '', sessionMode: ex.sessionMode ?? 'new', titleTemplate: ex.titleTemplate ?? '', pinnedSessionId: ex.pinnedSessionId ?? '', argsTemplate: (ex as any).argsTemplate ?? '', exampleArgs: (ex as any).exampleArgs ?? '' }) }
+                          else { const draft: any = { id: 0, commandName: cmd.name, exposeName: cmd.name, description: cmd.description ?? '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '' }; setEditingEx(draft); setEditForm({ exposeName: cmd.name, description: cmd.description ?? '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '' }) }
+                        }} title="편집"><Pencil className="w-3.5 h-3.5" /></Button>
                       </td>
                     </tr>
                   )
@@ -307,7 +310,7 @@ export function ExposeCommands() {
             </table>
           </div>
           <div className="px-3 py-2 border-t text-xs text-muted-foreground bg-muted/10">
-            체크 = 노출 · 편집 버튼에서 외부 이름/설명/세션 전략 수정 · 원본 설명이 기본값
+            체크 = 노출 · 편집은 미노출 상태에서도 가능 (편집 저장 시 자동 노출 생성) · 원본 설명이 기본값
           </div>
         </div>
       </div>
@@ -368,6 +371,12 @@ export function ExposeCommands() {
             <Button variant="ghost" onClick={() => setEditingEx(null)}>취소</Button>
             <Button onClick={() => {
               if (!editingEx) return
+              if ((editingEx as any).id === 0) {
+                // 미노출 상태에서 편집 → 새로 노출 생성 (비활성이어도 설정 저장)
+                const cmdName = (editingEx as any).commandName
+                createMut.mutate({ commandName: cmdName, exposeName: editForm.exposeName.trim() || cmdName, description: editForm.description, sessionMode: editForm.sessionMode, titleTemplate: editForm.titleTemplate, pinnedSessionId: editForm.pinnedSessionId || undefined, argsTemplate: editForm.argsTemplate, exampleArgs: editForm.exampleArgs }, { onSuccess: () => setEditingEx(null) })
+                return
+              }
               const payload: any = {}
               if (editForm.exposeName.trim() && editForm.exposeName.trim() !== editingEx.exposeName) payload.exposeName = editForm.exposeName.trim()
               if (editForm.description !== editingEx.description) payload.description = editForm.description
@@ -378,7 +387,7 @@ export function ExposeCommands() {
               if (editForm.exampleArgs !== ((editingEx as any).exampleArgs ?? '')) payload.exampleArgs = editForm.exampleArgs
               if (Object.keys(payload).length === 0) { setEditingEx(null); return }
               updateMut.mutate({ id: editingEx.id, data: payload }, { onSuccess: () => setEditingEx(null) })
-            }}>저장</Button>
+            }}>{(editingEx as any)?.id === 0 ? '노출 생성' : '저장'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
