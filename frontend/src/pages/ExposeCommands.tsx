@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { showToast } from '@/lib/toast'
-import { Copy, Plug, Globe, ArrowUp, ArrowDown, ArrowUpDown, Search, Pencil, Home } from 'lucide-react'
+import { Copy, Globe, ArrowUp, ArrowDown, ArrowUpDown, Search, Pencil, Home, ChevronDown, ChevronUp } from 'lucide-react'
 import { getSystemInfo } from '@/api/system'
 import { useNavigate } from 'react-router-dom'
 import { Button as HeaderButton } from '@/components/ui/button'
@@ -184,27 +184,11 @@ export function ExposeCommands() {
         </div>
       </header>
       <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
-        <div className="rounded-lg border p-3 bg-muted/20 space-y-2">
-          <div className="flex flex-wrap items-center gap-3 text-xs">
-            <span className="inline-flex items-center gap-1.5 font-medium"><Globe className="w-3.5 h-3.5" /> Public (MCP-like)</span>
-            <span className="font-mono px-2 py-1 rounded bg-background border">GET {publicBase}</span>
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => copy(publicBase)}><Copy className="w-3 h-3" /> Copy</Button>
-            <span className="text-muted-foreground">· {publicData?.count ?? 0} 노출됨</span>
-            {system && <span className="text-muted-foreground">· v{system.version} :{system.backend.port}</span>}
-          </div>
-          <div className="text-xs font-mono bg-background border rounded p-2 space-y-1">
-            <div>호출: <span className="text-primary">POST {publicBase}/:exposeName/run</span></div>
-            <div className="text-muted-foreground">body: {"{ repoId?: number, directory?: string, args?: string, sessionId?: string }"} — 체크된 것만 노출, 미체크는 404</div>
-            <div className="text-muted-foreground">세션: <span className="text-foreground">새 세션</span> = 항상 신규 세션 생성(제목 템플릿 적용), <span className="text-foreground">기존 세션</span> = 고정 세션 또는 호출 시 sessionId 재활용, 없으면 신규</div>
-            <div className="text-muted-foreground">제목 템플릿 변수: {"{exposeName} {commandName} {date} {time}"} 예: "[EXPOSE] {"{exposeName}"} - {"{date}"}"</div>
-            <div className="text-muted-foreground">예: curl -X POST {publicBase}/my-plan/run -H "Content-Type: application/json" -d '{"{ \"repoId\":1, \"args\":\"hello\" }"}'</div>
-          </div>
-        </div>
+        <DescPanel publicBase={publicBase} publicCount={publicData?.count ?? 0} system={system} onCopy={copy} />
 
         <div className="flex items-center gap-2">
           <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter name / description / repo" className="h-8 max-w-sm text-sm" />
           <span className="text-xs text-muted-foreground">{filtered.length} / {allCommands.length} commands</span>
-          <span className="ml-auto text-xs text-muted-foreground flex items-center gap-1"><Plug className="w-3 h-3" /> /expose</span>
         </div>
 
         <div className="rounded-lg border overflow-hidden">
@@ -429,6 +413,33 @@ export function ExposeCommands() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  )
+}
+
+function DescPanel({ publicBase, publicCount, system, onCopy }: { publicBase: string; publicCount: number; system: any; onCopy: (t: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-lg border bg-muted/20">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between p-3 text-xs hover:bg-muted/30">
+        <span className="inline-flex items-center gap-1.5 font-medium"><Globe className="w-3.5 h-3.5" /> Public (MCP-like) · {publicCount} 노출됨 {system ? `· v${system.version} :${system.backend.port}` : ''}</span>
+        <span className="inline-flex items-center gap-1 text-muted-foreground">{open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />} {open ? '접기' : '펼치기'}</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-mono px-2 py-1 rounded bg-background border">GET {publicBase}</span>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onCopy(publicBase)}><Copy className="w-3 h-3" /> Copy</Button>
+          </div>
+          <div className="text-xs font-mono bg-background border rounded p-2 space-y-1">
+            <div>호출: <span className="text-primary">POST {publicBase}/:exposeName/run</span></div>
+            <div className="text-muted-foreground">body: {"{ repoId?: number, directory?: string, args?: string, sessionId?: string }"} — 체크된 것만 노출, 미체크는 404</div>
+            <div className="text-muted-foreground">세션: <span className="text-foreground">새 세션</span> = 항상 신규 세션 생성(제목 템플릿 적용), <span className="text-foreground">기존 세션</span> = 고정 세션 또는 호출 시 sessionId 재활용, 없으면 신규</div>
+            <div className="text-muted-foreground">제목 템플릿 변수: {"{exposeName} {commandName} {date} {time}"} 예: "[EXPOSE] {"{exposeName}"} - {"{date}"}"</div>
+            <div className="text-muted-foreground">예: curl -X POST {publicBase}/my-plan/run -H "Content-Type: application/json" -d '{"{ \"repoId\":1, \"args\":\"hello\" }"}'</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
