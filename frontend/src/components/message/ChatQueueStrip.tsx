@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, X } from 'lucide-react'
-import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat } from '@/hooks/useChatQueue'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, RotateCcw, X } from 'lucide-react'
+import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat, useRetryQueuedChat } from '@/hooks/useChatQueue'
 import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 
@@ -12,9 +12,18 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
   const { data: items = [] } = useQueuedChats(sessionID)
   const removeChat = useRemoveQueuedChat()
   const moveChat = useMoveQueuedChat()
+  const retryChat = useRetryQueuedChat()
   const [minimized, setMinimized] = useState(true)
   const sendingItem = items.find((item) => item.status === 'sending')
   const failedItem = !sendingItem ? items.find((item) => item.status === 'failed') : undefined
+  // failed 발생 시 자동 펼침 — minimized 고정이면 Retry 버튼을 못 찾아 먹통처럼 보인다.
+  useEffect(() => {
+    if (failedItem) setMinimized(false)
+  }, [failedItem])
+  // sending 10분 이상 고착 의심 여부 (nw오류 후 limbo·장시간 턴)
+  const sendingStuck = sendingItem != null
+    && sendingItem.sendingSince != null
+    && Date.now() - sendingItem.sendingSince > 10 * 60_000
   // failed 항목은 목록에 남겨 X로 지울 수 있게 한다. sending만 제목으로 올린다.
   const restItems = sendingItem ? items.filter((item) => item.id !== sendingItem.id) : items
   useEffect(() => {
@@ -72,14 +81,26 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
             <Clock className="w-3 h-3 shrink-0" />
             <span className="flex-1">Queue is empty</span>
+          <button
+            type="button"
+            onClick={toggleInterrupt}
+            className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
+            title={allowInterrupt ? 'Send queue after every generation\nInterruption may skip some processing' : 'Send queue after working end'}
+          >
+            {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
+          </button>
+          {sendingStuck && sendingItem && (
             <button
               type="button"
-              onClick={toggleInterrupt}
-              className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
-              title={allowInterrupt ? 'Send queue after every generation\nInterruption may skip some processing' : 'Send queue after working end'}
+              aria-label="Retry stuck sending message"
+              title="고착 의심 — Retry (queued로 되돌리고 재발송)"
+              className="inline-flex items-center gap-1 rounded border border-destructive/40 px-1.5 h-5 text-[10px] font-medium text-destructive hover:bg-destructive/10"
+              onClick={() => retryChat.mutate({ sessionID, id: sendingItem.id })}
             >
-              {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
+              <RotateCcw className="h-3 w-3" />
+              Retry
             </button>
+          )}
             <button
               type="button"
               aria-label="Minimize queue"
@@ -112,9 +133,9 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           )}
           <span className="shrink-0 font-semibold">({restItems.length})</span>
           {sendingItem ? (
-            <span className="truncate opacity-60">Sending... {sendingItem.text}</span>
+            <span className="truncate opacity-60">{sendingStuck ? '고착 의심 — Abort 또는 Retry' : 'Sending...'} {sendingItem.text}</span>
           ) : failedItem ? (
-            <span className="truncate text-destructive">Failed to send — tap X on the item to remove</span>
+            <span className="truncate text-destructive">Failed to send — tap Retry or X on the item</span>
           ) : (
             <span className="shrink-0">Waiting to send</span>
           )}
@@ -137,9 +158,9 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           )}
           <span className="shrink-0 font-semibold">({restItems.length})</span>
           {sendingItem ? (
-            <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
+            <span className="min-w-0 flex-1 truncate opacity-60">{sendingStuck ? '고착 의심 — Abort 또는 Retry' : 'Sending...'} {sendingItem.text}</span>
           ) : failedItem ? (
-            <span className="min-w-0 flex-1 truncate text-destructive">Failed to send — remove the item below</span>
+            <span className="min-w-0 flex-1 truncate text-destructive">Failed to send — Retry or remove the item below</span>
           ) : (
             <span className="flex-1">Waiting to send</span>
           )}
@@ -171,6 +192,17 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
                 )}
               </span>
               <span className="flex shrink-0 items-center gap-0.5">
+                {(item.status === 'failed' || item.status === 'sending') && (
+                  <button
+                    type="button"
+                    aria-label="Retry queued message"
+                    title="Retry (queued로 되돌리고 재발송)"
+                    className="rounded p-0.5 text-muted-foreground opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
+                    onClick={() => retryChat.mutate({ sessionID, id: item.id })}
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                  </button>
+                )}
                 <button
                   type="button"
                   aria-label="Move to first"

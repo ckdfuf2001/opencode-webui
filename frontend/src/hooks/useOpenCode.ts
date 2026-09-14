@@ -1172,7 +1172,7 @@ export const useSessionStatusMap = () => {
     refetchInterval: 1200,
     staleTime: 800,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
   });
 };
 

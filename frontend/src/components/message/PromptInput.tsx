@@ -230,6 +230,21 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     }
   }
 
+  // enqueue 실패 시 입력 유실 금지: 성공 때만 입력창을 비운다. 실패면 입력 유지 + 토스트.
+  const enqueueAndClear = (vars: { sessionID: string; text: string; directory?: string } & { model?: { providerID: string; modelID: string }; agent?: string }) => {
+    enqueueQueued.mutate(vars, {
+      onSuccess: () => {
+        setPrompt('')
+        setAttachedFiles(new Map())
+        onSubmitted?.()
+        if (textareaRef.current) textareaRef.current.style.height = 'auto'
+      },
+      onError: () => {
+        // 입력 유지 — useEnqueueQueuedChat이 이미 토스트 표시
+      },
+    })
+  }
+
   const buildValidatedParts = async (): Promise<ContentPart[]> => {    if (attachedFiles.size === 0) return parsePromptToParts(prompt, attachedFiles)
 
     const mentionedKeys = new Set<string>()
@@ -309,11 +324,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           : prompt.trim()
         if (text) {
           clearCancelledUntilNextSend(sessionID)
-          enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
-          setPrompt('')
-          setAttachedFiles(new Map())
-          onSubmitted?.()
-          if (textareaRef.current) textareaRef.current.style.height = 'auto'
+          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
         }
         return
       }
@@ -338,13 +349,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       if (text.trim()) {
         clearCancelledUntilNextSend(sessionID)
         fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-        enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
-        setPrompt('')
-        setAttachedFiles(new Map())
-        onSubmitted?.()
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto'
-        }
+        enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
       }
       return
     }
@@ -360,13 +365,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           .join('\n')
         if (text.trim()) {
           clearCancelledUntilNextSend(sessionID)
-          enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
-          setPrompt('')
-          setAttachedFiles(new Map())
-          onSubmitted?.()
-          if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto'
-          }
+          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
         }
         return
       }
@@ -382,14 +381,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     if (!finalText.trim()) return
     clearCancelledUntilNextSend(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-    enqueueQueued.mutate({ sessionID, text: finalText, directory, ...queueDispatchOpts() })
-
-    setPrompt('')
-    setAttachedFiles(new Map())
-    onSubmitted?.()
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
+    enqueueAndClear({ sessionID, text: finalText, directory, ...queueDispatchOpts() })
     } finally {
       submitGuardRef.current = false
     }
@@ -416,13 +408,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     // 첫 전송도 큐 경유: 스트립에 sending 표시가 뜨고 응답 확인 후 제거된다.
     clearCancelledUntilNextSend(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-    enqueueQueued.mutate({ sessionID, text, directory, ...queueDispatchOpts() })
-    setPrompt('')
-    setAttachedFiles(new Map())
-    onSubmitted?.()
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
+    enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
   }
 
   const handleCommandSelect = async (command: CommandType) => {

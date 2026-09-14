@@ -5,6 +5,9 @@ export interface QueuedChat {
   text: string
   createdAt: number
   status: 'queued' | 'sending' | 'failed'
+  sendingSince?: number
+  failedAt?: number
+  attempts?: number
 }
 
 export interface EnqueueChatOptions {
@@ -54,4 +57,12 @@ export async function moveQueuedChat(sessionID: string, id: string, toTop: boole
 /** 중단(abort) 시: 세션 대기열 전체 비우기 */
 export async function clearQueuedChats(sessionID: string): Promise<void> {
   await request<{ success: boolean }>(`/${encodeURIComponent(sessionID)}`, { method: 'DELETE' })
+}
+
+/** 수동 재시도: sending 고착·failed를 queued로 되돌리고 즉시 발송 시도 */
+export async function retryQueuedChat(sessionID: string, id: string): Promise<QueuedChat[]> {
+  return request<QueuedChat[]>(
+    `/${encodeURIComponent(sessionID)}/${encodeURIComponent(id)}/retry`,
+    jsonInit('POST'),
+  )
 }

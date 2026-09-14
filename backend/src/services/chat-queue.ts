@@ -19,6 +19,12 @@ export interface QueuedChat {
   status: 'queued' | 'sending' | 'failed'
   model?: { providerID: string; modelID: string }
   agent?: string
+  /** sending으로 바뀐 시각. 장시간 sending 고착(nw오류·장시간 턴) 감지용. */
+  sendingSince?: number
+  /** failed로 바뀐 시각. 일시적 네트워크 오류 후 자동 재시도 쿨다운용. */
+  failedAt?: number
+  /** 누적 실패 횟수(타임아웃 제외). 영구 failed 판정용. */
+  attempts?: number
 }
 
 export interface EnqueueOptions {
@@ -29,8 +35,13 @@ export interface EnqueueOptions {
 const MAX_QUEUE_LENGTH = 20
 const MAX_TEXT_LENGTH = 16_000
 const REQUEST_TIMEOUT_MS = 1_500
-const SEND_HEADERS_TIMEOUT_MS = 90_000
+// opencode는 턴이 끝나야 응답 헤더를 보낸다. SAP 분석 같은 장시간 턴(로그상 9분+)이
+// 90초에 항상 TimeoutError가 나서 sending limbo가 반복되므로 proxy long-running(600s)에 맞춘다.
+const SEND_HEADERS_TIMEOUT_MS = 600_000
 const FLUSH_RETRY_BACKOFF_MS = 2_000
+// sending이 이 시간을 넘겨도 idle이 관측되지 않으면 고착 의심으로 warn을 남긴다
+// (자동 제거는 중복 전송 위험이 있어 하지 않는다 — 사용자가 retry/requeue로 해제).
+const SENDING_STUCK_WARN_MS = 10 * 60_000
 
 // In-memory, per-session FIFO of user messages typed while the assistant was
 // still generating. The session status poller (2s) flushes them one at a time
@@ -39,9 +50,12 @@ const queues = new Map<string, QueuedChat[]>()
 const failedUntil = new Map<string, number>()
 // 연속 실패 횟수. 상한을 넘기면 failed로 고정하고 자동 재시도를 멈춘다
 // (폴더명 변경 등으로 디렉터리가 깨졌을 때 수십 번 중복 발송 방지).
-// failed 헤드는 순서 유지를 위해 다음 항목을 막는다. 사용자가 X로 지우면 해제.
+// failed 헤드는 순서 유지를 위해 다음 항목을 막는다. 사용자가 X로 지우거나
+// 재시도(retry)하면 해제. 일시적 nw오류 후 영구 먹통을 막기 위해 상한 전에는
+// 쿨다운 뒤 자동 재시도한다 (아래 FAILED_RETRY_COOLDOWN_MS).
 const failCount = new Map<string, number>()
-const MAX_CONSECUTIVE_FAILURES = 1
+const MAX_CONSECUTIVE_FAILURES = 5
+const FAILED_RETRY_COOLDOWN_MS = 30_000
 const inFlight = new Set<string>()
 // 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
 // workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.
@@ -182,12 +196,28 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if (!queue || queue.length === 0) return
   const next = queue[0]
   if (!next) return
-  // failed는 자동 재시도 안 함. 순서 유지를 위해 뒤 항목도 막는다. X로 직접 지워야 해제.
-  if (next.status === 'failed') return
+  // failed는 상한 전까지 쿨다운 뒤 자동 재시도한다 (일시적 nw오류 후 영구 먹통 방지).
+  // 상한을 넘긴 failed만 순서 유지를 위해 뒤 항목을 막고 수동 retry/X 해제를 기다린다.
+  if (next.status === 'failed') {
+    const count = failCount.get(sessionID) ?? next.attempts ?? MAX_CONSECUTIVE_FAILURES
+    if (count >= MAX_CONSECUTIVE_FAILURES) return
+    const failedAt = next.failedAt ?? 0
+    if (Date.now() - failedAt < FAILED_RETRY_COOLDOWN_MS) return
+    next.status = 'queued'
+    next.failedAt = undefined
+    logger.info(`Auto-retrying failed chat for session ${sessionID} after cooldown (attempt ${count + 1}/${MAX_CONSECUTIVE_FAILURES})`)
+  }
   if (next.status === 'sending') {
     // 전송은 됐는데 응답 미확인 상태. 세션이 idle이면 턴이 끝난 것으로 보고 제거(확정).
     if (await isSessionBusy(sessionID)) {
       lastBusyAt.set(sessionID, Date.now())
+      // 장시간 sending 고착(nw오류·장시간 턴) 경고 — 자동 제거는 중복 전송 위험이 있어 안 한다.
+      const since = next.sendingSince ?? 0
+      if (since && Date.now() - since > SENDING_STUCK_WARN_MS) {
+        logger.warn(`Queued chat for session ${sessionID} stuck in sending for ${Math.round((Date.now() - since) / 60000)}min (still busy). User can abort or POST /api/chat-queue/${sessionID}/${next.id}/retry to requeue.`)
+        // warn 스팸 방지: 다음 warn은 한 쿨다운 뒤에
+        next.sendingSince = Date.now()
+      }
       return
     }
     queue.splice(0, 1)
@@ -217,6 +247,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   // 제거는 확정 후에만: sending 표시 후 응답 확인(HTTP 2xx 즉시, 타임아웃은 idle 관찰) 시 제거.
   // 실패(연결 에러·거부)는 queued로 되돌리고 backoff.
   next.status = 'sending'
+  next.sendingSince = Date.now()
 
   inFlight.add(sessionID)
   logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
@@ -256,10 +287,15 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
 function recordFailure(sessionID: string, id: string): void {
   const count = (failCount.get(sessionID) ?? 0) + 1
   failCount.set(sessionID, count)
+  const queue = queues.get(sessionID)
+  const head = queue?.[0]?.id === id ? queue[0] : undefined
+  if (head) {
+    head.attempts = (head.attempts ?? 0) + 1
+    head.failedAt = Date.now()
+  }
   if (count >= MAX_CONSECUTIVE_FAILURES) {
-    const queue = queues.get(sessionID)
-    if (queue && queue[0]?.id === id) {
-      queue[0]!.status = 'failed'
+    if (head) {
+      head.status = 'failed'
     }
     logger.error(`Queued chat for session ${sessionID} failed ${count} times in a row; marked failed, auto-retry stopped`)
     // 서버 응답 없음 등으로 큐가 failed가 되면 Cancelled 배찌가 다음 채팅 전까지 유지되게 DB에도 저장
@@ -284,6 +320,27 @@ function markHeadQueued(sessionID: string, id: string): void {
   const queue = queues.get(sessionID)
   if (!queue || queue[0]?.id !== id) return
   queue[0]!.status = 'queued'
+}
+
+/** 수동 재시도: sending/failed 항목을 queued로 되돌리고 즉시 발송 시도.
+ *  sending 고착(nw오류 후 limbo)·상한 초과 failed 모두 대상. 순서 유지를 위해
+ *  헤드가 아니면 queued로만 되돌리고, 헤드면 dispatchHead 즉시 호출. */
+export function retryQueuedChat(sessionID: string, id: string): QueuedChat[] | null {
+  const queue = queues.get(sessionID)
+  if (!queue) return null
+  const item = queue.find((entry) => entry.id === id)
+  if (!item) return null
+  if (item.status !== 'sending' && item.status !== 'failed') return [...queue]
+  item.status = 'queued'
+  delete item.failedAt
+  delete item.sendingSince
+  failedUntil.delete(sessionID)
+  failCount.delete(sessionID)
+  logger.info(`Manual retry of queued chat for session ${sessionID} (id ${id})`)
+  if (queue[0]?.id === id) {
+    void dispatchHead(opencodeServerManager.getUrl(), sessionID)
+  }
+  return [...queue]
 }
 
 /**

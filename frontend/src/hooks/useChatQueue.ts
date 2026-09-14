@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, type EnqueueChatOptions } from '@/api/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, type EnqueueChatOptions } from '@/api/chat-queue'
 import { showToast } from '@/lib/toast'
 
 export const chatQueueKeys = {
@@ -33,7 +33,7 @@ export function useQueuedChats(sessionID?: string | null) {
     refetchInterval: 2000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
   })
 }
 
@@ -93,6 +93,21 @@ export function useMoveQueuedChat() {
     },
     onError: (error) => {
       showToast.error(error instanceof Error ? error.message : 'Failed to reorder queue', { duration: 5000 })
+    },
+  })
+}
+
+export function useRetryQueuedChat() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ sessionID, id }: { sessionID: string; id: string }) =>
+      retryQueuedChat(sessionID, id),
+    onSuccess: (queue, { sessionID }) => {
+      queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
+    },
+    onError: (error) => {
+      showToast.error(error instanceof Error ? error.message : 'Failed to retry queued message', { duration: 5000 })
     },
   })
 }

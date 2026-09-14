@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, setQuickMode } from '../services/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, retryQueuedChat, setQuickMode } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
@@ -87,6 +87,20 @@ export function createChatQueueRoutes() {
       if (error instanceof z.ZodError) return c.json({ error: 'Invalid move payload' }, 400)
       logger.error('Failed to move queued chat:', error)
       return c.json({ error: 'Failed to move queued chat' }, 500)
+    }
+  })
+
+  // 수동 재시도: sending 고착·failed를 queued로 되돌리고 즉시 발송 시도
+  app.post('/:sessionId/:itemId/retry', async (c) => {
+    try {
+      const sessionId = c.req.param('sessionId')
+      const itemId = c.req.param('itemId')
+      const queue = retryQueuedChat(sessionId, itemId)
+      if (!queue) return c.json({ error: 'Queue item not found' }, 404)
+      return c.json(queue)
+    } catch (error) {
+      logger.error('Failed to retry queued chat:', error)
+      return c.json({ error: 'Failed to retry queued chat' }, 500)
     }
   })
 
