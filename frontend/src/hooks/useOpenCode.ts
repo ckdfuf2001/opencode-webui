@@ -108,32 +108,60 @@ export function truncateLargeToolOutputs(messages: MessageListResponse): Message
   const next = messages.map((msg) => {
     let msgChanged = false
     const newParts = msg.parts.map((part: any) => {
+      // edit 포함 모든 툴 + 큰 text 파트(파일 내용)도 힙을 잡는다 — 같이 잘라냄
+      if (part.type === 'text' && typeof part.text === 'string' && part.text.length > MAX_TOOL_OUTPUT_KEEP * 2) {
+        msgChanged = true
+        const keep = Math.max(5_000, MAX_TOOL_OUTPUT_KEEP - Math.max(0, totalKept - 150_000))
+        const truncated = part.text.length > keep ? part.text.slice(0, keep) + TOOL_TRUNCATE_NOTICE + ` (${part.text.length - keep} chars omitted)` : part.text
+        totalKept += keep
+        return { ...part, text: truncated }
+      }
       if (part.type !== 'tool' || !part.state) return part
-      const st = part.state as { output?: string; metadata?: { output?: string }; status?: string }
+      const st = part.state as { output?: string; metadata?: { output?: string }; status?: string; input?: unknown }
       const out = st.output ?? st.metadata?.output
-      if (!out) return part
-      const isRunning = st.status === 'running'
-      if (!isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP) {
-        totalKept += out.length
-        return part
+      // edit 등은 input에 파일 내용이 통째로 들어갈 수 있어 input도 같이 체크
+      const inputStr = typeof st.input === 'string' ? st.input : st.input ? JSON.stringify(st.input) : ''
+      const inputLen = inputStr.length
+      if (out) {
+        const isRunning = st.status === 'running'
+        if (!isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP && inputLen <= MAX_TOOL_OUTPUT_KEEP) {
+          totalKept += out.length + Math.min(inputLen, 5_000)
+          return part
+        }
+        if (isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP * 6) {
+          totalKept += out.length
+          return part
+        }
+        msgChanged = true
+        const budget = Math.max(5_000, MAX_TOOL_OUTPUT_KEEP - Math.max(0, totalKept - 150_000))
+        const keep = isRunning ? Math.min(out.length, MAX_TOOL_OUTPUT_KEEP * 6) : Math.min(out.length, budget)
+        const truncated = out.length > keep ? out.slice(0, keep) + TOOL_TRUNCATE_NOTICE + ` (${out.length - keep} chars omitted)` : out
+        totalKept += keep
+        let newState: any = { ...st }
+        if (st.output != null) newState.output = truncated
+        else newState.metadata = { ...(st.metadata ?? {}), output: truncated }
+        // edit input도 크면 잘라냄 (원본은 opencode에 보관)
+        if (inputLen > MAX_TOOL_OUTPUT_KEEP) {
+          const inKeep = 2_000
+          newState.input = typeof st.input === 'string' ? (st.input as string).slice(0, inKeep) + `…[input truncated ${inputLen - inKeep} chars]` : st.input
+        }
+        return { ...part, state: newState }
       }
-      if (isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP * 6) {
-        totalKept += out.length
-        return part
+      // output은 없는데 input만 큰 경우 (edit)
+      if (inputLen > MAX_TOOL_OUTPUT_KEEP) {
+        msgChanged = true
+        let newState: any = { ...st, input: typeof st.input === 'string' ? (st.input as string).slice(0, 2_000) + `…[input truncated ${inputLen - 2_000} chars]` : st.input }
+        return { ...part, state: newState }
       }
-      msgChanged = true
-      const budget = Math.max(5_000, MAX_TOOL_OUTPUT_KEEP - Math.max(0, totalKept - 150_000))
-      const keep = isRunning ? Math.min(out.length, MAX_TOOL_OUTPUT_KEEP * 6) : Math.min(out.length, budget)
-      const truncated = out.length > keep ? out.slice(0, keep) + TOOL_TRUNCATE_NOTICE + ` (${out.length - keep} chars omitted)` : out
-      totalKept += keep
-      if (st.output != null) return { ...part, state: { ...st, output: truncated } }
-      return { ...part, state: { ...st, metadata: { ...(st.metadata ?? {}), output: truncated } } }
+      return part
     })
     if (msgChanged) { changed = true; return { ...msg, parts: newParts } }
     for (const p of newParts) {
       if ((p as any).type === 'tool') {
         const s = (p as any).state
         totalKept += (s?.output ?? s?.metadata?.output ?? '').length
+      } else if ((p as any).type === 'text' && typeof (p as any).text === 'string') {
+        totalKept += (p as any).text.length
       }
     }
     return msg
