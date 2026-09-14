@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { showToast } from '@/lib/toast'
-import { Copy, Plug, Globe } from 'lucide-react'
+import { Copy, Plug, Globe, ArrowUp, ArrowDown, ArrowUpDown, Search } from 'lucide-react'
 import { getSystemInfo } from '@/api/system'
 import { Header } from '@/components/layout/Header'
 
@@ -35,6 +35,21 @@ export function ExposeCommands() {
 
   const [filter, setFilter] = useState('')
   const [edits, setEdits] = useState<Record<number, { exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string }>>({})
+  type SortKey = 'exposed'|'name'|'owner'|'desc'|'exposeName'|'exposeDesc'|'session'
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
+  const [filterExposed, setFilterExposed] = useState<'all'|'exposed'|'unexposed'>('all')
+  const [filterOwner, setFilterOwner] = useState<'all'|'builtin'|'global'|'project'>('all')
+  const [colSearch, setColSearch] = useState({ name: '', owner: '', desc: '', exposeName: '', exposeDesc: '', sessionText: '' })
+
+  const toggleSort = (k: SortKey) => {
+    if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(k); setSortDir('asc') }
+  }
+  const SortIcon = ({ k }: { k: SortKey }) => {
+    if (sortKey !== k) return <ArrowUpDown className="w-3 h-3 opacity-40" />
+    return sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+  }
 
   const exposedByCommand = useMemo(() => {
     const m = new Map<string, typeof exposed[number]>()
@@ -43,10 +58,63 @@ export function ExposeCommands() {
   }, [exposed])
 
   const filtered = useMemo(() => {
+    let list = [...allCommands]
     const q = filter.trim().toLowerCase()
-    if (!q) return allCommands
-    return allCommands.filter(c => c.name.toLowerCase().includes(q) || (c.description ?? '').toLowerCase().includes(q) || (c.repoName ?? '').toLowerCase().includes(q))
-  }, [allCommands, filter])
+    if (q) list = list.filter(c => c.name.toLowerCase().includes(q) || (c.description ?? '').toLowerCase().includes(q) || (c.repoName ?? '').toLowerCase().includes(q))
+    // per-header filters
+    if (filterExposed !== 'all') {
+      list = list.filter(c => {
+        const ex = exposedByCommand.get(c.name)
+        return filterExposed === 'exposed' ? !!ex : !ex
+      })
+    }
+    if (filterOwner !== 'all') list = list.filter(c => c.scope === filterOwner)
+    if (colSearch.name.trim()) {
+      const qq = colSearch.name.trim().toLowerCase()
+      list = list.filter(c => c.name.toLowerCase().includes(qq))
+    }
+    if (colSearch.owner.trim()) {
+      const qq = colSearch.owner.trim().toLowerCase()
+      list = list.filter(c => (c.repoName ?? c.scope).toLowerCase().includes(qq))
+    }
+    if (colSearch.desc.trim()) {
+      const qq = colSearch.desc.trim().toLowerCase()
+      list = list.filter(c => (c.description ?? '').toLowerCase().includes(qq))
+    }
+    if (colSearch.exposeName.trim() || colSearch.exposeDesc.trim() || colSearch.sessionText.trim()) {
+      list = list.filter(c => {
+        const ex = exposedByCommand.get(c.name)
+        if (!ex) return false
+        if (colSearch.exposeName.trim() && !ex.exposeName.toLowerCase().includes(colSearch.exposeName.trim().toLowerCase())) return false
+        if (colSearch.exposeDesc.trim() && !ex.description.toLowerCase().includes(colSearch.exposeDesc.trim().toLowerCase())) return false
+        if (colSearch.sessionText.trim()) {
+          const hay = `${ex.sessionMode} ${ex.titleTemplate} ${ex.pinnedSessionId ?? ''}`.toLowerCase()
+          if (!hay.includes(colSearch.sessionText.trim().toLowerCase())) return false
+        }
+        return true
+      })
+    }
+    // sort
+    if (sortKey) {
+      list.sort((a,b) => {
+        const exA = exposedByCommand.get(a.name)
+        const exB = exposedByCommand.get(b.name)
+        let va: string = '', vb: string = ''
+        switch (sortKey) {
+          case 'exposed': va = exA ? '1' : '0'; vb = exB ? '1' : '0'; break
+          case 'name': va = a.name; vb = b.name; break
+          case 'owner': va = a.repoName ?? a.scope; vb = b.repoName ?? b.scope; break
+          case 'desc': va = a.description ?? ''; vb = b.description ?? ''; break
+          case 'exposeName': va = exA?.exposeName ?? ''; vb = exB?.exposeName ?? ''; break
+          case 'exposeDesc': va = exA?.description ?? ''; vb = exB?.description ?? ''; break
+          case 'session': va = exA?.sessionMode ?? ''; vb = exB?.sessionMode ?? ''; break
+        }
+        const cmp = va.localeCompare(vb)
+        return sortDir === 'asc' ? cmp : -cmp
+      })
+    }
+    return list
+  }, [allCommands, filter, filterExposed, filterOwner, colSearch, sortKey, sortDir, exposedByCommand])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['expose', 'commands'] })
@@ -118,17 +186,90 @@ export function ExposeCommands() {
         <div className="rounded-lg border overflow-hidden flex flex-col">
           <div className="overflow-auto max-h-[60vh] overscroll-contain" style={{ scrollbarGutter: 'stable' } as any}>
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-muted/50 backdrop-blur border-b text-xs text-muted-foreground">
+              <thead className="sticky top-0 bg-muted/80 backdrop-blur border-b text-xs text-muted-foreground">
                 <tr>
-                  <th className="w-10 px-2 py-2 text-center">노출</th>
-                  <th className="text-left px-2 py-2 w-[130px]">커맨드</th>
-                  <th className="text-left px-2 py-2 w-[90px]">소유</th>
-                  <th className="text-left px-2 py-2">원본 설명</th>
-                  <th className="text-left px-2 py-2 w-[140px]">외부 이름</th>
-                  <th className="text-left px-2 py-2 w-[200px]">외부 설명</th>
-                  <th className="text-left px-2 py-2 w-[110px]">세션</th>
-                  <th className="text-left px-2 py-2 w-[160px]">세션명 템플릿 / 고정 세션</th>
-                  <th className="w-10 px-2 py-2 text-center">복사</th>
+                  <th className="px-2 py-1 text-center">
+                    <button onClick={() => toggleSort('exposed')} className="inline-flex items-center gap-1 hover:text-foreground"><span>노출</span><SortIcon k="exposed" /></button>
+                  </th>
+                  <th className="text-left px-2 py-1">
+                    <button onClick={() => toggleSort('name')} className="inline-flex items-center gap-1 hover:text-foreground"><span>커맨드</span><SortIcon k="name" /></button>
+                  </th>
+                  <th className="text-left px-2 py-1">
+                    <button onClick={() => toggleSort('owner')} className="inline-flex items-center gap-1 hover:text-foreground"><span>소유</span><SortIcon k="owner" /></button>
+                  </th>
+                  <th className="text-left px-2 py-1">
+                    <button onClick={() => toggleSort('desc')} className="inline-flex items-center gap-1 hover:text-foreground"><span>원본 설명</span><SortIcon k="desc" /></button>
+                  </th>
+                  <th className="text-left px-2 py-1">
+                    <button onClick={() => toggleSort('exposeName')} className="inline-flex items-center gap-1 hover:text-foreground"><span>외부 이름</span><SortIcon k="exposeName" /></button>
+                  </th>
+                  <th className="text-left px-2 py-1">
+                    <button onClick={() => toggleSort('exposeDesc')} className="inline-flex items-center gap-1 hover:text-foreground"><span>외부 설명</span><SortIcon k="exposeDesc" /></button>
+                  </th>
+                  <th className="text-left px-2 py-1">
+                    <button onClick={() => toggleSort('session')} className="inline-flex items-center gap-1 hover:text-foreground"><span>세션</span><SortIcon k="session" /></button>
+                  </th>
+                  <th className="text-left px-2 py-1">세션명 템플릿 / 고정 세션</th>
+                  <th className="px-2 py-1 text-center">복사</th>
+                </tr>
+                <tr className="bg-background/60">
+                  <th className="px-1 py-1">
+                    <select value={filterExposed} onChange={e => setFilterExposed(e.target.value as any)} className="h-6 w-full rounded border bg-background text-[11px] px-1">
+                      <option value="all">전체</option>
+                      <option value="exposed">노출만</option>
+                      <option value="unexposed">미노출</option>
+                    </select>
+                  </th>
+                  <th className="px-1 py-1">
+                    <div className="relative">
+                      <Search className="absolute left-1 top-1.5 w-3 h-3 opacity-40" />
+                      <Input value={colSearch.name} onChange={e => setColSearch(s => ({ ...s, name: e.target.value }))} placeholder="검색" className="h-6 pl-5 text-[11px]" />
+                    </div>
+                  </th>
+                  <th className="px-1 py-1">
+                    <div className="flex gap-1">
+                      <select value={filterOwner} onChange={e => setFilterOwner(e.target.value as any)} className="h-6 rounded border bg-background text-[11px] px-1 flex-1">
+                        <option value="all">전체</option>
+                        <option value="builtin">builtin</option>
+                        <option value="global">global</option>
+                        <option value="project">project</option>
+                      </select>
+                      <div className="relative flex-1 hidden lg:block">
+                        <Input value={colSearch.owner} onChange={e => setColSearch(s => ({ ...s, owner: e.target.value }))} placeholder="레포 검색" className="h-6 text-[11px]" />
+                      </div>
+                    </div>
+                  </th>
+                  <th className="px-1 py-1">
+                    <div className="relative">
+                      <Search className="absolute left-1 top-1.5 w-3 h-3 opacity-40" />
+                      <Input value={colSearch.desc} onChange={e => setColSearch(s => ({ ...s, desc: e.target.value }))} placeholder="검색" className="h-6 pl-5 text-[11px]" />
+                    </div>
+                  </th>
+                  <th className="px-1 py-1">
+                    <div className="relative">
+                      <Search className="absolute left-1 top-1.5 w-3 h-3 opacity-40" />
+                      <Input value={colSearch.exposeName} onChange={e => setColSearch(s => ({ ...s, exposeName: e.target.value }))} placeholder="검색" className="h-6 pl-5 text-[11px]" />
+                    </div>
+                  </th>
+                  <th className="px-1 py-1">
+                    <div className="relative">
+                      <Search className="absolute left-1 top-1.5 w-3 h-3 opacity-40" />
+                      <Input value={colSearch.exposeDesc} onChange={e => setColSearch(s => ({ ...s, exposeDesc: e.target.value }))} placeholder="검색" className="h-6 pl-5 text-[11px]" />
+                    </div>
+                  </th>
+                  <th className="px-1 py-1">
+                    <select value={colSearch.sessionText} onChange={e => setColSearch(s => ({ ...s, sessionText: e.target.value }))} className="h-6 w-full rounded border bg-background text-[11px] px-1 hidden">
+                      <option value="">전체</option>
+                    </select>
+                    <div className="relative">
+                      <Search className="absolute left-1 top-1.5 w-3 h-3 opacity-40" />
+                      <Input value={colSearch.sessionText} onChange={e => setColSearch(s => ({ ...s, sessionText: e.target.value }))} placeholder="검색" className="h-6 pl-5 text-[11px]" />
+                    </div>
+                  </th>
+                  <th className="px-1 py-1">
+                    <span className="text-[11px] opacity-50">—</span>
+                  </th>
+                  <th className="px-1 py-1"></th>
                 </tr>
               </thead>
               <tbody className="divide-y">
