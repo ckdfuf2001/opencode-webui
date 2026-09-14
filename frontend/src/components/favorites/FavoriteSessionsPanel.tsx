@@ -157,6 +157,7 @@ function MiniResultPopup({ sessionId, directory, onClose }: { sessionId: string;
 function MiniSendButton({ sessionId, directory, draft, onSent }: { sessionId: string; directory: string; draft: string; onSent: () => void }) {
   const isRepoFav = sessionId.startsWith('repo-')
   const send = useSendPrompt(OPENCODE_API_ENDPOINT, directory || undefined)
+  const qc = useQueryClient()
   const [sending, setSending] = useState(false)
   const handle = async () => {
     const text = draft.trim()
@@ -173,11 +174,17 @@ function MiniSendButton({ sessionId, directory, draft, onSent }: { sessionId: st
         const data = await res.json() as { id: string }
         if (!data.id) throw new Error('세션 생성 응답 이상')
         targetId = data.id
+      } else {
+        // 기존 세션의 Cancel 상태는 새 채팅 시작 시 즉시 해제 (일반 채팅과 동일)
+        try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(targetId)}/cancelled`, { method: 'DELETE' }) } catch {}
       }
       await new Promise<void>((resolve, reject) => {
         // @ts-ignore
         send.mutate({ sessionID: targetId, prompt: text } as any, { onSuccess: () => resolve(), onError: (e:any) => reject(e) })
       })
+      // useSendPrompt가 내부에서 DELETE를 하지만, 미니챗은 별도 경로이므로 명시적으로도 정리하고 캐시 무효화
+      try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(targetId)}/cancelled`, { method: 'DELETE' }) } catch {}
+      qc.invalidateQueries({ queryKey: ['session-status-db'] })
       onSent()
       showToast.success(isRepoFav ? '새 세션으로 전송됨' : '전송됨')
     } catch (e: any) {
