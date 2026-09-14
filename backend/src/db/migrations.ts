@@ -372,6 +372,9 @@ export function runMigrations(db: Database): void {
           expose_name TEXT NOT NULL UNIQUE,
           description TEXT NOT NULL DEFAULT '',
           enabled INTEGER NOT NULL DEFAULT 1,
+          session_mode TEXT NOT NULL DEFAULT 'new',
+          title_template TEXT NOT NULL DEFAULT '',
+          pinned_session_id TEXT,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         )
@@ -379,6 +382,18 @@ export function runMigrations(db: Database): void {
       db.run('CREATE INDEX IF NOT EXISTS idx_exposed_enabled ON exposed_commands(enabled)')
     } catch (e) {
       logger.debug('exposed_commands table may already exist:', e)
+    }
+    // 기존 DB에 새 컬럼 추가
+    try {
+      const cols = db.prepare('PRAGMA table_info(exposed_commands)').all() as { name: string }[]
+      const has = (n: string) => cols.some(c => c.name === n)
+      if (cols.length > 0) {
+        if (!has('session_mode')) { try { db.run("ALTER TABLE exposed_commands ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'") } catch {} }
+        if (!has('title_template')) { try { db.run("ALTER TABLE exposed_commands ADD COLUMN title_template TEXT NOT NULL DEFAULT ''") } catch {} }
+        if (!has('pinned_session_id')) { try { db.run('ALTER TABLE exposed_commands ADD COLUMN pinned_session_id TEXT') } catch {} }
+      }
+    } catch (e) {
+      logger.debug('exposed_commands migration skip:', e)
     }
 
     logger.info('Database migrations completed successfully')

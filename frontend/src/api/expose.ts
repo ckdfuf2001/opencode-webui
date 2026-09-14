@@ -6,6 +6,9 @@ export interface ExposedCommand {
   exposeName: string
   description: string
   enabled: boolean
+  sessionMode: 'new' | 'reuse'
+  titleTemplate: string
+  pinnedSessionId?: string
   createdAt: number
   updatedAt: number
 }
@@ -23,7 +26,7 @@ export async function listExposed(): Promise<ExposedCommand[]> {
   return request<ExposedCommand[]>('/commands')
 }
 
-export async function createExposed(input: { commandName: string; exposeName?: string; description?: string; enabled?: boolean }): Promise<ExposedCommand> {
+export async function createExposed(input: { commandName: string; exposeName?: string; description?: string; enabled?: boolean; sessionMode?: 'new'|'reuse'; titleTemplate?: string; pinnedSessionId?: string }): Promise<ExposedCommand> {
   return request<ExposedCommand>('/commands', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -31,7 +34,7 @@ export async function createExposed(input: { commandName: string; exposeName?: s
   })
 }
 
-export async function updateExposed(id: number, input: { exposeName?: string; description?: string; enabled?: boolean }): Promise<ExposedCommand> {
+export async function updateExposed(id: number, input: { exposeName?: string; description?: string; enabled?: boolean; sessionMode?: 'new'|'reuse'; titleTemplate?: string; pinnedSessionId?: string | null }): Promise<ExposedCommand> {
   return request<ExposedCommand>(`/commands/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -44,7 +47,7 @@ export async function deleteExposed(id: number): Promise<void> {
 }
 
 export interface PublicCommandsResponse {
-  commands: { name: string; commandName: string; description: string; enabled: boolean }[]
+  commands: { name: string; commandName: string; description: string; enabled: boolean; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId?: string }[]
   count: number
   timestamp: string
 }

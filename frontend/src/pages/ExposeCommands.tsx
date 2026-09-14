@@ -18,7 +18,7 @@ export function ExposeCommands() {
   const { commands, loading: cmdLoading } = useCommands(null)
 
   const [filter, setFilter] = useState('')
-  const [edits, setEdits] = useState<Record<number, { exposeName: string; description: string }>>({})
+  const [edits, setEdits] = useState<Record<number, { exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string }>>({})
 
   const exposedByCommand = useMemo(() => {
     const m = new Map<string, typeof exposed[number]>()
@@ -86,7 +86,9 @@ export function ExposeCommands() {
           </div>
           <div className="text-xs font-mono bg-background border rounded p-2 space-y-1">
             <div>호출: <span className="text-primary">POST {publicBase}/:exposeName/run</span></div>
-            <div className="text-muted-foreground">body: {"{ repoId?: number, directory?: string, args?: string, sessionId?: string }"} — 체크된 것만 노출, 미체크는 호출 404</div>
+            <div className="text-muted-foreground">body: {"{ repoId?: number, directory?: string, args?: string, sessionId?: string }"} — 체크된 것만 노출, 미체크는 404</div>
+            <div className="text-muted-foreground">세션: <span className="text-foreground">새 세션</span> = 항상 신규 세션 생성(제목 템플릿 적용), <span className="text-foreground">재활용</span> = pinned 세션 또는 호출 시 sessionId 재활용, 없으면 신규</div>
+            <div className="text-muted-foreground">제목 템플릿 변수: {"{exposeName} {commandName} {date} {time}"} 예: "[EXPOSE] {"{exposeName}"} - {"{date}"}"</div>
             <div className="text-muted-foreground">예: curl -X POST {publicBase}/my-plan/run -H "Content-Type: application/json" -d '{"{ \"repoId\":1, \"args\":\"hello\" }"}'</div>
           </div>
         </div>
@@ -103,11 +105,13 @@ export function ExposeCommands() {
               <thead className="sticky top-0 bg-muted/50 backdrop-blur border-b text-xs text-muted-foreground">
                 <tr>
                   <th className="w-10 px-2 py-2 text-center">노출</th>
-                  <th className="text-left px-2 py-2 w-[160px]">커맨드</th>
+                  <th className="text-left px-2 py-2 w-[130px]">커맨드</th>
                   <th className="text-left px-2 py-2">원본 설명</th>
-                  <th className="text-left px-2 py-2 w-[160px]">외부 이름</th>
-                  <th className="text-left px-2 py-2 w-[260px]">외부 설명 (수정 가능)</th>
-                  <th className="w-20 px-2 py-2 text-center">복사</th>
+                  <th className="text-left px-2 py-2 w-[140px]">외부 이름</th>
+                  <th className="text-left px-2 py-2 w-[200px]">외부 설명</th>
+                  <th className="text-left px-2 py-2 w-[110px]">세션</th>
+                  <th className="text-left px-2 py-2 w-[160px]">세션명 템플릿 / 고정 세션</th>
+                  <th className="w-10 px-2 py-2 text-center">복사</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -117,18 +121,25 @@ export function ExposeCommands() {
                   const edit = ex ? edits[ex.id] : undefined
                   const exposeNameVal = edit?.exposeName ?? ex?.exposeName ?? ''
                   const descVal = edit?.description ?? ex?.description ?? ''
+                  const modeVal = edit?.sessionMode ?? ex?.sessionMode ?? 'new'
+                  const titleVal = edit?.titleTemplate ?? ex?.titleTemplate ?? ''
+                  const pinnedVal = edit?.pinnedSessionId ?? ex?.pinnedSessionId ?? ''
+                  const setEdit = (patch: Partial<{ exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string }>) => {
+                    if (!ex) return
+                    setEdits(prev => ({ ...prev, [ex.id]: { exposeName: prev[ex.id]?.exposeName ?? ex.exposeName, description: prev[ex.id]?.description ?? ex.description, sessionMode: prev[ex.id]?.sessionMode ?? ex.sessionMode ?? 'new', titleTemplate: prev[ex.id]?.titleTemplate ?? ex.titleTemplate ?? '', pinnedSessionId: prev[ex.id]?.pinnedSessionId ?? ex.pinnedSessionId ?? '', ...patch } }))
+                  }
                   return (
                     <tr key={cmd.name} className={`hover:bg-muted/20 ${checked ? 'bg-primary/5' : ''}`}>
                       <td className="px-2 py-1.5 text-center">
                         <Checkbox checked={checked} onCheckedChange={(v) => toggle(cmd.name, cmd.description ?? '', !!v)} />
                       </td>
                       <td className="px-2 py-1.5 font-mono text-xs font-medium">/{cmd.name}</td>
-                      <td className="px-2 py-1.5 text-xs text-muted-foreground truncate max-w-[280px]" title={cmd.description ?? ''}>{cmd.description || '-'}</td>
+                      <td className="px-2 py-1.5 text-xs text-muted-foreground truncate max-w-[220px]" title={cmd.description ?? ''}>{cmd.description || '-'}</td>
                       <td className="px-2 py-1.5">
                         {ex ? (
                           <Input
                             value={exposeNameVal}
-                            onChange={(e) => setEdits(prev => ({ ...prev, [ex.id]: { exposeName: e.target.value, description: prev[ex.id]?.description ?? ex.description } }))}
+                            onChange={(e) => setEdit({ exposeName: e.target.value })}
                             onBlur={() => {
                               const cur = edits[ex.id]
                               if (!cur) return
@@ -145,7 +156,7 @@ export function ExposeCommands() {
                         {ex ? (
                           <Input
                             value={descVal}
-                            onChange={(e) => setEdits(prev => ({ ...prev, [ex.id]: { exposeName: prev[ex.id]?.exposeName ?? ex.exposeName, description: e.target.value } }))}
+                            onChange={(e) => setEdit({ description: e.target.value })}
                             onBlur={() => {
                               const cur = edits[ex.id]
                               if (!cur) return
@@ -156,7 +167,46 @@ export function ExposeCommands() {
                             className="h-7 text-xs"
                             placeholder={cmd.description ?? '설명'}
                           />
-                        ) : <span className="text-xs text-muted-foreground/50 truncate max-w-[240px] block" title={cmd.description ?? ''}>{cmd.description ?? '-'}</span>}
+                        ) : <span className="text-xs text-muted-foreground/50 truncate max-w-[180px] block" title={cmd.description ?? ''}>{cmd.description ?? '-'}</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {ex ? (
+                          <select value={modeVal} onChange={(e) => { const v = e.target.value as 'new'|'reuse'; setEdit({ sessionMode: v }); updateMut.mutate({ id: ex.id, data: { sessionMode: v } }) }} className="h-7 w-full rounded-md border border-input bg-background text-xs px-1">
+                            <option value="new">새 세션</option>
+                            <option value="reuse">재활용</option>
+                          </select>
+                        ) : <span className="text-xs text-muted-foreground/50">—</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {ex ? (
+                          <div className="flex flex-col gap-1">
+                            <Input
+                              value={titleVal}
+                              onChange={(e) => setEdit({ titleTemplate: e.target.value })}
+                              onBlur={() => {
+                                const cur = edits[ex.id]
+                                if (!cur) return
+                                if (cur.titleTemplate !== ex.titleTemplate) updateMut.mutate({ id: ex.id, data: { titleTemplate: cur.titleTemplate } })
+                              }}
+                              className="h-7 text-xs font-mono"
+                              placeholder={modeVal === 'new' ? '[EXPOSE]{exposeName} {date}' : '새 세션 시 제목'}
+                              title="{exposeName} {commandName} {date} {time} 치환"
+                            />
+                            {modeVal === 'reuse' && (
+                              <Input
+                                value={pinnedVal}
+                                onChange={(e) => setEdit({ pinnedSessionId: e.target.value })}
+                                onBlur={() => {
+                                  const cur = edits[ex.id]
+                                  if (!cur) return
+                                  if ((cur.pinnedSessionId ?? '') !== (ex.pinnedSessionId ?? '')) updateMut.mutate({ id: ex.id, data: { pinnedSessionId: cur.pinnedSessionId || null } as any })
+                                }}
+                                className="h-7 text-xs font-mono"
+                                placeholder="고정 sessionId (선택)"
+                              />
+                            )}
+                          </div>
+                        ) : <span className="text-xs text-muted-foreground/50">—</span>}
                       </td>
                       <td className="px-2 py-1.5 text-center">
                         {ex ? <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => copy(`${window.location.origin}/api/public/commands/${ex.exposeName}/run`)} title="Copy run URL"><Copy className="w-3.5 h-3.5" /></Button> : null}

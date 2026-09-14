@@ -14,6 +14,9 @@ interface ExposedRow {
   expose_name: string
   description: string
   enabled: number
+  session_mode: string
+  title_template: string
+  pinned_session_id: string | null
   created_at: number
   updated_at: number
 }
@@ -25,6 +28,9 @@ function rowToExpose(row: ExposedRow) {
     exposeName: row.expose_name,
     description: row.description,
     enabled: Boolean(row.enabled),
+    sessionMode: (row.session_mode ?? 'new') as 'new' | 'reuse',
+    titleTemplate: row.title_template ?? '',
+    pinnedSessionId: row.pinned_session_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -35,12 +41,18 @@ const CreateExposeSchema = z.object({
   exposeName: z.string().min(1).max(255).optional(),
   description: z.string().max(1000).optional(),
   enabled: z.boolean().optional(),
+  sessionMode: z.enum(['new', 'reuse']).optional(),
+  titleTemplate: z.string().max(255).optional(),
+  pinnedSessionId: z.string().max(255).optional(),
 })
 
 const UpdateExposeSchema = z.object({
   exposeName: z.string().min(1).max(255).optional(),
   description: z.string().max(1000).optional(),
   enabled: z.boolean().optional(),
+  sessionMode: z.enum(['new', 'reuse']).optional(),
+  titleTemplate: z.string().max(255).optional(),
+  pinnedSessionId: z.string().max(255).optional().nullable(),
 })
 
 export function createExposeRoutes(db: Database) {
@@ -67,8 +79,8 @@ export function createExposeRoutes(db: Database) {
       if (exists) return c.json({ error: `Expose name "${exposeName}" already exists` }, 409)
       const now = Date.now()
       const result = db.prepare(
-        'INSERT INTO exposed_commands (command_name, expose_name, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(validated.commandName.trim(), exposeName, validated.description ?? '', validated.enabled === false ? 0 : 1, now, now)
+        'INSERT INTO exposed_commands (command_name, expose_name, description, enabled, session_mode, title_template, pinned_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(validated.commandName.trim(), exposeName, validated.description ?? '', validated.enabled === false ? 0 : 1, validated.sessionMode ?? 'new', validated.titleTemplate ?? '', validated.pinnedSessionId ?? null, now, now)
       const row = db.prepare('SELECT * FROM exposed_commands WHERE id = ?').get(Number(result.lastInsertRowid)) as ExposedRow
       return c.json(rowToExpose(row), 201)
     } catch (error) {
@@ -93,8 +105,11 @@ export function createExposeRoutes(db: Database) {
       const nextExpose = validated.exposeName?.trim() ?? existing.expose_name
       const nextDesc = validated.description !== undefined ? validated.description : existing.description
       const nextEnabled = validated.enabled !== undefined ? (validated.enabled ? 1 : 0) : existing.enabled
-      db.prepare('UPDATE exposed_commands SET expose_name = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?')
-        .run(nextExpose, nextDesc, nextEnabled, Date.now(), id)
+      const nextMode = validated.sessionMode ?? existing.session_mode
+      const nextTitle = validated.titleTemplate !== undefined ? validated.titleTemplate : existing.title_template
+      const nextPinned = validated.pinnedSessionId !== undefined ? (validated.pinnedSessionId || null) : existing.pinned_session_id
+      db.prepare('UPDATE exposed_commands SET expose_name = ?, description = ?, enabled = ?, session_mode = ?, title_template = ?, pinned_session_id = ?, updated_at = ? WHERE id = ?')
+        .run(nextExpose, nextDesc, nextEnabled, nextMode, nextTitle, nextPinned, Date.now(), id)
       const row = db.prepare('SELECT * FROM exposed_commands WHERE id = ?').get(id) as ExposedRow
       return c.json(rowToExpose(row))
     } catch (error) {
@@ -134,6 +149,9 @@ export function createPublicExposeRoutes(db: Database) {
           commandName: r.command_name,
           description: r.description,
           enabled: true,
+          sessionMode: r.session_mode ?? 'new',
+          titleTemplate: r.title_template ?? '',
+          pinnedSessionId: r.pinned_session_id ?? undefined,
         })),
         count: rows.length,
         timestamp: new Date().toISOString(),
@@ -180,13 +198,38 @@ export function createPublicExposeRoutes(db: Database) {
       const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
       const directoryParam = encodeURIComponent(directory)
 
-      // 세션 재사용 또는 새로 생성
-      let sessionId = body.sessionId
+      // 세션 전략: expose에 설정된 모드에 따라 결정
+      // - session_mode='reuse' + pinned_session_id 지정: 해당 세션 재활용 (body.sessionId가 있으면 우선)
+      // - session_mode='reuse' + pinned 없음: body.sessionId 있으면 재활용, 없으면 신규
+      // - session_mode='new': 항상 신규 (body.sessionId가 있어도 무시하고 신규 생성 — 호출자가 명시한 경우만 재활용)
+      const mode = (row.session_mode ?? 'new') as 'new' | 'reuse'
+      const pinned = row.pinned_session_id
+      let sessionId: string | undefined
+      if (mode === 'reuse') {
+        sessionId = body.sessionId ?? pinned ?? undefined
+      } else {
+        // new: body.sessionId가 명시된 경우에만 재활용 (외부에서 특정 세션에 쏘고 싶을 때)
+        sessionId = body.sessionId ?? undefined
+      }
+      const titleTemplate = row.title_template ?? ''
+      const buildTitle = () => {
+        if (titleTemplate.trim()) {
+          const now = new Date()
+          const pad = (n: number) => String(n).padStart(2, '0')
+          return titleTemplate
+            .replaceAll('{exposeName}', exposeName)
+            .replaceAll('{commandName}', row.command_name)
+            .replaceAll('{date}', `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`)
+            .replaceAll('{time}', `${pad(now.getHours())}:${pad(now.getMinutes())}`)
+            .slice(0, 80)
+        }
+        return `[EXPOSE]${exposeName}`
+      }
       if (!sessionId) {
         const createRes = await fetch(`${base}/session?directory=${directoryParam}`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ title: `[EXPOSE]${exposeName}` }),
+          body: JSON.stringify({ title: buildTitle() }),
           signal: AbortSignal.timeout(30_000),
         })
         if (!createRes.ok) {

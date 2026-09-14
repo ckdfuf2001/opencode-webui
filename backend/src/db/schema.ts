@@ -146,6 +146,9 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       expose_name TEXT NOT NULL UNIQUE,
       description TEXT NOT NULL DEFAULT '',
       enabled INTEGER NOT NULL DEFAULT 1,
+      session_mode TEXT NOT NULL DEFAULT 'new',
+      title_template TEXT NOT NULL DEFAULT '',
+      pinned_session_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
