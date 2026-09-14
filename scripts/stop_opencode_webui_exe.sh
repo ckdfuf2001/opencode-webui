@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env bash
-# stop opencode-webui portable instance (this folder + global agent-browser daemon)
+# stop opencode-webui portable instance (this folder only)
 cd "$(dirname "$0")"
 CWD="$(pwd -W 2>/dev/null || pwd)"
 

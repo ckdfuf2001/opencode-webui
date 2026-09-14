@@ -26,6 +26,7 @@ import { createSessionStatusRoutes } from './routes/session-status'
 import { createChatQueueRoutes } from './routes/chat-queue'
 import { createMcpRoutes } from './routes/mcp'
 import { createHtmlViewRoutes } from './routes/html-view'
+import { createFavoriteRoutes } from './routes/favorites'
 import { createSessionMessageRoutes } from './routes/session-messages'
 import { createPtyRoutes } from './routes/pty'
 import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
@@ -283,6 +284,7 @@ app.route('/api/session-status', createSessionStatusRoutes(db))
   app.route('/api/chat-queue', createChatQueueRoutes())
   app.route('/api/mcp', createMcpRoutes(db))
   app.route('/api/html-view', createHtmlViewRoutes(db))
+  app.route('/api/favorites', createFavoriteRoutes(db))
   app.route('/api/session-messages', createSessionMessageRoutes())
 app.route('/api/pty', createPtyRoutes())
 app.route('/api/logs', createClientLogRoutes())

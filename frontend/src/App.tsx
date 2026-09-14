@@ -16,6 +16,7 @@ import { Button } from './components/ui/button'
 import { Bell } from 'lucide-react'
 import { BUILD_LABEL, logBuildInfo } from './lib/build-info'
 import { HtmlViewerMenu } from './components/html/HtmlViewerMenu'
+import { FavoriteSessionsPanel } from './components/favorites/FavoriteSessionsPanel'
 
 startAutoApprover()
 
@@ -94,6 +95,7 @@ function AppContent() {
         <Route path="/session/:sessionId" element={<SessionDetail />} />
       </Routes>
       <SettingsDialog open={isOpen} onOpenChange={close} />
+      <FavoriteSessionsPanel />
       <HtmlViewerMenu />
       <Toaster 
         position="bottom-right"

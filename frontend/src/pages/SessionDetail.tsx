@@ -478,7 +478,7 @@ export function SessionDetail() {
     (((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') && lastErrorName !== 'MessageAbortedError') ||
     hasFailedQueue
   )
-  const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && (dbIsCancelled || isCancelledUntilNextSend(sessionId) || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
+  const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && ((dbIsCancelled && !isUserCancel) || isCancelledUntilNextSend(sessionId) || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
   // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
   usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)

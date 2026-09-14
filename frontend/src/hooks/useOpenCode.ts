@@ -1184,8 +1184,6 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       await client.abortSession(sessionID);
     },
     onMutate: async (sessionID) => {
-      // ??�� ?�나??abort POST??onSettled가 cancel 직후 ?�로 보낸 ?�을
-      // 죽이지 ?�도�? 지�?진행 중인 ?�스?�스�??�아?�다 (context�??�달).
       const acAtAbort = activeSendControllers.get(sessionID)
       const esAtAbort = activeSSEMap.get(sessionID)
       const pendingAtAbort = pendingOptimistic.get(sessionID)

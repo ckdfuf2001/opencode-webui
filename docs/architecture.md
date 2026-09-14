@@ -58,71 +58,51 @@ the user's `~/.config/opencode`.
    inside the workspace.
 3. `proxy.ts` patches the fetched config before forwarding it to the UI and
    resolves the scope of slash commands (`global` vs `project` vs `builtin`).
-4. Repo directories under `workspace/repos/` do NOT get their own `agent-browser`
-   MCP entry — the single global entry applies to all repos (per-repo duplicates
-   are removed by `removeRepoAgentBrowserEntry`,
-   `backend/src/services/default-mcp.ts`). With `AGENT_BROWSER_AUTO_SESSION=1` (patched `ckdfuf2001/agent-browser`), `default`/`opencode` is auto-hashed to `auto-<cwd-hash>` per repo, so `open`/`read` without an explicit `session` no longer returns blank. The global `opencode.json` keeps the bare
-   `doc-reader` + `agent-browser` entries for sessions that run outside a repo.
+4. Repo directories under `workspace/repos/` do NOT get their own browser
+   MCP entry — the single global entry applies to all repos. Per-repo duplicates
+   are removed by `removeRepoAgentBrowserEntry` (`backend/src/services/default-mcp.ts`).
 
-## Default MCP Servers & agent-browser daemon warm-up
+## Default MCP Servers (2026-09: Playwright)
 
-`backend/src/services/default-mcp.ts` owns the two built-in MCP servers:
+`backend/src/services/default-mcp.ts` owns the built-in MCP servers (v0.7.8+):
 
 - `doc-reader` — FastMCP/stdio Python server
-  (`backend/scripts/doc_reader_mcp.py`) with `OPCODE_WEBUI_BACKEND` /
-  `OPCODE_WEBUI_WORKSPACE` env.
-- `agent-browser` — native binary + vendored Chromium
-  (`bin/agent-browser/`, paths from `.meta.json`). Its command is
-  `<bin> mcp --namespace opencode` and its env pins
-  `AGENT_BROWSER_NAMESPACE=opencode`, `AGENT_BROWSER_SESSION=<session>` and
-  `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` (24h).
+  (`backend/scripts/doc_reader_mcp.py` or portable `scripts/doc-reader.exe`)
+  with `OPCODE_WEBUI_BACKEND` / `OPCODE_WEBUI_WORKSPACE` env.
+- `playwright` — `npx --yes @playwright/mcp@latest --headless --isolated`
+  (no daemon, `--isolated` gives per-call browser contexts, safe for concurrent
+  sessions). First use auto-installs via npx cache.
 
-Namespaces isolate the agent-browser daemon socket
-(`~/.agent-browser/namespaces/<ns>/run`). The global config and all repos use `opencode` namespace. **By default** `AGENT_BROWSER_SESSION` is `opencode`/`default` for everyone, so `agent_browser_*` calls without an explicit `session` go to the same `default` browser — `read` on a fresh `default` returns blank, so you must pass `session` (e.g. `session: "repo-Test"`) or enable `AGENT_BROWSER_AUTO_SESSION=1` in the patched `ckdfuf2001/agent-browser` (`auto-<cwd-hash>` per repo, see `cli/src/flags.rs`). Session isolation is per-call (`session` param), not per config file: all repos share ONE Chrome tree in the `opencode` namespace via CDP browser contexts.
+`agent-browser` (native binary + vendored Chromium, `bin/agent-browser/`,
+`agent-browser-proxy/`, daemon socket `~/.agent-browser/…`, `warmUpAgentBrowserDaemon`)
+was removed in v0.7.8 and migrated to Playwright. Remaining references in
+`default-mcp.ts` / `opencode-single-server.ts` are no-ops kept for rollback safety
+(`warmUpAgentBrowserDaemon()` now returns `true`, `superviseAgentBrowserDaemon()`
+is no-op, `buildAgentBrowserMcp()` returns the Playwright entry). On upgrade,
+`writeActiveOpenCodeConfigFile()` and `mergeDefaultMcpEntries()` delete any stale
+`mcp.agent-browser` entry from `workspace/.config/opencode/opencode.json` and
+from `opencode_configs` DB (`is_default=1`), replacing it with `playwright`.
+Portable start/stop scripts (`scripts/start_opencode_webui_exe.*`,
+`scripts/stop_opencode_webui_exe.*`) no longer mention `agent-browser`.
 
 `mergeDefaultMcpEntries(content)` (called from `ensureDefaultConfigExists()` and
 `syncDefaultConfigToDisk()`, `backend/src/index.ts`) guarantees the **global**
 config entries exist and **repairs** them on every sync:
 
 1. `command` — replaced with the canonical absolute paths when they differ
-   (doc-reader must point at `backend/scripts/doc_reader_mcp.py`, never a
-   relative `..\backend\...` path that breaks in per-repo sessions).
-2. `enabled: true` — forced on.
-3. `env` — each default key/value is merged in when missing or stale (this is
-   what keeps `AGENT_BROWSER_NAMESPACE` and `AGENT_BROWSER_IDLE_TIMEOUT_MS`
-   present in a config regenerated from the DB).
-
-Legacy per-repo `opencode.json` agent-browser entries (if any) are stripped by
-`removeRepoAgentBrowserEntry` on repo create/clone/import and at backend startup —
-the repo root config otherwise keeps the user's own keys.
-
-The agent-browser MCP server spawns the CLI per tool call; that CLI talks to a
-long-lived background **daemon** over a local socket (namespace-scoped under
-`~/.agent-browser/namespaces/<ns>/run`). On a cold start the freshly-spawned
-daemon inherits the MCP server's stdout pipe, so the MCP server never receives
-EOF and `tools/call` waits ~40-75s then times out — the "first open hangs"
-failure mode. `warmUpAgentBrowserDaemon(namespace, session)` prevents it:
-
-- Called right after the opencode server starts
-  (`opencodeServerManager.start().then(...)`, `backend/src/index.ts`) and
-  re-called every 60s on a self-healing interval. `warmUpAllAgentBrowserDaemons()`
-  warms the `opencode:default` daemon only (single, `v0.3.10` behavior), so the first `agent_browser_open` is fast; per-repo `auto-*` sessions are created lazily on first `open`/`read` with `AGENT_BROWSER_AUTO_SESSION=1`.
-- Runs `<bin> --headed false open about:blank --json` (stdio discarded), which
-  spawns + connects the daemon and launches a headless browser.
-- Skips (fast no-op) when `agent-browser session info --json` already reports
-  `active` with `browserLaunched: true`, so the periodic re-check is cheap.
-- `AGENT_BROWSER_IDLE_TIMEOUT_MS=86400000` keeps that warm daemon alive between
-  tool calls; a warm daemon answers `agent_browser_open` in <1s.
+   (doc-reader must point at `scripts/doc-reader.exe` or
+   `backend/scripts/doc_reader_mcp.py`, never a relative `..\backend\...` path).
+2. `enabled: true` — forced on (except `playwright` user-disabled is respected).
+3. `env` — each default key/value is merged in when missing or stale
+   (e.g. `NO_PROXY` loopback bypass for Playwright).
 
 Do **not** hand-edit the MCP entries in
 `workspace/.config/opencode/opencode.json` — the backend regenerates the file
 from the DB default config and repairs the entries at every startup
 (`mergeDefaultMcpEntries` → `syncDefaultConfigToDisk()`), then spawns OpenCode
-with the resulting config so the default MCP servers (doc-reader, agent-browser)
+with the resulting config so the default MCP servers (`doc-reader`, `playwright`)
 come up together. Use the app UI (Settings → MCP Servers) to change them beyond
-the defaults. Repo-root `opencode.json` files are written
-by the backend per repo; only the `agent-browser` key is managed there, so a
-repo's own config keys are preserved when re-written.
+the defaults.
 
 ## Rules (AGENTS.md)
 
@@ -250,22 +230,40 @@ Because `/api/files/*` receives an encoded path (spaces, Korean, parens),
 **Frontend**
 - `useOpenCode` hooks — React Query wrappers for all API calls; `useSendPrompt`
   converts attached files to opencode `file` parts (or quoted text mentions for
-  unsupported MIME types)
+  unsupported MIME types). `useAbortSession` now POSTs `/api/session-status/:id/cancelled`
+  so the Cancel badge persists until the next send (works for `workspace` sessions too).
 - `MessagePart` / `MessageThread` — render `@mention` chips and offer
   edit-and-resend that restores quoted mentions
-- `useSSE` — global SSE connection for real-time events
-- `useSessionActivity` — per-session "Working" state
-- `usePermissionRequests` — global permission request polling + store
+- `SessionDetail.tsx` / `SessionList.tsx` — Working/Cancelled badges from `GET /api/session-status`
+  (busy/idle + `isCancelled` + `isCancelledUntilNextSend` fallback)
+- `ScheduleManager` / `ScheduleCalendar` — calendar view merges `GET /api/command-runs/view` + `GET /api/schedules`
+- `useSSE` — global SSE connection for real-time events; fallback is `session-status` poll (1.2s)
 - `CreateCommandDialog` — registers command/skill/plugin/agent/MCP files
 
 **Backend**
 - `proxy.ts` — forwards `/api/opencode/*` to the OpenCode server, enriches
-  `/command` with scope
+  `/command` with scope, injects `<memory-recall>` / `[run-context]` / `<skill-memory-check>`,
+  and persists `isCancelled` on `POST /session/:id/abort`.
 - `registry.ts` — resolves scope/target paths and writes opencode files
 - `opencode-single-server.ts` — manages the OpenCode server process lifecycle
   and injects `OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR`
 - `scheduler.ts` — scheduled prompt runner
-- `file-operations.ts` — file read/write helpers used by the registry and the
-  global-rules installer
+- `session-status.ts` — polls `GET /session/status` + `/permission|/question` per directory
+  (1s) and upserts `session_status`; `upsertSessionStatus` preserves `is_cancelled`
+  when `isCancelled` is not supplied so the poller never clears the Cancel badge.
+- `recall.ts` / `fts-indexer.ts` / `git-indexer.ts` — `<memory-recall>` / `session_messages_fts`
+  (trigram) / `git_commits` search stack
+- `html-view.ts` — `GET|POST|DELETE /api/html-view/pages` backing the HTML view manager panel
 - `routes/files.ts` — file browser + upload endpoints; `decodePath` percent-decodes
   each path segment so non-ASCII filenames resolve
+
+## Verification
+
+Reusable 5-check script: `scripts/verify-five-checks.ps1`
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/verify-five-checks.ps1                # dev (5001)
+powershell -ExecutionPolicy Bypass -File scripts/verify-five-checks.ps1 -BaseUrl http://localhost:5002 -TestRepoLocalPath aaa  # portable
+```
+
+Covers: (1) session create/model(delete)/delete, (2) Cancel badge (`isCancelled` persists through poller + abort), (3) calendar (`command-runs/view` + `schedules`), (4) memory recall (`/search/recall|messages|commits`), (5) HTML view (`/html-view/pages` CRUD + `/preview/extract`). See the script header for details.

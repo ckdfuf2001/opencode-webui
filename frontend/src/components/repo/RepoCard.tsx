@@ -2,7 +2,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis } from "lucide-react";
+import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis, Star } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { listFavorites, addFavorite, removeFavorite } from "@/api/favorites";
+import { showToast } from "@/lib/toast";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -48,6 +51,9 @@ export function RepoCard({
   const queryClient = useQueryClient();
   const [addBranchOpen, setAddBranchOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites });
+  const favId = `repo-${repo.id}`;
+  const isFav = favs?.some(f => f.sessionId === favId);
   const cloneMut = useMutation({
     mutationFn: async () => {
       const newName = window.prompt(`복제할 새 레포 이름 (디렉토리명):`, `${repo.localPath}-copy`)
@@ -178,6 +184,9 @@ export function RepoCard({
               </div>
             )}
               </div>
+              <Button variant="ghost" size="icon" className={`h-7 w-7 shrink-0 ${isFav ? 'text-amber-500' : ''}`} onClick={async (e) => { e.stopPropagation(); try { if (isFav) await removeFavorite(favId); else await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.fullPath || '', title: repo.localPath || `repo-${repo.id}` }); showToast.success(isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'); queryClient.invalidateQueries({ queryKey: ['favorites'] }) } catch (err:any){ showToast.error(err.message) } }} title={isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
+                <Star className={`w-4 h-4 ${isFav ? 'fill-amber-500' : ''}`} />
+              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={(e) => e.stopPropagation()}>

@@ -5,8 +5,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listRepos } from '@/api/repos'
 import { useSessions, useSessionStatusMap } from '@/hooks/useOpenCode'
 import { OPENCODE_API_ENDPOINT } from '@/config'
-import { FolderGit2, MessageSquare, Plus, ChevronDown, ChevronRight, Loader2, ShieldAlert, StopCircle } from 'lucide-react'
+import { FolderGit2, MessageSquare, Plus, ChevronDown, ChevronRight, Loader2, ShieldAlert, StopCircle, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useQuery } from '@tanstack/react-query'
+import { listFavorites, addFavorite, removeFavorite } from '@/api/favorites'
+import { showToast } from '@/lib/toast'
 
 interface NavigationTreeProps {
   onNavigate?: () => void
@@ -221,29 +224,44 @@ function RepoSessions({ repoId, directory, onNavigate }: { repoId: number; direc
     return <div className="ml-8 px-2 py-1 text-xs text-muted-foreground">세션 없음</div>
   }
 
+  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites })
+  const isFav = (id: string) => favs?.some(f => f.sessionId === id)
+  const toggleFav = async (id: string, title?: string) => {
+    try {
+      if (isFav(id)) { await removeFavorite(id); showToast.success('즐겨찾기 해제') }
+      else { await addFavorite({ sessionId: id, repoId, directory, title: title || id }); showToast.success('즐겨찾기 등록') }
+      queryClient.invalidateQueries({ queryKey: ['favorites'] })
+    } catch (e:any){ showToast.error(e.message) }
+  }
+
   const renderRow = (id: string, title?: string) => {
     const isActive = location.pathname.includes(id)
     const isBusy = dbStatuses?.some(e => e.sessionId === id && e.status === 'busy')
     const pending = dbStatuses?.find(e => e.sessionId === id)?.pendingPermissions ?? 0
     const isCancelled = dbStatuses?.some(e => (e as unknown as { isCancelled?: boolean }).isCancelled && e.sessionId === id && e.status !== 'busy') ?? false
+    const fav = isFav(id)
     return (
-      <a
-        key={id}
-        href={`/repos/${repoId}/sessions/${id}`}
-        onClick={(e) => {
-          if (e.ctrlKey || e.metaKey) return
-          e.preventDefault()
-          navigate(`/repos/${repoId}/sessions/${id}`)
-          onNavigate?.()
-        }}
-        className={`flex items-center gap-2 px-2 py-1 rounded text-xs truncate hover:bg-accent text-left ${isActive ? 'bg-accent' : ''}`}
-      >
-        <MessageSquare className="w-3 h-3 shrink-0" />
-        <span className="truncate flex-1">{title || 'Untitled'}</span>
-        {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
-        {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
-        {isCancelled && !isBusy && !pending && <StopCircle className="w-3 h-3 text-gray-500 shrink-0" />}
-      </a>
+      <div key={id} className={`flex items-center gap-1 pr-1 rounded hover:bg-accent ${isActive ? 'bg-accent' : ''}`}>
+        <a
+          href={`/repos/${repoId}/sessions/${id}`}
+          onClick={(e) => {
+            if (e.ctrlKey || e.metaKey) return
+            e.preventDefault()
+            navigate(`/repos/${repoId}/sessions/${id}`)
+            onNavigate?.()
+          }}
+          className={`flex items-center gap-2 px-2 py-1 text-xs truncate text-left flex-1 min-w-0`}
+        >
+          <MessageSquare className="w-3 h-3 shrink-0" />
+          <span className="truncate flex-1">{title || 'Untitled'}</span>
+          {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
+          {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
+          {isCancelled && !isBusy && !pending && <StopCircle className="w-3 h-3 text-gray-500 shrink-0" />}
+        </a>
+        <button onClick={() => toggleFav(id, title)} className={`p-1 rounded hover:bg-background ${fav ? 'text-amber-500' : 'text-muted-foreground'}`} title={fav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
+          <Star className={`w-3 h-3 ${fav ? 'fill-amber-500' : ''}`} />
+        </button>
+      </div>
     )
   }
 

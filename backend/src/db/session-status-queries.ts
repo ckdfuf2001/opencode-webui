@@ -46,6 +46,23 @@ export function upsertSessionStatus(
     updatedAt: number
   },
 ): void {
+  // isCancelled 미전달 시 기존 값 보존 — 폴러가 busy 갱신으로 cancelled 배지를 지우지 않게
+  if (row.isCancelled === undefined) {
+    const existing = db.prepare('SELECT is_cancelled FROM session_status WHERE session_id = ?').get(row.sessionId) as { is_cancelled?: number } | undefined
+    const keep = existing?.is_cancelled ?? 0
+    db.prepare(`
+      INSERT INTO session_status (session_id, directory, repo_id, status, pending_permissions, is_cancelled, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        directory = excluded.directory,
+        repo_id = excluded.repo_id,
+        status = excluded.status,
+        pending_permissions = excluded.pending_permissions,
+        is_cancelled = ?,
+        updated_at = excluded.updated_at
+    `).run(row.sessionId, row.directory, row.repoId, row.status, row.pendingPermissions, keep, row.updatedAt, keep)
+    return
+  }
   const isCancelledInt = row.isCancelled ? 1 : 0
   db.prepare(`
     INSERT INTO session_status (session_id, directory, repo_id, status, pending_permissions, is_cancelled, updated_at)

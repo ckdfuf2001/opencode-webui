@@ -11,6 +11,7 @@ import {
   listSessionStatus,
   markSessionStatusIdle,
   pruneIdleSessionStatus,
+  setSessionCancelled,
   upsertSessionStatus,
 } from '../db/session-status-queries'
 import { logger } from '../utils/logger'
@@ -42,6 +43,33 @@ export function startSessionStatusPoller(db: Database): void {
     try {
       const snapshots = await collectDirectorySnapshots(db)
       const now = Date.now()
+
+      // 서버 전체가 응답하지 않으면 busy가 영원히 남는다 — Cancelled로 승격
+      if (snapshots.size === 0) {
+        const busyRows = listSessionStatus(db).filter((r) => r.status === 'busy')
+        if (busyRows.length > 0) {
+          let serverDown = false
+          try {
+            // global 조회 1회로 서버 생존 확인 (collectDirectorySnapshots가 이미 실패했으므로 대부분 down)
+            await fetchBusySessions(undefined)
+          } catch {
+            serverDown = true
+          }
+          if (serverDown) {
+            for (const row of busyRows) {
+              try {
+                setSessionCancelled(db, row.sessionId)
+                markSessionStatusIdle(db, row.sessionId, now)
+                logger.warn(`Session ${row.sessionId} marked cancelled+idle: opencode server down`)
+              } catch {}
+            }
+            // busy를 정리했으므로 이번 틱은 여기서 종료 — 다음 틱에서 idle로 유지
+            pruneIdleSessionStatus(db, IDLE_ROW_TTL_MS, now)
+            flushReadyQueues(new Set())
+            return
+          }
+        }
+      }
 
       const touched = new Set<string>()
       const busySessionIds = new Set<string>()

@@ -332,6 +332,22 @@ export function runMigrations(db: Database): void {
       logger.debug('orphan prune skipped:', e)
     }
 
+    // ── 즐겨찾기 세션 ─────────────────────────
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS favorites (
+          session_id TEXT PRIMARY KEY,
+          repo_id INTEGER,
+          directory TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `)
+    } catch (e) {
+      logger.debug('favorites table may already exist:', e)
+    }
+
     // ── HTML 뷰어 관리 페이지 ─────────────────────────
     try {
       db.run(`
