@@ -58,7 +58,11 @@ export function FavoriteSessionsPanel() {
                       </div>
                       <div className="text-[11px] text-muted-foreground truncate">{repo?.localPath || f.directory || f.sessionId.slice(0, 8)}</div>
                     </div>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={async () => { try { await removeFavorite(f.sessionId); showToast.success('즐겨찾기 해제'); invalidate() } catch (e:any){ showToast.error(e.message) } }}><Trash2 className="w-3.5 h-3.5" /></Button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {!isRepoFav && <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`; window.location.href = url }}>이동</Button>}
+                      {isRepoFav && <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}` : '/'; window.location.href = url }}>이동</Button>}
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={async () => { try { await removeFavorite(f.sessionId); showToast.success('즐겨찾기 해제'); invalidate() } catch (e:any){ showToast.error(e.message) } }} title="삭제"><Trash2 className="w-3.5 h-3.5" /></Button>
+                    </div>
                   </div>
                   <div className="flex gap-1">
                     <Input
@@ -74,8 +78,6 @@ export function FavoriteSessionsPanel() {
                     <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="결과 보기" onClick={() => setResultFor(f.sessionId)} disabled={isRepoFav}>
                       <Eye className="w-3.5 h-3.5" />
                     </Button>
-                    {!isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`; window.location.href = url }}>열기</Button>}
-                    {isRepoFav && <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => { const url = f.repoId ? `/repos/${f.repoId}` : '/'; window.location.href = url }}>열기</Button>}
                   </div>
                   {resultFor === f.sessionId && !isRepoFav && (
                     <MiniResultPopup sessionId={f.sessionId} directory={f.directory} onClose={() => setResultFor(null)} />
