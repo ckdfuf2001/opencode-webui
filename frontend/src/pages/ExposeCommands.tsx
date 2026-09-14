@@ -40,6 +40,7 @@ export function ExposeCommands() {
   }, [builtinCmds, avail])
 
   const [filter, setFilter] = useState('')
+  const [descOpen, setDescOpen] = useState(false)
   const [editingEx, setEditingEx] = useState<typeof exposed[number] | null>(null)
   const [editForm, setEditForm] = useState<{ exposeName: string; description: string; sessionMode: 'new'|'reuse'; titleTemplate: string; pinnedSessionId: string; argsTemplate: string; exampleArgs: string; enabled: boolean }>({ exposeName: '', description: '', sessionMode: 'new', titleTemplate: '', pinnedSessionId: '', argsTemplate: '', exampleArgs: '', enabled: true })
   const { data: exposeSessionsData } = useQuery({
@@ -183,8 +184,8 @@ export function ExposeCommands() {
           </div>
         </div>
       </header>
-      <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
-        <DescPanel publicBase={publicBase} publicCount={publicData?.count ?? 0} system={system} onCopy={copy} />
+      <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4 overflow-auto">
+        <DescPanel publicBase={publicBase} publicCount={publicData?.count ?? 0} system={system} onCopy={copy} open={descOpen} onToggle={() => setDescOpen(o => !o)} />
 
         <div className="flex items-center gap-2">
           <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter name / description / repo" className="h-8 max-w-sm text-sm" />
@@ -192,7 +193,7 @@ export function ExposeCommands() {
         </div>
 
         <div className="rounded-lg border overflow-hidden">
-          <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 280px)', minHeight: '200px', scrollbarGutter: 'stable' } as any}>
+          <div className="overflow-auto" style={{ maxHeight: descOpen ? 'calc(100vh - 380px)' : 'calc(100vh - 280px)', minHeight: '200px', scrollbarGutter: 'stable' } as any}>
             <table className="w-full text-sm min-w-[900px]">
               <thead className="sticky top-0 bg-muted/80 backdrop-blur border-b text-xs text-muted-foreground">
                 <tr>
@@ -417,11 +418,10 @@ export function ExposeCommands() {
   )
 }
 
-function DescPanel({ publicBase, publicCount, system, onCopy }: { publicBase: string; publicCount: number; system: any; onCopy: (t: string) => void }) {
-  const [open, setOpen] = useState(false)
+function DescPanel({ publicBase, publicCount, system, onCopy, open, onToggle }: { publicBase: string; publicCount: number; system: any; onCopy: (t: string) => void; open: boolean; onToggle: () => void }) {
   return (
     <div className="rounded-lg border bg-muted/20">
-      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between p-3 text-xs hover:bg-muted/30">
+      <button onClick={onToggle} className="w-full flex items-center justify-between p-3 text-xs hover:bg-muted/30">
         <span className="inline-flex items-center gap-1.5 font-medium"><Globe className="w-3.5 h-3.5" /> Public (MCP-like) · {publicCount} 노출됨 {system ? `· v${system.version} :${system.backend.port}` : ''}</span>
         <span className="inline-flex items-center gap-1 text-muted-foreground">{open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />} {open ? '접기' : '펼치기'}</span>
       </button>
