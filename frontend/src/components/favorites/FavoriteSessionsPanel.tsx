@@ -49,6 +49,11 @@ export function FavoriteSessionsPanel() {
     return () => window.removeEventListener('global-escape-close', h as EventListener)
   }, [pinned])
 
+  // 패널을 닫으면 즐겨찾기 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
+  useEffect(() => {
+    if (!pinned) qc.removeQueries({ queryKey: ['favorites'] })
+  }, [pinned, qc])
+
   return (
     <>
       <button
@@ -215,8 +220,14 @@ function SessionBadges({ sessionId }: { sessionId: string }) {
 }
 
 function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId: string; directory: string; repoId?: number | null; onClose: () => void }) {
-  const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, directory || undefined)
+  const qc = useQueryClient()
+  const dirKey = directory || undefined
+  const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, dirKey)
   const [expanded, setExpanded] = useState(false)
+  // 팝업을 닫으면 메시지 캐시를 즉시 비운다 (다음 열 때 새로 로드)
+  useEffect(() => {
+    return () => { qc.removeQueries({ queryKey: ['opencode', 'messages', OPENCODE_API_ENDPOINT, sessionId, dirKey] }) }
+  }, [qc, sessionId, dirKey])
   const lastUser = [...(messages ?? [])].reverse().find(m => (m.info as any)?.role === 'user')
   const lastAssistant = [...(messages ?? [])].reverse().find(m => (m.info as any)?.role === 'assistant')
   const lastUserText = extractText((lastUser as any)?.parts)
@@ -307,8 +318,14 @@ function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId:
 }
 
 function RepoSessionsPopup({ repoId, directory, selectedSessionId, onSessionSelect, onClose }: { repoId: number | null; directory: string; selectedSessionId?: string | null; onSessionSelect?: (sid: string | null, title?: string) => void; onClose: () => void }) {
-  const { data: sessions, isLoading } = useSessions(OPENCODE_API_ENDPOINT, directory || undefined)
+  const qc = useQueryClient()
+  const dirKey = directory || undefined
+  const { data: sessions, isLoading } = useSessions(OPENCODE_API_ENDPOINT, dirKey)
   const { data: dbStatuses } = useSessionStatusMap()
+  // 팝업을 닫으면 세션 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
+  useEffect(() => {
+    return () => { qc.removeQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, dirKey] }) }
+  }, [qc, dirKey])
   if (selectedSessionId) {
     return (
       <div className="mt-1">

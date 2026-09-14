@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listRepos, deleteRepo } from "@/api/repos";
 import { listSchedules } from "@/api/schedules";
@@ -397,6 +397,10 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
   const queryClient = useQueryClient();
   const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, repo.fullPath);
   const sessionIds = useMemo(() => (sessions ?? []).map((s: any) => s.id as string), [sessions]);
+  // 행이 사라지면 세션 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
+  useEffect(() => {
+    return () => { queryClient.removeQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath] }) }
+  }, [queryClient, repo.fullPath]);
   const [editingSid, setEditingSid] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 

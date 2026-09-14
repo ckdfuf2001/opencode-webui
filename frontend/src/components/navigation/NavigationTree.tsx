@@ -348,6 +348,11 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
     return rs
   }, [sessions])
 
+  // 접으면 세션 목록 캐시를 즉시 비운다 (다음 펼칠 때 새로 로드)
+  useEffect(() => {
+    return () => { queryClient.removeQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, directory] }) }
+  }, [queryClient, directory])
+
   // 활성 세션이 접힌 하위에 있으면 조상 펼치기
   useEffect(() => {
     if (!sessions) return

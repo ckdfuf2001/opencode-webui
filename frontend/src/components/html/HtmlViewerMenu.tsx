@@ -75,6 +75,11 @@ export function HtmlViewerMenu() {
     return () => window.removeEventListener('global-escape-close', h as EventListener)
   }, [menuOpen])
 
+  // 메뉴를 닫으면 페이지 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
+  useEffect(() => {
+    if (!menuOpen) queryClient.removeQueries({ queryKey: ['html-pages'] })
+  }, [menuOpen, queryClient])
+
   useEffect(() => { if (!menuOpen) setSelectedPage(null) }, [menuOpen])
 
   const { files: suggestions } = useFileSearch(draft, menuOpen && !!creating, '.')
