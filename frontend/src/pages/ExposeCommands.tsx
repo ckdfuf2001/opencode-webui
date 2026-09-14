@@ -188,9 +188,9 @@ export function ExposeCommands() {
           <span className="ml-auto text-xs text-muted-foreground flex items-center gap-1"><Plug className="w-3 h-3" /> /expose</span>
         </div>
 
-        <div className="rounded-lg border overflow-hidden flex flex-col">
-          <div className="overflow-auto max-h-[60vh] overscroll-contain" style={{ scrollbarGutter: 'stable' } as any}>
-            <table className="w-full text-sm">
+        <div className="rounded-lg border flex flex-col overflow-hidden">
+          <div className="overflow-auto max-h-[60vh] min-h-[200px]" style={{ scrollbarGutter: 'stable' } as any}>
+            <table className="w-full text-sm min-w-[900px]">
               <thead className="sticky top-0 bg-muted/80 backdrop-blur border-b text-xs text-muted-foreground">
                 <tr>
                   <th className="px-2 py-1 text-center">
