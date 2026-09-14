@@ -1,25 +1,37 @@
-import { useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listExposed, createExposed, updateExposed, deleteExposed, listPublicCommands } from '@/api/expose'
 import { useCommands } from '@/hooks/useCommands'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { showToast } from '@/lib/toast'
-import { Copy, Trash2, Plug, Globe, Plus } from 'lucide-react'
+import { Copy, Plug, Globe } from 'lucide-react'
 import { getSystemInfo } from '@/api/system'
+import { Header } from '@/components/layout/Header'
 
 export function ExposeCommands() {
   const queryClient = useQueryClient()
-  const { data: exposed = [], isLoading } = useQuery({ queryKey: ['expose', 'commands'], queryFn: listExposed })
+  const { data: exposed = [] } = useQuery({ queryKey: ['expose', 'commands'], queryFn: listExposed })
   const { data: publicData } = useQuery({ queryKey: ['public', 'commands'], queryFn: listPublicCommands })
   const { data: system } = useQuery({ queryKey: ['system', 'info'], queryFn: getSystemInfo })
-  const { commands } = useCommands(null)
+  const { commands, loading: cmdLoading } = useCommands(null)
 
-  const [form, setForm] = useState({ commandName: '', exposeName: '', description: '' })
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [editDesc, setEditDesc] = useState('')
-  const [editExpose, setEditExpose] = useState('')
+  const [filter, setFilter] = useState('')
+  const [edits, setEdits] = useState<Record<number, { exposeName: string; description: string }>>({})
+
+  const exposedByCommand = useMemo(() => {
+    const m = new Map<string, typeof exposed[number]>()
+    for (const ex of exposed) m.set(ex.commandName, ex)
+    return m
+  }, [exposed])
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return commands
+    return commands.filter(c => c.name.toLowerCase().includes(q) || (c.description ?? '').toLowerCase().includes(q))
+  }, [commands, filter])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['expose', 'commands'] })
@@ -27,105 +39,136 @@ export function ExposeCommands() {
   }
 
   const createMut = useMutation({
-    mutationFn: () => createExposed({ commandName: form.commandName.trim(), exposeName: form.exposeName.trim() || undefined, description: form.description.trim() || undefined }),
-    onSuccess: () => { showToast.success('Exposed'); setForm({ commandName: '', exposeName: '', description: '' }); invalidate() },
+    mutationFn: (c: { commandName: string; exposeName?: string; description?: string }) => createExposed(c),
+    onSuccess: () => { invalidate() },
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to expose'),
   })
-
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Parameters<typeof updateExposed>[1] }) => updateExposed(id, data),
-    onSuccess: () => { showToast.success('Updated'); setEditingId(null); invalidate() },
+    onSuccess: () => invalidate(),
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to update'),
   })
-
   const deleteMut = useMutation({
     mutationFn: deleteExposed,
-    onSuccess: () => { showToast.success('Deleted'); invalidate() },
+    onSuccess: () => invalidate(),
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to delete'),
   })
+
+  const toggle = (cmdName: string, cmdDesc: string, checked: boolean) => {
+    const ex = exposedByCommand.get(cmdName)
+    if (checked && !ex) {
+      createMut.mutate({ commandName: cmdName, exposeName: cmdName, description: cmdDesc ?? '' })
+    } else if (!checked && ex) {
+      deleteMut.mutate(ex.id)
+    }
+  }
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text).catch(() => {})
     showToast.success('Copied')
   }
 
-  const publicUrl = useMemo(() => {
-    const base = system ? `http://${system.backend.host === '0.0.0.0' ? 'localhost' : system.backend.host}:${system.backend.port}` : ''
-    return base ? `${base}/api/public/commands` : '/api/public/commands'
+  const publicBase = useMemo(() => {
+    const base = system ? `http://${system.backend.host === '0.0.0.0' ? 'localhost' : system.backend.host}:${system.backend.port}` : window.location.origin
+    return `${base}/api/public/commands`
   }, [system])
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
-      <div>
-        <h1 className="text-xl font-bold flex items-center gap-2"><Plug className="w-5 h-5" /> Expose Commands (MCP-like)</h1>
-        <p className="text-sm text-muted-foreground mt-1">선택한 커맨드를 외부에서 MCP처럼 호출할 수 있도록 노출합니다. exposeName은 외부에서 보이는 이름, description은 외부 문서에 표시됩니다.</p>
-      </div>
-
-      <div className="rounded-lg border p-4 bg-muted/20 space-y-3">
-        <h2 className="text-sm font-semibold flex items-center gap-1.5"><Globe className="w-4 h-4" /> Public discovery</h2>
-        <div className="flex items-center gap-2 text-xs font-mono">
-          <span className="px-2 py-1 rounded bg-background border">GET {publicUrl}</span>
-          <Button size="sm" variant="outline" onClick={() => copy(publicUrl)}><Copy className="w-3 h-3" /> Copy</Button>
+    <div className="min-h-screen bg-background">
+      <Header title="Expose Commands" backTo="/" />
+      <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
+        <div className="rounded-lg border p-3 bg-muted/20 flex flex-wrap items-center gap-3 text-xs">
+          <span className="inline-flex items-center gap-1.5 font-medium"><Globe className="w-3.5 h-3.5" /> Public</span>
+          <span className="font-mono px-2 py-1 rounded bg-background border">GET {publicBase}</span>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => copy(publicBase)}><Copy className="w-3 h-3" /> Copy</Button>
+          <span className="text-muted-foreground">· POST {publicBase}/:exposeName/run {"{ repoId, args }"} · {publicData?.count ?? 0} enabled</span>
+          {system && <span className="text-muted-foreground">· v{system.version} :{system.backend.port} / opencode :{system.opencode.port}</span>}
         </div>
-        <div className="text-xs text-muted-foreground">예: <span className="font-mono">POST {publicUrl.replace('/commands', '/commands/my-expose/run')}  {"{ repoId: 1, args: \"hello\" }"}</span></div>
-        {publicData && <div className="text-xs text-muted-foreground">{publicData.count} enabled public commands</div>}
-        {system && <div className="text-xs text-muted-foreground">Backend v{system.version} · port {system.backend.port} · opencode {system.opencode.port} ({system.opencode.healthy ? 'healthy' : 'down'})</div>}
-      </div>
 
-      <div className="rounded-lg border p-4 space-y-3">
-        <h2 className="text-sm font-semibold flex items-center gap-1.5"><Plus className="w-4 h-4" /> New expose</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          <div>
-            <label className="text-xs text-muted-foreground">Command *</label>
-            <Input list="expose-cmd-list" value={form.commandName} onChange={(e) => setForm({ ...form, commandName: e.target.value })} placeholder="e.g. plan" />
-            <datalist id="expose-cmd-list">{commands.map((c) => <option key={c.name} value={c.name} />)}</datalist>
+        <div className="flex items-center gap-2">
+          <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter name / description" className="h-8 max-w-sm text-sm" />
+          <span className="text-xs text-muted-foreground">{filtered.length} / {commands.length} commands {cmdLoading ? '(loading…)' : ''}</span>
+          <span className="ml-auto text-xs text-muted-foreground flex items-center gap-1"><Plug className="w-3 h-3" /> /expose</span>
+        </div>
+
+        <div className="rounded-lg border overflow-hidden">
+          <div className="max-h-[70vh] overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-muted/50 backdrop-blur border-b text-xs text-muted-foreground">
+                <tr>
+                  <th className="w-10 px-2 py-2 text-center">노출</th>
+                  <th className="text-left px-2 py-2 w-[160px]">커맨드</th>
+                  <th className="text-left px-2 py-2">원본 설명</th>
+                  <th className="text-left px-2 py-2 w-[160px]">외부 이름</th>
+                  <th className="text-left px-2 py-2 w-[260px]">외부 설명 (수정 가능)</th>
+                  <th className="w-16 px-2 py-2 text-center">Active</th>
+                  <th className="w-20 px-2 py-2 text-center">복사</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filtered.map((cmd) => {
+                  const ex = exposedByCommand.get(cmd.name)
+                  const checked = !!ex
+                  const edit = ex ? edits[ex.id] : undefined
+                  const exposeNameVal = edit?.exposeName ?? ex?.exposeName ?? ''
+                  const descVal = edit?.description ?? ex?.description ?? ''
+                  return (
+                    <tr key={cmd.name} className={`hover:bg-muted/20 ${checked ? 'bg-primary/5' : ''}`}>
+                      <td className="px-2 py-1.5 text-center">
+                        <Checkbox checked={checked} onCheckedChange={(v) => toggle(cmd.name, cmd.description ?? '', !!v)} />
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-xs font-medium">/{cmd.name}</td>
+                      <td className="px-2 py-1.5 text-xs text-muted-foreground truncate max-w-[280px]" title={cmd.description ?? ''}>{cmd.description || '-'}</td>
+                      <td className="px-2 py-1.5">
+                        {ex ? (
+                          <Input
+                            value={exposeNameVal}
+                            onChange={(e) => setEdits(prev => ({ ...prev, [ex.id]: { exposeName: e.target.value, description: prev[ex.id]?.description ?? ex.description } }))}
+                            onBlur={() => {
+                              const cur = edits[ex.id]
+                              if (!cur) return
+                              if (cur.exposeName.trim() && cur.exposeName.trim() !== ex.exposeName) {
+                                updateMut.mutate({ id: ex.id, data: { exposeName: cur.exposeName.trim() } })
+                              }
+                            }}
+                            className="h-7 text-xs font-mono"
+                            placeholder={cmd.name}
+                          />
+                        ) : <span className="text-xs text-muted-foreground/50">—</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {ex ? (
+                          <Input
+                            value={descVal}
+                            onChange={(e) => setEdits(prev => ({ ...prev, [ex.id]: { exposeName: prev[ex.id]?.exposeName ?? ex.exposeName, description: e.target.value } }))}
+                            onBlur={() => {
+                              const cur = edits[ex.id]
+                              if (!cur) return
+                              if (cur.description !== ex.description) {
+                                updateMut.mutate({ id: ex.id, data: { description: cur.description } })
+                              }
+                            }}
+                            className="h-7 text-xs"
+                            placeholder={cmd.description ?? '설명'}
+                          />
+                        ) : <span className="text-xs text-muted-foreground/50 truncate max-w-[240px] block" title={cmd.description ?? ''}>{cmd.description ?? '-'}</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-center">
+                        {ex ? <Switch checked={ex.enabled} onCheckedChange={(v) => updateMut.mutate({ id: ex.id, data: { enabled: v } })} /> : <span className="text-xs text-muted-foreground/30">—</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-center">
+                        {ex ? <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => copy(`${window.location.origin}/api/public/commands/${ex.exposeName}/run`)} title="Copy run URL"><Copy className="w-3.5 h-3.5" /></Button> : null}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Expose name (외부 이름)</label>
-            <Input value={form.exposeName} onChange={(e) => setForm({ ...form, exposeName: e.target.value })} placeholder="default = commandName" />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Description</label>
-            <Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="외부 설명" />
+          <div className="px-3 py-2 border-t text-xs text-muted-foreground bg-muted/10">
+            체크 = 노출, 외부 이름/외부 설명은 블러 시 저장 · Active 끄면 public 목록에서 제외 · 원본 설명이 기본값으로 들어가고 수정해 노출할 수 있음
           </div>
         </div>
-        <Button size="sm" onClick={() => createMut.mutate()} disabled={!form.commandName.trim() || createMut.isPending}>Expose</Button>
-      </div>
-
-      <div className="rounded-lg border">
-        <div className="px-4 py-2 border-b text-sm font-semibold">Exposed list ({exposed.length})</div>
-        {isLoading ? <div className="p-4 text-sm text-muted-foreground">Loading...</div> : exposed.length === 0 ? <div className="p-4 text-sm text-muted-foreground">No exposed commands yet.</div> : (
-          <div className="divide-y">
-            {exposed.map((ex) => (
-              <div key={ex.id} className="p-3 flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  {editingId === ex.id ? (
-                    <div className="flex flex-col gap-2">
-                      <Input value={editExpose} onChange={(e) => setEditExpose(e.target.value)} placeholder="exposeName" className="h-7 text-xs" />
-                      <Input value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="description" className="h-7 text-xs" />
-                      <div className="flex gap-1">
-                        <Button size="sm" className="h-7 text-xs" onClick={() => updateMut.mutate({ id: ex.id, data: { exposeName: editExpose.trim() || undefined, description: editDesc } })}>Save</Button>
-                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingId(null)}>Cancel</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="text-sm font-mono font-medium truncate">/{ex.commandName} → <span className="text-primary">{ex.exposeName}</span> <span className={`ml-1 px-1 py-0.5 rounded text-[10px] border ${ex.enabled ? 'bg-green-500/10 border-green-500/30 text-green-600' : 'bg-muted border-border'}`}>{ex.enabled ? 'enabled' : 'disabled'}</span></div>
-                      <div className="text-xs text-muted-foreground truncate">{ex.description || 'No description'}</div>
-                      <div className="text-[11px] font-mono text-muted-foreground mt-1">GET /api/public/commands / POST /api/public/commands/{ex.exposeName}/run</div>
-                    </>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Switch checked={ex.enabled} onCheckedChange={(v) => updateMut.mutate({ id: ex.id, data: { enabled: v } })} />
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingId(ex.id); setEditExpose(ex.exposeName); setEditDesc(ex.description) }}>Edit</Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => copy(`${window.location.origin}/api/public/commands/${ex.exposeName}/run`)} title="Copy run URL"><Copy className="w-3.5 h-3.5" /></Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => deleteMut.mutate(ex.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
