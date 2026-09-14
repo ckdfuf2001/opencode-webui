@@ -24,9 +24,9 @@ startAutoApprover()
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 30,
-      // 미사용 쿼리는 30초 뒤 메모리에서 제거 — bash 등 대량 툴 출력이 2분 동안 힙을 잡던 원인
-      gcTime: 1000 * 30,
+      staleTime: 1000 * 10,
+      // 미사용 쿼리는 10초 뒤 메모리에서 제거 — pnpm 등 대량 툴 출력이 30초 동안 힙을 잡아 3GB까지 가던 원인, 프론트만 돌려도 동일
+      gcTime: 1000 * 10,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
       refetchOnMount: false,

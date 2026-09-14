@@ -99,26 +99,43 @@ function toolOutputLength(parts: MessageWithParts["parts"]): number {
 }
 
 // bash 등 대용량 툴 출력은 메모리에 전부 들고 있으면 힙이 GB 단위로 부푼다.
-// 완료된 툴은 80k까지만 메모리에 유지하고 나머지는 잘라낸다. 전체 보기는 opencode 원본에서 다시 fetch.
-export const MAX_TOOL_OUTPUT_KEEP = 80_000
+// pnpm 같은 대량 출력이 툴 하나에 4GB까지 가던 걸 방지 — 완료된 툴은 20k까지만 메모리에 유지
+export const MAX_TOOL_OUTPUT_KEEP = 20_000
 export const TOOL_TRUNCATE_NOTICE = '\n\n…[output truncated for memory — see full log in session]'
 export function truncateLargeToolOutputs(messages: MessageListResponse): MessageListResponse {
   let changed = false
+  let totalKept = 0
   const next = messages.map((msg) => {
     let msgChanged = false
     const newParts = msg.parts.map((part: any) => {
       if (part.type !== 'tool' || !part.state) return part
       const st = part.state as { output?: string; metadata?: { output?: string }; status?: string }
       const out = st.output ?? st.metadata?.output
-      if (!out || out.length <= MAX_TOOL_OUTPUT_KEEP) return part
-      // running 중에는 자르지 않는다 — 완료/error만 자름 (스트리밍 중 잘리면 이어붙이기 깨짐)
-      if (st.status === 'running') return part
+      if (!out) return part
+      const isRunning = st.status === 'running'
+      if (!isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP) {
+        totalKept += out.length
+        return part
+      }
+      if (isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP * 6) {
+        totalKept += out.length
+        return part
+      }
       msgChanged = true
-      const truncated = out.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${out.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+      const budget = Math.max(5_000, MAX_TOOL_OUTPUT_KEEP - Math.max(0, totalKept - 150_000))
+      const keep = isRunning ? Math.min(out.length, MAX_TOOL_OUTPUT_KEEP * 6) : Math.min(out.length, budget)
+      const truncated = out.length > keep ? out.slice(0, keep) + TOOL_TRUNCATE_NOTICE + ` (${out.length - keep} chars omitted)` : out
+      totalKept += keep
       if (st.output != null) return { ...part, state: { ...st, output: truncated } }
       return { ...part, state: { ...st, metadata: { ...(st.metadata ?? {}), output: truncated } } }
     })
     if (msgChanged) { changed = true; return { ...msg, parts: newParts } }
+    for (const p of newParts) {
+      if ((p as any).type === 'tool') {
+        const s = (p as any).state
+        totalKept += (s?.output ?? s?.metadata?.output ?? '').length
+      }
+    }
     return msg
   })
   return changed ? next as MessageListResponse : messages
@@ -363,8 +380,8 @@ export const useSessions = (opcodeUrl: string | null | undefined, directory?: st
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     staleTime: 5000,
-    // 미사용 시 60초 뒤 메모리에서 제거 (기본 5분 유지 방지)
-    gcTime: 60_000,
+    // 미사용 시 10초 뒤 메모리에서 제거 — 세션 목록도 pnpm 로그와 함께 힙 잡음
+    gcTime: 10_000,
   });
 };
 
@@ -1039,8 +1056,8 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
                   if (partMetaOut === curMeta + delta) nextPart = part;
                   else {
                     let nextOut = curMeta + delta
-                    // running 중에도 힙 폭증 방지: 120k 넘으면 뒤쪽 80k만 유지 (bash 대량 출력 대비)
-                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 1.5) {
+                    // running 중에도 힙 폭증 방지: 120k(20k*6) 넘으면 뒤쪽 20k만 유지 (pnpm 대량 출력 대비)
+                    if (nextOut.length > MAX_TOOL_OUTPUT_KEEP * 6) {
                       nextOut = `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + nextOut.slice(-MAX_TOOL_OUTPUT_KEEP)
                     }
                     nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: nextOut } } } as unknown as typeof part;

@@ -200,9 +200,9 @@ const FETCH_RETRY_DELAY_MS = 5000
 const FETCH_RETRY_MAX = 3
 // 주기 폴링: 커맨드/스킬은 자주 안 바뀌어 120초로 충분 (서버 부하·메모리 절약)
 const COMMANDS_POLL_MS = 120_000
-// 저메모리: 키 상한 + TTL. directory별 무한 누적 방지.
-const COMMANDS_CACHE_MAX_KEYS = 20
-const COMMANDS_CACHE_TTL_MS = 5 * 60_000
+// 저메모리: 키 상한 + TTL. directory별 무한 누적 방지 — 프론트만 돌려도 3GB 가던 원인 중 하나라 더 조임
+const COMMANDS_CACHE_MAX_KEYS = 10
+const COMMANDS_CACHE_TTL_MS = 60_000
 const commandsCache = new Map<string, CommandWithScope[]>()
 const commandsCacheAt = new Map<string, number>()
 function pruneCommandsCache(): void {
