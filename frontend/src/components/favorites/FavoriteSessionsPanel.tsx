@@ -11,36 +11,30 @@ import { listRepos } from '@/api/repos'
 
 export function FavoriteSessionsPanel() {
   const qc = useQueryClient()
-  const [open, setOpen] = useState(false)
   const [pinned, setPinned] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: open, staleTime: 10_000 })
+  const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: pinned, staleTime: 10_000 })
   const { data: dbStatuses } = useSessionStatusMap()
-  const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos, enabled: open })
+  const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos, enabled: pinned })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['favorites'] })
-  const isVisible = open || pinned
 
   return (
-    <div
-      className="fixed bottom-[72px] left-0 z-[60] flex items-start"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => { if (!pinned) setOpen(false) }}
-    >
+    <>
       <button
         type="button"
         onClick={() => setPinned(v => !v)}
-        className={`w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0
-          ${pinned ? 'bg-amber-500 text-white border-amber-600' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:bg-card-hover'}`}
-        title={pinned ? '즐겨찾기 고정 해제' : '즐겨찾기 (호버로 미리보기, 클릭으로 고정)'}
+        className={`fixed bottom-[72px] left-0 z-[60] w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0
+          ${pinned ? 'bg-amber-500 text-white border-amber-600' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:bg-card'}`}
+        title={pinned ? '즐겨찾기 고정 해제 (클릭)' : '즐겨찾기 (클릭하여 열기)'}
       >
-        <Star className={`w-5 h-5 ${pinned ? 'fill-white' : ''} transition-all`} />
+        <Star className={`w-5 h-5 ${pinned ? 'fill-white' : ''}`} />
       </button>
-      {isVisible && (
-        <div className="ml-4 w-[340px] max-w-[88vw] rounded-lg border border-border bg-card shadow-2xl overflow-hidden flex flex-col max-h-[60vh]">
+      {pinned && (
+        <div className="fixed bottom-[84px] left-4 z-[60] w-[340px] max-w-[88vw] rounded-lg border border-border bg-card shadow-2xl overflow-hidden flex flex-col max-h-[60vh]">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border">
             <span className="text-xs font-semibold">즐겨찾기</span>
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setOpen(false); setPinned(false) }}><X className="w-3.5 h-3.5" /></Button>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setPinned(false)}><X className="w-3.5 h-3.5" /></Button>
           </div>
           <div className="overflow-auto flex-1 p-2 space-y-2 bg-card">
             {isLoading && <div className="text-xs text-muted-foreground p-2">로딩...</div>}
@@ -85,7 +79,7 @@ export function FavoriteSessionsPanel() {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
 
