@@ -119,36 +119,40 @@ export function truncateLargeToolOutputs(messages: MessageListResponse): Message
       if (part.type !== 'tool' || !part.state) return part
       const st = part.state as { output?: string; metadata?: { output?: string }; status?: string; input?: unknown }
       const out = st.output ?? st.metadata?.output
-      // edit 등은 input에 파일 내용이 통째로 들어갈 수 있어 input도 같이 체크
+      const toolName = (part as any).tool ?? ''
+      const isRead = toolName.toLowerCase().includes('read')
+      // read는 파일 전체를 그대로 들고 와 더 크게 잡는다 — 10k로 더 짧게
+      const keepLimit = isRead ? 10_000 : MAX_TOOL_OUTPUT_KEEP
+      // edit/read 등은 input에 파일 내용이 통째로 들어갈 수 있어 input도 같이 체크
       const inputStr = typeof st.input === 'string' ? st.input : st.input ? JSON.stringify(st.input) : ''
       const inputLen = inputStr.length
       if (out) {
         const isRunning = st.status === 'running'
-        if (!isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP && inputLen <= MAX_TOOL_OUTPUT_KEEP) {
+        if (!isRunning && out.length <= keepLimit && inputLen <= keepLimit) {
           totalKept += out.length + Math.min(inputLen, 5_000)
           return part
         }
-        if (isRunning && out.length <= MAX_TOOL_OUTPUT_KEEP * 6) {
+        if (isRunning && out.length <= keepLimit * 6) {
           totalKept += out.length
           return part
         }
         msgChanged = true
-        const budget = Math.max(5_000, MAX_TOOL_OUTPUT_KEEP - Math.max(0, totalKept - 150_000))
-        const keep = isRunning ? Math.min(out.length, MAX_TOOL_OUTPUT_KEEP * 6) : Math.min(out.length, budget)
+        const budget = Math.max(5_000, keepLimit - Math.max(0, totalKept - 150_000))
+        const keep = isRunning ? Math.min(out.length, keepLimit * 6) : Math.min(out.length, budget)
         const truncated = out.length > keep ? out.slice(0, keep) + TOOL_TRUNCATE_NOTICE + ` (${out.length - keep} chars omitted)` : out
         totalKept += keep
         let newState: any = { ...st }
         if (st.output != null) newState.output = truncated
         else newState.metadata = { ...(st.metadata ?? {}), output: truncated }
-        // edit input도 크면 잘라냄 (원본은 opencode에 보관)
-        if (inputLen > MAX_TOOL_OUTPUT_KEEP) {
+        // edit/read input도 크면 잘라냄 (원본은 opencode에 보관)
+        if (inputLen > keepLimit) {
           const inKeep = 2_000
           newState.input = typeof st.input === 'string' ? (st.input as string).slice(0, inKeep) + `…[input truncated ${inputLen - inKeep} chars]` : st.input
         }
         return { ...part, state: newState }
       }
-      // output은 없는데 input만 큰 경우 (edit)
-      if (inputLen > MAX_TOOL_OUTPUT_KEEP) {
+      // output은 없는데 input만 큰 경우 (edit/read)
+      if (inputLen > keepLimit) {
         msgChanged = true
         let newState: any = { ...st, input: typeof st.input === 'string' ? (st.input as string).slice(0, 2_000) + `…[input truncated ${inputLen - 2_000} chars]` : st.input }
         return { ...part, state: newState }
