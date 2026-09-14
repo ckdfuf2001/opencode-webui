@@ -5,7 +5,6 @@ import { useCommands } from '@/hooks/useCommands'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Switch } from '@/components/ui/switch'
 import { showToast } from '@/lib/toast'
 import { Copy, Plug, Globe } from 'lucide-react'
 import { getSystemInfo } from '@/api/system'
@@ -77,12 +76,19 @@ export function ExposeCommands() {
     <div className="min-h-screen bg-background">
       <Header title="Expose Commands" backTo="/" />
       <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
-        <div className="rounded-lg border p-3 bg-muted/20 flex flex-wrap items-center gap-3 text-xs">
-          <span className="inline-flex items-center gap-1.5 font-medium"><Globe className="w-3.5 h-3.5" /> Public</span>
-          <span className="font-mono px-2 py-1 rounded bg-background border">GET {publicBase}</span>
-          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => copy(publicBase)}><Copy className="w-3 h-3" /> Copy</Button>
-          <span className="text-muted-foreground">· POST {publicBase}/:exposeName/run {"{ repoId, args }"} · {publicData?.count ?? 0} enabled</span>
-          {system && <span className="text-muted-foreground">· v{system.version} :{system.backend.port} / opencode :{system.opencode.port}</span>}
+        <div className="rounded-lg border p-3 bg-muted/20 space-y-2">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-medium"><Globe className="w-3.5 h-3.5" /> Public (MCP-like)</span>
+            <span className="font-mono px-2 py-1 rounded bg-background border">GET {publicBase}</span>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => copy(publicBase)}><Copy className="w-3 h-3" /> Copy</Button>
+            <span className="text-muted-foreground">· {publicData?.count ?? 0} 노출됨</span>
+            {system && <span className="text-muted-foreground">· v{system.version} :{system.backend.port}</span>}
+          </div>
+          <div className="text-xs font-mono bg-background border rounded p-2 space-y-1">
+            <div>호출: <span className="text-primary">POST {publicBase}/:exposeName/run</span></div>
+            <div className="text-muted-foreground">body: {"{ repoId?: number, directory?: string, args?: string, sessionId?: string }"} — 체크된 것만 노출, 미체크는 호출 404</div>
+            <div className="text-muted-foreground">예: curl -X POST {publicBase}/my-plan/run -H "Content-Type: application/json" -d '{"{ \"repoId\":1, \"args\":\"hello\" }"}'</div>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -101,7 +107,6 @@ export function ExposeCommands() {
                   <th className="text-left px-2 py-2">원본 설명</th>
                   <th className="text-left px-2 py-2 w-[160px]">외부 이름</th>
                   <th className="text-left px-2 py-2 w-[260px]">외부 설명 (수정 가능)</th>
-                  <th className="w-16 px-2 py-2 text-center">Active</th>
                   <th className="w-20 px-2 py-2 text-center">복사</th>
                 </tr>
               </thead>
@@ -154,9 +159,6 @@ export function ExposeCommands() {
                         ) : <span className="text-xs text-muted-foreground/50 truncate max-w-[240px] block" title={cmd.description ?? ''}>{cmd.description ?? '-'}</span>}
                       </td>
                       <td className="px-2 py-1.5 text-center">
-                        {ex ? <Switch checked={ex.enabled} onCheckedChange={(v) => updateMut.mutate({ id: ex.id, data: { enabled: v } })} /> : <span className="text-xs text-muted-foreground/30">—</span>}
-                      </td>
-                      <td className="px-2 py-1.5 text-center">
                         {ex ? <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => copy(`${window.location.origin}/api/public/commands/${ex.exposeName}/run`)} title="Copy run URL"><Copy className="w-3.5 h-3.5" /></Button> : null}
                       </td>
                     </tr>
@@ -166,7 +168,7 @@ export function ExposeCommands() {
             </table>
           </div>
           <div className="px-3 py-2 border-t text-xs text-muted-foreground bg-muted/10">
-            체크 = 노출, 외부 이름/외부 설명은 블러 시 저장 · Active 끄면 public 목록에서 제외 · 원본 설명이 기본값으로 들어가고 수정해 노출할 수 있음
+            체크 = 노출 (체크된 것만 GET /api/public/commands에 포함, 호출은 POST /api/public/commands/:exposeName/run) · 외부 이름/설명 블러 시 저장 · 원본 설명이 기본값
           </div>
         </div>
       </div>
