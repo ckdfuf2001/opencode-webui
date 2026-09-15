@@ -240,7 +240,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
     <div>
       <div
         ref={rowRef}
-        className={`flex items-center gap-1 py-1 hover:bg-muted rounded cursor-pointer group ${
+        className={`flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group ${
           isSelected ? 'bg-blue-500/15' : ''
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
@@ -253,7 +253,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               className="w-2.5 h-6 p-0 has-[>svg]:px-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
               onClick={(e) => e.stopPropagation()}
             >
-              <DotsThreeVertical className="w-2 h-2" />
+              <DotsThreeVertical className="w-3 h-3" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
@@ -302,7 +302,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
         )}
 
         <div
-          className="flex items-center gap-1 flex-1"
+          className="flex items-center gap-0 flex-1"
           onClick={handleClick}
           onDoubleClick={handleDoubleClick}
           title={file.isDirectory ? '클릭: 펼치기/접기, 더블클릭: 폴더로 이동' : file.name}
@@ -394,13 +394,13 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
     <div className="min-w-max">
       {showGoUp && (
         <div
-          className="flex items-center gap-1 py-1 hover:bg-muted rounded cursor-pointer group"
+          className="flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group"
           onClick={handleGoUp}
           title="상위 폴더로 이동"
         >
           <span className="w-4 shrink-0" />
           <FolderUp className="w-4 h-4 shrink-0" />
-          <div className="flex items-center gap-1 flex-1">
+          <div className="flex items-center gap-0 flex-1">
             <span className="text-sm truncate">..</span>
           </div>
         </div>
