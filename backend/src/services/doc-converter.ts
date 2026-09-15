@@ -134,71 +134,20 @@ export async function extractDocumentText(
   } catch {
     isFile = false
   }
-  // 호환: 이전에 chat_uploads/file 처럼 레포 없이 보낸 경로가 있으면, 실제 파일은 aaa/chat_uploads/file 에 있으므로 탐색해서 찾는다
-  // dev ↔ release workspace가 달라 파일을 못 찾는 경우도 대비해 여러 base를 시도
-  const tryFind = async (base: string, rel: string): Promise<string | null> => {
-    try {
-      const entries = await fs.readdir(base, { withFileTypes: true }).catch(() => [] as any[])
-      for (const e of entries as any[]) {
-        if (!e.isDirectory()) continue
-        const cand = path.join(base, e.name, rel)
-        try {
-          const s = await fs.stat(cand)
-          if (s.isFile()) return cand
-        } catch {}
-      }
-    } catch {}
-    return null
-  }
-  if (!isFile && userPath.replace(/\\/g, '/').startsWith('chat_uploads/')) {
-    try {
-      const { getReposPath, getWorkspacePath } = await import('@opencode-webui/shared')
-      const bases = new Set<string>([
-        getReposPath(),
-        path.join(getWorkspacePath(), 'repos'),
-        path.resolve(process.cwd(), 'workspace', 'repos'),
-        path.resolve(process.cwd(), '..', 'workspace', 'repos'),
-        path.resolve(process.cwd(), 'release', 'workspace', 'repos'),
-      ])
-      for (const base of bases) {
-        const found = await tryFind(base, userPath)
-        if (found) { resolved = found; isFile = true; break }
-      }
-    } catch {}
-  }
-  // aaa/... 처럼 레포 포함 경로도 dev/release 간 차이로 못 찾을 수 있어 대체 base에서 재시도
-  if (!isFile && userPath.replace(/\\/g, '/').includes('/')) {
-    try {
-      const { getWorkspacePath } = await import('@opencode-webui/shared')
-      const norm = userPath.replace(/\\/g, '/')
-      const cands = [
-        path.join(getWorkspacePath(), 'repos', norm),
-        path.resolve(process.cwd(), 'workspace', 'repos', norm),
-        path.resolve(process.cwd(), '..', 'workspace', 'repos', norm),
-        path.resolve(process.cwd(), 'release', 'workspace', 'repos', norm),
-      ]
-      for (const c of cands) {
-        try {
-          const s = await fs.stat(c)
-          if (s.isFile()) { resolved = c; isFile = true; break }
-        } catch {}
-      }
-    } catch {}
-  }
-  // src/file.ts 처럼 레포 없이 온 일반 파일도 모든 레포에서 탐색 (채팅은 레포 없이 보냄)
+  // 상대경로면 앞에 레포 붙여서 찾기 — 채팅은 레포 없이 chat_uploads/... 로 보내므로
   if (!isFile) {
     try {
-      const { getReposPath, getWorkspacePath } = await import('@opencode-webui/shared')
-      const bases = new Set<string>([
-        getReposPath(),
-        path.join(getWorkspacePath(), 'repos'),
-        path.resolve(process.cwd(), 'workspace', 'repos'),
-        path.resolve(process.cwd(), '..', 'workspace', 'repos'),
-        path.resolve(process.cwd(), 'release', 'workspace', 'repos'),
-      ])
-      for (const base of bases) {
-        const found = await tryFind(base, userPath.replace(/\\/g, '/'))
-        if (found) { resolved = found; isFile = true; break }
+      const { getReposPath } = await import('@opencode-webui/shared')
+      const norm = userPath.replace(/\\/g, '/').replace(/^\/+/, '')
+      const reposBase = getReposPath()
+      const entries = await fs.readdir(reposBase, { withFileTypes: true }).catch(() => [] as any[])
+      for (const e of entries as any[]) {
+        if (!e.isDirectory()) continue
+        const cand = path.join(reposBase, e.name, norm)
+        try {
+          const s = await fs.stat(cand)
+          if (s.isFile()) { resolved = cand; isFile = true; break }
+        } catch {}
       }
     } catch {}
   }
