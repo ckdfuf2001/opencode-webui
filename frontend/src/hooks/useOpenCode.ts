@@ -431,7 +431,7 @@ export const useSessions = (opcodeUrl: string | null | undefined, directory?: st
     // Working 배찌는 useSessionStatusMap(전역 폴링)이 따로 갱신하므로 목록 폴링 불필요.
     refetchInterval: opts?.poll === false ? false : 2000,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
     staleTime: 5000,
     // 미사용 시 10초 뒤 메모리에서 제거 — 세션 목록도 pnpm 로그와 함께 힙 잡음
     gcTime: 10_000,
@@ -446,7 +446,7 @@ export const useSession = (opcodeUrl: string | null | undefined, sessionID: stri
     queryFn: () => client!.getSession(sessionID!),
     enabled: !!client && !!sessionID,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
     staleTime: 5000,
   });
 };
@@ -565,7 +565,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     enabled: !!client && !!sessionID,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
     // 세션 전환 시 이전 메시지 캐시는 10초만 유지 후 메모리에서 제거 — bash 등 대용량 툴 출력이 30초 동안 힙을 잡아 7GB까지 가던 원인
     // idle이면 10초 폴링이라 10초 gcTime이면 다음 폴링 전까지 캐시가 살아있어 깜빡임 없이 유지된다.
     gcTime: 10_000,

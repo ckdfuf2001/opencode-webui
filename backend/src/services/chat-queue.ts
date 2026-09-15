@@ -303,13 +303,19 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
       // OpenCode는 턴이 끝나야 응답 헤더를 보낼 수 있어 타임아웃은 거의 확실히
       // 전달됐다는 뜻이다. sending 유지 → idle 관찰 시 제거(확정). 타임아웃은 실패로 세지 않는다.
-      // 연결 자체가 안 됐거나 그 외 에러는 실패로 센다 (중복 전송 방지 + 상한).
       const name = (error as { name?: string })?.name
       const code = ((error as { cause?: { code?: unknown } })?.cause?.code
         ?? (error as { code?: unknown })?.code) as string | undefined
       const connectError = typeof code === 'string'
-        && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code.toUpperCase())
-      if (connectError || (name !== 'TimeoutError' && name !== 'AbortError')) {
+        && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNABORTED'].includes(code.toUpperCase())
+      if (connectError) {
+        // NW 단절: failed로 고정하지 않고 queued 유지 + 백오프만 — 네트워크 회복 시 자동 재개
+        markHeadQueued(sessionID, next.id)
+        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        logger.info(`Queued chat for session ${sessionID} connect error (${code}), keep queued for auto-retry after NW recovery`)
+        return
+      }
+      if (name !== 'TimeoutError' && name !== 'AbortError') {
         recordFailure(sessionID, next.id)
       } else {
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
@@ -444,11 +450,11 @@ async function checkOpencodeBusy(base: string, directoryParam: string, sessionID
       headers: ensureServerAuth({}),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
-    if (!res.ok) return false
+    if (!res.ok) return true // 보수적: 상태 불명확 시 busy로 가정해 발송 보류 (NW 단절 시 idle 오판 방지)
     const map = (await res.json()) as Record<string, { type?: string }>
     return map[sessionID]?.type === 'busy'
   } catch {
-    return false
+    return true // NW 단절·타임아웃 시 busy로 가정해 sending을 제거하지 않고 queued 발송도 보류
   }
 }
 
@@ -480,12 +486,11 @@ async function hasPendingInteraction(base: string, directory: string, sessionID:
         headers: ensureServerAuth({}),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       })
-      if (!res.ok) return false
+      if (!res.ok) return true // 보수적: 조회 실패 시 working으로 가정
       const list = (await res.json()) as Array<{ sessionID?: string }>
       return Array.isArray(list) && list.some((item) => item?.sessionID === sessionID)
     } catch {
-      // 조회 실패는 working 아님으로 간주하고 다음으로 (보수적 차단은 status 체크가 담당)
-      return false
+      return true // NW 단절 시 working으로 가정해 발송 보류
     }
   }))
   return results.some(Boolean)
