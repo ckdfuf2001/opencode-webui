@@ -129,7 +129,7 @@ export function SessionDetail() {
   useLoadPendingPermissions(openCodeClient, sessionId, descendantIDs);
   useLoadPendingQuestions(openCodeClient, sessionId);
 
-  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory);
+  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory, 60);
   const { data: queuedForBadge = [] } = useQueuedChats(sessionId ?? '')
   // 고정 개수만 보여준다: DOM에는 항상 최대 WINDOW_SIZE개 (메모리/DOM 절약).
   // - windowStart === null: 하단 고정(마지막 N개)

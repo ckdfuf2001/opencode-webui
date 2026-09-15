@@ -611,7 +611,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     // 세션 전환 시 이전 메시지 캐시는 10초만 유지 후 메모리에서 제거 — bash 등 대용량 툴 출력이 30초 동안 힙을 잡아 7GB까지 가던 원인
     // idle이면 10초 폴링이라 10초 gcTime이면 다음 폴링 전까지 캐시가 살아있어 깜빡임 없이 유지된다.
     gcTime: 10_000,
-    placeholderData: (previousData) => previousData,
+    //placeholderData: (previousData) => previousData,
     staleTime: 2000,
     refetchInterval: (query) => {
       // 즐겨찾기 팝업처럼 열 때 한 번만 가져오는 용도 — 폴링 없음 (메모리 대응)
