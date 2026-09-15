@@ -44,6 +44,10 @@ interface FileTreeProps {
   isLoading?: boolean
   browserOpenPaths?: Set<string>
   attachedPaths?: Set<string>
+  /** 채팅 파일 클릭 시 펼쳐서 보여줄 폴더 경로 (정규화 전 원문) */
+  revealPath?: string
+  /** 검색 모드 등 children이 이미 알려진 트리를 전부 펼친다 (지연 로딩 폴더는 제외) */
+  expandKnown?: boolean
 }
 
 interface TreeNodeProps {
@@ -57,6 +61,8 @@ interface TreeNodeProps {
   onDownload?: (file: FileInfo) => void
   browserOpenPaths?: Set<string>
   attachedPaths?: Set<string>
+  revealPath?: string
+  expandKnown?: boolean
 }
 
 /**
@@ -77,15 +83,21 @@ function useDirChildren(dirPath: string, enabled: boolean) {
   })
 }
 
-function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, attachedPaths }: TreeNodeProps) {
-  const [expanded, setExpanded] = useState(false)
+function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
+  // 수동 토글이 최우선. 그 외에는 reveal 경로(채팅 파일 클릭)·검색 펼치기 순으로 자동 펼친다.
+  // expandKnown은 children이 이미 알려진 노드에만 적용 — 지연 로딩 폴더를 전부 깨우지 않는다.
+  const normPath = normalizeTreePath(file.path)
+  const revealNorm = revealPath ? normalizeTreePath(revealPath) : ''
+  const onRevealPath = !!revealNorm && file.isDirectory && (normPath === revealNorm || revealNorm.startsWith(normPath + '/'))
+  const [manual, setManual] = useState<boolean | null>(null)
+  const expanded = manual ?? (onRevealPath || (expandKnown === true && file.isDirectory && file.children !== undefined))
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const rowRef = useRef<HTMLDivElement>(null)
-  const isSelected = !!selectedFile?.path && normalizeTreePath(selectedFile.path) === normalizeTreePath(file.path)
-  const isBrowserOpen = !file.isDirectory && (browserOpenPaths?.has(normalizeTreePath(file.path)) ?? false)
+  const isSelected = !!selectedFile?.path && normalizeTreePath(selectedFile.path) === normPath
+  const isBrowserOpen = !file.isDirectory && (browserOpenPaths?.has(normPath) ?? false)
   // 하위 폴더는 펼칠 때만 불러온다 (눌렀을 때 1회 fetch, 이후 캐시).
   // children이 이미 있으면(검색 트리 등) 추가 요청 없이 그걸 쓴다.
   const needFetch = expanded && file.isDirectory && file.children === undefined
@@ -103,9 +115,14 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
     : false
 
   useEffect(() => {
-    if (isSelected) {
+    if (!isSelected) return
+    // 조상이 지연 로딩이라 행이 늦게 마운트될 수 있어서 몇 번 재시도한다
+    let n = 0
+    const id = setInterval(() => {
       rowRef.current?.scrollIntoView({ block: 'nearest' })
-    }
+      if (++n >= 6) clearInterval(id)
+    }, 250)
+    return () => clearInterval(id)
   }, [isSelected])
 
   const handleRegisterPage = async () => {
@@ -128,7 +145,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
     if (editing) return
     if (file.isDirectory) {
       // 행 단일 클릭은 그 자리에서 펼치기/접기
-      setExpanded((v) => !v)
+      setManual(!expanded)
     } else {
       onFileSelect(file)
     }
@@ -260,7 +277,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             title={expanded ? '접기' : '펼치기'}
             onClick={(e) => {
               e.stopPropagation()
-              setExpanded(!expanded)
+              setManual(!expanded)
             }}
           >
             {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -322,6 +339,8 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               onDownload={onDownload}
               browserOpenPaths={browserOpenPaths}
               attachedPaths={attachedPaths}
+              revealPath={revealPath}
+              expandKnown={expandKnown}
             />
           ))}
         </div>
@@ -340,7 +359,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   )
 }
 
-export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, attachedPaths }: FileTreeProps) {
+export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, attachedPaths, revealPath, expandKnown }: FileTreeProps) {
   const handleGoUp = () => {
     // If currentPath has content and is different from basePath, go up
     if (currentPath !== basePath) {
@@ -394,6 +413,8 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
             onDownload={onDownload}
             browserOpenPaths={browserOpenPaths}
             attachedPaths={attachedPaths}
+            revealPath={revealPath}
+            expandKnown={expandKnown}
           />
         ))
       )}

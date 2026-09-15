@@ -294,18 +294,18 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
     retry: false,
   })
 
-  // 채팅에서 파일을 열면 해당 파일의 디렉터리로 트리를 이동시킨다.
-  // basePath 로드와 레이스가 나지 않게 이 effect 하나로 통합한다.
+  // 트리는 basePath를 루트로 유지한다. 채팅 파일 클릭은 드릴인 이동 대신
+  // 트리에서 해당 경로를 펼쳐서 보여준다 (revealPath → FileTree).
   useEffect(() => {
-    if (initialSelectedFile?.includes('/')) {
-      const dir = normalizePath(initialSelectedFile).split('/').slice(0, -1).join('/')
-      if (dir) {
-        void loadFiles(dir)
-        return
-      }
-    }
     void loadFiles(basePath)
-  }, [basePath, initialSelectedFile])
+  }, [basePath])
+
+  // 채팅에서 연 파일의 디렉터리 — 트리에서 자동 펼침 + 선택 하이라이트용
+  const revealPath = useMemo(() => {
+    if (!initialSelectedFile?.includes('/')) return undefined
+    const dir = normalizePath(initialSelectedFile).split('/').slice(0, -1).join('/')
+    return dir || undefined
+  }, [initialSelectedFile])
 
    const { data: initialFileData, error: initialFileError } = useFile(initialSelectedFile)
   const initialErrorToastedRef = useRef<string | null>(null)
@@ -647,7 +647,7 @@ useEffect(() => {
     }
   }
 
-  // NOTE: initialSelectedFile 이동은 위 effect에서 함께 처리 (레이스 방지)
+  // NOTE: initialSelectedFile은 드릴인하지 않고 revealPath로 트리에서 펼친다
 
   useEffect(() => {
     const handleFileSaved = (event: CustomEvent<{ path: string; content: string }>) => {
@@ -788,6 +788,8 @@ useEffect(() => {
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
                   attachedPaths={attachedPaths}
+                  revealPath={revealPath}
+                  expandKnown={recursiveActive && !!recursiveResults}
                 />
               )}
             </div>
@@ -914,6 +916,8 @@ useEffect(() => {
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
                   attachedPaths={attachedPaths}
+                  revealPath={revealPath}
+                  expandKnown={recursiveActive && !!recursiveResults}
                 />
               </div>
             )}
