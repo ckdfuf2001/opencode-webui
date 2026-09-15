@@ -7,7 +7,7 @@ import { MobileFilePreviewModal } from './MobileFilePreviewModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { FolderOpen, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
+import { FolderOpen, FolderTree, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -112,6 +112,21 @@ interface FileBrowserProps {
 
 type FileSort = 'name-asc' | 'name-desc' | 'mtime-asc' | 'mtime-desc'
 
+/** 검색 범위 토글 — 하위 폴더 포함(기본) / 현재 폴더만. 아이콘 버튼. */
+function SubdirToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      variant={enabled ? 'default' : 'outline'}
+      size="icon"
+      className="h-8 w-8 shrink-0"
+      title={enabled ? '하위 폴더 포함 검색 중 (클릭: 현재 폴더만)' : '현재 폴더만 검색 중 (클릭: 하위 폴더 포함)'}
+      onClick={onToggle}
+    >
+      <FolderTree className="w-4 h-4" />
+    </Button>
+  )
+}
+
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
   const items: { value: FileSort; label: string }[] = [
     { value: 'name-asc', label: 'Name ascending' },
@@ -172,6 +187,23 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   }, [queryClient])
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  // 하위 폴더 포함 검색이 기본. localStorage에 유지한다.
+  const [searchSubdirs, setSearchSubdirs] = useState(() => {
+    try { return localStorage.getItem('filebrowser-search-subdirs') !== '0' } catch { return true }
+  })
+  const toggleSearchSubdirs = useCallback(() => {
+    setSearchSubdirs((v) => {
+      const next = !v
+      try { localStorage.setItem('filebrowser-search-subdirs', next ? '1' : '0') } catch {}
+      return next
+    })
+  }, [])
+  // 입력마다 재귀 탐색이 나가지 않게 300ms 디바운스
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 300)
+    return () => clearTimeout(t)
+  }, [searchQuery])
   const [sortBy, setSortBy] = useState<FileSort>('name-asc')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -190,6 +222,33 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   const browserOpenPaths = useMemo(() => new Set(
     managedPages.filter((p) => p.kind === 'file' && p.path).map((p) => normalizeTreePath(p.path)),
   ), [managedPages])
+
+  // 하위 포함 검색: 현재 경로 기준 재귀 탐색 (details로 FileInfo 조립).
+  // 쿼리가 비면 호출 안 하고 기존 현재 폴더 필터로 동작한다.
+  const recursiveActive = searchSubdirs && debouncedSearch.trim().length > 0
+  const { data: recursiveResults } = useQuery({
+    queryKey: ['files-search-details', currentPath, debouncedSearch],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        path: currentPath || basePath || '.',
+        query: debouncedSearch.trim(),
+        details: 'true',
+      })
+      const res = await fetch(`${API_BASE_URL}/api/files/search?${params.toString()}`)
+      if (!res.ok) throw new Error('Search failed')
+      const data = await res.json() as Array<{ name: string; path: string; isDirectory: boolean; size?: number; lastModified?: string }>
+      return data.map((d) => ({
+        name: d.name,
+        path: d.path,
+        isDirectory: d.isDirectory,
+        size: d.size ?? 0,
+        lastModified: new Date(d.lastModified ?? 0),
+      }) as FileInfo)
+    },
+    enabled: recursiveActive,
+    staleTime: 30_000,
+    retry: false,
+  })
 
   // 채팅에서 파일을 열면 해당 파일의 디렉터리로 트리를 이동시킨다.
   // basePath 로드와 레이스가 나지 않게 이 effect 하나로 통합한다.
@@ -574,25 +633,30 @@ useEffect(() => {
   }, [isPreviewModalOpen])
 
   const filteredFiles = useMemo(() => {
-    const q = searchQuery.toLowerCase()
-    const list = (files?.children ?? []).filter((file: FileInfo) => file.name.toLowerCase().includes(q))
     const mtimeOf = (f: FileInfo): number => {
       const t = new Date(f.lastModified ?? 0).getTime()
       return Number.isNaN(t) ? 0 : t
     }
     const byName = (a: FileInfo, b: FileInfo) =>
       a.name.localeCompare(b.name, 'ko', { numeric: true, sensitivity: 'base' })
-    list.sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
-      switch (sortBy) {
-        case 'name-desc': return byName(b, a)
-        case 'mtime-asc': return mtimeOf(a) - mtimeOf(b) || byName(a, b)
-        case 'mtime-desc': return mtimeOf(b) - mtimeOf(a) || byName(a, b)
-        default: return byName(a, b)
-      }
-    })
-    return list
-  }, [files, searchQuery, sortBy])
+    const sortList = (list: FileInfo[]) => {
+      list.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+        switch (sortBy) {
+          case 'name-desc': return byName(b, a)
+          case 'mtime-asc': return mtimeOf(a) - mtimeOf(b) || byName(a, b)
+          case 'mtime-desc': return mtimeOf(b) - mtimeOf(a) || byName(a, b)
+          default: return byName(a, b)
+        }
+      })
+      return list
+    }
+    // 하위 포함 모드 + 재귀 결과 도착 → 현재 폴더 필터 대신 재귀 결과 표시
+    if (recursiveActive && recursiveResults) return sortList([...recursiveResults])
+    const q = searchQuery.toLowerCase()
+    const list = (files?.children ?? []).filter((file: FileInfo) => file.name.toLowerCase().includes(q))
+    return sortList(list)
+  }, [files, searchQuery, sortBy, recursiveActive, recursiveResults])
 
   if (embedded) {
     return (
@@ -634,6 +698,7 @@ useEffect(() => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1 min-w-0"
                 />
+                <SubdirToggle enabled={searchSubdirs} onToggle={toggleSearchSubdirs} />
                 <FileSortSelect value={sortBy} onChange={setSortBy} />
               </div>
             </div>
@@ -778,6 +843,7 @@ useEffect(() => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1 min-w-0"
                 />
+                <SubdirToggle enabled={searchSubdirs} onToggle={toggleSearchSubdirs} />
                 <FileSortSelect value={sortBy} onChange={setSortBy} />
               </div>
             </div>

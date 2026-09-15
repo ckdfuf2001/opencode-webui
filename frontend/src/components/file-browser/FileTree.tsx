@@ -6,6 +6,7 @@ import {
   File,
   Folder,
   FolderOpen,
+  FolderUp,
   ChevronRight,
   ChevronDown,
   GripVertical,
@@ -299,11 +300,16 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
   return (
     <div className="min-w-max">
       {showGoUp && (
-        <div 
-          className="flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer"
+        <div
+          className="flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer group"
           onClick={handleGoUp}
+          title="상위 폴더로 이동"
         >
-          <span className="text-sm text-muted-foreground">..</span>
+          <span className="w-6 shrink-0" />
+          <FolderUp className="w-4 h-4 shrink-0" />
+          <div className="flex items-center gap-1 flex-1">
+            <span className="text-sm truncate">..</span>
+          </div>
         </div>
       )}
       

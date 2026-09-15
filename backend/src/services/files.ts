@@ -284,20 +284,63 @@ export async function renameOrMoveFile(userPath: string, body: { newPath: string
 
 const SEARCH_IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build'])
 
-export async function searchFiles(basePath: string, query: string): Promise<string[]> {
+export interface FileSearchDetail {
+  name: string
+  path: string
+  isDirectory: boolean
+  size: number
+  lastModified: Date
+}
+
+export async function searchFiles(basePath: string, query: string): Promise<string[]>;
+export async function searchFiles(basePath: string, query: string, opts: { details: true }): Promise<FileSearchDetail[]>;
+export async function searchFiles(
+  basePath: string,
+  query: string,
+  opts?: { details?: boolean },
+): Promise<string[] | FileSearchDetail[]> {
   const validatedPath = validatePath(basePath)
   const q = query.trim().toLowerCase()
+  const details = opts?.details === true
   const results: string[] = []
+  const detailed: FileSearchDetail[] = []
 
   if (!q) {
     const entries = await listDirectory(validatedPath)
-    return entries
+    const sorted = entries
       .filter((entry) => entry.name !== '.git' && entry.name !== 'node_modules')
       .sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
         return a.name.localeCompare(b.name)
       })
-      .map((entry) => entry.name)
+    if (details) {
+      const rawBase = basePath.replace(/\\/g, '/').replace(/\/+$/, '')
+      const base = rawBase === '.' ? '' : rawBase
+      return sorted.map((entry): FileSearchDetail => ({
+        name: entry.name,
+        path: [base, entry.name].filter(Boolean).join('/'),
+        isDirectory: entry.isDirectory,
+        size: entry.size ?? 0,
+        lastModified: entry.lastModified ?? new Date(0),
+      }))
+    }
+    return sorted.map((entry) => entry.name)
+  }
+
+  const rawBase = basePath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const joinBase = rawBase === '.' ? '' : rawBase
+  const pushResult = (relPath: string, entry: { isDirectory: boolean; size?: number; lastModified?: Date }): void => {
+    if (results.length >= 200) return
+    results.push(relPath)
+    if (details) {
+      detailed.push({
+        name: relPath,
+        path: [joinBase, relPath].filter(Boolean).join('/'),
+        isDirectory: entry.isDirectory,
+        size: entry.size ?? 0,
+        lastModified: entry.lastModified ?? new Date(0),
+      })
+    }
   }
 
   const walk = async (dir: string, rel: string): Promise<void> => {
@@ -312,7 +355,7 @@ export async function searchFiles(basePath: string, query: string): Promise<stri
       if (SEARCH_IGNORED_DIRS.has(entry.name)) continue
       const relPath = rel ? `${rel}/${entry.name}` : entry.name
       if (relPath.toLowerCase().includes(q)) {
-        results.push(relPath)
+        pushResult(relPath, entry)
       }
       if (entry.isDirectory) {
         await walk(entry.path, relPath)
@@ -322,12 +365,16 @@ export async function searchFiles(basePath: string, query: string): Promise<stri
 
   await walk(validatedPath, '')
   // 파일명(경로 마지막 세그먼트) 매칭을 먼저, 경로만 매칭된 결과는 그 다음
-  const ranked = results.map((rel) => {
+  const order = results.map((rel, i) => {
     const base = rel.split('/').pop()?.toLowerCase() ?? ''
-    return { rel, rank: base.includes(q) ? 0 : 1 }
+    return { i, rank: base.includes(q) ? 0 : 1, rel }
   })
-  ranked.sort((a, b) => a.rank - b.rank || a.rel.localeCompare(b.rel))
-  return ranked.map((r) => r.rel)
+  order.sort((a, b) => a.rank - b.rank || a.rel.localeCompare(b.rel))
+  if (details) {
+    const byRel = new Map(detailed.map((d) => [d.name, d] as const))
+    return order.map((o) => byRel.get(o.rel)).filter((d): d is FileSearchDetail => !!d)
+  }
+  return order.map((o) => o.rel)
 }
 
 export function validatePath(userPath: string): string {
