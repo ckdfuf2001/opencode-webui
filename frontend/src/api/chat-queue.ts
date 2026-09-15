@@ -5,6 +5,8 @@ export interface QueuedChat {
   text: string
   createdAt: number
   status: 'queued' | 'sending' | 'failed'
+  model?: { providerID: string; modelID: string }
+  agent?: string
   sendingSince?: number
   failedAt?: number
   attempts?: number
@@ -64,5 +66,20 @@ export async function retryQueuedChat(sessionID: string, id: string): Promise<Qu
   return request<QueuedChat[]>(
     `/${encodeURIComponent(sessionID)}/${encodeURIComponent(id)}/retry`,
     jsonInit('POST'),
+  )
+}
+
+/**
+ * 세션 모델 변경 시 큐에 스냅샷된 모델을 동기화한다.
+ * sending 항목은 서버에서 건드리지 않는다 (이미 발송된 슬롯).
+ * 큐가 비어 있으면 빈 배열로 no-op 성공.
+ */
+export async function updateQueuedChatsModel(
+  sessionID: string,
+  model: { providerID: string; modelID: string },
+): Promise<QueuedChat[]> {
+  return request<QueuedChat[]>(
+    `/${encodeURIComponent(sessionID)}/model`,
+    jsonInit('PATCH', model),
   )
 }

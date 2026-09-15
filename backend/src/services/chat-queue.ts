@@ -118,6 +118,36 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
 }
 
 /**
+ * 세션 모델 변경 시 큐에 스냅샷된 모델을 새 모델로 동기화한다.
+ * enqueue 시점에 박아둔 model 때문에 세션 모델을 바꿔도 stale 모델로
+ * 발송되던 버그 대응. 발송 중(sending)은 이미 opencode로 넘어가 회수
+ * 불가이므로 건드리지 않고, 발송 대기(queued)·실패(failed)만 갱신한다.
+ * failed도 갱신해야 재시도가 깨진 모델로 반복 실패하지 않는다.
+ * 큐가 없으면 null (호출자는 no-op 성공으로 취급).
+ */
+export function updateQueuedChatsModel(
+  sessionID: string,
+  model: { providerID: string; modelID: string },
+): QueuedChat[] | null {
+  const queue = queues.get(sessionID)
+  if (!queue) return null
+  for (const item of queue) {
+    if (item.status === 'sending') continue
+    item.model = { ...model }
+    // 모델이 바뀌었으니 이전 실패 카운트/시각은 무효 — 새 모델로 즉시 재시도 가능하게
+    if (item.status === 'failed') {
+      item.status = 'queued'
+      delete item.failedAt
+      delete item.sendingSince
+    }
+  }
+  failCount.delete(sessionID)
+  failedUntil.delete(sessionID)
+  logger.info(`Updated queued chat model for session ${sessionID} to ${model.providerID}/${model.modelID}`)
+  return [...queue]
+}
+
+/**
  * 대기열 순서 변경. toTop 이면 맨 앞(최우선)으로, 아니면 한 칸 위로.
  * 이미 첫 항목이거나 id 를 못 찾으면 현재 큐를 그대로 돌려준다(변화 없음).
  * 전송 중(sending)인 헤드는 발송 슬롯이라 건드리지 않는다: sending 항목
@@ -253,12 +283,17 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
 
   void dispatchQueuedChat(base, sessionID, next)
-    .then((sent) => {
-      if (sent) {
+    .then((result) => {
+      if (result.sent) {
         removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
         failCount.delete(sessionID)
         logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
+      } else if (result.nonRetryable) {
+        // reasoning encrypted_content 불일치 같은 결정적 400은 재시도해도 절대
+        // 성공하지 않는다. 5회 쿨다운 재시도로 시간만 끌지 말고 즉시 failed로
+        // 고정해 사용자가 가위(truncate)·모델 원복으로 복구하게 한다.
+        recordDeterministicFailure(sessionID, next.id, result.detail)
       } else {
         recordFailure(sessionID, next.id)
       }
@@ -304,6 +339,36 @@ function recordFailure(sessionID: string, id: string): void {
   }
   markHeadQueued(sessionID, id)
   failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+}
+
+/**
+ * provider가 히스토리의 reasoning 암호문을 거부한 경우
+ * (Anthropic `encrypted_content was not issued to this caller` 등).
+ * 모델 전환·중간 네트워크 실패 뒤 이전 모델의 reasoning 블록이 히스토리에
+ * 남아 있으면 발생한다. 같은 요청을 반복해도 절대 성공하지 않으므로
+ * 쿨다운 재시도를 건너뛰고 즉시 failed로 고정한다. 복구는 사용자가
+ * 가위(truncate)로 마지막 턴을 잘라내거나 원래 모델로 되돌린 뒤 수동 retry.
+ */
+export function isReasoningEncryptedMismatch(bodyText: string): boolean {
+  const lower = bodyText.toLowerCase()
+  return lower.includes('encrypted_content')
+    && (lower.includes('reasoning') || lower.includes('invalid_request_error') || lower.includes('not issued'))
+}
+
+function recordDeterministicFailure(sessionID: string, id: string, detail?: string): void {
+  failCount.set(sessionID, MAX_CONSECUTIVE_FAILURES)
+  const queue = queues.get(sessionID)
+  const head = queue?.[0]?.id === id ? queue[0] : undefined
+  if (head) {
+    head.status = 'failed'
+    head.attempts = (head.attempts ?? 0) + 1
+    head.failedAt = Date.now()
+  }
+  logger.error(
+    `Queued chat for session ${sessionID} rejected (non-retryable provider error — likely stale reasoning blocks after model switch or interrupted turn). ` +
+    `Truncate the last assistant turn (scissors) or switch back to the original model, then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
+  )
+  try { if (queueDb) setSessionCancelled(queueDb, sessionID) } catch {}
 }
 
 function removeHeadIf(sessionID: string, id: string): void {
@@ -464,11 +529,19 @@ export function flushQueueForSession(sessionId: string, directory?: string): voi
   void dispatchHead(opencodeServerManager.getUrl(), sessionId)
 }
 
+interface DispatchResult {
+  sent: boolean
+  /** true면 재시도해도 절대 성공하지 않는 결정적 provider 거부 (reasoning 암호문 불일치 등) */
+  nonRetryable?: boolean
+  status?: number
+  detail?: string
+}
+
 async function dispatchQueuedChat(
   base: string,
   sessionID: string,
   chat: QueuedChat,
-): Promise<boolean> {
+): Promise<DispatchResult> {
   const headers = ensureServerAuth({})
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
@@ -492,9 +565,12 @@ async function dispatchQueuedChat(
       if (cmdRes.ok) {
         void cmdRes.text().catch(() => {})
         logger.info(`Queued command /${cmd} dispatched via /command for session ${sessionID}`)
-        return true
+        return { sent: true }
       }
       const body = await cmdRes.text().catch(() => '')
+      if (cmdRes.status === 400 && isReasoningEncryptedMismatch(body)) {
+        return { sent: false, nonRetryable: true, status: cmdRes.status, detail: body.slice(0, 300) }
+      }
       // 커맨드가 아니거나 서버가 모르면 /message 로 폴백
       logger.warn(`Queued command /${cmd} via /command rejected HTTP ${cmdRes.status} ${body.slice(0, 200)} — fallback to /message`)
     } catch (e) {
@@ -515,9 +591,12 @@ async function dispatchQueuedChat(
   if (!sendRes.ok) {
     const body = await sendRes.text().catch(() => '')
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
-    return false
+    if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
+      return { sent: false, nonRetryable: true, status: sendRes.status, detail: body.slice(0, 300) }
+    }
+    return { sent: false, status: sendRes.status }
   }
   // Drain the body so the socket is released even if the server keeps it open.
   void sendRes.text().catch(() => {})
-  return true
+  return { sent: true }
 }

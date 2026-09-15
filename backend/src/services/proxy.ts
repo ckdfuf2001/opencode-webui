@@ -636,6 +636,35 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         })
       }
 
+      // reasoning 암호문 불일치 (모델 전환·중단된 턴 뒤 이전 모델의 thinking 블록이
+      // 히스토리에 남아 provider가 거부). 재시도해도 절대 성공하지 않으므로
+      // retryable:false + 복구 경로를 명시해 프론트가 안내하게 한다.
+      // 자동 truncate는 사용자 데이터 삭제라 하지 않는다 — 가위/삭제로 수동 복구.
+      const lowerBody = bodyText.toLowerCase()
+      const isReasoningMismatch =
+        lowerBody.includes('encrypted_content') &&
+        (lowerBody.includes('reasoning') || lowerBody.includes('not issued') || lowerBody.includes('invalid_request_error'))
+      if (isReasoningMismatch) {
+        const hint = ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). This request can never succeed by retrying: truncate the last assistant turn (scissors icon) or switch back to the original model, then send again. (reasoning encrypted_content mismatch)'
+        let parsed: Record<string, unknown> | undefined
+        try { parsed = JSON.parse(bodyText) as Record<string, unknown> } catch { parsed = undefined }
+        responseHeaders['Content-Type'] = 'application/json'
+        if (parsed) {
+          const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : bodyText
+          const enriched = { ...parsed, error: `${msg}${hint}`, message: `${msg}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH' }
+          return new Response(JSON.stringify(enriched), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: responseHeaders,
+          })
+        }
+        return new Response(JSON.stringify({ error: `${bodyText}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH' }), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+        })
+      }
+
       return new Response(bodyText, {
         status: response.status,
         statusText: response.statusText,

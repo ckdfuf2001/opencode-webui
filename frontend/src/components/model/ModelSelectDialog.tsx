@@ -22,6 +22,8 @@ import type { ProviderWithModels, Model } from "@/api/providers";
 import { showToast } from "@/lib/toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { updateQueuedChatsModel } from "@/api/chat-queue";
+import { chatQueueKeys } from "@/hooks/useChatQueue";
 
 interface ModelSelectDialogProps {
   open: boolean;
@@ -175,12 +177,28 @@ export function ModelSelectDialog({
           id: modelId,
           providerID: providerId,
         });
+        // NOTE: 아래 invalidate를 해제하지 말 것 — opencode 서버 반영 전 refetch가
+        // 들어오면 낙관 업데이트가 옛 모델로 되돌아가 라벨이 깜빡인다/틀어진다.
+        // 낙관 캐시를 정본으로 유지하고, 큐 스냅샷만 별도 동기화한다.
         //queryClient.invalidateQueries({
         //  queryKey: sessionKey,
         //});
         //queryClient.invalidateQueries({
         //  queryKey: sessionsKey,
         //});
+        // 큐에 enqueue 시점에 박아둔 모델이 있으면 새 모델로 동기화한다.
+        // (안 하면 세션을 바꿔도 대기열이 실패했던 옛 모델로 발송된다.)
+        // sending 항목은 서버에서 제외한다 — 이미 발송된 슬롯이라 회수 불가.
+        // 큐 동기화 실패가 세션 전환까지 되돌리면 안 되므로 경고만 남긴다.
+        try {
+          const updated = await updateQueuedChatsModel(sessionId, { providerID: providerId, modelID: modelId });
+          queryClient.setQueryData(chatQueueKeys.session(sessionId), updated);
+        } catch (e) {
+          showToast.warning(
+            `Session model switched, but queued messages may still use the previous model: ${e instanceof Error ? e.message : "unknown error"}`,
+            { duration: 6000 },
+          );
+        }
       } catch (error) {
         if (previous !== undefined) queryClient.setQueryData(sessionKey, previous);
         if (previousSessions !== undefined) queryClient.setQueryData(sessionsKey, previousSessions);

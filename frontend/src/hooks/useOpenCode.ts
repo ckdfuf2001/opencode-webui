@@ -325,6 +325,18 @@ function isBillingQuotaMessage(msg: string): boolean {
   )
 }
 
+function isReasoningEncryptedMismatchMessage(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    m.includes("encrypted_content") &&
+    (m.includes("reasoning") || m.includes("not issued") || m.includes("invalid_request_error"))
+  )
+}
+
+function reasoningMismatchHint(): string {
+  return "History contains reasoning blocks from a different model (or an interrupted turn) — retrying cannot succeed. Truncate the last assistant turn (scissors icon) or switch back to the original model, then send again."
+}
+
 function formatServerError(error: unknown): string {
   if (error && typeof error === "object" && "response" in error) {
     const axiosError = error as { response?: { data?: unknown; status?: number; headers?: Record<string, string> } }
@@ -335,6 +347,9 @@ function formatServerError(error: unknown): string {
     if (providerMsg) {
       if (isBillingQuotaMessage(providerMsg)) {
         return providerMsg + " - free quota/balance exhausted. Payment required. (Zen: https://opencode.ai/zen / OpenRouter: https://openrouter.ai/credits)"
+      }
+      if (isReasoningEncryptedMismatchMessage(providerMsg)) {
+        return providerMsg + " - " + reasoningMismatchHint()
       }
       return providerMsg
     }
@@ -361,10 +376,14 @@ function formatServerError(error: unknown): string {
     if (isBillingQuotaMessage(error.message)) {
       return error.message + " - payment/recharge required."
     }
+    if (isReasoningEncryptedMismatchMessage(error.message)) {
+      return error.message + " - " + reasoningMismatchHint()
+    }
     return error.message
   }
   if (typeof error === "string" && error.length > 0) {
     if (isBillingQuotaMessage(error)) return error + " - payment/recharge required."
+    if (isReasoningEncryptedMismatchMessage(error)) return error + " - " + reasoningMismatchHint()
     return error
   }
   return "An unexpected error occurred."
