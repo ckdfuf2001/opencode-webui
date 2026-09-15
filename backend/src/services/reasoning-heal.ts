@@ -42,6 +42,16 @@ export function isReasoningMismatchText(bodyText: string): boolean {
   )
 }
 
+function stripInjectedBlocks(text: string): string {
+  let t = text
+  // run-context: [run-context] ... [/run-context] or <run-context> ...
+  t = t.replace(/\[run-context\][\s\S]*?\[\/run-context\]\n*/gi, '')
+  t = t.replace(/<run-context>[\s\S]*?<\/run-context>\n*/gi, '')
+  t = t.replace(/<memory-recall>[\s\S]*?<\/memory-recall>\n*/gi, '')
+  t = t.replace(/<skill-memory-check>[\s\S]*?<\/skill-memory-check>\n*/gi, '')
+  return t.trim()
+}
+
 function userTextOf(msg: LooseMessage): string {
   const parts = Array.isArray(msg.parts) ? msg.parts : []
   return parts
@@ -128,9 +138,13 @@ export async function healReasoningTail(
   }
 
   const stored = userTextOf(lastUser)
-  const matched = texts.some((t) => stored === t || stored.endsWith(t))
+  const strippedStored = stripInjectedBlocks(stored)
+  const matched = texts.some((t) => {
+    const strippedT = stripInjectedBlocks(t)
+    return stored === t || stored.endsWith(t) || strippedStored === strippedT || strippedStored.endsWith(strippedT) || strippedStored.includes(strippedT) || strippedT.includes(strippedStored)
+  })
   if (!matched) {
-    return { healed: false, reason: 'text mismatch (not our turn?)' }
+    return { healed: false, reason: `text mismatch (not our turn?) stored=${stored.slice(0,60)}...` }
   }
 
   let truncatedMessageId: string | undefined

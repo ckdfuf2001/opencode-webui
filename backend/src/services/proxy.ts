@@ -721,10 +721,23 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
               const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
               healInfo.attempted = true
-              const heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText])
+              let heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText])
               healInfo.healed = heal.healed
               healInfo.reason = heal.reason
               healInfo.stubsRemoved = heal.stubsRemoved
+              if (!heal.healed && heal.reason?.includes('text mismatch')) {
+                // run-context/recall 주입 때문에 텍스트 불일치로 heal이 스킵된 경우 — 비정상 꼬리 전체를 잘라내는 fallback
+                const { healAbnormalTailIfNeeded } = await import('./reasoning-heal')
+                const fallback = await healAbnormalTailIfNeeded(opencodeServerManager.getUrl(), msgPost[1]!, directory)
+                if (fallback.healed) {
+                  heal = fallback
+                  healInfo.healed = true
+                  healInfo.reason = `fallback abnormal heal: ${fallback.reason}`
+                  healInfo.stubsRemoved = fallback.stubsRemoved
+                } else {
+                  healInfo.reason += `; fallback also failed: ${fallback.reason}`
+                }
+              }
               if (heal.healed) {
                 const busy2 = acquireBusy()
                 const release2 = () => busy2.release()
