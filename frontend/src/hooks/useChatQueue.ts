@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, type EnqueueChatOptions } from '@/api/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, updateQueuedChatsModel, type EnqueueChatOptions } from '@/api/chat-queue'
 import { showToast } from '@/lib/toast'
 
 export const chatQueueKeys = {
@@ -108,6 +108,23 @@ export function useRetryQueuedChat() {
     },
     onError: (error) => {
       showToast.error(error instanceof Error ? error.message : 'Failed to retry queued message', { duration: 5000 })
+    },
+  })
+}
+
+/**
+ * 세션 모델 변경 시 큐의 스냅샷 모델 동기화용.
+ * 실패해도 세션 전환 자체를 되돌리지 않는다 — 큐 다음 발송이 stale 모델로
+ * 나갈 수 있다는 경고만 남긴다 (ModelSelectDialog에서 호출).
+ */
+export function useUpdateQueuedChatsModel() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ sessionID, providerID, modelID }: { sessionID: string; providerID: string; modelID: string }) =>
+      updateQueuedChatsModel(sessionID, { providerID, modelID }),
+    onSuccess: (queue, { sessionID }) => {
+      queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
     },
   })
 }

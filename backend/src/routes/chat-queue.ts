@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, retryQueuedChat, setQuickMode } from '../services/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, retryQueuedChat, setQuickMode, updateQueuedChatsModel } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
@@ -12,6 +12,11 @@ const EnqueueChatSchema = z.object({
 
 const MoveChatSchema = z.object({
   toTop: z.boolean().default(false),
+})
+
+const UpdateQueueModelSchema = z.object({
+  providerID: z.string().min(1).max(255),
+  modelID: z.string().min(1).max(255),
 })
 
 export function createChatQueueRoutes() {
@@ -38,7 +43,6 @@ export function createChatQueueRoutes() {
       })
       // 폴러(1초)를 기다리지 않고 즉시 발송 시도 — idle이면 바로 나간다.
       flushQueueForSession(sessionId, validated.directory)
-      return c.json(queue, 201)
       return c.json(queue, 201)
     } catch (error: any) {
       if (error?.name === 'ZodError') {
@@ -101,6 +105,25 @@ export function createChatQueueRoutes() {
     } catch (error) {
       logger.error('Failed to retry queued chat:', error)
       return c.json({ error: 'Failed to retry queued chat' }, 500)
+    }
+  })
+
+  // 세션 모델 변경 시 큐에 스냅샷된 모델 동기화.
+  // 큐가 비어 있으면 빈 배열로 no-op 성공 (프론트는 실패로 취급하지 않는다).
+  // sending 항목은 건드리지 않는다 — 이미 opencode로 발송된 슬롯이라 회수 불가.
+  app.patch('/:sessionId/model', async (c) => {
+    try {
+      const sessionId = c.req.param('sessionId')
+      const validated = UpdateQueueModelSchema.parse(await c.req.json().catch(() => ({})))
+      const queue = updateQueuedChatsModel(sessionId, {
+        providerID: validated.providerID,
+        modelID: validated.modelID,
+      })
+      return c.json(queue ?? [])
+    } catch (error) {
+      if (error instanceof z.ZodError) return c.json({ error: 'Invalid model payload' }, 400)
+      logger.error('Failed to update queued chat model:', error)
+      return c.json({ error: 'Failed to update queued chat model' }, 500)
     }
   })
 

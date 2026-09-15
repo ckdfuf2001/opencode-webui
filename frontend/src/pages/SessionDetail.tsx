@@ -575,7 +575,7 @@ export function SessionDetail() {
         const isUserWithoutReply = last.info.role === "user";
         if ((isEmptyAssistant || isUserWithoutReply) && last.info.id !== lastBillingToastRef.current) {
           showToast.error(
-            "The LLM response was empty. This may be due to a free quota, timeout, or provider error. Check your model/key. (https://opencode.ai/zen / https://openrouter.ai/credits)",
+            "The LLM response was empty. Please check your quota.",
             { duration: 10000 },
           );
         }

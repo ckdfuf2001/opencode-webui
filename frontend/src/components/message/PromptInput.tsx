@@ -7,6 +7,7 @@ import { useCommandHandler } from '@/hooks/useCommandHandler'
 import { useFileSearch } from '@/hooks/useFileSearch'
 
 import { useUserBash } from '@/stores/userBashStore'
+import { useChatAttached } from '@/stores/chatAttachedStore'
 import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
 import { listQueuedChats } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
@@ -204,6 +205,11 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   
 
   const { addUserBashCommand } = useUserBash()
+  const setChatAttached = useChatAttached((s) => s.setAttached)
+  // 첨부 변경 시 파일 트리 표시용으로 스토어에 동기화 (전송 후 비워지면 표시도 사라진다)
+  useEffect(() => {
+    setChatAttached([...attachedFiles.values()].map((f) => f.path))
+  }, [attachedFiles, setChatAttached])
   const { totalTokens, contextLimit, usagePercentage } = useContextUsage(opcodeUrl, sessionID, directory)
   const usage = usagePercentage ?? 0
   const isContextWarning = usage >= 90 && usage < 95

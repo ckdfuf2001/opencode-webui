@@ -19,6 +19,10 @@ export function createFileRoutes(_database: Database) {
     try {
       const basePath = c.req.query('path') || '.'
       const query = c.req.query('query') || ''
+      if (c.req.query('details') === 'true') {
+        const results = await fileService.searchFiles(basePath, query, { details: true })
+        return c.json(results)
+      }
       const results = await fileService.searchFiles(basePath, query)
       return c.json(results)
     } catch (error: any) {

@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
+import { isReasoningMismatchText, healReasoningTail } from './reasoning-heal'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
@@ -115,6 +116,36 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
     failedUntil.delete(sessionID)
   }
   return true
+}
+
+/**
+ * 세션 모델 변경 시 큐에 스냅샷된 모델을 새 모델로 동기화한다.
+ * enqueue 시점에 박아둔 model 때문에 세션 모델을 바꿔도 stale 모델로
+ * 발송되던 버그 대응. 발송 중(sending)은 이미 opencode로 넘어가 회수
+ * 불가이므로 건드리지 않고, 발송 대기(queued)·실패(failed)만 갱신한다.
+ * failed도 갱신해야 재시도가 깨진 모델로 반복 실패하지 않는다.
+ * 큐가 없으면 null (호출자는 no-op 성공으로 취급).
+ */
+export function updateQueuedChatsModel(
+  sessionID: string,
+  model: { providerID: string; modelID: string },
+): QueuedChat[] | null {
+  const queue = queues.get(sessionID)
+  if (!queue) return null
+  for (const item of queue) {
+    if (item.status === 'sending') continue
+    item.model = { ...model }
+    // 모델이 바뀌었으니 이전 실패 카운트/시각은 무효 — 새 모델로 즉시 재시도 가능하게
+    if (item.status === 'failed') {
+      item.status = 'queued'
+      delete item.failedAt
+      delete item.sendingSince
+    }
+  }
+  failCount.delete(sessionID)
+  failedUntil.delete(sessionID)
+  logger.info(`Updated queued chat model for session ${sessionID} to ${model.providerID}/${model.modelID}`)
+  return [...queue]
 }
 
 /**
@@ -253,12 +284,17 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
 
   void dispatchQueuedChat(base, sessionID, next)
-    .then((sent) => {
-      if (sent) {
+    .then((result) => {
+      if (result.sent) {
         removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
         failCount.delete(sessionID)
         logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
+      } else if (result.nonRetryable) {
+        // reasoning encrypted_content 불일치 같은 결정적 400은 재시도해도 절대
+        // 성공하지 않는다. 5회 쿨다운 재시도로 시간만 끌지 말고 즉시 failed로
+        // 고정해 사용자가 가위(truncate)·모델 원복으로 복구하게 한다.
+        recordDeterministicFailure(sessionID, next.id, result.detail)
       } else {
         recordFailure(sessionID, next.id)
       }
@@ -267,13 +303,19 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
       // OpenCode는 턴이 끝나야 응답 헤더를 보낼 수 있어 타임아웃은 거의 확실히
       // 전달됐다는 뜻이다. sending 유지 → idle 관찰 시 제거(확정). 타임아웃은 실패로 세지 않는다.
-      // 연결 자체가 안 됐거나 그 외 에러는 실패로 센다 (중복 전송 방지 + 상한).
       const name = (error as { name?: string })?.name
       const code = ((error as { cause?: { code?: unknown } })?.cause?.code
         ?? (error as { code?: unknown })?.code) as string | undefined
       const connectError = typeof code === 'string'
-        && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code.toUpperCase())
-      if (connectError || (name !== 'TimeoutError' && name !== 'AbortError')) {
+        && ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNABORTED'].includes(code.toUpperCase())
+      if (connectError) {
+        // NW 단절: failed로 고정하지 않고 queued 유지 + 백오프만 — 네트워크 회복 시 자동 재개
+        markHeadQueued(sessionID, next.id)
+        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        logger.info(`Queued chat for session ${sessionID} connect error (${code}), keep queued for auto-retry after NW recovery`)
+        return
+      }
+      if (name !== 'TimeoutError' && name !== 'AbortError') {
         recordFailure(sessionID, next.id)
       } else {
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
@@ -304,6 +346,34 @@ function recordFailure(sessionID: string, id: string): void {
   }
   markHeadQueued(sessionID, id)
   failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+}
+
+/**
+ * provider가 히스토리의 reasoning 암호문을 거부한 경우
+ * (Anthropic `encrypted_content was not issued to this caller` 등).
+ * 모델 전환·중간 네트워크 실패 뒤 이전 모델의 reasoning 블록이 히스토리에
+ * 남아 있으면 발생한다. 같은 요청을 반복해도 절대 성공하지 않으므로
+ * 쿨다운 재시도를 건너뛰고 즉시 failed로 고정한다. 복구는 사용자가
+ * 가위(truncate)로 마지막 턴을 잘라내거나 원래 모델로 되돌린 뒤 수동 retry.
+ */
+export function isReasoningEncryptedMismatch(bodyText: string): boolean {
+  return isReasoningMismatchText(bodyText)
+}
+
+function recordDeterministicFailure(sessionID: string, id: string, detail?: string): void {
+  failCount.set(sessionID, MAX_CONSECUTIVE_FAILURES)
+  const queue = queues.get(sessionID)
+  const head = queue?.[0]?.id === id ? queue[0] : undefined
+  if (head) {
+    head.status = 'failed'
+    head.attempts = (head.attempts ?? 0) + 1
+    head.failedAt = Date.now()
+  }
+  logger.error(
+    `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; auto-truncate + one retry did not recover). ` +
+    `Truncate further back with the scissors icon or switch back to the original model, then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
+  )
+  try { if (queueDb) setSessionCancelled(queueDb, sessionID) } catch {}
 }
 
 function removeHeadIf(sessionID: string, id: string): void {
@@ -380,11 +450,11 @@ async function checkOpencodeBusy(base: string, directoryParam: string, sessionID
       headers: ensureServerAuth({}),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
-    if (!res.ok) return false
+    if (!res.ok) return true // 보수적: 상태 불명확 시 busy로 가정해 발송 보류 (NW 단절 시 idle 오판 방지)
     const map = (await res.json()) as Record<string, { type?: string }>
     return map[sessionID]?.type === 'busy'
   } catch {
-    return false
+    return true // NW 단절·타임아웃 시 busy로 가정해 sending을 제거하지 않고 queued 발송도 보류
   }
 }
 
@@ -416,12 +486,11 @@ async function hasPendingInteraction(base: string, directory: string, sessionID:
         headers: ensureServerAuth({}),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       })
-      if (!res.ok) return false
+      if (!res.ok) return true // 보수적: 조회 실패 시 working으로 가정
       const list = (await res.json()) as Array<{ sessionID?: string }>
       return Array.isArray(list) && list.some((item) => item?.sessionID === sessionID)
     } catch {
-      // 조회 실패는 working 아님으로 간주하고 다음으로 (보수적 차단은 status 체크가 담당)
-      return false
+      return true // NW 단절 시 working으로 가정해 발송 보류
     }
   }))
   return results.some(Boolean)
@@ -464,11 +533,19 @@ export function flushQueueForSession(sessionId: string, directory?: string): voi
   void dispatchHead(opencodeServerManager.getUrl(), sessionId)
 }
 
+interface DispatchResult {
+  sent: boolean
+  /** true면 재시도해도 절대 성공하지 않는 결정적 provider 거부 (reasoning 암호문 불일치 등) */
+  nonRetryable?: boolean
+  status?: number
+  detail?: string
+}
+
 async function dispatchQueuedChat(
   base: string,
   sessionID: string,
   chat: QueuedChat,
-): Promise<boolean> {
+): Promise<DispatchResult> {
   const headers = ensureServerAuth({})
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
@@ -492,9 +569,11 @@ async function dispatchQueuedChat(
       if (cmdRes.ok) {
         void cmdRes.text().catch(() => {})
         logger.info(`Queued command /${cmd} dispatched via /command for session ${sessionID}`)
-        return true
+        return { sent: true }
       }
       const body = await cmdRes.text().catch(() => '')
+      // mismatch여도 여기서 끝내지 않고 /message로 폴백한다 — 아래 /message 경로에서
+      // heal(꼬리 절단)+1회 재시도를 탄다. 커맨드가 아니면 어차피 폴백하던 경로.
       // 커맨드가 아니거나 서버가 모르면 /message 로 폴백
       logger.warn(`Queued command /${cmd} via /command rejected HTTP ${cmdRes.status} ${body.slice(0, 200)} — fallback to /message`)
     } catch (e) {
@@ -515,9 +594,40 @@ async function dispatchQueuedChat(
   if (!sendRes.ok) {
     const body = await sendRes.text().catch(() => '')
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
-    return false
+    if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
+      // 마지막 턴만 잘라내고 1회 재전송 (투명 복구). 오염이 더 앞에 있으면
+      // 재시도도 실패 → 즉시 failed + 수동 복구 안내 (recordDeterministicFailure).
+      // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
+      try {
+        const heal = await healReasoningTail(base, sessionID, directory, [chat.text])
+        if (heal.healed) {
+          const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
+            method: 'POST',
+            headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(messageBody),
+            signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+          })
+          if (retryRes.ok) {
+            void retryRes.text().catch(() => {})
+            logger.info(`Reasoning heal: truncated tail and queue retry succeeded for session ${sessionID}`)
+            return { sent: true }
+          }
+          const retryBody = await retryRes.text().catch(() => '')
+          logger.warn(`Queued chat heal-retry rejected for session ${sessionID}: HTTP ${retryRes.status} ${retryBody.slice(0, 200)}`)
+          if (retryRes.status === 400 && isReasoningEncryptedMismatch(retryBody)) {
+            return { sent: false, nonRetryable: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
+          }
+          return { sent: false, status: retryRes.status }
+        }
+        logger.warn(`Reasoning heal skipped for queued chat (session ${sessionID}): ${heal.reason}`)
+      } catch (e) {
+        logger.warn(`Reasoning heal attempt failed for queued chat (session ${sessionID}):`, e)
+      }
+      return { sent: false, nonRetryable: true, status: sendRes.status, detail: body.slice(0, 300) }
+    }
+    return { sent: false, status: sendRes.status }
   }
   // Drain the body so the socket is released even if the server keeps it open.
   void sendRes.text().catch(() => {})
-  return true
+  return { sent: true }
 }

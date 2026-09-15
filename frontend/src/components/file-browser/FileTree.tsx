@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, memo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
@@ -6,14 +7,15 @@ import {
   File,
   Folder,
   FolderOpen,
+  FolderUp,
   ChevronRight,
   ChevronDown,
-  GripVertical,
   Trash2,
   PenLine,
   Download,
   Globe,
-  ListPlus
+  ListPlus,
+  Paperclip
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -22,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { FileInfo } from '@/types/files'
+import { API_BASE_URL } from '@/config'
 import { isBrowserViewable, openHtmlInNewTab } from '@/lib/html-view'
 import { normalizeTreePath } from '@/lib/tree-path'
 import { upsertHtmlPage } from '@/api/html-pages'
@@ -39,6 +42,11 @@ interface FileTreeProps {
   basePath?: string
   isLoading?: boolean
   browserOpenPaths?: Set<string>
+  attachedPaths?: Set<string>
+  /** 채팅 파일 클릭 시 펼쳐서 보여줄 폴더 경로 (정규화 전 원문) */
+  revealPath?: string
+  /** 검색 모드 등 children이 이미 알려진 트리를 전부 펼친다 (지연 로딩 폴더는 제외) */
+  expandKnown?: boolean
 }
 
 interface TreeNodeProps {
@@ -51,22 +59,87 @@ interface TreeNodeProps {
   onRename?: (oldPath: string, newPath: string) => void
   onDownload?: (file: FileInfo) => void
   browserOpenPaths?: Set<string>
+  attachedPaths?: Set<string>
+  revealPath?: string
+  expandKnown?: boolean
 }
 
-function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths }: TreeNodeProps) {
-  const [expanded, setExpanded] = useState(false)
+/**
+ * 행 메뉴용 3점 세로 아이콘 (6점 그립보다 얇게)
+ */
+function DotsThreeVertical({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="6" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="12" cy="18" r="1.6" />
+    </svg>
+  )
+}
+
+/**
+ * 하위 폴더 지연 로딩 — FileBrowser의 경로별 캐시(['files', path])와 키를 공유해서
+ * 중복 요청 없이 트리를 인라인으로 펼친다.
+ */
+function useDirChildren(dirPath: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['files', dirPath],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/api/files/${dirPath}`)
+      if (!response.ok) throw new Error('Failed to load files')
+      return response.json() as Promise<FileInfo>
+    },
+    enabled,
+    staleTime: 60 * 1000,
+    retry: false,
+  })
+}
+
+function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
+  // 수동 토글이 최우선. 그 외에는 reveal 경로(채팅 파일 클릭)·검색 펼치기 순으로 자동 펼친다.
+  // expandKnown은 children이 이미 알려진 노드에만 적용 — 지연 로딩 폴더를 전부 깨우지 않는다.
+  const normPath = normalizeTreePath(file.path)
+  const revealNorm = revealPath ? normalizeTreePath(revealPath) : ''
+  const onRevealPath = !!revealNorm && file.isDirectory && (normPath === revealNorm || revealNorm.startsWith(normPath + '/'))
+  const [manual, setManual] = useState<boolean | null>(null)
+  const expanded = manual ?? (onRevealPath || (expandKnown === true && file.isDirectory && file.children !== undefined))
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const rowRef = useRef<HTMLDivElement>(null)
-  const isSelected = !!selectedFile?.path && normalizeTreePath(selectedFile.path) === normalizeTreePath(file.path)
-  const isBrowserOpen = !file.isDirectory && (browserOpenPaths?.has(normalizeTreePath(file.path)) ?? false)
+  const isSelected = !!selectedFile?.path && normalizeTreePath(selectedFile.path) === normPath
+  const isBrowserOpen = !file.isDirectory && (browserOpenPaths?.has(normPath) ?? false)
+  // 하위 폴더는 펼칠 때만 불러온다 (눌렀을 때 1회 fetch, 이후 캐시).
+  // children이 이미 있으면(검색 트리 등) 추가 요청 없이 그걸 쓴다.
+  const needFetch = expanded && file.isDirectory && file.children === undefined
+  const { data: fetchedDir, isLoading: childrenLoading } = useDirChildren(file.path, needFetch)
+  const children = file.children ?? fetchedDir?.children ?? []
+  // 채팅에 첨부된 파일은 클립 표시 (정규화 후 접미 매칭 — 트리 경로는 짧고 첨부 경로는 길다)
+  const isAttached = !file.isDirectory && file.path
+    ? (() => {
+        const p = normalizeTreePath(file.path)
+        for (const a of attachedPaths ?? []) {
+          if (a === p || a.endsWith('/' + p)) return true
+        }
+        return false
+      })()
+    : false
 
   useEffect(() => {
-    if (isSelected) {
+    if (!isSelected) return
+    // 조상이 지연 로딩이라 행이 늦게 마운트될 수 있어서 몇 번 재시도한다
+    let n = 0
+    const id = setInterval(() => {
       rowRef.current?.scrollIntoView({ block: 'nearest' })
-    }
+      if (++n >= 6) clearInterval(id)
+    }, 250)
+    return () => clearInterval(id)
   }, [isSelected])
 
   const handleRegisterPage = async () => {
@@ -88,10 +161,17 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   const handleClick = () => {
     if (editing) return
     if (file.isDirectory) {
-      onDirectoryClick(file.path)
+      // 행 단일 클릭은 그 자리에서 펼치기/접기
+      setManual(!expanded)
     } else {
       onFileSelect(file)
     }
+  }
+
+  const handleDoubleClick = () => {
+    if (editing) return
+    // 더블클릭은 폴더 안으로 이동 (업로드/생성 위치, 검색 범위 기준)
+    if (file.isDirectory) onDirectoryClick(file.path)
   }
 
   const handleDelete = () => {
@@ -160,7 +240,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
     <div>
       <div
         ref={rowRef}
-        className={`flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer group ${
+        className={`flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group ${
           isSelected ? 'bg-blue-500/15' : ''
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
@@ -170,10 +250,10 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             <Button
               variant="ghost"
               size="sm"
-              className="w-6 h-6 p-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+              className="w-2.5 h-6 p-0 has-[>svg]:px-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
               onClick={(e) => e.stopPropagation()}
             >
-              <GripVertical className="w-3 h-3" />
+              <DotsThreeVertical className="w-3 h-3" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
@@ -211,19 +291,22 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             variant="ghost"
             size="sm"
             className="w-4 h-4 p-0"
+            title={expanded ? '접기' : '펼치기'}
             onClick={(e) => {
               e.stopPropagation()
-              setExpanded(!expanded)
-              if (!expanded) {
-                onDirectoryClick(file.path)
-              }
+              setManual(!expanded)
             }}
           >
             {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           </Button>
         )}
-        
-        <div className="flex items-center gap-1 flex-1" onClick={handleClick}>
+
+        <div
+          className="flex items-center gap-1 flex-1"
+          onClick={handleClick}
+          onDoubleClick={handleDoubleClick}
+          title={file.isDirectory ? '클릭: 펼치기/접기, 더블클릭: 폴더로 이동' : file.name}
+        >
           {getFileIcon()}
           
           {editing ? (
@@ -246,13 +329,21 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
           {isBrowserOpen && !editing && (
             <Globe className="w-3 h-3 shrink-0 text-emerald-400" />
           )}
+          {isAttached && !editing && (
+            <span title="채팅에 첨부됨">
+              <Paperclip className="w-3 h-3 shrink-0 text-amber-500" />
+            </span>
+          )}
         </div>
-        
+
       </div>
-      
-      {file.isDirectory && expanded && file.children && (
+
+      {file.isDirectory && expanded && (
         <div>
-          {file.children.map((child) => (
+          {childrenLoading && children.length === 0 && (
+            <div className="text-xs text-muted-foreground py-1" style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}>불러오는 중...</div>
+          )}
+          {children.map((child) => (
             <TreeNode
               key={child.path}
               file={child}
@@ -264,6 +355,9 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               onRename={onRename}
               onDownload={onDownload}
               browserOpenPaths={browserOpenPaths}
+              attachedPaths={attachedPaths}
+              revealPath={revealPath}
+              expandKnown={expandKnown}
             />
           ))}
         </div>
@@ -282,7 +376,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   )
 }
 
-export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths }: FileTreeProps) {
+export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, attachedPaths, revealPath, expandKnown }: FileTreeProps) {
   const handleGoUp = () => {
     // If currentPath has content and is different from basePath, go up
     if (currentPath !== basePath) {
@@ -299,11 +393,16 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
   return (
     <div className="min-w-max">
       {showGoUp && (
-        <div 
-          className="flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer"
+        <div
+          className="flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group"
           onClick={handleGoUp}
+          title="상위 폴더로 이동"
         >
-          <span className="text-sm text-muted-foreground">..</span>
+          <span className="w-4 shrink-0" />
+          <FolderUp className="w-4 h-4 shrink-0" />
+          <div className="flex items-center gap-1 flex-1">
+            <span className="text-sm truncate">..</span>
+          </div>
         </div>
       )}
       
@@ -330,6 +429,9 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
             onRename={onRename}
             onDownload={onDownload}
             browserOpenPaths={browserOpenPaths}
+            attachedPaths={attachedPaths}
+            revealPath={revealPath}
+            expandKnown={expandKnown}
           />
         ))
       )}

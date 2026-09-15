@@ -7,7 +7,7 @@ import { MobileFilePreviewModal } from './MobileFilePreviewModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { FolderOpen, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
+import { FolderOpen, FolderTree, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +22,7 @@ import { listHtmlPages } from '@/api/html-pages'
 import { normalizeTreePath } from '@/lib/tree-path'
 import { downloadSingleFile, downloadFolderAsZip } from '@/lib/fileDownload'
 import { showToast } from '@/lib/toast'
+import { useChatAttached } from '@/stores/chatAttachedStore'
 
 const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
 
@@ -31,6 +32,48 @@ const clampToBasePath = (path: string, base: string): string => {
   if (!basePath || basePath === '.') return current
   if (current === basePath || current.startsWith(basePath + '/')) return current
   return basePath
+}
+
+/**
+ * 재귀 검색 결과(평탄 rel 경로 목록)를 트리로 조립한다.
+ * 중간 폴더는 결과에 포함된 경로에서 유도하고, 리프 파일명은 basename으로 표시한다
+ * (path 전체 경로는 그대로 유지해 이동/미리보기/삭제가 동작한다).
+ * 관련도순(백엔드 랭킹)을 유지하려고 정렬은 하지 않는다.
+ */
+function buildSearchTree(joinBase: string, details: FileInfo[]): FileInfo[] {
+  const base = normalizePath(joinBase)
+  const roots: FileInfo[] = []
+  const dirMap = new Map<string, FileInfo>()
+  const getDir = (fullPath: string, name: string): FileInfo => {
+    let d = dirMap.get(fullPath)
+    if (!d) {
+      d = { name, path: fullPath, isDirectory: true, size: 0, lastModified: new Date(0), children: [] }
+      dirMap.set(fullPath, d)
+    }
+    return d
+  }
+  const attach = (list: FileInfo[], node: FileInfo) => {
+    if (!list.some((c) => c.path === node.path)) list.push(node)
+  }
+  for (const d of details) {
+    const segs = d.name.replace(/\\/g, '/').split('/').filter(Boolean)
+    if (segs.length <= 1) {
+      roots.push(d)
+      continue
+    }
+    let parentPath = base
+    let parent: FileInfo | null = null
+    for (let i = 0; i < segs.length - 1; i++) {
+      const seg = segs[i]!
+      parentPath = parentPath ? `${parentPath}/${seg}` : seg
+      const dir = getDir(parentPath, seg)
+      if (parent) attach(parent.children!, dir)
+      else attach(roots, dir)
+      parent = dir
+    }
+    parent!.children!.push({ ...d, name: segs[segs.length - 1]! })
+  }
+  return roots
 }
 
 interface DroppedItem {
@@ -112,6 +155,21 @@ interface FileBrowserProps {
 
 type FileSort = 'name-asc' | 'name-desc' | 'mtime-asc' | 'mtime-desc'
 
+/** 검색 범위 토글 — 하위 폴더 포함(기본) / 현재 폴더만. 아이콘 버튼. */
+function SubdirToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      variant={enabled ? 'default' : 'outline'}
+      size="icon"
+      className="h-8 w-8 shrink-0"
+      title={enabled ? '하위 폴더 포함 검색 중 (클릭: 현재 폴더만)' : '현재 폴더만 검색 중 (클릭: 하위 폴더 포함)'}
+      onClick={onToggle}
+    >
+      <FolderTree className="w-4 h-4" />
+    </Button>
+  )
+}
+
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
   const items: { value: FileSort; label: string }[] = [
     { value: 'name-asc', label: 'Name ascending' },
@@ -171,7 +229,25 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
     queryClient.setQueryData(['files', path], data)
   }, [queryClient])
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
+  const attachedPaths = useChatAttached((s) => s.attachedPaths)
   const [searchQuery, setSearchQuery] = useState('')
+  // 하위 폴더 포함 검색이 기본. localStorage에 유지한다.
+  const [searchSubdirs, setSearchSubdirs] = useState(() => {
+    try { return localStorage.getItem('filebrowser-search-subdirs') !== '0' } catch { return true }
+  })
+  const toggleSearchSubdirs = useCallback(() => {
+    setSearchSubdirs((v) => {
+      const next = !v
+      try { localStorage.setItem('filebrowser-search-subdirs', next ? '1' : '0') } catch {}
+      return next
+    })
+  }, [])
+  // 입력마다 재귀 탐색이 나가지 않게 300ms 디바운스
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 300)
+    return () => clearTimeout(t)
+  }, [searchQuery])
   const [sortBy, setSortBy] = useState<FileSort>('name-asc')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -191,18 +267,45 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
     managedPages.filter((p) => p.kind === 'file' && p.path).map((p) => normalizeTreePath(p.path)),
   ), [managedPages])
 
-  // 채팅에서 파일을 열면 해당 파일의 디렉터리로 트리를 이동시킨다.
-  // basePath 로드와 레이스가 나지 않게 이 effect 하나로 통합한다.
+  // 하위 포함 검색: 현재 경로 기준 재귀 탐색 (details로 FileInfo 조립).
+  // 쿼리가 비면 호출 안 하고 기존 현재 폴더 필터로 동작한다.
+  const recursiveActive = searchSubdirs && debouncedSearch.trim().length > 0
+  const { data: recursiveResults } = useQuery({
+    queryKey: ['files-search-details', currentPath, debouncedSearch],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        path: currentPath || basePath || '.',
+        query: debouncedSearch.trim(),
+        details: 'true',
+      })
+      const res = await fetch(`${API_BASE_URL}/api/files/search?${params.toString()}`)
+      if (!res.ok) throw new Error('Search failed')
+      const data = await res.json() as Array<{ name: string; path: string; isDirectory: boolean; size?: number; lastModified?: string }>
+      return data.map((d) => ({
+        name: d.name,
+        path: d.path,
+        isDirectory: d.isDirectory,
+        size: d.size ?? 0,
+        lastModified: new Date(d.lastModified ?? 0),
+      }) as FileInfo)
+    },
+    enabled: recursiveActive,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  // 트리는 basePath를 루트로 유지한다. 채팅 파일 클릭은 드릴인 이동 대신
+  // 트리에서 해당 경로를 펼쳐서 보여준다 (revealPath → FileTree).
   useEffect(() => {
-    if (initialSelectedFile?.includes('/')) {
-      const dir = normalizePath(initialSelectedFile).split('/').slice(0, -1).join('/')
-      if (dir) {
-        void loadFiles(dir)
-        return
-      }
-    }
     void loadFiles(basePath)
-  }, [basePath, initialSelectedFile])
+  }, [basePath])
+
+  // 채팅에서 연 파일의 디렉터리 — 트리에서 자동 펼침 + 선택 하이라이트용
+  const revealPath = useMemo(() => {
+    if (!initialSelectedFile?.includes('/')) return undefined
+    const dir = normalizePath(initialSelectedFile).split('/').slice(0, -1).join('/')
+    return dir || undefined
+  }, [initialSelectedFile])
 
    const { data: initialFileData, error: initialFileError } = useFile(initialSelectedFile)
   const initialErrorToastedRef = useRef<string | null>(null)
@@ -544,7 +647,7 @@ useEffect(() => {
     }
   }
 
-  // NOTE: initialSelectedFile 이동은 위 effect에서 함께 처리 (레이스 방지)
+  // NOTE: initialSelectedFile은 드릴인하지 않고 revealPath로 트리에서 펼친다
 
   useEffect(() => {
     const handleFileSaved = (event: CustomEvent<{ path: string; content: string }>) => {
@@ -574,25 +677,32 @@ useEffect(() => {
   }, [isPreviewModalOpen])
 
   const filteredFiles = useMemo(() => {
-    const q = searchQuery.toLowerCase()
-    const list = (files?.children ?? []).filter((file: FileInfo) => file.name.toLowerCase().includes(q))
     const mtimeOf = (f: FileInfo): number => {
       const t = new Date(f.lastModified ?? 0).getTime()
       return Number.isNaN(t) ? 0 : t
     }
     const byName = (a: FileInfo, b: FileInfo) =>
       a.name.localeCompare(b.name, 'ko', { numeric: true, sensitivity: 'base' })
-    list.sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
-      switch (sortBy) {
-        case 'name-desc': return byName(b, a)
-        case 'mtime-asc': return mtimeOf(a) - mtimeOf(b) || byName(a, b)
-        case 'mtime-desc': return mtimeOf(b) - mtimeOf(a) || byName(a, b)
-        default: return byName(a, b)
-      }
-    })
-    return list
-  }, [files, searchQuery, sortBy])
+    const sortList = (list: FileInfo[]) => {
+      list.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+        switch (sortBy) {
+          case 'name-desc': return byName(b, a)
+          case 'mtime-asc': return mtimeOf(a) - mtimeOf(b) || byName(a, b)
+          case 'mtime-desc': return mtimeOf(b) - mtimeOf(a) || byName(a, b)
+          default: return byName(a, b)
+        }
+      })
+      return list
+    }
+    // 하위 포함 모드 + 재귀 결과 도착 → 평탄 목록 대신 결과 트리 표시
+    if (recursiveActive && recursiveResults) {
+      return buildSearchTree(currentPath || basePath, recursiveResults)
+    }
+    const q = searchQuery.toLowerCase()
+    const list = (files?.children ?? []).filter((file: FileInfo) => file.name.toLowerCase().includes(q))
+    return sortList(list)
+  }, [files, searchQuery, sortBy, recursiveActive, recursiveResults, currentPath, basePath])
 
   if (embedded) {
     return (
@@ -615,7 +725,7 @@ useEffect(() => {
         
         {/* Mobile: Full width file listing, Desktop: Split view */}
         <div className="flex-1 flex overflow-hidden min-h-0">
-          <div className={`${isMobile ? 'w-full' : 'w-[30%] min-w-[160px]'} border-r border-border px-4 flex flex-col min-h-0`}>
+          <div className={`${isMobile ? 'w-full' : 'w-[30%] min-w-[160px]'} border-r border-border flex flex-col min-h-0`}>
             <div className="sticky top-0 z-20 bg-background flex flex-col gap-2 py-3 flex-shrink-0 pointer-events-auto">
               <div className="flex items-center justify-between pointer-events-auto">
                 <Button variant="outline" size="sm" onClick={handleRefresh} className="pointer-events-auto">
@@ -634,6 +744,7 @@ useEffect(() => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1 min-w-0"
                 />
+                <SubdirToggle enabled={searchSubdirs} onToggle={toggleSearchSubdirs} />
                 <FileSortSelect value={sortBy} onChange={setSortBy} />
               </div>
             </div>
@@ -676,6 +787,9 @@ useEffect(() => {
                   basePath={basePath}
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
+                  attachedPaths={attachedPaths}
+                  revealPath={revealPath}
+                  expandKnown={recursiveActive && !!recursiveResults}
                 />
               )}
             </div>
@@ -759,7 +873,7 @@ useEffect(() => {
         
         <CardContent className="flex-1 flex overflow-hidden min-h-0">
           {/* Mobile: Full width file listing, Desktop: Split view */}
-          <div className={`${isMobile ? 'w-full' : 'w-1/3 min-w-[160px]'} border-r pr-4 flex flex-col min-h-0`}>
+          <div className={`${isMobile ? 'w-full' : 'w-1/3 min-w-[160px]'} border-r flex flex-col min-h-0`}>
             <div className="flex flex-col gap-2 mb-4 flex-shrink-0">
               <div className="flex items-center justify-between">
                 <Button variant="outline" size="sm" onClick={handleRefresh}>
@@ -778,6 +892,7 @@ useEffect(() => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1 min-w-0"
                 />
+                <SubdirToggle enabled={searchSubdirs} onToggle={toggleSearchSubdirs} />
                 <FileSortSelect value={sortBy} onChange={setSortBy} />
               </div>
             </div>
@@ -800,6 +915,9 @@ useEffect(() => {
                   basePath={basePath}
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
+                  attachedPaths={attachedPaths}
+                  revealPath={revealPath}
+                  expandKnown={recursiveActive && !!recursiveResults}
                 />
               </div>
             )}

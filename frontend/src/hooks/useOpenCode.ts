@@ -325,6 +325,18 @@ function isBillingQuotaMessage(msg: string): boolean {
   )
 }
 
+function isReasoningEncryptedMismatchMessage(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    m.includes("encrypted_content") &&
+    (m.includes("reasoning") || m.includes("not issued") || m.includes("invalid_request_error"))
+  )
+}
+
+function reasoningMismatchHint(): string {
+  return "History contains reasoning blocks from a different model (or an interrupted turn) — retrying cannot succeed. Truncate the last assistant turn (scissors icon) or switch back to the original model, then send again."
+}
+
 function formatServerError(error: unknown): string {
   if (error && typeof error === "object" && "response" in error) {
     const axiosError = error as { response?: { data?: unknown; status?: number; headers?: Record<string, string> } }
@@ -335,6 +347,9 @@ function formatServerError(error: unknown): string {
     if (providerMsg) {
       if (isBillingQuotaMessage(providerMsg)) {
         return providerMsg + " - free quota/balance exhausted. Payment required. (Zen: https://opencode.ai/zen / OpenRouter: https://openrouter.ai/credits)"
+      }
+      if (isReasoningEncryptedMismatchMessage(providerMsg)) {
+        return providerMsg + " - " + reasoningMismatchHint()
       }
       return providerMsg
     }
@@ -361,10 +376,14 @@ function formatServerError(error: unknown): string {
     if (isBillingQuotaMessage(error.message)) {
       return error.message + " - payment/recharge required."
     }
+    if (isReasoningEncryptedMismatchMessage(error.message)) {
+      return error.message + " - " + reasoningMismatchHint()
+    }
     return error.message
   }
   if (typeof error === "string" && error.length > 0) {
     if (isBillingQuotaMessage(error)) return error + " - payment/recharge required."
+    if (isReasoningEncryptedMismatchMessage(error)) return error + " - " + reasoningMismatchHint()
     return error
   }
   return "An unexpected error occurred."
@@ -401,16 +420,18 @@ export async function continueInterruptedSession(
   }
 }
 
-export const useSessions = (opcodeUrl: string | null | undefined, directory?: string) => {
+export const useSessions = (opcodeUrl: string | null | undefined, directory?: string, opts?: { poll?: boolean }) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
 
   return useQuery({
     queryKey: ["opencode", "sessions", opcodeUrl, directory],
     queryFn: () => client!.listSessions(),
     enabled: !!client,
-    refetchInterval: 2000,
+    // 즐겨찾기 레포 팝업처럼 정적 목록이면 poll:false — 열 때 한 번만 로드한다.
+    // Working 배찌는 useSessionStatusMap(전역 폴링)이 따로 갱신하므로 목록 폴링 불필요.
+    refetchInterval: opts?.poll === false ? false : 2000,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
     staleTime: 5000,
     // 미사용 시 10초 뒤 메모리에서 제거 — 세션 목록도 pnpm 로그와 함께 힙 잡음
     gcTime: 10_000,
@@ -425,7 +446,7 @@ export const useSession = (opcodeUrl: string | null | undefined, sessionID: stri
     queryFn: () => client!.getSession(sessionID!),
     enabled: !!client && !!sessionID,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
     staleTime: 5000,
   });
 };
@@ -544,7 +565,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     enabled: !!client && !!sessionID,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
     // 세션 전환 시 이전 메시지 캐시는 10초만 유지 후 메모리에서 제거 — bash 등 대용량 툴 출력이 30초 동안 힙을 잡아 7GB까지 가던 원인
     // idle이면 10초 폴링이라 10초 gcTime이면 다음 폴링 전까지 캐시가 살아있어 깜빡임 없이 유지된다.
     gcTime: 10_000,
