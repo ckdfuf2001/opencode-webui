@@ -321,7 +321,9 @@ function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId:
 function RepoSessionsPopup({ repoId, directory, selectedSessionId, onSessionSelect, onClose }: { repoId: number | null; directory: string; selectedSessionId?: string | null; onSessionSelect?: (sid: string | null, title?: string) => void; onClose: () => void }) {
   const qc = useQueryClient()
   const dirKey = directory || undefined
-  const { data: sessions, isLoading } = useSessions(OPENCODE_API_ENDPOINT, dirKey)
+  // 세션 목록은 열 때 한 번만 로드한다 (2초 폴링 없음 — 즐겨찾기 패널 메모리 대응).
+  // Working/승인 배찌는 useSessionStatusMap 전역 폴링으로 실시간 갱신된다.
+  const { data: sessions, isLoading } = useSessions(OPENCODE_API_ENDPOINT, dirKey, { poll: false })
   const { data: dbStatuses } = useSessionStatusMap()
   // 팝업을 닫으면 세션 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
   useEffect(() => {

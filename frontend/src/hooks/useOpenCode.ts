@@ -420,14 +420,16 @@ export async function continueInterruptedSession(
   }
 }
 
-export const useSessions = (opcodeUrl: string | null | undefined, directory?: string) => {
+export const useSessions = (opcodeUrl: string | null | undefined, directory?: string, opts?: { poll?: boolean }) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
 
   return useQuery({
     queryKey: ["opencode", "sessions", opcodeUrl, directory],
     queryFn: () => client!.listSessions(),
     enabled: !!client,
-    refetchInterval: 2000,
+    // 즐겨찾기 레포 팝업처럼 정적 목록이면 poll:false — 열 때 한 번만 로드한다.
+    // Working 배찌는 useSessionStatusMap(전역 폴링)이 따로 갱신하므로 목록 폴링 불필요.
+    refetchInterval: opts?.poll === false ? false : 2000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     staleTime: 5000,
