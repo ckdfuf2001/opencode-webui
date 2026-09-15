@@ -302,7 +302,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
         )}
 
         <div
-          className="flex items-center gap-0 flex-1"
+          className="flex items-center gap-1 flex-1"
           onClick={handleClick}
           onDoubleClick={handleDoubleClick}
           title={file.isDirectory ? '클릭: 펼치기/접기, 더블클릭: 폴더로 이동' : file.name}
@@ -400,7 +400,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
         >
           <span className="w-4 shrink-0" />
           <FolderUp className="w-4 h-4 shrink-0" />
-          <div className="flex items-center gap-0 flex-1">
+          <div className="flex items-center gap-1 flex-1">
             <span className="text-sm truncate">..</span>
           </div>
         </div>
