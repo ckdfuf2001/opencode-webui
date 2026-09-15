@@ -115,6 +115,7 @@ export async function healReasoningTail(
   sessionID: string,
   directory: string | undefined,
   candidates: string[],
+  opts?: { force?: boolean },
 ): Promise<ReasoningHealResult> {
   const texts = candidates.map((t) => (t ?? '').trim()).filter((t) => t.length > 0)
   if (texts.length === 0) return { healed: false, reason: 'empty expected text' }
@@ -133,7 +134,10 @@ export async function healReasoningTail(
   if (!lastUser || !cursorId) return { healed: false, reason: 'no user message' }
 
   const created = lastUser.info?.time?.created ?? 0
-  if (!created || Date.now() - created > HEAL_FRESHNESS_MS) {
+  // 채팅 발송 시점의 명시적 복구는 force로 신선도 가드를 우회한다.
+  // 에러 꼬리가 있으면 그 뒤 모든 전송이 400으로 거부돼 수십번 재시도해도
+  // 영원히 먹통이 되므로, 사용자가 새로 보내려는 순간에는 오래된 턴이라도 잘라낸다.
+  if (!opts?.force && (!created || Date.now() - created > HEAL_FRESHNESS_MS)) {
     return { healed: false, reason: 'last user message too old' }
   }
 
@@ -215,6 +219,7 @@ export async function healAbnormalTailIfNeeded(
   base: string,
   sessionID: string,
   directory: string | undefined,
+  opts?: { force?: boolean },
 ): Promise<ReasoningHealResult> {
   const { messages, reason } = await fetchMessageList(base, sessionID, directory)
   if (!messages || messages.length === 0) return { healed: false, reason: reason ?? 'no messages' }
@@ -251,7 +256,9 @@ export async function healAbnormalTailIfNeeded(
   if (!lastUser?.info?.id) return { healed: false, reason: 'no user to truncate from' }
 
   const created = lastUser.info?.time?.created ?? 0
-  if (!created || Date.now() - created > HEAL_FRESHNESS_MS) {
+  // 발송 직전 선제 클렌징(force)에서는 신선도 무관하게 비정상 꼬리를 잘라낸다.
+  // 채팅 기본 동작: 보낼 때 error/aborted/ghost/mismatch 상태면 삭제하고 깨끗한 히스토리로 시작.
+  if (!opts?.force && (!created || Date.now() - created > HEAL_FRESHNESS_MS)) {
     return { healed: false, reason: 'abnormal but last user too old' }
   }
 

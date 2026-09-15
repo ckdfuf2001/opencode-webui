@@ -554,7 +554,8 @@ async function dispatchQueuedChat(
   // 응답 없이 종료되던 케이스(빈 LLM 응답, reasoning mismatch, aborted ghost 등) 방지.
   // 실패 후 재시도가 아닌 발송 직전 선제 정리라 다음 턴이 깨끗한 히스토리에서 시작한다.
   try {
-    const preHeal = await healAbnormalTailIfNeeded(base, sessionID, directory)
+    // 채팅 기본 동작: 발송 직전 비정상이면 무조건 잘라낸다 (신선도 무관, force).
+    const preHeal = await healAbnormalTailIfNeeded(base, sessionID, directory, { force: true })
     if (preHeal.healed) {
       logger.info(`Pre-dispatch heal for session ${sessionID}: ${preHeal.reason ?? 'abnormal history truncated'} (removed ${preHeal.truncatedMessageId ?? '?'})`)
     }
@@ -611,7 +612,7 @@ async function dispatchQueuedChat(
       // 재시도도 실패 → 즉시 failed + 수동 복구 안내 (recordDeterministicFailure).
       // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
       try {
-        const heal = await healReasoningTail(base, sessionID, directory, [chat.text])
+        const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true })
         if (heal.healed) {
           const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
             method: 'POST',

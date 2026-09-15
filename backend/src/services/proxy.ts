@@ -494,6 +494,31 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       return false
     }
 
+    // 채팅 기본 동작: POST /session/:id/message 발송 직전, 마지막 턴이
+    // error/aborted/ghost/mismatch 상태면 신선도 무관하게 꼬리를 잘라내고 보낸다.
+    // (큐를 거치지 않는 직접 전송 경로 — 큐의 pre-dispatch heal과 쌍을 이룬다.)
+    if (method === 'POST') {
+      const preHealMatch = cleanEventPath.match(/^\/session\/([^/]+)\/message$/)
+      if (preHealMatch?.[1]) {
+        try {
+          const { healAbnormalTailIfNeeded } = await import('./reasoning-heal')
+          const preHeal = await healAbnormalTailIfNeeded(
+            opencodeServerManager.getUrl(),
+            preHealMatch[1]!,
+            query['directory'] ? decodeURIComponent(query['directory']) : undefined,
+            { force: true },
+          )
+          if (preHeal.healed) {
+            logger.info(
+              `Pre-send heal for session ${preHealMatch[1]}: ${preHeal.reason ?? 'abnormal history truncated'} (removed ${preHeal.truncatedMessageId ?? '?'})`,
+            )
+          }
+        } catch (e) {
+          logger.warn(`Pre-send heal check failed for session ${preHealMatch[1]}:`, e)
+        }
+      }
+    }
+
     let response: Response | null = null
     let lastError: unknown = null
 
@@ -721,14 +746,14 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
               const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
               healInfo.attempted = true
-              let heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText])
+              let heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText], { force: true })
               healInfo.healed = heal.healed
               healInfo.reason = heal.reason
               healInfo.stubsRemoved = heal.stubsRemoved
               if (!heal.healed && heal.reason?.includes('text mismatch')) {
                 // run-context/recall 주입 때문에 텍스트 불일치로 heal이 스킵된 경우 — 비정상 꼬리 전체를 잘라내는 fallback
                 const { healAbnormalTailIfNeeded } = await import('./reasoning-heal')
-                const fallback = await healAbnormalTailIfNeeded(opencodeServerManager.getUrl(), msgPost[1]!, directory)
+                const fallback = await healAbnormalTailIfNeeded(opencodeServerManager.getUrl(), msgPost[1]!, directory, { force: true })
                 if (fallback.healed) {
                   heal = fallback
                   healInfo.healed = true
