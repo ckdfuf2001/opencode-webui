@@ -266,8 +266,10 @@ def _extract_image_text_with_boxes(source_path):
                 bundled_tessdata = ap
                 break
     if bundled_tessdata and os.path.isdir(bundled_tessdata):
-        os.environ["TESSDATA_PREFIX"] = os.path.abspath(os.path.join(bundled_tessdata, ".."))
-        # tesseract가 번들 tessdata를 보게 하려면 --tessdata-dir 도 넘길 수 있지만 환경변수로 충분
+        # TESSDATA_PREFIX는 tessdata 디렉터리 자체를 가리켜야 한다.
+        # 부모(bin/tesseract)를 가리키면 언어가 tessdata/kor 로 인식돼
+        # "Failed loading language" 로 OCR 전체가 실패한다 (실측 확인).
+        os.environ["TESSDATA_PREFIX"] = os.path.abspath(bundled_tessdata)
     # Tesseract 실행 가능 여부 사전 체크
     try:
         pytesseract.get_tesseract_version()
@@ -329,6 +331,32 @@ def _extract_image_text_with_boxes(source_path):
         texts.append(t)
     full_text = " ".join(texts) if texts else pytesseract.image_to_string(img, lang=lang, config="--oem 3 --psm 6").strip()
     return {"text": full_text, "boxes": boxes}
+
+
+def _describe_image(source_path):
+    """OCR 없이 읽을 수 있는 이미지 기본 정보 (OCR 실패 시 폴백용).
+    tesseract 미설치·데이터 없음이어도 PIL만으로 동작한다."""
+    from PIL import Image
+
+    try:
+        size_bytes = os.path.getsize(source_path)
+    except OSError:
+        size_bytes = 0
+    if size_bytes >= 1024 * 1024:
+        size_str = f"{size_bytes / (1024 * 1024):.1f}MB"
+    elif size_bytes >= 1024:
+        size_str = f"{size_bytes / 1024:.1f}KB"
+    else:
+        size_str = f"{size_bytes}B"
+    try:
+        with Image.open(source_path) as img:
+            fmt = (img.format or os.path.splitext(source_path)[1].lstrip(".").upper() or "IMAGE")
+            w, h = img.size
+            mode = img.mode
+    except Exception:
+        fmt, w, h, mode = os.path.splitext(source_path)[1].lstrip(".").upper() or "IMAGE", 0, 0, "?"
+    dims = f"{w}x{h}" if w and h else "unknown size"
+    return f"[image: {fmt} {dims} {mode}, {size_str}]"
 
 
 def _extract_word_text(source_path):
@@ -612,8 +640,12 @@ def extract_text(source_path):
     ext = os.path.splitext(source_path)[1].lower()
     if ext in IMAGE_EXTS:
         _ensure_deps(additional=("PIL", "pytesseract"), require_com=False)
-        # 이미지 OCR: 텍스트만 반환 (호환), 좌표가 필요하면 extract_with_boxes 사용
-        return _extract_image_text_with_boxes(source_path)["text"]
+        # 이미지 OCR: 텍스트만 반환 (호환), 좌표가 필요하면 extract_with_boxes 사용.
+        # OCR 엔진 실패 시에는 메타데이터만 반환하고 500을 내지 않는다 (직접 보기로 읽으면 됨).
+        try:
+            return _extract_image_text_with_boxes(source_path)["text"]
+        except Exception as exc:
+            return f"{_describe_image(source_path)} (text extraction unavailable: {exc})"
     if ext not in SUPPORTED_EXTS and ext not in {".pdf", ".msg"}:
         raise ValueError(f"Unsupported document type: {ext}")
     if ext == ".pdf":
@@ -1410,7 +1442,8 @@ class Handler(BaseHTTPRequestHandler):
                         data = None
             ext = os.path.splitext(source_path)[1].lower()
             if data is None:
-                # 이미지 OCR은 텍스트 캐시와 별도로 처리 (박스 정보는 파일로 따로 캐시)
+                # 이미지 OCR은 텍스트 캐시와 별도로 처리 (박스 정보는 파일로 따로 캐시).
+                # OCR 실패해도 500이 아니라 메타데이터로 200 응답 — 직접 보기로 읽으면 된다.
                 if ext in IMAGE_EXTS:
                     try:
                         ocr = _extract_image_text_with_boxes(source_path)
@@ -1431,14 +1464,19 @@ class Handler(BaseHTTPRequestHandler):
                         self._json(200, resp)
                         return
                     except Exception as exc:
-                        self._json(500, {"error": str(exc)})
-                        return
-                data = extract_text(source_path)
-                try:
-                    with open(out_path, "w", encoding="utf-8") as f:
-                        f.write(data)
-                except Exception:
-                    pass
+                        data = f"{_describe_image(source_path)} (text extraction unavailable: {exc})"
+                        try:
+                            with open(out_path, "w", encoding="utf-8") as f:
+                                f.write(data)
+                        except Exception:
+                            pass
+                if data is None:
+                    data = extract_text(source_path)
+                    try:
+                        with open(out_path, "w", encoding="utf-8") as f:
+                            f.write(data)
+                    except Exception:
+                        pass
             # 캐시 히트인데 이미지였으면 박스 파일도 같이 반환
             resp = {"text": data, "fileName": os.path.basename(source_path)}
             if ext in IMAGE_EXTS:

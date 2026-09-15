@@ -14,7 +14,9 @@ mcp = FastMCP(
     instructions=(
         "Use read_document to extract the text content of office, PDF, image and Outlook email files "
         "(docx, doc, xlsx, xls, pptx, ppt, pdf, msg, png, jpg, jpeg, bmp, tiff, webp), including DRM-protected files. "
-        "For images (png/jpg etc) it runs lightweight local OCR (Pillow + pytesseract) and returns text plus word-level boxes "
+        "For images (png/jpg etc): if you can view images directly, do that first and skip this tool — "
+        "use read_document on an image only when direct viewing fails or isn't available. "
+        "When used on images it runs lightweight local OCR (Pillow + pytesseract) and returns text plus word-level boxes "
         "as JSON {text, boxes:[{text,left,top,width,height,conf}]} — no LLM needed, but Tesseract engine must be installed. "
         "For Outlook MSG emails the extracted text lists attachments and any HTTP(S) links found in the "
         "message; use download_attachment (with the 0-based Attachments index) to save an attachment to disk. "
@@ -32,7 +34,7 @@ def _resolve(path_value):
 
 @mcp.tool()
 def read_document(path: str) -> str:
-    """Extract readable text from an Office/PDF/Image/Outlook MSG file (docx, doc, xlsx, xls, pptx, ppt, pdf, msg, png, jpg, jpeg, bmp, tiff, webp). For images returns OCR text plus word boxes as JSON. Accepts an absolute path or a path relative to the workspace."""
+    """Extract readable text from an Office/PDF/Image/Outlook MSG file (docx, doc, xlsx, xls, pptx, ppt, pdf, msg, png, jpg, jpeg, bmp, tiff, webp). For images returns OCR text plus word boxes as JSON — only use on images when direct viewing fails or isn't available. Accepts an absolute path or a path relative to the workspace."""
     target = _resolve(path)
     payload = json.dumps({"path": target}).encode("utf-8")
     req = urllib.request.Request(

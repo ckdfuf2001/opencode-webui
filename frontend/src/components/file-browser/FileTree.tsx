@@ -233,7 +233,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             <Button
               variant="ghost"
               size="sm"
-              className="w-6 h-6 p-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+              className="w-4 h-6 p-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
               onClick={(e) => e.stopPropagation()}
             >
               <GripVertical className="w-3 h-3" />
@@ -381,7 +381,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
           onClick={handleGoUp}
           title="상위 폴더로 이동"
         >
-          <span className="w-6 shrink-0" />
+          <span className="w-4 shrink-0" />
           <FolderUp className="w-4 h-4 shrink-0" />
           <div className="flex items-center gap-1 flex-1">
             <span className="text-sm truncate">..</span>
