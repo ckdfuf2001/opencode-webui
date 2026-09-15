@@ -22,6 +22,7 @@ import { listHtmlPages } from '@/api/html-pages'
 import { normalizeTreePath } from '@/lib/tree-path'
 import { downloadSingleFile, downloadFolderAsZip } from '@/lib/fileDownload'
 import { showToast } from '@/lib/toast'
+import { useChatAttached } from '@/stores/chatAttachedStore'
 
 const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
 
@@ -31,6 +32,48 @@ const clampToBasePath = (path: string, base: string): string => {
   if (!basePath || basePath === '.') return current
   if (current === basePath || current.startsWith(basePath + '/')) return current
   return basePath
+}
+
+/**
+ * 재귀 검색 결과(평탄 rel 경로 목록)를 트리로 조립한다.
+ * 중간 폴더는 결과에 포함된 경로에서 유도하고, 리프 파일명은 basename으로 표시한다
+ * (path 전체 경로는 그대로 유지해 이동/미리보기/삭제가 동작한다).
+ * 관련도순(백엔드 랭킹)을 유지하려고 정렬은 하지 않는다.
+ */
+function buildSearchTree(joinBase: string, details: FileInfo[]): FileInfo[] {
+  const base = normalizePath(joinBase)
+  const roots: FileInfo[] = []
+  const dirMap = new Map<string, FileInfo>()
+  const getDir = (fullPath: string, name: string): FileInfo => {
+    let d = dirMap.get(fullPath)
+    if (!d) {
+      d = { name, path: fullPath, isDirectory: true, size: 0, lastModified: new Date(0), children: [] }
+      dirMap.set(fullPath, d)
+    }
+    return d
+  }
+  const attach = (list: FileInfo[], node: FileInfo) => {
+    if (!list.some((c) => c.path === node.path)) list.push(node)
+  }
+  for (const d of details) {
+    const segs = d.name.replace(/\\/g, '/').split('/').filter(Boolean)
+    if (segs.length <= 1) {
+      roots.push(d)
+      continue
+    }
+    let parentPath = base
+    let parent: FileInfo | null = null
+    for (let i = 0; i < segs.length - 1; i++) {
+      const seg = segs[i]!
+      parentPath = parentPath ? `${parentPath}/${seg}` : seg
+      const dir = getDir(parentPath, seg)
+      if (parent) attach(parent.children!, dir)
+      else attach(roots, dir)
+      parent = dir
+    }
+    parent!.children!.push({ ...d, name: segs[segs.length - 1]! })
+  }
+  return roots
 }
 
 interface DroppedItem {
@@ -186,6 +229,7 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
     queryClient.setQueryData(['files', path], data)
   }, [queryClient])
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
+  const attachedPaths = useChatAttached((s) => s.attachedPaths)
   const [searchQuery, setSearchQuery] = useState('')
   // 하위 폴더 포함 검색이 기본. localStorage에 유지한다.
   const [searchSubdirs, setSearchSubdirs] = useState(() => {
@@ -651,12 +695,14 @@ useEffect(() => {
       })
       return list
     }
-    // 하위 포함 모드 + 재귀 결과 도착 → 현재 폴더 필터 대신 재귀 결과 표시
-    if (recursiveActive && recursiveResults) return sortList([...recursiveResults])
+    // 하위 포함 모드 + 재귀 결과 도착 → 평탄 목록 대신 결과 트리 표시
+    if (recursiveActive && recursiveResults) {
+      return buildSearchTree(currentPath || basePath, recursiveResults)
+    }
     const q = searchQuery.toLowerCase()
     const list = (files?.children ?? []).filter((file: FileInfo) => file.name.toLowerCase().includes(q))
     return sortList(list)
-  }, [files, searchQuery, sortBy, recursiveActive, recursiveResults])
+  }, [files, searchQuery, sortBy, recursiveActive, recursiveResults, currentPath, basePath])
 
   if (embedded) {
     return (
@@ -741,6 +787,7 @@ useEffect(() => {
                   basePath={basePath}
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
+                  attachedPaths={attachedPaths}
                 />
               )}
             </div>
@@ -866,6 +913,7 @@ useEffect(() => {
                   basePath={basePath}
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
+                  attachedPaths={attachedPaths}
                 />
               </div>
             )}
