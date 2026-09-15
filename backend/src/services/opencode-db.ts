@@ -202,6 +202,79 @@ function recomputeSessionMeta(db: Database, sessionId: string, fallbackTime: num
 }
 
 /**
+ * Delete exactly one message plus its own parts — no cascade to children.
+ * reasoning-heal 전용: mismatch로 거부된 실패 턴의 찌꺼기(error stub)만
+ * 잘라낼 때 쓴다. 자식이 있으면 null (연쇄 삭제로 멀쩡한 턴까지 날아가는 것 방지).
+ * user 메시지는 절대 건드리지 않는다 — 호출자가 보장할 것 (heal은 assistant+error만).
+ */
+export async function deleteSingleChildlessMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<DeleteResult | null> {
+  const dbPath = await getOpenCodeDbPath()
+  if (!dbPath) return null
+
+  const db = new Database(dbPath)
+  try {
+    const target = db
+      .query('SELECT id FROM message WHERE session_id = ? AND id = ?')
+      .get(sessionId, messageId) as { id: string } | null
+    if (!target) {
+      logger.warn(`DeleteSingle: target message ${messageId} not found in session ${sessionId}`)
+      return null
+    }
+
+    const allMsgs = db
+      .query<{ id: string; data: string }, string>('SELECT id, data FROM message WHERE session_id = ?')
+      .all(sessionId)
+    for (const row of allMsgs) {
+      try {
+        const parsed = JSON.parse(row.data) as { parentID?: string }
+        if (parsed.parentID === messageId) {
+          logger.warn(`DeleteSingle: message ${messageId} has child ${row.id} — refusing (no cascade)`)
+          return null
+        }
+      } catch {
+        // ignore malformed data
+      }
+    }
+
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const partResult = db
+        .query<{ changes: number }, string>('DELETE FROM part WHERE message_id = ?')
+        .run(messageId)
+      const msgResult = db
+        .query<{ changes: number }, [string, string]>('DELETE FROM message WHERE session_id = ? AND id = ?')
+        .run(sessionId, messageId)
+
+      recomputeSessionMeta(db, sessionId, Date.now())
+
+      const remaining = db
+        .query('SELECT id FROM message WHERE session_id = ?')
+        .all(sessionId) as { id: string }[]
+
+      db.exec('COMMIT')
+
+      logger.info(
+        `Deleted single message ${messageId} in session ${sessionId}: removed ${Number(msgResult.changes ?? 0)} messages, ${Number(partResult.changes ?? 0)} parts`,
+      )
+      return {
+        messagesRemoved: Number(msgResult.changes ?? 0),
+        partsRemoved: Number(partResult.changes ?? 0),
+        eventsRemoved: 0,
+        remainingMessages: remaining.length,
+      }
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  } finally {
+    db.close()
+  }
+}
+
+/**
  * Delete a single message plus its descendant subtree (the message's own turn,
  * e.g. the user message and the assistant replies it produced) while keeping
  * later independent turns intact. Unlike truncate, this does not remove every

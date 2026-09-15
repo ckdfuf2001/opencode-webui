@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
+import { isReasoningMismatchText } from './reasoning-heal'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
@@ -350,9 +351,7 @@ function recordFailure(sessionID: string, id: string): void {
  * 가위(truncate)로 마지막 턴을 잘라내거나 원래 모델로 되돌린 뒤 수동 retry.
  */
 export function isReasoningEncryptedMismatch(bodyText: string): boolean {
-  const lower = bodyText.toLowerCase()
-  return lower.includes('encrypted_content')
-    && (lower.includes('reasoning') || lower.includes('invalid_request_error') || lower.includes('not issued'))
+  return isReasoningMismatchText(bodyText)
 }
 
 function recordDeterministicFailure(sessionID: string, id: string, detail?: string): void {
