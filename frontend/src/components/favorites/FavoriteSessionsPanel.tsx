@@ -17,7 +17,8 @@ export function FavoriteSessionsPanel() {
   const [resultFor, setResultFor] = useState<string | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [repoSelectedMap, setRepoSelectedMap] = useState<Record<string, { id: string; title: string }>>({})
-  const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: pinned, staleTime: 10_000 })
+  // 배지용 즐겨찾기는 패널 닫힘과 무관하게 유지 (부하는 favorites 1회 fetch 뿐).
+  const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, staleTime: 10_000 })
   const { data: dbStatuses } = useSessionStatusMap()
   const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos, enabled: pinned })
 
@@ -50,21 +51,67 @@ export function FavoriteSessionsPanel() {
   }, [pinned])
 
   // 패널을 닫으면 즐겨찾기 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
-  useEffect(() => {
-    if (!pinned) qc.removeQueries({ queryKey: ['favorites'] })
-  }, [pinned, qc])
+  // 배지 표시는 패널 닫힘과 무관하게 유지해야 하므로 제거하지 않는다.
+  // (favorites는 수 KB 수준이라 유지해도 부하 없음)
+
+  // 배지 합계 — 전역 useSessionStatusMap(2s 폴링)만 재사용, 추가 폴링 없음
+  const badgeTotals = useMemo(() => {
+    let working = 0
+    let pending = 0
+    let cancelled = 0
+    if (!favorites.length || !dbStatuses?.length) return { working, pending, cancelled }
+    for (const f of favorites) {
+      const isRepoFav = f.sessionId.startsWith('repo-')
+      if (isRepoFav) {
+        // repo 일치: repoId 우선, 아니면 directory 문자열 일치
+        const match = (s: { repoId?: number | null; directory?: string | null }) =>
+          s.repoId === f.repoId || s.directory === f.directory
+        working += dbStatuses.filter((s) => s.status === 'busy' && match(s)).length
+        pending += dbStatuses.filter(match).reduce((a, s) => a + (s.pendingPermissions ?? 0), 0)
+        cancelled += dbStatuses.filter((s) => (s as unknown as { isCancelled?: boolean }).isCancelled && s.status !== 'busy' && match(s)).length
+      } else {
+        const st = dbStatuses.find((s) => s.sessionId === f.sessionId)
+        if (!st) continue
+        if (st.status === 'busy') working += 1
+        pending += st.pendingPermissions ?? 0
+        if ((st as unknown as { isCancelled?: boolean }).isCancelled && st.status !== 'busy') cancelled += 1
+      }
+    }
+    return { working, pending, cancelled }
+  }, [favorites, dbStatuses])
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setPinned(v => !v)}
-        className={`fixed bottom-[72px] left-0 z-[60] w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0
-          ${pinned ? 'bg-amber-500 text-white border-amber-600' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:bg-card'}`}
-        title={pinned ? '즐겨찾기 고정 해제 (클릭)' : '즐겨찾기 (클릭하여 열기)'}
-      >
-        <Star className={`w-5 h-5 ${pinned ? 'fill-white' : ''}`} />
-      </button>
+      <div className="fixed bottom-[72px] left-0 z-[60] flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setPinned(v => !v)}
+          className={`w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0
+            ${pinned ? 'bg-amber-500 text-white border-amber-600' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:bg-card'}`}
+          title={pinned ? '즐겨찾기 고정 해제 (클릭)' : '즐겨찾기 (클릭하여 열기)'}
+        >
+          <Star className={`w-5 h-5 ${pinned ? 'fill-white' : ''}`} />
+        </button>
+        {(badgeTotals.working > 0 || badgeTotals.pending > 0 || badgeTotals.cancelled > 0) && (
+          <div className="flex items-center gap-1 rounded-full border border-border bg-card/95 backdrop-blur px-1.5 py-1 shadow-md">
+            {badgeTotals.working > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-600" title={`${badgeTotals.working} running`}>
+                <Loader2 className="w-3 h-3 animate-spin" />{badgeTotals.working}
+              </span>
+            )}
+            {badgeTotals.pending > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-600" title={`${badgeTotals.pending} question(s) pending`}>
+                <ShieldAlert className="w-3 h-3" />{badgeTotals.pending}
+              </span>
+            )}
+            {badgeTotals.cancelled > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-zinc-500" title={`${badgeTotals.cancelled} cancelled`}>
+                <StopCircle className="w-3 h-3" />{badgeTotals.cancelled}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
       {pinned && (
         <div className="fixed bottom-[84px] left-4 z-[60] w-[340px] max-w-[88vw] rounded-lg border border-border bg-card shadow-2xl overflow-hidden flex flex-col max-h-[60vh]">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border">
