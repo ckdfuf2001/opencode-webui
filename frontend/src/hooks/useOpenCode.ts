@@ -939,14 +939,18 @@ const mentionFor = (part: ContentPart & { name: string; path: string }): string 
   const path = part.path.replace(/^file:\/{2,3}/, "").replace(/\\/g, "/")
   const chatIdx = path.indexOf("/chat_uploads/")
   if (chatIdx >= 0) {
-    // workspace 기준 상대경로를 유지한다. 레포 prefix를 떼면 존재 확인이 안 돼 칩이 안 뜬다.
-    const reposIdx = path.indexOf("/repos/")
-    const rel = reposIdx >= 0 ? path.slice(reposIdx + "/repos/".length) : path.slice(chatIdx + 1)
-    return `@"${rel}"`
+    // 채팅 경로는 레포 없이 chat_uploads/... 로 — 변환은 doc-reader fallback이 처리
+    return `@"${path.slice(chatIdx + 1)}"`
   }
   const reposIdx = path.indexOf("/repos/")
-  const rel = reposIdx >= 0 ? path.slice(reposIdx + "/repos/".length) : part.name
-  return `@"${rel}"`
+  if (reposIdx >= 0) {
+    // repos/aaa/src/file.ts → src/file.ts (레포 없이, 채팅과 동일)
+    const afterRepos = path.slice(reposIdx + "/repos/".length)
+    const slash = afterRepos.indexOf("/")
+    const rel = slash >= 0 ? afterRepos.slice(slash + 1) : afterRepos
+    return `@"${rel}"`
+  }
+  return `@"${part.name}"`
 };
 
 export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: string) => {

@@ -166,21 +166,39 @@ export async function extractDocumentText(
       }
     } catch {}
   }
-  // aaa/chat_uploads/... 처럼 레포 포함 경로도 dev/release 간 차이로 못 찾을 수 있어 한 번 더 시도
-  if (!isFile && userPath.replace(/\\/g, '/').includes('/chat_uploads/')) {
+  // aaa/... 처럼 레포 포함 경로도 dev/release 간 차이로 못 찾을 수 있어 대체 base에서 재시도
+  if (!isFile && userPath.replace(/\\/g, '/').includes('/')) {
     try {
       const { getWorkspacePath } = await import('@opencode-webui/shared')
+      const norm = userPath.replace(/\\/g, '/')
       const cands = [
-        path.join(getWorkspacePath(), 'repos', userPath.replace(/\\/g, '/')),
-        path.resolve(process.cwd(), 'workspace', 'repos', userPath.replace(/\\/g, '/')),
-        path.resolve(process.cwd(), '..', 'workspace', 'repos', userPath.replace(/\\/g, '/')),
-        path.resolve(process.cwd(), 'release', 'workspace', 'repos', userPath.replace(/\\/g, '/')),
+        path.join(getWorkspacePath(), 'repos', norm),
+        path.resolve(process.cwd(), 'workspace', 'repos', norm),
+        path.resolve(process.cwd(), '..', 'workspace', 'repos', norm),
+        path.resolve(process.cwd(), 'release', 'workspace', 'repos', norm),
       ]
       for (const c of cands) {
         try {
           const s = await fs.stat(c)
           if (s.isFile()) { resolved = c; isFile = true; break }
         } catch {}
+      }
+    } catch {}
+  }
+  // src/file.ts 처럼 레포 없이 온 일반 파일도 모든 레포에서 탐색 (채팅은 레포 없이 보냄)
+  if (!isFile) {
+    try {
+      const { getReposPath, getWorkspacePath } = await import('@opencode-webui/shared')
+      const bases = new Set<string>([
+        getReposPath(),
+        path.join(getWorkspacePath(), 'repos'),
+        path.resolve(process.cwd(), 'workspace', 'repos'),
+        path.resolve(process.cwd(), '..', 'workspace', 'repos'),
+        path.resolve(process.cwd(), 'release', 'workspace', 'repos'),
+      ])
+      for (const base of bases) {
+        const found = await tryFind(base, userPath.replace(/\\/g, '/'))
+        if (found) { resolved = found; isFile = true; break }
       }
     } catch {}
   }

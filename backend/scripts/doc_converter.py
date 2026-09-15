@@ -1360,19 +1360,14 @@ class Handler(BaseHTTPRequestHandler):
                             pass
             except Exception:
                 pass
-        # 2) aaa/chat_uploads/... 처럼 레포 포함 경로도 dev/release 간 workspace 차이로 못 찾을 수 있어 대체 base에서 재시도
-        if not os.path.isfile(source_path) and "/chat_uploads/" in norm:
+        # 2) aaa/... 처럼 레포 포함 경로도 dev/release 간 차이로 못 찾을 수 있어 대체 base에서 재시도
+        if not os.path.isfile(source_path) and "/repos/" in norm:
             try:
-                # 현재 경로가 .../workspace/repos/aaa/... 또는 .../release/workspace/repos/aaa/... 중 하나일 수 있음
-                # 다른 쪽 workspace에서도 찾아본다
-                cands_bases = []
-                # 현재 repos_base 추정
                 idx = norm.find("/repos/")
                 if idx != -1:
                     cur_repos = source_path[: idx + len("/repos/") - 1].replace("/", os.sep)
-                    # 상대 경로 추출: aaa/chat_uploads/... 부분
                     rel = norm[idx + len("/repos/"):].lstrip("/")
-                    # 대체 base들: cwd 기준 workspace, release/workspace, 상위 workspace
+                    cands_bases = []
                     for base in [
                         os.path.join(os.getcwd(), "workspace", "repos"),
                         os.path.join(os.getcwd(), "release", "workspace", "repos"),
@@ -1388,6 +1383,36 @@ class Handler(BaseHTTPRequestHandler):
                         cand = os.path.join(base, rel.replace("/", os.sep))
                         if os.path.isfile(cand):
                             return cand
+            except Exception:
+                pass
+        # 3) src/file.ts 처럼 레포 없이 온 일반 파일도 모든 레포에서 탐색 (채팅은 레포 없이 보냄)
+        if not os.path.isfile(source_path):
+            try:
+                # norm이 .../repos/src/file.ts 처럼 repos 다음이 바로 파일이면 레포 없이 온 것
+                idx = norm.find("/repos/")
+                if idx != -1:
+                    rel = norm[idx + len("/repos/"):].lstrip("/")
+                    # rel이 src/... 처럼 레포 이름 없이 바로 파일이면 탐색
+                    # repos 하위 디렉토리 중 하나에 해당 파일이 있는지 확인
+                    repos_base = None
+                    # 현재 repos_base 추정
+                    cur_repos = source_path[: idx + len("/repos/") - 1].replace("/", os.sep)
+                    if os.path.isdir(cur_repos):
+                        repos_base = cur_repos
+                    else:
+                        for base in [os.path.join(os.getcwd(), "workspace", "repos"), os.path.join(os.getcwd(), "release", "workspace", "repos")]:
+                            if os.path.isdir(base):
+                                repos_base = base
+                                break
+                    if repos_base and os.path.isdir(repos_base) and "/" in rel and not os.path.isfile(os.path.join(repos_base, rel.replace("/", os.sep))):
+                        # rel의 첫 세그먼트가 레포 이름인지 확인: repos/aaa/... 형태면 첫 세그먼트가 레포 디렉토리여야 함
+                        first = rel.split("/")[0]
+                        if first and not os.path.isdir(os.path.join(repos_base, first)):
+                            # src/... 처럼 레포 없이 온 것으로 간주 → 모든 레포에서 탐색
+                            for entry in os.listdir(repos_base):
+                                cand = os.path.join(repos_base, entry, rel.replace("/", os.sep))
+                                if os.path.isfile(cand):
+                                    return cand
             except Exception:
                 pass
         return source_path
