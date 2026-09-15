@@ -82,18 +82,9 @@ export function FavoriteSessionsPanel() {
 
   return (
     <>
-      <div className="fixed bottom-[72px] left-0 z-[60] flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={() => setPinned(v => !v)}
-          className={`w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0
-            ${pinned ? 'bg-amber-500 text-white border-amber-600' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:bg-card'}`}
-          title={pinned ? '즐겨찾기 고정 해제 (클릭)' : '즐겨찾기 (클릭하여 열기)'}
-        >
-          <Star className={`w-5 h-5 ${pinned ? 'fill-white' : ''}`} />
-        </button>
+      <div className="fixed bottom-[72px] left-0 z-[60] flex flex-col items-start gap-1">
         {(badgeTotals.working > 0 || badgeTotals.pending > 0 || badgeTotals.cancelled > 0) && (
-          <div className="flex items-center gap-1 rounded-full border border-border bg-card/95 backdrop-blur px-1.5 py-1 shadow-md">
+          <div className="ml-1 flex items-center gap-1 rounded-full border border-border bg-card/95 backdrop-blur px-1.5 py-1 shadow-md">
             {badgeTotals.working > 0 && (
               <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-600" title={`${badgeTotals.working} running`}>
                 <Loader2 className="w-3 h-3 animate-spin" />{badgeTotals.working}
@@ -111,6 +102,15 @@ export function FavoriteSessionsPanel() {
             )}
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => setPinned(v => !v)}
+          className={`w-10 h-10 rounded-r-full border border-l-0 shadow-lg flex items-center justify-center transition-all -translate-x-1/2 hover:translate-x-0
+            ${pinned ? 'bg-amber-500 text-white border-amber-600' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:bg-card'}`}
+          title={pinned ? '즐겨찾기 고정 해제 (클릭)' : '즐겨찾기 (클릭하여 열기)'}
+        >
+          <Star className={`w-5 h-5 ${pinned ? 'fill-white' : ''}`} />
+        </button>
       </div>
       {pinned && (
         <div className="fixed bottom-[84px] left-4 z-[60] w-[340px] max-w-[88vw] rounded-lg border border-border bg-card shadow-2xl overflow-hidden flex flex-col max-h-[60vh]">
