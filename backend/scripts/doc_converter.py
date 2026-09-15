@@ -224,6 +224,21 @@ def _extract_pdf_text(source_path):
     return "\n\n".join(pages)
 
 
+def _resolve_bundled_tesseract():
+    """bin/tesseract/tesseract.exe 가 있으면 우선 사용 (pull 후 바로 동작)."""
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "..", "..", "bin", "tesseract", "tesseract.exe"),
+        os.path.join(os.getcwd(), "bin", "tesseract", "tesseract.exe"),
+        os.path.join(os.getcwd(), "release", "bin", "tesseract", "tesseract.exe"),
+        os.path.join(tempfile.gettempdir(), "tesseract-ocr", "tesseract.exe"),
+    ]
+    for p in candidates:
+        ap = os.path.abspath(p)
+        if os.path.isfile(ap):
+            return ap
+    return None
+
+
 def _extract_image_text_with_boxes(source_path):
     """가벼운 OCR: Pillow + pytesseract 로 텍스트와 단어별 좌표 반환.
     반환: {"text": str, "boxes": [{"text":str,"left":int,"top":int,"width":int,"height":int,"conf":float}]}
@@ -234,13 +249,23 @@ def _extract_image_text_with_boxes(source_path):
         from pytesseract import Output
     except ImportError as exc:
         raise RuntimeError(f"OCR deps missing: {exc}. pip install Pillow pytesseract") from exc
+    # 번들된 tesseract 우선 사용 (bin/tesseract)
+    bundled = _resolve_bundled_tesseract()
+    if bundled:
+        pytesseract.pytesseract.tesseract_cmd = bundled
+        # tessdata 경로 자동 인식
+        tessdata = os.path.join(os.path.dirname(bundled), "tessdata")
+        if os.path.isdir(tessdata):
+            os.environ["TESSDATA_PREFIX"] = os.path.abspath(os.path.join(tessdata, ".."))
     # Tesseract 실행 가능 여부 사전 체크
     try:
         pytesseract.get_tesseract_version()
     except Exception as exc:
+        hint = bundled or "PATH"
         raise RuntimeError(
-            "Tesseract OCR engine not found. Install Tesseract (https://github.com/UB-Mannheim/tesseract/wiki) "
-            "and ensure `tesseract` is in PATH."
+            f"Tesseract OCR engine not found (tried {hint}). "
+            "Run `npm run tesseract:install` or install Tesseract (https://github.com/UB-Mannheim/tesseract/wiki) "
+            "and ensure `tesseract` is in PATH. Bundled path: bin/tesseract/tesseract.exe"
         ) from exc
     img = Image.open(source_path)
     # RGB로 변환 (팰트/알파 대응)

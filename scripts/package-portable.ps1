@@ -87,11 +87,21 @@ if (-not (Test-Path $exePath)) { throw 'backend compile did not produce exe' }
 Write-Output '[package 4/7] frontend is embedded in the exe'
 Remove-Item (Join-Path $release 'frontend') -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Output '[package 5/7] bin copy (opencode)'
+Write-Output '[package 5/7] bin copy (opencode + tesseract)'
 $srcOpencode = Join-Path $root 'bin/opencode.exe'
 if (-not (Test-Path $srcOpencode)) { throw 'bin/opencode.exe not found - run pnpm run opencode:install first' }
 New-Item -ItemType Directory -Force -Path (Join-Path $release 'bin') | Out-Null
 Copy-Item -Force $srcOpencode (Join-Path $release 'bin/opencode.exe')
+# tesseract OCR (lightweight, optional but bundled if present — pull 후 바로 사용)
+$srcTess = Join-Path $root 'bin/tesseract'
+if (Test-Path $srcTess) {
+  $dstTess = Join-Path $release 'bin/tesseract'
+  if (Test-Path $dstTess) { Remove-Item -Recurse -Force $dstTess }
+  Copy-Item -Recurse -Force $srcTess $dstTess
+  Write-Output "[package 5/7] bundled tesseract -> $dstTess"
+} else {
+  Write-Output "[package 5/7] note: bin/tesseract not found — image OCR will require PATH install (run npm run tesseract:install)"
+}
 # browser automation now via Playwright MCP (npx, no bin copy needed)
 
 Write-Output '[package 6/7] doc tools exe'

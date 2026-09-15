@@ -79,6 +79,20 @@ if %errorlevel%==0 (
   exit /b 1
 )
 
+REM Tesseract OCR (lightweight, for image OCR with boxes)
+if exist "bin\tesseract\tesseract.exe" (
+  echo   [+] Tesseract bundled at .\bin\tesseract\tesseract.exe
+) else (
+  where tesseract >nul 2>nul
+  if %errorlevel%==0 (
+    echo   [+] Tesseract found in PATH
+  ) else (
+    echo   [.] Tesseract not found — image OCR will be unavailable.
+    echo       Run: npm run tesseract:install
+    echo       or install from https://github.com/UB-Mannheim/tesseract/wiki
+  )
+)
+
 REM Git LFS (needed to check out the vendored bin/opencode.exe and bin/agent-browser from the repo)
 where git-lfs >nul 2>nul
 if %errorlevel%==0 (

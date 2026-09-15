@@ -1,3 +1,4 @@
 # Binary files via Git LFS (GitHub hard limit: 100MB/file)
 bin/opencode/opencode.exe filter=lfs diff=lfs merge=lfs -text
 bin/opencode.exe filter=lfs diff=lfs merge=lfs -text
+bin/tesseract/** filter=lfs diff=lfs merge=lfs -text
