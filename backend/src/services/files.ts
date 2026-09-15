@@ -331,7 +331,9 @@ export async function searchFiles(basePath: string, query: string): Promise<stri
 }
 
 export function validatePath(userPath: string): string {
-  const normalized = path.normalize(userPath).replace(/^(\.\.(\/|\\|$))+/, '')
+  // aaa\chat_uploads\image (3).png 처럼 백슬래시·공백·괄호 포함 경로도 워크스페이스 기준으로 정규화
+  const withForward = userPath.replace(/\\/g, '/')
+  const normalized = path.normalize(withForward).replace(/^(\.\.(\/|\\|$))+/, '')
   const resolved = path.resolve(SHARED_WORKSPACE_BASE, normalized)
   
   const basePath = path.resolve(SHARED_WORKSPACE_BASE)
