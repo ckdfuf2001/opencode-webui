@@ -16,6 +16,9 @@ DOC_EXTS = {".docx", ".doc"}
 XLS_EXTS = {".xlsx", ".xls"}
 PPT_EXTS = {".pptx", ".ppt"}
 SUPPORTED_EXTS = DOC_EXTS | XLS_EXTS | PPT_EXTS
+# 가벼운 OCR용 이미지 확장자 (Pillow + pytesseract, Tesseract 본체 별도 설치 필요)
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
+OCR_EXTS = IMAGE_EXTS | {".pdf"}
 
 
 def _strip_zone_identifier(source_path):
@@ -219,6 +222,66 @@ def _extract_pdf_text(source_path):
         if text:
             pages.append(text)
     return "\n\n".join(pages)
+
+
+def _extract_image_text_with_boxes(source_path):
+    """가벼운 OCR: Pillow + pytesseract 로 텍스트와 단어별 좌표 반환.
+    반환: {"text": str, "boxes": [{"text":str,"left":int,"top":int,"width":int,"height":int,"conf":float}]}
+    Tesseract 본체가 없으면 RuntimeError."""
+    try:
+        from PIL import Image
+        import pytesseract
+        from pytesseract import Output
+    except ImportError as exc:
+        raise RuntimeError(f"OCR deps missing: {exc}. pip install Pillow pytesseract") from exc
+    # Tesseract 실행 가능 여부 사전 체크
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception as exc:
+        raise RuntimeError(
+            "Tesseract OCR engine not found. Install Tesseract (https://github.com/UB-Mannheim/tesseract/wiki) "
+            "and ensure `tesseract` is in PATH."
+        ) from exc
+    img = Image.open(source_path)
+    # RGB로 변환 (팰트/알파 대응)
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    # 가벼운 설정: oem 3, psm 6 (uniform block), kor+eng 시도 후 eng fallback
+    last_exc = None
+    for lang in ("kor+eng", "eng"):
+        try:
+            data = pytesseract.image_to_data(img, lang=lang, config="--oem 3 --psm 6", output_type=Output.DICT)
+            break
+        except Exception as exc:
+            last_exc = exc
+            if lang == "eng":
+                raise RuntimeError(f"OCR failed: {exc}") from exc
+            continue
+    boxes = []
+    texts = []
+    n = len(data.get("text", []))
+    for i in range(n):
+        t = (data["text"][i] or "").strip()
+        if not t:
+            continue
+        try:
+            conf = float(data["conf"][i])
+        except Exception:
+            conf = -1
+        # conf -1은 제외, 너무 낮은 신뢰도도 제외하려면 threshold 조정 가능
+        boxes.append({
+            "text": t,
+            "left": int(data["left"][i]),
+            "top": int(data["top"][i]),
+            "width": int(data["width"][i]),
+            "height": int(data["height"][i]),
+            "conf": conf,
+            "block_num": int(data.get("block_num", [0]*n)[i]),
+            "line_num": int(data.get("line_num", [0]*n)[i]),
+        })
+        texts.append(t)
+    full_text = " ".join(texts) if texts else pytesseract.image_to_string(img, lang=lang, config="--oem 3 --psm 6").strip()
+    return {"text": full_text, "boxes": boxes}
 
 
 def _extract_word_text(source_path):
@@ -500,6 +563,10 @@ def _extract_msg_text(source_path):
 def extract_text(source_path):
     _strip_zone_identifier(source_path)
     ext = os.path.splitext(source_path)[1].lower()
+    if ext in IMAGE_EXTS:
+        _ensure_deps(additional=("PIL", "pytesseract"), require_com=False)
+        # 이미지 OCR: 텍스트만 반환 (호환), 좌표가 필요하면 extract_with_boxes 사용
+        return _extract_image_text_with_boxes(source_path)["text"]
     if ext not in SUPPORTED_EXTS and ext not in {".pdf", ".msg"}:
         raise ValueError(f"Unsupported document type: {ext}")
     if ext == ".pdf":
@@ -1240,15 +1307,46 @@ class Handler(BaseHTTPRequestHandler):
                         data = open(out_path, "r", encoding="utf-8").read()
                     except Exception:
                         data = None
+            ext = os.path.splitext(source_path)[1].lower()
             if data is None:
+                # 이미지 OCR은 텍스트 캐시와 별도로 처리 (박스 정보는 파일로 따로 캐시)
+                if ext in IMAGE_EXTS:
+                    try:
+                        ocr = _extract_image_text_with_boxes(source_path)
+                        data = ocr["text"]
+                        # 박스도 텍스트 캐시 옆에 json으로 저장 (재요청 시 재OCR 방지)
+                        try:
+                            with open(out_path + ".ocr.json", "w", encoding="utf-8") as jf:
+                                json.dump(ocr, jf, ensure_ascii=False)
+                        except Exception:
+                            pass
+                        # 응답에 박스 포함
+                        resp = {"text": data, "fileName": os.path.basename(source_path), "ocr": ocr}
+                        if ext == ".msg":
+                            try:
+                                resp["msg"] = _msg_render(source_path)
+                            except Exception:
+                                resp["msg"] = {"html": None, "attachments": []}
+                        self._json(200, resp)
+                        return
+                    except Exception as exc:
+                        self._json(500, {"error": str(exc)})
+                        return
                 data = extract_text(source_path)
                 try:
                     with open(out_path, "w", encoding="utf-8") as f:
                         f.write(data)
                 except Exception:
                     pass
+            # 캐시 히트인데 이미지였으면 박스 파일도 같이 반환
             resp = {"text": data, "fileName": os.path.basename(source_path)}
-            if os.path.splitext(source_path)[1].lower() == ".msg":
+            if ext in IMAGE_EXTS:
+                try:
+                    with open(out_path + ".ocr.json", "r", encoding="utf-8") as jf:
+                        resp["ocr"] = json.load(jf)
+                except Exception:
+                    pass
+            if ext == ".msg":
                 try:
                     resp["msg"] = _msg_render(source_path)
                 except Exception:

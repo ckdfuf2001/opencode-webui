@@ -8,6 +8,7 @@ import { resolveDocConverterCommand } from './doc-tools'
 const CONVERTER_PORT = parseInt(process.env.DOC_CONVERTER_PORT || '8765', 10)
 const CONVERTER_BASE = `http://127.0.0.1:${CONVERTER_PORT}`
 const SUPPORTED_EXTENSIONS = new Set(['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt'])
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'])
 
 let converterProcess: ChildProcess | null = null
 let starting: Promise<boolean> | null = null
@@ -118,11 +119,11 @@ export type ExtractedMessage = {
 export async function extractDocumentText(
   userPath: string,
   refresh = false
-): Promise<{ text: string; fileName: string; msg?: ExtractedMessage }> {
+): Promise<{ text: string; fileName: string; msg?: ExtractedMessage; ocr?: { text: string; boxes: Array<{ text: string; left: number; top: number; width: number; height: number; conf: number }> } }> {
   const resolved = validatePath(userPath)
 
   const ext = path.extname(resolved).toLowerCase()
-  if (!SUPPORTED_EXTENSIONS.has(ext) && ext !== '.pdf' && ext !== '.msg') {
+  if (!SUPPORTED_EXTENSIONS.has(ext) && !IMAGE_EXTS.has(ext) && ext !== '.pdf' && ext !== '.msg') {
     throw { message: 'Unsupported document type', statusCode: 400 }
   }
 
@@ -154,7 +155,7 @@ export async function extractDocumentText(
     throw { message, statusCode: 500 }
   }
 
-  return { text: body.text, fileName: body.fileName || path.basename(resolved), msg: body.msg }
+  return { text: body.text, fileName: body.fileName || path.basename(resolved), msg: body.msg, ocr: body.ocr }
 }
 
 export async function editDocument(

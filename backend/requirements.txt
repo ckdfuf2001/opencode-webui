@@ -6,3 +6,5 @@ extract-msg
 pywin32
 psutil
 fastmcp
+Pillow
+pytesseract
