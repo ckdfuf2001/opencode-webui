@@ -8,7 +8,7 @@ import {
   FolderOpen,
   ChevronRight,
   ChevronDown,
-  Ellipsis,
+  GripVertical,
   Trash2,
   PenLine,
   Download,
@@ -165,6 +165,47 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
       >
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-6 h-6 p-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <GripVertical className="w-3 h-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
+            <DropdownMenuItem onClick={handleRename}>
+              <PenLine className="w-4 h-4 mr-2" />
+              Rename
+            </DropdownMenuItem>
+            {!file.isDirectory && isBrowserViewable(file.name) && (
+              <DropdownMenuItem onClick={() => openHtmlInNewTab(file.path, file.name)}>
+                <Globe className="w-4 h-4 mr-2" />
+                브라우저로 열기
+              </DropdownMenuItem>
+            )}
+            {!file.isDirectory && isBrowserViewable(file.name) && (
+              <DropdownMenuItem onClick={() => void handleRegisterPage()}>
+                <ListPlus className="w-4 h-4 mr-2" />
+                관리 페이지로 등록
+              </DropdownMenuItem>
+            )}
+            {onDownload && (
+              <DropdownMenuItem onClick={() => onDownload(file)}>
+                <Download className="w-4 h-4 mr-2" />
+                {file.isDirectory ? 'Download as ZIP' : 'Download'}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={handleDelete} className="text-red-600">
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         {file.isDirectory && (
           <Button
             variant="ghost"
@@ -207,45 +248,6 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
           )}
         </div>
         
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-6 h-6 p-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              <Ellipsis className="w-3 h-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
-            <DropdownMenuItem onClick={handleRename}>
-              <PenLine className="w-4 h-4 mr-2" />
-              Rename
-            </DropdownMenuItem>
-            {!file.isDirectory && isBrowserViewable(file.name) && (
-              <DropdownMenuItem onClick={() => openHtmlInNewTab(file.path, file.name)}>
-                <Globe className="w-4 h-4 mr-2" />
-                브라우저로 열기
-              </DropdownMenuItem>
-            )}
-            {!file.isDirectory && isBrowserViewable(file.name) && (
-              <DropdownMenuItem onClick={() => void handleRegisterPage()}>
-                <ListPlus className="w-4 h-4 mr-2" />
-                관리 페이지로 등록
-              </DropdownMenuItem>
-            )}
-            {onDownload && (
-              <DropdownMenuItem onClick={() => onDownload(file)}>
-                <Download className="w-4 h-4 mr-2" />
-                {file.isDirectory ? 'Download as ZIP' : 'Download'}
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onClick={handleDelete} className="text-red-600">
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
       
       {file.isDirectory && expanded && file.children && (
