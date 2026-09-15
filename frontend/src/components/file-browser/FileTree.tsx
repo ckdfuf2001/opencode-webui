@@ -10,7 +10,6 @@ import {
   FolderUp,
   ChevronRight,
   ChevronDown,
-  GripVertical,
   Trash2,
   PenLine,
   Download,
@@ -63,6 +62,24 @@ interface TreeNodeProps {
   attachedPaths?: Set<string>
   revealPath?: string
   expandKnown?: boolean
+}
+
+/**
+ * 행 메뉴용 3점 세로 아이콘 (6점 그립보다 얇게)
+ */
+function DotsThreeVertical({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="6" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="12" cy="18" r="1.6" />
+    </svg>
+  )
 }
 
 /**
@@ -223,7 +240,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
     <div>
       <div
         ref={rowRef}
-        className={`flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer group ${
+        className={`flex items-center gap-1 py-1 hover:bg-muted rounded cursor-pointer group ${
           isSelected ? 'bg-blue-500/15' : ''
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
@@ -236,7 +253,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               className="w-4 h-6 p-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
               onClick={(e) => e.stopPropagation()}
             >
-              <GripVertical className="w-3 h-3" />
+              <DotsThreeVertical className="w-3 h-3" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
@@ -377,7 +394,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
     <div className="min-w-max">
       {showGoUp && (
         <div
-          className="flex items-center gap-1 px-2 py-1 hover:bg-muted rounded cursor-pointer group"
+          className="flex items-center gap-1 py-1 hover:bg-muted rounded cursor-pointer group"
           onClick={handleGoUp}
           title="상위 폴더로 이동"
         >
