@@ -79,7 +79,7 @@ if %errorlevel%==0 (
   exit /b 1
 )
 
-REM Tesseract OCR (lightweight, for image OCR with boxes)
+REM Tesseract OCR (lightweight, for image OCR with boxes) — auto-install if missing
 if exist "bin\tesseract\tesseract.exe" (
   echo   [+] Tesseract bundled at .\bin\tesseract\tesseract.exe
 ) else (
@@ -87,9 +87,14 @@ if exist "bin\tesseract\tesseract.exe" (
   if %errorlevel%==0 (
     echo   [+] Tesseract found in PATH
   ) else (
-    echo   [.] Tesseract not found — image OCR will be unavailable.
-    echo       Run: npm run tesseract:install
-    echo       or install from https://github.com/UB-Mannheim/tesseract/wiki
+    echo   [.] Tesseract not found — auto-installing to bin\tesseract (1회, offline면 vendor/tesseract 필요)...
+    call node scripts\install-tesseract.js
+    if exist "bin\tesseract\tesseract.exe" (
+      echo   [+] Tesseract auto-installed
+    ) else (
+      echo   [.] Tesseract auto-install skipped/failed — image OCR will be unavailable.
+      echo       Run manually: npm run tesseract:install
+    )
   )
 )
 

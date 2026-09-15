@@ -28,6 +28,10 @@ if not exist "opencode-webui.exe" echo [START] ERROR: opencode-webui.exe not fou
 if exist "bin\opencode.exe" (echo [START] ok: opencode binary) else echo [START] WARN: bin\opencode.exe missing - AI sessions unavailable
 where npx >nul 2>&1 && call npx --yes @playwright/mcp --help >nul 2>&1 && echo [START] ok: playwright || echo [START] WARN: playwright not cached - first browser use will auto-install
 if exist "scripts\doc-reader.exe" (echo [START] ok: doc-reader.exe) else echo [START] WARN: doc-reader.exe missing - python fallback required
+if exist "bin\tesseract\tesseract.exe" (echo [START] ok: tesseract bundled) else (
+  where tesseract >nul 2>&1
+  if %errorlevel%==0 (echo [START] ok: tesseract in PATH) else echo [START] WARN: tesseract missing - image OCR unavailable (run npm run tesseract:install)
+)
 where git >nul 2>&1
 if %errorlevel%==0 (echo [START] ok: git) else echo [START] WARN: git not found - clone/pull features unavailable
 

@@ -51,6 +51,20 @@ else
   exit 1
 fi
 
+# Tesseract OCR (lightweight image OCR) — auto-install if missing
+if [ -f "bin/tesseract/tesseract" ] || [ -f "bin/tesseract/tesseract.exe" ]; then
+  echo "  [+] Tesseract bundled at bin/tesseract"
+elif command -v tesseract >/dev/null 2>&1; then
+  echo "  [+] Tesseract found in PATH"
+else
+  echo "  [.] Tesseract not found — auto-installing to bin/tesseract..."
+  if node scripts/install-tesseract.js; then
+    echo "  [+] Tesseract auto-installed"
+  else
+    echo "  [.] Tesseract auto-install skipped/failed — image OCR will be unavailable (run: npm run tesseract:install)"
+  fi
+fi
+
 # Git LFS (needed to check out the vendored binaries from the repo)
 if command -v git-lfs >/dev/null 2>&1 || git lfs version >/dev/null 2>&1; then
   echo "  [+] Git LFS is installed"
