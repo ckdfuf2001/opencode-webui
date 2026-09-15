@@ -82,21 +82,22 @@ if %errorlevel%==0 (
 REM Tesseract OCR (lightweight, for image OCR with boxes) — auto-install if missing
 if exist "bin\tesseract\tesseract.exe" (
   echo   [+] Tesseract bundled at .\bin\tesseract\tesseract.exe
-) else (
-  where tesseract >nul 2>nul
-  if %errorlevel%==0 (
-    echo   [+] Tesseract found in PATH
-  ) else (
-    echo   [.] Tesseract not found — auto-installing to bin\tesseract (1회, offline면 vendor/tesseract 필요)...
-    call node scripts\install-tesseract.js
-    if exist "bin\tesseract\tesseract.exe" (
-      echo   [+] Tesseract auto-installed
-    ) else (
-      echo   [.] Tesseract auto-install skipped/failed — image OCR will be unavailable.
-      echo       Run manually: npm run tesseract:install
-    )
-  )
+  goto :tess_done
 )
+where tesseract >nul 2>nul
+if %errorlevel%==0 (
+  echo   [+] Tesseract found in PATH
+  goto :tess_done
+)
+echo   [.] Tesseract not found — auto-installing to bin\tesseract (1회, offline면 vendor/tesseract 필요)...
+call node scripts\install-tesseract.js
+if exist "bin\tesseract\tesseract.exe" (
+  echo   [+] Tesseract auto-installed
+) else (
+  echo   [.] Tesseract auto-install skipped/failed — image OCR will be unavailable.
+  echo       Run manually: npm run tesseract:install
+)
+:tess_done
 
 REM Git LFS (needed to check out the vendored bin/opencode.exe and bin/agent-browser from the repo)
 where git-lfs >nul 2>nul

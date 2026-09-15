@@ -1,6 +1,6 @@
 {
   "name": "opencode-webui",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.0",
@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "predev": "node scripts/predev.js",
-    "postinstall": "node scripts/install-tesseract.js || true",
+    "postinstall": "node scripts/install-tesseract.js || echo tesseract skipped",
     "opencode:install": "node scripts/install-opencode.js",
     "tesseract:install": "node scripts/install-tesseract.js",
     "dev": "concurrently --kill-others-on-fail \"pnpm:dev:backend\" \"node scripts/wait-backend.js && pnpm run dev:frontend\"",

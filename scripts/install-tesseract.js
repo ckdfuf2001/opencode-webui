@@ -90,19 +90,25 @@ async function main() {
   try {
     await download(TESSERACT_URL, tmpExe)
   } catch (e) {
-    fail('download failed: ' + e.message + '\n  Offline: put installer or zip in vendor/tesseract/ and re-run\n  URL: ' + TESSERACT_URL)
+    console.warn('[install-tesseract] download failed (offline?): ' + e.message)
+    console.warn('  Offline: put installer or zip in vendor/tesseract/ and re-run')
+    console.warn('  URL: ' + TESSERACT_URL)
+    console.warn('  continuing without tesseract — image OCR will be unavailable')
+    return
   }
   log('running installer silently to ' + binTessDir)
   try {
     execFileSync(tmpExe, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/DIR=' + binTessDir], { stdio: 'inherit' })
   } catch (e) {
-    fail('installer failed: ' + e.message)
+    console.warn('[install-tesseract] installer failed: ' + e.message + ' — continuing without tesseract')
+    return
   }
   if (!existsSync(binTessExe)) {
-    fail('installer finished but not found: ' + binTessExe)
+    console.warn('[install-tesseract] installer finished but not found: ' + binTessExe + ' — continuing without tesseract')
+    return
   }
   await downloadTessdata()
   log('installed to ' + binTessExe)
 }
 
-main().catch(e => { console.error('[install-tesseract] failed:', e); process.exit(1) })
+main().catch(e => { console.error('[install-tesseract] failed:', e); process.exit(0) })
