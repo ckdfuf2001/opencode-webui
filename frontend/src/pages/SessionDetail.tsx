@@ -36,6 +36,7 @@ import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useContextUsage, markSessionCompacted } from "@/hooks/useContextUsage";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { PermissionResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
@@ -479,6 +480,41 @@ export function SessionDetail() {
     hasFailedQueue
   )
   const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && ((dbIsCancelled && !isUserCancel) || isCancelledUntilNextSend(sessionId) || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
+  const queryClientHeal = useQueryClient()
+  const [healing, setHealing] = useState(false)
+  const needsHeal = useMemo(() => {
+    if (!sessionId || isStreaming || hasActiveSend(sessionId) || dbBusy || descendantBusy) return false
+    if (!lastMessage) return false
+    const err = (lastMessage.info as unknown as { error?: unknown })?.error
+    if (!err) return false
+    const name = (err as { name?: string })?.name ?? (err as { data?: { name?: string } })?.data?.name ?? ''
+    if (name === 'MessageAbortedError' && recentlyAborted) return false
+    return true
+  }, [sessionId, isStreaming, dbBusy, descendantBusy, lastMessage, recentlyAborted])
+  const handleHeal = useCallback(async () => {
+    if (!sessionId) return
+    setHealing(true)
+    try {
+      const qs = repoDirectory ? `?directory=${encodeURIComponent(repoDirectory)}` : ''
+      const res = await fetch(`${API_BASE_URL}/api/session-heal/${sessionId}${qs}`, { method: 'POST' })
+      const data = await res.json().catch(() => ({} as Record<string, unknown>))
+      if (!res.ok) throw new Error((data as { reason?: string })?.reason || `heal failed (${res.status})`)
+      if ((data as { healed?: boolean })?.healed) {
+        showToast.success('정리 완료 — 꼬리 제거됨. 다시 보내보세요.')
+        queryClientHeal.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionId, repoDirectory] })
+        queryClientHeal.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionId, repoDirectory] })
+        try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionId)}/cancelled`, { method: 'DELETE' }) } catch {}
+      } else {
+        const reason = (data as { reason?: string })?.reason
+        if (reason === 'history clean') showToast.info('이미 깨끗한 상태예요.')
+        else showToast.info(reason ?? '정리할 내용이 없어요.')
+      }
+    } catch (e) {
+      showToast.error((e as Error)?.message ?? '정리 실패')
+    } finally {
+      setHealing(false)
+    }
+  }, [sessionId, repoDirectory, queryClientHeal, opcodeUrl])
   // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
   usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)
@@ -1402,6 +1438,12 @@ if (results.length > 0) {
                     <span className="sm:hidden">Back</span>
                     <span className="hidden sm:inline">Back to latest</span>
                   </button>
+                </div>
+              )}
+              {needsHeal && (
+                <div className="mb-1 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs pointer-events-auto w-[90%] max-w-4xl">
+                  <span className="flex-1 text-amber-700 dark:text-amber-300">세션이 비정상 꼬리 때문에 멈춰 있어요. 정리하면 마지막 실패 턴을 제거하고 다시 보낼 수 있어요.</span>
+                  <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={healing} onClick={handleHeal}>{healing ? '정리 중...' : '정리'}</Button>
                 </div>
               )}
               <div className="contents pointer-events-auto">
