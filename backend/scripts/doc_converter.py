@@ -249,14 +249,25 @@ def _extract_image_text_with_boxes(source_path):
         from pytesseract import Output
     except ImportError as exc:
         raise RuntimeError(f"OCR deps missing: {exc}. pip install Pillow pytesseract") from exc
-    # 번들된 tesseract 우선 사용 (bin/tesseract)
+    # 번들된 tesseract 우선 사용 (bin/tesseract) — tesseract 본체가 PATH에 있어도 kor 데이터는 번들 것을 우선 쓰면 한글 된다
     bundled = _resolve_bundled_tesseract()
+    bundled_tessdata = None
     if bundled:
         pytesseract.pytesseract.tesseract_cmd = bundled
-        # tessdata 경로 자동 인식
-        tessdata = os.path.join(os.path.dirname(bundled), "tessdata")
-        if os.path.isdir(tessdata):
-            os.environ["TESSDATA_PREFIX"] = os.path.abspath(os.path.join(tessdata, ".."))
+        bundled_tessdata = os.path.join(os.path.dirname(bundled), "tessdata")
+    else:
+        # PATH tesseract라도 번들 tessdata가 있으면 한글을 위해 그걸 쓰자
+        for p in [
+            os.path.join(os.path.dirname(__file__), "..", "..", "bin", "tesseract", "tessdata"),
+            os.path.join(os.getcwd(), "bin", "tesseract", "tessdata"),
+        ]:
+            ap = os.path.abspath(p)
+            if os.path.isdir(ap) and os.path.isfile(os.path.join(ap, "kor.traineddata")):
+                bundled_tessdata = ap
+                break
+    if bundled_tessdata and os.path.isdir(bundled_tessdata):
+        os.environ["TESSDATA_PREFIX"] = os.path.abspath(os.path.join(bundled_tessdata, ".."))
+        # tesseract가 번들 tessdata를 보게 하려면 --tessdata-dir 도 넘길 수 있지만 환경변수로 충분
     # Tesseract 실행 가능 여부 사전 체크
     try:
         pytesseract.get_tesseract_version()
@@ -271,14 +282,25 @@ def _extract_image_text_with_boxes(source_path):
     # RGB로 변환 (팰트/알파 대응)
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
-    # 가벼운 설정: oem 3, psm 6 (uniform block), kor+eng 시도 후 eng fallback
+    # kor+eng를 먼저 시도 — kor 데이터가 없으면 eng로 fallback되지만 한글은 안 나오므로 명확한 에러로 안내
     last_exc = None
+    lang_used = "eng"
     for lang in ("kor+eng", "eng"):
         try:
-            data = pytesseract.image_to_data(img, lang=lang, config="--oem 3 --psm 6", output_type=Output.DICT)
+            cfg = "--oem 1 --psm 6" if "kor" in lang else "--oem 3 --psm 6"
+            data = pytesseract.image_to_data(img, lang=lang, config=cfg, output_type=Output.DICT)
+            lang_used = lang
             break
         except Exception as exc:
             last_exc = exc
+            msg = str(exc).lower()
+            # kor 데이터 없음 → 한글 출력 안 됨 원인이므로 명확히 안내하고 eng로 숨기지 않음
+            if "kor" in msg or "traineddata" in msg or "failed loading language" in msg:
+                raise RuntimeError(
+                    "Korean OCR data (kor.traineddata) not found. Run `npm run tesseract:install` "
+                    "or `node scripts/install-tesseract.js` to download bin/tesseract/tessdata/kor.traineddata, "
+                    "or install Tesseract kor language pack. Original error: " + str(exc)
+                ) from exc
             if lang == "eng":
                 raise RuntimeError(f"OCR failed: {exc}") from exc
             continue
