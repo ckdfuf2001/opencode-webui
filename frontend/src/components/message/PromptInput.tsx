@@ -155,6 +155,9 @@ export function PromptInput({
   const pendingRunRef = useRef<string | null>(null)
   // Ctrl+Enter 연타 시 async 준비 구간 중복 실행 방지
   const submitGuardRef = useRef(false)
+  // 전송 중 중복 방지: 입력은 동기적으로 비우고, enqueue 정착까지 락 유지.
+  // setPrompt가 리렌더 전이라 두 번째 Enter가 옛 텍스트를 봐도 락으로 차단된다 (이중 방어).
+  const sendLockRef = useRef(false)
   const handleSubmitRef = useRef<() => Promise<void>>(async () => {})
   const sendPrompt = useSendPrompt(opcodeUrl, directory)
   const sendShell = useSendShell(opcodeUrl, directory)
@@ -230,17 +233,19 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     }
   }
 
-  // enqueue 실패 시 입력 유실 금지: 성공 때만 입력창을 비운다. 실패면 입력 유지 + 토스트.
-  const enqueueAndClear = (vars: { sessionID: string; text: string; directory?: string } & { model?: { providerID: string; modelID: string }; agent?: string }) => {
+  // 전송 직후 입력창을 동기적으로 비우고 enqueue 정착까지 락을 유지한다.
+  // 연타해도 두 번째 전송은 빈 입력으로 조기 리턴 + 락으로 차단 → 중복 전송 불가.
+  // 실패 시에는 스냅샷을 복원해 입력 유실을 막는다 (useEnqueueQueuedChat이 이미 토스트 표시).
+  const enqueueAndClear = (vars: { sessionID: string; text: string; directory?: string } & { model?: { providerID: string; modelID: string }; agent?: string }, snapshot: string) => {
     enqueueQueued.mutate(vars, {
       onSuccess: () => {
-        setPrompt('')
+        sendLockRef.current = false
         setAttachedFiles(new Map())
         onSubmitted?.()
-        if (textareaRef.current) textareaRef.current.style.height = 'auto'
       },
       onError: () => {
-        // 입력 유지 — useEnqueueQueuedChat이 이미 토스트 표시
+        sendLockRef.current = false
+        setPrompt(snapshot)
       },
     })
   }
@@ -287,8 +292,17 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       showToast.warning(`Context ${Math.round(usage)}% — the limit is close. Truncate unnecessary messages.`, { duration: 4000 })
     }
 
+    // 전송 중이면 무시 — 입력은 아래에서 동기적으로 비우므로 연타 시 빈 문자열로 조기 리턴되기도 한다 (이중 방어)
+    if (sendLockRef.current) return
     if (submitGuardRef.current) return
     submitGuardRef.current = true
+    // 스냅샷을 잡고 입력창을 즉시 비운다. 이후 await(파일 검증·큐 조회) 사이 연타나
+    // 비동기 onSuccess 지연과 무관하게 중복 전송이 불가하다. 실패 시 스냅샷 복원.
+    const snapshot = prompt
+    sendLockRef.current = true
+    setPrompt('')
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    const releaseWithRestore = () => { sendLockRef.current = false; setPrompt(snapshot) }
     try {
 
     if (isBashMode) {
@@ -299,11 +313,8 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         command,
         agent: currentMode
       })
-      setPrompt('')
       setIsBashMode(false)
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto'
-      }
+      sendLockRef.current = false
       return
     }
 
@@ -324,7 +335,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           : prompt.trim()
         if (text) {
           clearCancelledUntilNextSend(sessionID)
-          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
+          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+        } else {
+          releaseWithRestore()
         }
         return
       }
@@ -334,7 +347,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
 
     if (editTargetMessageID && onResendEdit) {
       const truncated = await onResendEdit(editTargetMessageID)
-      if (!truncated) return
+      if (!truncated) { releaseWithRestore(); return }
     }
 
     // 응답 생성 중이거나 cancel 처리 중에는 전송 대신 큐에 적재한다.
@@ -349,7 +362,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       if (text.trim()) {
         clearCancelledUntilNextSend(sessionID)
         fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-        enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
+        enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+      } else {
+        releaseWithRestore()
       }
       return
     }
@@ -365,7 +380,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           .join('\n')
         if (text.trim()) {
           clearCancelledUntilNextSend(sessionID)
-          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
+          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+        } else {
+          releaseWithRestore()
         }
         return
       }
@@ -378,10 +395,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       .map(partToText)
       .filter((t) => t.trim().length > 0)
       .join('\n')
-    if (!finalText.trim()) return
+    if (!finalText.trim()) { releaseWithRestore(); return }
     clearCancelledUntilNextSend(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-    enqueueAndClear({ sessionID, text: finalText, directory, ...queueDispatchOpts() })
+    enqueueAndClear({ sessionID, text: finalText, directory, ...queueDispatchOpts() }, snapshot)
+    } catch {
+      // 검증/재전송 중 예외 시 입력 복원 + 락 해제 (그대로 두면 전송이 영구 차단된다)
+      releaseWithRestore()
     } finally {
       submitGuardRef.current = false
     }
@@ -395,20 +415,30 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   // 생성 중 전송 = 큐 적재. 백엔드 폴러가 idle 전환 시 발송한다.
   const handleQueue = async () => {
     if (!prompt.trim() || disabled) return
+    if (sendLockRef.current) return
     if (isContextCritical || willExceed) {
       showToast.error(`Context ${Math.round(usage)}% exceeded — queueing blocked. Clean up the conversation first.`, { duration: 6000 })
       return
     }
+    const snapshot = prompt
+    sendLockRef.current = true
+    setPrompt('')
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    try {
     const parts = await buildValidatedParts()
     const text = parts
       .map(partToText)
       .filter((text) => text.trim().length > 0)
       .join('\n')
-    if (!text.trim()) return
+    if (!text.trim()) { sendLockRef.current = false; setPrompt(snapshot); return }
     // 첫 전송도 큐 경유: 스트립에 sending 표시가 뜨고 응답 확인 후 제거된다.
     clearCancelledUntilNextSend(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-    enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() })
+    enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+    } catch {
+      sendLockRef.current = false
+      setPrompt(snapshot)
+    }
   }
 
   const handleCommandSelect = async (command: CommandType) => {
