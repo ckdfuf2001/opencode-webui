@@ -102,6 +102,36 @@ function toolOutputLength(parts: MessageWithParts["parts"]): number {
 // pnpm 같은 대량 출력이 툴 하나에 4GB까지 가던 걸 방지 — 완료된 툴은 20k까지만 메모리에 유지
 export const MAX_TOOL_OUTPUT_KEEP = 20_000
 export const TOOL_TRUNCATE_NOTICE = '\n\n…[output truncated for memory — see full log in session]'
+/**
+ * SSE 스트리밍 병합용 cap. 전송 경로(useSendPrompt)와 동일한 기준:
+ * 실행 중은 꼬리 120k(실시간 tail 확인용), 끝난 건 앞 20k.
+ * ephemeral SSE(SessionDetail 실시간 병합)도 같은 cap을 써야
+ * git pull·인덱싱 같은 장시간 턴에서 힙이 GB로 부푸는 걸 막는다.
+ */
+export function capRunningStreamOutput(s: string): string {
+  if (s.length <= MAX_TOOL_OUTPUT_KEEP * 6) return s
+  return `…[stream truncated, showing last ${MAX_TOOL_OUTPUT_KEEP} chars]\n` + s.slice(-MAX_TOOL_OUTPUT_KEEP)
+}
+export function capFinishedStreamOutput(s: string): string {
+  if (s.length <= MAX_TOOL_OUTPUT_KEEP) return s
+  return s.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${s.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+}
+/** tool 파트 통째 교체(part.updated 전체 수신) 때도 output을 cap. 원본은 opencode에 보관. */
+export function capSseToolPart<T>(part: T): T {
+  const p = part as unknown as { type?: string; state?: { output?: unknown; metadata?: { output?: unknown }; status?: string } }
+  if (!p || p.type !== 'tool' || !p.state) return part
+  const running = p.state.status === 'running'
+  const cap = running ? capRunningStreamOutput : capFinishedStreamOutput
+  const out = p.state.output
+  const metaOut = p.state.metadata?.output
+  if (typeof out === 'string' && out.length > (running ? MAX_TOOL_OUTPUT_KEEP * 6 : MAX_TOOL_OUTPUT_KEEP)) {
+    return { ...(p as object), state: { ...p.state, output: cap(out) } } as unknown as T
+  }
+  if (typeof metaOut === 'string' && metaOut.length > (running ? MAX_TOOL_OUTPUT_KEEP * 6 : MAX_TOOL_OUTPUT_KEEP)) {
+    return { ...(p as object), state: { ...p.state, metadata: { ...p.state.metadata, output: cap(metaOut) } } } as unknown as T
+  }
+  return part
+}
 export function truncateLargeToolOutputs(messages: MessageListResponse): MessageListResponse {
   let changed = false
   let totalKept = 0
@@ -451,7 +481,7 @@ export const useSession = (opcodeUrl: string | null | undefined, sessionID: stri
   });
 };
 
-export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string, limit?: number) => {
+export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string, limit?: number, opts?: { poll?: boolean }) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
 
@@ -572,6 +602,8 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
     placeholderData: (previousData) => previousData,
     staleTime: 2000,
     refetchInterval: (query) => {
+      // 즐겨찾기 팝업처럼 열 때 한 번만 가져오는 용도 — 폴링 없음 (메모리 대응)
+      if (opts?.poll === false) return false
       if (isRecentlyAborted(sessionID!)) return 2000
       const data = query.state.data as MessageListResponse | undefined
       const last = data?.[data.length - 1] as unknown as { info: { role: string; time: Record<string, unknown> }; parts: { type: string }[] } | undefined
@@ -1566,7 +1598,8 @@ export const useEphemeralSessionSSE = (
         }
         let nextParts: MessageWithParts["parts"];
         if (pIdx === -1) {
-          nextParts = [...msg.parts, part];
+          // 새로 들어오는 tool 파트도 전체 출력이면 여기서 cap (delta 없는 part.updated 경로)
+          nextParts = [...msg.parts, capSseToolPart(part)];
         } else {
           const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
           let nextPart: typeof part = part;
@@ -1580,16 +1613,18 @@ export const useEphemeralSessionSSE = (
                 const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
                 const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
                 const partMetaOut = (part as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? "";
-                if (partMetaOut === curMeta + delta) nextPart = part;
-                else nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as typeof part;
+                if (partMetaOut === capRunningStreamOutput(curMeta + delta)) nextPart = part;
+                else nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: capRunningStreamOutput(curMeta + delta) } } } as unknown as typeof part;
               } else {
                 const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
                 const partOut = (part as unknown as { state?: { output?: string } }).state?.output ?? "";
-                if (partOut === cur + delta) nextPart = part;
-                else nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as typeof part;
+                if (partOut === capFinishedStreamOutput(cur + delta)) nextPart = part;
+                else nextPart = { ...existing, state: { ...st, output: capFinishedStreamOutput(cur + delta) } } as unknown as typeof part;
               }
             }
           }
+          // delta 없이 통째 교체되는 경우(완성된 대용량 출력)도 cap
+          if (nextPart === part) nextPart = capSseToolPart(part);
           nextParts = [...msg.parts];
           nextParts[pIdx] = nextPart;
         }
@@ -1674,10 +1709,10 @@ export const useEphemeralSessionSSE = (
               if (isRunning) {
                 const meta = ((st as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
                 const curMeta = typeof (meta as { output?: unknown }).output === 'string' ? (meta as { output: string }).output : '';
-                nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: curMeta + delta } } } as unknown as MessageWithParts["parts"][number];
+                nextPart = { ...existing, state: { ...st, metadata: { ...meta, output: capRunningStreamOutput(curMeta + delta) } } } as unknown as MessageWithParts["parts"][number];
               } else {
                 const cur = typeof (st as { output?: unknown }).output === 'string' ? (st as { output: string }).output : '';
-                nextPart = { ...existing, state: { ...st, output: cur + delta } } as unknown as MessageWithParts["parts"][number];
+                nextPart = { ...existing, state: { ...st, output: capFinishedStreamOutput(cur + delta) } } as unknown as MessageWithParts["parts"][number];
               }
             } else return old;
             const nextParts = [...msg.parts]; nextParts[pIdx] = nextPart;
