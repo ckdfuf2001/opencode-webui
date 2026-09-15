@@ -96,11 +96,18 @@ async function main() {
     console.warn('  continuing without tesseract — image OCR will be unavailable')
     return
   }
+  // Zone.Identifier 제거 (다운로드 파일 실행 차단 방지) — Default Project 경로 공백도 함께 처리
+  try {
+    execFileSync('powershell', ['-NoProfile', '-Command', `Unblock-File -LiteralPath '${tmpExe.replace(/'/g, "''")}'`], { stdio: 'inherit' })
+  } catch {}
   log('running installer silently to ' + binTessDir)
   try {
-    execFileSync(tmpExe, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/DIR=' + binTessDir], { stdio: 'inherit' })
+    // 경로에 공백이 있어 /DIR="..." 로 따옴표 필수, PowerShell 경유 실행이 공백 처리에 안전
+    const psCmd = `& '${tmpExe.replace(/'/g, "''")}' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="${binTessDir.replace(/"/g, '""')}"`
+    execFileSync('powershell', ['-NoProfile', '-Command', psCmd], { stdio: 'inherit' })
   } catch (e) {
     console.warn('[install-tesseract] installer failed: ' + e.message + ' — continuing without tesseract')
+    console.warn('  수동 설치: ' + tmpExe + ' 를 관리자 권한으로 실행해 ' + binTessDir + ' 에 설치하거나, vendor/tesseract 에 넣어 재실행')
     return
   }
   if (!existsSync(binTessExe)) {
