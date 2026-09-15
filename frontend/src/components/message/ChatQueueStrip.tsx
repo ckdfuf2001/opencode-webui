@@ -20,10 +20,6 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
   useEffect(() => {
     if (failedItem) setMinimized(false)
   }, [failedItem])
-  // sending 10분 이상 고착 의심 여부 (nw오류 후 limbo·장시간 턴)
-  const sendingStuck = sendingItem != null
-    && sendingItem.sendingSince != null
-    && Date.now() - sendingItem.sendingSince > 10 * 60_000
   // failed 항목은 목록에 남겨 X로 지울 수 있게 한다. sending만 제목으로 올린다.
   const restItems = sendingItem ? items.filter((item) => item.id !== sendingItem.id) : items
   useEffect(() => {
@@ -89,18 +85,6 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           >
             {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
           </button>
-          {sendingStuck && sendingItem && (
-            <button
-              type="button"
-              aria-label="Retry stuck sending message"
-              title="고착 의심 — Retry (queued로 되돌리고 재발송)"
-              className="inline-flex items-center gap-1 rounded border border-destructive/40 px-1.5 h-5 text-[10px] font-medium text-destructive hover:bg-destructive/10"
-              onClick={() => retryChat.mutate({ sessionID, id: sendingItem.id })}
-            >
-              <RotateCcw className="h-3 w-3" />
-              Retry
-            </button>
-          )}
             <button
               type="button"
               aria-label="Minimize queue"
@@ -133,7 +117,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           )}
           <span className="shrink-0 font-semibold">({restItems.length})</span>
           {sendingItem ? (
-            <span className="truncate opacity-60">{sendingStuck ? '고착 의심 — Abort 또는 Retry' : 'Sending...'} {sendingItem.text}</span>
+            <span className="truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : failedItem ? (
             <span className="truncate text-destructive">Failed to send — tap Retry or X on the item</span>
           ) : (
@@ -158,7 +142,7 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           )}
           <span className="shrink-0 font-semibold">({restItems.length})</span>
           {sendingItem ? (
-            <span className="min-w-0 flex-1 truncate opacity-60">{sendingStuck ? '고착 의심 — Abort 또는 Retry' : 'Sending...'} {sendingItem.text}</span>
+            <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : failedItem ? (
             <span className="min-w-0 flex-1 truncate text-destructive">Failed to send — Retry or remove the item below</span>
           ) : (
