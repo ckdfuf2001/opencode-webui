@@ -218,6 +218,61 @@ async function handleDelete(request: Request, sessionId: string): Promise<Respon
   }
 }
 
+/**
+ * long-running 응답(턴이 끝나야 헤더가 오는 /message 등)을 그대로 흘려보낸다.
+ * busy는 스트리밍 종료 시에만 해제 + 종료 후 큐 flush. 정상 경로와
+ * reasoning-heal 재시도 경로가 공유한다.
+ */
+function passThroughLongRunning(
+  upstream: Response,
+  responseHeaders: Record<string, string>,
+  cleanEventPath: string,
+  query: Record<string, string>,
+  release: () => void,
+): Response {
+  if (!upstream.body) {
+    release()
+    return new Response(null, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders,
+    })
+  }
+  const trackedStream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = upstream.body!.getReader()
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          controller.enqueue(value)
+        }
+        controller.close()
+      } catch (error) {
+        controller.error(error)
+      } finally {
+        release()
+        reader.releaseLock()
+        try {
+          const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
+          if (m?.[1]) {
+            setTimeout(() => flushQueueForSession(m[1]!, query['directory'] ? decodeURIComponent(query['directory']) : undefined), 150)
+          }
+        } catch {}
+      }
+    },
+    cancel() {
+      release()
+    },
+  })
+
+  return new Response(trackedStream, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: responseHeaders,
+  })
+}
+
 export async function proxyRequest(request: Request, method: string, pathname: string, query: Record<string, string>) {
   const truncateMatch = pathname.match(/^\/api\/opencode\/session\/([^/]+)\/truncate$/)
   const truncateSessionId = truncateMatch?.[1]
@@ -637,30 +692,83 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       }
 
       // reasoning 암호문 불일치 (모델 전환·중단된 턴 뒤 이전 모델의 thinking 블록이
-      // 히스토리에 남아 provider가 거부). 재시도해도 절대 성공하지 않으므로
-      // retryable:false + 복구 경로를 명시해 프론트가 안내하게 한다.
-      // 자동 truncate는 사용자 데이터 삭제라 하지 않는다 — 가위/삭제로 수동 복구.
+      // 히스토리에 남아 provider가 거부). POST /session/:id/message면 마지막 턴만
+      // 잘라내고 동일 요청 1회 재전송한다 (투명 복구 — 중단 때문에 세션 전체가
+      // 먹통이 되던 문제 대응). 오염이 더 앞 히스토리에 있으면 재시도도 실패하고
+      // 아래 enriched error 안내(더 앞 가위질·원래 모델 복귀)로 넘어간다.
       const lowerBody = bodyText.toLowerCase()
       const isReasoningMismatch =
         lowerBody.includes('encrypted_content') &&
         (lowerBody.includes('reasoning') || lowerBody.includes('not issued') || lowerBody.includes('invalid_request_error'))
       if (isReasoningMismatch) {
-        const hint = ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). This request can never succeed by retrying: truncate the last assistant turn (scissors icon) or switch back to the original model, then send again. (reasoning encrypted_content mismatch)'
+        let finalStatus = response.status
+        let finalStatusText = response.statusText
+        let finalBodyText = bodyText
+        let healedAndRetried = false
+        const msgPost = method === 'POST' ? cleanEventPath.match(/^\/session\/([^/]+)\/message$/) : null
+        if (msgPost?.[1] && body) {
+          try {
+            const parsedBody = JSON.parse(body) as { parts?: Array<{ type?: string; text?: string }> }
+            const sentText = (Array.isArray(parsedBody.parts) ? parsedBody.parts : [])
+              .filter((p) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim())
+              .map((p) => p.text as string)
+              .join('\n')
+              .trim()
+            if (sentText) {
+              const { healReasoningTail } = await import('./reasoning-heal')
+              const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
+              const heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText])
+              if (heal.healed) {
+                const busy2 = acquireBusy()
+                const release2 = () => busy2.release()
+                try {
+                  const retryRes = await fetch(targetUrl, {
+                    method,
+                    headers,
+                    body,
+                    signal: AbortSignal.timeout(600_000),
+                  })
+                  if (retryRes.ok) {
+                    logger.info(`Reasoning heal: truncated tail and retry succeeded for session ${msgPost[1]}`)
+                    return passThroughLongRunning(retryRes, responseHeaders, cleanEventPath, query, release2)
+                  }
+                  release2()
+                  finalStatus = retryRes.status
+                  finalStatusText = retryRes.statusText
+                  finalBodyText = await retryRes.text().catch(() => '')
+                  healedAndRetried = true
+                } catch (e) {
+                  release2()
+                  logger.warn(`Reasoning heal retry threw for session ${msgPost[1]}:`, e)
+                  healedAndRetried = true
+                  finalBodyText = `${finalBodyText} (auto-truncate done, retry failed: ${(e as Error)?.message ?? e})`
+                }
+              } else {
+                logger.warn(`Reasoning heal skipped for session ${msgPost[1]}: ${heal.reason}`)
+              }
+            }
+          } catch (e) {
+            logger.warn('Reasoning heal attempt failed:', e)
+          }
+        }
+        const hint = healedAndRetried
+          ? ' - Automatic recovery (truncated the last turn and retried once) did not help: the stale reasoning is earlier in history. Truncate further back with the scissors icon on an earlier message, or switch back to the original model, then send again. (reasoning encrypted_content mismatch)'
+          : ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). Truncate the last turn (scissors icon) or switch back to the original model, then send again. (reasoning encrypted_content mismatch)'
         let parsed: Record<string, unknown> | undefined
-        try { parsed = JSON.parse(bodyText) as Record<string, unknown> } catch { parsed = undefined }
+        try { parsed = JSON.parse(finalBodyText) as Record<string, unknown> } catch { parsed = undefined }
         responseHeaders['Content-Type'] = 'application/json'
         if (parsed) {
-          const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : bodyText
+          const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : finalBodyText
           const enriched = { ...parsed, error: `${msg}${hint}`, message: `${msg}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH' }
           return new Response(JSON.stringify(enriched), {
-            status: response.status,
-            statusText: response.statusText,
+            status: finalStatus,
+            statusText: finalStatusText,
             headers: responseHeaders,
           })
         }
-        return new Response(JSON.stringify({ error: `${bodyText}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH' }), {
-          status: response.status,
-          statusText: response.statusText,
+        return new Response(JSON.stringify({ error: `${finalBodyText}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH' }), {
+          status: finalStatus,
+          statusText: finalStatusText,
           headers: responseHeaders,
         })
       }

@@ -365,8 +365,8 @@ function recordDeterministicFailure(sessionID: string, id: string, detail?: stri
     head.failedAt = Date.now()
   }
   logger.error(
-    `Queued chat for session ${sessionID} rejected (non-retryable provider error — likely stale reasoning blocks after model switch or interrupted turn). ` +
-    `Truncate the last assistant turn (scissors) or switch back to the original model, then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
+    `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; auto-truncate + one retry did not recover). ` +
+    `Truncate further back with the scissors icon or switch back to the original model, then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
   )
   try { if (queueDb) setSessionCancelled(queueDb, sessionID) } catch {}
 }
@@ -568,9 +568,8 @@ async function dispatchQueuedChat(
         return { sent: true }
       }
       const body = await cmdRes.text().catch(() => '')
-      if (cmdRes.status === 400 && isReasoningEncryptedMismatch(body)) {
-        return { sent: false, nonRetryable: true, status: cmdRes.status, detail: body.slice(0, 300) }
-      }
+      // mismatch여도 여기서 끝내지 않고 /message로 폴백한다 — 아래 /message 경로에서
+      // heal(꼬리 절단)+1회 재시도를 탄다. 커맨드가 아니면 어차피 폴백하던 경로.
       // 커맨드가 아니거나 서버가 모르면 /message 로 폴백
       logger.warn(`Queued command /${cmd} via /command rejected HTTP ${cmdRes.status} ${body.slice(0, 200)} — fallback to /message`)
     } catch (e) {
@@ -592,6 +591,34 @@ async function dispatchQueuedChat(
     const body = await sendRes.text().catch(() => '')
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
+      // 마지막 턴만 잘라내고 1회 재전송 (투명 복구). 오염이 더 앞에 있으면
+      // 재시도도 실패 → 즉시 failed + 수동 복구 안내 (recordDeterministicFailure).
+      try {
+        const { healReasoningTail } = await import('./reasoning-heal')
+        const heal = await healReasoningTail(base, sessionID, directory, [chat.text])
+        if (heal.healed) {
+          const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
+            method: 'POST',
+            headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(messageBody),
+            signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+          })
+          if (retryRes.ok) {
+            void retryRes.text().catch(() => {})
+            logger.info(`Reasoning heal: truncated tail and queue retry succeeded for session ${sessionID}`)
+            return { sent: true }
+          }
+          const retryBody = await retryRes.text().catch(() => '')
+          logger.warn(`Queued chat heal-retry rejected for session ${sessionID}: HTTP ${retryRes.status} ${retryBody.slice(0, 200)}`)
+          if (retryRes.status === 400 && isReasoningEncryptedMismatch(retryBody)) {
+            return { sent: false, nonRetryable: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
+          }
+          return { sent: false, status: retryRes.status }
+        }
+        logger.warn(`Reasoning heal skipped for queued chat (session ${sessionID}): ${heal.reason}`)
+      } catch (e) {
+        logger.warn(`Reasoning heal attempt failed for queued chat (session ${sessionID}):`, e)
+      }
       return { sent: false, nonRetryable: true, status: sendRes.status, detail: body.slice(0, 300) }
     }
     return { sent: false, status: sendRes.status }
