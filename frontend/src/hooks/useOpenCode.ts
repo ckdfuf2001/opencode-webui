@@ -1256,9 +1256,9 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
               const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
               let nextPart: MessageWithParts["parts"][number];
               if (existing.type === "reasoning") {
-                nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+                nextPart = { ...existing, text: capSseTextPart((existing.text ?? "") + delta) } as MessageWithParts["parts"][number];
               } else if (existing.type === "text") {
-                nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+                nextPart = { ...existing, text: capSseTextPart((existing.text ?? "") + delta) } as MessageWithParts["parts"][number];
               } else if (existing.type === "tool") {
                 const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
                 const isRunning = (st as { status?: string }).status === 'running';
@@ -1772,3 +1772,21 @@ export const useEphemeralSessionSSE = (
   }, [enabled, opcodeUrl, sessionID, directory, client, queryClient]);
 };
 
+/** 창 최소화·백그라운드 30초 지속 시 대용량 메시지 캐시를 반환한다.
+ *  복귀하면 refetch로 다시 채워지므로 UX 손실 없이 힙만 돌려준다. */
+export function useReleaseCacheOnHidden(): void {
+  const qc = useQueryClient()
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null
+    const onVis = () => {
+      if (document.hidden) {
+        t = setTimeout(() => {
+          qc.removeQueries({ queryKey: ['opencode', 'messages'] })
+          qc.removeQueries({ queryKey: ['opencode', 'last-message'] })
+        }, 30_000)
+      } else if (t) { clearTimeout(t); t = null }
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { document.removeEventListener('visibilitychange', onVis); if (t) clearTimeout(t) }
+  }, [qc])
+}

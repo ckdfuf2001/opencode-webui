@@ -11,6 +11,7 @@ import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
 import { startAutoApprover } from './hooks/useAutoApprovePermissions'
 import { useSettings } from './hooks/useSettings'
+import { useReleaseCacheOnHidden } from './hooks/useOpenCode'
 import { isPushSupported, ensurePushPermission, sendPushNotification } from './lib/notifications'
 import { useState, useEffect } from 'react'
 import { Button } from './components/ui/button'
@@ -81,6 +82,7 @@ function PushPrompt() {
 function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
+  useReleaseCacheOnHidden()
   useEffect(() => { logBuildInfo() }, [])
   // 전역 Esc: 채팅창 외에서는 열려있는 패널(즐찾/html/workspace/탐색기 등) 모두 닫기 — 레포/세션 리스트에서도 동작해야 하므로 App 레벨에서 처리
   useEffect(() => {
