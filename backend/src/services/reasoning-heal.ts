@@ -188,3 +188,80 @@ export async function healReasoningTail(
 
   return { healed: true, truncatedMessageId, stubsRemoved }
 }
+
+/**
+ * 발송 직전 선제 클렌징: 이전 내용이 비정상이면 무조건 잘라낸다.
+ * 큐에 정상적으로 들어가도 응답 없이 종료되던 케이스 방지.
+ * - 마지막 assistant가 error를 들고 있거나 (empty LLM, reasoning mismatch, aborted)
+ * - ghost(미완성·빈 parts) 상태에서 busy가 아닐 때
+ * 하나라도 해당하면 마지막 user부터 꼬리를 잘라 다음 턴을 깨끗한 히스토리로 시작한다.
+ * candidates 없이 동작하므로 발송 전 항상 호출해도 안전 (비정상이 아니면 no-op).
+ */
+export async function healAbnormalTailIfNeeded(
+  base: string,
+  sessionID: string,
+  directory: string | undefined,
+): Promise<ReasoningHealResult> {
+  const { messages, reason } = await fetchMessageList(base, sessionID, directory)
+  if (!messages || messages.length === 0) return { healed: false, reason: reason ?? 'no messages' }
+
+  const last = messages[messages.length - 1]
+  if (!last?.info) return { healed: false, reason: 'no last info' }
+
+  const lastRole = last.info.role
+  const lastError = last.info.error
+  const lastFinish = (last.info as { finish?: string }).finish
+  const lastCompleted = (last.info.time as { completed?: number } | undefined)?.completed
+  const lastParts = Array.isArray(last.parts) ? last.parts : []
+
+  // 비정상 판별: error 있음 / aborted / 빈 응답 / ghost
+  const hasError = !!lastError
+  const isAborted = lastFinish === 'aborted' || (typeof lastError === 'object' && lastError !== null && String((lastError as { name?: string })?.name ?? '').includes('Aborted'))
+  const isEmptyResponse = (() => {
+    try {
+      const txt = JSON.stringify(lastError ?? '') + JSON.stringify(last.parts ?? '')
+      return txt.toLowerCase().includes('llm response was empty') || txt.toLowerCase().includes('empty') && txt.toLowerCase().includes('llm')
+    } catch { return false }
+  })()
+  const isGhost = lastRole === 'assistant' && !lastCompleted && lastParts.length === 0
+  const hasMismatch = hasError && isMismatchError(last)
+
+  const isAbnormal = hasError || isAborted || isEmptyResponse || isGhost || hasMismatch
+  if (!isAbnormal) return { healed: false, reason: 'history clean' }
+
+  // 마지막 user를 찾아 그 user부터 잘라낸다 — 실패한 턴 전체 제거
+  let lastUser: LooseMessage | undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.info?.role === 'user') { lastUser = messages[i]; break }
+  }
+  if (!lastUser?.info?.id) return { healed: false, reason: 'no user to truncate from' }
+
+  const created = lastUser.info?.time?.created ?? 0
+  if (!created || Date.now() - created > HEAL_FRESHNESS_MS) {
+    return { healed: false, reason: 'abnormal but last user too old' }
+  }
+
+  try {
+    const result = await truncateSessionMessages(sessionID, lastUser.info.id as string)
+    if (!result) return { healed: false, reason: 'truncate failed' }
+    logger.warn(`Pre-dispatch abnormal heal for session ${sessionID}: last ${lastRole} was abnormal (${hasError ? 'error' : isGhost ? 'ghost' : 'aborted'}), truncated from user ${lastUser.info.id} (removed ${result.messagesRemoved} messages)`)
+    // ghost/mismatch stub도 같이 쓸어냄 (위 healReasoningTail의 2단계와 유사하지만 여기선 더 넓게)
+    try {
+      const tail = await fetchMessageList(base, sessionID, directory)
+      if (tail.messages) {
+        for (let i = tail.messages.length - 1; i >= 0; i--) {
+          const m = tail.messages[i]
+          if (!m?.info || m.info.role !== 'assistant') break
+          if (m.info.error && m.info.id) {
+            const deleted = await deleteSingleChildlessMessage(sessionID, m.info.id as string)
+            if (deleted) logger.warn(`Pre-dispatch heal: removed abnormal stub ${m.info.id}`)
+            else break
+          } else if (!m.info.error) break
+        }
+      }
+    } catch {}
+    return { healed: true, reason: `abnormal ${lastRole} truncated`, truncatedMessageId: lastUser.info.id as string }
+  } catch (e) {
+    return { healed: false, reason: `truncate threw: ${(e as Error)?.message ?? e}` }
+  }
+}

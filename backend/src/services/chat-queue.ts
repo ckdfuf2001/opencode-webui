@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText, healReasoningTail } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail, healAbnormalTailIfNeeded } from './reasoning-heal'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
@@ -549,6 +549,18 @@ async function dispatchQueuedChat(
   const headers = ensureServerAuth({})
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
+
+  // 이전 내용이 비정상이면 무조건 클렌징 후 발송 — 큐에 정상적으로 들어가도
+  // 응답 없이 종료되던 케이스(빈 LLM 응답, reasoning mismatch, aborted ghost 등) 방지.
+  // 실패 후 재시도가 아닌 발송 직전 선제 정리라 다음 턴이 깨끗한 히스토리에서 시작한다.
+  try {
+    const preHeal = await healAbnormalTailIfNeeded(base, sessionID, directory)
+    if (preHeal.healed) {
+      logger.info(`Pre-dispatch heal for session ${sessionID}: ${preHeal.reason ?? 'abnormal history truncated'} (removed ${preHeal.truncatedMessageId ?? '?'})`)
+    }
+  } catch (e) {
+    logger.warn(`Pre-dispatch heal check failed for session ${sessionID}:`, e)
+  }
 
   // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다
   const trimmed = chat.text.trim()
