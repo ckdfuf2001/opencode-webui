@@ -84,7 +84,7 @@ export function FavoriteSessionsPanel() {
     <>
       <div className="fixed bottom-[72px] left-0 z-[60] flex flex-col items-start gap-1">
         {(badgeTotals.working > 0 || badgeTotals.pending > 0 || badgeTotals.cancelled > 0) && (
-          <div className="ml-1 flex items-center gap-1 rounded-full border border-border bg-card/95 backdrop-blur px-1.5 py-1 shadow-md">
+          <div className="relative ml-1 flex items-center gap-1 rounded-full border border-border bg-card/95 backdrop-blur px-1.5 py-1 shadow-md">
             {badgeTotals.working > 0 && (
               <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-600" title={`${badgeTotals.working} running`}>
                 <Loader2 className="w-3 h-3 animate-spin" />{badgeTotals.working}
@@ -100,6 +100,7 @@ export function FavoriteSessionsPanel() {
                 <StopCircle className="w-3 h-3" />{badgeTotals.cancelled}
               </span>
             )}
+            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-card border-r border-b border-border rotate-45" />
           </div>
         )}
         <button
