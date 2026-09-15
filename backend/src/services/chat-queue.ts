@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail } from './reasoning-heal'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
@@ -592,8 +592,8 @@ async function dispatchQueuedChat(
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
       // 마지막 턴만 잘라내고 1회 재전송 (투명 복구). 오염이 더 앞에 있으면
       // 재시도도 실패 → 즉시 failed + 수동 복구 안내 (recordDeterministicFailure).
+      // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
       try {
-        const { healReasoningTail } = await import('./reasoning-heal')
         const heal = await healReasoningTail(base, sessionID, directory, [chat.text])
         if (heal.healed) {
           const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {

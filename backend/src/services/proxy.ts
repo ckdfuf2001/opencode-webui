@@ -5,6 +5,7 @@ import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { flushQueueForSession, clearSendingOnAbort } from './chat-queue'
+import { healReasoningTail } from './reasoning-heal'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -705,6 +706,8 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         let finalStatusText = response.statusText
         let finalBodyText = bodyText
         let healedAndRetried = false
+        // heal 시도 내역 — exe는 콘솔 로그를 볼 수 없어 응답에 동봉한다 (다음 장애 진단용).
+        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number } = { attempted: false }
         const msgPost = method === 'POST' ? cleanEventPath.match(/^\/session\/([^/]+)\/message$/) : null
         if (msgPost?.[1] && body) {
           try {
@@ -715,9 +718,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               .join('\n')
               .trim()
             if (sentText) {
-              const { healReasoningTail } = await import('./reasoning-heal')
+              // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
               const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
+              healInfo.attempted = true
               const heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText])
+              healInfo.healed = heal.healed
+              healInfo.reason = heal.reason
+              healInfo.stubsRemoved = heal.stubsRemoved
               if (heal.healed) {
                 const busy2 = acquireBusy()
                 const release2 = () => busy2.release()
@@ -759,14 +766,14 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         responseHeaders['Content-Type'] = 'application/json'
         if (parsed) {
           const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : finalBodyText
-          const enriched = { ...parsed, error: `${msg}${hint}`, message: `${msg}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH' }
+          const enriched = { ...parsed, error: `${msg}${hint}`, message: `${msg}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH', heal: healInfo }
           return new Response(JSON.stringify(enriched), {
             status: finalStatus,
             statusText: finalStatusText,
             headers: responseHeaders,
           })
         }
-        return new Response(JSON.stringify({ error: `${finalBodyText}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH' }), {
+        return new Response(JSON.stringify({ error: `${finalBodyText}${hint}`, retryable: false, code: 'REASONING_ENCRYPTED_MISMATCH', heal: healInfo }), {
           status: finalStatus,
           statusText: finalStatusText,
           headers: responseHeaders,

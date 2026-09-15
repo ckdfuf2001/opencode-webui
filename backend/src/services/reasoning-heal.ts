@@ -1,5 +1,6 @@
 import { ensureServerAuth } from './opencode-auth'
 import { logger } from '../utils/logger'
+import { truncateSessionMessages, deleteSingleChildlessMessage } from './opencode-db'
 
 interface LoosePart {
   type?: string
@@ -95,7 +96,9 @@ async function fetchMessageList(
  *     그 뒤 모든 전송을 거부하던 문제 대응. 성공한 턴 이전은 provider가
  *     이미 받아들인 히스토리라 손대지 않는다. user 메시지는 절대 삭제 안 함.
  * 단계별 하나라도 건드렸으면 healed=true (호출자는 동일 요청 1회 재전송).
- * - opencode-db는 bun:sqlite를 값 import하므로 동적 import (node/vitest 호환).
+ * NOTE: opencode-db는 정적 import한다. 동적 import는 bun 단일 exe 번들에서
+ * 실패할 수 있고, try/catch가 삼켜 heal이 조용히 죽는다 (13:47 장애 교훈).
+ * vitest에서는 vi.mock으로 가로채므로 node 호환에 문제없다.
  */
 export async function healReasoningTail(
   base: string,
@@ -132,7 +135,6 @@ export async function healReasoningTail(
 
   let truncatedMessageId: string | undefined
   try {
-    const { truncateSessionMessages } = await import('./opencode-db')
     const result = await truncateSessionMessages(sessionID, cursorId)
     if (!result) return { healed: false, reason: 'truncate failed' }
     truncatedMessageId = cursorId
