@@ -494,32 +494,6 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       return false
     }
 
-    // 채팅 기본 동작: POST /session/:id/message 발송 직전, 마지막 턴이
-    // error/aborted/ghost/mismatch 상태면 신선도 무관하게 꼬리를 잘라내고 보낸다.
-    // NOTE: 일반 채팅은 전부 큐 경유(PromptInput→chat-queue)라 이 분기는
-    // 직접 전송(계속 보내기 등)에만 탄다. 주 경로는 dispatchQueuedChat의 pre-heal.
-    if (method === 'POST') {
-      const preHealMatch = cleanEventPath.match(/^\/session\/([^/]+)\/message$/)
-      if (preHealMatch?.[1]) {
-        try {
-          const { healAbnormalTailIfNeeded } = await import('./reasoning-heal')
-          const preHeal = await healAbnormalTailIfNeeded(
-            opencodeServerManager.getUrl(),
-            preHealMatch[1]!,
-            query['directory'] ? decodeURIComponent(query['directory']) : undefined,
-            { force: true },
-          )
-          if (preHeal.healed) {
-            logger.info(
-              `Pre-send heal for session ${preHealMatch[1]}: ${preHeal.reason ?? 'abnormal history truncated'} (removed ${preHeal.truncatedMessageId ?? '?'})`,
-            )
-          }
-        } catch (e) {
-          logger.warn(`Pre-send heal check failed for session ${preHealMatch[1]}:`, e)
-        }
-      }
-    }
-
     let response: Response | null = null
     let lastError: unknown = null
 

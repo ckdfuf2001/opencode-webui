@@ -582,8 +582,12 @@ async function dispatchQueuedChat(
   // 응답 없이 종료되던 케이스(빈 LLM 응답, reasoning mismatch, aborted ghost 등) 방지.
   // 실패 후 재시도가 아닌 발송 직전 선제 정리라 다음 턴이 깨끗한 히스토리에서 시작한다.
   try {
-    // 채팅 기본 동작: 발송 직전 비정상이면 무조건 잘라낸다 (신선도 무관, force).
-    const preHeal = await healAbnormalTailIfNeeded(base, sessionID, directory, { force: true })
+    // 채팅 기본 동작: 발송 직전 정리는 "모델이 꼬여 reasoning 암호문을 못 읽는"
+    // mismatch 꼬리만 잘라낸다. cancel(aborted)·ghost·empty는 그대로 보존.
+    const preHeal = await healAbnormalTailIfNeeded(base, sessionID, directory, {
+      force: true,
+      allow: ['mismatch'],
+    })
     if (preHeal.healed) {
       logger.info(`Pre-dispatch heal for session ${sessionID}: ${preHeal.reason ?? 'abnormal history truncated'} (removed ${preHeal.truncatedMessageId ?? '?'})`)
     }

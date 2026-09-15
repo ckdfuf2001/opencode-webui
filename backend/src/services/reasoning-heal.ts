@@ -312,7 +312,7 @@ export async function healAbnormalTailIfNeeded(
   base: string,
   sessionID: string,
   directory: string | undefined,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; allow?: TailKind[] },
 ): Promise<ReasoningHealResult> {
   const { messages, reason } = await fetchMessageList(base, sessionID, directory)
   if (!messages || messages.length === 0) return { healed: false, reason: reason ?? 'no messages' }
@@ -327,6 +327,15 @@ export async function healAbnormalTailIfNeeded(
   if (kind === 'clean') return { healed: false, reason: 'history clean', kind, healable: false, suggestedModel }
   if (!healable) {
     return { healed: false, reason: `non-healable error (${kind}) — truncate skipped to preserve your prompt`, kind, healable: false, suggestedModel }
+  }
+  if (opts?.allow && !opts.allow.includes(kind)) {
+    return {
+      healed: false,
+      reason: `tail is ${kind} — auto cleanup skipped (auto-heals only: ${opts.allow.join(', ')})`,
+      kind,
+      healable,
+      suggestedModel,
+    }
   }
   const lastRole = last.info.role
 
