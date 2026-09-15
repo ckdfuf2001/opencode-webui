@@ -3,6 +3,43 @@ import { opencodeServerManager } from '../services/opencode-single-server'
 import { ensureServerAuth } from '../services/opencode-auth'
 import { logger } from '../utils/logger'
 
+// 즐겨favorites 팝업이 limit=10으로 끝 N개만 가져와도, 백엔드는
+// opencode에 전체 목록(MB~GB)을 먼저 다 받아 캐시에 올린 뒤 slice한다.
+// pnpm·git pull 등 대량 툴 출력이 한 세션에 수 GB 쌓이면
+// 캐시가 20개 키 × GB = 20GB 힙을 잡고, 2s TTL 동안 폴링마다 재로드해
+// GC 폭발과 네트워크 폭발을 일으킨다. 캐시에 올릴 때 tool output을
+// 미리 잘라낸다 — 원본은 opencode에 보관, 프론트는 cap된 사본만 본다.
+const MAX_TOOL_OUTPUT_KEEP = 20_000
+const TOOL_TRUNCATE_NOTICE = '\n\n…[output truncated for memory — see full log in session]'
+const MAX_TOOL_OUTPUT_RUNNING = MAX_TOOL_OUTPUT_KEEP * 6
+
+function capToolOutputInMessage(msg: { info?: { id?: string }; parts?: unknown[] }): { info?: { id?: string }; parts?: unknown[] } {
+  const parts = msg.parts
+  if (!Array.isArray(parts)) return msg
+  let changed = false
+  const nextParts = parts.map((p: any) => {
+    if (!p || p.type !== 'tool' || !p.state) return p
+    const st = p.state as { output?: unknown; metadata?: { output?: unknown }; status?: string }
+    const out = st.output ?? st.metadata?.output
+    if (typeof out !== 'string' || out.length <= MAX_TOOL_OUTPUT_RUNNING) return p
+    const truncated = out.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${out.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+    if (st.output != null) return { ...p, state: { ...st, output: truncated } }
+    return { ...p, state: { ...st, metadata: { ...(st.metadata ?? {}), output: truncated } } }
+  })
+  if (nextParts !== parts) changed = true
+  return changed ? { ...msg, parts: nextParts } : msg
+}
+
+function capToolOutputsInList(messages: Array<{ info?: { id?: string } }>): Array<{ info?: { id?: string } }> {
+  let changed = false
+  const next = messages.map((m) => {
+    const capped = capToolOutputInMessage(m)
+    if (capped !== m) changed = true
+    return capped
+  })
+  return changed ? next : messages
+}
+
 interface CachedMessageList {
   at: number
   messages: Array<{ info?: { id?: string } }>
@@ -57,7 +94,8 @@ export function createSessionMessageRoutes() {
       let entry = cache.get(key)
       if (!entry || now - entry.at > CACHE_TTL_MS) {
         const messages = await fetchAllMessages(sessionId, directory)
-        entry = { at: Date.now(), messages }
+        const capped = capToolOutputsInList(messages)
+        entry = { at: Date.now(), messages: capped }
         cache.delete(key)
         cache.set(key, entry)
         pruneCache(entry.at)

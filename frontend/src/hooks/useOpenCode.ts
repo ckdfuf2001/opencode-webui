@@ -132,6 +132,18 @@ export function capSseToolPart<T>(part: T): T {
   }
   return part
 }
+/**
+ * SSE 실시간 병합용 text cap. 전송 경로(useSendPrompt)는 tool만 cap하고 text는
+ * 두지 않지만, ephemeral SSE는 별도 EventSource라 reasoning·assistant 텍스트가
+ * 무한히 쌓이는 경로다. git pull 로그가 텍스트로 스트리밍되면
+ * 단일 part가 MB~GB로 자라 힙을 폭발시킨다. 응답 본문은 일반적으로
+ * 1MB 미만이므로 1MB 상한은正常使用를 해치지 않으면서 방어한다.
+ */
+const MAX_TEXT_PART_KEEP = 1_000_000
+export function capSseTextPart(s: string): string {
+  if (s.length <= MAX_TEXT_PART_KEEP) return s
+  return s.slice(0, MAX_TEXT_PART_KEEP) + `\n\n…[text truncated ${s.length - MAX_TEXT_PART_KEEP} chars]`
+}
 export function truncateLargeToolOutputs(messages: MessageListResponse): MessageListResponse {
   let changed = false
   let totalKept = 0
@@ -642,32 +654,37 @@ export const usePollLastMessage = (
       if ('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) return null
       try {
         const msg = await client!.getMessage(sessionID!, last.info.id)
-        const merged: MessageListResponse = all ? [...all.slice(0, -1), msg as MessageWithParts] : [msg as MessageWithParts]
+        // msg은 opencode에서 온 원본 — tool output이 수 GB일 수 있다.
+        // poll은 380ms마다 setQueryData에 새로운 배열을 넣고,
+        // placeholderData/gcTime(10s)로 2사본이 동시에 살아있어 ힵ 폭발이 생긴다.
+        // poll 전용으로도 tool output을 cap해야 캐시가 무한히 자라지 않는다.
+        const capped = truncateLargeToolOutputs([msg as MessageWithParts])[0]!
+        const merged: MessageListResponse = all ? [...all.slice(0, -1), capped] : [capped]
         queryClient.setQueryData(["opencode", "messages", opcodeUrl, sessionID, directory], (old: MessageListResponse | undefined) => {
           if (!old || old.length === 0) return merged
           const curLast = old[old.length - 1]
           if (curLast.info.id !== last.info.id) return old
           const curCompleted = 'completed' in (curLast.info.time as Record<string, unknown>) && Boolean((curLast.info.time as { completed?: number }).completed)
-          const nextCompleted = 'completed' in (msg.info.time as Record<string, unknown>) && Boolean((msg.info as { time: { completed?: number } }).time.completed)
+          const nextCompleted = 'completed' in (capped.info.time as Record<string, unknown>) && Boolean((capped.info as { time: { completed?: number } }).time.completed)
           // SSE가 ?�서 ?��? ?�으�??�링 결과가 ??��?��? ?�도�?보존 ???�전?�는 ?�일 ?�스?�일 ?�만 ?��???SSE 증분???�아갔다
           // 길이가 ?�르�?join ?�이 ?�정 (?�트리밍 �?99%????경로), 같을 ?�만 ?�용 ?�등 ?�인
           const curTextLen = textPartsLength(curLast.parts)
-          const nextTextLen = textPartsLength(msg.parts as MessageWithParts["parts"])
+          const nextTextLen = textPartsLength(capped.parts as MessageWithParts["parts"])
           const curToolLen = toolOutputLength(curLast.parts)
-          const nextToolLen = toolOutputLength(msg.parts as MessageWithParts["parts"])
-          if (curLast.parts.length === msg.parts.length && curCompleted === nextCompleted && curTextLen === nextTextLen && curToolLen === nextToolLen) {
+          const nextToolLen = toolOutputLength(capped.parts as MessageWithParts["parts"])
+          if (curLast.parts.length === capped.parts.length && curCompleted === nextCompleted && curTextLen === nextTextLen && curToolLen === nextToolLen) {
             const curText = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
-            const nextText = (msg.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
+            const nextText = (capped.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
             const curTool = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
-            const nextTool = (msg.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
+            const nextTool = (capped.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
             if (curText === nextText && curTool === nextTool) return old
           }
           // SSE가 ??길면 ?�버 ?�답??lagging ????��?��? ?�는??
           if (curTextLen > nextTextLen || curToolLen > nextToolLen) return old
           // ?�버가 ??길거???�료 ?�태가 바뀌었???�만 교체
-          return [...old.slice(0, -1), msg as MessageWithParts]
+          return [...old.slice(0, -1), capped]
         })
-        return msg
+        return capped
       } catch {
         return null
       }
@@ -1605,7 +1622,7 @@ export const useEphemeralSessionSSE = (
           let nextPart: typeof part = part;
           if (delta) {
             if (existing.type === "text" && typeof existing.text === "string") {
-              nextPart = { ...part, text: existing.text + delta } as typeof part;
+              nextPart = { ...part, text: capSseTextPart(existing.text + delta) } as typeof part;
             } else if (existing.type === "tool") {
               const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
               const isRunning = (st as { status?: string }).status === 'running';
@@ -1702,7 +1719,7 @@ export const useEphemeralSessionSSE = (
             const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
             let nextPart: MessageWithParts["parts"][number];
             if (existing.type === "text") {
-              nextPart = { ...existing, text: (existing.text ?? "") + delta } as MessageWithParts["parts"][number];
+              nextPart = { ...existing, text: capSseTextPart((existing.text ?? "") + delta) } as MessageWithParts["parts"][number];
             } else if (existing.type === "tool") {
               const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
               const isRunning = (st as { status?: string }).status === 'running';
