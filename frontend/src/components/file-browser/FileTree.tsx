@@ -240,7 +240,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
     <div>
       <div
         ref={rowRef}
-        className={`flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group ${
+        className={`flex items-center gap-0 py-0 hover:bg-muted rounded cursor-pointer group ${
           isSelected ? 'bg-blue-500/15' : ''
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
@@ -394,7 +394,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
     <div className="min-w-max">
       {showGoUp && (
         <div
-          className="flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group"
+          className="flex items-center gap-0 py-0 hover:bg-muted rounded cursor-pointer group"
           onClick={handleGoUp}
           title="상위 폴더로 이동"
         >
