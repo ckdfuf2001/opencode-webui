@@ -222,11 +222,12 @@ function SessionBadges({ sessionId }: { sessionId: string }) {
 function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId: string; directory: string; repoId?: number | null; onClose: () => void }) {
   const qc = useQueryClient()
   const dirKey = directory || undefined
-  const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, dirKey)
+  // 마지막 10개만 로드 — 전체를 들고 오면 pnpm 등 대량 툴 출력으로 GB가 된다
+  const { data: messages, isLoading } = useMessages(OPENCODE_API_ENDPOINT, sessionId, dirKey, 10)
   const [expanded, setExpanded] = useState(false)
   // 팝업을 닫으면 메시지 캐시를 즉시 비운다 (다음 열 때 새로 로드)
   useEffect(() => {
-    return () => { qc.removeQueries({ queryKey: ['opencode', 'messages', OPENCODE_API_ENDPOINT, sessionId, dirKey] }) }
+    return () => { qc.removeQueries({ queryKey: ['opencode', 'messages', OPENCODE_API_ENDPOINT, sessionId, dirKey, 10] }) }
   }, [qc, sessionId, dirKey])
   const lastUser = [...(messages ?? [])].reverse().find(m => (m.info as any)?.role === 'user')
   const lastAssistant = [...(messages ?? [])].reverse().find(m => (m.info as any)?.role === 'assistant')

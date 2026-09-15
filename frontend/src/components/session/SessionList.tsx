@@ -12,7 +12,6 @@ import { formatDistanceToNow } from "date-fns";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listFavorites, addFavorite, removeFavorite } from "@/api/favorites";
 import { showToast } from "@/lib/toast";
-import { useSettings } from "@/hooks/useSettings";
 
 interface SessionListProps {
   opcodeUrl: string;
@@ -45,9 +44,7 @@ export const SessionList = ({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const createSession = useCreateSession(opcodeUrl, directory);
-  const { preferences } = useSettings();
-  const favoritesEnabled = preferences?.favoritesEnabled ?? false;
-  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: favoritesEnabled });
+  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites });
   const isFav = (id: string) => favs?.some(f => f.sessionId === id);
   const toggleFav = async (id: string, title?: string) => {
     try {
@@ -340,7 +337,6 @@ export const SessionList = ({
               </div>
             </div>
             <div className="flex items-center gap-1 shrink-0">
-              {favoritesEnabled && (
               <button
                 type="button"
                 className={`h-6 w-6 p-0 bg-transparent border-none cursor-pointer flex items-center justify-center ${isFav(session.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'}`}
@@ -349,7 +345,6 @@ export const SessionList = ({
               >
                 <Star className={`w-4 h-4 ${isFav(session.id) ? 'fill-amber-500' : ''}`} />
               </button>
-              )}
               <button
                 type="button"
                 className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer flex items-center justify-center"

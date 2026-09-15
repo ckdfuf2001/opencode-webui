@@ -430,16 +430,20 @@ export const useSession = (opcodeUrl: string | null | undefined, sessionID: stri
   });
 };
 
-export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string) => {
+export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string, limit?: number) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
 
   return useQuery({
-    queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory],
+    queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory, limit ?? 0],
     queryFn: async () => {
       // 백엔드 캐시를 경유해 가져온다 — 직접 opencode 호출보다 안정적
-      const dirQs = directory ? `?directory=${encodeURIComponent(directory)}` : '';
-      const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}${dirQs}`);
+      // limit이 있으면 끝 N개만 받는다 (즐겨찾기 팝업이 전체를 들고 오는 GB 방지)
+      const params = new URLSearchParams()
+      if (directory) params.set('directory', directory)
+      if (limit && limit > 0) params.set('limit', String(limit))
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}${qs}`);
       if (!res.ok) throw new Error('Failed to load messages');
       const data = (await res.json()) as MessageListResponse;
       let result = applyTruncationWindow(sessionID!, data);

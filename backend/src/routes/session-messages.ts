@@ -43,11 +43,14 @@ async function fetchAllMessages(sessionId: string, directory: string): Promise<A
 export function createSessionMessageRoutes() {
   const app = new Hono()
 
-  // GET /api/session-messages/:sessionId?directory=
+  // GET /api/session-messages/:sessionId?directory=&limit=
+  // limit이 있으면 끝 N개만 반환한다 — 즐겨찾기 팝업이 전체를 들고 오는 GB 문제를 막기 위해.
   app.get('/:sessionId', async (c) => {
     try {
       const sessionId = c.req.param('sessionId')
       const directory = c.req.query('directory') ?? ''
+      const limitRaw = c.req.query('limit')
+      const limit = limitRaw ? Math.max(1, Math.min(100, parseInt(limitRaw, 10) || 0)) : 0
       const key = `${directory}::${sessionId}`
       const now = Date.now()
       pruneCache(now)
@@ -58,6 +61,9 @@ export function createSessionMessageRoutes() {
         cache.delete(key)
         cache.set(key, entry)
         pruneCache(entry.at)
+      }
+      if (limit > 0 && entry.messages.length > limit) {
+        return c.json(entry.messages.slice(-limit))
       }
       return c.json(entry.messages)
     } catch (error: unknown) {
