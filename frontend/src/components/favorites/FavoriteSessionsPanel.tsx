@@ -100,7 +100,7 @@ export function FavoriteSessionsPanel() {
                 <StopCircle className="w-3 h-3" />{badgeTotals.cancelled}
               </span>
             )}
-            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-card border-r border-b border-border rotate-45" />
+            <div className="absolute -bottom-[5px] left-3 w-0 h-0 border-x-[4px] border-x-transparent border-t-[6px] border-t-card drop-shadow-[0_1px_0_hsl(var(--border))]" />
           </div>
         )}
         <button
