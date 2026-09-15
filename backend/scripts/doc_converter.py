@@ -1333,11 +1333,50 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._json(500, {"error": str(exc)})
 
+    def _resolve_fallback(self, source_path):
+        # chat_uploads/file 처럼 레포 없이 온 경우, 실제 파일은 aaa/chat_uploads/file 에 있으므로 탐색
+        if not source_path:
+            return source_path
+        norm = source_path.replace("\\", "/")
+        # .../repos/chat_uploads/... 패턴이면 레포 하위에서 찾는다
+        if "/repos/chat_uploads/" in norm or norm.endswith("/chat_uploads") or "/chat_uploads/" in norm and "/repos/" in norm:
+            # repos/chat_uploads/... → repos/*/chat_uploads/... 탐색
+            try:
+                # repos 폴더 찾기: .../repos/chat_uploads/... 에서 repos까지
+                idx = norm.find("/repos/")
+                if idx != -1:
+                    repos_base = source_path[: idx + len("/repos/") - 1]  # .../repos
+                    # 실제 repos_base는 파일시스템 상의 repos 폴더
+                    # source_path가 .../repos/chat_uploads/file 이면, repos_base는 .../repos
+                    repos_fs = repos_base.replace("/", os.sep)
+                    # chat_uploads 이후 경로 추출
+                    chat_idx = norm.find("/chat_uploads/")
+                    if chat_idx != -1:
+                        tail = norm[chat_idx + len("/chat_uploads/"):]
+                        # tail이 비면 디렉토리 자체
+                        if os.path.isfile(source_path):
+                            return source_path
+                        # 하위 레포들에서 탐색
+                        try:
+                            for entry in os.listdir(repos_fs):
+                                cand = os.path.join(repos_fs, entry, "chat_uploads", tail) if tail else os.path.join(repos_fs, entry, "chat_uploads")
+                                if os.path.isfile(cand):
+                                    return cand
+                                # tail이 빈 경우 디렉토리 체크도 가능하지만 extract는 파일이므로 skip
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        return source_path
+
     def _handle_extract(self):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             payload = json.loads(self.rfile.read(length) or b"{}")
             source_path = payload.get("path")
+            # fallback: chat_uploads 단독 경로 호환
+            if source_path and not os.path.isfile(source_path):
+                source_path = self._resolve_fallback(source_path)
             if not source_path or not os.path.isfile(source_path):
                 self._json(400, {"error": "Invalid path"})
                 return

@@ -470,7 +470,10 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const handleFileSelect = (filePath: string) => {
     if (!mentionRange || !textareaRef.current) return
     
-    const relativePath = filePath.startsWith('/') ? filePath.slice(1) : filePath
+    // filePath는 repo 기준 (src/file.ts) — doc-reader는 workspace/repos 기준이므로 aaa/src/file.ts 로 맞춰야 함
+    const repoName = directory ? directory.replace(/\\/g, '/').split('/').pop() || '' : ''
+    const workspaceRel = repoName && !filePath.startsWith(repoName + '/') && !filePath.startsWith('/') ? `${repoName}/${filePath}` : filePath
+    const relativePath = workspaceRel.startsWith('/') ? workspaceRel.slice(1) : workspaceRel
     const beforeMention = prompt.slice(0, mentionRange.start)
     const afterMention = prompt.slice(mentionRange.end)
     
@@ -513,7 +516,14 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const resolveFilePath = (relativePath: string): string => {
     if (!directory) return relativePath
     if (relativePath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(relativePath) || relativePath.startsWith('file:')) return relativePath
-    return `${directory.replace(/\\/g, '/')}/${relativePath}`
+    const dirNorm = directory.replace(/\\/g, '/').replace(/\/+$/, '')
+    const repoName = dirNorm.split('/').pop() || ''
+    // workspace-relative like aaa/chat_uploads/file → workspace/repos/aaa/... 로 해석해야 doc-reader와 일치 (repo-relative면 directory + 상대)
+    if (repoName && relativePath.startsWith(repoName + '/')) {
+      const reposBase = dirNorm.slice(0, dirNorm.lastIndexOf('/'))
+      return `${reposBase}/${relativePath}`
+    }
+    return `${dirNorm}/${relativePath}`
   }
 
   const handlePaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -551,7 +561,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           setUploadProgress({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: fresh.length })
         })
         const savedName: string = data?.name || file.name
-        uploaded.push({ name: savedName, path: `chat_uploads/${savedName}` })
+        // data.path는 aaa/chat_uploads/file 처럼 workspace/repos 기준 — doc-reader가 workspace를 루트로 보므로 이걸 써야 함 (chat_uploads만 쓰면 경로 불일치)
+        const savedPath: string = (data as any)?.path || `chat_uploads/${savedName}`
+        uploaded.push({ name: savedName, path: savedPath })
       } catch (e) {
         if ((e as Error).message === 'Upload cancelled') {
           setUploadProgress(null)

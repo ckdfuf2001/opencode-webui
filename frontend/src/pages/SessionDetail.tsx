@@ -1214,7 +1214,8 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
           setGlobalUpload({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: freshFiles.length })
         })
         const savedName: string = data?.name || file.name
-        results.push({ name: savedName, path: `chat_uploads/${savedName}` })
+        const savedPath: string = (data as any)?.path || `chat_uploads/${savedName}`
+        results.push({ name: savedName, path: savedPath })
       } catch (e) {
         if (e instanceof DuplicateUploadError) continue
         if (!lastError) lastError = e instanceof Error ? e.message : 'Upload failed'

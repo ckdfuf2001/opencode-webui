@@ -120,7 +120,7 @@ export async function extractDocumentText(
   userPath: string,
   refresh = false
 ): Promise<{ text: string; fileName: string; msg?: ExtractedMessage; ocr?: { text: string; boxes: Array<{ text: string; left: number; top: number; width: number; height: number; conf: number }> } }> {
-  const resolved = validatePath(userPath)
+  let resolved = validatePath(userPath)
 
   const ext = path.extname(resolved).toLowerCase()
   if (!SUPPORTED_EXTENSIONS.has(ext) && !IMAGE_EXTS.has(ext) && ext !== '.pdf' && ext !== '.msg') {
@@ -133,6 +133,22 @@ export async function extractDocumentText(
     isFile = stat.isFile()
   } catch {
     isFile = false
+  }
+  // 호환: 이전에 chat_uploads/file 처럼 레포 없이 보낸 경로가 있으면, 실제 파일은 aaa/chat_uploads/file 에 있으므로 탐색해서 찾는다
+  if (!isFile && userPath.replace(/\\/g, '/').startsWith('chat_uploads/')) {
+    try {
+      const { getReposPath } = await import('@opencode-webui/shared')
+      const reposBase = getReposPath()
+      const entries = await fs.readdir(reposBase, { withFileTypes: true }).catch(() => [] as any[])
+      for (const e of entries as any[]) {
+        if (!e.isDirectory()) continue
+        const cand = path.join(reposBase, e.name, userPath)
+        try {
+          const s = await fs.stat(cand)
+          if (s.isFile()) { resolved = cand; isFile = true; break }
+        } catch {}
+      }
+    } catch {}
   }
   if (!isFile) {
     throw { message: 'File not found', statusCode: 404 }
