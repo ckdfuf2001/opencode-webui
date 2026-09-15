@@ -5,7 +5,7 @@ vi.mock('../../src/services/opencode-db', () => ({
   deleteSingleChildlessMessage: vi.fn(),
 }))
 
-import { healReasoningTail } from '../../src/services/reasoning-heal'
+import { healReasoningTail, healAbnormalTailIfNeeded, classifyTail, findLastGoodModel } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage } from '../../src/services/opencode-db'
 
 const truncateMock = truncateSessionMessages as unknown as ReturnType<typeof vi.fn>
@@ -237,5 +237,81 @@ describe('healReasoningTail', () => {
     expect(res.healed).toBe(true)
     expect(deleteMock).not.toHaveBeenCalled()
     expect(res.stubsRemoved).toBe(0)
+  })
+})
+
+describe('classifyTail', () => {
+  const now = Date.now()
+  it('classifies mismatch as healable', () => {
+    expect(classifyTail([mismatchErrorMsg('e1', now)]).healable).toBe(true)
+    expect(classifyTail([mismatchErrorMsg('e1', now)]).kind).toBe('mismatch')
+  })
+  it('classifies quota/billing errors as non-healable', () => {
+    expect(classifyTail([otherErrorMsg('e2', now)]).healable).toBe(false)
+    expect(classifyTail([otherErrorMsg('e2', now)]).kind).toBe('non-healable')
+  })
+  it('classifies clean history', () => {
+    const r = classifyTail([assistantMsg('a1', now)])
+    expect(r.kind).toBe('clean')
+    expect(r.healable).toBe(false)
+  })
+})
+
+describe('findLastGoodModel', () => {
+  const now = Date.now()
+  it('returns the last successful assistant model', () => {
+    const good = {
+      info: { id: 'g1', role: 'assistant', sessionID: 'ses-1', time: { created: now, completed: now + 1 }, modelID: 'm-1.2', providerID: 'opencode' },
+      parts: [{ type: 'text', text: 'ok' }],
+    }
+    const bad = mismatchErrorMsg('e1', now + 10)
+    expect(findLastGoodModel([good, bad])).toEqual({ providerID: 'opencode', modelID: 'm-1.2' })
+  })
+  it('returns undefined when no successful turn exists', () => {
+    expect(findLastGoodModel([mismatchErrorMsg('e1', now)])).toBeUndefined()
+  })
+})
+
+describe('healAbnormalTailIfNeeded', () => {
+  beforeEach(() => {
+    truncateMock.mockReset()
+    truncateMock.mockResolvedValue({ messagesRemoved: 2, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 3 })
+    deleteMock.mockReset()
+    deleteMock.mockResolvedValue(null)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  it('does not truncate quota errors (preserves user prompt)', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      otherErrorMsg('e_quota', now - 50_000),
+    ])
+    const res = await healAbnormalTailIfNeeded('http://x', 'ses-1', '/ws', { force: true })
+    expect(res.healed).toBe(false)
+    expect(res.healable).toBe(false)
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('truncates mismatch tails with force regardless of age', async () => {
+    const old = Date.now() - 60 * 60_000
+    mockMessageList([
+      userMsg('u_old', 'old q', old),
+      mismatchErrorMsg('e_old', old + 1000),
+    ])
+    const res = await healAbnormalTailIfNeeded('http://x', 'ses-1', '/ws', { force: true })
+    expect(res.healed).toBe(true)
+    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u_old')
+  })
+  it('reports history clean when last turn is fine', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u1', 'hi', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+    ])
+    const res = await healAbnormalTailIfNeeded('http://x', 'ses-1', '/ws', { force: true })
+    expect(res.healed).toBe(false)
+    expect(res.reason).toMatch(/clean/)
+    expect(truncateMock).not.toHaveBeenCalled()
   })
 })

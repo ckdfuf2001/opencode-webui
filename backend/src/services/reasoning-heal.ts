@@ -11,11 +11,16 @@ interface LooseMessage {
   info?: {
     id?: string
     role?: string
-    time?: { created?: number }
+    time?: { created?: number; completed?: number }
     error?: unknown
+    finish?: string
+    modelID?: string
+    providerID?: string
   }
   parts?: LoosePart[]
 }
+
+export type TailKind = 'clean' | 'mismatch' | 'aborted' | 'ghost' | 'empty' | 'non-healable'
 
 export interface ReasoningHealResult {
   healed: boolean
@@ -23,6 +28,12 @@ export interface ReasoningHealResult {
   truncatedMessageId?: string
   /** trailing mismatch stub 단건 삭제 수 */
   stubsRemoved?: number
+  /** 꼬리 상태 분류 */
+  kind?: TailKind
+  /** truncate 대상이 아닌 에러(결제·쿼터·권한 등)면 false — 사용자 프롬프트를 지우지 않는다 */
+  healable?: boolean
+  /** 마지막 성공 assistant 턴의 모델 (모델 교체 오염 시 원래 모델 복귀용) */
+  suggestedModel?: { providerID: string; modelID: string }
 }
 
 const MESSAGE_LIST_TIMEOUT_MS = 20_000
@@ -40,6 +51,90 @@ export function isReasoningMismatchText(bodyText: string): boolean {
     lower.includes('encrypted_content') &&
     (lower.includes('reasoning') || lower.includes('not issued') || lower.includes('invalid_request_error'))
   )
+}
+
+/** 잘라내도 소용없고 프롬프트만 날리는 에러 (결제·쿼터·인증·레이트리밋). */
+export function isNonHealableErrorText(bodyText: string): boolean {
+  const lower = (bodyText ?? '').toLowerCase()
+  return (
+    lower.includes('quota') ||
+    lower.includes('billing') ||
+    lower.includes('payment') ||
+    lower.includes('insufficient') ||
+    lower.includes('freeusagelimit') ||
+    lower.includes('subscriptionusagelimit') ||
+    lower.includes('add credits') ||
+    lower.includes('unauthorized') ||
+    lower.includes('invalid_api_key') ||
+    lower.includes('authentication') ||
+    lower.includes('rate_limit') ||
+    lower.includes('rate limit') ||
+    lower.includes('429')
+  )
+}
+
+function errorTextOf(err: unknown): string {
+  try {
+    return typeof err === 'string' ? err : JSON.stringify(err ?? '')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 꼬리 상태 분류. truncate해도 되는 것(healable)은 딱 4종:
+ * mismatch(모델 교체 reasoning 오염) · aborted(중단) · ghost(미완성 빈 응답) · empty(LLM 빈 응답).
+ * 그 외 에러(결제·쿼터·레이트리밋·알 수 없는 provider 오류)는 자르면 사용자 프롬프트만
+ * 날리고 재발하므로 절대 자르지 않는다 (healable=false).
+ */
+export function classifyTail(messages: LooseMessage[]): { kind: TailKind; healable: boolean; lastErrorText: string } {
+  const last = messages[messages.length - 1]
+  if (!last?.info) return { kind: 'clean', healable: false, lastErrorText: '' }
+  const lastRole = last.info.role
+  const lastError = last.info.error
+  const lastFinish = last.info.finish
+  const lastCompleted = last.info.time?.completed
+  const lastParts = Array.isArray(last.parts) ? last.parts : []
+
+  const errText = errorTextOf(lastError)
+  if (isNonHealableErrorText(errText)) {
+    return { kind: 'non-healable', healable: false, lastErrorText: errText }
+  }
+  if (lastError && isReasoningMismatchText(errText)) {
+    return { kind: 'mismatch', healable: true, lastErrorText: errText }
+  }
+  const isAborted =
+    lastFinish === 'aborted' ||
+    (typeof lastError === 'object' &&
+      lastError !== null &&
+      String((lastError as { name?: string })?.name ?? '').includes('Aborted'))
+  if (isAborted) return { kind: 'aborted', healable: true, lastErrorText: errText }
+  const isGhost = lastRole === 'assistant' && !lastCompleted && lastParts.length === 0
+  if (isGhost) return { kind: 'ghost', healable: true, lastErrorText: errText }
+  const isEmptyResponse = (() => {
+    try {
+      const txt = errText + JSON.stringify(last.parts ?? '')
+      const lower = txt.toLowerCase()
+      return lower.includes('llm response was empty') || (lower.includes('empty') && lower.includes('llm'))
+    } catch {
+      return false
+    }
+  })()
+  if (isEmptyResponse) return { kind: 'empty', healable: true, lastErrorText: errText }
+  if (lastError) return { kind: 'non-healable', healable: false, lastErrorText: errText }
+  return { kind: 'clean', healable: false, lastErrorText: '' }
+}
+
+/** 마지막 성공 assistant 턴의 모델 — 모델 교체 오염 시 원래 모델 복귀용. */
+export function findLastGoodModel(messages: LooseMessage[]): { providerID: string; modelID: string } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const info = messages[i]?.info
+    if (!info || info.role !== 'assistant' || info.error) continue
+    if (info.modelID && info.providerID) {
+      return { providerID: info.providerID, modelID: info.modelID }
+    }
+  }
+  return undefined
 }
 
 function stripInjectedBlocks(text: string): string {
@@ -208,12 +303,10 @@ export async function healReasoningTail(
 }
 
 /**
- * 발송 직전 선제 클렌징: 이전 내용이 비정상이면 무조건 잘라낸다.
+ * 발송 직전 선제 클렌징: healable 꼬리(mismatch·aborted·ghost·empty)만 잘라낸다.
  * 큐에 정상적으로 들어가도 응답 없이 종료되던 케이스 방지.
- * - 마지막 assistant가 error를 들고 있거나 (empty LLM, reasoning mismatch, aborted)
- * - ghost(미완성·빈 parts) 상태에서 busy가 아닐 때
- * 하나라도 해당하면 마지막 user부터 꼬리를 잘라 다음 턴을 깨끗한 히스토리로 시작한다.
- * candidates 없이 동작하므로 발송 전 항상 호출해도 안전 (비정상이 아니면 no-op).
+ * 결제·쿼터·레이트리밋·기타 provider 오류는 프롬프트 보존을 위해 절대 자르지 않는다.
+ * candidates 없이 동작하므로 발송 전 항상 호출해도 안전 (대상 아니면 no-op).
  */
 export async function healAbnormalTailIfNeeded(
   base: string,
@@ -227,26 +320,15 @@ export async function healAbnormalTailIfNeeded(
   const last = messages[messages.length - 1]
   if (!last?.info) return { healed: false, reason: 'no last info' }
 
+  // 꼬리 분류: healable 4종(mismatch·aborted·ghost·empty)만 자른다.
+  // 결제·쿼터·레이트리밋·기타 provider 오류는 자르면 프롬프트만 날리고 재발하므로 손대지 않는다.
+  const { kind, healable } = classifyTail(messages)
+  const suggestedModel = findLastGoodModel(messages)
+  if (kind === 'clean') return { healed: false, reason: 'history clean', kind, healable: false, suggestedModel }
+  if (!healable) {
+    return { healed: false, reason: `non-healable error (${kind}) — truncate skipped to preserve your prompt`, kind, healable: false, suggestedModel }
+  }
   const lastRole = last.info.role
-  const lastError = last.info.error
-  const lastFinish = (last.info as { finish?: string }).finish
-  const lastCompleted = (last.info.time as { completed?: number } | undefined)?.completed
-  const lastParts = Array.isArray(last.parts) ? last.parts : []
-
-  // 비정상 판별: error 있음 / aborted / 빈 응답 / ghost
-  const hasError = !!lastError
-  const isAborted = lastFinish === 'aborted' || (typeof lastError === 'object' && lastError !== null && String((lastError as { name?: string })?.name ?? '').includes('Aborted'))
-  const isEmptyResponse = (() => {
-    try {
-      const txt = JSON.stringify(lastError ?? '') + JSON.stringify(last.parts ?? '')
-      return txt.toLowerCase().includes('llm response was empty') || txt.toLowerCase().includes('empty') && txt.toLowerCase().includes('llm')
-    } catch { return false }
-  })()
-  const isGhost = lastRole === 'assistant' && !lastCompleted && lastParts.length === 0
-  const hasMismatch = hasError && isMismatchError(last)
-
-  const isAbnormal = hasError || isAborted || isEmptyResponse || isGhost || hasMismatch
-  if (!isAbnormal) return { healed: false, reason: 'history clean' }
 
   // 마지막 user를 찾아 그 user부터 잘라낸다 — 실패한 턴 전체 제거
   let lastUser: LooseMessage | undefined
@@ -265,7 +347,7 @@ export async function healAbnormalTailIfNeeded(
   try {
     const result = await truncateSessionMessages(sessionID, lastUser.info.id as string)
     if (!result) return { healed: false, reason: 'truncate failed' }
-    logger.warn(`Pre-dispatch abnormal heal for session ${sessionID}: last ${lastRole} was abnormal (${hasError ? 'error' : isGhost ? 'ghost' : 'aborted'}), truncated from user ${lastUser.info.id} (removed ${result.messagesRemoved} messages)`)
+    logger.warn(`Pre-dispatch abnormal heal for session ${sessionID}: last ${lastRole} was abnormal (${kind}), truncated from user ${lastUser.info.id} (removed ${result.messagesRemoved} messages)`)
     // ghost/mismatch stub도 같이 쓸어냄 (위 healReasoningTail의 2단계와 유사하지만 여기선 더 넓게)
     try {
       const tail = await fetchMessageList(base, sessionID, directory)
@@ -281,8 +363,8 @@ export async function healAbnormalTailIfNeeded(
         }
       }
     } catch {}
-    return { healed: true, reason: `abnormal ${lastRole} truncated`, truncatedMessageId: lastUser.info.id as string }
+    return { healed: true, reason: `abnormal ${lastRole} truncated`, truncatedMessageId: lastUser.info.id as string, kind, healable: true, suggestedModel }
   } catch (e) {
-    return { healed: false, reason: `truncate threw: ${(e as Error)?.message ?? e}` }
+    return { healed: false, reason: `truncate threw: ${(e as Error)?.message ?? e}`, kind, healable: true, suggestedModel }
   }
 }

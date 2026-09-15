@@ -392,6 +392,34 @@ function markHeadQueued(sessionID: string, id: string): void {
   queue[0]!.status = 'queued'
 }
 
+/**
+ * 정리(heal) 성공 후 호출: 결정적 실패로 failed 고정된 항목을 queued로 되돌리고
+ * 실패 카운터를 초기화한 뒤 즉시 flush한다.
+ * failed 헤드는 뒤의 모든 전송을 영구 봉쇄하므로, DB 꼬리만 자르고 이것을
+ * 되돌리지 않으면 정리를 눌러도 다음 전송이 절대 발송되지 않는다.
+ * sending 항목은 건드리지 않는다 — 이미 opencode로 넘어간 슬롯이라
+ * idle 관찰 시 확정/정리되며, 중복 발송 위험이 있다.
+ */
+export function requeueStuckItems(sessionID: string): { requeued: number } {
+  const queue = queues.get(sessionID)
+  if (!queue || queue.length === 0) return { requeued: 0 }
+  let requeued = 0
+  for (const item of queue) {
+    if (item.status === 'failed') {
+      item.status = 'queued'
+      delete item.failedAt
+      delete item.sendingSince
+      requeued++
+    }
+  }
+  if (requeued === 0) return { requeued: 0 }
+  failedUntil.delete(sessionID)
+  failCount.delete(sessionID)
+  logger.info(`Requeued ${requeued} failed chat(s) for session ${sessionID} after heal — flushing`)
+  void dispatchHead(opencodeServerManager.getUrl(), sessionID)
+  return { requeued }
+}
+
 /** 수동 재시도: sending/failed 항목을 queued로 되돌리고 즉시 발송 시도.
  *  sending 고착(nw오류 후 limbo)·상한 초과 failed 모두 대상. 순서 유지를 위해
  *  헤드가 아니면 queued로만 되돌리고, 헤드면 dispatchHead 즉시 호출. */

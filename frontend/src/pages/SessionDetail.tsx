@@ -480,8 +480,9 @@ export function SessionDetail() {
     hasFailedQueue
   )
   const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && ((dbIsCancelled && !isUserCancel) || isCancelledUntilNextSend(sessionId) || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
-  const queryClientHeal = useQueryClient()
   const [healing, setHealing] = useState(false)
+  // 정리 버튼은 healable 꼬리(mismatch·중단·ghost·빈 응답)에만 표시한다.
+  // 결제·쿼터·레이트리밋 등은 잘라내도 재발하고 프롬프트만 날아가므로 버튼을 숨긴다.
   const needsHeal = useMemo(() => {
     if (!sessionId || isStreaming || hasActiveSend(sessionId) || dbBusy || descendantBusy) return false
     if (!lastMessage) return false
@@ -489,8 +490,23 @@ export function SessionDetail() {
     if (!err) return false
     const name = (err as { name?: string })?.name ?? (err as { data?: { name?: string } })?.data?.name ?? ''
     if (name === 'MessageAbortedError' && recentlyAborted) return false
-    return true
+    let text = ''
+    try { text = typeof err === 'string' ? err : JSON.stringify(err) } catch { text = '' }
+    const lower = text.toLowerCase()
+    const nonHealable = lower.includes('quota') || lower.includes('billing') || lower.includes('payment') || lower.includes('insufficient') || lower.includes('unauthorized') || lower.includes('invalid_api_key') || lower.includes('authentication') || lower.includes('rate_limit') || lower.includes('rate limit')
+    if (nonHealable) return false
+    const mismatch = lower.includes('encrypted_content') && (lower.includes('reasoning') || lower.includes('not issued') || lower.includes('invalid_request_error'))
+    const aborted = ((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') || name.includes('Aborted')
+    const ghost = !(lastMessage.info as unknown as { time?: { completed?: number } })?.time?.completed && ((lastMessage as unknown as { parts?: unknown[] }).parts?.length ?? 0) === 0
+    const empty = lower.includes('llm response was empty') || (lower.includes('empty') && lower.includes('llm'))
+    return mismatch || aborted || ghost || empty
   }, [sessionId, isStreaming, dbBusy, descendantBusy, lastMessage, recentlyAborted])
+  const refreshAfterHeal = useCallback(() => {
+    if (!sessionId) return
+    queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionId, repoDirectory] })
+    queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionId, repoDirectory] })
+    queryClient.invalidateQueries({ queryKey: ['opencode', 'last-message', opcodeUrl, sessionId, repoDirectory] })
+  }, [sessionId, repoDirectory, queryClient, opcodeUrl])
   const handleHeal = useCallback(async () => {
     if (!sessionId) return
     setHealing(true)
@@ -498,23 +514,25 @@ export function SessionDetail() {
       const qs = repoDirectory ? `?directory=${encodeURIComponent(repoDirectory)}` : ''
       const res = await fetch(`${API_BASE_URL}/api/session-heal/${sessionId}${qs}`, { method: 'POST' })
       const data = await res.json().catch(() => ({} as Record<string, unknown>))
+      if (res.status === 409) throw new Error('Still generating — please clean up after it finishes.')
       if (!res.ok) throw new Error((data as { reason?: string })?.reason || `heal failed (${res.status})`)
       if ((data as { healed?: boolean })?.healed) {
-        showToast.success('정리 완료 — 꼬리 제거됨. 다시 보내보세요.')
-        queryClientHeal.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionId, repoDirectory] })
-        queryClientHeal.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionId, repoDirectory] })
-        try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionId)}/cancelled`, { method: 'DELETE' }) } catch {}
+        const requeued = (data as { requeued?: number })?.requeued ?? 0
+        const queueNote = requeued > 0 ? ` ${requeued} stuck queued message(s) will be resent.` : ''
+        showToast.success(`Cleaned up — bad tail removed. Send again.${queueNote}`)
+        refreshAfterHeal()
+        try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionId)}/cancelled`, { method: 'DELETE' }) } catch { /* badge clear is best-effort */ }
       } else {
         const reason = (data as { reason?: string })?.reason
-        if (reason === 'history clean') showToast.info('이미 깨끗한 상태예요.')
-        else showToast.info(reason ?? '정리할 내용이 없어요.')
+        if (reason === 'history clean') showToast.info('Already clean — nothing to remove.')
+        else showToast.info(reason ?? 'Nothing to clean up.')
       }
     } catch (e) {
-      showToast.error((e as Error)?.message ?? '정리 실패')
+      showToast.error((e as Error)?.message ?? 'Clean up failed')
     } finally {
       setHealing(false)
     }
-  }, [sessionId, repoDirectory, queryClientHeal, opcodeUrl])
+  }, [sessionId, repoDirectory, queryClient, opcodeUrl, refreshAfterHeal])
   // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
   usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)
@@ -1442,8 +1460,8 @@ if (results.length > 0) {
               )}
               {needsHeal && (
                 <div className="mb-1 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs pointer-events-auto w-[90%] max-w-4xl">
-                  <span className="flex-1 text-amber-700 dark:text-amber-300">세션이 비정상 꼬리 때문에 멈춰 있어요. 정리하면 마지막 실패 턴을 제거하고 다시 보낼 수 있어요.</span>
-                  <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={healing} onClick={handleHeal}>{healing ? '정리 중...' : '정리'}</Button>
+                  <span className="flex-1 text-amber-700 dark:text-amber-300">Stopped with an error. Start a new session or clean up.</span>
+                  <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={healing} onClick={handleHeal}>{healing ? 'Cleaning…' : 'Clean up'}</Button>
                 </div>
               )}
               <div className="contents pointer-events-auto">

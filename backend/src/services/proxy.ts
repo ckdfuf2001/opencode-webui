@@ -496,7 +496,8 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     // 채팅 기본 동작: POST /session/:id/message 발송 직전, 마지막 턴이
     // error/aborted/ghost/mismatch 상태면 신선도 무관하게 꼬리를 잘라내고 보낸다.
-    // (큐를 거치지 않는 직접 전송 경로 — 큐의 pre-dispatch heal과 쌍을 이룬다.)
+    // NOTE: 일반 채팅은 전부 큐 경유(PromptInput→chat-queue)라 이 분기는
+    // 직접 전송(계속 보내기 등)에만 탄다. 주 경로는 dispatchQueuedChat의 pre-heal.
     if (method === 'POST') {
       const preHealMatch = cleanEventPath.match(/^\/session\/([^/]+)\/message$/)
       if (preHealMatch?.[1]) {
