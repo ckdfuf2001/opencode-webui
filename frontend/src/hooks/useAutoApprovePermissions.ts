@@ -87,18 +87,19 @@ async function handlePermissionAdd(permission: Permission): Promise<void> {
     if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) {
       recentlyProcessed.add(permission.id)
       setTimeout(() => { recentlyProcessed.delete(permission.id) }, 60_000)
-      try {
-        if (permission.v2) {
-          await client.respondToPermissionV2(permission.id, 'always')
-        } else {
-          await client.respondToPermission(permission.sessionID, permission.id, 'always')
+        try {
+          if (permission.v2) {
+            await client.respondToPermissionV2(permission.id, 'always')
+          } else {
+            await client.respondToPermission(permission.sessionID, permission.id, 'always')
+          }
+          // sessionID 동봉 — 배지 캐시 즉시 정리용 (아래 remove 구독자가 사용)
+          permissionEvents.emit({ type: 'remove', permissionID: permission.id, permission })
+        } catch (error) {
+          recentlyProcessed.delete(permission.id)
+          console.error('Failed to auto-approve permission (session):', error)
         }
-        permissionEvents.emit({ type: 'remove', permissionID: permission.id })
-      } catch (error) {
-        recentlyProcessed.delete(permission.id)
-        console.error('Failed to auto-approve permission (session):', error)
-      }
-      return
+        return
     }
   }
 
@@ -135,7 +136,7 @@ async function handlePermissionAdd(permission: Permission): Promise<void> {
     } else {
       await client.respondToPermission(permission.sessionID, permission.id, 'always')
     }
-    permissionEvents.emit({ type: 'remove', permissionID: permission.id })
+    permissionEvents.emit({ type: 'remove', permissionID: permission.id, permission })
   } catch (error) {
     recentlyProcessed.delete(permission.id)
     console.error('Failed to auto-approve permission:', error)

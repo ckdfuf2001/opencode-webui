@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
 import { useSessionStatusMap, useMessages, useSessions, clearCancelledUntilNextSend } from '@/hooks/useOpenCode'
+import { permissionEvents } from '@/hooks/usePermissionRequests'
 import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
 import { useSettings } from '@/hooks/useSettings'
 import { shouldPush, sendPushNotification } from '@/lib/notifications'
@@ -27,6 +28,22 @@ export function FavoriteSessionsPanel() {
   const { preferences } = useSettings()
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['favorites'] })
+
+  // 자동허용된 permission의 배지(방패) 즉시 정리 — 패널은 항상 마운트되므로 전역 커버.
+  // 수동 dismiss는 usePermissionRequests.dismissPermission이 이미 처리한다.
+  useEffect(() => {
+    return permissionEvents.subscribe((event) => {
+      const sid = event.type === 'remove' ? event.permission?.sessionID : undefined
+      if (!sid) return
+      qc.setQueryData(['session-status-db'], (old: unknown) => {
+        if (!Array.isArray(old)) return old
+        return (old as Array<{ sessionId: string; pendingPermissions?: number }>).map((s) =>
+          s?.sessionId === sid ? { ...s, pendingPermissions: Math.max(0, (s.pendingPermissions ?? 1) - 1) } : s,
+        )
+      })
+      qc.invalidateQueries({ queryKey: ['session-status-db'] })
+    })
+  }, [qc])
 
   // 즐겨찾기 세션 완료 푸시 (소리 없음 — 소리는 열린 세션에서만).
   // SessionDetail이 열려 있는 세션은 그쪽이 알리므로 중복 방지용으로 건너뛴다.

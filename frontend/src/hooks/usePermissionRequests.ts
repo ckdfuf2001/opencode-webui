@@ -239,9 +239,19 @@ export function usePermissionRequests(sessionID?: string, relatedSessionIDs?: st
 
   const dismissPermission = useCallback((permissionID: string) => {
     markPermissionDismissed(permissionID)
+    const sid = usePermissionStore.getState().permissions.find(p => p.id === permissionID)?.sessionID
     usePermissionStore.setState((state) => ({
       permissions: state.permissions.filter(p => p.id !== permissionID),
     }))
+    // 배지(방패) 즉시 정리 — 백엔드 1s + 프론트 2s 폴링을 기다리면 수 초간 잔류
+    if (sid) {
+      queryClient.setQueryData(['session-status-db'], (old: unknown) => {
+        if (!Array.isArray(old)) return old
+        return (old as Array<{ sessionId: string; pendingPermissions?: number }>).map((s) =>
+          s?.sessionId === sid ? { ...s, pendingPermissions: Math.max(0, (s.pendingPermissions ?? 1) - 1) } : s,
+        )
+      })
+    }
     queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
   }, [queryClient])
 
