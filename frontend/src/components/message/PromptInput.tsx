@@ -110,6 +110,7 @@ export function PromptInput({
   onInjectedPromptConsumed,
   onSubmitted,
   onCancelEdit,
+  onCompact,
   editTargetMessageID,
   onResendEdit,
   autoScrollEnabled,
@@ -184,7 +185,19 @@ const ks = preferences?.keyboardShortcuts
 const abortKs = ks?.abort ?? 'Escape'
 const toggleModeKs = ks?.toggleMode ?? 'Tab'
 const selectModelKs = ks?.selectModel ?? 'Ctrl+M'
-// 전송은 웹 표준 Ctrl+Enter 고정 (설정값과 무관하게 표시·동작 통일)
+const submitKs = ks?.submit ?? 'Ctrl+Enter'
+const compactKs = ks?.compact ?? 'Ctrl+Shift+C'
+// Ctrl/Cmd 교차: 설정이 Ctrl+Enter면 Mac Cmd+Enter도 전송되게 (기존 동작 유지).
+// 그 외 단축키는 저장값 그대로 매칭한다.
+const matchSubmitShortcut = (e: { ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; key: string; code: string }): boolean => {
+  if (matchStoredShortcut(e, submitKs)) return true
+  const swapped = submitKs.includes('Ctrl')
+    ? submitKs.replace('Ctrl', 'Cmd')
+    : submitKs.includes('Cmd')
+      ? submitKs.replace('Cmd', 'Ctrl')
+      : null
+  return swapped ? matchStoredShortcut(e, swapped) : false
+}
 const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = useCommands(opcodeUrl, directory, sessionID)
   // 슬래시 커맨드도 큐 경유로 바뀌어 executeCommand 직접 호출은 없다.
   // (훅 자체는 유지 — 내부 콜백/상태 초기화용)
@@ -621,10 +634,16 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       onShowModelsDialog?.()
       return
     }
-    // 생성 중 Esc는 입력 삭제가 아니라 중단이다 (전역 abort 단축키와 동일 동작)
-    if (e.key === 'Escape' && showStop && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    // compact: 설정 단축키 (기본 Alt+C) — onCompact(summarize)가 있으면 실행
+    if (matchStoredShortcut(e, compactKs)) {
       e.preventDefault()
-      handleStop()
+      onCompact?.()
+      return
+    }
+    // 모드 전환: 설정 단축키 (기본 Tab). 채팅창에서만 동작한다.
+    if (matchStoredShortcut(e, toggleModeKs)) {
+      e.preventDefault()
+      handleModeToggle()
       return
     }
     if (isBashMode && e.key === 'Escape') {
@@ -699,10 +718,17 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       }
     }
     
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (matchSubmitShortcut(e)) {
       e.preventDefault()
       handleSubmit()
-    } else if (e.key === 'Escape') {
+    } else if (matchStoredShortcut(e, abortKs)) {
+      // 생성 중이면 중단, idle이면 입력 정리 (기존 bare-Esc 동작을 설정값으로 이동).
+      // 전역 핸들러 중복 실행 방지로 항상 preventDefault한다.
+      e.preventDefault()
+      if (showStop) {
+        handleStop()
+        return
+      }
       setShowSuggestions(false)
       setSuggestionQuery('')
       setShowFileSuggestions(false)
@@ -1031,7 +1057,13 @@ useEffect(() => {
                 Keyboard Shortcuts
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                <span className="font-mono">Ctrl+Enter</span>{' '}- Send message
+                <span className="font-mono">{submitKs}</span>{' '}- Send message
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+                <span className="font-mono">{compactKs}</span>{' '}- Compact session
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+                <span className="font-mono">{toggleModeKs}</span>{' '}- Switch build/plan
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
                 <span className="font-mono">@"</span> - Mention files

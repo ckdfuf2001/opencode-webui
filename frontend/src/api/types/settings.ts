@@ -95,7 +95,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: Record<string, string> = {
   toggleMode: 'Tab',
   undo: `${CMD_KEY}+Z`,
   redo: `${CMD_KEY}+Shift+Z`,
-  compact: `${CMD_KEY}+K`,
+  compact: 'Ctrl+Shift+C',
   fork: `${CMD_KEY}+Shift+F`,
   settings: `${CMD_KEY}+,`,
   sessions: `${CMD_KEY}+S`,

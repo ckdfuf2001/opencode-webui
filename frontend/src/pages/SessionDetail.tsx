@@ -50,7 +50,7 @@ export function SessionDetail() {
   const { id, sessionId } = useParams<{ id: string; sessionId: string }>();
   const navigate = useNavigate();
   const repoId = parseInt(id || "0");
-  const { preferences, updateSettings } = useSettings();
+  const { preferences } = useSettings();
   const messageContainerRef = useRef<HTMLDivElement>(null);
   // 로딩 스피너 조기 리턴 때문에 effect 시점에 컨테이너가 없을 수 있어서
   // 콜백 ref로 실제 노드를 추적하고 리스너 effect 의존성에 넣는다
@@ -1020,18 +1020,7 @@ export function SessionDetail() {
     },
   });
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const newMode = preferences?.mode === "plan" ? "build" : "plan";
-        updateSettings({ mode: newMode });
-      }
-    };
 
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [preferences?.mode, updateSettings]);
 
   
 

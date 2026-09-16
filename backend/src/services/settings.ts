@@ -24,6 +24,7 @@ export class SettingsService {
    * 구버전 기본값으로 저장된 환경설정을 딱 한 번 새 기본값으로 전환한다.
    * - showReasoning: false → true
    * - theme: 'dark' → 'light'
+   * - keyboardShortcuts.compact: 'Ctrl+K' → 'Ctrl+Shift+C' (구 기본값과 정확히 일치할 때만)
    * 마이그레이션 플래그는 user_preferences 테이블의 예약 user_id 행에 기록하므로
    * 이후 사용자가 의도적으로 바꾼 값은 다시 덮어쓰지 않는다.
    */
@@ -68,6 +69,20 @@ export class SettingsService {
           logger.info("Migrated stored theme='dark' to 'light' (new default)")
         }
         flags.themeLightDefaultApplied = true
+      }
+
+      if (row && !flags.compactShortcutMigrated) {
+        const parsed = JSON.parse(row.preferences) as Record<string, unknown>
+        const ks = parsed.keyboardShortcuts as Record<string, unknown> | undefined
+        // 'Alt+C'는 중간 기본값이었어서 그것도 함께 새 기본값으로 전환
+        if (ks && (ks.compact === 'Ctrl+K' || ks.compact === 'Alt+C')) {
+          ks.compact = 'Ctrl+Shift+C'
+          this.db
+            .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
+            .run(JSON.stringify(parsed), Date.now(), 'default')
+          logger.info("Migrated stored compact shortcut to 'Ctrl+Shift+C' (new default)")
+        }
+        flags.compactShortcutMigrated = true
       }
 
       this.db
