@@ -4,7 +4,7 @@ import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
-import { flushQueueForSession, clearSendingOnAbort } from './chat-queue'
+import { flushQueueForSession, clearSendingOnAbort, dropDeliveredDuplicates } from './chat-queue'
 import { healReasoningTail, healStaleHistoryBeyondLastTurn, truncateFromNthLastUser, sweepPollutedStubs, isReasoningMismatchText, asOutgoingModel, preSendStripIfMismatch } from './reasoning-heal'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
@@ -48,6 +48,24 @@ async function readLatestOpenCodeError(): Promise<string | null> {
     }
   } catch {
     return null
+  }
+}
+
+/**
+ * 직접전송 본문에서 user 텍스트를 꺼내 큐 고아를 제거한다.
+ * 파싱 실패·텍스트 없음이면 손대지 않는다 (큐는 그대로 두고 폴러가 이어받는다).
+ */
+function dropDeliveredByBody(sessionID: string, rawBody: string): void {
+  try {
+    const parsed = JSON.parse(rawBody) as { parts?: Array<{ type?: string; text?: string }> }
+    const text = (Array.isArray(parsed.parts) ? parsed.parts : [])
+      .filter((p) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim())
+      .map((p) => p.text as string)
+      .join('\n')
+      .trim()
+    if (text) dropDeliveredDuplicates(sessionID, text)
+  } catch {
+    // 본문 파싱 실패 — 큐에 손대지 않는다
   }
 }
 
@@ -900,6 +918,8 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       try {
         const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
         if (m?.[1]) {
+          // 직접전송 성공 — 동일 텍스트의 큐 고아(failed 배지·중복 전송 원인)를 제거한다.
+          if (method === 'POST' && body) dropDeliveredByBody(m[1]!, body)
           setTimeout(() => flushQueueForSession(m[1]!, query['directory'] ? decodeURIComponent(query['directory']) : undefined), 150)
         }
       } catch {}
@@ -910,6 +930,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       })
     }
 
+    let streamCompleted = false
     const trackedStream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const reader = response.body!.getReader()
@@ -920,6 +941,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
             controller.enqueue(value)
           }
           controller.close()
+          streamCompleted = true
         } catch (error) {
           controller.error(error)
         } finally {
@@ -928,6 +950,8 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           try {
             const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
             if (m?.[1]) {
+              // 스트림 완주 = 턴 종료 — 직접전송 성공으로 보고 큐 고아를 제거한다.
+              if (streamCompleted && method === 'POST' && body) dropDeliveredByBody(m[1]!, body)
               setTimeout(() => flushQueueForSession(m[1]!, query['directory'] ? decodeURIComponent(query['directory']) : undefined), 150)
             }
           } catch {}

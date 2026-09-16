@@ -290,6 +290,9 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
         failCount.delete(sessionID)
+        // 같은 텍스트의 뒤쪽 중복(더블 전송 등)은 이번 성공으로 전달된 것으로 보고 제거.
+        // sending은 drop 대상에서 제외된다 (이미 opencode로 넘어감).
+        dropDeliveredDuplicates(sessionID, next.text)
         logger.info(`Flushed queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
       } else if (result.nonRetryable) {
         // reasoning encrypted_content 불일치 같은 결정적 400은 재시도해도 절대
@@ -392,6 +395,46 @@ function markHeadQueued(sessionID: string, id: string): void {
   const queue = queues.get(sessionID)
   if (!queue || queue[0]?.id !== id) return
   queue[0]!.status = 'queued'
+}
+
+function normalizeQueueText(text: string): string {
+  return text.trim().slice(0, MAX_TEXT_LENGTH)
+}
+
+/**
+ * 직접전송(proxy) 성공 시 동일 텍스트의 고아 항목을 제거한다.
+ * 큐 제거가 confirm-based(자기 디스패치 성공 때만 제거)라 직접전송으로
+ * 이미 전달된 텍스트의 큐 복사본이 failed 배지·X/재시도로 영원히 남거나,
+ * 다음 idle에 중복 턴으로 재전송되던 문제 대응. 발송 중(sending)은 이미
+ * opencode로 넘어가 회수 불가이므로 제외한다.
+ * 제거된 항목 수를 돌려준다.
+ */
+export function dropDeliveredDuplicates(sessionID: string, text: string): number {
+  const norm = normalizeQueueText(text ?? '')
+  if (!norm) return 0
+  const queue = queues.get(sessionID)
+  if (!queue || queue.length === 0) return 0
+  let removed = 0
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const item = queue[i]
+    if (!item || item.status === 'sending') continue
+    if (normalizeQueueText(item.text) === norm) {
+      queue.splice(i, 1)
+      removed++
+    }
+  }
+  if (queue.length === 0) {
+    queues.delete(sessionID)
+    queueDirs.delete(sessionID)
+  }
+  if (removed > 0) {
+    // 고아를 치웠으니 실패 카운트·백오프도 초기화 — 남은 항목이 있으면
+    // 다음 폴러에 바로 재시도된다 (stale 실패 상태 고착 방지).
+    failCount.delete(sessionID)
+    failedUntil.delete(sessionID)
+    logger.info(`Dropped ${removed} delivered duplicate(s) for session ${sessionID} after direct-send success`)
+  }
+  return removed
 }
 
 /** 수동 재시도: sending/failed 항목을 queued로 되돌리고 즉시 발송 시도.
