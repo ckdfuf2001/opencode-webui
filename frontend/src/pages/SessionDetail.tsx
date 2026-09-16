@@ -19,7 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, getRecentTotal, ensureMessageLoaded, loadOlderMessages, messagesQueryKey } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, ensureMessageLoaded, loadOlderMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -172,10 +172,11 @@ export function SessionDetail() {
     setTotalKnown(null);
     setIsLoadingMore(false);
   }, [sessionId]);
-  const recentTotal = sessionId ? getRecentTotal(sessionId) : undefined;
+  // 서버 total을 리액티브로 구독 — 폴링마다 갱신돼 새 메시지·캐시 변동에도 잔여 표시가 흔들리지 않는다.
+  const liveTotal = useRecentTotal(sessionId);
   useEffect(() => {
-    if (recentTotal != null) setTotalKnown(recentTotal);
-  }, [recentTotal]);
+    if (liveTotal != null) setTotalKnown(liveTotal);
+  }, [liveTotal]);
   // Back to latest: null 커밋 후(새 DOM 반영 후)에 하단 고정.
   // double-rAF + 120ms 폴백으로 늦은 페인트까지 커버한다.
   useEffect(() => {
@@ -191,7 +192,13 @@ export function SessionDetail() {
   }, [windowStart]);
   const prevMsgLenRef = useRef<number>(0);
   // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
+  // 이전 세션의 점프 앵커 핀도 함께 해제한다 (핀은 세션 전환 시에만 초기화).
+  const prevSessionRef = useRef<string | undefined>(undefined);
   useEffect(() => {
+    if (prevSessionRef.current && prevSessionRef.current !== sessionId) {
+      releaseMessageAnchors(prevSessionRef.current);
+    }
+    prevSessionRef.current = sessionId;
     setWindowStart(null)
     shiftPendingRef.current = false
     lastShiftAtRef.current = 0
@@ -874,7 +881,8 @@ export function SessionDetail() {
   }, [sessionId, sendPromptContinue])
 
   const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
-  // ... 메뉴: 전체 내려받기 (윈도우와 무관하게 전체 메시지 기준)
+  // ... 메뉴: 내려받기. 캐시에 로드된 메시지만 담긴다 (최근 60개 + backfill) —
+  // 서버 전체가 아니므로 개수 라벨·토스트에 로드된 수를 정직하게 표기한다.
   const handleExportFile = useCallback((format: SessionExportFormat | 'pdf' | 'json') => {
     const list = messagesRef.current ?? messages;
     if (!list || list.length === 0) {
@@ -882,15 +890,20 @@ export function SessionDetail() {
       return;
     }
     const title = (session as unknown as { title?: string })?.title || 'Untitled Session';
+    const totalNote = totalKnown != null && totalKnown > list.length
+      ? ` (loaded ${list.length} of ${totalKnown} — load more for the rest)`
+      : '';
     if (format === 'pdf') {
       if (!printSessionPdf(list, title)) {
         showToast.error('Popup blocked — allow popups for this site to print/PDF.');
+      } else {
+        showToast.success(`Exported ${list.length} message(s) as .pdf${totalNote}`);
       }
       return;
     }
     if (format === 'json') {
       downloadTextFile(sessionFileName(title, 'json'), JSON.stringify(list, null, 2), 'application/json');
-      showToast.success(`Exported ${list.length} message(s) as .json`);
+      showToast.success(`Exported ${list.length} message(s) as .json${totalNote}`);
       return;
     }
     const content = format === 'md'
@@ -900,8 +913,8 @@ export function SessionDetail() {
         : buildSessionText(list, title);
     const mime = format === 'html' ? 'text/html' : format === 'md' ? 'text/markdown' : 'text/plain';
     downloadTextFile(sessionFileName(title, format), content, mime);
-    showToast.success(`Exported ${list.length} message(s) as .${format}`);
-  }, [messages, session]);
+    showToast.success(`Exported ${list.length} message(s) as .${format}${totalNote}`);
+  }, [messages, session, totalKnown]);
   const handleNewSession = useCallback(async () => {
     try {
       const s = await createSessionMutation.mutateAsync({});

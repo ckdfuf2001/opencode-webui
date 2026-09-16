@@ -12,7 +12,7 @@ vi.mock('../../src/services/session-message-db', () => ({
   historyReasoningModels: vi.fn(),
 }))
 
-import { healReasoningTail, healMismatchTailManual, healStaleHistoryBeyondLastTurn, truncateFromNthLastUser, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch, findNewMismatch } from '../../src/services/reasoning-heal'
+import { healReasoningTail, healMismatchTailManual, healStaleHistoryBeyondLastTurn, truncateFromNthLastUser, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel, preSendStripIfMismatch, findNewMismatch } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts, stripAllReasoningParts } from '../../src/services/opencode-db'
 import { recentSessionMessages, historyReasoningModels } from '../../src/services/session-message-db'
 
@@ -810,33 +810,6 @@ describe('findNewMismatch', () => {
     expect(findNewMismatch(msgs as never, new Set(['u1']))).toBeUndefined()
   })
 })
-describe('findFreshMismatch', () => {
-  it('finds a mismatch created after the send started', () => {
-    const now = Date.now()
-    const msgs = [
-      userMsg('u1', 'hi', now - 60_000),
-      mismatchErrorMsg('e1', now - 1_000),
-    ] as never[]
-    expect(findFreshMismatch(msgs as never, now - 5_000)?.info?.id).toBe('e1')
-  })
-  it('ignores stale mismatch stubs from older turns', () => {
-    const now = Date.now()
-    const msgs = [
-      userMsg('u1', 'hi', now - 600_000),
-      mismatchErrorMsg('e1', now - 500_000),
-    ] as never[]
-    expect(findFreshMismatch(msgs as never, now - 5_000)).toBeUndefined()
-  })
-  it('ignores non-mismatch tails', () => {
-    const now = Date.now()
-    const msgs = [
-      userMsg('u1', 'hi', now - 60_000),
-      assistantMsg('a1', now - 1_000),
-    ] as never[]
-    expect(findFreshMismatch(msgs as never, now - 5_000)).toBeUndefined()
-  })
-})
-
 describe('healMismatchTailManual', () => {
   beforeEach(() => {
     recentMock.mockReset()
@@ -890,13 +863,12 @@ describe('healMismatchTailManual', () => {
     expect(res.strippedAllParts).toBe(7)
     expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
   })
-  it('strips foreign reasoning on cross-model tails before truncating', async () => {
+  it('refuses cross-model tails without an outgoing model (no session fallback)', async () => {
     const now = Date.now()
     historyMock.mockResolvedValue([
       { providerID: 'opencode', modelID: 'm-1.2', turns: 5 },
       { providerID: 'opencode', modelID: 'm-1.3', turns: 2 },
     ])
-    stripMock.mockResolvedValue({ partsRemoved: 4, messagesAffected: 3 })
     mockMessageListSequence([[
       userMsg('u1', 'hello', now - 60_000),
       mismatchErrorMsg('e1', now - 50_000),
@@ -905,11 +877,32 @@ describe('healMismatchTailManual', () => {
       userMsg('u1', 'hello', now - 60_000),
     ]])
     const res = await healMismatchTailManual('http://x', 'ses-1', '/ws')
-    expect(res.healed).toBe(true)
+    expect(res.healed).toBe(false)
     expect(res.kind).toBe('cross-model')
-    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
-    expect(res.strippedParts).toBe(4)
-    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
+    expect(res.reason).toMatch(/cannot help/)
+    expect(stripMock).not.toHaveBeenCalled()
+    expect(stripAllMock).not.toHaveBeenCalled()
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('refuses cross-model tails when nothing was stripped (prompt preserved)', async () => {
+    const now = Date.now()
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'm-1.2', turns: 5 },
+      { providerID: 'opencode', modelID: 'm-1.3', turns: 2 },
+    ])
+    stripMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
+    stripAllMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+    ]])
+    const res = await healMismatchTailManual('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.healed).toBe(false)
+    expect(res.reason).toMatch(/cannot help/)
+    expect(truncateMock).not.toHaveBeenCalled()
   })
   it('manual heal prefers the passed outgoing model over the session model', async () => {
     const now = Date.now()

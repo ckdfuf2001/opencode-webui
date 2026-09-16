@@ -760,16 +760,24 @@ export async function healMismatchTailManual(
     models = diag.models
     suggestedModel = diag.suggestedModel
     finalKind = 'cross-model'
-    // keep 체인은 자동 경로와 동일: outgoing > 세션 조회. suggested 제외.
-    const target = outgoingModel ?? (await getSessionModel(base, sessionID, directory))
-    if (target) {
-      try {
-        const strip = await stripReasoningParts(sessionID, target)
-        strippedParts = strip?.partsRemoved ?? 0
-        strippedMessages = strip?.messagesAffected ?? 0
-      } catch (e) {
-        return { healed: false, reason: `strip threw: ${(e as Error)?.message ?? e}`, kind: finalKind, healable, models, suggestedModel }
+    const names = diag.models.map((m) => `${m.providerID}/${m.modelID}`).join(', ')
+    // keep은 outgoing만 쓴다 — 세션 조회 폴백은 자동 경로와 동일하게 제외한다.
+    // (UI에서 모델을 바꾼 직후 세션 기록이 아직 이전 모델이면 keep이 반대로 잡혀
+    // 정상 전송을 깨뜨린다.) 둘 다 없으면 strip 없이 안내로 빠진다.
+    const target = outgoingModel
+    if (!target) {
+      return {
+        healed: false,
+        reason: `cross-model reasoning history [${names}] — truncating the last turn cannot help`,
+        kind: finalKind, healable, models, suggestedModel,
       }
+    }
+    try {
+      const strip = await stripReasoningParts(sessionID, target)
+      strippedParts = strip?.partsRemoved ?? 0
+      strippedMessages = strip?.messagesAffected ?? 0
+    } catch (e) {
+      return { healed: false, reason: `strip threw: ${(e as Error)?.message ?? e}`, kind: finalKind, healable, models, suggestedModel }
     }
   }
   // 동일모델 stale(또는 keep 미상) 폴백: 외국 strip이 0건이면 cutoff 이전
@@ -782,6 +790,16 @@ export async function healMismatchTailManual(
       strippedAllMessages = stripAll?.messagesAffected ?? 0
     } catch (e) {
       return { healed: false, reason: `strip-all threw: ${(e as Error)?.message ?? e}`, kind: finalKind, healable, models, suggestedModel }
+    }
+  }
+  // 크로스모델인데 아무것도 벗겨지지 않았으면 truncate해도 사용자 프롬프트만
+  // 날리고 오염은 남는다 — 자동 경로와 동일하게 안내로 반환한다.
+  if (diag.crossModel && strippedParts === 0 && strippedAllParts === 0) {
+    const names = (models ?? []).map((m) => `${m.providerID}/${m.modelID}`).join(', ')
+    return {
+      healed: false,
+      reason: `cross-model reasoning history [${names}] — truncating the last turn cannot help`,
+      kind: finalKind, healable, models, suggestedModel,
     }
   }
   const trunc = await truncateFromLastUser(sessionID)

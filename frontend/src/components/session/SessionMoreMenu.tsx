@@ -38,7 +38,7 @@ export function SessionMoreMenu({ onExport, onOpenJump, triggerClassName }: Sess
           <ListOrdered className="w-3.5 h-3.5 mr-2" /> Search / Go to message…
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs text-muted-foreground font-medium">Download all</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs text-muted-foreground font-medium">Download loaded</DropdownMenuLabel>
         <DropdownMenuItem onClick={() => onExport('md')} className="text-xs cursor-pointer">
           <FileText className="w-3.5 h-3.5 mr-2" /> Markdown (.md)
         </DropdownMenuItem>

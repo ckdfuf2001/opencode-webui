@@ -394,10 +394,30 @@ export function Search() {
                     선택 해제
                   </Button>
                 )}
-                <SelectedExportButtons
-                  ids={filteredHits.filter((h: any) => selectedHits.has(hitKeyOf(h))).map((h: any) => hitKeyOf(h)).filter(Boolean)}
-                  title={`선택 출력 ${selectedHits.size}개`}
-                />
+                {(() => {
+                  // 선택 출력은 메시지 전용 — 커밋 키(${repoId}:${sha})를 그대로 넘기면
+                  // 메시지 조회가 빗나가 "불러온 메시지가 없어요"가 된다.
+                  const msgIds = filteredHits
+                    .filter((h: any) => h.kind === 'message' && selectedHits.has(hitKeyOf(h)))
+                    .map((h: any) => h.messageId)
+                    .filter(Boolean)
+                  const excludedCommits = filteredHits.filter(
+                    (h: any) => h.kind !== 'message' && selectedHits.has(hitKeyOf(h)),
+                  ).length
+                  return (
+                    <>
+                      {excludedCommits > 0 && (
+                        <span className="text-[11px] text-muted-foreground" title="커밋은 메시지 출력에 포함되지 않습니다">
+                          커밋 {excludedCommits}개 제외
+                        </span>
+                      )}
+                      <SelectedExportButtons
+                        ids={msgIds}
+                        title={`선택 출력 ${msgIds.length}개`}
+                      />
+                    </>
+                  )
+                })()}
                 <Button variant="destructive" size="sm" disabled={selectedHits.size === 0 || deleteMessagesMutation.isPending || deleteCommitsMutation.isPending} onClick={handleBulkDelete} className="ml-auto gap-1">
                   <Trash2 className="w-3.5 h-3.5" /> Delete index ({selectedHits.size})
                 </Button>

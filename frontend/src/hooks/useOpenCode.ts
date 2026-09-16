@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { OpenCodeClient } from "../api/opencode";
 import type {
   MessageWithParts,
@@ -540,23 +540,73 @@ export function messagesQueryKey(
 /** 최근 폴링이 본 세션 전체 메시지 수 (recent 응답의 total). 폴링·backfill마다 갱신.
  * 더보기 잔여 계산이 항상 최신 total을 보게 한다 (버튼 숫자가 흔들리던 원인). */
 const recentTotals = new Map<string, number>();
+const recentTotalListeners = new Set<() => void>();
+function emitRecentTotal(): void {
+  for (const fn of recentTotalListeners) {
+    try { fn() } catch { /* ignore listener errors */ }
+  }
+}
 export function getRecentTotal(sessionID: string): number | undefined {
   return recentTotals.get(sessionID);
 }
 export function setRecentTotal(sessionID: string, total: number): void {
-  if (Number.isFinite(total) && total >= 0) recentTotals.set(sessionID, total);
+  if (Number.isFinite(total) && total >= 0) {
+    if (recentTotals.get(sessionID) === total) return;
+    recentTotals.set(sessionID, total);
+    emitRecentTotal();
+  }
 }
 export function dropRecentTotal(sessionID: string): void {
-  recentTotals.delete(sessionID);
+  if (recentTotals.delete(sessionID)) emitRecentTotal();
+}
+/** 폴링이 본 전체 메시지 수를 리액티브로 구독한다 (Load more 잔여 표시용). */
+export function useRecentTotal(sessionID: string | undefined): number | undefined {
+  return useSyncExternalStore(
+    (fn) => {
+      recentTotalListeners.add(fn);
+      return () => { recentTotalListeners.delete(fn) };
+    },
+    () => (sessionID ? (recentTotals.get(sessionID) ?? undefined) : undefined),
+    () => undefined,
+  );
 }
 
 /** 점프/검색으로 주문형 로드된 구간의 메시지 ID (세션별). 폴링 refetch가 덮어써도 유지한다. */
 const backfilledIds = new Map<string, Set<string>>();
 export function dropBackfilledId(sessionID: string, messageId: string): void {
   backfilledIds.get(sessionID)?.delete(messageId);
+  unpinMessageAnchor(sessionID, messageId);
 }
 export function clearBackfilledIds(sessionID: string): void {
   backfilledIds.delete(sessionID);
+}
+
+/**
+ * 점프 앵커 핀. ensureMessageLoaded로 로드된 타겟은 폴링 limit과 무관하게
+ * 항상 보존한다 (작은 limit 쿼리가 backfill 조각을 밀어내는 것 방지).
+ * 세션 전환 시 releaseMessageAnchors로만 해제한다.
+ */
+const MAX_PINNED_ANCHORS = 50;
+const pinnedAnchors = new Map<string, Set<string>>();
+export function pinMessageAnchor(sessionID: string, messageId: string): void {
+  if (!messageId) return;
+  let set = pinnedAnchors.get(sessionID);
+  if (!set) {
+    set = new Set();
+    pinnedAnchors.set(sessionID, set);
+  }
+  set.add(messageId);
+  while (set.size > MAX_PINNED_ANCHORS) {
+    const oldest = set.values().next();
+    if (oldest.done) break;
+    set.delete(oldest.value);
+  }
+}
+export function unpinMessageAnchor(sessionID: string, messageId: string): void {
+  pinnedAnchors.get(sessionID)?.delete(messageId);
+}
+export function releaseMessageAnchors(sessionID: string): void {
+  pinnedAnchors.delete(sessionID);
 }
 
 function createdOf(m: MessageWithParts): number {
@@ -684,10 +734,15 @@ export async function ensureMessageLoaded(
 ): Promise<boolean> {
   const key = messagesQueryKey(opcodeUrl, sessionID, directory);
   const cached = queryClient.getQueryData<MessageListResponse>(key);
-  if (cached?.some((m) => m.info.id === messageId)) return true;
+  if (cached?.some((m) => m.info.id === messageId)) {
+    pinMessageAnchor(sessionID, messageId);
+    return true;
+  }
   try {
     const { messages } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { around: messageId }, 30);
-    return messages.some((m) => m.info.id === messageId);
+    const found = messages.some((m) => m.info.id === messageId);
+    if (found) pinMessageAnchor(sessionID, messageId);
+    return found;
   } catch {
     return false;
   }
@@ -778,14 +833,23 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       // 주문형 로드된 구형 구간 보존 — 폴링(limit=60)이 refetch해도 점프용 히스토리가 날아가지 않게.
       // 삭제된 메시지의 부활을 막기 위해 backfilledIds에 기록된 것만 유지한다
       // (delete/truncate는 해당 ID를 집합에서 제거한다).
-      // 미리보기용 limit=10 쿼리(즐겨찾기 팝업)에는 적용하지 않는다.
+      // 미리보기용 limit=10 쿼리(즐겨찾기 팝업)에는 backfilled를 적용하지 않는다.
       const backfilled = backfilledIds.get(sessionID!);
       const shouldPreserve = !limit || limit >= RECENT_MESSAGE_LIMIT;
+      const freshIdsForKeep = new Set(result.map((m) => m.info.id));
       if (shouldPreserve && backfilled && backfilled.size > 0 && cached && result.length > 0) {
-        const freshIds = new Set(result.map((m) => m.info.id));
-        const keep = cached.filter((m) => backfilled.has(m.info.id) && !freshIds.has(m.info.id));
+        const keep = cached.filter((m) => backfilled.has(m.info.id) && !freshIdsForKeep.has(m.info.id));
         if (keep.length > 0) {
           result = [...keep, ...result].sort((a, b) => createdOf(a) - createdOf(b));
+        }
+      }
+      // 점프 앵커 핀 — limit과 무관하게 항상 보존한다. 작은 limit 쿼리라도
+      // 핀은 해당 키 캐시에 있던 항목만 유지하므로 미리보기가 부풀지 않는다.
+      const pinned = pinnedAnchors.get(sessionID!);
+      if (pinned && pinned.size > 0 && cached && result.length > 0) {
+        const keepPinned = cached.filter((m) => pinned.has(m.info.id) && !freshIdsForKeep.has(m.info.id));
+        if (keepPinned.length > 0) {
+          result = [...keepPinned, ...result].sort((a, b) => createdOf(a) - createdOf(b));
         }
       }
       const optimistic = pendingOptimistic.get(sessionID!);
