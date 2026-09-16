@@ -1150,6 +1150,13 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const refreshExplorer = useCallback(async () => {
     setRefreshing(true)
     try {
+      // 목록만 다시 읽으면 opencode 인스턴스 캐시 때문에 새 커맨드/스킬이 안 보인다.
+      // 먼저 인스턴스를 dispose해야 다음 조회가 디스크를 다시 읽는다.
+      try {
+        await registryApi.reload(directory)
+      } catch (e) {
+        console.warn('Instance reload failed, refetching lists anyway:', e)
+      }
       await refresh()
       queryClient.invalidateQueries({ queryKey: ['registry-list'] })
       queryClient.invalidateQueries({ queryKey: ['opencode', 'config', opcodeUrl, directory] })

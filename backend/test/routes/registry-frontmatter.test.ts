@@ -12,6 +12,10 @@ vi.mock('@opencode-webui/shared', async () => {
   return { ...actual, getConfigPath: () => tempDir }
 })
 
+vi.mock('../../src/services/automation-watcher', () => ({
+  notifyRegistryChanged: vi.fn(),
+}))
+
 describe('Command frontmatter round-trip', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), 'mig-check-'))

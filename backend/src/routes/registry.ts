@@ -6,6 +6,7 @@ import path from 'path'
 import { logger } from '../utils/logger'
 import { getConfigPath, getWorkspacePath } from '@opencode-webui/shared'
 import { opencodeServerManager } from '../services/opencode-single-server'
+import { notifyRegistryChanged } from '../services/automation-watcher'
 
 type RegistryType = 'command' | 'skill' | 'tool' | 'agent'
 type RegistryScope = 'global' | 'project'
@@ -344,6 +345,8 @@ export function createRegistryRoutes() {
       await writeFile(target, content, 'utf-8')
 
       logger.info(`Registered ${validated.type} ${validated.name} (${validated.scope}) -> ${target}`)
+      // 파일만 쓰면 opencode 인스턴스 캐시 때문에 바로 안 보인다 — 즉시 dispose.
+      notifyRegistryChanged(validated.scope, directory)
       return c.json({ success: true, type: validated.type, scope: validated.scope, name: validated.name, path: target })
     } catch (error) {
       logger.error('Failed to register opencode file:', error)
@@ -394,6 +397,7 @@ export function createRegistryRoutes() {
       await writeFile(target, content, 'utf-8')
 
       logger.info(`Updated ${type} ${currentName} -> ${newName} (${scope}) -> ${target}`)
+      notifyRegistryChanged(scope, directory)
       return c.json({ success: true, type, scope, name: newName, path: target })
     } catch (error) {
       logger.error('Failed to update opencode file:', error)
@@ -449,6 +453,7 @@ export function createRegistryRoutes() {
         }
       }
       logger.info(`Deleted ${type} ${name} (${scope})`)
+      notifyRegistryChanged(scope, directory)
       return c.json({ success: true })
     } catch (error) {
       logger.error('Failed to delete opencode file:', error)

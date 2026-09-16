@@ -88,6 +88,40 @@ function expandGlobalTargets(): string[] {
   return [...targets]
 }
 
+/**
+ * Registry API(커맨드/스킬/툴/에이전트 생성·수정·삭제) 직후 호출.
+ * 파일 쓰기만으로는 opencode 인스턴스 캐시가 안 비워지므로 여기서 dispose한다.
+ * fs watcher에만 의존하면 debounce·busy 연기·Windows 감지 누락 때문에
+ * "만들었는데 로드가 안 됨"이 된다 — 이 경로는 fs 이벤트과 무관하게 동작한다.
+ * idle이면 즉시 dispose(바로 로드), busy/queued면 기존 스케줄러에 맡겨
+ * idle 전환 시점에 flush한다 (진행 중 턴 위로 dispose하지 않는다).
+ */
+export function notifyRegistryChanged(scope: 'global' | 'project', directory?: string): void {
+  if (scope === 'project') {
+    if (!directory) return
+    if (isOpenCodeServerBusy() || hasAnyQueuedChats()) {
+      pendingDirectories.add(directory)
+      logger.info(`Registry change in ${directory} while busy; reload deferred until idle`)
+      scheduleRestart()
+      return
+    }
+    void opencodeServerManager
+      .reloadDirectories([directory])
+      .catch((error) => logger.error(`Failed to reload OpenCode instance after registry change in ${directory}:`, error))
+    return
+  }
+  // global 변경은 전 프로젝트 인스턴스에 영향 — watcher와 동일하게 전체 dispose.
+  if (isOpenCodeServerBusy() || hasAnyQueuedChats()) {
+    globalConfigChanged = true
+    logger.info('Global registry change while busy; reload deferred until idle')
+    scheduleRestart()
+    return
+  }
+  void opencodeServerManager
+    .reloadDirectories(expandGlobalTargets())
+    .catch((error) => logger.error('Failed to reload OpenCode instances after global registry change:', error))
+}
+
 function executeReload(): void {
   // 마지막 관문. 여기까지 오는 사이에 요청이 시작됐으면 dispose 하지 않는다.
   if (isOpenCodeServerBusy() || hasAnyQueuedChats()) {

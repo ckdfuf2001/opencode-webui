@@ -12,6 +12,13 @@ vi.mock('@opencode-webui/shared', async () => {
   return { ...actual, getConfigPath: () => tempDir }
 })
 
+// registry 라우트는 파일 쓰기 후 automation-watcher에 dispose를 요청한다.
+// 실제 watcher는 bun:sqlite 체인을 끌어들여 vitest(node)에서 못 읽으므로 mock.
+// (unit 테스트가 실제 opencode 인스턴스를 dispose하면 안 되기도 하다)
+vi.mock('../../src/services/automation-watcher', () => ({
+  notifyRegistryChanged: vi.fn(),
+}))
+
 function createApp(): Hono {
   const app = new Hono()
   app.route('/api/registry', createRegistryRoutes())
@@ -54,6 +61,9 @@ describe('Registry Routes', () => {
     const body = await json(res)
     expect(body.success).toBe(true)
     expect(body.path).toContain('mycmd.md')
+    // 파일 쓰기 후 인스턴스 dispose 요청까지 가야 바로 로드된다
+    const { notifyRegistryChanged } = await import('../../src/services/automation-watcher')
+    expect(notifyRegistryChanged).toHaveBeenCalledWith('global', undefined)
 
     const listRes = await app.request('/api/registry')
     const items = await jsonItems(listRes)
