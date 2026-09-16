@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger'
-import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts } from './opencode-db'
+import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts, stripAllReasoningParts } from './opencode-db'
 import { recentSessionMessages, historyReasoningModels, type ReasoningModelStat } from './session-message-db'
 import { ensureServerAuth } from './opencode-auth'
 
@@ -41,6 +41,9 @@ export interface ReasoningHealResult {
   /** cross-model strip으로 제거한 reasoning part 수 (메시지는 보존) */
   strippedParts?: number
   strippedMessages?: number
+  /** 동일모델 stale 대응 strip-all로 제거한 reasoning part 수 (keep 무관) */
+  strippedAllParts?: number
+  strippedAllMessages?: number
 }
 
 /** 마지막 user 메시지가 이보다 오래됐으면 남의 턴으로 보고 자르지 않는다. */
@@ -506,6 +509,9 @@ export interface PreSendStripResult {
   checked: boolean
   strippedParts: number
   strippedMessages: number
+  /** 동일모델 stale 폴백(strip-all) 제거 수 — keep 없이도 동작한다 */
+  strippedAllParts: number
+  strippedAllMessages: number
   stubsRemoved: number
   stubsPending: string[]
   /** 발송 전 꼬리 20개의 메시지 id — 발송 후 fresh 판별용(knownIds). */
@@ -525,9 +531,15 @@ const PRE_SEND_SCAN = 20
  *
  * keep은 outgoing(보내려는 모델)만 쓴다. 세션 조회 폴백은 여기서 제외한다 —
  * UI에서 모델을 바꾼 직후 세션 기록이 아직 이전 모델이면 keep이 반대로 잡혀
- * 정상 전송을 망가뜨린다 (자동 경로는 실패 뒤라 폴백이 틀려도 재시도 한 번
+ * 정상 전송을 깨뜨린다 (자동 경로는 실패 뒤라 폴백이 틀려도 재시도 한 번
  * 손해지만, pre-send는 정상 전송을 깨뜨리는 위치다). outgoing이 없으면
  * sweep만 한다.
+ *
+ * 외국 strip이 0건이면 strip-all 폴백이 돈다: 동일모델 stale(오래된 암호문
+ * 전체가 무효화된 경우)은 외국 strip으로 1건도 안 지워지는데, 꼬리 mismatch
+ * stub이 있다는 건 히스토리가 이미 거부된 상태라는 증거라 keep 없이
+ * 지워도 반대를 지울 위험이 없다. 최신 턴은 양쪽 모두 보존한다
+ * (interleaved thinking 보호 — 최신 턴 오염은 발송 후 단계에서 처리).
  *
  * 왜 필요한가: opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는
  * 경로가 있다 (실측: 큐에서 Flushed됐는데 400 메시지가 쌓임). 응답-기준 heal만
@@ -543,11 +555,12 @@ export async function preSendStripIfMismatch(
   outgoing?: OutgoingModel,
 ): Promise<PreSendStripResult> {
   const empty = (reason: string, tailIds: string[] = []): PreSendStripResult => ({
-    checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds, reason,
+    checked: true, strippedParts: 0, strippedMessages: 0, strippedAllParts: 0, strippedAllMessages: 0,
+    stubsRemoved: 0, stubsPending: [], tailIds, reason,
   })
   const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages || messages.length === 0) {
-    return { checked: false, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds: [], reason: reason ?? 'no messages' }
+    return { checked: false, strippedParts: 0, strippedMessages: 0, strippedAllParts: 0, strippedAllMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds: [], reason: reason ?? 'no messages' }
   }
   const tailIds = messages
     .slice(-PRE_SEND_SCAN)
@@ -561,21 +574,39 @@ export async function preSendStripIfMismatch(
   const keep = outgoing
   let strippedParts = 0
   let strippedMessages = 0
+  let strippedAllParts = 0
+  let strippedAllMessages = 0
   if (keep) {
     try {
       const strip = await stripReasoningParts(sessionID, keep)
       strippedParts = strip?.partsRemoved ?? 0
       strippedMessages = strip?.messagesAffected ?? 0
     } catch (e) {
-      return { checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds, reason: `strip threw: ${(e as Error)?.message ?? e}` }
+      return { checked: true, strippedParts: 0, strippedMessages: 0, strippedAllParts: 0, strippedAllMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds, reason: `strip threw: ${(e as Error)?.message ?? e}` }
+    }
+  }
+  // 동일모델 stale 폴백: 외국 strip이 0건이면 cutoff 이전 reasoning 전체를
+  // 모델 무관하게 제거한다. mismatch stub이 꼬리에 있다는 건 이미 거부된
+  // 히스토리라는 증거라 keep 유무와 무관하게 안전하다.
+  if (strippedParts === 0) {
+    try {
+      const stripAll = await stripAllReasoningParts(sessionID)
+      strippedAllParts = stripAll?.partsRemoved ?? 0
+      strippedAllMessages = stripAll?.messagesAffected ?? 0
+      if (strippedAllParts > 0) {
+        logger.warn(`Pre-send strip-all for session ${sessionID}: removed ${strippedAllParts} stale reasoning part(s) in ${strippedAllMessages} message(s) (foreign strip 0 — same-model stale history suspected)`)
+      }
+    } catch (e) {
+      logger.warn(`Pre-send strip-all threw for session ${sessionID}:`, e)
     }
   }
   const sweep = await sweepPollutedStubs(sessionID)
+  const acted = strippedParts > 0 || strippedAllParts > 0
   return {
-    checked: true, strippedParts, strippedMessages,
+    checked: true, strippedParts, strippedMessages, strippedAllParts, strippedAllMessages,
     stubsRemoved: sweep.removed, stubsPending: sweep.pending, tailIds,
     ...(keep ? { keep } : {}),
-    reason: keep ? undefined : 'keep unknown — sweep only',
+    reason: acted ? undefined : (keep ? 'foreign strip 0, strip-all 0 — sweep only' : 'keep unknown, strip-all 0 — sweep only'),
   }
 }
 
@@ -621,21 +652,81 @@ export function findNewMismatch(
 export async function truncateFromLastUser(
   sessionID: string,
 ): Promise<{ truncatedMessageId: string; messagesRemoved: number } | { reason: string }> {
+  return truncateFromNthLastUser(sessionID, 1)
+}
+
+/**
+ * 끝에서 n번째 user 메시지부터 잘라낸다 (n=1이면 마지막 user와 동일).
+ * stage3 deep-truncate용: 재시도에도 같은 400이 나면 최신 턴 통째가 오염된
+ * 것으로 보고 한 턴 더 뒤로 잘라낸다. 손실 범위를 1턴으로 묶기 위해 n>2는
+ * 받지 않는다 (그 이상은 사용자 가위·새 세션 영역).
+ */
+export async function truncateFromNthLastUser(
+  sessionID: string,
+  n: number,
+): Promise<{ truncatedMessageId: string; messagesRemoved: number } | { reason: string }> {
+  if (!Number.isInteger(n) || n < 1 || n > 2) return { reason: `unsupported depth n=${n} (max 2)` }
   const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages) return { reason: reason ?? 'no messages' }
+  let seen = 0
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m?.info?.role === 'user' && m.info.id) {
-      try {
-        const result = await truncateSessionMessages(sessionID, m.info.id)
-        if (!result) return { reason: 'truncate failed' }
-        return { truncatedMessageId: m.info.id, messagesRemoved: result.messagesRemoved }
-      } catch (e) {
-        return { reason: `truncate threw: ${(e as Error)?.message ?? e}` }
+      seen++
+      if (seen === n) {
+        try {
+          const result = await truncateSessionMessages(sessionID, m.info.id)
+          if (!result) return { reason: 'truncate failed' }
+          logger.warn(`Deep truncate for session ${sessionID}: cut from ${n}-th last user ${m.info.id} (removed ${result.messagesRemoved} messages)`)
+          return { truncatedMessageId: m.info.id, messagesRemoved: result.messagesRemoved }
+        } catch (e) {
+          return { reason: `truncate threw: ${(e as Error)?.message ?? e}` }
+        }
       }
     }
   }
-  return { reason: 'no user to truncate from' }
+  return { reason: seen === 0 ? 'no user to truncate from' : `only ${seen} user message(s), depth ${n} unavailable` }
+}
+
+export interface StaleHistoryHealResult {
+  truncatedMessageId?: string
+  messagesRemoved?: number
+  strippedAllParts: number
+  strippedAllMessages: number
+  stubsRemoved: number
+  stubsPending: string[]
+  reason?: string
+}
+
+/**
+ * stage2 DB 작업: 실패 턴 제거(마지막 user부터 절단) + cutoff 이전 reasoning
+ * 전체 strip-all + stub sweep. 동일모델 stale(히스토리 전체 오염) 대응으로,
+ * stage1(마지막 턴 절단 + 외국 strip) 재시도가 같은 400을 맞았을 때 호출한다.
+ * 최신 턴은 strip-all이 보존하므로, 최신 턴 자체가 오염이면 stage3
+ * (truncateFromNthLastUser 2)로 이어간다.
+ */
+export async function healStaleHistoryBeyondLastTurn(sessionID: string): Promise<StaleHistoryHealResult> {
+  const trunc = await truncateFromNthLastUser(sessionID, 1)
+  if ('reason' in trunc) {
+    return { strippedAllParts: 0, strippedAllMessages: 0, stubsRemoved: 0, stubsPending: [], reason: trunc.reason }
+  }
+  let strippedAllParts = 0
+  let strippedAllMessages = 0
+  try {
+    const stripAll = await stripAllReasoningParts(sessionID)
+    strippedAllParts = stripAll?.partsRemoved ?? 0
+    strippedAllMessages = stripAll?.messagesAffected ?? 0
+  } catch (e) {
+    logger.warn(`Stage2 strip-all threw for session ${sessionID}:`, e)
+  }
+  const sweep = await sweepPollutedStubs(sessionID)
+  logger.warn(`Stage2 stale-history heal for session ${sessionID}: truncated ${trunc.truncatedMessageId} (removed ${trunc.messagesRemoved}), strip-all ${strippedAllParts} part(s) in ${strippedAllMessages} message(s), stubs removed ${sweep.removed}, pending ${sweep.pending.length}`)
+  return {
+    truncatedMessageId: trunc.truncatedMessageId,
+    messagesRemoved: trunc.messagesRemoved,
+    strippedAllParts, strippedAllMessages,
+    stubsRemoved: sweep.removed, stubsPending: sweep.pending,
+  }
 }
 
 /**
@@ -659,6 +750,8 @@ export async function healMismatchTailManual(
   }
   let strippedParts = 0
   let strippedMessages = 0
+  let strippedAllParts = 0
+  let strippedAllMessages = 0
   let models: ReasoningModelStat[] | undefined
   let suggestedModel: { providerID: string; modelID: string } | undefined
   let finalKind: TailKind = kind
@@ -679,9 +772,21 @@ export async function healMismatchTailManual(
       }
     }
   }
+  // 동일모델 stale(또는 keep 미상) 폴백: 외국 strip이 0건이면 cutoff 이전
+  // reasoning 전체를 모델 무관하게 제거한다. 꼬리가 mismatch라는 건 이미
+  // 거부된 히스토리라는 증거라 안전하다.
+  if (strippedParts === 0) {
+    try {
+      const stripAll = await stripAllReasoningParts(sessionID)
+      strippedAllParts = stripAll?.partsRemoved ?? 0
+      strippedAllMessages = stripAll?.messagesAffected ?? 0
+    } catch (e) {
+      return { healed: false, reason: `strip-all threw: ${(e as Error)?.message ?? e}`, kind: finalKind, healable, models, suggestedModel }
+    }
+  }
   const trunc = await truncateFromLastUser(sessionID)
   if ('reason' in trunc) return { healed: false, reason: trunc.reason, kind: finalKind, healable, models, suggestedModel }
-  logger.warn(`Manual mismatch heal for session ${sessionID}: stripped ${strippedParts} reasoning part(s), truncated from user ${trunc.truncatedMessageId} (removed ${trunc.messagesRemoved} messages)`)
+  logger.warn(`Manual mismatch heal for session ${sessionID}: stripped ${strippedParts} reasoning part(s), strip-all ${strippedAllParts} part(s), truncated from user ${trunc.truncatedMessageId} (removed ${trunc.messagesRemoved} messages)`)
   const sweep = await sweepPollutedStubs(sessionID)
-  return { healed: true, truncatedMessageId: trunc.truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending, strippedParts, strippedMessages, kind: finalKind, healable: true, models, suggestedModel }
+  return { healed: true, truncatedMessageId: trunc.truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending, strippedParts, strippedMessages, strippedAllParts, strippedAllMessages, kind: finalKind, healable: true, models, suggestedModel }
 }

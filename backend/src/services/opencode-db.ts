@@ -371,6 +371,78 @@ export async function stripReasoningParts(
 }
 
 /**
+ * 동일모델 stale 암호문 대응 — keep과 무관하게 cutoff(세션의 최신 user 시각)
+ * 이전의 reasoning part를 전부 제거한다. 텍스트·tool 결과는 그대로 남는다.
+ *
+ * 왜 필요한가: stripReasoningParts는 외국 모델 reasoning만 벗겨내므로,
+ * 히스토리 전체가 같은 모델이어도 암호문이 무효화된 경우(장시간 경과 후
+ * 키 로테이션·캐시 만료 등 — 실측 세션에서 259개 blob이 전부 같은 모델인데도
+ * 400이 난 케이스)에는 0건을 지우고 끝난다. 꼬리에 mismatch stub이 있다는 건
+ * 히스토리가 이미 provider에게 거부된 상태라는 증거이므로, 이 폴백은
+ * keep을 몰라도 안전하게(잘못된 keep으로 반대를 지울 위험 없이) 동작한다.
+ *
+ * 최신 턴은 제외한다: interleaved thinking을 쓰는 provider는 tool_use 앞의
+ * thinking 블록을 요구하므로, 최신 턴은 turn 단위 삭제(truncate)로 처리한다.
+ * 경계 = 세션의 최신 user 메시지 시각 (그 턴 전체를 통째로 보존).
+ */
+export async function stripAllReasoningParts(sessionId: string): Promise<StripResult | null> {
+  const dbPath = await getOpenCodeDbPath()
+  if (!dbPath) return null
+
+  const db = new Database(dbPath)
+  try {
+    db.exec('PRAGMA busy_timeout = 5000')
+    const boundary = db
+      .query(
+        `SELECT MAX(time_created) AS t FROM message
+         WHERE session_id = ? AND json_extract(data,'$.role') = 'user'`,
+      )
+      .get(sessionId) as { t: number | null } | null
+    const cutoff = boundary?.t ?? 0
+
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const affected = db
+        .query<{ n: number }, [string, number]>(
+          `SELECT COUNT(DISTINCT p.message_id) AS n
+           FROM part p JOIN message m ON m.id = p.message_id
+           WHERE m.session_id = ?
+             AND m.time_created < ?
+             AND json_extract(m.data,'$.role') = 'assistant'
+             AND json_extract(p.data,'$.type') = 'reasoning'`,
+        )
+        .get(sessionId, cutoff) as { n: number }
+      const del = db
+        .query<{ changes: number }, [string, number]>(
+          `DELETE FROM part
+           WHERE message_id IN (
+             SELECT m.id FROM message m
+             WHERE m.session_id = ?
+               AND m.time_created < ?
+               AND json_extract(m.data,'$.role') = 'assistant'
+           )
+           AND json_extract(data,'$.type') = 'reasoning'`,
+        )
+        .run(sessionId, cutoff)
+
+      recomputeSessionMeta(db, sessionId, Date.now())
+
+      db.exec('COMMIT')
+
+      const partsRemoved = Number(del.changes ?? 0)
+      logger.info(
+        `Stripped ${partsRemoved} reasoning part(s) in ${Number(affected?.n ?? 0)} message(s) of session ${sessionId} (all models, cutoff ${cutoff})`,
+      )
+      return { partsRemoved, messagesAffected: Number(affected?.n ?? 0) }
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  } finally {
+    db.close()
+  }
+}
+/**
  * Delete a single message plus its descendant subtree (the message's own turn,
  * e.g. the user message and the assistant replies it produced) while keeping
  * later independent turns intact. Unlike truncate, this does not remove every

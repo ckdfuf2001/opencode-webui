@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText, healReasoningTail, asOutgoingModel, preSendStripIfMismatch, findNewMismatch } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail, healStaleHistoryBeyondLastTurn, truncateFromNthLastUser, sweepPollutedStubs, asOutgoingModel, preSendStripIfMismatch, findNewMismatch } from './reasoning-heal'
 import { recentSessionMessages } from './session-message-db'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
@@ -371,7 +371,7 @@ function recordDeterministicFailure(sessionID: string, id: string, detail?: stri
     head.failedAt = Date.now()
   }
   logger.error(
-    `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; auto-truncate + one retry did not recover). ` +
+    `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; staged auto-recovery (truncate + strip-all + deep-truncate with retries) did not recover). ` +
     `Pick one: (a) switch back to the model that owns the latest good turn, (b) truncate back before the model switch with the per-message scissors, or (c) start a new session. ` +
     `Manual deep-clean: POST /api/session-heal/${sessionID}. Then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
   )
@@ -562,7 +562,7 @@ async function dispatchQueuedChat(
   try {
     const pre = await preSendStripIfMismatch(base, sessionID, directory, outgoing)
     knownIds = new Set(pre.tailIds ?? [])
-    if ((pre.strippedParts ?? 0) > 0 || (pre.stubsRemoved ?? 0) > 0) {
+    if ((pre.strippedParts ?? 0) > 0 || (pre.strippedAllParts ?? 0) > 0 || (pre.stubsRemoved ?? 0) > 0) {
       let reloaded = false
       try {
         reloaded = await opencodeServerManager.reloadAndVerify(directory)
@@ -570,7 +570,7 @@ async function dispatchQueuedChat(
         logger.warn(`Pre-send strip instance reload threw for session ${sessionID}:`, e)
       }
       const kept = pre.keep ? `${pre.keep.providerID}/${pre.keep.modelID}` : 'unknown'
-      logger.warn(`Pre-send strip for session ${sessionID}: stripped ${pre.strippedParts} reasoning part(s) in ${pre.strippedMessages} message(s), removed ${pre.stubsRemoved} stub(s), kept ${kept} — instance reload ${reloaded ? 'verified' : 'NOT verified, sending anyway'}`)
+      logger.warn(`Pre-send strip for session ${sessionID}: stripped ${pre.strippedParts} reasoning part(s) in ${pre.strippedMessages} message(s), strip-all ${pre.strippedAllParts} part(s) in ${pre.strippedAllMessages} message(s), removed ${pre.stubsRemoved} stub(s), kept ${kept} — instance reload ${reloaded ? 'verified' : 'NOT verified, sending anyway'}`)
     }
   } catch (e) {
     logger.warn(`Pre-send strip check failed for session ${sessionID}:`, e)
@@ -685,11 +685,39 @@ async function dispatchQueuedChat(
   if (chat.agent) messageBody.agent = chat.agent
   if (chat.model) messageBody.model = chat.model
 
-  // security/reasoning 암호문 거부 때만 자동 정리 후 1회 재전송.
+  // security/reasoning 암호문 거부 때만 자동 정리 후 최대 3회 재전송
+  // (stage1 마지막 턴 절단 → stage2 strip-all → stage3 한 턴 더 절단).
   // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
   // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
   // providerDetail 출처 2가지: HTTP 400 본문, 또는 HTTP 200 + 저장된 메시지 error.
   const healMismatchAndRetryOnce = async (providerDetail: string): Promise<DispatchResult> => {
+    const url = `${base}/session/${sessionID}/message?directory=${directoryParam}`
+    const sendOnce = async () => fetch(url, {
+      method: 'POST',
+      headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(messageBody),
+      signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+    })
+    const reloadTag = async (tag: string) => {
+      try {
+        const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+        logger.warn(`Reasoning heal ${tag}: session ${sessionID} — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
+      } catch (e) {
+        logger.warn(`Reasoning heal ${tag}: instance reload threw for session ${sessionID}, retrying anyway:`, e)
+      }
+    }
+    // HTTP 200이어도 provider 400이 메시지로 저장될 수 있어, 발송 성공으로
+    // 단정하지 않고 방금 턴의 저장된 mismatch를 확인한다. 있으면 그 본문을 돌려준다.
+    const storedMismatchAfterOk = async (res: Response): Promise<string | undefined> => {
+      void res.text().catch(() => {})
+      return checkStoredMismatch()
+    }
+    const mismatchDetailOf = async (res: Response): Promise<string | undefined> => {
+      if (res.ok) return storedMismatchAfterOk(res)
+      const body = await res.text().catch(() => '')
+      if (res.status === 400 && isReasoningEncryptedMismatch(body)) return body
+      return undefined
+    }
     try {
       const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true, outgoingModel: outgoing })
       if (!heal.healed && heal.kind === 'cross-model') {
@@ -705,43 +733,58 @@ async function dispatchQueuedChat(
         logger.warn(`Queued chat cross-model mismatch for session ${sessionID}: ${guidance}`)
         return { sent: false, nonRetryable: true, status: 400, detail: (providerDetail.slice(0, 300) + ' ' + guidance) }
       }
-      if (heal.healed) {
-        // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
-        // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
-        // reloadAndVerify는 성공 여부를 boolean으로 돌려준다 (조용한 실패 방지).
-        // 남은 stub이 있으면 재전송이 같은 400을 맞을 수 있어 명시한다.
-        const pending = heal.stubsPending ?? []
-        try {
-          const reloaded = await opencodeServerManager.reloadAndVerify(directory)
-          logger.warn(`Reasoning heal: session ${sessionID} truncated ${heal.truncatedMessageId} (stripped ${heal.strippedParts ?? 0} reasoning parts, stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
-        } catch (e) {
-          logger.warn(`Reasoning heal: instance reload threw for session ${sessionID} (pending ${pending.length}), retrying anyway:`, e)
-        }
-        const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
-          method: 'POST',
-          headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify(messageBody),
-          signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
-        })
+      if (!heal.healed) {
+        logger.warn(`Reasoning heal skipped for queued chat (session ${sessionID}): ${heal.reason}`)
+        return { sent: false, nonRetryable: true, status: 400, detail: providerDetail.slice(0, 300) }
+      }
+      // 남은 stub이 있으면 재전송이 같은 400을 맞을 수 있어 명시한다.
+      const pending = heal.stubsPending ?? []
+      await reloadTag(`stage1 (truncated ${heal.truncatedMessageId}, stripped ${heal.strippedParts ?? 0} reasoning parts, stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length})`)
+      const retryRes = await sendOnce()
+      const retryMismatch = await mismatchDetailOf(retryRes)
+      if (!retryMismatch) {
         if (retryRes.ok) {
-          void retryRes.text().catch(() => {})
-          const stored = await checkStoredMismatch()
-          if (stored && isReasoningEncryptedMismatch(stored)) {
-            logger.warn(`Queued chat heal-retry stored a provider mismatch for session ${sessionID} — no further auto-retry`)
-            return { sent: false, nonRetryable: true, status: 400, detail: stored.slice(0, 300) }
-          }
           logger.info(`Reasoning heal: truncated tail and queue retry succeeded for session ${sessionID}`)
           return { sent: true }
         }
-        const retryBody = await retryRes.text().catch(() => '')
-        logger.warn(`Queued chat heal-retry rejected for session ${sessionID}: HTTP ${retryRes.status} ${retryBody.slice(0, 200)}`)
-        if (retryRes.status === 400 && isReasoningEncryptedMismatch(retryBody)) {
-          const pendingNote = (heal.stubsPending?.length ?? 0) > 0 ? ` Unremoved stubs: ${heal.stubsPending!.join(',')}.` : ''
-          return { sent: false, nonRetryable: true, status: retryRes.status, detail: (retryBody.slice(0, 300) + pendingNote) }
-        }
         return { sent: false, status: retryRes.status }
       }
-      logger.warn(`Reasoning heal skipped for queued chat (session ${sessionID}): ${heal.reason}`)
+      logger.warn(`Queued chat heal-retry hit the same mismatch for session ${sessionID} — stage2 (strip-all)`)
+      // Stage 2: 오염이 마지막 턴보다 앞에 있다 (동일모델 stale 등).
+      // 실패 턴 제거 + cutoff 이전 reasoning 전체 strip-all + sweep 후 재시도.
+      const stage2 = await healStaleHistoryBeyondLastTurn(sessionID)
+      await reloadTag(`stage2 (strip-all ${stage2.strippedAllParts} part(s), truncated ${stage2.truncatedMessageId ?? 'none'})`)
+      const retry2Res = await sendOnce()
+      const retry2Mismatch = await mismatchDetailOf(retry2Res)
+      if (!retry2Mismatch) {
+        if (retry2Res.ok) {
+          logger.info(`Reasoning heal stage2: strip-all and queue retry succeeded for session ${sessionID}`)
+          return { sent: true }
+        }
+        return { sent: false, status: retry2Res.status }
+      }
+      logger.warn(`Queued chat stage2 retry hit the same mismatch for session ${sessionID} — stage3 (deep truncate one more turn)`)
+      // Stage 3: 그래도 같은 400이면 최신 턴 통째가 오염 — 한 턴 더 뒤로
+      // 잘라내고 최종 재시도한다 (손실은 1턴으로 묶는다).
+      const deep = await truncateFromNthLastUser(sessionID, 2)
+      if ('reason' in deep) {
+        logger.warn(`Reasoning heal stage3 skipped for session ${sessionID}: ${deep.reason}`)
+        return { sent: false, nonRetryable: true, status: 400, detail: retry2Mismatch.slice(0, 300) }
+      }
+      const sweep2 = await sweepPollutedStubs(sessionID)
+      logger.warn(`Reasoning heal stage3: session ${sessionID} deep-truncated from ${deep.truncatedMessageId} (removed ${deep.messagesRemoved}), sweep removed ${sweep2.removed}`)
+      await reloadTag(`stage3 (deep-truncated ${deep.truncatedMessageId})`)
+      const retry3Res = await sendOnce()
+      const retry3Mismatch = await mismatchDetailOf(retry3Res)
+      if (!retry3Mismatch) {
+        if (retry3Res.ok) {
+          logger.info(`Reasoning heal stage3: deep-truncate and queue retry succeeded for session ${sessionID}`)
+          return { sent: true }
+        }
+        return { sent: false, status: retry3Res.status }
+      }
+      logger.warn(`Queued chat stage3 retry rejected for session ${sessionID} — no further auto-retry`)
+      return { sent: false, nonRetryable: true, status: 400, detail: (retry3Mismatch.slice(0, 300) + ` Deep recovery tried (strip-all ${stage2.strippedAllParts}, deep-truncated ${deep.truncatedMessageId}).`) }
     } catch (e) {
       logger.warn(`Reasoning heal attempt failed for queued chat (session ${sessionID}):`, e)
     }

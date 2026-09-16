@@ -4,6 +4,7 @@ vi.mock('../../src/services/opencode-db', () => ({
   truncateSessionMessages: vi.fn(),
   deleteSingleChildlessMessage: vi.fn(),
   stripReasoningParts: vi.fn(),
+  stripAllReasoningParts: vi.fn(),
 }))
 
 vi.mock('../../src/services/session-message-db', () => ({
@@ -11,13 +12,14 @@ vi.mock('../../src/services/session-message-db', () => ({
   historyReasoningModels: vi.fn(),
 }))
 
-import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch, findNewMismatch } from '../../src/services/reasoning-heal'
-import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts } from '../../src/services/opencode-db'
+import { healReasoningTail, healMismatchTailManual, healStaleHistoryBeyondLastTurn, truncateFromNthLastUser, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch, findNewMismatch } from '../../src/services/reasoning-heal'
+import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts, stripAllReasoningParts } from '../../src/services/opencode-db'
 import { recentSessionMessages, historyReasoningModels } from '../../src/services/session-message-db'
 
 const truncateMock = truncateSessionMessages as unknown as ReturnType<typeof vi.fn>
 const deleteMock = deleteSingleChildlessMessage as unknown as ReturnType<typeof vi.fn>
 const stripMock = stripReasoningParts as unknown as ReturnType<typeof vi.fn>
+const stripAllMock = stripAllReasoningParts as unknown as ReturnType<typeof vi.fn>
 const recentMock = recentSessionMessages as unknown as ReturnType<typeof vi.fn>
 const historyMock = historyReasoningModels as unknown as ReturnType<typeof vi.fn>
 
@@ -656,6 +658,8 @@ describe('preSendStripIfMismatch', () => {
     deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 3 })
     stripMock.mockReset()
     stripMock.mockResolvedValue({ partsRemoved: 6, messagesAffected: 4 })
+    stripAllMock.mockReset()
+    stripAllMock.mockResolvedValue(null)
   })
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -701,7 +705,24 @@ describe('preSendStripIfMismatch', () => {
   })
   it('never falls back to the session model in pre-send (outgoing only)', async () => {
     const now = Date.now()
-    // 세션 기록에 모델이 있어도 outgoing 없으면 strip 금지 — 정상 전송 보호
+    // 세션 기록에 모델이 있어도 outgoing 없으면 외국 strip 금지 — 정상 전송 보호.
+    // 단 keep 무관한 strip-all 폴백은 동작한다 (반대를 지울 위험이 없음).
+    stripAllMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', undefined)
+    expect(res.checked).toBe(true)
+    expect(stripMock).not.toHaveBeenCalled()
+    expect(stripAllMock).toHaveBeenCalledWith('ses-1')
+    expect(deleteMock).toHaveBeenCalledWith('ses-1', 'e1')
+    expect(res.reason).toMatch(/sweep only/)
+  })
+  it('sweeps without stripping when keep is unknown', async () => {
+    const now = Date.now()
+    mockNoSessionModel()
+    stripAllMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
     mockMessageList([
       userMsg('u1', 'hello', now - 60_000),
       mismatchErrorMsg('e1', now - 50_000),
@@ -712,9 +733,39 @@ describe('preSendStripIfMismatch', () => {
     expect(deleteMock).toHaveBeenCalledWith('ses-1', 'e1')
     expect(res.reason).toMatch(/sweep only/)
   })
-  it('sweeps without stripping when keep is unknown', async () => {
+  it('falls back to strip-all when foreign strip yields 0 (same-model stale)', async () => {
     const now = Date.now()
-    mockNoSessionModel()
+    // 동일모델 stale: 외국 strip 0건 → cutoff 이전 reasoning 전체 제거
+    stripMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
+    stripAllMock.mockResolvedValue({ partsRemoved: 9, messagesAffected: 5 })
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.checked).toBe(true)
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(stripAllMock).toHaveBeenCalledWith('ses-1')
+    expect(res.strippedAllParts).toBe(9)
+    expect(res.strippedAllMessages).toBe(5)
+    expect(res.reason).toBeUndefined()
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('skips strip-all when foreign strip already removed parts', async () => {
+    const now = Date.now()
+    stripAllMock.mockReset()
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.strippedParts).toBe(6)
+    expect(stripAllMock).not.toHaveBeenCalled()
+    expect(res.strippedAllParts).toBe(0)
+  })
+  it('strip-alls without keep when keep is unknown and history is stale', async () => {
+    const now = Date.now()
+    stripAllMock.mockResolvedValue({ partsRemoved: 3, messagesAffected: 2 })
     mockMessageList([
       userMsg('u1', 'hello', now - 60_000),
       mismatchErrorMsg('e1', now - 50_000),
@@ -722,8 +773,10 @@ describe('preSendStripIfMismatch', () => {
     const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', undefined)
     expect(res.checked).toBe(true)
     expect(stripMock).not.toHaveBeenCalled()
-    expect(deleteMock).toHaveBeenCalledWith('ses-1', 'e1')
-    expect(res.reason).toMatch(/sweep only/)
+    expect(stripAllMock).toHaveBeenCalledWith('ses-1')
+    expect(res.strippedAllParts).toBe(3)
+    expect(res.keep).toBeUndefined()
+    expect(truncateMock).not.toHaveBeenCalled()
   })
 })
 
@@ -796,6 +849,8 @@ describe('healMismatchTailManual', () => {
     deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 3 })
     stripMock.mockReset()
     stripMock.mockResolvedValue(null)
+    stripAllMock.mockReset()
+    stripAllMock.mockResolvedValue(null)
   })
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -812,6 +867,27 @@ describe('healMismatchTailManual', () => {
     const res = await healMismatchTailManual('http://x', 'ses-1', '/ws')
     expect(res.healed).toBe(true)
     expect(res.truncatedMessageId).toBe('u1')
+    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
+  })
+  it('strip-alls stale reasoning on single-model tails before truncating', async () => {
+    const now = Date.now()
+    // 단일모델 stale: 외국 strip 대상이 없어 stripMock은 안 돌고 strip-all이 돈다
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'm-1.3', turns: 12 },
+    ])
+    stripAllMock.mockResolvedValue({ partsRemoved: 7, messagesAffected: 6 })
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+    ]])
+    const res = await healMismatchTailManual('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.healed).toBe(true)
+    expect(stripMock).not.toHaveBeenCalled()
+    expect(stripAllMock).toHaveBeenCalledWith('ses-1')
+    expect(res.strippedAllParts).toBe(7)
     expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
   })
   it('strips foreign reasoning on cross-model tails before truncating', async () => {
@@ -874,5 +950,72 @@ describe('healMismatchTailManual', () => {
     const res = await healMismatchTailManual('http://x', 'ses-1', '/ws')
     expect(res.healed).toBe(false)
     expect(truncateMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('truncateFromNthLastUser + healStaleHistoryBeyondLastTurn', () => {
+  beforeEach(() => {
+    recentMock.mockReset()
+    historyMock.mockReset()
+    historyMock.mockResolvedValue([])
+    mockSessionIdle()
+    truncateMock.mockReset()
+    truncateMock.mockResolvedValue({ messagesRemoved: 2, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 3 })
+    deleteMock.mockReset()
+    deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 3 })
+    stripMock.mockReset()
+    stripAllMock.mockReset()
+    stripAllMock.mockResolvedValue(null)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  it('cuts from the 2nd-last user for deep truncate', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u_old', 'first question', now - 600_000),
+      assistantMsg('a_old', now - 590_000),
+      userMsg('u_new', 'second question', now - 5_000),
+      mismatchErrorMsg('e_new', now - 4_000),
+    ])
+    const res = await truncateFromNthLastUser('ses-1', 2)
+    expect('truncatedMessageId' in res && res.truncatedMessageId).toBe('u_old')
+    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u_old')
+  })
+  it('n=1 behaves like the last-user truncate', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u_old', 'first question', now - 600_000),
+      userMsg('u_new', 'second question', now - 5_000),
+    ])
+    const res = await truncateFromNthLastUser('ses-1', 1)
+    expect('truncatedMessageId' in res && res.truncatedMessageId).toBe('u_new')
+  })
+  it('rejects depths beyond 2 (loss cap)', async () => {
+    const now = Date.now()
+    mockMessageList([userMsg('u1', 'q', now - 5_000)])
+    const res = await truncateFromNthLastUser('ses-1', 3)
+    expect('reason' in res && res.reason).toMatch(/max 2/)
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('stage2 truncates the failed turn, strip-alls, then sweeps', async () => {
+    const now = Date.now()
+    mockMessageListSequence([[
+      userMsg('u_old', 'first question', now - 600_000),
+      assistantMsg('a_old', now - 590_000),
+      userMsg('u_new', 'second question', now - 5_000),
+      mismatchErrorMsg('e_new', now - 4_000),
+    ],
+    [
+      userMsg('u_old', 'first question', now - 600_000),
+      assistantMsg('a_old', now - 590_000),
+    ]])
+    stripAllMock.mockResolvedValue({ partsRemoved: 11, messagesAffected: 7 })
+    const res = await healStaleHistoryBeyondLastTurn('ses-1')
+    expect(res.truncatedMessageId).toBe('u_new')
+    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u_new')
+    expect(stripAllMock).toHaveBeenCalledWith('ses-1')
+    expect(res.strippedAllParts).toBe(11)
+    expect(res.strippedAllMessages).toBe(7)
   })
 })

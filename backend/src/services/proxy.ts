@@ -5,7 +5,7 @@ import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { flushQueueForSession, clearSendingOnAbort } from './chat-queue'
-import { healReasoningTail, isReasoningMismatchText, asOutgoingModel, preSendStripIfMismatch } from './reasoning-heal'
+import { healReasoningTail, healStaleHistoryBeyondLastTurn, truncateFromNthLastUser, sweepPollutedStubs, isReasoningMismatchText, asOutgoingModel, preSendStripIfMismatch } from './reasoning-heal'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -479,10 +479,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           if (hasText) {
             const preDir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
             const pre = await preSendStripIfMismatch(opencodeServerManager.getUrl(), preMatch[1]!, preDir, asOutgoingModel(preParsed.model))
-            if ((pre.strippedParts ?? 0) > 0 || (pre.stubsRemoved ?? 0) > 0) {
+            if ((pre.strippedParts ?? 0) > 0 || (pre.strippedAllParts ?? 0) > 0 || (pre.stubsRemoved ?? 0) > 0) {
               if (preDir) {
                 const reloaded = await opencodeServerManager.reloadAndVerify(preDir).catch(() => false)
-                logger.warn(`Pre-send strip for session ${preMatch[1]}: stripped ${pre.strippedParts} reasoning part(s), removed ${pre.stubsRemoved} stub(s), kept ${pre.keep ? `${pre.keep.providerID}/${pre.keep.modelID}` : 'unknown'} — instance reload ${reloaded ? 'verified' : 'NOT verified, forwarding anyway'}`)
+                logger.warn(`Pre-send strip for session ${preMatch[1]}: stripped ${pre.strippedParts} reasoning part(s), strip-all ${pre.strippedAllParts} part(s), removed ${pre.stubsRemoved} stub(s), kept ${pre.keep ? `${pre.keep.providerID}/${pre.keep.modelID}` : 'unknown'} — instance reload ${reloaded ? 'verified' : 'NOT verified, forwarding anyway'}`)
               } else {
                 logger.warn(`Pre-send strip for session ${preMatch[1]}: stripped ${pre.strippedParts} reasoning part(s), removed ${pre.stubsRemoved} stub(s) but no directory — reload skipped, forwarding anyway`)
               }
@@ -724,7 +724,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         let finalBodyText = bodyText
         let healedAndRetried = false
         // heal 시도 내역 — exe는 콘솔 로그를 볼 수 없어 응답에 동봉한다 (다음 장애 진단용).
-        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number; strippedParts?: number; stubsPending?: string[]; kind?: string; models?: Array<{ providerID: string; modelID: string; turns: number }> } = { attempted: false }
+        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number; strippedParts?: number; strippedAllParts?: number; deepTruncated?: string; stubsPending?: string[]; kind?: string; models?: Array<{ providerID: string; modelID: string; turns: number }> } = { attempted: false }
         const msgPost = method === 'POST' ? cleanEventPath.match(/^\/session\/([^/]+)\/message$/) : null
         if (msgPost?.[1] && body) {
           try {
@@ -767,13 +767,28 @@ export async function proxyRequest(request: Request, method: string, pathname: s
                 }
                 const busy2 = acquireBusy()
                 const release2 = () => busy2.release()
+                // 동일 요청 재전송 (최대 3회 — stage1 마지막 턴 절단 → stage2 strip-all →
+                // stage3 한 턴 더 절단). 각 단계는 같은 400 mismatch가 또 나올 때만 진행한다.
+                const resendOnce = async () => fetch(targetUrl, {
+                  method,
+                  headers,
+                  body,
+                  signal: AbortSignal.timeout(600_000),
+                })
+                const reloadInstance = async (tag: string) => {
+                  if (!directory) {
+                    logger.warn(`Reasoning heal ${tag}: session ${msgPost[1]} has no directory — instance reload skipped, retrying anyway`)
+                    return
+                  }
+                  try {
+                    const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+                    logger.warn(`Reasoning heal ${tag}: session ${msgPost[1]} — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
+                  } catch (e) {
+                    logger.warn(`Reasoning heal ${tag}: instance reload threw for session ${msgPost[1]}, retrying anyway:`, e)
+                  }
+                }
                 try {
-                  const retryRes = await fetch(targetUrl, {
-                    method,
-                    headers,
-                    body,
-                    signal: AbortSignal.timeout(600_000),
-                  })
+                  const retryRes = await resendOnce()
                   if (retryRes.ok) {
                     logger.info(`Reasoning heal: truncated tail and retry succeeded for session ${msgPost[1]}`)
                     return passThroughLongRunning(retryRes, responseHeaders, cleanEventPath, query, release2)
@@ -783,6 +798,60 @@ export async function proxyRequest(request: Request, method: string, pathname: s
                   finalStatusText = retryRes.statusText
                   finalBodyText = await retryRes.text().catch(() => '')
                   healedAndRetried = true
+                  // Stage 2: 같은 400이면 오염이 마지막 턴보다 앞에 있다 (동일모델 stale 등).
+                  // 실패 턴 제거 + cutoff 이전 reasoning 전체 strip-all + sweep 후 재시도.
+                  if (retryRes.status === 400 && isReasoningMismatchText(finalBodyText)) {
+                    const stage2 = await healStaleHistoryBeyondLastTurn(msgPost[1]!)
+                    healInfo.strippedAllParts = stage2.strippedAllParts
+                    await reloadInstance(`stage2 (strip-all ${stage2.strippedAllParts} part(s), truncated ${stage2.truncatedMessageId ?? 'none'})`)
+                    const busy3 = acquireBusy()
+                    const release3 = () => busy3.release()
+                    try {
+                      const retry2Res = await resendOnce()
+                      if (retry2Res.ok) {
+                        logger.info(`Reasoning heal stage2: strip-all and retry succeeded for session ${msgPost[1]}`)
+                        return passThroughLongRunning(retry2Res, responseHeaders, cleanEventPath, query, release3)
+                      }
+                      release3()
+                      finalStatus = retry2Res.status
+                      finalStatusText = retry2Res.statusText
+                      finalBodyText = await retry2Res.text().catch(() => '')
+                      // Stage 3: 그래도 같은 400이면 최신 턴 통째가 오염 — 한 턴 더 뒤로
+                      // 잘라내고 최종 재시도한다 (손실은 1턴으로 묶는다).
+                      if (retry2Res.status === 400 && isReasoningMismatchText(finalBodyText)) {
+                        const deep = await truncateFromNthLastUser(msgPost[1]!, 2)
+                        if (!('reason' in deep)) {
+                          healInfo.deepTruncated = deep.truncatedMessageId
+                          const sweep2 = await sweepPollutedStubs(msgPost[1]!)
+                          logger.warn(`Reasoning heal stage3: session ${msgPost[1]} deep-truncated from ${deep.truncatedMessageId} (removed ${deep.messagesRemoved}), sweep removed ${sweep2.removed}`)
+                          await reloadInstance(`stage3 (deep-truncated ${deep.truncatedMessageId})`)
+                          const busy4 = acquireBusy()
+                          const release4 = () => busy4.release()
+                          try {
+                            const retry3Res = await resendOnce()
+                            if (retry3Res.ok) {
+                              logger.info(`Reasoning heal stage3: deep-truncate and retry succeeded for session ${msgPost[1]}`)
+                              return passThroughLongRunning(retry3Res, responseHeaders, cleanEventPath, query, release4)
+                            }
+                            release4()
+                            finalStatus = retry3Res.status
+                            finalStatusText = retry3Res.statusText
+                            finalBodyText = await retry3Res.text().catch(() => '')
+                          } catch (e) {
+                            release4()
+                            logger.warn(`Reasoning heal stage3 retry threw for session ${msgPost[1]}:`, e)
+                            finalBodyText = `${finalBodyText} (deep-truncate done, final retry failed: ${(e as Error)?.message ?? e})`
+                          }
+                        } else {
+                          logger.warn(`Reasoning heal stage3 skipped for session ${msgPost[1]}: ${deep.reason}`)
+                        }
+                      }
+                    } catch (e) {
+                      release3()
+                      logger.warn(`Reasoning heal stage2 retry threw for session ${msgPost[1]}:`, e)
+                      finalBodyText = `${finalBodyText} (strip-all done, retry failed: ${(e as Error)?.message ?? e})`
+                    }
+                  }
                 } catch (e) {
                   release2()
                   logger.warn(`Reasoning heal retry threw for session ${msgPost[1]}:`, e)
@@ -798,7 +867,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           }
         }
         const hint = healedAndRetried
-          ? ' - Automatic recovery (truncated the last turn and retried once) did not help: the stale reasoning is earlier in history. Truncate further back with the scissors icon on an earlier message, switch back to the original model, or deep-clean via POST /api/session-heal/:sessionId, then send again. (reasoning encrypted_content mismatch)'
+          ? ' - Automatic recovery (last-turn truncate, stale-reasoning strip-all, and one-turn-deep truncate with retries) did not help: the stale reasoning may span the whole history or the provider rejected the replay for another reason. Start a new session, or switch back to the model that owns the latest good turn and retry, then send again. (reasoning encrypted_content mismatch)'
           : ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). Truncate the last turn (scissors icon), switch back to the original model, or deep-clean via POST /api/session-heal/:sessionId, then send again. (reasoning encrypted_content mismatch)'
         let parsed: Record<string, unknown> | undefined
         try { parsed = JSON.parse(finalBodyText) as Record<string, unknown> } catch { parsed = undefined }
