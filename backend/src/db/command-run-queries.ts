@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite'
 
 export type CommandRunStatus = 'started' | 'completed' | 'failed' | 'cancelled'
-export type CommandRunOrigin = 'ui' | 'schedule'
+export type CommandRunOrigin = 'ui' | 'schedule' | 'chat' | 'review'
 export type CommandRunKind = 'command' | 'skill'
 
 export interface CommandRun {

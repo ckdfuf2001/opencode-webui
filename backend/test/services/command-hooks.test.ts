@@ -4,6 +4,11 @@ import {
   firePostCommandHooks,
   getRecentHookCalls,
   clearRecentHookCalls,
+  TODO_PROTOCOL,
+  resolveCommandKind,
+  buildSkillCheckBlock,
+  isReviewSession,
+  maybeSpawnReviewChild,
 } from '../../src/services/command-hooks'
 import type { CommandRun } from '../../src/db/command-run-queries'
 
@@ -73,5 +78,52 @@ describe('command-hooks', () => {
     const calls = getRecentHookCalls()
     expect(calls.length).toBeLessThanOrEqual(50)
     expect(calls[0]?.commandName).toBe('cmd-59')
+  })
+
+  it('TODO_PROTOCOL declares todo-first, todo-only updates, todo-based failure', () => {
+    expect(TODO_PROTOCOL).toMatch(/todo tool is available/i)
+    expect(TODO_PROTOCOL).toMatch(/only via todo updates/i)
+    expect(TODO_PROTOCOL).toMatch(/only if a todo fails/i)
+  })
+
+  it('resolveCommandKind defaults to command without skill files', () => {
+    expect(resolveCommandKind(null, 'review')).toBe('command')
+    expect(resolveCommandKind('/nonexistent-dir-xyz', 'review')).toBe('command')
+    expect(resolveCommandKind(null, '')).toBe('command')
+  })
+
+  it('buildSkillCheckBlock returns empty without pending and consumes once', async () => {
+    expect(buildSkillCheckBlock({ sessionId: 'sess-empty' })).toBe('')
+    // post 훅으로 pending을 쌓으면 1회만 블록이 나온다 (plan 문구 = 자동 변경 OFF 기본)
+    firePostCommandHooks(makeRun({ sessionId: 'sess-1', kind: 'command', directory: '/tmp' }), 'completed')
+    await flushAsync()
+    const first = buildSkillCheckBlock({ sessionId: 'sess-1' })
+    expect(first).toContain('<skill-memory-check>')
+    expect(first).toContain('ask the user in chat for approval')
+    expect(buildSkillCheckBlock({ sessionId: 'sess-1' })).toBe('')
+  })
+
+  it('maybeSpawnReviewChild returns null without review toggle/db', async () => {
+    // 리뷰 세션 가드: 존재하지 않는 ID는 false
+    expect(isReviewSession('sess-1')).toBe(false)
+    const spawned = await maybeSpawnReviewChild({
+      sessionId: 'sess-1',
+      directory: '/tmp',
+      repoId: null,
+      commandName: 'review',
+      kind: 'command',
+      status: 'completed',
+    })
+    expect(spawned).toBeNull()
+    // 실패 턴은 리뷰 대상이 아니다
+    const failed = await maybeSpawnReviewChild({
+      sessionId: 'sess-1',
+      directory: '/tmp',
+      repoId: 1,
+      commandName: 'review',
+      kind: 'command',
+      status: 'failed',
+    })
+    expect(failed).toBeNull()
   })
 })

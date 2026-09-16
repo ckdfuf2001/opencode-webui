@@ -182,6 +182,22 @@ export async function setSkillAutoUpdate(id: number, enabled: boolean): Promise<
   return response.json()
 }
 
+export async function getSkillAutoReview(id: number): Promise<{ enabled: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/skill-auto-review`)
+  if (!response.ok) throw new Error('Failed to get skill auto review')
+  return response.json()
+}
+
+export async function setSkillAutoReview(id: number, enabled: boolean): Promise<{ enabled: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${id}/skill-auto-review`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!response.ok) throw new Error('Failed to set skill auto review')
+  return response.json()
+}
+
 export async function applyRepoTrackingAll(): Promise<{ success: boolean; applied: number }> {
   const response = await fetch(`${API_BASE_URL}/api/repos/tracking/apply-all`, {
     method: 'POST',

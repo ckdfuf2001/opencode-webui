@@ -20,6 +20,7 @@ export interface RepoRow {
   is_worktree?: number
   is_local?: number
   skill_auto_update?: number
+  skill_auto_review?: number
 }
 
 function rowToRepo(row: RepoRow): Repo {
@@ -37,6 +38,7 @@ function rowToRepo(row: RepoRow): Repo {
     isWorktree: row.is_worktree ? Boolean(row.is_worktree) : undefined,
     isLocal: row.is_local ? Boolean(row.is_local) : undefined,
     skillAutoUpdate: row.skill_auto_update ? Boolean(row.skill_auto_update) : undefined,
+    skillAutoReview: row.skill_auto_review ? Boolean(row.skill_auto_review) : undefined,
   }
 }
 
@@ -202,6 +204,17 @@ export function getSkillAutoUpdate(db: Database, id: number): boolean {
 
 export function setSkillAutoUpdate(db: Database, id: number, enabled: boolean): void {
   db.prepare('UPDATE repos SET skill_auto_update = ? WHERE id = ?').run(enabled ? 1 : 0, id)
+}
+
+export function getSkillAutoReview(db: Database, id: number): boolean {
+  const row = db.prepare('SELECT skill_auto_review FROM repos WHERE id = ?').get(id) as
+    | { skill_auto_review?: number | null }
+    | undefined
+  return Boolean(row?.skill_auto_review)
+}
+
+export function setSkillAutoReview(db: Database, id: number, enabled: boolean): void {
+  db.prepare('UPDATE repos SET skill_auto_review = ? WHERE id = ?').run(enabled ? 1 : 0, id)
 }
 
 export function updateRepoLocalPath(db: Database, id: number, newLocalPath: string): void {

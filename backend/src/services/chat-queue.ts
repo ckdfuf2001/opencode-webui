@@ -603,7 +603,30 @@ async function dispatchQueuedChat(
     const cmd = cmdMatch[1] ?? ''
     const args = cmdMatch[2] ?? ''
     try {
-      const cmdBody: Record<string, unknown> = { command: cmd, arguments: args }
+      // 모든 커맨드는 todo 프로토콜을 arguments에 덧붙여 실행한다 (todo 툴 지원 시 정리 후 단계 실행).
+      const { TODO_PROTOCOL, resolveCommandKind } = await import('./command-hooks')
+      const argsWithProtocol = args.trim() ? `${args.trim()}\n\n${TODO_PROTOCOL}` : TODO_PROTOCOL
+      const kind = resolveCommandKind(directory, cmd)
+      // command 이력 기록 시작 — 완료/실패는 아래에서 finish, 리뷰·스킬체크는 post 훅에서 처리
+      let runId: string | null = null
+      try {
+        if (queueDb) {
+          const { recordRunStartSafe, resolveRepoId } = await import('./command-runs')
+          const run = await recordRunStartSafe(queueDb, {
+            sessionId: sessionID,
+            commandName: cmd,
+            args: args.trim() || null,
+            directory,
+            repoId: resolveRepoId(queueDb, directory),
+            origin: 'chat',
+            kind,
+          })
+          runId = run?.id ?? null
+        }
+      } catch (e) {
+        logger.debug(`Command run record skipped for /${cmd}:`, e)
+      }
+      const cmdBody: Record<string, unknown> = { command: cmd, arguments: argsWithProtocol }
       if (chat.agent) cmdBody.agent = chat.agent
       if (chat.model) cmdBody.model = `${chat.model.providerID}/${chat.model.modelID}`
       const cmdRes = await fetch(`${base}/session/${sessionID}/command?directory=${directoryParam}`, {
@@ -615,9 +638,23 @@ async function dispatchQueuedChat(
       if (cmdRes.ok) {
         void cmdRes.text().catch(() => {})
         logger.info(`Queued command /${cmd} dispatched via /command for session ${sessionID}`)
+        try {
+          if (queueDb && runId) {
+            const { finishRunSafe } = await import('./command-runs')
+            await finishRunSafe(queueDb, runId, 'completed')
+          }
+        } catch (e) {
+          logger.debug(`Command run finish skipped for /${cmd}:`, e)
+        }
         return { sent: true }
       }
       const body = await cmdRes.text().catch(() => '')
+      try {
+        if (queueDb && runId) {
+          const { finishRunSafe } = await import('./command-runs')
+          await finishRunSafe(queueDb, runId, 'failed')
+        }
+      } catch {}
       // mismatch여도 여기서 끝내지 않고 /message로 폴백한다 — 아래 /message 경로에서
       // heal(꼬리 절단)+1회 재시도를 탄다. 커맨드가 아니면 어차피 폴백하던 경로.
       // 커맨드가 아니거나 서버가 모르면 /message 로 폴백
@@ -627,7 +664,24 @@ async function dispatchQueuedChat(
     }
   }
 
-  const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text: chat.text }] }
+  // 직전 스킬/커맨드 완료에 대한 부모 skill-memory-check (pending이 있을 때만 1회 주입).
+  // 리뷰 자식이 생성됐으면 spawn 시점에 consume되므로 여기서는 붙지 않는다.
+  let outgoingText = chat.text
+  try {
+    const { buildSkillCheckBlock } = await import('./command-hooks')
+    const { resolveRepoId } = await import('./command-runs')
+    if (queueDb) {
+      const block = buildSkillCheckBlock({
+        sessionId: sessionID,
+        repoId: resolveRepoId(queueDb, directory),
+        db: queueDb,
+      })
+      if (block) outgoingText = `${block}${outgoingText}`
+    }
+  } catch (e) {
+    logger.debug(`Skill-check injection skipped for session ${sessionID}:`, e)
+  }
+  const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text: outgoingText }] }
   if (chat.agent) messageBody.agent = chat.agent
   if (chat.model) messageBody.model = chat.model
 

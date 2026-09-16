@@ -16,6 +16,7 @@ export const RepoSchema = z.object({
   isWorktree: z.boolean().optional(),
   isLocal: z.boolean().optional(),
   skillAutoUpdate: z.boolean().optional(),
+  skillAutoReview: z.boolean().optional(),
 })
 
 export const CreateRepoRequestSchema = z.object({

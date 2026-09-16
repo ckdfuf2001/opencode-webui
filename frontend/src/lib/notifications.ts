@@ -140,8 +140,8 @@ const OVERRIDES_KEY = 'opencode-session-notify-overrides'
 const REPO_OVERRIDES_KEY = 'opencode-repo-notify-overrides'
 const SESSION_PERM_KEY = 'opencode-session-permission-rules'
 
-type SessionOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
-type RepoOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean }
+type SessionOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean; skillReviewEnabled?: boolean }
+type RepoOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean; skillReviewEnabled?: boolean }
 type OverridesMap = Record<string, SessionOverride>
 type RepoOverridesMap = Record<string, RepoOverride>
 
@@ -185,7 +185,7 @@ export function setSessionOverride(sessionId: string, patch: SessionOverride): v
   const map = readOverrides()
   const cur = map[sessionId] ?? {}
   const next = { ...cur, ...patch }
-  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
+  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined && next.skillReviewEnabled === undefined) {
     delete map[sessionId]
   } else {
     map[sessionId] = next
@@ -202,7 +202,7 @@ export function setRepoOverride(repoId: number | string, patch: RepoOverride): v
   const map = readRepoOverrides()
   const cur = map[String(repoId)] ?? {}
   const next = { ...cur, ...patch }
-  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined) {
+  if (next.soundEnabled === undefined && next.soundOnCancelEnabled === undefined && next.pushEnabled === undefined && next.skillAutoEnabled === undefined && next.skillReviewEnabled === undefined) {
     delete map[String(repoId)]
   } else {
     map[String(repoId)] = next
@@ -323,6 +323,14 @@ export function getEffectiveSkillAuto(repoId: number | string | undefined, sessi
   const repo = repoSkillAuto ?? false
   const repoOv = repoId !== undefined ? getRepoOverride(repoId).skillAutoEnabled : undefined
   const sessOv = sessionId ? getSessionOverride(sessionId).skillAutoEnabled : undefined
+  let effective = repoOv !== undefined ? repoOv : repo
+  if (sessOv !== undefined) effective = sessOv
+  return { repo, session: sessOv, effective }
+}
+export function getEffectiveSkillReview(repoId: number | string | undefined, sessionId: string | undefined, repoSkillReview: boolean | undefined): { repo: boolean; session?: boolean; effective: boolean } {
+  const repo = repoSkillReview ?? false
+  const repoOv = repoId !== undefined ? getRepoOverride(repoId).skillReviewEnabled : undefined
+  const sessOv = sessionId ? getSessionOverride(sessionId).skillReviewEnabled : undefined
   let effective = repoOv !== undefined ? repoOv : repo
   if (sessOv !== undefined) effective = sessOv
   return { repo, session: sessOv, effective }

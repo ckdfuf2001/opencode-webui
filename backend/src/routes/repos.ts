@@ -501,6 +501,10 @@ export function createRepoRoutes(database: Database) {
         db.setSkillAutoUpdate(database, newRepo.id, skill)
       } catch {}
       try {
+        const review = db.getSkillAutoReview(database, sourceId)
+        db.setSkillAutoReview(database, newRepo.id, review)
+      } catch {}
+      try {
         if (sourceRepo.openCodeConfigName) db.updateRepoConfigName(database, newRepo.id, sourceRepo.openCodeConfigName)
       } catch {}
       let copiedSchedules = 0
@@ -547,6 +551,7 @@ export function createRepoRoutes(database: Database) {
       const { listPermissionRules } = await import('../db/permission-rule-queries')
       const rules = listPermissionRules(database, id)
       const skillEnabled = db.getSkillAutoUpdate(database, id)
+      const reviewEnabled = db.getSkillAutoReview(database, id)
       const schedules = withSchedules ? exportSchedules(database, id) : []
       const indexes = withIndex ? exportRepoIndexes(database, id) : { gitCommits: [], repoIndexState: [], sessionMessages: [] }
       return c.json({
@@ -555,6 +560,7 @@ export function createRepoRoutes(database: Database) {
         repo: { repoUrl: repo.repoUrl, localPath: repo.localPath, branch: repo.branch, defaultBranch: repo.defaultBranch, isLocal: repo.isLocal, openCodeConfigName: repo.openCodeConfigName },
         permissionRules: rules.map(r => ({ permission: r.permission, pattern: r.pattern })),
         skillAutoUpdate: skillEnabled,
+        skillAutoReview: reviewEnabled,
         openCodeConfigName: repo.openCodeConfigName ?? null,
         schedules,
         files,
@@ -620,6 +626,10 @@ export function createRepoRoutes(database: Database) {
       try {
         const skillFlag = typeof data.skillAutoUpdate === 'boolean' ? data.skillAutoUpdate : false
         db.setSkillAutoUpdate(database, newRepo.id, skillFlag)
+      } catch {}
+      try {
+        const reviewFlag = typeof data.skillAutoReview === 'boolean' ? data.skillAutoReview : false
+        db.setSkillAutoReview(database, newRepo.id, reviewFlag)
       } catch {}
       const configName = data.openCodeConfigName || data.repo?.openCodeConfigName
       try { if (configName) db.updateRepoConfigName(database, newRepo.id, configName) } catch {}
@@ -824,6 +834,34 @@ export function createRepoRoutes(database: Database) {
       return c.json({ enabled: body.enabled })
     } catch (error: any) {
       logger.error('Failed to set skill auto update:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
+
+  app.get('/:id/skill-auto-review', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const enabled = db.getSkillAutoReview(database, id)
+      return c.json({ enabled })
+    } catch (error: any) {
+      logger.error('Failed to get skill auto review:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
+
+  app.patch('/:id/skill-auto-review', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const body = await c.req.json() as { enabled?: boolean }
+      if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled boolean required' }, 400)
+      db.setSkillAutoReview(database, id, body.enabled)
+      return c.json({ enabled: body.enabled })
+    } catch (error: any) {
+      logger.error('Failed to set skill auto review:', error)
       return c.json({ error: error.message }, 500)
     }
   })

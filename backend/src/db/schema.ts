@@ -28,7 +28,8 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       opencode_config_name TEXT,
       is_worktree BOOLEAN DEFAULT FALSE,
       is_local BOOLEAN DEFAULT FALSE,
-      skill_auto_update BOOLEAN DEFAULT FALSE
+      skill_auto_update BOOLEAN DEFAULT FALSE,
+      skill_auto_review BOOLEAN DEFAULT FALSE
     );
     
     CREATE INDEX IF NOT EXISTS idx_repo_clone_status ON repos(clone_status);

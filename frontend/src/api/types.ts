@@ -12,6 +12,7 @@ export interface Repo {
   openCodeConfigName?: string
   isWorktree?: boolean
   skillAutoUpdate?: boolean
+  skillAutoReview?: boolean
 }
 
 import type { components } from './opencode-types'

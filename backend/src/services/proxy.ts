@@ -403,26 +403,18 @@ export async function proxyRequest(request: Request, method: string, pathname: s
             }
           } else if (!text.includes('<memory-recall>') && !text.includes('<skill-memory-check>') && !text.includes('[run-context]')) {
             const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
+            // 공용 헬퍼: pending이 있을 때만 1회 주입 (리뷰 자식 생성 시 consume되므로 중복 없음).
+            // 자동 변경 ON=build(직접 수정) / OFF=plan(채팅 승인) 문구는 헬퍼가 결정한다.
             let skillBlock = ''
             if (sessionIdFromPath) {
               try {
-                const { getAndClearPendingSkillCheck } = await import('./command-hooks')
-                const pending = getAndClearPendingSkillCheck(sessionIdFromPath)
-                if (pending) {
-                  let auto = false
-                  try {
-                    const repoIdForCheck = directory ? (await import('./command-runs')).resolveRepoId(proxyDb, directory) : null
-                    if (repoIdForCheck != null) {
-                      const row = proxyDb.query('SELECT skill_auto_update FROM repos WHERE id = ?').get(repoIdForCheck) as { skill_auto_update?: number } | undefined
-                      auto = Boolean(row?.skill_auto_update)
-                    }
-                  } catch {}
-                  if (auto) {
-                    skillBlock = `<skill-memory-check>\nLast ${pending.kind} "${pending.commandName}" completed with status "${pending.status}". Skill auto update is ENABLED for this repo. Please evaluate if skill or memory needs update and if there are improvements, update directly without asking user.\n</skill-memory-check>\n\n`
-                  } else {
-                    skillBlock = `<skill-memory-check>\nLast ${pending.kind} "${pending.commandName}" completed with status "${pending.status}".\nPlease evaluate if skill or memory needs update and if there are improvements. If yes, ask the user in chat for approval before updating (in Korean, concise).\n</skill-memory-check>\n\n`
-                  }
-                }
+                const { buildSkillCheckBlock } = await import('./command-hooks')
+                const { resolveRepoId } = await import('./command-runs')
+                skillBlock = buildSkillCheckBlock({
+                  sessionId: sessionIdFromPath,
+                  repoId: directory ? resolveRepoId(proxyDb, directory) : null,
+                  db: proxyDb,
+                })
               } catch {}
             }
             let recallBlock = ''

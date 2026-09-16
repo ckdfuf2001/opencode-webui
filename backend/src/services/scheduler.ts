@@ -7,6 +7,7 @@ import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { markRequestBusy, clearRequestBusy } from './busy-tracker'
 import { recordRunStartSafe, finishRunSafe } from './command-runs'
+import { TODO_PROTOCOL } from './command-hooks'
 import { logger } from '../utils/logger'
 import path from 'path'
 
@@ -166,7 +167,8 @@ async function doRunSchedule(db: Database, schedule: Schedule): Promise<{ succes
     origin: 'schedule',
   })
 
-  const text = schedule.action === 'command' ? `/${prompt}` : prompt
+  // 스케줄 커맨드도 todo 프로토콜을 덧붙여 실행한다 (일반 채팅은 별도 미전송).
+  const text = schedule.action === 'command' ? `/${prompt}\n\n${TODO_PROTOCOL}` : prompt
   void sendSchedulePrompt(base, sessionID, schedule.agent, modelPayload, text, headers, directoryParam, schedule.name)
     .then(() => {
       if (run) finishRunSafe(db, run.id, 'completed')

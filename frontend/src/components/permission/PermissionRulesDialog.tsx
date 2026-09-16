@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePermissionRules, useCreatePermissionRule, useDeletePermissionRule } from '@/hooks/usePermissionRules'
 import { refreshAutoApproveData } from '@/hooks/useAutoApprovePermissions'
-import { getSkillAutoUpdate, setSkillAutoUpdate } from '@/api/repos'
+import { getSkillAutoUpdate, setSkillAutoUpdate, getSkillAutoReview, setSkillAutoReview } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
@@ -69,6 +69,22 @@ export function PermissionRulesDialog({
     },
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to update'),
   })
+  const { data: skillReview } = useQuery({
+    queryKey: ['skill-auto-review', repoId ?? 'global'],
+    queryFn: () => repoId ? getSkillAutoReview(repoId) : Promise.resolve({ enabled: false } as any),
+    enabled: open && scope !== 'global' && !!repoId,
+  })
+  const reviewMut = useMutation({
+    mutationFn: (enabled: boolean) => {
+      if (!repoId) throw new Error('repoId required')
+      return setSkillAutoReview(repoId, enabled)
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['skill-auto-review', repoId], data)
+      showToast.success(data.enabled ? 'Skill auto review enabled' : 'Skill auto review disabled')
+    },
+    onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to update'),
+  })
 
   // 알림/스킬 설정: 전역/레포/세션 계층
   const { preferences, updateSettings } = useSettings()
@@ -76,6 +92,7 @@ export function PermissionRulesDialog({
   const [sessionCancelOverride, setSessionCancelOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionPushOverride, setSessionPushOverrideState] = useState<boolean | undefined>(undefined)
   const [sessionSkillOverride, setSessionSkillOverrideState] = useState<boolean | undefined>(undefined)
+  const [sessionReviewOverride, setSessionReviewOverrideState] = useState<boolean | undefined>(undefined)
   const [repoSoundOverride, setRepoSoundOverrideState] = useState<boolean | undefined>(undefined)
   const [repoCancelOverride, setRepoCancelOverrideState] = useState<boolean | undefined>(undefined)
   const [repoPushOverride, setRepoPushOverrideState] = useState<boolean | undefined>(undefined)
@@ -104,12 +121,14 @@ export function PermissionRulesDialog({
       setSessionCancelOverrideState(ov.soundOnCancelEnabled)
       setSessionPushOverrideState(ov.pushEnabled)
       setSessionSkillOverrideState(ov.skillAutoEnabled)
+      setSessionReviewOverrideState(ov.skillReviewEnabled)
       setSessionPermRules(getSessionPermissionRules(sessionId))
     } else {
       setSessionSoundOverrideState(undefined)
       setSessionCancelOverrideState(undefined)
       setSessionPushOverrideState(undefined)
       setSessionSkillOverrideState(undefined)
+      setSessionReviewOverrideState(undefined)
       setSessionPermRules([])
     }
     const handler = () => {
@@ -125,6 +144,7 @@ export function PermissionRulesDialog({
         setSessionCancelOverrideState(ov.soundOnCancelEnabled)
         setSessionPushOverrideState(ov.pushEnabled)
         setSessionSkillOverrideState(ov.skillAutoEnabled)
+        setSessionReviewOverrideState(ov.skillReviewEnabled)
         setSessionPermRules(getSessionPermissionRules(sessionId))
       }
     }
@@ -252,40 +272,70 @@ export function PermissionRulesDialog({
             </div>
           </div>
           {skillTab==='global' && (
-            <p className="text-xs text-muted-foreground">Skill / Command auto update는 레포 단위 서버 설정입니다. 레포 탭에서 변경하세요.</p>
+            <p className="text-xs text-muted-foreground">자동 리뷰 / 자동 변경은 레포 단위 서버 설정입니다. 레포 탭에서 변경하세요.</p>
           )}
           {skillTab==='repo' && (
             repoId===undefined ? (
               <p className="text-xs text-muted-foreground">레포를 선택해야 변경할 수 있습니다.</p>
             ) : (
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-sm">자동 업데이트 (레포 #{repoId})</Label>
-                  <p className="text-xs text-muted-foreground">When enabled, skill and command updates from memory are applied automatically without asking in chat.</p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-0.5 flex-1">
+                  <Label className="text-sm">자동 리뷰 · 자동 변경 (레포 #{repoId})</Label>
+                  <p className="text-xs text-muted-foreground">리뷰 ON이면 스킬/커맨드 완료 후 리뷰 자식 세션을 생성합니다. 변경 ON이면 자식이 build(직접 수정), OFF면 plan(읽기전용·제안만)으로 수행합니다.</p>
                 </div>
-                <Switch
-                  checked={skillAuto?.enabled ?? false}
-                  onCheckedChange={(v) => skillMut.mutate(v)}
-                  disabled={skillMut.isPending}
-                />
+                <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-[11px] text-muted-foreground">자동 리뷰</span>
+                    <Switch
+                      checked={skillReview?.enabled ?? false}
+                      onCheckedChange={(v) => reviewMut.mutate(v)}
+                      disabled={reviewMut.isPending}
+                    />
+                  </div>
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-[11px] text-muted-foreground">자동 변경</span>
+                    <Switch
+                      checked={skillAuto?.enabled ?? false}
+                      onCheckedChange={(v) => skillMut.mutate(v)}
+                      disabled={skillMut.isPending}
+                    />
+                  </div>
+                </div>
               </div>
             )
           )}
           {skillTab==='session' && sessionId && (
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-0.5 flex-1">
                 <Label className="text-sm">이 세션에서만</Label>
-                <p className="text-xs text-muted-foreground">상위 {(skillAuto?.enabled ?? false)?'ON':'OFF'} → 적용 {(sessionSkillOverride ?? (skillAuto?.enabled ?? false))?'ON':'OFF'}{sessionSkillOverride===undefined?' (상속)':''} · 로컬스토리지</p>
+                <p className="text-xs text-muted-foreground">리뷰 상위 {(skillReview?.enabled ?? false)?'ON':'OFF'} → {(sessionReviewOverride ?? (skillReview?.enabled ?? false))?'ON':'OFF'}{sessionReviewOverride===undefined?' (상속)':''} · 변경 상위 {(skillAuto?.enabled ?? false)?'ON':'OFF'} → {(sessionSkillOverride ?? (skillAuto?.enabled ?? false))?'ON':'OFF'}{sessionSkillOverride===undefined?' (상속)':''} · 로컬스토리지</p>
               </div>
-              <Switch
-                checked={sessionSkillOverride !== undefined ? sessionSkillOverride : (skillAuto?.enabled ?? false)}
-                onCheckedChange={(v) => {
-                  const parent = skillAuto?.enabled ?? false
-                  const next = v === parent ? undefined : v
-                  setSessionOverride(sessionId!, { skillAutoEnabled: next })
-                  setSessionSkillOverrideState(next)
-                }}
-              />
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-[11px] text-muted-foreground">자동 리뷰</span>
+                  <Switch
+                    checked={sessionReviewOverride !== undefined ? sessionReviewOverride : (skillReview?.enabled ?? false)}
+                    onCheckedChange={(v) => {
+                      const parent = skillReview?.enabled ?? false
+                      const next = v === parent ? undefined : v
+                      setSessionOverride(sessionId!, { skillReviewEnabled: next })
+                      setSessionReviewOverrideState(next)
+                    }}
+                  />
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-[11px] text-muted-foreground">자동 변경</span>
+                  <Switch
+                    checked={sessionSkillOverride !== undefined ? sessionSkillOverride : (skillAuto?.enabled ?? false)}
+                    onCheckedChange={(v) => {
+                      const parent = skillAuto?.enabled ?? false
+                      const next = v === parent ? undefined : v
+                      setSessionOverride(sessionId!, { skillAutoEnabled: next })
+                      setSessionSkillOverrideState(next)
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           )}
         </div>
