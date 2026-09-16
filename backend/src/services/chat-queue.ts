@@ -2,7 +2,8 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText, healReasoningTail, asOutgoingModel } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch } from './reasoning-heal'
+import { recentSessionMessages } from './session-message-db'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
@@ -550,6 +551,46 @@ async function dispatchQueuedChat(
   const headers = ensureServerAuth({})
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
+  const outgoing = asOutgoingModel(chat.model)
+
+  // 발송 직전: 꼬리가 mismatch 에러면 strip-only 클렌징 (truncate 없음).
+  // opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
+  // 응답-기준 heal만으로는 복구가 안 된다. strip 후에는 인스턴스 reload로
+  // opencode 메모리 캐시를 비워야 strip이 실제 전송에 반영된다.
+  try {
+    const pre = await preSendStripIfMismatch(base, sessionID, directory, outgoing)
+    if ((pre.strippedParts ?? 0) > 0 || (pre.stubsRemoved ?? 0) > 0) {
+      let reloaded = false
+      try {
+        reloaded = await opencodeServerManager.reloadAndVerify(directory)
+      } catch (e) {
+        logger.warn(`Pre-send strip instance reload threw for session ${sessionID}:`, e)
+      }
+      const kept = pre.keep ? `${pre.keep.providerID}/${pre.keep.modelID}` : 'unknown'
+      logger.warn(`Pre-send strip for session ${sessionID}: stripped ${pre.strippedParts} reasoning part(s) in ${pre.strippedMessages} message(s), removed ${pre.stubsRemoved} stub(s), kept ${kept} — instance reload ${reloaded ? 'verified' : 'NOT verified, sending anyway'}`)
+    }
+  } catch (e) {
+    logger.warn(`Pre-send strip check failed for session ${sessionID}:`, e)
+  }
+
+  // 저장된 mismatch 확인: HTTP 200으로 응답해도 provider 400이 메시지로 남을
+  // 수 있다. 이번 발송 이후에 생긴 mismatch 에러면 그 본문을 돌려준다.
+  const checkStoredMismatch = async (sendStart: number): Promise<string | undefined> => {
+    try {
+      const tail = await recentSessionMessages(sessionID, 5)
+      const msgs = (tail?.messages ?? []) as unknown as Parameters<typeof findFreshMismatch>[0]
+      const fresh = findFreshMismatch(msgs, sendStart)
+      if (!fresh) return undefined
+      try {
+        return JSON.stringify((fresh as { info?: { error?: unknown } }).info?.error ?? '')
+      } catch {
+        return 'reasoning mismatch (unserializable)'
+      }
+    } catch (e) {
+      logger.warn(`Stored-mismatch check failed for session ${sessionID}:`, e)
+      return undefined
+    }
+  };
 
   // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다
   const trimmed = chat.text.trim()
@@ -592,68 +633,93 @@ async function dispatchQueuedChat(
     signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
   })
 
+  // security/reasoning 암호문 거부 때만 자동 정리 후 1회 재전송.
+  // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
+  // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
+  // providerDetail 출처 2가지: HTTP 400 본문, 또는 HTTP 200 + 저장된 메시지 error.
+  const healMismatchAndRetryOnce = async (providerDetail: string): Promise<DispatchResult> => {
+    try {
+      const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true, outgoingModel: outgoing })
+      if (!heal.healed && heal.kind === 'cross-model') {
+        // keep(보내려는 모델)을 못 정해 strip 없이 끝난 경우 — truncate+재시도로
+        // 해결 불가이므로 안내만 돌려주고 끝낸다 (자동 원복 없음: 모델 선택은 사용자 몫).
+        const names = (heal.models ?? []).map((m) => `${m.providerID}/${m.modelID}`).join(', ')
+        const back = heal.suggestedModel ? `${heal.suggestedModel.providerID}/${heal.suggestedModel.modelID}` : null
+        const guidance =
+          `Cross-model reasoning history [${names}]. Truncating cannot help — pick one:` +
+          (back ? ` (a) switch back to ${back},` : ` (a) switch back to the model that owns the latest good turn,`) +
+          ` (b) truncate back before the model switch (per-message scissors), or (c) start a new session.` +
+          ` Manual deep-clean: POST /api/session-heal/${sessionID}.`
+        logger.warn(`Queued chat cross-model mismatch for session ${sessionID}: ${guidance}`)
+        return { sent: false, nonRetryable: true, status: 400, detail: (providerDetail.slice(0, 300) + ' ' + guidance) }
+      }
+      if (heal.healed) {
+        // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
+        // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
+        // reloadAndVerify는 성공 여부를 boolean으로 돌려준다 (조용한 실패 방지).
+        // 남은 stub이 있으면 재전송이 같은 400을 맞을 수 있어 명시한다.
+        const pending = heal.stubsPending ?? []
+        try {
+          const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+          logger.warn(`Reasoning heal: session ${sessionID} truncated ${heal.truncatedMessageId} (stripped ${heal.strippedParts ?? 0} reasoning parts, stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
+        } catch (e) {
+          logger.warn(`Reasoning heal: instance reload threw for session ${sessionID} (pending ${pending.length}), retrying anyway:`, e)
+        }
+        const retryStart = Date.now()
+        const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
+          method: 'POST',
+          headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(messageBody),
+          signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+        })
+        if (retryRes.ok) {
+          void retryRes.text().catch(() => {})
+          const stored = await checkStoredMismatch(retryStart)
+          if (stored && isReasoningEncryptedMismatch(stored)) {
+            logger.warn(`Queued chat heal-retry stored a provider mismatch for session ${sessionID} — no further auto-retry`)
+            return { sent: false, nonRetryable: true, status: 400, detail: stored.slice(0, 300) }
+          }
+          logger.info(`Reasoning heal: truncated tail and queue retry succeeded for session ${sessionID}`)
+          return { sent: true }
+        }
+        const retryBody = await retryRes.text().catch(() => '')
+        logger.warn(`Queued chat heal-retry rejected for session ${sessionID}: HTTP ${retryRes.status} ${retryBody.slice(0, 200)}`)
+        if (retryRes.status === 400 && isReasoningEncryptedMismatch(retryBody)) {
+          const pendingNote = (heal.stubsPending?.length ?? 0) > 0 ? ` Unremoved stubs: ${heal.stubsPending!.join(',')}.` : ''
+          return { sent: false, nonRetryable: true, status: retryRes.status, detail: (retryBody.slice(0, 300) + pendingNote) }
+        }
+        return { sent: false, status: retryRes.status }
+      }
+      logger.warn(`Reasoning heal skipped for queued chat (session ${sessionID}): ${heal.reason}`)
+    } catch (e) {
+      logger.warn(`Reasoning heal attempt failed for queued chat (session ${sessionID}):`, e)
+    }
+    return { sent: false, nonRetryable: true, status: 400, detail: providerDetail.slice(0, 300) }
+  };
+
+  const sendStart = Date.now()
+  const sendRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
+    method: 'POST',
+    headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(messageBody),
+    signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+  })
+
   if (!sendRes.ok) {
     const body = await sendRes.text().catch(() => '')
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
-      // security/reasoning 암호문 거부 때만 자동 정리 후 1회 재전송.
-      // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
-      // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
-      try {
-        const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true, outgoingModel: asOutgoingModel(chat.model) })
-        if (!heal.healed && heal.kind === 'cross-model') {
-          // keep(보내려는 모델)을 못 정해 strip 없이 끝난 경우 — truncate+재시도로
-          // 해결 불가이므로 안내만 돌려주고 끝낸다 (자동 원복 없음: 모델 선택은 사용자 몫).
-          const names = (heal.models ?? []).map((m) => `${m.providerID}/${m.modelID}`).join(', ')
-          const back = heal.suggestedModel ? `${heal.suggestedModel.providerID}/${heal.suggestedModel.modelID}` : null
-          const guidance =
-            `Cross-model reasoning history [${names}]. Truncating cannot help — pick one:` +
-            (back ? ` (a) switch back to ${back},` : ` (a) switch back to the model that owns the latest good turn,`) +
-            ` (b) truncate back before the model switch (per-message scissors), or (c) start a new session.` +
-            ` Manual deep-clean: POST /api/session-heal/${sessionID}.`
-          logger.warn(`Queued chat cross-model mismatch for session ${sessionID}: ${guidance}`)
-          return { sent: false, nonRetryable: true, status: sendRes.status, detail: (body.slice(0, 300) + ' ' + guidance) }
-        }
-        if (heal.healed) {
-          // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
-          // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
-          // reloadAndVerify는 성공 여부를 boolean으로 돌려준다 (조용한 실패 방지).
-          // 남은 stub이 있으면 재전송이 같은 400을 맞을 수 있어 명시한다.
-          const pending = heal.stubsPending ?? []
-          try {
-            const reloaded = await opencodeServerManager.reloadAndVerify(directory)
-            logger.warn(`Reasoning heal: session ${sessionID} truncated ${heal.truncatedMessageId} (stripped ${heal.strippedParts ?? 0} reasoning parts, stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
-          } catch (e) {
-            logger.warn(`Reasoning heal: instance reload threw for session ${sessionID} (pending ${pending.length}), retrying anyway:`, e)
-          }
-          const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
-            method: 'POST',
-            headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify(messageBody),
-            signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
-          })
-          if (retryRes.ok) {
-            void retryRes.text().catch(() => {})
-            logger.info(`Reasoning heal: truncated tail and queue retry succeeded for session ${sessionID}`)
-            return { sent: true }
-          }
-          const retryBody = await retryRes.text().catch(() => '')
-          logger.warn(`Queued chat heal-retry rejected for session ${sessionID}: HTTP ${retryRes.status} ${retryBody.slice(0, 200)}`)
-          if (retryRes.status === 400 && isReasoningEncryptedMismatch(retryBody)) {
-            const pendingNote = (heal.stubsPending?.length ?? 0) > 0 ? ` Unremoved stubs: ${heal.stubsPending!.join(',')}.` : ''
-            return { sent: false, nonRetryable: true, status: retryRes.status, detail: (retryBody.slice(0, 300) + pendingNote) }
-          }
-          return { sent: false, status: retryRes.status }
-        }
-        logger.warn(`Reasoning heal skipped for queued chat (session ${sessionID}): ${heal.reason}`)
-      } catch (e) {
-        logger.warn(`Reasoning heal attempt failed for queued chat (session ${sessionID}):`, e)
-      }
-      return { sent: false, nonRetryable: true, status: sendRes.status, detail: body.slice(0, 300) }
+      return healMismatchAndRetryOnce(body)
     }
     return { sent: false, status: sendRes.status }
   }
   // Drain the body so the socket is released even if the server keeps it open.
   void sendRes.text().catch(() => {})
+  // HTTP 200이어도 provider 400이 메시지로 저장될 수 있다 — 꼬리 확인 후 heal+1회 재시도.
+  const stored = await checkStoredMismatch(sendStart)
+  if (stored && isReasoningEncryptedMismatch(stored)) {
+    logger.warn(`Queued chat send returned 2xx but stored a provider mismatch for session ${sessionID} — running heal+retry once`)
+    return healMismatchAndRetryOnce(stored)
+  }
   return { sent: true }
 }

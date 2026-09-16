@@ -11,7 +11,7 @@ vi.mock('../../src/services/session-message-db', () => ({
   historyReasoningModels: vi.fn(),
 }))
 
-import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel } from '../../src/services/reasoning-heal'
+import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts } from '../../src/services/opencode-db'
 import { recentSessionMessages, historyReasoningModels } from '../../src/services/session-message-db'
 
@@ -642,6 +642,89 @@ describe('findLastGoodModel', () => {
   })
   it('returns undefined when no successful turn exists', () => {
     expect(findLastGoodModel([mismatchErrorMsg('e1', now)])).toBeUndefined()
+  })
+})
+
+describe('preSendStripIfMismatch', () => {
+  beforeEach(() => {
+    recentMock.mockReset()
+    historyMock.mockReset()
+    historyMock.mockResolvedValue([])
+    mockSessionIdle()
+    truncateMock.mockReset()
+    deleteMock.mockReset()
+    deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 3 })
+    stripMock.mockReset()
+    stripMock.mockResolvedValue({ partsRemoved: 6, messagesAffected: 4 })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  it('strips with the outgoing model and sweeps stubs without truncating', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.checked).toBe(true)
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.strippedParts).toBe(6)
+    expect(deleteMock).toHaveBeenCalledWith('ses-1', 'e1')
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('does nothing when the tail is not a mismatch', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u1', 'hi', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.checked).toBe(true)
+    expect(res.reason).toMatch(/not mismatch/)
+    expect(stripMock).not.toHaveBeenCalled()
+    expect(deleteMock).not.toHaveBeenCalled()
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('sweeps without stripping when keep is unknown', async () => {
+    const now = Date.now()
+    mockNoSessionModel()
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', undefined)
+    expect(res.checked).toBe(true)
+    expect(stripMock).not.toHaveBeenCalled()
+    expect(deleteMock).toHaveBeenCalledWith('ses-1', 'e1')
+    expect(res.reason).toMatch(/sweep only/)
+  })
+})
+
+describe('findFreshMismatch', () => {
+  it('finds a mismatch created after the send started', () => {
+    const now = Date.now()
+    const msgs = [
+      userMsg('u1', 'hi', now - 60_000),
+      mismatchErrorMsg('e1', now - 1_000),
+    ] as never[]
+    expect(findFreshMismatch(msgs as never, now - 5_000)?.info?.id).toBe('e1')
+  })
+  it('ignores stale mismatch stubs from older turns', () => {
+    const now = Date.now()
+    const msgs = [
+      userMsg('u1', 'hi', now - 600_000),
+      mismatchErrorMsg('e1', now - 500_000),
+    ] as never[]
+    expect(findFreshMismatch(msgs as never, now - 5_000)).toBeUndefined()
+  })
+  it('ignores non-mismatch tails', () => {
+    const now = Date.now()
+    const msgs = [
+      userMsg('u1', 'hi', now - 60_000),
+      assistantMsg('a1', now - 1_000),
+    ] as never[]
+    expect(findFreshMismatch(msgs as never, now - 5_000)).toBeUndefined()
   })
 })
 

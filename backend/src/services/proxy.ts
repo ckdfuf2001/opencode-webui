@@ -5,7 +5,7 @@ import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { flushQueueForSession, clearSendingOnAbort } from './chat-queue'
-import { healReasoningTail, isReasoningMismatchText, asOutgoingModel } from './reasoning-heal'
+import { healReasoningTail, isReasoningMismatchText, asOutgoingModel, preSendStripIfMismatch } from './reasoning-heal'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -471,6 +471,35 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         }
       }
       headers['content-length'] = String(Buffer.byteLength(body))
+    }
+
+    // POST /session/:id/message 발송 직전: 꼬리가 mismatch 에러면 strip-only 클렌징.
+    // opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
+    // 응답-기준 heal만으로는 발동하지 않는다. truncate는 하지 않는다 (이번 본문과
+    // 무관한 과거 user를 지우지 않기 위해) — strip+sweep+reload만으로 다음 전송을 살린다.
+    if (method === 'POST' && body) {
+      const preMatch = cleanEventPath.match(/^\/session\/([^/]+)\/message$/)
+      if (preMatch?.[1]) {
+        try {
+          const preParsed = JSON.parse(body) as { parts?: Array<{ type?: string; text?: string }>; model?: unknown }
+          const hasText = (Array.isArray(preParsed.parts) ? preParsed.parts : [])
+            .some((p) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim())
+          if (hasText) {
+            const preDir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
+            const pre = await preSendStripIfMismatch(opencodeServerManager.getUrl(), preMatch[1]!, preDir, asOutgoingModel(preParsed.model))
+            if ((pre.strippedParts ?? 0) > 0 || (pre.stubsRemoved ?? 0) > 0) {
+              if (preDir) {
+                const reloaded = await opencodeServerManager.reloadAndVerify(preDir).catch(() => false)
+                logger.warn(`Pre-send strip for session ${preMatch[1]}: stripped ${pre.strippedParts} reasoning part(s), removed ${pre.stubsRemoved} stub(s), kept ${pre.keep ? `${pre.keep.providerID}/${pre.keep.modelID}` : 'unknown'} — instance reload ${reloaded ? 'verified' : 'NOT verified, forwarding anyway'}`)
+              } else {
+                logger.warn(`Pre-send strip for session ${preMatch[1]}: stripped ${pre.strippedParts} reasoning part(s), removed ${pre.stubsRemoved} stub(s) but no directory — reload skipped, forwarding anyway`)
+              }
+            }
+          }
+        } catch (e) {
+          logger.warn(`Pre-send strip check failed for session ${preMatch[1]}:`, e)
+        }
+      }
     }
 
     const retryable = (error: unknown): boolean => {

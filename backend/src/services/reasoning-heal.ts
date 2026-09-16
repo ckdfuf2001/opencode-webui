@@ -156,7 +156,8 @@ function userTextOf(msg: LooseMessage): string {
     .trim()
 }
 
-function isMismatchError(msg: LooseMessage): boolean {
+/** mismatch 에러 턴 판별 — 발송 전후 꼬리 검사에서 공유한다 (export). */
+export function isMismatchError(msg: LooseMessage): boolean {
   const err = msg.info?.error
   if (!err) return false
   try {
@@ -495,6 +496,86 @@ export async function sweepPollutedStubs(sessionID: string): Promise<{ removed: 
     logger.warn(`Reasoning heal stub sweep threw for session ${sessionID}:`, e)
   }
   return { removed, pending }
+}
+
+export interface PreSendStripResult {
+  checked: boolean
+  strippedParts: number
+  strippedMessages: number
+  stubsRemoved: number
+  stubsPending: string[]
+  keep?: OutgoingModel
+  reason?: string
+}
+
+/**
+ * 발송 직전 안전 클렌징: 꼬리가 mismatch 에러일 때만 외국 reasoning strip +
+ * 자식 없는 stub sweep을 한다. 메시지 truncate는 절대 하지 않는다 — 아직
+ * 보내지 않은 이번 텍스트와 무관한 과거 user를 지우면 안 되기 때문이다.
+ *
+ * 왜 필요한가: opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는
+ * 경로가 있다 (실측: 큐에서 Flushed됐는데 400 메시지가 쌓임). 응답-기준 heal만
+ * 있으면 이 경우 heal이 영원히 발동하지 않아, 다음 전송이 같은 400을 맞는다.
+ * 발송 전에 꼬리를 직접 보고 strip해 두면 다음 전송이 깨끗한 히스토리에서
+ * 시작한다. 호출자는 strippedParts/stubsRemoved > 0이면 인스턴스 reload 후
+ * 전송한다 (opencode 메모리 캐시 무효화).
+ */
+export async function preSendStripIfMismatch(
+  base: string,
+  sessionID: string,
+  directory: string | undefined,
+  outgoing?: OutgoingModel,
+): Promise<PreSendStripResult> {
+  const empty = (reason: string): PreSendStripResult => ({
+    checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], reason,
+  })
+  const { messages, reason } = await fetchMessageList(sessionID)
+  if (!messages || messages.length === 0) {
+    return { checked: false, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], reason: reason ?? 'no messages' }
+  }
+  const last = messages[messages.length - 1]
+  if (!last || !isMismatchError(last)) return empty('tail not mismatch')
+  // keep 체인은 자동 경로와 동일: outgoing > 세션 조회. suggested 제외.
+  // 둘 다 없으면 strip 없이 sweep만 한다 (반대로 지우는 것보다 안전).
+  const keep = outgoing ?? (await getSessionModel(base, sessionID, directory))
+  let strippedParts = 0
+  let strippedMessages = 0
+  if (keep) {
+    try {
+      const strip = await stripReasoningParts(sessionID, keep)
+      strippedParts = strip?.partsRemoved ?? 0
+      strippedMessages = strip?.messagesAffected ?? 0
+    } catch (e) {
+      return { checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], reason: `strip threw: ${(e as Error)?.message ?? e}` }
+    }
+  }
+  const sweep = await sweepPollutedStubs(sessionID)
+  return {
+    checked: true, strippedParts, strippedMessages,
+    stubsRemoved: sweep.removed, stubsPending: sweep.pending,
+    ...(keep ? { keep } : {}),
+    reason: keep ? undefined : 'keep unknown — sweep only',
+  }
+}
+
+/**
+ * 방금 보낸 턴이 provider mismatch로 저장됐는지 판별한다.
+ * opencode가 HTTP 200으로 응답해도 메시지 error로 400이 남을 수 있어,
+ * 발송 성공으로 단정하지 않고 꼬리를 한 번 더 본다. sinceTs(발송 시작)보다
+ * 먼저 생긴 오래된 stub은 이번 턴과 무관하므로 제외한다.
+ */
+export function findFreshMismatch(
+  messages: LooseMessage[],
+  sinceTs: number,
+): LooseMessage | undefined {
+  const SKEW_MS = 10_000
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (!m || !isMismatchError(m)) continue
+    const created = m.info?.time?.created ?? 0
+    if (created >= sinceTs - SKEW_MS) return m
+  }
+  return undefined
 }
 
 /** 마지막 user 메시지를 찾아 그 지점부터 잘라낸다 (수동 endpoint용 — 텍스트 대조 없음). */
