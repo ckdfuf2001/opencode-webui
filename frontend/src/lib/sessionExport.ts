@@ -145,12 +145,17 @@ export function downloadTextFile(name: string, content: string, mime: string): v
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
 
+/** 미리 열어둔 창에 PDF 인쇄 문서를 쓴다. fetch보다 먼저 창을 열어야 팝업 차단을 피한다. */
+export function printSessionPdfInto(w: Window, messages: MessageWithParts[], title: string): void {
+  const body = `<h1>${escHtml(title)}</h1>\n` + messages.map(messageHtml).join('\n')
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escHtml(title)}</title><style>${PRINT_CSS}</style></head><body>${body}<script>window.onload=()=>{window.focus();window.print()}<\/script></body></html>`)
+  w.document.close()
+}
+
 /** PDF는 브라우저 인쇄(다른 이름으로 저장→PDF)로 내보낸다. 팝업 차단을 피하려 클릭 핸들러에서 직접 호출해야 한다. */
 export function printSessionPdf(messages: MessageWithParts[], title: string): boolean {
   const w = window.open('', '_blank', 'width=900,height=700')
   if (!w) return false
-  const body = `<h1>${escHtml(title)}</h1>\n` + messages.map(messageHtml).join('\n')
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escHtml(title)}</title><style>${PRINT_CSS}</style></head><body>${body}<script>window.onload=()=>{window.focus();window.print()}<\/script></body></html>`)
-  w.document.close()
+  printSessionPdfInto(w, messages, title)
   return true
 }

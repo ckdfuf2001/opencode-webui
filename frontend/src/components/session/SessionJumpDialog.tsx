@@ -11,15 +11,13 @@ interface SessionJumpDialogProps {
   open: boolean
   onClose: () => void
   sessionId: string | undefined
-  repoId?: number | null
-  repoLabel?: string
   onJump: (messageID: string) => void
 }
 
 const ENTRY_LIMIT = 20
 const SEARCH_PAGE = 20
 
-export function SessionJumpDialog({ open, onClose, sessionId, repoId, repoLabel, onJump }: SessionJumpDialogProps) {
+export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJumpDialogProps) {
   const [q, setQ] = useState('')
   const [offset, setOffset] = useState(0)
   const needle = q.trim()
@@ -109,44 +107,15 @@ export function SessionJumpDialog({ open, onClose, sessionId, repoId, repoLabel,
   const total = needle.length === 0 ? entryTotal : searchPage?.total
   const entryItems = entryAcc
 
-  // 리스트 선택: 체크·범위 → 선택 출력 (검색 페이지와 같은 JSON 양식)
+  // 리스트 선택: 체크·범위 → 선택 출력 드롭다운 (md/txt/html/pdf/json)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [outputOpen, setOutputOpen] = useState(false)
   const [rangeMode, setRangeMode] = useState(false)
   const [rangeStart, setRangeStart] = useState<string | null>(null)
   useEffect(() => {
     setSelectedIds(new Set())
-    setOutputOpen(false)
     setRangeMode(false)
     setRangeStart(null)
   }, [sessionId])
-  // 출력 양식은 검색 페이지 selectedJson과 동일 키
-  // (kind/repo/repoId/sessionId/messageId/turnIndex/role/ts/snippet/meta)
-  const selectedOutput = useMemo(() => {
-    if (selectedIds.size === 0) return ''
-    const rows: Array<Record<string, unknown>> = []
-    if (needle.length === 0) {
-      // entry 목록은 turn 0부터 연속 누적되므로 인덱스가 곧 turnIndex다
-      entryItems.forEach((m, i) => {
-        if (!selectedIds.has(m.id)) return
-        rows.push({
-          kind: 'message', repo: repoLabel ?? '', repoId: repoId ?? null,
-          sessionId, messageId: m.id, turnIndex: i, role: m.role, ts: m.created,
-          snippet: m.preview, meta: `${m.role} turn ${i}`,
-        })
-      })
-    } else {
-      for (const h of searchItems) {
-        if (!selectedIds.has(h.messageId)) continue
-        rows.push({
-          kind: 'message', repo: repoLabel ?? '', repoId: repoId ?? null,
-          sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts,
-          snippet: h.snippet, meta: `${h.role} turn ${h.turnIndex}`,
-        })
-      }
-    }
-    return JSON.stringify(rows, null, 2)
-  }, [selectedIds, needle, entryItems, searchItems, sessionId, repoId, repoLabel])
 
   const visibleIds = useMemo(() => {
     return needle.length === 0
@@ -228,32 +197,11 @@ export function SessionJumpDialog({ open, onClose, sessionId, repoId, repoLabel,
               선택 해제
             </button>
           )}
-          <button
-            onClick={() => setOutputOpen((v) => !v)}
-            disabled={selectedIds.size === 0}
-            className="text-[11px] px-2 py-1 rounded border border-input hover:bg-accent disabled:opacity-40"
-          >
-            선택 출력 ({selectedIds.size})
-          </button>
+          <SelectedExportButtons
+            ids={[...selectedIds]}
+            title={sessionId ? `선택 출력 ${selectedIds.size}개` : undefined}
+          />
         </div>
-        {outputOpen && selectedOutput && (
-          <div className="rounded-md border border-input bg-background">
-            <div className="flex items-center justify-between px-2 py-1 border-b border-input gap-2">
-              <span className="text-[11px] font-medium shrink-0">선택 출력</span>
-              <SelectedExportButtons
-                ids={[...selectedIds]}
-                title={`선택 출력 ${selectedIds.size}개`}
-              />
-              <button
-                onClick={() => setOutputOpen(false)}
-                className="text-[11px] px-2 py-0.5 rounded hover:bg-accent text-muted-foreground shrink-0"
-              >
-                닫기
-              </button>
-            </div>
-            <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2 max-h-48 overflow-y-auto">{selectedOutput}</pre>
-          </div>
-        )}
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}

@@ -875,7 +875,7 @@ export function SessionDetail() {
 
   const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
   // ... 메뉴: 전체 내려받기 (윈도우와 무관하게 전체 메시지 기준)
-  const handleExportFile = useCallback((format: SessionExportFormat | 'pdf') => {
+  const handleExportFile = useCallback((format: SessionExportFormat | 'pdf' | 'json') => {
     const list = messagesRef.current ?? messages;
     if (!list || list.length === 0) {
       showToast.error('No messages to export yet.');
@@ -886,6 +886,11 @@ export function SessionDetail() {
       if (!printSessionPdf(list, title)) {
         showToast.error('Popup blocked — allow popups for this site to print/PDF.');
       }
+      return;
+    }
+    if (format === 'json') {
+      downloadTextFile(sessionFileName(title, 'json'), JSON.stringify(list, null, 2), 'application/json');
+      showToast.success(`Exported ${list.length} message(s) as .json`);
       return;
     }
     const content = format === 'md'
@@ -1659,8 +1664,6 @@ if (results.length > 0) {
         open={jumpOpen}
         onClose={() => setJumpOpen(false)}
         sessionId={sessionId}
-        repoId={repoId || undefined}
-        repoLabel={repo?.localPath}
         onJump={(id) => {
           // 모달(스크롤 잠금·포커스 복원·닫힘 애니메이션)이 끝난 뒤 이동해야
           // smooth 스크롤이 중간에 끊기거나 무시되지 않는다.

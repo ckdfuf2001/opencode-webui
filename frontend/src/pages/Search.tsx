@@ -133,25 +133,9 @@ export function Search() {
   // 범위 선택 모드: 시작 행 클릭 → 종료 행 클릭으로 사이 전체 체크
   const [rangeMode, setRangeMode] = useState(false)
   const [rangeStart, setRangeStart] = useState<string | null>(null)
-  // 선택 출력: 체크된 것만 같은 양식으로 오버레이에 표시 (null이면 전체)
-  const [outputOverride, setOutputOverride] = useState<string | null>(null)
 
   const hitKeyOf = (h: any): string =>
     h.kind === 'message' ? h.messageId : `${h.repoId}:${h.sha}`
-
-  const selectedJson = useMemo(() => {
-    if (selectedHits.size === 0) return ''
-    const arr = filteredHits
-      .filter((h: any) => selectedHits.has(hitKeyOf(h)))
-      .map((h) => {
-        if (h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData) {
-          return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, expanded: expandedData.rows }
-        }
-        return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, meta: h.meta }
-      })
-    return JSON.stringify(arr, null, 2)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredHits, selectedHits, expandedId, expandedData, repos])
 
   // 체크박스 토글: user면 다음 user 전까지 턴 단위로 묶고, assistant/커밋은 낱개.
   // 턴으로 묶인 답변은 각자 낱개로 해제할 수 있다.
@@ -193,11 +177,7 @@ export function Search() {
     showToast.success(`${to - from + 1}개 선택됨`)
   }
 
-  const handleSelectedOutput = () => {
-    if (!selectedJson) return
-    setOutputOverride(selectedJson)
-    setBlockOpen(true)
-  }
+
 
   const copyText = async (text: string, _label?: string) => {
     try {
@@ -365,22 +345,16 @@ export function Search() {
               </div>
             </div>
 
-              {blockOpen && (outputOverride ?? filteredJson) && (
+              {blockOpen && filteredJson && (
                 <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl min-w-[500px] max-w-[800px]">
                   <div className="flex items-center justify-between px-2.5 py-1.5 border-b gap-2">
-                    <span className="text-[11px] font-medium shrink-0">Recalls JSON {outputOverride ? '(선택 출력)' : kind !== 'all' ? `(${kind})` : ''}</span>
-                    {outputOverride && (
-                      <SelectedExportButtons
-                        ids={filteredHits.filter((h: any) => selectedHits.has(hitKeyOf(h))).map((h: any) => hitKeyOf(h)).filter(Boolean)}
-                        title={`선택 출력 ${selectedHits.size}개`}
-                      />
-                    )}
-                    <button onClick={() => { setBlockOpen(false); setOutputOverride(null) }} className="text-muted-foreground hover:text-foreground p-0.5 shrink-0">
+                    <span className="text-[11px] font-medium shrink-0">Recalls JSON {kind !== 'all' ? `(${kind})` : ''}</span>
+                    <button onClick={() => setBlockOpen(false)} className="text-muted-foreground hover:text-foreground p-0.5 shrink-0">
                       <X className="w-3 h-3" />
                     </button>
                   </div>
                   <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto">
-                    {outputOverride ?? filteredJson}
+                    {filteredJson}
                   </pre>
                 </div>
               )}
@@ -420,9 +394,10 @@ export function Search() {
                     선택 해제
                   </Button>
                 )}
-                <Button variant="outline" size="sm" disabled={selectedHits.size === 0} onClick={handleSelectedOutput} className="gap-1 h-7 text-xs">
-                  선택 출력 ({selectedHits.size})
-                </Button>
+                <SelectedExportButtons
+                  ids={filteredHits.filter((h: any) => selectedHits.has(hitKeyOf(h))).map((h: any) => hitKeyOf(h)).filter(Boolean)}
+                  title={`선택 출력 ${selectedHits.size}개`}
+                />
                 <Button variant="destructive" size="sm" disabled={selectedHits.size === 0 || deleteMessagesMutation.isPending || deleteCommitsMutation.isPending} onClick={handleBulkDelete} className="ml-auto gap-1">
                   <Trash2 className="w-3.5 h-3.5" /> Delete index ({selectedHits.size})
                 </Button>

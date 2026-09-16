@@ -1,4 +1,4 @@
-import { Download, Search, FileText, FileType, FileCode2, Printer, ListOrdered } from 'lucide-react'
+import { Download, Search, FileText, FileType, FileCode2, FileJson, Printer, ListOrdered } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,7 +10,7 @@ import {
 import type { SessionExportFormat } from '@/lib/sessionExport'
 
 interface SessionMoreMenuProps {
-  onExport: (format: SessionExportFormat | 'pdf') => void
+  onExport: (format: SessionExportFormat | 'pdf' | 'json') => void
   onOpenJump: () => void
   triggerClassName?: string
 }
@@ -50,6 +50,9 @@ export function SessionMoreMenu({ onExport, onOpenJump, triggerClassName }: Sess
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onExport('pdf')} className="text-xs cursor-pointer">
           <Printer className="w-3.5 h-3.5 mr-2" /> PDF (print)
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onExport('json')} className="text-xs cursor-pointer">
+          <FileJson className="w-3.5 h-3.5 mr-2" /> JSON
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
