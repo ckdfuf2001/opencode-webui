@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
 import { useSessionStatusMap, useMessages, useSessions, clearCancelledUntilNextSend } from '@/hooks/useOpenCode'
-import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
+import { useEnqueueQueuedChat, useQueuedChats } from '@/hooks/useChatQueue'
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import { listRepos } from '@/api/repos'
@@ -289,6 +289,15 @@ function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId:
   const lastUserText = extractText((lastUser as any)?.parts)
   const lastAssistantText = extractText((lastAssistant as any)?.parts)
   const userSnippet = lastUserText ? (lastUserText.length > 40 ? lastUserText.slice(0, 40) + '…' : lastUserText) : ''
+  // sending/대기 중 큐는 opencode 메시지에 아직 없어서 lastUser에 안 잡힌다.
+  // 타이틀에만 '마지막 결과 - <입력>'으로 표기하고, 본문(질문/응답)에는 찍지 않는다.
+  // 본문에 찍으면 상단 타이틀과 중복되고, 아직 미전송이라 내용도 비어 있다.
+  const { data: queuedChats = [] } = useQueuedChats(sessionId)
+  const activeQueue = queuedChats.find(q => q.status === 'sending') ?? queuedChats.find(q => q.status === 'queued')
+  const activeQueueText = activeQueue?.text?.trim() ?? ''
+  const queueSnippet = activeQueueText ? (activeQueueText.length > 40 ? activeQueueText.slice(0, 40) + '…' : activeQueueText) : ''
+  const titleSnippet = queueSnippet || userSnippet
+  const titleFull = activeQueueText || lastUserText || undefined
   const moveUrl = repoId ? `/repos/${repoId}/sessions/${sessionId}` : `/session/${sessionId}`
   // 마지막 시퀀스: 마지막 user 이후의 user+assistant만 (전체보기용)
   const lastSequence = (() => {
@@ -308,8 +317,8 @@ function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId:
     <>
       <div className="mt-1 border rounded-md bg-muted/30 p-2 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-medium truncate flex items-center gap-1.5 min-w-0" title={lastUserText || undefined}>
-            <span className="truncate">{userSnippet ? `마지막 결과 - ${userSnippet}` : '마지막 결과'}</span>
+          <span className="text-[11px] font-medium truncate flex items-center gap-1.5 min-w-0" title={titleFull}>
+            <span className="truncate">{titleSnippet ? `마지막 결과 - ${titleSnippet}` : '마지막 결과'}</span>
             <SessionBadges sessionId={sessionId} />
           </span>
           <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onClose}><X className="w-3 h-3" /></Button>
@@ -340,8 +349,8 @@ function MiniResultPopup({ sessionId, directory, repoId, onClose }: { sessionId:
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => setExpanded(false)}>
           <div className="bg-card border rounded-lg shadow-2xl w-[720px] max-w-[95vw] max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b gap-2">
-              <span className="text-sm font-semibold truncate flex items-center gap-2 min-w-0" title={lastUserText || undefined}>
-                <span className="truncate">{userSnippet ? `전체 보기 — ${userSnippet}` : `전체 보기 — ${sessionId.slice(0, 8)}`}</span>
+              <span className="text-sm font-semibold truncate flex items-center gap-2 min-w-0" title={titleFull}>
+                <span className="truncate">{titleSnippet ? `전체 보기 — ${titleSnippet}` : `전체 보기 — ${sessionId.slice(0, 8)}`}</span>
                 <SessionBadges sessionId={sessionId} />
               </span>
               <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setExpanded(false)}><X className="w-4 h-4" /></Button>
