@@ -601,10 +601,16 @@ async function dispatchQueuedChat(
       try {
         const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true })
         if (heal.healed) {
+          // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
+          // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
+          // reloadAndVerify는 성공 여부를 boolean으로 돌려준다 (조용한 실패 방지).
+          // 남은 stub이 있으면 재전송이 같은 400을 맞을 수 있어 명시한다.
+          const pending = heal.stubsPending ?? []
           try {
-            await opencodeServerManager.reloadDirectory(directory)
+            const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+            logger.warn(`Reasoning heal: session ${sessionID} truncated ${heal.truncatedMessageId} (stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
           } catch (e) {
-            logger.warn(`Reasoning heal: instance reload failed for session ${sessionID}:`, e)
+            logger.warn(`Reasoning heal: instance reload threw for session ${sessionID} (pending ${pending.length}), retrying anyway:`, e)
           }
           const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
             method: 'POST',
@@ -620,7 +626,8 @@ async function dispatchQueuedChat(
           const retryBody = await retryRes.text().catch(() => '')
           logger.warn(`Queued chat heal-retry rejected for session ${sessionID}: HTTP ${retryRes.status} ${retryBody.slice(0, 200)}`)
           if (retryRes.status === 400 && isReasoningEncryptedMismatch(retryBody)) {
-            return { sent: false, nonRetryable: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
+            const pendingNote = (heal.stubsPending?.length ?? 0) > 0 ? ` Unremoved stubs: ${heal.stubsPending!.join(',')}.` : ''
+            return { sent: false, nonRetryable: true, status: retryRes.status, detail: (retryBody.slice(0, 300) + pendingNote) }
           }
           return { sent: false, status: retryRes.status }
         }

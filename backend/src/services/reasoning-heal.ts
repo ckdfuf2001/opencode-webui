@@ -5,10 +5,6 @@ import { recentSessionMessages } from './session-message-db'
 interface LoosePart {
   type?: string
   text?: string
-  signature?: unknown
-  encrypted_content?: unknown
-  metadata?: { signature?: unknown } & Record<string, unknown>
-  [key: string]: unknown
 }
 
 interface LooseMessage {
@@ -32,6 +28,8 @@ export interface ReasoningHealResult {
   truncatedMessageId?: string
   /** trailing mismatch stub 단건 삭제 수 */
   stubsRemoved?: number
+  /** 오염으로 감지됐으나 자식 때문에 못 지운 stub id (재전송 실패 가능 — 로그 추적용) */
+  stubsPending?: string[]
   kind?: TailKind
   healable?: boolean
 }
@@ -86,7 +84,9 @@ function errorTextOf(err: unknown): string {
 function errorStatusOf(err: unknown): number | undefined {
   if (typeof err !== 'object' || err === null) return undefined
   const e = err as Record<string, unknown>
-  const candidates = [e.status, e.statusCode, e.code, (e.data as Record<string, unknown> | undefined)?.status]
+  const data = e.data as Record<string, unknown> | undefined
+  // 실측 shape: { name:'APIError', data:{ message, statusCode:400, isRetryable:false, ... } }
+  const candidates = [e.status, e.statusCode, e.code, data?.status, data?.statusCode]
   for (const c of candidates) {
     if (typeof c === 'number' && Number.isFinite(c)) return c
     if (typeof c === 'string' && /^\d{3}$/.test(c.trim())) return Number(c.trim())
@@ -147,19 +147,16 @@ function isMismatchError(msg: LooseMessage): boolean {
 }
 
 /**
- * NW 중단으로 서명이 도착하기 전에 저장된 reasoning part.
- * info.error가 비어 있어 "정상처럼 보이는" 미완성 assistant 메시지로 남고,
- * 다음 전송 때 provider가 replay를 거부하면서 새 턴에 400이 기록된다.
+ * NW 중단으로 끝까지 생성되지 못한 assistant 턴 (step-finish 없이 저장됨).
+ * info.error가 비어 있어 "정상처럼 보이는" 메시지로 남고, 다음 전송 때
+ * provider가 이 reasoning을 replay하면서 새 턴에 400이 기록된다.
+ * 실DB 실측: reasoning part는 {type,text,time}만 저장되고 서명 필드 자체가
+ * 없으므로(11,714건 전수 확인) 서명 유무로는 판별 불가 — 완료 여부로만 본다.
+ * heal은 mismatch 400을 관측한 뒤에만 동작하므로, 그 시점에 미완성인 턴은
+ * 진행 중이 아니라 중단된 것이다 (발송 전 busy 체크로도 가드됨).
  */
-export function hasUnsignedReasoning(msg: LooseMessage): boolean {
-  const parts = Array.isArray(msg.parts) ? msg.parts : []
-  return parts.some((p) => {
-    if (!p || p.type !== 'reasoning') return false
-    const sig = (p as LoosePart).signature
-    const metaSig = (p as LoosePart).metadata?.signature
-    const enc = (p as LoosePart).encrypted_content
-    return sig == null && metaSig == null && enc == null
-  })
+export function isIncompleteAssistant(msg: LooseMessage): boolean {
+  return msg.info?.role === 'assistant' && msg.info.time?.completed == null
 }
 
 async function fetchMessageList(
@@ -181,13 +178,15 @@ async function fetchMessageList(
  * security/reasoning 암호문 불일치로 거부된 턴의 꼬리를 잘라낸다. 2단계:
  *  1. 방금 보낸 user 메시지부터 끝까지 절단 (가드: 텍스트 일치·10분 신선도).
  *     → 이번 전송의 실패 턴 제거.
- *  2. 마지막 성공 턴까지 거슬러 올라가며 mismatch 에러 assistant stub +
- *     무서명(unsigned) reasoning을 남긴 assistant 메시지를 자식 없을 때
+ *  2. 마지막 성공 턴까지 거슬러 올라가며 mismatch 에러 assistant stub과
+ *     미완성 assistant 턴(completed 없음 — NW 중단 잔재)을 자식 없을 때
  *     단건 삭제 (최대 5개, 스캔 20개).
- *     → NW 중단으로 error 없이 남은 오염 part가 다음 전송까지 거부하던
- *     케이스 대응. 성공한 턴 이전은 provider가 이미 받아들인 히스토리라
- *     손대지 않는다. user 메시지는 절대 삭제 안 함.
+ *     → NW 중단으로 error 없이 남은 턴이 다음 전송까지 거부하던 케이스 대응.
+ *     완료된 성공 턴 이전은 provider가 이미 받아들인 히스토리라 손대지 않는다.
+ *     user 메시지는 절대 삭제 안 함.
  * 단계별 하나라도 건드렸으면 healed=true (호출자는 동일 요청 1회 재전송).
+ * 감지됐으나 자식 때문에 못 지운 stub은 stubsPending에 담아 호출자가 로그로
+ * 남긴다 — 재전송 실패 시 원인 추적용 (조용한 거짓 성공 방지).
  */
 export async function healReasoningTail(
   base: string,
@@ -242,10 +241,25 @@ export async function healReasoningTail(
     return { healed: false, reason: `truncate threw: ${(e as Error)?.message ?? e}` }
   }
 
-  // 2단계: 마지막 성공 턴까지 거슬러 올라가며 mismatch/unsigned stub만 단건 삭제.
+  // 2단계: 마지막 성공 턴까지 거슬러 올라가며 mismatch/미완성 stub만 단건 삭제.
   // 오염 메시지는 info.error가 비어 있을 수 있어 "성공 턴"으로 오인하고 break하면
-  // 안 된다 — 무서명 reasoning이 있으면 오염으로 보고 삭제 대상으로 삼는다.
-  let stubsRemoved = 0
+  // 안 된다 — completed가 없는 assistant 턴은 중단 잔재로 보고 삭제 대상으로 삼는다.
+  const sweep = await sweepPollutedStubs(sessionID)
+  if (sweep.pending.length > 0) {
+    logger.warn(`Reasoning heal: session ${sessionID} truncated ${truncatedMessageId} but ${sweep.pending.length} polluted stub(s) remain [${sweep.pending.join(',')}]`)
+  }
+
+  return { healed: true, truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending }
+}
+
+/**
+ * 꼬리 sweep 공용 헬퍼: mismatch 에러 stub과 미완성 assistant 턴을
+ * 마지막 성공 턴까지 거슬러 올라가며 자식 없을 때 단건 삭제.
+ * 완료된 성공 턴 이전은 provider가 받아들인 히스토리라 손대지 않는다.
+ */
+export async function sweepPollutedStubs(sessionID: string): Promise<{ removed: number; pending: string[] }> {
+  let removed = 0
+  const pending: string[] = []
   try {
     const tail = await fetchMessageList(sessionID)
     if (tail.messages) {
@@ -258,22 +272,23 @@ export async function healReasoningTail(
         if (!m || !m.info) break
         if (m.info.role === 'user') continue
         if (m.info.role !== 'assistant') break
-        if (isMismatchError(m) || hasUnsignedReasoning(m)) {
+        if (isMismatchError(m) || isIncompleteAssistant(m)) {
           if (m.info.id) targets.push(m.info.id)
           continue
         }
         if (m.info.error) continue // 다른 종류 에러 stub은 유지하고 뒤를 계속 본다
-        break // 에러 없고 서명도 정상인 성공 턴 → 그 앞은 provider가 받아들인 히스토리라 중단
+        break // 완료된 성공 턴 → 그 앞은 provider가 받아들인 히스토리라 중단
       }
       if (targets.length > 0) {
         // 최신 것부터 삭제 (자식 검사는 DB에서 실시간 재확인)
         for (const targetId of targets) {
           const deleted = await deleteSingleChildlessMessage(sessionID, targetId)
           if (!deleted) {
-            logger.warn(`Reasoning heal: kept stub ${targetId} (has children or delete failed)`)
+            pending.push(targetId)
+            logger.warn(`Reasoning heal: kept stub ${targetId} in session ${sessionID} (has children or delete failed) — retry may hit the same 400`)
             continue
           }
-          stubsRemoved++
+          removed++
           logger.warn(`Reasoning heal: removed mismatch stub ${targetId} in session ${sessionID}`)
         }
       }
@@ -281,6 +296,47 @@ export async function healReasoningTail(
   } catch (e) {
     logger.warn(`Reasoning heal stub sweep threw for session ${sessionID}:`, e)
   }
+  return { removed, pending }
+}
 
-  return { healed: true, truncatedMessageId, stubsRemoved }
+/** 마지막 user 메시지를 찾아 그 지점부터 잘라낸다 (수동 endpoint용 — 텍스트 대조 없음). */
+export async function truncateFromLastUser(
+  sessionID: string,
+): Promise<{ truncatedMessageId: string; messagesRemoved: number } | { reason: string }> {
+  const { messages, reason } = await fetchMessageList(sessionID)
+  if (!messages) return { reason: reason ?? 'no messages' }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m?.info?.role === 'user' && m.info.id) {
+      try {
+        const result = await truncateSessionMessages(sessionID, m.info.id)
+        if (!result) return { reason: 'truncate failed' }
+        return { truncatedMessageId: m.info.id, messagesRemoved: result.messagesRemoved }
+      } catch (e) {
+        return { reason: `truncate threw: ${(e as Error)?.message ?? e}` }
+      }
+    }
+  }
+  return { reason: 'no user to truncate from' }
+}
+
+/**
+ * 수동 백업용 narrow 정리: 꼬리가 mismatch(암호문 거부)일 때만 마지막 user부터
+ * 잘라내고 sweep한다. 결제·쿼터 등 non-healable이나 clean이면 손대지 않는다.
+ * 자동 복구가 실패했을 때의 비상 출구 — 프론트 버튼 없음, API 직접 호출용.
+ */
+export async function healMismatchTailManual(
+  sessionID: string,
+): Promise<ReasoningHealResult> {
+  const { messages, reason } = await fetchMessageList(sessionID)
+  if (!messages || messages.length === 0) return { healed: false, reason: reason ?? 'no messages' }
+  const { kind, healable } = classifyTail(messages)
+  if (kind !== 'mismatch' || !healable) {
+    return { healed: false, reason: kind === 'clean' ? 'history clean' : `not a reasoning-mismatch tail (${kind}) — manual cleanup refused`, kind, healable }
+  }
+  const trunc = await truncateFromLastUser(sessionID)
+  if ('reason' in trunc) return { healed: false, reason: trunc.reason, kind, healable }
+  logger.warn(`Manual mismatch heal for session ${sessionID}: truncated from user ${trunc.truncatedMessageId} (removed ${trunc.messagesRemoved} messages)`)
+  const sweep = await sweepPollutedStubs(sessionID)
+  return { healed: true, truncatedMessageId: trunc.truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending, kind, healable: true }
 }

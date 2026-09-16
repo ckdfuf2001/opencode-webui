@@ -9,7 +9,7 @@ vi.mock('../../src/services/session-message-db', () => ({
   recentSessionMessages: vi.fn(),
 }))
 
-import { healReasoningTail, classifyTail, hasUnsignedReasoning, isReasoningMismatchText } from '../../src/services/reasoning-heal'
+import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage } from '../../src/services/opencode-db'
 import { recentSessionMessages } from '../../src/services/session-message-db'
 
@@ -70,8 +70,10 @@ function otherErrorMsg(id: string, created: number) {
   }
 }
 
-function unsignedReasoningMsg(id: string, created: number) {
-  // NW 중단으로 서명 없이 저장된 오염 메시지 — info.error가 비어 있다.
+function interruptedMsg(id: string, created: number) {
+  // NW 중단으로 step-finish 없이 저장된 오염 턴 — info.error가 비어 있다.
+  // 실DB 실측: reasoning part는 {type,text,time}만 저장되고 서명 필드가 없으므로
+  // 완료 여부로만 판별한다.
   return {
     info: {
       id,
@@ -79,19 +81,7 @@ function unsignedReasoningMsg(id: string, created: number) {
       sessionID: 'ses-1',
       time: { created },
     },
-    parts: [{ type: 'reasoning', text: 'partial thinking...' }],
-  }
-}
-
-function signedReasoningMsg(id: string, created: number) {
-  return {
-    info: {
-      id,
-      role: 'assistant',
-      sessionID: 'ses-1',
-      time: { created, completed: created + 1000 },
-    },
-    parts: [{ type: 'reasoning', text: 'thinking...', signature: 'sig-abc' }],
+    parts: [{ type: 'step-start' }, { type: 'reasoning', text: 'partial thinking...' }],
   }
 }
 
@@ -115,11 +105,11 @@ describe('isReasoningMismatchText', () => {
   })
 })
 
-describe('hasUnsignedReasoning', () => {
-  it('detects reasoning parts without any signature', () => {
-    expect(hasUnsignedReasoning(unsignedReasoningMsg('u', Date.now()) as never)).toBe(true)
-    expect(hasUnsignedReasoning(signedReasoningMsg('s', Date.now()) as never)).toBe(false)
-    expect(hasUnsignedReasoning(assistantMsg('a', Date.now()) as never)).toBe(false)
+describe('isIncompleteAssistant', () => {
+  it('detects interrupted turns by missing completed (parts are irrelevant)', () => {
+    expect(isIncompleteAssistant(interruptedMsg('u', Date.now()) as never)).toBe(true)
+    expect(isIncompleteAssistant(assistantMsg('a', Date.now()) as never)).toBe(false)
+    expect(isIncompleteAssistant(userMsg('u', 'hi', Date.now()) as never)).toBe(false)
   })
 })
 
@@ -216,17 +206,18 @@ describe('healReasoningTail', () => {
     expect(res.stubsRemoved).toBe(1)
   })
 
-  it('sweeps an unsigned reasoning message left by an NW interruption', async () => {
-    // NW 중단 케이스: [u_old, unsigned(poison, no error), u_new] → u_new 절단 후 unsigned 삭제
+  it('sweeps an interrupted turn left by an NW interruption', async () => {
+    // NW 중단 케이스 (실DB ses_f61e43e4 재현): [u_old, interrupted(poison, no error, no completed), u_new]
+    // → u_new 절단 후 interrupted 삭제
     const now = Date.now()
     mockMessageListSequence([[
       userMsg('u_old', 'old question', now - 300_000),
-      unsignedReasoningMsg('err_old', now - 290_000),
+      interruptedMsg('err_old', now - 290_000),
       userMsg('u_new', 'new question', now - 5_000),
     ],
     [
       userMsg('u_old', 'old question', now - 300_000),
-      unsignedReasoningMsg('err_old', now - 290_000),
+      interruptedMsg('err_old', now - 290_000),
     ],
     [
       userMsg('u_old', 'old question', now - 300_000),
@@ -235,6 +226,25 @@ describe('healReasoningTail', () => {
     expect(res.healed).toBe(true)
     expect(deleteMock).toHaveBeenCalledWith('ses-1', 'err_old')
     expect(res.stubsRemoved).toBe(1)
+    expect(res.stubsPending).toEqual([])
+  })
+
+  it('reports kept stubs explicitly when delete is refused', async () => {
+    const now = Date.now()
+    mockMessageListSequence([[
+      userMsg('u_old', 'old question', now - 300_000),
+      mismatchErrorMsg('err_old', now - 290_000),
+      userMsg('u_new', 'new question', now - 5_000),
+    ],
+    [
+      userMsg('u_old', 'old question', now - 300_000),
+      mismatchErrorMsg('err_old', now - 290_000),
+    ]])
+    deleteMock.mockResolvedValue(null)
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
+    expect(res.healed).toBe(true)
+    expect(res.stubsRemoved).toBe(0)
+    expect(res.stubsPending).toEqual(['err_old'])
   })
 
   it('does not delete trailing errors of other kinds', async () => {
@@ -296,15 +306,19 @@ describe('healReasoningTail', () => {
     expect(res.stubsRemoved).toBe(1)
   })
 
-  it('does not touch a signed reasoning turn behind a healthy assistant turn', async () => {
+  it('does not touch a completed reasoning turn behind a healthy assistant turn', async () => {
     const now = Date.now()
+    const completedReasoning = {
+      info: { id: 'good_reason', role: 'assistant', sessionID: 'ses-1', time: { created: now - 600_000, completed: now - 599_000 } },
+      parts: [{ type: 'reasoning', text: 'thinking...' }],
+    }
     mockMessageListSequence([[
-      signedReasoningMsg('good_reason', now - 600_000),
+      completedReasoning,
       assistantMsg('good', now - 300_000),
       userMsg('u_new', 'new question', now - 5_000),
     ],
     [
-      signedReasoningMsg('good_reason', now - 600_000),
+      completedReasoning,
       assistantMsg('good', now - 300_000),
     ]])
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
@@ -337,6 +351,19 @@ describe('classifyTail', () => {
     }
     expect(classifyTail([mixed]).kind).toBe('mismatch')
   })
+  it('reads statusCode nested in data (real opencode shape)', () => {
+    const nested = {
+      info: {
+        id: 'e1',
+        role: 'assistant',
+        sessionID: 'ses-1',
+        time: { created: now, completed: now + 1000 },
+        error: { name: 'APIError', data: { message: 'rate limited', statusCode: 429 } },
+      },
+      parts: [{ type: 'text', text: '...' }],
+    }
+    expect(classifyTail([nested]).kind).toBe('non-healable')
+  })
   it('classifies quota/billing errors as non-healable', () => {
     expect(classifyTail([otherErrorMsg('e2', now)]).healable).toBe(false)
     expect(classifyTail([otherErrorMsg('e2', now)]).kind).toBe('non-healable')
@@ -345,5 +372,53 @@ describe('classifyTail', () => {
     const r = classifyTail([assistantMsg('a1', now)])
     expect(r.kind).toBe('clean')
     expect(r.healable).toBe(false)
+  })
+})
+
+describe('healMismatchTailManual', () => {
+  beforeEach(() => {
+    recentMock.mockReset()
+    truncateMock.mockReset()
+    truncateMock.mockResolvedValue({ messagesRemoved: 2, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 3 })
+    deleteMock.mockReset()
+    deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 3 })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  it('heals a mismatch tail without text candidates', async () => {
+    const now = Date.now()
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+    ]])
+    const res = await healMismatchTailManual('ses-1')
+    expect(res.healed).toBe(true)
+    expect(res.truncatedMessageId).toBe('u1')
+    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
+  })
+  it('refuses clean history', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u1', 'hi', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+    ])
+    const res = await healMismatchTailManual('ses-1')
+    expect(res.healed).toBe(false)
+    expect(res.reason).toMatch(/clean/)
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('refuses non-healable tails (quota preserved)', async () => {
+    const now = Date.now()
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      otherErrorMsg('e_quota', now - 50_000),
+    ])
+    const res = await healMismatchTailManual('ses-1')
+    expect(res.healed).toBe(false)
+    expect(truncateMock).not.toHaveBeenCalled()
   })
 })

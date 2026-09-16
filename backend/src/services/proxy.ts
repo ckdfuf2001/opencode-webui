@@ -703,7 +703,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         let finalBodyText = bodyText
         let healedAndRetried = false
         // heal 시도 내역 — exe는 콘솔 로그를 볼 수 없어 응답에 동봉한다 (다음 장애 진단용).
-        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number } = { attempted: false }
+        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number; stubsPending?: string[] } = { attempted: false }
         const msgPost = method === 'POST' ? cleanEventPath.match(/^\/session\/([^/]+)\/message$/) : null
         if (msgPost?.[1] && body) {
           try {
@@ -720,15 +720,19 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               healInfo.healed = heal.healed
               healInfo.reason = heal.reason
               healInfo.stubsRemoved = heal.stubsRemoved
+              healInfo.stubsPending = heal.stubsPending
               if (heal.healed) {
                 // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
-                // 재전송 전에 인스턴스를 dispose해 캐시를 비운다.
+                // 재전송 전에 인스턴스를 dispose해 캐시를 비운다 (결과 명시 로깅).
                 if (directory) {
                   try {
-                    await opencodeServerManager.reloadDirectory(directory)
+                    const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+                    logger.warn(`Reasoning heal: session ${msgPost[1]} truncated ${heal.truncatedMessageId} (stubs removed ${heal.stubsRemoved ?? 0}, pending ${(heal.stubsPending ?? []).length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
                   } catch (e) {
-                    logger.warn(`Reasoning heal: instance reload failed for session ${msgPost[1]}:`, e)
+                    logger.warn(`Reasoning heal: instance reload threw for session ${msgPost[1]}, retrying anyway:`, e)
                   }
+                } else {
+                  logger.warn(`Reasoning heal: session ${msgPost[1]} truncated ${heal.truncatedMessageId} but no directory — instance reload skipped, retrying anyway`)
                 }
                 const busy2 = acquireBusy()
                 const release2 = () => busy2.release()
