@@ -9,7 +9,7 @@ import type {
   CreateCommandRunInput,
 } from '../db/command-run-queries'
 import * as store from './command-run-store'
-import { listRepos } from '../db/queries'
+import { listRepos, normalizeDirKey, recordDirectoryAlias, listDirectoryAliases } from '../db/queries'
 import { firePreCommandHooks, firePostCommandHooks } from './command-hooks'
 import { captureRunVersions, findTargetPath, isPathIgnored } from './run-version'
 import { createSuggestion, deriveTrackPath } from './untracked-suggestions'
@@ -110,12 +110,69 @@ export function resolveLiveDirectory(
   }
   if (best) {
     try {
-      if (existsSync(best)) return best
+      if (existsSync(best)) {
+        // stale 경로가 현재 경로로 재해석되면 별칭으로 학습 — 세션 리스트 병합에 쓴다.
+        try {
+          const hit = repos.find((r) => r.fullPath === best)
+          if (hit && normalizeDirKey(storedDir).toLowerCase() !== normalizeDirKey(best).toLowerCase()) {
+            recordDirectoryAlias(db, storedDir, hit.id)
+          }
+        } catch {}
+        return best
+      }
     } catch {
       return storedDir
     }
   }
   return storedDir
+}
+
+/**
+ * 레포의 세션 조회용 디렉터리 목록: 현재 fullPath + 별칭(루트 이동/리네임 전 경로).
+ * 현재 경로가 항상 맨 앞(충돌 시 현재 복사본 우선 병합).
+ */
+export function listSessionDirectories(db: Database, repoId: number, currentDir: string): string[] {
+  const dirs = [currentDir]
+  try {
+    for (const alias of listDirectoryAliases(db, repoId)) {
+      if (normalizeDirKey(alias).toLowerCase() === normalizeDirKey(currentDir).toLowerCase()) continue
+      if (!dirs.some((d) => normalizeDirKey(d).toLowerCase() === normalizeDirKey(alias).toLowerCase())) {
+        dirs.push(alias)
+      }
+    }
+  } catch {}
+  return dirs
+}
+
+/**
+ * session_status에 남은 stale 디렉터리를 별칭으로 백필한다.
+ * 루트를 통째로 옮긴 뒤에는 resolveLiveDirectory를 탈 트래픽이 없어 학습이 안 되므로,
+ * 세션 리스트 조회 시점에 여기서 한 번 훑는다.
+ */
+export function backfillDirectoryAliases(db: Database, repoId: number, currentDir: string): number {
+  let added = 0
+  try {
+    const cur = normalizeDirKey(currentDir).toLowerCase()
+    // 레포 localPath suffix (예: "myrepo", "group/myrepo")
+    let local = ''
+    try {
+      const r = db.prepare('SELECT local_path FROM repos WHERE id = ?').get(repoId) as { local_path?: string } | undefined
+      local = normalizeDirKey(r?.local_path ?? '').toLowerCase()
+    } catch {}
+    const rows = db.prepare('SELECT DISTINCT directory FROM session_status WHERE repo_id = ?').all(repoId) as { directory: string }[]
+    for (const row of rows) {
+      const stored = row?.directory
+      if (!stored) continue
+      const norm = normalizeDirKey(stored).toLowerCase()
+      if (!norm || norm === cur) continue
+      // 존재 여부와 무관하게 suffix가 이어지면 별칭 (복사-이동처럼 옛 루트가 남아 있어도 학습).
+      // session_status.repo_id가 이미 이 레포로 확정된 행만 보므로 오탐 여지가 적다.
+      if (local && (norm === local || norm.endsWith(`/${local}`))) {
+        try { recordDirectoryAlias(db, stored, repoId); added++ } catch {}
+      }
+    }
+  } catch {}
+  return added
 }
 
 export interface RecordRunStartInput extends CreateCommandRunInput {

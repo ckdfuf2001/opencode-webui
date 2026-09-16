@@ -217,6 +217,27 @@ export function setSkillAutoReview(db: Database, id: number, enabled: boolean): 
   db.prepare('UPDATE repos SET skill_auto_review = ? WHERE id = ?').run(enabled ? 1 : 0, id)
 }
 
+/** 절대경로 정규화 (별칭 비교용): 슬래시 통일 + 끝 슬래시 제거. 대소문자 유지(윈도우는 호출자가 lower). */
+export function normalizeDirKey(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+/** 루트 이동/리네임 전 경로를 별칭으로 기록. 같은 old_dir는 최초 repoId 유지. */
+export function recordDirectoryAlias(db: Database, oldDir: string, repoId: number): void {
+  const key = normalizeDirKey(oldDir)
+  if (!key) return
+  db.prepare('INSERT OR IGNORE INTO directory_aliases (old_dir, repo_id, created_at) VALUES (?, ?, ?)').run(key, repoId, Date.now())
+}
+
+export function listDirectoryAliases(db: Database, repoId: number): string[] {
+  try {
+    const rows = db.prepare('SELECT old_dir FROM directory_aliases WHERE repo_id = ? ORDER BY created_at ASC').all(repoId) as { old_dir: string }[]
+    return rows.map((r) => r.old_dir)
+  } catch {
+    return []
+  }
+}
+
 export function updateRepoLocalPath(db: Database, id: number, newLocalPath: string): void {
   const stmt = db.prepare('UPDATE repos SET local_path = ? WHERE id = ?')
   stmt.run(newLocalPath, id)

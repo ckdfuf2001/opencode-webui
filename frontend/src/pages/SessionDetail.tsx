@@ -109,7 +109,8 @@ export function SessionDetail() {
   const openCodeClient = useOpenCodeClient(opcodeUrl, repo?.fullPath);
 
   const repoDirectory = repo?.fullPath;
-  const { data: sessions } = useSessions(opcodeUrl, repoDirectory);
+  // repoId를 넘기면 백엔드 병합 API(현재 경로 + 루트 이동 전 별칭)로 가져온다.
+  const { data: sessions } = useSessions(opcodeUrl, repoDirectory, { repoId: repoId || undefined });
 
   const descendantIDs = useMemo(
     () => sessionId && sessions ? collectDescendantIDs(sessions, sessionId) : [],
@@ -431,8 +432,9 @@ export function SessionDetail() {
         const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
         setWindowStart(cur + shift);
       }
-    } catch {
-      // 실패해도 버튼 유지 — 재시도 가능
+    } catch (e) {
+      // 실패해도 버튼 유지 — 토스트로 알려주고 재시도 가능
+      showToast.error(`이전 메시지를 불러오지 못했어요 (${(e as Error)?.message ?? 'unknown'}). 다시 눌러주세요.`);
     } finally {
       setIsLoadingMore(false);
     }
@@ -1052,14 +1054,20 @@ export function SessionDetail() {
         setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
       }
     };
+    // 착지 확정: smooth scrollIntoView는 autoScroll 하단핀·보상 스크롤과 싸워
+    // 엉뚱한 곳에 멈춘다. 컨테이너 scrollTop을 직접 계산해 중앙에 꽂고,
+    // 렌더 지연에 대비해 2.5초까지 재시도한다.
     let tries = 0;
+    const t0 = Date.now();
     const attempt = () => {
+      const cc = messageContainerRef.current;
       const el = document.getElementById(`message-${messageID}`);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (el && cc) {
+        const elTop = el.getBoundingClientRect().top - cc.getBoundingClientRect().top + cc.scrollTop;
+        cc.scrollTop = Math.max(0, elTop - cc.clientHeight / 2 + el.clientHeight / 2);
         return;
       }
-      if (tries++ < 30) requestAnimationFrame(attempt);
+      if (tries++ < 90 || Date.now() - t0 < 2500) requestAnimationFrame(attempt);
     };
     const base = baseOf(baseMessagesRef.current);
     const idx = base ? base.findIndex((m) => m.info.id === messageID) : -1;

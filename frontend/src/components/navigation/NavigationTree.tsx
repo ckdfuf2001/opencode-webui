@@ -322,7 +322,7 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
   const navigate = useNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
-  const { data: sessions, isLoading: sessionsLoading } = useSessions(OPENCODE_API_ENDPOINT, directory)
+  const { data: sessions, isLoading: sessionsLoading } = useSessions(OPENCODE_API_ENDPOINT, directory, { repoId })
   const { data: dbStatuses } = useSessionStatusMap()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 

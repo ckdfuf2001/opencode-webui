@@ -143,14 +143,19 @@ export async function syncSessionMessages(db: Database, sessionId: string): Prom
          ORDER BY tc, r`,
       ).all(sessionId, sessionId) as Array<{ id: string; data: string; tc: number; ti: number }>
       if (missing.length === 0) return 0
-      // text 본문 + tool/file 마커. tool 전용 턴도 검색·스니펫에 걸리게 한다
-      // (마커 없으면 text=''라 스니펫이 empty로만 보였다).
+      // text 본문 + reasoning head + tool 출력 head + file 마커.
+      // tool 전용 턴(에이전트 실행)은 출력까지 넣어야 검색·스니펫에서 (empty)로 안 보인다.
+      // 메시지당 20k 상한 — 수백 tool 호출 턴이 FTS를 GB로 불리지 않게
       const textOf = db.prepare(
-        `SELECT group_concat(
+        `SELECT substr(group_concat(
            CASE WHEN json_extract(p.data,'$.type') = 'text' THEN json_extract(p.data,'$.text')
-                WHEN json_extract(p.data,'$.type') = 'tool' THEN '[tool:' || COALESCE(json_extract(p.data,'$.tool'), 'tool') || ']'
+                WHEN json_extract(p.data,'$.type') = 'reasoning'
+                     THEN substr(json_extract(p.data,'$.text'),1,${INDEX_PART_HEAD})
+                WHEN json_extract(p.data,'$.type') = 'tool'
+                     THEN '[tool:' || COALESCE(json_extract(p.data,'$.tool'), 'tool') || ']' || char(10) ||
+                          substr(COALESCE(json_extract(p.data,'$.state.output'), json_extract(p.data,'$.state.metadata.output'), ''),1,${INDEX_PART_HEAD})
                 WHEN json_extract(p.data,'$.type') = 'file' THEN '[file]'
-           END, char(10)) AS tx
+           END, char(10)),1,20000) AS tx
          FROM oc.part p WHERE p.message_id = ?`,
       )
       const upsert = db.prepare(
@@ -179,6 +184,14 @@ export async function syncSessionMessages(db: Database, sessionId: string): Prom
   }
 }
 
+/** 인덱싱용 part 텍스트 상한 (tool 출력·reasoning이 GB 인덱스를 만들지 않게). */
+export const INDEX_PART_HEAD = 1000
+
+function toolOutputOf(d: { state?: { output?: unknown; metadata?: { output?: unknown } } }): string {
+  const out = d?.state?.output ?? d?.state?.metadata?.output
+  return typeof out === 'string' ? out : ''
+}
+
 function collectPartText(oc: import('bun:sqlite').Database, messageId: string): string {
   let rows: Array<{ data: string }>
   try {
@@ -191,10 +204,16 @@ function collectPartText(oc: import('bun:sqlite').Database, messageId: string): 
   const texts: string[] = []
   for (const r of rows) {
     try {
-      const d = JSON.parse(r.data) as { type?: string; text?: unknown; tool?: unknown }
+      const d = JSON.parse(r.data) as { type?: string; text?: unknown; tool?: unknown; state?: { output?: unknown; metadata?: { output?: unknown } } }
       if (d?.type === 'text' && typeof d.text === 'string') texts.push(d.text)
-      else if (d?.type === 'tool') texts.push(`[tool:${typeof d.tool === 'string' && d.tool ? d.tool : 'tool'}]`)
-      else if (d?.type === 'file') texts.push('[file]')
+      else if (d?.type === 'reasoning' && typeof d.text === 'string' && d.text.trim()) {
+        texts.push(d.text.length > INDEX_PART_HEAD ? d.text.slice(0, INDEX_PART_HEAD) : d.text)
+      } else if (d?.type === 'tool') {
+        const name = typeof d.tool === 'string' && d.tool ? d.tool : 'tool'
+        const out = toolOutputOf(d)
+        // 마커 + 출력 head — agent(tool 전용) 턴이 검색·스니펫에서 (empty)로 보이지 않게
+        texts.push(out ? `[tool:${name}]\n${out.length > INDEX_PART_HEAD ? out.slice(0, INDEX_PART_HEAD) : out}` : `[tool:${name}]`)
+      } else if (d?.type === 'file') texts.push('[file]')
     } catch {
       // skip malformed part
     }

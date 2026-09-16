@@ -866,6 +866,51 @@ export function createRepoRoutes(database: Database) {
     }
   })
 
+  // GET /api/repos/:id/sessions — 현재 경로 + 별칭(이동/리네임 전 경로)들의
+  // opencode 세션을 병합한다. 루트를 바꿔도 예전 세션 목록이 그대로 뜬다.
+  // opencode는 ?directory= 정확 일치 필터라 이동 후에는 현재 경로 조회만으로
+  // 예전 세션이 안 보인다 (없는 경로는 200 []이라 안전).
+  app.get('/:id/sessions', async (c) => {
+    try {
+      const id = parseInt(c.req.param('id'))
+      const repo = db.getRepoById(database, id)
+      if (!repo) return c.json({ error: 'Repo not found' }, 404)
+      const currentDir = path.resolve(getReposPath(), path.basename(repo.localPath))
+      const { backfillDirectoryAliases, listSessionDirectories } = await import('../services/command-runs')
+      try { backfillDirectoryAliases(database, id, currentDir) } catch {}
+      const dirs = listSessionDirectories(database, id, currentDir)
+      const base = opencodeServerManager.getUrl()
+      const headers = ensureServerAuth({})
+      const settled = await Promise.all(dirs.map(async (dir) => {
+        try {
+          const res = await fetch(`${base}/session?directory=${encodeURIComponent(dir)}`, {
+            headers,
+            signal: AbortSignal.timeout(20_000),
+          })
+          if (!res.ok) return []
+          const list = (await res.json()) as Array<{ id: string }>
+          return Array.isArray(list) ? list : []
+        } catch {
+          return []
+        }
+      }))
+      // 현재 경로 복사본 우선으로 id 병합
+      const seen = new Set<string>()
+      const merged: Array<{ id: string }> = []
+      for (const list of settled) {
+        for (const s of list) {
+          if (!s?.id || seen.has(s.id)) continue
+          seen.add(s.id)
+          merged.push(s)
+        }
+      }
+      return c.json({ sessions: merged, directories: dirs })
+    } catch (error: any) {
+      logger.error('Failed to list repo sessions:', error)
+      return c.json({ error: error.message }, 500)
+    }
+  })
+
   app.patch('/:id/rename', async (c) => {
     try {
       const id = parseInt(c.req.param('id'))
@@ -889,6 +934,8 @@ export function createRepoRoutes(database: Database) {
         await fs.mkdir(newPath, { recursive: true })
       }
       db.updateRepoLocalPath(database, id, newLocalPath)
+      // 리네임 전 절대경로를 별칭으로 기록 — 세션 리스트 병합용
+      try { db.recordDirectoryAlias(database, oldPath, id) } catch {}
       const updated = db.getRepoById(database, id)
       logger.info(`Repo renamed ${id}: ${repo.localPath} -> ${newLocalPath}`)
       return c.json(updated)

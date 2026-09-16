@@ -5,6 +5,7 @@ import type {
   MessageWithParts,
   MessageListResponse,
   ContentPart,
+  Session,
 } from "../api/types";
 import type { paths } from "../api/opencode-types";
 import { showToast } from "@/lib/toast"
@@ -471,12 +472,22 @@ export async function continueInterruptedSession(
   }
 }
 
-export const useSessions = (opcodeUrl: string | null | undefined, directory?: string, opts?: { poll?: boolean }) => {
+export const useSessions = (opcodeUrl: string | null | undefined, directory?: string, opts?: { poll?: boolean; repoId?: number }) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
 
   return useQuery({
+    // 키는 그대로 둔다 — 기존 invalidate 로직이 그대로 먹게.
+    // repoId가 있으면 백엔드 병합 API(현재 경로 + 이동 전 별칭)로 가져온다.
     queryKey: ["opencode", "sessions", opcodeUrl, directory],
-    queryFn: () => client!.listSessions(),
+    queryFn: async () => {
+      if (opts?.repoId != null) {
+        const res = await fetch(`${API_BASE_URL}/api/repos/${opts.repoId}/sessions`);
+        if (!res.ok) throw new Error('Failed to list repo sessions');
+        const body = (await res.json()) as { sessions: Session[] };
+        return body.sessions;
+      }
+      return client!.listSessions();
+    },
     enabled: !!client,
     // 즐겨찾기 레포 팝업처럼 정적 목록이면 poll:false — 열 때 한 번만 로드한다.
     // Working 배찌는 useSessionStatusMap(전역 폴링)이 따로 갱신하므로 목록 폴링 불필요.
@@ -642,7 +653,11 @@ async function backfillMessages(
   if ('around' in anchor) params.set('around', anchor.around);
   else params.set('before', anchor.before);
   const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID}/window?${params.toString()}`);
-  if (!res.ok) throw new Error('Failed to load message window');
+  if (!res.ok) {
+    const err = new Error(`Failed to load message window (HTTP ${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   const body = (await res.json()) as { total: number; messages: MessageListResponse; hasMore?: boolean };
   const range = truncateLargeToolOutputs(body.messages);
   let ids = backfilledIds.get(sessionID);
@@ -696,9 +711,28 @@ export async function loadOlderMessages(
   const oldest = cached.find((m) => !m.info.id.startsWith('optimistic'));
   if (!oldest) return { loaded: 0, total: getRecentTotal(sessionID) ?? 0, hasMore: false };
   const beforeIds = new Set(cached.map((m) => m.info.id));
-  const { messages, total, hasMore } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { before: oldest.info.id }, count);
-  const loaded = messages.filter((m) => !beforeIds.has(m.info.id)).length;
-  return { loaded, total, hasMore };
+  try {
+    const { messages, total, hasMore } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { before: oldest.info.id }, count);
+    const loaded = messages.filter((m) => !beforeIds.has(m.info.id)).length;
+    return { loaded, total, hasMore };
+  } catch (e) {
+    // 앵커가 서버에 없으면(잘린 뒤 stale 캐시 등) 앵커를 캐시·backfilled에서 제거하고
+    // 새 최상단 기준으로 1회 재시도. 그래도 실패하면 던져 호출자가 토스트를 띄운다.
+    if ((e as { status?: number })?.status === 404) {
+      dropBackfilledId(sessionID, oldest.info.id);
+      queryClient.setQueryData<MessageListResponse>(key, (old) =>
+        old?.filter((m) => m.info.id !== oldest.info.id),
+      );
+      const fresh = queryClient.getQueryData<MessageListResponse>(key) ?? [];
+      const retryAnchor = fresh.find((m) => !m.info.id.startsWith('optimistic'));
+      if (retryAnchor) {
+        const { messages, total, hasMore } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { before: retryAnchor.info.id }, count);
+        const loaded = messages.filter((m) => !beforeIds.has(m.info.id)).length;
+        return { loaded, total, hasMore };
+      }
+    }
+    throw e;
+  }
 }
 
 export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string, limit?: number, opts?: { poll?: boolean }) => {

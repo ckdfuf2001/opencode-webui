@@ -243,4 +243,41 @@ describe('Database Queries', () => {
       expect(typeof mockDb.transaction).toBe('function')
     })
   })
+
+  describe('normalizeDirKey', () => {
+    it('should unify slashes and strip trailing slash', () => {
+      expect(db.normalizeDirKey('C:\\Users\\oh\\repos\\bbb\\')).toBe('C:/Users/oh/repos/bbb')
+      expect(db.normalizeDirKey('C:/a//')).toBe('C:/a')
+      expect(db.normalizeDirKey('')).toBe('')
+    })
+  })
+
+  describe('directory aliases', () => {
+    it('recordDirectoryAlias should INSERT OR IGNORE with normalized key', () => {
+      const stmt = { run: vi.fn() }
+      mockDb.prepare.mockReturnValue(stmt)
+      db.recordDirectoryAlias(mockDb, 'C:\\OLD\\repos\\bbb\\', 7)
+      expect(mockDb.prepare).toHaveBeenCalledWith(
+        'INSERT OR IGNORE INTO directory_aliases (old_dir, repo_id, created_at) VALUES (?, ?, ?)'
+      )
+      expect(stmt.run).toHaveBeenCalledWith('C:/OLD/repos/bbb', 7, expect.any(Number))
+    })
+
+    it('recordDirectoryAlias should skip empty keys', () => {
+      mockDb.prepare.mockClear()
+      db.recordDirectoryAlias(mockDb, '', 7)
+      expect(mockDb.prepare).not.toHaveBeenCalled()
+    })
+
+    it('listDirectoryAliases should return old_dir list', () => {
+      const stmt = { all: vi.fn().mockReturnValue([{ old_dir: 'C:/OLD/repos/bbb' }]) }
+      mockDb.prepare.mockReturnValue(stmt)
+      expect(db.listDirectoryAliases(mockDb, 7)).toEqual(['C:/OLD/repos/bbb'])
+    })
+
+    it('listDirectoryAliases should return [] when table missing', () => {
+      mockDb.prepare.mockImplementation(() => { throw new Error('no such table') })
+      expect(db.listDirectoryAliases(mockDb, 7)).toEqual([])
+    })
+  })
 })

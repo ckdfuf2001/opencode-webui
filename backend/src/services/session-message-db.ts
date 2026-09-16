@@ -117,17 +117,21 @@ function readPreviews(oc: Database, messageIds: string[]): Map<string, string> {
   const rows = oc
     .query(
       `SELECT message_id AS mid, json_extract(data,'$.type') AS ty, json_extract(data,'$.tool') AS tool,
-              substr(json_extract(data,'$.text'),1,200) AS t
+              substr(json_extract(data,'$.text'),1,200) AS t,
+              substr(COALESCE(json_extract(data,'$.state.output'), json_extract(data,'$.state.metadata.output'), ''),1,200) AS o
        FROM part WHERE message_id IN (SELECT value FROM json_each(?))
        ORDER BY message_id, time_created, rowid`,
     )
-    .all(JSON.stringify(messageIds)) as Array<{ mid: string; ty: string | null; tool: string | null; t: string | null }>
+    .all(JSON.stringify(messageIds)) as Array<{ mid: string; ty: string | null; tool: string | null; t: string | null; o: string | null }>
   const seen = new Set<string>()
   for (const r of rows) {
     if (seen.has(r.mid)) continue
     seen.add(r.mid)
     if (r.t != null && r.t !== '') out.set(r.mid, r.t)
-    else if (r.ty === 'tool') out.set(r.mid, r.tool ? `[tool:${r.tool}]` : '[tool]')
+    else if (r.ty === 'tool') {
+      const marker = r.tool ? `[tool:${r.tool}]` : '[tool]'
+      out.set(r.mid, r.o ? `${marker} ${r.o}` : marker)
+    }
     else if (r.ty === 'file') out.set(r.mid, '[file]')
     else out.set(r.mid, '(empty)')
   }

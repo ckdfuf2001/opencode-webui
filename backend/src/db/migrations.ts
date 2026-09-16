@@ -95,6 +95,20 @@ export function runMigrations(db: Database): void {
       }
     }
     
+    // directory_aliases: 루트 이동 전 절대경로 별칭 (세션 리스트 병합용)
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS directory_aliases (
+          old_dir TEXT PRIMARY KEY,
+          repo_id INTEGER NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `)
+      db.run('CREATE INDEX IF NOT EXISTS idx_dir_alias_repo ON directory_aliases(repo_id)')
+    } catch (e) {
+      logger.debug('directory_aliases table may already exist:', e)
+    }
+
     const indexes = [
       'CREATE INDEX IF NOT EXISTS idx_repo_clone_status ON repos(clone_status)',
       'CREATE INDEX IF NOT EXISTS idx_user_id ON user_preferences(user_id)',

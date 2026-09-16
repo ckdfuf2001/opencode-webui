@@ -33,6 +33,15 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
     );
     
     CREATE INDEX IF NOT EXISTS idx_repo_clone_status ON repos(clone_status);
+
+    -- 루트 이동/리네임 전의 절대 디렉터리 별칭. 세션 리스트는 현재 경로 +
+    -- 별칭 경로들의 opencode 세션을 병합하므로 루트를 바꿔도 목록이 뜬다.
+    CREATE TABLE IF NOT EXISTS directory_aliases (
+      old_dir TEXT PRIMARY KEY,
+      repo_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_dir_alias_repo ON directory_aliases(repo_id);
     
     CREATE TABLE IF NOT EXISTS user_preferences (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

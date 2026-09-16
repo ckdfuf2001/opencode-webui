@@ -395,7 +395,7 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
   isDeleting: boolean;
 }) {
   const queryClient = useQueryClient();
-  const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, repo.fullPath);
+  const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, repo.fullPath, { repoId: repo.id });
   const sessionIds = useMemo(() => (sessions ?? []).map((s: any) => s.id as string), [sessions]);
   // 행이 사라지면 세션 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
   useEffect(() => {
