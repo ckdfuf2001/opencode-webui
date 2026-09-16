@@ -36,7 +36,6 @@ import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useContextUsage, markSessionCompacted } from "@/hooks/useContextUsage";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import type { PermissionResponse, MessageWithParts, MessageListResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
@@ -490,59 +489,6 @@ export function SessionDetail() {
     hasFailedQueue
   )
   const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && ((dbIsCancelled && !isUserCancel) || isCancelledUntilNextSend(sessionId) || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
-  const [healing, setHealing] = useState(false)
-  // 정리 버튼은 healable 꼬리(mismatch·중단·ghost·빈 응답)에만 표시한다.
-  // 결제·쿼터·레이트리밋 등은 잘라내도 재발하고 프롬프트만 날아가므로 버튼을 숨긴다.
-  const needsHeal = useMemo(() => {
-    if (!sessionId || isStreaming || hasActiveSend(sessionId) || dbBusy || descendantBusy) return false
-    if (!lastMessage) return false
-    const err = (lastMessage.info as unknown as { error?: unknown })?.error
-    if (!err) return false
-    const name = (err as { name?: string })?.name ?? (err as { data?: { name?: string } })?.data?.name ?? ''
-    if (name === 'MessageAbortedError' && recentlyAborted) return false
-    let text = ''
-    try { text = typeof err === 'string' ? err : JSON.stringify(err) } catch { text = '' }
-    const lower = text.toLowerCase()
-    const nonHealable = lower.includes('quota') || lower.includes('billing') || lower.includes('payment') || lower.includes('insufficient') || lower.includes('unauthorized') || lower.includes('invalid_api_key') || lower.includes('authentication') || lower.includes('rate_limit') || lower.includes('rate limit')
-    if (nonHealable) return false
-    const mismatch = lower.includes('encrypted_content') && (lower.includes('reasoning') || lower.includes('not issued') || lower.includes('invalid_request_error'))
-    const aborted = ((lastMessage.info as unknown as { finish?: string }).finish === 'aborted') || name.includes('Aborted')
-    const ghost = !(lastMessage.info as unknown as { time?: { completed?: number } })?.time?.completed && ((lastMessage as unknown as { parts?: unknown[] }).parts?.length ?? 0) === 0
-    const empty = lower.includes('llm response was empty') || (lower.includes('empty') && lower.includes('llm'))
-    return mismatch || aborted || ghost || empty
-  }, [sessionId, isStreaming, dbBusy, descendantBusy, lastMessage, recentlyAborted])
-  const refreshAfterHeal = useCallback(() => {
-    if (!sessionId) return
-    queryClient.invalidateQueries({ queryKey: ['opencode', 'messages', opcodeUrl, sessionId, repoDirectory] })
-    queryClient.invalidateQueries({ queryKey: ['opencode', 'session', opcodeUrl, sessionId, repoDirectory] })
-    queryClient.invalidateQueries({ queryKey: ['opencode', 'last-message', opcodeUrl, sessionId, repoDirectory] })
-  }, [sessionId, repoDirectory, queryClient, opcodeUrl])
-  const handleHeal = useCallback(async () => {
-    if (!sessionId) return
-    setHealing(true)
-    try {
-      const qs = repoDirectory ? `?directory=${encodeURIComponent(repoDirectory)}` : ''
-      const res = await fetch(`${API_BASE_URL}/api/session-heal/${sessionId}${qs}`, { method: 'POST' })
-      const data = await res.json().catch(() => ({} as Record<string, unknown>))
-      if (res.status === 409) throw new Error('Still generating — please clean up after it finishes.')
-      if (!res.ok) throw new Error((data as { reason?: string })?.reason || `heal failed (${res.status})`)
-      if ((data as { healed?: boolean })?.healed) {
-        const requeued = (data as { requeued?: number })?.requeued ?? 0
-        const queueNote = requeued > 0 ? ` ${requeued} stuck queued message(s) will be resent.` : ''
-        showToast.success(`Cleaned up — bad tail removed. Send again.${queueNote}`)
-        refreshAfterHeal()
-        try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionId)}/cancelled`, { method: 'DELETE' }) } catch { /* badge clear is best-effort */ }
-      } else {
-        const reason = (data as { reason?: string })?.reason
-        if (reason === 'history clean') showToast.info('Already clean — nothing to remove.')
-        else showToast.info(reason ?? 'Nothing to clean up.')
-      }
-    } catch (e) {
-      showToast.error((e as Error)?.message ?? 'Clean up failed')
-    } finally {
-      setHealing(false)
-    }
-  }, [sessionId, repoDirectory, queryClient, opcodeUrl, refreshAfterHeal])
   // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
   usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)
@@ -1497,12 +1443,6 @@ if (results.length > 0) {
                     <span className="sm:hidden">Back</span>
                     <span className="hidden sm:inline">Back to latest</span>
                   </button>
-                </div>
-              )}
-              {needsHeal && (
-                <div className="mb-1 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs pointer-events-auto w-[90%] max-w-4xl">
-                  <span className="flex-1 text-amber-700 dark:text-amber-300">Stopped with an error. Start a new session or clean up.</span>
-                  <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={healing} onClick={handleHeal}>{healing ? 'Cleaning…' : 'Clean up'}</Button>
                 </div>
               )}
               <div className="contents pointer-events-auto">

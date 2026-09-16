@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText, healReasoningTail, healAbnormalTailIfNeeded } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail } from './reasoning-heal'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
@@ -392,34 +392,6 @@ function markHeadQueued(sessionID: string, id: string): void {
   queue[0]!.status = 'queued'
 }
 
-/**
- * 정리(heal) 성공 후 호출: 결정적 실패로 failed 고정된 항목을 queued로 되돌리고
- * 실패 카운터를 초기화한 뒤 즉시 flush한다.
- * failed 헤드는 뒤의 모든 전송을 영구 봉쇄하므로, DB 꼬리만 자르고 이것을
- * 되돌리지 않으면 정리를 눌러도 다음 전송이 절대 발송되지 않는다.
- * sending 항목은 건드리지 않는다 — 이미 opencode로 넘어간 슬롯이라
- * idle 관찰 시 확정/정리되며, 중복 발송 위험이 있다.
- */
-export function requeueStuckItems(sessionID: string): { requeued: number } {
-  const queue = queues.get(sessionID)
-  if (!queue || queue.length === 0) return { requeued: 0 }
-  let requeued = 0
-  for (const item of queue) {
-    if (item.status === 'failed') {
-      item.status = 'queued'
-      delete item.failedAt
-      delete item.sendingSince
-      requeued++
-    }
-  }
-  if (requeued === 0) return { requeued: 0 }
-  failedUntil.delete(sessionID)
-  failCount.delete(sessionID)
-  logger.info(`Requeued ${requeued} failed chat(s) for session ${sessionID} after heal — flushing`)
-  void dispatchHead(opencodeServerManager.getUrl(), sessionID)
-  return { requeued }
-}
-
 /** 수동 재시도: sending/failed 항목을 queued로 되돌리고 즉시 발송 시도.
  *  sending 고착(nw오류 후 limbo)·상한 초과 failed 모두 대상. 순서 유지를 위해
  *  헤드가 아니면 queued로만 되돌리고, 헤드면 dispatchHead 즉시 호출. */
@@ -578,23 +550,6 @@ async function dispatchQueuedChat(
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
 
-  // 이전 내용이 비정상이면 무조건 클렌징 후 발송 — 큐에 정상적으로 들어가도
-  // 응답 없이 종료되던 케이스(빈 LLM 응답, reasoning mismatch, aborted ghost 등) 방지.
-  // 실패 후 재시도가 아닌 발송 직전 선제 정리라 다음 턴이 깨끗한 히스토리에서 시작한다.
-  try {
-    // 채팅 기본 동작: 발송 직전 정리는 "모델이 꼬여 reasoning 암호문을 못 읽는"
-    // mismatch 꼬리만 잘라낸다. cancel(aborted)·ghost·empty는 그대로 보존.
-    const preHeal = await healAbnormalTailIfNeeded(base, sessionID, directory, {
-      force: true,
-      allow: ['mismatch'],
-    })
-    if (preHeal.healed) {
-      logger.info(`Pre-dispatch heal for session ${sessionID}: ${preHeal.reason ?? 'abnormal history truncated'} (removed ${preHeal.truncatedMessageId ?? '?'})`)
-    }
-  } catch (e) {
-    logger.warn(`Pre-dispatch heal check failed for session ${sessionID}:`, e)
-  }
-
   // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다
   const trimmed = chat.text.trim()
   const cmdMatch = trimmed.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
@@ -640,12 +595,17 @@ async function dispatchQueuedChat(
     const body = await sendRes.text().catch(() => '')
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
-      // 마지막 턴만 잘라내고 1회 재전송 (투명 복구). 오염이 더 앞에 있으면
-      // 재시도도 실패 → 즉시 failed + 수동 복구 안내 (recordDeterministicFailure).
-      // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
+      // security/reasoning 암호문 거부 때만 자동 정리 후 1회 재전송.
+      // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
+      // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
       try {
         const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true })
         if (heal.healed) {
+          try {
+            await opencodeServerManager.reloadDirectory(directory)
+          } catch (e) {
+            logger.warn(`Reasoning heal: instance reload failed for session ${sessionID}:`, e)
+          }
           const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
             method: 'POST',
             headers: ensureServerAuth({ 'Content-Type': 'application/json' }),

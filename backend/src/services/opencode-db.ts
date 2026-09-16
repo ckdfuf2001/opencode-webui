@@ -78,6 +78,7 @@ export async function truncateSessionMessages(
 
   const db = new Database(dbPath)
   try {
+    db.exec('PRAGMA busy_timeout = 5000')
     const cursor = db
       .query('SELECT time_created FROM message WHERE session_id = ? AND id = ?')
       .get(sessionId, cursorMessageId) as { time_created: number } | null
@@ -216,6 +217,7 @@ export async function deleteSingleChildlessMessage(
 
   const db = new Database(dbPath)
   try {
+    db.exec('PRAGMA busy_timeout = 5000')
     const target = db
       .query('SELECT id FROM message WHERE session_id = ? AND id = ?')
       .get(sessionId, messageId) as { id: string } | null
@@ -289,6 +291,7 @@ export async function deleteSessionMessage(
 
   const db = new Database(dbPath)
   try {
+    db.exec('PRAGMA busy_timeout = 5000')
     const target = db
       .query('SELECT id FROM message WHERE session_id = ? AND id = ?')
       .get(sessionId, messageId) as { id: string } | null

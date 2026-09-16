@@ -9,7 +9,7 @@ vi.mock('../../src/services/session-message-db', () => ({
   recentSessionMessages: vi.fn(),
 }))
 
-import { healReasoningTail, healAbnormalTailIfNeeded, classifyTail, findLastGoodModel } from '../../src/services/reasoning-heal'
+import { healReasoningTail, classifyTail, hasUnsignedReasoning, isReasoningMismatchText } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage } from '../../src/services/opencode-db'
 import { recentSessionMessages } from '../../src/services/session-message-db'
 
@@ -44,6 +44,19 @@ function mismatchErrorMsg(id: string, created: number) {
   }
 }
 
+function securityMismatchErrorMsg(id: string, created: number) {
+  return {
+    info: {
+      id,
+      role: 'assistant',
+      sessionID: 'ses-1',
+      time: { created, completed: created + 1000 },
+      error: { name: 'APIError', data: { message: 'security reasoning `encrypted_content` was not issued to this caller' } },
+    },
+    parts: [{ type: 'reasoning', text: '...' }],
+  }
+}
+
 function otherErrorMsg(id: string, created: number) {
   return {
     info: {
@@ -54,6 +67,31 @@ function otherErrorMsg(id: string, created: number) {
       error: { name: 'APIError', data: { message: 'insufficient_quota' } },
     },
     parts: [{ type: 'text', text: '...' }],
+  }
+}
+
+function unsignedReasoningMsg(id: string, created: number) {
+  // NW 중단으로 서명 없이 저장된 오염 메시지 — info.error가 비어 있다.
+  return {
+    info: {
+      id,
+      role: 'assistant',
+      sessionID: 'ses-1',
+      time: { created },
+    },
+    parts: [{ type: 'reasoning', text: 'partial thinking...' }],
+  }
+}
+
+function signedReasoningMsg(id: string, created: number) {
+  return {
+    info: {
+      id,
+      role: 'assistant',
+      sessionID: 'ses-1',
+      time: { created, completed: created + 1000 },
+    },
+    parts: [{ type: 'reasoning', text: 'thinking...', signature: 'sig-abc' }],
   }
 }
 
@@ -68,6 +106,22 @@ function mockMessageListSequence(lists: unknown[][]) {
   const last = lists[lists.length - 1] ?? []
   recentMock.mockResolvedValue({ total: last.length, messages: last })
 }
+
+describe('isReasoningMismatchText', () => {
+  it('matches security reasoning blocks too', () => {
+    expect(isReasoningMismatchText('security reasoning `encrypted_content` was not issued')).toBe(true)
+    expect(isReasoningMismatchText('reasoning `encrypted_content` was not issued')).toBe(true)
+    expect(isReasoningMismatchText('plain quota error')).toBe(false)
+  })
+})
+
+describe('hasUnsignedReasoning', () => {
+  it('detects reasoning parts without any signature', () => {
+    expect(hasUnsignedReasoning(unsignedReasoningMsg('u', Date.now()) as never)).toBe(true)
+    expect(hasUnsignedReasoning(signedReasoningMsg('s', Date.now()) as never)).toBe(false)
+    expect(hasUnsignedReasoning(assistantMsg('a', Date.now()) as never)).toBe(false)
+  })
+})
 
 describe('healReasoningTail', () => {
   beforeEach(() => {
@@ -162,6 +216,27 @@ describe('healReasoningTail', () => {
     expect(res.stubsRemoved).toBe(1)
   })
 
+  it('sweeps an unsigned reasoning message left by an NW interruption', async () => {
+    // NW 중단 케이스: [u_old, unsigned(poison, no error), u_new] → u_new 절단 후 unsigned 삭제
+    const now = Date.now()
+    mockMessageListSequence([[
+      userMsg('u_old', 'old question', now - 300_000),
+      unsignedReasoningMsg('err_old', now - 290_000),
+      userMsg('u_new', 'new question', now - 5_000),
+    ],
+    [
+      userMsg('u_old', 'old question', now - 300_000),
+      unsignedReasoningMsg('err_old', now - 290_000),
+    ],
+    [
+      userMsg('u_old', 'old question', now - 300_000),
+    ]])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
+    expect(res.healed).toBe(true)
+    expect(deleteMock).toHaveBeenCalledWith('ses-1', 'err_old')
+    expect(res.stubsRemoved).toBe(1)
+  })
+
   it('does not delete trailing errors of other kinds', async () => {
     const now = Date.now()
     mockMessageListSequence([[
@@ -221,15 +296,15 @@ describe('healReasoningTail', () => {
     expect(res.stubsRemoved).toBe(1)
   })
 
-  it('does not touch a mismatch stub behind a healthy assistant turn', async () => {
+  it('does not touch a signed reasoning turn behind a healthy assistant turn', async () => {
     const now = Date.now()
     mockMessageListSequence([[
-      mismatchErrorMsg('err_ancient', now - 600_000),
+      signedReasoningMsg('good_reason', now - 600_000),
       assistantMsg('good', now - 300_000),
       userMsg('u_new', 'new question', now - 5_000),
     ],
     [
-      mismatchErrorMsg('err_ancient', now - 600_000),
+      signedReasoningMsg('good_reason', now - 600_000),
       assistantMsg('good', now - 300_000),
     ]])
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
@@ -245,6 +320,23 @@ describe('classifyTail', () => {
     expect(classifyTail([mismatchErrorMsg('e1', now)]).healable).toBe(true)
     expect(classifyTail([mismatchErrorMsg('e1', now)]).kind).toBe('mismatch')
   })
+  it('classifies security mismatch as healable', () => {
+    expect(classifyTail([securityMismatchErrorMsg('e1', now)]).healable).toBe(true)
+    expect(classifyTail([securityMismatchErrorMsg('e1', now)]).kind).toBe('mismatch')
+  })
+  it('prefers mismatch over non-healable keywords in the same body', () => {
+    const mixed = {
+      info: {
+        id: 'e1',
+        role: 'assistant',
+        sessionID: 'ses-1',
+        time: { created: now, completed: now + 1000 },
+        error: { name: 'APIError', status: 400, data: { message: 'reasoning `encrypted_content` was not issued (authentication context req_429_x)' } },
+      },
+      parts: [{ type: 'reasoning', text: '...' }],
+    }
+    expect(classifyTail([mixed]).kind).toBe('mismatch')
+  })
   it('classifies quota/billing errors as non-healable', () => {
     expect(classifyTail([otherErrorMsg('e2', now)]).healable).toBe(false)
     expect(classifyTail([otherErrorMsg('e2', now)]).kind).toBe('non-healable')
@@ -253,65 +345,5 @@ describe('classifyTail', () => {
     const r = classifyTail([assistantMsg('a1', now)])
     expect(r.kind).toBe('clean')
     expect(r.healable).toBe(false)
-  })
-})
-
-describe('findLastGoodModel', () => {
-  const now = Date.now()
-  it('returns the last successful assistant model', () => {
-    const good = {
-      info: { id: 'g1', role: 'assistant', sessionID: 'ses-1', time: { created: now, completed: now + 1 }, modelID: 'm-1.2', providerID: 'opencode' },
-      parts: [{ type: 'text', text: 'ok' }],
-    }
-    const bad = mismatchErrorMsg('e1', now + 10)
-    expect(findLastGoodModel([good, bad])).toEqual({ providerID: 'opencode', modelID: 'm-1.2' })
-  })
-  it('returns undefined when no successful turn exists', () => {
-    expect(findLastGoodModel([mismatchErrorMsg('e1', now)])).toBeUndefined()
-  })
-})
-
-describe('healAbnormalTailIfNeeded', () => {
-  beforeEach(() => {
-    recentMock.mockReset()
-    truncateMock.mockReset()
-    truncateMock.mockResolvedValue({ messagesRemoved: 2, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 3 })
-    deleteMock.mockReset()
-    deleteMock.mockResolvedValue(null)
-  })
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-  it('does not truncate quota errors (preserves user prompt)', async () => {
-    const now = Date.now()
-    mockMessageList([
-      userMsg('u1', 'hello', now - 60_000),
-      otherErrorMsg('e_quota', now - 50_000),
-    ])
-    const res = await healAbnormalTailIfNeeded('http://x', 'ses-1', '/ws', { force: true })
-    expect(res.healed).toBe(false)
-    expect(res.healable).toBe(false)
-    expect(truncateMock).not.toHaveBeenCalled()
-  })
-  it('truncates mismatch tails with force regardless of age', async () => {
-    const old = Date.now() - 60 * 60_000
-    mockMessageList([
-      userMsg('u_old', 'old q', old),
-      mismatchErrorMsg('e_old', old + 1000),
-    ])
-    const res = await healAbnormalTailIfNeeded('http://x', 'ses-1', '/ws', { force: true })
-    expect(res.healed).toBe(true)
-    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u_old')
-  })
-  it('reports history clean when last turn is fine', async () => {
-    const now = Date.now()
-    mockMessageList([
-      userMsg('u1', 'hi', now - 60_000),
-      assistantMsg('a1', now - 59_000),
-    ])
-    const res = await healAbnormalTailIfNeeded('http://x', 'ses-1', '/ws', { force: true })
-    expect(res.healed).toBe(false)
-    expect(res.reason).toMatch(/clean/)
-    expect(truncateMock).not.toHaveBeenCalled()
   })
 })

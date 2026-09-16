@@ -149,6 +149,9 @@ interface PartRow {
   outhead: string | null
   metahead: string | null
   hasout: number
+  sig: string | null
+  msig: string | null
+  enc: string | null
 }
 
 /** 지정된 메시지들의 part를 읽는다. 큰 part는 SQL head 추출로 JS 파싱을 피한다. */
@@ -169,8 +172,11 @@ function readCappedParts(oc: Database, messageIds: string[]): Map<string, Array<
               json_extract(data,'$.state.title') AS title,
               json_extract(data,'$.state.time') AS statetime,
               substr(json_extract(data,'$.state.output'),1,${HEAD_KEEP}) AS outhead,
-              substr(json_extract(data,'$.state.metadata.output'),1,${HEAD_KEEP}) AS metahead,
-              CASE WHEN json_extract(data,'$.state.output') IS NOT NULL THEN 1 ELSE 0 END AS hasout
+               substr(json_extract(data,'$.state.metadata.output'),1,${HEAD_KEEP}) AS metahead,
+               CASE WHEN json_extract(data,'$.state.output') IS NOT NULL THEN 1 ELSE 0 END AS hasout,
+               json_extract(data,'$.signature') AS sig,
+               json_extract(data,'$.metadata.signature') AS msig,
+               json_extract(data,'$.encrypted_content') AS enc
        FROM part WHERE message_id IN (SELECT value FROM json_each(?))
        ORDER BY time_created, rowid`,
     )
@@ -191,7 +197,15 @@ function buildPart(r: PartRow): Record<string, unknown> {
   }
   const notice = `${TRUNCATE_NOTICE} (${Math.max(0, r.len - HEAD_KEEP)} chars omitted)`
   if (r.type === 'text' || r.type === 'reasoning') {
-    return { ...base, type: r.type, time: safeParse(r.timejson), text: `${r.texthead ?? ''}${notice}` }
+    const part: Record<string, unknown> = { ...base, type: r.type, time: safeParse(r.timejson), text: `${r.texthead ?? ''}${notice}` }
+    // heal이 서명 유무로 오염을 판별하므로 cap된 reasoning에서도 서명은 보존한다.
+    // 긴 reasoning이 정상인데도 "서명 없음"으로 오탐되면 멀쩡한 히스토리를 날린다.
+    if (r.type === 'reasoning') {
+      if (r.sig != null) part.signature = r.sig
+      if (r.msig != null) part.metadata = { signature: r.msig }
+      if (r.enc != null) part.encrypted_content = r.enc
+    }
+    return part
   }
   if (r.type === 'tool') {
     const state: Record<string, unknown> = { status: r.status ?? 'completed' }

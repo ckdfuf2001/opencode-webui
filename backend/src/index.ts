@@ -30,7 +30,6 @@ import { createExposeRoutes, createPublicExposeRoutes } from './routes/expose'
 import { createHtmlViewRoutes } from './routes/html-view'
 import { createFavoriteRoutes } from './routes/favorites'
 import { createSessionMessageRoutes } from './routes/session-messages'
-import { createSessionHealRoutes } from './routes/session-heal'
 import { createPtyRoutes } from './routes/pty'
 import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
@@ -292,7 +291,6 @@ app.route('/api/search', createSearchRoutes(db))
   app.route('/api/html-view', createHtmlViewRoutes(db))
   app.route('/api/favorites', createFavoriteRoutes(db))
   app.route('/api/session-messages', createSessionMessageRoutes())
-  app.route('/api/session-heal', createSessionHealRoutes())
 app.route('/api/pty', createPtyRoutes())
 app.route('/api/logs', createClientLogRoutes())
 

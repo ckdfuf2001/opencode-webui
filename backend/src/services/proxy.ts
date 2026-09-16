@@ -5,7 +5,7 @@ import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { flushQueueForSession, clearSendingOnAbort } from './chat-queue'
-import { healReasoningTail } from './reasoning-heal'
+import { healReasoningTail, isReasoningMismatchText } from './reasoning-heal'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -697,11 +697,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       // 잘라내고 동일 요청 1회 재전송한다 (투명 복구 — 중단 때문에 세션 전체가
       // 먹통이 되던 문제 대응). 오염이 더 앞 히스토리에 있으면 재시도도 실패하고
       // 아래 enriched error 안내(더 앞 가위질·원래 모델 복귀)로 넘어간다.
-      const lowerBody = bodyText.toLowerCase()
-      const isReasoningMismatch =
-        lowerBody.includes('encrypted_content') &&
-        (lowerBody.includes('reasoning') || lowerBody.includes('not issued') || lowerBody.includes('invalid_request_error'))
-      if (isReasoningMismatch) {
+      if (isReasoningMismatchText(bodyText)) {
         let finalStatus = response.status
         let finalStatusText = response.statusText
         let finalBodyText = bodyText
@@ -718,27 +714,22 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               .join('\n')
               .trim()
             if (sentText) {
-              // NOTE: 정적 import — 동적 import는 bun 단일 exe에서 실패해 heal이 죽는다.
               const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
               healInfo.attempted = true
-              let heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText], { force: true })
+              const heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText], { force: true })
               healInfo.healed = heal.healed
               healInfo.reason = heal.reason
               healInfo.stubsRemoved = heal.stubsRemoved
-              if (!heal.healed && heal.reason?.includes('text mismatch')) {
-                // run-context/recall 주입 때문에 텍스트 불일치로 heal이 스킵된 경우 — 비정상 꼬리 전체를 잘라내는 fallback
-                const { healAbnormalTailIfNeeded } = await import('./reasoning-heal')
-                const fallback = await healAbnormalTailIfNeeded(opencodeServerManager.getUrl(), msgPost[1]!, directory, { force: true })
-                if (fallback.healed) {
-                  heal = fallback
-                  healInfo.healed = true
-                  healInfo.reason = `fallback abnormal heal: ${fallback.reason}`
-                  healInfo.stubsRemoved = fallback.stubsRemoved
-                } else {
-                  healInfo.reason += `; fallback also failed: ${fallback.reason}`
-                }
-              }
               if (heal.healed) {
+                // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
+                // 재전송 전에 인스턴스를 dispose해 캐시를 비운다.
+                if (directory) {
+                  try {
+                    await opencodeServerManager.reloadDirectory(directory)
+                  } catch (e) {
+                    logger.warn(`Reasoning heal: instance reload failed for session ${msgPost[1]}:`, e)
+                  }
+                }
                 const busy2 = acquireBusy()
                 const release2 = () => busy2.release()
                 try {
