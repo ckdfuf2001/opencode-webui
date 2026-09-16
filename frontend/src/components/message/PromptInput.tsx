@@ -1101,7 +1101,7 @@ useEffect(() => {
                   ? 'bg-blue-600 hover:bg-blue-600/90 text-white'
                   : 'bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground'
             }`}
-            title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? 'Queue message (Ctrl+Enter)' : 'Send (Ctrl+Enter)'}
+            title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? `Queue message (${submitKs})` : `Send (${submitKs})`}
           >
             {isContextCritical || willExceed ? 'Blocked' : 'Send'}
           </button>

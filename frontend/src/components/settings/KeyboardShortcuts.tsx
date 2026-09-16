@@ -29,6 +29,12 @@ export function KeyboardShortcuts() {
 
   const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS, ...preferences?.keyboardShortcuts, ...tempShortcuts }
 
+  // 채팅 입력창 포커스 시 동작하는 키 vs 그 외 전역 키를 구분해서 보여준다.
+  // (실제 분기는 useKeyboardShortcuts + PromptInput 핸들러와 일치시켜야 한다)
+  const CHAT_ACTIONS = ['submit', 'abort', 'toggleMode', 'selectModel', 'compact']
+  const chatEntries = Object.entries(shortcuts).filter(([action]) => CHAT_ACTIONS.includes(action))
+  const globalEntries = Object.entries(shortcuts).filter(([action]) => !CHAT_ACTIONS.includes(action))
+
   const handleKeyDown = (e: KeyboardEvent, action: string) => {
     e.preventDefault()
     
@@ -110,47 +116,57 @@ export function KeyboardShortcuts() {
     }
   }, [recordingKey])
 
+  const renderRow = ([action, keys]: [string, string]) => (
+    <div key={action} className="flex items-center justify-between py-3 border-b border-border last:border-0">
+      <div className="space-y-1">
+        <p className="text-foreground font-medium capitalize">
+          {action.replace(/([A-Z])/g, ' $1').trim()}
+        </p>
+      </div>
+
+      {recordingKey === action ? (
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            className="px-3 py-1.5 bg-accent border border-primary rounded text-sm text-foreground font-mono outline-none"
+            placeholder="Press keys..."
+            value={currentKeys || ''}
+            autoFocus
+            onBlur={stopRecording}
+            readOnly
+          />
+          <button
+            onClick={stopRecording}
+            className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => startRecording(action)}
+          className="px-3 py-1.5 bg-accent border border-border hover:border-border rounded text-sm text-foreground font-mono transition-colors"
+        >
+          {normalizeShortcut(keys)}
+        </button>
+      )}
+    </div>
+  )
+
   return (
     <div className="bg-card border border-border rounded-lg p-6">
       <h2 className="text-lg font-semibold text-foreground mb-6">Keyboard Shortcuts</h2>
-      
+
+      <h3 className="text-sm font-semibold text-foreground mt-2 mb-1">채팅창</h3>
+      <p className="text-xs text-muted-foreground mb-3">채팅 입력창에 포커스가 있을 때만 동작합니다.</p>
+      <div className="space-y-4 mb-6">
+        {chatEntries.map(renderRow)}
+      </div>
+
+      <h3 className="text-sm font-semibold text-foreground mt-2 mb-1">전체</h3>
+      <p className="text-xs text-muted-foreground mb-3">입력 중이 아닐 때 동작합니다. (브라우저 예약키 Ctrl+N/W/T 등은 가로챌 수 없습니다)</p>
       <div className="space-y-4">
-        {Object.entries(shortcuts).map(([action, keys]) => (
-          <div key={action} className="flex items-center justify-between py-3 border-b border-border last:border-0">
-            <div className="space-y-1">
-              <p className="text-foreground font-medium capitalize">
-                {action.replace(/([A-Z])/g, ' $1').trim()}
-              </p>
-            </div>
-            
-            {recordingKey === action ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  className="px-3 py-1.5 bg-accent border border-primary rounded text-sm text-foreground font-mono outline-none"
-                  placeholder="Press keys..."
-                  value={currentKeys || ''}
-                  autoFocus
-                  onBlur={stopRecording}
-                  readOnly
-                />
-                <button
-                  onClick={stopRecording}
-                  className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => startRecording(action)}
-                className="px-3 py-1.5 bg-accent border border-border hover:border-border rounded text-sm text-foreground font-mono transition-colors"
-              >
-                {normalizeShortcut(keys)}
-              </button>
-            )}
-          </div>
-        ))}
+        {globalEntries.map(renderRow)}
       </div>
 
       <p className="mt-6 text-sm text-muted-foreground">
