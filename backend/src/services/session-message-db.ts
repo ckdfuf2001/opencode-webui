@@ -82,6 +82,7 @@ export async function listSessionMessages(
   sessionId: string,
   limit = 20,
   offset = 0,
+  order: 'asc' | 'desc' = 'desc',
 ): Promise<{ total: number; items: MessageListItem[] } | null> {
   const lim = Math.max(1, Math.min(100, limit))
   const off = Math.max(0, offset)
@@ -91,9 +92,10 @@ export async function listSessionMessages(
     const total = (
       oc.query('SELECT COUNT(*) AS c FROM message WHERE session_id = ?').get(sessionId) as { c: number }
     ).c
+    const dir = order === 'asc' ? 'ASC' : 'DESC'
     const rows = oc
       .query(
-        'SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created DESC, rowid DESC LIMIT ? OFFSET ?',
+        `SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created ${dir}, rowid ${dir} LIMIT ? OFFSET ?`,
       )
       .all(sessionId, lim, off) as MessageRow[]
     if (rows.length === 0) return { total, items: [] }

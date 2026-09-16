@@ -588,17 +588,19 @@ export const useMessageCount = (
 
 /**
  * 검색 메뉴 진입 시 소량 리스트 — id/role/시간/미리보기만 (parts 없음, 폴링 없음).
+ * order=asc면 오래된 것부터 (다이얼로그 시간순 브라우징용).
  */
 export const useMessageList = (
   sessionID: string | undefined,
-  opts?: { limit?: number; offset?: number; enabled?: boolean },
+  opts?: { limit?: number; offset?: number; enabled?: boolean; order?: 'asc' | 'desc' },
 ) => {
   const limit = opts?.limit ?? 20;
   const offset = opts?.offset ?? 0;
+  const order = opts?.order ?? 'desc';
   return useQuery({
-    queryKey: ["opencode", "message-list", sessionID, limit, offset],
+    queryKey: ["opencode", "message-list", sessionID, limit, offset, order],
     queryFn: async () => {
-      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset), order });
       const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}/list?${params.toString()}`);
       if (!res.ok) throw new Error('Failed to load message list');
       return (await res.json()) as { total: number; items: MessageListItem[] };

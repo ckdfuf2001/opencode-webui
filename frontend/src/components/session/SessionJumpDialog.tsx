@@ -30,12 +30,13 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
     void reindexMessages(sessionId).catch(() => {})
   }, [open, sessionId])
 
-  // 검색어 없음: 전체를 나눠서 미리보기만 로드 (200자 cap, parts 없음).
+  // 검색어 없음: 전체를 오래된 것부터 나눠서 미리보기만 로드 (200자 cap, parts 없음).
   // "더 보기"는 offset 페이지네이션 + 누적 append — 60개 캐시와 무관하게 전체를 본다.
   const [entryOffset, setEntryOffset] = useState(0)
   const { data: entryPage, isLoading: entryLoading, isFetching: entryFetching } = useMessageList(sessionId, {
     limit: ENTRY_LIMIT,
     offset: entryOffset,
+    order: 'asc',
     enabled: open && needle.length === 0,
   })
   const [entryAcc, setEntryAcc] = useState<MessageListItem[]>([])
@@ -107,7 +108,7 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
             ? entryItems.map((m: MessageListItem, i: number) => (
                 <JumpRow
                   key={m.id}
-                  no={total != null ? total - i : i + 1}
+                  no={i + 1}
                   role={m.role}
                   preview={m.preview}
                   created={m.created}

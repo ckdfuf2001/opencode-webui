@@ -128,6 +128,11 @@ export async function syncSessionMessages(db: Database, sessionId: string): Prom
       db.query(
         'DELETE FROM session_messages_fts WHERE session_id = ? AND message_id NOT IN (SELECT id FROM oc.message WHERE session_id = ?)',
       ).run(sessionId, sessionId)
+      // 1b) 본문 없는 행 재인덱스 — tool 전용 턴은 예전에 text=''로 들어가
+      // 스니펫이 empty로 보였다. 아래 마커 형태로 다시 넣는다.
+      db.query(
+        "DELETE FROM session_messages_fts WHERE session_id = ? AND (text IS NULL OR text = '')",
+      ).run(sessionId)
       // 2) 새 메시지만 추가 (turn_index는 전체 순서 기준 ROW_NUMBER)
       const missing = db.query(
         `SELECT id, data, tc, ti FROM (
@@ -138,10 +143,15 @@ export async function syncSessionMessages(db: Database, sessionId: string): Prom
          ORDER BY tc, r`,
       ).all(sessionId, sessionId) as Array<{ id: string; data: string; tc: number; ti: number }>
       if (missing.length === 0) return 0
+      // text 본문 + tool/file 마커. tool 전용 턴도 검색·스니펫에 걸리게 한다
+      // (마커 없으면 text=''라 스니펫이 empty로만 보였다).
       const textOf = db.prepare(
-        `SELECT group_concat(json_extract(p.data,'$.text'), char(10)) AS tx
-         FROM oc.part p WHERE p.message_id = ?
-           AND json_extract(p.data,'$.type') = 'text'`,
+        `SELECT group_concat(
+           CASE WHEN json_extract(p.data,'$.type') = 'text' THEN json_extract(p.data,'$.text')
+                WHEN json_extract(p.data,'$.type') = 'tool' THEN '[tool:' || COALESCE(json_extract(p.data,'$.tool'), 'tool') || ']'
+                WHEN json_extract(p.data,'$.type') = 'file' THEN '[file]'
+           END, char(10)) AS tx
+         FROM oc.part p WHERE p.message_id = ?`,
       )
       const upsert = db.prepare(
         `INSERT INTO session_messages_fts (text, session_id, message_id, role, repo_id, turn_index, ts)
@@ -181,8 +191,10 @@ function collectPartText(oc: import('bun:sqlite').Database, messageId: string): 
   const texts: string[] = []
   for (const r of rows) {
     try {
-      const d = JSON.parse(r.data) as { type?: string; text?: unknown }
+      const d = JSON.parse(r.data) as { type?: string; text?: unknown; tool?: unknown }
       if (d?.type === 'text' && typeof d.text === 'string') texts.push(d.text)
+      else if (d?.type === 'tool') texts.push(`[tool:${typeof d.tool === 'string' && d.tool ? d.tool : 'tool'}]`)
+      else if (d?.type === 'file') texts.push('[file]')
     } catch {
       // skip malformed part
     }
@@ -230,7 +242,7 @@ function buildMessageSearchFilter(q: string, opts: MessageSearchOpts): SearchFil
       where.push('session_id = ?')
       params.push(opts.sessionId)
     }
-    return { where, params, orderBy: 'ts DESC' }
+    return { where, params, orderBy: 'ts ASC' }
   }
   if (trimmed === '*') {
     const where: string[] = ['1 = 1']
@@ -243,7 +255,7 @@ function buildMessageSearchFilter(q: string, opts: MessageSearchOpts): SearchFil
       where.push('session_id = ?')
       params.push(opts.sessionId)
     }
-    return { where, params, orderBy: 'ts DESC' }
+    return { where, params, orderBy: 'ts ASC' }
   }
   const where: string[] = ['session_messages_fts MATCH ?']
   const params: (string | number)[] = [buildFtsQuery(q)]
@@ -255,7 +267,8 @@ function buildMessageSearchFilter(q: string, opts: MessageSearchOpts): SearchFil
     where.push('session_id = ?')
     params.push(opts.sessionId)
   }
-  return { where, params, orderBy: 'bm25(session_messages_fts)' }
+  // 시간순(오래된 것부터) 표기 — bm25 관련도보다 대화 흐름 순서를 우선한다.
+  return { where, params, orderBy: 'ts ASC' }
 }
 
 type MessageSearchRow = {

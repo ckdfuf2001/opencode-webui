@@ -399,11 +399,15 @@ export function SessionDetail() {
   //      (높이 보정은 기존 [windowStart] effect가 처리).
   const handleLoadOlder = useCallback(async () => {
     if (isLoadingMore || !sessionId) return;
+    // 연타 스로틀 (휠·스크롤·버튼이 같은 쿨다운 공유)
+    if (Date.now() - lastShiftAtRef.current < SHIFT_COOLDOWN_MS) return;
+    if (shiftPendingRef.current) return;
     const len = baseMessages?.length ?? 0;
     if (len === 0) return;
     // shift량은 API loaded가 아니라 병합 전후 실측으로 계산한다.
     // 겹침·스트리밍 tail 증가가 있어도 이전 최상단의 새 인덱스가 정확한 prepend량이다.
     const prevOldestId = baseMessages?.[0]?.info.id;
+    lastShiftAtRef.current = Date.now();
     setIsLoadingMore(true);
     try {
       const r = await loadOlderMessages(queryClient, opcodeUrl, sessionId, repoDirectory, 30);
@@ -416,8 +420,14 @@ export function SessionDetail() {
         const c = messageContainerRef.current;
         if (c) pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
         markDisengagedRef.current?.();
+        // 실제로 움직일 때만 pending·락을 건다. shift 없이 걸면
+        // [windowStart] effect가 안 돌아 pending이 영구 고착돼 이후 이동이 전부 막힌다.
         shiftPendingRef.current = true;
         lastShiftAtRef.current = Date.now();
+        lastShiftDirRef.current = 'up';
+        edgeLockedRef.current = true;
+        // 보상 스크롤이 상단 근처에 떨어져도 즉시 복귀하지 않도록 근처로 표시
+        wasNearBottomRef.current = true;
         const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
         setWindowStart(cur + shift);
       }
@@ -475,6 +485,9 @@ export function SessionDetail() {
             shiftWindowUp();
             return;
           }
+          // 캐시 최상단: 서버에 더 있으면 스크롤로도 가져온다 (쿨다운·로딩 가드는 handleLoadOlder 안)
+          void handleLoadOlder();
+          return;
         }
         if (distToBottom < EDGE_PX) {
           if (edgeLockedRef.current && lastShiftDirRef.current === 'down') return;
@@ -490,14 +503,15 @@ export function SessionDetail() {
       });
     };
     // 끝에 닿은 상태에서 방향키로/휠로 더 미는 경우 scroll이 안 나므로 여기서 직접 이동
-    const onWheel = (e: WheelEvent) => {
-      // 사용자 휠 개입이면 프로그램 이동 락 해제
-      navLockUntilRef.current = 0;
-      if (e.deltaY < 0 && c.scrollTop <= 0) {
-        const len = baseMessages?.length ?? 0;
-        const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
-        if (cur > 0) shiftWindowUp();
-      } else if (e.deltaY > 0) {
+      const onWheel = (e: WheelEvent) => {
+        // 사용자 휠 개입이면 프로그램 이동 락 해제
+        navLockUntilRef.current = 0;
+        if (e.deltaY < 0 && c.scrollTop <= 0) {
+          const len = baseMessages?.length ?? 0;
+          const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+          if (cur > 0) shiftWindowUp();
+          else void handleLoadOlder();
+        } else if (e.deltaY > 0) {
         const distToBottom = c.scrollHeight - (c.scrollTop + c.clientHeight);
         if (distToBottom <= 1 && windowStartRef.current !== null) shiftWindowDown();
       }
@@ -510,7 +524,7 @@ export function SessionDetail() {
     };
     // 컨테이너가 key={sessionId}로 리마운트 + 로딩 후 마운트되므로
     // 실제 노드 기준으로 리스너 재부착
-  }, [shiftWindowUp, shiftWindowDown, sessionId, containerNode]);
+  }, [shiftWindowUp, shiftWindowDown, handleLoadOlder, sessionId, containerNode]);
   const {
     data: dbStatuses,
     isError: statusError,

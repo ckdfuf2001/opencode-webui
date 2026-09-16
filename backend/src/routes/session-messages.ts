@@ -33,8 +33,9 @@ export function createSessionMessageRoutes() {
     }
   })
 
-  // GET /api/session-messages/:sessionId/list?limit=&offset=
+  // GET /api/session-messages/:sessionId/list?limit=&offset=&order=
   // 검색 메뉴 진입 시 소량 리스트 — id/role/시간/미리보기만 (parts 없음).
+  // order=asc면 오래된 것부터 (다이얼로그 시간순 브라우징용), 기본 desc.
   app.get('/:sessionId/list', async (c) => {
     try {
       const sessionId = c.req.param('sessionId')
@@ -42,7 +43,8 @@ export function createSessionMessageRoutes() {
       const offsetRaw = c.req.query('offset')
       const limit = limitRaw ? parseInt(limitRaw, 10) || 20 : 20
       const offset = offsetRaw ? Math.max(0, parseInt(offsetRaw, 10) || 0) : 0
-      const result = await listSessionMessages(sessionId, limit, offset)
+      const order = c.req.query('order') === 'asc' ? 'asc' : 'desc'
+      const result = await listSessionMessages(sessionId, limit, offset, order)
       if (!result) return dbUnavailable(c)
       return c.json(result)
     } catch (error: unknown) {
