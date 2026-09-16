@@ -98,6 +98,15 @@ function toolOutputLength(parts: MessageWithParts["parts"]): number {
   return n
 }
 
+function reasoningPartsLength(parts: MessageWithParts["parts"]): number {
+  let n = 0
+  for (const p of parts) {
+    if ((p as { type?: string }).type !== "reasoning") continue
+    n += ((p as { text?: string }).text ?? "").length
+  }
+  return n
+}
+
 // bash 등 대용량 툴 출력은 메모리에 전부 들고 있으면 힙이 GB 단위로 부푼다.
 // pnpm 같은 대량 출력이 툴 하나에 4GB까지 가던 걸 방지 — 완료된 툴은 20k까지만 메모리에 유지
 export const MAX_TOOL_OUTPUT_KEEP = 20_000
@@ -721,11 +730,15 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           result = [...result.slice(0, -1), cachedLast];
         } else if (cachedLast.info.id === resultLast.info.id) {
           // 길이 ?�산?�로�?비교 ??join?�?거�? ?�당?�라 길이 ?�정?�는 ?��? ?�는??
+          // reasoning도 비교한다 — SSE로 스트리밍된 추론 텍스트가 DB 빈 텍스트로
+          // 덮여 "마지막 reasoning이 완료와 동시에 사라지는" 원인이었다.
           const cTextLen = textPartsLength(cachedLast.parts);
           const rTextLen = textPartsLength(resultLast.parts);
           const cToolLen = toolOutputLength(cachedLast.parts);
           const rToolLen = toolOutputLength(resultLast.parts);
-          if (cTextLen > rTextLen || cToolLen > rToolLen) result = [...result.slice(0, -1), cachedLast];
+          const cReasonLen = reasoningPartsLength(cachedLast.parts);
+          const rReasonLen = reasoningPartsLength(resultLast.parts);
+          if (cTextLen > rTextLen || cToolLen > rToolLen || cReasonLen > rReasonLen) result = [...result.slice(0, -1), cachedLast];
         }
       }
       // 주문형 로드된 구형 구간 보존 — 폴링(limit=60)이 refetch해도 점프용 히스토리가 날아가지 않게.
@@ -1851,7 +1864,13 @@ export const useEphemeralSessionSSE = (
           const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
           let nextPart: typeof part = part;
           if (delta) {
-            if (existing.type === "text" && typeof existing.text === "string") {
+            // reasoning은 opencode가 빈 파트 껍데기 + message.part.delta로 스트리밍한다.
+            // 분기가 없으면 통째 교체라 라이브 추론이 안 보인다.
+            if (existing.type === "reasoning" && typeof existing.text === "string") {
+              const pText = (part as { text?: string }).text ?? "";
+              if (pText === capSseTextPart(existing.text + delta)) nextPart = part;
+              else nextPart = { ...existing, text: capSseTextPart(existing.text + delta) } as unknown as typeof part;
+            } else if (existing.type === "text" && typeof existing.text === "string") {
               nextPart = { ...part, text: capSseTextPart(existing.text + delta) } as typeof part;
             } else if (existing.type === "tool") {
               const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
@@ -1948,7 +1967,10 @@ export const useEphemeralSessionSSE = (
             }
             const existing = msg.parts[pIdx] as { type: string; text?: string; state?: { output?: string; metadata?: { output?: string }; status?: string } };
             let nextPart: MessageWithParts["parts"][number];
-            if (existing.type === "text") {
+            if (existing.type === "reasoning") {
+              // delta 전용 이벤트(part 객체 없이 messageID/partID/delta만 옴) — concat해야 라이브로 보인다.
+              nextPart = { ...existing, text: capSseTextPart((existing.text ?? "") + delta) } as MessageWithParts["parts"][number];
+            } else if (existing.type === "text") {
               nextPart = { ...existing, text: capSseTextPart((existing.text ?? "") + delta) } as MessageWithParts["parts"][number];
             } else if (existing.type === "tool") {
               const st = (existing as unknown as { state: Record<string, unknown> }).state ?? {} as Record<string, unknown>;
