@@ -84,7 +84,12 @@ export function FavoriteSessionsPanel() {
     <>
       <div className="fixed bottom-[72px] left-0 z-[60] flex flex-col items-start gap-1">
         {(badgeTotals.working > 0 || badgeTotals.pending > 0 || badgeTotals.cancelled > 0) && (
-          <div className="relative ml-1 flex items-center gap-1 rounded-full border border-border bg-card/95 backdrop-blur px-1.5 py-1 shadow-md">
+          <button
+            type="button"
+            onClick={() => setPinned(true)}
+            title="즐겨찾기 열기"
+            className="relative ml-1 flex items-center gap-1 rounded-full border border-border bg-card/95 backdrop-blur px-1.5 py-1 shadow-md cursor-pointer hover:border-muted-foreground/40"
+          >
             {badgeTotals.working > 0 && (
               <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-600" title={`${badgeTotals.working} running`}>
                 <Loader2 className="w-3 h-3 animate-spin" />{badgeTotals.working}
@@ -101,7 +106,7 @@ export function FavoriteSessionsPanel() {
               </span>
             )}
             <div className="absolute -bottom-[5px] left-2 w-0 h-0 border-x-[4px] border-x-transparent border-t-[6px] border-t-card drop-shadow-[0_1px_0_hsl(var(--border))]" />
-          </div>
+          </button>
         )}
         <button
           type="button"
