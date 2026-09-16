@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { opencodeServerManager } from '../services/opencode-single-server'
 import { ensureServerAuth } from '../services/opencode-auth'
-import { healMismatchTailManual } from '../services/reasoning-heal'
+import { healMismatchTailManual, asOutgoingModel } from '../services/reasoning-heal'
 import { logger } from '../utils/logger'
 
 export function createSessionHealRoutes() {
@@ -32,7 +32,16 @@ export function createSessionHealRoutes() {
       } catch {
         // 상태 조회 실패는 막지 않는다 (opencode가 느린 경우 정리 자체가 복구 수단)
       }
-      const result = await healMismatchTailManual(base, sessionId, directory)
+      // 수동 호출에 보내려는 모델을 동봉하면 strip keep이 확정된다.
+      // body: { model?: { providerID, modelID } | "provider/model" } (없으면 세션 조회 폴백)
+      let outgoingModel = undefined as ReturnType<typeof asOutgoingModel>
+      try {
+        const body = (await c.req.json().catch(() => undefined)) as { model?: unknown } | undefined
+        outgoingModel = asOutgoingModel(body?.model)
+      } catch {
+        outgoingModel = undefined
+      }
+      const result = await healMismatchTailManual(base, sessionId, directory, outgoingModel)
       if (result.healed && directory) {
         // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
         // 다음 전송 전에 인스턴스를 dispose해 캐시를 비운다.

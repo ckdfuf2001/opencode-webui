@@ -11,7 +11,7 @@ vi.mock('../../src/services/session-message-db', () => ({
   historyReasoningModels: vi.fn(),
 }))
 
-import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel } from '../../src/services/reasoning-heal'
+import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts } from '../../src/services/opencode-db'
 import { recentSessionMessages, historyReasoningModels } from '../../src/services/session-message-db'
 
@@ -40,6 +40,15 @@ function mockNoSessionModel() {
     return { ok: false, json: async () => ({}) }
   }))
 }
+/** 세션에 기록된 모델을 지정 — outgoing 우선순위 테스트용 */
+function mockSessionModel(providerID: string, id: string) {
+  vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+    const u = String(url)
+    if (u.includes('/session/status')) return { ok: true, json: async () => ({}) }
+    if (u.includes('/session/')) return { ok: true, json: async () => ({ model: { providerID, id } }) }
+    return { ok: false, json: async () => ({}) }
+  }))
+}
 
 function userMsg(id: string, text: string, created: number) {
   return {
@@ -51,6 +60,14 @@ function userMsg(id: string, text: string, created: number) {
 function assistantMsg(id: string, created: number) {
   return {
     info: { id, role: 'assistant', sessionID: 'ses-1', time: { created, completed: created + 1000 } },
+    parts: [{ type: 'text', text: 'done' }],
+  }
+}
+
+/** 모델 정보가 박힌 성공 턴 — suggestedModel(마지막 성공 모델) 제어용 */
+function goodAssistantWithModel(id: string, created: number, providerID: string, modelID: string) {
+  return {
+    info: { id, role: 'assistant', sessionID: 'ses-1', providerID, modelID, time: { created, completed: created + 1000 } },
     parts: [{ type: 'text', text: 'done' }],
   }
 }
@@ -134,6 +151,30 @@ describe('isIncompleteAssistant', () => {
     expect(isIncompleteAssistant(interruptedMsg('u', Date.now()) as never)).toBe(true)
     expect(isIncompleteAssistant(assistantMsg('a', Date.now()) as never)).toBe(false)
     expect(isIncompleteAssistant(userMsg('u', 'hi', Date.now()) as never)).toBe(false)
+  })
+})
+
+describe('asOutgoingModel', () => {
+  it('accepts {providerID, modelID} objects', () => {
+    expect(asOutgoingModel({ providerID: 'opencode', modelID: 'm-1.3' }))
+      .toEqual({ providerID: 'opencode', modelID: 'm-1.3' })
+  })
+  it('accepts opencode session shape {providerID, id}', () => {
+    expect(asOutgoingModel({ providerID: 'opencode', id: 'm-1.2' }))
+      .toEqual({ providerID: 'opencode', modelID: 'm-1.2' })
+  })
+  it('accepts "provider/model" strings', () => {
+    expect(asOutgoingModel('opencode/m-1.3'))
+      .toEqual({ providerID: 'opencode', modelID: 'm-1.3' })
+  })
+  it('rejects missing or blank fields', () => {
+    expect(asOutgoingModel(undefined)).toBeUndefined()
+    expect(asOutgoingModel(null)).toBeUndefined()
+    expect(asOutgoingModel({})).toBeUndefined()
+    expect(asOutgoingModel({ providerID: 'opencode' })).toBeUndefined()
+    expect(asOutgoingModel({ providerID: ' ', modelID: 'm' })).toBeUndefined()
+    expect(asOutgoingModel('noslash')).toBeUndefined()
+    expect(asOutgoingModel('/m')).toBeUndefined()
   })
 })
 
@@ -289,6 +330,7 @@ describe('healReasoningTail', () => {
     expect(res.healed).toBe(false)
     expect(res.kind).toBe('cross-model')
     expect(res.models).toHaveLength(2)
+    expect(stripMock).not.toHaveBeenCalled()
     expect(truncateMock).not.toHaveBeenCalled()
     expect(deleteMock).not.toHaveBeenCalled()
   })
@@ -318,6 +360,57 @@ describe('healReasoningTail', () => {
     expect(res.strippedParts).toBe(6)
     expect(res.strippedMessages).toBe(4)
     expect(res.truncatedMessageId).toBe('u2')
+  })
+
+  it('prefers the outgoing model over the session model for strip keep', async () => {
+    const now = Date.now()
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'm-1.2', turns: 8 },
+      { providerID: 'opencode', modelID: 'm-1.3', turns: 2 },
+    ])
+    stripMock.mockResolvedValue({ partsRemoved: 6, messagesAffected: 4 })
+    // 세션 기록은 1.2인데 실제 전송은 1.3 — f5b72 세션 재현
+    mockSessionModel('opencode', 'm-1.2')
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+      userMsg('u2', 'fix the bug', now - 5_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+    ]])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['fix the bug'],
+      { force: true, outgoingModel: { providerID: 'opencode', modelID: 'm-1.3' } })
+    expect(stripMock).toHaveBeenCalledTimes(1)
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.healed).toBe(true)
+  })
+
+  it('ignores suggestedModel: keep comes from outgoing even when the last good turn is another model', async () => {
+    const now = Date.now()
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'm-1.2', turns: 8 },
+      { providerID: 'opencode', modelID: 'm-1.3', turns: 2 },
+    ])
+    stripMock.mockResolvedValue({ partsRemoved: 6, messagesAffected: 4 })
+    mockNoSessionModel()
+    // 마지막 성공 턴이 1.2지만 보내려는 건 1.3 — suggested를 쓰면 반대를 지운다
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      goodAssistantWithModel('a1', now - 59_000, 'opencode', 'm-1.2'),
+      userMsg('u2', 'fix the bug', now - 5_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+      goodAssistantWithModel('a1', now - 59_000, 'opencode', 'm-1.2'),
+    ]])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['fix the bug'],
+      { force: true, outgoingModel: { providerID: 'opencode', modelID: 'm-1.3' } })
+    expect(stripMock).toHaveBeenCalledTimes(1)
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.healed).toBe(true)
+    expect(res.suggestedModel).toEqual({ providerID: 'opencode', modelID: 'm-1.2' })
   })
 
   it('does not sweep a recently-active incomplete turn (presumed live)', async () => {
@@ -602,6 +695,25 @@ describe('healMismatchTailManual', () => {
     expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
     expect(res.strippedParts).toBe(4)
     expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
+  })
+  it('manual heal prefers the passed outgoing model over the session model', async () => {
+    const now = Date.now()
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'm-1.2', turns: 5 },
+      { providerID: 'opencode', modelID: 'm-1.3', turns: 2 },
+    ])
+    stripMock.mockResolvedValue({ partsRemoved: 4, messagesAffected: 3 })
+    mockSessionModel('opencode', 'm-1.2')
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+    ]])
+    const res = await healMismatchTailManual('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.healed).toBe(true)
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
   })
   it('refuses clean history', async () => {
     const now = Date.now()

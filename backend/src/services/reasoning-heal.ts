@@ -181,8 +181,8 @@ export function findLastGoodModel(messages: LooseMessage[]): { providerID: strin
 
 /**
  * mismatch 400의 전후 맥락 진단: 히스토리에 reasoning을 남긴 모델이 2개 이상이면
- * 크로스모델 오염이다. 이 경우 마지막 턴 truncate+재시도는 구조적으로 무의미해서
- * (오염이 스위치 지점부터 쌓여 있음) 건너뛰고 안내만 돌려준다.
+ * 크로스모델 오염이다. 과거 턴의 외국 reasoning은 strip으로 벗겨낸 뒤 실패 턴
+ * 제거·재시도로 이어간다 (strip할 keep을 못 정하면 안내만 돌려준다).
  */
 export async function diagnoseMismatch(
   sessionID: string,
@@ -194,7 +194,40 @@ export async function diagnoseMismatch(
   return { crossModel: true, models, suggestedModel }
 }
 
-/** 세션의 현재 모델 조회 (strip keep 기준 — 실패하면 undefined). */
+/** 보내려는 모델. strip keep의 유일한 1순위 소스다. */
+export interface OutgoingModel {
+  providerID: string
+  modelID: string
+}
+
+/**
+ * unknown 입력을 OutgoingModel로 정규화. 허용 형태:
+ * - { providerID, modelID } 객체 (큐·프론트·opencode body)
+ * - "providerID/modelID" 문자열
+ * 그 외(빈 문자열·필드 누락 등)는 undefined — 호출자는 폴백/스킵으로 처리.
+ */
+export function asOutgoingModel(v: unknown): OutgoingModel | undefined {
+  if (typeof v === 'string') {
+    const slash = v.indexOf('/')
+    if (slash <= 0 || slash >= v.length - 1) return undefined
+    const providerID = v.slice(0, slash).trim()
+    const modelID = v.slice(slash + 1).trim()
+    if (!providerID || !modelID) return undefined
+    return { providerID, modelID }
+  }
+  if (typeof v === 'object' && v !== null) {
+    const o = v as Record<string, unknown>
+    // opencode 세션 모델은 id 필드명을 쓴다 ({providerID, id}).
+    const providerID = o.providerID
+    const modelID = o.modelID ?? o.id
+    if (typeof providerID === 'string' && providerID.trim() && typeof modelID === 'string' && modelID.trim()) {
+      return { providerID: providerID.trim(), modelID: modelID.trim() }
+    }
+  }
+  return undefined
+}
+
+/** 세션의 현재 모델 조회 (strip keep 폴백 — 실패하면 undefined). */
 async function getSessionModel(
   base: string,
   sessionID: string,
@@ -207,11 +240,8 @@ async function getSessionModel(
       signal: AbortSignal.timeout(10_000),
     })
     if (!res.ok) return undefined
-    const data = (await res.json()) as { model?: { providerID?: string; id?: string; modelID?: string } }
-    const providerID = data?.model?.providerID
-    const modelID = data?.model?.id ?? data?.model?.modelID
-    if (typeof providerID === 'string' && typeof modelID === 'string') return { providerID, modelID }
-    return undefined
+    const data = (await res.json()) as { model?: unknown }
+    return asOutgoingModel(data?.model)
   } catch {
     return undefined
   }
@@ -299,7 +329,7 @@ export async function healReasoningTail(
   sessionID: string,
   directory: string | undefined,
   candidates: string[],
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; outgoingModel?: OutgoingModel },
 ): Promise<ReasoningHealResult> {
   const texts = candidates.map((t) => (t ?? '').trim()).filter((t) => t.length > 0)
   if (texts.length === 0) return { healed: false, reason: 'empty expected text' }
@@ -349,7 +379,11 @@ export async function healReasoningTail(
   let strippedMessages = 0
   if (diag.crossModel) {
     const names = diag.models.map((m) => `${m.providerID}/${m.modelID}`).join(', ')
-    const target = (await getSessionModel(base, sessionID, directory)) ?? diag.suggestedModel
+    // keep은 보내려는 모델이 유일한 1순위다. suggestedModel(마지막 성공 턴의
+    // 모델)은 keep 소스에서 제외한다 — 모델을 바꾼 직후에는 둘 다 값이 있어도
+    // 서로 다르고, 그때 suggested를 쓰면 정확히 반대를 지운다.
+    // 둘 다 없으면 strip 없이 안내로 빠진다 (반대로 지우는 것보다 안전).
+    const target = opts?.outgoingModel ?? (await getSessionModel(base, sessionID, directory))
     if (!target) {
       logger.warn(`Reasoning heal: session ${sessionID} has cross-model reasoning [${names}] but current model unknown — truncate skipped, needs model choice`)
       return {
@@ -495,6 +529,7 @@ export async function healMismatchTailManual(
   base: string,
   sessionID: string,
   directory: string | undefined,
+  outgoingModel?: OutgoingModel,
 ): Promise<ReasoningHealResult> {
   const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages || messages.length === 0) return { healed: false, reason: reason ?? 'no messages' }
@@ -512,7 +547,8 @@ export async function healMismatchTailManual(
     models = diag.models
     suggestedModel = diag.suggestedModel
     finalKind = 'cross-model'
-    const target = (await getSessionModel(base, sessionID, directory)) ?? diag.suggestedModel
+    // keep 체인은 자동 경로와 동일: outgoing > 세션 조회. suggested 제외.
+    const target = outgoingModel ?? (await getSessionModel(base, sessionID, directory))
     if (target) {
       try {
         const strip = await stripReasoningParts(sessionID, target)

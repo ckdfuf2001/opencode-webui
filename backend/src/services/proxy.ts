@@ -5,7 +5,7 @@ import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { flushQueueForSession, clearSendingOnAbort } from './chat-queue'
-import { healReasoningTail, isReasoningMismatchText } from './reasoning-heal'
+import { healReasoningTail, isReasoningMismatchText, asOutgoingModel } from './reasoning-heal'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -703,11 +703,11 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         let finalBodyText = bodyText
         let healedAndRetried = false
         // heal 시도 내역 — exe는 콘솔 로그를 볼 수 없어 응답에 동봉한다 (다음 장애 진단용).
-        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number; stubsPending?: string[]; kind?: string; models?: Array<{ providerID: string; modelID: string; turns: number }> } = { attempted: false }
+        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number; strippedParts?: number; stubsPending?: string[]; kind?: string; models?: Array<{ providerID: string; modelID: string; turns: number }> } = { attempted: false }
         const msgPost = method === 'POST' ? cleanEventPath.match(/^\/session\/([^/]+)\/message$/) : null
         if (msgPost?.[1] && body) {
           try {
-            const parsedBody = JSON.parse(body) as { parts?: Array<{ type?: string; text?: string }> }
+            const parsedBody = JSON.parse(body) as { parts?: Array<{ type?: string; text?: string }>; model?: unknown }
             const sentText = (Array.isArray(parsedBody.parts) ? parsedBody.parts : [])
               .filter((p) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim())
               .map((p) => p.text as string)
@@ -716,15 +716,17 @@ export async function proxyRequest(request: Request, method: string, pathname: s
             if (sentText) {
               const directory = query['directory'] ? decodeURIComponent(query['directory']) : undefined
               healInfo.attempted = true
-              const heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText], { force: true })
+              // 본문 model이 없으면 세션 모델로 보낸 정상 경로 — heal이 세션 조회로 폴백한다.
+              const heal = await healReasoningTail(opencodeServerManager.getUrl(), msgPost[1]!, directory, [sentText], { force: true, outgoingModel: asOutgoingModel(parsedBody.model) })
               healInfo.healed = heal.healed
               healInfo.reason = heal.reason
               healInfo.stubsRemoved = heal.stubsRemoved
+              healInfo.strippedParts = heal.strippedParts
               healInfo.stubsPending = heal.stubsPending
               healInfo.kind = heal.kind
               healInfo.models = heal.models
               if (!heal.healed && heal.kind === 'cross-model') {
-                // 크로스모델 오염은 truncate+재시도로 해결 불가 — 재시도 없이 안내만.
+                // keep을 못 정해 strip 없이 끝난 경우 — 재시도 없이 안내만.
                 const names = (heal.models ?? []).map((m) => `${m.providerID}/${m.modelID}`).join(', ')
                 const back = heal.suggestedModel ? `${heal.suggestedModel.providerID}/${heal.suggestedModel.modelID}` : null
                 finalBodyText = `${finalBodyText} (cross-model reasoning history [${names}]: switch back to ${back ?? 'the model that owns the latest good turn'}, truncate back before the switch, or start a new session. Manual deep-clean: POST /api/session-heal/${msgPost[1]})`

@@ -286,7 +286,17 @@ export interface StripResult {
 }
 
 /**
- * reasoning part 단위 수술: 현재 모델과 다른 턴이 남긴 reasoning만 지운다.
+ * strip용 모델 비교 조건. IFNULL이 핵심이다 — SQLite에서 NULL != 'x'는
+ * NULL(WHERE에서 탈락)이라, 모델 정보 없는 assistant 턴(NW 중단 등)이
+ * strip 사각지대에 남는다. 그런 턴이 바로 지워야 할 대상이므로 빈 문자열로
+ * 취급해 비교에 포함시킨다.
+ */
+export function stripForeignModelClause(): string {
+  return `(IFNULL(json_extract(m.data,'$.providerID'),'') != ? OR IFNULL(json_extract(m.data,'$.modelID'),'') != ?)`
+}
+
+/**
+ * reasoning part 단위 수술: 보내려는 모델(keep)과 다른 턴이 남긴 reasoning만 지운다.
  * 크로스모델 encrypted_content 400의 진짜 해법 — 메시지/턴을 통째로 버리지
  * 않으므로 text·tool 결과는 그대로 남고, 자식 검사에 막히지도 않는다.
  * 실DB 실측: reasoning part의 metadata.openai 안에 {itemId, reasoningEncryptedContent}
@@ -324,7 +334,7 @@ export async function stripReasoningParts(
            WHERE m.session_id = ?
              AND m.time_created < ?
              AND json_extract(m.data,'$.role') = 'assistant'
-             AND (json_extract(m.data,'$.providerID') != ? OR json_extract(m.data,'$.modelID') != ?)
+             AND ${stripForeignModelClause()}
              AND json_extract(p.data,'$.type') = 'reasoning'`,
         )
         .get(sessionId, cutoff, keep.providerID, keep.modelID) as { n: number }
@@ -336,7 +346,7 @@ export async function stripReasoningParts(
              WHERE m.session_id = ?
                AND m.time_created < ?
                AND json_extract(m.data,'$.role') = 'assistant'
-               AND (json_extract(m.data,'$.providerID') != ? OR json_extract(m.data,'$.modelID') != ?)
+               AND ${stripForeignModelClause()}
            )
            AND json_extract(data,'$.type') = 'reasoning'`,
         )

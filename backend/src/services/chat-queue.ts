@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText, healReasoningTail } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail, asOutgoingModel } from './reasoning-heal'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
 import { resolveLiveDirectory } from './command-runs'
@@ -600,10 +600,10 @@ async function dispatchQueuedChat(
       // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
       // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
       try {
-        const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true })
+        const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true, outgoingModel: asOutgoingModel(chat.model) })
         if (!heal.healed && heal.kind === 'cross-model') {
-          // 크로스모델 오염은 truncate+재시도로 해결 불가 — 안내만 돌려주고 끝낸다.
-          // (자동 원복 없음: 모델 선택은 사용자 몫. 둘 중 하나를 고르게 한다)
+          // keep(보내려는 모델)을 못 정해 strip 없이 끝난 경우 — truncate+재시도로
+          // 해결 불가이므로 안내만 돌려주고 끝낸다 (자동 원복 없음: 모델 선택은 사용자 몫).
           const names = (heal.models ?? []).map((m) => `${m.providerID}/${m.modelID}`).join(', ')
           const back = heal.suggestedModel ? `${heal.suggestedModel.providerID}/${heal.suggestedModel.modelID}` : null
           const guidance =
