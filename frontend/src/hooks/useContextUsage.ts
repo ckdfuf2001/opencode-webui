@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react'
-import { useMessages } from './useOpenCode'
+import { useMessages, RECENT_MESSAGE_LIMIT } from './useOpenCode'
 import { useSettings } from './useSettings'
 import { useQuery } from '@tanstack/react-query'
 import type { components } from '@/api/opencode-types'
@@ -103,7 +103,8 @@ async function fetchProviders(opcodeUrl: string): Promise<ProvidersResponse> {
 }
 
 export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string): ContextUsage => {
-  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionID, directory)
+  // 메인 목록 캐시를 공유한다 (poll:false — 별도 풀링 없음). 최신 턴 토큰만 쓰므로 최근 N개면 충분.
+  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionID, directory, RECENT_MESSAGE_LIMIT, { poll: false })
   const { preferences } = useSettings()
   // 컴팩트 기준점 변경 시 재계산 (deps에 포함)
   const compactVer = useSyncExternalStore(subscribeCompact, getCompactVersion)

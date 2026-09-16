@@ -7,7 +7,7 @@ import { MobileFilePreviewModal } from './MobileFilePreviewModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { FolderOpen, FolderTree, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
+import { FolderOpen, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -155,21 +155,6 @@ interface FileBrowserProps {
 
 type FileSort = 'name-asc' | 'name-desc' | 'mtime-asc' | 'mtime-desc'
 
-/** 검색 범위 토글 — 하위 폴더 포함(기본) / 현재 폴더만. 아이콘 버튼. */
-function SubdirToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
-  return (
-    <Button
-      variant={enabled ? 'default' : 'outline'}
-      size="icon"
-      className="h-8 w-8 shrink-0"
-      title={enabled ? '하위 폴더 포함 검색 중 (클릭: 현재 폴더만)' : '현재 폴더만 검색 중 (클릭: 하위 폴더 포함)'}
-      onClick={onToggle}
-    >
-      <FolderTree className="w-4 h-4" />
-    </Button>
-  )
-}
-
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
   const items: { value: FileSort; label: string }[] = [
     { value: 'name-asc', label: 'Name ascending' },
@@ -231,17 +216,7 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const attachedPaths = useChatAttached((s) => s.attachedPaths)
   const [searchQuery, setSearchQuery] = useState('')
-  // 하위 폴더 포함 검색이 기본. localStorage에 유지한다.
-  const [searchSubdirs, setSearchSubdirs] = useState(() => {
-    try { return localStorage.getItem('filebrowser-search-subdirs') !== '0' } catch { return true }
-  })
-  const toggleSearchSubdirs = useCallback(() => {
-    setSearchSubdirs((v) => {
-      const next = !v
-      try { localStorage.setItem('filebrowser-search-subdirs', next ? '1' : '0') } catch {}
-      return next
-    })
-  }, [])
+  // 검색은 항상 하위 폴더 포함 (토글 없음).
   // 입력마다 재귀 탐색이 나가지 않게 300ms 디바운스
   const [debouncedSearch, setDebouncedSearch] = useState(searchQuery)
   useEffect(() => {
@@ -269,7 +244,7 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
 
   // 하위 포함 검색: 현재 경로 기준 재귀 탐색 (details로 FileInfo 조립).
   // 쿼리가 비면 호출 안 하고 기존 현재 폴더 필터로 동작한다.
-  const recursiveActive = searchSubdirs && debouncedSearch.trim().length > 0
+  const recursiveActive = debouncedSearch.trim().length > 0
   const { data: recursiveResults } = useQuery({
     queryKey: ['files-search-details', currentPath, debouncedSearch],
     queryFn: async () => {
@@ -744,7 +719,6 @@ useEffect(() => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1 min-w-0"
                 />
-                <SubdirToggle enabled={searchSubdirs} onToggle={toggleSearchSubdirs} />
                 <FileSortSelect value={sortBy} onChange={setSortBy} />
               </div>
             </div>
@@ -892,7 +866,6 @@ useEffect(() => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1 min-w-0"
                 />
-                <SubdirToggle enabled={searchSubdirs} onToggle={toggleSearchSubdirs} />
                 <FileSortSelect value={sortBy} onChange={setSortBy} />
               </div>
             </div>

@@ -236,7 +236,7 @@ function fastPullMessages(
     if (now - (lastFastPullAt.get(sessionID) ?? 0) < 800) return;
     lastFastPullAt.set(sessionID, now);
   }
-  queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+  queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
 }
 
 /** truncate 직후 opencode 메모리�? ??목록???�려�????�어 뷰�? ?��??�는 가??
@@ -493,6 +493,146 @@ export const useSession = (opcodeUrl: string | null | undefined, sessionID: stri
   });
 };
 
+/**
+ * 폴링이 들고 오는 최근 메시지 수.
+ * 전체 목록 폴링(GB)이 메모리 누수의 주범이므로 폴링은 최근 N개로 고정하고,
+ * 이동·검색은 meta/range/one API로 주문형 처리한다.
+ * 모든 useMessages 호출자는 이 상수를 써서 같은 쿼리키(캐시)를 공유해야 한다 —
+ * limit이 다르면 키가 갈라져 이중 풀링이 된다.
+ */
+export const RECENT_MESSAGE_LIMIT = 60;
+
+/**
+ * 메시지 목록 쿼리의 canonical key.
+ * 기존 코드 곳곳에 5-segment 키(["opencode","messages",url,sid,dir])가 하드코딩돼
+ * 실제 6-segment 키(limit 포함)와 어긋나 읽기/쓰기가 고아 키에 닿던 문제를 막는다.
+ * 폴링·SSE·optimistic·주문형 로드 모두 이 키로 통일한다.
+ */
+export function messagesQueryKey(
+  opcodeUrl: string | null | undefined,
+  sessionID: string | undefined,
+  directory?: string,
+  limit: number = RECENT_MESSAGE_LIMIT,
+): readonly [string, string, string | null | undefined, string | undefined, string | undefined, number] {
+  return ["opencode", "messages", opcodeUrl, sessionID, directory, limit] as const;
+}
+
+/** 점프/검색으로 주문형 로드된 구간의 메시지 ID (세션별). 폴링 refetch가 덮어써도 유지한다. */
+const backfilledIds = new Map<string, Set<string>>();
+export function dropBackfilledId(sessionID: string, messageId: string): void {
+  backfilledIds.get(sessionID)?.delete(messageId);
+}
+export function clearBackfilledIds(sessionID: string): void {
+  backfilledIds.delete(sessionID);
+}
+
+function createdOf(m: MessageWithParts): number {
+  return (m.info as unknown as { time?: { created?: number } }).time?.created ?? 0;
+}
+
+/** 캐시 병합: id 중복 제거 + 생성순 정렬 (stable — 동률은 기존 순서 유지). */
+function mergeMessagesDeduped(existing: MessageListResponse, incoming: MessageListResponse): MessageListResponse {
+  const seen = new Set(existing.map((m) => m.info.id));
+  const merged: MessageListResponse = [...existing];
+  for (const m of incoming) {
+    if (!seen.has(m.info.id)) { seen.add(m.info.id); merged.push(m); }
+  }
+  merged.sort((a, b) => createdOf(a) - createdOf(b));
+  return truncateLargeToolOutputs(merged);
+}
+
+export interface MessageListItem {
+  id: string;
+  role: string;
+  created: number;
+  preview: string;
+}
+
+/**
+ * 개수 전용 — 메시지 본문을 일절 읽지 않는 COUNT(*) (상단 표기용).
+ * 가벼우므로 5초 간격으로 폴링해도 부담이 없다.
+ */
+export const useMessageCount = (
+  sessionID: string | undefined,
+  opts?: { poll?: boolean },
+) => {
+  return useQuery({
+    queryKey: ["opencode", "message-count", sessionID],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}/count`);
+      if (!res.ok) throw new Error('Failed to load message count');
+      return (await res.json()) as { total: number };
+    },
+    enabled: !!sessionID,
+    staleTime: 3000,
+    gcTime: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchInterval: opts?.poll === false ? false : 5000,
+    retry: false,
+  });
+};
+
+/**
+ * 검색 메뉴 진입 시 소량 리스트 — id/role/시간/미리보기만 (parts 없음, 폴링 없음).
+ */
+export const useMessageList = (
+  sessionID: string | undefined,
+  opts?: { limit?: number; offset?: number; enabled?: boolean },
+) => {
+  const limit = opts?.limit ?? 20;
+  const offset = opts?.offset ?? 0;
+  return useQuery({
+    queryKey: ["opencode", "message-list", sessionID, limit, offset],
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}/list?${params.toString()}`);
+      if (!res.ok) throw new Error('Failed to load message list');
+      return (await res.json()) as { total: number; items: MessageListItem[] };
+    },
+    enabled: !!sessionID && (opts?.enabled ?? true),
+    staleTime: 15_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
+};
+
+/**
+ * 점프 타겟이 폴링 윈도우(최근 N개) 밖에 있으면 DB 윈도우 API로
+ * 주문형 로드해 캐시에 합친다. 캐시에 있으면 네트워크 없이 true.
+ * 전체 목록을 절대 가져오지 않는다.
+ */
+export async function ensureMessageLoaded(
+  queryClient: ReturnType<typeof useQueryClient>,
+  opcodeUrl: string | null | undefined,
+  sessionID: string,
+  directory: string | undefined,
+  messageId: string,
+): Promise<boolean> {
+  const key = messagesQueryKey(opcodeUrl, sessionID, directory);
+  const cached = queryClient.getQueryData<MessageListResponse>(key);
+  if (cached?.some((m) => m.info.id === messageId)) return true;
+  try {
+    const params = new URLSearchParams({ around: messageId, limit: '30' });
+    const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID}/window?${params.toString()}`);
+    if (!res.ok) return false;
+    const body = (await res.json()) as { total: number; messages: MessageListResponse };
+    const range = truncateLargeToolOutputs(body.messages);
+    if (!range.some((m) => m.info.id === messageId)) return false;
+    let ids = backfilledIds.get(sessionID);
+    if (!ids) { ids = new Set(); backfilledIds.set(sessionID, ids); }
+    for (const m of range) ids.add(m.info.id);
+    queryClient.setQueryData<MessageListResponse>(key, (old) =>
+      old && old.length > 0 ? mergeMessagesDeduped(old, range) : truncateLargeToolOutputs(range),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string, limit?: number, opts?: { poll?: boolean }) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
@@ -500,17 +640,19 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
   return useQuery({
     queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory, limit ?? 0],
     queryFn: async () => {
-      // 백엔드 캐시를 경유해 가져온다 — 직접 opencode 호출보다 안정적
-      // limit이 있으면 끝 N개만 받는다 (즐겨찾기 팝업이 전체를 들고 오는 GB 방지)
+      // opencode SQLite에서 최근 N개만 읽는다 — opencode HTTP 목록 API는
+      // 페이지네이션이 없어 전체를 직렬화하므로 절대 쓰지 않는다.
+      // (즐겨찾기 팝업 limit=10도 같은 recent 엔드포인트를 공유한다)
       const params = new URLSearchParams()
-      if (directory) params.set('directory', directory)
       if (limit && limit > 0) params.set('limit', String(limit))
-      const qs = params.toString() ? `?${params.toString()}` : '';
-      const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}${qs}`);
+      else params.set('limit', String(RECENT_MESSAGE_LIMIT))
+      const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}/recent?${params.toString()}`);
       if (!res.ok) throw new Error('Failed to load messages');
-      const data = (await res.json()) as MessageListResponse;
+      const body = (await res.json()) as { total: number; messages: MessageListResponse };
+      const data = body.messages;
       let result = applyTruncationWindow(sessionID!, data);
-      const cached = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory]);
+      const ownKey = messagesQueryKey(opcodeUrl, sessionID, directory, limit ?? 0);
+      const cached = queryClient.getQueryData<MessageListResponse>(ownKey);
       if (cached && result.length > 0 && cached.length > 0) {
         const cachedLast = cached[cached.length - 1]!;
         const resultLast = result[result.length - 1]!;
@@ -523,6 +665,19 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           const cToolLen = toolOutputLength(cachedLast.parts);
           const rToolLen = toolOutputLength(resultLast.parts);
           if (cTextLen > rTextLen || cToolLen > rToolLen) result = [...result.slice(0, -1), cachedLast];
+        }
+      }
+      // 주문형 로드된 구형 구간 보존 — 폴링(limit=60)이 refetch해도 점프용 히스토리가 날아가지 않게.
+      // 삭제된 메시지의 부활을 막기 위해 backfilledIds에 기록된 것만 유지한다
+      // (delete/truncate는 해당 ID를 집합에서 제거한다).
+      // 미리보기용 limit=10 쿼리(즐겨찾기 팝업)에는 적용하지 않는다.
+      const backfilled = backfilledIds.get(sessionID!);
+      const shouldPreserve = !limit || limit >= RECENT_MESSAGE_LIMIT;
+      if (shouldPreserve && backfilled && backfilled.size > 0 && cached && result.length > 0) {
+        const freshIds = new Set(result.map((m) => m.info.id));
+        const keep = cached.filter((m) => backfilled.has(m.info.id) && !freshIds.has(m.info.id));
+        if (keep.length > 0) {
+          result = [...keep, ...result].sort((a, b) => createdOf(a) - createdOf(b));
         }
       }
       const optimistic = pendingOptimistic.get(sessionID!);
@@ -647,7 +802,7 @@ export const usePollLastMessage = (
   return useQuery({
     queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory],
     queryFn: async () => {
-      const all = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory])
+      const all = queryClient.getQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, sessionID, directory))
       const last = all?.[all.length - 1]
       if (!last) return null
       if (last.info.id.startsWith("optimistic_")) return null
@@ -660,7 +815,7 @@ export const usePollLastMessage = (
         // poll 전용으로도 tool output을 cap해야 캐시가 무한히 자라지 않는다.
         const capped = truncateLargeToolOutputs([msg as MessageWithParts])[0]!
         const merged: MessageListResponse = all ? [...all.slice(0, -1), capped] : [capped]
-        queryClient.setQueryData(["opencode", "messages", opcodeUrl, sessionID, directory], (old: MessageListResponse | undefined) => {
+        queryClient.setQueryData(messagesQueryKey(opcodeUrl, sessionID, directory), (old: MessageListResponse | undefined) => {
           if (!old || old.length === 0) return merged
           const curLast = old[old.length - 1]
           if (curLast.info.id !== last.info.id) return old
@@ -863,7 +1018,7 @@ export const useSummarizeSession = (opcodeUrl: string | null | undefined, direct
     },
     onSuccess: (_data, variables) => {
       const { sessionID } = variables;
-      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
       queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionID, directory] });
     },
     onError: (error) => {
@@ -885,7 +1040,7 @@ export const useTruncateSession = (opcodeUrl: string | null | undefined, directo
       return client.truncateSession(sessionID, messageID);
     },
     onMutate: async ({ sessionID, messageID }) => {
-      const messagesKey = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+      const messagesKey = messagesQueryKey(opcodeUrl, sessionID, directory);
       await queryClient.cancelQueries({ queryKey: messagesKey });
       const previous = queryClient.getQueryData<MessageListResponse>(messagesKey);
       const cursor = previous?.find((m) => m.info.id === messageID);
@@ -903,6 +1058,8 @@ export const useTruncateSession = (opcodeUrl: string | null | undefined, directo
         queryClient.setQueryData<MessageListResponse>(messagesKey, () =>
           previous.filter((m) => (m.info.time?.created ?? 0) < cursorTime),
         );
+        // 잘려나간 ID는 backfilled 집합에서도 제거 — 폴링 preserve가 부활시키지 않게
+        for (const id of removedIds) dropBackfilledId(sessionID, id);
       }
       return { messagesKey, previous };
     },
@@ -919,7 +1076,7 @@ export const useTruncateSession = (opcodeUrl: string | null | undefined, directo
     onSettled: (_data, _error, variables) => {
       const { sessionID } = variables;
       queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionID, directory] });
-      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
     },
   });
 };
@@ -933,10 +1090,22 @@ export const useDeleteMessage = (opcodeUrl: string | null | undefined, directory
       if (!client) throw new Error("No client available");
       return client.deleteMessage(sessionID, messageID);
     },
+    onMutate: async ({ sessionID, messageID }) => {
+      // 삭제된 메시지가 폴링 preserve로 부활하지 않게 캐시·backfilled에서 즉시 제거
+      dropBackfilledId(sessionID, messageID);
+      const key = messagesQueryKey(opcodeUrl, sessionID, directory);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<MessageListResponse>(key);
+      queryClient.setQueryData<MessageListResponse>(key, (old) => old?.filter((m) => m.info.id !== messageID));
+      return { key, previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) queryClient.setQueryData(context.key, context.previous);
+    },
     onSettled: (_data, _error, variables) => {
       const { sessionID } = variables;
       queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionID, directory] });
-      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
     },
   });
 };
@@ -1064,7 +1233,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         contentParts,
         optimisticUserID,
       );
-      await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+      await queryClient.cancelQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
       pendingOptimistic.set(sessionID, userMessage);
       // sending 중에는 내용 없이 빈 sending 마크만 같은 위치에 둔다.
       // 실 메시지는 서버 반영 후 교체된다.
@@ -1079,7 +1248,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         parts: [],
       } as MessageWithParts
       queryClient.setQueryData<MessageListResponse>(
-        ["opencode", "messages", opcodeUrl, sessionID, directory],
+        messagesQueryKey(opcodeUrl, sessionID, directory),
         (old) => [...(old || []), sendingPlaceholder],
       );
 
@@ -1140,7 +1309,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       }
       const sseMergePart = (part: MessageWithParts["parts"][number], delta?: string) => {
         part = capIncomingToolPart(part as any) as MessageWithParts["parts"][number]
-        const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+        const key = messagesQueryKey(opcodeUrl, sessionID, directory);
         queryClient.setQueryData<MessageListResponse>(key, (old) => {
           if (!old) return old;
           const mid = (part as { messageID: string }).messageID;
@@ -1217,7 +1386,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
         });
       };
       const sseMergeMessage = (info: MessageWithParts["info"]) => {
-        const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+        const key = messagesQueryKey(opcodeUrl, sessionID, directory);
         queryClient.setQueryData<MessageListResponse>(key, (old) => {
           if (!old) return old;
           const idx = old.findIndex((m) => m.info.id === info.id);
@@ -1245,7 +1414,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             if (sid !== sessionID) return;
             const mid = p.messageID as string; const pid = (p.partID as string) ?? (p.id as string); const delta = p.delta as string;
             if (!mid || !pid || !delta) return;
-            const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+            const key = messagesQueryKey(opcodeUrl, sessionID, directory);
             queryClient.setQueryData<MessageListResponse>(key, (old) => {
               if (!old) return old; const idx = old.findIndex((m) => m.info.id === mid); if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
               const msg = old[idx]!; let pIdx = msg.parts.findIndex((pp) => (pp as { id: string }).id === pid);
@@ -1300,7 +1469,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           } else if (t === "session.idle") {
             const sid = (p.sessionID as string) ?? (p.sessionId as string);
             if (sid && sid !== sessionID) return;
-            queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+            queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
             queryClient.invalidateQueries({ queryKey: ["session-status-db"] });
             queryClient.invalidateQueries({ queryKey: ["sessions", opcodeUrl, directory] });
             // 즉시 Working 마크 ?�제 ??2s ?�링 ?��??�이 캐시?�서 직접 ?�거
@@ -1332,12 +1501,12 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
     },
     onSettled: (_data, _error, variables) => {
       if (activeSendControllers.get(variables.sessionID)) activeSendControllers.delete(variables.sessionID)
-      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, variables.sessionID, directory) })
       // sending?�??�버???�상 반영?�어 ?�면??뿌려�??�까지 ?��? ??useMessages??realUserArrived?�서 교체
       // ?�패/?�?�아???�비??30�??�에�?강제 ?�리 (?�무 ?�찍 지?��? ?�음)
       setTimeout(() => {
         if (!pendingOptimistic.has(variables.sessionID)) return
-        const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
+        const cur = queryClient.getQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, variables.sessionID, directory))
         const pending = pendingOptimistic.get(variables.sessionID)
         if (!pending) return
         const real = cur?.find((m) => {
@@ -1346,7 +1515,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           return true
         })
         if (!real) {
-          queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => old?.filter((m) => !m.info.id.startsWith("optimistic_sending_")) ?? old)
+          queryClient.setQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, variables.sessionID, directory), (old) => old?.filter((m) => !m.info.id.startsWith("optimistic_sending_")) ?? old)
           pendingOptimistic.delete(variables.sessionID)
         }
       }, 30000)
@@ -1355,7 +1524,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       const { sessionID } = variables;
       const formatted = formatServerError(error)
       queryClient.setQueryData<MessageListResponse>(
-        ["opencode", "messages", opcodeUrl, sessionID, directory],
+        messagesQueryKey(opcodeUrl, sessionID, directory),
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_")),
       );
       pendingOptimistic.delete(sessionID)
@@ -1402,10 +1571,10 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       const pendingAtAbort = pendingOptimistic.get(sessionID)
       abortActiveSend(sessionID)
       recentlyAborted.set(sessionID, Date.now());
-      await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] })
+      await queryClient.cancelQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) })
       await queryClient.cancelQueries({ queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory] })
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
-      queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, sessionID, directory], (old) => {
+      queryClient.setQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, sessionID, directory), (old) => {
         if (!old) return old
         return old.filter((m) => !m.info.id.startsWith("optimistic_") && !m.info.id.startsWith("optimistic_sending_"))
       })
@@ -1501,10 +1670,10 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
         [{ type: "text" as const, content: command }],
         optimisticUserID,
       );
-      await queryClient.cancelQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+      await queryClient.cancelQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
       pendingOptimistic.set(sessionID, userMessage);
       queryClient.setQueryData<MessageListResponse>(
-        ["opencode", "messages", opcodeUrl, sessionID, directory],
+        messagesQueryKey(opcodeUrl, sessionID, directory),
         (old) => [...(old || []), userMessage],
       );
 
@@ -1516,10 +1685,10 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
       return { optimisticUserID, response };
     },
     onSettled: (_data, _error, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, variables.sessionID, directory] })
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, variables.sessionID, directory) })
       setTimeout(() => {
         if (pendingOptimistic.has(variables.sessionID)) {
-          const cur = queryClient.getQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory])
+          const cur = queryClient.getQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, variables.sessionID, directory))
           const pending = pendingOptimistic.get(variables.sessionID)
           const pendingText = (pending?.parts.find((p) => (p as { type: string }).type === 'text') as { text?: string } | undefined)?.text?.trim() ?? ''
           const real = cur?.find((m) => {
@@ -1531,7 +1700,7 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
             return true
           })
           if (real) {
-            queryClient.setQueryData<MessageListResponse>(["opencode", "messages", opcodeUrl, variables.sessionID, directory], (old) => {
+            queryClient.setQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, variables.sessionID, directory), (old) => {
               if (!old) return old
               return old.map((msg) => msg.info.id === pending!.info.id ? { ...msg, info: { ...msg.info, id: real.info.id } } : msg)
             })
@@ -1544,7 +1713,7 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
       const { sessionID } = variables;
       const formatted = formatServerError(error)
       queryClient.setQueryData<MessageListResponse>(
-        ["opencode", "messages", opcodeUrl, sessionID, directory],
+        messagesQueryKey(opcodeUrl, sessionID, directory),
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_") && !msg.info.id.startsWith("optimistic_sending_")),
       );
       pendingOptimistic.delete(sessionID)
@@ -1599,7 +1768,7 @@ export const useEphemeralSessionSSE = (
       return;
     }
     const mergePart = (part: MessageWithParts["parts"][number], delta?: string) => {
-      const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+      const key = messagesQueryKey(opcodeUrl, sessionID, directory);
       queryClient.setQueryData<MessageListResponse>(key, (old) => {
         if (!old) return old;
         const mid = (part as { messageID: string }).messageID;
@@ -1652,7 +1821,7 @@ export const useEphemeralSessionSSE = (
       });
     };
     const mergeMessage = (info: MessageWithParts["info"]) => {
-      const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+      const key = messagesQueryKey(opcodeUrl, sessionID, directory);
       queryClient.setQueryData<MessageListResponse>(key, (old) => {
         if (!old) return old;
         const idx = old.findIndex((m) => m.info.id === info.id);
@@ -1689,7 +1858,7 @@ export const useEphemeralSessionSSE = (
           const pid = (part as { id: string }).id ?? (p.partID as string) ?? (p.id as string);
           const partForMerge = mid && !(part as { messageID: string }).messageID ? { ...part, messageID: mid, id: pid ?? (part as { id: string }).id } as MessageWithParts["parts"][number] : part as MessageWithParts["parts"][number];
           if (delta && partForMerge && typeof (partForMerge as { type: string; text?: string }).text === "string") {
-            const existingKey = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+            const existingKey = messagesQueryKey(opcodeUrl, sessionID, directory);
             const old = queryClient.getQueryData<MessageListResponse>(existingKey);
             const idx = old?.findIndex((m) => m.info.id === (partForMerge as { messageID: string }).messageID) ?? -1;
             if (idx !== -1) {
@@ -1706,7 +1875,7 @@ export const useEphemeralSessionSSE = (
           if (sid !== sessionID) return;
           const mid = p.messageID as string; const pid = (p.partID as string) ?? (p.id as string); const delta = p.delta as string;
           if (!mid || !pid || !delta) return;
-          const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+          const key = messagesQueryKey(opcodeUrl, sessionID, directory);
           queryClient.setQueryData<MessageListResponse>(key, (old) => {
             if (!old) return old;
             const idx = old.findIndex((m) => m.info.id === mid);
@@ -1745,13 +1914,13 @@ export const useEphemeralSessionSSE = (
           const sid = p.sessionID as string;
           const mid = p.messageID as string;
           if (sid !== sessionID) return;
-          const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const;
+          const key = messagesQueryKey(opcodeUrl, sessionID, directory);
           queryClient.setQueryData<MessageListResponse>(key, (old) => old?.filter((m) => m.info.id !== mid) ?? old);
         } else if (t === "session.idle" || t === "session.status") {
           const sid = (p.sessionID as string) ?? (p.sessionId as string);
           if (sid && sid !== sessionID) return;
           if (t === "session.idle") {
-            queryClient.invalidateQueries({ queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory] });
+            queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
             queryClient.invalidateQueries({ queryKey: ["session-status-db"] });
           }
         }

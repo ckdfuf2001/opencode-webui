@@ -19,7 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useMessageCount, ensureMessageLoaded, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -37,7 +37,7 @@ import { useContextUsage, markSessionCompacted } from "@/hooks/useContextUsage";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { PermissionResponse } from "@/api/types";
+import type { PermissionResponse, MessageWithParts, MessageListResponse } from "@/api/types";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
 import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
@@ -129,7 +129,10 @@ export function SessionDetail() {
   useLoadPendingPermissions(openCodeClient, sessionId, descendantIDs);
   useLoadPendingQuestions(openCodeClient, sessionId);
 
-  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory, 60);
+  // 폴링은 최근 N개만 (전체 목록 폴링이 메모리 누수의 주범 — DB 직접 읽기, GB 전체 직렬화 없음).
+  const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory, RECENT_MESSAGE_LIMIT);
+  // 개수 전용 COUNT(*) — 본문을 읽지 않으므로 상단에 표기해도 부담이 없다
+  const { data: messageCount } = useMessageCount(sessionId);
   const { data: queuedForBadge = [] } = useQueuedChats(sessionId ?? '')
   // 고정 개수만 보여준다: DOM에는 항상 최대 WINDOW_SIZE개 (메모리/DOM 절약).
   // - windowStart === null: 하단 고정(마지막 N개)
@@ -197,16 +200,23 @@ export function SessionDetail() {
   // 길이 변화 처리: 대량 감소(컴팩트/트렁케이트) → 하단 고정,
   // ON이면 새 메시지가 오면 히스토리 열람 중이라도 최신으로 복귀 + 핀.
   // OFF면 내가 보낸 턴만 하단 고정, 나머지는 화면 유지.
+  // 주문형 로드(구형 구간 prepend)는 len이 늘어도 핀하지 않는다 — 점프 중 화면을 유지해야 한다.
+  const prevFirstIdRef = useRef<string | null>(null);
   useEffect(() => {
     const len = baseMessages?.length ?? 0;
     const prev = prevMsgLenRef.current;
     prevMsgLenRef.current = len;
+    const firstId = len > 0 ? baseMessages![0]!.info.id : null;
+    const prevFirst = prevFirstIdRef.current;
+    prevFirstIdRef.current = firstId;
     if (len === 0 || prev === 0) return; // 첫 로드/세션전환: 하단 고정 유지
     if (len < prev - 10) {
       setWindowStart(null);
       return;
     }
     if (len <= prev) return;
+    // 맨 앞 ID가 바뀌었으면 꼬리 추가가 아닌 구형 prepend → 점프/열람 위치 유지
+    if (prevFirst != null && firstId !== prevFirst) return;
     if (effectiveAutoScroll) {
       pendingLatestPinRef.current = true;
       setWindowStart(null);
@@ -1006,22 +1016,24 @@ export function SessionDetail() {
   
 
   // 로그/검색/런 패널에서 해당 채팅으로 이동. 타겟이 윈도우 밖이면
-  // 먼저 포함되게 옮기고(커밋 후 엘리먼트가 생긴다), 최대 12프레임 재시도한다.
+  // 먼저 포함되게 옮기고(커밋 후 엘리먼트가 생긴다), 최대 30프레임 재시도한다.
+  // 폴링은 최근 N개만 들고 있으므로, 타겟이 캐시에 없으면 range API로
+  // 주문형 로드한 뒤 이동한다 (전체 목록 폴링 없이 구형 메시지 접근).
   const scrollToMessage = useCallback((messageID: string) => {
     setHighlightedMessageID(messageID);
     markDisengaged();
     navLockUntilRef.current = Date.now() + 1200;
-    const list = baseMessagesRef.current;
-    if (list) {
-      const idx = list.findIndex((m) => m.info.id === messageID);
-      if (idx >= 0) {
-        const len = list.length;
-        const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
-        if (idx < cur || idx >= cur + WINDOW_SIZE) {
-          setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
-        }
+    const baseOf = (list: MessageWithParts[] | undefined) => {
+      if (!list) return undefined;
+      const editIndex = hiddenAfterID ? list.findIndex((m) => m.info.id === hiddenAfterID) : -1;
+      return editIndex >= 0 ? list.slice(0, editIndex + 1) : list;
+    };
+    const moveWindowTo = (idx: number, len: number) => {
+      const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
+      if (idx < cur || idx >= cur + WINDOW_SIZE) {
+        setWindowStart(Math.max(0, Math.min(idx - 5, len - WINDOW_SIZE)));
       }
-    }
+    };
     let tries = 0;
     const attempt = () => {
       const el = document.getElementById(`message-${messageID}`);
@@ -1031,11 +1043,32 @@ export function SessionDetail() {
       }
       if (tries++ < 30) requestAnimationFrame(attempt);
     };
-    requestAnimationFrame(() => requestAnimationFrame(attempt));
-  }, [markDisengaged]);
+    const base = baseOf(baseMessagesRef.current);
+    const idx = base ? base.findIndex((m) => m.info.id === messageID) : -1;
+    if (idx >= 0 && base) {
+      moveWindowTo(idx, base.length);
+      requestAnimationFrame(() => requestAnimationFrame(attempt));
+      return;
+    }
+    if (!sessionId) {
+      requestAnimationFrame(() => requestAnimationFrame(attempt));
+      return;
+    }
+    void ensureMessageLoaded(queryClient, opcodeUrl, sessionId, repoDirectory, messageID).then((ok) => {
+      if (ok) {
+        const fresh = queryClient.getQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, sessionId, repoDirectory));
+        const next = baseOf(fresh);
+        const i2 = next ? next.findIndex((m) => m.info.id === messageID) : -1;
+        if (i2 >= 0 && next) moveWindowTo(i2, next.length);
+      }
+      requestAnimationFrame(() => requestAnimationFrame(attempt));
+    });
+  }, [markDisengaged, hiddenAfterID, queryClient, opcodeUrl, sessionId, repoDirectory]);
 
   const [searchParams, setSearchParams] = useSearchParams();
 
+  // 존재하지 않는 ID로의 반복 range 호출을 막는 가드
+  const deepLinkMissRef = useRef<string | null>(null);
   useEffect(() => {
     const msgFromQuery = searchParams.get('msg');
     const hash = window.location.hash;
@@ -1044,7 +1077,14 @@ export function SessionDetail() {
     if (!msgID) return;
     if (!messages || !baseMessages) return;
     const idx = baseMessages.findIndex((m) => m.info.id === msgID);
-    if (idx === -1) return;
+    // 캐시에 없어도 scrollToMessage가 range API로 주문형 로드 후 이동한다.
+    // 단, 로드 실패한 ID는 폴링마다 재시도하지 않는다.
+    if (idx === -1) {
+      if (deepLinkMissRef.current === msgID) return;
+      deepLinkMissRef.current = msgID;
+    } else {
+      deepLinkMissRef.current = null;
+    }
     // 윈도우 포함 + 스크롤 재시도는 scrollToMessage가 담당하므로
     // 여기서는 파라미터만 소비한다 (재실행돼도 clear済라 바로 리턴, 루프 없음)
     if (msgFromQuery) setSearchParams({}, { replace: true });
@@ -1342,6 +1382,7 @@ if (results.length > 0) {
                 isStreaming={isStreaming}
                 isCancelled={isCancelledBadge}
                 pendingPermissions={headerPendingPermissions}
+        messageCount={messageCount?.total}
         opcodeUrl={opcodeUrl}
         repoDirectory={repoDirectory}
         onFileBrowserOpen={() => setFileBrowserOpen(true)}
@@ -1594,7 +1635,7 @@ if (results.length > 0) {
       <SessionJumpDialog
         open={jumpOpen}
         onClose={() => setJumpOpen(false)}
-        messages={messages}
+        sessionId={sessionId}
         onJump={(id) => {
           // 모달(스크롤 잠금·포커스 복원·닫힘 애니메이션)이 끝난 뒤 이동해야
           // smooth 스크롤이 중간에 끊기거나 무시되지 않는다.

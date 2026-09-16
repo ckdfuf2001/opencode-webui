@@ -3,9 +3,10 @@ import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import {
   searchMessages,
+  countMessageMatches,
   expandMessage,
-  indexSessionMessages,
   indexAllSessions,
+  syncSessionMessages,
 } from '../services/fts-indexer'
 import {
   searchCommits,
@@ -19,7 +20,7 @@ import { listAllIndexedRepos } from '../services/git-indexer'
 import { buildRecall } from '../services/recall'
 import { logger } from '../utils/logger'
 
-const SearchSchema = z.object({ q: z.string().max(500).optional(), k: z.coerce.number().int().min(1).max(50).optional() })
+const SearchSchema = z.object({ q: z.string().max(500).optional(), k: z.coerce.number().int().min(1).max(50).optional(), offset: z.coerce.number().int().min(0).max(10000).optional() })
 const ExpandSchema = z.object({ messageId: z.string().min(1), n: z.coerce.number().int().min(0).max(20).optional() })
 const ReindexMessagesSchema = z.object({ sessionId: z.string().optional() })
 const ReindexCommitsSchema = z.object({ repoId: z.coerce.number().int().optional(), force: z.boolean().optional() })
@@ -33,16 +34,21 @@ export function createSearchRoutes(db: Database) {
       const parsed = SearchSchema.parse({
         q: c.req.query('q'),
         k: c.req.query('k') ? Number(c.req.query('k')) : undefined,
+        offset: c.req.query('offset') ? Number(c.req.query('offset')) : undefined,
       })
       const repoIdRaw = c.req.query('repoId')
       const repoId = repoIdRaw != null && repoIdRaw !== '' ? parseInt(repoIdRaw, 10) : undefined
       const sessionId = c.req.query('sessionId') || undefined
-      const hits = searchMessages(db, parsed.q || '', {
+      const opts = {
         k: parsed.k,
+        offset: parsed.offset,
         repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
         sessionId,
-      })
-      return c.json({ hits })
+      }
+      const hits = searchMessages(db, parsed.q || '', opts)
+      const total = countMessageMatches(db, parsed.q || '', opts)
+      const offset = parsed.offset ?? 0
+      return c.json({ hits, total, hasMore: offset + hits.length < total })
     } catch (error) {
       if (error instanceof z.ZodError) return c.json({ error: 'Invalid query', details: error.issues }, 400)
       logger.error('Failed to search messages:', error)
@@ -71,7 +77,7 @@ export function createSearchRoutes(db: Database) {
       const body = await c.req.json().catch(() => ({}))
       const parsed = ReindexMessagesSchema.parse(body ?? {})
       if (parsed.sessionId) {
-        const n = await indexSessionMessages(db, parsed.sessionId)
+        const n = await syncSessionMessages(db, parsed.sessionId)
         return c.json({ sessionId: parsed.sessionId, indexed: n })
       }
       const total = await indexAllSessions(db)

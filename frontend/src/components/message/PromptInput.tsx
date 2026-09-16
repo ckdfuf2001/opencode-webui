@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from 'react'
-import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap, clearCancelledUntilNextSend, hasActiveSend } from '@/hooks/useOpenCode'
+import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap, clearCancelledUntilNextSend, hasActiveSend, RECENT_MESSAGE_LIMIT } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
@@ -174,7 +174,8 @@ export function PromptInput({
     window.addEventListener('queue-allow-interrupt', handler as EventListener)
     return () => window.removeEventListener('queue-allow-interrupt', handler as EventListener)
   }, [sessionID])
-  const { data: messages } = useMessages(opcodeUrl, sessionID, directory)
+  // SessionDetail과 같은 캐시(최근 N개)를 공유한다 — 별도 limit/폴링을 두면 이중 풀링이 된다.
+  const { data: messages } = useMessages(opcodeUrl, sessionID, directory, RECENT_MESSAGE_LIMIT, { poll: false })
   const sessionData = useSession(opcodeUrl, sessionID, directory)
   const session = sessionData.data as SessionWithModel | undefined
 const { data: config } = useConfig(opcodeUrl)

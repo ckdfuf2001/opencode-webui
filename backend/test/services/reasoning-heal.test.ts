@@ -5,11 +5,17 @@ vi.mock('../../src/services/opencode-db', () => ({
   deleteSingleChildlessMessage: vi.fn(),
 }))
 
+vi.mock('../../src/services/session-message-db', () => ({
+  recentSessionMessages: vi.fn(),
+}))
+
 import { healReasoningTail, healAbnormalTailIfNeeded, classifyTail, findLastGoodModel } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage } from '../../src/services/opencode-db'
+import { recentSessionMessages } from '../../src/services/session-message-db'
 
 const truncateMock = truncateSessionMessages as unknown as ReturnType<typeof vi.fn>
 const deleteMock = deleteSingleChildlessMessage as unknown as ReturnType<typeof vi.fn>
+const recentMock = recentSessionMessages as unknown as ReturnType<typeof vi.fn>
 
 function userMsg(id: string, text: string, created: number) {
   return {
@@ -52,14 +58,20 @@ function otherErrorMsg(id: string, created: number) {
 }
 
 function mockMessageList(messages: unknown[]) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => ({ ok: true, json: async () => messages })),
-  )
+  recentMock.mockResolvedValue({ total: messages.length, messages })
+}
+
+function mockMessageListSequence(lists: unknown[][]) {
+  for (const messages of lists) {
+    recentMock.mockResolvedValueOnce({ total: messages.length, messages })
+  }
+  const last = lists[lists.length - 1] ?? []
+  recentMock.mockResolvedValue({ total: last.length, messages: last })
 }
 
 describe('healReasoningTail', () => {
   beforeEach(() => {
+    recentMock.mockReset()
     truncateMock.mockReset()
     truncateMock.mockResolvedValue({
       messagesRemoved: 2,
@@ -115,11 +127,8 @@ describe('healReasoningTail', () => {
     expect(truncateMock).not.toHaveBeenCalled()
   })
 
-  it('returns unhealed when the message list request fails', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: false, status: 500 })),
-    )
+  it('returns unhealed when the message store is unavailable', async () => {
+    recentMock.mockRejectedValueOnce(new Error('db down'))
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['fix the bug'])
     expect(res.healed).toBe(false)
     expect(truncateMock).not.toHaveBeenCalled()
@@ -133,21 +142,19 @@ describe('healReasoningTail', () => {
   it('sweeps an older trailing mismatch stub after truncating our turn', async () => {
     // 실제 케이스 재현: [u_old, err_old(poison), u_new] + 실패 → u_new 절단 후 err_old 단건 삭제
     const now = Date.now()
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => [
+    mockMessageListSequence([[
       userMsg('u_old', 'old question', now - 300_000),
       mismatchErrorMsg('err_old', now - 290_000),
       userMsg('u_new', 'new question', now - 5_000),
-    ] })
+    ],
     // truncate 이후 꼬리: [u_old, err_old] → err_old 삭제 → [u_old] → stop
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => [
+    [
       userMsg('u_old', 'old question', now - 300_000),
       mismatchErrorMsg('err_old', now - 290_000),
-    ] })
-    fetchMock.mockResolvedValue({ ok: true, json: async () => [
+    ],
+    [
       userMsg('u_old', 'old question', now - 300_000),
-    ] })
-    vi.stubGlobal('fetch', fetchMock)
+    ]])
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
     expect(res.healed).toBe(true)
     expect(res.truncatedMessageId).toBe('u_new')
@@ -157,17 +164,15 @@ describe('healReasoningTail', () => {
 
   it('does not delete trailing errors of other kinds', async () => {
     const now = Date.now()
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => [
+    mockMessageListSequence([[
       userMsg('u_old', 'old question', now - 300_000),
       otherErrorMsg('err_quota', now - 290_000),
       userMsg('u_new', 'new question', now - 5_000),
-    ] })
-    fetchMock.mockResolvedValue({ ok: true, json: async () => [
+    ],
+    [
       userMsg('u_old', 'old question', now - 300_000),
       otherErrorMsg('err_quota', now - 290_000),
-    ] })
-    vi.stubGlobal('fetch', fetchMock)
+    ]])
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
     expect(res.healed).toBe(true)
     expect(deleteMock).not.toHaveBeenCalled()
@@ -176,19 +181,17 @@ describe('healReasoningTail', () => {
 
   it('stops the sweep when delete is refused (has children)', async () => {
     const now = Date.now()
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => [
+    mockMessageListSequence([[
       userMsg('u_old', 'old question', now - 300_000),
       mismatchErrorMsg('err_old', now - 290_000),
       userMsg('u_new', 'new question', now - 5_000),
-    ] })
+    ],
     // truncate로 u_new이 사라진 뒤 꼬리: [u_old, err_old] → 삭제 시도 → 거부(null)
-    fetchMock.mockResolvedValue({ ok: true, json: async () => [
+    [
       userMsg('u_old', 'old question', now - 300_000),
       mismatchErrorMsg('err_old', now - 290_000),
-    ] })
+    ]])
     deleteMock.mockResolvedValue(null)
-    vi.stubGlobal('fetch', fetchMock)
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
     expect(res.healed).toBe(true)
     expect(deleteMock).toHaveBeenCalledTimes(1)
@@ -198,21 +201,19 @@ describe('healReasoningTail', () => {
   it('removes a buried mismatch stub behind a kept user message', async () => {
     // 실제 세션 재현: [u1, err_old, u2, quotaErr, u3new] → u3 절단 후 err_old만 삭제
     const now = Date.now()
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => [
+    mockMessageListSequence([[
       userMsg('u1', 'q1', now - 600_000),
       mismatchErrorMsg('err_old', now - 590_000),
       userMsg('u2', 'q2', now - 300_000),
       otherErrorMsg('err_quota', now - 290_000),
       userMsg('u3new', 'q3', now - 5_000),
-    ] })
-    fetchMock.mockResolvedValue({ ok: true, json: async () => [
+    ],
+    [
       userMsg('u1', 'q1', now - 600_000),
       mismatchErrorMsg('err_old', now - 590_000),
       userMsg('u2', 'q2', now - 300_000),
       otherErrorMsg('err_quota', now - 290_000),
-    ] })
-    vi.stubGlobal('fetch', fetchMock)
+    ]])
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['q3'])
     expect(res.healed).toBe(true)
     expect(deleteMock).toHaveBeenCalledTimes(1)
@@ -222,17 +223,15 @@ describe('healReasoningTail', () => {
 
   it('does not touch a mismatch stub behind a healthy assistant turn', async () => {
     const now = Date.now()
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => [
+    mockMessageListSequence([[
       mismatchErrorMsg('err_ancient', now - 600_000),
       assistantMsg('good', now - 300_000),
       userMsg('u_new', 'new question', now - 5_000),
-    ] })
-    fetchMock.mockResolvedValue({ ok: true, json: async () => [
+    ],
+    [
       mismatchErrorMsg('err_ancient', now - 600_000),
       assistantMsg('good', now - 300_000),
-    ] })
-    vi.stubGlobal('fetch', fetchMock)
+    ]])
     const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
     expect(res.healed).toBe(true)
     expect(deleteMock).not.toHaveBeenCalled()
@@ -274,6 +273,7 @@ describe('findLastGoodModel', () => {
 
 describe('healAbnormalTailIfNeeded', () => {
   beforeEach(() => {
+    recentMock.mockReset()
     truncateMock.mockReset()
     truncateMock.mockResolvedValue({ messagesRemoved: 2, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 3 })
     deleteMock.mockReset()

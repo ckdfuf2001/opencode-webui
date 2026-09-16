@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { createOpenCodeClient } from '@/api/opencode'
 import { useCreateSession } from '@/hooks/useOpenCode'
+import { messagesQueryKey } from '@/hooks/useOpenCode'
 import type { CommandWithScope } from '@/hooks/useCommands'
 import { useCreateCommandRun, useFinishCommandRun } from '@/hooks/useCommandRuns'
 import { useSettings } from '@/hooks/useSettings'
@@ -209,7 +210,7 @@ export function useCommandHandler({
             // 커맨드도 채팅처럼 낙관적 유저 메시지를 먼저 보여준다 — 빈 카드 방지
             const optimisticID = `optimistic_user_${Date.now()}_${Math.random()}`
             const displayText = args ? `/${command.name} ${args}` : `/${command.name}`
-            const key = ["opencode", "messages", opcodeUrl, sessionID, directory] as const
+            const key = messagesQueryKey(opcodeUrl, sessionID, directory)
             try {
               await queryClient.cancelQueries({ queryKey: key })
               const optimisticMsg = {

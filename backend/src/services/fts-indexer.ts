@@ -101,6 +101,74 @@ export async function indexAllSessions(db: Database): Promise<number> {
   return total
 }
 
+
+/**
+ * 세션 FTS 인덱스 증분 동기화 — opencode DB를 ATTACH해서 SQL만으로 처리한다.
+ * 삭제된 메시지는 인덱스에서 제거하고, 새로 들어온 메시지만 추가한다.
+ * 메시지 본문을 JS로 통째 읽지 않으므로(집계는 SQLite 내부) 전체 로드가 없다.
+ * 검색 메뉴 진입 시 1회 호출해 인덱스를 최신으로 맞춘다.
+ */
+export async function syncSessionMessages(db: Database, sessionId: string): Promise<number> {
+  const override = (process.env.OPENCODE_DB_PATH || '').trim()
+  const dbPath = override || (await getOpenCodeDbPath())
+  if (!dbPath) return 0
+  const oc = new (await import('bun:sqlite')).Database(dbPath, { readonly: true })
+  try {
+    const sess = oc
+      .query('SELECT directory FROM session WHERE id = ?')
+      .get(sessionId) as { directory: string | null } | undefined
+    if (!sess || !sess.directory) return 0
+    let repoId = resolveRepoId(db, sess.directory)
+    if (repoId == null && isHostDirectory(sess.directory)) repoId = HOST_REPO_ID
+
+    const escaped = dbPath.replace(/'/g, "''")
+    db.exec(`ATTACH DATABASE '${escaped}' AS oc`)
+    try {
+      // 1) 지워진 메시지 정리
+      db.query(
+        'DELETE FROM session_messages_fts WHERE session_id = ? AND message_id NOT IN (SELECT id FROM oc.message WHERE session_id = ?)',
+      ).run(sessionId, sessionId)
+      // 2) 새 메시지만 추가 (turn_index는 전체 순서 기준 ROW_NUMBER)
+      const missing = db.query(
+        `SELECT id, data, tc, ti FROM (
+           SELECT id, data, time_created AS tc, rowid AS r,
+                  ROW_NUMBER() OVER (ORDER BY time_created, rowid) - 1 AS ti
+           FROM oc.message WHERE session_id = ?
+         ) WHERE id NOT IN (SELECT message_id FROM session_messages_fts WHERE session_id = ?)
+         ORDER BY tc, r`,
+      ).all(sessionId, sessionId) as Array<{ id: string; data: string; tc: number; ti: number }>
+      if (missing.length === 0) return 0
+      const textOf = db.prepare(
+        `SELECT group_concat(json_extract(p.data,'$.text'), char(10)) AS tx
+         FROM oc.part p WHERE p.message_id = ?
+           AND json_extract(p.data,'$.type') = 'text'`,
+      )
+      const upsert = db.prepare(
+        `INSERT INTO session_messages_fts (text, session_id, message_id, role, repo_id, turn_index, ts)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      let inserted = 0
+      for (const m of missing) {
+        let role = 'unknown'
+        try {
+          const parsed = JSON.parse(m.data) as { role?: string }
+          role = parsed.role ?? 'unknown'
+        } catch {
+          // ignore malformed message data
+        }
+        const t = textOf.get(m.id) as { tx: string | null } | undefined
+        upsert.run(t?.tx ?? '', sessionId, m.id, role, repoId ?? null, m.ti, m.tc)
+        inserted++
+      }
+      return inserted
+    } finally {
+      db.exec('DETACH DATABASE oc')
+    }
+  } finally {
+    oc.close()
+  }
+}
+
 function collectPartText(oc: import('bun:sqlite').Database, messageId: string): string {
   let rows: Array<{ data: string }>
   try {
@@ -132,12 +200,22 @@ export interface MessageSearchHit {
   snippet: string
 }
 
-export function searchMessages(
-  db: Database,
-  q: string,
-  opts: { k?: number; repoId?: number | null; sessionId?: string } = {},
-): MessageSearchHit[] {
-  const k = Math.max(1, Math.min(50, opts.k ?? 10))
+
+export interface MessageSearchOpts {
+  k?: number
+  offset?: number
+  repoId?: number | null
+  sessionId?: string
+}
+
+interface SearchFilter {
+  where: string[]
+  params: (string | number)[]
+  orderBy: string
+}
+
+/** 분할 검색용 공통 필터 — searchMessages와 countMessageMatches가 공유한다. */
+function buildMessageSearchFilter(q: string, opts: MessageSearchOpts): SearchFilter {
   const trimmed = q.trim()
   // 단일 문자 prefix (a*)는 trigram FTS5 prefix로 매칭이 안 되므로 LIKE fallback
   if (/^\p{L}\*$/u.test(trimmed) || /^\p{N}\*$/u.test(trimmed)) {
@@ -152,27 +230,7 @@ export function searchMessages(
       where.push('session_id = ?')
       params.push(opts.sessionId)
     }
-    const sql = `
-      SELECT session_id AS s, message_id AS m, role AS r, repo_id AS rid,
-             turn_index AS ti, ts AS t,
-             snippet(session_messages_fts, 0, '[', ']', '\u2026', ${SNIPPET_SIZE}) AS snip
-      FROM session_messages_fts
-      WHERE ${where.join(' AND ')}
-      ORDER BY ts DESC
-      LIMIT ?`
-    params.push(k)
-    const rows = db.query(sql).all(...(params as any[])) as Array<{
-      s: string; m: string; r: string; rid: number | null; ti: number; t: number; snip: string
-    }>
-    return rows.map((row) => ({
-      sessionId: row.s,
-      messageId: row.m,
-      role: row.r,
-      repoId: row.rid,
-      turnIndex: row.ti,
-      ts: row.t,
-      snippet: row.snip,
-    }))
+    return { where, params, orderBy: 'ts DESC' }
   }
   if (trimmed === '*') {
     const where: string[] = ['1 = 1']
@@ -185,31 +243,10 @@ export function searchMessages(
       where.push('session_id = ?')
       params.push(opts.sessionId)
     }
-    const sql = `
-      SELECT session_id AS s, message_id AS m, role AS r, repo_id AS rid,
-             turn_index AS ti, ts AS t,
-             snippet(session_messages_fts, 0, '[', ']', '\u2026', ${SNIPPET_SIZE}) AS snip
-      FROM session_messages_fts
-      WHERE ${where.join(' AND ')}
-      ORDER BY ts DESC
-      LIMIT ?`
-    params.push(k)
-    const rows = db.query(sql).all(...(params as any[])) as Array<{
-      s: string; m: string; r: string; rid: number | null; ti: number; t: number; snip: string
-    }>
-    return rows.map((row) => ({
-      sessionId: row.s,
-      messageId: row.m,
-      role: row.r,
-      repoId: row.rid,
-      turnIndex: row.ti,
-      ts: row.t,
-      snippet: row.snip,
-    }))
+    return { where, params, orderBy: 'ts DESC' }
   }
-  const query = buildFtsQuery(q)
   const where: string[] = ['session_messages_fts MATCH ?']
-  const params: (string | number)[] = [query]
+  const params: (string | number)[] = [buildFtsQuery(q)]
   if (opts.repoId != null) {
     where.push('repo_id = ?')
     params.push(opts.repoId)
@@ -218,19 +255,15 @@ export function searchMessages(
     where.push('session_id = ?')
     params.push(opts.sessionId)
   }
-  const sql = `
-    SELECT session_id AS s, message_id AS m, role AS r, repo_id AS rid,
-           turn_index AS ti, ts AS t,
-           snippet(session_messages_fts, 0, '[', ']', '\u2026', ${SNIPPET_SIZE}) AS snip
-    FROM session_messages_fts
-    WHERE ${where.join(' AND ')}
-    ORDER BY bm25(session_messages_fts)
-    LIMIT ?`
-  params.push(k)
-  const rows = db.query(sql).all(...(params as any[])) as Array<{
-    s: string; m: string; r: string; rid: number | null; ti: number; t: number; snip: string
-  }>
-  return rows.map((row) => ({
+  return { where, params, orderBy: 'bm25(session_messages_fts)' }
+}
+
+type MessageSearchRow = {
+  s: string; m: string; r: string; rid: number | null; ti: number; t: number; snip: string
+}
+
+function mapSearchRow(row: MessageSearchRow): MessageSearchHit {
+  return {
     sessionId: row.s,
     messageId: row.m,
     role: row.r,
@@ -238,7 +271,42 @@ export function searchMessages(
     turnIndex: row.ti,
     ts: row.t,
     snippet: row.snip,
-  }))
+  }
+}
+
+const SEARCH_SELECT = `
+  SELECT session_id AS s, message_id AS m, role AS r, repo_id AS rid,
+         turn_index AS ti, ts AS t,
+         snippet(session_messages_fts, 0, '[', ']', '\u2026', ${SNIPPET_SIZE}) AS snip
+  FROM session_messages_fts`
+
+/** 분할 검색 — k개씩 offset부터. 전체 로드 없이 FTS 인덱스에서 페이징한다. */
+export function searchMessages(
+  db: Database,
+  q: string,
+  opts: MessageSearchOpts = {},
+): MessageSearchHit[] {
+  const k = Math.max(1, Math.min(50, opts.k ?? 10))
+  const offset = Math.max(0, Math.min(10000, opts.offset ?? 0))
+  const { where, params, orderBy } = buildMessageSearchFilter(q, opts)
+  const sql = `${SEARCH_SELECT}
+    WHERE ${where.join(' AND ')}
+    ORDER BY ${orderBy}
+    LIMIT ? OFFSET ?`
+  const rows = db.query(sql).all(...(params as any[]), k, offset) as MessageSearchRow[]
+  return rows.map(mapSearchRow)
+}
+
+/** 분할 검색의 전체 매칭 수 — "더 보기" 여부 판단용. */
+export function countMessageMatches(
+  db: Database,
+  q: string,
+  opts: MessageSearchOpts = {},
+): number {
+  const { where, params } = buildMessageSearchFilter(q, opts)
+  const sql = `SELECT COUNT(*) AS c FROM session_messages_fts WHERE ${where.join(' AND ')}`
+  const row = db.query(sql).get(...(params as any[])) as { c: number }
+  return row.c
 }
 
 export interface MessageExpandRow {

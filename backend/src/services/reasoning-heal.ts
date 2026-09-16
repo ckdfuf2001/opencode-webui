@@ -1,6 +1,6 @@
-import { ensureServerAuth } from './opencode-auth'
 import { logger } from '../utils/logger'
 import { truncateSessionMessages, deleteSingleChildlessMessage } from './opencode-db'
+import { recentSessionMessages } from './session-message-db'
 
 interface LoosePart {
   type?: string
@@ -36,7 +36,6 @@ export interface ReasoningHealResult {
   suggestedModel?: { providerID: string; modelID: string }
 }
 
-const MESSAGE_LIST_TIMEOUT_MS = 20_000
 /** 마지막 user 메시지가 이보다 오래됐으면 남의 턴으로 보고 자르지 않는다. */
 const HEAL_FRESHNESS_MS = 10 * 60_000
 /** trailing stub 삭제 상한 (연쇄 삭제 폭주 방지) */
@@ -167,27 +166,17 @@ function isMismatchError(msg: LooseMessage): boolean {
 }
 
 async function fetchMessageList(
-  base: string,
   sessionID: string,
-  directory: string | undefined,
 ): Promise<{ messages?: LooseMessage[]; reason?: string }> {
-  const dirQs = directory ? `?directory=${encodeURIComponent(directory)}` : ''
-  let listRes: Response
+  // 꼬리 복구에 필요한 건 끝쪽 최대 20개뿐 — opencode HTTP 목록 API는
+  // 페이지네이션이 없어 전체를 불러오므로 DB에서 tail만 읽는다.
   try {
-    listRes = await fetch(`${base}/session/${sessionID}/message${dirQs}`, {
-      headers: ensureServerAuth({}),
-      signal: AbortSignal.timeout(MESSAGE_LIST_TIMEOUT_MS),
-    })
+    const result = await recentSessionMessages(sessionID, MAX_SWEEP_SCAN)
+    if (!result) return { reason: 'message store unavailable' }
+    if (!Array.isArray(result.messages) || result.messages.length === 0) return { reason: 'no messages' }
+    return { messages: result.messages as unknown as LooseMessage[] }
   } catch (e) {
-    return { reason: `message list fetch failed: ${(e as Error)?.message ?? e}` }
-  }
-  if (!listRes.ok) return { reason: `message list HTTP ${listRes.status}` }
-  try {
-    const messages = (await listRes.json()) as LooseMessage[]
-    if (!Array.isArray(messages) || messages.length === 0) return { reason: 'no messages' }
-    return { messages }
-  } catch {
-    return { reason: 'message list parse failed' }
+    return { reason: `tail read failed: ${(e as Error)?.message ?? e}` }
   }
 }
 
@@ -215,7 +204,7 @@ export async function healReasoningTail(
   const texts = candidates.map((t) => (t ?? '').trim()).filter((t) => t.length > 0)
   if (texts.length === 0) return { healed: false, reason: 'empty expected text' }
 
-  const { messages, reason } = await fetchMessageList(base, sessionID, directory)
+  const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages) return { healed: false, reason }
 
   let lastUser: LooseMessage | undefined
@@ -263,7 +252,7 @@ export async function healReasoningTail(
   //  user 메시지와 다른 종류 에러 stub은 유지하고 건너뛴다.)
   let stubsRemoved = 0
   try {
-    const tail = await fetchMessageList(base, sessionID, directory)
+    const tail = await fetchMessageList(sessionID)
     if (tail.messages) {
       const list = tail.messages
       const targets: string[] = []
@@ -314,7 +303,7 @@ export async function healAbnormalTailIfNeeded(
   directory: string | undefined,
   opts?: { force?: boolean; allow?: TailKind[] },
 ): Promise<ReasoningHealResult> {
-  const { messages, reason } = await fetchMessageList(base, sessionID, directory)
+  const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages || messages.length === 0) return { healed: false, reason: reason ?? 'no messages' }
 
   const last = messages[messages.length - 1]
@@ -359,7 +348,7 @@ export async function healAbnormalTailIfNeeded(
     logger.warn(`Pre-dispatch abnormal heal for session ${sessionID}: last ${lastRole} was abnormal (${kind}), truncated from user ${lastUser.info.id} (removed ${result.messagesRemoved} messages)`)
     // ghost/mismatch stub도 같이 쓸어냄 (위 healReasoningTail의 2단계와 유사하지만 여기선 더 넓게)
     try {
-      const tail = await fetchMessageList(base, sessionID, directory)
+      const tail = await fetchMessageList(sessionID)
       if (tail.messages) {
         for (let i = tail.messages.length - 1; i >= 0; i--) {
           const m = tail.messages[i]

@@ -44,15 +44,23 @@ export interface CommitDetail {
   deletions: number | null
 }
 
+export interface MessageSearchPage {
+  hits: MessageSearchHit[]
+  total: number
+  hasMore: boolean
+}
+
 export async function searchMessages(params: {
   q: string
   k?: number
+  offset?: number
   repoId?: number
   sessionId?: string
-}): Promise<MessageSearchHit[]> {
+}): Promise<MessageSearchPage> {
   const sp = new URLSearchParams()
   if (params.q) sp.set('q', params.q)
   if (params.k != null) sp.set('k', String(params.k))
+  if (params.offset != null) sp.set('offset', String(params.offset))
   if (params.repoId != null) sp.set('repoId', String(params.repoId))
   if (params.sessionId) sp.set('sessionId', params.sessionId)
   const res = await fetch(`${API_BASE_URL}/api/search/messages?${sp.toString()}`)
@@ -60,8 +68,8 @@ export async function searchMessages(params: {
     const err = await res.json().catch(() => ({}))
     throw new Error((err as { error?: string }).error || 'Failed to search messages')
   }
-  const data = (await res.json()) as { hits: MessageSearchHit[] }
-  return data.hits
+  const data = (await res.json()) as { hits: MessageSearchHit[]; total: number; hasMore: boolean }
+  return { hits: data.hits, total: data.total ?? data.hits.length, hasMore: data.hasMore ?? false }
 }
 
 export async function expandMessage(messageId: string, n = 3): Promise<MessageExpandResult> {
