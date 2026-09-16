@@ -781,7 +781,7 @@ describe('preSendStripIfMismatch', () => {
   })
   it('fires strip-all only once per stub (no repeated wipe)', async () => {
     const now = Date.now()
-    // 외국 strip 0건 → strip-all 발동. 같은 stub이 남 o아 있어도 2회째는 스킵.
+    // 외국 strip 0건 → strip-all 발동. 같은 stub이 남아 있어도 2회째는 스킵.
     stripMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
     stripAllMock.mockResolvedValue({ partsRemoved: 9, messagesAffected: 5 })
     mockMessageList([
@@ -796,7 +796,29 @@ describe('preSendStripIfMismatch', () => {
     expect(second.strippedAllParts).toBe(0)
     expect(second.strippedParts).toBe(0)
   })
-  it('skips sweep while the session is busy', async () => {
+  it('caps strip-all fires per session even for fresh stubs', async () => {
+    const now = Date.now()
+    stripMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
+    stripAllMock.mockResolvedValue({ partsRemoved: 9, messagesAffected: 5 })
+    // 실패 반복마다 새 stub(e1→e4)이 생겨도 세션당 3회까지만 발동
+    for (const stub of ['e1', 'e2', 'e3']) {
+      mockMessageList([
+        userMsg('u1', 'hello', now - 60_000),
+        mismatchErrorMsg(stub, now - 50_000),
+      ])
+      const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+      expect(res.strippedAllParts).toBe(9)
+    }
+    stripAllMock.mockClear()
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e4', now - 50_000),
+    ])
+    const fourth = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(stripAllMock).not.toHaveBeenCalled()
+    expect(fourth.strippedAllParts).toBe(0)
+  })
+  it('skips strip and sweep while the session is busy', async () => {
     const now = Date.now()
     vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
       const u = String(url)
@@ -804,8 +826,6 @@ describe('preSendStripIfMismatch', () => {
       return { ok: false, json: async () => ({}) }
     }))
     // fetchMessageList는 DB 경로라 위 stub과 무관하게 따로 mock돼 있음 — 메시지 목록만 재지정
-    stripMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
-    stripAllMock.mockResolvedValue({ partsRemoved: 0, messagesAffected: 0 })
     mockMessageList([
       userMsg('u1', 'hello', now - 60_000),
       mismatchErrorMsg('e1', now - 50_000),
@@ -813,6 +833,8 @@ describe('preSendStripIfMismatch', () => {
     const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
     expect(res.checked).toBe(true)
     expect(res.reason).toMatch(/busy/)
+    expect(stripMock).not.toHaveBeenCalled()
+    expect(stripAllMock).not.toHaveBeenCalled()
     expect(deleteMock).not.toHaveBeenCalled()
     expect(res.stubsRemoved).toBe(0)
   })

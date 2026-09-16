@@ -524,23 +524,49 @@ export interface PreSendStripResult {
 const PRE_SEND_SCAN = 20
 
 /**
- * strip-all 재발동 방지: 같은 mismatch stub에 대해서는 1회만 발동한다.
- * 자식 때문에 sweep이 못 지운 stub이 꼬리에 남으면 매 발송마다 strip-all이
- * 돌아 정상 reasoning까지 벗겨지므로, 발동한 stub id를 세션별로 기록한다.
- * 새 stub(다른 id)가 나타나면 다시 발동한다.
+ * strip-all 재발동 방지: 발동한 stub id를 세션별 집합으로 기억해 같은 stub에는
+ * 1회만 발동한다. 자식 때문에 sweep이 못 지운 stub이 꼬리에 남으면 매 발송마다
+ * strip-all이 돌아 정상 reasoning까지 벗겨지므로, 세션당 총 발동 횟수에도
+ * 상한을 둔다 (실패 반복마다 새 stub이 생겨 집합만으로는 제한이 실효되지 않는다).
  */
-const stripAllFiredFor = new Map<string, string>()
+const stripAllFiredStubs = new Map<string, Set<string>>()
+const stripAllFireCounts = new Map<string, number>()
 const MAX_STRIP_ALL_MARKS = 500
+const MAX_STRIP_ALL_FIRES_PER_SESSION = 3
 /** 테스트용 리셋 */
 export function clearStripAllMarks(): void {
-  stripAllFiredFor.clear()
+  stripAllFiredStubs.clear()
+  stripAllFireCounts.clear()
+}
+function stripAllAlreadyFired(sessionID: string, hitId: string | undefined): boolean {
+  if (!hitId) return false
+  if ((stripAllFireCounts.get(sessionID) ?? 0) >= MAX_STRIP_ALL_FIRES_PER_SESSION) return true
+  return stripAllFiredStubs.get(sessionID)?.has(hitId) ?? false
+}
+function markStripAllFired(sessionID: string, hitId: string | undefined): void {
+  stripAllFireCounts.set(sessionID, (stripAllFireCounts.get(sessionID) ?? 0) + 1)
+  if (!hitId) return
+  let set = stripAllFiredStubs.get(sessionID)
+  if (!set) {
+    set = new Set()
+    stripAllFiredStubs.set(sessionID, set)
+  }
+  set.add(hitId)
+  while (stripAllFiredStubs.size > MAX_STRIP_ALL_MARKS) {
+    const oldest = stripAllFiredStubs.keys().next()
+    if (oldest.done) break
+    const key = oldest.value
+    stripAllFiredStubs.delete(key)
+    stripAllFireCounts.delete(key)
+  }
 }
 
 /**
- * 발송 직전 안전 클렌징: 최근 꼬리(PRE_SEND_SCAN개) 안에 mismatch 에러가 있을
- * 때만 외국 reasoning strip + 자식 없는 stub sweep을 한다. 메시지 truncate는
- * 절대 하지 않는다 — 아직 보내지 않은 이번 텍스트와 무관한 과거 user를
- * 지우면 안 되기 때문이다.
+  * 발송 직전 안전 클렌징: 최근 꼬리(PRE_SEND_SCAN개) 안에 mismatch 에러가 있을
+  * 때만 외국 reasoning strip + 자식 없는 stub sweep을 한다. 메시지 truncate는
+  * 절대 하지 않는다 — 아직 보내지 않은 이번 텍스트와 무관한 과거 user를
+  * 지우면 안 되기 때문이다. 세션이 busy면 strip/sweep 전부 건너뛴다
+  * (cutoff가 최신 user 기준이라 동시 전송 중 스트리밍 턴이 strip 대상이 된다).
  *
  * keep은 outgoing(보내려는 모델)만 쓴다. 세션 조회 폴백은 여기서 제외한다 —
  * UI에서 모델을 바꾼 직후 세션 기록이 아직 이전 모델이면 keep이 반대로 잡혀
@@ -583,6 +609,18 @@ export async function preSendStripIfMismatch(
   // 얹히거나 자식 때문에 sweep이 못 지운 오염이 그대로 남을 수 있다.
   const hit = [...messages].slice(-PRE_SEND_SCAN).reverse().find((m) => m && isMismatchError(m))
   if (!hit) return empty('no mismatch in recent tail', tailIds)
+  // busy면 strip/sweep 전부 건너뛴다. cutoff가 "최신 user 이전"이라 동시 전송
+  // 중이면 스트리밍 턴의 reasoning이 strip 대상에 들어가 live 턴이 깨진다.
+  // pre-send는 발송 직전이라 별도 게이트가 없으므로 여기서 직접 확인한다
+  // (퀴 모드·프록시 직접 경로는 busy 판정을 우회한다).
+  if (await isSessionBusy(base, sessionID, directory)) {
+    logger.warn(`Pre-send strip: session ${sessionID} busy — cleanup skipped`)
+    return {
+      checked: true, strippedParts: 0, strippedMessages: 0, strippedAllParts: 0, strippedAllMessages: 0,
+      stubsRemoved: 0, stubsPending: [], tailIds,
+      reason: 'session busy — pre-send cleanup skipped',
+    }
+  }
   // keep은 outgoing만. 세션 조회 폴백 없음 (위 docstring).
   const keep = outgoing
   let strippedParts = 0
@@ -604,20 +642,13 @@ export async function preSendStripIfMismatch(
   // 단 같은 stub에는 1회만 발동한다 — 자식 때문에 stub이 남으면 매 발송마다
   // strip-all이 돌아 새로 쌓인 정상 reasoning까지 벗겨진다.
   const hitId = typeof hit.info?.id === 'string' && hit.info.id.length > 0 ? hit.info.id : undefined
-  const stripAllDone = !!hitId && stripAllFiredFor.get(sessionID) === hitId
+  const stripAllDone = stripAllAlreadyFired(sessionID, hitId)
   if (strippedParts === 0 && !stripAllDone) {
     try {
       const stripAll = await stripAllReasoningParts(sessionID)
       strippedAllParts = stripAll?.partsRemoved ?? 0
       strippedAllMessages = stripAll?.messagesAffected ?? 0
-      if (hitId) {
-        stripAllFiredFor.set(sessionID, hitId)
-        while (stripAllFiredFor.size > MAX_STRIP_ALL_MARKS) {
-          const oldest = stripAllFiredFor.keys().next()
-          if (oldest.done) break
-          stripAllFiredFor.delete(oldest.value)
-        }
-      }
+      markStripAllFired(sessionID, hitId)
       if (strippedAllParts > 0) {
         logger.warn(`Pre-send strip-all for session ${sessionID}: removed ${strippedAllParts} stale reasoning part(s) in ${strippedAllMessages} message(s) (foreign strip 0 — same-model stale history suspected)`)
       }
@@ -625,20 +656,7 @@ export async function preSendStripIfMismatch(
       logger.warn(`Pre-send strip-all threw for session ${sessionID}:`, e)
     }
   } else if (strippedParts === 0 && stripAllDone) {
-    logger.info(`Pre-send strip-all skipped for session ${sessionID}: already fired for stub ${hitId}`)
-  }
-  // sweep 전 busy 체크: 진행 중 턴의 stub을 지우면 live 턴이 깨진다.
-  // strip(파트 삭제)은 선행해도 상대적으로 안전하지만, sweep(메시지 삭제)은
-  // busy 세션에서 건너뛴다. pre-send는 발송 직전이라 별도 게이트가 없다
-  // (퀴 모드·프록시 직접 경로는 busy 판정을 우회한다).
-  if (await isSessionBusy(base, sessionID, directory)) {
-    logger.warn(`Pre-send strip: session ${sessionID} busy — sweep skipped, strip results stand`)
-    return {
-      checked: true, strippedParts, strippedMessages, strippedAllParts, strippedAllMessages,
-      stubsRemoved: 0, stubsPending: [], tailIds,
-      ...(keep ? { keep } : {}),
-      reason: 'session busy — sweep skipped',
-    }
+    logger.info(`Pre-send strip-all skipped for session ${sessionID}: already fired (stub ${hitId ?? 'unknown'})`)
   }
   const sweep = await sweepPollutedStubs(sessionID)
   const acted = strippedParts > 0 || strippedAllParts > 0
