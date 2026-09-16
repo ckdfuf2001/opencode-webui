@@ -128,6 +128,66 @@ export function Search() {
   }, [filteredHits, expandedId, expandedData, repos])
 
   const [blockOpen, setBlockOpen] = useState(false)
+  // 범위 선택 모드: 시작 행 클릭 → 종료 행 클릭으로 사이 전체 체크
+  const [rangeMode, setRangeMode] = useState(false)
+  const [rangeStart, setRangeStart] = useState<string | null>(null)
+  // 선택 출력: 체크된 것만 같은 양식으로 오버레이에 표시 (null이면 전체)
+  const [outputOverride, setOutputOverride] = useState<string | null>(null)
+
+  const hitKeyOf = (h: any): string =>
+    h.kind === 'message' ? h.messageId : `${h.repoId}:${h.sha}`
+
+  const selectedJson = useMemo(() => {
+    if (selectedHits.size === 0) return ''
+    const arr = filteredHits
+      .filter((h: any) => selectedHits.has(hitKeyOf(h)))
+      .map((h) => {
+        if (h.kind === 'message' && h.messageId && expandedId === h.messageId && expandedData) {
+          return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, expanded: expandedData.rows }
+        }
+        return { kind: h.kind, repo: repoName(h.repoId), repoId: h.repoId, sessionId: h.sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts, snippet: h.snippet, meta: h.meta }
+      })
+    return JSON.stringify(arr, null, 2)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredHits, selectedHits, expandedId, expandedData, repos])
+
+  const handleRowClick = (hit: any) => {
+    if (!rangeMode) {
+      if (hit.kind === 'message' && hit.messageId) void handleExpand(hit.messageId)
+      return
+    }
+    const key = hitKeyOf(hit)
+    if (!key) return
+    if (rangeStart == null) {
+      setRangeStart(key)
+      showToast.info('시작점 선택됨 — 종료점을 누르세요')
+      return
+    }
+    const keys = filteredHits.map(hitKeyOf)
+    const a = keys.indexOf(rangeStart)
+    const b = keys.indexOf(key)
+    if (a === -1 || b === -1) {
+      setRangeStart(key)
+      showToast.info('시작점 선택됨 — 종료점을 누르세요')
+      return
+    }
+    const [from, to] = a <= b ? [a, b] : [b, a]
+    const next = new Set(selectedHits)
+    for (let i = from; i <= to; i++) {
+      const k = keys[i]
+      if (k) next.add(k)
+    }
+    setSelectedHits(next)
+    setRangeStart(null)
+    setRangeMode(false)
+    showToast.success(`${to - from + 1}개 선택됨`)
+  }
+
+  const handleSelectedOutput = () => {
+    if (!selectedJson) return
+    setOutputOverride(selectedJson)
+    setBlockOpen(true)
+  }
 
   const copyText = async (text: string, _label?: string) => {
     try {
@@ -295,19 +355,19 @@ export function Search() {
               </div>
             </div>
 
-            {blockOpen && filteredJson && (
-              <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl min-w-[500px] max-w-[800px]">
-                <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
-                  <span className="text-[11px] font-medium">Recalls JSON {kind !== 'all' ? `(${kind})` : ''}</span>
-                  <button onClick={() => setBlockOpen(false)} className="text-muted-foreground hover:text-foreground p-0.5">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+              {blockOpen && (outputOverride ?? filteredJson) && (
+                <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl min-w-[500px] max-w-[800px]">
+                  <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
+                    <span className="text-[11px] font-medium">Recalls JSON {outputOverride ? '(선택 출력)' : kind !== 'all' ? `(${kind})` : ''}</span>
+                    <button onClick={() => { setBlockOpen(false); setOutputOverride(null) }} className="text-muted-foreground hover:text-foreground p-0.5">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto">
+                    {outputOverride ?? filteredJson}
+                  </pre>
                 </div>
-                <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2.5 max-h-64 overflow-y-auto">
-                  {filteredJson}
-                </pre>
-              </div>
-            )}
+              )}
           </div>
 
           <Tabs value={kind} onValueChange={(v) => setKind(v as any)} className="shrink-0">
@@ -334,6 +394,21 @@ export function Search() {
                   else setSelectedHits(new Set())
                 }} />
                 <span className="text-xs text-muted-foreground">Select all</span>
+                <Button
+                  variant={rangeMode ? 'default' : 'outline'} size="sm" className="h-7 text-xs"
+                  title={rangeMode ? (rangeStart ? '종료점을 누르세요 (취소: 다시 클릭)' : '시작점을 누르세요 (취소: 다시 클릭)') : '범위 선택: 시작 행 → 종료 행'}
+                  onClick={() => { setRangeMode((v) => !v); setRangeStart(null) }}
+                >
+                  범위 선택{rangeMode ? (rangeStart ? ' (종료점…)' : ' (시작점…)') : ''}
+                </Button>
+                {selectedHits.size > 0 && (
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedHits(new Set())}>
+                    선택 해제
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" disabled={selectedHits.size === 0} onClick={handleSelectedOutput} className="gap-1 h-7 text-xs">
+                  선택 출력 ({selectedHits.size})
+                </Button>
                 <Button variant="destructive" size="sm" disabled={selectedHits.size === 0 || deleteMessagesMutation.isPending || deleteCommitsMutation.isPending} onClick={handleBulkDelete} className="ml-auto gap-1">
                   <Trash2 className="w-3.5 h-3.5" /> Delete index ({selectedHits.size})
                 </Button>
@@ -342,8 +417,9 @@ export function Search() {
                 {filteredHits.map((hit: any, i: number) => {
                   const key = hit.kind === 'message' ? hit.messageId : `${hit.repoId}:${hit.sha}`
                   const isMessage = hit.kind === 'message'
+                  const isRangeStart = rangeMode && rangeStart != null && rangeStart === key
                   return (
-                    <div key={key || i} onClick={() => isMessage && hit.messageId && handleExpand(hit.messageId)} className="rounded-md border border-input bg-background p-2.5 space-y-1.5 cursor-pointer hover:border-primary/30">
+                    <div key={key || i} onClick={() => handleRowClick(hit)} className={`rounded-md border p-2.5 space-y-1.5 cursor-pointer hover:border-primary/30 ${isRangeStart ? 'border-primary ring-1 ring-primary/40 bg-primary/5' : 'border-input bg-background'}`}>
                       <div className="flex items-center gap-0 flex-nowrap overflow-hidden rounded-md bg-muted/20">
                         <Checkbox checked={selectedHits.has(key)} onCheckedChange={(v) => {
                           const next = new Set(selectedHits)
