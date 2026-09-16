@@ -238,6 +238,13 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'tool':
       return <ToolCallPart part={part} onFileClick={onFileClick} directory={directory} />
     case 'reasoning': {
+      // 암호문(security) reasoning은 절대 그리지 않는다 — 평문 없이 암호 블록만 있어
+      // 패널·펄스가 떠도 내용이 영원히 안 찬다. 백엔드 security 플래그 또는 인라인 메타로 판별.
+      const pAny = part as unknown as { security?: boolean; metadata?: { openai?: { reasoningEncryptedContent?: string } } }
+      if (pAny.security) return null
+      try {
+        if (typeof pAny.metadata?.openai?.reasoningEncryptedContent === 'string' && pAny.metadata.openai.reasoningEncryptedContent) return null
+      } catch { /* ignore malformed metadata */ }
       const hasReasonText = !!part.text?.trim()
       // showReasoning on이면 reasoning 파트가 있을 때 닫힌 패널을 먼저 깔아둔다.
       // 스트리밍 시작 직후(텍스트 아직 없음)에도 패널이 있어야 클릭해서 SSE를 볼 수 있다.

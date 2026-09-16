@@ -160,6 +160,7 @@ interface PartRow {
   callID: string | null
   timejson: string | null
   texthead: string | null
+  hasenc: number | null
   status: string | null
   title: string | null
   statetime: string | null
@@ -182,6 +183,7 @@ function readCappedParts(oc: Database, messageIds: string[]): Map<string, Array<
               json_extract(data,'$.callID') AS callID,
               json_extract(data,'$.time') AS timejson,
               substr(json_extract(data,'$.text'),1,${HEAD_KEEP}) AS texthead,
+              CASE WHEN json_extract(data,'$.metadata') LIKE '%reasoningEncryptedContent%' THEN 1 ELSE 0 END AS hasenc,
               json_extract(data,'$.state.status') AS status,
               json_extract(data,'$.state.title') AS title,
               json_extract(data,'$.state.time') AS statetime,
@@ -200,17 +202,33 @@ function readCappedParts(oc: Database, messageIds: string[]): Map<string, Array<
   return out
 }
 
+/** 암호문(security) reasoning 판별 — 평문 없이 암호 블록만 있는 파트는 UI에 패널을 그리지 않는다. */
+function isEncryptedReasoning(data: string | null | undefined): boolean {
+  if (!data) return false
+  return data.includes('reasoningEncryptedContent')
+}
+
 function buildPart(r: PartRow): Record<string, unknown> {
   const base = { id: r.id, messageID: r.message_id, sessionID: r.session_id }
   if (r.data != null) {
-    // 작은 part는 그대로 (호출자가 필요시 cap — 폴링 경로는 프론트 truncate가 2차 방어)
-    return { ...safeParse(r.data), ...base }
+    // 작은 part는 그대로 (호출자가 필요시 cap — 폴링 경로는 프론트 truncate가 2차 방어).
+    // 단 암호문 reasoning은 security 플래그를 붙인다 (메타 통째 전달 대신).
+    const parsed = safeParse(r.data)
+    if (r.type === 'reasoning' && isEncryptedReasoning(r.data)) {
+      // 암호문 blob은 프론트로 보내지 않는다 — 플래그만으로 충분하다
+      const { metadata: _omit, ...rest } = parsed
+      return { ...rest, ...base, security: true }
+    }
+    return { ...parsed, ...base }
   }
   const notice = `${TRUNCATE_NOTICE} (${Math.max(0, r.len - HEAD_KEEP)} chars omitted)`
   if (r.type === 'text' || r.type === 'reasoning') {
     // NOTE: opencode는 reasoning part를 {type,text,time}만 저장한다 (실DB 11,714건 전수 확인).
     // 서명 필드가 애초에 없으므로 heal은 서명이 아니라 완료 여부로 오염을 판별한다.
-    return { ...base, type: r.type, time: safeParse(r.timejson), text: `${r.texthead ?? ''}${notice}` }
+    // 암호문 reasoning(metadata에 reasoningEncryptedContent)은 security 플래그만 남긴다.
+    const out: Record<string, unknown> = { ...base, type: r.type, time: safeParse(r.timejson), text: `${r.texthead ?? ''}${notice}` }
+    if (r.type === 'reasoning' && r.hasenc) out.security = true
+    return out
   }
   if (r.type === 'tool') {
     const state: Record<string, unknown> = { status: r.status ?? 'completed' }

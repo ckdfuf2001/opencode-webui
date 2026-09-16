@@ -177,8 +177,8 @@ export function FavoriteSessionsPanel() {
                         <span className="cursor-grab active:cursor-grabbing p-0.5 -ml-1 text-muted-foreground hover:text-foreground" draggable={false} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}><GripVertical className="w-3 h-3" /></span>
                         {isRepoFav ? <FolderGit2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" /> : <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />}
                         <span className="text-xs font-medium truncate" title={f.title}>{f.title}</span>
-                        {busy && <span className="text-[10px] px-1.5 py-0 rounded-full bg-amber-500 text-white">Working</span>}
-                        {status?.isCancelled && <span className="text-[10px] px-1.5 py-0 rounded-full bg-red-500 text-white">Cancelled</span>}
+                        {busy && <span title="Working" className="inline-flex shrink-0"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
+                        {status?.isCancelled && !busy && <span title="Cancelled" className="inline-flex shrink-0"><StopCircle className="w-3 h-3 text-gray-500" /></span>}
                         {isRepoFav && <span className="text-[10px] px-1 py-0 rounded bg-muted text-muted-foreground">레포</span>}
                         {isRepoFav && repoWorking > 0 && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-500" title={`${repoWorking} session(s) working`}>
