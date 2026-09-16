@@ -31,6 +31,11 @@ vi.mock('../../src/services/session-message-db', () => ({
   recentSessionMessages: vi.fn(async () => null),
 }))
 
+// chat-queue가 직접 import한다 (bun:sqlite 런타임 — vitest node에서 로드 불가).
+vi.mock('../../src/services/opencode-db', () => ({
+  stripAllReasoningParts: vi.fn(async () => null),
+}))
+
 vi.mock('../../src/services/command-runs', () => ({
   resolveLiveDirectory: (_db: unknown, dir: string) => dir,
 }))

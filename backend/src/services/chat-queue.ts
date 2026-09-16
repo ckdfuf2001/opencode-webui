@@ -2,7 +2,8 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText, healReasoningTail, healStaleHistoryBeyondLastTurn, truncateFromNthLastUser, sweepPollutedStubs, asOutgoingModel, preSendStripIfMismatch, findNewMismatch } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail, sweepPollutedStubs, asOutgoingModel, preSendStripIfMismatch, findNewMismatch } from './reasoning-heal'
+import { stripAllReasoningParts } from './opencode-db'
 import { recentSessionMessages } from './session-message-db'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
@@ -50,14 +51,12 @@ const SENDING_STUCK_WARN_MS = 10 * 60_000
 // whenever the session is idle again. Lost on backend restart by design.
 const queues = new Map<string, QueuedChat[]>()
 const failedUntil = new Map<string, number>()
-// 연속 실패 횟수. 상한을 넘기면 failed로 고정하고 자동 재시도를 멈춘다
+// 연속 실패 횟수. 상한을 넘기면 failed로 고정한다
 // (폴더명 변경 등으로 디렉터리가 깨졌을 때 수십 번 중복 발송 방지).
 // failed 헤드는 순서 유지를 위해 다음 항목을 막는다. 사용자가 X로 지우거나
-// 재시도(retry)하면 해제. 일시적 nw오류 후 영구 먹통을 막기 위해 상한 전에는
-// 쿨다운 뒤 자동 재시도한다 (아래 FAILED_RETRY_COOLDOWN_MS).
+// 수동 재시도(retry)하면 해제. 자동 재시도는 하지 않는다 (retry storm 방지).
 const failCount = new Map<string, number>()
 const MAX_CONSECUTIVE_FAILURES = 5
-const FAILED_RETRY_COOLDOWN_MS = 30_000
 const inFlight = new Set<string>()
 // 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
 // workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.
@@ -228,16 +227,12 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if (!queue || queue.length === 0) return
   const next = queue[0]
   if (!next) return
-  // failed는 상한 전까지 쿨다운 뒤 자동 재시도한다 (일시적 nw오류 후 영구 먹통 방지).
-  // 상한을 넘긴 failed만 순서 유지를 위해 뒤 항목을 막고 수동 retry/X 해제를 기다린다.
+  // failed는 수동 retry/X까지 유지한다 — 자동 재시도 없음.
+  // 폴러·쿨다운에 의한 자동 재전송이 동일 텍스트를 새 턴으로 반복 생성해
+  // 세션을 도배하던(retry storm) 문제 대응. 일시적 nw오류는 connect-error
+  // 분기(queued 유지 + 백오프)가 담당하고, 진짜 실패는 사용자가 직접 재시도한다.
   if (next.status === 'failed') {
-    const count = failCount.get(sessionID) ?? next.attempts ?? MAX_CONSECUTIVE_FAILURES
-    if (count >= MAX_CONSECUTIVE_FAILURES) return
-    const failedAt = next.failedAt ?? 0
-    if (Date.now() - failedAt < FAILED_RETRY_COOLDOWN_MS) return
-    next.status = 'queued'
-    next.failedAt = undefined
-    logger.info(`Auto-retrying failed chat for session ${sessionID} after cooldown (attempt ${count + 1}/${MAX_CONSECUTIVE_FAILURES})`)
+    return
   }
   if (next.status === 'sending') {
     // 전송은 됐는데 응답 미확인 상태. 세션이 idle이면 턴이 끝난 것으로 보고 제거(확정).
@@ -374,7 +369,7 @@ function recordDeterministicFailure(sessionID: string, id: string, detail?: stri
     head.failedAt = Date.now()
   }
   logger.error(
-    `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; staged auto-recovery (truncate + strip-all + deep-truncate with retries) did not recover). ` +
+    `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; single cleanup (truncate + strip-all) and one retry did not recover). ` +
     `Pick one: (a) switch back to the model that owns the latest good turn, (b) truncate back before the model switch with the per-message scissors, or (c) start a new session. ` +
     `Manual deep-clean: POST /api/session-heal/${sessionID}. Then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
   )
@@ -728,8 +723,11 @@ async function dispatchQueuedChat(
   if (chat.agent) messageBody.agent = chat.agent
   if (chat.model) messageBody.model = chat.model
 
-  // security/reasoning 암호문 거부 때만 자동 정리 후 최대 3회 재전송
-  // (stage1 마지막 턴 절단 → stage2 strip-all → stage3 한 턴 더 절단).
+  // security/reasoning 암호문 거부 때만 자동 정리 후 1회 재전송.
+  // 정책: 정리(마지막 턴 절단 + 외국 strip + strip-all + sweep)가 실제로
+  // 일어났을 때만 정확히 1회 재전송하고, 그래도 같은 400이면 failed로 남긴다.
+  // 자동 deep-truncate·연속 재시도 없음 — 동일 텍스트가 새 턴으로 반복 생성돼
+  // 세션을 도배하던 retry storm 대응. 그 이상은 사용자 가위·수동 retry 영역.
   // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
   // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
   // providerDetail 출처 2가지: HTTP 400 본문, 또는 HTTP 200 + 저장된 메시지 error.
@@ -780,54 +778,30 @@ async function dispatchQueuedChat(
         logger.warn(`Reasoning heal skipped for queued chat (session ${sessionID}): ${heal.reason}`)
         return { sent: false, nonRetryable: true, status: 400, detail: providerDetail.slice(0, 300) }
       }
+      // 단일 정리 추가분: 동일모델 stale 대응 strip-all + sweep (최신 턴은 보존).
       // 남은 stub이 있으면 재전송이 같은 400을 맞을 수 있어 명시한다.
-      const pending = heal.stubsPending ?? []
-      await reloadTag(`stage1 (truncated ${heal.truncatedMessageId}, stripped ${heal.strippedParts ?? 0} reasoning parts, stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length})`)
+      let strippedAllParts = 0
+      try {
+        const stripAll = await stripAllReasoningParts(sessionID)
+        strippedAllParts = stripAll?.partsRemoved ?? 0
+      } catch (e) {
+        logger.warn(`Reasoning heal strip-all threw for session ${sessionID}:`, e)
+      }
+      const sweep2 = await sweepPollutedStubs(sessionID)
+      const pending = [...(heal.stubsPending ?? []), ...sweep2.pending]
+      const stubsRemoved = (heal.stubsRemoved ?? 0) + sweep2.removed
+      await reloadTag(`cleanup (truncated ${heal.truncatedMessageId}, stripped ${heal.strippedParts ?? 0}, strip-all ${strippedAllParts}, stubs removed ${stubsRemoved}, pending ${pending.length})`)
       const retryRes = await sendOnce()
       const retryMismatch = await mismatchDetailOf(retryRes)
       if (!retryMismatch) {
         if (retryRes.ok) {
-          logger.info(`Reasoning heal: truncated tail and queue retry succeeded for session ${sessionID}`)
+          logger.info(`Reasoning heal: cleanup and queue retry succeeded for session ${sessionID}`)
           return { sent: true }
         }
         return { sent: false, status: retryRes.status }
       }
-      logger.warn(`Queued chat heal-retry hit the same mismatch for session ${sessionID} — stage2 (strip-all)`)
-      // Stage 2: 오염이 마지막 턴보다 앞에 있다 (동일모델 stale 등).
-      // 실패 턴 제거 + cutoff 이전 reasoning 전체 strip-all + sweep 후 재시도.
-      const stage2 = await healStaleHistoryBeyondLastTurn(sessionID)
-      await reloadTag(`stage2 (strip-all ${stage2.strippedAllParts} part(s), truncated ${stage2.truncatedMessageId ?? 'none'})`)
-      const retry2Res = await sendOnce()
-      const retry2Mismatch = await mismatchDetailOf(retry2Res)
-      if (!retry2Mismatch) {
-        if (retry2Res.ok) {
-          logger.info(`Reasoning heal stage2: strip-all and queue retry succeeded for session ${sessionID}`)
-          return { sent: true }
-        }
-        return { sent: false, status: retry2Res.status }
-      }
-      logger.warn(`Queued chat stage2 retry hit the same mismatch for session ${sessionID} — stage3 (deep truncate one more turn)`)
-      // Stage 3: 그래도 같은 400이면 최신 턴 통째가 오염 — 한 턴 더 뒤로
-      // 잘라내고 최종 재시도한다 (손실은 1턴으로 묶는다).
-      const deep = await truncateFromNthLastUser(sessionID, 2)
-      if ('reason' in deep) {
-        logger.warn(`Reasoning heal stage3 skipped for session ${sessionID}: ${deep.reason}`)
-        return { sent: false, nonRetryable: true, status: 400, detail: retry2Mismatch.slice(0, 300) }
-      }
-      const sweep2 = await sweepPollutedStubs(sessionID)
-      logger.warn(`Reasoning heal stage3: session ${sessionID} deep-truncated from ${deep.truncatedMessageId} (removed ${deep.messagesRemoved}), sweep removed ${sweep2.removed}`)
-      await reloadTag(`stage3 (deep-truncated ${deep.truncatedMessageId})`)
-      const retry3Res = await sendOnce()
-      const retry3Mismatch = await mismatchDetailOf(retry3Res)
-      if (!retry3Mismatch) {
-        if (retry3Res.ok) {
-          logger.info(`Reasoning heal stage3: deep-truncate and queue retry succeeded for session ${sessionID}`)
-          return { sent: true }
-        }
-        return { sent: false, status: retry3Res.status }
-      }
-      logger.warn(`Queued chat stage3 retry rejected for session ${sessionID} — no further auto-retry`)
-      return { sent: false, nonRetryable: true, status: 400, detail: (retry3Mismatch.slice(0, 300) + ` Deep recovery tried (strip-all ${stage2.strippedAllParts}, deep-truncated ${deep.truncatedMessageId}).`) }
+      logger.warn(`Queued chat cleanup+retry hit the same mismatch for session ${sessionID} — leaving failed (no further auto-retry)`)
+      return { sent: false, nonRetryable: true, status: 400, detail: retryMismatch.slice(0, 300) }
     } catch (e) {
       logger.warn(`Reasoning heal attempt failed for queued chat (session ${sessionID}):`, e)
     }
