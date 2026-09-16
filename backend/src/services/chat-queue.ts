@@ -626,12 +626,6 @@ async function dispatchQueuedChat(
   const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text: chat.text }] }
   if (chat.agent) messageBody.agent = chat.agent
   if (chat.model) messageBody.model = chat.model
-  const sendRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
-    method: 'POST',
-    headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(messageBody),
-    signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
-  })
 
   // security/reasoning 암호문 거부 때만 자동 정리 후 1회 재전송.
   // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
