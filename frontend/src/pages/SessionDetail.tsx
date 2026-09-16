@@ -1005,8 +1005,16 @@ export function SessionDetail() {
     }
   }, [baseMessages?.length, visibleMessages?.length, sessionId, containerNode])
 
+  // 전역 단축키 액션 연결 — 채팅 입력 중이 아닐 때만 발동한다
+  // (입력 중은 PromptInput이 설정값으로 직접 처리, undo/redo/fork는 미지원).
+  // NOTE: Ctrl+N/W/T 등은 브라우저 예약키라 가로챌 수 없다.
   useKeyboardShortcuts({
     openModelDialog: () => setModelDialogOpen(true),
+    openSessions: () => setSessionsDialogOpen(true),
+    newSession: () => { void handleNewSession(); },
+    closeSession: () => navigate(`/repos/${repoId}`),
+    openSettings: () => openSettings(),
+    compact: () => { void handleCompact(); },
     submitPrompt: () => {
       const submitButton = document.querySelector(
         "[data-submit-prompt]",

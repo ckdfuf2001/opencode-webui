@@ -24,7 +24,10 @@ export class SettingsService {
    * 구버전 기본값으로 저장된 환경설정을 딱 한 번 새 기본값으로 전환한다.
    * - showReasoning: false → true
    * - theme: 'dark' → 'light'
-   * - keyboardShortcuts.compact: 'Ctrl+K' → 'Ctrl+Shift+C' (구 기본값과 정확히 일치할 때만)
+   * - keyboardShortcuts: 브라우저 예약키와 겹치는 구 기본값을 Alt 조합으로 전환
+   *   (compact: 'Ctrl+K'/'Ctrl+Shift+C' → 'Alt+C',
+   *    newSession: 'Ctrl+N' → 'Alt+N', closeSession: 'Ctrl+W' → 'Alt+W').
+   *   각 값이 구 기본값과 정확히 일치할 때만 바꾼다.
    * 마이그레이션 플래그는 user_preferences 테이블의 예약 user_id 행에 기록하므로
    * 이후 사용자가 의도적으로 바꾼 값은 다시 덮어쓰지 않는다.
    */
@@ -74,13 +77,27 @@ export class SettingsService {
       if (row && !flags.compactShortcutMigrated) {
         const parsed = JSON.parse(row.preferences) as Record<string, unknown>
         const ks = parsed.keyboardShortcuts as Record<string, unknown> | undefined
-        // 'Alt+C'는 중간 기본값이었어서 그것도 함께 새 기본값으로 전환
-        if (ks && (ks.compact === 'Ctrl+K' || ks.compact === 'Alt+C')) {
-          ks.compact = 'Ctrl+Shift+C'
-          this.db
-            .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
-            .run(JSON.stringify(parsed), Date.now(), 'default')
-          logger.info("Migrated stored compact shortcut to 'Ctrl+Shift+C' (new default)")
+        if (ks) {
+          let changed = false
+          // 'Ctrl+Shift+C'/'Alt+C'는 중간 기본값이었어서 그것도 함께 전환
+          if (ks.compact === 'Ctrl+K' || ks.compact === 'Ctrl+Shift+C' || ks.compact === 'Alt+C') {
+            ks.compact = 'Alt+C'
+            changed = true
+          }
+          if (ks.newSession === 'Ctrl+N') {
+            ks.newSession = 'Alt+N'
+            changed = true
+          }
+          if (ks.closeSession === 'Ctrl+W') {
+            ks.closeSession = 'Alt+W'
+            changed = true
+          }
+          if (changed) {
+            this.db
+              .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
+              .run(JSON.stringify(parsed), Date.now(), 'default')
+            logger.info('Migrated stored shortcuts overlapping browser keys to Alt combos')
+          }
         }
         flags.compactShortcutMigrated = true
       }

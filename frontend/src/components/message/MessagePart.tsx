@@ -275,7 +275,10 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         )
       }
 
-      // showReasoning off: noContextNoTool/answer는 무조건 펼쳐서, live는 인디케이터, 그 외 숨김
+      // showReasoning off: 스트리밍 중에는 숨긴다 (SSE 델타가 쌓여도 보이지 않게).
+      // reasoning이 곧 답변인 모델(big-pickle 등)은 완료 시점에 아래 answer 분기로 펼쳐진다.
+      if (messageStreaming) return null
+      // showReasoning off: noContextNoTool/answer는 무조건 펼쳐서, 그 외 숨김
       if (noContextNoTool || reasoningIsAnswer) {
         return (
           <details open className="border border-border rounded-lg my-2">
@@ -288,29 +291,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           </details>
         )
       }
-      {
-        const isLive =
-          messageStreaming &&
-          !!allParts &&
-          allParts.length > 0 &&
-          allParts[allParts.length - 1]?.id === part.id
-        if (!isLive) return null
-        // live 추론은 인디케이터 + 스트리밍 텍스트를 함께 보여준다.
-        // 바깥 스크롤을 그대로 따라가게 안쪽 고정 스크롤박스를 두지 않는다
-        // (max-h+overflow-y는 휠을 안쪽에 가두고 자동 추종도 안 돼서
-        //  "열려 있는데 AUTO SCROLL 안 됨"처럼 보인다).
-        return (
-          <div className="my-1 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
-            <div className="flex items-center gap-2 text-xs text-zinc-500">
-              <span className="animate-pulse">▋</span>
-              <span className="shine-loading">Reasoning...</span>
-            </div>
-            <div className="mt-1 whitespace-pre-wrap text-sm text-foreground/70">
-              {part.text}
-            </div>
-          </div>
-        )
-      }
+      return null
     }
     case 'snapshot':
       return (

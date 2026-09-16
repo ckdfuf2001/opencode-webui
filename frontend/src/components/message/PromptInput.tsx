@@ -186,7 +186,7 @@ const abortKs = ks?.abort ?? 'Escape'
 const toggleModeKs = ks?.toggleMode ?? 'Tab'
 const selectModelKs = ks?.selectModel ?? 'Ctrl+M'
 const submitKs = ks?.submit ?? 'Ctrl+Enter'
-const compactKs = ks?.compact ?? 'Ctrl+Shift+C'
+const compactKs = ks?.compact ?? 'Alt+C'
 // Ctrl/Cmd 교차: 설정이 Ctrl+Enter면 Mac Cmd+Enter도 전송되게 (기존 동작 유지).
 // 그 외 단축키는 저장값 그대로 매칭한다.
 const matchSubmitShortcut = (e: { ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; key: string; code: string }): boolean => {
