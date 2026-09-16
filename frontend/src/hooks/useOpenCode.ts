@@ -609,6 +609,38 @@ export function releaseMessageAnchors(sessionID: string): void {
   pinnedAnchors.delete(sessionID);
 }
 
+/**
+ * 핀은 살아있는데 캐시에 없는 경우 backfill로 재로드한다
+ * (GC/리마운트/invalidate 후 점프 위치가 사라지는 것 방지).
+ * 삭제된 메시지의 핀은 정리해 좀비 핀이 폴링을 돌지 않게 한다.
+ */
+export async function reloadMissingPins(
+  queryClient: ReturnType<typeof useQueryClient>,
+  opcodeUrl: string | null | undefined,
+  sessionID: string,
+  directory: string | undefined,
+): Promise<void> {
+  const pins = pinnedAnchors.get(sessionID);
+  if (!pins || pins.size === 0) return;
+  const key = messagesQueryKey(opcodeUrl, sessionID, directory);
+  const have = new Set((queryClient.getQueryData<MessageListResponse>(key) ?? []).map((m) => m.info.id));
+  for (const id of [...pins]) {
+    if (have.has(id)) continue;
+    try {
+      const { messages } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { around: id }, 30);
+      if (messages.some((m) => m.info.id === id)) {
+        const cur = queryClient.getQueryData<MessageListResponse>(key) ?? [];
+        cur.forEach((m) => have.add(m.info.id));
+      } else {
+        unpinMessageAnchor(sessionID, id);
+      }
+    } catch (e) {
+      // 404 등 사라진 메시지의 핀만 정리, 그 외 오류는 다음 기회에 재시도
+      if ((e as { status?: number })?.status === 404) unpinMessageAnchor(sessionID, id);
+    }
+  }
+}
+
 function createdOf(m: MessageWithParts): number {
   return (m.info as unknown as { time?: { created?: number } }).time?.created ?? 0;
 }

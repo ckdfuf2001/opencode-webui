@@ -19,7 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, ensureMessageLoaded, loadOlderMessages, messagesQueryKey } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -191,21 +191,26 @@ export function SessionDetail() {
     return () => clearTimeout(t);
   }, [windowStart]);
   const prevMsgLenRef = useRef<number>(0);
-  // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약)
-  // 이전 세션의 점프 앵커 핀도 함께 해제한다 (핀은 세션 전환 시에만 초기화).
-  const prevSessionRef = useRef<string | undefined>(undefined);
+  // 세션 변경 시 하단 고정 + 이전 세션 메시지 캐시 해제 (브라우저 메모리 절약).
+  // 점프 앵커 핀은 cleanup에서 해제한다 — 세션 전환·언마운트 모두 커버한다.
   useEffect(() => {
-    if (prevSessionRef.current && prevSessionRef.current !== sessionId) {
-      releaseMessageAnchors(prevSessionRef.current);
-    }
-    prevSessionRef.current = sessionId;
+    const id = sessionId;
     setWindowStart(null)
     shiftPendingRef.current = false
     lastShiftAtRef.current = 0
     wasNearBottomRef.current = false
     prevMsgLenRef.current = 0
     queryClient.removeQueries({ queryKey: ["opencode", "messages"], type: "inactive" } as never)
+    return () => {
+      if (id) releaseMessageAnchors(id);
+    };
   }, [sessionId, queryClient]);
+  // 핀 재로드: GC/리마운트로 캐시가 비면 핀 메시지를 backfill로 되살린다.
+  // 전부 있으면 동기 체크만 하고 끝나 네트워크가 나가지 않는다.
+  useEffect(() => {
+    if (!sessionId || !messages) return;
+    void reloadMissingPins(queryClient, opcodeUrl, sessionId, repoDirectory);
+  }, [sessionId, opcodeUrl, repoDirectory, messages, queryClient]);
   const baseMessages = useMemo(() => {
     if (!messages) return undefined;
     const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1;
@@ -890,9 +895,12 @@ export function SessionDetail() {
       return;
     }
     const title = (session as unknown as { title?: string })?.title || 'Untitled Session';
-    const totalNote = totalKnown != null && totalKnown > list.length
-      ? ` (loaded ${list.length} of ${totalKnown} — load more for the rest)`
-      : '';
+    // total을 아직 모르면(첫 폴링 전) 전체로 오해하지 않게 unknown 표기
+    const totalNote = totalKnown == null
+      ? ` (loaded ${list.length}, total unknown)`
+      : totalKnown > list.length
+        ? ` (loaded ${list.length} of ${totalKnown} — load more for the rest)`
+        : '';
     if (format === 'pdf') {
       if (!printSessionPdf(list, title)) {
         showToast.error('Popup blocked — allow popups for this site to print/PDF.');
