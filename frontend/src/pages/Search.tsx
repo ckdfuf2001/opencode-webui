@@ -384,8 +384,6 @@ export function Search() {
             <p className="text-sm text-muted-foreground">Searching...</p>
           ) : isError ? (
             <p className="text-sm text-destructive">Search failed: {(error as Error).message}</p>
-          ) : filteredHits.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">No results</p>
           ) : (
             <>
               <div className="flex items-center gap-2">
@@ -413,6 +411,9 @@ export function Search() {
                   <Trash2 className="w-3.5 h-3.5" /> Delete index ({selectedHits.size})
                 </Button>
               </div>
+              {filteredHits.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-8 text-center">No results</p>
+              ) : (
               <div className="space-y-2">
                 {filteredHits.map((hit: any, i: number) => {
                   const key = hit.kind === 'message' ? hit.messageId : `${hit.repoId}:${hit.sha}`
@@ -483,6 +484,7 @@ export function Search() {
                   )
                 })}
               </div>
+              )}
             </>
           )}
         </div>

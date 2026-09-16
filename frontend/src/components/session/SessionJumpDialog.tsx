@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useMessageList, type MessageListItem } from '@/hooks/useOpenCode'
@@ -22,18 +22,36 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
 
   // 진입 시 FTS 인덱스를 증분 동기화 (화끈한 전체 rebuild가 아님) 후 목록 조회.
   // FTS 검색은 동기화 완료 후에만 켠다 — 동시에 쏘면 stale 인덱스로 빗나간다.
+  // 같은 세션 재입장에서는 상태(검색어·목록·선택)를 유지하고, 60초 이내 동기화는 건너뛴다.
+  // 매번 비우고 다시 로딩하면 깜빡이고 느리다.
   const [indexReady, setIndexReady] = useState(false)
+  const lastSessionRef = useRef<string | null>(null)
+  const lastSyncRef = useRef(0)
   useEffect(() => {
     if (!open || !sessionId) return
-    setQ('')
-    setOffset(0)
-    setEntryOffset(0)
-    setEntryAcc([])
-    setIndexReady(false)
+    const switched = lastSessionRef.current !== sessionId
+    lastSessionRef.current = sessionId
+    if (switched) {
+      setQ('')
+      setOffset(0)
+      setEntryOffset(0)
+      setEntryAcc([])
+      setAcc([])
+    }
+    const fresh = Date.now() - lastSyncRef.current < 60_000 && !switched
+    if (fresh) {
+      setIndexReady(true)
+      return
+    }
+    if (switched) setIndexReady(false)
     let cancelled = false
     void reindexMessages(sessionId)
       .catch(() => {})
-      .finally(() => { if (!cancelled) setIndexReady(true) })
+      .finally(() => {
+        if (cancelled) return
+        lastSyncRef.current = Date.now()
+        setIndexReady(true)
+      })
     return () => { cancelled = true }
   }, [open, sessionId])
 
