@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye, GripVertical, Loader2, ShieldAlert, StopCircle } from 'lucide-react'
+import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye, GripVertical, Loader2, ShieldAlert } from 'lucide-react'
+import { CancelledBadge } from '../session/CancelledBadge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
@@ -102,7 +103,7 @@ export function FavoriteSessionsPanel() {
             )}
             {badgeTotals.cancelled > 0 && (
               <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-zinc-500" title={`${badgeTotals.cancelled} cancelled`}>
-                <StopCircle className="w-3 h-3" />{badgeTotals.cancelled}
+                <CancelledBadge size="sm" />{badgeTotals.cancelled}
               </span>
             )}
             <div className="absolute -bottom-[5px] left-2 w-0 h-0 border-x-[4px] border-x-transparent border-t-[6px] border-t-card drop-shadow-[0_1px_0_hsl(var(--border))]" />
@@ -178,7 +179,7 @@ export function FavoriteSessionsPanel() {
                         {isRepoFav ? <FolderGit2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" /> : <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />}
                         <span className="text-xs font-medium truncate" title={f.title}>{f.title}</span>
                         {busy && <span title="Working" className="inline-flex shrink-0"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
-                        {status?.isCancelled && !busy && <span title="Cancelled" className="inline-flex shrink-0"><StopCircle className="w-3 h-3 text-gray-500" /></span>}
+                        {status?.isCancelled && !busy && <CancelledBadge size="sm" />}
                         {isRepoFav && <span className="text-[10px] px-1 py-0 rounded bg-muted text-muted-foreground">레포</span>}
                         {isRepoFav && repoWorking > 0 && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-500" title={`${repoWorking} session(s) working`}>
@@ -192,7 +193,7 @@ export function FavoriteSessionsPanel() {
                         )}
                         {isRepoFav && repoCancelled > 0 && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-gray-500" title={`${repoCancelled} cancelled`}>
-                            <StopCircle className="w-3 h-3" />{repoCancelled}
+                            <CancelledBadge size="sm" />{repoCancelled}
                           </span>
                         )}
                       </div>
@@ -267,7 +268,7 @@ function SessionBadges({ sessionId }: { sessionId: string }) {
           <ShieldAlert className="w-3 h-3" />{pending}
         </span>
       )}
-      {cancelled && !busy && !pending && <span title="Cancelled" className="inline-flex"><StopCircle className="w-3 h-3 text-gray-500" /></span>}
+      {cancelled && !busy && !pending && <CancelledBadge size="sm" />}
     </span>
   )
 }
@@ -417,7 +418,7 @@ function RepoSessionsPopup({ repoId, directory, selectedSessionId, onSessionSele
                     <ShieldAlert className="w-3 h-3" />{pending}
                   </span>
                 )}
-                {cancelled && !busy && !pending && <span title="Cancelled" className="inline-flex shrink-0"><StopCircle className="w-3 h-3 text-gray-500" /></span>}
+                {cancelled && !busy && !pending && <CancelledBadge size="sm" />}
                 <Button size="sm" className="h-6 text-xs px-2 shrink-0" asChild>
                   <a href={repoId ? `/repos/${repoId}/sessions/${sid}` : `/session/${sid}`} onClick={(e) => e.stopPropagation()}>이동</a>
                 </Button>

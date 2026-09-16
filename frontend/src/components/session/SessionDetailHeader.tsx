@@ -2,7 +2,8 @@ import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
-import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert, StopCircle } from "lucide-react";
+import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert } from "lucide-react";
+import { CancelledBadge } from "./CancelledBadge";
 import { useState, useEffect } from "react";
 
 interface Repo {
@@ -185,7 +186,7 @@ export function SessionDetailHeader({
               className="flex items-center gap-1 rounded-full bg-gray-500/10 border border-gray-500/30 px-2 py-0.5"
               title="Last result was cancelled — will show until next chat starts"
             >
-              <StopCircle className="w-3.5 h-3.5 text-gray-500" />
+              <CancelledBadge />
               <span className="text-xs text-gray-500 font-medium hidden sm:inline">Cancelled</span>
             </div>
           )}
