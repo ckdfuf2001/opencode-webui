@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import { getOpenCodeDbPath } from './opencode-db'
 import { resolveRepoId } from './command-runs'
+import { withTransactionAsync } from '../db/transactions'
 import { logger } from '../utils/logger'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -43,32 +44,36 @@ export async function indexSessionMessages(db: Database, sessionId: string): Pro
     let repoId = resolveRepoId(db, sess.directory)
     if (repoId == null && isHostDirectory(sess.directory)) repoId = HOST_REPO_ID
 
-    db.query('DELETE FROM session_messages_fts WHERE session_id = ?').run(sessionId)
+    // DELETE→INSERT 사이를 검색이 읽으면 구멍(빈 결과)이 보인다.
+    // 트랜잭션으로 묶어 독자는 항상 완전한 스냅샷만 보게 한다.
+    return withTransactionAsync(db, async () => {
+      db.query('DELETE FROM session_messages_fts WHERE session_id = ?').run(sessionId)
 
-    const messages = oc
-      .query('SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC')
-      .all(sessionId) as { id: string; data: string; time_created: number }[]
+      const messages = oc
+        .query('SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC')
+        .all(sessionId) as { id: string; data: string; time_created: number }[]
 
-    const upsert = db.prepare(
-      `INSERT INTO session_messages_fts (text, session_id, message_id, role, repo_id, turn_index, ts)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    let inserted = 0
-    let turnIndex = 0
-    for (const m of messages) {
-      let role = 'unknown'
-      try {
-        const parsed = JSON.parse(m.data) as { role?: string }
-        role = parsed.role ?? 'unknown'
-      } catch {
-        // ignore malformed message data
+      const upsert = db.prepare(
+        `INSERT INTO session_messages_fts (text, session_id, message_id, role, repo_id, turn_index, ts)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      let inserted = 0
+      let turnIndex = 0
+      for (const m of messages) {
+        let role = 'unknown'
+        try {
+          const parsed = JSON.parse(m.data) as { role?: string }
+          role = parsed.role ?? 'unknown'
+        } catch {
+          // ignore malformed message data
+        }
+        const text = collectPartText(oc, m.id)
+        upsert.run(text, sessionId, m.id, role, repoId ?? null, turnIndex, m.time_created)
+        inserted++
+        turnIndex++
       }
-      const text = collectPartText(oc, m.id)
-      upsert.run(text, sessionId, m.id, role, repoId ?? null, turnIndex, m.time_created)
-      inserted++
-      turnIndex++
-    }
-    return inserted
+      return inserted
+    })
   } finally {
     oc.close()
   }
@@ -124,6 +129,8 @@ export async function syncSessionMessages(db: Database, sessionId: string): Prom
     const escaped = dbPath.replace(/'/g, "''")
     db.exec(`ATTACH DATABASE '${escaped}' AS oc`)
     try {
+      // 삭제→삽입 사이를 검색이 읽으면 구멍이 보인다. 트랜잭션으로 묶는다.
+      return await withTransactionAsync(db, async () => {
       // 1) 지워진 메시지 정리
       db.query(
         'DELETE FROM session_messages_fts WHERE session_id = ? AND message_id NOT IN (SELECT id FROM oc.message WHERE session_id = ?)',
@@ -176,6 +183,7 @@ export async function syncSessionMessages(db: Database, sessionId: string): Prom
         inserted++
       }
       return inserted
+      }) // withTransactionAsync
     } finally {
       db.exec('DETACH DATABASE oc')
     }
