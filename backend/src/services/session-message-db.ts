@@ -277,6 +277,39 @@ export async function recentSessionMessages(
   }
 }
 
+/**
+ * ID 지정 메시지 조회 (선택 출력용). 요청 순서대로 반환, cap 적용.
+ * 세션에 관계없이 읽으므로 여러 세션 선택도 한 번에 가져온다.
+ */
+export async function messagesByIds(ids: string[]): Promise<DbFullMessage[] | null> {
+  const uniq = [...new Set((ids ?? []).filter((v) => typeof v === 'string' && v))].slice(0, 200)
+  if (uniq.length === 0) return []
+  const oc = await openOcDb()
+  if (!oc) return null
+  try {
+    const rows = oc
+      .query('SELECT id, session_id AS sid, data FROM message WHERE id IN (SELECT value FROM json_each(?))')
+      .all(JSON.stringify(uniq)) as Array<{ id: string; sid: string; data: string }>
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const partsByMessage = readCappedParts(
+      oc,
+      rows.map((r) => r.id),
+    )
+    const messages: DbFullMessage[] = []
+    for (const id of uniq) {
+      const r = byId.get(id)
+      if (!r) continue
+      messages.push({
+        info: { ...safeParse(r.data), id: r.id, sessionID: r.sid },
+        parts: partsByMessage.get(r.id) ?? [],
+      })
+    }
+    return messages
+  } finally {
+    oc.close()
+  }
+}
+
 export interface ReasoningModelStat {
   providerID: string
   modelID: string

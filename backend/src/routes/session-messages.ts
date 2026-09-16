@@ -4,6 +4,7 @@ import {
   listSessionMessages,
   recentSessionMessages,
   windowSessionMessages,
+  messagesByIds,
 } from '../services/session-message-db'
 import { logger } from '../utils/logger'
 
@@ -66,6 +67,21 @@ export function createSessionMessageRoutes() {
     } catch (error: unknown) {
       logger.error('Failed to load recent session messages:', error)
       return c.json({ error: error instanceof Error ? error.message : 'Failed to load recent messages' }, 500)
+    }
+  })
+
+  // POST /api/session-messages/by-ids { ids: string[] } — 선택 출력용 ID 지정 조회.
+  // 요청 순서대로 반환한다 (여러 세션 혼합 가능, 최대 200개).
+  app.post('/by-ids', async (c) => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as { ids?: unknown }
+      const ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === 'string' && v.length > 0).slice(0, 200) : []
+      const messages = await messagesByIds(ids)
+      if (!messages) return dbUnavailable(c)
+      return c.json({ messages })
+    } catch (error: unknown) {
+      logger.error('Failed to load messages by ids:', error)
+      return c.json({ error: error instanceof Error ? error.message : 'Failed to load messages' }, 500)
     }
   })
 

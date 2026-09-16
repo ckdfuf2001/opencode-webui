@@ -19,6 +19,8 @@ import { recall, syncRecentSessions } from '@/api/search'
 import { listRepos } from '@/api/repos'
 import { Search as SearchIcon, History, GitCommit, Trash2, Copy, CornerDownLeft, X } from 'lucide-react'
 import { showToast } from '@/lib/toast'
+import { toggleTurn } from '@/lib/turnSelection'
+import { SelectedExportButtons } from '@/components/session/SelectedExportButtons'
 
 
 
@@ -150,6 +152,14 @@ export function Search() {
     return JSON.stringify(arr, null, 2)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredHits, selectedHits, expandedId, expandedData, repos])
+
+  // 체크박스 토글: user면 다음 user 전까지 턴 단위로 묶고, assistant/커밋은 낱개.
+  // 턴으로 묶인 답변은 각자 낱개로 해제할 수 있다.
+  const handleCheck = (_hit: any, index: number) => {
+    const ids = filteredHits.map(hitKeyOf)
+    const roles = filteredHits.map((h: any) => (h.kind === 'message' ? (h.role as string | undefined) : undefined))
+    setSelectedHits((prev) => toggleTurn(prev, ids, roles, index))
+  }
 
   const handleRowClick = (hit: any) => {
     if (!rangeMode) {
@@ -357,9 +367,15 @@ export function Search() {
 
               {blockOpen && (outputOverride ?? filteredJson) && (
                 <div className="absolute top-full mt-1 left-0 right-0 z-50 rounded-md border bg-background shadow-xl min-w-[500px] max-w-[800px]">
-                  <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
-                    <span className="text-[11px] font-medium">Recalls JSON {outputOverride ? '(선택 출력)' : kind !== 'all' ? `(${kind})` : ''}</span>
-                    <button onClick={() => { setBlockOpen(false); setOutputOverride(null) }} className="text-muted-foreground hover:text-foreground p-0.5">
+                  <div className="flex items-center justify-between px-2.5 py-1.5 border-b gap-2">
+                    <span className="text-[11px] font-medium shrink-0">Recalls JSON {outputOverride ? '(선택 출력)' : kind !== 'all' ? `(${kind})` : ''}</span>
+                    {outputOverride && (
+                      <SelectedExportButtons
+                        ids={filteredHits.filter((h: any) => selectedHits.has(hitKeyOf(h))).map((h: any) => hitKeyOf(h)).filter(Boolean)}
+                        title={`선택 출력 ${selectedHits.size}개`}
+                      />
+                    )}
+                    <button onClick={() => { setBlockOpen(false); setOutputOverride(null) }} className="text-muted-foreground hover:text-foreground p-0.5 shrink-0">
                       <X className="w-3 h-3" />
                     </button>
                   </div>
@@ -422,11 +438,7 @@ export function Search() {
                   return (
                     <div key={key || i} onClick={() => handleRowClick(hit)} className={`rounded-md border p-2.5 space-y-1.5 cursor-pointer hover:border-primary/30 ${isRangeStart ? 'border-primary ring-1 ring-primary/40 bg-primary/5' : 'border-input bg-background'}`}>
                       <div className="flex items-center gap-0 flex-nowrap overflow-hidden rounded-md bg-muted/20">
-                        <Checkbox checked={selectedHits.has(key)} onCheckedChange={(v) => {
-                          const next = new Set(selectedHits)
-                          if (v) next.add(key); else next.delete(key)
-                          setSelectedHits(next)
-                        }} onClick={(e) => e.stopPropagation()} className="ml-1.5 mr-1 h-3.5 w-3.5" />
+                        <Checkbox checked={selectedHits.has(key)} onCheckedChange={() => handleCheck(hit, i)} onClick={(e) => e.stopPropagation()} className="ml-1.5 mr-1 h-3.5 w-3.5" />
                         <span className={`px-1.5 py-1 text-[10px] ${isMessage ? 'bg-blue-500/15 text-blue-400' : 'bg-amber-500/15 text-amber-400'} shrink-0`}>{isMessage ? 'chat' : 'git'}</span>
                         {hit.ts && <span className="px-1.5 py-1 text-[10px] bg-muted/30 whitespace-nowrap shrink-0">{new Date(hit.ts).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
                         {hit.repoId != null && <span className="px-1.5 py-1 text-[10px] bg-muted/40 truncate max-w-[110px] shrink-0" title={repoName(hit.repoId)}>{repoName(hit.repoId)}</span>}

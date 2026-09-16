@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useMessageList, type MessageListItem } from '@/hooks/useOpenCode'
 import { searchMessages, reindexMessages, type MessageSearchHit } from '@/api/search'
+import { toggleTurn } from '@/lib/turnSelection'
+import { SelectedExportButtons } from '@/components/session/SelectedExportButtons'
 import { formatChatTime } from '@/lib/chatTime'
 
 interface SessionJumpDialogProps {
@@ -118,14 +120,6 @@ export function SessionJumpDialog({ open, onClose, sessionId, repoId, repoLabel,
     setRangeMode(false)
     setRangeStart(null)
   }, [sessionId])
-  const toggleSelect = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
   // 출력 양식은 검색 페이지 selectedJson과 동일 키
   // (kind/repo/repoId/sessionId/messageId/turnIndex/role/ts/snippet/meta)
   const selectedOutput = useMemo(() => {
@@ -159,6 +153,26 @@ export function SessionJumpDialog({ open, onClose, sessionId, repoId, repoLabel,
       ? entryItems.map((m) => m.id)
       : searchItems.map((h) => h.messageId)
   }, [needle, entryItems, searchItems])
+
+  // 체크 토글: user면 다음 user 전까지 턴 단위, assistant는 낱개 (해제도 낱개 가능)
+  const toggleSelect = (id: string) => {
+    const ids = visibleIds
+    const roles =
+      needle.length === 0
+        ? entryItems.map((m) => m.role as string | undefined)
+        : searchItems.map((h) => h.role as string | undefined)
+    const index = ids.indexOf(id)
+    if (index === -1) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
+      return
+    }
+    setSelectedIds((prev) => toggleTurn(prev, ids, roles, index))
+  }
 
   const handleRowClick = (id: string) => {
     if (!rangeMode) {
@@ -224,33 +238,18 @@ export function SessionJumpDialog({ open, onClose, sessionId, repoId, repoLabel,
         </div>
         {outputOpen && selectedOutput && (
           <div className="rounded-md border border-input bg-background">
-            <div className="flex items-center justify-between px-2 py-1 border-b border-input">
-              <span className="text-[11px] font-medium">선택 출력</span>
-              <div className="flex gap-1">
-                <button
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(selectedOutput)
-                    } catch {
-                      const ta = document.createElement('textarea')
-                      ta.value = selectedOutput
-                      document.body.appendChild(ta)
-                      ta.select()
-                      document.execCommand('copy')
-                      document.body.removeChild(ta)
-                    }
-                  }}
-                  className="text-[11px] px-2 py-0.5 rounded hover:bg-accent text-muted-foreground"
-                >
-                  Copy
-                </button>
-                <button
-                  onClick={() => setOutputOpen(false)}
-                  className="text-[11px] px-2 py-0.5 rounded hover:bg-accent text-muted-foreground"
-                >
-                  닫기
-                </button>
-              </div>
+            <div className="flex items-center justify-between px-2 py-1 border-b border-input gap-2">
+              <span className="text-[11px] font-medium shrink-0">선택 출력</span>
+              <SelectedExportButtons
+                ids={[...selectedIds]}
+                title={`선택 출력 ${selectedIds.size}개`}
+              />
+              <button
+                onClick={() => setOutputOpen(false)}
+                className="text-[11px] px-2 py-0.5 rounded hover:bg-accent text-muted-foreground shrink-0"
+              >
+                닫기
+              </button>
             </div>
             <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2 max-h-48 overflow-y-auto">{selectedOutput}</pre>
           </div>
