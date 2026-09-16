@@ -371,7 +371,8 @@ function recordDeterministicFailure(sessionID: string, id: string, detail?: stri
   }
   logger.error(
     `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; auto-truncate + one retry did not recover). ` +
-    `Truncate further back with the scissors icon or switch back to the original model, then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
+    `Pick one: (a) switch back to the model that owns the latest good turn, (b) truncate back before the model switch with the per-message scissors, or (c) start a new session. ` +
+    `Manual deep-clean: POST /api/session-heal/${sessionID}. Then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
   )
   try { if (queueDb) setSessionCancelled(queueDb, sessionID) } catch {}
 }
@@ -600,6 +601,19 @@ async function dispatchQueuedChat(
       // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.
       try {
         const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true })
+        if (!heal.healed && heal.kind === 'cross-model') {
+          // 크로스모델 오염은 truncate+재시도로 해결 불가 — 안내만 돌려주고 끝낸다.
+          // (자동 원복 없음: 모델 선택은 사용자 몫. 둘 중 하나를 고르게 한다)
+          const names = (heal.models ?? []).map((m) => `${m.providerID}/${m.modelID}`).join(', ')
+          const back = heal.suggestedModel ? `${heal.suggestedModel.providerID}/${heal.suggestedModel.modelID}` : null
+          const guidance =
+            `Cross-model reasoning history [${names}]. Truncating cannot help — pick one:` +
+            (back ? ` (a) switch back to ${back},` : ` (a) switch back to the model that owns the latest good turn,`) +
+            ` (b) truncate back before the model switch (per-message scissors), or (c) start a new session.` +
+            ` Manual deep-clean: POST /api/session-heal/${sessionID}.`
+          logger.warn(`Queued chat cross-model mismatch for session ${sessionID}: ${guidance}`)
+          return { sent: false, nonRetryable: true, status: sendRes.status, detail: (body.slice(0, 300) + ' ' + guidance) }
+        }
         if (heal.healed) {
           // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
           // 재전송 전에 해당 directory 인스턴스를 dispose해 캐시를 비운다.

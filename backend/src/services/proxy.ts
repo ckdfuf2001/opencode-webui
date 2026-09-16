@@ -703,7 +703,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         let finalBodyText = bodyText
         let healedAndRetried = false
         // heal 시도 내역 — exe는 콘솔 로그를 볼 수 없어 응답에 동봉한다 (다음 장애 진단용).
-        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number; stubsPending?: string[] } = { attempted: false }
+        const healInfo: { attempted: boolean; healed?: boolean; reason?: string; stubsRemoved?: number; stubsPending?: string[]; kind?: string; models?: Array<{ providerID: string; modelID: string; turns: number }> } = { attempted: false }
         const msgPost = method === 'POST' ? cleanEventPath.match(/^\/session\/([^/]+)\/message$/) : null
         if (msgPost?.[1] && body) {
           try {
@@ -721,7 +721,15 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               healInfo.reason = heal.reason
               healInfo.stubsRemoved = heal.stubsRemoved
               healInfo.stubsPending = heal.stubsPending
-              if (heal.healed) {
+              healInfo.kind = heal.kind
+              healInfo.models = heal.models
+              if (!heal.healed && heal.kind === 'cross-model') {
+                // 크로스모델 오염은 truncate+재시도로 해결 불가 — 재시도 없이 안내만.
+                const names = (heal.models ?? []).map((m) => `${m.providerID}/${m.modelID}`).join(', ')
+                const back = heal.suggestedModel ? `${heal.suggestedModel.providerID}/${heal.suggestedModel.modelID}` : null
+                finalBodyText = `${finalBodyText} (cross-model reasoning history [${names}]: switch back to ${back ?? 'the model that owns the latest good turn'}, truncate back before the switch, or start a new session. Manual deep-clean: POST /api/session-heal/${msgPost[1]})`
+                healedAndRetried = false
+              } else if (heal.healed) {
                 // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
                 // 재전송 전에 인스턴스를 dispose해 캐시를 비운다 (결과 명시 로깅).
                 if (directory) {
@@ -767,8 +775,8 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           }
         }
         const hint = healedAndRetried
-          ? ' - Automatic recovery (truncated the last turn and retried once) did not help: the stale reasoning is earlier in history. Truncate further back with the scissors icon on an earlier message, or switch back to the original model, then send again. (reasoning encrypted_content mismatch)'
-          : ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). Truncate the last turn (scissors icon) or switch back to the original model, then send again. (reasoning encrypted_content mismatch)'
+          ? ' - Automatic recovery (truncated the last turn and retried once) did not help: the stale reasoning is earlier in history. Truncate further back with the scissors icon on an earlier message, switch back to the original model, or deep-clean via POST /api/session-heal/:sessionId, then send again. (reasoning encrypted_content mismatch)'
+          : ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). Truncate the last turn (scissors icon), switch back to the original model, or deep-clean via POST /api/session-heal/:sessionId, then send again. (reasoning encrypted_content mismatch)'
         let parsed: Record<string, unknown> | undefined
         try { parsed = JSON.parse(finalBodyText) as Record<string, unknown> } catch { parsed = undefined }
         responseHeaders['Content-Type'] = 'application/json'

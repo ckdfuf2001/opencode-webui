@@ -24,6 +24,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { updateQueuedChatsModel } from "@/api/chat-queue";
 import { chatQueueKeys } from "@/hooks/useChatQueue";
+import { API_BASE_URL } from "@/config";
+
+interface ModelSwitchRisk {
+  providerId: string;
+  modelId: string;
+  foreign: Array<{ providerID: string; modelID: string; turns: number }>;
+}
 
 interface ModelSelectDialogProps {
   open: boolean;
@@ -45,6 +52,10 @@ export function ModelSelectDialog({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [useAsDefault, setUseAsDefault] = useState(false);
+  // 크로스모델 스위치 경고: 히스토리에 다른 모델의 reasoning이 있으면
+  // 스위치 후 encrypted_content 400이 날 수 있어 확인을 받는다 (차단은 안 함).
+  const [modelRisk, setModelRisk] = useState<ModelSwitchRisk | null>(null);
+  const [checkingRisk, setCheckingRisk] = useState(false);
   const { preferences, updateSettingsAsync } = useSettings();
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
@@ -84,6 +95,7 @@ export function ModelSelectDialog({
       loadProviders();
       // 다이얼로그 열 때마다 "Use as default" 초기화
       setUseAsDefault(false);
+      setModelRisk(null);
     }
   }, [open, loadProviders]);
 
@@ -129,6 +141,32 @@ export function ModelSelectDialog({
       .map(({ provider, filteredModels }) => ({ ...provider, models: filteredModels }));
 
   const handleModelSelect = async (providerId: string, modelId: string) => {
+    // 세션 모델 변경이면 먼저 오염 검사를 한다. default 저장은 확인 후에 해서
+    // 사용자가 경고를 보고 취소해도 default가 바뀌지 않게 한다.
+    if (sessionId && !forDefault && `${providerId}/${modelId}` !== sessionModelKey) {
+      setCheckingRisk(true);
+      try {
+        const qs = `provider=${encodeURIComponent(providerId)}&model=${encodeURIComponent(modelId)}`;
+        const res = await fetch(`${API_BASE_URL}/api/session-model-check/${encodeURIComponent(sessionId)}?${qs}`);
+        const data = await res.json().catch(() => null) as {
+          risk?: boolean;
+          foreignModels?: Array<{ providerID: string; modelID: string; turns: number }>;
+        } | null;
+        if (res.ok && data?.risk && (data.foreignModels?.length ?? 0) > 0) {
+          setModelRisk({ providerId, modelId, foreign: data.foreignModels! });
+          return;
+        }
+      } catch {
+        // 검사 실패는 스위치를 막지 않는다 (경고는 best-effort)
+      } finally {
+        setCheckingRisk(false);
+      }
+    }
+    await applyModelSwitch(providerId, modelId);
+  };
+
+  const applyModelSwitch = async (providerId: string, modelId: string) => {
+    setModelRisk(null);
     const newModel = `${providerId}/${modelId}`;
     const shouldUpdateDefault = forDefault || !sessionId || useAsDefault;
 
@@ -260,6 +298,37 @@ export function ModelSelectDialog({
               {preferences?.defaultModel && (
                 <span className="text-xs text-zinc-500 font-mono truncate max-w-[180px]">{preferences.defaultModel}</span>
               )}
+            </div>
+          )}
+
+          {/* 크로스모델 스위치 경고 — 차단은 안 하고 확인만 받는다 */}
+          {modelRisk && (
+            <div className="px-3 py-2.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-sm space-y-2">
+              <div className="text-amber-200 font-medium">Switching may break this session</div>
+              <div className="text-zinc-300 text-xs leading-relaxed">
+                History contains reasoning from {modelRisk.foreign.map((f) => `${f.providerID}/${f.modelID} (${f.turns} turns)`).join(", ")}.
+                Switching to {modelRisk.providerId}/{modelRisk.modelId} can cause an <span className="font-mono">encrypted_content</span> rejection
+                on the next send. Switch back or truncate before the switch if that happens.
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 border-amber-500/40 text-amber-200 hover:bg-amber-500/20"
+                  disabled={checkingRisk}
+                  onClick={() => applyModelSwitch(modelRisk.providerId, modelRisk.modelId)}
+                >
+                  Switch anyway
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-zinc-400 hover:text-white"
+                  onClick={() => setModelRisk(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
             </div>
           )}
 

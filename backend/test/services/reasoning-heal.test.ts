@@ -7,15 +7,25 @@ vi.mock('../../src/services/opencode-db', () => ({
 
 vi.mock('../../src/services/session-message-db', () => ({
   recentSessionMessages: vi.fn(),
+  historyReasoningModels: vi.fn(),
 }))
 
-import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText } from '../../src/services/reasoning-heal'
+import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage } from '../../src/services/opencode-db'
-import { recentSessionMessages } from '../../src/services/session-message-db'
+import { recentSessionMessages, historyReasoningModels } from '../../src/services/session-message-db'
 
 const truncateMock = truncateSessionMessages as unknown as ReturnType<typeof vi.fn>
 const deleteMock = deleteSingleChildlessMessage as unknown as ReturnType<typeof vi.fn>
 const recentMock = recentSessionMessages as unknown as ReturnType<typeof vi.fn>
+const historyMock = historyReasoningModels as unknown as ReturnType<typeof vi.fn>
+
+/** opencode 세션 상태 조회 stub — 기본 idle, 테스트별 override */
+function mockSessionIdle() {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })))
+}
+function mockSessionBusy() {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ 'ses-1': { type: 'busy' } }) })))
+}
 
 function userMsg(id: string, text: string, created: number) {
   return {
@@ -116,6 +126,9 @@ describe('isIncompleteAssistant', () => {
 describe('healReasoningTail', () => {
   beforeEach(() => {
     recentMock.mockReset()
+    historyMock.mockReset()
+    historyMock.mockResolvedValue([])
+    mockSessionIdle()
     truncateMock.mockReset()
     truncateMock.mockResolvedValue({
       messagesRemoved: 2,
@@ -227,6 +240,64 @@ describe('healReasoningTail', () => {
     expect(deleteMock).toHaveBeenCalledWith('ses-1', 'err_old')
     expect(res.stubsRemoved).toBe(1)
     expect(res.stubsPending).toEqual([])
+  })
+
+  it('refuses everything while the session is busy (live turn guard)', async () => {
+    const now = Date.now()
+    mockSessionBusy()
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+      userMsg('u2', 'fix the bug', now - 5_000),
+    ])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['fix the bug'])
+    expect(res.healed).toBe(false)
+    expect(res.reason).toMatch(/busy/)
+    expect(truncateMock).not.toHaveBeenCalled()
+    expect(deleteMock).not.toHaveBeenCalled()
+  })
+
+  it('skips cross-model history without touching the DB', async () => {
+    const now = Date.now()
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'muse-spark-1.2', turns: 12 },
+      { providerID: 'opencode', modelID: 'muse-spark-1.3', turns: 3 },
+    ])
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+      userMsg('u2', 'fix the bug', now - 5_000),
+    ])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['fix the bug'])
+    expect(res.healed).toBe(false)
+    expect(res.kind).toBe('cross-model')
+    expect(res.models).toHaveLength(2)
+    expect(truncateMock).not.toHaveBeenCalled()
+    expect(deleteMock).not.toHaveBeenCalled()
+  })
+
+  it('does not sweep a recently-active incomplete turn (presumed live)', async () => {
+    const now = Date.now()
+    const liveGhost = {
+      info: { id: 'live', role: 'assistant', sessionID: 'ses-1', time: { created: now - 10_000 } },
+      parts: [{ type: 'reasoning', text: '...', time: { created: now - 5_000 } }],
+    }
+    mockMessageListSequence([[
+      userMsg('u_old', 'old question', now - 300_000),
+      mismatchErrorMsg('err_old', now - 290_000),
+      userMsg('u_new', 'new question', now - 5_000),
+    ],
+    [
+      userMsg('u_old', 'old question', now - 300_000),
+      mismatchErrorMsg('err_old', now - 290_000),
+      liveGhost,
+    ]])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['new question'])
+    expect(res.healed).toBe(true)
+    // 오래된 mismatch stub은 지우되, 방금 활동한 미완성 턴은 건드리지 않는다
+    expect(deleteMock).toHaveBeenCalledWith('ses-1', 'err_old')
+    expect(deleteMock).not.toHaveBeenCalledWith('ses-1', 'live')
+    expect(res.stubsRemoved).toBe(1)
   })
 
   it('reports kept stubs explicitly when delete is refused', async () => {
@@ -372,6 +443,66 @@ describe('classifyTail', () => {
     const r = classifyTail([assistantMsg('a1', now)])
     expect(r.kind).toBe('clean')
     expect(r.healable).toBe(false)
+  })
+})
+
+describe('sweep depth', () => {
+  beforeEach(() => {
+    recentMock.mockReset()
+    historyMock.mockReset()
+    historyMock.mockResolvedValue([])
+    mockSessionIdle()
+    truncateMock.mockReset()
+    truncateMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 5 })
+    deleteMock.mockReset()
+    deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 4 })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  it('removes at most 2 trailing stubs per run', async () => {
+    const now = Date.now()
+    mockMessageListSequence([[
+      userMsg('u_new', 'q', now - 5_000),
+    ],
+    [
+      userMsg('u1', 'q1', now - 600_000),
+      mismatchErrorMsg('e1', now - 590_000),
+      userMsg('u2', 'q2', now - 500_000),
+      mismatchErrorMsg('e2', now - 490_000),
+      userMsg('u3', 'q3', now - 400_000),
+      mismatchErrorMsg('e3', now - 390_000),
+    ]])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['q'])
+    expect(res.healed).toBe(true)
+    expect(deleteMock).toHaveBeenCalledTimes(2)
+    expect(res.stubsRemoved).toBe(2)
+  })
+})
+
+describe('findLastGoodModel', () => {
+  const now = Date.now()
+  it('returns the last completed successful assistant model', () => {
+    const good = {
+      info: { id: 'g1', role: 'assistant', sessionID: 'ses-1', time: { created: now, completed: now + 1 }, modelID: 'm-1.2', providerID: 'opencode' },
+      parts: [{ type: 'text', text: 'ok' }],
+    }
+    const bad = mismatchErrorMsg('e1', now + 10)
+    expect(findLastGoodModel([good, bad])).toEqual({ providerID: 'opencode', modelID: 'm-1.2' })
+  })
+  it('skips incomplete turns (no completed yet)', () => {
+    const live = {
+      info: { id: 'l1', role: 'assistant', sessionID: 'ses-1', time: { created: now }, modelID: 'm-new', providerID: 'opencode' },
+      parts: [{ type: 'reasoning', text: '...' }],
+    }
+    const good = {
+      info: { id: 'g1', role: 'assistant', sessionID: 'ses-1', time: { created: now - 1000, completed: now - 999 }, modelID: 'm-old', providerID: 'opencode' },
+      parts: [{ type: 'text', text: 'ok' }],
+    }
+    expect(findLastGoodModel([good, live])).toEqual({ providerID: 'opencode', modelID: 'm-old' })
+  })
+  it('returns undefined when no successful turn exists', () => {
+    expect(findLastGoodModel([mismatchErrorMsg('e1', now)])).toBeUndefined()
   })
 })
 

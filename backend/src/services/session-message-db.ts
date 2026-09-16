@@ -242,6 +242,39 @@ export async function recentSessionMessages(
   }
 }
 
+export interface ReasoningModelStat {
+  providerID: string
+  modelID: string
+  turns: number
+}
+
+/**
+ * 히스토리에 reasoning을 남긴 모델 분포 (모델 스위치 탐지용).
+ * parts 본문은 읽지 않고 id/type만 보므로 전체 로드 없이 집계된다.
+ * reasoning이 없는 세션은 빈 배열.
+ */
+export async function historyReasoningModels(sessionId: string): Promise<ReasoningModelStat[] | null> {
+  const oc = await openOcDb()
+  if (!oc) return null
+  try {
+    const rows = oc
+      .query(
+        `SELECT json_extract(m.data,'$.providerID') AS prov,
+                json_extract(m.data,'$.modelID') AS model,
+                COUNT(DISTINCT m.id) AS turns
+         FROM message m JOIN part p ON p.message_id = m.id
+         WHERE m.session_id = ? AND json_extract(p.data,'$.type') = 'reasoning'
+         GROUP BY 1, 2`,
+      )
+      .all(sessionId) as Array<{ prov: unknown; model: unknown; turns: number }>
+    return rows
+      .filter((r) => typeof r.prov === 'string' && typeof r.model === 'string')
+      .map((r) => ({ providerID: r.prov as string, modelID: r.model as string, turns: r.turns }))
+  } finally {
+    oc.close()
+  }
+}
+
 /** 점프용 윈도우: around 메시지 전후 limit개 (parts 포함, cap 적용). */
 export async function windowSessionMessages(
   sessionId: string,

@@ -1,10 +1,12 @@
 import { logger } from '../utils/logger'
 import { truncateSessionMessages, deleteSingleChildlessMessage } from './opencode-db'
-import { recentSessionMessages } from './session-message-db'
+import { recentSessionMessages, historyReasoningModels, type ReasoningModelStat } from './session-message-db'
+import { ensureServerAuth } from './opencode-auth'
 
 interface LoosePart {
   type?: string
   text?: string
+  time?: { created?: number }
 }
 
 interface LooseMessage {
@@ -20,7 +22,7 @@ interface LooseMessage {
   parts?: LoosePart[]
 }
 
-export type TailKind = 'clean' | 'mismatch' | 'non-healable'
+export type TailKind = 'clean' | 'mismatch' | 'cross-model' | 'non-healable'
 
 export interface ReasoningHealResult {
   healed: boolean
@@ -32,14 +34,29 @@ export interface ReasoningHealResult {
   stubsPending?: string[]
   kind?: TailKind
   healable?: boolean
+  /** 히스토리에 reasoning을 남긴 모델들 (cross-model 안내용) */
+  models?: ReasoningModelStat[]
+  /** 마지막 성공 assistant 턴의 모델 (모델 스위치 안내용 — 자동 원복은 하지 않는다) */
+  suggestedModel?: { providerID: string; modelID: string }
 }
 
 /** 마지막 user 메시지가 이보다 오래됐으면 남의 턴으로 보고 자르지 않는다. */
 const HEAL_FRESHNESS_MS = 10 * 60_000
-/** trailing stub 삭제 상한 (연쇄 삭제 폭주 방지) */
-const MAX_STUB_DELETIONS = 5
+/**
+ * trailing stub 삭제 상한. 유발건이 보통 1건이고, 더 지운다고 해결되는 문제가
+ * 아니라서(크로스모델은 경계 truncate가 필요) 2로 고정한다.
+ * 점진 확장을 안 하는 이유: mismatch 400은 nonRetryable로 즉시 failed 고정돼
+ * attempts가 자동으로 오르지 않으므로, 깊이 카운터가 진행할 수단이 없다.
+ */
+const MAX_STUB_DELETIONS = 2
 /** 뒤쪽 스캔 상한 (성공 턴을 찾을 때까지 최대 거슬러 올라가는 깊이) */
 const MAX_SWEEP_SCAN = 20
+/**
+ * 미완성 턴의 최근 활동猶予. created 나이는 소용없다 — 장시간 턴(로그상 9분+)이
+ * 내내 completed=null로 존재한다. 대신 part 시각(스트리밍 중 계속 갱신)을 보고,
+ * 최근 활동이 있으면 진행 중으로 간주해 건드리지 않는다.
+ */
+const PART_ACTIVITY_GRACE_MS = 90_000
 
 /** mismatch 패턴 판별 (chat-queue·proxy와 동일 조건 — 여기서 export해 공유). */
 export function isReasoningMismatchText(bodyText: string): boolean {
@@ -146,6 +163,69 @@ function isMismatchError(msg: LooseMessage): boolean {
   }
 }
 
+/** 마지막 성공 assistant 턴의 모델 — 크로스모델 안내용 (자동 원복은 하지 않는다). */
+export function findLastGoodModel(messages: LooseMessage[]): { providerID: string; modelID: string } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const info = messages[i]?.info
+    if (!info || info.role !== 'assistant' || info.error) continue
+    if (info.time?.completed == null) continue
+    if (info.modelID && info.providerID) {
+      return { providerID: info.providerID, modelID: info.modelID }
+    }
+  }
+  return undefined
+}
+
+/**
+ * mismatch 400의 전후 맥락 진단: 히스토리에 reasoning을 남긴 모델이 2개 이상이면
+ * 크로스모델 오염이다. 이 경우 마지막 턴 truncate+재시도는 구조적으로 무의미해서
+ * (오염이 스위치 지점부터 쌓여 있음) 건너뛰고 안내만 돌려준다.
+ */
+export async function diagnoseMismatch(
+  sessionID: string,
+): Promise<{ crossModel: boolean; models: ReasoningModelStat[]; suggestedModel?: { providerID: string; modelID: string } }> {
+  const models = (await historyReasoningModels(sessionID)) ?? []
+  if (models.length < 2) return { crossModel: false, models }
+  const { messages } = await fetchMessageList(sessionID)
+  const suggestedModel = messages ? findLastGoodModel(messages) : undefined
+  return { crossModel: true, models, suggestedModel }
+}
+
+/** opencode 세션 상태 조회 — sweep이 진행 중 턴을 지우지 않게 heal 진입 가드. */
+async function isSessionBusy(base: string, sessionID: string, directory: string | undefined): Promise<boolean> {
+  try {
+    const dirQs = directory ? `?directory=${encodeURIComponent(directory)}` : ''
+    const res = await fetch(`${base}/session/status${dirQs}`, {
+      headers: ensureServerAuth({}),
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!res.ok) return false // fail-open: 상태 불명확이면 heal을 막지 않는다 (로그 남김)
+    const map = (await res.json()) as Record<string, { type?: string }>
+    return map[sessionID]?.type === 'busy'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 메시지의 마지막 활동 시각. info.created는 턴 시작에 고정되지만 part 시각은
+ * 스트리밍 중 계속 갱신되므로, 진행 중 턴 판별에는 이쪽이 정확하다.
+ */
+function lastActivityOf(msg: LooseMessage): number {
+  let latest = msg.info?.time?.created ?? 0
+  for (const p of (Array.isArray(msg.parts) ? msg.parts : [])) {
+    const t = (p as LoosePart)?.time?.created
+    if (typeof t === 'number' && t > latest) latest = t
+  }
+  return latest
+}
+
+/** 진행 중일 수 있는 미완성 턴은 sweep 타겟에서 제외 (최근 part 활동 기준). */
+function isSettledIncomplete(msg: LooseMessage, now: number): boolean {
+  if (!isIncompleteAssistant(msg)) return false
+  return now - lastActivityOf(msg) >= PART_ACTIVITY_GRACE_MS
+}
+
 /**
  * NW 중단으로 끝까지 생성되지 못한 assistant 턴 (step-finish 없이 저장됨).
  * info.error가 비어 있어 "정상처럼 보이는" 메시지로 남고, 다음 전송 때
@@ -198,6 +278,12 @@ export async function healReasoningTail(
   const texts = candidates.map((t) => (t ?? '').trim()).filter((t) => t.length > 0)
   if (texts.length === 0) return { healed: false, reason: 'empty expected text' }
 
+  // 진행 중 턴이 있으면 truncate/sweep이 live 턴을 날릴 수 있어 진입 차단.
+  // (busy-tracker는 전역 카운터라 세션 가드가 안 되므로 opencode 상태를 직접 본다)
+  if (await isSessionBusy(base, sessionID, directory)) {
+    return { healed: false, reason: 'session busy — live turn in progress, heal skipped' }
+  }
+
   const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages) return { healed: false, reason }
 
@@ -227,6 +313,22 @@ export async function healReasoningTail(
   })
   if (!matched) {
     return { healed: false, reason: `text mismatch (not our turn?) stored=${stored.slice(0,60)}...` }
+  }
+
+  // 크로스모델 오염(히스토리에 2개 이상 모델의 reasoning)은 마지막 턴을 잘라내도
+  // 해결되지 않는다 — truncate+재시도를 건너뛰고 안내만 돌려준다.
+  const diag = await diagnoseMismatch(sessionID)
+  if (diag.crossModel) {
+    const names = diag.models.map((m) => `${m.providerID}/${m.modelID}`).join(', ')
+    logger.warn(`Reasoning heal: session ${sessionID} has cross-model reasoning [${names}] — truncate skipped, needs model choice, not cleanup`)
+    return {
+      healed: false,
+      reason: `cross-model reasoning history [${names}] — truncating the last turn cannot help`,
+      kind: 'cross-model',
+      healable: false,
+      models: diag.models,
+      suggestedModel: diag.suggestedModel,
+    }
   }
 
   let truncatedMessageId: string | undefined
@@ -266,13 +368,24 @@ export async function sweepPollutedStubs(sessionID: string): Promise<{ removed: 
       const list = tail.messages
       const targets: string[] = []
       let scanned = 0
+      const now = Date.now()
       for (let i = list.length - 1; i >= 0 && targets.length < MAX_STUB_DELETIONS && scanned < MAX_SWEEP_SCAN; i--) {
         const m = list[i]
         scanned++
         if (!m || !m.info) break
         if (m.info.role === 'user') continue
         if (m.info.role !== 'assistant') break
-        if (isMismatchError(m) || isIncompleteAssistant(m)) {
+        if (isMismatchError(m)) {
+          if (m.info.id) targets.push(m.info.id)
+          continue
+        }
+        if (isIncompleteAssistant(m)) {
+          // 최근 활동이 있으면 진행 중 턴으로 보고 제외 (NW 잔재만 삭제).
+          // 사용자 cancel 턴은 completed=1이라 여기 오지 않는다 (실DB 239건 전수 확인).
+          if (now - lastActivityOf(m) < PART_ACTIVITY_GRACE_MS) {
+            logger.info(`Reasoning heal: skipping recently-active incomplete turn ${m.info.id} in session ${sessionID} (presumed live)`)
+            continue
+          }
           if (m.info.id) targets.push(m.info.id)
           continue
         }

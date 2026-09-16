@@ -371,12 +371,12 @@ function isReasoningEncryptedMismatchMessage(msg: string): boolean {
   const m = msg.toLowerCase()
   return (
     m.includes("encrypted_content") &&
-    (m.includes("reasoning") || m.includes("not issued") || m.includes("invalid_request_error"))
+    (m.includes("reasoning") || m.includes("security") || m.includes("not issued") || m.includes("invalid_request_error"))
   )
 }
 
 function reasoningMismatchHint(): string {
-  return "History contains reasoning blocks from a different model (or an interrupted turn) — retrying cannot succeed. Truncate the last assistant turn (scissors icon) or switch back to the original model, then send again."
+  return "History contains reasoning blocks from a different model (or an interrupted turn) — retrying cannot succeed. Switch back to the model that owns the latest good turn, truncate back before the model switch (per-message scissors), or start a new session."
 }
 
 function formatServerError(error: unknown): string {
