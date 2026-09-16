@@ -32,7 +32,7 @@ export function createSessionHealRoutes() {
       } catch {
         // 상태 조회 실패는 막지 않는다 (opencode가 느린 경우 정리 자체가 복구 수단)
       }
-      const result = await healMismatchTailManual(sessionId)
+      const result = await healMismatchTailManual(base, sessionId, directory)
       if (result.healed && directory) {
         // DB만 자르면 opencode 메모리 캐시가 오염 part를 그대로 보내므로
         // 다음 전송 전에 인스턴스를 dispose해 캐시를 비운다.

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('../../src/services/opencode-db', () => ({
   truncateSessionMessages: vi.fn(),
   deleteSingleChildlessMessage: vi.fn(),
+  stripReasoningParts: vi.fn(),
 }))
 
 vi.mock('../../src/services/session-message-db', () => ({
@@ -11,20 +12,33 @@ vi.mock('../../src/services/session-message-db', () => ({
 }))
 
 import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel } from '../../src/services/reasoning-heal'
-import { truncateSessionMessages, deleteSingleChildlessMessage } from '../../src/services/opencode-db'
+import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts } from '../../src/services/opencode-db'
 import { recentSessionMessages, historyReasoningModels } from '../../src/services/session-message-db'
 
 const truncateMock = truncateSessionMessages as unknown as ReturnType<typeof vi.fn>
 const deleteMock = deleteSingleChildlessMessage as unknown as ReturnType<typeof vi.fn>
+const stripMock = stripReasoningParts as unknown as ReturnType<typeof vi.fn>
 const recentMock = recentSessionMessages as unknown as ReturnType<typeof vi.fn>
 const historyMock = historyReasoningModels as unknown as ReturnType<typeof vi.fn>
 
-/** opencode 세션 상태 조회 stub — 기본 idle, 테스트별 override */
+/** opencode 조회 stub — 상태는 idle, 세션 모델은 opencode/m-1.3, 테스트별 override */
 function mockSessionIdle() {
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })))
+  vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+    const u = String(url)
+    if (u.includes('/session/status')) return { ok: true, json: async () => ({}) }
+    if (u.includes('/session/')) return { ok: true, json: async () => ({ model: { providerID: 'opencode', id: 'm-1.3' } }) }
+    return { ok: false, json: async () => ({}) }
+  }))
 }
 function mockSessionBusy() {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ 'ses-1': { type: 'busy' } }) })))
+}
+function mockNoSessionModel() {
+  vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+    const u = String(url)
+    if (u.includes('/session/status')) return { ok: true, json: async () => ({}) }
+    return { ok: false, json: async () => ({}) }
+  }))
 }
 
 function userMsg(id: string, text: string, created: number) {
@@ -139,6 +153,8 @@ describe('healReasoningTail', () => {
     })
     deleteMock.mockReset()
     deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 3 })
+    stripMock.mockReset()
+    stripMock.mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -257,12 +273,13 @@ describe('healReasoningTail', () => {
     expect(deleteMock).not.toHaveBeenCalled()
   })
 
-  it('skips cross-model history without touching the DB', async () => {
+  it('skips cross-model history without touching the DB when strip finds nothing', async () => {
     const now = Date.now()
     historyMock.mockResolvedValue([
       { providerID: 'opencode', modelID: 'muse-spark-1.2', turns: 12 },
       { providerID: 'opencode', modelID: 'muse-spark-1.3', turns: 3 },
     ])
+    mockNoSessionModel()
     mockMessageList([
       userMsg('u1', 'hello', now - 60_000),
       assistantMsg('a1', now - 59_000),
@@ -274,6 +291,33 @@ describe('healReasoningTail', () => {
     expect(res.models).toHaveLength(2)
     expect(truncateMock).not.toHaveBeenCalled()
     expect(deleteMock).not.toHaveBeenCalled()
+  })
+
+  it('strips foreign reasoning then truncates the failed turn (single shot)', async () => {
+    const now = Date.now()
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'm-1.2', turns: 8 },
+      { providerID: 'opencode', modelID: 'm-1.3', turns: 2 },
+    ])
+    stripMock.mockResolvedValue({ partsRemoved: 6, messagesAffected: 4 })
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+      userMsg('u2', 'fix the bug', now - 5_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+      assistantMsg('a1', now - 59_000),
+    ]])
+    const res = await healReasoningTail('http://x', 'ses-1', '/ws', ['fix the bug'])
+    expect(stripMock).toHaveBeenCalledTimes(1)
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u2')
+    expect(res.healed).toBe(true)
+    expect(res.kind).toBe('cross-model')
+    expect(res.strippedParts).toBe(6)
+    expect(res.strippedMessages).toBe(4)
+    expect(res.truncatedMessageId).toBe('u2')
   })
 
   it('does not sweep a recently-active incomplete turn (presumed live)', async () => {
@@ -456,6 +500,8 @@ describe('sweep depth', () => {
     truncateMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 5 })
     deleteMock.mockReset()
     deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 4 })
+    stripMock.mockReset()
+    stripMock.mockResolvedValue(null)
   })
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -509,10 +555,15 @@ describe('findLastGoodModel', () => {
 describe('healMismatchTailManual', () => {
   beforeEach(() => {
     recentMock.mockReset()
+    historyMock.mockReset()
+    historyMock.mockResolvedValue([])
+    mockSessionIdle()
     truncateMock.mockReset()
     truncateMock.mockResolvedValue({ messagesRemoved: 2, partsRemoved: 1, eventsRemoved: 0, todoRemoved: 0, remainingMessages: 3 })
     deleteMock.mockReset()
     deleteMock.mockResolvedValue({ messagesRemoved: 1, partsRemoved: 1, eventsRemoved: 0, remainingMessages: 3 })
+    stripMock.mockReset()
+    stripMock.mockResolvedValue(null)
   })
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -526,9 +577,30 @@ describe('healMismatchTailManual', () => {
     [
       userMsg('u1', 'hello', now - 60_000),
     ]])
-    const res = await healMismatchTailManual('ses-1')
+    const res = await healMismatchTailManual('http://x', 'ses-1', '/ws')
     expect(res.healed).toBe(true)
     expect(res.truncatedMessageId).toBe('u1')
+    expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
+  })
+  it('strips foreign reasoning on cross-model tails before truncating', async () => {
+    const now = Date.now()
+    historyMock.mockResolvedValue([
+      { providerID: 'opencode', modelID: 'm-1.2', turns: 5 },
+      { providerID: 'opencode', modelID: 'm-1.3', turns: 2 },
+    ])
+    stripMock.mockResolvedValue({ partsRemoved: 4, messagesAffected: 3 })
+    mockMessageListSequence([[
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ],
+    [
+      userMsg('u1', 'hello', now - 60_000),
+    ]])
+    const res = await healMismatchTailManual('http://x', 'ses-1', '/ws')
+    expect(res.healed).toBe(true)
+    expect(res.kind).toBe('cross-model')
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.strippedParts).toBe(4)
     expect(truncateMock).toHaveBeenCalledWith('ses-1', 'u1')
   })
   it('refuses clean history', async () => {
@@ -537,7 +609,7 @@ describe('healMismatchTailManual', () => {
       userMsg('u1', 'hi', now - 60_000),
       assistantMsg('a1', now - 59_000),
     ])
-    const res = await healMismatchTailManual('ses-1')
+    const res = await healMismatchTailManual('http://x', 'ses-1', '/ws')
     expect(res.healed).toBe(false)
     expect(res.reason).toMatch(/clean/)
     expect(truncateMock).not.toHaveBeenCalled()
@@ -548,7 +620,7 @@ describe('healMismatchTailManual', () => {
       userMsg('u1', 'hello', now - 60_000),
       otherErrorMsg('e_quota', now - 50_000),
     ])
-    const res = await healMismatchTailManual('ses-1')
+    const res = await healMismatchTailManual('http://x', 'ses-1', '/ws')
     expect(res.healed).toBe(false)
     expect(truncateMock).not.toHaveBeenCalled()
   })

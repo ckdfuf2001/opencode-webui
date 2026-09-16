@@ -27,6 +27,10 @@ function resolveOpenCodeBin(): string | null {
 }
 
 export async function getOpenCodeDbPath(): Promise<string | null> {
+  // 테스트·컨테이너에서 직접 지정 가능 (session-message-db의 override와 동일).
+  // 캐시하지 않는다 — env가 바뀌는 테스트에서 오염 방지 (stat 1회는 무시 가능).
+  const override = (process.env.OPENCODE_DB_PATH || '').trim()
+  if (override && existsSync(override)) return override
   if (cachedDbPath) return cachedDbPath
   const bin = resolveOpenCodeBin()
   if (!bin) return null
@@ -267,6 +271,84 @@ export async function deleteSingleChildlessMessage(
         eventsRemoved: 0,
         remainingMessages: remaining.length,
       }
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export interface StripResult {
+  partsRemoved: number
+  messagesAffected: number
+}
+
+/**
+ * reasoning part 단위 수술: 현재 모델과 다른 턴이 남긴 reasoning만 지운다.
+ * 크로스모델 encrypted_content 400의 진짜 해법 — 메시지/턴을 통째로 버리지
+ * 않으므로 text·tool 결과는 그대로 남고, 자식 검사에 막히지도 않는다.
+ * 실DB 실측: reasoning part의 metadata.openai 안에 {itemId, reasoningEncryptedContent}
+ * blob이 들어 있어 part 행 삭제가 곧 blob 제거다. 다른 part의 metadata는
+ * itemId뿐이라(19k+ 정상 턴이 매일 replay) 남겨둬도 안전하다.
+ *
+ * 최신 턴은 반드시 제외한다: interleaved thinking을 쓰는 provider는 tool_use 앞의
+ * thinking 블록을 요구하므로, 최신 턴은 기존 turn 단위 삭제(truncate)로 처리한다.
+ * 경계 = 세션의 최신 user 메시지 시각 (그 턴 전체를 통째로 보존).
+ */
+export async function stripReasoningParts(
+  sessionId: string,
+  keep: { providerID: string; modelID: string },
+): Promise<StripResult | null> {
+  const dbPath = await getOpenCodeDbPath()
+  if (!dbPath) return null
+
+  const db = new Database(dbPath)
+  try {
+    db.exec('PRAGMA busy_timeout = 5000')
+    const boundary = db
+      .query(
+        `SELECT MAX(time_created) AS t FROM message
+         WHERE session_id = ? AND json_extract(data,'$.role') = 'user'`,
+      )
+      .get(sessionId) as { t: number | null } | null
+    const cutoff = boundary?.t ?? 0
+
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const affected = db
+        .query<{ n: number }, [string, number, string, string]>(
+          `SELECT COUNT(DISTINCT p.message_id) AS n
+           FROM part p JOIN message m ON m.id = p.message_id
+           WHERE m.session_id = ?
+             AND m.time_created < ?
+             AND json_extract(m.data,'$.role') = 'assistant'
+             AND (json_extract(m.data,'$.providerID') != ? OR json_extract(m.data,'$.modelID') != ?)
+             AND json_extract(p.data,'$.type') = 'reasoning'`,
+        )
+        .get(sessionId, cutoff, keep.providerID, keep.modelID) as { n: number }
+      const del = db
+        .query<{ changes: number }, [string, number, string, string]>(
+          `DELETE FROM part
+           WHERE message_id IN (
+             SELECT m.id FROM message m
+             WHERE m.session_id = ?
+               AND m.time_created < ?
+               AND json_extract(m.data,'$.role') = 'assistant'
+               AND (json_extract(m.data,'$.providerID') != ? OR json_extract(m.data,'$.modelID') != ?)
+           )
+           AND json_extract(data,'$.type') = 'reasoning'`,
+        )
+        .run(sessionId, cutoff, keep.providerID, keep.modelID)
+
+      db.exec('COMMIT')
+
+      const partsRemoved = Number(del.changes ?? 0)
+      logger.info(
+        `Stripped ${partsRemoved} foreign reasoning part(s) in ${Number(affected?.n ?? 0)} message(s) of session ${sessionId} (kept ${keep.providerID}/${keep.modelID}, cutoff ${cutoff})`,
+      )
+      return { partsRemoved, messagesAffected: Number(affected?.n ?? 0) }
     } catch (error) {
       db.exec('ROLLBACK')
       throw error

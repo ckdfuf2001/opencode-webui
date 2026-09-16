@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger'
-import { truncateSessionMessages, deleteSingleChildlessMessage } from './opencode-db'
+import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts } from './opencode-db'
 import { recentSessionMessages, historyReasoningModels, type ReasoningModelStat } from './session-message-db'
 import { ensureServerAuth } from './opencode-auth'
 
@@ -38,6 +38,9 @@ export interface ReasoningHealResult {
   models?: ReasoningModelStat[]
   /** 마지막 성공 assistant 턴의 모델 (모델 스위치 안내용 — 자동 원복은 하지 않는다) */
   suggestedModel?: { providerID: string; modelID: string }
+  /** cross-model strip으로 제거한 reasoning part 수 (메시지는 보존) */
+  strippedParts?: number
+  strippedMessages?: number
 }
 
 /** 마지막 user 메시지가 이보다 오래됐으면 남의 턴으로 보고 자르지 않는다. */
@@ -191,6 +194,29 @@ export async function diagnoseMismatch(
   return { crossModel: true, models, suggestedModel }
 }
 
+/** 세션의 현재 모델 조회 (strip keep 기준 — 실패하면 undefined). */
+async function getSessionModel(
+  base: string,
+  sessionID: string,
+  directory: string | undefined,
+): Promise<{ providerID: string; modelID: string } | undefined> {
+  try {
+    const dirQs = directory ? `?directory=${encodeURIComponent(directory)}` : ''
+    const res = await fetch(`${base}/session/${sessionID}${dirQs}`, {
+      headers: ensureServerAuth({}),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return undefined
+    const data = (await res.json()) as { model?: { providerID?: string; id?: string; modelID?: string } }
+    const providerID = data?.model?.providerID
+    const modelID = data?.model?.id ?? data?.model?.modelID
+    if (typeof providerID === 'string' && typeof modelID === 'string') return { providerID, modelID }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** opencode 세션 상태 조회 — sweep이 진행 중 턴을 지우지 않게 heal 진입 가드. */
 async function isSessionBusy(base: string, sessionID: string, directory: string | undefined): Promise<boolean> {
   try {
@@ -260,7 +286,7 @@ async function fetchMessageList(
  *     → 이번 전송의 실패 턴 제거.
  *  2. 마지막 성공 턴까지 거슬러 올라가며 mismatch 에러 assistant stub과
  *     미완성 assistant 턴(completed 없음 — NW 중단 잔재)을 자식 없을 때
- *     단건 삭제 (최대 5개, 스캔 20개).
+ *     단건 삭제 (최대 2개, 스캔 20개).
  *     → NW 중단으로 error 없이 남은 턴이 다음 전송까지 거부하던 케이스 대응.
  *     완료된 성공 턴 이전은 provider가 이미 받아들인 히스토리라 손대지 않는다.
  *     user 메시지는 절대 삭제 안 함.
@@ -316,19 +342,44 @@ export async function healReasoningTail(
   }
 
   // 크로스모델 오염(히스토리에 2개 이상 모델의 reasoning)은 마지막 턴을 잘라내도
-  // 해결되지 않는다 — truncate+재시도를 건너뛰고 안내만 돌려준다.
+  // 해결되지 않는다 — 과거 턴의 외국 reasoning part를 벗겨낸 뒤(truncate 아님)
+  // 실패 턴 제거·재시도로 이어간다. strip이 0건이면 안내만 돌려준다.
   const diag = await diagnoseMismatch(sessionID)
+  let strippedParts = 0
+  let strippedMessages = 0
   if (diag.crossModel) {
     const names = diag.models.map((m) => `${m.providerID}/${m.modelID}`).join(', ')
-    logger.warn(`Reasoning heal: session ${sessionID} has cross-model reasoning [${names}] — truncate skipped, needs model choice, not cleanup`)
-    return {
-      healed: false,
-      reason: `cross-model reasoning history [${names}] — truncating the last turn cannot help`,
-      kind: 'cross-model',
-      healable: false,
-      models: diag.models,
-      suggestedModel: diag.suggestedModel,
+    const target = (await getSessionModel(base, sessionID, directory)) ?? diag.suggestedModel
+    if (!target) {
+      logger.warn(`Reasoning heal: session ${sessionID} has cross-model reasoning [${names}] but current model unknown — truncate skipped, needs model choice`)
+      return {
+        healed: false,
+        reason: `cross-model reasoning history [${names}] — truncating the last turn cannot help`,
+        kind: 'cross-model',
+        healable: false,
+        models: diag.models,
+        suggestedModel: diag.suggestedModel,
+      }
     }
+    try {
+      const strip = await stripReasoningParts(sessionID, target)
+      strippedParts = strip?.partsRemoved ?? 0
+      strippedMessages = strip?.messagesAffected ?? 0
+    } catch (e) {
+      return { healed: false, reason: `strip threw: ${(e as Error)?.message ?? e}`, kind: 'cross-model', healable: false, models: diag.models, suggestedModel: diag.suggestedModel }
+    }
+    if (strippedParts === 0) {
+      logger.warn(`Reasoning heal: session ${sessionID} cross-model [${names}] but nothing to strip — needs model choice, not cleanup`)
+      return {
+        healed: false,
+        reason: `cross-model reasoning history [${names}] — truncating the last turn cannot help`,
+        kind: 'cross-model',
+        healable: false,
+        models: diag.models,
+        suggestedModel: diag.suggestedModel,
+      }
+    }
+    logger.warn(`Reasoning heal: session ${sessionID} stripped ${strippedParts} foreign reasoning part(s) in ${strippedMessages} message(s), keeping ${target.providerID}/${target.modelID} — continuing to truncate the failed turn`)
   }
 
   let truncatedMessageId: string | undefined
@@ -351,7 +402,7 @@ export async function healReasoningTail(
     logger.warn(`Reasoning heal: session ${sessionID} truncated ${truncatedMessageId} but ${sweep.pending.length} polluted stub(s) remain [${sweep.pending.join(',')}]`)
   }
 
-  return { healed: true, truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending }
+  return { healed: true, truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending, strippedParts, strippedMessages, kind: diag.crossModel ? 'cross-model' : 'mismatch', healable: true, models: diag.models, suggestedModel: diag.suggestedModel }
 }
 
 /**
@@ -382,7 +433,7 @@ export async function sweepPollutedStubs(sessionID: string): Promise<{ removed: 
         if (isIncompleteAssistant(m)) {
           // 최근 활동이 있으면 진행 중 턴으로 보고 제외 (NW 잔재만 삭제).
           // 사용자 cancel 턴은 completed=1이라 여기 오지 않는다 (실DB 239건 전수 확인).
-          if (now - lastActivityOf(m) < PART_ACTIVITY_GRACE_MS) {
+          if (!isSettledIncomplete(m, now)) {
             logger.info(`Reasoning heal: skipping recently-active incomplete turn ${m.info.id} in session ${sessionID} (presumed live)`)
             continue
           }
@@ -434,12 +485,16 @@ export async function truncateFromLastUser(
 }
 
 /**
- * 수동 백업용 narrow 정리: 꼬리가 mismatch(암호문 거부)일 때만 마지막 user부터
- * 잘라내고 sweep한다. 결제·쿼터 등 non-healable이나 clean이면 손대지 않는다.
+ * 수동 백업용 narrow 정리: 꼬리가 mismatch(암호문 거부)일 때만 동작한다.
+ * 크로스모델이면 외국 reasoning strip → 마지막 user truncate → sweep 순으로,
+ * 단일 모델이면 마지막 user truncate → sweep 순으로 처리한다.
+ * 결제·쿼터 등 non-healable이나 clean이면 손대지 않는다.
  * 자동 복구가 실패했을 때의 비상 출구 — 프론트 버튼 없음, API 직접 호출용.
  */
 export async function healMismatchTailManual(
+  base: string,
   sessionID: string,
+  directory: string | undefined,
 ): Promise<ReasoningHealResult> {
   const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages || messages.length === 0) return { healed: false, reason: reason ?? 'no messages' }
@@ -447,9 +502,30 @@ export async function healMismatchTailManual(
   if (kind !== 'mismatch' || !healable) {
     return { healed: false, reason: kind === 'clean' ? 'history clean' : `not a reasoning-mismatch tail (${kind}) — manual cleanup refused`, kind, healable }
   }
+  let strippedParts = 0
+  let strippedMessages = 0
+  let models: ReasoningModelStat[] | undefined
+  let suggestedModel: { providerID: string; modelID: string } | undefined
+  let finalKind: TailKind = kind
+  const diag = await diagnoseMismatch(sessionID)
+  if (diag.crossModel) {
+    models = diag.models
+    suggestedModel = diag.suggestedModel
+    finalKind = 'cross-model'
+    const target = (await getSessionModel(base, sessionID, directory)) ?? diag.suggestedModel
+    if (target) {
+      try {
+        const strip = await stripReasoningParts(sessionID, target)
+        strippedParts = strip?.partsRemoved ?? 0
+        strippedMessages = strip?.messagesAffected ?? 0
+      } catch (e) {
+        return { healed: false, reason: `strip threw: ${(e as Error)?.message ?? e}`, kind: finalKind, healable, models, suggestedModel }
+      }
+    }
+  }
   const trunc = await truncateFromLastUser(sessionID)
-  if ('reason' in trunc) return { healed: false, reason: trunc.reason, kind, healable }
-  logger.warn(`Manual mismatch heal for session ${sessionID}: truncated from user ${trunc.truncatedMessageId} (removed ${trunc.messagesRemoved} messages)`)
+  if ('reason' in trunc) return { healed: false, reason: trunc.reason, kind: finalKind, healable, models, suggestedModel }
+  logger.warn(`Manual mismatch heal for session ${sessionID}: stripped ${strippedParts} reasoning part(s), truncated from user ${trunc.truncatedMessageId} (removed ${trunc.messagesRemoved} messages)`)
   const sweep = await sweepPollutedStubs(sessionID)
-  return { healed: true, truncatedMessageId: trunc.truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending, kind, healable: true }
+  return { healed: true, truncatedMessageId: trunc.truncatedMessageId, stubsRemoved: sweep.removed, stubsPending: sweep.pending, strippedParts, strippedMessages, kind: finalKind, healable: true, models, suggestedModel }
 }

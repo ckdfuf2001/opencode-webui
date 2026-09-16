@@ -735,7 +735,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
                 if (directory) {
                   try {
                     const reloaded = await opencodeServerManager.reloadAndVerify(directory)
-                    logger.warn(`Reasoning heal: session ${msgPost[1]} truncated ${heal.truncatedMessageId} (stubs removed ${heal.stubsRemoved ?? 0}, pending ${(heal.stubsPending ?? []).length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
+                    logger.warn(`Reasoning heal: session ${msgPost[1]} truncated ${heal.truncatedMessageId} (stripped ${heal.strippedParts ?? 0} reasoning parts, stubs removed ${heal.stubsRemoved ?? 0}, pending ${(heal.stubsPending ?? []).length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
                   } catch (e) {
                     logger.warn(`Reasoning heal: instance reload threw for session ${msgPost[1]}, retrying anyway:`, e)
                   }

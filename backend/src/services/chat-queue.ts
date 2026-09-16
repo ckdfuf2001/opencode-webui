@@ -622,7 +622,7 @@ async function dispatchQueuedChat(
           const pending = heal.stubsPending ?? []
           try {
             const reloaded = await opencodeServerManager.reloadAndVerify(directory)
-            logger.warn(`Reasoning heal: session ${sessionID} truncated ${heal.truncatedMessageId} (stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
+            logger.warn(`Reasoning heal: session ${sessionID} truncated ${heal.truncatedMessageId} (stripped ${heal.strippedParts ?? 0} reasoning parts, stubs removed ${heal.stubsRemoved ?? 0}, pending ${pending.length}) — instance reload ${reloaded ? 'verified' : 'NOT verified, retrying anyway'}`)
           } catch (e) {
             logger.warn(`Reasoning heal: instance reload threw for session ${sessionID} (pending ${pending.length}), retrying anyway:`, e)
           }
