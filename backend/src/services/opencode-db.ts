@@ -352,6 +352,8 @@ export async function stripReasoningParts(
         )
         .run(sessionId, cutoff, keep.providerID, keep.modelID)
 
+      recomputeSessionMeta(db, sessionId, Date.now())
+
       db.exec('COMMIT')
 
       const partsRemoved = Number(del.changes ?? 0)

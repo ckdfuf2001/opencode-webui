@@ -11,7 +11,7 @@ vi.mock('../../src/services/session-message-db', () => ({
   historyReasoningModels: vi.fn(),
 }))
 
-import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch } from '../../src/services/reasoning-heal'
+import { healReasoningTail, healMismatchTailManual, classifyTail, isIncompleteAssistant, isReasoningMismatchText, findLastGoodModel, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch, findNewMismatch } from '../../src/services/reasoning-heal'
 import { truncateSessionMessages, deleteSingleChildlessMessage, stripReasoningParts } from '../../src/services/opencode-db'
 import { recentSessionMessages, historyReasoningModels } from '../../src/services/session-message-db'
 
@@ -681,10 +681,36 @@ describe('preSendStripIfMismatch', () => {
     ])
     const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
     expect(res.checked).toBe(true)
-    expect(res.reason).toMatch(/not mismatch/)
+    expect(res.reason).toMatch(/no mismatch/)
     expect(stripMock).not.toHaveBeenCalled()
     expect(deleteMock).not.toHaveBeenCalled()
     expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('fires when a newer user message sits on top of the mismatch stub', async () => {
+    const now = Date.now()
+    // stub 뒤에 새 user가 얹혀 꼬리가 mismatch가 아니게 된 경우 — 그래도 오염은 남아 있다
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+      userMsg('u2', 'another question', now - 5_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(res.checked).toBe(true)
+    expect(stripMock).toHaveBeenCalledWith('ses-1', { providerID: 'opencode', modelID: 'm-1.3' })
+    expect(truncateMock).not.toHaveBeenCalled()
+  })
+  it('never falls back to the session model in pre-send (outgoing only)', async () => {
+    const now = Date.now()
+    // 세션 기록에 모델이 있어도 outgoing 없으면 strip 금지 — 정상 전송 보호
+    mockMessageList([
+      userMsg('u1', 'hello', now - 60_000),
+      mismatchErrorMsg('e1', now - 50_000),
+    ])
+    const res = await preSendStripIfMismatch('http://x', 'ses-1', '/ws', undefined)
+    expect(res.checked).toBe(true)
+    expect(stripMock).not.toHaveBeenCalled()
+    expect(deleteMock).toHaveBeenCalledWith('ses-1', 'e1')
+    expect(res.reason).toMatch(/sweep only/)
   })
   it('sweeps without stripping when keep is unknown', async () => {
     const now = Date.now()
@@ -701,6 +727,36 @@ describe('preSendStripIfMismatch', () => {
   })
 })
 
+describe('findNewMismatch', () => {
+  it('finds a mismatch whose id was absent before the send', () => {
+    const now = Date.now()
+    const msgs = [
+      userMsg('u1', 'hi', now - 60_000),
+      mismatchErrorMsg('e_old', now - 50_000),
+      userMsg('u2', 'hey', now - 1_000),
+      mismatchErrorMsg('e_new', now - 500),
+    ] as never[]
+    const known = new Set(['u1', 'e_old', 'u2'])
+    expect(findNewMismatch(msgs as never, known)?.info?.id).toBe('e_new')
+  })
+  it('ignores mismatches already present before the send (no clock involved)', () => {
+    const now = Date.now()
+    const msgs = [
+      userMsg('u1', 'hi', now - 60_000),
+      mismatchErrorMsg('e_old', now - 500),
+    ] as never[]
+    // created가 방금이어도 발송 전 꼬리에 있었으면 이번 턴과 무관
+    expect(findNewMismatch(msgs as never, new Set(['u1', 'e_old']))).toBeUndefined()
+  })
+  it('returns undefined when there is no mismatch', () => {
+    const now = Date.now()
+    const msgs = [
+      userMsg('u1', 'hi', now - 60_000),
+      assistantMsg('a1', now - 1_000),
+    ] as never[]
+    expect(findNewMismatch(msgs as never, new Set(['u1']))).toBeUndefined()
+  })
+})
 describe('findFreshMismatch', () => {
   it('finds a mismatch created after the send started', () => {
     const now = Date.now()

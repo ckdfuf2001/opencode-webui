@@ -256,10 +256,14 @@ async function isSessionBusy(base: string, sessionID: string, directory: string 
       headers: ensureServerAuth({}),
       signal: AbortSignal.timeout(5_000),
     })
-    if (!res.ok) return false // fail-open: 상태 불명확이면 heal을 막지 않는다 (로그 남김)
+    if (!res.ok) {
+      logger.warn(`Session busy check for ${sessionID}: status HTTP ${res.status} — fail-open, heal proceeds`)
+      return false // fail-open: 상태 불명확이면 heal을 막지 않는다
+    }
     const map = (await res.json()) as Record<string, { type?: string }>
     return map[sessionID]?.type === 'busy'
-  } catch {
+  } catch (e) {
+    logger.warn(`Session busy check threw for ${sessionID} — fail-open, heal proceeds:`, e)
     return false
   }
 }
@@ -504,14 +508,26 @@ export interface PreSendStripResult {
   strippedMessages: number
   stubsRemoved: number
   stubsPending: string[]
+  /** 발송 전 꼬리 20개의 메시지 id — 발송 후 fresh 판별용(knownIds). */
+  tailIds: string[]
   keep?: OutgoingModel
   reason?: string
 }
 
+/** pre-send 발동 탐색 폭. 마지막 메시지가 user여도 그 앞 mismatch를 찾는다. */
+const PRE_SEND_SCAN = 20
+
 /**
- * 발송 직전 안전 클렌징: 꼬리가 mismatch 에러일 때만 외국 reasoning strip +
- * 자식 없는 stub sweep을 한다. 메시지 truncate는 절대 하지 않는다 — 아직
- * 보내지 않은 이번 텍스트와 무관한 과거 user를 지우면 안 되기 때문이다.
+ * 발송 직전 안전 클렌징: 최근 꼬리(PRE_SEND_SCAN개) 안에 mismatch 에러가 있을
+ * 때만 외국 reasoning strip + 자식 없는 stub sweep을 한다. 메시지 truncate는
+ * 절대 하지 않는다 — 아직 보내지 않은 이번 텍스트와 무관한 과거 user를
+ * 지우면 안 되기 때문이다.
+ *
+ * keep은 outgoing(보내려는 모델)만 쓴다. 세션 조회 폴백은 여기서 제외한다 —
+ * UI에서 모델을 바꾼 직후 세션 기록이 아직 이전 모델이면 keep이 반대로 잡혀
+ * 정상 전송을 망가뜨린다 (자동 경로는 실패 뒤라 폴백이 틀려도 재시도 한 번
+ * 손해지만, pre-send는 정상 전송을 깨뜨리는 위치다). outgoing이 없으면
+ * sweep만 한다.
  *
  * 왜 필요한가: opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는
  * 경로가 있다 (실측: 큐에서 Flushed됐는데 400 메시지가 쌓임). 응답-기준 heal만
@@ -521,23 +537,28 @@ export interface PreSendStripResult {
  * 전송한다 (opencode 메모리 캐시 무효화).
  */
 export async function preSendStripIfMismatch(
-  base: string,
+  _base: string,
   sessionID: string,
-  directory: string | undefined,
+  _directory: string | undefined,
   outgoing?: OutgoingModel,
 ): Promise<PreSendStripResult> {
-  const empty = (reason: string): PreSendStripResult => ({
-    checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], reason,
+  const empty = (reason: string, tailIds: string[] = []): PreSendStripResult => ({
+    checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds, reason,
   })
   const { messages, reason } = await fetchMessageList(sessionID)
   if (!messages || messages.length === 0) {
-    return { checked: false, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], reason: reason ?? 'no messages' }
+    return { checked: false, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds: [], reason: reason ?? 'no messages' }
   }
-  const last = messages[messages.length - 1]
-  if (!last || !isMismatchError(last)) return empty('tail not mismatch')
-  // keep 체인은 자동 경로와 동일: outgoing > 세션 조회. suggested 제외.
-  // 둘 다 없으면 strip 없이 sweep만 한다 (반대로 지우는 것보다 안전).
-  const keep = outgoing ?? (await getSessionModel(base, sessionID, directory))
+  const tailIds = messages
+    .slice(-PRE_SEND_SCAN)
+    .map((m) => m?.info?.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  // 마지막 메시지가 user여도 그 앞 mismatch를 찾는다 — stub 뒤에 새 전송이
+  // 얹히거나 자식 때문에 sweep이 못 지운 오염이 그대로 남을 수 있다.
+  const hit = [...messages].slice(-PRE_SEND_SCAN).reverse().find((m) => m && isMismatchError(m))
+  if (!hit) return empty('no mismatch in recent tail', tailIds)
+  // keep은 outgoing만. 세션 조회 폴백 없음 (위 docstring).
+  const keep = outgoing
   let strippedParts = 0
   let strippedMessages = 0
   if (keep) {
@@ -546,13 +567,13 @@ export async function preSendStripIfMismatch(
       strippedParts = strip?.partsRemoved ?? 0
       strippedMessages = strip?.messagesAffected ?? 0
     } catch (e) {
-      return { checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], reason: `strip threw: ${(e as Error)?.message ?? e}` }
+      return { checked: true, strippedParts: 0, strippedMessages: 0, stubsRemoved: 0, stubsPending: [], tailIds, reason: `strip threw: ${(e as Error)?.message ?? e}` }
     }
   }
   const sweep = await sweepPollutedStubs(sessionID)
   return {
     checked: true, strippedParts, strippedMessages,
-    stubsRemoved: sweep.removed, stubsPending: sweep.pending,
+    stubsRemoved: sweep.removed, stubsPending: sweep.pending, tailIds,
     ...(keep ? { keep } : {}),
     reason: keep ? undefined : 'keep unknown — sweep only',
   }
@@ -574,6 +595,24 @@ export function findFreshMismatch(
     if (!m || !isMismatchError(m)) continue
     const created = m.info?.time?.created ?? 0
     if (created >= sinceTs - SKEW_MS) return m
+  }
+  return undefined
+}
+
+/**
+ * 발송 전 꼬리 id 집합에 없던 mismatch를 찾는다. 시계 비교가 아니라 존재
+ * 비교라 created 오차·SKEW 방향 문제에서 자유롭다. id 없는 메시지는
+ * 이번 턴 산물로 보고 fresh로 취급한다 (DB 메시지는 항상 id가 주입된다).
+ */
+export function findNewMismatch(
+  messages: LooseMessage[],
+  knownIds: Set<string>,
+): LooseMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (!m || !isMismatchError(m)) continue
+    const id = m.info?.id
+    if (typeof id !== 'string' || id.length === 0 || !knownIds.has(id)) return m
   }
   return undefined
 }

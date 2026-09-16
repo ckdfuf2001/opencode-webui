@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
-import { isReasoningMismatchText, healReasoningTail, asOutgoingModel, preSendStripIfMismatch, findFreshMismatch } from './reasoning-heal'
+import { isReasoningMismatchText, healReasoningTail, asOutgoingModel, preSendStripIfMismatch, findNewMismatch } from './reasoning-heal'
 import { recentSessionMessages } from './session-message-db'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
@@ -557,8 +557,11 @@ async function dispatchQueuedChat(
   // opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
   // 응답-기준 heal만으로는 복구가 안 된다. strip 후에는 인스턴스 reload로
   // opencode 메모리 캐시를 비워야 strip이 실제 전송에 반영된다.
+  // knownIds: 발송 전 꼬리 id — 발송 후 fresh 판별용 (시계 대신 존재 비교).
+  let knownIds = new Set<string>()
   try {
     const pre = await preSendStripIfMismatch(base, sessionID, directory, outgoing)
+    knownIds = new Set(pre.tailIds ?? [])
     if ((pre.strippedParts ?? 0) > 0 || (pre.stubsRemoved ?? 0) > 0) {
       let reloaded = false
       try {
@@ -574,12 +577,13 @@ async function dispatchQueuedChat(
   }
 
   // 저장된 mismatch 확인: HTTP 200으로 응답해도 provider 400이 메시지로 남을
-  // 수 있다. 이번 발송 이후에 생긴 mismatch 에러면 그 본문을 돌려준다.
-  const checkStoredMismatch = async (sendStart: number): Promise<string | undefined> => {
+  // 수 있다. 발송 전 꼬리에 없던 mismatch면 이번 턴 산물이다 (id 존재 비교 —
+  // created 시계 오차에 영향받지 않는다).
+  const checkStoredMismatch = async (): Promise<string | undefined> => {
     try {
-      const tail = await recentSessionMessages(sessionID, 5)
-      const msgs = (tail?.messages ?? []) as unknown as Parameters<typeof findFreshMismatch>[0]
-      const fresh = findFreshMismatch(msgs, sendStart)
+      const tail = await recentSessionMessages(sessionID, 10)
+      const msgs = (tail?.messages ?? []) as unknown as Parameters<typeof findNewMismatch>[0]
+      const fresh = findNewMismatch(msgs, knownIds)
       if (!fresh) return undefined
       try {
         return JSON.stringify((fresh as { info?: { error?: unknown } }).info?.error ?? '')
@@ -659,7 +663,6 @@ async function dispatchQueuedChat(
         } catch (e) {
           logger.warn(`Reasoning heal: instance reload threw for session ${sessionID} (pending ${pending.length}), retrying anyway:`, e)
         }
-        const retryStart = Date.now()
         const retryRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
           method: 'POST',
           headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
@@ -668,7 +671,7 @@ async function dispatchQueuedChat(
         })
         if (retryRes.ok) {
           void retryRes.text().catch(() => {})
-          const stored = await checkStoredMismatch(retryStart)
+          const stored = await checkStoredMismatch()
           if (stored && isReasoningEncryptedMismatch(stored)) {
             logger.warn(`Queued chat heal-retry stored a provider mismatch for session ${sessionID} — no further auto-retry`)
             return { sent: false, nonRetryable: true, status: 400, detail: stored.slice(0, 300) }
@@ -691,7 +694,6 @@ async function dispatchQueuedChat(
     return { sent: false, nonRetryable: true, status: 400, detail: providerDetail.slice(0, 300) }
   };
 
-  const sendStart = Date.now()
   const sendRes = await fetch(`${base}/session/${sessionID}/message?directory=${directoryParam}`, {
     method: 'POST',
     headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
@@ -710,7 +712,7 @@ async function dispatchQueuedChat(
   // Drain the body so the socket is released even if the server keeps it open.
   void sendRes.text().catch(() => {})
   // HTTP 200이어도 provider 400이 메시지로 저장될 수 있다 — 꼬리 확인 후 heal+1회 재시도.
-  const stored = await checkStoredMismatch(sendStart)
+  const stored = await checkStoredMismatch()
   if (stored && isReasoningEncryptedMismatch(stored)) {
     logger.warn(`Queued chat send returned 2xx but stored a provider mismatch for session ${sessionID} — running heal+retry once`)
     return healMismatchAndRetryOnce(stored)
