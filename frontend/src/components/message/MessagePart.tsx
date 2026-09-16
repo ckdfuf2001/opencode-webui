@@ -238,7 +238,12 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'tool':
       return <ToolCallPart part={part} onFileClick={onFileClick} directory={directory} />
     case 'reasoning': {
-      if (!part.text?.trim()) return null
+      const hasReasonText = !!part.text?.trim()
+      // showReasoning on이면 reasoning 파트가 있을 때 닫힌 패널을 먼저 깔아둔다.
+      // 스트리밍 시작 직후(텍스트 아직 없음)에도 패널이 있어야 클릭해서 SSE를 볼 수 있다.
+      // 완료 후에도 비어 있으면(암호문-only 모델) 그리지 않는다 — 매 턴 빈 패널 노이즈 방지.
+      if (showReasoning && !hasReasonText && !messageStreaming) return null
+      if (!showReasoning && !hasReasonText) return null
       // 이 메시지에 text 파트가 없다면 reasoning 이 사실상 답변이다.
       // (big-pickle 등 일부 모델은 답변 전체를 reasoning 으로 출력한다)
       // 접거나 숨기지 않고 본문처럼 바로 보여준다.
@@ -251,18 +256,20 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       const hasContextPart = hasTextPart || hasOtherVisiblePart || !!allParts?.some((p) => p.type === 'snapshot');
       const noContextNoTool = !hasToolPart && !hasContextPart;
 
-      // showReasoning on이면 항상 접힘으로 보임 — bash처럼 어딜 눌러도 닫히고 복사 버튼은 우측
+      // showReasoning on이면 항상 접힘으로 보임 — bash처럼 어딜 눌러도 닫히고 복사 버튼은 우측.
+      // 스트리밍 중 텍스트가 아직 비었으면 펄스 표시 (SSE가 채워준다).
       if (showReasoning) {
+        const waiting = !hasReasonText && messageStreaming
         return (
           <details className="border border-border rounded-lg my-2">
             <summary className="px-4 py-2 bg-muted hover:bg-muted/80 cursor-pointer text-sm font-medium flex items-center justify-between gap-2">
-              <span>Reasoning</span>
+              <span className="inline-flex items-center gap-2">Reasoning{waiting && <span className="animate-pulse text-xs">▋</span>}</span>
               <span onClick={(e) => e.preventDefault()}>
                 <CopyButton content={copyableContent} title="Copy reasoning" />
               </span>
             </summary>
             <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap cursor-pointer" onClick={(e) => { const d = (e.currentTarget.closest('details') as HTMLDetailsElement); if (d) d.open = false; }}>
-              {part.text}
+              {waiting ? <span className="shine-loading text-xs">Reasoning...</span> : part.text}
             </div>
           </details>
         )
