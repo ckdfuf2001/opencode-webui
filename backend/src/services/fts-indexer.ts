@@ -284,6 +284,26 @@ function buildMessageSearchFilter(q: string, opts: MessageSearchOpts): SearchFil
     }
     return { where, params, orderBy: 'ts ASC' }
   }
+  // 3자 미만 토큰이 하나라도 있으면 trigram MATCH가 못 잡는다 (예: "플젝" 0건).
+  // 전체를 LIKE AND로 폴백한다. 와일드카드는 이스케이프한다.
+  const shortTokens = trimmed
+    .split(/\s+/)
+    .map((t) => t.replace(/[^\p{L}\p{N}_\-]/gu, '').trim())
+    .filter((t) => t.length >= 1)
+  if (shortTokens.length > 0 && shortTokens.some((t) => t.length < 3)) {
+    const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+    const where: string[] = shortTokens.map(() => `text LIKE ? ESCAPE '\\'`)
+    const params: (string | number)[] = shortTokens.map((t) => `%${esc(t)}%`)
+    if (opts.repoId != null) {
+      where.push('repo_id = ?')
+      params.push(opts.repoId)
+    }
+    if (opts.sessionId) {
+      where.push('session_id = ?')
+      params.push(opts.sessionId)
+    }
+    return { where, params, orderBy: 'ts ASC' }
+  }
   const where: string[] = ['session_messages_fts MATCH ?']
   const params: (string | number)[] = [buildFtsQuery(q)]
   if (opts.repoId != null) {
