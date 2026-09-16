@@ -619,6 +619,13 @@ export function SessionDetail() {
       m.includes("exceeded your current quota")
     );
   }, []);
+  // 완료 알림 라벨은 ref로 읽는다. 완료 직후 제목 갱신 invalidate가 session/repo
+  // 객체를 갈아엎으면 이 effect가 재실행되어 cleanup이 800ms debounce를 매번
+  // 지워버리고, 소리/푸시가 영원히 안 가는 것이 미발송의 원인이었다.
+  const repoRef = useRef(repo);
+  const sessionRef = useRef(session);
+  useEffect(() => { repoRef.current = repo }, [repo]);
+  useEffect(() => { sessionRef.current = session }, [session]);
   useEffect(() => {
     const was = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
@@ -646,8 +653,10 @@ export function SessionDetail() {
         if (canSound) void playCompletionTick();
         if (canPush) {
           const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
-          const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
-          const sessLabel = (session as unknown as { title?: string })?.title || 'Untitled Session';
+          const curRepo = repoRef.current
+          const curSession = sessionRef.current as unknown as { title?: string } | undefined
+          const repoLabel = curRepo ? (curRepo.repoUrl ? curRepo.repoUrl.split("/").pop()?.replace(".git","") || curRepo.localPath : curRepo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
+          const sessLabel = curSession?.title || 'Untitled Session';
           const body = `${repoLabel} · ${sessLabel}`;
           sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0)
         }
@@ -678,7 +687,9 @@ export function SessionDetail() {
       }, 3500);
       return () => { clearTimeout(debounce); clearTimeout(timer); };
     }
-  }, [isStreaming, preferences, sessionId, repo, session, repoId, id]);
+    // NOTE: repo/session을 dep에 넣지 말 것 — 완료 후 invalidate로 객체가 바뀌면
+    // 예약된 알림 타이머가 취소된다 (라벨은 위 ref로 읽는다).
+  }, [isStreaming, preferences, sessionId, repoId, id]);
 
   // 매 턴 완료 시 제목 변경을 동적으로 반영 (A안: 부담 턴당 HTTP 2회, 2초 폴링과 병행)
   const prevStreamingForTitleRef = useRef(false);
