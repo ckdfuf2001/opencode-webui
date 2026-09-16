@@ -25,15 +25,30 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
     if (!open || !sessionId) return
     setQ('')
     setOffset(0)
+    setEntryOffset(0)
+    setEntryAcc([])
     void reindexMessages(sessionId).catch(() => {})
   }, [open, sessionId])
 
-  // 검색어 없음: 최근 소량 리스트만 (전체 로드 없음)
-  const { data: entryList, isLoading: entryLoading } = useMessageList(sessionId, {
+  // 검색어 없음: 전체를 나눠서 미리보기만 로드 (200자 cap, parts 없음).
+  // "더 보기"는 offset 페이지네이션 + 누적 append — 60개 캐시와 무관하게 전체를 본다.
+  const [entryOffset, setEntryOffset] = useState(0)
+  const { data: entryPage, isLoading: entryLoading, isFetching: entryFetching } = useMessageList(sessionId, {
     limit: ENTRY_LIMIT,
-    offset: 0,
+    offset: entryOffset,
     enabled: open && needle.length === 0,
   })
+  const [entryAcc, setEntryAcc] = useState<MessageListItem[]>([])
+  useEffect(() => {
+    if (!entryPage) return
+    setEntryAcc((prev) => {
+      if (entryOffset === 0) return entryPage.items
+      const seen = new Set(prev.map((p) => p.id))
+      return [...prev, ...entryPage.items.filter((m) => !seen.has(m.id))]
+    })
+  }, [entryPage, entryOffset])
+  const entryTotal = entryPage?.total ?? 0
+  const entryHasMore = entryAcc.length < entryTotal
 
   // 검색어 있음: FTS 분할 검색 ("더 보기"는 누적 append)
   const { data: searchPage, isLoading: searchLoading, isFetching: searchFetching } = useQuery({
@@ -61,7 +76,8 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
 
   const searchItems = acc
   const hasMore = searchPage?.hasMore ?? false
-  const total = needle.length === 0 ? entryList?.total : searchPage?.total
+  const total = needle.length === 0 ? entryTotal : searchPage?.total
+  const entryItems = entryAcc
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
@@ -78,17 +94,17 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
           className="h-8 px-2 rounded-md bg-muted/40 border border-border text-xs focus:border-primary focus:outline-none"
         />
         <div className="overflow-y-auto min-h-0 flex-1 -mx-1 px-1">
-          {(entryLoading || searchLoading) && searchItems.length === 0 && (
+          {(entryLoading || searchLoading) && searchItems.length === 0 && entryItems.length === 0 && (
             <div className="text-xs text-muted-foreground py-6 text-center">Loading…</div>
           )}
-          {!entryLoading && !searchLoading && needle.length === 0 && (entryList?.items.length ?? 0) === 0 && (
+          {!entryLoading && !searchLoading && needle.length === 0 && entryItems.length === 0 && (
             <div className="text-xs text-muted-foreground py-6 text-center">No messages found</div>
           )}
           {!searchLoading && needle.length > 0 && searchItems.length === 0 && (
             <div className="text-xs text-muted-foreground py-6 text-center">No messages found</div>
           )}
           {needle.length === 0
-            ? (entryList?.items ?? []).map((m: MessageListItem, i: number) => (
+            ? entryItems.map((m: MessageListItem, i: number) => (
                 <JumpRow
                   key={m.id}
                   no={total != null ? total - i : i + 1}
@@ -108,6 +124,15 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
                   onJump={() => onJump(h.messageId)}
                 />
               ))}
+          {needle.length === 0 && entryHasMore && (
+            <button
+              onClick={() => setEntryOffset((o) => o + ENTRY_LIMIT)}
+              disabled={entryFetching}
+              className="w-full text-center px-2 py-2 rounded-md hover:bg-accent text-xs text-muted-foreground cursor-pointer disabled:opacity-50"
+            >
+              {entryFetching ? 'Loading…' : `Show more (${entryItems.length} / ${entryTotal})`}
+            </button>
+          )}
           {needle.length > 0 && hasMore && (
             <button
               onClick={() => setOffset((o) => o + SEARCH_PAGE)}

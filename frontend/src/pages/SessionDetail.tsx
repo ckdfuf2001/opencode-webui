@@ -19,7 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, ensureMessageLoaded, loadOlderMessages, messagesQueryKey } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, getRecentTotal, ensureMessageLoaded, loadOlderMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -163,14 +163,18 @@ export function SessionDetail() {
     windowStartRef.current = windowStart;
     shiftPendingRef.current = false;
   }, [windowStart]);
-  // 서버 잔여량: backfill(window/before) 응답의 total 기준. 폴링 없이 안다.
-  // 모르면(더보기 전) 캐시가 가득 찼을 때만 가능성이 있다.
+  // 서버 잔여량: 최근 폴링·backfill이 본 total 기준. 추정 분기 없음 —
+  // total을 모르면 버튼을 숨긴다 (60개 추정은 오탐이라 제거).
   const [totalKnown, setTotalKnown] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   useEffect(() => {
     setTotalKnown(null);
     setIsLoadingMore(false);
   }, [sessionId]);
+  const recentTotal = sessionId ? getRecentTotal(sessionId) : undefined;
+  useEffect(() => {
+    if (recentTotal != null) setTotalKnown(recentTotal);
+  }, [recentTotal]);
   // Back to latest: null 커밋 후(새 DOM 반영 후)에 하단 고정.
   // double-rAF + 120ms 폴백으로 늦은 페인트까지 커버한다.
   useEffect(() => {
@@ -250,13 +254,13 @@ export function SessionDetail() {
     if (baseMessages.length <= WINDOW_SIZE) return baseMessages;
     return baseMessages.slice(start, start + WINDOW_SIZE);
   }, [baseMessages, start]);
-  // 서버 잔여량: backfill(window/before) 응답의 total 기준. 폴링 없이 안다.
-  // 모르면(더보기 전) 캐시가 가득 찼을 때만 가능성이 있다.
+  // 서버 잔여량: 최근 폴링·backfill이 본 total 기준. 추정 분기 없음.
   const remainingOnServer = totalKnown != null
     ? Math.max(0, totalKnown - (baseMessages?.length ?? 0))
-    : ((baseMessages?.length ?? 0) >= RECENT_MESSAGE_LIMIT ? 1 : 0);
-  const hasMore = start > 0 || remainingOnServer > 0 || isLoadingMore;
-  const hiddenCount = start;
+    : 0;
+  // 라벨 단일 숫자: 캐시 안 가려진 수 + 서버 잔여. 모드별 다른 숫자 번갈아 표시 금지.
+  const olderAvailable = start + remainingOnServer;
+  const hasMore = olderAvailable > 0;
   // useAutoScroll의 추종 해제 함수 (아래 useAutoScroll 선언 뒤에 연결)
   const markDisengagedRef = useRef<(() => void) | null>(null);
   // 윈도우 이동 후 시각 위치 유지용: 앵커 메시지 기준 보정.
@@ -397,18 +401,25 @@ export function SessionDetail() {
     if (isLoadingMore || !sessionId) return;
     const len = baseMessages?.length ?? 0;
     if (len === 0) return;
+    // shift량은 API loaded가 아니라 병합 전후 실측으로 계산한다.
+    // 겹침·스트리밍 tail 증가가 있어도 이전 최상단의 새 인덱스가 정확한 prepend량이다.
+    const prevOldestId = baseMessages?.[0]?.info.id;
     setIsLoadingMore(true);
     try {
       const r = await loadOlderMessages(queryClient, opcodeUrl, sessionId, repoDirectory, 30);
       setTotalKnown(r.total);
-      if (r.loaded > 0) {
+      const key = messagesQueryKey(opcodeUrl, sessionId, repoDirectory);
+      const merged = queryClient.getQueryData<MessageListResponse>(key) ?? [];
+      const idx = prevOldestId ? merged.findIndex((m) => m.info.id === prevOldestId) : -1;
+      const shift = idx >= 0 ? idx : r.loaded;
+      if (shift > 0) {
         const c = messageContainerRef.current;
         if (c) pendingCompensateRef.current = { prevHeight: c.scrollHeight, prevTop: c.scrollTop };
         markDisengagedRef.current?.();
         shiftPendingRef.current = true;
         lastShiftAtRef.current = Date.now();
         const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
-        setWindowStart(cur + r.loaded);
+        setWindowStart(cur + shift);
       }
     } catch {
       // 실패해도 버튼 유지 — 재시도 가능
@@ -1419,17 +1430,12 @@ if (results.length > 0) {
                   disabled={isLoadingMore}
                   className="text-xs px-3 py-1.5 rounded-full border bg-card hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm disabled:opacity-50"
                 >
-                  {start > 0 ? (
-                    <>
-                      <span className="sm:hidden">Load more</span>
-                      <span className="hidden sm:inline">Load more — {hiddenCount} older message{hiddenCount !== 1 ? "s" : ""} hidden · click or scroll up</span>
-                    </>
-                  ) : isLoadingMore ? (
+                  {isLoadingMore ? (
                     <>Loading older…</>
                   ) : (
                     <>
-                      <span className="sm:hidden">Load older</span>
-                      <span className="hidden sm:inline">Load more — {remainingOnServer > 1 ? `${remainingOnServer} older in history` : 'older in history'} · click</span>
+                      <span className="sm:hidden">Load more</span>
+                      <span className="hidden sm:inline">Load more — {olderAvailable} older · click or scroll up</span>
                     </>
                   )}
                 </button>

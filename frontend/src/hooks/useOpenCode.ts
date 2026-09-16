@@ -517,6 +517,19 @@ export function messagesQueryKey(
   return ["opencode", "messages", opcodeUrl, sessionID, directory, limit] as const;
 }
 
+/** 최근 폴링이 본 세션 전체 메시지 수 (recent 응답의 total). 폴링·backfill마다 갱신.
+ * 더보기 잔여 계산이 항상 최신 total을 보게 한다 (버튼 숫자가 흔들리던 원인). */
+const recentTotals = new Map<string, number>();
+export function getRecentTotal(sessionID: string): number | undefined {
+  return recentTotals.get(sessionID);
+}
+export function setRecentTotal(sessionID: string, total: number): void {
+  if (Number.isFinite(total) && total >= 0) recentTotals.set(sessionID, total);
+}
+export function dropRecentTotal(sessionID: string): void {
+  recentTotals.delete(sessionID);
+}
+
 /** 점프/검색으로 주문형 로드된 구간의 메시지 ID (세션별). 폴링 refetch가 덮어써도 유지한다. */
 const backfilledIds = new Map<string, Set<string>>();
 export function dropBackfilledId(sessionID: string, messageId: string): void {
@@ -627,6 +640,7 @@ async function backfillMessages(
   queryClient.setQueryData<MessageListResponse>(key, (old) =>
     old && old.length > 0 ? mergeMessagesDeduped(old, range) : truncateLargeToolOutputs(range),
   );
+  setRecentTotal(sessionID, body.total);
   return { messages: range, total: body.total, hasMore: body.hasMore ?? false };
 }
 
@@ -667,8 +681,9 @@ export async function loadOlderMessages(
 ): Promise<{ loaded: number; total: number; hasMore: boolean }> {
   const key = messagesQueryKey(opcodeUrl, sessionID, directory);
   const cached = queryClient.getQueryData<MessageListResponse>(key) ?? [];
-  const oldest = cached[0];
-  if (!oldest) return { loaded: 0, total: 0, hasMore: false };
+  // 낙관적 항목(아직 서버에 없음)을 앵커로 쓰면 window가 404가 된다 — 실재 ID만 쓴다
+  const oldest = cached.find((m) => !m.info.id.startsWith('optimistic'));
+  if (!oldest) return { loaded: 0, total: getRecentTotal(sessionID) ?? 0, hasMore: false };
   const beforeIds = new Set(cached.map((m) => m.info.id));
   const { messages, total, hasMore } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { before: oldest.info.id }, count);
   const loaded = messages.filter((m) => !beforeIds.has(m.info.id)).length;
@@ -691,6 +706,8 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID!}/recent?${params.toString()}`);
       if (!res.ok) throw new Error('Failed to load messages');
       const body = (await res.json()) as { total: number; messages: MessageListResponse };
+      // 전체 total을 매 폴링마다 기록 — 더보기 잔여 계산용 (별도 count 폴링 없음)
+      setRecentTotal(sessionID!, body.total);
       const data = body.messages;
       let result = applyTruncationWindow(sessionID!, data);
       const ownKey = messagesQueryKey(opcodeUrl, sessionID, directory, limit ?? RECENT_MESSAGE_LIMIT);
