@@ -67,19 +67,23 @@ export function createSessionMessageRoutes() {
     }
   })
 
-  // GET /api/session-messages/:sessionId/window?around=&limit=
-  // 점프용 윈도우 — around 메시지 전후 limit개만 (parts 포함, cap 적용).
+  // GET /api/session-messages/:sessionId/window?around=&limit= / ?before=&limit=
+  // 점프용 윈도우 — around면 전후 limit개, before면 앵커 이전 limit개만 (parts 포함, cap 적용).
+  // before는 load-more(오래된 쪽 확장)용. 응답에 total/hasMore가 같이 오므로
+  // 헤더의 count 폴링 없이 더보기 버튼의 잔여 계산이 된다.
   app.get('/:sessionId/window', async (c) => {
     try {
       const sessionId = c.req.param('sessionId')
       const around = c.req.query('around') || ''
-      if (!around) return c.json({ error: 'around query parameter is required' }, 400)
+      const before = c.req.query('before') || ''
+      const anchor = around || before
+      if (!anchor) return c.json({ error: 'around or before query parameter is required' }, 400)
       const limitRaw = c.req.query('limit')
       const limit = limitRaw ? parseInt(limitRaw, 10) || 30 : 30
-      const result = await windowSessionMessages(sessionId, around, limit)
+      const result = await windowSessionMessages(sessionId, anchor, limit, before ? 'before' : 'around')
       if (!result) return dbUnavailable(c)
       if (!result.found) return c.json({ error: 'Message not found' }, 404)
-      return c.json({ total: result.total, messages: result.messages })
+      return c.json({ total: result.total, messages: result.messages, hasMore: result.hasMore })
     } catch (error: unknown) {
       logger.error('Failed to load session message window:', error)
       return c.json({ error: error instanceof Error ? error.message : 'Failed to load message window' }, 500)

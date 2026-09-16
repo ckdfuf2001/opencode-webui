@@ -600,6 +600,37 @@ export const useMessageList = (
 };
 
 /**
+ * 주문형 로드의 공통 몸통. 점프({around})·더보기({before})·향후 아래 확장({after})
+ * 모두 여기로 모은다: window fetch → cap → backfilledIds 등록 → dedup 병합 →
+ * canonical 키에 setQueryData. 호출자는 앵커와 개수만 지정한다.
+ */
+type BackfillAnchor = { around: string } | { before: string };
+async function backfillMessages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  opcodeUrl: string | null | undefined,
+  sessionID: string,
+  directory: string | undefined,
+  anchor: BackfillAnchor,
+  limit: number,
+): Promise<{ messages: MessageListResponse; total: number; hasMore: boolean }> {
+  const key = messagesQueryKey(opcodeUrl, sessionID, directory);
+  const params = new URLSearchParams({ limit: String(limit) });
+  if ('around' in anchor) params.set('around', anchor.around);
+  else params.set('before', anchor.before);
+  const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID}/window?${params.toString()}`);
+  if (!res.ok) throw new Error('Failed to load message window');
+  const body = (await res.json()) as { total: number; messages: MessageListResponse; hasMore?: boolean };
+  const range = truncateLargeToolOutputs(body.messages);
+  let ids = backfilledIds.get(sessionID);
+  if (!ids) { ids = new Set(); backfilledIds.set(sessionID, ids); }
+  for (const m of range) ids.add(m.info.id);
+  queryClient.setQueryData<MessageListResponse>(key, (old) =>
+    old && old.length > 0 ? mergeMessagesDeduped(old, range) : truncateLargeToolOutputs(range),
+  );
+  return { messages: range, total: body.total, hasMore: body.hasMore ?? false };
+}
+
+/**
  * 점프 타겟이 폴링 윈도우(최근 N개) 밖에 있으면 DB 윈도우 API로
  * 주문형 로드해 캐시에 합친다. 캐시에 있으면 네트워크 없이 true.
  * 전체 목록을 절대 가져오지 않는다.
@@ -615,22 +646,33 @@ export async function ensureMessageLoaded(
   const cached = queryClient.getQueryData<MessageListResponse>(key);
   if (cached?.some((m) => m.info.id === messageId)) return true;
   try {
-    const params = new URLSearchParams({ around: messageId, limit: '30' });
-    const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID}/window?${params.toString()}`);
-    if (!res.ok) return false;
-    const body = (await res.json()) as { total: number; messages: MessageListResponse };
-    const range = truncateLargeToolOutputs(body.messages);
-    if (!range.some((m) => m.info.id === messageId)) return false;
-    let ids = backfilledIds.get(sessionID);
-    if (!ids) { ids = new Set(); backfilledIds.set(sessionID, ids); }
-    for (const m of range) ids.add(m.info.id);
-    queryClient.setQueryData<MessageListResponse>(key, (old) =>
-      old && old.length > 0 ? mergeMessagesDeduped(old, range) : truncateLargeToolOutputs(range),
-    );
-    return true;
+    const { messages } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { around: messageId }, 30);
+    return messages.some((m) => m.info.id === messageId);
   } catch {
     return false;
   }
+}
+
+/**
+ * 리스트 상단 "더 보기": 캐시된 가장 오래된 메시지 이전을 count개 더 가져와
+ * 앞에 붙인다. 새로 붙은 개수(스크롤 위치 유지용)·전체 total·서버 잔여 여부를
+ * 돌려준다. truncateLargeToolOutputs·backfilledIds·병합은 backfillMessages가 처리.
+ */
+export async function loadOlderMessages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  opcodeUrl: string | null | undefined,
+  sessionID: string,
+  directory: string | undefined,
+  count = 30,
+): Promise<{ loaded: number; total: number; hasMore: boolean }> {
+  const key = messagesQueryKey(opcodeUrl, sessionID, directory);
+  const cached = queryClient.getQueryData<MessageListResponse>(key) ?? [];
+  const oldest = cached[0];
+  if (!oldest) return { loaded: 0, total: 0, hasMore: false };
+  const beforeIds = new Set(cached.map((m) => m.info.id));
+  const { messages, total, hasMore } = await backfillMessages(queryClient, opcodeUrl, sessionID, directory, { before: oldest.info.id }, count);
+  const loaded = messages.filter((m) => !beforeIds.has(m.info.id)).length;
+  return { loaded, total, hasMore };
 }
 
 export const useMessages = (opcodeUrl: string | null | undefined, sessionID: string | undefined, directory?: string, limit?: number, opts?: { poll?: boolean }) => {
@@ -638,7 +680,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
   const queryClient = useQueryClient();
 
   return useQuery({
-    queryKey: ["opencode", "messages", opcodeUrl, sessionID, directory, limit ?? 0],
+    queryKey: messagesQueryKey(opcodeUrl, sessionID, directory, limit ?? RECENT_MESSAGE_LIMIT),
     queryFn: async () => {
       // opencode SQLite에서 최근 N개만 읽는다 — opencode HTTP 목록 API는
       // 페이지네이션이 없어 전체를 직렬화하므로 절대 쓰지 않는다.
@@ -651,7 +693,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const body = (await res.json()) as { total: number; messages: MessageListResponse };
       const data = body.messages;
       let result = applyTruncationWindow(sessionID!, data);
-      const ownKey = messagesQueryKey(opcodeUrl, sessionID, directory, limit ?? 0);
+      const ownKey = messagesQueryKey(opcodeUrl, sessionID, directory, limit ?? RECENT_MESSAGE_LIMIT);
       const cached = queryClient.getQueryData<MessageListResponse>(ownKey);
       if (cached && result.length > 0 && cached.length > 0) {
         const cachedLast = cached[cached.length - 1]!;

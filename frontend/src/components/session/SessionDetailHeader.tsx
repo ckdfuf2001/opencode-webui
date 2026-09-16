@@ -27,8 +27,6 @@ interface SessionDetailHeaderProps {
   isCancelled?: boolean;
   /** 이 세션(+하위)의 승인 대기 권한 수. 세션 리스트의 방패 배지와 동일한 데이터. */
   pendingPermissions?: number;
-  /** 전체 메시지 수 (COUNT 전용 API — 본문 로드 없음). */
-  messageCount?: number;
   opcodeUrl: string | null;
   repoDirectory: string | undefined;
   onFileBrowserOpen: () => void;
@@ -49,7 +47,6 @@ export function SessionDetailHeader({
   isStreaming,
   isCancelled = false,
   pendingPermissions = 0,
-  messageCount,
   opcodeUrl,
   repoDirectory,
   onFileBrowserOpen,
@@ -148,14 +145,6 @@ export function SessionDetailHeader({
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
-            {messageCount != null && (
-              <span
-                className="text-[11px] text-muted-foreground tabular-nums"
-                title={`${messageCount} messages in this session`}
-              >
-                {messageCount} msgs
-              </span>
-            )}
             <ContextUsageIndicator
               opcodeUrl={opcodeUrl}
               sessionID={sessionId}

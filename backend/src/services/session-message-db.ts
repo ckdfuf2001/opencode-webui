@@ -275,12 +275,13 @@ export async function historyReasoningModels(sessionId: string): Promise<Reasoni
   }
 }
 
-/** 점프용 윈도우: around 메시지 전후 limit개 (parts 포함, cap 적용). */
+/** 점프용 윈도우: around 메시지 전후, 또는 before 방향(앵커 이전) limit개 (parts 포함, cap 적용). */
 export async function windowSessionMessages(
   sessionId: string,
   aroundId: string,
   limit = 30,
-): Promise<{ total: number; found: boolean; messages: DbFullMessage[] } | null> {
+  direction: 'around' | 'before' = 'around',
+): Promise<{ total: number; found: boolean; messages: DbFullMessage[]; hasMore: boolean } | null> {
   const lim = Math.max(1, Math.min(100, limit))
   const oc = await openOcDb()
   if (!oc) return null
@@ -299,12 +300,17 @@ export async function windowSessionMessages(
         )
         .get(sessionId, anchor.t, anchor.t, anchor.r) as { c: number }
     ).c
-    const offset = Math.max(0, rank - Math.floor(lim / 2))
+    // around: 앵커 전후 절반씩. before: 앵커 이전 limit개만 (load-more용).
+    // rank는 앵커보다 앞선 메시지 수이므로, before는 [rank-take, rank) 구간만
+    // 읽어야 앵커 자신·이후가 섞이지 않는다 (rank < lim이면 앞에서부터 rank개).
+    const offset = direction === 'before' ? Math.max(0, rank - lim) : Math.max(0, rank - Math.floor(lim / 2))
+    const take = direction === 'before' ? rank - offset : lim
+    const hasMore = offset > 0
     const rows = oc
       .query(
         'SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created, rowid LIMIT ? OFFSET ?',
       )
-      .all(sessionId, lim, offset) as MessageRow[]
+      .all(sessionId, take, offset) as MessageRow[]
     const partsByMessage = readCappedParts(
       oc,
       rows.map((r) => r.id),
@@ -313,7 +319,7 @@ export async function windowSessionMessages(
       info: { ...safeParse(r.data), id: r.id, sessionID: sessionId },
       parts: partsByMessage.get(r.id) ?? [],
     }))
-    return { total, found: true, messages }
+    return { total, found: true, messages, hasMore }
   } finally {
     oc.close()
   }
