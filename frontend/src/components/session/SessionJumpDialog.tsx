@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useMessageList, type MessageListItem } from '@/hooks/useOpenCode'
@@ -9,13 +9,15 @@ interface SessionJumpDialogProps {
   open: boolean
   onClose: () => void
   sessionId: string | undefined
+  repoId?: number | null
+  repoLabel?: string
   onJump: (messageID: string) => void
 }
 
 const ENTRY_LIMIT = 20
 const SEARCH_PAGE = 20
 
-export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJumpDialogProps) {
+export function SessionJumpDialog({ open, onClose, sessionId, repoId, repoLabel, onJump }: SessionJumpDialogProps) {
   const [q, setQ] = useState('')
   const [offset, setOffset] = useState(0)
   const needle = q.trim()
@@ -105,6 +107,84 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
   const total = needle.length === 0 ? entryTotal : searchPage?.total
   const entryItems = entryAcc
 
+  // 리스트 선택: 체크·범위 → 선택 출력 (검색 페이지와 같은 JSON 양식)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [outputOpen, setOutputOpen] = useState(false)
+  const [rangeMode, setRangeMode] = useState(false)
+  const [rangeStart, setRangeStart] = useState<string | null>(null)
+  useEffect(() => {
+    setSelectedIds(new Set())
+    setOutputOpen(false)
+    setRangeMode(false)
+    setRangeStart(null)
+  }, [sessionId])
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  // 출력 양식은 검색 페이지 selectedJson과 동일 키
+  // (kind/repo/repoId/sessionId/messageId/turnIndex/role/ts/snippet/meta)
+  const selectedOutput = useMemo(() => {
+    if (selectedIds.size === 0) return ''
+    const rows: Array<Record<string, unknown>> = []
+    if (needle.length === 0) {
+      // entry 목록은 turn 0부터 연속 누적되므로 인덱스가 곧 turnIndex다
+      entryItems.forEach((m, i) => {
+        if (!selectedIds.has(m.id)) return
+        rows.push({
+          kind: 'message', repo: repoLabel ?? '', repoId: repoId ?? null,
+          sessionId, messageId: m.id, turnIndex: i, role: m.role, ts: m.created,
+          snippet: m.preview, meta: `${m.role} turn ${i}`,
+        })
+      })
+    } else {
+      for (const h of searchItems) {
+        if (!selectedIds.has(h.messageId)) continue
+        rows.push({
+          kind: 'message', repo: repoLabel ?? '', repoId: repoId ?? null,
+          sessionId, messageId: h.messageId, turnIndex: h.turnIndex, role: h.role, ts: h.ts,
+          snippet: h.snippet, meta: `${h.role} turn ${h.turnIndex}`,
+        })
+      }
+    }
+    return JSON.stringify(rows, null, 2)
+  }, [selectedIds, needle, entryItems, searchItems, sessionId, repoId, repoLabel])
+
+  const visibleIds = useMemo(() => {
+    return needle.length === 0
+      ? entryItems.map((m) => m.id)
+      : searchItems.map((h) => h.messageId)
+  }, [needle, entryItems, searchItems])
+
+  const handleRowClick = (id: string) => {
+    if (!rangeMode) {
+      onJump(id)
+      return
+    }
+    if (rangeStart == null) {
+      setRangeStart(id)
+      return
+    }
+    const a = visibleIds.indexOf(rangeStart)
+    const b = visibleIds.indexOf(id)
+    if (a === -1 || b === -1) {
+      setRangeStart(id)
+      return
+    }
+    const [from, to] = a <= b ? [a, b] : [b, a]
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      for (let i = from; i <= to; i++) next.add(visibleIds[i]!)
+      return next
+    })
+    setRangeStart(null)
+    setRangeMode(false)
+  }
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent
@@ -112,6 +192,69 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <DialogTitle>Search / Go to message{total != null && total > 0 ? ` (${total})` : ''}</DialogTitle>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground">
+            {rangeMode
+              ? (rangeStart ? '종료점을 누르세요' : '시작점을 누르세요')
+              : selectedIds.size > 0 ? `${selectedIds.size}개 선택됨` : '행 클릭: 이동 · 체크: 선택'}
+          </span>
+          <span className="flex-1" />
+          <button
+            onClick={() => { setRangeMode((v) => !v); setRangeStart(null) }}
+            title="범위 선택: 시작 행 → 종료 행"
+            className={`text-[11px] px-2 py-1 rounded border ${rangeMode ? 'border-primary bg-primary/10 text-primary' : 'border-input hover:bg-accent text-muted-foreground'}`}
+          >
+            범위 선택{rangeMode ? (rangeStart ? ' (종료점…)' : ' (시작점…)') : ''}
+          </button>
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="text-[11px] px-2 py-1 rounded hover:bg-accent text-muted-foreground"
+            >
+              선택 해제
+            </button>
+          )}
+          <button
+            onClick={() => setOutputOpen((v) => !v)}
+            disabled={selectedIds.size === 0}
+            className="text-[11px] px-2 py-1 rounded border border-input hover:bg-accent disabled:opacity-40"
+          >
+            선택 출력 ({selectedIds.size})
+          </button>
+        </div>
+        {outputOpen && selectedOutput && (
+          <div className="rounded-md border border-input bg-background">
+            <div className="flex items-center justify-between px-2 py-1 border-b border-input">
+              <span className="text-[11px] font-medium">선택 출력</span>
+              <div className="flex gap-1">
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(selectedOutput)
+                    } catch {
+                      const ta = document.createElement('textarea')
+                      ta.value = selectedOutput
+                      document.body.appendChild(ta)
+                      ta.select()
+                      document.execCommand('copy')
+                      document.body.removeChild(ta)
+                    }
+                  }}
+                  className="text-[11px] px-2 py-0.5 rounded hover:bg-accent text-muted-foreground"
+                >
+                  Copy
+                </button>
+                <button
+                  onClick={() => setOutputOpen(false)}
+                  className="text-[11px] px-2 py-0.5 rounded hover:bg-accent text-muted-foreground"
+                >
+                  닫기
+                </button>
+              </div>
+            </div>
+            <pre className="text-[11px] whitespace-pre-wrap break-words font-mono p-2 max-h-48 overflow-y-auto">{selectedOutput}</pre>
+          </div>
+        )}
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -140,7 +283,10 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
                   role={m.role}
                   preview={m.preview}
                   created={m.created}
-                  onJump={() => onJump(m.id)}
+                  checked={selectedIds.has(m.id)}
+                  rangeStart={rangeMode && rangeStart === m.id}
+                  onCheck={() => toggleSelect(m.id)}
+                  onJump={() => handleRowClick(m.id)}
                 />
               ))
             : searchItems.map((h: MessageSearchHit) => (
@@ -150,7 +296,10 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
                   role={h.role}
                   preview={h.snippet}
                   created={h.ts}
-                  onJump={() => onJump(h.messageId)}
+                  checked={selectedIds.has(h.messageId)}
+                  rangeStart={rangeMode && rangeStart === h.messageId}
+                  onCheck={() => toggleSelect(h.messageId)}
+                  onJump={() => handleRowClick(h.messageId)}
                 />
               ))}
           {needle.length === 0 && entryHasMore && (
@@ -177,18 +326,29 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
   )
 }
 
-function JumpRow({ no, role, preview, created, onJump }: {
+function JumpRow({ no, role, preview, created, checked, rangeStart, onCheck, onJump }: {
   no: number
   role: string
   preview: string
   created: number
+  checked: boolean
+  rangeStart: boolean
+  onCheck: () => void
   onJump: () => void
 }) {
   return (
-    <button
+    <div
       onClick={onJump}
-      className="w-full text-left px-2 py-1.5 rounded-md hover:bg-accent flex items-baseline gap-2 cursor-pointer"
+      className={`w-full text-left px-2 py-1.5 rounded-md hover:bg-accent flex items-baseline gap-2 cursor-pointer ${checked ? 'bg-primary/5 ring-1 ring-primary/30' : ''} ${rangeStart ? 'ring-1 ring-primary/60 bg-primary/10' : ''}`}
     >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onCheck}
+        onClick={(e) => e.stopPropagation()}
+        className="h-3.5 w-3.5 shrink-0 accent-primary"
+        title="선택"
+      />
       <span className="text-[10px] font-mono text-muted-foreground w-8 shrink-0">#{no}</span>
       <span className={`text-[10px] font-medium w-14 shrink-0 ${role === 'user' ? 'text-blue-500' : 'text-muted-foreground'}`}>
         {role === 'user' ? 'You' : 'Asst'}
@@ -199,6 +359,6 @@ function JumpRow({ no, role, preview, created, onJump }: {
           {formatChatTime(created)}
         </span>
       ) : null}
-    </button>
+    </div>
   )
 }

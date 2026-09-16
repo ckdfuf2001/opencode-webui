@@ -1659,6 +1659,8 @@ if (results.length > 0) {
         open={jumpOpen}
         onClose={() => setJumpOpen(false)}
         sessionId={sessionId}
+        repoId={repoId || undefined}
+        repoLabel={repo?.localPath}
         onJump={(id) => {
           // 모달(스크롤 잠금·포커스 복원·닫힘 애니메이션)이 끝난 뒤 이동해야
           // smooth 스크롤이 중간에 끊기거나 무시되지 않는다.
