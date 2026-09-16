@@ -2,8 +2,11 @@ import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert } from "lucide-react";
 import { CancelledBadge } from "./CancelledBadge";
+import { API_BASE_URL } from "@/config";
+import { clearCancelledUntilNextSend } from "@/hooks/useOpenCode";
 import { useState, useEffect } from "react";
 
 interface Repo {
@@ -60,6 +63,28 @@ export function SessionDetailHeader({
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(sessionTitle);
   const isWorking = isStreaming;
+  // 취소 배지 수동 제거: 확인 팝업에서 제거하면 DB 플래그 + 메모리 유지분을 지우고
+  // 헤더에서 숨긴다. 채팅 내용·실패 큐 항목은 그대로 (마지막 메시지 에러·실패 큐가
+  // 남아 있으면 다음 폴링에 배지가 다시 뜰 수 있다 — 그건 진짜 실패라 유지가 맞다).
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [badgeDismissed, setBadgeDismissed] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  useEffect(() => {
+    setBadgeDismissed(false);
+    setConfirmClearOpen(false);
+  }, [sessionId]);
+
+  const handleConfirmClearCancelled = async () => {
+    setClearing(true);
+    try {
+      await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionId)}/cancelled`, { method: 'DELETE' }).catch(() => undefined);
+    } finally {
+      clearCancelledUntilNextSend(sessionId);
+      setBadgeDismissed(true);
+      setClearing(false);
+      setConfirmClearOpen(false);
+    }
+  };
 
   useEffect(() => {
     if (sessionStorage.getItem(`newSessionFocus:${sessionId}`)) {
@@ -181,14 +206,16 @@ export function SessionDetailHeader({
               <span className="text-xs text-blue-500 font-medium hidden sm:inline">Working</span>
             </div>
           )}
-          {isCancelled && !isWorking && (
-            <div
-              className="flex items-center gap-1 rounded-full bg-gray-500/10 border border-gray-500/30 px-2 py-0.5"
-              title="Last result was cancelled — will show until next chat starts"
+          {isCancelled && !isWorking && !badgeDismissed && (
+            <button
+              type="button"
+              onClick={() => setConfirmClearOpen(true)}
+              className="flex items-center gap-1 rounded-full bg-gray-500/10 border border-gray-500/30 px-2 py-0.5 cursor-pointer hover:bg-gray-500/20 transition-colors"
+              title="클릭하면 취소 배지 제거 확인"
             >
               <CancelledBadge />
               <span className="text-xs text-gray-500 font-medium hidden sm:inline">Cancelled</span>
-            </div>
+            </button>
           )}
           {pendingPermissions > 0 && (
             <div
@@ -239,6 +266,24 @@ export function SessionDetailHeader({
           </div>
         </div>
       </div>
+      <Dialog open={confirmClearOpen} onOpenChange={setConfirmClearOpen}>
+        <DialogContent className="max-w-[90%] sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>취소 배지 제거</DialogTitle>
+            <DialogDescription>
+              헤더의 취소 배지를 숨깁니다. 채팅 내용과 대기열 항목은 그대로 유지됩니다.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setConfirmClearOpen(false)} disabled={clearing}>
+              취소
+            </Button>
+            <Button onClick={handleConfirmClearCancelled} disabled={clearing}>
+              {clearing ? '제거 중...' : '배지 제거'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
