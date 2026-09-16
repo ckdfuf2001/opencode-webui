@@ -15,7 +15,7 @@ import {
   type MessageExpandResult,
   type CommitDetail,
 } from '@/api/search'
-import { recall } from '@/api/search'
+import { recall, syncRecentSessions } from '@/api/search'
 import { listRepos } from '@/api/repos'
 import { Search as SearchIcon, History, GitCommit, Trash2, Copy, CornerDownLeft, X } from 'lucide-react'
 import { showToast } from '@/lib/toast'
@@ -59,6 +59,20 @@ export function Search() {
     return () => clearTimeout(id)
   }, [q])
 
+  // 최근 활성 세션을 증분 동기화한 뒤 검색을 새로고침한다.
+  // 안 하면 채팅 직후 검색이 stale 인덱스를 맞아 새 내용을 놓친다.
+  const syncAndRefresh = () => {
+    void syncRecentSessions(25)
+      .catch(() => {})
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: ['recall-search'] })
+      })
+  }
+  useEffect(() => {
+    syncAndRefresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const handleSearch = () => {
     if (!q.trim()) return
     setSubmittedQ(q.trim())
@@ -67,6 +81,7 @@ export function Search() {
     setExpandedData(null)
     setCommitDetail(null)
     setDetailSha(null)
+    syncAndRefresh()
   }
 
   const effectiveQ = submittedQ || debouncedQ

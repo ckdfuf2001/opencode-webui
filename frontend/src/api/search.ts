@@ -112,6 +112,16 @@ export async function getCommitDetail(sha: string, repoId: number): Promise<Comm
   return res.json() as Promise<CommitDetail>
 }
 
+export async function syncRecentSessions(limit = 25): Promise<{ synced: number; indexed: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/search/messages/sync-recent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  })
+  if (!res.ok) throw new Error('Failed to sync recent sessions')
+  return res.json()
+}
+
 export async function reindexMessages(sessionId?: string): Promise<{ indexed: number }> {
   const res = await fetch(`${API_BASE_URL}/api/search/messages/reindex`, {
     method: 'POST',

@@ -20,14 +20,21 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
   const [offset, setOffset] = useState(0)
   const needle = q.trim()
 
-  // 진입 시 FTS 인덱스를 증분 동기화 (화끈한 전체 rebuild가 아님) 후 목록 조회
+  // 진입 시 FTS 인덱스를 증분 동기화 (화끈한 전체 rebuild가 아님) 후 목록 조회.
+  // FTS 검색은 동기화 완료 후에만 켠다 — 동시에 쏘면 stale 인덱스로 빗나간다.
+  const [indexReady, setIndexReady] = useState(false)
   useEffect(() => {
     if (!open || !sessionId) return
     setQ('')
     setOffset(0)
     setEntryOffset(0)
     setEntryAcc([])
-    void reindexMessages(sessionId).catch(() => {})
+    setIndexReady(false)
+    let cancelled = false
+    void reindexMessages(sessionId)
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setIndexReady(true) })
+    return () => { cancelled = true }
   }, [open, sessionId])
 
   // 검색어 없음: 전체를 오래된 것부터 나눠서 미리보기만 로드 (200자 cap, parts 없음).
@@ -55,7 +62,7 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
   const { data: searchPage, isLoading: searchLoading, isFetching: searchFetching } = useQuery({
     queryKey: ['message-search', sessionId, needle, offset],
     queryFn: () => searchMessages({ q: needle, k: SEARCH_PAGE, offset, sessionId: sessionId! }),
-    enabled: open && !!sessionId && needle.length > 0,
+    enabled: open && !!sessionId && needle.length > 0 && indexReady,
     staleTime: 15_000,
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: false,
@@ -98,10 +105,13 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
           {(entryLoading || searchLoading) && searchItems.length === 0 && entryItems.length === 0 && (
             <div className="text-xs text-muted-foreground py-6 text-center">Loading…</div>
           )}
+          {!indexReady && needle.length > 0 && (
+            <div className="text-xs text-muted-foreground py-6 text-center">Indexing…</div>
+          )}
           {!entryLoading && !searchLoading && needle.length === 0 && entryItems.length === 0 && (
             <div className="text-xs text-muted-foreground py-6 text-center">No messages found</div>
           )}
-          {!searchLoading && needle.length > 0 && searchItems.length === 0 && (
+          {indexReady && !searchLoading && needle.length > 0 && searchItems.length === 0 && (
             <div className="text-xs text-muted-foreground py-6 text-center">No messages found</div>
           )}
           {needle.length === 0

@@ -110,7 +110,11 @@ export async function listSessionMessages(
   }
 }
 
-/** 같은 세션의 여러 메시지에 대한 첫 텍스트 미리보기(200자)를 SQL에서 잘라 가져온다. */
+/**
+ * 같은 세션의 여러 메시지에 대한 미리보기(200자).
+ * 첫 파트만 보면 step-start/reasoning(빈 텍스트) 뒤에 실제 내용이 있어도
+ * (empty)가 된다. 순서대로 훑어 첫 의미 있는 파트(text → tool → reasoning → file)를 쓴다.
+ */
 function readPreviews(oc: Database, messageIds: string[]): Map<string, string> {
   const out = new Map<string, string>()
   if (messageIds.length === 0) return out
@@ -123,17 +127,24 @@ function readPreviews(oc: Database, messageIds: string[]): Map<string, string> {
        ORDER BY message_id, time_created, rowid`,
     )
     .all(JSON.stringify(messageIds)) as Array<{ mid: string; ty: string | null; tool: string | null; t: string | null; o: string | null }>
-  const seen = new Set<string>()
+  interface Cand { text?: string; tool?: string; reasoning?: string; file?: boolean }
+  const cands = new Map<string, Cand>()
   for (const r of rows) {
-    if (seen.has(r.mid)) continue
-    seen.add(r.mid)
-    if (r.t != null && r.t !== '') out.set(r.mid, r.t)
-    else if (r.ty === 'tool') {
+    let c = cands.get(r.mid)
+    if (!c) { c = {}; cands.set(r.mid, c) }
+    if (r.t != null && r.t !== '') {
+      if (r.ty === 'text' && c.text === undefined) c.text = r.t
+      else if (r.ty === 'reasoning' && c.reasoning === undefined) c.reasoning = r.t
+    } else if (r.ty === 'tool' && c.tool === undefined) {
       const marker = r.tool ? `[tool:${r.tool}]` : '[tool]'
-      out.set(r.mid, r.o ? `${marker} ${r.o}` : marker)
+      c.tool = r.o ? `${marker} ${r.o}` : marker
+    } else if (r.ty === 'file' && c.file === undefined) {
+      c.file = true
     }
-    else if (r.ty === 'file') out.set(r.mid, '[file]')
-    else out.set(r.mid, '(empty)')
+  }
+  for (const mid of messageIds) {
+    const c = cands.get(mid)
+    out.set(mid, c?.text ?? c?.tool ?? c?.reasoning ?? (c?.file ? '[file]' : '(empty)'))
   }
   return out
 }

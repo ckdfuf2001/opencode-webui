@@ -89,6 +89,33 @@ export function createSearchRoutes(db: Database) {
     }
   })
 
+  // POST /api/search/messages/sync-recent — 최근 활성 N 세션 증분 동기화.
+  // recall/검색 진입 시 호출하면 새 메시지·(empty) 해소·turn_index가 최신으로 맞는다.
+  // 세션별 incremental(신규만)이라 가볍다.
+  app.post('/messages/sync-recent', async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { limit?: number }
+      const limit = Math.max(1, Math.min(100, body?.limit ?? 25))
+      const rows = db.prepare(
+        'SELECT session_id FROM session_status ORDER BY updated_at DESC LIMIT ?',
+      ).all(limit) as { session_id: string }[]
+      let synced = 0
+      let indexed = 0
+      for (const r of rows) {
+        try {
+          indexed += await syncSessionMessages(db, r.session_id)
+          synced++
+        } catch (e) {
+          logger.debug(`sync-recent skipped ${r.session_id}:`, e)
+        }
+      }
+      return c.json({ synced, indexed })
+    } catch (error) {
+      logger.error('Failed to sync recent sessions:', error)
+      return c.json({ error: 'Failed to sync recent sessions' }, 500)
+    }
+  })
+
   app.get('/commits', async (c) => {
     try {
       const parsed = SearchSchema.parse({
