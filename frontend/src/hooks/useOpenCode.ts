@@ -112,25 +112,50 @@ function reasoningPartsLength(parts: MessageWithParts["parts"]): number {
  * 메시지 목록 지문 비교 — join 없이 길이 합산만으로 판정한다.
  * 내용이 동일하면 캐시 참조를 그대로 반환해 매 폴링마다 새 배열이 생기는
  * 할당 압력을 막는다 (structuralSharing만으로는 하위 useMemo가 다 깨진다).
+ * 전체 합산이 아닌 메시지별 즉시 비교 — 서로 다른 메시지의 증감이 상쇄되면
+ * 오판하고 화면이 갱신되지 않는다. completed도 마지막이 아닌 전수 비교
+ * (고아 정리·과거 턴 reconcile로 중간 메시지가 바뀌는 경우).
  */
 function sameMessageList(a: MessageListResponse, b: MessageListResponse): boolean {
   if (a.length !== b.length) return false
-  if (a.length === 0) return true
-  let aText = 0
-  let bText = 0
   for (let i = 0; i < a.length; i++) {
     const ma = a[i]!
     const mb = b[i]!
     if (ma.info.id !== mb.info.id) return false
-    aText += textPartsLength(ma.parts) + toolOutputLength(ma.parts) + reasoningPartsLength(ma.parts)
-    bText += textPartsLength(mb.parts) + toolOutputLength(mb.parts) + reasoningPartsLength(mb.parts)
+    if (ma.parts.length !== mb.parts.length) return false
+    const la = textPartsLength(ma.parts) + toolOutputLength(ma.parts) + reasoningPartsLength(ma.parts)
+    const lb = textPartsLength(mb.parts) + toolOutputLength(mb.parts) + reasoningPartsLength(mb.parts)
+    if (la !== lb) return false
+    const da = Boolean((ma.info.time as { completed?: number } | undefined)?.completed)
+    const db = Boolean((mb.info.time as { completed?: number } | undefined)?.completed)
+    if (da !== db) return false
   }
-  if (aText !== bText) return false
-  const aLast = a[a.length - 1]!
-  const bLast = b[b.length - 1]!
-  const aDone = Boolean((aLast.info.time as { completed?: number } | undefined)?.completed)
-  const bDone = Boolean((bLast.info.time as { completed?: number } | undefined)?.completed)
-  return aDone === bDone
+  return true
+}
+
+/**
+ * 캐시가 fetch 결과보다 앞선 상태인지 — 같은 id 시퀀스·같은 길이에서 캐시 쪽이
+ * 더 많은 내용을 가지면 fetch 중 SSE 병합이 낀 것이다. 이때 fresh를 덮어쓰면
+ * 화면이 순간 되감기므로 캐시를 유지한다. 서버가 앞선 메시지가 하나라도 있으면
+ * (길이 다름 포함) fresh 채택 — 구조 변화는 항상 fresh가 이긴다.
+ */
+function isCachedAhead(cached: MessageListResponse, fresh: MessageListResponse): boolean {
+  if (cached.length !== fresh.length || cached.length === 0) return false
+  let ahead = false
+  for (let i = 0; i < cached.length; i++) {
+    const mc = cached[i]!
+    const mf = fresh[i]!
+    if (mc.info.id !== mf.info.id) return false
+    if (mc.parts.length !== mf.parts.length) return false
+    const lc = textPartsLength(mc.parts) + toolOutputLength(mc.parts) + reasoningPartsLength(mc.parts)
+    const lf = textPartsLength(mf.parts) + toolOutputLength(mf.parts) + reasoningPartsLength(mf.parts)
+    if (lc < lf) return false
+    if (lc > lf) ahead = true
+    const dc = Boolean((mc.info.time as { completed?: number } | undefined)?.completed)
+    const df = Boolean((mf.info.time as { completed?: number } | undefined)?.completed)
+    if (dc !== df) return false
+  }
+  return ahead
 }
 
 // bash 등 대용량 툴 출력은 메모리에 전부 들고 있으면 힙이 GB 단위로 부푼다.
@@ -638,7 +663,13 @@ export function releaseMessageAnchors(sessionID: string): void {
  * 핀은 살아있는데 캐시에 없는 경우 backfill로 재로드한다
  * (GC/리마운트/invalidate 후 점프 위치가 사라지는 것 방지).
  * 삭제된 메시지의 핀은 정리해 좀비 핀이 폴링을 돌지 않게 한다.
+ * 네트워크 오류가 지속되면 세션당 연속 실패 3회 후 60초 쿨다운 —
+ * messages 변경마다 effect가 돌 때 최대 50핀 × window 요청이 나가는 것을 막는다.
  */
+const pinReloadFailures = new Map<string, { count: number; until: number }>();
+const PIN_RELOAD_MAX_FAILURES = 3;
+const PIN_RELOAD_COOLDOWN_MS = 60_000;
+const PIN_RELOAD_MAX_TRACKED = 500;
 export async function reloadMissingPins(
   queryClient: ReturnType<typeof useQueryClient>,
   opcodeUrl: string | null | undefined,
@@ -647,8 +678,11 @@ export async function reloadMissingPins(
 ): Promise<void> {
   const pins = pinnedAnchors.get(sessionID);
   if (!pins || pins.size === 0) return;
+  const fb = pinReloadFailures.get(sessionID);
+  if (fb && Date.now() < fb.until) return;
   const key = messagesQueryKey(opcodeUrl, sessionID, directory);
   const have = new Set((queryClient.getQueryData<MessageListResponse>(key) ?? []).map((m) => m.info.id));
+  let failed = 0;
   for (const id of [...pins]) {
     if (have.has(id)) continue;
     try {
@@ -660,9 +694,24 @@ export async function reloadMissingPins(
         unpinMessageAnchor(sessionID, id);
       }
     } catch (e) {
-      // 404 등 사라진 메시지의 핀만 정리, 그 외 오류는 다음 기회에 재시도
+      // 404 등 사라진 메시지의 핀만 정리, 그 외 오류는 카운트 후 쿨다운
       if ((e as { status?: number })?.status === 404) unpinMessageAnchor(sessionID, id);
+      else failed++;
     }
+  }
+  if (failed === 0) {
+    pinReloadFailures.delete(sessionID);
+    return;
+  }
+  const count = (pinReloadFailures.get(sessionID)?.count ?? 0) + 1;
+  pinReloadFailures.set(sessionID, {
+    count: count >= PIN_RELOAD_MAX_FAILURES ? 0 : count,
+    until: count >= PIN_RELOAD_MAX_FAILURES ? Date.now() + PIN_RELOAD_COOLDOWN_MS : 0,
+  });
+  while (pinReloadFailures.size > PIN_RELOAD_MAX_TRACKED) {
+    const oldest = pinReloadFailures.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    pinReloadFailures.delete(oldest);
   }
 }
 
@@ -990,8 +1039,9 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       // 내용 동일하면 캐시 참조 그대로 반환 — 새 배열이 생길 때마다 하위
       // useMemo(MessageThread prepared 등)가 전부 재계산되고 힙이 부푼다.
       // fetch 중 SSE 병합이 끼었을 수 있어 캐시를 다시 읽어 비교한다.
+      // SSE가 fetch보다 앞서면 fresh 덮기로 화면이 되감기므로 캐시를 유지한다.
       const latest = queryClient.getQueryData<MessageListResponse>(ownKey) ?? cached
-      if (latest && sameMessageList(latest, reconciled)) return latest
+      if (latest && (sameMessageList(latest, reconciled) || isCachedAhead(latest, reconciled))) return latest
       return reconciled;
     },
     enabled: !!client && !!sessionID,
