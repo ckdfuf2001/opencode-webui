@@ -638,6 +638,39 @@ async function getSkillTemplate(base: string, directory: string, name: string): 
   }
 }
 
+/**
+ * 턴 결과 판정 (2층) — 전달(HTTP 2xx)과 별개로 턴이 실제로 에러로 끝났는지 본다.
+ * opencode는 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
+ * 응답 코드만 보면 실패를 놓친다. 발송 시작 이후 생성된 마지막 assistant
+ * 메시지의 info.error 존재 여부로 판정한다.
+ * 조회 실패·이번 턴 산출 없음이면 null (fail-open — 전달 기준으로 유지).
+ * 사용자 취소(MessageAbortedError)는 실패가 아니다.
+ * 툴 호출 실패는 일부러 안 본다: 재시도·부분 실패는 정상 작업 과정이라
+ * 실패로 세면 거의 모든 run이 실패가 된다.
+ */
+async function checkTurnError(sessionID: string, sinceMs: number): Promise<string | null> {
+  try {
+    const tail = await recentSessionMessages(sessionID, 5)
+    // ASC 정렬(오래된 것 먼저)이라 뒤쪽이 이번 턴이다
+    const msgs = (tail?.messages ?? []) as Array<{ info?: Record<string, unknown> }>
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const info = msgs[i]?.info
+      if (info?.role !== 'assistant') continue
+      const created = (info.time as { created?: number } | undefined)?.created ?? 0
+      // 이번 턴 산물이 아니면 증거 없음으로 본다 (오래된 에러 턴 오탐 방지)
+      if (created < sinceMs - 5_000) return null
+      const err = info.error as { name?: string } | undefined
+      if (!err) return null
+      const name = typeof err.name === 'string' && err.name ? err.name : 'UnknownError'
+      if (name === 'MessageAbortedError') return null
+      return name
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 async function dispatchQueuedChat(
   base: string,
   sessionID: string,
@@ -647,6 +680,8 @@ async function dispatchQueuedChat(
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
   const outgoing = asOutgoingModel(chat.model)
+  // 턴 판정 기준시각 — 이 이후 생성된 assistant 메시지만 이번 턴 산물로 본다
+  const dispatchStartMs = Date.now()
 
   // 발송 직전: 꼬리가 mismatch 에러면 strip-only 클렌징 (truncate 없음).
   // opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
@@ -700,14 +735,25 @@ async function dispatchQueuedChat(
   // 스킬 run id — 아래 /message 결과에 따라 finish (post 훅·리뷰자식 연결).
   let messageTextOverride: string | null = null
   let pendingSkillRunId: string | null = null
-  const finishPendingSkillRun = (status: 'completed' | 'failed'): void => {
+  const finishPendingSkillRun = (delivered: boolean): void => {
     if (!pendingSkillRunId) return
     const id = pendingSkillRunId
     pendingSkillRunId = null
     const db = queueDb
     if (!db) return
     void import('./command-runs')
-      .then(({ finishRunSafe }) => finishRunSafe(db, id, status))
+      .then(async ({ finishRunSafe }) => {
+        // 2층 판정: 전달됐어도 턴이 에러로 끝났으면 failed
+        let status: 'completed' | 'failed' = delivered ? 'completed' : 'failed'
+        if (delivered) {
+          const turnError = await checkTurnError(sessionID, dispatchStartMs)
+          if (turnError) {
+            status = 'failed'
+            logger.warn(`Queued skill run ${id} delivered but turn errored (${turnError}) — marking failed`)
+          }
+        }
+        return finishRunSafe(db, id, status)
+      })
       .catch((e) => logger.debug('Skill run finish skipped:', e))
   }
   // 스킬 선처리: opencode /command로 스킬을 실행할 수 없다 (실측 500 UnknownError + 메시지 0건).
@@ -814,7 +860,12 @@ async function dispatchQueuedChat(
         try {
           if (queueDb && runId) {
             const { finishRunSafe } = await import('./command-runs')
-            await finishRunSafe(queueDb, runId, 'completed')
+            // 2층 판정: 2xx여도 턴이 에러로 끝났으면 failed (provider 400 저장 경로 대응)
+            const turnError = await checkTurnError(sessionID, dispatchStartMs)
+            if (turnError) {
+              logger.warn(`Queued command /${cmd} accepted but turn errored (${turnError}) — marking failed`)
+            }
+            await finishRunSafe(queueDb, runId, turnError ? 'failed' : 'completed')
           }
         } catch (e) {
           logger.debug(`Command run finish skipped for /${cmd}:`, e)
@@ -959,10 +1010,10 @@ async function dispatchQueuedChat(
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
       const healed = await healMismatchAndRetryOnce(body)
-      finishPendingSkillRun(healed.sent ? 'completed' : 'failed')
+      finishPendingSkillRun(healed.sent)
       return healed
     }
-    finishPendingSkillRun('failed')
+    finishPendingSkillRun(false)
     return { sent: false, status: sendRes.status }
   }
   // Drain the body so the socket is released even if the server keeps it open.
@@ -972,9 +1023,9 @@ async function dispatchQueuedChat(
   if (stored && isReasoningEncryptedMismatch(stored)) {
     logger.warn(`Queued chat send returned 2xx but stored a provider mismatch for session ${sessionID} — running heal+retry once`)
     const healed = await healMismatchAndRetryOnce(stored)
-    finishPendingSkillRun(healed.sent ? 'completed' : 'failed')
+    finishPendingSkillRun(healed.sent)
     return healed
   }
-  finishPendingSkillRun('completed')
+  finishPendingSkillRun(true)
   return { sent: true }
 }
