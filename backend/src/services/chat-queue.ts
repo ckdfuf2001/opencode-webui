@@ -648,10 +648,14 @@ async function dispatchQueuedChat(
     const cmd = cmdMatch[1] ?? ''
     const args = cmdMatch[2] ?? ''
     try {
-      // 모든 커맨드는 todo 프로토콜을 arguments에 덧붙여 실행한다 (todo 툴 지원 시 정리 후 단계 실행).
       const { TODO_PROTOCOL, resolveCommandKind } = await import('./command-hooks')
-      const argsWithProtocol = args.trim() ? `${args.trim()}\n\n${TODO_PROTOCOL}` : TODO_PROTOCOL
       const kind = resolveCommandKind(directory, cmd)
+      // todo 프로토콜은 command에만 덧붙인다. skill은 자체 실행 흐름이 있어
+      // 프로토콜을 붙이면 간섭한다.
+      const withProtocol = kind === 'command'
+      const argsWithProtocol = !withProtocol
+        ? args
+        : args.trim() ? `${args.trim()}\n\n${TODO_PROTOCOL}` : TODO_PROTOCOL
       // command 이력 기록 시작 — 완료/실패는 아래에서 finish, 리뷰·스킬체크는 post 훅에서 처리
       let runId: string | null = null
       try {
