@@ -123,6 +123,8 @@ async function preCommand(run: CommandRun, db?: Database): Promise<void> {
   )
   if (db && run.commandName) {
     try {
+      // 진단용 로그만 남긴다 — 이 훅은 기록용이라 여기서 만든 블록을 프롬프트에
+      // 붙일 수 없다. 실제 주입은 발송 직전 dispatchQueuedChat에서 한다.
       const { buildRecall } = await import('./recall')
       const q = `${run.commandName} ${run.args ?? ''}`.trim().slice(0, 200)
       const { hits } = buildRecall(db, q, { k: 3, repoId: run.repoId ?? undefined })

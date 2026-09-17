@@ -588,6 +588,38 @@ interface DispatchResult {
   detail?: string
 }
 
+/**
+ * 슬래시 커맨드/스킬 발송용 <memory-recall> 블록. preCommand 훅은 기록용이라
+ * 여기서 만든 블록을 프롬프트에 붙일 수 없어 발송 직전에 직접 만든다
+ * (원래 proxy에서 하던 주입이 큐 경로에서는 유실됐던 것 복구).
+ * 없거나 꺼져 있으면 '' — 호출부가 원문 그대로 보낸다.
+ */
+async function recallBlockForSlash(directory: string, cmd: string, args: string): Promise<string> {
+  try {
+    if (!queueDb) return ''
+    if (args.includes('<memory-recall>')) return ''
+    const prefRow = queueDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
+    let topK = 4
+    if (prefRow) {
+      try {
+        const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
+        if (p.autoRecallEnabled === false) return ''
+        if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
+      } catch {}
+    }
+    const q = (args.trim().length >= 2 ? args.trim() : `${cmd} ${args}`.trim()).slice(0, 500)
+    if (q.length < 2) return ''
+    const { buildRecall } = await import('./recall')
+    const { resolveRepoId } = await import('./command-runs')
+    const repoId = directory ? resolveRepoId(queueDb, directory) : null
+    const { block } = buildRecall(queueDb, q, { k: topK, repoId: repoId ?? undefined })
+    return block ? `${block}\n\n` : ''
+  } catch (e) {
+    logger.debug('memory recall injection (queue command) skipped:', e)
+    return ''
+  }
+}
+
 async function dispatchQueuedChat(
   base: string,
   sessionID: string,
@@ -644,6 +676,8 @@ async function dispatchQueuedChat(
   // 슬래시 커맨드는 /command 엔드포인트로 실행해야 실제 수행이 된다 — /message 로 보내면 LLM이 설명만 한다
   const trimmed = chat.text.trim()
   const cmdMatch = trimmed.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
+  // /command 실패 시 /message 폴백에 붙일 recall (/command에는 arguments에 직접 붙인다)
+  let slashRecall = ''
   if (cmdMatch) {
     const cmd = cmdMatch[1] ?? ''
     const args = cmdMatch[2] ?? ''
@@ -653,9 +687,17 @@ async function dispatchQueuedChat(
       // todo 프로토콜은 command에만 덧붙인다. skill은 자체 실행 흐름이 있어
       // 프로토콜을 붙이면 간섭한다.
       const withProtocol = kind === 'command'
-      const argsWithProtocol = !withProtocol
+      let argsWithProtocol = !withProtocol
         ? args
         : args.trim() ? `${args.trim()}\n\n${TODO_PROTOCOL}` : TODO_PROTOCOL
+      // 메모리 주입: preCommand 훅은 기록용이라 블록을 버리므로 발송 직전에 직접 주입
+      // (command/skill 공통 — TODO 프로토콜과 달리 recall은 스킬에도 간섭 없음).
+      // arguments에 붙여야 /command 실행이 컨텍스트를 본다.
+      const recall = await recallBlockForSlash(directory, cmd, args)
+      if (recall) {
+        argsWithProtocol = `${recall}${argsWithProtocol}`
+        slashRecall = recall
+      }
       // command 이력 기록 시작 — 완료/실패는 아래에서 finish, 리뷰·스킬체크는 post 훅에서 처리
       let runId: string | null = null
       try {
@@ -717,7 +759,11 @@ async function dispatchQueuedChat(
 
   // 직전 스킬/커맨드 완료에 대한 부모 skill-memory-check (pending이 있을 때만 1회 주입).
   // 리뷰 자식이 생성됐으면 spawn 시점에 consume되므로 여기서는 붙지 않는다.
+  // /command 실패 폴백용 recall을 먼저 붙이고 skill을 그 앞에 — proxy와 같은 순서.
   let outgoingText = chat.text
+  if (slashRecall && !outgoingText.includes('<memory-recall>')) {
+    outgoingText = `${slashRecall}${outgoingText}`
+  }
   try {
     const { buildSkillCheckBlock } = await import('./command-hooks')
     const { resolveRepoId } = await import('./command-runs')

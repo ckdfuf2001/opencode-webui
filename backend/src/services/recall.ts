@@ -61,13 +61,15 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
 
   if (hits.length === 0) return { block: '', hits }
 
+  // perKind 수집 합이 k를 넘을 수 있어 최종 상한을 여기서 건다.
+  const capped = hits.slice(0, k)
   const lines = ['<memory-recall>']
   lines.push(`query: "${q}"`)
-  for (const h of hits) {
+  for (const h of capped) {
     lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta}`)
   }
   lines.push('</memory-recall>')
-  return { block: lines.join('\n'), hits }
+  return { block: lines.join('\n'), hits: capped }
 }
 
 function searchMessagesUnion(db: Database, q: string, k: number, opts: RecallOptions) {
