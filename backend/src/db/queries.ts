@@ -195,11 +195,15 @@ export function deleteRepoCascade(db: Database, id: number, opts?: { withIndex?:
   logger.info(`Cleaned search/git index for repo ${id}`)
 }
 
+/**
+ * 자동 변경 실효값 — 자동 리뷰가 꺼져 있으면 변경도 꺼진 것으로 본다.
+ * 리뷰 없이 직접 수정되는 것을 막는 의존성 (기존 불일치 행도 여기서 정규화).
+ */
 export function getSkillAutoUpdate(db: Database, id: number): boolean {
-  const row = db.prepare('SELECT skill_auto_update FROM repos WHERE id = ?').get(id) as
-    | { skill_auto_update?: number | null }
+  const row = db.prepare('SELECT skill_auto_update, skill_auto_review FROM repos WHERE id = ?').get(id) as
+    | { skill_auto_update?: number | null; skill_auto_review?: number | null }
     | undefined
-  return Boolean(row?.skill_auto_update)
+  return Boolean(row?.skill_auto_update) && Boolean(row?.skill_auto_review)
 }
 
 export function setSkillAutoUpdate(db: Database, id: number, enabled: boolean): void {

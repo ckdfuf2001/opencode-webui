@@ -830,6 +830,10 @@ export function createRepoRoutes(database: Database) {
       if (!repo) return c.json({ error: 'Repo not found' }, 404)
       const body = await c.req.json() as { enabled?: boolean }
       if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled boolean required' }, 400)
+      // 자동 변경은 자동 리뷰가 켜져 있을 때만 켤 수 있다 (리뷰 없는 직접 수정 방지)
+      if (body.enabled && !db.getSkillAutoReview(database, id)) {
+        return c.json({ error: 'Enable auto review first' }, 400)
+      }
       db.setSkillAutoUpdate(database, id, body.enabled)
       return c.json({ enabled: body.enabled })
     } catch (error: any) {
@@ -859,6 +863,8 @@ export function createRepoRoutes(database: Database) {
       const body = await c.req.json() as { enabled?: boolean }
       if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled boolean required' }, 400)
       db.setSkillAutoReview(database, id, body.enabled)
+      // 리뷰를 끄면 자동 변경도 함께 끈다 (리뷰 없는 직접 수정 방지)
+      if (!body.enabled) db.setSkillAutoUpdate(database, id, false)
       return c.json({ enabled: body.enabled })
     } catch (error: any) {
       logger.error('Failed to set skill auto review:', error)

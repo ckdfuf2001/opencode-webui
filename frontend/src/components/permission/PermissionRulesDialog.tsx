@@ -81,7 +81,9 @@ export function PermissionRulesDialog({
     },
     onSuccess: (data) => {
       queryClient.setQueryData(['skill-auto-review', repoId], data)
-      showToast.success(data.enabled ? 'Skill auto review enabled' : 'Skill auto review disabled')
+      // 리뷰를 끄면 서버가 자동 변경도 함께 끈다 — 캐시를 맞춰둔다
+      if (!data.enabled) queryClient.setQueryData(['skill-auto-update', repoId], { enabled: false })
+      showToast.success(data.enabled ? 'Skill auto review enabled' : 'Skill auto review disabled (auto change off too)')
     },
     onError: (e) => showToast.error(e instanceof Error ? e.message : 'Failed to update'),
   })
@@ -99,6 +101,20 @@ export function PermissionRulesDialog({
   const [notifyTab, setNotifyTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [skillTab, setSkillTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
+  // 의존성: 자동 변경은 자동 리뷰가 켜져 있을 때만 켤 수 있다 (리뷰 없는 직접 수정 방지).
+  // 레포 실효값 (서버 GET auto-update는 이미 review AND로 내려온다) + 세션 오버라이드 합성.
+  const repoReviewOn = skillReview?.enabled ?? false
+  const repoAutoOn = skillAuto?.enabled ?? false
+  const effReviewSession = sessionReviewOverride ?? repoReviewOn
+  const effAutoSession = (sessionSkillOverride ?? repoAutoOn) && effReviewSession
+  // 기존 저장값 정규화: 리뷰 실효 OFF인데 자동 오버라이드가 ON이면 OFF로 되돌린다 (1회)
+  useEffect(() => {
+    if (!open || !sessionId) return
+    if (!effReviewSession && sessionSkillOverride === true) {
+      setSessionOverride(sessionId, { skillAutoEnabled: false })
+      setSessionSkillOverrideState(false)
+    }
+  }, [open, sessionId, effReviewSession, sessionSkillOverride])
   useEffect(() => {
     if (!open) return
     setNotifyTab(scope)
@@ -287,17 +303,21 @@ export function PermissionRulesDialog({
                   <div className="flex flex-col items-center gap-1">
                     <span className="text-[11px] text-muted-foreground">자동 리뷰</span>
                     <Switch
-                      checked={skillReview?.enabled ?? false}
-                      onCheckedChange={(v) => reviewMut.mutate(v)}
-                      disabled={reviewMut.isPending}
+                      checked={repoReviewOn}
+                      onCheckedChange={(v) => {
+                        reviewMut.mutate(v)
+                        // 리뷰를 끄면 자동 변경도 함께 꺼진다 (서버도 같이 끈다)
+                        if (!v && repoAutoOn) skillMut.mutate(false)
+                      }}
+                      disabled={reviewMut.isPending || skillMut.isPending}
                     />
                   </div>
-                  <div className="flex flex-col items-center gap-1">
+                  <div className="flex flex-col items-center gap-1" title={repoReviewOn ? undefined : '자동 리뷰를 먼저 켜세요'}>
                     <span className="text-[11px] text-muted-foreground">자동 변경</span>
                     <Switch
-                      checked={skillAuto?.enabled ?? false}
+                      checked={repoAutoOn}
                       onCheckedChange={(v) => skillMut.mutate(v)}
-                      disabled={skillMut.isPending}
+                      disabled={skillMut.isPending || reviewMut.isPending || !repoReviewOn}
                     />
                   </div>
                 </div>
@@ -308,31 +328,35 @@ export function PermissionRulesDialog({
             <div className="flex items-center justify-between gap-3">
               <div className="space-y-0.5 flex-1">
                 <Label className="text-sm">이 세션에서만</Label>
-                <p className="text-xs text-muted-foreground">리뷰 상위 {(skillReview?.enabled ?? false)?'ON':'OFF'} → {(sessionReviewOverride ?? (skillReview?.enabled ?? false))?'ON':'OFF'}{sessionReviewOverride===undefined?' (상속)':''} · 변경 상위 {(skillAuto?.enabled ?? false)?'ON':'OFF'} → {(sessionSkillOverride ?? (skillAuto?.enabled ?? false))?'ON':'OFF'}{sessionSkillOverride===undefined?' (상속)':''} · 로컬스토리지</p>
+                <p className="text-xs text-muted-foreground">리뷰 상위 {repoReviewOn?'ON':'OFF'} → {effReviewSession?'ON':'OFF'}{sessionReviewOverride===undefined?' (상속)':''} · 변경 상위 {repoAutoOn?'ON':'OFF'} → {effAutoSession?'ON':'OFF'}{sessionSkillOverride===undefined?' (상속)':''}{!effReviewSession?' · 리뷰 OFF라 변경 불가':''} · 로컬스토리지</p>
               </div>
               <div className="flex items-center gap-3 shrink-0">
                 <div className="flex flex-col items-center gap-1">
                   <span className="text-[11px] text-muted-foreground">자동 리뷰</span>
                   <Switch
-                    checked={sessionReviewOverride !== undefined ? sessionReviewOverride : (skillReview?.enabled ?? false)}
+                    checked={effReviewSession}
                     onCheckedChange={(v) => {
-                      const parent = skillReview?.enabled ?? false
-                      const next = v === parent ? undefined : v
+                      const next = v === repoReviewOn ? undefined : v
                       setSessionOverride(sessionId!, { skillReviewEnabled: next })
                       setSessionReviewOverrideState(next)
+                      // 리뷰를 끄면 이 세션의 자동 변경도 함께 끈다
+                      if (!v && (sessionSkillOverride ?? repoAutoOn)) {
+                        setSessionOverride(sessionId!, { skillAutoEnabled: false })
+                        setSessionSkillOverrideState(false)
+                      }
                     }}
                   />
                 </div>
-                <div className="flex flex-col items-center gap-1">
+                <div className="flex flex-col items-center gap-1" title={effReviewSession ? undefined : '자동 리뷰를 먼저 켜세요'}>
                   <span className="text-[11px] text-muted-foreground">자동 변경</span>
                   <Switch
-                    checked={sessionSkillOverride !== undefined ? sessionSkillOverride : (skillAuto?.enabled ?? false)}
+                    checked={effAutoSession}
                     onCheckedChange={(v) => {
-                      const parent = skillAuto?.enabled ?? false
-                      const next = v === parent ? undefined : v
+                      const next = v === repoAutoOn ? undefined : v
                       setSessionOverride(sessionId!, { skillAutoEnabled: next })
                       setSessionSkillOverrideState(next)
                     }}
+                    disabled={!effReviewSession}
                   />
                 </div>
               </div>
