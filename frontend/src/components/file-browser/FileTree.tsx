@@ -148,7 +148,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   const handleRegisterPage = async () => {
     try {
       await upsertHtmlPage({ name: file.name, kind: 'file', path: file.path })
-      showToast.success(`관리 페이지에 등록: ${file.name}`)
+      showToast.success(`Added to managed pages: ${file.name}`)
     } catch (error) {
       showToast.error(error instanceof Error ? error.message : '등록 실패')
     }
@@ -273,13 +273,13 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             {!file.isDirectory && isBrowserViewable(file.name) && (
               <DropdownMenuItem onClick={() => openHtmlInNewTab(file.path, file.name)}>
                 <Globe className="w-4 h-4 mr-2" />
-                브라우저로 열기
+                Open in browser
               </DropdownMenuItem>
             )}
             {!file.isDirectory && isBrowserViewable(file.name) && (
               <DropdownMenuItem onClick={() => void handleRegisterPage()}>
                 <ListPlus className="w-4 h-4 mr-2" />
-                관리 페이지로 등록
+                Add to managed pages
               </DropdownMenuItem>
             )}
             {onDownload && (
