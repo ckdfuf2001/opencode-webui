@@ -84,6 +84,13 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
       .map((part) => {
         if ((part as { type?: string }).type === 'text' && typeof (part as { text?: string }).text === 'string') {
           const original = (part as { text: string }).text
+          // opencode가 task tool 뒤에 주입하는 synthetic 유저 메시지
+          // ("Summarize the task tool output above...") — 내가 보낸 게 아니므로 그리지 않는다
+          if (msg.info.role === 'user'
+            && (part as { synthetic?: boolean }).synthetic === true
+            && /summarize the task tool output above/i.test(original)) {
+            return null
+          }
           const t = stripMemoryRecall(original)
           if (!t) return null
           if (t === original) return part
@@ -137,6 +144,10 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
         const isSendingPlaceholder = msg.info.id.startsWith("optimistic_sending_")
         // sending 표시는 입력창 위 오버레이(SendingPill)가 담당. 본문에는 그리지 않는다.
         if (isSendingPlaceholder) {
+          return null
+        }
+        // 필터(synthetic task 문구 등)로 가시 파트가 하나도 안 남으면 버블 자체를 그리지 않는다
+        if (msg.info.role === 'user' && parts.length === 0) {
           return null
         }
         const streaming = isMessageStreaming(msg)

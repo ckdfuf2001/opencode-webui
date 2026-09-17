@@ -239,6 +239,8 @@ export function firePostCommandHooks(
 
 /**
  * 자동 리뷰: 스킬/커맨드 완료 후 리뷰 자식 세션을 생성한다.
+ * - 부모 마지막 메시지에서 fork해 진짜 하위 세션으로 만든다 (기록 공유 + /children 연결).
+ *   fork 불가 때만 빈 세션을 만든다.
  * - 자동 리뷰 OFF → null (부모 채팅의 skill-memory-check가 대신 동작).
  * - 성공 시에만 생성 (실패 턴은 부모에서 재시도/정리 대상).
  * - 자식 세션에서 실행된 커맨드는 다시 리뷰를 낳지 않는다.
@@ -294,42 +296,79 @@ export async function maybeSpawnReviewChild(opts: {
     const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
     const directoryParam = encodeURIComponent(directory)
 
-    const createRes = await fetch(`${base}/session?directory=${directoryParam}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ title: `[REVIEW] /${commandName}` }),
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!createRes.ok) {
-      logger.warn(`Review spawn: session create failed HTTP ${createRes.status} for /${commandName}`)
-      return null
-    }
-    const child = (await createRes.json()) as { id: string }
-    if (!child?.id) return null
-    rememberReviewSession(child.id)
-
-    // 부모의 마지막 결과를 잘라 자식에게 근거로 전달 (없으면 생략 — fail-open)
-    let snippet = ''
+    // 부모 메시지 1회 조회 — fork 앵커(마지막 메시지) + 폴백용 스니펫에 함께 쓴다
+    let parentMessages: Array<{ info?: { id?: string; role?: string }; parts?: Array<{ type?: string; text?: string }> }> = []
     try {
       const msgRes = await fetch(`${base}/session/${sessionId}/message?directory=${directoryParam}`, {
         headers: ensureServerAuth({}),
         signal: AbortSignal.timeout(20_000),
       })
-      if (msgRes.ok) {
-        const messages = (await msgRes.json()) as Array<{ info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }>
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i]?.info?.role === 'assistant') {
-            const text = (messages[i]?.parts ?? [])
-              .filter((p) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim())
-              .map((p) => p.text as string)
-              .join('\n')
-              .trim()
-            if (text) snippet = text.length > 4000 ? text.slice(-4000) : text
-            break
+      if (msgRes.ok) parentMessages = (await msgRes.json()) as typeof parentMessages
+    } catch {}
+
+    let childId: string | null = null
+    // 1) fork 시도 — 진짜 하위 세션 (기록 공유 + /children 연결).
+    // 모델·에이전트도 부모를 물려받아 크로스모델 mismatch를 피한다.
+    const lastMsgId = [...parentMessages].reverse().find((m) => typeof m?.info?.id === 'string')?.info?.id
+    if (lastMsgId) {
+      try {
+        const forkRes = await fetch(`${base}/session/${sessionId}/fork?directory=${directoryParam}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ messageID: lastMsgId }),
+          signal: AbortSignal.timeout(30_000),
+        })
+        if (forkRes.ok) {
+          const forked = (await forkRes.json()) as { id?: string }
+          if (forked?.id) {
+            childId = forked.id
+            try {
+              await fetch(`${base}/session/${childId}?directory=${directoryParam}`, {
+                method: 'PATCH',
+                headers,
+                body: JSON.stringify({ title: `[REVIEW] /${commandName}` }),
+                signal: AbortSignal.timeout(15_000),
+              })
+            } catch {}
           }
+        } else {
+          logger.warn(`Review spawn: fork failed HTTP ${forkRes.status} for /${commandName} — blank fallback`)
+        }
+      } catch (e) {
+        logger.warn(`Review spawn: fork threw for /${commandName} — blank fallback:`, e)
+      }
+    }
+
+    // 2) 폴백: 기존 빈 세션 생성 (fork 불가·메시지 없음).
+    // 부모 기록이 없어 마지막 결과를 잘라 근거로 전달한다 (없으면 생략 — fail-open).
+    let snippet = ''
+    if (!childId) {
+      const createRes = await fetch(`${base}/session?directory=${directoryParam}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ title: `[REVIEW] /${commandName}` }),
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!createRes.ok) {
+        logger.warn(`Review spawn: session create failed HTTP ${createRes.status} for /${commandName}`)
+        return null
+      }
+      const child = (await createRes.json()) as { id: string }
+      if (!child?.id) return null
+      childId = child.id
+      for (let i = parentMessages.length - 1; i >= 0; i--) {
+        if (parentMessages[i]?.info?.role === 'assistant') {
+          const text = (parentMessages[i]?.parts ?? [])
+            .filter((p) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim())
+            .map((p) => p.text as string)
+            .join('\n')
+            .trim()
+          if (text) snippet = text.length > 4000 ? text.slice(-4000) : text
+          break
         }
       }
-    } catch {}
+    }
+    rememberReviewSession(childId)
 
     const mode = autoApply ? 'BUILD' : 'PLAN'
     const modeRule = autoApply
@@ -351,7 +390,7 @@ export async function maybeSpawnReviewChild(opts: {
       (snippet ? `\nParent's last result (truncated):\n${snippet}` : '')
 
     const sendBody: Record<string, unknown> = { parts: [{ type: 'text', text: prompt }], agent: autoApply ? 'build' : 'plan' }
-    const sendRes = await fetch(`${base}/session/${child.id}/message?directory=${directoryParam}`, {
+    const sendRes = await fetch(`${base}/session/${childId}/message?directory=${directoryParam}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(sendBody),
@@ -360,13 +399,13 @@ export async function maybeSpawnReviewChild(opts: {
     if (!sendRes.ok) {
       const t = await sendRes.text().catch(() => '')
       logger.warn(`Review spawn: review prompt rejected HTTP ${sendRes.status} for /${commandName}: ${t.slice(0, 200)}`)
-      return child.id
+      return childId
     }
     void sendRes.text().catch(() => {})
     // 자식이 생겼으니 부모에는 중복 주입하지 않는다.
     getAndClearPendingSkillCheck(sessionId)
-    logger.info(`Review spawn: child ${child.id} (${mode}) for /${commandName} from ${sessionId}`)
-    return child.id
+    logger.info(`Review spawn: child ${childId} (${mode}) for /${commandName} from ${sessionId}`)
+    return childId
   } catch (e) {
     logger.warn(`Review spawn failed for /${commandName}:`, e)
     return null
