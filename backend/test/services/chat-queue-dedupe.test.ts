@@ -38,6 +38,7 @@ vi.mock('../../src/services/opencode-db', () => ({
 
 vi.mock('../../src/services/command-runs', () => ({
   resolveLiveDirectory: (_db: unknown, dir: string) => dir,
+  resolveRepoId: () => null,
 }))
 
 vi.mock('../../src/db/session-status-queries', () => ({

@@ -10,6 +10,31 @@ export interface RecallOptions {
   includeCommits?: boolean
 }
 
+export interface RecallPrefs {
+  enabled: boolean
+  topK: number
+}
+
+/**
+ * user_preferences의 recall 설정을 읽는다. 행 없음·파싱 실패 시 기본값
+ * (enabled, k=4) — 호출부마다 복붙하던 것을 여기로 모았다.
+ */
+export function readRecallPrefs(db: Database): RecallPrefs {
+  try {
+    const row = db
+      .query('SELECT preferences FROM user_preferences WHERE user_id = ?')
+      .get('default') as { preferences: string } | undefined
+    if (!row?.preferences) return { enabled: true, topK: 4 }
+    const p = JSON.parse(row.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
+    return {
+      enabled: p.autoRecallEnabled !== false,
+      topK: typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10 ? p.recallTopK : 4,
+    }
+  } catch {
+    return { enabled: true, topK: 4 }
+  }
+}
+
 export interface RecallHit {
   kind: 'message' | 'commit'
   snippet: string

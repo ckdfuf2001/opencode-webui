@@ -7,7 +7,8 @@ import { stripAllReasoningParts } from './opencode-db'
 import { recentSessionMessages } from './session-message-db'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
-import { resolveLiveDirectory } from './command-runs'
+import { resolveLiveDirectory, resolveRepoId } from './command-runs'
+import { buildRecall, readRecallPrefs } from './recall'
 import { logger } from '../utils/logger'
 
 let queueDb: Database | null = null
@@ -594,26 +595,21 @@ interface DispatchResult {
  * (원래 proxy에서 하던 주입이 큐 경로에서는 유실됐던 것 복구).
  * 없거나 꺼져 있으면 '' — 호출부가 원문 그대로 보낸다.
  */
-async function recallBlockForSlash(directory: string, cmd: string, args: string): Promise<string> {
+async function recallBlockForSlash(directory: string, cmd: string, args: string, fullText: string): Promise<string> {
   try {
     if (!queueDb) return ''
-    if (args.includes('<memory-recall>')) return ''
-    const prefRow = queueDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
-    let topK = 4
-    if (prefRow) {
-      try {
-        const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
-        if (p.autoRecallEnabled === false) return ''
-        if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
-      } catch {}
-    }
-    const q = (args.trim().length >= 2 ? args.trim() : `${cmd} ${args}`.trim()).slice(0, 500)
+    // 재시도 재진입 시 chat.text에는 블록이 있지만 args에는 없을 수 있어 전체 기준으로 검사
+    if (fullText.includes('<memory-recall>')) return ''
+    const { enabled, topK } = readRecallPrefs(queueDb)
+    if (!enabled) return ''
+    // 커맨드명은 가장 강한 컨텍스트 신호라 항상 포함 (preCommand의 쿼리와 동일)
+    const q = `${cmd} ${args}`.trim().slice(0, 500)
     if (q.length < 2) return ''
-    const { buildRecall } = await import('./recall')
-    const { resolveRepoId } = await import('./command-runs')
     const repoId = directory ? resolveRepoId(queueDb, directory) : null
-    const { block } = buildRecall(queueDb, q, { k: topK, repoId: repoId ?? undefined })
-    return block ? `${block}\n\n` : ''
+    const { block, hits } = buildRecall(queueDb, q, { k: topK, repoId: repoId ?? undefined })
+    if (!block) return ''
+    logger.info(`memory recall injected (queue command /${cmd}): ${hits.length} hit(s)`)
+    return `${block}\n\n`
   } catch (e) {
     logger.debug('memory recall injection (queue command) skipped:', e)
     return ''
@@ -693,7 +689,7 @@ async function dispatchQueuedChat(
       // 메모리 주입: preCommand 훅은 기록용이라 블록을 버리므로 발송 직전에 직접 주입
       // (command/skill 공통 — TODO 프로토콜과 달리 recall은 스킬에도 간섭 없음).
       // arguments에 붙여야 /command 실행이 컨텍스트를 본다.
-      const recall = await recallBlockForSlash(directory, cmd, args)
+      const recall = await recallBlockForSlash(directory, cmd, args, trimmed)
       if (recall) {
         argsWithProtocol = `${recall}${argsWithProtocol}`
         slashRecall = recall

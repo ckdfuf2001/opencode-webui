@@ -6,6 +6,7 @@ import { truncateSessionMessages, deleteSessionMessage, stripAllReasoningParts }
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { flushQueueForSession, clearSendingOnAbort, dropDeliveredDuplicates } from './chat-queue'
 import { healReasoningTail, sweepPollutedStubs, isReasoningMismatchText, asOutgoingModel, preSendStripIfMismatch } from './reasoning-heal'
+import { readRecallPrefs } from './recall'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -390,16 +391,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               const argsText = text.replace(/^\/[a-zA-Z0-9_-]+\s*/, '').trim()
               const q = (argsText.length >= 2 ? argsText : text).slice(0, 500)
               if (q.length >= 2) {
-                const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
-                let enabled = true
-                let topK = 4
-                if (prefRow) {
-                  try {
-                    const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
-                    if (p.autoRecallEnabled === false) enabled = false
-                    if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
-                  } catch {}
-                }
+                const { enabled, topK } = readRecallPrefs(proxyDb)
                 if (enabled) {
                   const { buildRecall } = await import('./recall')
                   const { resolveRepoId } = await import('./command-runs')
@@ -438,16 +430,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
             let recallBlock = ''
             if (commandName && text.trim().length >= 4) {
               try {
-                const prefRow = proxyDb.query('SELECT preferences FROM user_preferences WHERE user_id = ?').get('default') as { preferences: string } | undefined
-                let enabled = true
-                let topK = 4
-                if (prefRow) {
-                  try {
-                    const p = JSON.parse(prefRow.preferences) as { autoRecallEnabled?: boolean; recallTopK?: number }
-                    if (p.autoRecallEnabled === false) enabled = false
-                    if (typeof p.recallTopK === 'number' && p.recallTopK >= 1 && p.recallTopK <= 10) topK = p.recallTopK
-                  } catch {}
-                }
+                const { enabled, topK } = readRecallPrefs(proxyDb)
                 if (enabled) {
                   const { buildRecall } = await import('./recall')
                   const { resolveRepoId } = await import('./command-runs')
@@ -838,7 +821,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         }
         const hint = healedAndRetried
           ? ' - Automatic recovery (truncated the failed turn, stripped stale reasoning, retried once) did not help: start a new session, or truncate back further with the scissors icon on an earlier message and send again. (reasoning encrypted_content mismatch)'
-          : ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). Truncate the last turn (scissors icon), switch back to the original model, or deep-clean via POST /api/session-heal/:sessionId, then send again. (reasoning encrypted_content mismatch)'
+          : ' - The conversation history contains reasoning blocks from a different model (or an interrupted turn). Truncate the last turn (scissors icon), switch back to the original model, or start a new session, then send again. (reasoning encrypted_content mismatch)'
         let parsed: Record<string, unknown> | undefined
         try { parsed = JSON.parse(finalBodyText) as Record<string, unknown> } catch { parsed = undefined }
         responseHeaders['Content-Type'] = 'application/json'
