@@ -881,7 +881,17 @@ export async function ensureMessageLoaded(
  * recent 200건으로 시작해 before 체인(limit 100)으로 과거로 내려가며
  * 로컬 배열에만 쌓는다 — 채팅 캐시를 통째로 불리면 메모리 작업이 무너진다.
  * 0건 진전·hasMore=false·앵커 소실 시 종료한다 (무한 루프 방지).
+ * 앵커는 반드시 가장 오래된 메시지 — recent/window 모두 시간 오름차순이라
+ * 끝에서 찾으면 최신이 걸려 같은 페이지만 반복한다 (치명적 방향 버그 수정됨).
  */
+function oldestExportId(list: MessageListResponse): string | undefined {
+  let best: MessageWithParts | null = null
+  for (const m of list) {
+    if (m.info.id.startsWith('optimistic')) continue
+    if (!best || createdOf(m) < createdOf(best)) best = m
+  }
+  return best?.info.id
+}
 export async function loadAllSessionMessages(
   opcodeUrl: string | null | undefined,
   sessionID: string,
@@ -910,8 +920,7 @@ export async function loadAllSessionMessages(
     acc.sort((a, b) => createdOf(a) - createdOf(b))
     return { messages: acc, total }
   }
-  // 서버 응답에는 optimistic 항목이 없지만 혹시 모르니 필터 유지
-  let anchor = [...acc].reverse().find((m) => !m.info.id.startsWith('optimistic'))?.info.id
+  let anchor = oldestExportId(acc)
   for (;;) {
     if (!anchor) break
     const params = new URLSearchParams({ limit: '100', before: anchor })
@@ -921,7 +930,7 @@ export async function loadAllSessionMessages(
     const added = push(truncateLargeToolOutputs(body.messages ?? []))
     onProgress?.(acc.length, body.total ?? total)
     if (!body.hasMore || added === 0) break
-    const next = [...acc].reverse().find((m) => !m.info.id.startsWith('optimistic'))?.info.id
+    const next = oldestExportId(acc)
     if (!next || next === anchor) break
     anchor = next
   }

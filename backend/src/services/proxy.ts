@@ -396,7 +396,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
                   const { buildRecall } = await import('./recall')
                   const { resolveRepoId } = await import('./command-runs')
                   const repoId = directory ? resolveRepoId(proxyDb, directory) : null
-                  const { block } = buildRecall(proxyDb, q, { k: topK, repoId: repoId ?? undefined })
+                  const { block } = buildRecall(proxyDb, q, { k: topK, repoId: repoId ?? undefined, exactK: true })
                   if (block) {
                     const cur = JSON.parse(body) as { parts?: { type?: string; text?: string }[] }
                     const curFirst = cur?.parts?.find((p) => p.type === 'text' && typeof p.text === 'string') as { text: string } | undefined
@@ -435,7 +435,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
                   const { buildRecall } = await import('./recall')
                   const { resolveRepoId } = await import('./command-runs')
                   const repoId = directory ? resolveRepoId(proxyDb, directory) : null
-                  const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: topK, repoId: repoId ?? undefined })
+                  const { block } = buildRecall(proxyDb, text.slice(0, 500), { k: topK, repoId: repoId ?? undefined, exactK: true })
                   if (block) recallBlock = `${block}\n\n`
                 }
               } catch (e) {

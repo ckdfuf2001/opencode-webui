@@ -30,8 +30,8 @@ export function Search() {
   const [debouncedQ, setDebouncedQ] = useState('')
   const [submittedQ, setSubmittedQ] = useState('')
   const [selectedRepoId, setSelectedRepoId] = useState<string>('all')
-  const [k, setK] = useState('20')
-  const kParam = Math.min(50, Math.max(1, parseInt(k, 10) || 5))
+  // 전체 자동로드라 k는 라운드당 페이지 크기로만 쓴다 (결과 개수 제한 아님)
+  const kParam = 200
   const [kind, setKind] = useState<'all' | 'message' | 'commit'>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [expandedData, setExpandedData] = useState<MessageExpandResult | null>(null)
@@ -323,19 +323,6 @@ export function Search() {
                       {r.localPath} (#{r.id})
                     </SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="w-[68px] shrink-0">
-              <Select value={k} onValueChange={setK}>
-                <SelectTrigger className="w-full h-7 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="5">5 hits</SelectItem>
-                  <SelectItem value="8">8 hits</SelectItem>
-                  <SelectItem value="10">10 hits</SelectItem>
-                  <SelectItem value="20">20 hits</SelectItem>
                 </SelectContent>
               </Select>
             </div>

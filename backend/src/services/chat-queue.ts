@@ -606,7 +606,7 @@ async function recallBlockForSlash(directory: string, cmd: string, args: string,
     const q = `${cmd} ${args}`.trim().slice(0, 500)
     if (q.length < 2) return ''
     const repoId = directory ? resolveRepoId(queueDb, directory) : null
-    const { block, hits } = buildRecall(queueDb, q, { k: topK, repoId: repoId ?? undefined })
+    const { block, hits } = buildRecall(queueDb, q, { k: topK, repoId: repoId ?? undefined, exactK: true })
     if (!block) return ''
     logger.info(`memory recall injected (queue command /${cmd}): ${hits.length} hit(s)`)
     return `${block}\n\n`

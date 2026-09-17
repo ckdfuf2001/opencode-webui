@@ -64,6 +64,15 @@ describe('buildRecall', () => {
     expect(p2.nextOffset).toBeNull()
   })
 
+  it('exactK trims to exactly k for injection paths (topK honored)', () => {
+    const { block, hits, hasMore } = buildRecall(stubDb() as never, 'deploy prod', { k: 5, exactK: true })
+    expect(hits).toHaveLength(5)
+    expect(block).toContain('deploy commit 2')
+    expect(block).not.toContain('deploy commit 3')
+    // 잘라냈어도 잔여 판정은 윈도우 기준이라 루프 호출자는 영향 없음
+    expect(hasMore).toBe(true)
+  })
+
   it('returns empty block when nothing matches', () => {
     const emptyDb = { query: () => ({ all: () => [], get: () => undefined }) }
     const { block, hits, hasMore, nextOffset } = buildRecall(emptyDb as never, 'deploy prod', { k: 5 })

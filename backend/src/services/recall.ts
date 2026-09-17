@@ -49,23 +49,26 @@ export interface RecallHit {
 }
 
 /**
- * 전체 로드 sanity 상한 (병합 리스트 좌표) — 스니펫은 작아 1만건도 수 MB다.
- * 이를 넘기면 빈 페이지 + hasMore=false로 루프를 끝낸다.
+ * 종류별 sanity 상한 — offset은 종류별 좌표라 실질 상한은 종류당 1만건이다.
+ * 스니펫은 작아 합쳐도 수 MB 수준이다. 이를 넘기면 빈 페이지 +
+ * hasMore=false로 루프를 끝낸다.
  */
-export const RECALL_TOTAL_HARD_CAP = 10000
+export const RECALL_KIND_HARD_CAP = 10000
 
 export function buildRecall(
   db: Database,
   q: string,
-  opts: RecallOptions & { offset?: number } = {},
+  opts: RecallOptions & { offset?: number; exactK?: boolean } = {},
 ): { block: string; hits: RecallHit[]; hasMore: boolean; nextOffset: number | null } {
-  const k = Math.max(1, Math.min(10, opts.k ?? 5))
+  // 프롬프트 주입용은 큰 k가 필요하고(전체 루프), 채팅 주입은 작게 쓴다.
+  // HTTP /messages 엔드포인트는 zod k≤50으로 별도 제한이라 여길 올려도 안전.
+  const k = Math.max(1, Math.min(200, opts.k ?? 5))
   // 종류별 윈도우: 각 종류는 독립 스트림이라 같은 offset으로 타일링해도
   // 정확히 덮는다 (한쪽이 먼저 바닥나도 다른 쪽은 계속 진행).
   // 홀수 k면 한 행 더 나오지만(ceil) 종류 균형이 깨지지 않는 쪽을 택한다.
   const perKind = Math.max(1, Math.ceil(k / 2))
   const offset = Math.max(0, opts.offset ?? 0)
-  if (offset >= RECALL_TOTAL_HARD_CAP) {
+  if (offset >= RECALL_KIND_HARD_CAP) {
     return { block: '', hits: [], hasMore: false, nextOffset: null }
   }
   // union은 prefix만 반환하므로 매번 앞쪽부터 다시 읽는다 (O(offset)).
@@ -73,7 +76,7 @@ export function buildRecall(
   // 흔들리면 프론트의 키 dedup이 흡수하고, 0건 진전 시 루프가 멈춘다.
   // (하위 searchMessages/searchCommits의 내부 상한은 20000까지 열려 있어
   //  deep page에서도 잘리지 않는다 — HTTP 엔드포인트는 zod로 별도 상한 유지)
-  const want = Math.min(offset + perKind + 1, RECALL_TOTAL_HARD_CAP + 1)
+  const want = Math.min(offset + perKind + 1, RECALL_KIND_HARD_CAP + 1)
   const hits: RecallHit[] = []
   let msgMore = false
   let commitMore = false
@@ -113,15 +116,19 @@ export function buildRecall(
 
   if (hits.length === 0) return { block: '', hits, hasMore: false, nextOffset: null }
   const hasMore = msgMore || commitMore
+  // 주입 경로는 topK를 상한으로 신뢰하므로 정확히 k개까지만 내보낸다.
+  // (홀수 k면 perKind 윈도우가 1행 더 나오기 때문. 페이징 호출자는 exactK를
+  //  쓰지 않아 타일링에 영향 없음)
+  const out = opts.exactK ? hits.slice(0, k) : hits
   const lines = ['<memory-recall>']
   lines.push(`query: "${q}"`)
-  for (const h of hits) {
+  for (const h of out) {
     lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta}`)
   }
   lines.push('</memory-recall>')
   return {
     block: lines.join('\n'),
-    hits,
+    hits: out,
     hasMore,
     nextOffset: hasMore ? offset + perKind : null,
   }
