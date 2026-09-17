@@ -196,7 +196,8 @@ export function searchCommits(
   q: string,
   opts: { k?: number; repoId?: number | null } = {},
 ): CommitSearchHit[] {
-  const k = Math.max(1, Math.min(50, opts.k ?? 10))
+  // 내부 상한은 넉넉히 (HTTP 엔드포인트는 zod k≤50으로 별도 제한).
+  const k = Math.max(1, Math.min(20000, opts.k ?? 10))
   const trimmed = q.trim()
   const trackPaths = getRepoTrackPaths(db)
   const needTrackFilter = trackPaths.length > 0

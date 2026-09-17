@@ -346,7 +346,9 @@ export function searchMessages(
   q: string,
   opts: MessageSearchOpts = {},
 ): MessageSearchHit[] {
-  const k = Math.max(1, Math.min(50, opts.k ?? 10))
+  // 내부 상한은 넉넉히 (HTTP 엔드포인트는 zod k≤50으로 별도 제한).
+  // recall 전체 로드가 deep page에서 잘리면 silent truncation이 된다.
+  const k = Math.max(1, Math.min(20000, opts.k ?? 10))
   const offset = Math.max(0, Math.min(10000, opts.offset ?? 0))
   const { where, params, orderBy } = buildMessageSearchFilter(q, opts)
   const sql = `${SEARCH_SELECT}

@@ -142,14 +142,44 @@ export async function reindexCommits(repoId?: number): Promise<unknown> {
   return res.json()
 }
 
-export async function recall(q: string, opts: { k?: number; repoId?: number; sessionId?: string } = {}): Promise<{ block: string; hits: { kind: string; snippet: string; meta: string; repoId?: number | null; sessionId?: string; messageId?: string; turnIndex?: number; ts?: number; sha?: string; role?: string }[] }> {
+export interface RecallHit {
+  kind: string
+  snippet: string
+  meta: string
+  repoId?: number | null
+  sessionId?: string
+  messageId?: string
+  turnIndex?: number
+  ts?: number
+  sha?: string
+  role?: string
+}
+
+export interface RecallPage {
+  block: string
+  hits: RecallHit[]
+  hasMore: boolean
+  nextOffset: number | null
+}
+
+export async function recall(
+  q: string,
+  opts: { k?: number; repoId?: number; sessionId?: string; offset?: number; signal?: AbortSignal } = {},
+): Promise<RecallPage> {
   const sp = new URLSearchParams({ q })
   if (opts.k != null) sp.set('k', String(opts.k))
+  if (opts.offset != null) sp.set('offset', String(opts.offset))
   if (opts.repoId != null) sp.set('repoId', String(opts.repoId))
   if (opts.sessionId) sp.set('sessionId', opts.sessionId)
-  const res = await fetch(`${API_BASE_URL}/api/search/recall?${sp.toString()}`)
+  const res = await fetch(`${API_BASE_URL}/api/search/recall?${sp.toString()}`, opts.signal ? { signal: opts.signal } : undefined)
   if (!res.ok) throw new Error('Failed to recall')
-  return res.json()
+  const data = (await res.json()) as Partial<RecallPage>
+  return {
+    block: data.block ?? '',
+    hits: data.hits ?? [],
+    hasMore: data.hasMore ?? false,
+    nextOffset: data.nextOffset ?? null,
+  }
 }
 
 export async function deleteMessageIndexes(messageIds: string[]): Promise<{ deleted: number }> {

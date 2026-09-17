@@ -19,7 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, messagesQueryKey } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -897,43 +897,55 @@ export function SessionDetail() {
   }, [sessionId, sendPromptContinue])
 
   const createSessionMutation = useCreateSession(opcodeUrl, repoDirectory);
-  // ... 메뉴: 내려받기. 캐시에 로드된 메시지만 담긴다 (최근 60개 + backfill) —
-  // 서버 전체가 아니므로 개수 라벨·토스트에 로드된 수를 정직하게 표기한다.
-  const handleExportFile = useCallback((format: SessionExportFormat | 'pdf' | 'json') => {
-    const list = messagesRef.current ?? messages;
-    if (!list || list.length === 0) {
-      showToast.error('No messages to export yet.');
+  // ... 메뉴: Download all. 출력 시점에 서버에서 전체를 로드해 내보낸다.
+  // 채팅 캐시를 통째로 불리지 않게 별도 로컬 배열로 읽는다 (메모리 작업 보호).
+  const exportingRef = useRef(false);
+  const handleExportFile = useCallback(async (format: SessionExportFormat | 'pdf' | 'json') => {
+    if (!sessionId) {
+      showToast.error('No session selected.');
       return;
     }
-    const title = (session as unknown as { title?: string })?.title || 'Untitled Session';
-    // total을 아직 모르면(첫 폴링 전) 전체로 오해하지 않게 unknown 표기
-    const totalNote = totalKnown == null
-      ? ` (loaded ${list.length}, total unknown)`
-      : totalKnown > list.length
-        ? ` (loaded ${list.length} of ${totalKnown} — load more for the rest)`
-        : '';
-    if (format === 'pdf') {
-      if (!printSessionPdf(list, title)) {
-        showToast.error('Popup blocked — allow popups for this site to print/PDF.');
-      } else {
-        showToast.success(`Exported ${list.length} message(s) as .pdf${totalNote}`);
+    if (exportingRef.current) {
+      showToast.info('Export already in progress…');
+      return;
+    }
+    exportingRef.current = true;
+    try {
+      showToast.info('Loading all messages for export…');
+      const { messages: list, total } = await loadAllSessionMessages(opcodeUrl, sessionId, repoDirectory);
+      if (!list || list.length === 0) {
+        showToast.error('No messages to export yet.');
+        return;
       }
-      return;
+      const title = (session as unknown as { title?: string })?.title || 'Untitled Session';
+      const countNote = total > list.length ? ` (${list.length} of ${total})` : '';
+      if (format === 'pdf') {
+        if (!printSessionPdf(list, title)) {
+          showToast.error('Popup blocked — allow popups for this site to print/PDF.');
+        } else {
+          showToast.success(`Exported ${list.length} message(s) as .pdf${countNote}`);
+        }
+        return;
+      }
+      if (format === 'json') {
+        downloadTextFile(sessionFileName(title, 'json'), JSON.stringify(list, null, 2), 'application/json');
+        showToast.success(`Exported ${list.length} message(s) as .json${countNote}`);
+        return;
+      }
+      const content = format === 'md'
+        ? buildSessionMarkdown(list, title)
+        : format === 'html'
+          ? buildSessionHtml(list, title, true)
+          : buildSessionText(list, title);
+      const mime = format === 'html' ? 'text/html' : format === 'md' ? 'text/markdown' : 'text/plain';
+      downloadTextFile(sessionFileName(title, format), content, mime);
+      showToast.success(`Exported ${list.length} message(s) as .${format}${countNote}`);
+    } catch (e) {
+      showToast.error((e as Error)?.message ?? 'Export failed.');
+    } finally {
+      exportingRef.current = false;
     }
-    if (format === 'json') {
-      downloadTextFile(sessionFileName(title, 'json'), JSON.stringify(list, null, 2), 'application/json');
-      showToast.success(`Exported ${list.length} message(s) as .json${totalNote}`);
-      return;
-    }
-    const content = format === 'md'
-      ? buildSessionMarkdown(list, title)
-      : format === 'html'
-        ? buildSessionHtml(list, title, true)
-        : buildSessionText(list, title);
-    const mime = format === 'html' ? 'text/html' : format === 'md' ? 'text/markdown' : 'text/plain';
-    downloadTextFile(sessionFileName(title, format), content, mime);
-    showToast.success(`Exported ${list.length} message(s) as .${format}${totalNote}`);
-  }, [messages, session, totalKnown]);
+  }, [opcodeUrl, sessionId, repoDirectory, session]);
   const handleNewSession = useCallback(async () => {
     try {
       const s = await createSessionMutation.mutateAsync({});

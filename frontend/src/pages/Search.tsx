@@ -14,6 +14,7 @@ import {
   deleteCommitIndexes,
   type MessageExpandResult,
   type CommitDetail,
+  type RecallHit,
 } from '@/api/search'
 import { recall, syncRecentSessions } from '@/api/search'
 import { listRepos } from '@/api/repos'
@@ -88,9 +89,30 @@ export function Search() {
 
   const effectiveQ = submittedQ || debouncedQ
 
+  // 검색 화면은 일부가 아닌 전체를 보여준다 — 내부적으로 최종 페이지까지
+  // 반복 로드한다. 쿼리 키가 바뀌면(signal abort) 진행 중 루프는 버려진다.
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['recall-search', effectiveQ, repoIdParam, kParam],
-    queryFn: () => recall(effectiveQ, { k: kParam, repoId: repoIdParam }),
+    queryFn: async ({ signal }) => {
+      const all: RecallHit[] = []
+      const seen = new Set<string>()
+      let offset: number | null = 0
+      for (;;) {
+        const page = await recall(effectiveQ, { k: kParam, repoId: repoIdParam, offset: offset ?? 0, signal })
+        let added = 0
+        for (const h of page.hits) {
+          const key = h.kind === 'message' ? h.messageId : `${h.repoId}:${h.sha}`
+          if (!key || seen.has(key)) continue
+          seen.add(key)
+          all.push(h)
+          added++
+        }
+        // 인덱스가 도는 사이 바뀌어도 0건 진전이면 멈춘다 (무한 루프 방지)
+        if (page.nextOffset == null || added === 0) break
+        offset = page.nextOffset
+      }
+      return { block: '', hits: all }
+    },
     enabled: !!effectiveQ,
   })
 

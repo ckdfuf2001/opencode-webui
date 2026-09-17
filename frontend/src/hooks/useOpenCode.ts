@@ -855,6 +855,59 @@ export async function ensureMessageLoaded(
 }
 
 /**
+ * 내보내기용 전체 로드: 캐시를 건드리지 않고 서버를 끝까지 읽는다.
+ * recent 200건으로 시작해 before 체인(limit 100)으로 과거로 내려가며
+ * 로컬 배열에만 쌓는다 — 채팅 캐시를 통째로 불리면 메모리 작업이 무너진다.
+ * 0건 진전·hasMore=false·앵커 소실 시 종료한다 (무한 루프 방지).
+ */
+export async function loadAllSessionMessages(
+  opcodeUrl: string | null | undefined,
+  sessionID: string,
+  directory: string | undefined,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<{ messages: MessageListResponse; total: number }> {
+  const acc: MessageListResponse = []
+  const seen = new Set<string>()
+  const push = (msgs: MessageListResponse) => {
+    let added = 0
+    for (const m of msgs) {
+      if (seen.has(m.info.id)) continue
+      seen.add(m.info.id)
+      acc.push(m)
+      added++
+    }
+    return added
+  }
+  const first = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID}/recent?limit=200`)
+  if (!first.ok) throw new Error(`Failed to load messages (HTTP ${first.status})`)
+  const firstBody = (await first.json()) as { total: number; messages: MessageListResponse }
+  const total = firstBody.total ?? 0
+  push(truncateLargeToolOutputs(firstBody.messages ?? []))
+  onProgress?.(acc.length, total)
+  if (acc.length >= total) {
+    acc.sort((a, b) => createdOf(a) - createdOf(b))
+    return { messages: acc, total }
+  }
+  // 서버 응답에는 optimistic 항목이 없지만 혹시 모르니 필터 유지
+  let anchor = [...acc].reverse().find((m) => !m.info.id.startsWith('optimistic'))?.info.id
+  for (;;) {
+    if (!anchor) break
+    const params = new URLSearchParams({ limit: '100', before: anchor })
+    const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionID}/window?${params.toString()}`)
+    if (!res.ok) throw new Error(`Failed to load message window (HTTP ${res.status})`)
+    const body = (await res.json()) as { total: number; messages: MessageListResponse; hasMore?: boolean }
+    const added = push(truncateLargeToolOutputs(body.messages ?? []))
+    onProgress?.(acc.length, body.total ?? total)
+    if (!body.hasMore || added === 0) break
+    const next = [...acc].reverse().find((m) => !m.info.id.startsWith('optimistic'))?.info.id
+    if (!next || next === anchor) break
+    anchor = next
+  }
+  acc.sort((a, b) => createdOf(a) - createdOf(b))
+  return { messages: acc, total }
+}
+
+/**
  * 리스트 상단 "더 보기": 캐시된 가장 오래된 메시지 이전을 count개 더 가져와
  * 앞에 붙인다. 새로 붙은 개수(스크롤 위치 유지용)·전체 total·서버 잔여 여부를
  * 돌려준다. truncateLargeToolOutputs·backfilledIds·병합은 backfillMessages가 처리.

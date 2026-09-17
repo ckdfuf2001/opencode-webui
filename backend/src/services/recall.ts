@@ -48,14 +48,40 @@ export interface RecallHit {
   role?: string
 }
 
-export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): { block: string; hits: RecallHit[] } {
+/**
+ * 전체 로드 sanity 상한 (병합 리스트 좌표) — 스니펫은 작아 1만건도 수 MB다.
+ * 이를 넘기면 빈 페이지 + hasMore=false로 루프를 끝낸다.
+ */
+export const RECALL_TOTAL_HARD_CAP = 10000
+
+export function buildRecall(
+  db: Database,
+  q: string,
+  opts: RecallOptions & { offset?: number } = {},
+): { block: string; hits: RecallHit[]; hasMore: boolean; nextOffset: number | null } {
   const k = Math.max(1, Math.min(10, opts.k ?? 5))
+  // 종류별 윈도우: 각 종류는 독립 스트림이라 같은 offset으로 타일링해도
+  // 정확히 덮는다 (한쪽이 먼저 바닥나도 다른 쪽은 계속 진행).
+  // 홀수 k면 한 행 더 나오지만(ceil) 종류 균형이 깨지지 않는 쪽을 택한다.
   const perKind = Math.max(1, Math.ceil(k / 2))
+  const offset = Math.max(0, opts.offset ?? 0)
+  if (offset >= RECALL_TOTAL_HARD_CAP) {
+    return { block: '', hits: [], hasMore: false, nextOffset: null }
+  }
+  // union은 prefix만 반환하므로 매번 앞쪽부터 다시 읽는다 (O(offset)).
+  // +1씩 더 읽어 잔여 존재를 판정한다. 인덱스가 안정적이라는 전제 —
+  // 흔들리면 프론트의 키 dedup이 흡수하고, 0건 진전 시 루프가 멈춘다.
+  // (하위 searchMessages/searchCommits의 내부 상한은 20000까지 열려 있어
+  //  deep page에서도 잘리지 않는다 — HTTP 엔드포인트는 zod로 별도 상한 유지)
+  const want = Math.min(offset + perKind + 1, RECALL_TOTAL_HARD_CAP + 1)
   const hits: RecallHit[] = []
+  let msgMore = false
+  let commitMore = false
 
   if (opts.includeMessages !== false) {
-    const msgs = searchMessagesUnion(db, q, perKind, { repoId: opts.repoId })
-    for (const m of msgs) {
+    const msgs = searchMessagesUnion(db, q, want, { repoId: opts.repoId })
+    msgMore = msgs.length > offset + perKind
+    for (const m of msgs.slice(offset, offset + perKind)) {
       hits.push({
         kind: 'message',
         snippet: m.snippet.replace(/\[|\]/g, ''),
@@ -71,8 +97,9 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
   }
 
   if (opts.includeCommits !== false) {
-    const commits = searchCommitsUnion(db, q, perKind, opts)
-    for (const c of commits) {
+    const commits = searchCommitsUnion(db, q, want, opts)
+    commitMore = commits.length > offset + perKind
+    for (const c of commits.slice(offset, offset + perKind)) {
       hits.push({
         kind: 'commit',
         snippet: `${c.sha.slice(0, 7)} ${c.subject}`,
@@ -84,17 +111,20 @@ export function buildRecall(db: Database, q: string, opts: RecallOptions = {}): 
     }
   }
 
-  if (hits.length === 0) return { block: '', hits }
-
-  // perKind 수집 합이 k를 넘을 수 있어 최종 상한을 여기서 건다.
-  const capped = hits.slice(0, k)
+  if (hits.length === 0) return { block: '', hits, hasMore: false, nextOffset: null }
+  const hasMore = msgMore || commitMore
   const lines = ['<memory-recall>']
   lines.push(`query: "${q}"`)
-  for (const h of capped) {
+  for (const h of hits) {
     lines.push(`- [${h.kind}] ${h.snippet} — ${h.meta}`)
   }
   lines.push('</memory-recall>')
-  return { block: lines.join('\n'), hits: capped }
+  return {
+    block: lines.join('\n'),
+    hits,
+    hasMore,
+    nextOffset: hasMore ? offset + perKind : null,
+  }
 }
 
 function searchMessagesUnion(db: Database, q: string, k: number, opts: RecallOptions) {

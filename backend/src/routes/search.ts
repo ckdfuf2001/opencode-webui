@@ -181,14 +181,17 @@ export function createSearchRoutes(db: Database) {
   app.get('/recall', async (c) => {
     try {
       const q = c.req.query('q') ?? ''
-      if (!q.trim()) return c.json({ block: '', hits: [] })
+      if (!q.trim()) return c.json({ block: '', hits: [], hasMore: false, nextOffset: null })
       const kRaw = c.req.query('k')
       const k = kRaw ? parseInt(kRaw, 10) : undefined
+      const offsetRaw = c.req.query('offset')
+      const offset = offsetRaw ? Math.max(0, parseInt(offsetRaw, 10) || 0) : 0
       const repoIdRaw = c.req.query('repoId')
       const repoId = repoIdRaw != null && repoIdRaw !== '' ? parseInt(repoIdRaw, 10) : undefined
       const sessionId = c.req.query('sessionId') || undefined
       const result = buildRecall(db, q, {
         k: k != null && !Number.isNaN(k) ? k : undefined,
+        offset,
         repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
         sessionId,
       })
