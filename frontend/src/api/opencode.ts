@@ -12,6 +12,7 @@ type CommandListResponse = paths['/command']['get']['responses']['200']['content
 type CommandRequest = NonNullable<paths['/session/{id}/command']['post']['requestBody']>['content']['application/json']
 type ShellRequest = NonNullable<paths['/session/{id}/shell']['post']['requestBody']>['content']['application/json']
 type Permission = components['schemas']['Permission']
+export type SessionTodo = components['schemas']['Todo']
 
 /**
  * axios 기본 메시지("Request failed with status code 500")는 원인이 안 보인다.
@@ -211,6 +212,11 @@ export class OpenCodeClient {
   async getProviders() {
     const response = await this.client.get('/config/providers')
     return response.data
+  }
+
+  async listTodos(sessionID: string): Promise<SessionTodo[]> {
+    const response = await this.client.get<SessionTodo[]>(`/session/${sessionID}/todo`)
+    return response.data ?? []
   }
 
   async listCommands(timeoutMs?: number) {

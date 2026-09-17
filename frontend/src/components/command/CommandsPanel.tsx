@@ -16,6 +16,8 @@ import {
   ChevronDown,
   ChevronRight,
   Wrench,
+  Circle,
+  XCircle,
   Plus,
   CornerDownLeft,
   Trash2,
@@ -46,7 +48,7 @@ import { toCommandRunView } from '@/lib/command-run-view'
 import type { CommandRunViewItem, CommandRunStatus } from '@/api/command-runs'
 import { CreateCommandDialog, type DialogType, type EditingEntry } from '@/components/command/CreateCommandDialog'
 import { useCommands, type CommandScope, type CommandWithScope } from '@/hooks/useCommands'
-import { createOpenCodeClient } from '@/api/opencode'
+import { createOpenCodeClient, type SessionTodo } from '@/api/opencode'
 import { settingsApi } from '@/api/settings'
 import { registryApi, type RegistryType, type RegistryScope, type RegistryEntry } from '@/api/registry'
 import { ScheduleManager } from '@/components/schedule/ScheduleManager'
@@ -1518,6 +1520,34 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     return idx >= 0 ? messageQueries[idx] : undefined
   }, [sessionTargets, messageQueries])
 
+  // 세션 to-do: Steps 펼침 시점에 lazy 로드한다 (세션당 1회, 실패하면 빈 배열로 tool-call 표시로 폴백).
+  // to-do가 있으면 to-do 우선, 없으면 기존 tool-call 목록을 보여준다.
+  const [todosBySession, setTodosBySession] = useState<Record<string, SessionTodo[]>>({})
+  const [todosLoading, setTodosLoading] = useState<Record<string, boolean>>({})
+  const todosStateRef = useRef({ loaded: new Set<string>(), loading: new Set<string>() })
+  const loadSessionTodos = useCallback(async (sessionId: string, directory?: string) => {
+    if (!opcodeUrl || !sessionId) return
+    const st = todosStateRef.current
+    if (st.loaded.has(sessionId) || st.loading.has(sessionId)) return
+    st.loading.add(sessionId)
+    setTodosLoading((l) => ({ ...l, [sessionId]: true }))
+    try {
+      const client = createOpenCodeClient(opcodeUrl, directory)
+      const todos = await client.listTodos(sessionId)
+      setTodosBySession((p) => ({ ...p, [sessionId]: todos ?? [] }))
+    } catch {
+      setTodosBySession((p) => ({ ...p, [sessionId]: [] }))
+    } finally {
+      st.loaded.add(sessionId)
+      st.loading.delete(sessionId)
+      setTodosLoading((l) => {
+        const n = { ...l }
+        delete n[sessionId]
+        return n
+      })
+    }
+  }, [opcodeUrl])
+
   const sessionMeta = useMemo(() => {
     const map: Record<string, RunSessionMeta> = {}
     for (const item of scopedItems) {
@@ -1588,12 +1618,13 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         statusLabel,
         seg?.result ?? '',
         ...(seg?.steps ?? []),
+        ...(todosBySession[run.sessionID] ?? []).map((t) => `${t.content} ${t.status}`),
       ]
         .join(' ')
         .toLowerCase()
       return hay.includes(q)
     })
-  }, [runList, historyQuery, sessionMeta, segmentById])
+  }, [runList, historyQuery, sessionMeta, segmentById, todosBySession])
 
   const toggleRunSelected = useCallback((id: string, checked: boolean) => {
     setSelectedRunIds((prev) => {
@@ -1924,10 +1955,14 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                           <div className="border border-border rounded-md overflow-hidden">
                             <button
                               type="button"
-                              onClick={() => toggle('steps', !stepsOpen)}
+                              onClick={() => {
+                                const next = !stepsOpen
+                                toggle('steps', next)
+                                if (next) void loadSessionTodos(entry.sessionID, entry.sessionMeta?.directory || entry.directory)
+                              }}
                               className="w-full flex items-center justify-between px-2.5 py-1.5 text-left hover:bg-muted/40"
                             >
-                              <span className="text-[11px] font-medium text-foreground">Steps{run.steps.length > 0 ? ` (${run.steps.length})` : ''}</span>
+                              <span className="text-[11px] font-medium text-foreground">Steps{(todosBySession[entry.sessionID]?.length ?? 0) > 0 ? ` (${todosBySession[entry.sessionID]?.length})` : run.steps.length > 0 ? ` (${run.steps.length})` : ''}</span>
                               <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${stepsOpen ? '' : '-rotate-90'}`} />
                             </button>
                             {stepsOpen && (
@@ -1936,6 +1971,26 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                                   <p className="text-[11px] text-muted-foreground animate-pulse flex items-center gap-1.5">
                                     <Loader2 className="w-3 h-3 animate-spin" />
                                     Loading conversation...
+                                  </p>
+                                ) : (todosBySession[entry.sessionID]?.length ?? 0) > 0 ? (
+                                  todosBySession[entry.sessionID]!.map((todo) => (
+                                    <div key={todo.id} className="flex items-center gap-1.5 text-[11px] text-muted-foreground" title={`${todo.status} · ${todo.priority}`}>
+                                      {todo.status === 'completed' ? (
+                                        <CheckCircle2 className="w-3 h-3 flex-shrink-0 text-green-500" />
+                                      ) : todo.status === 'in_progress' ? (
+                                        <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin text-amber-500" />
+                                      ) : todo.status === 'cancelled' ? (
+                                        <XCircle className="w-3 h-3 flex-shrink-0 text-zinc-500" />
+                                      ) : (
+                                        <Circle className="w-3 h-3 flex-shrink-0 text-zinc-400" />
+                                      )}
+                                      <span className={`truncate ${todo.status === 'completed' ? 'line-through opacity-70' : ''}`}>{todo.content}</span>
+                                    </div>
+                                  ))
+                                ) : todosLoading[entry.sessionID] ? (
+                                  <p className="text-[11px] text-muted-foreground animate-pulse flex items-center gap-1.5">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Loading to-dos...
                                   </p>
                                 ) : run.steps.length > 0 ? (
                                   run.steps.map((step, i) => (
