@@ -110,6 +110,12 @@ function AppContent() {
 function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => void }) {
   const location = useLocation()
   const isExpose = location.pathname === '/expose'
+  const { preferences } = useSettings()
+  const favoritesEnabled = preferences?.favoritesEnabled ?? false
+  // 즐겨찾기 끄면 목록 캐시를 즉시 비워 메모리를 되돌린다
+  useEffect(() => {
+    if (!favoritesEnabled) queryClient.removeQueries({ queryKey: ['favorites'] })
+  }, [favoritesEnabled])
   return (
     <>
       <PushPrompt />
@@ -125,7 +131,7 @@ function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => 
         <Route path="/session/:sessionId" element={<SessionDetail />} />
       </Routes>
       <SettingsDialog open={isOpen} onOpenChange={close} />
-      {!isExpose && <FavoriteSessionsPanel />}
+      {!isExpose && favoritesEnabled && <FavoriteSessionsPanel />}
       {!isExpose && <HtmlViewerMenu />}
       <Toaster
         position="bottom-right"

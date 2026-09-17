@@ -56,6 +56,8 @@ export const UserPreferencesSchema = z.object({
   completionSoundOnCancel: z.boolean().default(true),
   pushNotificationEnabled: z.boolean().default(false),
   pushNotificationDuration: z.number().int().min(0).max(86400).default(0),
+  // 즐겨찾기 패널: 결과 팝업이 세션 메시지를 통째로 로드해 메모리 사용량이 늘어난다. 기본 off.
+  favoritesEnabled: z.boolean().default(false),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -85,6 +87,7 @@ export const DEFAULT_USER_PREFERENCES = {
   completionSoundOnCancel: true,
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
+  favoritesEnabled: false,
 };
 
 export const SettingsResponseSchema = z.object({
