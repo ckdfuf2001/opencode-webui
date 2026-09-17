@@ -9,6 +9,8 @@ import {
   buildSkillCheckBlock,
   isReviewSession,
   maybeSpawnReviewChild,
+  pruneExpiredSkillChecks,
+  REVIEW_SESSION_TTL_MS,
 } from '../../src/services/command-hooks'
 import type { CommandRun } from '../../src/db/command-run-queries'
 
@@ -101,6 +103,46 @@ describe('command-hooks', () => {
     expect(first).toContain('<skill-memory-check>')
     expect(first).toContain('ask the user in chat for approval')
     expect(buildSkillCheckBlock({ sessionId: 'sess-1' })).toBe('')
+  })
+
+  it('pruneExpiredSkillChecks removes entries past the consume window', async () => {
+    firePostCommandHooks(makeRun({ sessionId: 'sess-prune', kind: 'command', directory: '/tmp' }), 'completed')
+    await flushAsync()
+    // 아직 유효 — 제거 없음
+    expect(pruneExpiredSkillChecks()).toBe(0)
+    // 6분 뒤 시점에서는 죽은 엔트리 1건 정리, 다시 호출하면 0건
+    expect(pruneExpiredSkillChecks(Date.now() + 6 * 60 * 1000)).toBe(1)
+    expect(pruneExpiredSkillChecks(Date.now() + 6 * 60 * 1000)).toBe(0)
+  })
+
+  it('spawned review sessions expire from the loop guard after TTL', async () => {
+    let n = 0
+    const fetchMock = vi.fn(async (_input: unknown, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'POST') {
+        n += 1
+        return { ok: true, json: async () => ({ id: `ses-rev-${n}` }), text: async () => '' } as unknown as Response
+      }
+      return { ok: true, json: async () => [], text: async () => '' } as unknown as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const id = await maybeSpawnReviewChild({
+        sessionId: 'sess-1',
+        directory: '/tmp',
+        repoId: null,
+        commandName: 'review',
+        kind: 'command',
+        status: 'completed',
+        reviewWanted: true,
+      })
+      expect(id).toBe('ses-rev-1')
+      expect(isReviewSession('ses-rev-1')).toBe(true)
+      expect(isReviewSession('ses-rev-1', Date.now() + REVIEW_SESSION_TTL_MS + 1000)).toBe(false)
+      // 만료 후에는 맵에서도 제거되어 다음 조회가 가볍다
+      expect(isReviewSession('ses-rev-1')).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('maybeSpawnReviewChild returns null without review toggle/db', async () => {

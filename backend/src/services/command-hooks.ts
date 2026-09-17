@@ -37,23 +37,63 @@ const recentCalls: CommandHookCall[] = []
 
 const pendingSkillChecks = new Map<string, { commandName: string; status: string; at: number; kind: string }>()
 
+/** consume 기한(5분)이 지나면 어차피 null이라 읽히지 않는다 — 죽은 엔트리 정리용. */
+const PENDING_TTL_MS = 5 * 60 * 1000
+
 export function getAndClearPendingSkillCheck(sessionId: string): { commandName: string; status: string; kind: string } | null {
   const v = pendingSkillChecks.get(sessionId)
   if (!v) return null
   pendingSkillChecks.delete(sessionId)
-  if (Date.now() - v.at > 5 * 60 * 1000) return null
+  if (Date.now() - v.at > PENDING_TTL_MS) return null
   return v
+}
+
+/**
+ * consume 기한이 지난 죽은 엔트리 정리. 다음 메시지가 오지 않는 세션은
+ * 읽힐 일이 없어 무한 누적되므로, post 훅에서 매번 호출한다. 제거 수 반환.
+ */
+export function pruneExpiredSkillChecks(now: number = Date.now()): number {
+  let removed = 0
+  for (const [sid, v] of pendingSkillChecks) {
+    if (now - v.at > PENDING_TTL_MS) {
+      pendingSkillChecks.delete(sid)
+      removed++
+    }
+  }
+  return removed
 }
 
 export function getRecentHookCalls(): CommandHookCall[] {
   return [...recentCalls]
 }
 
-/** 리뷰 자식 세션 ID — 여기서 실행된 커맨드는 다시 리뷰를 낳지 않는다 (루프 가드). */
-const reviewSessions = new Set<string>()
+/**
+ * 리뷰 자식 세션 ID → 생성 시각 — 여기서 실행된 커맨드는 다시 리뷰를 낳지
+ * 않는다 (루프 가드). add만 있고 정리 경로가 없어 무한 누적되므로 TTL(24h) +
+ * 상한(1000개, 초과분은 가장 오래된 것부터 evict)을 둔다.
+ */
+export const REVIEW_SESSION_TTL_MS = 24 * 60 * 60 * 1000
+const REVIEW_SESSION_MAX = 1000
+const reviewSessions = new Map<string, number>()
 
-export function isReviewSession(sessionId: string): boolean {
-  return reviewSessions.has(sessionId)
+export function isReviewSession(sessionId: string, now: number = Date.now()): boolean {
+  const at = reviewSessions.get(sessionId)
+  if (at == null) return false
+  if (now - at > REVIEW_SESSION_TTL_MS) {
+    reviewSessions.delete(sessionId)
+    return false
+  }
+  return true
+}
+
+function rememberReviewSession(sessionId: string): void {
+  reviewSessions.delete(sessionId)
+  reviewSessions.set(sessionId, Date.now())
+  while (reviewSessions.size > REVIEW_SESSION_MAX) {
+    const oldest = reviewSessions.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    reviewSessions.delete(oldest)
+  }
 }
 
 /** 스킬 파일 존재 여부로 kind 판별 (project → global 순). */
@@ -144,6 +184,7 @@ async function postCommand(run: CommandRun, status: Exclude<CommandRunStatus, 's
     `[post-command] ${run.commandName} status=${status} (run=${run.id}, origin=${run.origin}, session=${run.sessionId})`
   )
   if ((run.kind === 'skill' || run.kind === 'command') && run.commandName) {
+    pruneExpiredSkillChecks()
     pendingSkillChecks.set(run.sessionId, { commandName: run.commandName, status, at: Date.now(), kind: run.kind })
   }
   if (db && run.repoId != null && status === 'completed') {
@@ -265,7 +306,7 @@ export async function maybeSpawnReviewChild(opts: {
     }
     const child = (await createRes.json()) as { id: string }
     if (!child?.id) return null
-    reviewSessions.add(child.id)
+    rememberReviewSession(child.id)
 
     // 부모의 마지막 결과를 잘라 자식에게 근거로 전달 (없으면 생략 — fail-open)
     let snippet = ''
