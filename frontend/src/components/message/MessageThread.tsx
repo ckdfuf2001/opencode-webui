@@ -1,4 +1,5 @@
 import { memo, useMemo } from 'react'
+import { useSettings } from '@/hooks/useSettings'
 import { MessagePart } from './MessagePart'
 import { CornerDownLeft, Scissors, Eraser, X, Copy } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
@@ -101,6 +102,10 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
     : prepared
   const highlightedIdx = highlightedMessageID ? preVisible.findIndex(({ msg }) => msg.info.id === highlightedMessageID) : -1
   void highlightedIdx
+  // SSE off 모드: 폴링으로 완료됐을 때만 보여준다. 생성 중 partial은 숨기고
+  // Generating 플레이스홀더만 그린다 (뒤에서 실시간 병합이 도는 느낌 제거).
+  const { preferences } = useSettings()
+  const sseOn = preferences?.sseStreaming ?? true
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
@@ -239,7 +244,13 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {parts.map((part, index) => (
+                  {!sseOn && streaming && msg.info.role === 'assistant' ? (
+                    <div className="flex items-center gap-2 text-zinc-500">
+                      <span className="animate-pulse">▋</span>
+                      <span className="text-sm shine-loading">Generating...</span>
+                    </div>
+                  ) : (
+                  parts.map((part, index) => (
                       <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`}>
                         <MessagePart
                           part={part as typeof msg.parts[number]}
@@ -252,7 +263,8 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                           messageStreaming={streaming}
                         />
                       </div>
-                    ))}
+                    ))
+                  )}
                 </div>
               )}
             </div>

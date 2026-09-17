@@ -124,7 +124,7 @@ export function GeneralSettings() {
           <div className="space-y-0.5">
             <Label htmlFor="sseStreaming" className="text-base">SSE streaming</Label>
             <p className="text-sm text-muted-foreground">
-              Stream reasoning and responses live. Off = polling only (slower updates).
+              Stream reasoning and responses live. Off = polling only, shown when complete.
             </p>
           </div>
           <Switch

@@ -19,7 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -562,8 +562,12 @@ export function SessionDetail() {
   const lastMessage = messages?.[messages.length - 1];
   const recentlyAborted = sessionId ? isRecentlyAborted(sessionId) : false;
   const isStreaming = isConnected && !recentlyAborted && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy || (sessionId ? hasActiveSend(sessionId) : false));
-  // SSE off면 폴링만으로 갱신 (reasoning·응답 실시간 스트리밍 없음)
+  // SSE off면 폴링만으로 갱신 (reasoning·응답 실시간 스트리밍 없음).
+  // 끄는 순간 진행 중 per-send 스트림까지 kill-switch로 닫는다.
   const sseOn = preferences?.sseStreaming ?? true
+  useEffect(() => {
+    if (!sseOn) closeAllSessionSSE()
+  }, [sseOn])
   const sseEnabled = sseOn && !!sessionId && !recentlyAborted && (hasActiveSend(sessionId) || isStreaming);
   const hasFailedQueue = (queuedForBadge as unknown as Array<{ status?: string }>)?.some((q) => q.status === 'failed') ?? false
   const dbIsCancelled = !!sessionId && (dbStatuses as unknown as Array<{ sessionId: string; isCancelled?: boolean }>)?.some((s) => s.sessionId === sessionId && s.isCancelled) === true
@@ -577,8 +581,9 @@ export function SessionDetail() {
     hasFailedQueue
   )
   const isCancelledBadge = !!sessionId && !isStreaming && !hasActiveSend(sessionId) && !dbBusy && !descendantBusy && ((dbIsCancelled && !isUserCancel) || isCancelledUntilNextSend(sessionId) || isLastCancelled || hasFailedQueue) && (messages?.length ?? 0) > 0
-  // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback
-  usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming)
+  // Poll last message even when SSE is active — bash PTY output is not always via SSE delta (tool case), polling is the reliable fallback.
+  // SSE off면 완료 메시지만 병합한다 (미완료 partial은 Generating 표시 후 완료 시점에 통째로).
+  usePollLastMessage(opcodeUrl, sessionId, repoDirectory, isStreaming, sseOn)
   useEphemeralSessionSSE(opcodeUrl, sessionId, repoDirectory, sseEnabled)
   useEffect(() => {
     if (sessionId && isRecentlyAborted(sessionId)) setHiddenAfterID(null)

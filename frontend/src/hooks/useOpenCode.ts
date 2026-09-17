@@ -42,6 +42,17 @@ const pendingOptimistic = new Map<string, MessageWithParts>();
 const activeSendControllers = new Map<string, AbortController>();
 const activeSSEMap = new Map<string, EventSource>();
 
+/**
+ * SSE 설정 off 시 킬 스위치 — 진행 중 per-send 스트림까지 즉시 닫는다.
+ * POST 자체는 계속되고 폴링이 갱신을 담당하므로 전송은 유실되지 않는다.
+ */
+export function closeAllSessionSSE(): void {
+  for (const [, es] of activeSSEMap) {
+    try { es.close(); } catch {}
+  }
+  activeSSEMap.clear()
+}
+
 export function abortActiveSend(sessionID: string): void {
   const ac = activeSendControllers.get(sessionID)
   if (ac) {
@@ -1168,6 +1179,11 @@ export const usePollLastMessage = (
   sessionID: string | undefined,
   directory?: string,
   enabled?: boolean,
+  /**
+   * false(SSE off)면 폴링은 계속하되 완료 메시지만 병합한다.
+   * partial 병합을 건너뛰어 off 모드에서 백그라운드 churn·실시간 표시가 없게 한다.
+   */
+  mergePartial: boolean = true,
 ) => {
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
@@ -1186,6 +1202,12 @@ export const usePollLastMessage = (
         // placeholderData/gcTime(10s)로 2사본이 동시에 살아있어 ힵ 폭발이 생긴다.
         // poll 전용으로도 tool output을 cap해야 캐시가 무한히 자라지 않는다.
         const capped = truncateLargeToolOutputs([msg as MessageWithParts])[0]!
+        // SSE off 모드: 완료됐을 때만 병합한다. 미완료 partial은 버려
+        // 표시(Generating 플레이스홀더)와 캐시 churn이 생기지 않게 한다.
+        if (!mergePartial) {
+          const done = 'completed' in (capped.info.time as Record<string, unknown>) && Boolean((capped.info as { time: { completed?: number } }).time.completed)
+          if (!done) return null
+        }
         const merged: MessageListResponse = all ? [...all.slice(0, -1), capped] : [capped]
         queryClient.setQueryData(messagesQueryKey(opcodeUrl, sessionID, directory), (old: MessageListResponse | undefined) => {
           if (!old || old.length === 0) return merged
@@ -1217,7 +1239,8 @@ export const usePollLastMessage = (
       }
     },
     enabled: !!client && !!sessionID && !!enabled,
-    refetchInterval: 380,
+    // SSE off(mergePartial=false)면 완료 감지용으로만 천천히 폴링한다
+    refetchInterval: mergePartial ? 380 : 2000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     gcTime: 0,
