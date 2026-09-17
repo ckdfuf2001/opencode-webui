@@ -124,7 +124,8 @@ export function GeneralSettings() {
           <div className="space-y-0.5">
             <Label htmlFor="favoritesEnabled" className="text-base">Favorites</Label>
             <p className="text-sm text-muted-foreground">
-              Show favorites panel and star buttons.{' '}
+              Show favorites panel and star buttons.
+              <br />
               <span className="text-amber-500 font-medium">May increase browser memory usage.</span>
             </p>
           </div>
