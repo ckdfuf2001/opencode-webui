@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { API_BASE_URL } from '@/config'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import type { MessageListItem } from '@/hooks/useOpenCode'
@@ -21,6 +21,15 @@ const SEARCH_PAGE = 50
 export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJumpDialogProps) {
   const [q, setQ] = useState('')
   const needle = q.trim()
+  const queryClient = useQueryClient()
+  // 다이얼로그는 닫혀도 마운트가 유지돼 observer가 남아 캐시가 안 비워진다.
+  // close 시점에 쿼리를 직접 제거해 전체 로드분을 즉시 반납한다 (진행 중 루프는 signal abort).
+  useEffect(() => {
+    if (!open) {
+      queryClient.removeQueries({ queryKey: ['message-list-all'] })
+      queryClient.removeQueries({ queryKey: ['message-search-all'] })
+    }
+  }, [open, queryClient])
 
   // 진입 시 FTS 인덱스를 증분 동기화 (화끈한 전체 rebuild가 아님) 후 목록 조회.
   // FTS 검색은 동기화 완료 후에만 켠다 — 동시에 쏘면 stale 인덱스로 빗나간다.
@@ -57,13 +66,13 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
   // 검색어 있음: FTS 전체 자동 로드. 닫으면 캐시가 반납되므로 열려 있는 동안만 전체를 들고 있는다.
   const { data: entryAll, isLoading: entryLoading, isFetching: entryFetching } = useQuery({
     queryKey: ['message-list-all', sessionId],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const items: MessageListItem[] = []
       let total = 0
       let offset = 0
       for (;;) {
         const params = new URLSearchParams({ limit: String(ENTRY_PAGE), offset: String(offset), order: 'asc' })
-        const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionId!}/list?${params.toString()}`)
+        const res = await fetch(`${API_BASE_URL}/api/session-messages/${sessionId!}/list?${params.toString()}`, { signal })
         if (!res.ok) throw new Error('Failed to load message list')
         const page = (await res.json()) as { total: number; items: MessageListItem[] }
         total = page.total
@@ -77,7 +86,7 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
     },
     enabled: open && !!sessionId && needle.length === 0,
     staleTime: 15_000,
-    gcTime: 5 * 60_000,
+    gcTime: 0,
     refetchOnWindowFocus: false,
     retry: false,
   })
@@ -86,13 +95,13 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
 
   const { data: searchAll, isLoading: searchLoading, isFetching: searchFetching } = useQuery({
     queryKey: ['message-search-all', sessionId, needle],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const hits: MessageSearchHit[] = []
       const seen = new Set<string>()
       let offset = 0
       let total = 0
       for (;;) {
-        const page = await searchMessages({ q: needle, k: SEARCH_PAGE, offset, sessionId: sessionId! })
+        const page = await searchMessages({ q: needle, k: SEARCH_PAGE, offset, sessionId: sessionId!, signal })
         total = page.total
         let added = 0
         for (const h of page.hits) {
@@ -108,7 +117,7 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
     },
     enabled: open && !!sessionId && needle.length > 0 && indexReady,
     staleTime: 15_000,
-    gcTime: 5 * 60_000,
+    gcTime: 0,
     refetchOnWindowFocus: false,
     retry: false,
   })

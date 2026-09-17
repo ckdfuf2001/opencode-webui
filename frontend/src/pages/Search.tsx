@@ -114,6 +114,8 @@ export function Search() {
       return { block: '', hits: all }
     },
     enabled: !!effectiveQ,
+    // 페이지 나가면 즉시 반납 (닫힌 뒤 5분 캐시 유지 안 함). signal abort로 진행 중 루프도 중단된다.
+    gcTime: 0,
   })
 
   const filteredHits = useMemo(() => {

@@ -56,6 +56,7 @@ export async function searchMessages(params: {
   offset?: number
   repoId?: number
   sessionId?: string
+  signal?: AbortSignal
 }): Promise<MessageSearchPage> {
   const sp = new URLSearchParams()
   if (params.q) sp.set('q', params.q)
@@ -63,7 +64,7 @@ export async function searchMessages(params: {
   if (params.offset != null) sp.set('offset', String(params.offset))
   if (params.repoId != null) sp.set('repoId', String(params.repoId))
   if (params.sessionId) sp.set('sessionId', params.sessionId)
-  const res = await fetch(`${API_BASE_URL}/api/search/messages?${sp.toString()}`)
+  const res = await fetch(`${API_BASE_URL}/api/search/messages?${sp.toString()}`, params.signal ? { signal: params.signal } : undefined)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error((err as { error?: string }).error || 'Failed to search messages')
