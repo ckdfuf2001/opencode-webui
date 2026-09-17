@@ -616,6 +616,28 @@ async function recallBlockForSlash(directory: string, cmd: string, args: string,
   }
 }
 
+/**
+ * 스킬 템플릿 조회 — opencode /command 목록에서 같은 이름의 skill 항목을 찾는다.
+ * 프론트가 보는 목록과 동일한 원천이라 템플릿이 항상 일치한다.
+ * 없으면 '' — 호출부는 `/스킬 인자`만 보낸다.
+ */
+async function getSkillTemplate(base: string, directory: string, name: string): Promise<string> {
+  try {
+    const res = await fetch(`${base}/command?directory=${encodeURIComponent(directory)}`, {
+      headers: ensureServerAuth({}),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return ''
+    const list = (await res.json()) as Array<{ name?: string; source?: string; template?: string }>
+    if (!Array.isArray(list)) return ''
+    const hit = list.find((e) => e?.name === name && e?.source === 'skill')
+      ?? list.find((e) => e?.name === name)
+    return hit?.template ?? ''
+  } catch {
+    return ''
+  }
+}
+
 async function dispatchQueuedChat(
   base: string,
   sessionID: string,
@@ -674,7 +696,69 @@ async function dispatchQueuedChat(
   const cmdMatch = trimmed.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
   // /command 실패 시 /message 폴백에 붙일 recall (/command에는 arguments에 직접 붙인다)
   let slashRecall = ''
+  // skill 합성문(`/스킬 인자` + skill-template 마커) — 있으면 /message 본문으로 쓴다.
+  // 스킬 run id — 아래 /message 결과에 따라 finish (post 훅·리뷰자식 연결).
+  let messageTextOverride: string | null = null
+  let pendingSkillRunId: string | null = null
+  const finishPendingSkillRun = (status: 'completed' | 'failed'): void => {
+    if (!pendingSkillRunId) return
+    const id = pendingSkillRunId
+    pendingSkillRunId = null
+    const db = queueDb
+    if (!db) return
+    void import('./command-runs')
+      .then(({ finishRunSafe }) => finishRunSafe(db, id, status))
+      .catch((e) => logger.debug('Skill run finish skipped:', e))
+  }
+  // 스킬 선처리: opencode /command로 스킬을 실행할 수 없다 (실측 500 UnknownError + 메시지 0건).
+  // 템플릿을 직접 합성해 아래 공통 /message 꼬리로 보낸다. 첫 줄 `/스킬 인자`는
+  // 채팅에 먼저 보이고, 템플릿은 skill-template 마커로 감싸 렌더러가 접힘 md 블록으로 그린다.
   if (cmdMatch) {
+    const probe = (cmdMatch[1] ?? '').trim()
+    if (probe) {
+      try {
+        const { resolveCommandKind } = await import('./command-hooks')
+        if (resolveCommandKind(directory, probe) === 'skill') {
+          const args = cmdMatch[2] ?? ''
+          let recall = ''
+          try {
+            recall = await recallBlockForSlash(directory, probe, args, trimmed)
+          } catch (e) {
+            logger.debug(`Skill recall skipped for /${probe}:`, e)
+          }
+          const template = await getSkillTemplate(base, directory, probe)
+          const head = args ? `/${probe} ${args}` : `/${probe}`
+          const composed = template
+            ? `${head}\n\n<!-- skill-template:${probe} -->\n${template.trim()}\n<!-- /skill-template -->`
+            : head
+          messageTextOverride = recall ? `${recall}${composed}` : composed
+          try {
+            if (queueDb) {
+              const { recordRunStartSafe } = await import('./command-runs')
+              const run = await recordRunStartSafe(queueDb, {
+                sessionId: sessionID,
+                commandName: probe,
+                args: args.trim() || null,
+                directory,
+                repoId: resolveRepoId(queueDb, directory),
+                origin: 'chat',
+                kind: 'skill',
+                reviewWanted: chat.reviewWanted,
+                autoApply: chat.autoApply,
+              })
+              pendingSkillRunId = run?.id ?? null
+            }
+          } catch (e) {
+            logger.debug(`Skill run record skipped for /${probe}:`, e)
+          }
+          logger.info(`Queued skill /${probe} composed for /message (template ${template ? `${template.length} chars` : 'missing'})`)
+        }
+      } catch (e) {
+        logger.debug('Skill pre-resolve skipped:', e)
+      }
+    }
+  }
+  if (cmdMatch && !messageTextOverride) {
     const cmd = cmdMatch[1] ?? ''
     const args = cmdMatch[2] ?? ''
     try {
@@ -756,7 +840,7 @@ async function dispatchQueuedChat(
   // 직전 스킬/커맨드 완료에 대한 부모 skill-memory-check (pending이 있을 때만 1회 주입).
   // 리뷰 자식이 생성됐으면 spawn 시점에 consume되므로 여기서는 붙지 않는다.
   // /command 실패 폴백용 recall을 먼저 붙이고 skill을 그 앞에 — proxy와 같은 순서.
-  let outgoingText = chat.text
+  let outgoingText = messageTextOverride ?? chat.text
   if (slashRecall && !outgoingText.includes('<memory-recall>')) {
     outgoingText = `${slashRecall}${outgoingText}`
   }
@@ -815,7 +899,7 @@ async function dispatchQueuedChat(
       return undefined
     }
     try {
-      const heal = await healReasoningTail(base, sessionID, directory, [chat.text], { force: true, outgoingModel: outgoing })
+      const heal = await healReasoningTail(base, sessionID, directory, [messageTextOverride ?? chat.text], { force: true, outgoingModel: outgoing })
       if (!heal.healed && heal.kind === 'cross-model') {
         // keep(보내려는 모델)을 못 정해 strip 없이 끝난 경우 — truncate+재시도로
         // 해결 불가이므로 안내만 돌려주고 끝낸다 (자동 원복 없음: 모델 선택은 사용자 몫).
@@ -874,8 +958,11 @@ async function dispatchQueuedChat(
     const body = await sendRes.text().catch(() => '')
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
-      return healMismatchAndRetryOnce(body)
+      const healed = await healMismatchAndRetryOnce(body)
+      finishPendingSkillRun(healed.sent ? 'completed' : 'failed')
+      return healed
     }
+    finishPendingSkillRun('failed')
     return { sent: false, status: sendRes.status }
   }
   // Drain the body so the socket is released even if the server keeps it open.
@@ -884,7 +971,10 @@ async function dispatchQueuedChat(
   const stored = await checkStoredMismatch()
   if (stored && isReasoningEncryptedMismatch(stored)) {
     logger.warn(`Queued chat send returned 2xx but stored a provider mismatch for session ${sessionID} — running heal+retry once`)
-    return healMismatchAndRetryOnce(stored)
+    const healed = await healMismatchAndRetryOnce(stored)
+    finishPendingSkillRun(healed.sent ? 'completed' : 'failed')
+    return healed
   }
+  finishPendingSkillRun('completed')
   return { sent: true }
 }

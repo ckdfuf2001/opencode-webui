@@ -2,6 +2,8 @@ import { memo, useState, useEffect, type ReactNode } from 'react'
 import type { components } from '@/api/opencode-types'
 import { Copy, Volume2, Square, Loader2 } from 'lucide-react'
 import { TextPart } from './TextPart'
+import { SkillInvocationBlock } from './SkillInvocationBlock'
+import { parseSkillInvocation } from '@/lib/skillBlock'
 import { PatchPart } from './PatchPart'
 import { ToolCallPart, CappedOutput } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
@@ -200,13 +202,20 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
   
   switch (part.type) {
     case 'text': {
+      const text = part.text || ''
+      // 스킬 호출(`/스킬 인자` + skill-template 마커)은 칩 + 접힘 md 블록으로 그린다
+      if (role === 'user') {
+        const skill = parseSkillInvocation(text)
+        if (skill) {
+          return <SkillInvocationBlock name={skill.name} args={skill.args} body={skill.body} part={part} />
+        }
+      }
       if (role === 'user' && allParts && partIndex !== undefined) {
         const nextPart = allParts[partIndex + 1]
         if (nextPart && nextPart.type === 'file') {
           return null
         }
       }
-      const text = part.text || ''
       // 멘션(@...)만 칩으로 바꾸고 앞뒤 텍스트는 그대로 렌더한다.
       // 예전에는 텍스트 전체가 칩 하나로 바뀌어 앞뒤 말이 날아갔다.
       const nodes: ReactNode[] = []

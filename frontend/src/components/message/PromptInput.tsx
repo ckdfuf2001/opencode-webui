@@ -357,13 +357,11 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       const command = filterCommands(commandName)[0]
       
       if (command) {
-        // 커맨드도 큐 경유 — 스킬은 템플릿 전체를, 일반 커맨드는 /name args를 큐에 넣는다
-        // 배치(큐)는 opencode의 /command 엔드포인트로 실행되어 설명이 아닌 실제 수행이 된다
-        const isSkill = (command as { source?: string }).source === 'skill'
-        const args = commandMatch[2] ?? ''
-        const text = isSkill
-          ? (args ? `${(command as { template?: string }).template ?? `/${command.name}`}\n\n${args}` : ((command as { template?: string }).template ?? `/${command.name}`))
-          : prompt.trim()
+        // 커맨드도 큐 경유 — 원문 `/name args` 그대로 넣는다.
+        // 스킬 템플릿 확장은 백엔드(dispatchQueuedChat)가 한다: 프론트에서 펼치면
+        // 16k enqueue 상한에 잘리고, 표시도 `/스킬 인자` + 접힘 블록 형태가 안 된다.
+        // (opencode /command는 스킬을 실행 못해 500 + 메시지 0건 — 백엔드가 /message로 합성 전송)
+        const text = prompt.trim()
         if (text) {
           clearCancelledUntilNextSend(sessionID)
           enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
