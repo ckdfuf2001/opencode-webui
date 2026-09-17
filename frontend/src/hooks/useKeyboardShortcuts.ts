@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react'
 import { useSettings } from './useSettings'
+import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/api/types/settings'
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
 
@@ -68,7 +69,8 @@ export function useKeyboardShortcuts(actions: ShortcutActions = {}) {
     const shortcut = parseEventShortcut(e)
     if (!shortcut) return
 
-    const shortcuts = preferences?.keyboardShortcuts || {}
+    // 저장값이 비어 있어도 기본값으로 동작해야 한다 (표시·채팅 핸들러와 동일 기준)
+    const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS, ...preferences?.keyboardShortcuts }
     
     // Check if any file editor is active on the page
     const activeFileEditor = document.querySelector('[data-file-editor="true"]')

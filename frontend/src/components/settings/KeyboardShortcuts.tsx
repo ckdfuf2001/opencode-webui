@@ -157,14 +157,12 @@ export function KeyboardShortcuts() {
     <div className="bg-card border border-border rounded-lg p-6">
       <h2 className="text-lg font-semibold text-foreground mb-6">Keyboard Shortcuts</h2>
 
-      <h3 className="text-sm font-semibold text-foreground mt-2 mb-1">채팅창</h3>
-      <p className="text-xs text-muted-foreground mb-3">채팅 입력창에 포커스가 있을 때만 동작합니다.</p>
+      <h3 className="text-sm font-semibold text-foreground mt-2 mb-1">Chat input</h3>
       <div className="space-y-4 mb-6">
         {chatEntries.map(renderRow)}
       </div>
 
-      <h3 className="text-sm font-semibold text-foreground mt-2 mb-1">전체</h3>
-      <p className="text-xs text-muted-foreground mb-3">입력 중이 아닐 때 동작합니다. (브라우저 예약키 Ctrl+N/W/T 등은 가로챌 수 없습니다)</p>
+      <h3 className="text-sm font-semibold text-foreground mt-2 mb-1">Global</h3>
       <div className="space-y-4">
         {globalEntries.map(renderRow)}
       </div>

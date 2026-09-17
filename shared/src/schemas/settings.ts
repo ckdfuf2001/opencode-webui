@@ -23,14 +23,19 @@ export const CustomAgentSchema = z.object({
 });
 
 export const DEFAULT_KEYBOARD_SHORTCUTS = {
-  submit: "shift+Enter",
+  submit: "Ctrl+Enter",
   abort: "Escape",
-  undo: "ctrl+Z",
-  redo: "ctrl+R",
-  compact: "ctrl",
-  newSession: "ctrl+N",
   toggleMode: "Tab",
-  selectModel: "ctrl+M",
+  undo: "Ctrl+Z",
+  redo: "Ctrl+Shift+Z",
+  compact: "Alt+C",
+  fork: "Ctrl+Shift+F",
+  settings: "Ctrl+,",
+  sessions: "Ctrl+S",
+  newSession: "Alt+N",
+  closeSession: "Alt+W",
+  toggleSidebar: "Ctrl+B",
+  selectModel: "Ctrl+M",
 };
 
 export const DEFAULT_REPO_TRACK_PATHS = [".opencode", "scripts"];

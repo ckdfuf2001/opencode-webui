@@ -28,6 +28,10 @@ export class SettingsService {
    *   (compact: 'Ctrl+K'/'Ctrl+Shift+C' → 'Alt+C',
    *    newSession: 'Ctrl+N' → 'Alt+N', closeSession: 'Ctrl+W' → 'Alt+W').
    *   각 값이 구 기본값과 정확히 일치할 때만 바꾼다.
+   * - keyboardShortcuts: shared 구 기본값 테이블 잔재를 현행 canonical 값으로 통일
+   *   (compact: 'ctrl' → 'Alt+C' — 수식키 단독은 매칭 불가라 죽은 값,
+   *    submit: 'shift+Enter' → 'Ctrl+Enter', redo: 'ctrl+R' → 'Ctrl+Shift+Z',
+   *    undo/selectModel은 표기 통일). 역시 구 값과 정확히 일치할 때만 바꾼다.
    * 마이그레이션 플래그는 user_preferences 테이블의 예약 user_id 행에 기록하므로
    * 이후 사용자가 의도적으로 바꾼 값은 다시 덮어쓰지 않는다.
    */
@@ -100,6 +104,37 @@ export class SettingsService {
           }
         }
         flags.compactShortcutMigrated = true
+      }
+
+      if (row && !flags.keyboardDefaultsUnified) {
+        const parsed = JSON.parse(row.preferences) as Record<string, unknown>
+        const ks = parsed.keyboardShortcuts as Record<string, unknown> | undefined
+        if (ks) {
+          let changed = false
+          const fix = (action: string, stale: string[], canon: string) => {
+            const cur = ks[action]
+            if (typeof cur === 'string' && cur !== canon && stale.includes(cur.toLowerCase())) {
+              ks[action] = canon
+              changed = true
+            }
+          }
+          // 'ctrl' 단독은 수식키만 있어 매칭 함수가 영원히 false — 죽은 값이므로 교체
+          fix('compact', ['ctrl', 'ctrl+k', 'ctrl+shift+c'], 'Alt+C')
+          fix('submit', ['shift+enter'], 'Ctrl+Enter')
+          fix('redo', ['ctrl+r'], 'Ctrl+Shift+Z')
+          // 아래는 동작 동일·표기만 통일 (매칭이 대소문자 무시라 기능 변화 없음)
+          fix('undo', ['ctrl+z'], 'Ctrl+Z')
+          fix('selectModel', ['ctrl+m'], 'Ctrl+M')
+          fix('toggleMode', ['tab'], 'Tab')
+          fix('abort', ['escape'], 'Escape')
+          if (changed) {
+            this.db
+              .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
+              .run(JSON.stringify(parsed), Date.now(), 'default')
+            logger.info('Unified stale keyboard shortcut defaults to canonical values')
+          }
+        }
+        flags.keyboardDefaultsUnified = true
       }
 
       this.db
