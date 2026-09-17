@@ -117,7 +117,7 @@ function runningToolCount(parts: MessageWithParts["parts"]): number {
   return n
 }
 
-function isCompleted(info: { time?: { completed?: number } }): boolean {
+function isCompleted(info: MessageWithParts["info"]): boolean {
   return Boolean((info.time as { completed?: number } | undefined)?.completed)
 }
 
@@ -893,9 +893,7 @@ function oldestExportId(list: MessageListResponse): string | undefined {
   return best?.info.id
 }
 export async function loadAllSessionMessages(
-  opcodeUrl: string | null | undefined,
   sessionID: string,
-  directory: string | undefined,
   onProgress?: (loaded: number, total: number) => void,
 ): Promise<{ messages: MessageListResponse; total: number }> {
   const acc: MessageListResponse = []

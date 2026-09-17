@@ -912,7 +912,7 @@ export function SessionDetail() {
     exportingRef.current = true;
     try {
       showToast.info('Loading all messages for export…');
-      const { messages: list, total } = await loadAllSessionMessages(opcodeUrl, sessionId, repoDirectory);
+      const { messages: list, total } = await loadAllSessionMessages(sessionId);
       if (!list || list.length === 0) {
         showToast.error('No messages to export yet.');
         return;
