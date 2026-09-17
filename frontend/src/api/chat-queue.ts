@@ -10,11 +10,16 @@ export interface QueuedChat {
   sendingSince?: number
   failedAt?: number
   attempts?: number
+  reviewWanted?: boolean
+  autoApply?: boolean
 }
 
 export interface EnqueueChatOptions {
   model?: { providerID: string; modelID: string }
   agent?: string
+  /** 세션 리뷰/자동변경 오버라이드 스냅샷 (undefined면 상속 = 레포 설정). */
+  reviewWanted?: boolean
+  autoApply?: boolean
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

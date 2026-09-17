@@ -128,4 +128,31 @@ describe('command-run-store', () => {
     const visible = runs.filter((r) => r.kind !== 'skill')
     expect(visible.map((r) => r.id).sort()).toEqual(['cmd-1', 'legacy-1'])
   })
+
+  it('preserves review/autoApply override flags through a write/read cycle', async () => {
+    await appendToDir(dir, makeRun({ id: 'ov-1', reviewWanted: true, autoApply: false }))
+    await appendToDir(dir, makeRun({ id: 'ov-2', reviewWanted: false }))
+    await flush()
+
+    const runs = await listFromDir(dir, () => true)
+    const byId = new Map(runs.map((r) => [r.id, r]))
+    expect(byId.get('ov-1')).toMatchObject({ reviewWanted: true, autoApply: false })
+    expect(byId.get('ov-2')).toMatchObject({ reviewWanted: false })
+    expect(byId.get('ov-2')).not.toHaveProperty('autoApply')
+  })
+
+  it('omits unset override flags so old readers treat them as inherit', async () => {
+    await appendToDir(dir, makeRun({ id: 'plain-1' }))
+    await flush()
+
+    const file = path.join(dir, `${monthKey(Date.now())}.jsonl`)
+    const lines = (await readFile(file, 'utf8')).trim().split('\n')
+    const raw = JSON.parse(lines[0]!) as Record<string, unknown>
+    expect(raw).not.toHaveProperty('reviewWanted')
+    expect(raw).not.toHaveProperty('autoApply')
+
+    const runs = await listFromDir(dir, () => true)
+    expect(runs[0]?.reviewWanted).toBeUndefined()
+    expect(runs[0]?.autoApply).toBeUndefined()
+  })
 })

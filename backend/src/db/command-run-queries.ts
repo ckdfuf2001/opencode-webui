@@ -16,6 +16,12 @@ export interface CommandRun {
   origin: CommandRunOrigin
   /** 마이그레이션 이전 레거시 레코드에는 없을 수 있다(없으면 command 취급). */
   kind?: CommandRunKind
+  /**
+   * 세션 오버라이드 스냅샷 (enqueue 시점). undefined면 상속 = 레포 DB 설정을 따른다.
+   * 프론트 세션 토글이 localStorage 전용이라 백엔드가 볼 수 없어 run 행에 실어 나른다.
+   */
+  reviewWanted?: boolean
+  autoApply?: boolean
   startedAt: number
   finishedAt: number | null
   createdAt: number
@@ -32,6 +38,8 @@ export interface CreateCommandRunInput {
   directory?: string | null
   repoId?: number | null
   kind?: CommandRunKind
+  reviewWanted?: boolean
+  autoApply?: boolean
 }
 
 /** 서비스가 완성해서 쿼리 계층에 넘기는 레코드. 이 계층은 값을 만들지 않는다. */

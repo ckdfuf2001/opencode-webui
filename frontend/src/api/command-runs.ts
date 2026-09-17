@@ -18,6 +18,8 @@ export interface CommandRun {
   startedAt: number
   finishedAt: number | null
   createdAt: number
+  reviewWanted?: boolean
+  autoApply?: boolean
 }
 
 export interface CreateCommandRunInput {
@@ -27,6 +29,8 @@ export interface CreateCommandRunInput {
   directory?: string
   repoId?: number
   kind?: CommandRunKind
+  reviewWanted?: boolean
+  autoApply?: boolean
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

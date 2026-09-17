@@ -8,6 +8,8 @@ const EnqueueChatSchema = z.object({
   directory: z.string().min(1).max(1024).optional(),
   model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }).optional(),
   agent: z.string().min(1).max(255).optional(),
+  reviewWanted: z.boolean().optional(),
+  autoApply: z.boolean().optional(),
 })
 
 const MoveChatSchema = z.object({
@@ -40,6 +42,8 @@ export function createChatQueueRoutes() {
       const queue = enqueueQueuedChat(sessionId, validated.text, validated.directory, {
         model: validated.model,
         agent: validated.agent,
+        reviewWanted: validated.reviewWanted,
+        autoApply: validated.autoApply,
       })
       // 폴러(1초)를 기다리지 않고 즉시 발송 시도 — idle이면 바로 나간다.
       flushQueueForSession(sessionId, validated.directory)

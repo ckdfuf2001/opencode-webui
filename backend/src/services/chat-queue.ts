@@ -22,6 +22,9 @@ export interface QueuedChat {
   status: 'queued' | 'sending' | 'failed'
   model?: { providerID: string; modelID: string }
   agent?: string
+  /** 세션 리뷰/자동변경 오버라이드 스냅샷 (undefined면 상속 = 레포 DB 설정). */
+  reviewWanted?: boolean
+  autoApply?: boolean
   /** sending으로 바뀐 시각. 장시간 sending 고착(nw오류·장시간 턴) 감지용. */
   sendingSince?: number
   /** failed로 바뀐 시각. 일시적 네트워크 오류 후 자동 재시도 쿨다운용. */
@@ -33,6 +36,8 @@ export interface QueuedChat {
 export interface EnqueueOptions {
   model?: { providerID: string; modelID: string }
   agent?: string
+  reviewWanted?: boolean
+  autoApply?: boolean
 }
 
 const MAX_QUEUE_LENGTH = 20
@@ -95,6 +100,8 @@ export function enqueueQueuedChat(sessionID: string, text: string, directory?: s
     status: 'queued',
     ...(opts?.model ? { model: opts.model } : {}),
     ...(opts?.agent ? { agent: opts.agent } : {}),
+    ...(opts?.reviewWanted !== undefined ? { reviewWanted: opts.reviewWanted } : {}),
+    ...(opts?.autoApply !== undefined ? { autoApply: opts.autoApply } : {}),
   })
   while (queue.length > MAX_QUEUE_LENGTH) queue.shift()
   queues.set(sessionID, queue)
@@ -658,6 +665,8 @@ async function dispatchQueuedChat(
             repoId: resolveRepoId(queueDb, directory),
             origin: 'chat',
             kind,
+            reviewWanted: chat.reviewWanted,
+            autoApply: chat.autoApply,
           })
           runId = run?.id ?? null
         }

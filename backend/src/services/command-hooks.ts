@@ -171,6 +171,8 @@ async function postCommand(run: CommandRun, status: Exclude<CommandRunStatus, 's
       kind: run.kind,
       status,
       origin: run.origin,
+      reviewWanted: run.reviewWanted,
+      autoApply: run.autoApply,
       db,
     }).catch((e) => logger.debug('[post-command] review spawn skipped:', e))
   }
@@ -209,6 +211,12 @@ export async function maybeSpawnReviewChild(opts: {
   kind: string
   status: Exclude<CommandRunStatus, 'started'>
   origin?: string
+  /**
+   * run 행에 실린 세션 오버라이드 스냅샷. undefined면 상속 = 레포 DB 설정을 따른다.
+   * 프론트 세션 토글이 localStorage 전용이라 enqueue→run 행으로 운반된다.
+   */
+  reviewWanted?: boolean
+  autoApply?: boolean
   db?: Database
 }): Promise<string | null> {
   const { sessionId, directory, commandName, kind, status } = opts
@@ -223,15 +231,18 @@ export async function maybeSpawnReviewChild(opts: {
       repoId = resolveRepoId(opts.db, directory)
     }
   } catch {}
-  let autoReview = false
-  let autoApply = false
+  let autoReview = opts.reviewWanted ?? false
+  let autoApply = opts.autoApply ?? false
   try {
     if (opts.db && repoId != null) {
-      autoReview = getSkillAutoReview(opts.db, repoId)
-      autoApply = getSkillAutoUpdate(opts.db, repoId)
+      if (opts.reviewWanted === undefined) autoReview = getSkillAutoReview(opts.db, repoId)
+      if (opts.autoApply === undefined) autoApply = getSkillAutoUpdate(opts.db, repoId)
     }
   } catch {}
-  if (!autoReview) return null
+  if (!autoReview) {
+    logger.debug(`Review spawn skipped for /${commandName}: autoReview off (run override ${String(opts.reviewWanted)}, repo ${repoId})`)
+    return null
+  }
 
   try {
     const { opencodeServerManager } = await import('./opencode-single-server')

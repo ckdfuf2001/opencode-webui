@@ -22,6 +22,7 @@ import type { components } from '@/api/opencode-types'
 import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
 import { getFileStat, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
 import { showToast } from '@/lib/toast'
+import { getSessionOverride } from '@/lib/notifications'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -243,20 +244,30 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   }
 
   // 첫 전송도 큐 경유라 모델/에이전트 선택이 큐에 타야 한다 (직접 전송과 동일값).
-  const queueDispatchOpts = (): { model?: { providerID: string; modelID: string }; agent?: string } => {
+  // 세션 리뷰/자동변경 오버라이드도 스냅샷으로 실어 보낸다 (undefined면 상속).
+  const queueDispatchOpts = (): { model?: { providerID: string; modelID: string }; agent?: string; reviewWanted?: boolean; autoApply?: boolean } => {
     const slash = currentModel.indexOf('/')
     const providerID = slash > 0 ? currentModel.slice(0, slash) : ''
     const modelID = slash > 0 ? currentModel.slice(slash + 1) : ''
+    let reviewWanted: boolean | undefined
+    let autoApply: boolean | undefined
+    try {
+      const ov = getSessionOverride(sessionID)
+      reviewWanted = ov.skillReviewEnabled
+      autoApply = ov.skillAutoEnabled
+    } catch {}
     return {
       ...(providerID && modelID ? { model: { providerID, modelID } } : {}),
       ...(currentMode ? { agent: currentMode } : {}),
+      ...(reviewWanted !== undefined ? { reviewWanted } : {}),
+      ...(autoApply !== undefined ? { autoApply } : {}),
     }
   }
 
   // 전송 직후 입력창을 동기적으로 비우고 enqueue 정착까지 락을 유지한다.
   // 연타해도 두 번째 전송은 빈 입력으로 조기 리턴 + 락으로 차단 → 중복 전송 불가.
   // 실패 시에는 스냅샷을 복원해 입력 유실을 막는다 (useEnqueueQueuedChat이 이미 토스트 표시).
-  const enqueueAndClear = (vars: { sessionID: string; text: string; directory?: string } & { model?: { providerID: string; modelID: string }; agent?: string }, snapshot: string) => {
+  const enqueueAndClear = (vars: { sessionID: string; text: string; directory?: string } & { model?: { providerID: string; modelID: string }; agent?: string; reviewWanted?: boolean; autoApply?: boolean }, snapshot: string) => {
     enqueueQueued.mutate(vars, {
       onSuccess: () => {
         sendLockRef.current = false

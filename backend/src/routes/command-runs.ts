@@ -15,6 +15,8 @@ const CreateSchema = z.object({
   args: z.string().max(20000).optional(),
   directory: z.string().max(1000).optional(),
   kind: z.enum(['command', 'skill']).optional(),
+  reviewWanted: z.boolean().optional(),
+  autoApply: z.boolean().optional(),
 })
 
 const UpdateMessageSchema = z.object({ messageId: z.string().min(1) })

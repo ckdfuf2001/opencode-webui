@@ -41,8 +41,8 @@ export function useEnqueueQueuedChat() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ sessionID, text, directory, model, agent }: { sessionID: string; text: string; directory?: string } & EnqueueChatOptions) =>
-      enqueueQueuedChat(sessionID, text, directory, { model, agent }),
+    mutationFn: ({ sessionID, text, directory, model, agent, reviewWanted, autoApply }: { sessionID: string; text: string; directory?: string } & EnqueueChatOptions) =>
+      enqueueQueuedChat(sessionID, text, directory, { model, agent, reviewWanted, autoApply }),
     onSuccess: (queue, { sessionID }) => {
       queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
     },

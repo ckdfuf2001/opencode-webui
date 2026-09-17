@@ -201,6 +201,8 @@ export async function recordRunStart(
     status: 'started',
     origin: input.origin,
     kind: input.kind ?? 'command',
+    reviewWanted: input.reviewWanted,
+    autoApply: input.autoApply,
     startedAt: now,
     finishedAt: null,
     createdAt: now,
