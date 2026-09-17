@@ -108,13 +108,37 @@ function reasoningPartsLength(parts: MessageWithParts["parts"]): number {
   return n
 }
 
+function runningToolCount(parts: MessageWithParts["parts"]): number {
+  let n = 0
+  for (const p of parts) {
+    if ((p as { type?: string }).type !== "tool") continue
+    if ((p as { state?: { status?: string } }).state?.status === "running") n++
+  }
+  return n
+}
+
+function isCompleted(info: { time?: { completed?: number } }): boolean {
+  return Boolean((info.time as { completed?: number } | undefined)?.completed)
+}
+
+/**
+ * 단일 메시지 지문 비교 — 종류별 분리 비교한다. 한 메시지 안에서 text 합산과
+ * tool 합산을 뭉개면 상쇄 오판이 난다 (running 120k→완료 20k 캡 축소 vs 텍스트
+ * 증가). running 툴 수도 센다 — 길이가 안 변는 running→completed 전이 대응.
+ */
+function sameMessageContent(a: MessageWithParts, b: MessageWithParts): boolean {
+  if (a.parts.length !== b.parts.length) return false
+  if (textPartsLength(a.parts) !== textPartsLength(b.parts)) return false
+  if (toolOutputLength(a.parts) !== toolOutputLength(b.parts)) return false
+  if (reasoningPartsLength(a.parts) !== reasoningPartsLength(b.parts)) return false
+  if (runningToolCount(a.parts) !== runningToolCount(b.parts)) return false
+  return isCompleted(a.info) === isCompleted(b.info)
+}
+
 /**
  * 메시지 목록 지문 비교 — join 없이 길이 합산만으로 판정한다.
  * 내용이 동일하면 캐시 참조를 그대로 반환해 매 폴링마다 새 배열이 생기는
  * 할당 압력을 막는다 (structuralSharing만으로는 하위 useMemo가 다 깨진다).
- * 전체 합산이 아닌 메시지별 즉시 비교 — 서로 다른 메시지의 증감이 상쇄되면
- * 오판하고 화면이 갱신되지 않는다. completed도 마지막이 아닌 전수 비교
- * (고아 정리·과거 턴 reconcile로 중간 메시지가 바뀌는 경우).
  */
 function sameMessageList(a: MessageListResponse, b: MessageListResponse): boolean {
   if (a.length !== b.length) return false
@@ -122,40 +146,35 @@ function sameMessageList(a: MessageListResponse, b: MessageListResponse): boolea
     const ma = a[i]!
     const mb = b[i]!
     if (ma.info.id !== mb.info.id) return false
-    if (ma.parts.length !== mb.parts.length) return false
-    const la = textPartsLength(ma.parts) + toolOutputLength(ma.parts) + reasoningPartsLength(ma.parts)
-    const lb = textPartsLength(mb.parts) + toolOutputLength(mb.parts) + reasoningPartsLength(mb.parts)
-    if (la !== lb) return false
-    const da = Boolean((ma.info.time as { completed?: number } | undefined)?.completed)
-    const db = Boolean((mb.info.time as { completed?: number } | undefined)?.completed)
-    if (da !== db) return false
+    if (!sameMessageContent(ma, mb)) return false
   }
   return true
 }
 
 /**
- * 캐시가 fetch 결과보다 앞선 상태인지 — 같은 id 시퀀스·같은 길이에서 캐시 쪽이
- * 더 많은 내용을 가지면 fetch 중 SSE 병합이 낀 것이다. 이때 fresh를 덮어쓰면
- * 화면이 순간 되감기므로 캐시를 유지한다. 서버가 앞선 메시지가 하나라도 있으면
- * (길이 다름 포함) fresh 채택 — 구조 변화는 항상 fresh가 이긴다.
+ * 캐시가 fetch 결과보다 앞선 상태인지 — SSE가 fetch보다 먼저 간 경우 fresh를
+ * 덮어쓰면 화면이 순간 되감기므로 캐시를 유지한다.
+ * 적용 범위는 마지막 미완료 메시지로 한정한다. SSE가 앞설 수 있는 구간은
+ * 거기뿐이고, 과거 메시지는 캡 축소·reconcile 반영을 위해 항상 fresh 우선이다.
+ * 끝난 턴의 축소(120k→20k)는 정상 축소라 캐시 유지 대상이 아니다.
  */
 function isCachedAhead(cached: MessageListResponse, fresh: MessageListResponse): boolean {
   if (cached.length !== fresh.length || cached.length === 0) return false
-  let ahead = false
-  for (let i = 0; i < cached.length; i++) {
-    const mc = cached[i]!
-    const mf = fresh[i]!
-    if (mc.info.id !== mf.info.id) return false
-    if (mc.parts.length !== mf.parts.length) return false
-    const lc = textPartsLength(mc.parts) + toolOutputLength(mc.parts) + reasoningPartsLength(mc.parts)
-    const lf = textPartsLength(mf.parts) + toolOutputLength(mf.parts) + reasoningPartsLength(mf.parts)
-    if (lc < lf) return false
-    if (lc > lf) ahead = true
-    const dc = Boolean((mc.info.time as { completed?: number } | undefined)?.completed)
-    const df = Boolean((mf.info.time as { completed?: number } | undefined)?.completed)
-    if (dc !== df) return false
+  const last = cached.length - 1
+  for (let i = 0; i < last; i++) {
+    // 과거 메시지는 무조건 fresh 우선 (id만 맞는지 확인)
+    if (cached[i]!.info.id !== fresh[i]!.info.id) return false
   }
-  return ahead
+  const mc = cached[last]!
+  const mf = fresh[last]!
+  if (mc.info.id !== mf.info.id) return false
+  if (mc.parts.length !== mf.parts.length) return false
+  if (isCompleted(mc.info) !== isCompleted(mf.info)) return false
+  // 완료된 턴이면 축소는 정상 — fresh 채택
+  if (isCompleted(mf.info)) return false
+  const lc = textPartsLength(mc.parts) + toolOutputLength(mc.parts) + reasoningPartsLength(mc.parts)
+  const lf = textPartsLength(mf.parts) + toolOutputLength(mf.parts) + reasoningPartsLength(mf.parts)
+  return lc > lf
 }
 
 // bash 등 대용량 툴 출력은 메모리에 전부 들고 있으면 힙이 GB 단위로 부푼다.
@@ -703,7 +722,10 @@ export async function reloadMissingPins(
     pinReloadFailures.delete(sessionID);
     return;
   }
+  // 갱신 시 delete 후 set으로 삽입 순서를 올린다 — Map.set은 기존 키 순서를
+  // 바꾸지 않아 오래 연 세션의 쿨다운이 상한 정리 때 먼저 날아간다.
   const count = (pinReloadFailures.get(sessionID)?.count ?? 0) + 1;
+  pinReloadFailures.delete(sessionID);
   pinReloadFailures.set(sessionID, {
     count: count >= PIN_RELOAD_MAX_FAILURES ? 0 : count,
     until: count >= PIN_RELOAD_MAX_FAILURES ? Date.now() + PIN_RELOAD_COOLDOWN_MS : 0,
