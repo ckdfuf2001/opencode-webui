@@ -8,14 +8,13 @@ import { DEFAULTS } from "../shared/src/config/defaults";
 function getBuildMeta(): { sha: string; time: string; tag: string } {
   try {
     const sha = execSync("git rev-parse --short HEAD", { encoding: "utf8", timeout: 5000 }).trim();
+    // 태그 커밋이 아니어도 가장 가까운 조상 태그를 항상 표시한다.
+    // describe 형식: v0.10.4 (정확히 태그 위) / v0.10.4-2-gabc1234 (태그 뒤 2커밋)
     let tag = "";
     try {
-      tag = execSync("git tag --points-at HEAD", { encoding: "utf8", timeout: 5000 })
-        .split("\n")
-        .map((t) => t.trim())
-        .filter((t) => /^v\d/.test(t))
-        .sort()
-        .pop() ?? "";
+      const desc = execSync('git describe --tags --long --match "v[0-9]*" HEAD', { encoding: "utf8", timeout: 5000 }).trim();
+      const m = desc.match(/^(.*)-(\d+)-g[0-9a-f]+$/);
+      if (m) tag = m[2] === "0" ? m[1]! : `${m[1]}+${m[2]}`;
     } catch {}
     if (/^[0-9a-f]{4,}$/.test(sha)) return { sha, time: new Date().toISOString(), tag };
   } catch {}
