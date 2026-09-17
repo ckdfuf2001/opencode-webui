@@ -136,9 +136,11 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
     try { localStorage.setItem('ptyIntervalMs', String(ptyIntervalMs)) } catch {}
   }, [ptyIntervalMs])
 
-  // PTY streaming for bash while running: only when expanded to save connection
+  // PTY streaming for bash while running: only when expanded to save connection.
+  // SSE off면 PTY 스트림도 열지 않는다 — metadata.output 폴링 동기화만으로 갱신.
+  const sseOn = preferences?.sseStreaming ?? true
   useEffect(() => {
-    if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded) {
+    if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded || !sseOn) {
       if (part.tool === 'bash' && part.state.status === 'completed') setPtyOutput(null)
       return
     }
@@ -174,7 +176,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
       es.addEventListener('pty.done', onDone as EventListener)
     } catch {}
     return () => { try { es?.close() } catch {} }
-  }, [part.tool, part.state.status, expanded, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs, directory])
+  }, [part.tool, part.state.status, expanded, sseOn, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs, directory])
 
   // Sync ptyOutput with opencode's metadata.output polling (for when SSE delta not yet arrived, or after refresh)
   useEffect(() => {

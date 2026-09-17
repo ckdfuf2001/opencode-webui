@@ -1664,6 +1664,13 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
 
       const esUrl = client.getEventSourceURL();
       let es: EventSource | null = null;
+      // 설정에서 SSE를 끄면 per-send 스트림도 열지 않는다 — 폴링(usePollLastMessage)이 갱신을 담당
+      let sseOn = true
+      try {
+        const sseSettings = queryClient.getQueryData<{ preferences?: { sseStreaming?: boolean } }>(["settings", "default"])
+          ?? queryClient.getQueryData<{ preferences?: { sseStreaming?: boolean } }>(["settings"])
+        if (sseSettings?.preferences?.sseStreaming === false) sseOn = false
+      } catch {}
       const capIncomingToolPart = (p: any): any => {
         if (p?.type !== 'tool' || !p?.state) return p
         const st = p.state as { output?: string; metadata?: { output?: string }; status?: string }
@@ -1852,12 +1859,14 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           }
         } catch {}
       };
+      if (sseOn) {
       try {
         es = new EventSource(esUrl);
         activeSSEMap.set(sessionID, es);
         es.onmessage = sseHandle;
         ["message.part.updated","message.updated","message.removed","session.idle"].forEach((tt) => { try { es!.addEventListener(tt, sseHandle as EventListener); } catch {} });
       } catch {}
+      }
 
       const ac = new AbortController()
       activeSendControllers.set(sessionID, ac)

@@ -50,7 +50,7 @@ export interface UserPreferences {
   completionSoundOnCancel?: boolean
   pushNotificationEnabled?: boolean
   pushNotificationDuration?: number
-  favoritesEnabled?: boolean
+  sseStreaming?: boolean
 }
 
 export interface SettingsResponse {
@@ -124,5 +124,5 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   completionSoundOnCancel: true,
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
-  favoritesEnabled: true,
+  sseStreaming: true,
 }

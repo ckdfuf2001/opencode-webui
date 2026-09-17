@@ -61,8 +61,8 @@ export const UserPreferencesSchema = z.object({
   completionSoundOnCancel: z.boolean().default(true),
   pushNotificationEnabled: z.boolean().default(false),
   pushNotificationDuration: z.number().int().min(0).max(86400).default(0),
-  // 즐겨찾기 패널: 결과 팝업이 세션 메시지를 통째로 로드해 메모리 사용량이 늘어난다. 기본 on.
-  favoritesEnabled: z.boolean().default(true),
+  // SSE 스트리밍: reasoning·응답 델타를 실시간 병합. off면 폴링만으로 갱신. 기본 on.
+  sseStreaming: z.boolean().default(true),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -92,7 +92,7 @@ export const DEFAULT_USER_PREFERENCES = {
   completionSoundOnCancel: true,
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
-  favoritesEnabled: true,
+  sseStreaming: true,
 };
 
 export const SettingsResponseSchema = z.object({

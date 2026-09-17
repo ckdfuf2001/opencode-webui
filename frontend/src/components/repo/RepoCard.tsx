@@ -13,7 +13,6 @@ import { cloneRepo, exportRepo } from "@/api/repos";
 import { cloneRepoNotifyData } from "@/lib/notifications";
 import { showToast } from "@/lib/toast";
 import { listFavorites, addFavorite, removeFavorite } from "@/api/favorites";
-import { useSettings } from "@/hooks/useSettings";
 
 interface RepoCardProps {
   repo: {
@@ -50,9 +49,7 @@ export function RepoCard({
   const queryClient = useQueryClient();
   const [addBranchOpen, setAddBranchOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  const { preferences } = useSettings();
-  const favoritesEnabled = preferences?.favoritesEnabled ?? true;
-  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: favoritesEnabled });
+  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites });
   const favId = `repo-${repo.id}`;
   const isFav = favs?.some(f => f.sessionId === favId);
   const cloneMut = useMutation({
@@ -186,11 +183,9 @@ export function RepoCard({
             )}
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                {favoritesEnabled && (
                 <Button variant="ghost" size="icon" className={`h-7 w-7 ${isFav ? 'text-amber-500' : ''}`} onClick={async (e) => { e.stopPropagation(); try { if (isFav) await removeFavorite(favId); else await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.fullPath || '', title: repo.localPath || `repo-${repo.id}` }); showToast.success(isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'); queryClient.invalidateQueries({ queryKey: ['favorites'] }) } catch (err:any){ showToast.error(err.message) } }} title={isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
                   <Star className={`w-4 h-4 ${isFav ? 'fill-amber-500' : ''}`} />
                 </Button>
-                )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => e.stopPropagation()}>

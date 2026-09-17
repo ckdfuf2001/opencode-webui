@@ -122,17 +122,15 @@ export function GeneralSettings() {
 
         <div className="flex flex-row items-center justify-between rounded-lg border border-border p-4">
           <div className="space-y-0.5">
-            <Label htmlFor="favoritesEnabled" className="text-base">Favorites</Label>
+            <Label htmlFor="sseStreaming" className="text-base">SSE streaming</Label>
             <p className="text-sm text-muted-foreground">
-              Show favorites panel and star buttons.
-              <br />
-              <span className="text-amber-500 font-medium">May increase browser memory usage.</span>
+              Stream reasoning and responses live. Off = polling only (slower updates).
             </p>
           </div>
           <Switch
-            id="favoritesEnabled"
-            checked={preferences?.favoritesEnabled ?? true}
-            onCheckedChange={(checked) => updateSettings({ favoritesEnabled: checked })}
+            id="sseStreaming"
+            checked={preferences?.sseStreaming ?? true}
+            onCheckedChange={(checked) => updateSettings({ sseStreaming: checked })}
           />
         </div>
 

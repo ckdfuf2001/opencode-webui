@@ -11,7 +11,6 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { listFavorites, addFavorite, removeFavorite } from '@/api/favorites'
-import { useSettings } from '@/hooks/useSettings'
 import { showToast } from '@/lib/toast'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
 import { deleteRepo } from '@/api/repos'
@@ -38,9 +37,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
 
   const { data: repos, isLoading: reposLoading } = useQuery({ queryKey: ['repos'], queryFn: listRepos })
   const { data: dbStatuses } = useSessionStatusMap()
-  const { preferences } = useSettings()
-  const favoritesEnabled = preferences?.favoritesEnabled ?? true
-  const { data: favsTop } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: favoritesEnabled })
+  const { data: favsTop } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites })
   const isRepoFavTop = (rid: number) => favsTop?.some(f => f.sessionId === `repo-${rid}`)
   const toggleRepoFavTop = async (repo: { id: number; localPath?: string; fullPath?: string }) => {
     const favId = `repo-${repo.id}`
@@ -185,7 +182,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
                 >
                   {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                 </button>
-                {favoritesEnabled && !editMode && (
+                {!editMode && (
                   <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleRepoFavTop(repo) }} className={`p-1 rounded hover:bg-background shrink-0 ${isRepoFavTop(repo.id) ? 'text-amber-500' : 'text-muted-foreground'}`} title={isRepoFavTop(repo.id) ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
                     <Star className={`w-3.5 h-3.5 ${isRepoFavTop(repo.id) ? 'fill-amber-500' : ''}`} />
                   </button>
@@ -384,9 +381,7 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
   }
 
   // 훅은 early return보다 항상 먼저 호출되어야 한다 (세션 로딩 전후 훅 개수 불일치 크래시 방지)
-  const { preferences: repoPrefs } = useSettings()
-  const repoFavsEnabled = repoPrefs?.favoritesEnabled ?? true
-  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: repoFavsEnabled })
+  const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites })
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editingSessionTitle, setEditingSessionTitle] = useState('')
   useEffect(() => { if (!editMode) { setEditingSessionId(null); setEditingSessionTitle('') } }, [editMode])
@@ -442,7 +437,7 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
     const isEditing = editMode && editingSessionId === id
     return (
       <div key={id} className={`flex items-center gap-1 pr-1 rounded hover:bg-accent ${isActive ? 'bg-accent' : ''} ${editMode && isChecked ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}>
-        {repoFavsEnabled && !editMode && !isEditing && (
+        {!editMode && !isEditing && (
           <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(id, title) }} className={`p-1 rounded hover:bg-background shrink-0 ${fav ? 'text-amber-500' : 'text-muted-foreground'}`} title={fav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
             <Star className={`w-3 h-3 ${fav ? 'fill-amber-500' : ''}`} />
           </button>
