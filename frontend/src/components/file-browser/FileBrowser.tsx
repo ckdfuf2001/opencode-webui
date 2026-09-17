@@ -151,6 +151,8 @@ interface FileBrowserProps {
   embedded?: boolean
   initialSelectedFile?: string
   onDirectoryLoad?: (info: { workspaceRoot?: string; currentPath: string }) => void
+  /** 채팅 멘션 — 있으면 트리 ... 메뉴에 "Mention on chat"이 뜬다 */
+  onMentionFile?: (file: FileInfo) => void
 }
 
 type FileSort = 'name-asc' | 'name-desc' | 'mtime-asc' | 'mtime-desc'
@@ -181,7 +183,7 @@ function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: Fi
   )
 }
 
-export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad }: FileBrowserProps) {
+export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad, onMentionFile }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState(basePath)
   const queryClient = useQueryClient()
   const { data: files, isLoading: queryLoading, error: filesQueryError } = useQuery<FileInfo, Error>({
@@ -761,6 +763,7 @@ useEffect(() => {
                   basePath={basePath}
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
+                  onMentionFile={onMentionFile}
                   attachedPaths={attachedPaths}
                   revealPath={revealPath}
                   expandKnown={recursiveActive && !!recursiveResults}
@@ -888,6 +891,7 @@ useEffect(() => {
                   basePath={basePath}
                   isLoading={loading || queryLoading}
                   browserOpenPaths={browserOpenPaths}
+                  onMentionFile={onMentionFile}
                   attachedPaths={attachedPaths}
                   revealPath={revealPath}
                   expandKnown={recursiveActive && !!recursiveResults}

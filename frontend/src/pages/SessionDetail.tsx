@@ -1288,6 +1288,20 @@ export function SessionDetail() {
     setInjectedFile(null)
   }, []);
 
+  // 탐색기 ... 메뉴 "Mention on chat" — 트리 전체경로에서 repo 기준 상대경로로 바꿔
+  // 채팅 입력창에 @"..." 멘션으로 꽂는다 (업로드 흐름과 같은 injectedFile 경로).
+  const handleMentionFile = useCallback((file: { name: string; path: string }) => {
+    const norm = file.path.replace(/\\/g, '/');
+    const base = (repo?.localPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const rel = base && (norm === base || norm.startsWith(base + '/'))
+      ? norm.slice(base.length + (norm === base ? 0 : 1))
+      : norm.replace(/^\/+/, '');
+    setInjectedFile((prev) => ({
+      token: (prev?.token ?? 0) + 1,
+      files: [{ name: file.name, path: rel }],
+    }));
+  }, [repo?.localPath]);
+
   const handleEditMessage = useCallback((messageID: string, text: string) => {
     setHiddenAfterID(messageID)
     setInjectedPrompt((prev) => ({
@@ -1640,6 +1654,7 @@ if (results.length > 0) {
             width={filePanelWidth}
             onClose={handleFileBrowserClose}
             onOpenFullscreen={() => setFileBrowserFullscreenOpen(true)}
+            onMentionFile={handleMentionFile}
           />
         )}
       </div>
@@ -1650,6 +1665,7 @@ if (results.length > 0) {
         basePath={repo?.localPath}
         repoName={repo?.repoUrl?.split("/").pop()?.replace(".git", "") || repo?.localPath || "Repository"}
         initialSelectedFile={selectedFilePath}
+        onMentionFile={handleMentionFile}
       />
 
       <ModelSelectDialog

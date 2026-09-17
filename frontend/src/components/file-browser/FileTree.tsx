@@ -15,7 +15,8 @@ import {
   Download,
   Globe,
   ListPlus,
-  Paperclip
+  Paperclip,
+  AtSign
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -42,6 +43,7 @@ interface FileTreeProps {
   basePath?: string
   isLoading?: boolean
   browserOpenPaths?: Set<string>
+  onMentionFile?: (file: FileInfo) => void
   attachedPaths?: Set<string>
   /** 채팅 파일 클릭 시 펼쳐서 보여줄 폴더 경로 (정규화 전 원문) */
   revealPath?: string
@@ -59,6 +61,7 @@ interface TreeNodeProps {
   onRename?: (oldPath: string, newPath: string) => void
   onDownload?: (file: FileInfo) => void
   browserOpenPaths?: Set<string>
+  onMentionFile?: (file: FileInfo) => void
   attachedPaths?: Set<string>
   revealPath?: string
   expandKnown?: boolean
@@ -100,7 +103,7 @@ function useDirChildren(dirPath: string, enabled: boolean) {
   })
 }
 
-function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
+function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
   // 수동 토글이 최우선. 그 외에는 reveal 경로(채팅 파일 클릭)·검색 펼치기 순으로 자동 펼친다.
   // expandKnown은 children이 이미 알려진 노드에만 적용 — 지연 로딩 폴더를 전부 깨우지 않는다.
   const normPath = normalizeTreePath(file.path)
@@ -257,6 +260,12 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
+            {!file.isDirectory && onMentionFile && (
+              <DropdownMenuItem onClick={() => onMentionFile(file)}>
+                <AtSign className="w-4 h-4 mr-2" />
+                Mention on chat
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={handleRename}>
               <PenLine className="w-4 h-4 mr-2" />
               Rename
@@ -355,6 +364,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               onRename={onRename}
               onDownload={onDownload}
               browserOpenPaths={browserOpenPaths}
+              onMentionFile={onMentionFile}
               attachedPaths={attachedPaths}
               revealPath={revealPath}
               expandKnown={expandKnown}
@@ -376,7 +386,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
   )
 }
 
-export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, attachedPaths, revealPath, expandKnown }: FileTreeProps) {
+export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: FileTreeProps) {
   const handleGoUp = () => {
     // If currentPath has content and is different from basePath, go up
     if (currentPath !== basePath) {
@@ -429,6 +439,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
             onRename={onRename}
             onDownload={onDownload}
             browserOpenPaths={browserOpenPaths}
+            onMentionFile={onMentionFile}
             attachedPaths={attachedPaths}
             revealPath={revealPath}
             expandKnown={expandKnown}

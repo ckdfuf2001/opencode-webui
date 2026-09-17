@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { PathDisplay } from '@/components/ui/path-display'
 import { X } from 'lucide-react'
 import { GPU_ACCELERATED_STYLE, MODAL_TRANSITION_MS } from '@/lib/utils'
+import type { FileInfo } from '@/types/files'
 
 interface FileBrowserSheetProps {
   isOpen: boolean
@@ -11,9 +12,10 @@ interface FileBrowserSheetProps {
   basePath?: string
   repoName?: string
   initialSelectedFile?: string
+  onMentionFile?: (file: FileInfo) => void
 }
 
-export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose, basePath = '', repoName, initialSelectedFile }: FileBrowserSheetProps) {
+export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose, basePath = '', repoName, initialSelectedFile, onMentionFile }: FileBrowserSheetProps) {
   const normalizedBasePath = basePath || '.'
   const [isEditing, setIsEditing] = useState(false)
   const [displayPath, setDisplayPath] = useState<string>('/')
@@ -122,6 +124,7 @@ export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose
             embedded={true}
             initialSelectedFile={initialSelectedFile}
             onDirectoryLoad={handleDirectoryLoad}
+            onMentionFile={onMentionFile}
           />
         </div>
       </div>
