@@ -82,6 +82,12 @@ interface RunSessionMeta {
 
 type RunStatus = 'running' | 'completed' | 'error'
 
+interface RunStep {
+  tool: string
+  status: string
+  detail: string
+}
+
 interface SegmentedRun {
   name: string
   args: string
@@ -89,7 +95,7 @@ interface SegmentedRun {
   trigger: string | null
   triggerMessageID: string | null
   result: string
-  steps: string[]
+  steps: RunStep[]
   status: RunStatus
   lastUpdated: number
   stepCount: number
@@ -103,10 +109,40 @@ function assistantText(message: MessageWithParts): string {
   return message.parts.filter((p) => p.type === 'text').map(partText).join('\n')
 }
 
-function assistantSteps(message: MessageWithParts): string[] {
+function firstLine(s: string, max = 100): string {
+  const line = s.split('\n')[0]!.trim()
+  return line.length > max ? `${line.slice(0, max)}…` : line
+}
+
+// tool-call 한 줄 설명: 에러 → 출력 첫 줄 → 제목 → 대표 입력 순으로 첫 의미 있는 값을 쓴다
+function toolStepDetail(part: Part): string {
+  const st = (part as unknown as { state?: Record<string, unknown> }).state ?? {}
+  const asStr = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const errObj = st.error as { message?: unknown } | undefined
+  const err = asStr(st.error) || asStr(errObj?.message)
+  if (err.trim()) return firstLine(err)
+  const meta = st.metadata as Record<string, unknown> | undefined
+  const out = asStr(st.output) || asStr(meta?.output)
+  if (out.trim()) return firstLine(out)
+  const title = asStr(st.title)
+  if (title.trim()) return firstLine(title)
+  const input = st.input as Record<string, unknown> | undefined
+  if (input) {
+    for (const k of ['command', 'filePath', 'pattern', 'query', 'description', 'prompt']) {
+      const v = asStr(input[k])
+      if (v.trim()) return firstLine(v)
+    }
+  }
+  return ''
+}
+
+function assistantSteps(message: MessageWithParts): RunStep[] {
   return message.parts
     .filter((p) => p.type === 'tool')
-    .map((p) => p.tool)
+    .map((p) => {
+      const t = p as unknown as { tool?: string; state?: { status?: string } }
+      return { tool: t.tool ?? '?', status: t.state?.status ?? 'unknown', detail: toolStepDetail(p) }
+    })
 }
 
 function segmentRun(
@@ -1525,10 +1561,11 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const [todosBySession, setTodosBySession] = useState<Record<string, SessionTodo[]>>({})
   const [todosLoading, setTodosLoading] = useState<Record<string, boolean>>({})
   const todosStateRef = useRef({ loaded: new Set<string>(), loading: new Set<string>() })
-  const loadSessionTodos = useCallback(async (sessionId: string, directory?: string) => {
+  const loadSessionTodos = useCallback(async (sessionId: string, directory?: string, force = false) => {
     if (!opcodeUrl || !sessionId) return
     const st = todosStateRef.current
-    if (st.loaded.has(sessionId) || st.loading.has(sessionId)) return
+    if (st.loading.has(sessionId)) return
+    if (!force && st.loaded.has(sessionId)) return
     st.loading.add(sessionId)
     setTodosLoading((l) => ({ ...l, [sessionId]: true }))
     try {
@@ -1617,7 +1654,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
         meta?.repoName ?? '',
         statusLabel,
         seg?.result ?? '',
-        ...(seg?.steps ?? []),
+        ...(seg?.steps ?? []).map((s) => `${s.tool} ${s.status} ${s.detail}`),
         ...(todosBySession[run.sessionID] ?? []).map((t) => `${t.content} ${t.status}`),
       ]
         .join(' ')
@@ -1629,11 +1666,29 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const toggleRunSelected = useCallback((id: string, checked: boolean) => {
     setSelectedRunIds((prev) => {
       const next = new Set(prev)
-      if (checked) next.add(id)
-      else next.delete(id)
+      if (checked) next.delete(id)
+      else next.add(id)
       return next
     })
   }, [])
+
+  // 펼친 Steps 중 running인 run이 있으면 세션 to-do를 주기 갱신한다.
+  // 1회 로드로는 실행 중 상태가 그대로 굳어 command 완료 후에도 반영이 안 된다.
+  // 완료/실패로 바뀌면 segment가 바뀌어 effect가 정리되고 마지막 강제 리로드 1회가 남는다.
+  useEffect(() => {
+    const targets = new Map<string, string | undefined>()
+    for (const [runId, st] of Object.entries(expanded)) {
+      if (!st?.steps) continue
+      if (segmentById.get(runId)?.status !== 'running') continue
+      const entry = filteredRunList.find((r) => r.id === runId)
+      if (entry) targets.set(entry.sessionID, entry.sessionMeta?.directory || entry.directory)
+    }
+    if (targets.size === 0) return
+    const id = setInterval(() => {
+      for (const [sid, dir] of targets) void loadSessionTodos(sid, dir, true)
+    }, 2500)
+    return () => clearInterval(id)
+  }, [expanded, segmentById, filteredRunList, loadSessionTodos])
 
   const selectAllRuns = useCallback(() => {
     setSelectedRunIds(new Set(filteredRunList.map((r) => r.id)))
@@ -1958,7 +2013,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                               onClick={() => {
                                 const next = !stepsOpen
                                 toggle('steps', next)
-                                if (next) void loadSessionTodos(entry.sessionID, entry.sessionMeta?.directory || entry.directory)
+                                if (next) void loadSessionTodos(entry.sessionID, entry.sessionMeta?.directory || entry.directory, true)
                               }}
                               className="w-full flex items-center justify-between px-2.5 py-1.5 text-left hover:bg-muted/40"
                             >
@@ -1994,9 +2049,17 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                                   </p>
                                 ) : run.steps.length > 0 ? (
                                   run.steps.map((step, i) => (
-                                    <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground truncate">
-                                      <Wrench className="w-3 h-3 flex-shrink-0" />
-                                      <span className="truncate">{step}</span>
+                                    <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground" title={`${step.tool} · ${step.status}${step.detail ? ` — ${step.detail}` : ''}`}>
+                                      {step.status === 'completed' ? (
+                                        <CheckCircle2 className="w-3 h-3 flex-shrink-0 text-green-500" />
+                                      ) : step.status === 'error' ? (
+                                        <XCircle className="w-3 h-3 flex-shrink-0 text-red-500" />
+                                      ) : step.status === 'running' ? (
+                                        <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin text-amber-500" />
+                                      ) : (
+                                        <Wrench className="w-3 h-3 flex-shrink-0" />
+                                      )}
+                                      <span className="truncate">{step.tool}{step.detail ? <span className="opacity-80"> — {step.detail}</span> : null}</span>
                                     </div>
                                   ))
                                 ) : run.status === 'running' ? (
