@@ -108,6 +108,31 @@ function reasoningPartsLength(parts: MessageWithParts["parts"]): number {
   return n
 }
 
+/**
+ * 메시지 목록 지문 비교 — join 없이 길이 합산만으로 판정한다.
+ * 내용이 동일하면 캐시 참조를 그대로 반환해 매 폴링마다 새 배열이 생기는
+ * 할당 압력을 막는다 (structuralSharing만으로는 하위 useMemo가 다 깨진다).
+ */
+function sameMessageList(a: MessageListResponse, b: MessageListResponse): boolean {
+  if (a.length !== b.length) return false
+  if (a.length === 0) return true
+  let aText = 0
+  let bText = 0
+  for (let i = 0; i < a.length; i++) {
+    const ma = a[i]!
+    const mb = b[i]!
+    if (ma.info.id !== mb.info.id) return false
+    aText += textPartsLength(ma.parts) + toolOutputLength(ma.parts) + reasoningPartsLength(ma.parts)
+    bText += textPartsLength(mb.parts) + toolOutputLength(mb.parts) + reasoningPartsLength(mb.parts)
+  }
+  if (aText !== bText) return false
+  const aLast = a[a.length - 1]!
+  const bLast = b[b.length - 1]!
+  const aDone = Boolean((aLast.info.time as { completed?: number } | undefined)?.completed)
+  const bDone = Boolean((bLast.info.time as { completed?: number } | undefined)?.completed)
+  return aDone === bDone
+}
+
 // bash 등 대용량 툴 출력은 메모리에 전부 들고 있으면 힙이 GB 단위로 부푼다.
 // pnpm 같은 대량 출력이 툴 하나에 4GB까지 가던 걸 방지 — 완료된 툴은 20k까지만 메모리에 유지
 export const MAX_TOOL_OUTPUT_KEEP = 20_000
@@ -957,11 +982,17 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
       const isBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
-      if (isRecentlyAborted(sessionID!)) {
-        return reconcileOrphanedStreams(result, sessionID!, false);
-      }
-      if (hasPending) return reconcileOrphanedStreams(result, sessionID!, true)
-      return reconcileOrphanedStreams(result, sessionID!, isBusy);
+      const reconciled = isRecentlyAborted(sessionID!)
+        ? reconcileOrphanedStreams(result, sessionID!, false)
+        : hasPending
+          ? reconcileOrphanedStreams(result, sessionID!, true)
+          : reconcileOrphanedStreams(result, sessionID!, isBusy)
+      // 내용 동일하면 캐시 참조 그대로 반환 — 새 배열이 생길 때마다 하위
+      // useMemo(MessageThread prepared 등)가 전부 재계산되고 힙이 부푼다.
+      // fetch 중 SSE 병합이 끼었을 수 있어 캐시를 다시 읽어 비교한다.
+      const latest = queryClient.getQueryData<MessageListResponse>(ownKey) ?? cached
+      if (latest && sameMessageList(latest, reconciled)) return latest
+      return reconciled;
     },
     enabled: !!client && !!sessionID,
     refetchOnMount: false,
@@ -980,16 +1011,21 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
       const last = data?.[data.length - 1] as unknown as { info: { role: string; time: Record<string, unknown> }; parts: { type: string }[] } | undefined
       const hasReasoning = !!last?.parts?.some((p) => p.type === 'reasoning')
       const hasPending = pendingOptimistic.has(sessionID!) || activeSendControllers.has(sessionID!)
+      // optimistic 미도착(hasPending) 동안은 전체 폴링 유지 — 도착 확인 자체가
+      // 전체 목록으로 이루어지므로 끄면 120s 타임아웃까지 고착된다.
       if (hasPending) return hasReasoning ? 500 : 1500
       const streaming = last ? !('completed' in (last.info.time as Record<string, unknown>) && (last.info.time as { completed?: number }).completed) && last.info.role === 'assistant' : false
-      if (hasReasoning && streaming) return 500
-      if (streaming) return 1000
+      // 스트리밍 중 전체 60건 재조회는 중단 — 같은 내용을 수백 번 재파싱하는 주범.
+      // 증가분은 380ms last-message 폴링 + SSE가 커버하고, 전체 목록은
+      // 턴 완료(SSE idle) 때 갱신된다. 5s는 SSE 유실 시 안전망.
+      if (hasReasoning && streaming) return 5000
+      if (streaming) return 5000
       const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"])
       const dbBusy = statuses?.some((s) => s.sessionId === sessionID && s.status === "busy") ?? false
-      if (dbBusy) return 1000
+      if (dbBusy) return 5000
       // 완전 idle이면 10초로 늦춘다 — 2초마다 전체 목록 파싱이 긴 세션에서
-      // 힙을 계속 부풀리는 주범이다. 스트리밍/전송/busy는 위에서 빠른 주기 유지.
-      // (TUI 등 외부 변경은 최대 10초 늦게 반영, 상태 배지는 별도 2초 폴링 유지)
+      // 힙을 계속 부풀리는 주범이다. 전송 중(optimistic 미도착)은 위에서 빠른 주기 유지.
+      // (TUI 등 외부 변경은 최대 10초 늦게 반영, 상태 배지는 별도 1.2초 폴링 유지)
       return 10000
     },
   });

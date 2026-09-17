@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { useQueryClient } from '@tanstack/react-query'
 import type { QuestionRequest } from '@/api/types'
 
@@ -32,17 +31,10 @@ interface QuestionStore {
   questions: QuestionRequest[]
 }
 
-const useQuestionStore = create<QuestionStore, [['zustand/persist', Pick<QuestionStore, 'questions'>]]>(
-  persist(
-    (): QuestionStore => ({
-      questions: [],
-    }),
-    {
-      name: 'opencode-webui-questions',
-      partialize: (state) => ({ questions: state.questions }),
-    },
-  ),
-)
+// permission과 동일 — 수 분 내 소멸하는 임시 데이터라 persist하지 않는다.
+const useQuestionStore = create<QuestionStore>()((): QuestionStore => ({
+  questions: [],
+}))
 
 let storeSubscriptionStarted = false
 
@@ -50,8 +42,15 @@ let storeSubscriptionStarted = false
 const RECENTLY_DISMISSED_MS = 12_000
 const recentlyDismissed = new Map<string, number>()
 
+// 조회될 때만 만료 청소되므로 상한을 둔다 (장시간 세션 무한 누적 방지)
+const RECENTLY_DISMISSED_MAX = 500
 export function markQuestionDismissed(requestID: string): void {
   recentlyDismissed.set(requestID, Date.now())
+  while (recentlyDismissed.size > RECENTLY_DISMISSED_MAX) {
+    const oldest = recentlyDismissed.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    recentlyDismissed.delete(oldest)
+  }
 }
 
 function isRecentlyDismissed(requestID: string): boolean {
@@ -96,6 +95,8 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
     let cancelled = false
 
     const load = async () => {
+      // 백그라운드 탭에서는 폴링 스킵 — 브라우저 스로틀만 믿지 않는다
+      if (typeof document !== 'undefined' && document.hidden) return
       try {
         const pending = await client.listQuestions()
         if (cancelled) return

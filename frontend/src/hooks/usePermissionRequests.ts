@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Permission } from '@/api/types'
 
@@ -32,17 +31,11 @@ interface PermissionStore {
   permissions: Permission[]
 }
 
-const usePermissionStore = create<PermissionStore, [['zustand/persist', Pick<PermissionStore, 'permissions'>]]>(
-  persist(
-    (): PermissionStore => ({
-      permissions: [],
-    }),
-    {
-      name: 'opencode-webui-permissions',
-      partialize: (state) => ({ permissions: state.permissions }),
-    },
-  ),
-)
+// 수 분 내 소멸하는 임시 데이터라 persist하지 않는다 — 매 setState마다
+// localStorage 직렬화+쓰기가 일어나 힙/IO를 잡아먹는다. 마운트 시 서버에서 다시 읽는다.
+const usePermissionStore = create<PermissionStore>()((): PermissionStore => ({
+  permissions: [],
+}))
 
 let storeSubscriptionStarted = false
 
@@ -50,8 +43,15 @@ let storeSubscriptionStarted = false
 const RECENTLY_DISMISSED_MS = 12_000
 const recentlyDismissed = new Map<string, number>()
 
+// 조회될 때만 만료 청소되므로 상한을 둔다 (장시간 세션 무한 누적 방지)
+const RECENTLY_DISMISSED_MAX = 500
 export function markPermissionDismissed(permissionID: string): void {
   recentlyDismissed.set(permissionID, Date.now())
+  while (recentlyDismissed.size > RECENTLY_DISMISSED_MAX) {
+    const oldest = recentlyDismissed.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    recentlyDismissed.delete(oldest)
+  }
 }
 
 function isRecentlyDismissed(permissionID: string): boolean {
@@ -177,6 +177,8 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
     const scopeIDs = sessionID ? new Set([sessionID, ...(relatedSessionIDs ?? [])]) : null
 
     const load = async () => {
+      // 백그라운드 탭에서는 폴링 스킵 — 브라우저 스로틀만 믿지 않는다
+      if (typeof document !== 'undefined' && document.hidden) return
       try {
         const pending = await client.listPermissions()
         if (cancelled) return

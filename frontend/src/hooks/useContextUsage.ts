@@ -42,6 +42,12 @@ interface Provider {
 // 튀게 된다. 컴팩트 성공 시점을 세션별로 기록하고, 그 이전 생성 메시지는
 // 사용량에서 제외한다 — 새 ID 메시지(그 이후)부터 다시 잰다.
 const compactAtBySession = new Map<string, number>()
+// 세션 삭제 시 정리 경로가 없어 TTL+상한을 둔다 (Map·sessionStorage 동반 증가 방지)
+const COMPACT_TTL_MS = 30 * 24 * 60 * 60 * 1000
+const COMPACT_MAX_ENTRIES = 500
+function compactKey(sessionID: string): string {
+  return `compactAt:${sessionID}`
+}
 
 // mark만 쓰고 끝내면 useMemo가 재계산되지 않아 컴팩트 전 값이 화면에
 // 그대로 남는다 (SessionDetail 경로는 onSuccess 무효화→재계산이 mark보다
@@ -56,10 +62,32 @@ function getCompactVersion(): number {
   return compactVersion
 }
 
+function sweepCompactStorage(now: number = Date.now()): void {
+  for (const [sid, at] of compactAtBySession) {
+    if (now - at > COMPACT_TTL_MS) compactAtBySession.delete(sid)
+  }
+  while (compactAtBySession.size > COMPACT_MAX_ENTRIES) {
+    const oldest = compactAtBySession.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    compactAtBySession.delete(oldest)
+  }
+  try {
+    const stale: string[] = []
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)
+      if (k == null || !k.startsWith('compactAt:')) continue
+      const n = Number(sessionStorage.getItem(k))
+      if (!Number.isFinite(n) || n <= 0 || now - n > COMPACT_TTL_MS) stale.push(k)
+    }
+    for (const k of stale) sessionStorage.removeItem(k)
+  } catch { /* ignore */ }
+}
+
 export function markSessionCompacted(sessionID: string, at: number = Date.now()): void {
+  sweepCompactStorage(at)
   compactAtBySession.set(sessionID, at)
   try {
-    sessionStorage.setItem(`compactAt:${sessionID}`, String(at))
+    sessionStorage.setItem(compactKey(sessionID), String(at))
   } catch { /* ignore */ }
   compactVersion += 1
   compactListeners.forEach((l) => { try { l() } catch { /* ignore */ } })
@@ -68,12 +96,23 @@ export function markSessionCompacted(sessionID: string, at: number = Date.now())
 function getSessionCompactedAt(sessionID: string | undefined): number | null {
   if (!sessionID) return null
   const mem = compactAtBySession.get(sessionID)
-  if (mem != null) return mem
+  if (mem != null) {
+    if (Date.now() - mem > COMPACT_TTL_MS) {
+      compactAtBySession.delete(sessionID)
+      try { sessionStorage.removeItem(compactKey(sessionID)) } catch { /* ignore */ }
+      return null
+    }
+    return mem
+  }
   try {
-    const raw = sessionStorage.getItem(`compactAt:${sessionID}`)
+    const raw = sessionStorage.getItem(compactKey(sessionID))
     if (raw != null) {
       const n = Number(raw)
       if (Number.isFinite(n) && n > 0) {
+        if (Date.now() - n > COMPACT_TTL_MS) {
+          sessionStorage.removeItem(compactKey(sessionID))
+          return null
+        }
         compactAtBySession.set(sessionID, n)
         return n
       }

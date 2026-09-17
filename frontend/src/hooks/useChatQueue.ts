@@ -9,7 +9,17 @@ export const chatQueueKeys = {
 
 // 삭제한 항목이 서버에 반영되기 전 뜬 폴링이 되살리지 못하게 5초간 무시
 const RECENTLY_REMOVED_MS = 5000
+// 폴링 때만 만료 청소되므로 상한을 둔다 (삭제 많은 세션 무한 누적 방지)
+const RECENTLY_REMOVED_MAX = 500
 const recentlyRemovedAt = new Map<string, number>()
+function trackRemoved(key: string): void {
+  recentlyRemovedAt.set(key, Date.now())
+  while (recentlyRemovedAt.size > RECENTLY_REMOVED_MAX) {
+    const oldest = recentlyRemovedAt.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    recentlyRemovedAt.delete(oldest)
+  }
+}
 
 export function useQueuedChats(sessionID?: string | null) {
   return useQuery({
@@ -61,7 +71,7 @@ export function useRemoveQueuedChat() {
     onMutate: async ({ sessionID, id }) => {
       // 낙관 제거: 진행 중·직후 폴링이 옛날 목록으로 되살리기 전에 즉시 화면에서 뺀다.
       await queryClient.cancelQueries({ queryKey: chatQueueKeys.session(sessionID) })
-      recentlyRemovedAt.set(`${sessionID}:${id}`, Date.now())
+      trackRemoved(`${sessionID}:${id}`)
       const previous = queryClient.getQueryData<{ id: string }[]>(chatQueueKeys.session(sessionID))
       queryClient.setQueryData(chatQueueKeys.session(sessionID), (old: { id: string }[] | undefined) =>
         (old ?? []).filter((item) => item.id !== id),
