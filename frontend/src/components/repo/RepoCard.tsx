@@ -51,7 +51,7 @@ export function RepoCard({
   const [addBranchOpen, setAddBranchOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const { preferences } = useSettings();
-  const favoritesEnabled = preferences?.favoritesEnabled ?? false;
+  const favoritesEnabled = preferences?.favoritesEnabled ?? true;
   const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: favoritesEnabled });
   const favId = `repo-${repo.id}`;
   const isFav = favs?.some(f => f.sessionId === favId);

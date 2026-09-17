@@ -111,7 +111,7 @@ function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => 
   const location = useLocation()
   const isExpose = location.pathname === '/expose'
   const { preferences } = useSettings()
-  const favoritesEnabled = preferences?.favoritesEnabled ?? false
+  const favoritesEnabled = preferences?.favoritesEnabled ?? true
   // 즐겨찾기 끄면 목록 캐시를 즉시 비워 메모리를 되돌린다
   useEffect(() => {
     if (!favoritesEnabled) queryClient.removeQueries({ queryKey: ['favorites'] })

@@ -47,7 +47,7 @@ export const SessionList = ({
   const queryClient = useQueryClient();
   const createSession = useCreateSession(opcodeUrl, directory);
   const { preferences } = useSettings();
-  const favoritesEnabled = preferences?.favoritesEnabled ?? false;
+  const favoritesEnabled = preferences?.favoritesEnabled ?? true;
   const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: favoritesEnabled });
   const isFav = (id: string) => favs?.some(f => f.sessionId === id);
   const toggleFav = async (id: string, title?: string) => {

@@ -122,15 +122,15 @@ export function GeneralSettings() {
 
         <div className="flex flex-row items-center justify-between rounded-lg border border-border p-4">
           <div className="space-y-0.5">
-            <Label htmlFor="favoritesEnabled" className="text-base">즐겨찾기</Label>
+            <Label htmlFor="favoritesEnabled" className="text-base">Favorites</Label>
             <p className="text-sm text-muted-foreground">
-              즐겨찾기 패널·별 버튼 표시. 결과 팝업이 세션 메시지를 통째로 로드하므로{' '}
-              <span className="text-amber-500 font-medium">켜면 브라우저 메모리 사용량이 늘어날 수 있습니다.</span>
+              Show favorites panel and star buttons.{' '}
+              <span className="text-amber-500 font-medium">May increase browser memory usage.</span>
             </p>
           </div>
           <Switch
             id="favoritesEnabled"
-            checked={preferences?.favoritesEnabled ?? false}
+            checked={preferences?.favoritesEnabled ?? true}
             onCheckedChange={(checked) => updateSettings({ favoritesEnabled: checked })}
           />
         </div>

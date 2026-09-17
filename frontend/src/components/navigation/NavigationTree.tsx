@@ -39,7 +39,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
   const { data: repos, isLoading: reposLoading } = useQuery({ queryKey: ['repos'], queryFn: listRepos })
   const { data: dbStatuses } = useSessionStatusMap()
   const { preferences } = useSettings()
-  const favoritesEnabled = preferences?.favoritesEnabled ?? false
+  const favoritesEnabled = preferences?.favoritesEnabled ?? true
   const { data: favsTop } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: favoritesEnabled })
   const isRepoFavTop = (rid: number) => favsTop?.some(f => f.sessionId === `repo-${rid}`)
   const toggleRepoFavTop = async (repo: { id: number; localPath?: string; fullPath?: string }) => {
@@ -385,7 +385,7 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
 
   // 훅은 early return보다 항상 먼저 호출되어야 한다 (세션 로딩 전후 훅 개수 불일치 크래시 방지)
   const { preferences: repoPrefs } = useSettings()
-  const repoFavsEnabled = repoPrefs?.favoritesEnabled ?? false
+  const repoFavsEnabled = repoPrefs?.favoritesEnabled ?? true
   const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, enabled: repoFavsEnabled })
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editingSessionTitle, setEditingSessionTitle] = useState('')

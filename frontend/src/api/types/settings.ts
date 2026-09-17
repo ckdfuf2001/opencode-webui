@@ -124,5 +124,5 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   completionSoundOnCancel: true,
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
-  favoritesEnabled: false,
+  favoritesEnabled: true,
 }
