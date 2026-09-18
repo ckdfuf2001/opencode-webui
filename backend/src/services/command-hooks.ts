@@ -238,7 +238,9 @@ export function firePostCommandHooks(
 }
 
 /**
- * 자동 리뷰: 스킬/커맨드 완료 후 리뷰 자식 세션을 생성한다.
+ * 자동 리뷰: 커맨드 완료 후 리뷰 자식 세션을 생성한다 (스킬 단독은 대상 아님 —
+ *   커맨드 안에서 쓰인 스킬은 그 커맨드 리뷰 때 함께 본다. 스킬 단독 실행은
+ *   부모 채팅의 skill-memory-check 주입으로만 다룬다).
  * - parentID로 진짜 하위 세션을 만든다 (기록은 비어 있고 /children 연결).
  *   마지막 결과 요약만 프롬프트에 실어 보낸다.
  * - 자동 리뷰 OFF → null (부모 채팅의 skill-memory-check가 대신 동작).
@@ -267,6 +269,7 @@ export async function maybeSpawnReviewChild(opts: {
   const { sessionId, directory, commandName, kind, status } = opts
   if (isReviewSession(sessionId)) return null
   if (status !== 'completed') return null
+  if (kind !== 'command') return null
   if (!directory) return null
 
   let repoId = opts.repoId

@@ -297,7 +297,7 @@ export function PermissionRulesDialog({
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-0.5 flex-1">
                   <Label className="text-sm">자동 리뷰 · 자동 변경 (레포 #{repoId})</Label>
-                  <p className="text-xs text-muted-foreground">리뷰 ON이면 스킬/커맨드 완료 후 리뷰 자식 세션을 생성합니다. 변경 ON이면 자식이 build(직접 수정), OFF면 plan(읽기전용·제안만)으로 수행합니다.</p>
+                  <p className="text-xs text-muted-foreground">리뷰 ON이면 커맨드 완료 후 리뷰 자식 세션을 생성합니다 (스킬 단독은 제외, 커맨드 안에서 쓰인 스킬은 함께 리뷰). 변경 ON이면 자식이 build(직접 수정), OFF면 plan(읽기전용·제안만)으로 수행합니다.</p>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   <div className="flex flex-col items-center gap-1">

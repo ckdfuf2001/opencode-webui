@@ -145,6 +145,26 @@ describe('command-hooks', () => {
     }
   })
 
+  it('maybeSpawnReviewChild returns null for skill kind (command only)', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ id: 'ses-x' }) }) as unknown as Response)
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const spawned = await maybeSpawnReviewChild({
+        sessionId: 'sess-1',
+        directory: '/tmp',
+        repoId: null,
+        commandName: 'demo-skill',
+        kind: 'skill',
+        status: 'completed',
+        reviewWanted: true,
+      })
+      expect(spawned).toBeNull()
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('maybeSpawnReviewChild returns null without review toggle/db', async () => {
     // 리뷰 세션 가드: 존재하지 않는 ID는 false
     expect(isReviewSession('sess-1')).toBe(false)
