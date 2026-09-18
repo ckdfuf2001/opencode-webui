@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, type ClipboardEvent, type DragEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye, GripVertical, Loader2, ShieldAlert } from 'lucide-react'
 import { CancelledBadge } from '../session/CancelledBadge'
@@ -13,6 +13,7 @@ import { shouldPush, sendPushNotification, getSessionOverride } from '@/lib/noti
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import { listRepos } from '@/api/repos'
+import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
 
 export function FavoriteSessionsPanel() {
   const qc = useQueryClient()
@@ -21,6 +22,9 @@ export function FavoriteSessionsPanel() {
   const [resultFor, setResultFor] = useState<string | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [repoSelectedMap, setRepoSelectedMap] = useState<Record<string, { id: string; title: string }>>({})
+  // 미니챗 파일 업로드(세션 디테일과 동일): 붙여넣기/드래그드롭 → chat_uploads 업로드 → @"..." 멘션 삽입
+  const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, { name: string; loaded: number; total: number; index: number; count: number }>>({})
+  const [dragOverMiniId, setDragOverMiniId] = useState<string | null>(null)
   // 배지용 즐겨찾기는 패널 닫힘과 무관하게 유지 (부하는 favorites 1회 fetch 뿐).
   const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, staleTime: 10_000 })
   const { data: dbStatuses } = useSessionStatusMap()
@@ -28,6 +32,113 @@ export function FavoriteSessionsPanel() {
   const { preferences } = useSettings()
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['favorites'] })
+
+  // --- 미니챗 파일 첨부: SessionDetail/PromptInput과 동일한 업로드 흐름 ---
+  // 붙여넣기(클립보드 파일) / 드래그드롭 → `${localPath}/chat_uploads` 업로드 → draft에 @"chat_uploads/..." 멘션 삽입.
+  // 텍스트 전송 자체는 기존 MiniSendButton(큐 경유) 그대로라 멘션이 백엔드에서 파일 파트로 해석된다.
+  const appendUploadMentions = (favSessionId: string, uploaded: { name: string; path: string }[]) => {
+    if (uploaded.length === 0) return
+    const mentions = uploaded.map((u) => {
+      const rel = u.path.startsWith('/') ? u.path.slice(1) : u.path
+      return `@"${rel}"`
+    })
+    setDrafts((prev) => {
+      const cur = prev[favSessionId] ?? ''
+      const prefix = cur && !cur.endsWith(' ') ? `${cur} ` : cur
+      return { ...prev, [favSessionId]: `${prefix}${mentions.join(' ')} ` }
+    })
+    qc.invalidateQueries({ queryKey: ['files'] })
+  }
+
+  const uploadFilesToFavorite = async (
+    fav: { sessionId: string; directory: string; repoId?: number | null },
+    files: File[],
+  ) => {
+    if (files.length === 0) return
+    const repoForFav = repos?.find((r) => r.id === fav.repoId || r.fullPath === fav.directory)
+    const uploadDir = repoForFav?.localPath ? `${repoForFav.localPath}/chat_uploads` : null
+    if (!uploadDir) {
+      showToast.error('No project folder available for upload')
+      return
+    }
+    const fresh = files.filter((f) => !isUploadInFlight(f))
+    if (fresh.length < files.length) {
+      showToast.info(`이미 업로드 중인 ${files.length - fresh.length}개 파일은 제외합니다`)
+    }
+    if (fresh.length === 0) return
+    const sid = fav.sessionId
+    setUploadProgressMap((prev) => ({ ...prev, [sid]: { name: fresh[0].name, loaded: 0, total: fresh[0].size || 1, index: 1, count: fresh.length } }))
+    let lastProgAt = 0
+    const uploaded: { name: string; path: string }[] = []
+    let failures = 0
+    for (let i = 0; i < fresh.length; i++) {
+      const file = fresh[i]
+      setUploadProgressMap((prev) => ({ ...prev, [sid]: { name: file.name, loaded: 0, total: file.size || 1, index: i + 1, count: fresh.length } }))
+      try {
+        const data = await uploadFileWithProgress(`${API_BASE_URL}/api/files/${uploadDir}`, file, (loaded, total) => {
+          const now = Date.now()
+          if (now - lastProgAt < 150) return
+          lastProgAt = now
+          setUploadProgressMap((prev) => ({ ...prev, [sid]: { name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: fresh.length } }))
+        })
+        const savedName: string = data?.name || file.name
+        uploaded.push({ name: savedName, path: `chat_uploads/${savedName}` })
+      } catch (e) {
+        if ((e as Error).message === 'Upload cancelled') {
+          setUploadProgressMap((prev) => { const n = { ...prev }; delete n[sid]; return n })
+          showToast.info('업로드 취소됨')
+          return
+        }
+        if (e instanceof DuplicateUploadError) continue
+        failures++
+        continue
+      }
+    }
+    setUploadProgressMap((prev) => { const n = { ...prev }; delete n[sid]; return n })
+    if (uploaded.length === 0) {
+      if (failures === 0) return
+      showToast.error('Upload failed')
+      return
+    }
+    if (failures > 0) {
+      showToast.error(`${failures} of ${fresh.length} file(s) failed to upload`)
+    }
+    showToast.success(`Uploaded ${uploaded.length} file(s) to project`, { duration: 5000 })
+    appendUploadMentions(sid, uploaded)
+  }
+
+  const handleMiniPaste = (
+    e: ClipboardEvent<HTMLInputElement>,
+    fav: { sessionId: string; directory: string; repoId?: number | null },
+  ) => {
+    const items = Array.from(e.clipboardData?.items || [])
+    const files = items
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null)
+    if (files.length === 0) return
+    e.preventDefault()
+    void uploadFilesToFavorite(fav, files)
+  }
+
+  const handleMiniDropFiles = (
+    e: DragEvent,
+    fav: { sessionId: string; directory: string; repoId?: number | null },
+  ): boolean => {
+    const files = Array.from(e.dataTransfer?.files || [])
+    if (files.length === 0) return false
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOverMiniId(null)
+    void uploadFilesToFavorite(fav, files)
+    return true
+  }
+
+  const handleCancelMiniUpload = (favSessionId: string) => {
+    abortAllUploads()
+    setUploadProgressMap((prev) => { const n = { ...prev }; delete n[favSessionId]; return n })
+    showToast.info('업로드 취소됨')
+  }
 
   // 자동허용된 permission의 배지(방패) 즉시 정리 — 패널은 항상 마운트되므로 전역 커버.
   // 수동 dismiss는 usePermissionRequests.dismissPermission이 이미 처리한다.
@@ -197,6 +308,8 @@ export function FavoriteSessionsPanel() {
                   onDragStart={() => setDragIdx(idx)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
+                    // 파일 드롭은 순서 변경이 아니라 미니챗 첨부로 처리 (세션 디테일과 동일)
+                    if (handleMiniDropFiles(e, f)) return
                     e.preventDefault()
                     if (dragIdx === null || dragIdx === idx) return
                     const list = [...orderedFavorites]
@@ -256,12 +369,22 @@ export function FavoriteSessionsPanel() {
                   </div>
                   {isActive && (
                     <>
-                      <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                      <div
+                        className={`flex gap-1 rounded-md transition-colors ${dragOverMiniId === f.sessionId ? 'ring-2 ring-blue-500 bg-blue-500/5 p-0.5 -m-0.5' : ''}`}
+                        onClick={e => e.stopPropagation()}
+                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (dragOverMiniId !== f.sessionId) setDragOverMiniId(f.sessionId) }}
+                        onDragLeave={(e) => { e.stopPropagation(); if (dragOverMiniId === f.sessionId) setDragOverMiniId(null) }}
+                        onDrop={(e) => { handleMiniDropFiles(e, f) }}
+                        title="파일을 끌어다 놓거나 붙여넣기 (Ctrl+V) 하면 첨부됩니다"
+                      >
                         <Input
                           autoFocus
-                          placeholder={isRepoFav ? (repoSelectedMap[f.sessionId] ? `${repoSelectedMap[f.sessionId].title} 에 전송...` : "새 세션으로 채팅...") : "퀵챗..."}
+                          placeholder={isRepoFav ? (repoSelectedMap[f.sessionId] ? `${repoSelectedMap[f.sessionId].title} 에 전송...` : "새 세션으로 채팅... (파일 드롭/붙여넣기 가능)") : "퀵챗... (파일 드롭/붙여넣기 가능)"}
                           value={drafts[f.sessionId] ?? ''}
                           onChange={e => setDrafts(prev => ({ ...prev, [f.sessionId]: e.target.value }))}
+                          onPaste={(e) => handleMiniPaste(e, f)}
+                          onDrop={(e) => { handleMiniDropFiles(e, f) }}
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (dragOverMiniId !== f.sessionId) setDragOverMiniId(f.sessionId) }}
                           onKeyDown={e => {
                             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.target as HTMLInputElement).nextElementSibling?.dispatchEvent(new MouseEvent('click', { bubbles: true })) }
                           }}
@@ -272,6 +395,25 @@ export function FavoriteSessionsPanel() {
                         <Eye className="w-3.5 h-3.5" />
                       </Button>
                     </div>
+                      {uploadProgressMap[f.sessionId] && (
+                        <div className="px-2 py-1.5 rounded-md text-[11px] bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="truncate">업로드 중 {uploadProgressMap[f.sessionId].index}/{uploadProgressMap[f.sessionId].count} — {uploadProgressMap[f.sessionId].name}</span>
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              <span className="font-mono">{Math.round((uploadProgressMap[f.sessionId].loaded / Math.max(uploadProgressMap[f.sessionId].total, 1)) * 100)}%</span>
+                              <button type="button" onClick={() => handleCancelMiniUpload(f.sessionId)} className="p-0.5 rounded hover:bg-red-500/20 text-red-600 dark:text-red-400" title="취소" aria-label="업로드 취소">
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          </div>
+                          <div className="h-1 rounded-full bg-blue-500/20 overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 transition-[width]"
+                              style={{ width: `${Math.min(100, Math.round((uploadProgressMap[f.sessionId].loaded / Math.max(uploadProgressMap[f.sessionId].total, 1)) * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                   {resultFor === f.sessionId && !isRepoFav && (
