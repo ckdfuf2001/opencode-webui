@@ -821,20 +821,8 @@ export function writeActiveOpenCodeConfigFile(configContent: string): void {
     }
   } catch {}
   const merged = mergeDefaultMcpEntries(parsed) as Record<string, unknown> & { mcp?: Record<string, unknown> }
-  // 후크 플러그인 항목 보존 — 디스크 파일에만 있는 plugin 경로는 DB content에 없어
-  // 덮어쓰면 후크 등록이 날아간다 (다음 스폰 때 복구되긴 하지만 thrash 방지)
-  try {
-    const diskRaw = readFileSync(configPath, 'utf8')
-    const disk = JSON.parse(diskRaw) as { plugin?: unknown }
-    const diskPlugins = Array.isArray(disk?.plugin) ? (disk.plugin as unknown[]) : []
-    if (diskPlugins.length > 0) {
-      const cur = Array.isArray(merged.plugin) ? [...(merged.plugin as unknown[])] : []
-      for (const p of diskPlugins) {
-        if (!cur.includes(p)) cur.push(p)
-      }
-      merged.plugin = cur
-    }
-  } catch {}
+  // NOTE: plugin 배열은 여기서 합치지 않는다. 후크 플러그인은 디렉토리 자동 로드를
+  // 쓰고, ensureWebuiPlugin이 배열 잔재를 정리하므로 양쪽이 반대로 동작한다.
   // 0.8.0+ 마이그레이션: 기존 agent-browser 항목은 제거하고 playwright로 교체 (pull 받은 머신 자동 정리)
   try {
     if (merged.mcp && typeof merged.mcp === 'object' && 'agent-browser' in (merged.mcp as Record<string, unknown>)) {

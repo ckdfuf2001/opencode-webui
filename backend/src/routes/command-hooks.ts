@@ -12,9 +12,20 @@ const HookEventSchema = z.object({
   messageID: z.string().max(200).optional(),
 })
 
-// 세션별 idle 스캔 워터마크 — 마지막으로 본 assistant 생성시각. 메모리만 쓴다.
-const idleWatermarks = new Map<string, number>()
-const RECENT_RUN_WINDOW_MS = 300_000
+// 세션별 idle 스캔 워터마크 — 마지막으로 본 assistant 생성시각 + 스캔 시각.
+// 1시간 넘게 조용하면 버린다 (재시작 리셋과 동등 — messageId dup이 중복 기록을 막는다).
+const idleWatermarks = new Map<string, { created: number; at: number }>()
+const WATERMARK_TTL_MS = 3_600_000
+
+/** 이력 저장용 인자 정제 — recall 블록·TODO 프로토콜을 벗기고 2000자로 자른다. */
+function cleanArgsForHistory(args: string): string | null {
+  let t = (args ?? '').replace(/<memory-recall>[\s\S]*?<\/memory-recall>\s*/gi, '')
+  const protoIdx = t.indexOf('[execution-protocol]')
+  if (protoIdx >= 0) t = t.slice(0, protoIdx)
+  t = t.trim()
+  if (!t) return null
+  return t.length > 2000 ? `${t.slice(0, 2000)}…` : t
+}
 
 async function fetchSessionDirectory(sessionID: string): Promise<string | undefined> {
   try {
@@ -57,10 +68,9 @@ async function fetchMessageOutcome(
 }
 
 /**
- * command.executed — /command로 실행된 모든 커맨드(TUI·API·큐)를 한 곳에서 마무리한다.
- * 중복 방지는 messageID 생성시각 상관으로 한다: 이벤트 메시지가 run 시작 이후에
- * 만들어졌을 때만 같은 실행으로 본다. 인자 문자열은 recall/프로토콜이 덧붙어
- * 정확히 안 맞으므로 키로 쓰지 않는다.
+ * command.executed — /command 실행은 여기서 항상 새로 기록하고 턴 결과로 finish한다.
+ * 큐·스케줄러는 run을 미리 만들지 않으므로 상관시킬 상대가 없다 (사체 코드 제거됨).
+ * 큐 발송분이면 남겨둔 스냅샷(세션 오버라이드)을 싣는다. 없으면 MISS 로그를 남긴다.
  */
 async function handleCommandExecuted(
   db: Database,
@@ -70,49 +80,17 @@ async function handleCommandExecuted(
   messageID: string | undefined,
 ): Promise<void> {
   if (!name) return
-  const { listRunsBySession, attachMessage } = await import('../services/command-runs')
   const outcome = await fetchMessageOutcome(sessionID, messageID)
-  try {
-    const runs = await listRunsBySession(db, sessionID)
-    const candidates = runs
-      .filter((r) => r.commandName === name && Date.now() - r.startedAt < 600_000)
-      .sort((a, b) => b.startedAt - a.startedAt)
-    for (const run of candidates.slice(0, 5)) {
-      // 메시지 시각을 알면 엄격 상관, 모르면 최신 started/finished-<30s 휴리스틱
-      if (outcome) {
-        if (outcome.created < run.startedAt - 10_000) continue
-      } else if (run.status !== 'started' && Date.now() - (run.finishedAt ?? 0) > 30_000) {
-        continue
-      }
-      if (messageID) {
-        try {
-          await attachMessage(db, run.id, messageID)
-        } catch (e) {
-          logger.debug('Hook attach skipped:', e)
-        }
-      }
-      if (run.status === 'started') {
-        const { finishRunSafe } = await import('../services/command-runs')
-        if (outcome?.failed) logger.warn(`Hook command /${name} turn errored — marking failed`)
-        await finishRunSafe(db, run.id, outcome?.failed ? 'failed' : 'completed')
-      }
-      logger.debug(`Hook command.executed correlated to run ${run.id} (/${name})`)
-      return
-    }
-  } catch (e) {
-    logger.debug('Hook correlation skipped:', e)
-  }
-  // 상관 실패 = 진짜 새 실행(TUI 등): 새로 기록하고 턴 결과로 finish.
-  // 큐 발송분이면 남겨둔 스냅샷(세션 오버라이드)을 싣는다.
   const directory = await fetchSessionDirectory(sessionID)
-  const { resolveCommandKind, peekDispatchContext } = await import('../services/command-hooks')
-  const { recordRunStartSafe, resolveRepoId, finishRunSafe } = await import('../services/command-runs')
+  const { resolveCommandKind, takeDispatchContext } = await import('../services/command-hooks')
+  const { recordRunStartSafe, resolveRepoId, finishRunSafe, attachMessage } = await import('../services/command-runs')
   const kind = resolveCommandKind(directory, name)
-  const snap = peekDispatchContext(sessionID, name)
+  const snap = takeDispatchContext(sessionID, name)
+  if (!snap) logger.warn(`Hook command /${name}: snapshot MISS (session ${sessionID}) — review falls back to repo settings`)
   const run = await recordRunStartSafe(db, {
     sessionId: sessionID,
     commandName: name,
-    args: args.trim() || null,
+    args: cleanArgsForHistory(args),
     directory,
     repoId: directory ? resolveRepoId(db, directory) : null,
     origin: snap?.origin ?? 'ui',
@@ -135,8 +113,14 @@ async function handleCommandExecuted(
  * 리뷰 스폰은 커맨드만 하므로(정책) skill은 이력 + skill-check까지만 연결된다.
  */
 async function handleSessionIdle(db: Database, sessionID: string): Promise<void> {
-  let watermark = idleWatermarks.get(sessionID) ?? 0
-  if (idleWatermarks.size > 2000) idleWatermarks.clear()
+  const now = Date.now()
+  // TTL 만료 워터마크 정리 (전체 clear가 아니라 만료분만)
+  if (idleWatermarks.size > 2000) {
+    for (const [k, v] of idleWatermarks) {
+      if (now - v.at > WATERMARK_TTL_MS) idleWatermarks.delete(k)
+    }
+  }
+  const watermark = idleWatermarks.get(sessionID)?.created ?? 0
   let tail: Awaited<ReturnType<typeof recentSessionMessages>>
   try {
     tail = await recentSessionMessages(sessionID, 20)
@@ -152,30 +136,35 @@ async function handleSessionIdle(db: Database, sessionID: string): Promise<void>
     if (created > maxSeen) maxSeen = created
     if (info?.role === 'assistant' && created > watermark) fresh.push(m)
   }
-  idleWatermarks.set(sessionID, maxSeen)
+  idleWatermarks.set(sessionID, { created: maxSeen, at: now })
   if (fresh.length === 0) return
 
   const directory = await fetchSessionDirectory(sessionID)
-  const { resolveCommandKind, peekDispatchContext } = await import('../services/command-hooks')
-  const { recordRunStartSafe, resolveRepoId, finishRunSafe, attachMessage } = await import('../services/command-runs')
+  const { resolveCommandKind, takeDispatchContext } = await import('../services/command-hooks')
+  const { recordRunStartSafe, resolveRepoId, finishRunSafe, attachMessage, listRunsBySession } = await import('../services/command-runs')
+  // 중복 판정은 messageId 기준 1회 조회 — 같은 메시지의 스킬은 다시 기록하지 않는다.
+  // 시간 윈도우가 아니라 재시작 후에도, 같은 턴 반복에도 안전하다.
+  let recordedKeys: Set<string>
+  try {
+    const runs = await listRunsBySession(db, sessionID)
+    recordedKeys = new Set(
+      runs.flatMap((r) => ((r as { messageId?: string }).messageId ? [`${r.commandName}\n${(r as { messageId?: string }).messageId}`] : [])),
+    )
+  } catch {
+    recordedKeys = new Set()
+  }
   for (const m of fresh) {
+    const msgId = (m.info as { id?: string } | undefined)?.id
     const parts = (m as { parts?: Array<Record<string, unknown>> }).parts ?? []
     for (const p of parts) {
       if (p?.type !== 'tool' || (p as { tool?: string }).tool !== 'skill') continue
       const state = (p as { state?: { status?: string; input?: { name?: string } } }).state
       const skillName = state?.input?.name
       if (!skillName) continue
-      // 큐·외부 기록과 중복 방지 (300초 윈도우)
-      let dup = false
-      try {
-        const { listRunsBySession } = await import('../services/command-runs')
-        const runs = await listRunsBySession(db, sessionID)
-        const now = Date.now()
-        dup = runs.some((r) => r.commandName === skillName && now - r.startedAt < RECENT_RUN_WINDOW_MS)
-      } catch {}
-      if (dup) continue
-      const msgId = (m.info as { id?: string } | undefined)?.id
-      const snap = peekDispatchContext(sessionID, skillName)
+      const dedupKey = `${skillName}\n${msgId ?? ''}`
+      if (recordedKeys.has(dedupKey)) continue
+      const snap = takeDispatchContext(sessionID, skillName)
+      if (!snap) logger.warn(`Hook auto skill /${skillName}: snapshot MISS (session ${sessionID}) — review falls back to repo settings`)
       const run = await recordRunStartSafe(db, {
         sessionId: sessionID,
         commandName: skillName,
@@ -192,6 +181,7 @@ async function handleSessionIdle(db: Database, sessionID: string): Promise<void>
         try {
           await attachMessage(db, run.id, msgId)
         } catch {}
+        recordedKeys.add(dedupKey)
       }
       const failed = state?.status === 'error'
       logger.info(`Hook auto skill /${skillName} recorded (${failed ? 'failed' : 'completed'}) for session ${sessionID}`)

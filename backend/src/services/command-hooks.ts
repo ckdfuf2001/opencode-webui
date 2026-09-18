@@ -68,9 +68,9 @@ export function getRecentHookCalls(): CommandHookCall[] {
 }
 
 /**
- * 발송 스냅샷 — 큐는 전송만 하고 run 기록은 후크에 맡기므로,
- * 세션 오버라이드(reviewWanted/autoApply)를 후크가 읽을 수 있게 남긴다.
- * 후크가 run을 만들 때 이름이 맞으면 스냅샷을 그대로 싣는다 (peek, TTL 소멸).
+ * 발송 스냅샷 큐 (세션당 여러 개). 세션당 한 칸이면 연속 실행·경합에서
+ * 뒤가 앞을 덮어써 앞 커맨드의 후크 이벤트가 null을 받는다.
+ * 소비 시 제거(take)하고 TTL(10분)이 지나면 만료된다.
  */
 export interface DispatchContext {
   commandName: string
@@ -80,27 +80,38 @@ export interface DispatchContext {
 }
 
 const DISPATCH_CONTEXT_TTL_MS = 600_000
-const dispatchContexts = new Map<string, { ctx: DispatchContext; at: number }>()
+const DISPATCH_CONTEXT_MAX = 10
+const dispatchContexts = new Map<string, Array<{ ctx: DispatchContext; at: number }>>()
 
 export function setDispatchContext(sessionId: string, ctx: DispatchContext): void {
+  const list = dispatchContexts.get(sessionId) ?? []
+  list.push({ ctx, at: Date.now() })
+  while (list.length > DISPATCH_CONTEXT_MAX) list.shift()
+  dispatchContexts.set(sessionId, list)
   if (dispatchContexts.size > 500) {
     const now = Date.now()
     for (const [k, v] of dispatchContexts) {
-      if (now - v.at > DISPATCH_CONTEXT_TTL_MS) dispatchContexts.delete(k)
+      const kept = v.filter((e) => now - e.at <= DISPATCH_CONTEXT_TTL_MS)
+      if (kept.length === 0) dispatchContexts.delete(k)
+      else if (kept.length !== v.length) dispatchContexts.set(k, kept)
     }
   }
-  dispatchContexts.set(sessionId, { ctx, at: Date.now() })
 }
 
-export function peekDispatchContext(sessionId: string, commandName: string): DispatchContext | null {
-  const v = dispatchContexts.get(sessionId)
-  if (!v) return null
-  if (Date.now() - v.at > DISPATCH_CONTEXT_TTL_MS) {
-    dispatchContexts.delete(sessionId)
-    return null
+/** 이름이 맞는 가장 오래된 스냅샷을 꺼낸다. 없거나 만료됐으면 null (MISS). */
+export function takeDispatchContext(sessionId: string, commandName: string): DispatchContext | null {
+  const list = dispatchContexts.get(sessionId)
+  if (!list || list.length === 0) return null
+  const now = Date.now()
+  for (let i = 0; i < list.length; i++) {
+    const v = list[i]!
+    if (now - v.at > DISPATCH_CONTEXT_TTL_MS) continue
+    if (v.ctx.commandName !== commandName) continue
+    list.splice(i, 1)
+    if (list.length === 0) dispatchContexts.delete(sessionId)
+    return v.ctx
   }
-  if (v.ctx.commandName !== commandName) return null
-  return v.ctx
+  return null
 }
 
 
