@@ -229,8 +229,9 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
       ) : null
       if (role === 'user' && allParts && partIndex !== undefined) {
         const nextPart = allParts[partIndex + 1]
+        // 파일이 뒤따라도 본문은 버리지 않는다 (칩만 있으면 호출 표시가 된다)
         if (nextPart && nextPart.type === 'file') {
-          return chip
+          return <>{chip}<TextPart part={part} /></>
         }
       }
       // 멘션(@...)만 칩으로 바꾸고 앞뒤 텍스트는 그대로 렌더한다.
