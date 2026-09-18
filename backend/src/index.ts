@@ -38,6 +38,7 @@ import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-fronten
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionStatusPoller, stopSessionStatusPoller } from './services/session-status'
+import { startPermissionAutoApprover, stopPermissionAutoApprover } from './services/permission-auto-approver'
 import { startGitCommitIndexer, stopGitCommitIndexer } from './services/git-indexer'
 import { migrateCommandRunsToFiles } from './services/command-run-migration'
 import { startAutomationWatcher, stopAutomationWatcher } from './services/automation-watcher'
@@ -435,6 +436,7 @@ const shutdown = async (signal: string) => {
   if (scheduleRunner) clearInterval(scheduleRunner)
   stopSessionStatusPoller()
   stopAutomationWatcher()
+  stopPermissionAutoApprover()
   stopGitCommitIndexer()
   try {
     await opencodeServerManager.stop()
@@ -562,6 +564,9 @@ logger.info('Schedule runner started')
 
 startSessionStatusPoller(db)
 logger.info('Session status poller started')
+
+startPermissionAutoApprover(db)
+logger.info('Permission auto-approver started')
 
 startGitCommitIndexer(db)
 logger.info('Git commit indexer started')

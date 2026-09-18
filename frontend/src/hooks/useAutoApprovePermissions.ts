@@ -1,6 +1,4 @@
 import { createOpenCodeClient } from '@/api/opencode'
-import { listPermissionRules } from '@/api/permission-rules'
-import { listRepos } from '@/api/repos'
 import { OPENCODE_API_ENDPOINT } from '@/config'
 import { permissionEvents } from './usePermissionRequests'
 import type { Permission, PermissionRule } from '@/api/types'
@@ -9,8 +7,6 @@ import { getSessionPermissionRules } from '@/lib/notifications'
 const client = createOpenCodeClient(OPENCODE_API_ENDPOINT)
 
 let started = false
-let repoByDirectory = new Map<string, number>()
-let rulesByRepo = new Map<number, PermissionRule[]>()
 const recentlyProcessed = new Set<string>()
 
 function globToRegex(pattern: string): RegExp {
@@ -48,42 +44,16 @@ function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
   })
 }
 
-async function refreshData(): Promise<void> {
-  try {
-    const [repos, rules] = await Promise.all([listRepos(), listPermissionRules()])
-    const nextRepos = new Map<string, number>()
-    for (const repo of repos) {
-      if (repo.fullPath) {
-        nextRepos.set(repo.fullPath, repo.id)
-      }
-    }
-    const nextRules = new Map<number, PermissionRule[]>()
-    for (const rule of rules) {
-      const list = nextRules.get(rule.repoId) ?? []
-      list.push(rule)
-      nextRules.set(rule.repoId, list)
-    }
-    repoByDirectory = nextRepos
-    rulesByRepo = nextRules
-  } catch (error) {
-    console.error('Failed to load permission rules for auto-approve:', error)
-  }
-}
+// 레포/전역 룰은 백엔드 자동승인자가 DB에서 직접 읽는다 (호출 시점 fresh).
+// 이 함수는 호출부 호환용으로만 남긴다.
+export function refreshAutoApproveData(): void {}
 
 async function handlePermissionAdd(permission: Permission): Promise<void> {
   if (recentlyProcessed.has(permission.id)) return
 
-  // 세션 로컬 룰 우선 확인 (로컬스토리지)
+  // 세션 로컬 룰 우선 확인 (로컬스토리지) — 매칭될 때만 승인, 나머지는 백엔드가 담당
   if (permission.sessionID) {
     const sessRules = getSessionPermissionRules(permission.sessionID) as unknown as PermissionRule[]
-    if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) {
-      // 세션 룰이 매칭되면 즉시 승인
-    } else if (sessRules.length > 0) {
-      // 세션 룰이 있지만 매칭 실패 → 아래 레포/전역 룰로 폴백
-    } else {
-      // 세션 룰 없음 → 레포 룰 확인
-    }
-    // 세션 룰 매칭 시 바로 승인 시도, 아니면 아래로
     if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) {
       recentlyProcessed.add(permission.id)
       setTimeout(() => { recentlyProcessed.delete(permission.id) }, 60_000)
@@ -103,73 +73,21 @@ async function handlePermissionAdd(permission: Permission): Promise<void> {
     }
   }
 
-  // directory 정규화: 윈도우 백슬래시, 트레일링 슬래시, 대소문자 무시
-  const normalizeDir = (d: string) => d.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-  let candidateRules: PermissionRule[] | undefined
-  if (permission.directory) {
-    const normalized = normalizeDir(permission.directory)
-    let repoId: number | undefined
-    for (const [dir, id] of repoByDirectory.entries()) {
-      if (normalizeDir(dir) === normalized) {
-        repoId = id
-        break
-      }
-    }
-    if (repoId) candidateRules = rulesByRepo.get(repoId)
-  }
-  // directory가 없거나 매칭 실패 시(재기동 후 세션-디렉토리 매핑 유실 등) 전체 룰에서 매칭 시도
-  if (!candidateRules || candidateRules.length === 0) {
-    const all = Array.from(rulesByRepo.values()).flat()
-    if (all.length === 0) return
-    candidateRules = all
-  }
-  if (!candidateRules.some(rule => ruleMatches(rule, permission))) return
-
-  recentlyProcessed.add(permission.id)
-  setTimeout(() => {
-    recentlyProcessed.delete(permission.id)
-  }, 60_000)
-
-  try {
-    if (permission.v2) {
-      await client.respondToPermissionV2(permission.id, 'always')
-    } else {
-      await client.respondToPermission(permission.sessionID, permission.id, 'always')
-    }
-    permissionEvents.emit({ type: 'remove', permissionID: permission.id, permission })
-  } catch (error) {
-    recentlyProcessed.delete(permission.id)
-    console.error('Failed to auto-approve permission:', error)
-  }
+  // 레포/전역 룰은 백엔드 자동승인자가 담당한다 (탭 무관·단일 처리).
+  // 프론트는 세션 로컬(localStorage) 룰만 본다 — 백엔드가 볼 수 없는 값이다.
+  return
 }
 
 export function isPermissionAutoApprovable(permission: Permission): boolean {
-  if (permission.sessionID) {
-    const sessRules = getSessionPermissionRules(permission.sessionID) as unknown as PermissionRule[]
-    if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) return true
-  }
-  const normalizeDir = (d: string) => d.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-  let candidateRules: PermissionRule[] | undefined
-  if (permission.directory) {
-    const normalized = normalizeDir(permission.directory)
-    for (const [dir, id] of repoByDirectory.entries()) {
-      if (normalizeDir(dir) === normalized) { candidateRules = rulesByRepo.get(id); break }
-    }
-  }
-  if (!candidateRules || candidateRules.length === 0) candidateRules = Array.from(rulesByRepo.values()).flat()
-  if (!candidateRules || candidateRules.length === 0) return false
-  return candidateRules.some(rule => ruleMatches(rule, permission))
-}
-
-export function refreshAutoApproveData(): void {
-  void refreshData()
+  // 세션 로컬 룰만 본다. 레포/전역 룰은 백엔드 자동승인자가 처리한다.
+  if (!permission.sessionID) return false
+  const sessRules = getSessionPermissionRules(permission.sessionID) as unknown as PermissionRule[]
+  return sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))
 }
 
 export function startAutoApprover(): void {
   if (started) return
   started = true
-  refreshAutoApproveData()
-  setInterval(refreshAutoApproveData, 60_000)
   permissionEvents.subscribe((event) => {
     if (event.type === 'add' && event.permission) {
       void handlePermissionAdd(event.permission)
