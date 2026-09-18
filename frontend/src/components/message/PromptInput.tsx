@@ -832,6 +832,10 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const currentMode = preferences?.mode || 'build'
   const modeColor = currentMode === 'plan' ? 'text-yellow-600 dark:text-yellow-500' : 'text-green-600 dark:text-green-500'
   const modeBg = currentMode === 'plan' ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-green-500/10 border-green-500/30'
+  // 세션 실제 agent (opencode가 내려주지만 스펙 타입에는 없음). 토글(다음 전송 제어)과
+  // 다르면 병기한다 — 리뷰 자식(plan)처럼 세션 agent가 따로 있는 경우를 가리기 위함.
+  const sessionAgent = (session as unknown as { agent?: string } | undefined)?.agent || null
+  const sessionAgentDiffers = !!sessionAgent && sessionAgent !== currentMode
 
 const sessionModel = session?.model?.providerID && session?.model?.id
     ? `${session.model.providerID}/${session.model.id}`
@@ -1034,7 +1038,7 @@ useEffect(() => {
         <div className="flex gap-1.5 items-center flex-1 min-w-0">
           <button
             onClick={handleModeToggle}
-            title={isBashMode ? 'Bash mode (Esc to exit)' : `Switch build/plan (${toggleModeKs})`}
+            title={isBashMode ? 'Bash mode (Esc to exit)' : `Switch build/plan (${toggleModeKs}) — next send uses this${sessionAgent ? ` · session agent: ${sessionAgent}` : ''}`}
             className={`px-2 py-1 rounded-md text-xs font-medium border w-14 flex-shrink-0 ${
               isBashMode 
                 ? 'bg-purple-500/10 border-purple-500/30 text-purple-600 dark:text-purple-400' 
@@ -1043,6 +1047,14 @@ useEffect(() => {
           >
             {isBashMode ? 'BASH' : currentMode.toUpperCase()} 
           </button>
+          {sessionAgentDiffers && !isBashMode && (
+            <span
+              className="text-[10px] text-muted-foreground font-mono shrink-0"
+              title={`This session runs on '${sessionAgent}' agent. Toggle controls next sends.`}
+            >
+              ·{sessionAgent}
+            </span>
+          )}
 <div className="flex items-center space-x-2 min-w-0">
   <button
     onClick={onShowModelsDialog}
