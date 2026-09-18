@@ -24,6 +24,7 @@ export interface AskedPermission {
   type?: string
   pattern?: string | string[]
   patterns?: string[]
+  always?: string[]
   metadata?: Record<string, unknown>
 }
 
@@ -83,13 +84,23 @@ function isPathLike(value: string): boolean {
 function getCandidatePatterns(permission: AskedPermission): string[] {
   const patterns = permission.patterns ?? permission.pattern
   const normalized = Array.isArray(patterns) ? patterns : patterns ? [patterns] : []
-  const metadata = permission.metadata ?? {}
-  const metadataValue =
-    (metadata as { command?: unknown }).command ??
-    (metadata as { path?: unknown }).path ??
-    (metadata as { url?: unknown }).url
-  const metadataPatterns = typeof metadataValue === 'string' ? [metadataValue] : []
-  return [...normalized, ...metadataPatterns]
+  const metadata = (permission.metadata ?? {}) as Record<string, unknown>
+  const asString = (v: unknown): string[] => (typeof v === 'string' && v ? [v] : [])
+  // opencode는 permission마다 다른 키를 쓴다:
+  // bash=command, read/edit=path, webfetch=url,
+  // external_directory=metadata.filepath/parentDir (+ always 제안 패턴)
+  const metadataPatterns = [
+    ...asString(metadata.command),
+    ...asString(metadata.path),
+    ...asString(metadata.url),
+    ...asString(metadata.filepath),
+    ...asString(metadata.parentDir),
+    ...asString(metadata.directory),
+  ]
+  const alwaysPatterns = Array.isArray(permission.always)
+    ? permission.always.flatMap((p) => asString(p))
+    : []
+  return [...normalized, ...metadataPatterns, ...alwaysPatterns]
 }
 
 export function ruleMatches(rule: PermissionRule, permission: AskedPermission): boolean {
@@ -133,6 +144,7 @@ function normalizePermission(raw: unknown): AskedPermission | null {
     type?: unknown
     pattern?: unknown
     patterns?: unknown
+    always?: unknown
     metadata?: unknown
   }
   if (typeof r.id !== 'string' || !r.id) return null
@@ -143,6 +155,9 @@ function normalizePermission(raw: unknown): AskedPermission | null {
     : typeof rawPatterns === 'string'
       ? [rawPatterns]
       : undefined
+  const always = Array.isArray(r.always)
+    ? r.always.filter((p): p is string => typeof p === 'string')
+    : undefined
   return {
     id: r.id,
     sessionID: r.sessionID,
@@ -150,6 +165,7 @@ function normalizePermission(raw: unknown): AskedPermission | null {
     type: typeof r.type === 'string' ? r.type : undefined,
     pattern: typeof r.pattern === 'string' ? r.pattern : undefined,
     patterns,
+    always,
     metadata:
       r.metadata && typeof r.metadata === 'object'
         ? (r.metadata as Record<string, unknown>)

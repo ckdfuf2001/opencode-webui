@@ -126,6 +126,29 @@ describe('ruleMatches', () => {
     ).toBe(true)
   })
 
+  it('matches opencode external_directory shape (patterns=parent/*, metadata.filepath)', () => {
+    const rule = {
+      id: 2,
+      repoId: 1,
+      permission: 'external_directory',
+      pattern: 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\*',
+      createdAt: 0,
+    }
+    const asked = {
+      id: 'per-x',
+      sessionID: 's',
+      permission: 'external_directory',
+      patterns: ['C:/Users/oh/Documents/Default Project/opencode-webui/backend/*'],
+      metadata: {
+        filepath: 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\backend\\src\\x.ts',
+        parentDir: 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\backend',
+      },
+    }
+    expect(ruleMatches(rule, asked)).toBe(true)
+    // patterns가 비어도 metadata.filepath로 매칭된다
+    expect(ruleMatches(rule, { ...asked, patterns: [] })).toBe(true)
+  })
+
   it('treats ? as single-char wildcard', () => {
     expect(
       ruleMatches(rule({ permission: 'read', pattern: 'file?.txt' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'file1.txt' }),
