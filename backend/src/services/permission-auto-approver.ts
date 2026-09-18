@@ -271,15 +271,27 @@ async function handleAskedPermission(
   if (!permission) return
   if (wasResponded(permission.id)) return
   const isV2 = eventType === 'permission.v2.asked'
+  // 진단용: 왜 승인/스킵됐는지 info에 남긴다 (ask는 사용자 다이얼로그급이라 info가 적당)
+  const describe = (): string => {
+    const cands = getCandidatePatterns(permission)
+    const shown = cands.slice(0, 4).join(' | ').slice(0, 300)
+    return `${permission.id} type=${permission.permission ?? permission.type} session=${permission.sessionID} candidates=[${shown}]${cands.length > 4 ? ` +${cands.length - 4}` : ''}`
+  }
   // directory → repo 스코프가 확정될 때만 승인한다.
   // 해석 실패 시 전체 규칙 폴백은 다른 레포의 규칙으로 승인할 수 있어 금지 —
   // 이 경우 응답하지 않고 사용자 다이얼로그에 맡긴다.
   let repoId: number | null = null
   try {
     const directory = await getSessionDirectoryCached(permission.sessionID, resolveBase)
-    if (!directory) return
+    if (!directory) {
+      logger.info(`Auto-approve skip (no session directory): ${describe()}`)
+      return
+    }
     repoId = resolveRepoId(db, directory)
-    if (repoId == null) return
+    if (repoId == null) {
+      logger.info(`Auto-approve skip (no repo for dir): ${describe()} dir=${directory}`)
+      return
+    }
   } catch (e) {
     // 조회 실패는 조용히 넘기면 원인을 알 수 없으니 warn (404 등 미해석은 위에서 return)
     logger.warn(`Auto-approve directory resolve failed for session ${permission.sessionID}:`, e)
@@ -289,11 +301,17 @@ async function handleAskedPermission(
   try {
     candidateRules = listPermissionRules(db, repoId)
   } catch (e) {
-    logger.debug('Auto-approve rules read skipped:', e)
+    logger.warn(`Auto-approve rules read failed (repo ${repoId}):`, e)
     return
   }
-  if (candidateRules.length === 0) return
-  if (!candidateRules.some((rule) => ruleMatches(rule, permission))) return
+  if (candidateRules.length === 0) {
+    logger.info(`Auto-approve skip (no rules for repo ${repoId}): ${describe()}`)
+    return
+  }
+  if (!candidateRules.some((rule) => ruleMatches(rule, permission))) {
+    logger.info(`Auto-approve no-match (${candidateRules.length} repo rules): ${describe()}`)
+    return
+  }
   markResponded(permission.id)
   try {
     await replyPermission(permission.sessionID, permission.id, isV2, resolveBase)
