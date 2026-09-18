@@ -412,21 +412,8 @@ export async function proxyRequest(request: Request, method: string, pathname: s
               logger.debug('memory recall injection (command) skipped:', e)
             }
           } else if (!text.includes('<memory-recall>') && !text.includes('<skill-memory-check>') && !text.includes('[run-context]')) {
-            const sessionIdFromPath = cleanEventPath.match(/\/session\/([^/]+)\/message/)?.[1]
-            // 공용 헬퍼: pending이 있을 때만 1회 주입 (리뷰 자식 생성 시 consume되므로 중복 없음).
-            // 자동 변경 ON=build(직접 수정) / OFF=plan(채팅 승인) 문구는 헬퍼가 결정한다.
-            let skillBlock = ''
-            if (sessionIdFromPath) {
-              try {
-                const { buildSkillCheckBlock } = await import('./command-hooks')
-                const { resolveRepoId } = await import('./command-runs')
-                skillBlock = buildSkillCheckBlock({
-                  sessionId: sessionIdFromPath,
-                  repoId: directory ? resolveRepoId(proxyDb, directory) : null,
-                  db: proxyDb,
-                })
-              } catch {}
-            }
+            // 일반 채팅에는 skill-check를 붙이지 않는다 — 무관한 턴을 스킬 평가로 오염시킨다.
+            // (슬래시 호출은 위 commandName 분기 + 큐 경로에서 처리. pending은 TTL까지 유지된다)
             let recallBlock = ''
             if (commandName && text.trim().length >= 4) {
               try {

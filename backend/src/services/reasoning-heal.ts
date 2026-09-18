@@ -140,7 +140,7 @@ export function classifyTail(messages: LooseMessage[]): { kind: TailKind; healab
   return { kind: 'clean', healable: false, lastErrorText: '' }
 }
 
-function stripInjectedBlocks(text: string): string {
+export function stripInjectedBlocks(text: string): string {
   let t = text
   // run-context: [run-context] ... [/run-context] or <run-context> ...
   t = t.replace(/\[run-context\][\s\S]*?\[\/run-context\]\n*/gi, '')

@@ -1,7 +1,7 @@
 import { API_BASE_URL } from '@/config'
 
 export type CommandRunStatus = 'started' | 'completed' | 'failed' | 'cancelled'
-export type CommandRunOrigin = 'ui' | 'schedule' | 'chat' | 'review' | 'auto'
+export type CommandRunOrigin = 'ui' | 'schedule' | 'chat' | 'review' | 'auto' | 'external'
 export type CommandRunKind = 'command' | 'skill'
 
 export interface CommandRun {

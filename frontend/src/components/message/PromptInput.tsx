@@ -535,9 +535,10 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   }
 
   const handleModeToggle = () => {
+    // 세션 override만 바꾼다. 전역 preferences.mode까지 바꾸면
+    // 이 세션의 토글이 이후 만드는 모든 세션의 기본값으로 새어 나간다.
     const newMode = currentMode === 'plan' ? 'build' : 'plan'
     setSessionModeOverride(newMode)
-    updateSettings({ mode: newMode })
   }
 
   const resolveFilePath = (relativePath: string): string => {

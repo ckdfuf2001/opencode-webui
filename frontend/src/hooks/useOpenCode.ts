@@ -240,6 +240,33 @@ export function truncateLargeToolOutputs(messages: MessageListResponse): Message
   const next = messages.map((msg) => {
     let msgChanged = false
     const newParts = msg.parts.map((part: any) => {
+      // reasoning은 text/tool과 같은 cap을 적용한다 — 기존에 미절단이라
+      // 873개 reasoning 파트가 통째로 힙에 남던 구멍을 막는다.
+      if (part.type === 'reasoning' && typeof part.text === 'string' && part.text.length > MAX_TOOL_OUTPUT_KEEP) {
+        msgChanged = true
+        const truncated = part.text.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${part.text.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)`
+        totalKept += MAX_TOOL_OUTPUT_KEEP
+        return { ...part, text: truncated }
+      }
+      // snapshot 통째 보관도 잘라낸다 (원본은 opencode DB에 유지)
+      if (part.type === 'snapshot' && typeof part.snapshot === 'string' && part.snapshot.length > MAX_TOOL_OUTPUT_KEEP) {
+        msgChanged = true
+        const src = part.snapshot as string
+        totalKept += MAX_TOOL_OUTPUT_KEEP
+        return { ...part, snapshot: src.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${src.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)` }
+      }
+      // file 파트의 data: URL(base64 붙여넣기 이미지)은 렌더에 원문이 필요 없다 — 칩만 남긴다
+      if (part.type === 'file' && typeof part.url === 'string' && part.url.startsWith('data:') && part.url.length > 20_000) {
+        msgChanged = true
+        return { ...part, url: part.url.slice(0, 200) + `…[inline data truncated ${part.url.length - 200} chars]` }
+      }
+      // step/subtask 등 텍스트성 알 수 없는 파트도 방어적으로 cap
+      if ((part.type === 'step-start' || part.type === 'step-finish' || part.type === 'subtask') && typeof part.text === 'string' && part.text.length > MAX_TOOL_OUTPUT_KEEP) {
+        msgChanged = true
+        const src = part.text as string
+        totalKept += MAX_TOOL_OUTPUT_KEEP
+        return { ...part, text: src.slice(0, MAX_TOOL_OUTPUT_KEEP) + TOOL_TRUNCATE_NOTICE + ` (${src.length - MAX_TOOL_OUTPUT_KEEP} chars omitted)` }
+      }
       // edit 포함 모든 툴 + 큰 text 파트(파일 내용)도 힙을 잡는다 — 같이 잘라냄
       if (part.type === 'text' && typeof part.text === 'string' && part.text.length > MAX_TOOL_OUTPUT_KEEP * 2) {
         msgChanged = true
@@ -687,6 +714,11 @@ export function unpinMessageAnchor(sessionID: string, messageId: string): void {
 }
 export function releaseMessageAnchors(sessionID: string): void {
   pinnedAnchors.delete(sessionID);
+  // 핀과 함께 backfilled도 해제 — 둘 중 하나만 남으면 캐시가 무한 증식한다.
+  // (clearBackfilledIds는 export됐지만 호출자가 없어 실효가 없었음)
+  backfilledIds.delete(sessionID);
+  pinReloadFailures.delete(sessionID);
+  pinReloadLastRun.delete(sessionID);
 }
 
 /**
@@ -700,6 +732,10 @@ const pinReloadFailures = new Map<string, { count: number; until: number }>();
 const PIN_RELOAD_MAX_FAILURES = 3;
 const PIN_RELOAD_COOLDOWN_MS = 60_000;
 const PIN_RELOAD_MAX_TRACKED = 500;
+// 핀 재로드 성공 경로 스로틀 — messages 변경 effect가 매 폴링마다 돌 때
+// 전부-보유 상태에서도 Map 순회+getQueryData가 반복되는 것을 막는다.
+const pinReloadLastRun = new Map<string, number>();
+const PIN_RELOAD_THROTTLE_MS = 2_000;
 export async function reloadMissingPins(
   queryClient: ReturnType<typeof useQueryClient>,
   opcodeUrl: string | null | undefined,
@@ -708,6 +744,9 @@ export async function reloadMissingPins(
 ): Promise<void> {
   const pins = pinnedAnchors.get(sessionID);
   if (!pins || pins.size === 0) return;
+  const now0 = Date.now();
+  if (now0 - (pinReloadLastRun.get(sessionID) ?? 0) < PIN_RELOAD_THROTTLE_MS) return;
+  pinReloadLastRun.set(sessionID, now0);
   const fb = pinReloadFailures.get(sessionID);
   if (fb && Date.now() < fb.until) return;
   const key = messagesQueryKey(opcodeUrl, sessionID, directory);
@@ -752,15 +791,35 @@ function createdOf(m: MessageWithParts): number {
   return (m.info as unknown as { time?: { created?: number } }).time?.created ?? 0;
 }
 
-/** 캐시 병합: id 중복 제거 + 생성순 정렬 (stable — 동률은 기존 순서 유지). */
-function mergeMessagesDeduped(existing: MessageListResponse, incoming: MessageListResponse): MessageListResponse {
+/** 캐시 병합: id 중복 제거 + 생성순 정렬 (stable — 동률은 기존 순서 유지).
+ * 상한 초과 시 가장 오래된 비핀 메시지부터 버리고 backfilledIds에서도 제거한다.
+ * (스크롤·점프로 2000개 세션을 다 읽으면 canonical 캐시가 그대로 GB 힙이 되던 원인)
+ */
+const MAX_CACHED_MESSAGES = 250;
+function enforceCacheCap(sessionID: string, list: MessageListResponse): MessageListResponse {
+  if (list.length <= MAX_CACHED_MESSAGES) return list;
+  const pins = pinnedAnchors.get(sessionID);
+  const sorted = [...list].sort((a, b) => createdOf(a) - createdOf(b));
+  const keep = new Set<string>();
+  // 최신 구간은 무조건 유지 (폴링 recent 윈도우)
+  for (let i = sorted.length - 1; i >= 0 && keep.size < MAX_CACHED_MESSAGES; i--) {
+    keep.add(sorted[i]!.info.id);
+  }
+  // 핀은 상한 밖이라도 유지 (최대 50개)
+  if (pins) for (const id of pins) keep.add(id);
+  const ids = backfilledIds.get(sessionID);
+  const next = sorted.filter((m) => keep.has(m.info.id));
+  if (ids) for (const m of sorted) if (!keep.has(m.info.id)) ids.delete(m.info.id);
+  return next;
+}
+function mergeMessagesDeduped(sessionID: string, existing: MessageListResponse, incoming: MessageListResponse): MessageListResponse {
   const seen = new Set(existing.map((m) => m.info.id));
   const merged: MessageListResponse = [...existing];
   for (const m of incoming) {
     if (!seen.has(m.info.id)) { seen.add(m.info.id); merged.push(m); }
   }
   merged.sort((a, b) => createdOf(a) - createdOf(b));
-  return truncateLargeToolOutputs(merged);
+  return enforceCacheCap(sessionID, truncateLargeToolOutputs(merged));
 }
 
 export interface MessageListItem {
@@ -853,7 +912,7 @@ async function backfillMessages(
   if (!ids) { ids = new Set(); backfilledIds.set(sessionID, ids); }
   for (const m of range) ids.add(m.info.id);
   queryClient.setQueryData<MessageListResponse>(key, (old) =>
-    old && old.length > 0 ? mergeMessagesDeduped(old, range) : truncateLargeToolOutputs(range),
+    old && old.length > 0 ? mergeMessagesDeduped(sessionID, old, range) : truncateLargeToolOutputs(range),
   );
   setRecentTotal(sessionID, body.total);
   return { messages: range, total: body.total, hasMore: body.hasMore ?? false };
@@ -1050,6 +1109,11 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         if (keepPinned.length > 0) {
           result = [...keepPinned, ...result].sort((a, b) => createdOf(a) - createdOf(b));
         }
+      }
+      // 보존 병합 후에도 상한을 강제한다 — 폴링 refetch가 backfilled를
+      // 계속 끌고 오면 recent-60 쿼리 캐시가 세션 전체로 부푸는 것을 막는다.
+      if (shouldPreserve && result.length > MAX_CACHED_MESSAGES) {
+        result = enforceCacheCap(sessionID!, result);
       }
       const optimistic = pendingOptimistic.get(sessionID!);
       let realUserArrived = false;

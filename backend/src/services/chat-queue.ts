@@ -638,6 +638,56 @@ async function getSkillTemplate(base: string, directory: string, name: string): 
   }
 }
 
+/**
+ * 턴 결과 판정 (2층) — 전달(HTTP 2xx)과 별개로 턴이 실제로 에러로 끝났는지 본다.
+ * opencode는 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
+ * 응답 코드만 보면 실패를 놓친다. 발송 시작 이후 생성된 마지막 assistant
+ * 메시지의 info.error 존재 여부로 판정한다.
+ * 조회 실패·이번 턴 산출 없음이면 null (fail-open — 전달 기준으로 유지).
+ * 사용자 취소(MessageAbortedError)는 실패가 아니다.
+ * 툴 호출 실패는 일부러 안 본다: 재시도·부분 실패는 정상 작업 과정이라
+ * 실패로 세면 거의 모든 run이 실패가 된다.
+ */
+type TurnCheck =
+  | { kind: 'error'; name: string }
+  | { kind: 'clean' }
+  | { kind: 'no-turn' }
+  | { kind: 'unknown' }
+
+async function checkTurnOnce(sessionID: string, sinceMs: number): Promise<TurnCheck> {
+  try {
+    const tail = await recentSessionMessages(sessionID, 5)
+    // ASC 정렬(오래된 것 먼저)이라 뒤쪽이 이번 턴이다
+    const msgs = (tail?.messages ?? []) as Array<{ info?: Record<string, unknown> }>
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const info = msgs[i]?.info
+      if (info?.role !== 'assistant') continue
+      const created = (info.time as { created?: number } | undefined)?.created ?? 0
+      // 이번 턴 산물이 아니면 증거 없음으로 본다 (오래된 에러 턴 오탐 방지)
+      if (created < sinceMs - 5_000) return { kind: 'no-turn' }
+      const err = info.error as { name?: string } | undefined
+      if (!err) return { kind: 'clean' }
+      const name = typeof err.name === 'string' && err.name ? err.name : 'UnknownError'
+      if (name === 'MessageAbortedError') return { kind: 'clean' }
+      return { kind: 'error', name }
+    }
+    return { kind: 'no-turn' }
+  } catch {
+    return { kind: 'unknown' }
+  }
+}
+
+async function checkTurnError(sessionID: string, sinceMs: number): Promise<string | null> {
+  let r = await checkTurnOnce(sessionID, sinceMs)
+  // 2xx 직후라 opencode가 DB 커밋을 안 끝냈을 수 있다 — 이번 턴 메시지가
+  // 없으면 500ms 쉬고 한 번만 재조회한다. 조회 실패(unknown)는 재시도 없이 fail-open.
+  if (r.kind === 'no-turn') {
+    await new Promise((res) => setTimeout(res, 500))
+    r = await checkTurnOnce(sessionID, sinceMs)
+  }
+  return r.kind === 'error' ? r.name : null
+}
+
 async function dispatchQueuedChat(
   base: string,
   sessionID: string,
@@ -647,6 +697,8 @@ async function dispatchQueuedChat(
   const directory = resolveQueueDir(sessionID)
   const directoryParam = encodeURIComponent(directory)
   const outgoing = asOutgoingModel(chat.model)
+  // 턴 판정 기준시각 — 이 이후 생성된 assistant 메시지만 이번 턴 산물로 본다
+  const dispatchStartMs = Date.now()
 
   // 발송 직전: 꼬리가 mismatch 에러면 strip-only 클렌징 (truncate 없음).
   // opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
@@ -697,8 +749,31 @@ async function dispatchQueuedChat(
   // /command 실패 시 /message 폴백에 붙일 recall (/command에는 arguments에 직접 붙인다)
   let slashRecall = ''
   // skill 합성문(`/스킬 인자` + skill-template 마커) — 있으면 /message 본문으로 쓴다.
-  // 전송용 합성일 뿐, run 기록·종료는 후크 이벤트가 전담한다.
+  // 전송용 합성문(`/스킬 인자` + skill-template 마커) — 있으면 /message 본문으로 쓴다.
+  // 스킬 run id — 아래 /message 결과에 따라 finish (post 훅·리뷰자식 연결).
   let messageTextOverride: string | null = null
+  let pendingSkillRunId: string | null = null
+  const finishPendingSkillRun = (delivered: boolean): void => {
+    if (!pendingSkillRunId) return
+    const id = pendingSkillRunId
+    pendingSkillRunId = null
+    const db = queueDb
+    if (!db) return
+    void import('./command-runs')
+      .then(async ({ finishRunSafe }) => {
+        // 2층 판정: 전달됐어도 턴이 에러로 끝났으면 failed
+        let status: 'completed' | 'failed' = delivered ? 'completed' : 'failed'
+        if (delivered) {
+          const turnError = await checkTurnError(sessionID, dispatchStartMs)
+          if (turnError) {
+            status = 'failed'
+            logger.warn(`Queued skill run ${id} delivered but turn errored (${turnError}) — marking failed`)
+          }
+        }
+        return finishRunSafe(db, id, status)
+      })
+      .catch((e) => logger.debug('Skill run finish skipped:', e))
+  }
   // 스킬 선처리: opencode /command로 스킬을 실행할 수 없다 (실측 500 UnknownError + 메시지 0건).
   // 템플릿을 직접 합성해 아래 공통 /message 꼬리로 보낸다. 첫 줄 `/스킬 인자`는
   // 채팅에 먼저 보이고, 템플릿은 skill-template 마커로 감싸 렌더러가 접힘 md 블록으로 그린다.
@@ -721,17 +796,26 @@ async function dispatchQueuedChat(
             ? `${head}\n\n<!-- skill-template:${probe} -->\n${template.trim()}\n<!-- /skill-template -->`
             : head
           messageTextOverride = recall ? `${recall}${composed}` : composed
-          // 후크(idle 스캔)가 run을 만들 때 쓸 스냅샷을 남긴다 (기록 자체는 후크 전담)
+          // run 생애주기 소유권은 디스패치에 있다 — 스냅샷을 실어 기록한다.
+          // 후크는 관측만 하며, idle 스캔 중복은 messageId로 걸러진다.
           try {
-            const { setDispatchContext } = await import('./command-hooks')
-            setDispatchContext(sessionID, {
-              commandName: probe,
-              origin: 'chat',
-              reviewWanted: chat.reviewWanted,
-              autoApply: chat.autoApply,
-            })
+            if (queueDb) {
+              const { recordRunStartSafe, resolveRepoId } = await import('./command-runs')
+              const run = await recordRunStartSafe(queueDb, {
+                sessionId: sessionID,
+                commandName: probe,
+                args: args.trim() || null,
+                directory,
+                repoId: resolveRepoId(queueDb, directory),
+                origin: 'chat',
+                kind: 'skill',
+                reviewWanted: chat.reviewWanted,
+                autoApply: chat.autoApply,
+              })
+              pendingSkillRunId = run?.id ?? null
+            }
           } catch (e) {
-            logger.debug(`Skill dispatch context skipped for /${probe}:`, e)
+            logger.debug(`Skill run record skipped for /${probe}:`, e)
           }
           logger.info(`Queued skill /${probe} composed for /message (template ${template ? `${template.length} chars` : 'missing'})`)
         }
@@ -760,18 +844,27 @@ async function dispatchQueuedChat(
         argsWithProtocol = `${recall}${argsWithProtocol}`
         slashRecall = recall
       }
-      // run 기록·종료는 후크 이벤트(command.executed)가 전담한다.
-      // 여기서는 스냅샷(세션 오버라이드)만 남겨 후크가 리뷰 판정에 그대로 쓴다.
+      // run 생애주기 소유권은 디스패치에 있다 — 스냅샷을 실어 기록한다.
+      // 후크는 관측만 하며, 외부 실행은 origin='external'로 따로 기록한다.
+      let runId: string | null = null
       try {
-        const { setDispatchContext } = await import('./command-hooks')
-        setDispatchContext(sessionID, {
-          commandName: cmd,
-          origin: 'chat',
-          reviewWanted: chat.reviewWanted,
-          autoApply: chat.autoApply,
-        })
+        if (queueDb) {
+          const { recordRunStartSafe, resolveRepoId } = await import('./command-runs')
+          const run = await recordRunStartSafe(queueDb, {
+            sessionId: sessionID,
+            commandName: cmd,
+            args: args.trim() || null,
+            directory,
+            repoId: resolveRepoId(queueDb, directory),
+            origin: 'chat',
+            kind,
+            reviewWanted: chat.reviewWanted,
+            autoApply: chat.autoApply,
+          })
+          runId = run?.id ?? null
+        }
       } catch (e) {
-        logger.debug(`Command dispatch context skipped for /${cmd}:`, e)
+        logger.debug(`Command run record skipped for /${cmd}:`, e)
       }
       const cmdBody: Record<string, unknown> = { command: cmd, arguments: argsWithProtocol }
       if (chat.agent) cmdBody.agent = chat.agent
@@ -785,9 +878,28 @@ async function dispatchQueuedChat(
       if (cmdRes.ok) {
         void cmdRes.text().catch(() => {})
         logger.info(`Queued command /${cmd} dispatched via /command for session ${sessionID}`)
+        try {
+          if (queueDb && runId) {
+            const { finishRunSafe } = await import('./command-runs')
+            // 2층 판정: 2xx여도 턴이 에러로 끝났으면 failed (provider 400 저장 경로 대응)
+            const turnError = await checkTurnError(sessionID, dispatchStartMs)
+            if (turnError) {
+              logger.warn(`Queued command /${cmd} accepted but turn errored (${turnError}) — marking failed`)
+            }
+            await finishRunSafe(queueDb, runId, turnError ? 'failed' : 'completed')
+          }
+        } catch (e) {
+          logger.debug(`Command run finish skipped for /${cmd}:`, e)
+        }
         return { sent: true }
       }
       const body = await cmdRes.text().catch(() => '')
+      try {
+        if (queueDb && runId) {
+          const { finishRunSafe } = await import('./command-runs')
+          await finishRunSafe(queueDb, runId, 'failed')
+        }
+      } catch {}
       // mismatch여도 여기서 끝내지 않고 /message로 폴백한다 — 아래 /message 경로에서
       // heal(꼬리 절단)+1회 재시도를 탄다. 커맨드가 아니면 어차피 폴백하던 경로.
       // 커맨드가 아니거나 서버가 모르면 /message 로 폴백
@@ -799,15 +911,18 @@ async function dispatchQueuedChat(
 
   // 직전 스킬/커맨드 완료에 대한 부모 skill-memory-check (pending이 있을 때만 1회 주입).
   // 리뷰 자식이 생성됐으면 spawn 시점에 consume되므로 여기서는 붙지 않는다.
+  // 슬래시 호출에만 붙인다 — 일반 채팅에 붙으면 무관한 턴을 스킬 평가로 오염시킨다.
+  // pending은 유지되므로 다음 슬래시 호출 때 전달된다 (TTL 5분).
   // /command 실패 폴백용 recall을 먼저 붙이고 skill을 그 앞에 — proxy와 같은 순서.
   let outgoingText = messageTextOverride ?? chat.text
   if (slashRecall && !outgoingText.includes('<memory-recall>')) {
     outgoingText = `${slashRecall}${outgoingText}`
   }
+  const isSlashSend = trimmed.startsWith('/')
   try {
     const { buildSkillCheckBlock } = await import('./command-hooks')
     const { resolveRepoId } = await import('./command-runs')
-    if (queueDb) {
+    if (queueDb && isSlashSend) {
       const block = buildSkillCheckBlock({
         sessionId: sessionID,
         repoId: resolveRepoId(queueDb, directory),
@@ -919,8 +1034,10 @@ async function dispatchQueuedChat(
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
       const healed = await healMismatchAndRetryOnce(body)
+      finishPendingSkillRun(healed.sent)
       return healed
     }
+    finishPendingSkillRun(false)
     return { sent: false, status: sendRes.status }
   }
   // Drain the body so the socket is released even if the server keeps it open.
@@ -930,7 +1047,9 @@ async function dispatchQueuedChat(
   if (stored && isReasoningEncryptedMismatch(stored)) {
     logger.warn(`Queued chat send returned 2xx but stored a provider mismatch for session ${sessionID} — running heal+retry once`)
     const healed = await healMismatchAndRetryOnce(stored)
+    finishPendingSkillRun(healed.sent)
     return healed
   }
+  finishPendingSkillRun(true)
   return { sent: true }
 }

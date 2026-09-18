@@ -44,10 +44,6 @@ function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
   })
 }
 
-// 레포/전역 룰은 백엔드 자동승인자가 DB에서 직접 읽는다 (호출 시점 fresh).
-// 이 함수는 호출부 호환용으로만 남긴다.
-export function refreshAutoApproveData(): void {}
-
 async function handlePermissionAdd(permission: Permission): Promise<void> {
   if (recentlyProcessed.has(permission.id)) return
 
@@ -57,19 +53,19 @@ async function handlePermissionAdd(permission: Permission): Promise<void> {
     if (sessRules.length > 0 && sessRules.some(rule => ruleMatches(rule as unknown as PermissionRule, permission))) {
       recentlyProcessed.add(permission.id)
       setTimeout(() => { recentlyProcessed.delete(permission.id) }, 60_000)
-        try {
-          if (permission.v2) {
-            await client.respondToPermissionV2(permission.id, 'always')
-          } else {
-            await client.respondToPermission(permission.sessionID, permission.id, 'always')
-          }
-          // sessionID 동봉 — 배지 캐시 즉시 정리용 (아래 remove 구독자가 사용)
-          permissionEvents.emit({ type: 'remove', permissionID: permission.id, permission })
-        } catch (error) {
-          recentlyProcessed.delete(permission.id)
-          console.error('Failed to auto-approve permission (session):', error)
+      try {
+        if (permission.v2) {
+          await client.respondToPermissionV2(permission.id, 'always')
+        } else {
+          await client.respondToPermission(permission.sessionID, permission.id, 'always')
         }
-        return
+        // sessionID 동봉 — 배지 캐시 즉시 정리용 (아래 remove 구독자가 사용)
+        permissionEvents.emit({ type: 'remove', permissionID: permission.id, permission })
+      } catch (error) {
+        recentlyProcessed.delete(permission.id)
+        console.error('Failed to auto-approve permission (session):', error)
+      }
+      return
     }
   }
 

@@ -119,14 +119,21 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   // Generating 플레이스홀더만 그린다 (뒤에서 실시간 병합이 도는 느낌 제거).
   const { preferences } = useSettings()
   const sseOn = preferences?.sseStreaming ?? true
-  // bash 감시자: opencode가 timeout에 kill하지 못하고 running이 고착되면 턴을 중단한다.
-  // (opencode 기본 2분·최대 10분 강제 + grace 30초. 정상 종료분은 status가 바뀌어 스킵된다.)
+  // bash 감시자: opencode가 timeout에 kill하지 못하고 running이 고착되면
+  // 중단 확인 토스트만 띄운다 (자동 abort 금지 — 되돌릴 수 없는 동작이라 사용자 판단에 맡긴다).
+  // (opencode 기본 2분·최대 10분 강제 + grace 60초. 정상 종료분은 status가 바뀌어 스킵된다.)
   // 표시 여부(SSE off 숨김)와 무관하게 여기서 감시한다.
   const abortSession = useAbortSession(opcodeUrl, directory)
-  const watchdogFiredRef = useRef(new Set<string>())
+  const abortRef = useRef(abortSession.mutate)
+  abortRef.current = abortSession.mutate
+  const watchdogFiredRef = useRef<{ sessionID: string; keys: Set<string> }>({ sessionID: '', keys: new Set() })
   useEffect(() => {
     if (!messages || !sessionID) return
-    if (watchdogFiredRef.current.size > 1000) watchdogFiredRef.current.clear()
+    if (watchdogFiredRef.current.sessionID !== sessionID) {
+      watchdogFiredRef.current = { sessionID, keys: new Set() }
+    }
+    const fired = watchdogFiredRef.current.keys
+    if (fired.size > 1000) fired.clear()
     for (const m of messages) {
       if (m.info.role !== 'assistant') continue
       for (const p of m.parts ?? []) {
@@ -138,16 +145,24 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
         const inputTimeout = typeof st.input?.timeout === 'number' && st.input.timeout > 0 ? st.input.timeout : 120_000
         const timeoutMs = Math.min(inputTimeout, 600_000)
         const start = st.time?.start ?? m.info.time?.created ?? 0
-        if (!start || Date.now() - start < timeoutMs + 30_000) continue
+        if (!start || Date.now() - start < timeoutMs + 60_000) continue
         const pid = (p as { id?: string }).id ?? ''
-        const key = `${m.info.id}:${pid}`
-        if (watchdogFiredRef.current.has(key)) continue
-        watchdogFiredRef.current.add(key)
-        showToast.warning(`Bash timeout exceeded (${Math.round(timeoutMs / 1000)}s+) but still running — stopping the turn`, { duration: 6000 })
-        abortSession.mutate(sessionID)
+        const key = `bash-stuck:${sessionID}:${m.info.id}:${pid}`
+        if (fired.has(key)) continue
+        fired.add(key)
+        const secs = Math.round(timeoutMs / 1000)
+        showToast.warning(`Bash가 timeout(${secs}s)을 넘겨도 실행 중입니다 — 고착이면 중단하세요`, {
+          id: key,
+          duration: 15000,
+          action: {
+            label: '중단하기',
+            onClick: () => abortRef.current(sessionID),
+          },
+        })
       }
     }
-  }, [messages, sessionID, abortSession])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, sessionID])
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">

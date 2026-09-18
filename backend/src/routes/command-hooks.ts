@@ -68,9 +68,9 @@ async function fetchMessageOutcome(
 }
 
 /**
- * command.executed — /command 실행은 여기서 항상 새로 기록하고 턴 결과로 finish한다.
- * 큐·스케줄러는 run을 미리 만들지 않으므로 상관시킬 상대가 없다 (사체 코드 제거됨).
- * 큐 발송분이면 남겨둔 스냅샷(세션 오버라이드)을 싣는다. 없으면 MISS 로그를 남긴다.
+ * command.executed — 큐·스케줄러가 먼저 기록한 run이 있으면 messageId를 붙이고,
+ * 없으면 외부 실행(TUI 등)으로 새로 기록한다. 외부 실행은 세션 토글이 없으므로
+ * 두 플래그를 명시 false로 박는다 (생략하면 레포 설정으로 새어나간다).
  */
 async function handleCommandExecuted(
   db: Database,
@@ -81,29 +81,62 @@ async function handleCommandExecuted(
 ): Promise<void> {
   if (!name) return
   const outcome = await fetchMessageOutcome(sessionID, messageID)
+  const { listRunsBySession, attachMessage } = await import('../services/command-runs')
+  try {
+    const runs = await listRunsBySession(db, sessionID)
+    const msgCreated = outcome?.created ?? 0
+    const candidates = runs
+      .filter((r) => r.commandName === name && Date.now() - r.startedAt < 600_000)
+      .sort((a, b) => b.startedAt - a.startedAt)
+    for (const run of candidates.slice(0, 5)) {
+      // 메시지 시각을 알면 엄격 상관, 모르면 최신 started/finished-<30s 휴리스틱
+      if (outcome) {
+        if (msgCreated < run.startedAt - 10_000) continue
+      } else if (run.status !== 'started' && Date.now() - (run.finishedAt ?? 0) > 30_000) {
+        continue
+      }
+      if (messageID) {
+        try {
+          await attachMessage(db, run.id, messageID)
+        } catch (e) {
+          logger.debug('Hook attach skipped:', e)
+        }
+      }
+      if (run.status === 'started') {
+        const { finishRunSafe } = await import('../services/command-runs')
+        if (outcome?.failed) logger.warn(`Hook command /${name} turn errored — marking failed`)
+        await finishRunSafe(db, run.id, outcome?.failed ? 'failed' : 'completed')
+      }
+      logger.debug(`Hook command.executed correlated to run ${run.id} (/${name})`)
+      return
+    }
+  } catch (e) {
+    logger.debug('Hook correlation skipped:', e)
+  }
+  // 상관 실패 = 외부 실행: 명시 false로 기록하고 턴 결과로 finish (리뷰 스폰 없음).
   const directory = await fetchSessionDirectory(sessionID)
-  const { resolveCommandKind, takeDispatchContext } = await import('../services/command-hooks')
-  const { recordRunStartSafe, resolveRepoId, finishRunSafe, attachMessage } = await import('../services/command-runs')
+  const { resolveCommandKind } = await import('../services/command-hooks')
+  const { recordRunStartSafe, resolveRepoId, finishRunSafe } = await import('../services/command-runs')
   const kind = resolveCommandKind(directory, name)
-  const snap = takeDispatchContext(sessionID, name)
-  if (!snap) logger.warn(`Hook command /${name}: snapshot MISS (session ${sessionID}) — review falls back to repo settings`)
   const run = await recordRunStartSafe(db, {
     sessionId: sessionID,
     commandName: name,
     args: cleanArgsForHistory(args),
     directory,
     repoId: directory ? resolveRepoId(db, directory) : null,
-    origin: snap?.origin ?? 'ui',
+    origin: 'external',
     kind,
-    ...(snap?.reviewWanted !== undefined ? { reviewWanted: snap.reviewWanted } : {}),
-    ...(snap?.autoApply !== undefined ? { autoApply: snap.autoApply } : {}),
+    reviewWanted: false,
+    autoApply: false,
   })
   if (!run) return
   if (messageID) {
     try {
+      const { attachMessage } = await import('../services/command-runs')
       await attachMessage(db, run.id, messageID)
     } catch {}
   }
+  logger.info(`Hook external command /${name} recorded (explicit flags false) for session ${sessionID}`)
   if (outcome?.failed) logger.warn(`Hook command /${name} turn errored — marking failed`)
   await finishRunSafe(db, run.id, outcome?.failed ? 'failed' : 'completed')
 }
@@ -140,21 +173,22 @@ async function handleSessionIdle(db: Database, sessionID: string): Promise<void>
   if (fresh.length === 0) return
 
   const directory = await fetchSessionDirectory(sessionID)
-  const { resolveCommandKind, takeDispatchContext } = await import('../services/command-hooks')
+  const { resolveCommandKind } = await import('../services/command-hooks')
   const { recordRunStartSafe, resolveRepoId, finishRunSafe, attachMessage, listRunsBySession } = await import('../services/command-runs')
-  // 중복 판정은 messageId 기준 1회 조회 — 같은 메시지의 스킬은 다시 기록하지 않는다.
-  // 시간 윈도우가 아니라 재시작 후에도, 같은 턴 반복에도 안전하다.
-  let recordedKeys: Set<string>
+  // 중복 판정: 같은 messageId면 스킵, 큐가 먼저 만든 행이면 붙이고, 둘 다 아니면 새로 만든다.
+  // messageId 키가 재시작 후에도 안전하고, 시간 상관은 큐 행에만 쓴다.
+  let sessionRuns: Awaited<ReturnType<typeof listRunsBySession>>
   try {
-    const runs = await listRunsBySession(db, sessionID)
-    recordedKeys = new Set(
-      runs.flatMap((r) => ((r as { messageId?: string }).messageId ? [`${r.commandName}\n${(r as { messageId?: string }).messageId}`] : [])),
-    )
+    sessionRuns = await listRunsBySession(db, sessionID)
   } catch {
-    recordedKeys = new Set()
+    sessionRuns = []
   }
+  const recordedKeys = new Set(
+    sessionRuns.flatMap((r) => (r.messageId ? [`${r.commandName}\n${r.messageId}`] : [])),
+  )
   for (const m of fresh) {
     const msgId = (m.info as { id?: string } | undefined)?.id
+    const msgCreated = (m.info as { time?: { created?: number } } | undefined)?.time?.created ?? 0
     const parts = (m as { parts?: Array<Record<string, unknown>> }).parts ?? []
     for (const p of parts) {
       if (p?.type !== 'tool' || (p as { tool?: string }).tool !== 'skill') continue
@@ -163,18 +197,32 @@ async function handleSessionIdle(db: Database, sessionID: string): Promise<void>
       if (!skillName) continue
       const dedupKey = `${skillName}\n${msgId ?? ''}`
       if (recordedKeys.has(dedupKey)) continue
-      const snap = takeDispatchContext(sessionID, skillName)
-      if (!snap) logger.warn(`Hook auto skill /${skillName}: snapshot MISS (session ${sessionID}) — review falls back to repo settings`)
+      // 큐가 먼저 만든 행(아직 messageId 없음)에 붙인다.
+      // messageId 있는 행은 완성된 기록이라 건드리지 않는다 (새 턴이면 아래서 새로 만든다).
+      // 1시간 넘은 started 행(stuck)은 다른 턴 것으로 보고 제외한다.
+      const queued = sessionRuns
+        .filter((r) => r.commandName === skillName && !r.messageId && Date.now() - r.startedAt < 3_600_000)
+        .sort((a, b) => b.startedAt - a.startedAt)[0]
+      if (queued && (!msgCreated || msgCreated >= queued.startedAt - 10_000)) {
+        if (msgId) {
+          try {
+            await attachMessage(db, queued.id, msgId)
+          } catch {}
+          recordedKeys.add(dedupKey)
+        }
+        continue
+      }
+      // 모델 주도 실행: 명시 false로 기록 (세션 토글 없음 → 상속 금지)
       const run = await recordRunStartSafe(db, {
         sessionId: sessionID,
         commandName: skillName,
         args: null,
         directory,
         repoId: directory ? resolveRepoId(db, directory) : null,
-        origin: snap?.origin ?? 'auto',
+        origin: 'auto',
         kind: resolveCommandKind(directory, skillName),
-        ...(snap?.reviewWanted !== undefined ? { reviewWanted: snap.reviewWanted } : {}),
-        ...(snap?.autoApply !== undefined ? { autoApply: snap.autoApply } : {}),
+        reviewWanted: false,
+        autoApply: false,
       })
       if (!run) continue
       if (msgId) {

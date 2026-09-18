@@ -11,7 +11,9 @@ import { resolveRepoId } from './command-runs'
  * 설계 원칙:
  * - 판단은 여기서, 표시는 프론트 (다이얼로그·뱃지는 그대로 living 목록을 보여준다).
  * - 세션 로컬스토리지 룰은 백엔드가 볼 수 없어 프론트가 계속 담당한다 (빠른 경로).
- * - 응답은 'always' 1회. 중복 응답은 opencode가 거부하므로 해롭지 않다.
+ * - 응답은 'always' 1회 (60초 TTL dedupe로 중복 응답 방지).
+ * - repo 스코프가 확정될 때만 승인한다. directory 해석 실패 시에는
+ *   응답하지 않고 다이얼로그에 맡긴다 (다른 레포 규칙 오승인 방지).
  * - 실패해도 조용히 넘긴다 — 사용자가 다이얼로그에서 직접 처리할 수 있다.
  */
 
@@ -33,6 +35,7 @@ const RESPONDED_TTL_MS = 60_000
 const RESPONDED_MAX = 500
 
 function markResponded(id: string): void {
+  // wasResponded가 TTL 만료를 검사하므로 별도 타이머 정리 불필요
   respondedRecently.set(id, Date.now())
   if (respondedRecently.size > RESPONDED_MAX) {
     const oldest = respondedRecently.keys().next().value as string | undefined
@@ -119,31 +122,71 @@ function normalizePermission(raw: unknown): AskedPermission | null {
   }
 }
 
-async function fetchSessionDirectory(sessionID: string): Promise<string | undefined> {
-  try {
-    const { opencodeServerManager } = await import('./opencode-single-server')
-    const { ensureServerAuth } = await import('./opencode-auth')
-    const base = opencodeServerManager.getUrl()
-    const res = await fetch(`${base}/session/${encodeURIComponent(sessionID)}`, {
-      headers: ensureServerAuth({}),
-      signal: AbortSignal.timeout(15_000),
+// 세션 디렉터리는 바뀌지 않으므로 캐시한다 (권한마다 세션 조회 1회가 붙던 문제 해소).
+// 실패(undefined)는 캐시하지 않는다 — 일시 장애가 영구 미승인으로 굳는 것을 막는다.
+const sessionDirectoryCache = new Map<string, string>()
+const SESSION_DIR_CACHE_MAX = 1000
+// 진행 중인 조회 공유 — 같은 세션의 동시 권한이 각자 HTTP를 쏘지 않게 한다
+const sessionDirectoryInflight = new Map<string, Promise<string | undefined>>()
+
+async function getSessionDirectoryCached(
+  sessionID: string,
+  resolveBase: () => Promise<string>,
+): Promise<string | undefined> {
+  const cached = sessionDirectoryCache.get(sessionID)
+  if (cached !== undefined) return cached
+  const inflight = sessionDirectoryInflight.get(sessionID)
+  if (inflight) return inflight
+  const pending = fetchSessionDirectory(sessionID, resolveBase)
+    .then((directory) => {
+      if (directory) {
+        sessionDirectoryCache.set(sessionID, directory)
+        if (sessionDirectoryCache.size > SESSION_DIR_CACHE_MAX) {
+          const oldest = sessionDirectoryCache.keys().next().value as string | undefined
+          if (oldest !== undefined) sessionDirectoryCache.delete(oldest)
+        }
+      }
+      return directory
     })
-    if (!res.ok) return undefined
-    const info = (await res.json()) as { directory?: string }
-    return typeof info?.directory === 'string' && info.directory ? info.directory : undefined
-  } catch {
-    return undefined
-  }
+    .finally(() => {
+      if (sessionDirectoryInflight.get(sessionID) === pending) {
+        sessionDirectoryInflight.delete(sessionID)
+      }
+    })
+  sessionDirectoryInflight.set(sessionID, pending)
+  return pending
+}
+
+type BaseUrlResolver = () => string
+
+async function defaultBaseUrl(): Promise<string> {
+  const { opencodeServerManager } = await import('./opencode-single-server')
+  return opencodeServerManager.getUrl()
+}
+
+async function fetchSessionDirectory(
+  sessionID: string,
+  resolveBase: () => Promise<string>,
+): Promise<string | undefined> {
+  const { ensureServerAuth } = await import('./opencode-auth')
+  const base = await resolveBase()
+  const res = await fetch(`${base}/session/${encodeURIComponent(sessionID)}`, {
+    headers: ensureServerAuth({}),
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) return undefined
+  const info = (await res.json()) as { directory?: string }
+  return typeof info?.directory === 'string' && info.directory ? info.directory : undefined
 }
 
 async function replyPermission(
   sessionID: string,
   permissionID: string,
   isV2: boolean,
+  resolveBase: () => Promise<string>,
 ): Promise<void> {
-  const { opencodeServerManager } = await import('./opencode-single-server')
   const { ensureServerAuth } = await import('./opencode-auth')
-  const base = opencodeServerManager.getUrl()
+  const base = await resolveBase()
   const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
   if (isV2) {
     const res = await fetch(`${base}/permission/${encodeURIComponent(permissionID)}/reply`, {
@@ -167,42 +210,42 @@ async function replyPermission(
   if (!res.ok) throw new Error(`v1 reply HTTP ${res.status}`)
 }
 
-async function handleAskedPermission(db: Database, raw: unknown, eventType: string): Promise<void> {
+async function handleAskedPermission(
+  db: Database,
+  raw: unknown,
+  eventType: string,
+  resolveBase: () => Promise<string>,
+): Promise<void> {
   const permission = normalizePermission(raw)
   if (!permission) return
   if (wasResponded(permission.id)) return
   const isV2 = eventType === 'permission.v2.asked'
-  // directory → repo 규칙 매칭, 실패하면 전체 규칙 (프론트와 동일 폴백)
-  let candidateRules: PermissionRule[] | undefined
+  // directory → repo 스코프가 확정될 때만 승인한다.
+  // 해석 실패 시 전체 규칙 폴백은 다른 레포의 규칙으로 승인할 수 있어 금지 —
+  // 이 경우 응답하지 않고 사용자 다이얼로그에 맡긴다.
+  let repoId: number | null = null
   try {
-    const directory = await fetchSessionDirectory(permission.sessionID)
-    if (directory) {
-      const repoId = resolveRepoId(db, directory)
-      if (repoId != null) {
-        const mine = listPermissionRules(db, repoId)
-        if (mine.length > 0) candidateRules = mine
-      }
-    }
+    const directory = await getSessionDirectoryCached(permission.sessionID, resolveBase)
+    if (!directory) return
+    repoId = resolveRepoId(db, directory)
+    if (repoId == null) return
   } catch (e) {
-    logger.debug('Auto-approve directory resolve skipped:', e)
+    // 조회 실패는 조용히 넘기면 원인을 알 수 없으니 warn (404 등 미해석은 위에서 return)
+    logger.warn(`Auto-approve directory resolve failed for session ${permission.sessionID}:`, e)
+    return
   }
+  let candidateRules: PermissionRule[]
   try {
-    if (!candidateRules || candidateRules.length === 0) {
-      const all = listPermissionRules(db)
-      if (all.length === 0) return
-      candidateRules = all
-    }
+    candidateRules = listPermissionRules(db, repoId)
   } catch (e) {
     logger.debug('Auto-approve rules read skipped:', e)
     return
   }
+  if (candidateRules.length === 0) return
   if (!candidateRules.some((rule) => ruleMatches(rule, permission))) return
   markResponded(permission.id)
-  setTimeout(() => {
-    respondedRecently.delete(permission.id)
-  }, RESPONDED_TTL_MS).unref?.()
   try {
-    await replyPermission(permission.sessionID, permission.id, isV2)
+    await replyPermission(permission.sessionID, permission.id, isV2, resolveBase)
     logger.info(`Auto-approved permission ${permission.id} (${permission.permission ?? permission.type}) for session ${permission.sessionID}`)
   } catch (e) {
     // 중복 응답 등 — 해롭지 않으므로 다음 폴링/다이얼로그에 맡긴다
@@ -238,19 +281,21 @@ function extractEventType(name: string, data: unknown): string {
 /** opencode /event를 직접 구독한다. fetch 기반이라 런타임에 무관하고, heartbeat 단절을 감시한다. */
 export function subscribeOpencodeEvents(
   db: Database,
-  opts?: { onEvent?: (type: string) => void },
+  opts?: { onEvent?: (type: string) => void; getBaseUrl?: BaseUrlResolver },
 ): SseSubscriber {
   let stopped = false
   let abort: AbortController | null = null
   let lastSeen = 0
   let watchdog: ReturnType<typeof setInterval> | null = null
+  // 주입된 base가 있으면 그대로 쓰고, 없으면 매니저에서 매번 해석한다 (재시작 대응)
+  const resolveBase = async (): Promise<string> =>
+    opts?.getBaseUrl ? opts.getBaseUrl() : defaultBaseUrl()
 
   const pump = async (): Promise<void> => {
     while (!stopped) {
       try {
-        const { opencodeServerManager } = await import('./opencode-single-server')
         const { ensureServerAuth } = await import('./opencode-auth')
-        const base = opencodeServerManager.getUrl()
+        const base = await resolveBase()
         abort = new AbortController()
         const res = await fetch(`${base}/event`, {
           headers: { ...ensureServerAuth({}), Accept: 'text/event-stream' },
@@ -284,7 +329,7 @@ export function subscribeOpencodeEvents(
             } catch {}
             if (!ASK_TYPES.has(type)) continue
             const props = (data as { properties?: unknown }).properties ?? data
-            void handleAskedPermission(db, props, type)
+            void handleAskedPermission(db, props, type, resolveBase)
           }
         }
       } catch (e) {

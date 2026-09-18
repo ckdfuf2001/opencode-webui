@@ -1,14 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
-import { AddressInfo } from 'node:net'
-
-vi.mock('../../src/services/opencode-single-server', () => ({
-  opencodeServerManager: { getUrl: () => (globalThis as Record<string, string>).__hookStubUrl },
-}))
+import type { AddressInfo } from 'node:net'
 
 import { subscribeOpencodeEvents } from '../../src/services/permission-auto-approver'
 
 function mockDb() {
+  // ?�제 listPermissionRules(db, repoId)??repo_id = ? �??�터?�다 ??목도 ?�일?�게 ?�작
   const ruleRows = [
     { id: 1, repo_id: 7, permission: 'bash', pattern: 'echo hooktest*', created_at: 0 },
     { id: 2, repo_id: 8, permission: 'bash', pattern: 'echo hooktest*', created_at: 0 },
@@ -20,12 +17,24 @@ function mockDb() {
       is_worktree: 0, is_local: 1, skill_auto_update: 0,
     },
   ]
+  interface MockStatement {
+    all: (...args: unknown[]) => unknown[]
+    get: (...args: unknown[]) => unknown
+    run: (...args: unknown[]) => Record<string, unknown>
+  }
+  const stmt = (all: (...args: unknown[]) => unknown[]): MockStatement => ({
+    all,
+    get: () => undefined,
+    run: () => ({}),
+  })
   return {
-    prepare: vi.fn((sql: string) => {
+    prepare: vi.fn((sql: string): MockStatement => {
       if (sql.includes('permission_rules')) {
-        return { all: () => ruleRows, get: () => undefined, run: () => ({}) }
+        return stmt((repoId?: unknown) =>
+          repoId == null ? ruleRows : ruleRows.filter((r) => r.repo_id === repoId),
+        )
       }
-      return { all: () => repoRows, get: () => undefined, run: () => ({}) }
+      return stmt(() => repoRows)
     }),
   } as any
 }
@@ -40,6 +49,7 @@ describe('permission hook integration (stub opencode server)', () => {
   let baseUrl = ''
   let replies: CapturedReply[] = []
   let sseClients: ServerResponse[] = []
+  let sessionFetchCount = 0
 
   const readBody = (req: IncomingMessage): Promise<string> =>
     new Promise((resolve) => {
@@ -51,6 +61,7 @@ describe('permission hook integration (stub opencode server)', () => {
   beforeEach(async () => {
     replies = []
     sseClients = []
+    sessionFetchCount = 0
     server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://x')
       if (req.method === 'GET' && url.pathname === '/event') {
@@ -60,8 +71,20 @@ describe('permission hook integration (stub opencode server)', () => {
         return
       }
       if (req.method === 'GET' && url.pathname.startsWith('/session/')) {
+        sessionFetchCount += 1
+        const sid = decodeURIComponent(url.pathname.slice('/session/'.length))
+        if (sid === 'ses-unknown') {
+          res.writeHead(404)
+          res.end()
+          return
+        }
+        if (sid === 'ses-norepo') {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ id: sid, directory: '/elsewhere/none' }))
+          return
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ id: 'ses-1', directory: '/repo/test' }))
+        res.end(JSON.stringify({ id: sid, directory: '/repo/test' }))
         return
       }
       if (req.method === 'POST' && url.pathname.endsWith('/reply')) {
@@ -78,12 +101,13 @@ describe('permission hook integration (stub opencode server)', () => {
         res.end('{}')
         return
       }
+      // eslint-disable-next-line no-console
+      console.error(`[stub-debug] 404 ${req.method} ${url.pathname}`)
       res.writeHead(404)
       res.end()
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-    ;(globalThis as Record<string, string>).__hookStubUrl = baseUrl
   })
 
   afterEach(async () => {
@@ -91,9 +115,10 @@ describe('permission hook integration (stub opencode server)', () => {
       try { c.end() } catch {}
     }
     await new Promise<void>((resolve) => server.close(() => resolve()))
-    delete (globalThis as Record<string, unknown>).__hookStubUrl
-    vi.unstubAllGlobals()
   })
+
+  const subscribe = (db: ReturnType<typeof mockDb>, onEvent?: (t: string) => void) =>
+    subscribeOpencodeEvents(db, { onEvent, getBaseUrl: () => baseUrl })
 
   const emitAsked = (props: Record<string, unknown>, type = 'permission.asked') => {
     const frame = `data: ${JSON.stringify({ type, properties: props })}\n\n`
@@ -108,7 +133,7 @@ describe('permission hook integration (stub opencode server)', () => {
   }
 
   it('replies always to a matching repo rule via v1 endpoint', async () => {
-    const sub = subscribeOpencodeEvents(mockDb())
+    const sub = subscribe(mockDb())
     try {
       await new Promise((r) => setTimeout(r, 300))
       emitAsked({ id: 'per-1', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'echo hooktest now' } })
@@ -122,7 +147,7 @@ describe('permission hook integration (stub opencode server)', () => {
   })
 
   it('ignores non-matching permissions (decoy repo rule does not leak)', async () => {
-    const sub = subscribeOpencodeEvents(mockDb())
+    const sub = subscribe(mockDb())
     try {
       await new Promise((r) => setTimeout(r, 300))
       emitAsked({ id: 'per-2', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'rm -rf /tmp/x' } })
@@ -133,8 +158,49 @@ describe('permission hook integration (stub opencode server)', () => {
     }
   })
 
+  it('does not fall back to other repos rules when session has no repo', async () => {
+    const sub = subscribe(mockDb())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked({ id: 'per-norepo', sessionID: 'ses-norepo', permission: 'bash', metadata: { command: 'echo hooktest now' } })
+      await new Promise((r) => setTimeout(r, 800))
+      expect(replies).toHaveLength(0)
+    } finally {
+      sub.stop()
+    }
+  })
+
+  it('skips when session directory cannot be resolved', async () => {
+    const sub = subscribe(mockDb())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked({ id: 'per-unknown', sessionID: 'ses-unknown', permission: 'bash', metadata: { command: 'echo hooktest now' } })
+      await new Promise((r) => setTimeout(r, 800))
+      expect(replies).toHaveLength(0)
+    } finally {
+      sub.stop()
+    }
+  })
+
+  it('fetches session directory only once per session (cache)', async () => {
+    const seen: string[] = []
+    const sub = subscribe(mockDb(), (t) => { seen.push(t) })
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      const before = sessionFetchCount
+      emitAsked({ id: 'per-c1', sessionID: 'ses-cache', permission: 'bash', metadata: { command: 'echo hooktest one' } })
+      emitAsked({ id: 'per-c2', sessionID: 'ses-cache', permission: 'bash', metadata: { command: 'echo hooktest two' } })
+      await waitForReplies(2, 12000)
+      expect(seen.filter((t) => t === 'permission.asked')).toHaveLength(2)
+      expect(replies).toHaveLength(2)
+      expect(sessionFetchCount - before).toBe(1)
+    } finally {
+      sub.stop()
+    }
+  }, 15000)
+
   it('uses v2 endpoint for v2.asked events', async () => {
-    const sub = subscribeOpencodeEvents(mockDb())
+    const sub = subscribe(mockDb())
     try {
       await new Promise((r) => setTimeout(r, 300))
       emitAsked(

@@ -67,52 +67,7 @@ export function getRecentHookCalls(): CommandHookCall[] {
   return [...recentCalls]
 }
 
-/**
- * 발송 스냅샷 큐 (세션당 여러 개). 세션당 한 칸이면 연속 실행·경합에서
- * 뒤가 앞을 덮어써 앞 커맨드의 후크 이벤트가 null을 받는다.
- * 소비 시 제거(take)하고 TTL(10분)이 지나면 만료된다.
- */
-export interface DispatchContext {
-  commandName: string
-  origin: 'chat'
-  reviewWanted?: boolean
-  autoApply?: boolean
-}
 
-const DISPATCH_CONTEXT_TTL_MS = 600_000
-const DISPATCH_CONTEXT_MAX = 10
-const dispatchContexts = new Map<string, Array<{ ctx: DispatchContext; at: number }>>()
-
-export function setDispatchContext(sessionId: string, ctx: DispatchContext): void {
-  const list = dispatchContexts.get(sessionId) ?? []
-  list.push({ ctx, at: Date.now() })
-  while (list.length > DISPATCH_CONTEXT_MAX) list.shift()
-  dispatchContexts.set(sessionId, list)
-  if (dispatchContexts.size > 500) {
-    const now = Date.now()
-    for (const [k, v] of dispatchContexts) {
-      const kept = v.filter((e) => now - e.at <= DISPATCH_CONTEXT_TTL_MS)
-      if (kept.length === 0) dispatchContexts.delete(k)
-      else if (kept.length !== v.length) dispatchContexts.set(k, kept)
-    }
-  }
-}
-
-/** 이름이 맞는 가장 오래된 스냅샷을 꺼낸다. 없거나 만료됐으면 null (MISS). */
-export function takeDispatchContext(sessionId: string, commandName: string): DispatchContext | null {
-  const list = dispatchContexts.get(sessionId)
-  if (!list || list.length === 0) return null
-  const now = Date.now()
-  for (let i = 0; i < list.length; i++) {
-    const v = list[i]!
-    if (now - v.at > DISPATCH_CONTEXT_TTL_MS) continue
-    if (v.ctx.commandName !== commandName) continue
-    list.splice(i, 1)
-    if (list.length === 0) dispatchContexts.delete(sessionId)
-    return v.ctx
-  }
-  return null
-}
 
 
 
@@ -266,6 +221,8 @@ async function postCommand(run: CommandRun, status: Exclude<CommandRunStatus, 's
       reviewWanted: run.reviewWanted,
       autoApply: run.autoApply,
       db,
+      triggerMessageId: run.messageId ?? undefined,
+      startedAt: run.startedAt,
     }).catch((e) => logger.debug('[post-command] review spawn skipped:', e))
   }
 }
@@ -298,6 +255,144 @@ export function firePostCommandHooks(
  * - agent는 자동 변경 ON=build(직접 수정) / OFF=plan(읽기전용·제안만).
  * - spawn 실패 시 pending을 남겨 부모 주입으로 폴백한다.
  */
+type LooseMsg = {
+  info?: Record<string, unknown>
+  parts?: Array<Record<string, unknown>>
+}
+
+function clipText(s: string, n: number): string {
+  const t = (s ?? '').trim()
+  return t.length > n ? `${t.slice(0, n)}…[truncated ${t.length - n} chars]` : t
+}
+
+/** 앵커 없을 때 폴백: 마지막 assistant 텍스트 4000자 (기존 방식). */
+function legacySnippet(msgs: LooseMsg[]): string {
+  const rev = [...msgs].reverse()
+  for (const m of rev) {
+    if ((m.info as { role?: string })?.role !== 'assistant') continue
+    const text = (m.parts ?? [])
+      .filter((p) => p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string' && ((p as { text?: string }).text ?? '').trim())
+      .map((p) => (p as { text?: string }).text as string)
+      .join('\n')
+      .trim()
+    if (text) return text.length > 4000 ? text.slice(-4000) : text
+  }
+  return ''
+}
+
+/** 파트 요약 — text/reasoning은 보존, 쓰기 계열은 경로+출력, 나머지는 한 줄. */
+function summarizePart(p: Record<string, unknown>): string | null {
+  const type = p?.type as string | undefined
+  if (type === 'text' || type === 'reasoning') {
+    const t = typeof (p as { text?: unknown }).text === 'string' ? ((p as { text?: string }).text ?? '').trim() : ''
+    return t || null
+  }
+  if (type !== 'tool') return null
+  const tool = (p as { tool?: string }).tool ?? '?'
+  const st = (p as { state?: Record<string, unknown> }).state ?? {}
+  const status = typeof st.status === 'string' ? st.status : 'done'
+  const input = (st.input ?? {}) as Record<string, unknown>
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const firstOf = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = str(input[k]).trim()
+      if (v) return v.length > 200 ? `${v.slice(0, 200)}…` : v
+    }
+    return ''
+  }
+  if (tool === 'edit' || tool === 'write' || tool === 'patch' || tool === 'apply_patch' || tool === 'bash') {
+    const target = firstOf('filePath', 'path', 'command', 'description') || tool
+    const out = str(st.output) || str((st.metadata as Record<string, unknown> | undefined)?.output) || str(st.error)
+    return `[${tool}] ${target}\n${clipText(out, 3000)}`
+  }
+  const target = firstOf('filePath', 'path', 'command', 'pattern', 'query', 'description', 'prompt', 'name') || tool
+  return `[${tool}] ${target} → ${status}`
+}
+
+/**
+ * 앵커 턴 조립: 앵커의 parent user 메시지부터 다음 user 전까지를 블록으로 만든다.
+ * 예산 60k — 첫 블록(요청 원문)과 마지막 텍스트 블록(결론)은 살리고
+ * 가운뎃부분은 `…(N blocks omitted)…` 한 줄로 접는다.
+ */
+function assembleTurnContext(
+  msgs: LooseMsg[],
+  anchorIdx: number,
+  stripInjected: (text: string) => string,
+): string {
+  const anchor = msgs[anchorIdx]
+  if (!anchor) return ''
+  const anchorParent = ((anchor.info ?? {}) as { parentID?: string }).parentID
+  // trigger = 앵커의 parent user 메시지, 없으면 앵커 이전 가장 가까운 user 메시지
+  let startIdx = -1
+  if (anchorParent) {
+    const pi = msgs.findIndex((m) => ((m.info ?? {}) as { id?: string }).id === anchorParent)
+    if (pi >= 0 && ((msgs[pi]?.info ?? {}) as { role?: string }).role === 'user') startIdx = pi
+  }
+  if (startIdx < 0) {
+    for (let i = anchorIdx; i >= 0; i--) {
+      if (((msgs[i]?.info ?? {}) as { role?: string }).role === 'user') {
+        startIdx = i
+        break
+      }
+    }
+  }
+  if (startIdx < 0) startIdx = anchorIdx
+  let endIdx = msgs.length
+  for (let i = startIdx + 1; i < msgs.length; i++) {
+    if (((msgs[i]?.info ?? {}) as { role?: string }).role === 'user') {
+      endIdx = i
+      break
+    }
+  }
+  const blocks: Array<{ kind: 'user' | 'text' | 'tool'; text: string }> = []
+  for (let i = startIdx; i < endIdx; i++) {
+    const m = msgs[i]!
+    const role = ((m.info ?? {}) as { role?: string }).role
+    if (role === 'user') {
+      const raw = (m.parts ?? [])
+        .filter((p) => p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+        .map((p) => (p as { text?: string }).text as string)
+        .join('\n')
+      let cleaned = stripInjected(raw)
+      const protoIdx = cleaned.indexOf('[execution-protocol]')
+      if (protoIdx >= 0) cleaned = cleaned.slice(0, protoIdx).trim()
+      if (cleaned) blocks.push({ kind: 'user', text: cleaned })
+      continue
+    }
+    if (role !== 'assistant') continue
+    for (const p of m.parts ?? []) {
+      if (p?.type !== 'text' && p?.type !== 'reasoning' && p?.type !== 'tool') continue
+      // 암호문 reasoning은 근거가 안 된다
+      if (p?.type === 'reasoning' && !(p as { text?: unknown }).text) {
+        const meta = (p as { metadata?: { openai?: { reasoningEncryptedContent?: string } } }).metadata
+        if (typeof meta?.openai?.reasoningEncryptedContent === 'string' && meta.openai.reasoningEncryptedContent) continue
+      }
+      const s = summarizePart(p)
+      if (s) blocks.push({ kind: p.type === 'tool' ? 'tool' : 'text', text: s })
+    }
+  }
+  if (blocks.length === 0) return ''
+  const BUDGET = 60_000
+  const joined = blocks.map((b) => b.text).join('\n\n')
+  if (joined.length <= BUDGET) return joined
+  let lastTextIdx = -1
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i]!.kind === 'text') {
+      lastTextIdx = i
+      break
+    }
+  }
+  const kept: string[] = [blocks[0]!.text]
+  let omitted = 0
+  for (let i = 1; i < blocks.length; i++) {
+    if (i === lastTextIdx) continue
+    omitted++
+  }
+  if (omitted > 0) kept.push(`…(${omitted} blocks omitted)…`)
+  if (lastTextIdx > 0) kept.push(blocks[lastTextIdx]!.text)
+  return kept.join('\n\n')
+}
+
 export async function maybeSpawnReviewChild(opts: {
   sessionId: string
   directory: string | null
@@ -314,6 +409,9 @@ export async function maybeSpawnReviewChild(opts: {
   reviewWanted?: boolean
   autoApply?: boolean
   db?: Database
+  /** run.messageId — 리뷰 입력으로 쓸 턴의 앵커 assistant 메시지. 없으면 시간으로 찾고, 없으면 스니펫 폴백. */
+  triggerMessageId?: string
+  startedAt?: number
 }): Promise<string | null> {
   const { sessionId, directory, commandName, kind, status } = opts
   if (isReviewSession(sessionId)) return null
@@ -397,27 +495,59 @@ export async function maybeSpawnReviewChild(opts: {
       }
     } catch {}
 
-    // 부모의 마지막 결과를 잘라 자식에게 근거로 전달 (없으면 생략 — fail-open).
-    // DB 직접 조회라 전체 HTTP 로드 없이 꼬리 5건이면 충분하다.
-    let snippet = ''
+    // 리뷰 입력 = 앵커 턴 전체. run.messageId(assistant)의 parent user 메시지부터
+    // 다음 user 전까지를 잘라낸다. 파트는 종류별로 요약하고 60k 예산을 건다.
+    // 앵커가 꼬리에 없으면 1초 쉬고 한 번만 재조회(DB 커밋 race), 그래도 없으면
+    // 기존 스니펫 방식으로 폴백하고 anchor=MISS를 남긴다.
+    let turnContext = ''
     try {
       const { recentSessionMessages } = await import('./session-message-db')
-      const tail = await recentSessionMessages(sessionId, 5)
-      const msgs = [...(tail?.messages ?? [])].reverse()
-      for (const m of msgs) {
-        const info = m.info as { role?: string } | undefined
-        if (info?.role !== 'assistant') continue
-        const text = (m.parts ?? [])
-          .filter((p) => p?.type === 'text' && typeof p.text === 'string' && (p.text as string).trim())
-          .map((p) => p.text as string)
-          .join('\n')
-          .trim()
-        if (text) {
-          snippet = text.length > 4000 ? text.slice(-4000) : text
-          break
+      const { stripInjectedBlocks } = await import('./reasoning-heal')
+      type LooseList = Array<{
+        info?: Record<string, unknown>
+        parts?: Array<Record<string, unknown>>
+      }>
+      const loadTail = async (): Promise<LooseList> => {
+        const tail = await recentSessionMessages(sessionId, 50)
+        return (tail?.messages ?? []) as LooseList
+      }
+      const msgIdOf = (m: LooseList[number]): string | undefined =>
+        (m.info as { id?: string } | undefined)?.id
+      const createdOf = (m: LooseList[number]): number =>
+        (m.info as { time?: { created?: number } } | undefined)?.time?.created ?? 0
+      let msgs = await loadTail()
+      // 1) run.messageId 직접 앵커 (DB 커밋 race면 1초 쉬고 한 번만 재조회)
+      let anchor = opts.triggerMessageId
+      if (anchor && !msgs.some((m) => msgIdOf(m) === anchor)) {
+        await new Promise((res) => setTimeout(res, 1000))
+        msgs = await loadTail()
+        if (!msgs.some((m) => msgIdOf(m) === anchor)) anchor = undefined
+      }
+      // 2) 시간 폴백: 스폰이 attach보다 먼저 돌면 messageId가 아직 없다.
+      // run 시작 이후 가장 늦은 assistant를 앵커로 쓴다.
+      if (!anchor) {
+        const since = (opts.startedAt ?? Date.now()) - 10_000
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i]!
+          if (((m.info ?? {}) as { role?: string }).role !== 'assistant') continue
+          if (createdOf(m) < since) break
+          anchor = msgIdOf(m)
+          if (anchor) {
+            logger.info(`Review spawn: anchor TIME-FALLBACK for /${commandName} (${anchor})`)
+            break
+          }
         }
       }
-    } catch {}
+      const anchorIdx = anchor ? msgs.findIndex((m) => msgIdOf(m) === anchor) : -1
+      if (anchorIdx < 0) {
+        logger.warn(`Review spawn: anchor MISS for /${commandName} (messageId ${opts.triggerMessageId ?? 'none'}) — snippet fallback`)
+        turnContext = await legacySnippet(msgs)
+      } else {
+        turnContext = assembleTurnContext(msgs, anchorIdx, stripInjectedBlocks)
+      }
+    } catch (e) {
+      logger.debug('Review turn context skipped:', e)
+    }
 
     const mode = autoApply ? 'BUILD' : 'PLAN'
     const modeRule = autoApply
@@ -436,7 +566,7 @@ export async function maybeSpawnReviewChild(opts: {
       `1. Re-read the ${kind} definition for "/${commandName}" and the repo state under ${directory}.\n` +
       `2. Evaluate whether the skill/command definition or memory needs an update based on this run.\n` +
       `3. ${applyStep}` +
-      (snippet ? `\nParent's last result (truncated):\n${snippet}` : '')
+      (turnContext ? `\nThis run's turn:\n${turnContext}` : '')
 
     const sendBody: Record<string, unknown> = {
       parts: [{ type: 'text', text: prompt }],
