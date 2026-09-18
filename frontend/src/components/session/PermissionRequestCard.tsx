@@ -14,12 +14,20 @@ interface PermissionRequestCardProps {
   onDismiss: (permissionID: string) => void
 }
 
-function getRulePattern(permission: Permission): string | null {
+function getRulePatterns(permission: Permission): string[] {
   const patterns = permission.patterns ?? permission.pattern
   const normalized = Array.isArray(patterns) ? patterns : patterns ? [patterns] : []
-  if (normalized.length > 0) return normalized[0]
-  const metadataValue = permission.metadata?.command ?? permission.metadata?.path ?? permission.metadata?.url
-  return typeof metadataValue === 'string' && metadataValue ? metadataValue : null
+  if (normalized.length > 0) return normalized
+  const metadata = (permission.metadata ?? {}) as Record<string, unknown>
+  const asString = (v: unknown): string[] => (typeof v === 'string' && v ? [v] : [])
+  return [
+    ...asString(metadata.command),
+    ...asString(metadata.path),
+    ...asString(metadata.url),
+    ...asString(metadata.filepath),
+    ...asString(metadata.parentDir),
+    ...asString(metadata.directory),
+  ]
 }
 
 function getPermissionTypeLabel(type: string): string {
@@ -82,9 +90,10 @@ export function PermissionRequestCard({
     try {
       await onRespond(permission.id, permission.sessionID, response)
       if (response === 'always' && repoId) {
-        const pattern = getRulePattern(permission)
+        // ask 패턴이 여러 개면 전부 룰로 저장한다 (외부 폴더 2곳 동시 요청 등).
+        // 서버가 중복은 기존 행으로 흡수하므로 그대로 보낸다.
         const type = permission.permission ?? permission.type
-        if (pattern) {
+        for (const pattern of getRulePatterns(permission)) {
           try {
             await createRule.mutateAsync({ repoId, permission: type, pattern })
           } catch (error) {
