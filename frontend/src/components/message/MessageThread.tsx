@@ -1,5 +1,6 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useEffect, useRef } from 'react'
 import { useSettings } from '@/hooks/useSettings'
+import { useAbortSession } from '@/hooks/useOpenCode'
 import { MessagePart } from './MessagePart'
 import { CornerDownLeft, Scissors, Eraser, X, Copy } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
@@ -8,6 +9,7 @@ import { MENTION_PATTERN } from '@/lib/promptParser'
 import { stripMemoryRecall } from '@/lib/stripRecall'
 import { formatChatTime } from '@/lib/chatTime'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { showToast } from '@/lib/toast'
 
 function getMessageTextContent(msg: MessageWithParts): string {
   return stripMemoryRecall(
@@ -76,7 +78,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID, invocations, onOpenCommandHistory }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID, invocations, onOpenCommandHistory, opcodeUrl }: MessageThreadProps) {
   // 윈도우는 SessionDetail이 단일 소유 (WINDOW_SIZE/windowStart).
   // 여기서 이중으로 자르면 "Show earlier"가 동작 안 하고 스크롤이 튄다.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -117,6 +119,35 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   // Generating 플레이스홀더만 그린다 (뒤에서 실시간 병합이 도는 느낌 제거).
   const { preferences } = useSettings()
   const sseOn = preferences?.sseStreaming ?? true
+  // bash 감시자: opencode가 timeout에 kill하지 못하고 running이 고착되면 턴을 중단한다.
+  // (opencode 기본 2분·최대 10분 강제 + grace 30초. 정상 종료분은 status가 바뀌어 스킵된다.)
+  // 표시 여부(SSE off 숨김)와 무관하게 여기서 감시한다.
+  const abortSession = useAbortSession(opcodeUrl, directory)
+  const watchdogFiredRef = useRef(new Set<string>())
+  useEffect(() => {
+    if (!messages || !sessionID) return
+    if (watchdogFiredRef.current.size > 1000) watchdogFiredRef.current.clear()
+    for (const m of messages) {
+      if (m.info.role !== 'assistant') continue
+      for (const p of m.parts ?? []) {
+        if ((p as { type?: string }).type !== 'tool') continue
+        const tool = (p as { tool?: string }).tool
+        if (tool !== 'bash' && tool !== 'shell' && tool !== 'terminal') continue
+        const st = (p as { state?: { status?: string; time?: { start?: number }; input?: { timeout?: number } } }).state
+        if (st?.status !== 'running') continue
+        const inputTimeout = typeof st.input?.timeout === 'number' && st.input.timeout > 0 ? st.input.timeout : 120_000
+        const timeoutMs = Math.min(inputTimeout, 600_000)
+        const start = st.time?.start ?? m.info.time?.created ?? 0
+        if (!start || Date.now() - start < timeoutMs + 30_000) continue
+        const pid = (p as { id?: string }).id ?? ''
+        const key = `${m.info.id}:${pid}`
+        if (watchdogFiredRef.current.has(key)) continue
+        watchdogFiredRef.current.add(key)
+        showToast.warning(`Bash timeout exceeded (${Math.round(timeoutMs / 1000)}s+) but still running — stopping the turn`, { duration: 6000 })
+        abortSession.mutate(sessionID)
+      }
+    }
+  }, [messages, sessionID, abortSession])
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">

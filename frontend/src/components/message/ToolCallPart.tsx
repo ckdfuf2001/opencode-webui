@@ -126,9 +126,11 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
       return [1000, 3000, 5000, 10000, 60000].includes(v) ? v : 1000
     } catch { return 1000 }
   })
+  // 표시용 타임아웃: 미지정 120000(opencode 기본 2분과 동일), 상한 600000(opencode 최대 10분).
+  // 실제 kill은 opencode가 하고, 실패 시 MessageThread 감시자가 턴을 중단한다.
   const ptyTimeoutMs = (() => {
     const t = (part.state.input as Record<string, unknown>)?.timeout as number | undefined
-    if (typeof t === 'number' && t > 0) return t
+    if (typeof t === 'number' && t > 0) return Math.min(t, 600000)
     return 120000
   })()
 

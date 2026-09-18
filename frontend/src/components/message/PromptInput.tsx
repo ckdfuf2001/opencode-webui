@@ -536,6 +536,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
 
   const handleModeToggle = () => {
     const newMode = currentMode === 'plan' ? 'build' : 'plan'
+    setSessionModeOverride(newMode)
     updateSettings({ mode: newMode })
   }
 
@@ -829,13 +830,28 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   // 전송 POST는 턴이 끝날 때까지 대기하므로 isPending = 생성 중 신호 (폴링보다 즉각적). abort 직후엔 강제로 숨긴다.
   const showStop = !abortedRecently && (hasActiveStream || sendPrompt.isPending)
 
-  const currentMode = preferences?.mode || 'build'
+  const prefMode = preferences?.mode || 'build'
+  // 세션 진입 시 이전 메시지 agent를 기본값으로 삼는다 (리뷰 자식=plan 등 세션 자체 모드 우선).
+  // 토글하면 세션 오버라이드로 고정 + 전역 설정에도 저장해 새 세션 기본값을 유지한다.
+  const [sessionModeOverride, setSessionModeOverride] = useState<string | null>(null)
+  useEffect(() => { setSessionModeOverride(null) }, [sessionID])
+  const normAgent = (a: unknown): string | null => (a === 'plan' ? 'plan' : a === 'build' ? 'build' : null)
+  const lastMsgAgent = (() => {
+    if (!messages) return null
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const info = messages[i]?.info as { role?: string; agent?: string } | undefined
+      if (info?.role === 'assistant') {
+        const a = normAgent(info?.agent)
+        if (a) return a
+      }
+    }
+    return null
+  })()
+  const sessionAgent = normAgent((session as unknown as { agent?: string } | undefined)?.agent)
+  const currentMode = sessionModeOverride ?? lastMsgAgent ?? sessionAgent ?? prefMode
   const modeColor = currentMode === 'plan' ? 'text-yellow-600 dark:text-yellow-500' : 'text-green-600 dark:text-green-500'
   const modeBg = currentMode === 'plan' ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-green-500/10 border-green-500/30'
-  // 세션 실제 agent (opencode가 내려주지만 스펙 타입에는 없음). 토글(다음 전송 제어)과
-  // 다르면 병기한다 — 리뷰 자식(plan)처럼 세션 agent가 따로 있는 경우를 가리기 위함.
-  const sessionAgent = (session as unknown as { agent?: string } | undefined)?.agent || null
-  const sessionAgentDiffers = !!sessionAgent && sessionAgent !== currentMode
+
 
 const sessionModel = session?.model?.providerID && session?.model?.id
     ? `${session.model.providerID}/${session.model.id}`
@@ -1047,14 +1063,6 @@ useEffect(() => {
           >
             {isBashMode ? 'BASH' : currentMode.toUpperCase()} 
           </button>
-          {sessionAgentDiffers && !isBashMode && (
-            <span
-              className="text-[10px] text-muted-foreground font-mono shrink-0"
-              title={`This session runs on '${sessionAgent}' agent. Toggle controls next sends.`}
-            >
-              ·{sessionAgent}
-            </span>
-          )}
 <div className="flex items-center space-x-2 min-w-0">
   <button
     onClick={onShowModelsDialog}
