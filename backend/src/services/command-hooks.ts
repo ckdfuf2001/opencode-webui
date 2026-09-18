@@ -309,10 +309,15 @@ export async function maybeSpawnReviewChild(opts: {
 
     // parentID로 진짜 하위 세션을 만든다 (기록은 비어 있고 /children에 연결).
     // fork는 그 지점까지의 대화 전체를 복제해서 리뷰 용도에 과하다.
+    // 타이틀에 리뷰 일시를 달아 목록에서 구분한다.
+    const now = new Date()
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const stamp = `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+    const reviewTitle = `[REVIEW] /${commandName} ${stamp}`
     const createRes = await fetch(`${base}/session?directory=${directoryParam}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ parentID: sessionId, title: `[REVIEW] /${commandName}` }),
+      body: JSON.stringify({ parentID: sessionId, title: reviewTitle }),
       signal: AbortSignal.timeout(30_000),
     })
     if (!createRes.ok) {
