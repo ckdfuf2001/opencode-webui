@@ -370,12 +370,9 @@ export async function maybeSpawnReviewChild(opts: {
       `3. ${applyStep}` +
       (snippet ? `\nParent's last result (truncated):\n${snippet}` : '')
 
-    // PLAN은 에이전트 이름에만 기대지 않고 쓰기 계열 도구를 직접 차단한다.
-    // agent 필드가 무시되고 기본 agent로 돌아도 파일을 못 고친다.
     const sendBody: Record<string, unknown> = {
       parts: [{ type: 'text', text: prompt }],
       agent: autoApply ? 'build' : 'plan',
-      ...(autoApply ? {} : { tools: { write: false, edit: false, patch: false, bash: false } }),
       ...(parentModel ? { model: parentModel } : {}),
     }
     const sendRes = await fetch(`${base}/session/${childId}/message?directory=${directoryParam}`, {
