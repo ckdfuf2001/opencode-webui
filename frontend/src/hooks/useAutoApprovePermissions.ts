@@ -12,9 +12,28 @@ const recentlyProcessed = new Set<string>()
 function globToRegex(pattern: string): RegExp {
   const escaped = pattern
     .split('**')
-    .map(segment => segment.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*'))
+    .map(segment =>
+      segment
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '[^/]*')
+        .replace(/\?/g, '[^/]'),
+    )
     .join('.*')
   return new RegExp(`^${escaped}$`)
+}
+
+/** 매칭용 정규화: 역슬래시→슬래시, \\?\ 제거, 후행 슬래시 제거(루트 제외) */
+function normalizeMatchValue(value: string): string {
+  let s = value.replace(/\\/g, '/')
+  s = s.replace(/^\/\/\?\//, '')
+  while (s.length > 1 && s.endsWith('/') && !/^[A-Za-z]:\/$/.test(s)) {
+    s = s.slice(0, -1)
+  }
+  return s
+}
+
+function isPathLike(value: string): boolean {
+  return value.includes('/') || value.includes('\\') || /^[A-Za-z]:/.test(value)
 }
 
 function getCandidatePatterns(permission: Permission): string[] {
@@ -35,11 +54,27 @@ function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
     // 하위 경로까지 허용: 룰이 prefix인 경우
     // 예: 룰 "/tmp/foo" → "/tmp/foo/bar" 허용, 룰 "npm run" → "npm run build" 허용
     if (rule.pattern === '*') return true
-    const normCandidate = candidate.replace(/\\/g, '/')
-    const normRule = rule.pattern.replace(/\\/g, '/')
+    // 경로형이면 대소문자 무시(Windows), 아니면 기존처럼 엄격 비교
+    const pathLike = isPathLike(rule.pattern) || isPathLike(candidate)
+    let normCandidate = normalizeMatchValue(candidate)
+    let normRule = normalizeMatchValue(rule.pattern)
+    if (pathLike) {
+      normCandidate = normCandidate.toLowerCase()
+      normRule = normRule.toLowerCase()
+    }
+    // 슬래시 정규화 후 glob 재검사 (룰 '/'형 vs 후보 '\'형 엇갈림 해소)
+    if (normRule !== rule.pattern && globToRegex(normRule).test(normCandidate)) return true
     if (normCandidate === normRule) return true
     if (normCandidate.startsWith(normRule + '/')) return true
     if (normCandidate.startsWith(normRule + ' ')) return true
+    // 후행 스타 베이스: 'C:/work/*', 'git status *' → 베이스 prefix.
+    // (' *'는 인자 없는 명령도 매칭 — opencode와 동일)
+    const starBase = normRule.match(/^(.*?)[/ ]\*+$/)?.[1].replace(/\/+$/, '')
+    if (starBase) {
+      if (normCandidate === starBase) return true
+      if (normCandidate.startsWith(starBase + '/')) return true
+      if (normCandidate.startsWith(starBase + ' ')) return true
+    }
     return false
   })
 }

@@ -73,4 +73,65 @@ describe('ruleMatches', () => {
       ruleMatches(rule({ permission: 'read', pattern: 'C:/work' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'C:\\work\\a.txt' }),
     ).toBe(true)
   })
+
+  it('ignores case for path-like rules (Windows)', () => {
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'c:\\work' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:\\Work\\a.txt' }),
+    ).toBe(true)
+  })
+
+  it('trims trailing separators from rules and candidates', () => {
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'C:/work/' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:/work/a.txt' }),
+    ).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'C:\\work\\' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:\\work\\a.txt' }),
+    ).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'C:/work' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:/work/' }),
+    ).toBe(true)
+  })
+
+  it('strips extended-length \\\\?\\ prefix', () => {
+    expect(
+      ruleMatches(rule({ permission: 'read', pattern: 'C:\\work' }), { id: 'x', sessionID: 's', permission: 'read', pattern: '\\\\?\\C:\\work\\a.txt' }),
+    ).toBe(true)
+  })
+
+  it('trailing star covers base and subtree (slash or space before star)', () => {
+    const deep = { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:\\work\\a\\b.txt' }
+    expect(ruleMatches(rule({ permission: 'edit', pattern: 'C:\\work\\*' }), deep)).toBe(true)
+    expect(ruleMatches(rule({ permission: 'edit', pattern: 'C:/work/*' }), deep)).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'C:/work/*' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:/work' }),
+    ).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'bash', pattern: 'git status *' }), { id: 'x', sessionID: 's', permission: 'bash', pattern: 'git status' }),
+    ).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'bash', pattern: 'git status *' }), { id: 'x', sessionID: 's', permission: 'bash', pattern: 'git status --short' }),
+    ).toBe(true)
+  })
+
+  it('does not leak siblings or glob-extensions via prefix', () => {
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'C:/work' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:/work2/a.txt' }),
+    ).toBe(false)
+    // '*.ts'는 직계만 허용 — 하위 디렉터리로 번지지 않는다
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'C:/work/*.ts' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:/work/sub/a.ts' }),
+    ).toBe(false)
+    expect(
+      ruleMatches(rule({ permission: 'edit', pattern: 'C:/work/*.ts' }), { id: 'x', sessionID: 's', permission: 'edit', pattern: 'C:/work/a.ts' }),
+    ).toBe(true)
+  })
+
+  it('treats ? as single-char wildcard', () => {
+    expect(
+      ruleMatches(rule({ permission: 'read', pattern: 'file?.txt' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'file1.txt' }),
+    ).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'read', pattern: 'file?.txt' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'file.txt' }),
+    ).toBe(false)
+  })
 })
