@@ -194,12 +194,18 @@ function rememberLocation(id: string, dir: string): void {
   locationCache.set(id, dir)
 }
 
+/** 조회 전용: updateInDir identity 조회는 변경 없음에도 전월 파일을 전부 읽는다. */
+async function findInDir(dir: string, id: string): Promise<CommandRun | null> {
+  const runs = await listFromDir(dir, (r) => r.id === id)
+  return runs[0] ?? null
+}
+
 async function locateDir(db: Database, id: string): Promise<string | null> {
   const cached = locationCache.get(id)
   if (cached) return cached
 
   for (const dir of candidateDirs(db)) {
-    const found = await updateInDir(dir, id, (r) => r)
+    const found = await findInDir(dir, id)
     if (found) {
       rememberLocation(id, dir)
       return dir

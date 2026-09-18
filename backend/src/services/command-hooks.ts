@@ -278,12 +278,23 @@ export async function maybeSpawnReviewChild(opts: {
   } catch {}
   let autoReview = opts.reviewWanted ?? false
   let autoApply = opts.autoApply ?? false
+  let repoReviewDef: boolean | undefined
+  let repoAutoDef: boolean | undefined
   try {
     if (opts.db && repoId != null) {
       if (opts.reviewWanted === undefined) autoReview = getSkillAutoReview(opts.db, repoId)
       if (opts.autoApply === undefined) autoApply = getSkillAutoUpdate(opts.db, repoId)
+      repoReviewDef = getSkillAutoReview(opts.db, repoId)
+      repoAutoDef = getSkillAutoUpdate(opts.db, repoId)
     }
   } catch {}
+  // 판정 추적: 스냅샷 유실인지 레포 설정인지 여기서 갈린다
+  logger.info(
+    `Review spawn decision /${commandName} (session ${sessionId}): ` +
+      `autoApply=${autoApply} (snapshot=${opts.autoApply === undefined ? 'inherit' : String(opts.autoApply)}, repoAuto=${repoAutoDef === undefined ? 'n/a' : repoAutoDef}), ` +
+      `autoReview=${autoReview} (snapshot=${opts.reviewWanted === undefined ? 'inherit' : String(opts.reviewWanted)}, repoReview=${repoReviewDef === undefined ? 'n/a' : repoReviewDef}) ` +
+      `-> agent=${autoApply ? 'build' : 'plan'}`,
+  )
   if (!autoReview) {
     logger.debug(`Review spawn skipped for /${commandName}: autoReview off (run override ${String(opts.reviewWanted)}, repo ${repoId})`)
     return null
