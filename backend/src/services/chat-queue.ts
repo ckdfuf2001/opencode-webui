@@ -841,7 +841,9 @@ async function dispatchQueuedChat(
         argsWithProtocol = `${recall}${argsWithProtocol}`
         slashRecall = recall
       }
-      // command 이력 기록 시작 — 완료/실패는 아래에서 finish, 리뷰·스킬체크는 post 훅에서 처리
+      // command 이력 기록 시작 — 완료/실패는 아래에서 finish, 리뷰·스킬체크는 post 훅에서 처리.
+      // 후크 이벤트(command.executed)가 뒤따라오면 라우트가 messageID 시각으로
+      // 같은 실행을 찾아 붙인다 (중복 행 없음).
       let runId: string | null = null
       try {
         if (queueDb) {

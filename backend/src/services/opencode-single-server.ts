@@ -7,6 +7,7 @@ import { logger } from '../utils/logger'
 import { getWorkspacePath, getOpenCodeConfigFilePath, getConfigPath, ENV } from '@opencode-webui/shared'
 import { getServerAuthHeader } from './opencode-auth'
 import { agentBrowserEnv } from './default-mcp'
+import { webuiHookEnv, ensureWebuiPlugin } from './webui-plugin'
 
 let preferredOpenCodeBin: string | null = null
 let cachedBinary: string | null | undefined
@@ -302,6 +303,10 @@ class OpenCodeServerManager {
     else logger.info(`OpenCode GOMEMLIMIT unset (no soft limit) — set GOMEMLIMIT=2GiB in .env to limit to 2GB`)
     logger.info(`Launching OpenCode server on port ${port} (resolved binary: ${binPath})`)
 
+    // 후크 플러그인 등록 보장 — UI에서 지웠어도 스폰 시 복구된다
+    try {
+      ensureWebuiPlugin()
+    } catch {}
     const isKnownPath = path.isAbsolute(binPath) && existsSync(binPath)
     this.serverProcess = spawn(
       binPath,
@@ -315,6 +320,8 @@ class OpenCodeServerManager {
           ...process.env,
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
           OPENCODE_CONFIG_DIR: getConfigPath(),
+          // 후크 플러그인 → 백엔드 콜백 주소. 외부 서버에는 없어 플러그인이 스스로 쉰다.
+          ...webuiHookEnv(),
           // agent-browser 단일 데몬 보장: MCP entry env는 opencode가 전달하지
           // 않으므로 서버 env 상속으로 네임스페이스·실행파일·지문을 통일한다.
           ...agentBrowserEnv(),

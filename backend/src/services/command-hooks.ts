@@ -67,6 +67,8 @@ export function getRecentHookCalls(): CommandHookCall[] {
   return [...recentCalls]
 }
 
+
+
 /**
  * 리뷰 자식 세션 ID → 생성 시각 — 여기서 실행된 커맨드는 다시 리뷰를 낳지
  * 않는다 (루프 가드). add만 있고 정리 경로가 없어 무한 누적되므로 TTL(24h) +

@@ -24,6 +24,7 @@ import { createSearchRoutes } from './routes/search'
 import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
 import { createChatQueueRoutes } from './routes/chat-queue'
+import { createCommandHooksRoutes } from './routes/command-hooks'
 import { createMcpRoutes } from './routes/mcp'
 import { createSystemRoutes } from './routes/system'
 import { createExposeRoutes, createPublicExposeRoutes } from './routes/expose'
@@ -286,6 +287,7 @@ app.route('/api/command-runs', createCommandRunRoutes(db))
 app.route('/api/search', createSearchRoutes(db))
   app.route('/api/session-status', createSessionStatusRoutes(db))
   app.route('/api/chat-queue', createChatQueueRoutes())
+  app.route('/api/command-hooks', createCommandHooksRoutes(db))
   app.route('/api/mcp', createMcpRoutes(db))
   app.route('/api/system', createSystemRoutes(db))
   app.route('/api/expose', createExposeRoutes(db))
@@ -565,3 +567,12 @@ startGitCommitIndexer(db)
 logger.info('Git commit indexer started')
 
 startAutomationWatcher()
+
+// opencode 후크 플러그인 등록 — 스폰되는 모든 서버에 자동 적용된다 (dev·portable·docker 공통).
+// 플러그인은 관측만 하고 판단은 백엔드가 한다.
+try {
+  const { ensureWebuiPlugin } = await import('./services/webui-plugin')
+  ensureWebuiPlugin()
+} catch (e) {
+  logger.warn('WebUI hooks plugin ensure skipped:', e)
+}

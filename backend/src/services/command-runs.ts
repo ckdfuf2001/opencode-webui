@@ -292,15 +292,27 @@ export async function attachMessage(db: Database, id: string, messageId: string)
   await store.updateMessage(db, id, messageId)
 }
 
+/**
+ * 중복 finish 가드 — 큐 HTTP 응답 경로와 후크 이벤트 경로가 같은 run을
+ * 끝내려 할 때 post 훅(리뷰 스폰 등)이 두 번 도는 것을 막는다.
+ * 단일 프로세스이므로 Set 선점으로 원자성을 보장한다.
+ */
+const finishingRuns = new Set<string>()
+
 export async function finishRun(
   db: Database,
   id: string,
   status: Exclude<CommandRunStatus, 'started'>,
 ): Promise<void> {
-  const run = await store.getRunById(db, id)
-  await store.markFinished(db, id, status)
-  if (run) {
+  if (finishingRuns.has(id)) return
+  finishingRuns.add(id)
+  try {
+    const run = await store.getRunById(db, id)
+    if (!run || run.status !== 'started') return
+    await store.markFinished(db, id, status)
     firePostCommandHooks(run, status, db)
+  } finally {
+    finishingRuns.delete(id)
   }
 }
 
