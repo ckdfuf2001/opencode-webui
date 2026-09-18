@@ -67,6 +67,42 @@ export function getRecentHookCalls(): CommandHookCall[] {
   return [...recentCalls]
 }
 
+/**
+ * 발송 스냅샷 — 큐는 전송만 하고 run 기록은 후크에 맡기므로,
+ * 세션 오버라이드(reviewWanted/autoApply)를 후크가 읽을 수 있게 남긴다.
+ * 후크가 run을 만들 때 이름이 맞으면 스냅샷을 그대로 싣는다 (peek, TTL 소멸).
+ */
+export interface DispatchContext {
+  commandName: string
+  origin: 'chat'
+  reviewWanted?: boolean
+  autoApply?: boolean
+}
+
+const DISPATCH_CONTEXT_TTL_MS = 600_000
+const dispatchContexts = new Map<string, { ctx: DispatchContext; at: number }>()
+
+export function setDispatchContext(sessionId: string, ctx: DispatchContext): void {
+  if (dispatchContexts.size > 500) {
+    const now = Date.now()
+    for (const [k, v] of dispatchContexts) {
+      if (now - v.at > DISPATCH_CONTEXT_TTL_MS) dispatchContexts.delete(k)
+    }
+  }
+  dispatchContexts.set(sessionId, { ctx, at: Date.now() })
+}
+
+export function peekDispatchContext(sessionId: string, commandName: string): DispatchContext | null {
+  const v = dispatchContexts.get(sessionId)
+  if (!v) return null
+  if (Date.now() - v.at > DISPATCH_CONTEXT_TTL_MS) {
+    dispatchContexts.delete(sessionId)
+    return null
+  }
+  if (v.ctx.commandName !== commandName) return null
+  return v.ctx
+}
+
 
 
 /**

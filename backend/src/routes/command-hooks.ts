@@ -102,19 +102,23 @@ async function handleCommandExecuted(
   } catch (e) {
     logger.debug('Hook correlation skipped:', e)
   }
-  // 상관 실패 = 진짜 새 실행(TUI 등): 새로 기록하고 턴 결과로 finish
+  // 상관 실패 = 진짜 새 실행(TUI 등): 새로 기록하고 턴 결과로 finish.
+  // 큐 발송분이면 남겨둔 스냅샷(세션 오버라이드)을 싣는다.
   const directory = await fetchSessionDirectory(sessionID)
-  const { resolveCommandKind } = await import('../services/command-hooks')
+  const { resolveCommandKind, peekDispatchContext } = await import('../services/command-hooks')
   const { recordRunStartSafe, resolveRepoId, finishRunSafe } = await import('../services/command-runs')
   const kind = resolveCommandKind(directory, name)
+  const snap = peekDispatchContext(sessionID, name)
   const run = await recordRunStartSafe(db, {
     sessionId: sessionID,
     commandName: name,
     args: args.trim() || null,
     directory,
     repoId: directory ? resolveRepoId(db, directory) : null,
-    origin: 'ui',
+    origin: snap?.origin ?? 'ui',
     kind,
+    ...(snap?.reviewWanted !== undefined ? { reviewWanted: snap.reviewWanted } : {}),
+    ...(snap?.autoApply !== undefined ? { autoApply: snap.autoApply } : {}),
   })
   if (!run) return
   if (messageID) {
@@ -152,7 +156,7 @@ async function handleSessionIdle(db: Database, sessionID: string): Promise<void>
   if (fresh.length === 0) return
 
   const directory = await fetchSessionDirectory(sessionID)
-  const { resolveCommandKind } = await import('../services/command-hooks')
+  const { resolveCommandKind, peekDispatchContext } = await import('../services/command-hooks')
   const { recordRunStartSafe, resolveRepoId, finishRunSafe, attachMessage } = await import('../services/command-runs')
   for (const m of fresh) {
     const parts = (m as { parts?: Array<Record<string, unknown>> }).parts ?? []
@@ -171,14 +175,17 @@ async function handleSessionIdle(db: Database, sessionID: string): Promise<void>
       } catch {}
       if (dup) continue
       const msgId = (m.info as { id?: string } | undefined)?.id
+      const snap = peekDispatchContext(sessionID, skillName)
       const run = await recordRunStartSafe(db, {
         sessionId: sessionID,
         commandName: skillName,
         args: null,
         directory,
         repoId: directory ? resolveRepoId(db, directory) : null,
-        origin: 'auto',
+        origin: snap?.origin ?? 'auto',
         kind: resolveCommandKind(directory, skillName),
+        ...(snap?.reviewWanted !== undefined ? { reviewWanted: snap.reviewWanted } : {}),
+        ...(snap?.autoApply !== undefined ? { autoApply: snap.autoApply } : {}),
       })
       if (!run) continue
       if (msgId) {
