@@ -136,6 +136,40 @@ function toolStepDetail(part: Part): string {
   return ''
 }
 
+function renderTodoRow(todo: SessionTodo) {
+  return (
+    <div key={todo.id} className="flex items-center gap-1.5 text-[11px] text-muted-foreground" title={`${todo.status} · ${todo.priority}`}>
+      {todo.status === 'completed' ? (
+        <CheckCircle2 className="w-3 h-3 flex-shrink-0 text-green-500" />
+      ) : todo.status === 'in_progress' ? (
+        <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin text-amber-500" />
+      ) : todo.status === 'cancelled' ? (
+        <XCircle className="w-3 h-3 flex-shrink-0 text-zinc-500" />
+      ) : (
+        <Circle className="w-3 h-3 flex-shrink-0 text-zinc-400" />
+      )}
+      <span className={`truncate ${todo.status === 'completed' ? 'line-through opacity-70' : ''}`}>{todo.content}</span>
+    </div>
+  )
+}
+
+function renderToolRow(step: RunStep, i: number) {
+  return (
+    <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground" title={`${step.tool} · ${step.status}${step.detail ? ` — ${step.detail}` : ''}`}>
+      {step.status === 'completed' ? (
+        <CheckCircle2 className="w-3 h-3 flex-shrink-0 text-green-500" />
+      ) : step.status === 'error' ? (
+        <XCircle className="w-3 h-3 flex-shrink-0 text-red-500" />
+      ) : step.status === 'running' ? (
+        <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin text-amber-500" />
+      ) : (
+        <Wrench className="w-3 h-3 flex-shrink-0" />
+      )}
+      <span className="truncate">{step.tool}{step.detail ? <span className="opacity-80"> — {step.detail}</span> : null}</span>
+    </div>
+  )
+}
+
 function assistantSteps(message: MessageWithParts): RunStep[] {
   return message.parts
     .filter((p) => p.type === 'tool')
@@ -1144,6 +1178,8 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
   const { data: config } = useConfig(opcodeUrl, directory)
   const [tab, setTab] = useState<'runs' | 'explorer' | 'recall'>('runs')
   const [expanded, setExpanded] = useState<Record<string, { steps: boolean; response: boolean }>>({})
+  // Steps 내 탭 (to-do / tool-call). 있는 쪽만 보여주고 기본은 to-do 우선.
+  const [stepsTab, setStepsTab] = useState<Record<string, 'todos' | 'tools'>>({})
   const [createOpen, setCreateOpen] = useState(false)
   const [createType, setCreateType] = useState<ExplorerResourceType>('command')
   const [editing, setEditing] = useState<EditingEntry | null>(null)
@@ -2017,58 +2053,63 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
                               }}
                               className="w-full flex items-center justify-between px-2.5 py-1.5 text-left hover:bg-muted/40"
                             >
-                              <span className="text-[11px] font-medium text-foreground">Steps{(todosBySession[entry.sessionID]?.length ?? 0) > 0 ? ` (${todosBySession[entry.sessionID]?.length})` : run.steps.length > 0 ? ` (${run.steps.length})` : ''}</span>
+                              <span className="text-[11px] font-medium text-foreground">Steps{(() => {
+                                const bits: string[] = []
+                                if ((todosBySession[entry.sessionID]?.length ?? 0) > 0) bits.push(`todo ${todosBySession[entry.sessionID]!.length}`)
+                                if (run.steps.length > 0) bits.push(`tool ${run.steps.length}`)
+                                return bits.length > 0 ? ` (${bits.join(' · ')})` : ''
+                              })()}</span>
                               <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${stepsOpen ? '' : '-rotate-90'}`} />
                             </button>
-                            {stepsOpen && (
+                            {stepsOpen && (() => {
+                              const todos = todosBySession[entry.sessionID] ?? []
+                              const tools = run.steps
+                              const hasTodos = todos.length > 0
+                              const hasTools = tools.length > 0
+                              const tab = stepsTab[run.id] ?? (hasTodos ? 'todos' : 'tools')
+                              const setTab = (t: 'todos' | 'tools') => setStepsTab((p) => ({ ...p, [run.id]: t }))
+                              const tabBtn = (t: 'todos' | 'tools', label: string, n: number) => (
+                                <button
+                                  key={t}
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setTab(t) }}
+                                  className={`px-2 py-0.5 rounded text-[10px] ${tab === t ? 'bg-primary/15 text-primary font-medium' : 'text-muted-foreground hover:bg-muted'}`}
+                                >
+                                  {label} ({n})
+                                </button>
+                              )
+                              return (
                               <div className="px-2.5 pb-2 space-y-1">
                                 {!run.messagesLoaded ? (
                                   <p className="text-[11px] text-muted-foreground animate-pulse flex items-center gap-1.5">
                                     <Loader2 className="w-3 h-3 animate-spin" />
                                     Loading conversation...
                                   </p>
-                                ) : (todosBySession[entry.sessionID]?.length ?? 0) > 0 ? (
-                                  todosBySession[entry.sessionID]!.map((todo) => (
-                                    <div key={todo.id} className="flex items-center gap-1.5 text-[11px] text-muted-foreground" title={`${todo.status} · ${todo.priority}`}>
-                                      {todo.status === 'completed' ? (
-                                        <CheckCircle2 className="w-3 h-3 flex-shrink-0 text-green-500" />
-                                      ) : todo.status === 'in_progress' ? (
-                                        <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin text-amber-500" />
-                                      ) : todo.status === 'cancelled' ? (
-                                        <XCircle className="w-3 h-3 flex-shrink-0 text-zinc-500" />
-                                      ) : (
-                                        <Circle className="w-3 h-3 flex-shrink-0 text-zinc-400" />
-                                      )}
-                                      <span className={`truncate ${todo.status === 'completed' ? 'line-through opacity-70' : ''}`}>{todo.content}</span>
+                                ) : hasTodos && hasTools ? (
+                                  <>
+                                    <div className="flex items-center gap-1">
+                                      {tabBtn('todos', 'To-dos', todos.length)}
+                                      {tabBtn('tools', 'Tool calls', tools.length)}
                                     </div>
-                                  ))
+                                    {tab === 'todos' ? todos.map(renderTodoRow) : tools.map(renderToolRow)}
+                                  </>
+                                ) : hasTodos ? (
+                                  todos.map(renderTodoRow)
+                                ) : hasTools ? (
+                                  tools.map(renderToolRow)
                                 ) : todosLoading[entry.sessionID] ? (
                                   <p className="text-[11px] text-muted-foreground animate-pulse flex items-center gap-1.5">
                                     <Loader2 className="w-3 h-3 animate-spin" />
                                     Loading to-dos...
                                   </p>
-                                ) : run.steps.length > 0 ? (
-                                  run.steps.map((step, i) => (
-                                    <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground" title={`${step.tool} · ${step.status}${step.detail ? ` — ${step.detail}` : ''}`}>
-                                      {step.status === 'completed' ? (
-                                        <CheckCircle2 className="w-3 h-3 flex-shrink-0 text-green-500" />
-                                      ) : step.status === 'error' ? (
-                                        <XCircle className="w-3 h-3 flex-shrink-0 text-red-500" />
-                                      ) : step.status === 'running' ? (
-                                        <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin text-amber-500" />
-                                      ) : (
-                                        <Wrench className="w-3 h-3 flex-shrink-0" />
-                                      )}
-                                      <span className="truncate">{step.tool}{step.detail ? <span className="opacity-80"> — {step.detail}</span> : null}</span>
-                                    </div>
-                                  ))
                                 ) : run.status === 'running' ? (
                                   <p className="text-[11px] text-muted-foreground animate-pulse">Executing steps...</p>
                                 ) : (
                                   <p className="text-[11px] text-muted-foreground">(no steps)</p>
                                 )}
                               </div>
-                            )}
+                              )
+                            })()}
                           </div>
                         )}
 
