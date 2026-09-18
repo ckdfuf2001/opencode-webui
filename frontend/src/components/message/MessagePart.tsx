@@ -22,6 +22,8 @@ interface MessagePartProps {
   messageTextContent?: string
   directory?: string
   messageStreaming?: boolean
+  /** 커맨드/스킬 호출 정보 — user 메시지의 첫 텍스트 파트만 블록으로 그린다 */
+  invocation?: { name: string; args: string | null }
 }
 
 function getCopyableContent(part: Part, allParts?: Part[]): string {
@@ -195,7 +197,7 @@ function FileMention({  part,
 
 
 
-export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, messageStreaming }: MessagePartProps) {
+export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, messageStreaming, invocation }: MessagePartProps) {
   const { preferences } = useSettings()
   const showReasoning = preferences?.showReasoning ?? true
   const copyableContent = getCopyableContent(part, allParts)
@@ -203,11 +205,20 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
   switch (part.type) {
     case 'text': {
       const text = part.text || ''
-      // 스킬 호출(`/스킬 인자` + skill-template 마커)은 칩 + 접힘 md 블록으로 그린다
-      if (role === 'user') {
+      // 스킬/커맨드 호출은 칩 + 접힘 md 블록으로 그린다.
+      // skill-template 마커가 있으면 템플릿만 본문으로, 아니면 run 이력의 호출 정보로 전체를 감싼다.
+      if (role === 'user' && partIndex === 0) {
         const skill = parseSkillInvocation(text)
         if (skill) {
           return <SkillInvocationBlock name={skill.name} args={skill.args} body={skill.body} part={part} />
+        }
+        if (invocation) {
+          const body = (allParts ?? [])
+            .filter((p) => p.type === 'text')
+            .map((p) => (p as { text?: string }).text || '')
+            .join('\n\n')
+            .trim() || text
+          return <SkillInvocationBlock name={invocation.name} args={invocation.args ?? ''} body={body} part={part} summaryLabel="Command" />
         }
       }
       if (role === 'user' && allParts && partIndex !== undefined) {

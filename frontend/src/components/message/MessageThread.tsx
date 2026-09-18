@@ -60,6 +60,8 @@ interface MessageThreadProps {
   onCancelEdit?: () => void
   highlightedMessageID?: string | null
   isLoading?: boolean
+  /** 메시지id → 스킬/커맨드 호출 정보 (user 첫 텍스트 파트를 블록으로 그린다) */
+  invocations?: Map<string, { name: string; args: string | null }>
 }
 
 export const isMessageStreaming = (msg: MessageWithParts): boolean => {
@@ -72,7 +74,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID, invocations }: MessageThreadProps) {
   // 윈도우는 SessionDetail이 단일 소유 (WINDOW_SIZE/windowStart).
   // 여기서 이중으로 자르면 "Show earlier"가 동작 안 하고 스크롤이 튄다.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -272,6 +274,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                           messageTextContent={assistantText}
                           directory={directory}
                           messageStreaming={streaming}
+                          invocation={msg.info.role === 'user' ? invocations?.get(msg.info.id) : undefined}
                         />
                       </div>
                     ))

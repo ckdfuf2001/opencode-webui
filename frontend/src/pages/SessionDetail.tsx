@@ -37,6 +37,7 @@ import { useContextUsage, markSessionCompacted } from "@/hooks/useContextUsage";
 import type { CommandWithScope } from "@/hooks/useCommands";
 import { Loader2 } from "lucide-react";
 import type { PermissionResponse, MessageWithParts, MessageListResponse } from "@/api/types";
+import { useCommandRunsBySession } from "@/hooks/useCommandRuns";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
 import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
@@ -219,6 +220,46 @@ export function SessionDetail() {
   // scrollToMessage(콜백)에서 최신 목록을 읽기 위한 미러
   const baseMessagesRef = useRef(baseMessages);
   useEffect(() => { baseMessagesRef.current = baseMessages; }, [baseMessages]);
+  // 스킬/커맨드 호출 표시: run 이력의 trigger user 메시지를 찾아
+  // `/이름 인자` 칩 + 접힘 md 블록으로 그린다.
+  // - origin=auto(NL로 모델이 알아서 실행)는 제외: 마커 기반 표시만 쓴다
+  // - trigger 판정: 인자가 본문에 들어있는 메시지를 우선, 없으면 시작 직전 가장 늦은 메시지.
+  //   큐 지연발송 때문에 trigger는 startedAt보다 먼저 생긴다 (상한만 +60s로 둬 낙관 메시지를 제외).
+  const { data: sessionRuns } = useCommandRunsBySession(sessionId ?? '');
+  const invocationByMessage = useMemo(() => {
+    const map = new Map<string, { name: string; args: string | null }>();
+    if (!sessionRuns || !baseMessages) return map;
+    const taken = new Set<string>();
+    const userMsgs = baseMessages.filter((m) => {
+      if (m.info.role !== 'user') return false;
+      if (!m.parts || m.parts.length === 0) return false;
+      if (m.parts.every((p) => (p as { synthetic?: boolean }).synthetic)) return false;
+      return true;
+    });
+    const msgText = (m: MessageWithParts): string =>
+      m.parts
+        .filter((p) => p.type === 'text')
+        .map((p) => (p as { text?: string }).text || '')
+        .join('\n');
+    const ordered = [...sessionRuns].sort((a, b) => a.startedAt - b.startedAt);
+    for (const run of ordered) {
+      if (!run.commandName) continue;
+      if (run.origin === 'auto') continue;
+      const cands = userMsgs.filter((m) => {
+        if (taken.has(m.info.id)) return false;
+        return (m.info.time?.created ?? 0) <= run.startedAt + 60_000;
+      });
+      if (cands.length === 0) continue;
+      let best = cands[cands.length - 1]!;
+      if (run.args) {
+        const hit = [...cands].reverse().find((m) => msgText(m).includes(run.args!));
+        if (hit) best = hit;
+      }
+      taken.add(best.info.id);
+      map.set(best.info.id, { name: run.commandName, args: run.args });
+    }
+    return map;
+  }, [sessionRuns, baseMessages]);
   // 길이 변화 처리: 대량 감소(컴팩트/트렁케이트) → 하단 고정,
   // ON이면 새 메시지가 오면 히스토리 열람 중이라도 최신으로 복귀 + 핀.
   // OFF면 내가 보낸 턴만 하단 고정, 나머지는 화면 유지.
@@ -1549,6 +1590,7 @@ if (results.length > 0) {
                 hiddenAfterID={hiddenAfterID}
                 onCancelEdit={handleCancelEdit}
                 highlightedMessageID={highlightedMessageID}
+                invocations={invocationByMessage}
               />
             )}
             {currentQuestion && (
