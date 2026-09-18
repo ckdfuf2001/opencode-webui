@@ -239,8 +239,8 @@ export function firePostCommandHooks(
 
 /**
  * 자동 리뷰: 스킬/커맨드 완료 후 리뷰 자식 세션을 생성한다.
- * - 부모 마지막 메시지에서 fork해 진짜 하위 세션으로 만든다 (기록 공유 + /children 연결).
- *   fork 불가 때만 빈 세션을 만든다.
+ * - parentID로 진짜 하위 세션을 만든다 (기록은 비어 있고 /children 연결).
+ *   마지막 결과 요약만 프롬프트에 실어 보낸다.
  * - 자동 리뷰 OFF → null (부모 채팅의 skill-memory-check가 대신 동작).
  * - 성공 시에만 생성 (실패 턴은 부모에서 재시도/정리 대상).
  * - 자식 세션에서 실행된 커맨드는 다시 리뷰를 낳지 않는다.
@@ -265,7 +265,7 @@ export async function maybeSpawnReviewChild(opts: {
   db?: Database
 }): Promise<string | null> {
   const { sessionId, directory, commandName, kind, status } = opts
-  if (reviewSessions.has(sessionId)) return null
+  if (isReviewSession(sessionId)) return null
   if (status !== 'completed') return null
   if (!directory) return null
 
@@ -296,79 +296,60 @@ export async function maybeSpawnReviewChild(opts: {
     const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
     const directoryParam = encodeURIComponent(directory)
 
-    // 부모 메시지 1회 조회 — fork 앵커(마지막 메시지) + 폴백용 스니펫에 함께 쓴다
-    let parentMessages: Array<{ info?: { id?: string; role?: string }; parts?: Array<{ type?: string; text?: string }> }> = []
+    // parentID로 진짜 하위 세션을 만든다 (기록은 비어 있고 /children에 연결).
+    // fork는 그 지점까지의 대화 전체를 복제해서 리뷰 용도에 과하다.
+    const createRes = await fetch(`${base}/session?directory=${directoryParam}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ parentID: sessionId, title: `[REVIEW] /${commandName}` }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!createRes.ok) {
+      logger.warn(`Review spawn: session create failed HTTP ${createRes.status} for /${commandName}`)
+      return null
+    }
+    const child = (await createRes.json()) as { id?: string }
+    if (!child?.id) return null
+    const childId = child.id
+    rememberReviewSession(childId)
+
+    // 빈 자식은 서버 기본 모델을 물려받는다 (fork처럼 부모 모델이 안 이어진다).
+    // 부모 모델을 읽어 명시 전달 — 아니면 이미지 모델 같은 기본값이 리뷰를 망친다.
+    let parentModel: { providerID: string; modelID: string } | undefined
     try {
-      const msgRes = await fetch(`${base}/session/${sessionId}/message?directory=${directoryParam}`, {
+      const infoRes = await fetch(`${base}/session/${sessionId}?directory=${directoryParam}`, {
         headers: ensureServerAuth({}),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(15_000),
       })
-      if (msgRes.ok) parentMessages = (await msgRes.json()) as typeof parentMessages
+      if (infoRes.ok) {
+        const info = (await infoRes.json()) as { model?: { providerID?: string; id?: string } }
+        if (info?.model?.providerID && info?.model?.id) {
+          parentModel = { providerID: info.model.providerID, modelID: info.model.id }
+        }
+      }
     } catch {}
 
-    let childId: string | null = null
-    // 1) fork 시도 — 진짜 하위 세션 (기록 공유 + /children 연결).
-    // 모델·에이전트도 부모를 물려받아 크로스모델 mismatch를 피한다.
-    const lastMsgId = [...parentMessages].reverse().find((m) => typeof m?.info?.id === 'string')?.info?.id
-    if (lastMsgId) {
-      try {
-        const forkRes = await fetch(`${base}/session/${sessionId}/fork?directory=${directoryParam}`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ messageID: lastMsgId }),
-          signal: AbortSignal.timeout(30_000),
-        })
-        if (forkRes.ok) {
-          const forked = (await forkRes.json()) as { id?: string }
-          if (forked?.id) {
-            childId = forked.id
-            try {
-              await fetch(`${base}/session/${childId}?directory=${directoryParam}`, {
-                method: 'PATCH',
-                headers,
-                body: JSON.stringify({ title: `[REVIEW] /${commandName}` }),
-                signal: AbortSignal.timeout(15_000),
-              })
-            } catch {}
-          }
-        } else {
-          logger.warn(`Review spawn: fork failed HTTP ${forkRes.status} for /${commandName} — blank fallback`)
-        }
-      } catch (e) {
-        logger.warn(`Review spawn: fork threw for /${commandName} — blank fallback:`, e)
-      }
-    }
-
-    // 2) 폴백: 기존 빈 세션 생성 (fork 불가·메시지 없음).
-    // 부모 기록이 없어 마지막 결과를 잘라 근거로 전달한다 (없으면 생략 — fail-open).
+    // 부모의 마지막 결과를 잘라 자식에게 근거로 전달 (없으면 생략 — fail-open).
+    // DB 직접 조회라 전체 HTTP 로드 없이 꼬리 5건이면 충분하다.
     let snippet = ''
-    if (!childId) {
-      const createRes = await fetch(`${base}/session?directory=${directoryParam}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ title: `[REVIEW] /${commandName}` }),
-        signal: AbortSignal.timeout(30_000),
-      })
-      if (!createRes.ok) {
-        logger.warn(`Review spawn: session create failed HTTP ${createRes.status} for /${commandName}`)
-        return null
-      }
-      const child = (await createRes.json()) as { id: string }
-      if (!child?.id) return null
-      childId = child.id
-      for (let i = parentMessages.length - 1; i >= 0; i--) {
-        if (parentMessages[i]?.info?.role === 'assistant') {
-          const text = (parentMessages[i]?.parts ?? [])
-            .filter((p) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim())
-            .map((p) => p.text as string)
-            .join('\n')
-            .trim()
-          if (text) snippet = text.length > 4000 ? text.slice(-4000) : text
+    try {
+      const { recentSessionMessages } = await import('./session-message-db')
+      const tail = await recentSessionMessages(sessionId, 5)
+      const msgs = [...(tail?.messages ?? [])].reverse()
+      for (const m of msgs) {
+        const info = m.info as { role?: string } | undefined
+        if (info?.role !== 'assistant') continue
+        const text = (m.parts ?? [])
+          .filter((p) => p?.type === 'text' && typeof p.text === 'string' && (p.text as string).trim())
+          .map((p) => p.text as string)
+          .join('\n')
+          .trim()
+        if (text) {
+          snippet = text.length > 4000 ? text.slice(-4000) : text
           break
         }
       }
-    }
-    rememberReviewSession(childId)
+    } catch {}
 
     const mode = autoApply ? 'BUILD' : 'PLAN'
     const modeRule = autoApply
@@ -389,7 +370,14 @@ export async function maybeSpawnReviewChild(opts: {
       `3. ${applyStep}` +
       (snippet ? `\nParent's last result (truncated):\n${snippet}` : '')
 
-    const sendBody: Record<string, unknown> = { parts: [{ type: 'text', text: prompt }], agent: autoApply ? 'build' : 'plan' }
+    // PLAN은 에이전트 이름에만 기대지 않고 쓰기 계열 도구를 직접 차단한다.
+    // agent 필드가 무시되고 기본 agent로 돌아도 파일을 못 고친다.
+    const sendBody: Record<string, unknown> = {
+      parts: [{ type: 'text', text: prompt }],
+      agent: autoApply ? 'build' : 'plan',
+      ...(autoApply ? {} : { tools: { write: false, edit: false, patch: false, bash: false } }),
+      ...(parentModel ? { model: parentModel } : {}),
+    }
     const sendRes = await fetch(`${base}/session/${childId}/message?directory=${directoryParam}`, {
       method: 'POST',
       headers,

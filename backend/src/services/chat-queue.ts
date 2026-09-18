@@ -648,7 +648,13 @@ async function getSkillTemplate(base: string, directory: string, name: string): 
  * 툴 호출 실패는 일부러 안 본다: 재시도·부분 실패는 정상 작업 과정이라
  * 실패로 세면 거의 모든 run이 실패가 된다.
  */
-async function checkTurnError(sessionID: string, sinceMs: number): Promise<string | null> {
+type TurnCheck =
+  | { kind: 'error'; name: string }
+  | { kind: 'clean' }
+  | { kind: 'no-turn' }
+  | { kind: 'unknown' }
+
+async function checkTurnOnce(sessionID: string, sinceMs: number): Promise<TurnCheck> {
   try {
     const tail = await recentSessionMessages(sessionID, 5)
     // ASC 정렬(오래된 것 먼저)이라 뒤쪽이 이번 턴이다
@@ -658,17 +664,28 @@ async function checkTurnError(sessionID: string, sinceMs: number): Promise<strin
       if (info?.role !== 'assistant') continue
       const created = (info.time as { created?: number } | undefined)?.created ?? 0
       // 이번 턴 산물이 아니면 증거 없음으로 본다 (오래된 에러 턴 오탐 방지)
-      if (created < sinceMs - 5_000) return null
+      if (created < sinceMs - 5_000) return { kind: 'no-turn' }
       const err = info.error as { name?: string } | undefined
-      if (!err) return null
+      if (!err) return { kind: 'clean' }
       const name = typeof err.name === 'string' && err.name ? err.name : 'UnknownError'
-      if (name === 'MessageAbortedError') return null
-      return name
+      if (name === 'MessageAbortedError') return { kind: 'clean' }
+      return { kind: 'error', name }
     }
-    return null
+    return { kind: 'no-turn' }
   } catch {
-    return null
+    return { kind: 'unknown' }
   }
+}
+
+async function checkTurnError(sessionID: string, sinceMs: number): Promise<string | null> {
+  let r = await checkTurnOnce(sessionID, sinceMs)
+  // 2xx 직후라 opencode가 DB 커밋을 안 끝냈을 수 있다 — 이번 턴 메시지가
+  // 없으면 500ms 쉬고 한 번만 재조회한다. 조회 실패(unknown)는 재시도 없이 fail-open.
+  if (r.kind === 'no-turn') {
+    await new Promise((res) => setTimeout(res, 500))
+    r = await checkTurnOnce(sessionID, sinceMs)
+  }
+  return r.kind === 'error' ? r.name : null
 }
 
 async function dispatchQueuedChat(
