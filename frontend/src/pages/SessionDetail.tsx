@@ -220,43 +220,42 @@ export function SessionDetail() {
   // scrollToMessage(콜백)에서 최신 목록을 읽기 위한 미러
   const baseMessagesRef = useRef(baseMessages);
   useEffect(() => { baseMessagesRef.current = baseMessages; }, [baseMessages]);
-  // 스킬/커맨드 호출 표시: run 이력의 trigger user 메시지를 찾아
-  // `/이름 인자` 칩 + 접힘 md 블록으로 그린다.
-  // - origin=auto(NL로 모델이 알아서 실행)는 제외: 마커 기반 표시만 쓴다
-  // - trigger 판정: 인자가 본문에 들어있는 메시지를 우선, 없으면 시작 직전 가장 늦은 메시지.
-  //   큐 지연발송 때문에 trigger는 startedAt보다 먼저 생긴다 (상한만 +60s로 둬 낙관 메시지를 제외).
+  // 스킬/커맨드 호출 표시: run.messageId(assistant)의 parentID로 trigger를 찾는다.
+  // 시간 휴리스틱은 오매칭이 확정적이라 쓰지 않는다 — messageId 없는 레거시는 표시 포기.
+  // trigger user 메시지 위에 `/이름` 칩만 덧붙이고 원본은 그대로 둔다.
   const { data: sessionRuns } = useCommandRunsBySession(sessionId ?? '');
   const invocationByMessage = useMemo(() => {
-    const map = new Map<string, { name: string; args: string | null }>();
+    const map = new Map<string, { name: string; runId: string }>();
     if (!sessionRuns || !baseMessages) return map;
+    const byId = new Map(baseMessages.map((m) => [m.info.id, m]));
     const taken = new Set<string>();
-    const userMsgs = baseMessages.filter((m) => {
-      if (m.info.role !== 'user') return false;
-      if (!m.parts || m.parts.length === 0) return false;
-      if (m.parts.every((p) => (p as { synthetic?: boolean }).synthetic)) return false;
-      return true;
-    });
-    const msgText = (m: MessageWithParts): string =>
-      m.parts
-        .filter((p) => p.type === 'text')
-        .map((p) => (p as { text?: string }).text || '')
-        .join('\n');
+    const isTriggerCandidate = (m: MessageWithParts | undefined): m is MessageWithParts =>
+      !!m && m.info.role === 'user' && !!m.parts && m.parts.length > 0 &&
+      !m.parts.every((p) => (p as { synthetic?: boolean }).synthetic);
     const ordered = [...sessionRuns].sort((a, b) => a.startedAt - b.startedAt);
     for (const run of ordered) {
-      if (!run.commandName) continue;
-      if (run.origin === 'auto') continue;
-      const cands = userMsgs.filter((m) => {
-        if (taken.has(m.info.id)) return false;
-        return (m.info.time?.created ?? 0) <= run.startedAt + 60_000;
-      });
-      if (cands.length === 0) continue;
-      let best = cands[cands.length - 1]!;
-      if (run.args) {
-        const hit = [...cands].reverse().find((m) => msgText(m).includes(run.args!));
-        if (hit) best = hit;
+      if (!run.commandName || !run.messageId) continue;
+      const assistant = byId.get(run.messageId);
+      const parentId = (assistant?.info as { parentID?: string } | undefined)?.parentID;
+      const viaParent = parentId ? byId.get(parentId) : undefined;
+      if (isTriggerCandidate(viaParent) && !taken.has(viaParent.info.id)) {
+        taken.add(viaParent.info.id);
+        map.set(viaParent.info.id, { name: run.commandName, runId: run.id });
+        continue;
       }
-      taken.add(best.info.id);
-      map.set(best.info.id, { name: run.commandName, args: run.args });
+      // 폴백: 하한을 둔 시간 범위에서 가장 늦은 미사용 user 메시지
+      const assistantCreated = (assistant?.info.time?.created ?? run.startedAt + 60_000);
+      let best: MessageWithParts | null = null;
+      for (const m of baseMessages) {
+        if (!isTriggerCandidate(m) || taken.has(m.info.id)) continue;
+        const created = m.info.time?.created ?? 0;
+        if (created < run.startedAt - 120_000 || created > assistantCreated) continue;
+        if (!best || created > (best.info.time?.created ?? 0)) best = m;
+      }
+      if (best) {
+        taken.add(best.info.id);
+        map.set(best.info.id, { name: run.commandName, runId: run.id });
+      }
     }
     return map;
   }, [sessionRuns, baseMessages]);
@@ -1591,6 +1590,7 @@ if (results.length > 0) {
                 onCancelEdit={handleCancelEdit}
                 highlightedMessageID={highlightedMessageID}
                 invocations={invocationByMessage}
+                onOpenCommandHistory={() => setCommandsOpen(true)}
               />
             )}
             {currentQuestion && (

@@ -19,7 +19,7 @@ interface SkillInvocationBlockProps {
  * 본문(md 원문)은 접힘 md 블록으로 그린다.
  */
 export const SkillInvocationBlock = memo(function SkillInvocationBlock({ name, args, body, part, summaryLabel = 'Skill template' }: SkillInvocationBlockProps) {
-  // 한 줄 본문은 접힘 없이 칩만 그린다
+  // 한 줄 본문은 접힘 없이 칩 + 본문을 그대로 그린다 (원본 유실 금지)
   if (!body.includes('\n')) {
     return (
       <div className="flex items-center gap-2 flex-wrap">
@@ -27,11 +27,7 @@ export const SkillInvocationBlock = memo(function SkillInvocationBlock({ name, a
           <Zap className="w-3.5 h-3.5" />
           /{name}
         </span>
-        {args ? (
-          <span className="text-sm text-zinc-200 break-words">{args}</span>
-        ) : (
-          <span className="text-sm text-zinc-200 break-words">{body}</span>
-        )}
+        <span className="text-sm text-zinc-200 break-words">{body}</span>
       </div>
     )
   }

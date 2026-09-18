@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, type ReactNode } from 'react'
 import type { components } from '@/api/opencode-types'
-import { Copy, Volume2, Square, Loader2 } from 'lucide-react'
+import { Copy, Volume2, Square, Loader2, Zap } from 'lucide-react'
 import { TextPart } from './TextPart'
 import { SkillInvocationBlock } from './SkillInvocationBlock'
 import { parseSkillInvocation } from '@/lib/skillBlock'
@@ -22,8 +22,10 @@ interface MessagePartProps {
   messageTextContent?: string
   directory?: string
   messageStreaming?: boolean
-  /** 커맨드/스킬 호출 정보 — user 메시지의 첫 텍스트 파트만 블록으로 그린다 */
-  invocation?: { name: string; args: string | null }
+  /** 커맨드 호출 정보 — user 첫 텍스트 파트 위에 `/이름` 칩만 덧붙인다 (원본 유지) */
+  invocation?: { name: string; runId: string }
+  /** 칩 클릭 → 커맨드 히스토리 창 열기 */
+  onCommandClick?: () => void
 }
 
 function getCopyableContent(part: Part, allParts?: Part[]): string {
@@ -197,7 +199,7 @@ function FileMention({  part,
 
 
 
-export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, messageStreaming, invocation }: MessagePartProps) {
+export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, messageStreaming, invocation, onCommandClick }: MessagePartProps) {
   const { preferences } = useSettings()
   const showReasoning = preferences?.showReasoning ?? true
   const copyableContent = getCopyableContent(part, allParts)
@@ -205,26 +207,30 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
   switch (part.type) {
     case 'text': {
       const text = part.text || ''
-      // 스킬/커맨드 호출은 칩 + 접힘 md 블록으로 그린다.
-      // skill-template 마커가 있으면 템플릿만 본문으로, 아니면 run 이력의 호출 정보로 전체를 감싼다.
+      // 스킬/커맨드 호출 표시는 원본을 가리지 않는다.
+      // - skill-template 마커: 템플릿 접힘 블록 (스킬 설명 보기용)
+      // - run 이력 매칭: `/이름` 칩만 위에 덧붙이고 본문은 기존 렌더 그대로
       if (role === 'user' && partIndex === 0) {
         const skill = parseSkillInvocation(text)
         if (skill) {
           return <SkillInvocationBlock name={skill.name} args={skill.args} body={skill.body} part={part} />
         }
-        if (invocation) {
-          const body = (allParts ?? [])
-            .filter((p) => p.type === 'text')
-            .map((p) => (p as { text?: string }).text || '')
-            .join('\n\n')
-            .trim() || text
-          return <SkillInvocationBlock name={invocation.name} args={invocation.args ?? ''} body={body} part={part} summaryLabel="Command" />
-        }
       }
+      const chip = role === 'user' && partIndex === 0 && invocation ? (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCommandClick?.() }}
+          title="커맨드 이력 보기"
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1.5 rounded-md bg-violet-500/15 border border-violet-500/30 text-violet-200 font-mono text-sm font-medium hover:bg-violet-500/25 cursor-pointer"
+        >
+          <Zap className="w-3.5 h-3.5" />
+          /{invocation.name}
+        </button>
+      ) : null
       if (role === 'user' && allParts && partIndex !== undefined) {
         const nextPart = allParts[partIndex + 1]
         if (nextPart && nextPart.type === 'file') {
-          return null
+          return chip
         }
       }
       // 멘션(@...)만 칩으로 바꾸고 앞뒤 텍스트는 그대로 렌더한다.
@@ -246,12 +252,12 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         last = idx + m[0].length
       }
       if (nodes.length === 0) {
-        return <TextPart part={part} />
+        return <>{chip}<TextPart part={part} /></>
       }
       if (last < text.length) {
         nodes.push(<TextPart key="t-end" part={{ ...part, text: text.slice(last) } as typeof part} />)
       }
-      return <>{nodes}</>
+      return <>{chip}{nodes}</>
     }
     case 'patch':
       return <PatchPart part={part} />
