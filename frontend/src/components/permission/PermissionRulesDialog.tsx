@@ -9,7 +9,6 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePermissionRules, useCreatePermissionRule, useDeletePermissionRule } from '@/hooks/usePermissionRules'
-import { refreshAutoApproveData } from '@/hooks/useAutoApprovePermissions'
 import { getSkillAutoUpdate, setSkillAutoUpdate, getSkillAutoReview, setSkillAutoReview } from '@/api/repos'
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
@@ -194,14 +193,12 @@ export function PermissionRulesDialog({
         addSessionPermissionRule(sessionId, { permission, pattern: pattern.trim() })
         setSessionPermRules(getSessionPermissionRules(sessionId))
         showToast.success('세션 전용 permission rule 추가됨 (이 세션에서만 동작)')
-        refreshAutoApproveData()
       } else {
         if (!repoId) {
           showToast.error('전역 스코프에서는 세션 전용 룰만 추가할 수 있습니다. 레포를 선택해주세요.')
           return
         }
         await createRule.mutateAsync({ repoId, permission, pattern: pattern.trim() })
-        refreshAutoApproveData()
         showToast.success(scope === 'session' ? '레포 permission rule 추가됨' : 'Permission rule added.')
       }
       resetForm()
@@ -216,7 +213,6 @@ export function PermissionRulesDialog({
     setDeletingId(rule.id)
     try {
       await deleteRule.mutateAsync({ id: rule.id, repoId: repoId! })
-      refreshAutoApproveData()
       showToast.success('Permission rule removed.')
     } catch (error) {
       showToast.error(error instanceof Error ? error.message : 'Failed to remove permission rule.')
@@ -228,7 +224,6 @@ export function PermissionRulesDialog({
     if (!sessionId) return
     deleteSessionPermissionRule(sessionId, id)
     setSessionPermRules(getSessionPermissionRules(sessionId))
-    refreshAutoApproveData()
     showToast.success('세션 룰 제거됨')
   }
   const handleSaveRepoEdit = async (id: number) => {
@@ -238,7 +233,6 @@ export function PermissionRulesDialog({
     try {
       await deleteRule.mutateAsync({ id, repoId: repoId! })
       await createRule.mutateAsync({ repoId: repoId!, permission: editRepoPermission, pattern: editRepoPattern.trim() })
-      refreshAutoApproveData()
       showToast.success('수정됨')
     } catch (e) { showToast.error(e instanceof Error?e.message:'수정 실패') }
     setEditingRepoId(null)
@@ -250,7 +244,6 @@ export function PermissionRulesDialog({
     deleteSessionPermissionRule(sessionId, id)
     addSessionPermissionRule(sessionId, { permission: editSessionPermission, pattern: editSessionPattern.trim() })
     setSessionPermRules(getSessionPermissionRules(sessionId))
-    refreshAutoApproveData()
     showToast.success('수정됨')
     setEditingSessionId(null)
   }

@@ -181,7 +181,7 @@ export function PromptInput({
   const sessionData = useSession(opcodeUrl, sessionID, directory)
   const session = sessionData.data as SessionWithModel | undefined
 const { data: config } = useConfig(opcodeUrl)
-const { preferences, updateSettings } = useSettings()
+const { preferences } = useSettings()
 const ks = preferences?.keyboardShortcuts
 const abortKs = ks?.abort ?? 'Escape'
 const toggleModeKs = ks?.toggleMode ?? 'Tab'

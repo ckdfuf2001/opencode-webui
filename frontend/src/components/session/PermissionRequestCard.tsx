@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useCreatePermissionRule } from '@/hooks/usePermissionRules'
-import { refreshAutoApproveData } from '@/hooks/useAutoApprovePermissions'
 import type { Permission, PermissionResponse } from '@/api/types'
 import { cn } from '@/lib/utils'
 
@@ -88,7 +87,6 @@ export function PermissionRequestCard({
         if (pattern) {
           try {
             await createRule.mutateAsync({ repoId, permission: type, pattern })
-            refreshAutoApproveData()
           } catch (error) {
             console.error('Failed to save permission rule:', error)
           }

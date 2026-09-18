@@ -101,8 +101,6 @@ describe('permission hook integration (stub opencode server)', () => {
         res.end('{}')
         return
       }
-      // eslint-disable-next-line no-console
-      console.error(`[stub-debug] 404 ${req.method} ${url.pathname}`)
       res.writeHead(404)
       res.end()
     })
