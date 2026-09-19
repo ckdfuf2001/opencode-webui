@@ -64,6 +64,36 @@ const failedUntil = new Map<string, number>()
 const failCount = new Map<string, number>()
 const MAX_CONSECUTIVE_FAILURES = 5
 const inFlight = new Set<string>()
+// 발송 중 fetch를 취소하기 위한 세션별 AbortController.
+// clearSendingOnAbort/clearQueuedChats(중단 버튼)가 이것을 abort한다.
+// 없으면 600s 타임아웃 fetch가 살아남아 취소 후에도 실패 accounting/재발송을 일으킨다.
+const inFlightControllers = new Map<string, AbortController>()
+function abortInFlight(sessionID: string): void {
+  const ac = inFlightControllers.get(sessionID)
+  if (!ac) return
+  try { ac.abort() } catch {}
+  inFlightControllers.delete(sessionID)
+}
+const QUOTA_BODY_PATTERNS = [
+  'insufficient_quota',
+  'insufficient balance',
+  'quota exceeded',
+  'exceeded your current quota',
+  'freeusagelimit',
+  'subscriptionusagelimit',
+  'usage_not_included',
+  'payment required',
+  'add credits',
+]
+/** 결제/쿼터 거부는 재시도해도 성공하지 않는다 → 즉시 failed (5회 재시도 스톰 방지). */
+export function isQuotaRejection(status?: number, bodyText?: string): boolean {
+  if (status === 402) return true
+  if (!bodyText) return false
+  const lower = bodyText.toLowerCase()
+  if (!QUOTA_BODY_PATTERNS.some((p) => lower.includes(p))) return false
+  if (status === undefined) return true
+  return status === 429 || status === 400 || status === 402 || status === 403
+}
 // 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
 // workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.
 const queueDirs = new Map<string, string>()
@@ -116,7 +146,13 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
   if (!queue) return false
   const index = queue.findIndex((item) => item.id === id)
   if (index === -1) return false
-  queue.splice(index, 1)
+  const [removed] = queue.splice(index, 1)
+  if (removed?.status === 'sending') {
+    // 발송 중 항목을 X로 지우면 진행 중 fetch도 끊는다 — 아니면 settle 시
+    // 실패 accounting/backoff가 걸려 다음 전송이 막힌다.
+    abortInFlight(sessionID)
+    markRecentlyAborted(sessionID)
+  }
   if (queue.length === 0) {
     queues.delete(sessionID)
     queueDirs.delete(sessionID)
@@ -179,8 +215,15 @@ export function moveQueuedChat(sessionID: string, id: string, toTop: boolean): Q
 
 const recentlyAbortedBackend = new Set<string>()
 
+function markRecentlyAborted(sessionID: string): void {
+  recentlyAbortedBackend.add(sessionID)
+  setTimeout(() => recentlyAbortedBackend.delete(sessionID), 5000)
+}
+
 /** 중단(abort) 시 호출: 세션의 대기열 전체를 비운다. */
 export function clearQueuedChats(sessionID: string): number {
+  abortInFlight(sessionID)
+  markRecentlyAborted(sessionID)
   const queue = queues.get(sessionID)
   if (!queue) return 0
   const count = queue.length
@@ -193,6 +236,7 @@ export function clearQueuedChats(sessionID: string): number {
 }
 
 export function clearSendingOnAbort(sessionID: string): void {
+  abortInFlight(sessionID)
   const queue = queues.get(sessionID)
   if (queue) {
     const idx = queue.findIndex((item) => item.status === 'sending')
@@ -208,8 +252,7 @@ export function clearSendingOnAbort(sessionID: string): void {
   lastBusyAt.delete(sessionID)
   failedUntil.delete(sessionID)
   failCount.delete(sessionID)
-  recentlyAbortedBackend.add(sessionID)
-  setTimeout(() => recentlyAbortedBackend.delete(sessionID), 5000)
+  markRecentlyAborted(sessionID)
 }
 
 /**
@@ -289,6 +332,12 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
 
   void dispatchQueuedChat(base, sessionID, next)
     .then((result) => {
+      // 중단 직후 도착한 결과는 무시한다 — 취소된 슬롯에 실패 accounting/backoff를
+      // 걸면 다음 전송까지 막혀 "취소 안됨"처럼 보인다.
+      if (recentlyAbortedBackend.has(sessionID)) {
+        failedUntil.delete(sessionID)
+        return
+      }
       if (result.sent) {
         removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
@@ -307,6 +356,11 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       }
     })
     .catch((error) => {
+      // 사용자 중단으로 끊긴 fetch는 에러가 아니다 — 실패로 세지 않는다.
+      if (recentlyAbortedBackend.has(sessionID)) {
+        failedUntil.delete(sessionID)
+        return
+      }
       logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
       // OpenCode는 턴이 끝나야 응답 헤더를 보낼 수 있어 타임아웃은 거의 확실히
       // 전달됐다는 뜻이다. sending 유지 → idle 관찰 시 제거(확정). 타임아웃은 실패로 세지 않는다.
@@ -330,6 +384,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
     })
     .finally(() => {
       inFlight.delete(sessionID)
+      inFlightControllers.delete(sessionID)
     })
 }
 
@@ -377,9 +432,12 @@ function recordDeterministicFailure(sessionID: string, id: string, detail?: stri
     head.failedAt = Date.now()
   }
   logger.error(
-    `Queued chat for session ${sessionID} rejected (non-retryable provider error — stale reasoning blocks; single cleanup (truncate + strip-all) and one retry did not recover). ` +
-    `Pick one: (a) switch back to the model that owns the latest good turn, (b) truncate back before the model switch with the per-message scissors, or (c) start a new session. ` +
-    `Manual deep-clean: POST /api/session-heal/${sessionID}. Then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
+    `Queued chat for session ${sessionID} rejected (non-retryable provider error). ` +
+    (detail && isQuotaRejection(undefined, detail)
+      ? `Free quota/balance exhausted — add credits or switch provider/model. `
+      : `Stale reasoning blocks? Pick one: (a) switch back to the model that owns the latest good turn, (b) truncate back before the model switch with the per-message scissors, or (c) start a new session. ` +
+        `Manual deep-clean: POST /api/session-heal/${sessionID}. `) +
+    `Then retry manually.${detail ? ` Detail: ${detail.slice(0, 200)}` : ''}`,
   )
   try { if (queueDb) setSessionCancelled(queueDb, sessionID) } catch {}
 }
@@ -449,6 +507,10 @@ export function retryQueuedChat(sessionID: string, id: string): QueuedChat[] | n
   const item = queue.find((entry) => entry.id === id)
   if (!item) return null
   if (item.status !== 'sending' && item.status !== 'failed') return [...queue]
+  if (item.status === 'sending') {
+    // 고착된 발송을 재시도하기 전 진행 중 fetch를 끊는다 — 중복 턴 방지.
+    abortInFlight(sessionID)
+  }
   item.status = 'queued'
   delete item.failedAt
   delete item.sendingSince
@@ -699,6 +761,18 @@ async function dispatchQueuedChat(
   const outgoing = asOutgoingModel(chat.model)
   // 턴 판정 기준시각 — 이 이후 생성된 assistant 메시지만 이번 턴 산물로 본다
   const dispatchStartMs = Date.now()
+  // 중단 버튼이 이 발송을 실제로 끊을 수 있게 세션별 컨트롤러를 등록한다.
+  // clearSendingOnAbort/clearQueuedChats가 abort하면 아래 fetch들이 즉시 취소된다.
+  const dispatchAborter = new AbortController()
+  inFlightControllers.set(sessionID, dispatchAborter)
+  const combineSendSignal = (): AbortSignal => {
+    const timeout = AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS)
+    const maybeAny = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+    if (typeof maybeAny === 'function') return maybeAny([timeout, dispatchAborter.signal])
+    if (dispatchAborter.signal.aborted) return dispatchAborter.signal
+    timeout.addEventListener('abort', () => { try { dispatchAborter.abort(timeout.reason) } catch {} }, { once: true })
+    return dispatchAborter.signal
+  }
 
   // 발송 직전: 꼬리가 mismatch 에러면 strip-only 클렌징 (truncate 없음).
   // opencode가 provider 400을 HTTP 200 + 메시지 error로 저장하는 경로가 있어
@@ -873,7 +947,7 @@ async function dispatchQueuedChat(
         method: 'POST',
         headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(cmdBody),
-        signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+        signal: combineSendSignal(),
       })
       if (cmdRes.ok) {
         void cmdRes.text().catch(() => {})
@@ -894,6 +968,18 @@ async function dispatchQueuedChat(
         return { sent: true }
       }
       const body = await cmdRes.text().catch(() => '')
+      // quota/결제 거부는 /message로 폴백해도 같은 결과라 즉시 failed로 고정한다.
+      if (isQuotaRejection(cmdRes.status, body)) {
+        try {
+          if (queueDb && runId) {
+            const { finishRunSafe } = await import('./command-runs')
+            await finishRunSafe(queueDb, runId, 'failed')
+          }
+        } catch {}
+        finishPendingSkillRun(false)
+        logger.warn(`Queued command /${cmd} rejected with quota/billing HTTP ${cmdRes.status} — marked failed without retry`)
+        return { sent: false, nonRetryable: true, status: cmdRes.status, detail: body.slice(0, 300) }
+      }
       try {
         if (queueDb && runId) {
           const { finishRunSafe } = await import('./command-runs')
@@ -951,7 +1037,7 @@ async function dispatchQueuedChat(
       method: 'POST',
       headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(messageBody),
-      signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+      signal: combineSendSignal(),
     })
     const reloadTag = async (tag: string) => {
       try {
@@ -1006,13 +1092,23 @@ async function dispatchQueuedChat(
       const stubsRemoved = (heal.stubsRemoved ?? 0) + sweep2.removed
       await reloadTag(`cleanup (truncated ${heal.truncatedMessageId}, stripped ${heal.strippedParts ?? 0}, strip-all ${strippedAllParts}, stubs removed ${stubsRemoved}, pending ${pending.length})`)
       const retryRes = await sendOnce()
+      if (!retryRes.ok) {
+        // 본문은 한 번만 읽힌다 — quota 판정과 mismatch 판정에 같은 본문을 쓴다.
+        const retryBody = await retryRes.text().catch(() => '')
+        if (isQuotaRejection(retryRes.status, retryBody)) {
+          logger.warn(`Queued chat heal-retry hit quota/billing HTTP ${retryRes.status} for session ${sessionID} — leaving failed`)
+          return { sent: false, nonRetryable: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
+        }
+        if (retryRes.status !== 400 || !isReasoningEncryptedMismatch(retryBody)) {
+          return { sent: false, status: retryRes.status }
+        }
+        logger.warn(`Queued chat cleanup+retry hit the same mismatch for session ${sessionID} — leaving failed (no further auto-retry)`)
+        return { sent: false, nonRetryable: true, status: 400, detail: retryBody.slice(0, 300) }
+      }
       const retryMismatch = await mismatchDetailOf(retryRes)
       if (!retryMismatch) {
-        if (retryRes.ok) {
-          logger.info(`Reasoning heal: cleanup and queue retry succeeded for session ${sessionID}`)
-          return { sent: true }
-        }
-        return { sent: false, status: retryRes.status }
+        logger.info(`Reasoning heal: cleanup and queue retry succeeded for session ${sessionID}`)
+        return { sent: true }
       }
       logger.warn(`Queued chat cleanup+retry hit the same mismatch for session ${sessionID} — leaving failed (no further auto-retry)`)
       return { sent: false, nonRetryable: true, status: 400, detail: retryMismatch.slice(0, 300) }
@@ -1026,12 +1122,17 @@ async function dispatchQueuedChat(
     method: 'POST',
     headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(messageBody),
-    signal: AbortSignal.timeout(SEND_HEADERS_TIMEOUT_MS),
+    signal: combineSendSignal(),
   })
 
   if (!sendRes.ok) {
     const body = await sendRes.text().catch(() => '')
     logger.warn(`Queued chat flush rejected for session ${sessionID}: HTTP ${sendRes.status} ${body.slice(0, 200)}`)
+    if (isQuotaRejection(sendRes.status, body)) {
+      logger.warn(`Queued chat hit quota/billing HTTP ${sendRes.status} for session ${sessionID} — marked failed without retry`)
+      finishPendingSkillRun(false)
+      return { sent: false, nonRetryable: true, status: sendRes.status, detail: body.slice(0, 300) }
+    }
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
       const healed = await healMismatchAndRetryOnce(body)
       finishPendingSkillRun(healed.sent)

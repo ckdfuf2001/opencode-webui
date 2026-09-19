@@ -166,6 +166,26 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
           </button>
         </div>
         <ul className="space-y-1">
+          {sendingItem && (
+            <li key={sendingItem.id} className="group flex items-center gap-2">
+              <span className="shrink-0 text-muted-foreground">→</span>
+              <span className="min-w-0 flex-1 truncate break-words opacity-60">
+                {sendingItem.text}
+                <span className="ml-1.5 text-[10px]">sending</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  aria-label="Cancel sending message"
+                  title="Cancel sending (발송 취소)"
+                  className="rounded p-0.5 text-muted-foreground opacity-80 transition-opacity hover:opacity-100 hover:text-destructive"
+                  onClick={() => removeChat.mutate({ sessionID, id: sendingItem.id })}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </li>
+          )}
           {restItems.map((item, index) => (
             <li key={item.id} className="group flex items-center gap-2">
               <span className="shrink-0 text-muted-foreground">{index + 1}.</span>

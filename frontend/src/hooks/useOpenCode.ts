@@ -2054,6 +2054,8 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
         queryClient.setQueryData(['session-status-db'], [{ sessionId: sessionID, status: 'idle', pendingPermissions: 0 } as never])
       }
       queryClient.setQueryData(['session-status-db'], (old: unknown) => old)
+      // 백엔드 큐 sending 표시도 즉시 갱신 — 2s 폴링을 기다리면 취소가 안 된 것처럼 보인다.
+      queryClient.invalidateQueries({ queryKey: ['chat-queue', sessionID] })
       return { acAtAbort, esAtAbort, pendingAtAbort }
     },
     onError: () => {
@@ -2073,6 +2075,7 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       queryClient.invalidateQueries({ queryKey: ['opencode', 'last-message', opcodeUrl, sessionID, directory] })
       queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', opcodeUrl, directory] })
       queryClient.invalidateQueries({ queryKey: ['session-status-db'] })
+      queryClient.invalidateQueries({ queryKey: ['chat-queue', sessionID] })
     },
   });
 };
