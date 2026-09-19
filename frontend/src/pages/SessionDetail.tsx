@@ -18,6 +18,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
+import { liveCommandIntents } from "@/lib/commandIntent";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
@@ -257,8 +258,35 @@ export function SessionDetail() {
         map.set(best.info.id, { name: run.commandName, runId: run.id });
       }
     }
+    // 낙관적 칩: 전송 직후(run.messageId 부착 전)에도 `/이름` 칩이 바로 보이게 한다.
+    // 전송 시점에 recordCommandIntent로 남긴 커맨드명을, 아직 백엔드가 차지하지 않은
+    // user 메시지 텍스트(`/이름` 시작)와 매칭한다. 백엔드 매칭(taken)이 우선이라
+    // 턴 종료 후에는 run 기준으로 자연스럽게 교체된다.
+    try {
+      const intents = liveCommandIntents(sessionId ?? '');
+      if (intents.length > 0 && baseMessages) {
+        const firstTextOf = (m: MessageWithParts): string => {
+          const p = m.parts?.find((x) => (x as { type?: string }).type === 'text') as { text?: string } | undefined;
+          return (p?.text ?? '').trim();
+        };
+        for (const name of intents) {
+          let best: MessageWithParts | null = null;
+          for (const m of baseMessages) {
+            if (!isTriggerCandidate(m) || taken.has(m.info.id) || map.has(m.info.id)) continue;
+            const t = firstTextOf(m);
+            if (t !== `/${name}` && !t.startsWith(`/${name} `) && !t.startsWith(`/${name}\n`)) continue;
+            const created = m.info.time?.created ?? 0;
+            if (!best || created > (best.info.time?.created ?? 0)) best = m;
+          }
+          if (best) {
+            taken.add(best.info.id);
+            map.set(best.info.id, { name, runId: '' });
+          }
+        }
+      }
+    } catch { /* optimistic-only, never break render */ }
     return map;
-  }, [sessionRuns, baseMessages]);
+  }, [sessionRuns, baseMessages, sessionId]);
   // 길이 변화 처리: 대량 감소(컴팩트/트렁케이트) → 하단 고정,
   // ON이면 새 메시지가 오면 히스토리 열람 중이라도 최신으로 복귀 + 핀.
   // OFF면 내가 보낸 턴만 하단 고정, 나머지는 화면 유지.

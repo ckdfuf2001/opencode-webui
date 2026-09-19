@@ -73,6 +73,10 @@ export function useCommandRunsBySession(sessionId: string, enabled = true) {
     enabled: enabled && !!sessionId,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    // 턴 종료 후 run.messageId가 붙으면 새로고침 없이 칩이 확정되게 폴링한다.
+    // 전송 직후 표시는 commandIntent 낙관 매칭이 담당.
+    refetchInterval: enabled && !!sessionId ? 5_000 : false,
+    refetchIntervalInBackground: false,
     staleTime: 5000,
   })
 }
