@@ -88,7 +88,10 @@ function getCandidatePatterns(permission: AskedPermission): string[] {
   const asString = (v: unknown): string[] => (typeof v === 'string' && v ? [v] : [])
   // opencode는 permission마다 다른 키를 쓴다:
   // bash=command, read/edit=path, webfetch=url,
-  // external_directory=metadata.filepath/parentDir (+ always 제안 패턴)
+  // external_directory=metadata.filepath/parentDir
+  // NOTE: permission.always는 다음 턴용 제안(허위 가능)이라 매칭에서 제외한다.
+  // 실제 요청(patterns/metadata)과 무관한 제안이 룰에 걸려 승인되던 과승인 방지.
+  // 하위 경로 prefix 허용(룰 "/tmp/foo" → "/tmp/foo/bar")은 ruleMatches가 유지한다.
   const metadataPatterns = [
     ...asString(metadata.command),
     ...asString(metadata.path),
@@ -97,10 +100,7 @@ function getCandidatePatterns(permission: AskedPermission): string[] {
     ...asString(metadata.parentDir),
     ...asString(metadata.directory),
   ]
-  const alwaysPatterns = Array.isArray(permission.always)
-    ? permission.always.flatMap((p) => asString(p))
-    : []
-  return [...normalized, ...metadataPatterns, ...alwaysPatterns]
+  return [...normalized, ...metadataPatterns]
 }
 
 export function ruleMatches(rule: PermissionRule, permission: AskedPermission): boolean {
@@ -275,7 +275,10 @@ async function handleAskedPermission(
   const describe = (): string => {
     const cands = getCandidatePatterns(permission)
     const shown = cands.slice(0, 4).join(' | ').slice(0, 300)
-    return `${permission.id} type=${permission.permission ?? permission.type} session=${permission.sessionID} candidates=[${shown}]${cands.length > 4 ? ` +${cands.length - 4}` : ''}`
+    const alwaysHint = Array.isArray(permission.always) && permission.always.length > 0
+      ? ` alwaysSuggestions=${permission.always.length}(excluded from match)`
+      : ''
+    return `${permission.id} type=${permission.permission ?? permission.type} session=${permission.sessionID} candidates=[${shown}]${cands.length > 4 ? ` +${cands.length - 4}` : ''}${alwaysHint}`
   }
   // directory → repo 스코프가 확정될 때만 승인한다.
   // 해석 실패 시 전체 규칙 폴백은 다른 레포의 규칙으로 승인할 수 있어 금지 —

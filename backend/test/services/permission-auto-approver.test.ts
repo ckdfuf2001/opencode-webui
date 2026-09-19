@@ -149,6 +149,29 @@ describe('ruleMatches', () => {
     expect(ruleMatches(rule, { ...asked, patterns: [] })).toBe(true)
   })
 
+  it('ignores always suggestions when matching (no over-approval via proposed paths)', () => {
+    // always는 다음 턴용 제안이라 실제 요청과 무관할 수 있다 — 단독으로는 승인 불가.
+    // 하위 경로 prefix 허용은 그대로: 실제 patterns/metadata가 룰 하위면 승인.
+    expect(
+      ruleMatches(rule({ permission: 'read', pattern: '/tmp/real' }), {
+        id: 'x',
+        sessionID: 's',
+        permission: 'read',
+        pattern: '/other/place/file.txt',
+        always: ['/tmp/real/sub/file.txt'],
+      }),
+    ).toBe(false)
+    expect(
+      ruleMatches(rule({ permission: 'read', pattern: '/tmp/real' }), {
+        id: 'x',
+        sessionID: 's',
+        permission: 'read',
+        pattern: '/tmp/real/sub/file.txt',
+        always: ['/other/place/file.txt'],
+      }),
+    ).toBe(true)
+  })
+
   it('treats ? as single-char wildcard', () => {
     expect(
       ruleMatches(rule({ permission: 'read', pattern: 'file?.txt' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'file1.txt' }),

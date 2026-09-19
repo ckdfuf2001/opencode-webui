@@ -43,7 +43,9 @@ function getCandidatePatterns(permission: Permission): string[] {
   const asString = (v: unknown): string[] => (typeof v === 'string' && v ? [v] : [])
   // opencode는 permission마다 다른 키를 쓴다:
   // bash=command, read/edit=path, webfetch=url,
-  // external_directory=metadata.filepath/parentDir (+ always 제안 패턴)
+  // external_directory=metadata.filepath/parentDir
+  // NOTE: permission.always는 다음 턴용 제안(허위 가능)이라 매칭에서 제외한다.
+  // 하위 경로 prefix 허용은 ruleMatches가 유지한다.
   const metadataPatterns = [
     ...asString(metadata.command),
     ...asString(metadata.path),
@@ -52,10 +54,7 @@ function getCandidatePatterns(permission: Permission): string[] {
     ...asString(metadata.parentDir),
     ...asString(metadata.directory),
   ]
-  const alwaysPatterns = Array.isArray(permission.always)
-    ? permission.always.flatMap((p) => asString(p))
-    : []
-  return [...normalized, ...metadataPatterns, ...alwaysPatterns]
+  return [...normalized, ...metadataPatterns]
 }
 
 function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
