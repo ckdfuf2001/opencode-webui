@@ -8,6 +8,7 @@ import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
 import { stripMemoryRecall } from '@/lib/stripRecall'
 import { parseSkillInvocation } from '@/lib/skillBlock'
+import { absToWsPath } from '@/lib/repoPath'
 import { formatChatTime } from '@/lib/chatTime'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { showToast } from '@/lib/toast'
@@ -30,14 +31,24 @@ function getRawMessageTextContent(msg: MessageWithParts): string {
     .trim()
 }
 
-function getEditablePrompt(msg: MessageWithParts, invocation?: { name: string; args: string | null }): string {
+function getEditablePrompt(msg: MessageWithParts, invocation?: { name: string; args: string | null }, workspaceRoot: string = ''): string {
   const lines: string[] = []
   const fileLines: string[] = []
   let headText = ''
   for (const p of msg.parts) {
     if (p.type === 'file') {
-      const filename = p.filename || p.url?.replace(/^file:\/{2,3}/, '').split('/').pop() || 'File'
-      const mention = `@"${filename}"`
+      // /command 호출은 opencode가 템플릿을 펼쳐 저장해서 원문에 `/이름`이 없다.
+      // run 기록의 이름·인자로 복원해야 edit 재전송이 커맨드로 동작한다.
+      // file 파트는 절대경로(p.url)에서 wsPath로 환산해 재전송 시 커맨드로 동작하게 한다.
+      let mention = ''
+      if (p.url) {
+        const abs = p.url.replace(/^file:\/{2,3}/, '')
+        const ws = absToWsPath(abs, workspaceRoot || '')
+        mention = `@"${ws || p.filename || 'File'}"`
+      } else {
+        const filename = p.filename || p.url?.replace(/^file:\/{2,3}/, '').split('/').pop() || 'File'
+        mention = `@"${filename}"`
+      }
       lines.push(mention)
       fileLines.push(mention)
     } else if (p.type === 'text' && p.text) {
@@ -289,7 +300,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 )}
                 {msg.info.role === 'user' && onEditMessage && !streaming && (
                   <button
-                    onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg, invocations?.get(msg.info.id)))}
+                    onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg, invocations?.get(msg.info.id), directory))}
                     className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
                     title="Edit and resend"
                   >

@@ -189,7 +189,7 @@ function FileMention({  part,
   return (
     <span
       className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
-      onClick={() => onFileClick?.(mentionText)}
+      onClick={() => onFileClick?.(resolvedPath ?? mentionText)}
     >
       <span className="text-blue-400">@</span>
       <span className="font-medium">{mentionText}</span>
