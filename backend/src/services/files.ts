@@ -13,14 +13,29 @@ import {
   getFileStats, 
   listDirectory 
 } from './file-operations'
-import { FILE_LIMITS, getReposPath } from '@opencode-webui/shared'
+import { FILE_LIMITS, getReposPath, DEFAULT_BLOCKED_UPLOAD_EXTENSIONS } from '@opencode-webui/shared'
 import type { ChunkedFileInfo, PatchOperation } from '@opencode-webui/shared'
 
 const SHARED_WORKSPACE_BASE = getReposPath()
 
-const BLOCKED_UPLOAD_EXTENSIONS = new Set([
-  '.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.ps1', '.msi', '.dll', '.lnk',
-])
+const DEFAULT_BLOCKED_UPLOADS = new Set(
+  (DEFAULT_BLOCKED_UPLOAD_EXTENSIONS ?? []).map((e) => e.toLowerCase()),
+)
+
+function normalizeBlockedExtensions(input: unknown): Set<string> {
+  if (!Array.isArray(input)) return DEFAULT_BLOCKED_UPLOADS
+  const out = new Set<string>()
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue
+    let e = raw.trim().toLowerCase()
+    if (!e) continue
+    if (!e.startsWith('.')) e = `.${e}`
+    out.add(e)
+  }
+  return out
+}
+
+export { DEFAULT_BLOCKED_UPLOADS }
 
 interface FileInfo {
   name: string
@@ -184,14 +199,15 @@ export async function getFileStat(userPath: string): Promise<{ exists: boolean; 
   }
 }
 
-export async function uploadFile(userPath: string, file: File): Promise<FileUploadResult> {
+export async function uploadFile(userPath: string, file: File, blockedExtensions?: unknown): Promise<FileUploadResult> {
   if (file.size > FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES) {
     throw { message: `File too large (max ${FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES} bytes)`, statusCode: 400 }
   }
-  
+
   const fileName = file.name || path.basename(userPath)
   const ext = path.extname(fileName).toLowerCase()
-  if (BLOCKED_UPLOAD_EXTENSIONS.has(ext)) {
+  const blocked = blockedExtensions === undefined ? DEFAULT_BLOCKED_UPLOADS : normalizeBlockedExtensions(blockedExtensions)
+  if (ext && blocked.has(ext)) {
     throw { message: `File type not allowed: ${fileName}`, statusCode: 400 }
   }
   

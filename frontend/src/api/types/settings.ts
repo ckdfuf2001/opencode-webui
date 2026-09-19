@@ -44,6 +44,7 @@ export interface UserPreferences {
   opencodeBin?: string
   tts?: TTSConfig
   repoTrackPaths?: string[]
+  blockedUploadExtensions?: string[]
   autoRecallEnabled?: boolean
   recallTopK?: number
   completionSoundEnabled?: boolean
@@ -118,6 +119,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   gitToken: undefined,
   tts: DEFAULT_TTS_CONFIG,
   repoTrackPaths: ['.opencode', 'scripts'],
+  blockedUploadExtensions: ['.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.ps1', '.msi', '.dll', '.lnk'],
   autoRecallEnabled: true,
   recallTopK: 4,
   completionSoundEnabled: true,

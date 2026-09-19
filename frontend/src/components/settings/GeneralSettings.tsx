@@ -16,12 +16,25 @@ export function GeneralSettings() {
   
   const [gitToken, setGitToken] = useState('')
   const [repoTrackPathsInput, setRepoTrackPathsInput] = useState('')
+  const [blockedExtInput, setBlockedExtInput] = useState('')
   const [isApplyingTracking, setIsApplyingTracking] = useState(false)
+
+  const normalizeBlockedExtensions = (raw: string): string[] => {
+    const seen = new Set<string>()
+    for (const part of raw.split(',')) {
+      let e = part.trim().toLowerCase()
+      if (!e) continue
+      if (!e.startsWith('.')) e = `.${e}`
+      seen.add(e)
+    }
+    return [...seen]
+  }
 
   useEffect(() => {
     if (preferences) {
       setGitToken(preferences.gitToken || '')
       setRepoTrackPathsInput((preferences.repoTrackPaths ?? []).join(', '))
+      setBlockedExtInput((preferences.blockedUploadExtensions ?? []).join(', '))
       try { localStorage.setItem('opencode-push-duration', String(preferences.pushNotificationDuration ?? 0)) } catch {}
     }
   }, [preferences])
@@ -300,6 +313,43 @@ export function GeneralSettings() {
             Repo-relative paths tracked for version history (comma-separated). All other files are
             excluded from change detection via .git/info/exclude. Saved paths apply to newly created
             repos; use "Apply to existing repos" to update all current ones. Empty = track everything.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="blockedUploadExtensions">업로드 차단 확장자</Label>
+          <div className="flex gap-2">
+            <Input
+              id="blockedUploadExtensions"
+              placeholder=".exe, .bat, .ps1 ..."
+              value={blockedExtInput}
+              onChange={(e) => setBlockedExtInput(e.target.value)}
+              onBlur={() => {
+                const next = normalizeBlockedExtensions(blockedExtInput)
+                const current = (preferences?.blockedUploadExtensions ?? []).map((e) => e.toLowerCase())
+                if (next.join(',') !== current.join(',')) {
+                  updateSettings({ blockedUploadExtensions: next })
+                } else {
+                  setBlockedExtInput(next.join(', '))
+                }
+              }}
+              className="bg-background border-border text-foreground placeholder:text-muted-foreground"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                const defaults = ['.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.ps1', '.msi', '.dll', '.lnk']
+                setBlockedExtInput(defaults.join(', '))
+                updateSettings({ blockedUploadExtensions: defaults })
+              }}
+            >
+              기본값 복원
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            채팅 파일 업로드(드래그드롭/붙여넣기) 시 차단할 확장자 (쉼표 구분, 점 생략 가능).
+            비워두면 모든 파일 허용. 이미지(png/jpg 등)는 기본적으로 허용됨.
           </p>
         </div>
 

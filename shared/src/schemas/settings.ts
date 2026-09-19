@@ -40,6 +40,10 @@ export const DEFAULT_KEYBOARD_SHORTCUTS = {
 
 export const DEFAULT_REPO_TRACK_PATHS = [".opencode", "scripts"];
 
+export const DEFAULT_BLOCKED_UPLOAD_EXTENSIONS = [
+  ".exe", ".bat", ".cmd", ".com", ".scr", ".vbs", ".ps1", ".msi", ".dll", ".lnk",
+];
+
 export const UserPreferencesSchema = z.object({
   theme: z.enum(["dark", "light", "system"]),
   mode: z.enum(["plan", "build"]),
@@ -55,6 +59,8 @@ export const UserPreferencesSchema = z.object({
   opencodeBin: z.string().optional(),
   tts: TTSConfigSchema.optional(),
   repoTrackPaths: z.array(z.string()).default(DEFAULT_REPO_TRACK_PATHS),
+  // 채팅 파일 업로드 차단 확장자 (소문자 .ext 형태). 비워두면 전부 허용.
+  blockedUploadExtensions: z.array(z.string()).default(DEFAULT_BLOCKED_UPLOAD_EXTENSIONS),
   autoRecallEnabled: z.boolean().default(true),
   recallTopK: z.number().int().min(1).max(10).default(4),
   completionSoundEnabled: z.boolean().default(true),
@@ -86,6 +92,7 @@ export const DEFAULT_USER_PREFERENCES = {
   gitToken: undefined,
   tts: DEFAULT_TTS_CONFIG,
   repoTrackPaths: DEFAULT_REPO_TRACK_PATHS,
+  blockedUploadExtensions: DEFAULT_BLOCKED_UPLOAD_EXTENSIONS,
   autoRecallEnabled: true,
   recallTopK: 4,
   completionSoundEnabled: true,

@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
 import * as fileService from '../services/files'
+import { SettingsService } from '../services/settings'
 import type { Database } from 'bun:sqlite'
 import { logger } from '../utils/logger'
 
-export function createFileRoutes(_database: Database) {
+export function createFileRoutes(database: Database) {
   const app = new Hono()
 
   const decodePath = (c: { req: { path: string } }) =>
@@ -98,13 +99,22 @@ export function createFileRoutes(_database: Database) {
     try {
       const path = decodePath(c)
       const body = await c.req.parseBody()
-      
+
       const file = body.file as File
       if (!file) {
         return c.json({ error: 'No file provided' }, 400)
       }
-      
-      const result = await fileService.uploadFile(path, file)
+
+      // 업로드 차단 확장자는 사용자 설정에서 읽는다 (userId 쿼리 지원, 기본 default).
+      // 설정 조회 실패 시 서비스 기본값으로 폴백한다.
+      let blocked: unknown
+      try {
+        const userId = c.req.query('userId') || 'default'
+        blocked = new SettingsService(database).getSettings(userId).preferences.blockedUploadExtensions
+      } catch {
+        blocked = undefined
+      }
+      const result = await fileService.uploadFile(path, file, blocked)
       return c.json(result)
     } catch (error: any) {
       logger.error('Failed to upload file:', error)
