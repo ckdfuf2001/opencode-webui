@@ -1400,6 +1400,13 @@ export function SessionDetail() {
       token: (prev?.token ?? 0) + 1,
       text,
     }))
+    // edit 버튼 클릭 시 하단 고정 해제 → 편집 후 재전송 시 하단 고정 복귀
+    setWindowStart(null)
+    pendingLatestPinRef.current = true
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const c = messageContainerRef.current
+      if (c) c.scrollTop = c.scrollHeight
+    }))
   }, []);
 
   const handleCancelEdit = useCallback(() => {

@@ -336,6 +336,12 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     const releaseWithRestore = () => { sendLockRef.current = false; setPrompt(snapshot) }
     try {
 
+    // 편집 재전송이면 경로(커맨드/일반/큐)와 무관하게 먼저 잘라낸다
+    if (editTargetMessageID && onResendEdit) {
+      const truncated = await onResendEdit(editTargetMessageID)
+      if (!truncated) { releaseWithRestore(); return }
+    }
+
     if (isBashMode) {
       const command = prompt.startsWith('!') ? prompt.slice(1) : prompt
       addUserBashCommand(command)
@@ -374,11 +380,6 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     }
 
     const parts = await buildValidatedParts()
-
-    if (editTargetMessageID && onResendEdit) {
-      const truncated = await onResendEdit(editTargetMessageID)
-      if (!truncated) { releaseWithRestore(); return }
-    }
 
     // 응답 생성 중이거나 cancel 처리 중에는 전송 대신 큐에 적재한다.
     // cancel 직후 프론트는 idle로 보여도 서버가 abort 중이라 직접 보내면 유실/역전된다.
