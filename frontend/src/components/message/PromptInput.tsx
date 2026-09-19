@@ -23,7 +23,6 @@ import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
 import { getFileStat, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
 import { showToast } from '@/lib/toast'
 import { getSessionOverride } from '@/lib/notifications'
-import { recordCommandIntent } from '@/lib/commandIntent'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -362,11 +361,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         // 스킬 템플릿 확장은 백엔드(dispatchQueuedChat)가 한다: 프론트에서 펼치면
         // 16k enqueue 상한에 잘리고, 표시도 `/스킬 인자` + 접힘 블록 형태가 안 된다.
         // (opencode /command는 스킬을 실행 못해 500 + 메시지 0건 — 백엔드가 /message로 합성 전송)
-        // 전송 시점에 인텐트를 남겨 칩(`/이름`)이 새로고침 없이 바로 붙는다.
-        // 백엔드 run 매칭(턴 종료 후)이 되면 그쪽이 우선해 교체된다.
+        // 칩 표시는 SessionDetail이 메시지 텍스트 기준으로 낙관 매칭한다(전송 경로 무관).
         const text = prompt.trim()
         if (text) {
-          recordCommandIntent(sessionID, command.name)
           clearCancelledUntilNextSend(sessionID)
           enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
         } else {
