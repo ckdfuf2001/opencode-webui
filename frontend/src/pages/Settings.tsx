@@ -3,6 +3,7 @@ import { Header } from '@/components/layout/Header'
 import { GeneralSettings } from '@/components/settings/GeneralSettings'
 import { KeyboardShortcuts } from '@/components/settings/KeyboardShortcuts'
 import { OpenCodeConfigManager } from '@/components/settings/OpenCodeConfigManager'
+import { PermissionSettings } from '@/components/settings/PermissionSettings'
 
 export function Settings() {
   return (
@@ -11,12 +12,18 @@ export function Settings() {
 
       <div className="max-w-4xl mx-auto p-6">
         <Tabs defaultValue="general" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 mb-8 bg-[#141414] border border-[#262626] p-1">
-            <TabsTrigger 
+          <TabsList className="grid w-full grid-cols-4 mb-8 bg-[#141414] border border-[#262626] p-1">
+            <TabsTrigger
               value="general"
               className="data-[state=active]:bg-blue-800 data-[state=active]:text-white text-zinc-400"
             >
               General
+            </TabsTrigger>
+            <TabsTrigger
+              value="permissions"
+              className="data-[state=active]:bg-blue-800 data-[state=active]:text-white text-zinc-400"
+            >
+              Permissions
             </TabsTrigger>
             <TabsTrigger 
               value="shortcuts"
@@ -34,6 +41,10 @@ export function Settings() {
 
           <TabsContent value="general">
             <GeneralSettings />
+          </TabsContent>
+
+          <TabsContent value="permissions">
+            <PermissionSettings />
           </TabsContent>
 
           <TabsContent value="shortcuts">

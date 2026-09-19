@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
 import { logger } from '../utils/logger'
-import { listPermissionRules } from '../db/permission-rule-queries'
+import { listApplicableRules } from '../db/permission-rule-queries'
 import type { PermissionRule } from '../types/permission-rule'
 import { resolveRepoId } from './command-runs'
 
@@ -302,7 +302,7 @@ async function handleAskedPermission(
   }
   let candidateRules: PermissionRule[]
   try {
-    candidateRules = listPermissionRules(db, repoId)
+    candidateRules = listApplicableRules(db, repoId)
   } catch (e) {
     logger.warn(`Auto-approve rules read failed (repo ${repoId}):`, e)
     return
@@ -312,7 +312,7 @@ async function handleAskedPermission(
     return
   }
   if (!candidateRules.some((rule) => ruleMatches(rule, permission))) {
-    logger.info(`Auto-approve no-match (${candidateRules.length} repo rules): ${describe()}`)
+    logger.info(`Auto-approve no-match (${candidateRules.length} repo+global rules): ${describe()}`)
     return
   }
   markResponded(permission.id)

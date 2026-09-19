@@ -589,14 +589,14 @@ export const openApiSpec = {
       get: {
         tags: ['permission-rules'],
         summary: 'List permission rules',
-        parameters: [{ name: 'repoId', in: 'query', schema: { type: 'integer' } }],
+        parameters: [{ name: 'repoId', in: 'query', schema: { type: 'integer' } }, { name: 'scope', in: 'query', schema: { type: 'string', enum: ['global'] }, description: 'scope=global이면 전역 룰만' }],
         responses: {
           '200': { description: 'Rules', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/PermissionRule' } } } } },
         },
       },
       post: {
         tags: ['permission-rules'],
-        summary: 'Create a permission rule',
+        summary: 'Create a permission rule (repoId null/생략이면 전역 룰)',
         requestBody: {
           required: true,
           content: {
@@ -604,11 +604,11 @@ export const openApiSpec = {
               schema: {
                 type: 'object',
                 properties: {
-                  repoId: { type: 'integer' },
+                  repoId: { type: ['integer', 'null'], description: 'null이면 전역 룰' },
                   permission: { type: 'string' },
                   pattern: { type: 'string' },
                 },
-                required: ['repoId', 'permission', 'pattern'],
+                required: ['permission', 'pattern'],
               },
             },
           },
@@ -1350,7 +1350,7 @@ export const openApiSpec = {
         type: 'object',
         properties: {
           id: { type: 'integer' },
-          repoId: { type: 'integer' },
+          repoId: { type: ['integer', 'null'], description: 'null이면 전역 룰' },
           permission: { type: 'string' },
           pattern: { type: 'string' },
           createdAt: { type: 'integer' },

@@ -6,7 +6,8 @@ import { getRepoById } from '../db/queries'
 import { logger } from '../utils/logger'
 
 const CreatePermissionRuleSchema = z.object({
-  repoId: z.number().int().positive(),
+  // null/생략이면 전역 룰 — 모든 레포 세션에 적용
+  repoId: z.number().int().positive().nullish(),
   permission: z.string().min(1).max(255),
   pattern: z.string().min(1).max(10000),
 })
@@ -16,6 +17,9 @@ export function createPermissionRuleRoutes(db: Database) {
 
   app.get('/', async (c) => {
     try {
+      if (c.req.query('scope') === 'global') {
+        return c.json(permissionRuleDb.listGlobalPermissionRules(db))
+      }
       const repoIdRaw = c.req.query('repoId')
       const repoId = repoIdRaw ? parseInt(repoIdRaw, 10) : undefined
       const rules = permissionRuleDb.listPermissionRules(db, repoId && !Number.isNaN(repoId) ? repoId : undefined)
@@ -30,12 +34,13 @@ export function createPermissionRuleRoutes(db: Database) {
     try {
       const body = await c.req.json()
       const validated = CreatePermissionRuleSchema.parse(body)
+      const repoId = validated.repoId ?? null
 
-      if (!getRepoById(db, validated.repoId)) {
+      if (repoId !== null && !getRepoById(db, repoId)) {
         return c.json({ error: 'Repo not found' }, 404)
       }
 
-      const rule = permissionRuleDb.createPermissionRule(db, validated)
+      const rule = permissionRuleDb.createPermissionRule(db, { ...validated, repoId })
       return c.json(rule, 201)
     } catch (error) {
       if (error instanceof z.ZodError) {

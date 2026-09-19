@@ -247,6 +247,38 @@ export function runMigrations(db: Database): void {
       logger.debug('untracked_suggestions table may already exist:', e)
     }
 
+    // permission_rules: repo_id NULL 허용 (전역 룰). 기존 테이블은 NOT NULL이라 재빌드.
+    try {
+      const prTable = db.prepare('PRAGMA table_info(permission_rules)').all() as any[]
+      const repoCol = prTable.find((col: any) => col.name === 'repo_id')
+      if (repoCol && repoCol.notnull === 1) {
+        logger.info('Migrating permission_rules table to allow nullable repo_id (global rules)')
+        db.run('BEGIN TRANSACTION')
+        try {
+          db.run(`
+            CREATE TABLE permission_rules_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              repo_id INTEGER,
+              permission TEXT NOT NULL,
+              pattern TEXT NOT NULL,
+              created_at INTEGER NOT NULL
+            )
+          `)
+          db.run('INSERT INTO permission_rules_new (id, repo_id, permission, pattern, created_at) SELECT id, repo_id, permission, pattern, created_at FROM permission_rules')
+          db.run('DROP TABLE permission_rules')
+          db.run('ALTER TABLE permission_rules_new RENAME TO permission_rules')
+          db.run('CREATE INDEX IF NOT EXISTS idx_permission_rules_repo ON permission_rules(repo_id)')
+          db.run('COMMIT')
+          logger.info('Successfully migrated permission_rules table (repo_id nullable)')
+        } catch (migrationError) {
+          db.run('ROLLBACK')
+          throw migrationError
+        }
+      }
+    } catch (error) {
+      logger.debug('permission_rules table may not exist yet:', error)
+    }
+
     // ── 전체 대화 검색 (Hermes 세션 검색 계층) ─────────────────────────
     // FTS5 trigram : 한글 부분일치 필수. 인덱스는 opencode DB의 message/part를
     // idle 시점에 pull하여 채운다 (per-message rebuild 전략).

@@ -1,8 +1,11 @@
 import type { PermissionRule } from './types'
 import { API_BASE_URL } from '@/config'
 
-export async function listPermissionRules(repoId?: number): Promise<PermissionRule[]> {
-  const query = repoId ? `?repoId=${repoId}` : ''
+export async function listPermissionRules(repoId?: number, scope?: 'global'): Promise<PermissionRule[]> {
+  const params = new URLSearchParams()
+  if (scope === 'global') params.set('scope', 'global')
+  else if (repoId) params.set('repoId', String(repoId))
+  const query = params.size > 0 ? `?${params.toString()}` : ''
   const response = await fetch(`${API_BASE_URL}/api/permission-rules${query}`)
 
   if (!response.ok) {
@@ -13,7 +16,7 @@ export async function listPermissionRules(repoId?: number): Promise<PermissionRu
 }
 
 export async function createPermissionRule(
-  repoId: number,
+  repoId: number | null,
   permission: string,
   pattern: string,
 ): Promise<PermissionRule> {

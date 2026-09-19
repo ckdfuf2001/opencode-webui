@@ -89,7 +89,7 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
     
     CREATE TABLE IF NOT EXISTS permission_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      repo_id INTEGER NOT NULL,
+      repo_id INTEGER,
       permission TEXT NOT NULL,
       pattern TEXT NOT NULL,
       created_at INTEGER NOT NULL

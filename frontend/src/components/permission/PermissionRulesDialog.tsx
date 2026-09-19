@@ -489,7 +489,7 @@ export function PermissionRulesDialog({
         )}
 
         {scope === 'global' && (
-          <p className="text-xs text-muted-foreground text-center py-2">전역에서는 알림/스킬 전역값만 설정합니다. Permission 룰은 레포 또는 세션 패널에서 추가하세요.</p>
+          <p className="text-xs text-muted-foreground text-center py-2">전역 자동승인 룰은 Settings → Permissions 탭에서 관리하세요. Permission 룰 추가는 레포 또는 세션 패널에서 가능합니다.</p>
         )}
         </div>
         <div className="rounded-lg border border-border bg-card p-3 space-y-3">

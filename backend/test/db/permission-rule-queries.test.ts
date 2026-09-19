@@ -57,6 +57,31 @@ describe('Permission Rule Queries', () => {
     })
   })
 
+  describe('listGlobalPermissionRules', () => {
+    it('should select only global rules', () => {
+      const stmt = { all: vi.fn().mockReturnValue([]) }
+      mockDb.prepare.mockReturnValue(stmt)
+
+      db.listGlobalPermissionRules(mockDb)
+
+      expect(mockDb.prepare).toHaveBeenCalledWith(
+        'SELECT * FROM permission_rules WHERE repo_id IS NULL ORDER BY created_at DESC'
+      )
+    })
+  })
+
+  describe('listApplicableRules', () => {
+    it('should include repo and global rules with repo first', () => {
+      const stmt = { all: vi.fn().mockReturnValue([ruleRow]) }
+      mockDb.prepare.mockReturnValue(stmt)
+
+      const result = db.listApplicableRules(mockDb, 2)
+
+      expect(stmt.all).toHaveBeenCalledWith(2)
+      expect(result).toHaveLength(1)
+    })
+  })
+
   describe('getPermissionRuleById', () => {
     it('should return rule by ID', () => {
       const stmt = { get: vi.fn().mockReturnValue(ruleRow) }
@@ -114,6 +139,27 @@ describe('Permission Rule Queries', () => {
 
       expect(insertStmt.run).toHaveBeenCalledWith(1, 'bash', 'npm run build', expect.any(Number))
       expect(result.id).toBe(2)
+    })
+
+    it('should insert a global rule when repoId is null', () => {
+      const dupCheckStmt = { get: vi.fn().mockReturnValue(undefined) }
+      const insertStmt = { run: vi.fn().mockReturnValue({ changes: 1, lastInsertRowid: 3 }) }
+      const selectStmt = { get: vi.fn().mockReturnValue({ ...ruleRow, id: 3, repo_id: null }) }
+
+      mockDb.prepare
+        .mockReturnValueOnce(dupCheckStmt)
+        .mockReturnValueOnce(insertStmt)
+        .mockReturnValueOnce(selectStmt)
+
+      const result = db.createPermissionRule(mockDb, {
+        repoId: null,
+        permission: 'bash',
+        pattern: 'npm run build'
+      })
+
+      expect(dupCheckStmt.get).toHaveBeenCalledWith(null, 'bash', 'npm run build')
+      expect(insertStmt.run).toHaveBeenCalledWith(null, 'bash', 'npm run build', expect.any(Number))
+      expect(result.repoId).toBeNull()
     })
   })
 

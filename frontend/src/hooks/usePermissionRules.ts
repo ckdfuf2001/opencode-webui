@@ -13,14 +13,24 @@ export function usePermissionRules(repoId?: number) {
   })
 }
 
+/** Settings 전역 탭용: 전역 룰만 (scope=global). */
+export function useGlobalPermissionRules() {
+  return useQuery({
+    queryKey: ['permission-rules', 'global-scope'],
+    queryFn: () => listPermissionRules(undefined, 'global'),
+    enabled: true,
+  })
+}
+
 export function useCreatePermissionRule() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ repoId, permission, pattern }: { repoId: number; permission: string; pattern: string }) =>
+    mutationFn: ({ repoId, permission, pattern }: { repoId: number | null; permission: string; pattern: string }) =>
       createPermissionRule(repoId, permission, pattern),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['permission-rules', variables.repoId] })
+      queryClient.invalidateQueries({ queryKey: ['permission-rules', variables.repoId ?? 'global'] })
+      queryClient.invalidateQueries({ queryKey: ['permission-rules', 'global-scope'] })
     },
   })
 }
@@ -29,9 +39,10 @@ export function useDeletePermissionRule() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (input: { id: number; repoId: number }) => deletePermissionRule(input.id),
+    mutationFn: (input: { id: number; repoId?: number | null }) => deletePermissionRule(input.id),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['permission-rules', variables.repoId] })
+      queryClient.invalidateQueries({ queryKey: ['permission-rules', variables.repoId ?? 'global'] })
+      queryClient.invalidateQueries({ queryKey: ['permission-rules', 'global-scope'] })
     },
   })
 }
