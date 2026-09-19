@@ -42,6 +42,7 @@ import { useCommandRunsBySession } from "@/hooks/useCommandRuns";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
 import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
+import { toWsPath } from "@/lib/repoPath";
 
 interface InjectedFile {
   token: number;
@@ -819,7 +820,7 @@ export function SessionDetail() {
         if (shouldPush(sessionId, preferences ?? {}, repoId)) {
           const title = '승인이 필요합니다';
           const pattern = (currentPermission as unknown as { pattern?: string[]; permission?: string })?.pattern?.[0] ?? (currentPermission as unknown as { permission?: string })?.permission ?? '';
-          const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : `repo ${repoId}`;
+          const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.workspaceRel : repo.workspaceRel) : `repo ${repoId}`;
           const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
           const body = `${repoLabel} · ${sessLabel}${pattern ? ` — ${pattern}` : ''}`;
           sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
@@ -838,7 +839,7 @@ export function SessionDetail() {
       prevQuestionIdRef.current = qid;
       if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
       if (shouldPush(sessionId, preferences ?? {}, repoId)) {
-        const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.localPath : repo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
+        const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.workspaceRel : repo.workspaceRel) : (repoId ? `repo ${repoId}` : 'Workspace');
         const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
         const body = `${repoLabel} · ${sessLabel}`;
         sendPushNotification('질문이 도착했습니다', { body, tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
@@ -1260,24 +1261,19 @@ export function SessionDetail() {
     const normalizedFilePath = filePath.replace(/\\/g, '/')
     let pathToOpen = normalizedFilePath
     
-    if (repo?.fullPath) {
-      const normalizedFullPath = repo.fullPath.replace(/\\/g, '/')
-      const workspaceReposPath = normalizedFullPath.substring(0, normalizedFullPath.lastIndexOf('/'))
-      
-      if (normalizedFilePath.startsWith(workspaceReposPath + '/')) {
-        pathToOpen = normalizedFilePath.substring(workspaceReposPath.length + 1)
-      } else if (repo?.localPath && normalizedFilePath.startsWith('chat_uploads/')) {
-        pathToOpen = `${repo.localPath}/${normalizedFilePath}`
-      } else if (repo?.localPath && !/^[a-zA-Z]:[\\/]/.test(normalizedFilePath) && !normalizedFilePath.startsWith('/')) {
+    if (repo?.workspaceRel) {
+      if (normalizedFilePath.startsWith('chat_uploads/')) {
+        pathToOpen = toWsPath(`chat_uploads/${normalizedFilePath}`, repo.workspaceRel)
+      } else if (!/^[a-zA-Z]:[\\/]/.test(normalizedFilePath) && !normalizedFilePath.startsWith('/')) {
         const candidates = normalizedFilePath.includes('/')
           ? [
-              `${repo.localPath}/${normalizedFilePath}`,
-              `${repo.localPath}/chat_uploads/${normalizedFilePath}`,
+              toWsPath(normalizedFilePath, repo.workspaceRel),
+              toWsPath(`chat_uploads/${normalizedFilePath}`, repo.workspaceRel),
               normalizedFilePath,
             ]
           : [
-              `${repo.localPath}/chat_uploads/${normalizedFilePath}`,
-              `${repo.localPath}/${normalizedFilePath}`,
+              toWsPath(`chat_uploads/${normalizedFilePath}`, repo.workspaceRel),
+              toWsPath(normalizedFilePath, repo.workspaceRel),
               normalizedFilePath,
             ]
         for (const candidate of candidates) {
@@ -1465,10 +1461,10 @@ export function SessionDetail() {
 
 const handleGlobalDrop = useCallback(async (e: DragEvent) => {
     const files = e.dataTransfer?.files
-    if (!files || files.length === 0 || !repo?.localPath) return
+    if (!files || files.length === 0 || !repo?.workspaceRel) return
 
     e.preventDefault()
-    const uploadDir = `${repo.localPath}/chat_uploads`
+    const uploadDir = toWsPath('chat_uploads', repo.workspaceRel)
     const results: { name: string; path: string }[] = []
     let lastError: string | null = null
 
@@ -1696,7 +1692,7 @@ if (results.length > 0) {
               <PromptInput
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
-                uploadDir={`${repo.localPath}/chat_uploads`}
+                uploadDir={toWsPath('chat_uploads', repo.workspaceRel)}
                 sessionID={sessionId}
                 disabled={!isConnected}
                 onShowModelsDialog={() => setModelDialogOpen(true)}
@@ -1749,8 +1745,8 @@ if (results.length > 0) {
 
         {fileBrowserOpen && (
           <SessionFilePanel
-            basePath={repo.localPath}
-            repoName={repo.repoUrl?.split("/").pop()?.replace(".git", "") || repo.localPath || "Repository"}
+            basePath={repo.workspaceRel}
+            repoName={repo.repoUrl?.split("/").pop()?.replace(".git", "") || repo.workspaceRel || "Repository"}
             initialSelectedFile={selectedFilePath}
             width={filePanelWidth}
             onClose={handleFileBrowserClose}
@@ -1763,8 +1759,8 @@ if (results.length > 0) {
       <FileBrowserSheet
         isOpen={fileBrowserFullscreenOpen}
         onClose={() => setFileBrowserFullscreenOpen(false)}
-        basePath={repo?.localPath}
-        repoName={repo?.repoUrl?.split("/").pop()?.replace(".git", "") || repo?.localPath || "Repository"}
+        basePath={repo?.workspaceRel}
+        repoName={repo?.repoUrl?.split("/").pop()?.replace(".git", "") || repo?.workspaceRel || "Repository"}
         initialSelectedFile={selectedFilePath}
         onMentionFile={handleMentionFile}
       />

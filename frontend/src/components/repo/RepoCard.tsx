@@ -20,6 +20,7 @@ interface RepoCardProps {
     repoUrl?: string | null;
     localPath?: string;
     fullPath?: string;
+    workspaceRel: string;
     branch?: string;
     currentBranch?: string;
     cloneStatus: string;
@@ -183,7 +184,7 @@ export function RepoCard({
             )}
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <Button variant="ghost" size="icon" className={`h-7 w-7 ${isFav ? 'text-amber-500' : ''}`} onClick={async (e) => { e.stopPropagation(); try { if (isFav) await removeFavorite(favId); else await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.fullPath || '', title: repo.localPath || `repo-${repo.id}` }); showToast.success(isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'); queryClient.invalidateQueries({ queryKey: ['favorites'] }) } catch (err:any){ showToast.error(err.message) } }} title={isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
+                <Button variant="ghost" size="icon" className={`h-7 w-7 ${isFav ? 'text-amber-500' : ''}`} onClick={async (e) => { e.stopPropagation(); try { if (isFav) await removeFavorite(favId); else await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.workspaceRel || '', title: repo.localPath || `repo-${repo.id}` }); showToast.success(isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'); queryClient.invalidateQueries({ queryKey: ['favorites'] }) } catch (err:any){ showToast.error(err.message) } }} title={isFav ? '즐겨찾기 해제' : '즐겨찾기 등록'}>
                   <Star className={`w-4 h-4 ${isFav ? 'fill-amber-500' : ''}`} />
                 </Button>
                 <DropdownMenu>
@@ -298,7 +299,7 @@ export function RepoCard({
         onOpenChange={handleScheduleOpenChange}
         repoId={repo.id}
         opcodeUrl={OPENCODE_API_ENDPOINT}
-        directory={repo.fullPath}
+        directory={repo.workspaceRel}
       />
     </div>
   );

@@ -281,7 +281,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                   onSessionChecked={(sid, checked) => {
                     const isRepoSelected = selectedRepos.has(repo.id)
                     if (!checked && isRepoSelected) {
-                      const cachedSessions = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+                      const cachedSessions = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.workspaceRel])
                       const ids: string[] = (cachedSessions ?? []).map((s: any) => s.id as string)
                       if (ids.length === 0) {
                         const n = new Set(selectedSessions); n.delete(sid); setSelectedSessions(n)
@@ -295,7 +295,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                     const ns = new Set(selectedSessions);
                     if (checked) ns.add(sid); else ns.delete(sid);
                     // 전부 체크되면 레포도 체크
-                    const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+                    const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.workspaceRel])
                     const ids: string[] = (cached ?? []).map((s: any) => s.id as string)
                     if (ids.length > 0 && ids.every(id => ns.has(id))) {
                       setSelectedRepos(prev => new Set([...prev, repo.id]))
@@ -386,7 +386,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
 }
 
 function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSessionChecked, onDeleteRepo, isDeleting }: {
-  repo: { id: number; localPath?: string; fullPath?: string };
+  repo: { id: number; localPath?: string; fullPath?: string; workspaceRel: string };
   isSelected: boolean;
   selectedSessions: Set<string>;
   onRepoChecked: (checked: boolean, ids: string[]) => void;
@@ -395,12 +395,12 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
   isDeleting: boolean;
 }) {
   const queryClient = useQueryClient();
-  const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, repo.fullPath, { repoId: repo.id });
+  const { data: sessions } = useSessions(OPENCODE_API_ENDPOINT, repo.workspaceRel, { repoId: repo.id });
   const sessionIds = useMemo(() => (sessions ?? []).map((s: any) => s.id as string), [sessions]);
   // 행이 사라지면 세션 목록 캐시를 즉시 비운다 (다음 열 때 새로 로드)
   useEffect(() => {
-    return () => { queryClient.removeQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath] }) }
-  }, [queryClient, repo.fullPath]);
+    return () => { queryClient.removeQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.workspaceRel] }) }
+  }, [queryClient, repo.workspaceRel]);
   const [editingSid, setEditingSid] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
@@ -410,10 +410,10 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
     try {
       try { await renameSessionRepo(repo.id, sid, title) } catch {
         const { createOpenCodeClient } = await import('@/api/opencode')
-        const client = createOpenCodeClient(OPENCODE_API_ENDPOINT, repo.fullPath)
+        const client = createOpenCodeClient(OPENCODE_API_ENDPOINT, repo.workspaceRel)
         await client.updateSession(sid, { title } as any)
       }
-      showToast.success('세션 이름 변경됨'); queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath] }); setEditingSid(null)
+      showToast.success('세션 이름 변경됨'); queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.workspaceRel] }); setEditingSid(null)
     } catch (e:any){ showToast.error(e.message || '이름 변경 실패') }
   }
 
@@ -450,7 +450,7 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
                       className="p-1 rounded hover:bg-background shrink-0"
                       onClick={(e) => {
                         e.preventDefault();
-                        fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(repo.fullPath || '')}`, { method: 'DELETE' })
+                        fetch(`${OPENCODE_API_ENDPOINT}/session/${sid}?directory=${encodeURIComponent(repo.workspaceRel || '')}`, { method: 'DELETE' })
                           .then(() => window.location.reload())
                           .catch(() => {})
                       }}

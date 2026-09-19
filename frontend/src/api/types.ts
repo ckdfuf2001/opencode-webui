@@ -3,6 +3,7 @@ export interface Repo {
   repoUrl: string
   localPath: string
   fullPath: string
+  workspaceRel: string
   branch?: string
   currentBranch?: string
   defaultBranch: string
