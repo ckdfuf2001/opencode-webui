@@ -10,7 +10,6 @@ import { permissionEvents } from '@/hooks/usePermissionRequests'
 import { useEnqueueQueuedChat, useQueuedChats } from '@/hooks/useChatQueue'
 import { useSettings } from '@/hooks/useSettings'
 import { shouldPush, sendPushNotification, getSessionOverride } from '@/lib/notifications'
-import { recordCommandIntent } from '@/lib/commandIntent'
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import { listRepos } from '@/api/repos'
@@ -664,8 +663,6 @@ function MiniSendButton({ sessionId, directory, draft, selectedSessionId, onSent
         try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(targetId)}/cancelled`, { method: 'DELETE' }) } catch {}
       }
       // 큐 경유 발송 — PromptInput과 동일 경로 (busy/취소 중에도 유실 없이 순서 보존)
-      // `/커맨드`면 칩이 바로 붙도록 인텐트 기록 (세션 화면 텍스트 매칭용)
-      recordCommandIntent(targetId, text)
       // 세션 리뷰/자동변경 오버라이드도 스냅샷으로 실어 보낸다 (undefined면 상속)
       let reviewWanted: boolean | undefined
       let autoApply: boolean | undefined

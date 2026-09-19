@@ -19,7 +19,6 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { useCommands } from "@/hooks/useCommands";
-import { liveCommandIntents } from "@/lib/commandIntent";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
@@ -222,21 +221,43 @@ export function SessionDetail() {
   // scrollToMessage(콜백)에서 최신 목록을 읽기 위한 미러
   const baseMessagesRef = useRef(baseMessages);
   useEffect(() => { baseMessagesRef.current = baseMessages; }, [baseMessages]);
-  // 스킬/커맨드 호출 표시: run.messageId(assistant)의 parentID로 trigger를 찾는다.
-  // 시간 휴리스틱은 오매칭이 확정적이라 쓰지 않는다 — messageId 없는 레거시는 표시 포기.
-  // trigger user 메시지 위에 `/이름` 칩만 덧붙이고 원본은 그대로 둔다.
+  // 스킬/커맨드 호출 표시: `/이름` 칩을 trigger user 메시지 위에 덧붙인다 (원본 그대로).
+  // 단일 진실은 백엔드 run(command_runs): 발송 시 기록되고 턴 종료 후 messageId가 붙는다.
+  // 매칭 우선순위:
+  //  1) run.messageId → assistant 메시지의 parentID (확정)
+  //  2) 발송 중 run(messageId 없음): startedAt 이후 최신 user 메시지 (큐가 순차 발송이라 안전)
+  //  3) 텍스트 낙관 매칭: 첫 줄이 `/이름`인 user 메시지 (인텐트·알려진 목록 기준, 히스토리 커버)
   const { data: sessionRuns } = useCommandRunsBySession(sessionId ?? '');
   // 칩 표시용 커맨드 목록. PromptInput과 동일 키(opcodeUrl|directory)라 캐시 공유, 추가 fetch 없음.
   // oneshot(UI 전용: help/new 등)은 서버 실행이 없어 칩 대상에서 뺀다.
   const { commands } = useCommands(opcodeUrl, repoDirectory, sessionId);
   const invocationByMessage = useMemo(() => {
-    const map = new Map<string, { name: string; runId: string }>();
+    const map = new Map<string, { name: string; runId: string; args: string | null }>();
     if (!sessionRuns || !baseMessages) return map;
     const byId = new Map(baseMessages.map((m) => [m.info.id, m]));
     const taken = new Set<string>();
     const isTriggerCandidate = (m: MessageWithParts | undefined): m is MessageWithParts =>
       !!m && m.info.role === 'user' && !!m.parts && m.parts.length > 0 &&
       !m.parts.every((p) => (p as { synthetic?: boolean }).synthetic);
+    const firstTextOf = (m: MessageWithParts): string => {
+      const p = m.parts?.find((x) => (x as { type?: string }).type === 'text') as { text?: string } | undefined;
+      return (p?.text ?? '').trim();
+    };
+    const takeNewestAfter = (
+      since: number,
+      extra?: (m: MessageWithParts) => boolean,
+    ): MessageWithParts | null => {
+      let best: MessageWithParts | null = null;
+      for (const m of baseMessages) {
+        if (!isTriggerCandidate(m) || taken.has(m.info.id) || map.has(m.info.id)) continue;
+        if ((m.info.time?.created ?? 0) < since) continue;
+        if (extra && !extra(m)) continue;
+        if (!best || (m.info.time?.created ?? 0) > (best.info.time?.created ?? 0)) best = m;
+      }
+      return best;
+    };
+    // 1) 확정: run.messageId(assistant) → parentID(trigger user)
+    // 시간 휴리스틱은 오매칭이 확정적이라 쓰지 않는다 — messageId 없는 레거시는 표시 포기.
     const ordered = [...sessionRuns].sort((a, b) => a.startedAt - b.startedAt);
     for (const run of ordered) {
       if (!run.commandName || !run.messageId) continue;
@@ -245,64 +266,40 @@ export function SessionDetail() {
       const viaParent = parentId ? byId.get(parentId) : undefined;
       if (isTriggerCandidate(viaParent) && !taken.has(viaParent.info.id)) {
         taken.add(viaParent.info.id);
-        map.set(viaParent.info.id, { name: run.commandName, runId: run.id });
-        continue;
+        map.set(viaParent.info.id, { name: run.commandName, runId: run.id, args: run.args ?? null });
       }
-      // 폴백: 하한을 둔 시간 범위에서 가장 늦은 미사용 user 메시지
-      const assistantCreated = (assistant?.info.time?.created ?? run.startedAt + 60_000);
-      let best: MessageWithParts | null = null;
-      for (const m of baseMessages) {
-        if (!isTriggerCandidate(m) || taken.has(m.info.id)) continue;
-        const created = m.info.time?.created ?? 0;
-        if (created < run.startedAt - 120_000 || created > assistantCreated) continue;
-        if (!best || created > (best.info.time?.created ?? 0)) best = m;
-      }
+    }
+    // 2) 발송 중: messageId가 아직 없어도 run은 발송 시점에 기록된다.
+    // 큐가 한 번에 하나씩만 발송하므로 startedAt 이후 최신 메시지가 그 턴이다.
+    // 좀비 run(오래 멈춘 started)이 이후 메시지를 가로채지 않게 10분 상한.
+    const now = Date.now();
+    for (const run of ordered) {
+      if (!run.commandName || run.messageId) continue;
+      if (now - run.startedAt > 10 * 60_000) continue;
+      if (run.status !== 'started' && !(run.finishedAt != null && now - run.finishedAt < 60_000)) continue;
+      const best = takeNewestAfter(run.startedAt - 10_000);
       if (best) {
         taken.add(best.info.id);
-        map.set(best.info.id, { name: run.commandName, runId: run.id });
+        map.set(best.info.id, { name: run.commandName, runId: run.id, args: run.args ?? null });
       }
     }
-    // 낙관적 칩 1) 전송 시점 인텐트: 커맨드 목록 로딩 전·미니챗 전송까지 커버.
-    // 입력 원문 그대로 저장되므로 텍스트는 원문 기준(소문자 무시)으로 매칭한다.
-    const firstTextOf = (m: MessageWithParts): string => {
-      const p = m.parts?.find((x) => (x as { type?: string }).type === 'text') as { text?: string } | undefined;
-      return (p?.text ?? '').trim();
-    };
-    try {
-      for (const name of liveCommandIntents(sessionId ?? '')) {
-        const lower = name.toLowerCase();
-        let best: MessageWithParts | null = null;
-        for (const m of baseMessages ?? []) {
-          if (!isTriggerCandidate(m) || taken.has(m.info.id) || map.has(m.info.id)) continue;
-          const line = firstTextOf(m).split('\n')[0]?.trim() ?? '';
-          const cm = line.match(/^\/([^\s/]+)(?:\s|$)/);
-          if (!cm || (cm[1] ?? '').toLowerCase() !== lower) continue;
-          const created = m.info.time?.created ?? 0;
-          if (!best || created > (best.info.time?.created ?? 0)) best = m;
-        }
-        if (best) {
-          taken.add(best.info.id);
-          map.set(best.info.id, { name, runId: '' });
-        }
-      }
-    } catch { /* optimistic-only, never break render */ }
-    // 낙관적 칩 2) 텍스트+목록 기준: 히스토리·재전송·인텐트 유실까지 커버.
-    // 첫 줄이 실제 실행 커맨드(known, 비-oneshot)로 시작하는 user 메시지가 대상.
-    // 백엔드 run 매칭(taken)이 우선이라 턴 종료 후 run 기준으로 교체된다.
-    const executable = new Map<string, string>();
+    // 3) 텍스트 낙관 매칭: 알려진 실행 커맨드 목록 기준 (히스토리·재전송 커버).
+    // /command 호출은 opencode가 템플릿을 펼쳐 저장해서 원문에 `/이름`이 없고,
+    // 스킬 합성 전에도 커버한다. 표시명은 목록 기준 canonical 우선.
+    const optimistic = new Map<string, string>();
     for (const c of commands ?? []) {
-      if (!c.oneshot) executable.set(c.name.toLowerCase(), c.name);
+      if (!c.oneshot) optimistic.set(c.name.toLowerCase(), c.name);
     }
-    if (executable.size > 0 && baseMessages) {
+    if (optimistic.size > 0) {
       for (const m of baseMessages) {
         if (!isTriggerCandidate(m) || taken.has(m.info.id) || map.has(m.info.id)) continue;
         const line = firstTextOf(m).split('\n')[0]?.trim() ?? '';
         const cm = line.match(/^\/([^\s/]+)(?:\s|$)/);
         if (!cm) continue;
-        const canon = executable.get((cm[1] ?? '').toLowerCase());
-        if (!canon) continue;
+        const display = optimistic.get((cm[1] ?? '').toLowerCase());
+        if (!display) continue;
         taken.add(m.info.id);
-        map.set(m.info.id, { name: canon, runId: '' });
+        map.set(m.info.id, { name: display, runId: '', args: null });
       }
     }
     return map;

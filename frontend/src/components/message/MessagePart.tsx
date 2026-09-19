@@ -23,7 +23,7 @@ interface MessagePartProps {
   directory?: string
   messageStreaming?: boolean
   /** 커맨드 호출 정보 — user 첫 텍스트 파트 위에 `/이름` 칩만 덧붙인다 (원본 유지) */
-  invocation?: { name: string; runId: string }
+  invocation?: { name: string; runId: string; args: string | null }
   /** 칩 클릭 → 커맨드 히스토리 창 열기 */
   onCommandClick?: () => void
 }

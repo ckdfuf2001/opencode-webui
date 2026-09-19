@@ -30,12 +30,16 @@ function getRawMessageTextContent(msg: MessageWithParts): string {
     .trim()
 }
 
-function getEditablePrompt(msg: MessageWithParts): string {
+function getEditablePrompt(msg: MessageWithParts, invocation?: { name: string; args: string | null }): string {
   const lines: string[] = []
+  const fileLines: string[] = []
+  let headText = ''
   for (const p of msg.parts) {
     if (p.type === 'file') {
       const filename = p.filename || p.url?.replace(/^file:\/{2,3}/, '').split('/').pop() || 'File'
-      lines.push(`@"${filename}"`)
+      const mention = `@"${filename}"`
+      lines.push(mention)
+      fileLines.push(mention)
     } else if (p.type === 'text' && p.text) {
       const text = stripMemoryRecall(p.text.trim())
       if (!text) continue
@@ -43,12 +47,18 @@ function getEditablePrompt(msg: MessageWithParts): string {
       // 스킬 합성문(`/이름 인자` + 템플릿 전문)은 `/이름 인자`로 되돌린다 —
       // edit창에 스크립트 전문이 들어가면 재전송이 어긋난다.
       const skill = parseSkillInvocation(text)
-      if (skill) {
-        lines.push(`/${skill.name}${skill.args ? ` ${skill.args}` : ''}`)
-        continue
-      }
-      lines.push(text.replace(MENTION_PATTERN, (m, quoted, single, unquoted) => quoted || single ? m : `@"${unquoted}"`))
+      const line = skill
+        ? `/${skill.name}${skill.args ? ` ${skill.args}` : ''}`
+        : text.replace(MENTION_PATTERN, (m, quoted, single, unquoted) => quoted || single ? m : `@"${unquoted}"`)
+      lines.push(line)
+      if (!headText) headText = line
     }
+  }
+  // /command 호출은 opencode가 템플릿을 펼쳐 저장해서 원문에 `/이름`이 없다.
+  // run 기록의 이름·인자로 복원해야 edit 재전송이 커맨드로 동작한다.
+  if (invocation && !headText.startsWith(`/${invocation.name}`)) {
+    const cmd = `/${invocation.name}${invocation.args ? ` ${invocation.args}` : ''}`
+    return [cmd, ...fileLines].join(' ').trim()
   }
   return lines.join(' ').trim()
 }
@@ -71,7 +81,7 @@ interface MessageThreadProps {
   highlightedMessageID?: string | null
   isLoading?: boolean
   /** trigger user 메시지id → 호출 정보 (원본 위에 `/이름` 칩만 덧붙인다) */
-  invocations?: Map<string, { name: string; runId: string }>
+  invocations?: Map<string, { name: string; runId: string; args: string | null }>
   /** 칩 클릭 → 커맨드 히스토리 창 열기 */
   onOpenCommandHistory?: () => void
 }
@@ -279,7 +289,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 )}
                 {msg.info.role === 'user' && onEditMessage && !streaming && (
                   <button
-                    onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg))}
+                    onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg, invocations?.get(msg.info.id)))}
                     className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
                     title="Edit and resend"
                   >
