@@ -7,6 +7,7 @@ import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
 import { stripMemoryRecall } from '@/lib/stripRecall'
+import { parseSkillInvocation } from '@/lib/skillBlock'
 import { formatChatTime } from '@/lib/chatTime'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { showToast } from '@/lib/toast'
@@ -39,6 +40,13 @@ function getEditablePrompt(msg: MessageWithParts): string {
       const text = stripMemoryRecall(p.text.trim())
       if (!text) continue
       if (/^Called the \w+ tool with the following input:/i.test(text)) continue
+      // 스킬 합성문(`/이름 인자` + 템플릿 전문)은 `/이름 인자`로 되돌린다 —
+      // edit창에 스크립트 전문이 들어가면 재전송이 어긋난다.
+      const skill = parseSkillInvocation(text)
+      if (skill) {
+        lines.push(`/${skill.name}${skill.args ? ` ${skill.args}` : ''}`)
+        continue
+      }
       lines.push(text.replace(MENTION_PATTERN, (m, quoted, single, unquoted) => quoted || single ? m : `@"${unquoted}"`))
     }
   }

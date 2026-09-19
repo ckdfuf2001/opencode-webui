@@ -19,6 +19,7 @@ import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { useCommands } from "@/hooks/useCommands";
+import { liveCommandIntents } from "@/lib/commandIntent";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
@@ -261,8 +262,31 @@ export function SessionDetail() {
         map.set(best.info.id, { name: run.commandName, runId: run.id });
       }
     }
-    // 낙관적 칩: 메시지가 화면에 뜨자마자 `/이름` 칩을 붙인다 (전송 경로 무관 —
-    // 세션 입력창·미니챗·재전송 모두 텍스트 기준이라 인텐트 저장소가 필요 없다).
+    // 낙관적 칩 1) 전송 시점 인텐트: 커맨드 목록 로딩 전·미니챗 전송까지 커버.
+    // 입력 원문 그대로 저장되므로 텍스트는 원문 기준(소문자 무시)으로 매칭한다.
+    const firstTextOf = (m: MessageWithParts): string => {
+      const p = m.parts?.find((x) => (x as { type?: string }).type === 'text') as { text?: string } | undefined;
+      return (p?.text ?? '').trim();
+    };
+    try {
+      for (const name of liveCommandIntents(sessionId ?? '')) {
+        const lower = name.toLowerCase();
+        let best: MessageWithParts | null = null;
+        for (const m of baseMessages ?? []) {
+          if (!isTriggerCandidate(m) || taken.has(m.info.id) || map.has(m.info.id)) continue;
+          const line = firstTextOf(m).split('\n')[0]?.trim() ?? '';
+          const cm = line.match(/^\/([^\s/]+)(?:\s|$)/);
+          if (!cm || (cm[1] ?? '').toLowerCase() !== lower) continue;
+          const created = m.info.time?.created ?? 0;
+          if (!best || created > (best.info.time?.created ?? 0)) best = m;
+        }
+        if (best) {
+          taken.add(best.info.id);
+          map.set(best.info.id, { name, runId: '' });
+        }
+      }
+    } catch { /* optimistic-only, never break render */ }
+    // 낙관적 칩 2) 텍스트+목록 기준: 히스토리·재전송·인텐트 유실까지 커버.
     // 첫 줄이 실제 실행 커맨드(known, 비-oneshot)로 시작하는 user 메시지가 대상.
     // 백엔드 run 매칭(taken)이 우선이라 턴 종료 후 run 기준으로 교체된다.
     const executable = new Map<string, string>();
@@ -270,10 +294,6 @@ export function SessionDetail() {
       if (!c.oneshot) executable.set(c.name.toLowerCase(), c.name);
     }
     if (executable.size > 0 && baseMessages) {
-      const firstTextOf = (m: MessageWithParts): string => {
-        const p = m.parts?.find((x) => (x as { type?: string }).type === 'text') as { text?: string } | undefined;
-        return (p?.text ?? '').trim();
-      };
       for (const m of baseMessages) {
         if (!isTriggerCandidate(m) || taken.has(m.info.id) || map.has(m.info.id)) continue;
         const line = firstTextOf(m).split('\n')[0]?.trim() ?? '';
