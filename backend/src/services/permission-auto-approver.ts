@@ -54,6 +54,11 @@ function wasResponded(id: string): boolean {
   return true
 }
 
+/** 응답 실패 시 dedupe를 풀어 다음 이벤트에서 재시도할 수 있게 한다. */
+function unmarkResponded(id: string): void {
+  respondedRecently.delete(id)
+}
+
 export function globToRegex(pattern: string): RegExp {
   const escaped = pattern
     .split('**')
@@ -81,7 +86,7 @@ function isPathLike(value: string): boolean {
   return value.includes('/') || value.includes('\\') || /^[A-Za-z]:/.test(value)
 }
 
-function getCandidatePatterns(permission: AskedPermission): string[] {
+function getActualPatterns(permission: AskedPermission): string[] {
   const patterns = permission.patterns ?? permission.pattern
   const normalized = Array.isArray(patterns) ? patterns : patterns ? [patterns] : []
   const metadata = (permission.metadata ?? {}) as Record<string, unknown>
@@ -89,9 +94,6 @@ function getCandidatePatterns(permission: AskedPermission): string[] {
   // opencode는 permission마다 다른 키를 쓴다:
   // bash=command, read/edit=path, webfetch=url,
   // external_directory=metadata.filepath/parentDir
-  // NOTE: permission.always는 다음 턴용 제안(허위 가능)이라 매칭에서 제외한다.
-  // 실제 요청(patterns/metadata)과 무관한 제안이 룰에 걸려 승인되던 과승인 방지.
-  // 하위 경로 prefix 허용(룰 "/tmp/foo" → "/tmp/foo/bar")은 ruleMatches가 유지한다.
   const metadataPatterns = [
     ...asString(metadata.command),
     ...asString(metadata.path),
@@ -101,6 +103,23 @@ function getCandidatePatterns(permission: AskedPermission): string[] {
     ...asString(metadata.directory),
   ]
   return [...normalized, ...metadataPatterns]
+}
+
+function getCandidatePatterns(permission: AskedPermission): string[] {
+  const actual = getActualPatterns(permission)
+  if (actual.length > 0) return actual
+  // thin ask 방어: 실제 경로 없이 제안(always)만 온 경우 예전처럼 제안으로 판정한다.
+  // 실제 요청이 있을 때는 제안을 보지 않는다(허위 제안 과승인 방지).
+  // NOTE: 제안 단독 매칭은 최후 수단 — 로그에 남겨 추적한다.
+  if (Array.isArray(permission.always)) {
+    const suggested = permission.always.filter((p): p is string => typeof p === 'string' && !!p)
+    if (suggested.length > 0) {
+      logger.debug(`Auto-approve using always-suggestions (no actual patterns): ${permission.id}`)
+      return suggested
+    }
+  }
+  return []
+  // 하위 경로 prefix 허용(룰 "/tmp/foo" → "/tmp/foo/bar")은 ruleMatches가 유지한다.
 }
 
 export function ruleMatches(rule: PermissionRule, permission: AskedPermission): boolean {
@@ -292,6 +311,18 @@ async function handleAskedPermission(
     }
     repoId = resolveRepoId(db, directory)
     if (repoId == null) {
+      // 폴백: 폴러가 session_status에 기록한 repo_id. 디렉터리 표기 차이
+      // (대소문자·심링크·이동)로 resolveRepoId가 빗나간 경우를 구한다.
+      try {
+        const { getSessionStatusRow } = await import('../db/session-status-queries')
+        const row = getSessionStatusRow(db, permission.sessionID)
+        if (row?.repoId != null) {
+          repoId = row.repoId
+          logger.info(`Auto-approve repo fallback via session_status (repo ${repoId}): ${describe()} dir=${directory}`)
+        }
+      } catch {}
+    }
+    if (repoId == null) {
       logger.info(`Auto-approve skip (no repo for dir): ${describe()} dir=${directory}`)
       return
     }
@@ -320,8 +351,10 @@ async function handleAskedPermission(
     await replyPermission(permission.sessionID, permission.id, isV2, resolveBase)
     logger.info(`Auto-approved permission ${permission.id} (${permission.permission ?? permission.type}) for session ${permission.sessionID}`)
   } catch (e) {
-    // 중복 응답 등 — 해롭지 않으므로 다음 폴링/다이얼로그에 맡긴다
-    logger.debug(`Auto-approve reply skipped for ${permission.id}:`, e)
+    // 응답 실패(404/409 등)는 dedupe를 풀어 다음 이벤트에서 재시도한다.
+    // 성공 전에 mark하면 실패가 영구 미승인으로 굳는다.
+    unmarkResponded(permission.id)
+    logger.debug(`Auto-approve reply failed for ${permission.id} (will retry on next event):`, e)
   }
 }
 

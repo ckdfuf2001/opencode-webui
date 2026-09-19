@@ -172,6 +172,49 @@ describe('ruleMatches', () => {
     ).toBe(true)
   })
 
+  it('falls back to always suggestions only when actuals are empty (thin ask)', () => {
+    // 실제 경로 없이 제안만 온 thin ask는 예전처럼 제안으로 판정한다.
+    expect(
+      ruleMatches(rule({ permission: 'read', pattern: '/tmp/real' }), {
+        id: 'x',
+        sessionID: 's',
+        permission: 'read',
+        patterns: [],
+        always: ['/tmp/real/sub/file.txt'],
+      }),
+    ).toBe(true)
+    // 실제·제안 모두 비면 승인 불가.
+    expect(
+      ruleMatches(rule({ permission: 'read', pattern: '/tmp/real' }), {
+        id: 'x',
+        sessionID: 's',
+        permission: 'read',
+        patterns: [],
+        always: [],
+      }),
+    ).toBe(false)
+  })
+
+  it('matches the exact same allow pattern (re-ask regression)', () => {
+    const same = 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\*'
+    expect(
+      ruleMatches(rule({ permission: 'external_directory', pattern: same }), {
+        id: 'x',
+        sessionID: 's',
+        permission: 'external_directory',
+        patterns: [same],
+      }),
+    ).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'external_directory', pattern: same }), {
+        id: 'x',
+        sessionID: 's',
+        permission: 'external_directory',
+        patterns: ['C:/Users/oh/Documents/Default Project/opencode-webui/*'],
+      }),
+    ).toBe(true)
+  })
+
   it('treats ? as single-char wildcard', () => {
     expect(
       ruleMatches(rule({ permission: 'read', pattern: 'file?.txt' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'file1.txt' }),

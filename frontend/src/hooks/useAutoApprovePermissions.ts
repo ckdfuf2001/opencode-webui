@@ -36,7 +36,7 @@ function isPathLike(value: string): boolean {
   return value.includes('/') || value.includes('\\') || /^[A-Za-z]:/.test(value)
 }
 
-function getCandidatePatterns(permission: Permission): string[] {
+function getActualPatterns(permission: Permission): string[] {
   const patterns = permission.patterns ?? permission.pattern
   const normalized = Array.isArray(patterns) ? patterns : patterns ? [patterns] : []
   const metadata = (permission.metadata ?? {}) as Record<string, unknown>
@@ -44,8 +44,6 @@ function getCandidatePatterns(permission: Permission): string[] {
   // opencode는 permission마다 다른 키를 쓴다:
   // bash=command, read/edit=path, webfetch=url,
   // external_directory=metadata.filepath/parentDir
-  // NOTE: permission.always는 다음 턴용 제안(허위 가능)이라 매칭에서 제외한다.
-  // 하위 경로 prefix 허용은 ruleMatches가 유지한다.
   const metadataPatterns = [
     ...asString(metadata.command),
     ...asString(metadata.path),
@@ -55,6 +53,20 @@ function getCandidatePatterns(permission: Permission): string[] {
     ...asString(metadata.directory),
   ]
   return [...normalized, ...metadataPatterns]
+}
+
+function getCandidatePatterns(permission: Permission): string[] {
+  const actual = getActualPatterns(permission)
+  if (actual.length > 0) return actual
+  // thin ask 방어: 실제 경로 없이 제안(always)만 온 경우 예전처럼 제안으로 판정한다.
+  // 실제 요청이 있을 때는 제안을 보지 않는다(허위 제안 과승인 방지).
+  // NOTE: permission.always는 다음 턴용 제안이라 최후 수단으로만 쓴다.
+  // 하위 경로 prefix 허용은 ruleMatches가 유지한다.
+  if (Array.isArray(permission.always)) {
+    const suggested = permission.always.filter((p): p is string => typeof p === 'string' && !!p)
+    if (suggested.length > 0) return suggested
+  }
+  return []
 }
 
 function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
