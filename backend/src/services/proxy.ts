@@ -172,7 +172,7 @@ function parseDirectory(url: URL): string | undefined {
   return value ? decodeURIComponent(value) : undefined
 }
 
-async function handleTruncate(request: Request, sessionId: string): Promise<Response> {
+async function handleTruncate(request: Request, sessionId: string, directory?: string): Promise<Response> {
   try {
     const body = (await request.json().catch(() => null)) as { messageID?: string } | null
     const messageID = body?.messageID
@@ -195,6 +195,16 @@ async function handleTruncate(request: Request, sessionId: string): Promise<Resp
         headers: { 'Content-Type': 'application/json' },
       })
     }
+    // DB만 자르면 opencode 메모리 캐시가 지운 메시지를 그대로 내놓아
+    // UI에 삭제가 반영되지 않는다 — 인스턴스 reload로 캐시를 비운다.
+    if ((result.messagesRemoved ?? 0) > 0 && directory) {
+      try {
+        const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+        logger.info(`Truncate session ${sessionId}: removed ${result.messagesRemoved} message(s), instance reload ${reloaded ? 'verified' : 'NOT verified'}`)
+      } catch (e) {
+        logger.warn(`Truncate session ${sessionId}: instance reload threw, UI may show stale messages:`, e)
+      }
+    }
     return new Response(JSON.stringify({ success: true, ...result }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -208,7 +218,7 @@ async function handleTruncate(request: Request, sessionId: string): Promise<Resp
   }
 }
 
-async function handleDelete(request: Request, sessionId: string): Promise<Response> {
+async function handleDelete(request: Request, sessionId: string, directory?: string): Promise<Response> {
   try {
     const body = (await request.json().catch(() => null)) as { messageID?: string } | null
     const messageID = body?.messageID
@@ -224,6 +234,15 @@ async function handleDelete(request: Request, sessionId: string): Promise<Respon
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       })
+    }
+    // truncate과 동일: DB 삭제 후 메모리 캐시를 비워야 UI에 반영된다.
+    if (directory) {
+      try {
+        const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+        logger.info(`Delete message ${messageID} in session ${sessionId}: instance reload ${reloaded ? 'verified' : 'NOT verified'}`)
+      } catch (e) {
+        logger.warn(`Delete message ${messageID} in session ${sessionId}: instance reload threw:`, e)
+      }
     }
     return new Response(JSON.stringify({ success: true, ...result }), {
       status: 200,
@@ -297,13 +316,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
   const truncateMatch = pathname.match(/^\/api\/opencode\/session\/([^/]+)\/truncate$/)
   const truncateSessionId = truncateMatch?.[1]
   if (method === 'POST' && truncateSessionId) {
-    return handleTruncate(request, truncateSessionId)
+    return handleTruncate(request, truncateSessionId, query['directory'] ? decodeURIComponent(query['directory']) : undefined)
   }
 
   const deleteMatch = pathname.match(/^\/api\/opencode\/session\/([^/]+)\/delete$/)
   const deleteSessionId = deleteMatch?.[1]
   if (method === 'POST' && deleteSessionId) {
-    return handleDelete(request, deleteSessionId)
+    return handleDelete(request, deleteSessionId, query['directory'] ? decodeURIComponent(query['directory']) : undefined)
   }
 
   // abort 시 큐의 sending 표시 즉시 제거 — 다음 채팅이 바로 가게
