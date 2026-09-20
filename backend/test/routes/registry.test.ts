@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, rm, mkdir, readFile, stat } from 'fs/promises'
+import { mkdtemp, rm, mkdir, readFile, stat, writeFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { Hono } from 'hono'
@@ -9,7 +9,8 @@ let tempDir = ''
 
 vi.mock('@opencode-webui/shared', async () => {
   const actual = await vi.importActual<typeof import('@opencode-webui/shared')>('@opencode-webui/shared')
-  return { ...actual, getConfigPath: () => tempDir }
+  // S4: project 스코프 정본 위치. tempDir 직접 참조는 TDZ(collect 시점 호출)라 env 경유.
+  return { ...actual, getConfigPath: () => tempDir, getWorkspacePath: () => process.env.REGISTRY_TEST_WS ?? os.tmpdir() }
 })
 
 // registry 라우트는 파일 쓰기 후 automation-watcher에 dispose를 요청한다.
@@ -48,9 +49,11 @@ async function jsonItems(res: Response): Promise<Record<string, unknown>[]> {
 describe('Registry Routes', () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'registry-test-'))
+    process.env.REGISTRY_TEST_WS = tempDir
   })
 
   afterEach(async () => {
+    delete process.env.REGISTRY_TEST_WS
     await rm(tempDir, { recursive: true, force: true })
   })
 
@@ -87,20 +90,33 @@ describe('Registry Routes', () => {
     expect(items[0]).toMatchObject({ type: 'skill', scope: 'global', name: 'myskill', description: 'A skill', content: 'Instructions here' })
   })
 
-  it('should register and list project scope items with directory', async () => {
-    const projectDir = path.join(tempDir, '..', 'project')
+  it('should register project scope items under workspace root with repo prefix', async () => {
+    const projectDir = path.join(tempDir, 'proj')
     await mkdir(projectDir, { recursive: true })
     const app = createApp()
 
     const res = await register(app, { type: 'agent', scope: 'project', name: 'coder', description: 'Coding agent', content: 'You are a coder', mode: 'subagent' }, projectDir)
     expect(res.status).toBe(200)
     const resBody = await json(res)
-    expect(resBody.path).toBeDefined()
+    // S4: workspace 루트 + 레포 prefix — S2 cwd에서 opencode가 탐색한다.
+    expect(String(resBody.path)).toContain(`proj-coder.md`)
 
     const listRes = await app.request(`/api/registry?directory=${encodeURIComponent(projectDir)}`)
     const items = await jsonItems(listRes)
     expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({ type: 'agent', scope: 'project', name: 'coder', mode: 'subagent' })
+    expect(items[0]).toMatchObject({ type: 'agent', scope: 'project', name: 'proj-coder', mode: 'subagent' })
+  })
+
+  it('should still read legacy repo .opencode files (read compat)', async () => {
+    const projectDir = path.join(tempDir, 'legacyproj')
+    const legacyFile = path.join(projectDir, '.opencode', 'agents', 'oldie.md')
+    await mkdir(path.dirname(legacyFile), { recursive: true })
+    await writeFile(legacyFile, '---\ndescription: Old\nmode: all\n---\n\nbody', 'utf-8')
+    const app = createApp()
+
+    const listRes = await app.request(`/api/registry?directory=${encodeURIComponent(projectDir)}`)
+    const items = await jsonItems(listRes)
+    expect(items.some((i) => i.name === 'oldie' && i.scope === 'project')).toBe(true)
   })
 
   it('should update a registered file and support rename', async () => {

@@ -33,50 +33,114 @@ function scopeRoot(scope: RegistryScope, directory?: string): string {
   return path.join(directory, '.opencode')
 }
 
+/**
+ * S4: opencode 세션 cwd가 workspace 루트라 `<repo>/.opencode` 파일은
+ * 탐색되지 않는다. project 스코프의 정본 위치를 `workspace/.opencode`로
+ * 옮기고, 파일명 앞에 레포 prefix(`aaa-deploy`)를 붙여 충돌을 막는다.
+ * 기존 레포 위치 파일은 읽기/삭제 호환용으로 계속 찾는다.
+ */
+function projectPrefix(directory?: string): string {
+  if (!directory) return ''
+  let dir: string
+  try {
+    dir = path.resolve(directory)
+  } catch {
+    return ''
+  }
+  let ws: string
+  try {
+    ws = path.resolve(getWorkspacePath())
+  } catch {
+    return ''
+  }
+  if (dir === ws) return ''
+  const base = path.basename(dir).trim().replace(/[\\:*?"<>|\s]+/g, '-')
+  return base || ''
+}
+
+function projectRoots(directory?: string): { root: string; prefix: string; legacy: string[] } {
+  const root = path.join(getWorkspacePath(), '.opencode')
+  const prefix = projectPrefix(directory)
+  const legacy: string[] = []
+  if (directory) {
+    try {
+      const old = path.join(path.resolve(directory), '.opencode')
+      if (path.resolve(old) !== path.resolve(root)) legacy.push(old)
+    } catch {}
+  }
+  return { root, prefix, legacy }
+}
+
+function withPrefix(name: string, prefix: string): string {
+  const clean = sanitize(name)
+  if (!prefix) return clean
+  if (clean === prefix || clean.startsWith(`${prefix}-`)) return clean
+  return `${prefix}-${clean}`
+}
+
 // opencode scans plural directories (commands/skills/plugins/agents) as
 // canonical; singular (command/skill/plugin/agent) is legacy. Resolve an
 // existing file across both, preferring plural, so reads/writes work
 // regardless of which naming convention was used.
-function resolveExisting(type: RegistryType, root: string, name: string): string | null {
+// S4: project 스코프는 workspace 루트를 먼저 보고, 구 레포 위치도
+// 읽기 호환용으로 뒤에 둔다.
+function resolveExisting(
+  type: RegistryType,
+  root: string,
+  name: string,
+  opts?: { prefix?: string; legacyRoots?: string[] },
+): string | null {
   const clean = sanitize(name)
-  const plural = path.join(root, `${type === 'tool' ? 'plugins' : `${type}s`}`, clean)
-  const singular = path.join(root, type, clean)
-  switch (type) {
-    case 'command':
-    case 'tool':
-    case 'agent': {
-      const pluralFile = plural + (type === 'tool' ? '.ts' : '.md')
-      const singularFile = singular + (type === 'tool' ? '.ts' : '.md')
-      return [pluralFile, singularFile].find((p) => {
-        try {
-          statSync(p)
-          return true
-        } catch {
-          return false
-        }
-      }) ?? null
-    }
-    case 'skill': {
-      const pluralFile = path.join(plural, 'SKILL.md')
-      const singularFile = path.join(singular, 'SKILL.md')
-      return [pluralFile, singularFile].find((p) => {
-        try {
-          statSync(p)
-          return true
-        } catch {
-          return false
-        }
-      }) ?? null
+  const prefixed = opts?.prefix ? withPrefix(clean, opts.prefix) : clean
+  const candidates: string[] = [prefixed, clean].filter((v, i, a) => a.indexOf(v) === i)
+  const roots = [root, ...(opts?.legacyRoots ?? [])]
+  const hit = (base: string, n: string): string | null => {
+    const plural = path.join(base, `${type === 'tool' ? 'plugins' : `${type}s`}`, n)
+    const singular = path.join(base, type, n)
+    switch (type) {
+      case 'command':
+      case 'tool':
+      case 'agent': {
+        const pluralFile = plural + (type === 'tool' ? '.ts' : '.md')
+        const singularFile = singular + (type === 'tool' ? '.ts' : '.md')
+        return [pluralFile, singularFile].find((p) => {
+          try {
+            statSync(p)
+            return true
+          } catch {
+            return false
+          }
+        }) ?? null
+      }
+      case 'skill': {
+        const pluralFile = path.join(plural, 'SKILL.md')
+        const singularFile = path.join(singular, 'SKILL.md')
+        return [pluralFile, singularFile].find((p) => {
+          try {
+            statSync(p)
+            return true
+          } catch {
+            return false
+          }
+        }) ?? null
+      }
     }
   }
+  for (const base of roots) {
+    for (const n of candidates) {
+      const found = hit(base, n)
+      if (found) return found
+    }
+  }
+  return null
 }
 
-function resolveTarget(type: RegistryType, scope: RegistryScope, name: string, directory?: string): string {
-  const root = scopeRoot(scope, directory)
+function buildTarget(
+  type: RegistryType,
+  root: string,
+  name: string,
+): string {
   const clean = sanitize(name)
-  const existing = resolveExisting(type, root, name)
-  if (existing) return existing
-
   // Fall back to the canonical plural directory for new writes.
   switch (type) {
     case 'command':
@@ -88,6 +152,18 @@ function resolveTarget(type: RegistryType, scope: RegistryScope, name: string, d
     case 'agent':
       return path.join(root, 'agents', `${clean}.md`)
   }
+}
+
+function resolveTarget(type: RegistryType, scope: RegistryScope, name: string, directory?: string): string {
+  if (scope === 'global') {
+    const root = scopeRoot(scope, directory)
+    return resolveExisting(type, root, name) ?? buildTarget(type, root, name)
+  }
+  const { root, prefix, legacy } = projectRoots(directory)
+  const existing = resolveExisting(type, root, name, { prefix, legacyRoots: legacy })
+  if (existing) return existing
+  // 신규 쓰기는 workspace 루트 + 레포 prefix (S2 cwd에서 탐색되게).
+  return buildTarget(type, root, withPrefix(name, prefix))
 }
 
 function buildContent(type: RegistryType, data: { name: string; description: string; content: string; mode?: string; agent?: string; model?: string; subtask?: boolean; topP?: number }): string {
@@ -295,9 +371,13 @@ export function createRegistryRoutes() {
       }
 
       if (directory) {
-        const projectRoot = path.join(directory, '.opencode')
+        // S4: workspace 루트(정본) + 구 레포 위치(읽기 호환) 모두 수집.
+        const { root, legacy } = projectRoots(directory)
         for (const type of ['command', 'skill', 'tool', 'agent'] as RegistryType[]) {
-          await collectType(projectRoot, type, 'project', items)
+          await collectType(root, type, 'project', items)
+          for (const old of legacy) {
+            await collectType(old, type, 'project', items)
+          }
         }
       }
 
@@ -320,7 +400,11 @@ export function createRegistryRoutes() {
       const items: RegistryListItem[] = []
       await collectType(getConfigPath(), type, 'global', items)
       if (directory) {
-        await collectType(path.join(directory, '.opencode'), type, 'project', items)
+        const { root, legacy } = projectRoots(directory)
+        await collectType(root, type, 'project', items)
+        for (const old of legacy) {
+          await collectType(old, type, 'project', items)
+        }
       }
       return c.json(items)
     } catch (error) {

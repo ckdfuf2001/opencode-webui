@@ -595,7 +595,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Plugin script (.ts) <span className="text-destructive">*</span></label>
               <Textarea value={toolScript} onChange={(e) => setToolScript(e.target.value)} placeholder="Full TypeScript plugin definition using @opencode-ai/plugin's tool() helper" className="min-h-[160px] font-mono text-xs" />
-              <p className="text-[10px] text-muted-foreground">Writes to {scope === 'global' ? `${GLOBAL_TARGET_DIR}/plugin` : '.opencode/plugin'} as `.ts`. Filename becomes the tool name.</p>
+              <p className="text-[10px] text-muted-foreground">Writes to {scope === 'global' ? `${GLOBAL_TARGET_DIR}/plugin` : 'workspace/.opencode/plugin (repo-prefixed)'} as `.ts`. Filename becomes the tool name.</p>
             </div>
           )}
 
@@ -716,7 +716,7 @@ export function CreateCommandDialog({ open, onOpenChange, onCreated, availableSk
             <span className="font-mono">
               {scope === 'global'
                 ? GLOBAL_TARGET_DIR
-                : `${directory ? directory.split(/[\\/]/).pop() : 'project'} /.opencode`}
+                : `workspace /.opencode (repo-prefixed)`}
               /{type === 'tool' ? 'plugin' : type === 'skill' ? 'skill' : type === 'agent' ? 'agents' : 'command'}/{type === 'skill' ? `${name}/` : ''}...
             </span>
           </div>

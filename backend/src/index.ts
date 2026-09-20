@@ -231,6 +231,22 @@ async function ensureGlobalRulesFile(): Promise<void> {
   logger.info(`Installed global rules file: ${target}`)
 }
 
+// S3: workspace 루트 AGENTS.md (workspace 좌표계 규약). 없으면 tracked
+// 템플릿에서 설치, 있으면 사용자 편집본 유지.
+async function ensureWorkspaceAgentsFile(): Promise<void> {
+  try {
+    const source = path.join(process.cwd(), 'docs', 'workspace-agents.md')
+    const target = path.join(getWorkspacePath(), 'AGENTS.md')
+    if (!(await fileExists(source))) return
+    if (await fileExists(target)) return
+    const content = await readFileContent(source)
+    await writeFileContent(target, content)
+    logger.info(`Installed workspace rules file: ${target}`)
+  } catch (e) {
+    logger.debug('workspace AGENTS.md install skipped:', e)
+  }
+}
+
 async function syncDefaultConfigToDisk(): Promise<void> {
   const settingsService = new SettingsService(db)
   const defaultConfig = settingsService.getDefaultOpenCodeConfig()
@@ -272,6 +288,7 @@ try {
 } catch (error) {
   logger.error('Failed to initialize workspace:', error)
 }
+void ensureWorkspaceAgentsFile()
 
 app.route('/api/repos', createRepoRoutes(db))
 app.route('/api/settings', createSettingsRoutes(db))
