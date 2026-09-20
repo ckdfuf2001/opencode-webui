@@ -33,6 +33,11 @@ export function isInRepo(ws: WsPath, repoRoot: string): boolean {
   return p === r || p.startsWith(r + '/')
 }
 
+/** '..' 이탈 차단. 프론트에서 경로를 조립하는 코드가 늘어나므로 필수. */
+export function isSafeWsPath(p: string): boolean {
+  return normSlash(p).split('/').every((seg) => seg !== '..' && seg !== '')
+}
+
 /** 절대경로 → wsPath. workspaceRoot 밖이면 null. */
 export function absToWsPath(abs: string, workspaceRoot: string): WsPath | null {
   const absNorm = normSlash(abs)

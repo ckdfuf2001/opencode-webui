@@ -10,6 +10,7 @@
     "./schemas": "./src/schemas/index.ts",
     "./types": "./src/types/index.ts",
     "./config": "./src/config/index.ts",
+    "./lib/repoPath": "./src/lib/repoPath.ts",
     "./config/defaults": "./src/config/defaults.ts",
     "./config/env": "./src/config/env.ts",
     "./config/client": "./src/config/client.ts"

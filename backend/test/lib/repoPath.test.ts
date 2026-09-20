@@ -4,11 +4,12 @@ import {
   toWsPath,
   toDisplayPath,
   isInRepo,
+  isSafeWsPath,
   absToWsPath,
   getDirectory,
   getFilename,
   getRepoRel,
-} from '../../src/lib/repoPath'
+} from '@opencode-webui/shared'
 
 describe('repoPath', () => {
   describe('normSlash', () => {
@@ -136,6 +137,21 @@ describe('repoPath', () => {
     })
     it('repoRoot가 빈 문자열이면 원본', () => {
       expect(getRepoRel('src/a.ts', '')).toBe('src/a.ts')
+    })
+  })
+
+  describe('isSafeWsPath', () => {
+    it('정상 경로는 true', () => {
+      expect(isSafeWsPath('repoA/src/a.ts')).toBe(true)
+      expect(isSafeWsPath('a.ts')).toBe(true)
+    })
+    it('.. 이탈은 false', () => {
+      expect(isSafeWsPath('a/../../etc')).toBe(false)
+      expect(isSafeWsPath('../x')).toBe(false)
+      expect(isSafeWsPath('repoA/../etc/passwd')).toBe(false)
+    })
+    it('빈 세그먼트는 false', () => {
+      expect(isSafeWsPath('')).toBe(false)
     })
   })
 
