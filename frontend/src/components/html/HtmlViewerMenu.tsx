@@ -83,7 +83,7 @@ export function HtmlViewerMenu() {
   useEffect(() => { if (!menuOpen) setSelectedPage(null) }, [menuOpen])
 
   const { files: suggestions } = useFileSearch(draft, menuOpen && !!creating, '.')
-  const viewableSuggestions = suggestions.filter(isBrowserViewable).slice(0, 6)
+  const viewableSuggestions = suggestions.map((h) => h.wsPath).filter(isBrowserViewable).slice(0, 6)
 
   useEffect(() => {
     const trimmed = draft.trim()

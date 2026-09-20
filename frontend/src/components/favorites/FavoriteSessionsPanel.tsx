@@ -13,6 +13,7 @@ import { shouldPush, sendPushNotification, getSessionOverride } from '@/lib/noti
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import { listRepos } from '@/api/repos'
+import { toWsPath } from '@opencode-webui/shared'
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
 
 export function FavoriteSessionsPanel() {
@@ -34,13 +35,13 @@ export function FavoriteSessionsPanel() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['favorites'] })
 
   // --- 미니챗 파일 첨부: SessionDetail/PromptInput과 동일한 업로드 흐름 ---
-  // 붙여넣기(클립보드 파일) / 드래그드롭 → `${localPath}/chat_uploads` 업로드 → draft에 @"chat_uploads/..." 멘션 삽입.
+  // 붙여넣기(클립보드 파일) / 드래그드롭 → `<repo>/chat_uploads` 업로드 → draft에 @"<repo>/chat_uploads/..." 멘션 삽입.
   // 텍스트 전송 자체는 기존 MiniSendButton(큐 경유) 그대로라 멘션이 백엔드에서 파일 파트로 해석된다.
   const appendUploadMentions = (favSessionId: string, uploaded: { name: string; path: string }[]) => {
     if (uploaded.length === 0) return
     const mentions = uploaded.map((u) => {
-      const rel = u.path.startsWith('/') ? u.path.slice(1) : u.path
-      return `@"${rel}"`
+      const ws = toWsPath(u.path, '')
+      return `@"${ws}"`
     })
     setDrafts((prev) => {
       const cur = prev[favSessionId] ?? ''
@@ -56,7 +57,8 @@ export function FavoriteSessionsPanel() {
   ) => {
     if (files.length === 0) return
     const repoForFav = repos?.find((r) => r.id === fav.repoId || r.fullPath === fav.directory)
-    const uploadDir = repoForFav?.localPath ? `${repoForFav.localPath}/chat_uploads` : null
+    const repoRoot = repoForFav?.workspaceRel ?? ''
+    const uploadDir = repoRoot ? toWsPath('chat_uploads', repoRoot) : null
     if (!uploadDir) {
       showToast.error('No project folder available for upload')
       return
@@ -82,7 +84,8 @@ export function FavoriteSessionsPanel() {
           setUploadProgressMap((prev) => ({ ...prev, [sid]: { name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: fresh.length } }))
         })
         const savedName: string = data?.name || file.name
-        uploaded.push({ name: savedName, path: `chat_uploads/${savedName}` })
+        // 백엔드 응답 path는 이미 wsPath — 그대로 쓴다.
+        uploaded.push({ name: savedName, path: data?.path || toWsPath(`chat_uploads/${savedName}`, repoRoot) })
       } catch (e) {
         if ((e as Error).message === 'Upload cancelled') {
           setUploadProgressMap((prev) => { const n = { ...prev }; delete n[sid]; return n })

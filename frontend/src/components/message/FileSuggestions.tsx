@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react'
+import type { FileHit } from '@/hooks/useFileSearch'
+import { getDirectory, getFilename } from '@opencode-webui/shared'
 
 interface FileSuggestionsProps {
   isOpen: boolean
   query: string
-  files: string[]
-  onSelect: (file: string) => void
+  files: FileHit[]
+  onSelect: (file: FileHit) => void
   onClose: () => void
   position: { bottom: number, left: number, width: number, maxHeight?: number }
   selectedIndex?: number
@@ -44,12 +46,6 @@ export function FileSuggestions({
 
   if (!isOpen || files.length === 0) return null
 
-  const getFilename = (path: string) => path.split('/').pop() || path
-  const getDirectory = (path: string) => {
-    const parts = path.split('/')
-    return parts.slice(0, -1).join('/') || '.'
-  }
-
   return (
     <div
       ref={listRef}
@@ -61,10 +57,10 @@ export function FileSuggestions({
         maxHeight: position.maxHeight ? `${position.maxHeight}px` : undefined
       }}
     >
-      {files.map((file, idx) => (
+      {files.map((hit, idx) => (
         <button
-          key={file}
-          onClick={() => onSelect(file)}
+          key={hit.wsPath}
+          onClick={() => onSelect(hit)}
           className={`w-full px-3 py-2 text-left transition-colors ${
             idx === selectedIndex
               ? 'bg-blue-600 text-white'
@@ -72,10 +68,10 @@ export function FileSuggestions({
           }`}
         >
           <div className="font-mono text-sm font-medium">
-            {getFilename(file)}
+            {getFilename(hit.display)}
           </div>
           <div className="text-xs opacity-70 mt-0.5">
-            {getDirectory(file)}
+            {getDirectory(hit.display)}
           </div>
         </button>
       ))}

@@ -1,4 +1,5 @@
 import type { ContentPart, FileInfo } from '@/api/types'
+import { normSlash } from '@opencode-webui/shared'
 
 export const MENTION_PATTERN = /@(?:"([^"]*)"|'([^']*)'|(\S+))/g
 export const MENTION_TRIGGER_PATTERN = /(^|\s)@"([^"]*)$/
@@ -44,7 +45,10 @@ export function parsePromptToParts(
     }
     
     const mentionText = match[1] ?? match[2] ?? match[3]
-    const file = fileMap.get(mentionText.toLowerCase())
+    // 정확 매칭 1순위 → 소문자 매칭 2순위(레거시 폴백).
+    // 무조건 소문자는 대소문자 구분 FS에서 Foo.ts/foo.ts를 충돌시킨다.
+    const key = normSlash(mentionText)
+    const file = fileMap.get(key) ?? fileMap.get(key.toLowerCase())
     
     if (file) {
       parts.push({

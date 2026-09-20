@@ -212,7 +212,11 @@ export async function uploadFile(userPath: string, file: File, blockedExtensions
   }
   
   const validatedPath = validatePath(userPath)
-  const fullPath = await resolveUniquePath(validatedPath, fileName)
+  // T15: 저장 파일명 정규화 — 공백·괄호 등은 셸 계열 도구와 따옴표 없는
+  // 멘션에서 말썽이므로 `_`로 치환한다 (한글 등 유니코드 파일명은 유지).
+  // 충돌 접미사는 기존 `name (1).ext` 대신 `name_1.ext` 형식으로 합친다.
+  const sluggedName = slugUploadName(fileName)
+  const fullPath = await resolveUniquePath(validatedPath, sluggedName)
   const savedName = path.basename(fullPath)
   
   const buffer = await file.arrayBuffer()
@@ -227,13 +231,26 @@ export async function uploadFile(userPath: string, file: File, blockedExtensions
   }
 }
 
+export function slugUploadName(fileName: string): string {
+  let ext = path.extname(fileName)
+  // '...'처럼 점만 있는 이름은 확장자로 보지 않는다
+  if (ext && !/^\.[A-Za-z0-9가-힣]+$/.test(ext)) ext = ''
+  let base = ext ? path.basename(fileName, ext) : fileName
+  base = base
+    .replace(/[^A-Za-z0-9가-힣._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[_.]+|[_.]+$/g, '')
+  if (!base) base = 'file'
+  return `${base}${ext.toLowerCase()}`
+}
+
 async function resolveUniquePath(dirPath: string, fileName: string): Promise<string> {
   const ext = path.extname(fileName)
   const base = path.basename(fileName, ext)
   let candidate = path.join(dirPath, fileName)
   let counter = 1
   while (await fileExists(candidate)) {
-    candidate = path.join(dirPath, `${base} (${counter})${ext}`)
+    candidate = path.join(dirPath, `${base}_${counter}${ext}`)
     counter++
   }
   return candidate

@@ -9,6 +9,7 @@ import { ToolCallPart, CappedOutput } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
 import { useSettings } from '@/hooks/useSettings'
 import { getFileStat } from '@/api/files'
+import { toWsPath, toDisplayPath } from '@opencode-webui/shared'
 import { copyTextToClipboard } from '@/lib/clipboard'
 
 type Part = components['schemas']['Part']
@@ -21,6 +22,8 @@ interface MessagePartProps {
   onFileClick?: (filePath: string, lineNumber?: number) => void
   messageTextContent?: string
   directory?: string
+  /** wsPath 변환용 레포 루트 (예: 'repoA'). 있으면 추측 없이 직접 해석. */
+  repoRoot?: string
   messageStreaming?: boolean
   /** 커맨드 호출 정보 — user 첫 텍스트 파트 위에 `/이름` 칩만 덧붙인다 (원본 유지) */
   invocation?: { name: string; runId: string; args: string | null }
@@ -147,8 +150,21 @@ function mentionCandidates(mentionText: string, directory?: string): string[] {
   return [primary, `${normalizedDir}/${mentionText}`]
 }
 
+/**
+ * 레거시 멘션 폴백 — 구 형식(파일명·repoRel·절대경로) 히스토리 전용.
+ * 신규 입력 경로에서 호출 금지. 발동 시 경고 1회 (사라지면 삭제 시점).
+ */
+let legacyFallbackWarned = false
+function legacyMentionFallback(mentionText: string, directory?: string): string[] {
+  if (!legacyFallbackWarned) {
+    legacyFallbackWarned = true
+    console.warn('[repoPath] legacy mention fallback used — old-format history entry')
+  }
+  return mentionCandidates(mentionText, directory)
+}
+
 async function resolveExistingMentionPath(mentionText: string, directory?: string): Promise<string | null> {
-  for (const candidate of mentionCandidates(mentionText, directory)) {
+  for (const candidate of legacyMentionFallback(mentionText, directory)) {
     try {
       const stat = await getFileStat(candidate)
       if (stat.exists && !stat.isDirectory) return candidate
@@ -162,16 +178,22 @@ async function resolveExistingMentionPath(mentionText: string, directory?: strin
 function FileMention({  part,
   mentionText,
   directory,
+  repoRoot,
   onFileClick,
 }: {
   part: components['schemas']['TextPart']
   mentionText: string
   directory?: string
+  repoRoot?: string
   onFileClick?: (filePath: string, lineNumber?: number) => void
 }) {
   const [resolvedPath, setResolvedPath] = useState<string | null>(null)
 
+  // repoRoot가 있으면 추측 없이 wsPath로 직접 해석 (stat 왕복 없음).
+  const directWsPath = repoRoot ? toWsPath(mentionText, repoRoot) : null
+
   useEffect(() => {
+    if (directWsPath) return
     let cancelled = false
     setResolvedPath(null)
     void resolveExistingMentionPath(mentionText, directory).then((found) => {
@@ -180,16 +202,16 @@ function FileMention({  part,
     return () => {
       cancelled = true
     }
-  }, [mentionText, directory])
+  }, [mentionText, directory, directWsPath])
 
-  if (resolvedPath === null) {
+  if (!directWsPath && resolvedPath === null) {
     return <TextPart part={part} />
   }
 
   return (
     <span
       className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
-      onClick={() => onFileClick?.(resolvedPath ?? mentionText)}
+      onClick={() => onFileClick?.(directWsPath ?? resolvedPath ?? mentionText)}
     >
       <span className="text-blue-400">@</span>
       <span className="font-medium">{mentionText}</span>
@@ -199,7 +221,7 @@ function FileMention({  part,
 
 
 
-export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, messageStreaming, invocation, onCommandClick }: MessagePartProps) {
+export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, repoRoot, messageStreaming, invocation, onCommandClick }: MessagePartProps) {
   const { preferences } = useSettings()
   const showReasoning = preferences?.showReasoning ?? true
   const copyableContent = getCopyableContent(part, allParts)
@@ -248,7 +270,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
           // 폴백용으로는 멘션 구간만 넘긴다. 원문 전체를 넘기면 존재 확인 실패 시
           // 앞뒤 텍스트와 합쳐져 중복으로 보인다.
           const mentionPart = { ...part, text: m[0] } as typeof part
-          nodes.push(<FileMention key={`m${idx}`} part={mentionPart} mentionText={mentionText} directory={directory} onFileClick={onFileClick} />)
+          nodes.push(<FileMention key={`m${idx}`} part={mentionPart} mentionText={mentionText} directory={directory} repoRoot={repoRoot} onFileClick={onFileClick} />)
         }
         last = idx + m[0].length
       }
@@ -349,20 +371,25 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
         </div>
       )
     case 'file': {
-      const fileClickTarget = part.url?.startsWith('data:')
-        ? part.filename
-          ? `chat_uploads/${part.filename}`
-          : ''
+      const rawTarget = part.url?.startsWith('data:')
+        ? (part.filename ? `chat_uploads/${part.filename}` : '')
         : part.url?.replace(/^file:\/{2,3}/, '') || part.filename || ''
+      // repoRoot가 있으면 wsPath로 정규화 (data: URL의 chat_uploads 포함).
+      // 없으면 레거시 그대로 (절대경로·파일명).
+      const fileClickTarget = repoRoot ? toWsPath(rawTarget, repoRoot) : rawTarget
       // 이미지以外은 파일명만으로는 어느 파일인지 알 수 없어 클릭해도 못 찾는다.
-      // 레포 기준 상대경로를 칩에 표시한다 (이미지는 기존대로 파일명만).
+      // 칩에는 표시용 repoRel을 보여준다 (이미지는 기존대로 파일명만).
       const ext = (part.filename?.split('.').pop() ?? '').toLowerCase()
       const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)
-      const normTarget = fileClickTarget.replace(/\\/g, '/')
-      const normDir = (directory ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
-      const label = !isImage && normDir && normTarget.startsWith(normDir + '/')
-        ? normTarget.slice(normDir.length + 1)
-        : part.filename || 'File'
+      const label = !isImage && repoRoot
+        ? toDisplayPath(fileClickTarget, repoRoot) || part.filename || 'File'
+        : (() => {
+            const normTarget = fileClickTarget.replace(/\\/g, '/')
+            const normDir = (directory ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+            return !isImage && normDir && normTarget.startsWith(normDir + '/')
+              ? normTarget.slice(normDir.length + 1)
+              : part.filename || 'File'
+          })()
       return (
         <span
           className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
