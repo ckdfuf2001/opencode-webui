@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { API_BASE_URL } from '@/config'
-import { toWsPath } from '@opencode-webui/shared'
+import { toWsPath } from '@opencode-webui/shared/lib/repoPath'
 
 export interface FileHit {
   /** 저장·전송·API용: workspace 기준 (`repoA/src/foo.ts`) */
