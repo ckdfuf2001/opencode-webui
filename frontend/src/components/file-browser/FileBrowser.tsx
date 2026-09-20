@@ -366,22 +366,36 @@ useEffect(() => {
   }
 
   const handleRefresh = () => {
-    loadFiles(currentPath)
+    refreshTree()
   }
+
+  /**
+   * 트리 전체 새로고침: 현재 경로 + 펼쳐진 하위 폴더까지.
+   * 하위 폴더는 마운트된 ['files', path] 쿼리로 지연 로딩되므로, 무효화하면
+   * 펼쳐진 것만 다시 불러온다. 펼침 상태는 TreeNode 로컬이라 유지된다.
+   */
+  const refreshTree = useCallback(() => {
+    const cur = currentPath
+    void queryClient.invalidateQueries({
+      queryKey: ['files'],
+      predicate: (q) => q.queryKey[0] === 'files' && q.queryKey[1] !== cur,
+    })
+    void loadFiles(cur)
+  }, [currentPath, queryClient])
 
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ path: string }>).detail
-      if (!detail?.path) { loadFiles(currentPath); return }
+      if (!detail?.path) { refreshTree(); return }
       const changed = detail.path.replace(/\\/g, '/')
       const cur = currentPath.replace(/\\/g, '/')
       if (changed === cur || changed.startsWith(cur + '/') || cur.startsWith(changed + '/')) {
-        loadFiles(currentPath)
+        refreshTree()
       }
     }
     window.addEventListener('opencode:files-changed', handler as EventListener)
     return () => window.removeEventListener('opencode:files-changed', handler as EventListener)
-  }, [currentPath])
+  }, [refreshTree])
 
   const ensureDropDirs = useCallback(async (dirs: string[]) => {
     const unique = [...new Set(dirs.map((d) => normalizePath(d)).filter(Boolean))]
