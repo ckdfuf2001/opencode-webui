@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { globToRegex, ruleMatches } from '../../src/services/permission-auto-approver'
+import { globToRegex, isCandidateInRepo, ruleMatches } from '../../src/services/permission-auto-approver'
 import type { PermissionRule } from '../../src/types/permission-rule'
 
 function rule(partial: Partial<PermissionRule> = {}): PermissionRule {
@@ -222,5 +222,27 @@ describe('ruleMatches', () => {
     expect(
       ruleMatches(rule({ permission: 'read', pattern: 'file?.txt' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'file.txt' }),
     ).toBe(false)
+  })
+})
+
+describe('isCandidateInRepo (S2 guardrail)', () => {
+  const full = 'C:/work/ws/repos/aaa'
+  it('absolute inside/outside by fullPath prefix', () => {
+    expect(isCandidateInRepo('C:\\work\\ws\\repos\\aaa\\src\\a.ts', full, ['bbb'])).toBe(true)
+    expect(isCandidateInRepo('C:/work/ws/repos/aaa', full, [])).toBe(true)
+    expect(isCandidateInRepo('C:/work/ws/repos/bbb/src/a.ts', full, ['bbb'])).toBe(false)
+    expect(isCandidateInRepo('C:/work/ws/repos/aaa2/x.ts', full, [])).toBe(false)
+  })
+  it('relative is fail-open, except other-repo prefix', () => {
+    expect(isCandidateInRepo('src/a.ts', full, ['bbb'])).toBe(true)
+    expect(isCandidateInRepo('bbb/src/a.ts', full, ['bbb'])).toBe(false)
+  })
+  it('file:// URLs are stripped before judging', () => {
+    expect(isCandidateInRepo('file:///C:/work/ws/repos/aaa/x.png', full, [])).toBe(true)
+    expect(isCandidateInRepo('file:///C:/other/x.png', full, [])).toBe(false)
+  })
+  it('empty candidates never match', () => {
+    expect(isCandidateInRepo('', full, [])).toBe(false)
+    expect(isCandidateInRepo('   ', full, [])).toBe(false)
   })
 })

@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger'
-import { getConfigPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
+import { getConfigPath, getOpenCodeConfigFilePath, getWorkspacePath } from '@opencode-webui/shared'
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage, stripAllReasoningParts } from './opencode-db'
@@ -330,6 +330,21 @@ export async function proxyRequest(request: Request, method: string, pathname: s
   const abortMatch = abortPath.match(/^\/session\/([^/]+)\/abort$/)
   if (method === 'POST' && abortMatch?.[1]) {
     try { clearSendingOnAbort(abortMatch[1]!) } catch {}
+  }
+
+  const cleanEventPathEarly = pathname.replace(/^\/api\/opencode/, '')
+  // S2: 새 세션은 항상 workspace 루트에 생성한다. opencode 세션 cwd를
+  // workspace로 통일해야 모델이 보는 모든 경로를 `repoA/...`로 통일할 수 있다.
+  // 소속 기록(S1)용 원본 directory는 따로 보관한다.
+  let sessionCreateRepoDir: string | undefined
+  if (method === 'POST' && cleanEventPathEarly === '/session') {
+    const rawDir = query['directory']
+    try { sessionCreateRepoDir = rawDir ? decodeURIComponent(rawDir) : undefined } catch { sessionCreateRepoDir = rawDir }
+    try {
+      query = { ...query, directory: getWorkspacePath() }
+    } catch (e) {
+      logger.debug('workspace directory force skipped:', e)
+    }
   }
 
   const search = query ? '?' + new URLSearchParams(query).toString() : ''
@@ -856,14 +871,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     if (!isLongRunning || !response.body) {
       releaseBusy()
-      // S1: 세션 생성 시 소속 레포를 1회 기록 (directory가 아직 레포별인 시점 값).
+      // S1: 세션 생성 시 소속 레포를 1회 기록. S2 강제 전의 원본 directory로
+      // 해석한다 (강제 후 값은 workspace라 역산 불가).
       // 응답은 그대로 돌려주고 매핑은 백그라운드로 (실패해도 무시).
       if (method === 'POST' && cleanEventPath === '/session' && response.ok && proxyDb) {
         try {
           const clone = response.clone()
-          const dirRaw = query['directory']
-          let dir: string | undefined
-          try { dir = dirRaw ? decodeURIComponent(dirRaw) : undefined } catch { dir = dirRaw }
+          const dir = sessionCreateRepoDir
           void clone.json()
             .then(async (created: unknown) => {
               const sid = (created as { id?: string } | null)?.id

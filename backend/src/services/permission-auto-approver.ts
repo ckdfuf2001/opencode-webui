@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import { logger } from '../utils/logger'
 import { listApplicableRules } from '../db/permission-rule-queries'
+import { getSessionRepo } from '../db/session-repo-queries'
 import type { PermissionRule } from '../types/permission-rule'
 import { resolveRepoId } from './command-runs'
 
@@ -155,6 +156,68 @@ export function ruleMatches(rule: PermissionRule, permission: AskedPermission): 
   })
 }
 
+/** S2 가드레일 대상: 경로 쓰기 계열. 읽기·bash·fetch는 기존대로 둔다. */
+const WRITE_SCOPED_TYPES = new Set(['edit', 'external_directory', 'write'])
+
+function stripFileScheme(p: string): string {
+  return p.replace(/^file:\/{2,3}/i, '')
+}
+
+function isAbsoluteLike(p: string): boolean {
+  return p.startsWith('/') || /^[a-zA-Z]:\//.test(p)
+}
+
+/**
+ * 순수 판정: 후보 경로가 세션 레포 안에 있는가.
+ * - 절대경로: 레포 fullPath 하위일 때만 inside (대소문자 무시).
+ * - 상대경로: 세션 cwd 기준이라 inside로 본다. 단, 다른 레포 루트로
+ *   시작하면(`repoB/...`) 명백한 이탈이므로 outside.
+ * 하나라도 inside면 전체를 inside로 본다 (호출부가 some으로 집계).
+ */
+export function isCandidateInRepo(
+  candidate: string,
+  repoFullPath: string,
+  otherRoots: string[],
+): boolean {
+  const norm = normalizeMatchValue(stripFileScheme(candidate.trim())).toLowerCase()
+  if (!norm) return false
+  if (!isAbsoluteLike(norm)) {
+    const head = norm.split('/')[0] ?? ''
+    const others = new Set(otherRoots.map((r) => normalizeMatchValue(r).toLowerCase()).filter(Boolean))
+    return !others.has(head)
+  }
+  const base = normalizeMatchValue(repoFullPath).toLowerCase()
+  if (!base) return true
+  return norm === base || norm.startsWith(`${base}/`)
+}
+
+/**
+ * S2 가드레일: 쓰기 계열 요청의 실제 경로가 전부 세션 레포 밖이면 false.
+ * 전역 룰(`*`)이 다른 레포를 건드리는 오승인을 막는다. 경로 판단이
+ * 불가능하면(비경로 후보만) true — 기존 동작 유지, 다이얼로그로 넘기지 않는다.
+ */
+async function isInSessionRepo(
+  db: Database,
+  repoId: number,
+  permission: AskedPermission,
+): Promise<boolean> {
+  let fullPath = ''
+  let otherRoots: string[] = []
+  try {
+    const { getRepoById, listRepos } = await import('../db/queries')
+    fullPath = getRepoById(db, repoId)?.fullPath ?? ''
+    otherRoots = listRepos(db)
+      .filter((r) => r.id !== repoId)
+      .map((r) => r.workspaceRel)
+      .filter((s): s is string => !!s)
+  } catch {
+    return true
+  }
+  const pathLikes = getActualPatterns(permission).filter(isPathLike)
+  if (pathLikes.length === 0) return true
+  return pathLikes.some((c) => isCandidateInRepo(c, fullPath, otherRoots))
+}
+
 function normalizePermission(raw: unknown): AskedPermission | null {
   const r = raw as {
     id?: unknown
@@ -302,14 +365,20 @@ async function handleAskedPermission(
   // directory → repo 스코프가 확정될 때만 승인한다.
   // 해석 실패 시 전체 규칙 폴백은 다른 레포의 규칙으로 승인할 수 있어 금지 —
   // 이 경우 응답하지 않고 사용자 다이얼로그에 맡긴다.
+  // S1 정본(session_repo_map)을 먼저 보고, 없으면 directory 역산 + session_status 순.
   let repoId: number | null = null
   try {
+    try {
+      repoId = getSessionRepo(db, permission.sessionID)
+    } catch {}
     const directory = await getSessionDirectoryCached(permission.sessionID, resolveBase)
-    if (!directory) {
-      logger.info(`Auto-approve skip (no session directory): ${describe()}`)
-      return
+    if (repoId == null) {
+      if (!directory) {
+        logger.info(`Auto-approve skip (no session directory): ${describe()}`)
+        return
+      }
+      repoId = resolveRepoId(db, directory)
     }
-    repoId = resolveRepoId(db, directory)
     if (repoId == null) {
       // 폴백: 폴러가 session_status에 기록한 repo_id. 디렉터리 표기 차이
       // (대소문자·심링크·이동)로 resolveRepoId가 빗나간 경우를 구한다.
@@ -342,9 +411,25 @@ async function handleAskedPermission(
     logger.info(`Auto-approve skip (no rules for repo ${repoId}): ${describe()}`)
     return
   }
-  if (!candidateRules.some((rule) => ruleMatches(rule, permission))) {
+  const matched = candidateRules.find((rule) => ruleMatches(rule, permission))
+  if (!matched) {
     logger.info(`Auto-approve no-match (${candidateRules.length} repo+global rules): ${describe()}`)
     return
+  }
+  // S2 가드레일: 쓰기 계열이 세션 레포 밖이면 룰이 맞아도 승인하지 않는다.
+  // (전역 `*` 룰의 타 레포 오승인 방지 — 다이얼로그로 넘긴다)
+  const askType = permission.permission ?? permission.type
+  if (askType && WRITE_SCOPED_TYPES.has(askType)) {
+    let inside = true
+    try {
+      inside = await isInSessionRepo(db, repoId, permission)
+    } catch {
+      inside = true
+    }
+    if (!inside) {
+      logger.warn(`Auto-approve veto (outside session repo ${repoId}): ${describe()} rule=#${matched.id}`)
+      return
+    }
   }
   markResponded(permission.id)
   try {

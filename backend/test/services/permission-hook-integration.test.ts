@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import path from 'node:path'
+import { getReposPath } from '@opencode-webui/shared'
 
 import { subscribeOpencodeEvents } from '../../src/services/permission-auto-approver'
 
@@ -209,6 +211,56 @@ describe('permission hook integration (stub opencode server)', () => {
       expect(replies).toHaveLength(1)
       expect(replies[0]!.url).toBe('/permission/per-3/reply')
       expect(replies[0]!.body).toEqual({ reply: 'always' })
+    } finally {
+      sub.stop()
+    }
+  })
+
+  // S2 가드레일: 전역 `**` 룰이 매칭돼도 세션 레포 밖 쓰기는 거부한다.
+  const mockDbVeto = () => {
+    const repoRow = {
+      id: 7, repo_url: null, local_path: 'test', branch: null, default_branch: 'main',
+      clone_status: 'ready', cloned_at: 0, last_pulled: null, opencode_config_name: null,
+      is_worktree: 0, is_local: 1, skill_auto_update: 0,
+    }
+    return {
+      prepare: vi.fn((sql: string) => {
+        if (sql.includes('permission_rules')) {
+          return {
+            all: () => [{ id: 9, repo_id: 7, permission: 'edit', pattern: '**', created_at: 0 }],
+            get: () => undefined,
+            run: () => ({}),
+          }
+        }
+        if (sql.includes('FROM repos WHERE id')) {
+          return { all: () => [], get: () => repoRow, run: () => ({}) }
+        }
+        return { all: () => [repoRow], get: () => undefined, run: () => ({}) }
+      }),
+    } as any
+  }
+
+  it('vetoes writes outside the session repo even when a global rule matches', async () => {
+    const sub = subscribe(mockDbVeto())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked({ id: 'per-veto', sessionID: 'ses-1', permission: 'edit', patterns: ['/other/scope/file.txt'] })
+      await new Promise((r) => setTimeout(r, 800))
+      expect(replies).toHaveLength(0)
+    } finally {
+      sub.stop()
+    }
+  })
+
+  it('approves writes inside the session repo (absolute + fail-open relative)', async () => {
+    const sub = subscribe(mockDbVeto())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      const inside = `${path.join(getReposPath(), 'test')}/sub/a.txt`.replace(/\\/g, '/')
+      emitAsked({ id: 'per-allow-abs', sessionID: 'ses-1', permission: 'edit', patterns: [inside] })
+      await waitForReplies(1)
+      expect(replies).toHaveLength(1)
+      expect(replies[0]!.body).toEqual({ response: 'always' })
     } finally {
       sub.stop()
     }
