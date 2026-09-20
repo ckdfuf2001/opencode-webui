@@ -239,14 +239,12 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const projectedUsage = contextLimit ? ((totalTokens + estimatedInputTokens) / contextLimit) * 100 : 0
   const willExceed = contextLimit ? projectedUsage >= 95 : false
 
-  // 파일 파트는 텍스트로 바꿀 때 위치가 포함되어야 나중에 칩으로 인식된다.
-  // 파일명만 넣으면("...") 존재 확인이 안 돼 아이콘 표시도 안 된다.
+  // 파일 파트는 텍스트로 바꿀 때 wsPath(repoA/...) 그대로 넣는다.
+  // opencode가 @멘션을 cwd(workspace 루트) 기준으로 해석하므로 repo prefix가 필수.
+  // basename으로 자르면 엉뚱한 파일을 집거나 못 찾는다.
   const partToText = (part: ContentPart): string => {
     if (part.type === 'text') return part.content
-    const norm = part.path.replace(/\\/g, '/')
-    const dir = (directory ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
-    const rel = dir && norm.startsWith(dir + '/') ? norm.slice(dir.length + 1) : part.name
-    return `@"${rel}"`
+    return `@"${normSlash(part.path)}"`
   }
 
   // 첫 전송도 큐 경유라 모델/에이전트 선택이 큐에 타야 한다 (직접 전송과 동일값).

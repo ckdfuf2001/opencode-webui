@@ -15,29 +15,14 @@ interface SessionFilePanelProps {
   onMentionFile?: (file: FileInfo) => void
 }
 
-export function SessionFilePanel({ basePath = '', repoName, initialSelectedFile, width = 380, onClose, onOpenFullscreen, onMentionFile }: SessionFilePanelProps) {
+export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSelectedFile, width = 380, onClose, onOpenFullscreen, onMentionFile }: SessionFilePanelProps) {
   const [displayPath, setDisplayPath] = useState<string>('/')
 
   const handleDirectoryLoad = useCallback((info: { workspaceRoot?: string; currentPath: string }) => {
-    if (!info.currentPath || info.currentPath === '.' || info.currentPath === '') {
-      setDisplayPath('/')
-      return
-    }
-
-    const pathParts = info.currentPath.split('/').filter(Boolean)
-
-    if (repoName) {
-      const repoIndex = pathParts.findIndex(p => p === repoName || p.startsWith(repoName + '-'))
-      if (repoIndex >= 0) {
-        const subPath = pathParts.slice(repoIndex + 1)
-        setDisplayPath(subPath.length > 0 ? '/' + subPath.join('/') : '/')
-      } else {
-        setDisplayPath('/' + pathParts.join('/'))
-      }
-    } else {
-      setDisplayPath('/' + pathParts.join('/'))
-    }
-  }, [repoName])
+    const norm = info.currentPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+    // 레포명을 앞에 찍어 표시: /<repo>/sub 형식. 루트면 /<repo>.
+    setDisplayPath(norm ? `/${norm}` : '/')
+  }, [])
 
   return (
     <div
