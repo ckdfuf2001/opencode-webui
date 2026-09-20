@@ -214,6 +214,16 @@ export function SessionDetail() {
     if (!sessionId || !messages) return;
     void reloadMissingPins(queryClient, opcodeUrl, sessionId, repoDirectory);
   }, [sessionId, opcodeUrl, repoDirectory, messages, queryClient]);
+  // S1: 세션 소속 레포를 서버 매핑에 1회 기록 (first-write-wins, 실패 무시).
+  // opencode directory와 무관하게 레포별 세션 목록이 유지된다.
+  useEffect(() => {
+    if (!sessionId || !repoId || Number.isNaN(repoId)) return;
+    fetch(`${API_BASE_URL}/api/session-repos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, repoId }),
+    }).catch(() => {});
+  }, [sessionId, repoId]);
   const baseMessages = useMemo(() => {
     if (!messages) return undefined;
     const editIndex = hiddenAfterID ? messages.findIndex((m) => m.info.id === hiddenAfterID) : -1;

@@ -165,6 +165,15 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_exposed_enabled ON exposed_commands(enabled);
+
+    -- sessionId → repoId 정본 매핑 (S1: opencode directory와 무관한 세션 귀속).
+    -- 세션 생성 시 1회 기록(first-write-wins), 기존 세션은起動 백필.
+    CREATE TABLE IF NOT EXISTS session_repo_map (
+      session_id TEXT PRIMARY KEY,
+      repo_id INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_repo_map_repo ON session_repo_map(repo_id);
   
    `)
   

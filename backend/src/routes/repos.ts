@@ -910,7 +910,19 @@ export function createRepoRoutes(database: Database) {
           merged.push(s)
         }
       }
-      return c.json({ sessions: merged, directories: dirs })
+      // S1: 매핑에 다른 레포로 기록된 세션은 제외한다 (S2 이후 directory가
+      // 전부 workspace라 directory 병합만으로는 레포를 가릴 수 없다).
+      // 매핑 없는 세션은 fail-open으로 포함 (TUI 생성·백필 전).
+      try {
+        const { getSessionRepo } = await import('../db/session-repo-queries')
+        const filtered = merged.filter((s) => {
+          const mapped = getSessionRepo(database, s.id)
+          return mapped == null || mapped === id
+        })
+        return c.json({ sessions: filtered, directories: dirs })
+      } catch {
+        return c.json({ sessions: merged, directories: dirs })
+      }
     } catch (error: any) {
       logger.error('Failed to list repo sessions:', error)
       return c.json({ error: error.message }, 500)

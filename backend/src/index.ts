@@ -23,6 +23,7 @@ import { createCommandRunRoutes } from './routes/command-runs'
 import { createSearchRoutes } from './routes/search'
 import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
+import { createSessionRepoRoutes } from './routes/session-repos'
 import { createChatQueueRoutes } from './routes/chat-queue'
 import { createCommandHooksRoutes } from './routes/command-hooks'
 import { createMcpRoutes } from './routes/mcp'
@@ -287,6 +288,7 @@ app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
 app.route('/api/search', createSearchRoutes(db))
   app.route('/api/session-status', createSessionStatusRoutes(db))
+  app.route('/api/session-repos', createSessionRepoRoutes(db))
   app.route('/api/chat-queue', createChatQueueRoutes())
   app.route('/api/command-hooks', createCommandHooksRoutes(db))
   app.route('/api/mcp', createMcpRoutes(db))
@@ -564,6 +566,14 @@ logger.info('Schedule runner started')
 
 startSessionStatusPoller(db)
 logger.info('Session status poller started')
+
+// S1 백필: 기존 세션의 소속 레포를 현재 directory로 역산해 1회 기록.
+// opencode 부팅을 기다렸다가 1회만 (S2 이전 directory 값이 유효할 때).
+setTimeout(() => {
+  import('./services/session-repo-backfill')
+    .then((m) => m.backfillSessionRepoMap(db))
+    .catch((e) => logger.debug('session-repo backfill skipped:', e))
+}, 30_000)
 
 startPermissionAutoApprover(db)
 logger.info('Permission auto-approver started')

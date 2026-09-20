@@ -856,6 +856,26 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     if (!isLongRunning || !response.body) {
       releaseBusy()
+      // S1: 세션 생성 시 소속 레포를 1회 기록 (directory가 아직 레포별인 시점 값).
+      // 응답은 그대로 돌려주고 매핑은 백그라운드로 (실패해도 무시).
+      if (method === 'POST' && cleanEventPath === '/session' && response.ok && proxyDb) {
+        try {
+          const clone = response.clone()
+          const dirRaw = query['directory']
+          let dir: string | undefined
+          try { dir = dirRaw ? decodeURIComponent(dirRaw) : undefined } catch { dir = dirRaw }
+          void clone.json()
+            .then(async (created: unknown) => {
+              const sid = (created as { id?: string } | null)?.id
+              if (!sid || !dir || !proxyDb) return
+              const { resolveRepoId } = await import('./command-runs')
+              const { setSessionRepoIfAbsent } = await import('../db/session-repo-queries')
+              const repoId = resolveRepoId(proxyDb, dir)
+              if (repoId != null) setSessionRepoIfAbsent(proxyDb, sid, repoId)
+            })
+            .catch(() => {})
+        } catch {}
+      }
       try {
         const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
         if (m?.[1]) {
