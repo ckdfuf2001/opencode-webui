@@ -13,10 +13,11 @@ import {
   getFileStats, 
   listDirectory 
 } from './file-operations'
-import { FILE_LIMITS, getReposPath, DEFAULT_BLOCKED_UPLOAD_EXTENSIONS } from '@opencode-webui/shared'
+import { FILE_LIMITS, getReposPath, getWorkspacePath, DEFAULT_BLOCKED_UPLOAD_EXTENSIONS } from '@opencode-webui/shared'
 import type { ChunkedFileInfo, PatchOperation } from '@opencode-webui/shared'
 
 const SHARED_WORKSPACE_BASE = getReposPath()
+const WORKSPACE_ROOT = getWorkspacePath()
 
 const DEFAULT_BLOCKED_UPLOADS = new Set(
   (DEFAULT_BLOCKED_UPLOAD_EXTENSIONS ?? []).map((e) => e.toLowerCase()),
@@ -422,6 +423,70 @@ export function validatePath(userPath: string): string {
   }
   
   return resolved
+}
+
+/**
+ * 채팅 멘션·doc-reader가 보내는 다양한 경로형을 repos 안 실제 파일로 푼다.
+ * - `aaa/chat_uploads/x.png` (레포 prefix 상대경로)
+ * - `chat_uploads/x.png`, `src/a.ts` (레포명 없는 상대경로 — 전 레포 탐색)
+ * - `repos/aaa/...` (workspace 상대경로)
+ * - `<workspace>/aaa/...` (MCP _resolve가 workspace 루트에 붙인 절대경로)
+ * - `<workspace>/repos/aaa/...` (정상 절대경로)
+ * 실제 파일을 못 찾으면 validatePath(userPath) 로 폴백해서 403/404 시맨틱을 유지한다.
+ */
+export async function resolveWorkspaceFile(userPath: string): Promise<string> {
+  const fwd = String(userPath ?? '').replace(/\\/g, '/')
+  const stripDotdot = (s: string) => s.replace(/^(\.\.(\/|$))+/, '')
+  const keys: string[] = []
+  const pushKey = (k: string) => {
+    const clean = stripDotdot(k.replace(/^\/+/, ''))
+    if (clean && !keys.includes(clean)) keys.push(clean)
+  }
+  if (path.isAbsolute(fwd)) {
+    const wsRoot = path.resolve(WORKSPACE_ROOT)
+    const abs = path.resolve(fwd)
+    if (abs !== wsRoot && abs.startsWith(wsRoot + path.sep)) {
+      const rel = path.relative(wsRoot, abs).replace(/\\/g, '/')
+      pushKey(rel)
+      pushKey(rel.split('/').slice(1).join('/'))
+    }
+  } else {
+    pushKey(fwd)
+  }
+  const normKeys: string[] = []
+  for (const k of keys) {
+    const noRepos = k === 'repos' ? '' : k.replace(/^repos\//, '')
+    if (noRepos && !normKeys.includes(noRepos)) normKeys.push(noRepos)
+  }
+  const insideRepos = async (p: string): Promise<string | null> => {
+    const resolved = path.resolve(p)
+    const base = path.resolve(SHARED_WORKSPACE_BASE)
+    if (resolved !== base && !resolved.startsWith(base + path.sep)) return null
+    try {
+      const s = await fs.stat(resolved)
+      return s.isFile() ? resolved : null
+    } catch {
+      return null
+    }
+  }
+  for (const k of normKeys) {
+    const hit = await insideRepos(path.join(SHARED_WORKSPACE_BASE, k))
+    if (hit) return hit
+  }
+  let repoNames: string[] = []
+  try {
+    const dirents = await fs.readdir(path.resolve(SHARED_WORKSPACE_BASE), { withFileTypes: true })
+    repoNames = dirents.filter((d) => d.isDirectory()).map((d) => d.name)
+  } catch {
+    // 조회 실패 시 직접 경로만 시도
+  }
+  for (const k of normKeys) {
+    for (const repoName of repoNames) {
+      const hit = await insideRepos(path.join(SHARED_WORKSPACE_BASE, repoName, k))
+      if (hit) return hit
+    }
+  }
+  return validatePath(userPath)
 }
 
 function getMimeType(filePath: string, _content: Uint8Array): string {

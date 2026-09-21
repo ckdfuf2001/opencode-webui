@@ -29,7 +29,18 @@ mcp = FastMCP(
 def _resolve(path_value):
     if os.path.isabs(path_value):
         return path_value
-    return os.path.join(os.path.abspath(WORKSPACE), path_value)
+    ws = os.path.abspath(WORKSPACE)
+    # 채팅 상대경로는 레포 기준(aaa/chat_uploads/..., aaa/src/...)이므로
+    # 첫 세그먼트가 repos/ 아래 실재 레포명이면 repos/에 붙인다.
+    # 백엔드도 구형 workspace형 절대경로를 해석하지만, 신규 호출은 정상형으로 보낸다.
+    rel = str(path_value).replace("\\", "/").lstrip("/")
+    first = rel.split("/", 1)[0]
+    repos = os.path.join(ws, "repos")
+    if first == "repos":
+        return os.path.join(ws, rel)
+    if first and os.path.isdir(os.path.join(repos, first)):
+        return os.path.join(repos, rel)
+    return os.path.join(ws, path_value)
 
 
 @mcp.tool()
