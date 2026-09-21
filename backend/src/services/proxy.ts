@@ -916,8 +916,9 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       try {
         const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
         if (m?.[1]) {
-          // 직접전송 성공 — 동일 텍스트의 큐 고아(failed 배지·중복 전송 원인)를 제거한다.
-          if (method === 'POST' && body) dropDeliveredByBody(m[1]!, body)
+          // 직접전송 성공(2xx) 때만 동일 텍스트의 큐 고아를 제거한다.
+          // 실패 응답인데 지우면 직접전송·큐 복사본이 둘 다 사라져 메시지가 증발한다.
+          if (method === 'POST' && body && response.ok) dropDeliveredByBody(m[1]!, body)
           setTimeout(() => flushQueueForSession(m[1]!, query['directory'] ? decodeURIComponent(query['directory']) : undefined), 150)
         }
       } catch {}
