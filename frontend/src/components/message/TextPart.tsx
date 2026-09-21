@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
+import { rehypeSafeHtml } from '@/lib/rehypeSafeHtml'
 import { Copy, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -173,7 +174,7 @@ export function TextPart({ part }: TextPartProps) {
     <div className="prose prose-invert prose-enhanced max-w-none text-foreground overflow-hidden break-words leading-snug">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight, rehypeRaw]}
+        rehypePlugins={[rehypeRaw, rehypeSafeHtml, rehypeHighlight]}
         components={components}
       >
         {shown}

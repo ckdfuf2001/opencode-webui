@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
@@ -1674,6 +1675,7 @@ if (results.length > 0) {
               />
             </div>
             {opcodeUrl && repoDirectory && (
+              <ErrorBoundary label="MessageThread">
               <MessageThread 
                 opcodeUrl={opcodeUrl} 
                 sessionID={sessionId} 
@@ -1692,6 +1694,7 @@ if (results.length > 0) {
                 invocations={invocationByMessage}
                 onOpenCommandHistory={() => setCommandsOpen(true)}
               />
+              </ErrorBoundary>
             )}
             {currentQuestion && (
               <div className="mt-2">
