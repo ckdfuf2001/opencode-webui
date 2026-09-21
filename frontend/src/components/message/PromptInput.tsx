@@ -19,10 +19,11 @@ import { FileSuggestions } from './FileSuggestions'
 import { detectMentionTrigger, parsePromptToParts, MENTION_PATTERN } from '@/lib/promptParser'
 import type { FileHit } from '@/hooks/useFileSearch'
 import { getFilename, normSlash, toWsPath } from '@opencode-webui/shared/lib/repoPath'
-import { getModel, formatModelName } from '@/api/providers'
+import { getModel, formatModelName, resolveUsableModel } from '@/api/providers'
 import type { components } from '@/api/opencode-types'
 import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
 import { getFileStat, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
+import { getSessionModelOverride } from '@/lib/sessionModelOverride'
 import { showToast } from '@/lib/toast'
 import { getSessionOverride } from '@/lib/notifications'
 import {
@@ -856,8 +857,30 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
 const sessionModel = session?.model?.providerID && session?.model?.id
     ? `${session.model.providerID}/${session.model.id}`
     : null
-// webui 기본값이 opencode 설정보다 우선. opencode 설정 모델은 폴백이다.
-const currentModel = sessionModel || preferences?.defaultModel || config?.model || ''
+// 세션 오버라이드(사용자 직접 선택) > 서버 세션값 > webui 기본값 > opencode 설정 순.
+// opencode에 세션 모델 변경 API가 없어서(POST /session/:id/model은 무응답)
+// 선택은 localStorage에 세션별로 기억하고 전송마다 명시한다.
+// 제공 중지된 모델은 목록 확인되는 한 건너뛰고, 모르면 fail-open(기존 동작).
+const modelOverride = getSessionModelOverride(sessionID)
+const rawModel = modelOverride || sessionModel || preferences?.defaultModel || config?.model || ''
+const [currentModel, setCurrentModel] = useState(rawModel)
+const warnedModelRef = useRef<string | null>(null)
+useEffect(() => {
+  let cancelled = false
+  setCurrentModel(rawModel)
+  if (!rawModel) return
+  void resolveUsableModel([modelOverride, sessionModel, preferences?.defaultModel, config?.model]).then(({ model, skipped }) => {
+    if (cancelled) return
+    setCurrentModel(model)
+    const skippedDefault = skipped.find((s) => s === preferences?.defaultModel)
+    if (skippedDefault && warnedModelRef.current !== `${sessionID}:${skippedDefault}`) {
+      warnedModelRef.current = `${sessionID}:${skippedDefault}`
+      showToast.warning(`기본 모델 '${skippedDefault}' 제공이 중지된 것 같습니다. 모델 대화상자에서 새 기본값을 골라주세요.`, { duration: 8000 })
+    }
+  })
+  return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [rawModel, sessionID])
 
 useEffect(() => {
     const loadModelName = async () => {

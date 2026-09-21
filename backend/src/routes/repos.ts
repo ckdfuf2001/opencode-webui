@@ -10,7 +10,7 @@ import { releaseAgentBrowserForDirectory, writeActiveOpenCodeConfigFile } from '
 import { ensureServerAuth } from '../services/opencode-auth'
 import { logger } from '../utils/logger'
 import { withTransactionAsync } from '../db/transactions'
-import { getOpenCodeConfigFilePath, getReposPath } from '@opencode-webui/shared'
+import { getOpenCodeConfigFilePath, getReposPath, getWorkspacePath } from '@opencode-webui/shared'
 import { executeCommand } from '../utils/process'
 import * as scheduleQueries from '../db/schedule-queries'
 import * as permissionRuleQueries from '../db/permission-rule-queries'
@@ -885,9 +885,23 @@ export function createRepoRoutes(database: Database) {
       const { backfillDirectoryAliases, listSessionDirectories } = await import('../services/command-runs')
       try { backfillDirectoryAliases(database, id, currentDir) } catch {}
       const dirs = listSessionDirectories(database, id, currentDir)
+      // S2: 새 세션 cwd가 전부 workspace 루트라 레포 경로 조회만으로는
+      // 생성 직후 세션이 안 보인다. 루트도 함께 조회하되, 루트에서 온 것은
+      // 매핑 확정분만 포함한다 (매핑 없는 타 레포 세션 섞임 방지).
+      // 레포 경로에서 온 것은 기존대로 fail-open (TUI 생성·백필 전).
+      let wsRoot = ''
+      try { wsRoot = path.resolve(getWorkspacePath()) } catch {}
+      const normEq = (a: string, b: string) => a.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === b.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+      const queryDirs = [...dirs]
+      const wsIndex = wsRoot ? queryDirs.findIndex((d) => normEq(d, wsRoot)) : -1
+      let rootIndex = wsIndex
+      if (wsRoot && wsIndex < 0) {
+        queryDirs.push(wsRoot)
+        rootIndex = queryDirs.length - 1
+      }
       const base = opencodeServerManager.getUrl()
       const headers = ensureServerAuth({})
-      const settled = await Promise.all(dirs.map(async (dir) => {
+      const settled = await Promise.all(queryDirs.map(async (dir) => {
         try {
           const res = await fetch(`${base}/session?directory=${encodeURIComponent(dir)}`, {
             headers,
@@ -900,28 +914,32 @@ export function createRepoRoutes(database: Database) {
           return []
         }
       }))
-      // 현재 경로 복사본 우선으로 id 병합
+      // 현재 경로 복사본 우선으로 id 병합 (루트 출처 표시 유지)
       const seen = new Set<string>()
+      const fromRootIds = new Set<string>()
       const merged: Array<{ id: string }> = []
-      for (const list of settled) {
+      settled.forEach((list, di) => {
         for (const s of list) {
           if (!s?.id || seen.has(s.id)) continue
           seen.add(s.id)
+          if (di === rootIndex) fromRootIds.add(s.id)
           merged.push(s)
         }
-      }
+      })
       // S1: 매핑에 다른 레포로 기록된 세션은 제외한다 (S2 이후 directory가
       // 전부 workspace라 directory 병합만으로는 레포를 가릴 수 없다).
-      // 매핑 없는 세션은 fail-open으로 포함 (TUI 생성·백필 전).
+      // 레포 경로 매핑 없는 세션은 fail-open으로 포함 (TUI 생성·백필 전).
+      // workspace 루트에서 온 것은 매핑 확정분만 포함한다.
       try {
         const { getSessionRepo } = await import('../db/session-repo-queries')
         const filtered = merged.filter((s) => {
           const mapped = getSessionRepo(database, s.id)
+          if (fromRootIds.has(s.id)) return mapped === id
           return mapped == null || mapped === id
         })
-        return c.json({ sessions: filtered, directories: dirs })
+        return c.json({ sessions: filtered, directories: queryDirs })
       } catch {
-        return c.json({ sessions: merged, directories: dirs })
+        return c.json({ sessions: merged, directories: queryDirs })
       }
     } catch (error: any) {
       logger.error('Failed to list repo sessions:', error)

@@ -894,21 +894,23 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       releaseBusy()
       // S1: 세션 생성 시 소속 레포를 1회 기록. S2 강제 전의 원본 directory로
       // 해석한다 (강제 후 값은 workspace라 역산 불가).
-      // 응답은 그대로 돌려주고 매핑은 백그라운드로 (실패해도 무시).
+      // 응답 전에 확정한다 — 생성 직후 목록 조회가 바로 붙게.
+      // 로컬 sqlite 1회라 지연은 무시 수준이다.
       if (method === 'POST' && cleanEventPath === '/session' && response.ok && proxyDb) {
         try {
-          const clone = response.clone()
           const dir = sessionCreateRepoDir
-          void clone.json()
-            .then(async (created: unknown) => {
-              const sid = (created as { id?: string } | null)?.id
-              if (!sid || !dir || !proxyDb) return
-              const { resolveRepoId } = await import('./command-runs')
-              const { setSessionRepoIfAbsent } = await import('../db/session-repo-queries')
-              const repoId = resolveRepoId(proxyDb, dir)
-              if (repoId != null) setSessionRepoIfAbsent(proxyDb, sid, repoId)
-            })
-            .catch(() => {})
+          if (dir) {
+            const created = (await response.clone().json().catch(() => null)) as { id?: string } | null
+            const sid = created?.id
+            if (sid) {
+              try {
+                const { resolveRepoId } = await import('./command-runs')
+                const { setSessionRepoIfAbsent } = await import('../db/session-repo-queries')
+                const repoId = resolveRepoId(proxyDb, dir)
+                if (repoId != null) setSessionRepoIfAbsent(proxyDb, sid, repoId)
+              } catch {}
+            }
+          }
         } catch {}
       }
       try {
