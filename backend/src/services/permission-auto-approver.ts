@@ -156,6 +156,16 @@ export function ruleMatches(rule: PermissionRule, permission: AskedPermission): 
   })
 }
 
+/**
+ * S2 veto 예외: 룰 패턴이 구체 경로를 명시하면 레포 밖이어도 승인한다.
+ * veto는 전역 `*` 같은 광범위 룰의 타 레포 오승인만 막는다.
+ * 사용자가 외부 경로를 콕 집어 등록한 룰까지 막으면 등록해도 계속 묻게 된다.
+ */
+export function shouldVetoOutsideRepo(rule: PermissionRule): boolean {
+  if (rule.pattern === '*') return true
+  return !isPathLike(rule.pattern)
+}
+
 /** S2 가드레일 대상: 경로 쓰기 계열. 읽기·bash·fetch는 기존대로 둔다. */
 const WRITE_SCOPED_TYPES = new Set(['edit', 'external_directory', 'write'])
 
@@ -427,8 +437,13 @@ async function handleAskedPermission(
       inside = true
     }
     if (!inside) {
-      logger.warn(`Auto-approve veto (outside session repo ${repoId}): ${describe()} rule=#${matched.id}`)
-      return
+      // 명시적 외부경로 룰(구체 경로 패턴)은 veto하지 않는다 — 사용자가 허용한 위치다.
+      // `*` 같은 광범위 룰만 타 레포 오승인 방지로 veto한다.
+      if (shouldVetoOutsideRepo(matched)) {
+        logger.warn(`Auto-approve veto (outside session repo ${repoId}): ${describe()} rule=#${matched.id}`)
+        return
+      }
+      logger.info(`Auto-approve explicit outside-repo rule #${matched.id} (repo ${repoId}): ${describe()}`)
     }
   }
   markResponded(permission.id)

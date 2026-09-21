@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { globToRegex, isCandidateInRepo, ruleMatches } from '../../src/services/permission-auto-approver'
+import { globToRegex, isCandidateInRepo, ruleMatches, shouldVetoOutsideRepo } from '../../src/services/permission-auto-approver'
 import type { PermissionRule } from '../../src/types/permission-rule'
 
 function rule(partial: Partial<PermissionRule> = {}): PermissionRule {
@@ -244,5 +244,43 @@ describe('isCandidateInRepo (S2 guardrail)', () => {
   it('empty candidates never match', () => {
     expect(isCandidateInRepo('', full, [])).toBe(false)
     expect(isCandidateInRepo('   ', full, [])).toBe(false)
+  })
+})
+
+describe('shouldVetoOutsideRepo (명시적 외부경로 룰은 veto 안 함)', () => {
+  it('`*` 룰은 veto 유지', () => {
+    expect(shouldVetoOutsideRepo(rule({ pattern: '*' }))).toBe(true)
+  })
+  it('구체 외부경로 룰은 veto 안 함 (등록해도 계속 묻던 버그)', () => {
+    expect(
+      shouldVetoOutsideRepo(
+        rule({ permission: 'external_directory', pattern: 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\*' }),
+      ),
+    ).toBe(false)
+    expect(shouldVetoOutsideRepo(rule({ permission: 'edit', pattern: 'C:/data' }))).toBe(false)
+  })
+  it('비경로 광범위 패턴은 veto 유지', () => {
+    expect(shouldVetoOutsideRepo(rule({ permission: 'bash', pattern: 'npm run *' }))).toBe(true)
+  })
+  it('실제 shape: checkout 파일 요청이 룰 #31형에 매칭 + 레포 밖 판정', () => {
+    const ask = {
+      id: 'x',
+      sessionID: 's',
+      permission: 'external_directory',
+      metadata: { filepath: 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\backend\\src\\services\\files.ts' },
+    }
+    expect(
+      ruleMatches(
+        rule({ permission: 'external_directory', pattern: 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\*' }),
+        ask,
+      ),
+    ).toBe(true)
+    expect(
+      isCandidateInRepo(
+        'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\backend\\src\\services\\files.ts',
+        'C:/portable/workspace/repos/aaa',
+        ['bbb'],
+      ),
+    ).toBe(false)
   })
 })
