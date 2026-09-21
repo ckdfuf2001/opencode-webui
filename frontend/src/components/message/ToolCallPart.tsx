@@ -140,7 +140,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
 
   // PTY streaming for bash while running: only when expanded to save connection.
   // SSE off면 PTY 스트림도 열지 않는다 — metadata.output 폴링 동기화만으로 갱신.
-  const sseOn = preferences?.sseStreaming ?? true
+  const sseOn = preferences?.sseStreaming ?? false
   useEffect(() => {
     if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded || !sseOn) {
       if (part.tool === 'bash' && part.state.status === 'completed') setPtyOutput(null)

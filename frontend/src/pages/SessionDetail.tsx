@@ -697,7 +697,7 @@ export function SessionDetail() {
   const isStreaming = isConnected && !recentlyAborted && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy || (sessionId ? hasActiveSend(sessionId) : false));
   // SSE off면 폴링만으로 갱신 (reasoning·응답 실시간 스트리밍 없음).
   // 끄는 순간 진행 중 per-send 스트림까지 kill-switch로 닫는다.
-  const sseOn = preferences?.sseStreaming ?? true
+  const sseOn = preferences?.sseStreaming ?? false
   useEffect(() => {
     if (!sseOn) closeAllSessionSSE()
   }, [sseOn])

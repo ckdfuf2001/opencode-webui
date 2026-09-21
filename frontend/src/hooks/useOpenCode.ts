@@ -1767,11 +1767,12 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       const esUrl = client.getEventSourceURL();
       let es: EventSource | null = null;
       // 설정에서 SSE를 끄면 per-send 스트림도 열지 않는다 — 폴링(usePollLastMessage)이 갱신을 담당
-      let sseOn = true
+      // 기본값 off: 명시적으로 켠 경우에만 스트림을 연다.
+      let sseOn = false
       try {
         const sseSettings = queryClient.getQueryData<{ preferences?: { sseStreaming?: boolean } }>(["settings", "default"])
           ?? queryClient.getQueryData<{ preferences?: { sseStreaming?: boolean } }>(["settings"])
-        if (sseSettings?.preferences?.sseStreaming === false) sseOn = false
+        if (sseSettings?.preferences?.sseStreaming === true) sseOn = true
       } catch {}
       const capIncomingToolPart = (p: any): any => {
         if (p?.type !== 'tool' || !p?.state) return p
