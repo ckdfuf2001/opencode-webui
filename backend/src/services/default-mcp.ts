@@ -26,6 +26,8 @@ function buildDocReaderMcp(): Record<string, unknown> {
       env: {
         OPCODE_WEBUI_BACKEND: workspaceBackend,
         OPCODE_WEBUI_WORKSPACE: getWorkspacePath(),
+        // doc-reader 상대경로 루트 = workspace/repos (채팅 멘션이 레포 기준이라 매핑 불필요)
+        OPCODE_WEBUI_REPOS: getReposPath(),
       },
     },
   }

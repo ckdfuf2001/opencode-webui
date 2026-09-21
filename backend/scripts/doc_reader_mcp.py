@@ -8,6 +8,9 @@ from fastmcp import FastMCP
 
 BACKEND = os.environ.get("OPCODE_WEBUI_BACKEND", "http://127.0.0.1:5001")
 WORKSPACE = os.environ.get("OPCODE_WEBUI_WORKSPACE", os.path.join(os.getcwd(), "workspace"))
+# 채팅 상대경로 루트. 백엔드가 OPCODE_WEBUI_REPOS(= workspace/repos)로 넘긴다.
+# 있으면 여기를 루트로 쓰고, 없으면 workspace 루트 + 레포 매핑(구 동작)으로 폴백한다.
+REPOS = os.environ.get("OPCODE_WEBUI_REPOS", "")
 
 mcp = FastMCP(
     "opencode-doc-reader",
@@ -29,11 +32,19 @@ mcp = FastMCP(
 def _resolve(path_value):
     if os.path.isabs(path_value):
         return path_value
-    ws = os.path.abspath(WORKSPACE)
-    # 채팅 상대경로는 레포 기준(aaa/chat_uploads/..., aaa/src/...)이므로
-    # 첫 세그먼트가 repos/ 아래 실재 레포명이면 repos/에 붙인다.
-    # 백엔드도 구형 workspace형 절대경로를 해석하지만, 신규 호출은 정상형으로 보낸다.
     rel = str(path_value).replace("\\", "/").lstrip("/")
+    # 1순위: repos 루트 (aaa/chat_uploads/... → repos/aaa/chat_uploads/...)
+    if REPOS and os.path.isdir(REPOS):
+        repos_base = os.path.abspath(REPOS)
+        if rel == "repos":
+            return repos_base
+        if rel.startswith("repos/"):
+            return os.path.join(repos_base, rel[len("repos/"):])
+        return os.path.join(repos_base, rel)
+    ws = os.path.abspath(WORKSPACE)
+    # 2순위(구 동작): 첫 세그먼트가 repos/ 아래 실재 레포명이면 repos/에 붙인다.
+    # 채팅 상대경로는 레포 기준(aaa/chat_uploads/..., aaa/src/...)이므로
+    # 백엔드도 구형 workspace형 절대경로를 해석하지만, 신규 호출은 정상형으로 보낸다.
     first = rel.split("/", 1)[0]
     repos = os.path.join(ws, "repos")
     if first == "repos":
