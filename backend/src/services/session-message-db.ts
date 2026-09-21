@@ -344,6 +344,37 @@ export async function historyReasoningModels(sessionId: string): Promise<Reasoni
 }
 
 /** 점프용 윈도우: around 메시지 전후, 또는 before 방향(앵커 이전) limit개 (parts 포함, cap 적용). */
+/**
+ * 윈도우 상단 라벨용: anchor보다 오래된 메시지 수(전역 rank).
+ * 점프 병합 뒤 캐시에 틈이 생기면 total-len 공식이 gap까지
+ * 오래된 쪽으로 잡아 개수가 어긋나므로, 상단 메시지 기준으로 직접 센다.
+ */
+export async function rankSessionMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<{ total: number; found: boolean; older: number } | null> {
+  const oc = await openOcDb()
+  if (!oc) return null
+  try {
+    const total = (
+      oc.query('SELECT COUNT(*) AS c FROM message WHERE session_id = ?').get(sessionId) as { c: number }
+    ).c
+    const anchor = oc
+      .query('SELECT time_created AS t, rowid AS r FROM message WHERE session_id = ? AND id = ?')
+      .get(sessionId, messageId) as { t: number; r: number } | undefined
+    if (!anchor) return { total, found: false, older: 0 }
+    const older = (
+      oc
+        .query(
+          'SELECT COUNT(*) AS c FROM message WHERE session_id = ? AND (time_created < ? OR (time_created = ? AND rowid < ?))',
+        )
+        .get(sessionId, anchor.t, anchor.t, anchor.r) as { c: number }
+    ).c
+    return { total, found: true, older }
+  } finally {
+    oc.close()
+  }
+}
 export async function windowSessionMessages(
   sessionId: string,
   aroundId: string,

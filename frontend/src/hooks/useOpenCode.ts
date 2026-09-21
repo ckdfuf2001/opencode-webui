@@ -1007,6 +1007,21 @@ export async function loadAllSessionMessages(
 }
 
 /**
+ * 윈도우 상단 메시지보다 오래된 개수 (COUNT 1회).
+ * 점프 병합 뒤 캐시에 틈이 생기면 total-len 공식이 어긋나므로 상단 기준으로 직접 센다.
+ */
+export async function fetchMessageRank(sessionID: string, messageID: string): Promise<number | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/session-messages/${encodeURIComponent(sessionID)}/rank?messageId=${encodeURIComponent(messageID)}`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { older?: number };
+    return typeof body?.older === 'number' ? body.older : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 리스트 상단 "더 보기": 캐시된 가장 오래된 메시지 이전을 count개 더 가져와
  * 앞에 붙인다. 새로 붙은 개수(스크롤 위치 유지용)·전체 total·서버 잔여 여부를
  * 돌려준다. truncateLargeToolOutputs·backfilledIds·병합은 backfillMessages가 처리.
