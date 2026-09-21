@@ -358,11 +358,15 @@ async function handleAskedPermission(
   raw: unknown,
   eventType: string,
   resolveBase: () => Promise<string>,
+  opts?: { quiet?: boolean },
 ): Promise<void> {
   const permission = normalizePermission(raw)
   if (!permission) return
   if (wasResponded(permission.id)) return
   const isV2 = eventType === 'permission.v2.asked'
+  const logSkip = opts?.quiet
+    ? (msg: string) => logger.debug(msg)
+    : (msg: string) => logger.info(msg)
   // 진단용: 왜 승인/스킵됐는지 info에 남긴다 (ask는 사용자 다이얼로그급이라 info가 적당)
   const describe = (): string => {
     const cands = getCandidatePatterns(permission)
@@ -384,7 +388,7 @@ async function handleAskedPermission(
     const directory = await getSessionDirectoryCached(permission.sessionID, resolveBase)
     if (repoId == null) {
       if (!directory) {
-        logger.info(`Auto-approve skip (no session directory): ${describe()}`)
+        logSkip(`Auto-approve skip (no session directory): ${describe()}`)
         return
       }
       repoId = resolveRepoId(db, directory)
@@ -397,33 +401,35 @@ async function handleAskedPermission(
         const row = getSessionStatusRow(db, permission.sessionID)
         if (row?.repoId != null) {
           repoId = row.repoId
-          logger.info(`Auto-approve repo fallback via session_status (repo ${repoId}): ${describe()} dir=${directory}`)
+          logSkip(`Auto-approve repo fallback via session_status (repo ${repoId}): ${describe()} dir=${directory}`)
         }
       } catch {}
     }
     if (repoId == null) {
-      logger.info(`Auto-approve skip (no repo for dir): ${describe()} dir=${directory}`)
+      logSkip(`Auto-approve skip (no repo for dir): ${describe()} dir=${directory}`)
       return
     }
   } catch (e) {
     // 조회 실패는 조용히 넘기면 원인을 알 수 없으니 warn (404 등 미해석은 위에서 return)
-    logger.warn(`Auto-approve directory resolve failed for session ${permission.sessionID}:`, e)
+    if (opts?.quiet) logger.debug(`Auto-approve directory resolve failed for session ${permission.sessionID}:`, e)
+    else logger.warn(`Auto-approve directory resolve failed for session ${permission.sessionID}:`, e)
     return
   }
   let candidateRules: PermissionRule[]
   try {
     candidateRules = listApplicableRules(db, repoId)
   } catch (e) {
-    logger.warn(`Auto-approve rules read failed (repo ${repoId}):`, e)
+    if (opts?.quiet) logger.debug(`Auto-approve rules read failed (repo ${repoId}):`, e)
+    else logger.warn(`Auto-approve rules read failed (repo ${repoId}):`, e)
     return
   }
   if (candidateRules.length === 0) {
-    logger.info(`Auto-approve skip (no rules for repo ${repoId}): ${describe()}`)
+    logSkip(`Auto-approve skip (no rules for repo ${repoId}): ${describe()}`)
     return
   }
   const matched = candidateRules.find((rule) => ruleMatches(rule, permission))
   if (!matched) {
-    logger.info(`Auto-approve no-match (${candidateRules.length} repo+global rules): ${describe()}`)
+    logSkip(`Auto-approve no-match (${candidateRules.length} repo+global rules): ${describe()}`)
     return
   }
   // S2 가드레일: 쓰기 계열이 세션 레포 밖이면 룰이 맞아도 승인하지 않는다.
@@ -440,7 +446,8 @@ async function handleAskedPermission(
       // 명시적 외부경로 룰(구체 경로 패턴)은 veto하지 않는다 — 사용자가 허용한 위치다.
       // `*` 같은 광범위 룰만 타 레포 오승인 방지로 veto한다.
       if (shouldVetoOutsideRepo(matched)) {
-        logger.warn(`Auto-approve veto (outside session repo ${repoId}): ${describe()} rule=#${matched.id}`)
+        if (opts?.quiet) logger.debug(`Auto-approve veto (outside session repo ${repoId}): ${describe()} rule=#${matched.id}`)
+        else logger.warn(`Auto-approve veto (outside session repo ${repoId}): ${describe()} rule=#${matched.id}`)
         return
       }
       logger.info(`Auto-approve explicit outside-repo rule #${matched.id} (repo ${repoId}): ${describe()}`)
@@ -455,6 +462,57 @@ async function handleAskedPermission(
     // 성공 전에 mark하면 실패가 영구 미승인으로 굳는다.
     unmarkResponded(permission.id)
     logger.debug(`Auto-approve reply failed for ${permission.id} (will retry on next event):`, e)
+  }
+}
+
+/**
+ * 재조정 sweep: SSE로 놓친 ask를 잡는다.
+ * ask 생성 이벤트를 못 받으면(백엔드 재시작·단절 구간) 프론트 폴링에만 보이고
+ * 자동승인이 영원히 안 돈다. 살아있는 목록을 주기로 읽어 같은 판정기로 처리한다.
+ * - v1형(reply에 sessionID 필요)으로 처리한다. v2 ask는 이벤트 경로가 담당한다.
+ * - 응답 성공/실패 처리는 handleAskedPermission과 동일(dedupe+재시도).
+ * - 미승인 사유 로그는 quiet로 낮춰 스팸을 막는다. 승인은 info 유지.
+ */
+const SWEEP_INTERVAL_MS = 45_000
+const SWEEP_START_DELAY_MS = 10_000
+let sweepRunning = false
+
+async function sweepPendingPermissions(
+  db: Database,
+  resolveBase: () => Promise<string>,
+): Promise<void> {
+  if (sweepRunning) return
+  sweepRunning = true
+  try {
+    const { ensureServerAuth } = await import('./opencode-auth')
+    const base = await resolveBase()
+    const res = await fetch(`${base}/permission`, {
+      headers: ensureServerAuth({}),
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) {
+      logger.debug(`Auto-approve sweep: permission list HTTP ${res.status}`)
+      return
+    }
+    const list = (await res.json()) as unknown[]
+    if (!Array.isArray(list) || list.length === 0) return
+    let approved = 0
+    for (const raw of list) {
+      const r = raw as { id?: unknown; sessionID?: unknown }
+      if (typeof r.id !== 'string' || !r.id || typeof r.sessionID !== 'string' || !r.sessionID) continue
+      if (wasResponded(r.id)) continue
+      try {
+        await handleAskedPermission(db, raw, 'permission.asked', resolveBase, { quiet: true })
+        approved++
+      } catch (e) {
+        logger.debug(`Auto-approve sweep: item ${r.id} failed:`, e instanceof Error ? e.message : e)
+      }
+    }
+    if (approved > 0) logger.info(`Auto-approve sweep processed ${approved}/${list.length} pending permission(s)`)
+  } catch (e) {
+    logger.debug('Auto-approve sweep failed:', e instanceof Error ? e.message : e)
+  } finally {
+    sweepRunning = false
   }
 }
 
@@ -546,6 +604,23 @@ export function subscribeOpencodeEvents(
   }
 
   void pump()
+  // 놓친 ask 재조정: 부팅 직후 1회 + 45초 주기. SSE 미수신분도 자동승인 대상이면 처리된다.
+  let sweepTimer: ReturnType<typeof setInterval> | null = null
+  const sweepOnce = () => {
+    if (stopped) return
+    void sweepPendingPermissions(db, resolveBase)
+  }
+  const sweepStart = setTimeout(() => {
+    if (stopped) return
+    sweepOnce()
+    sweepTimer = setInterval(sweepOnce, SWEEP_INTERVAL_MS)
+    if (typeof (sweepTimer as unknown as { unref?: unknown }).unref === 'function') {
+      ;(sweepTimer as unknown as { unref: () => void }).unref()
+    }
+  }, SWEEP_START_DELAY_MS)
+  if (typeof (sweepStart as unknown as { unref?: unknown }).unref === 'function') {
+    ;(sweepStart as unknown as { unref: () => void }).unref()
+  }
   watchdog = setInterval(() => {
     if (stopped) return
     // 2분 무소식은 단절로 보고 재연결한다 (heartbeat 포함 어떤 프레임도 없으면)
@@ -567,6 +642,8 @@ export function subscribeOpencodeEvents(
         abort?.abort()
       } catch {}
       if (watchdog) clearInterval(watchdog)
+      if (sweepTimer) clearInterval(sweepTimer)
+      clearTimeout(sweepStart)
     },
   }
 }
