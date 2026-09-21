@@ -739,6 +739,8 @@ export function SessionDetail() {
 
   // 응답 완료 똑소리: 카드 상태 기준으로 전환 1회만 재생한다.
   const prevStreamingRef = useRef(false);
+  const isStreamingRef = useRef(isStreaming);
+  useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming]);
   const lastBillingToastRef = useRef<string | null>(null);
   const messagesRef = useRef(messages);
   useEffect(() => {
@@ -804,11 +806,23 @@ export function SessionDetail() {
       }, 800);
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
       // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
-      // 폴링 지연(2s) 고려해 3.5초 뒤 재확인한다.
+      // 오판 방지: 예약 시점의 마지막 메시지를 스냅샷해두고, 발화 시점에 달라졌으면
+      // (그 사이 응답이 도착했으면) 조용히 넘긴다. 상태/메시지 폴링 레이스로
+      // streaming=false가 먼저 보여도 user가 마지막이라 오판하던 원인.
+      // 아직 진행 중이면 다음 전이 때 다시 본다. 토스트한 id는 기억해 반복하지 않는다.
+      const schedCur = messagesRef.current;
+      const schedLen = schedCur?.length ?? 0;
+      const schedLastId = schedLen > 0 ? (schedCur as any[])[schedLen - 1]?.info?.id : undefined;
       const timer = setTimeout(() => {
+        if (isStreamingRef.current) return;
         const cur = messagesRef.current;
         if (!cur || cur.length === 0) return;
         const last = cur[cur.length - 1] as any;
+        if (!last) return;
+        // 예약 후 변동 여부: 바뀌었으면 그 사이 뭔가 도착한 것이다.
+        // user-last는 변동 없을 때만(진짜 무응답) 토스트한다.
+        // assistant-empty는 언제 도착했든 비정상이니 그대로 판정한다.
+        const unchanged = cur.length === schedLen && last.info?.id === schedLastId;
         const errName = last.info?.error?.name ?? last.info?.error?.data?.name
         const isAborted = errName === "MessageAbortedError" || last.info?.finish === "aborted" || (last.parts?.some((p: any) => p.type === "step-finish" && p.reason === "aborted"))
         if (isAborted) return;
@@ -818,14 +832,15 @@ export function SessionDetail() {
           return false;
         });
         const isEmptyAssistant = last.info.role === "assistant" && !hasVisible;
-        const isUserWithoutReply = last.info.role === "user";
+        const isUserWithoutReply = last.info.role === "user" && unchanged;
         if ((isEmptyAssistant || isUserWithoutReply) && last.info.id !== lastBillingToastRef.current) {
+          lastBillingToastRef.current = last.info.id;
           showToast.error(
             "The LLM response was empty. Please check your quota.",
             { duration: 10000 },
           );
         }
-      }, 3500);
+      }, 5000);
       return () => { clearTimeout(debounce); clearTimeout(timer); };
     }
     // NOTE: repo/session을 dep에 넣지 말 것 — 완료 후 invalidate로 객체가 바뀌면
