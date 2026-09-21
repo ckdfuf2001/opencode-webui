@@ -217,6 +217,7 @@ export function RepoDetail() {
               directory={repoDirectory}
               sessionHrefBase={`/repos/${repoId}/sessions`}
               onSelectSession={handleSelectSession}
+              repoId={repoId}
             />
           )}
         </div>

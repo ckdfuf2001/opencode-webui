@@ -20,6 +20,7 @@ interface SessionListProps {
   activeSessionID?: string;
   onSelectSession: (sessionID: string) => void;
   sessionHrefBase?: string;
+  repoId?: number;
 }
 
 interface SessionNode {
@@ -38,8 +39,11 @@ export const SessionList = ({
   activeSessionID,
   onSelectSession,
   sessionHrefBase,
+  repoId,
 }: SessionListProps) => {
-  const { data: sessions, isLoading } = useSessions(opcodeUrl, directory);
+  // repoId가 있으면 백엔드 병합 API(현재 경로+별칭+workspace 루트)로 가져온다.
+  // 없으면 opencode 직접 조회라 S2 이후 workspace 루트 세션이 안 보인다.
+  const { data: sessions, isLoading } = useSessions(opcodeUrl, directory, { repoId });
   const deleteSession = useDeleteSession(opcodeUrl, directory);
   const { data: dbStatuses } = useSessionStatusMap();
   const navigate = useNavigate();
