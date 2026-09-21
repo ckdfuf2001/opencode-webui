@@ -64,6 +64,7 @@ export function PermissionSettings() {
         여기에 등록한 룰은 <b>모든 레포의 모든 세션</b>에서 권한 요청을 자동 승인합니다.
         적용 우선순위: 세션 룰 &gt; 레포 룰 &gt; 전역 룰. 레포별 룰은 각 레포 화면의 권한 패널에서 관리하세요.
         하위 경로까지 허용됩니다 (예: <code className="font-mono">/tmp/foo</code> → <code className="font-mono">/tmp/foo/bar</code>).
+        전역 룰은 opencode 설정 파일에도 기록되어 재시작 후에도 ask가 다시 뜨지 않습니다 (적용은 다음 opencode 시작부터, 그 전에는 실시간 자동승인이 처리).
       </p>
 
       <div className="space-y-6">
