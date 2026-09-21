@@ -43,7 +43,7 @@ export const SessionList = ({
 }: SessionListProps) => {
   // repoId가 있으면 백엔드 병합 API(현재 경로+별칭+workspace 루트)로 가져온다.
   // 없으면 opencode 직접 조회라 S2 이후 workspace 루트 세션이 안 보인다.
-  const { data: sessions, isLoading } = useSessions(opcodeUrl, directory, { repoId });
+  const { data: sessions, isLoading, isFetching, isError, refetch } = useSessions(opcodeUrl, directory, { repoId });
   const deleteSession = useDeleteSession(opcodeUrl, directory);
   const { data: dbStatuses } = useSessionStatusMap();
   const navigate = useNavigate();
@@ -174,8 +174,22 @@ export const SessionList = ({
     });
   };
 
-  if (isLoading) {
+  if (isLoading || (sessions === undefined && isFetching)) {
     return <div className="p-4 text-sm text-muted-foreground">Loading sessions...</div>;
+  }
+
+  if (sessions === undefined) {
+    // 에러를 빈 목록으로 속이면 "없다"가 떴다가 바뀌는 것처럼 보인다. 명시하고 재시도 제공.
+    return (
+      <div className="p-4 text-sm text-muted-foreground text-center">
+        <div>{isError ? '세션 목록을 불러오지 못했습니다.' : 'No sessions yet. Create one to get started.'}</div>
+        {isError && (
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void refetch()}>
+            다시 시도
+          </Button>
+        )}
+      </div>
+    );
   }
 
   const handleDelete = (
