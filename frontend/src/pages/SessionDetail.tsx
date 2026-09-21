@@ -806,6 +806,8 @@ export function SessionDetail() {
       }, 800);
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
       // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
+      // 취소는 어시스턴트 메시지 자체가 없을 수 있어(last=user) 발화 시점
+      // 가드로는 안 걸러진다. 스케줄 시점에 취소됐으면 타이머 자체를 잡지 않는다.
       // 오판 방지: 예약 시점의 마지막 메시지를 스냅샷해두고, 발화 시점에 달라졌으면
       // (그 사이 응답이 도착했으면) 조용히 넘긴다. 상태/메시지 폴링 레이스로
       // streaming=false가 먼저 보여도 user가 마지막이라 오판하던 원인.
@@ -813,7 +815,7 @@ export function SessionDetail() {
       const schedCur = messagesRef.current;
       const schedLen = schedCur?.length ?? 0;
       const schedLastId = schedLen > 0 ? (schedCur as any[])[schedLen - 1]?.info?.id : undefined;
-      const timer = setTimeout(() => {
+      const timer = aborted ? undefined : setTimeout(() => {
         if (isStreamingRef.current) return;
         const cur = messagesRef.current;
         if (!cur || cur.length === 0) return;
@@ -841,7 +843,7 @@ export function SessionDetail() {
           );
         }
       }, 5000);
-      return () => { clearTimeout(debounce); clearTimeout(timer); };
+      return () => { clearTimeout(debounce); if (timer) clearTimeout(timer); };
     }
     // NOTE: repo/session을 dep에 넣지 말 것 — 완료 후 invalidate로 객체가 바뀌면
     // 예약된 알림 타이머가 취소된다 (라벨은 위 ref로 읽는다).
