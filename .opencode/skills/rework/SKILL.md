@@ -40,6 +40,13 @@ description: Re-apply post-v0.10.33 work onto the v0.10.33 base without S2 works
 ### Phase 2 — doc-reader + permission stack
 - `eccec1d` + `9f565ed` (resolve + REPOS env)
 - `5724839` veto bypass, `9e071d7` sweep, `e7eb0f3`+`aacf12a` config render + review 반영, `f385cb7` directories
+- config render 적용 시 **object-capable allowlist 필수** (`bash/edit/read/external_directory`만
+  객체 맵, 나머지는 스킵+warn). 근거: opencode 1.18은 `permission.webfetch` 객체를
+  `ConfigInvalidError`로 거부하고, 그 뒤 모든 세션 생성이 400으로 막힌다 (dev 실측).
+  string 전체허용으로 접지 말 것 (과다 허용).
+- opencode는 config를 메모리에 들고 있어서 파일 수정 후에도 **서버 재시작 전까지**
+  구값이 유효하다. e2e 검증은 재시작 후 판정.
+- e2e probe가 공용 dev 파일/DB를 건드리면 바이트 단위로 원복한다 (DB row 포함).
 - 검증: vitest + CRUD→opencode.json 실측 + live ask 포착 판정
 
 ### Phase 3 — chat behaviors
