@@ -1835,6 +1835,7 @@ if (results.length > 0) {
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
                 activeSessionID={sessionId || undefined}
+                repoId={repoId || undefined}
                 sessionHrefBase={
                   window.location.pathname.match(/\/repos\/(\d+)\/sessions\//)
                     ? `/repos/${window.location.pathname.match(/\/repos\/(\d+)\/sessions\//)![1]}/sessions`
