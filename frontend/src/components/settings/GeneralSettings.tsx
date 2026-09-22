@@ -139,6 +139,9 @@ export function GeneralSettings() {
             <p className="text-sm text-muted-foreground">
               Stream reasoning and responses live. Off = polling only, shown when complete.
             </p>
+            <p className="text-sm text-amber-500">
+              Note: SSE streaming may increase frontend memory usage.
+            </p>
           </div>
           <Switch
             id="sseStreaming"

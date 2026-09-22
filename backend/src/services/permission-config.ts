@@ -29,11 +29,45 @@ export const PERMISSION_CONFIG_KEYS = [
 ]
 
 /**
- * 우리 glob → opencode 패턴. opencode의 '*'는 '/'를 포함한 모든 문자라
- * 우리 '**'는 '*'로 접는다. 단일 '*'·'?'는 그대로 둔다.
+ * 우리 패턴 → opencode 패턴 목록.
+ * opencode 신 semantics에서는 '*'가 '/'를 넘지 못하고 '**'만 재귀다
+ * (구버전은 '*'가 전부라 달랐다). 하위까지 커버되게 변형을 함께 내보낸다.
+ * 구버전 호환용 '*'형 + 신버전용 '**'형을 둘 다 넣는다 (중복 무해).
+ * - 'C:/data/*' → ['C:/data/*', 'C:/data/**']
+ * - 'C:/data/**' → ['C:/data/**', 'C:/data/*']
+ * - 'C:/data' (경로형 확정) → [원본, 'C:/data/*', 'C:/data/**']
+ *   (백엔드 매칭이 prefix=하위 포함이라 config도 맞춘다)
+ * - bash 명령 등 비경로형 → [원본] 그대로
  */
-export function toOpencodePattern(pattern: string): string {
-  return pattern.split('**').join('*')
+function isPathLikePattern(p: string): boolean {
+  return (
+    p.includes('/') ||
+    p.includes('\\') ||
+    /^[A-Za-z]:/.test(p) ||
+    p.startsWith('~') ||
+    p.startsWith('$HOME')
+  )
+}
+
+export function toOpencodePatterns(pattern: string): string[] {
+  const p = (pattern ?? '').trim()
+  if (!p) return []
+  if (!isPathLikePattern(p)) return [p]
+  const out: string[] = [p]
+  const norm = p.replace(/\\/g, '/')
+  const push = (v: string) => {
+    if (v && !out.includes(v)) out.push(v)
+  }
+  if (norm.endsWith('/**')) {
+    push(norm.slice(0, -1))
+  } else if (norm.endsWith('/*')) {
+    push(`${norm}*`)
+  } else {
+    const base = norm.replace(/\/+$/, '')
+    push(`${base}/*`)
+    push(`${base}/**`)
+  }
+  return out
 }
 
 /**
@@ -50,18 +84,20 @@ export function renderPermissionConfig(
     .filter((r) => r.repoId == null)
     .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id - b.id)
   for (const r of ordered) {
-    const pattern = toOpencodePattern((r.pattern ?? '').trim())
-    if (!pattern) continue
-    // catch-all('*' 단독)은 렌더하지 않는다 — 모든 명령 무조건 허용이 되는데
-    // 보통은 입력 실수다. 필요하면 명시적으로 다시 논의한다.
-    if (pattern === '*') {
+    const raw = (r.pattern ?? '').trim()
+    if (!raw) continue
+    // catch-all('*'·'**' 단독 등, 와일드카드·슬래시만)은 렌더하지 않는다 —
+    // 모든 명령 무조건 허용이 되는데 보통은 입력 실수다.
+    if (!raw.replace(/\\/g, '/').replace(/\*/g, '').replace(/\//g, '')) {
       logger.warn(`Skipping catch-all permission rule #${r.id} (${r.permission}) in opencode config render`)
       continue
     }
     const keys = r.permission === '*' ? PERMISSION_CONFIG_KEYS : [r.permission]
     for (const k of keys) {
       if (!k) continue
-      ;(out[k] ??= {})[pattern] = 'allow'
+      for (const pattern of toOpencodePatterns(raw)) {
+        ;(out[k] ??= {})[pattern] = 'allow'
+      }
     }
   }
   return out
@@ -102,13 +138,45 @@ export function mergePermissionConfigInto<T extends Record<string, unknown>>(
  * 원자적 파일 쓰기 (temp + rename). 쓰는 도중 opencode가 기동해도
  * 잘린 JSON을 읽지 않는다.
  */
-async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
   const fs = await import('fs/promises')
   const { default: path } = await import('path')
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
   await fs.writeFile(tmp, content, 'utf-8')
   await fs.rename(tmp, filePath)
+}
+
+/**
+ * 전역 룰 렌더를 content에 합치고 sidecar를 갱신한다.
+ * DB row·파일 쓰기는 호출자가 한다 (호출 경로마다 row 처리·원자적 쓰기가 다르다).
+ */
+export async function applyGlobalPermissionRules(
+  db: Database,
+  content: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const { listGlobalPermissionRules } = await import('../db/permission-rule-queries')
+  const rendered = renderPermissionConfig(listGlobalPermissionRules(db))
+  const { getOpenCodeConfigFilePath } = await import('@opencode-webui/shared')
+  const { readFileContent } = await import('./file-operations')
+  const sidecarPath = `${getOpenCodeConfigFilePath()}.webui-permission`
+  let previous: Record<string, Record<string, string>> = {}
+  try {
+    const raw = await readFileContent(sidecarPath)
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      previous = parsed as Record<string, Record<string, string>>
+    }
+  } catch {
+    // 첫 실행 — sidecar 없음
+  }
+  const merged = mergePermissionConfigInto(content, rendered, previous)
+  try {
+    await writeFileAtomic(sidecarPath, JSON.stringify(rendered, null, 2))
+  } catch (e) {
+    logger.warn('Permission render sidecar write failed:', e instanceof Error ? e.message : e)
+  }
+  return merged
 }
 
 /**
@@ -119,8 +187,6 @@ async function writeFileAtomic(filePath: string, content: string): Promise<void>
  */
 export async function syncPermissionConfigToDisk(db: Database): Promise<boolean> {
   try {
-    const { listGlobalPermissionRules } = await import('../db/permission-rule-queries')
-    const rendered = renderPermissionConfig(listGlobalPermissionRules(db))
     const { SettingsService } = await import('./settings')
     const settingsService = new SettingsService(db)
     const defaultConfig = settingsService.getDefaultOpenCodeConfig()
@@ -128,22 +194,9 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
     const { getOpenCodeConfigFilePath } = await import('@opencode-webui/shared')
     const { readFileContent } = await import('./file-operations')
     const configPath = getOpenCodeConfigFilePath()
-    // opencode가 config 디렉터리를 스캔해도 집지 않게 .json으로 끝나지 않게 한다.
-    const sidecarPath = `${configPath}.webui-permission`
-    let previous: Record<string, Record<string, string>> = {}
-    try {
-      const raw = await readFileContent(sidecarPath)
-      const parsed = JSON.parse(raw) as unknown
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        previous = parsed as Record<string, Record<string, string>>
-      }
-    } catch {
-      // 첫 실행 — sidecar 없음
-    }
-    const merged = mergePermissionConfigInto(
-      defaultConfig.content as Record<string, unknown>,
-      rendered,
-      previous
+    const merged = await applyGlobalPermissionRules(
+      db,
+      defaultConfig.content as Record<string, unknown>
     )
     const before = JSON.stringify(
       ((defaultConfig.content as Record<string, unknown>).permission as unknown) ?? null
@@ -155,6 +208,7 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
       logger.info('Merged global permission allow rules into default opencode config')
     }
     // 디스크 파일의 이전 내용과도 비교한다 (수기 편집·재빌드 직후 어긋남 대비).
+    // 파일 부재(ENOENT)는 쓸 내용이 비어있으면 변경 없음, 파싱 실패는 보수적으로 변경 취급.
     let diskChanged = true
     try {
       const diskRaw = await readFileContent(configPath)
@@ -162,15 +216,16 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
       diskChanged =
         JSON.stringify(diskJson?.permission ?? null) !==
         JSON.stringify((merged.permission as unknown) ?? null)
-    } catch {
-      diskChanged = true
+    } catch (e) {
+      const code = (e as { code?: unknown })?.code
+      if (code === 'ENOENT') {
+        diskChanged =
+          Object.keys((merged.permission as Record<string, unknown> | undefined) ?? {}).length > 0
+      } else {
+        diskChanged = true
+      }
     }
     await writeFileAtomic(configPath, JSON.stringify(merged, null, 2))
-    try {
-      await writeFileAtomic(sidecarPath, JSON.stringify(rendered, null, 2))
-    } catch (e) {
-      logger.warn('Permission render sidecar write failed:', e instanceof Error ? e.message : e)
-    }
     return rowChanged || diskChanged
   } catch (e) {
     // config 쓰기 실패는 증상이 원래 버그와 똑같다 (재기동하면 또 물어봄).
@@ -181,10 +236,17 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
 }
 
 // fire-and-forget 연속 호출 직렬화. 겹치면 sidecar diff 기준이 어긋나
-// 삭제된 룰이 잔류한다. CRUD 핸들러는 이걸 쓴다.
-let syncChain: Promise<unknown> = Promise.resolve()
+// 삭제된 룰이 잔류한다. opencode.json을 쓰는 모든 경로는 이 큐를 탄다
+// (룰 CRUD·부팅 MCP sync·수기 저장 — 각자 자기 시점 content 전체를 쓰므로
+// 직렬화하지 않으면 나중 쓰기가 앞선 쓰기를 통째로 덮는다).
+let configWriteChain: Promise<unknown> = Promise.resolve()
 
-export function queuePermissionConfigSync(db: Database): Promise<unknown> {
-  syncChain = syncChain.then(() => syncPermissionConfigToDisk(db)).catch(() => {})
-  return syncChain
+export function queueConfigWrite<T>(task: () => Promise<T>): Promise<T> {
+  const result = configWriteChain.then(task)
+  configWriteChain = result.catch(() => {})
+  return result
+}
+
+export function queuePermissionConfigSync(db: Database): Promise<boolean> {
+  return queueConfigWrite(() => syncPermissionConfigToDisk(db))
 }
