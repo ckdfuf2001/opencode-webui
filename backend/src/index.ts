@@ -248,16 +248,23 @@ async function ensureWorkspaceAgentsFile(): Promise<void> {
 }
 
 async function syncDefaultConfigToDisk(): Promise<void> {
-  const settingsService = new SettingsService(db)
-  const defaultConfig = settingsService.getDefaultOpenCodeConfig()
-  
-  if (defaultConfig) {
+  // opencode.json을 쓰는 모든 경로와 같은 큐를 탄다 (룰 CRUD·수기 저장).
+  // 각자 자기 시점 content 전체를 쓰므로 직렬화하지 않으면 나중 쓰기가 앞선 쓰기를 덮는다.
+  const { queueConfigWrite } = await import('./services/permission-config')
+  await queueConfigWrite(async () => {
+    const settingsService = new SettingsService(db)
+    const defaultConfig = settingsService.getDefaultOpenCodeConfig()
+    if (!defaultConfig) {
+      logger.info('No default OpenCode config found in database')
+      return
+    }
     const merged = mergeDefaultMcpEntries(defaultConfig.content)
     if (JSON.stringify(merged.mcp) !== JSON.stringify(defaultConfig.content.mcp)) {
       settingsService.updateOpenCodeConfig(defaultConfig.name, { content: merged }, 'default')
       logger.info('Merged default MCP servers into default config')
     }
     // 전역 allow 룰 → opencode.json permission 블록 (재기동 후에도 ask 부활 방지).
+    // 최종 파일 쓰기는 여기서 한 번만 한다 — 위에서 직접 쓰면 permission 병합을 덮어쓴다.
     // 파일 변경은 다음 opencode 시작부터 적용, 그 전에는 live 자동승인이 커버.
     try {
       const { syncPermissionConfigToDisk } = await import('./services/permission-config')
@@ -265,13 +272,8 @@ async function syncDefaultConfigToDisk(): Promise<void> {
     } catch (e) {
       logger.debug('Permission config sync skipped:', e instanceof Error ? e.message : e)
     }
-    const configPath = getOpenCodeConfigFilePath()
-    const configContent = JSON.stringify(merged, null, 2)
-    await writeFileContent(configPath, configContent)
-    logger.info(`Synced default config '${defaultConfig.name}' to: ${configPath}`)
-  } else {
-    logger.info('No default OpenCode config found in database')
-  }
+    logger.info(`Synced default config '${defaultConfig.name}' to: ${getOpenCodeConfigFilePath()}`)
+  })
 }
 
 try {

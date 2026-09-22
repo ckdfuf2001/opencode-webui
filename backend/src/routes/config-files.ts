@@ -8,6 +8,7 @@ import { readFileContent, writeFileContent, fileExists, deletePath } from '../se
 import { SettingsService } from '../services/settings'
 import { patchOpenCodeConfig } from '../services/proxy'
 import { mergeDefaultMcpEntries } from '../services/default-mcp'
+import { queueConfigWrite, applyGlobalPermissionRules, writeFileAtomic } from '../services/permission-config'
 
 const CONFIG_NAMES = ['AGENTS.md', 'opencode.json'] as const
 type ConfigName = typeof CONFIG_NAMES[number]
@@ -98,15 +99,20 @@ export function createConfigFileRoutes(db: Database) {
 
         const settingsService = new SettingsService(db)
         const existing = settingsService.getDefaultOpenCodeConfig()
-        const merged = mergeDefaultMcpEntries(parsedContent)
-        if (existing) {
-          settingsService.updateOpenCodeConfig(existing.name, { content: merged, isDefault: true })
-        } else {
-          settingsService.createOpenCodeConfig({ name: 'default', content: merged, isDefault: true })
-        }
-
-        const diskContent = JSON.stringify(merged, null, 2)
-        await writeFileContent(getOpenCodeConfigFilePath(), diskContent)
+        // opencode.json 쓰기는 단일 큐로 직렬화한다 (룰 CRUD·부팅 sync와 같은 파일).
+        // 수기 저장에도 전역 룰 렌더를 합쳐 동시 변경이 날아가지 않게 한다.
+        const merged = await queueConfigWrite(async () => {
+          const withMcp = mergeDefaultMcpEntries(parsedContent)
+          const withPerm = await applyGlobalPermissionRules(db, withMcp)
+          if (existing) {
+            settingsService.updateOpenCodeConfig(existing.name, { content: withPerm, isDefault: true })
+          } else {
+            settingsService.createOpenCodeConfig({ name: 'default', content: withPerm, isDefault: true })
+          }
+          const diskContent = JSON.stringify(withPerm, null, 2)
+          await writeFileAtomic(getOpenCodeConfigFilePath(), diskContent)
+          return withPerm
+        })
         await patchOpenCodeConfig(merged)
         logger.info(`Saved global opencode.json config and synced default config`)
         return c.json({ success: true, path: getOpenCodeConfigFilePath() })
