@@ -127,10 +127,10 @@ export function SessionDetail() {
   }, [sessions]);
 
   const { currentPermission, pendingCount, dismissPermission } = usePermissionRequests(sessionId, descendantIDs);
-  const { currentQuestion, dismissQuestion } = useQuestionRequests(sessionId);
+  const { currentQuestion, dismissQuestion } = useQuestionRequests(sessionId, descendantIDs);
   
   useLoadPendingPermissions(openCodeClient, sessionId, descendantIDs);
-  useLoadPendingQuestions(openCodeClient, sessionId);
+  useLoadPendingQuestions(openCodeClient, sessionId, descendantIDs);
 
   // 폴링은 최근 N개만 (전체 목록 폴링이 메모리 누수의 주범 — DB 직접 읽기, GB 전체 직렬화 없음).
   const { data: messages, isLoading: messagesLoading } = useMessages(opcodeUrl, sessionId, repoDirectory, RECENT_MESSAGE_LIMIT);

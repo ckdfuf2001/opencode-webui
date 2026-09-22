@@ -89,10 +89,12 @@ function normalizeQuestion(raw: unknown): QuestionRequest | null {
   return r
 }
 
-export function useLoadPendingQuestions(client: { listQuestions(): Promise<unknown[]> } | null, sessionID?: string) {
+export function useLoadPendingQuestions(client: { listQuestions(): Promise<unknown[]> } | null, sessionID?: string, relatedSessionIDs?: string[]) {
   useEffect(() => {
     if (!client) return
     let cancelled = false
+
+    const scopeIDs = sessionID ? new Set([sessionID, ...(relatedSessionIDs ?? [])]) : null
 
     const load = async () => {
       // 백그라운드 탭에서는 폴링 스킵 — 브라우저 스로틀만 믿지 않는다
@@ -100,8 +102,8 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
       try {
         const pending = await client.listQuestions()
         if (cancelled) return
-        const scope = sessionID
-          ? pending.filter((q) => (q as QuestionRequest).sessionID === sessionID)
+        const scope = scopeIDs
+          ? pending.filter((q) => scopeIDs.has((q as QuestionRequest).sessionID ?? ''))
           : pending
         const serverIDs = new Set<string>()
         for (const q of scope) {
@@ -115,7 +117,7 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
         }
         const current = useQuestionStore.getState().questions
         const stale = current.filter((q) => {
-          if (sessionID && q.sessionID !== sessionID) return false
+          if (scopeIDs && !scopeIDs.has(q.sessionID)) return false
           return !serverIDs.has(q.id)
         })
         if (stale.length > 0) {
@@ -134,18 +136,25 @@ export function useLoadPendingQuestions(client: { listQuestions(): Promise<unkno
       cancelled = true
       clearInterval(interval)
     }
-  }, [client, sessionID])
+  }, [client, sessionID, relatedSessionIDs])
 }
 
-export function useQuestionRequests(sessionID?: string) {
+export function useQuestionRequests(sessionID?: string, relatedSessionIDs?: string[]) {
   const allQuestions = useQuestionStore((state) => state.questions)
   const queryClient = useQueryClient()
 
+  const scopeIDs = useMemo(() => {
+    const ids = new Set<string>()
+    if (sessionID) ids.add(sessionID)
+    for (const id of relatedSessionIDs ?? []) ids.add(id)
+    return ids
+  }, [sessionID, relatedSessionIDs])
+
   const questions = useMemo(
-    () => sessionID
-      ? allQuestions.filter(q => q.sessionID === sessionID)
+    () => scopeIDs.size > 0
+      ? allQuestions.filter(q => scopeIDs.has(q.sessionID))
       : allQuestions,
-    [allQuestions, sessionID],
+    [allQuestions, scopeIDs],
   )
 
   const currentQuestion = questions[0] || null
