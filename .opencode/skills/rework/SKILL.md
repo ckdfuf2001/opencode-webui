@@ -38,8 +38,9 @@ description: Re-apply post-v0.10.33 work onto the v0.10.33 base without S2 works
 - 검증: dev에서 repo 생성→세션 cwd가 repo dir인지 확인 + doc-reader 6종 probe
 
 ### Phase 2 — doc-reader + permission stack
-- `eccec1d` + `9f565ed` (resolve + REPOS env)
-- `5724839` veto bypass, `9e071d7` sweep, `e7eb0f3`+`aacf12a` config render + review 반영, `f385cb7` directories
+- `eccec1d` + `9f565ed` (resolve + REPOS env) — 완료 (v0.11.3)
+- `5724839` veto bypass → **제외 확정**. S2 가드레일 자체가 없으므로 예외도 불필요.
+  자연 cwd에서 전역 `*` 룰은 사용자 명시 선택으로 그대로 둔다.
 - config render 적용 시 **object-capable allowlist 필수** (`bash/edit/read/external_directory`만
   객체 맵, 나머지는 스킵+warn). 근거: opencode 1.18은 `permission.webfetch` 객체를
   `ConfigInvalidError`로 거부하고, 그 뒤 모든 세션 생성이 400으로 막힌다 (dev 실측).
