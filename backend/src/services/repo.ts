@@ -664,6 +664,17 @@ export async function cleanupOrphanedDirectories(database: Database): Promise<vo
     }
     
     const allRepos = db.listRepos(database)
+    // 안전장치: DB에 레포가 하나도 없으면 workspace를 건드리지 않는다.
+    // (빈 DB(sqlite 재생성·잘못된 DATABASE_PATH)로 부팅하면 전부 orphan으로 보여
+    // 실제 레포 디렉터리를 다 지워버린다 — 실측 사고 있음. 의심스러우면 삭제 대신 로그만.)
+    if (allRepos.length === 0) {
+      if (directories.length > 0) {
+        logger.warn(
+          `Refusing to delete ${directories.length} directorie(s) with an empty repo database: ${directories.join(', ')}`
+        )
+      }
+      return
+    }
     const trackedPaths = new Set(allRepos.map(r => r.localPath.split('/').pop()))
     
     const orphanedDirs = directories.filter(dir => !trackedPaths.has(dir))
