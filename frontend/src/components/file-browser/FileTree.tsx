@@ -28,6 +28,7 @@ import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { isBrowserViewable, openHtmlInNewTab } from '@/lib/html-view'
 import { normalizeTreePath } from '@/lib/tree-path'
+import { sortFileInfos, type FileSort } from '@/lib/fileSort'
 import { upsertHtmlPage } from '@/api/html-pages'
 import { showToast } from '@/lib/toast'
 import { useFileTreeExpand } from '@/stores/fileTreeExpandStore'
@@ -50,6 +51,8 @@ interface FileTreeProps {
   revealPath?: string
   /** 검색 모드 등 children이 이미 알려진 트리를 전부 펼친다 (지연 로딩 폴더는 제외) */
   expandKnown?: boolean
+  /** 정렬 기준 — 루트뿐 아니라 하위 폴더에도 동일 적용 */
+  sortBy?: FileSort
 }
 
 interface TreeNodeProps {
@@ -68,6 +71,7 @@ interface TreeNodeProps {
   attachedPaths?: Set<string>
   revealPath?: string
   expandKnown?: boolean
+  sortBy?: FileSort
 }
 
 /**
@@ -106,7 +110,7 @@ function useDirChildren(dirPath: string, enabled: boolean) {
   })
 }
 
-function TreeNode({ file, level, expandStoreKey, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
+function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
   // 수동 토글이 최우선. 그 외에는 reveal 경로(채팅 파일 클릭)·검색 펼치기 순으로 자동 펼친다.
   // expandKnown은 children이 이미 알려진 노드에만 적용 — 지연 로딩 폴더를 전부 깨우지 않는다.
   const normPath = normalizeTreePath(file.path)
@@ -131,7 +135,8 @@ function TreeNode({ file, level, expandStoreKey, onFileSelect, onDirectoryClick,
   // children이 이미 있으면(검색 트리 등) 추가 요청 없이 그걸 쓴다.
   const needFetch = expanded && file.isDirectory && file.children === undefined
   const { data: fetchedDir, isLoading: childrenLoading } = useDirChildren(file.path, needFetch)
-  const children = file.children ?? fetchedDir?.children ?? []
+  // 하위 폴더도 루트와 같은 정렬 적용 (복사본 정렬 — 쿼리 캐시를 직접 sort하면 저장 순서가 망가진다)
+  const children = sortFileInfos(file.children ?? fetchedDir?.children ?? [], sortBy)
   // 채팅에 첨부된 파일은 클립 표시 (정규화 후 접미 매칭 — 트리 경로는 짧고 첨부 경로는 길다)
   const isAttached = !file.isDirectory && file.path
     ? (() => {
@@ -378,6 +383,7 @@ function TreeNode({ file, level, expandStoreKey, onFileSelect, onDirectoryClick,
               attachedPaths={attachedPaths}
               revealPath={revealPath}
               expandKnown={expandKnown}
+              sortBy={sortBy}
             />
           ))}
         </div>
@@ -396,7 +402,7 @@ function TreeNode({ file, level, expandStoreKey, onFileSelect, onDirectoryClick,
   )
 }
 
-export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: FileTreeProps) {
+export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown, sortBy = 'name-asc' }: FileTreeProps) {
   // 수동 펼침 네임스페이스 — 레포마다 분리, currentPath 이동과 무관 (키는 전체 경로).
   const expandStoreKey = normalizeTreePath(basePath || currentPath || '.')
   const handleGoUp = () => {
@@ -456,6 +462,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
             attachedPaths={attachedPaths}
             revealPath={revealPath}
             expandKnown={expandKnown}
+            sortBy={sortBy}
           />
         ))
       )}

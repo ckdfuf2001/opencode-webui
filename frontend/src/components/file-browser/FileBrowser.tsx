@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { FileInfo } from '@/types/files'
+import { sortFileInfos, type FileSort } from '@/lib/fileSort'
 import { API_BASE_URL } from '@/config'
 import { useMobile } from '@/hooks/useMobile'
 import { useFile, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, FileApiError } from '@/api/files'
@@ -154,8 +155,6 @@ interface FileBrowserProps {
   /** 채팅 멘션 — 있으면 트리 ... 메뉴에 "Mention on chat"이 뜬다 */
   onMentionFile?: (file: FileInfo) => void
 }
-
-type FileSort = 'name-asc' | 'name-desc' | 'mtime-asc' | 'mtime-desc'
 
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
   const items: { value: FileSort; label: string }[] = [
@@ -668,31 +667,13 @@ useEffect(() => {
   }, [isPreviewModalOpen])
 
   const filteredFiles = useMemo(() => {
-    const mtimeOf = (f: FileInfo): number => {
-      const t = new Date(f.lastModified ?? 0).getTime()
-      return Number.isNaN(t) ? 0 : t
-    }
-    const byName = (a: FileInfo, b: FileInfo) =>
-      a.name.localeCompare(b.name, 'ko', { numeric: true, sensitivity: 'base' })
-    const sortList = (list: FileInfo[]) => {
-      list.sort((a, b) => {
-        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
-        switch (sortBy) {
-          case 'name-desc': return byName(b, a)
-          case 'mtime-asc': return mtimeOf(a) - mtimeOf(b) || byName(a, b)
-          case 'mtime-desc': return mtimeOf(b) - mtimeOf(a) || byName(a, b)
-          default: return byName(a, b)
-        }
-      })
-      return list
-    }
     // 하위 포함 모드 + 재귀 결과 도착 → 평탄 목록 대신 결과 트리 표시
     if (recursiveActive && recursiveResults) {
       return buildSearchTree(currentPath || basePath, recursiveResults)
     }
     const q = searchQuery.toLowerCase()
     const list = (files?.children ?? []).filter((file: FileInfo) => file.name.toLowerCase().includes(q))
-    return sortList(list)
+    return sortFileInfos(list, sortBy)
   }, [files, searchQuery, sortBy, recursiveActive, recursiveResults, currentPath, basePath])
 
   if (embedded) {
@@ -781,6 +762,7 @@ useEffect(() => {
                   attachedPaths={attachedPaths}
                   revealPath={revealPath}
                   expandKnown={recursiveActive && !!recursiveResults}
+                  sortBy={sortBy}
                 />
               )}
             </div>
@@ -909,6 +891,7 @@ useEffect(() => {
                   attachedPaths={attachedPaths}
                   revealPath={revealPath}
                   expandKnown={recursiveActive && !!recursiveResults}
+                  sortBy={sortBy}
                 />
               </div>
             )}
