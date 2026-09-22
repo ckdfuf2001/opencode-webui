@@ -40,6 +40,9 @@ description: Re-apply post-v0.10.33 work onto the v0.10.33 base without S2 works
 ### Phase 2 — doc-reader + permission stack
 - `eccec1d` + `9f565ed` (resolve + REPOS env) — 완료 (v0.11.3)
 - `5724839` veto bypass → **제외 확정**. S2 가드레일 자체가 없으므로 예외도 불필요.
+- `9e071d7` sweep (S2 제외 적응: quiet + getSessionRepo-first만, 가드레일 제외)
+- `e7eb0f3`+`aacf12a` config render + review 반영, `f385cb7` directories
+- `cc4ae0d` 쓰기 단일 큐 (부팅 sync·CRUD·수기 저장 직렬화)
   자연 cwd에서 전역 `*` 룰은 사용자 명시 선택으로 그대로 둔다.
 - config render 적용 시 **object-capable allowlist 필수** (`bash/edit/read/external_directory`만
   객체 맵, 나머지는 스킵+warn). 근거: opencode 1.18은 `permission.webfetch` 객체를
