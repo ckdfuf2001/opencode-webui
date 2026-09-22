@@ -37,6 +37,7 @@ const defaultMcp = {
     env: {
       OPCODE_WEBUI_BACKEND: workspaceBackend,
       OPCODE_WEBUI_WORKSPACE: workspacePath,
+      OPCODE_WEBUI_REPOS: join(workspacePath, 'repos'),
     },
   },
 }
