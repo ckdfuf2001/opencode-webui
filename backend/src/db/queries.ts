@@ -5,6 +5,7 @@ import path from 'path'
 import { logger } from '../utils/logger'
 import { deleteSchedulesByRepo } from './schedule-queries'
 import { deletePermissionRulesByRepo } from './permission-rule-queries'
+import { deleteSessionRepoMapsByRepo } from './session-repo-queries'
 import { deleteCommandRunsByRepo } from './command-run-queries'
 
 export interface RepoRow {
@@ -162,6 +163,7 @@ export function deleteRepoCascade(db: Database, id: number, opts?: { withIndex?:
   const schedules = deleteSchedulesByRepo(db, id)
   const rules = deletePermissionRulesByRepo(db, id)
   const runs = deleteCommandRunsByRepo(db, id)
+  const maps = deleteSessionRepoMapsByRepo(db, id)
   const withIndex = opts?.withIndex !== false
   if (withIndex) {
     try {

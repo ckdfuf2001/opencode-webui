@@ -279,6 +279,21 @@ export function runMigrations(db: Database): void {
       logger.debug('permission_rules table may not exist yet:', error)
     }
 
+    // ── sessionId → repoId 정본 매핑 (S1) ─────────────────────────────
+    // 기존 DB에도 멱등 생성. 세션 생성 시 1회 기록, 기존 세션은 부팅 시 백필.
+    try {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS session_repo_map (
+          session_id TEXT PRIMARY KEY,
+          repo_id INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `)
+      db.run('CREATE INDEX IF NOT EXISTS idx_session_repo_map_repo ON session_repo_map(repo_id)')
+    } catch (e) {
+      logger.debug('session_repo_map table may already exist:', e)
+    }
+
     // ── 전체 대화 검색 (Hermes 세션 검색 계층) ─────────────────────────
     // FTS5 trigram : 한글 부분일치 필수. 인덱스는 opencode DB의 message/part를
     // idle 시점에 pull하여 채운다 (per-message rebuild 전략).
