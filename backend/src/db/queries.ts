@@ -24,11 +24,15 @@ export interface RepoRow {
 }
 
 function rowToRepo(row: RepoRow): Repo {
+  const reposPath = getReposPath()
+  const fullPath = path.join(getReposPath(), row.local_path)
+  const workspaceRel = row.local_path
   return {
     id: row.id,
     repoUrl: row.repo_url,
     localPath: row.local_path,
-    fullPath: path.join(getReposPath(), row.local_path),
+    fullPath,
+    workspaceRel,
     branch: row.branch,
     defaultBranch: row.default_branch,
     cloneStatus: row.clone_status as Repo['cloneStatus'],

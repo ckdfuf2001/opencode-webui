@@ -7,6 +7,7 @@ export const RepoSchema = z.object({
   repoUrl: z.string().url().optional(),
   localPath: z.string(),
   fullPath: z.string(),
+  workspaceRel: z.string(),
   branch: z.string().optional(),
   defaultBranch: z.string(),
   cloneStatus: RepoStatusSchema,

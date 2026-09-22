@@ -39,11 +39,11 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
   const { data: dbStatuses } = useSessionStatusMap()
   const { data: favsTop } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites })
   const isRepoFavTop = (rid: number) => favsTop?.some(f => f.sessionId === `repo-${rid}`)
-  const toggleRepoFavTop = async (repo: { id: number; localPath?: string; fullPath?: string }) => {
+  const toggleRepoFavTop = async (repo: { id: number; localPath?: string; fullPath?: string; workspaceRel?: string }) => {
     const favId = `repo-${repo.id}`
     try {
       if (isRepoFavTop(repo.id)) { await removeFavorite(favId); showToast.success('즐겨찾기 해제') }
-      else { await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.fullPath || '', title: repo.localPath || favId }); showToast.success('즐겨찾기 등록') }
+      else { await addFavorite({ sessionId: favId, repoId: repo.id, directory: repo.workspaceRel || '', title: repo.localPath || favId }); showToast.success('즐겨찾기 등록') }
       queryClient.invalidateQueries({ queryKey: ['favorites'] })
     } catch (e:any){ showToast.error(e.message) }
   }
@@ -74,21 +74,21 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     if (!dbStatuses || !repos) return 0
     const repo = repos.find(r => r.id === repoId)
     if (!repo) return 0
-    return dbStatuses.filter(s => s.status === 'busy' && (s.repoId === repoId || s.directory === repo.fullPath)).length
+    return dbStatuses.filter(s => s.status === 'busy' && (s.repoId === repoId || s.directory === repo.workspaceRel)).length
   }
 
   const getPendingCount = (repoId: number) => {
     if (!dbStatuses || !repos) return 0
     const repo = repos.find(r => r.id === repoId)
     if (!repo) return 0
-    return dbStatuses.filter(s => s.repoId === repoId || s.directory === repo.fullPath).reduce((acc, s) => acc + (s.pendingPermissions ?? 0), 0)
+    return dbStatuses.filter(s => s.repoId === repoId || s.directory === repo.workspaceRel).reduce((acc, s) => acc + (s.pendingPermissions ?? 0), 0)
   }
 
   const getCancelledCount = (repoId: number) => {
     if (!dbStatuses || !repos) return 0
     const repo = repos.find(r => r.id === repoId)
     if (!repo) return 0
-    return dbStatuses.filter(s => (s as unknown as { isCancelled?: boolean }).isCancelled && (s.repoId === repoId || s.directory === repo.fullPath) && s.status !== 'busy').length
+    return dbStatuses.filter(s => (s as unknown as { isCancelled?: boolean }).isCancelled && (s.repoId === repoId || s.directory === repo.workspaceRel) && s.status !== 'busy').length
   }
 
   const handleNewSession = async (repoId: number, directory?: string) => {
@@ -193,7 +193,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
                       checked={isRepoSelected}
                       onCheckedChange={(v) => {
                         const checked = v === true
-                        const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.workspaceRel])
                         const ids: string[] = (cached ?? []).map((s: any) => s.id as string)
                         handleRepoChecked(repo.id, checked, ids)
                       }}
@@ -223,7 +223,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 shrink-0"
-                    onClick={(e) => { (e as any).stopPropagation(); handleNewSession(repo.id, repo.fullPath) }}
+                    onClick={(e) => { (e as any).stopPropagation(); handleNewSession(repo.id, repo.workspaceRel) }}
                     title="새 세션"
                   >
                     <Plus className="w-3 h-3" />
@@ -233,7 +233,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
               {isExpanded && (
                 <RepoSessions
                   repoId={repo.id}
-                  directory={repo.fullPath}
+                  directory={repo.workspaceRel}
                   onNavigate={onNavigate}
                   editMode={editMode}
                   selectedSessions={selectedSessions}
@@ -241,7 +241,7 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
                   onSessionChecked={(sid, checked) => {
                     const isRepoSelected = selectedRepos.has(repo.id)
                     if (!checked && isRepoSelected) {
-                      const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.fullPath])
+const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE_API_ENDPOINT, repo.workspaceRel])
                       const ids: string[] = (cached ?? []).map((s: any) => s.id as string)
                       const ns = new Set(ids.filter(id => id !== sid))
                       setSelectedRepos(prev => { const n = new Set(prev); n.delete(repo.id); return n })

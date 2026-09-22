@@ -295,7 +295,7 @@ export function FavoriteSessionsPanel() {
               const busy = status?.status === 'busy'
               // 레포 즐겨찾기: workspace처럼 레포 단위 집계 배찌 (개수 포함)
               const matchRepo = (s: { repoId?: number | null; directory?: string | null }) =>
-                isRepoFav && (s.repoId === f.repoId || (repo && s.directory === repo.fullPath) || s.directory === f.directory)
+                isRepoFav && (s.repoId === f.repoId || (repo && s.directory === repo.workspaceRel) || s.directory === f.directory)
               const repoWorking = isRepoFav ? (dbStatuses?.filter(s => s.status === 'busy' && matchRepo(s)).length ?? 0) : 0
               const repoPending = isRepoFav ? (dbStatuses?.filter(s => matchRepo(s)).reduce((a, s) => a + (s.pendingPermissions ?? 0), 0) ?? 0) : 0
               const repoCancelled = isRepoFav ? (dbStatuses?.filter(s => (s as unknown as { isCancelled?: boolean }).isCancelled && s.status !== 'busy' && matchRepo(s)).length ?? 0) : 0

@@ -110,7 +110,10 @@ describe('Database Queries', () => {
         lastPulled: null,
         openCodeConfigName: null,
         isWorktree: undefined,
-        isLocal: undefined
+        isLocal: undefined,
+        skillAutoUpdate: undefined,
+        skillAutoReview: undefined,
+        workspaceRel: 'test-repo',
       })
     })
 

@@ -117,7 +117,7 @@ export function RepoDetail() {
 
   const repoName = repo.repoUrl
     ? repo.repoUrl.split("/").pop()?.replace(".git", "") || "Repository"
-    : repo.localPath || "Local Repository";
+    : repo.workspaceRel || "Local Repository";
   const branchToDisplay = repo.currentBranch || repo.branch;
   const isNotMainBranch = branchToDisplay && branchToDisplay !== repo.defaultBranch;
   const currentBranch = repo.currentBranch || "main";
@@ -231,7 +231,7 @@ export function RepoDetail() {
 
         {fileBrowserOpen && (
           <SessionFilePanel
-            basePath={repo.localPath}
+            basePath={repo.workspaceRel}
             repoName={repoName}
             width={filePanelWidth}
             onClose={() => setFileBrowserOpen(false)}
@@ -277,7 +277,7 @@ export function RepoDetail() {
         <FileBrowserSheet
           isOpen={fileBrowserFullscreenOpen}
           onClose={() => setFileBrowserFullscreenOpen(false)}
-          basePath={repo.localPath}
+          basePath={repo.workspaceRel}
           repoName={repoName}
         />
       <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
