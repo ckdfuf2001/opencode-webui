@@ -166,13 +166,34 @@ function legacyMentionFallback(mentionText: string, directory?: string): string[
 async function resolveExistingMentionPath(mentionText: string, directory?: string): Promise<string | null> {
   for (const candidate of legacyMentionFallback(mentionText, directory)) {
     try {
-      const stat = await getFileStat(candidate)
-      if (stat.exists && !stat.isDirectory) return candidate
+      if (await statCached(candidate)) return candidate
     } catch {
       // 다음 후보 시도
     }
   }
   return null
+}
+
+// 멘션 존재 확인 공유 캐시 (60초 TTL, 상한 500).
+// 메시지마다 FileMention이 마운트될 때마다 stat이 나가던 폭풍을 막는다.
+const mentionStatCache = new Map<string, { at: number; ok: boolean }>()
+
+async function statCached(path: string): Promise<boolean> {
+  const prev = mentionStatCache.get(path)
+  if (prev && Date.now() - prev.at < 60_000) return prev.ok
+  try {
+    const stat = await getFileStat(path)
+    const ok = stat.exists && !stat.isDirectory
+    mentionStatCache.set(path, { at: Date.now(), ok })
+    if (mentionStatCache.size > 500) {
+      const oldest = mentionStatCache.keys().next().value as string | undefined
+      if (oldest !== undefined) mentionStatCache.delete(oldest)
+    }
+    return ok
+  } catch {
+    mentionStatCache.set(path, { at: Date.now(), ok: false })
+    return false
+  }
 }
 
 function FileMention({  part,
@@ -189,29 +210,35 @@ function FileMention({  part,
 }) {
   const [resolvedPath, setResolvedPath] = useState<string | null>(null)
 
-  // repoRoot가 있으면 추측 없이 wsPath로 직접 해석 (stat 왕복 없음).
+  // repoRoot가 있으면 wsPath로 직접 해석한다 (추측 후보 없이).
+  // 단, 칩 표시는 존재 확인 후에만 — 없는 파일까지 칩으로 바꾸지 않는다.
   const directWsPath = repoRoot ? toWsPath(mentionText, repoRoot) : null
 
   useEffect(() => {
-    if (directWsPath) return
     let cancelled = false
     setResolvedPath(null)
-    void resolveExistingMentionPath(mentionText, directory).then((found) => {
-      if (!cancelled) setResolvedPath(found)
-    })
+    if (directWsPath) {
+      void statCached(directWsPath).then((ok) => {
+        if (!cancelled) setResolvedPath(ok ? directWsPath : null)
+      })
+    } else {
+      void resolveExistingMentionPath(mentionText, directory).then((found) => {
+        if (!cancelled) setResolvedPath(found)
+      })
+    }
     return () => {
       cancelled = true
     }
   }, [mentionText, directory, directWsPath])
 
-  if (!directWsPath && resolvedPath === null) {
+  if (resolvedPath === null) {
     return <TextPart part={part} />
   }
 
   return (
     <span
       className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-300 cursor-pointer hover:bg-zinc-700 hover:text-zinc-200"
-      onClick={() => onFileClick?.(directWsPath ?? resolvedPath ?? mentionText)}
+      onClick={() => onFileClick?.(resolvedPath ?? mentionText)}
     >
       <span className="text-blue-400">@</span>
       <span className="font-medium">{mentionText}</span>
