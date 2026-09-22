@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'child_process'
 import fs from 'fs/promises'
 import path from 'path'
 import { logger } from '../utils/logger'
-import { validatePath } from './files'
+import { resolveWorkspaceFile } from './files'
 import { resolveDocConverterCommand } from './doc-tools'
 
 const CONVERTER_PORT = parseInt(process.env.DOC_CONVERTER_PORT || '8765', 10)
@@ -86,7 +86,7 @@ async function ensureConverter(): Promise<boolean> {
 }
 
 export async function convertToPdf(userPath: string, refresh = false): Promise<Buffer> {
-  const validatedPath = validatePath(userPath)
+  const validatedPath = await resolveWorkspaceFile(userPath)
   if (!isConvertibleDocument(validatedPath)) {
     throw { message: 'Unsupported document type', statusCode: 400 }
   }
@@ -120,7 +120,8 @@ export async function extractDocumentText(
   userPath: string,
   refresh = false
 ): Promise<{ text: string; fileName: string; msg?: ExtractedMessage; ocr?: { text: string; boxes: Array<{ text: string; left: number; top: number; width: number; height: number; conf: number }> } }> {
-  let resolved = validatePath(userPath)
+  // 채팅 상대경로(aaa/chat_uploads/..., chat_uploads/...)·MCP workspace형 절대경로까지 해석
+  let resolved = await resolveWorkspaceFile(userPath)
 
   const ext = path.extname(resolved).toLowerCase()
   if (!SUPPORTED_EXTENSIONS.has(ext) && !IMAGE_EXTS.has(ext) && ext !== '.pdf' && ext !== '.msg') {
@@ -133,23 +134,6 @@ export async function extractDocumentText(
     isFile = stat.isFile()
   } catch {
     isFile = false
-  }
-  // 상대경로면 앞에 레포 붙여서 찾기 — 채팅은 레포 없이 chat_uploads/... 로 보내므로
-  if (!isFile) {
-    try {
-      const { getReposPath } = await import('@opencode-webui/shared')
-      const norm = userPath.replace(/\\/g, '/').replace(/^\/+/, '')
-      const reposBase = getReposPath()
-      const entries = await fs.readdir(reposBase, { withFileTypes: true }).catch(() => [] as any[])
-      for (const e of entries as any[]) {
-        if (!e.isDirectory()) continue
-        const cand = path.join(reposBase, e.name, norm)
-        try {
-          const s = await fs.stat(cand)
-          if (s.isFile()) { resolved = cand; isFile = true; break }
-        } catch {}
-      }
-    } catch {}
   }
   if (!isFile) {
     throw { message: 'File not found', statusCode: 404 }
@@ -179,7 +163,7 @@ export async function editDocument(
   userPath: string,
   operations: Array<Record<string, unknown>>
 ): Promise<{ fileName: string; results: Array<Record<string, unknown>> }> {
-  const resolved = validatePath(userPath)
+  const resolved = await resolveWorkspaceFile(userPath)
 
   const ext = path.extname(resolved).toLowerCase()
   if (!SUPPORTED_EXTENSIONS.has(ext)) {
@@ -221,7 +205,7 @@ export async function extractAttachment(
   userPath: string,
   index: number
 ): Promise<{ data: Buffer; fileName: string; mimeType: string }> {
-  const resolved = validatePath(userPath)
+  const resolved = await resolveWorkspaceFile(userPath)
 
   let isFile = false
   try {
