@@ -25,7 +25,7 @@ import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
-import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
+import { useBackendConnection } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
 import { shouldPlaySound, shouldPush, sendPushNotification } from "@/lib/notifications";
@@ -677,10 +677,14 @@ export function SessionDetail() {
     data: dbStatuses,
     isError: statusError,
     isFetching: statusFetching,
+    failureCount: statusFails,
   } = useSessionStatusMap();
-  const { data: opencodeHealthy, isError: healthError, isFetching: healthFetching } = useOpencodeHealth();
-  const isConnected = !healthError && !!opencodeHealthy && !statusError && !!dbStatuses;
-  const isReconnecting = (healthError && healthFetching) || (statusError && statusFetching) || (!opencodeHealthy && !healthError);
+  const { connected: isConnected, reconnecting: isReconnecting } = useBackendConnection({
+    data: dbStatuses,
+    isError: statusError,
+    isFetching: statusFetching,
+    failureCount: statusFails,
+  });
   const dbBusy = !!sessionId && dbStatuses?.some((s) => s.sessionId === sessionId && s.status === "busy") === true;
   // 세션 리스트 배지와 동일한 기준: 이 세션 또는 하위 세션이 busy 면 Working.
   const descendantBusy = !!sessionId && dbStatuses?.some(

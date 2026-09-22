@@ -1,11 +1,14 @@
 import { useSessionStatusMap } from "@/hooks/useOpenCode";
-import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
+import { useBackendConnection } from "@/hooks/useOpencodeHealth";
 
 export function OpenCodeStatus() {
-  const { data: dbStatuses, isError: statusError, isFetching: statusFetching } = useSessionStatusMap();
-  const { data: opencodeHealthy, isError: healthError, isFetching: healthFetching } = useOpencodeHealth();
-  const isConnected = !healthError && !!opencodeHealthy && !statusError && !!dbStatuses;
-  const isReconnecting = (healthError && healthFetching) || (statusError && statusFetching) || (!opencodeHealthy && !healthError);
+  const { data: dbStatuses, isError: statusError, isFetching: statusFetching, failureCount: statusFails } = useSessionStatusMap();
+  const { connected: isConnected, reconnecting: isReconnecting } = useBackendConnection({
+    data: dbStatuses,
+    isError: statusError,
+    isFetching: statusFetching,
+    failureCount: statusFails,
+  });
 
   return (
     <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 h-8 px-2">
