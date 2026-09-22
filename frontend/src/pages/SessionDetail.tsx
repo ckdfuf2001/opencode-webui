@@ -42,7 +42,7 @@ import { useCommandRunsBySession } from "@/hooks/useCommandRuns";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
 import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
-import { toWsPath } from "@opencode-webui/shared";
+import { toWsPath, reposDirOf } from "@opencode-webui/shared";
 
 interface InjectedFile {
   token: number;
@@ -1392,19 +1392,15 @@ export function SessionDetail() {
     setInjectedFile(null)
   }, []);
 
-  // 탐색기 ... 메뉴 "Mention on chat" — 트리 전체경로에서 repo 기준 상대경로로 바꿔
+  // 탐색기 ... 메뉴 "Mention on chat" — FileBrowser가 주는 wsPath 그대로
   // 채팅 입력창에 @"..." 멘션으로 꽂는다 (업로드 흐름과 같은 injectedFile 경로).
   const handleMentionFile = useCallback((file: { name: string; path: string }) => {
-    const norm = file.path.replace(/\\/g, '/');
-    const base = (repo?.localPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-    const rel = base && (norm === base || norm.startsWith(base + '/'))
-      ? norm.slice(base.length + (norm === base ? 0 : 1))
-      : norm.replace(/^\/+/, '');
+    const ws = toWsPath(file.path, repo?.workspaceRel ?? '');
     setInjectedFile((prev) => ({
       token: (prev?.token ?? 0) + 1,
-      files: [{ name: file.name, path: rel }],
+      files: [{ name: file.name, path: ws }],
     }));
-  }, [repo?.localPath]);
+  }, [repo?.workspaceRel]);
 
   const handleEditMessage = useCallback((messageID: string, text: string) => {
     setHiddenAfterID(messageID)
@@ -1505,7 +1501,8 @@ const handleGlobalDrop = useCallback(async (e: DragEvent) => {
           setGlobalUpload({ name: file.name, loaded, total: total || file.size || 1, index: i + 1, count: freshFiles.length })
         })
         const savedName: string = data?.name || file.name
-        results.push({ name: savedName, path: `chat_uploads/${savedName}` })
+        // 백엔드 응답 path는 이미 wsPath (`<repo>/chat_uploads/<saved>`) — 그대로 쓴다.
+        results.push({ name: savedName, path: data?.path || toWsPath(`chat_uploads/${savedName}`, repo.workspaceRel) })
       } catch (e) {
         if (e instanceof DuplicateUploadError) continue
         if (!lastError) lastError = e instanceof Error ? e.message : 'Upload failed'
@@ -1524,7 +1521,7 @@ if (results.length > 0) {
     } else {
       showToast.error(lastError || 'Upload failed')
     }
-  }, [repo?.localPath]);
+  }, [repo?.workspaceRel]);
 
   useEffect(() => {
     const onDragOver = (e: DragEvent) => e.preventDefault()
@@ -1644,6 +1641,8 @@ if (results.length > 0) {
                 opcodeUrl={opcodeUrl} 
                 sessionID={sessionId} 
                 directory={repoDirectory}
+                repoRoot={repo.workspaceRel}
+                reposRootAbs={reposDirOf(repo.fullPath ?? '', repo.workspaceRel ?? '') ?? ''}
                 messages={visibleMessages}
                 isLoading={messagesLoading}
                 onFileClick={handleFileClick}
@@ -1708,6 +1707,7 @@ if (results.length > 0) {
               <PromptInput
                 opcodeUrl={opcodeUrl}
                 directory={repoDirectory}
+                repoRoot={repo.workspaceRel}
                 uploadDir={toWsPath('chat_uploads', repo.workspaceRel)}
                 sessionID={sessionId}
                 disabled={!isConnected}

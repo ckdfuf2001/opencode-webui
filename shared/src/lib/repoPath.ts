@@ -71,3 +71,22 @@ export function getRepoRel(wsPath: WsPath, repoRoot: string): string | null {
   if (p.startsWith(r + '/')) return p.slice(r.length + 1)
   return null
 }
+
+/**
+ * 레포 절대경로 + workspaceRel에서 파일 API 기준 루트(repos 디렉터리 절대경로) 역산.
+ * backend가 fullPath = join(reposDir, localPath)로 만들고, 파일 API가
+ * reposDir 기준으로 resolve하므로, 이 값이 absToWsPath의 기준점이 된다.
+ */
+export function reposDirOf(fullPath: string, workspaceRel: string): string | null {
+  const f = normSlash(fullPath).replace(/\/+$/, '')
+  const r = normSlash(workspaceRel)
+  if (!f) return null
+  if (!r) return f
+  if (f === r) return f
+  const suffix = `/${r}`
+  if (f.endsWith(suffix)) {
+    const base = f.slice(0, -(suffix.length)) || '/'
+    return base
+  }
+  return null
+}

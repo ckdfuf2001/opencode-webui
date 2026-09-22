@@ -8,6 +8,7 @@ import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
 import { stripMemoryRecall } from '@/lib/stripRecall'
 import { parseSkillInvocation } from '@/lib/skillBlock'
+import { absToWsPath } from '@opencode-webui/shared'
 import { formatChatTime } from '@/lib/chatTime'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { showToast } from '@/lib/toast'
@@ -30,14 +31,28 @@ function getRawMessageTextContent(msg: MessageWithParts): string {
     .trim()
 }
 
-function getEditablePrompt(msg: MessageWithParts, invocation?: { name: string; args: string | null }): string {
+function getEditablePrompt(
+  msg: MessageWithParts,
+  invocation?: { name: string; args: string | null },
+  reposRootAbs: string = '',
+): string {
   const lines: string[] = []
   const fileLines: string[] = []
   let headText = ''
   for (const p of msg.parts) {
     if (p.type === 'file') {
-      const filename = p.filename || p.url?.replace(/^file:\/{2,3}/, '').split('/').pop() || 'File'
-      const mention = `@"${filename}"`
+      // /command 호출은 opencode가 템플릿을 펼쳐 저장해서 원문에 `/이름`이 없다.
+      // run 기록의 이름·인자로 복원해야 edit 재전송이 커맨드로 동작한다.
+      // file 파트는 절대경로(p.url)에서 wsPath로 환산한다 (실패 시 basename 폴백).
+      let mention = ''
+      if (p.url && !p.url.startsWith('data:')) {
+        const abs = p.url.replace(/^file:\/{2,3}/, '')
+        const ws = absToWsPath(abs, reposRootAbs)
+        mention = `@"${ws || p.filename || abs.split('/').pop() || 'File'}"`
+      } else {
+        const filename = p.filename || 'File'
+        mention = `@"${filename}"`
+      }
       lines.push(mention)
       fileLines.push(mention)
     } else if (p.type === 'text' && p.text) {
@@ -71,6 +86,10 @@ interface MessageThreadProps {
   opcodeUrl: string
   sessionID: string
   directory?: string
+  /** wsPath 변환용 레포 루트 (예: 'repoA') */
+  repoRoot?: string
+  /** absToWsPath 기준점 (repos 디렉터리 절대경로) */
+  reposRootAbs?: string
   messages?: MessageWithParts[]
   onFileClick?: (filePath: string, lineNumber?: number) => void
   onEditMessage?: (messageID: string, text: string) => void
@@ -96,7 +115,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, isLoading, sessionID, invocations, onOpenCommandHistory, opcodeUrl }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, repoRoot, reposRootAbs, isLoading, sessionID, invocations, onOpenCommandHistory, opcodeUrl }: MessageThreadProps) {
   // 윈도우는 SessionDetail이 단일 소유 (WINDOW_SIZE/windowStart).
   // 여기서 이중으로 자르면 "Show earlier"가 동작 안 하고 스크롤이 튄다.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -289,7 +308,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 )}
                 {msg.info.role === 'user' && onEditMessage && !streaming && (
                   <button
-                    onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg, invocations?.get(msg.info.id)))}
+                    onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg, invocations?.get(msg.info.id), reposRootAbs ?? ''))}
                     className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
                     title="Edit and resend"
                   >
@@ -339,6 +358,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                           onFileClick={onFileClick}
                           messageTextContent={assistantText}
                           directory={directory}
+                          repoRoot={repoRoot}
                           messageStreaming={streaming}
                           invocation={msg.info.role === 'user' ? invocations?.get(msg.info.id) : undefined}
                           onCommandClick={onOpenCommandHistory}

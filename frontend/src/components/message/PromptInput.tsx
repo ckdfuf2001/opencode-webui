@@ -16,7 +16,9 @@ import { useContextUsage } from '@/hooks/useContextUsage'
 import { X } from 'lucide-react'
 import { CommandSuggestions } from '@/components/command/CommandSuggestions'
 import { FileSuggestions } from './FileSuggestions'
-import { detectMentionTrigger, parsePromptToParts, getFilename, MENTION_PATTERN } from '@/lib/promptParser'
+import { detectMentionTrigger, parsePromptToParts, MENTION_PATTERN } from '@/lib/promptParser'
+import type { FileHit } from '@/hooks/useFileSearch'
+import { getFilename, normSlash, toWsPath } from '@opencode-webui/shared'
 import { getModel, formatModelName } from '@/api/providers'
 import type { components } from '@/api/opencode-types'
 import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
@@ -72,6 +74,8 @@ interface PromptInputProps {
   opcodeUrl: string
   directory?: string
   uploadDir?: string
+  /** wsPath 변환용 레포 루트 (예: 'repoA'). 없으면 기존 동작 유지. */
+  repoRoot?: string
   sessionID: string
   disabled?: boolean
   onShowSessionsDialog?: () => void
@@ -98,6 +102,7 @@ export function PromptInput({
   opcodeUrl,
   directory,
   uploadDir,
+  repoRoot,
   sessionID, 
   disabled,
   onShowSessionsDialog,
@@ -215,7 +220,8 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const { files: searchResults } = useFileSearch(
     fileQuery,
     showFileSuggestions,
-    directory
+    directory,
+    repoRoot,
   )
   
 
@@ -286,7 +292,10 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     const mentionedKeys = new Set<string>()
     for (const match of prompt.matchAll(MENTION_PATTERN)) {
       const mention = match[1] ?? match[2] ?? match[3]
-      if (mention) mentionedKeys.add(mention.toLowerCase())
+      if (mention) {
+        mentionedKeys.add(normSlash(mention))
+        mentionedKeys.add(normSlash(mention).toLowerCase())
+      }
     }
 
     const validAttachments = new Map<string, FileInfo>()
@@ -498,28 +507,23 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     }
   }
   
-  const handleFileSelect = (filePath: string) => {
+  const handleFileSelect = (hit: FileHit) => {
     if (!mentionRange || !textareaRef.current) return
-    
-    const relativePath = filePath.startsWith('/') ? filePath.slice(1) : filePath
+
+    const wsPath = hit.wsPath
     const beforeMention = prompt.slice(0, mentionRange.start)
     const afterMention = prompt.slice(mentionRange.end)
-    
-    const newPrompt = beforeMention + `@"${relativePath}"` + ' ' + afterMention
+
+    const newPrompt = beforeMention + `@"${wsPath}"` + ' ' + afterMention
     setPrompt(newPrompt)
-    
-    const absolutePath = filePath.startsWith('/') 
-      ? filePath 
-      : directory 
-        ? `${directory}/${filePath}` 
-        : filePath
-    
+
     setAttachedFiles(prev => {
       const next = new Map(prev)
-      next.set(relativePath.toLowerCase(), {
-        path: absolutePath,
-        name: getFilename(relativePath)
-      })
+      const key = normSlash(wsPath)
+      const info = { path: wsPath, name: getFilename(wsPath) }
+      // 정확 매칭 1순위 + 소문자 폴백 2순위 (파서와 동일 규칙)
+      next.set(key, info)
+      next.set(key.toLowerCase(), info)
       return next
     })
     
@@ -529,7 +533,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     
     setTimeout(() => {
       if (textareaRef.current) {
-        const newCursorPos = beforeMention.length + `@"${relativePath}"`.length + 1
+        const newCursorPos = beforeMention.length + `@"${wsPath}"`.length + 1
         textareaRef.current.focus()
         textareaRef.current.setSelectionRange(newCursorPos, newCursorPos)
       }
@@ -541,12 +545,6 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     // 이 세션의 토글이 이후 만드는 모든 세션의 기본값으로 새어 나간다.
     const newMode = currentMode === 'plan' ? 'build' : 'plan'
     setSessionModeOverride(newMode)
-  }
-
-  const resolveFilePath = (relativePath: string): string => {
-    if (!directory) return relativePath
-    if (relativePath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(relativePath) || relativePath.startsWith('file:')) return relativePath
-    return `${directory.replace(/\\/g, '/')}/${relativePath}`
   }
 
   const handlePaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -609,20 +607,21 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     showToast.success(`Uploaded ${uploaded.length} file(s) to project`, { duration: 5000 })
 
     const el = textareaRef.current
+    // 업로드 응답 path는 백엔드 기준 상대경로 — wsPath로 정규화해 멘션·첨부에 쓴다.
     const insertions = uploaded.map((file) => {
-      const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      const mention = `@"${relativePath}"`
-      return { relativePath, mention, name: file.name }
+      const ws = toWsPath(file.path, repoRoot ?? '')
+      const mention = `@"${ws}"`
+      return { wsPath: ws, mention, name: file.name }
     })
 
     setPrompt(prev => `${prev ? `${prev} ` : ''}${insertions.map(i => i.mention).join(' ')} `)
     setAttachedFiles(prev => {
       const next = new Map(prev)
       for (const i of insertions) {
-        next.set(i.relativePath.toLowerCase(), {
-          path: resolveFilePath(i.relativePath),
-          name: i.name,
-        })
+        const key = normSlash(i.wsPath)
+        const info = { path: i.wsPath, name: i.name }
+        next.set(key, info)
+        next.set(key.toLowerCase(), info)
       }
       return next
     })
@@ -959,9 +958,10 @@ useEffect(() => {
 
   useEffect(() => {
     if (!injectedFile || injectedFile.files.length === 0) return
+    // 탐색기·드래그드롭 주입 경로도 wsPath로 정규화 (호출부가 이미 ws면 그대로).
     const mentions = injectedFile.files.map((file) => {
-      const relativePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      return { relativePath, mention: `@"${relativePath}"`, name: file.name }
+      const ws = toWsPath(file.path, repoRoot ?? '')
+      return { wsPath: ws, mention: `@"${ws}"`, name: file.name }
     })
     setPrompt((prev) => {
       const prefix = prev ? `${prev} ` : ''
@@ -970,10 +970,10 @@ useEffect(() => {
     setAttachedFiles((prev) => {
       const next = new Map(prev)
       for (const m of mentions) {
-        next.set(m.relativePath.toLowerCase(), {
-          path: resolveFilePath(m.relativePath),
-          name: m.name,
-        })
+        const key = normSlash(m.wsPath)
+        const info = { path: m.wsPath, name: m.name }
+        next.set(key, info)
+        next.set(key.toLowerCase(), info)
       }
       return next
     })

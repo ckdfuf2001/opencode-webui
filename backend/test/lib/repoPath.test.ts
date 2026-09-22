@@ -9,6 +9,7 @@ import {
   getDirectory,
   getFilename,
   getRepoRel,
+  reposDirOf,
 } from '@opencode-webui/shared'
 
 describe('repoPath', () => {
@@ -165,6 +166,20 @@ describe('repoPath', () => {
       expect(toWsPath('src/a.ts', '')).toBe('src/a.ts')
       expect(toDisplayPath('src/a.ts', '')).toBe('src/a.ts')
       expect(isInRepo('src/a.ts', '')).toBe(false)
+    })
+  })
+
+  describe('reposDirOf', () => {
+    it('fullPath에서 workspaceRel 접미사를 잘라 repos 기준점을 구한다', () => {
+      expect(reposDirOf('C:/w/repos/aaa', 'aaa')).toBe('C:/w/repos')
+      expect(reposDirOf('C:\\w\\repos\\aaa', 'aaa')).toBe('C:/w/repos')
+    })
+    it('workspaceRel이 비면 fullPath 그대로', () => {
+      expect(reposDirOf('C:/w/repos', '')).toBe('C:/w/repos')
+    })
+    it('접미사가 안 맞으면 null', () => {
+      expect(reposDirOf('C:/w/repos/aaa', 'bbb')).toBeNull()
+      expect(reposDirOf('', 'aaa')).toBeNull()
     })
   })
 })
