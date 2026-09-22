@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import * as permissionRuleDb from '../db/permission-rule-queries'
 import { getRepoById } from '../db/queries'
+import { queuePermissionConfigSync } from '../services/permission-config'
 import { logger } from '../utils/logger'
 
 const CreatePermissionRuleSchema = z.object({
@@ -41,12 +42,11 @@ export function createPermissionRuleRoutes(db: Database) {
       }
 
       const rule = permissionRuleDb.createPermissionRule(db, { ...validated, repoId })
-      // 전역 룰 변경은 opencode.json permission 블록에 반영한다 (직렬화).
+      // 전역 룰 변경은 opencode.json permission 블록에 반영한다.
       // 파일은 다음 opencode 시작부터 적용, 그 전에는 live 자동승인이 커버.
       // 즉시 적용하려면 POST /api/opencode-restart 로 opencode 재시작.
-      void import('../services/permission-config')
-        .then((m) => m.queuePermissionConfigSync(db))
-        .catch((e) => logger.debug('Permission config rewrite skipped:', e))
+      // await로 기다린다 — 요청 순서대로 파일에 반영되게 (빠른 연속 CRUD 순서 보장).
+      await queuePermissionConfigSync(db)
       return c.json(rule, 201)
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -64,9 +64,7 @@ export function createPermissionRuleRoutes(db: Database) {
       if (!deleted) {
         return c.json({ error: 'Permission rule not found' }, 404)
       }
-      void import('../services/permission-config')
-        .then((m) => m.queuePermissionConfigSync(db))
-        .catch((e) => logger.debug('Permission config rewrite skipped:', e))
+      await queuePermissionConfigSync(db)
       return c.json({ success: true })
     } catch (error) {
       logger.error('Failed to delete permission rule:', error)
