@@ -29,11 +29,19 @@ describe('renderPermissionConfig', () => {
     ])
     expect(out).toEqual({ external_directory: { 'C:/data/*': 'allow' } })
   })
-  it('expands * permission to all keys (incl. doom_loop)', () => {
+  it('expands * permission to all keys (incl. external_directory, excl. doom_loop)', () => {
     const out = renderPermissionConfig([rule({ id: 1, permission: '*', pattern: 'C:/safe/*' })])
     expect(out['bash']).toEqual({ 'C:/safe/*': 'allow' })
     expect(out['external_directory']).toEqual({ 'C:/safe/*': 'allow' })
-    expect(out['doom_loop']).toEqual({ 'C:/safe/*': 'allow' })
+    expect(out['doom_loop']).toBeUndefined()
+  })
+  it('passes explicit doom_loop through (no expansion)', () => {
+    const out = renderPermissionConfig([rule({ id: 1, permission: 'doom_loop', pattern: 'repeat *' })])
+    expect(out).toEqual({ doom_loop: { 'repeat *': 'allow' } })
+  })
+  it('skips bare catch-all patterns', () => {
+    expect(renderPermissionConfig([rule({ id: 1, permission: 'bash', pattern: '*' })])).toEqual({})
+    expect(renderPermissionConfig([rule({ id: 2, permission: '*', pattern: '**' })])).toEqual({})
   })
   it('later rules win (last match wins)', () => {
     const out = renderPermissionConfig([

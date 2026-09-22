@@ -13,6 +13,8 @@ import type { PermissionRule } from '../types/permission-rule'
  */
 
 // opencode config permission 키. '*' 룰은 전부로 확장한다.
+// 단 doom_loop는 제외 — 리소스 스코프가 아니라 무한반복 안전장치라
+// 경로 패턴 하나로 풀리면 안 된다. 필요하면 doom_loop를 명시 지정해야 한다.
 export const PERMISSION_CONFIG_KEYS = [
   'bash',
   'edit',
@@ -24,7 +26,6 @@ export const PERMISSION_CONFIG_KEYS = [
   'task',
   'skill',
   'external_directory',
-  'doom_loop',
 ]
 
 /**
@@ -51,6 +52,12 @@ export function renderPermissionConfig(
   for (const r of ordered) {
     const pattern = toOpencodePattern((r.pattern ?? '').trim())
     if (!pattern) continue
+    // catch-all('*' 단독)은 렌더하지 않는다 — 모든 명령 무조건 허용이 되는데
+    // 보통은 입력 실수다. 필요하면 명시적으로 다시 논의한다.
+    if (pattern === '*') {
+      logger.warn(`Skipping catch-all permission rule #${r.id} (${r.permission}) in opencode config render`)
+      continue
+    }
     const keys = r.permission === '*' ? PERMISSION_CONFIG_KEYS : [r.permission]
     for (const k of keys) {
       if (!k) continue
@@ -92,9 +99,23 @@ export function mergePermissionConfigInto<T extends Record<string, unknown>>(
 }
 
 /**
+ * 원자적 파일 쓰기 (temp + rename). 쓰는 도중 opencode가 기동해도
+ * 잘린 JSON을 읽지 않는다.
+ */
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const fs = await import('fs/promises')
+  const { default: path } = await import('path')
+  await fs.mkdir(path.dirname(filePath), { recursive: true })
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  await fs.writeFile(tmp, content, 'utf-8')
+  await fs.rename(tmp, filePath)
+}
+
+/**
  * 전역 룰을 default opencode config(DB row + 디스크 파일)에 반영한다.
  * 직전 렌더는 sidecar 파일에 보관하고, 사라진 항목만 제거한다.
- * 변경이 없으면 파일 쓰기를 건너뛰고 false를 돌려준다.
+ * 반환값: true면 DB row 또는 디스크 파일 중 하나라도 실제로 바뀌었다
+ * (호출부가 "재시작 필요" 판단에 쓸 수 있다).
  */
 export async function syncPermissionConfigToDisk(db: Database): Promise<boolean> {
   try {
@@ -105,9 +126,10 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
     const defaultConfig = settingsService.getDefaultOpenCodeConfig()
     if (!defaultConfig) return false
     const { getOpenCodeConfigFilePath } = await import('@opencode-webui/shared')
-    const { writeFileContent, readFileContent } = await import('./file-operations')
+    const { readFileContent } = await import('./file-operations')
     const configPath = getOpenCodeConfigFilePath()
-    const sidecarPath = configPath + '.webui-permission.json'
+    // opencode가 config 디렉터리를 스캔해도 집지 않게 .json으로 끝나지 않게 한다.
+    const sidecarPath = `${configPath}.webui-permission`
     let previous: Record<string, Record<string, string>> = {}
     try {
       const raw = await readFileContent(sidecarPath)
@@ -127,22 +149,42 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
       ((defaultConfig.content as Record<string, unknown>).permission as unknown) ?? null
     )
     const after = JSON.stringify((merged.permission as unknown) ?? null)
-    if (before !== after) {
+    const rowChanged = before !== after
+    if (rowChanged) {
       settingsService.updateOpenCodeConfig(defaultConfig.name, { content: merged }, 'default')
       logger.info('Merged global permission allow rules into default opencode config')
     }
-    await writeFileContent(configPath, JSON.stringify(merged, null, 2))
+    // 디스크 파일의 이전 내용과도 비교한다 (수기 편집·재빌드 직후 어긋남 대비).
+    let diskChanged = true
     try {
-      const fs = await import('fs/promises')
-      const { default: path } = await import('path')
-      await fs.mkdir(path.dirname(sidecarPath), { recursive: true })
-      await writeFileContent(sidecarPath, JSON.stringify(rendered, null, 2))
-    } catch (e) {
-      logger.debug('Permission render sidecar write skipped:', e instanceof Error ? e.message : e)
+      const diskRaw = await readFileContent(configPath)
+      const diskJson = JSON.parse(diskRaw) as { permission?: unknown }
+      diskChanged =
+        JSON.stringify(diskJson?.permission ?? null) !==
+        JSON.stringify((merged.permission as unknown) ?? null)
+    } catch {
+      diskChanged = true
     }
-    return before !== after
+    await writeFileAtomic(configPath, JSON.stringify(merged, null, 2))
+    try {
+      await writeFileAtomic(sidecarPath, JSON.stringify(rendered, null, 2))
+    } catch (e) {
+      logger.warn('Permission render sidecar write failed:', e instanceof Error ? e.message : e)
+    }
+    return rowChanged || diskChanged
   } catch (e) {
-    logger.debug('Permission config sync skipped:', e instanceof Error ? e.message : e)
+    // config 쓰기 실패는 증상이 원래 버그와 똑같다 (재기동하면 또 물어봄).
+    // debug에 묻히면 다음 제보 때 원인 추적이 어려우니 warn이다.
+    logger.warn('Permission config sync failed:', e instanceof Error ? e.message : e)
     return false
   }
+}
+
+// fire-and-forget 연속 호출 직렬화. 겹치면 sidecar diff 기준이 어긋나
+// 삭제된 룰이 잔류한다. CRUD 핸들러는 이걸 쓴다.
+let syncChain: Promise<unknown> = Promise.resolve()
+
+export function queuePermissionConfigSync(db: Database): Promise<unknown> {
+  syncChain = syncChain.then(() => syncPermissionConfigToDisk(db)).catch(() => {})
+  return syncChain
 }
