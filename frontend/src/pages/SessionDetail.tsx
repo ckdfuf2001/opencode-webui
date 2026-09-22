@@ -42,7 +42,7 @@ import { useCommandRunsBySession } from "@/hooks/useCommandRuns";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
 import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
-import { toWsPath } from "@/lib/repoPath";
+import { toWsPath } from "@opencode-webui/shared";
 
 interface InjectedFile {
   token: number;
@@ -1260,20 +1260,26 @@ export function SessionDetail() {
   const handleFileClick = useCallback(async (filePath: string) => {
     const normalizedFilePath = filePath.replace(/\\/g, '/')
     let pathToOpen = normalizedFilePath
-    
+
     if (repo?.workspaceRel) {
-      if (normalizedFilePath.startsWith('chat_uploads/')) {
-        pathToOpen = toWsPath(`chat_uploads/${normalizedFilePath}`, repo.workspaceRel)
+      const repoRoot = repo.workspaceRel
+      // 절대경로(file:// URL, 드라이브 문자, workspace 절대경로) → wsPath 환산 시도.
+      const absMatch = normalizedFilePath.match(/(?:file:\/{2,3})?(?:[a-zA-Z]:)?\/.*\/repos\/([^/]+)(\/.*)?$/)
+      if (absMatch) {
+        const [, dirName, rest] = absMatch
+        pathToOpen = rest && rest !== '/' ? `${dirName}${rest}` : `${dirName}`
+      } else if (normalizedFilePath.startsWith('chat_uploads/')) {
+        pathToOpen = toWsPath(normalizedFilePath, repoRoot)
       } else if (!/^[a-zA-Z]:[\\/]/.test(normalizedFilePath) && !normalizedFilePath.startsWith('/')) {
         const candidates = normalizedFilePath.includes('/')
           ? [
-              toWsPath(normalizedFilePath, repo.workspaceRel),
-              toWsPath(`chat_uploads/${normalizedFilePath}`, repo.workspaceRel),
+              toWsPath(normalizedFilePath, repoRoot),
+              toWsPath(`chat_uploads/${normalizedFilePath}`, repoRoot),
               normalizedFilePath,
             ]
           : [
-              toWsPath(`chat_uploads/${normalizedFilePath}`, repo.workspaceRel),
-              toWsPath(normalizedFilePath, repo.workspaceRel),
+              toWsPath(`chat_uploads/${normalizedFilePath}`, repoRoot),
+              toWsPath(normalizedFilePath, repoRoot),
               normalizedFilePath,
             ]
         for (const candidate of candidates) {
@@ -1290,7 +1296,7 @@ export function SessionDetail() {
     
     setSelectedFilePath(pathToOpen)
     setFileBrowserOpen(true)
-  }, [repo?.fullPath, repo?.localPath]);
+  }, [repo?.workspaceRel]);
 
   const handleSessionTitleUpdate = useCallback((newTitle: string) => {
     if (sessionId) {
