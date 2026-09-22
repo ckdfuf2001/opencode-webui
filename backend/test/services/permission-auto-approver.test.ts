@@ -247,8 +247,7 @@ describe('isCandidateInRepo (S2 guardrail)', () => {
   })
 })
 
-describe('shouldVetoOutsideRepo (명시적 외부경로 룰은 veto 안 함)', () => {
-  it('`*` 룰은 veto 유지', () => {
+describe('shouldVetoOutsideRepo (명시적 외부경로 룰은 veto 안 함)', () => {  it('`*` 룰은 veto 유지', () => {
     expect(shouldVetoOutsideRepo(rule({ pattern: '*' }))).toBe(true)
   })
   it('구체 외부경로 룰은 veto 안 함 (등록해도 계속 묻던 버그)', () => {
@@ -281,6 +280,36 @@ describe('shouldVetoOutsideRepo (명시적 외부경로 룰은 veto 안 함)', (
         'C:/portable/workspace/repos/aaa',
         ['bbb'],
       ),
+    ).toBe(false)
+  })
+})
+
+describe('실측 ask 형태 (metadata.directories 배열)', () => {
+  // 2026-09-22 포착: external_directory ask가 patterns+directories 둘 다 들고 옴.
+  // directories만 있어도 후보가 되어야 한다 (그 전에는 빈 후보 → no-match).
+  const ask = {
+    id: 'per_live',
+    sessionID: 'ses_x',
+    permission: 'external_directory',
+    patterns: [],
+    metadata: {
+      directories: [
+        'C:\\Users\\oh\\AppData\\Local\\Temp\\opencode',
+        'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui',
+      ],
+    },
+  }
+  it('directories 배열을 후보로 쓴다', () => {
+    expect(
+      ruleMatches(
+        rule({ permission: 'external_directory', pattern: 'C:\\Users\\oh\\Documents\\Default Project\\opencode-webui\\*' }),
+        ask,
+      ),
+    ).toBe(true)
+  })
+  it('어느 쪽도 안 맞으면 false', () => {
+    expect(
+      ruleMatches(rule({ permission: 'external_directory', pattern: 'C:\\nope\\*' }), ask),
     ).toBe(false)
   })
 })

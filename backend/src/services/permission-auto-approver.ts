@@ -94,7 +94,9 @@ function getActualPatterns(permission: AskedPermission): string[] {
   const asString = (v: unknown): string[] => (typeof v === 'string' && v ? [v] : [])
   // opencode는 permission마다 다른 키를 쓴다:
   // bash=command, read/edit=path, webfetch=url,
-  // external_directory=metadata.filepath/parentDir
+  // external_directory=metadata.filepath/parentDir (+directories 배열형도 옴)
+  const asArray = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : []
   const metadataPatterns = [
     ...asString(metadata.command),
     ...asString(metadata.path),
@@ -102,6 +104,7 @@ function getActualPatterns(permission: AskedPermission): string[] {
     ...asString(metadata.filepath),
     ...asString(metadata.parentDir),
     ...asString(metadata.directory),
+    ...asArray(metadata.directories),
   ]
   return [...normalized, ...metadataPatterns]
 }
