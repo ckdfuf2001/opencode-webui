@@ -30,6 +30,7 @@ import { isBrowserViewable, openHtmlInNewTab } from '@/lib/html-view'
 import { normalizeTreePath } from '@/lib/tree-path'
 import { upsertHtmlPage } from '@/api/html-pages'
 import { showToast } from '@/lib/toast'
+import { useFileTreeExpand } from '@/stores/fileTreeExpandStore'
 
 interface FileTreeProps {
   files: FileInfo[]
@@ -54,6 +55,8 @@ interface FileTreeProps {
 interface TreeNodeProps {
   file: FileInfo
   level: number
+  /** 펼침 저장소 네임스페이스 (레포 basePath 기준) */
+  expandStoreKey: string
   onFileSelect: (file: FileInfo) => void
   onDirectoryClick: (path: string) => void
   selectedFile?: FileInfo | null
@@ -103,13 +106,19 @@ function useDirChildren(dirPath: string, enabled: boolean) {
   })
 }
 
-function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
+function TreeNode({ file, level, expandStoreKey, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: TreeNodeProps) {
   // 수동 토글이 최우선. 그 외에는 reveal 경로(채팅 파일 클릭)·검색 펼치기 순으로 자동 펼친다.
   // expandKnown은 children이 이미 알려진 노드에만 적용 — 지연 로딩 폴더를 전부 깨우지 않는다.
   const normPath = normalizeTreePath(file.path)
   const revealNorm = revealPath ? normalizeTreePath(revealPath) : ''
   const onRevealPath = !!revealNorm && file.isDirectory && (normPath === revealNorm || revealNorm.startsWith(normPath + '/'))
-  const [manual, setManual] = useState<boolean | null>(null)
+  // 수동 토글은 컴포넌트 state가 아니라 스토어에 둔다 — 리마운트(시트 열고닫기·
+  // 데이터 교체·파일 선택 등)에도 펼침이 유지된다. 없으면 자동 규칙을 따른다.
+  const storeKey = `${expandStoreKey}\n${normPath}`
+  const manual = useFileTreeExpand((s) => s.explicit.get(storeKey) ?? null)
+  const setManualStore = (v: boolean) => {
+    useFileTreeExpand.getState().setExplicit(expandStoreKey, normPath, v)
+  }
   const expanded = manual ?? (onRevealPath || (expandKnown === true && file.isDirectory && file.children !== undefined))
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
@@ -165,7 +174,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
     if (editing) return
     if (file.isDirectory) {
       // 행 단일 클릭은 그 자리에서 펼치기/접기
-      setManual(!expanded)
+      setManualStore(!expanded)
     } else {
       onFileSelect(file)
     }
@@ -303,7 +312,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
             title={expanded ? '접기' : '펼치기'}
             onClick={(e) => {
               e.stopPropagation()
-              setManual(!expanded)
+              setManualStore(!expanded)
             }}
           >
             {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -357,6 +366,7 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
               key={child.path}
               file={child}
               level={level + 1}
+              expandStoreKey={expandStoreKey}
               onFileSelect={onFileSelect}
               onDirectoryClick={onDirectoryClick}
               selectedFile={selectedFile}
@@ -387,6 +397,8 @@ function TreeNode({ file, level, onFileSelect, onDirectoryClick, selectedFile, o
 }
 
 export const FileTree = memo(function FileTree({ files, onFileSelect, onDirectoryClick, selectedFile, onDelete, onRename, onDownload, currentPath = '', basePath = '', isLoading = false, browserOpenPaths, onMentionFile, attachedPaths, revealPath, expandKnown }: FileTreeProps) {
+  // 수동 펼침 네임스페이스 — 레포마다 분리, currentPath 이동과 무관 (키는 전체 경로).
+  const expandStoreKey = normalizeTreePath(basePath || currentPath || '.')
   const handleGoUp = () => {
     // If currentPath has content and is different from basePath, go up
     if (currentPath !== basePath) {
@@ -432,6 +444,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
             key={file.path}
             file={file}
             level={0}
+            expandStoreKey={expandStoreKey}
             onFileSelect={onFileSelect}
             onDirectoryClick={onDirectoryClick}
             selectedFile={selectedFile}
