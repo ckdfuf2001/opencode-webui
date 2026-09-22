@@ -64,6 +64,14 @@ function isRecentlyDismissed(permissionID: string): boolean {
   return true
 }
 
+// 백엔드 자동승인 레이스 완화: 처음 본 요청은 1회 유예하고,
+// 다음 폴링에도 살아있을 때만 다이얼로그 스토어에 올린다.
+// 그 사이 승인되면 깜빡임 없이 사라진다. (폴링 2초 > 유예 1.5초라
+// 사실상 "2회 연속 목격" 조건이다.)
+const PERMISSION_GRACE_MS = 1500
+const pendingFirstSeen = new Map<string, number>()
+const PENDING_FIRST_SEEN_MAX = 500
+
 function startStoreSubscription(): void {
   if (storeSubscriptionStarted) return
   storeSubscriptionStarted = true
@@ -186,14 +194,36 @@ export function useLoadPendingPermissions(client: { listPermissions(): Promise<u
           ? pending.filter((p) => scopeIDs.has((p as { sessionID?: string }).sessionID ?? ''))
           : pending
         const serverIDs = new Set<string>()
+        const seenNow = Date.now()
         for (const p of scope) {
           const permission = normalizePermission(p)
           if (permission) {
             serverIDs.add(permission.id)
-            if (!isRecentlyDismissed(permission.id)) {
-              permissionEvents.emit({ type: 'add', permission })
+            if (isRecentlyDismissed(permission.id)) continue
+            const alreadyShown = usePermissionStore
+              .getState()
+              .permissions.some((s) => s.id === permission.id)
+            if (alreadyShown) {
+              pendingFirstSeen.delete(permission.id)
+              continue
             }
+            const firstSeen = pendingFirstSeen.get(permission.id)
+            if (firstSeen == null) {
+              pendingFirstSeen.set(permission.id, seenNow)
+              while (pendingFirstSeen.size > PENDING_FIRST_SEEN_MAX) {
+                const oldest = pendingFirstSeen.keys().next().value as string | undefined
+                if (oldest === undefined) break
+                pendingFirstSeen.delete(oldest)
+              }
+              continue
+            }
+            if (seenNow - firstSeen < PERMISSION_GRACE_MS) continue
+            pendingFirstSeen.delete(permission.id)
+            permissionEvents.emit({ type: 'add', permission })
           }
+        }
+        for (const id of [...pendingFirstSeen.keys()]) {
+          if (!serverIDs.has(id)) pendingFirstSeen.delete(id)
         }
         const current = usePermissionStore.getState().permissions
         const stale = current.filter((p) => {

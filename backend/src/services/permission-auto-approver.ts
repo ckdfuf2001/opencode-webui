@@ -382,7 +382,7 @@ async function handleAskedPermission(
  * - 미승인 사유 로그는 quiet로 낮춰 스팸을 막는다. 승인은 info 유지.
  */
 const SWEEP_INTERVAL_MS = 45_000
-const SWEEP_START_DELAY_MS = 10_000
+const SWEEP_START_DELAY_MS = 3_000
 let sweepRunning = false
 
 async function sweepPendingPermissions(
@@ -474,6 +474,8 @@ export function subscribeOpencodeEvents(
         })
         if (!res.ok || !res.body) throw new Error(`event stream HTTP ${res.status}`)
         lastSeen = Date.now()
+        // (재)연결 직후 1회 sweep — 단절 구간에 생긴 ask를 즉시 잡는다 (45초 대기 제거).
+        void sweepPendingPermissions(db, resolveBase)
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
         let buf = ''
