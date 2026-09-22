@@ -140,7 +140,7 @@ export function GeneralSettings() {
               Stream reasoning and responses live. Off = polling only, shown when complete.
             </p>
             <p className="text-sm text-amber-500">
-              Note: turning SSE streaming off may increase frontend memory usage.
+              Note: SSE streaming may increase frontend memory usage.
             </p>
           </div>
           <Switch

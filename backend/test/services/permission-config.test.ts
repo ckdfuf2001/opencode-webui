@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
-  toOpencodePattern,
+  toOpencodePatterns,
   renderPermissionConfig,
   mergePermissionConfigInto,
+  queueConfigWrite,
 } from '../../src/services/permission-config'
 import type { PermissionRule } from '../../src/types/permission-rule'
 
@@ -10,29 +11,33 @@ function rule(partial: Partial<PermissionRule> = {}): PermissionRule {
   return { id: 1, repoId: null, permission: 'bash', pattern: '*', createdAt: 0, ...partial }
 }
 
-describe('toOpencodePattern', () => {
-  it('folds ** into * (opencode * crosses separators)', () => {
-    expect(toOpencodePattern('C:/work/**')).toBe('C:/work/*')
-    expect(toOpencodePattern('a/**/b')).toBe('a/*/b')
+describe('toOpencodePatterns', () => {
+  it('adds ** companion to /* (new semantics: * is single level)', () => {
+    expect(toOpencodePatterns('C:/work/*')).toEqual(['C:/work/*', 'C:/work/**'])
   })
-  it('leaves single * and ? alone', () => {
-    expect(toOpencodePattern('C:/work/*')).toBe('C:/work/*')
-    expect(toOpencodePattern('npm run *')).toBe('npm run *')
+  it('adds * companion to /** (old-version compat)', () => {
+    expect(toOpencodePatterns('C:/work/**')).toEqual(['C:/work/**', 'C:/work/*'])
+  })
+  it('expands bare paths to subtree variants (backend prefix semantics)', () => {
+    expect(toOpencodePatterns('C:/work')).toEqual(['C:/work', 'C:/work/*', 'C:/work/**'])
+  })
+  it('leaves non-path commands alone', () => {
+    expect(toOpencodePatterns('npm run *')).toEqual(['npm run *'])
   })
 })
 
 describe('renderPermissionConfig', () => {
-  it('renders global rules only', () => {
+  it('renders global rules only (with subtree variants)', () => {
     const out = renderPermissionConfig([
       rule({ id: 1, permission: 'external_directory', pattern: 'C:/data/*' }),
       rule({ id: 2, repoId: 7, permission: 'edit', pattern: 'C:/repo/*' }),
     ])
-    expect(out).toEqual({ external_directory: { 'C:/data/*': 'allow' } })
+    expect(out).toEqual({ external_directory: { 'C:/data/*': 'allow', 'C:/data/**': 'allow' } })
   })
   it('expands * permission to all keys (incl. external_directory, excl. doom_loop)', () => {
     const out = renderPermissionConfig([rule({ id: 1, permission: '*', pattern: 'C:/safe/*' })])
-    expect(out['bash']).toEqual({ 'C:/safe/*': 'allow' })
-    expect(out['external_directory']).toEqual({ 'C:/safe/*': 'allow' })
+    expect(out['bash']).toEqual({ 'C:/safe/*': 'allow', 'C:/safe/**': 'allow' })
+    expect(out['external_directory']).toEqual({ 'C:/safe/*': 'allow', 'C:/safe/**': 'allow' })
     expect(out['doom_loop']).toBeUndefined()
   })
   it('passes explicit doom_loop through (no expansion)', () => {
@@ -48,7 +53,7 @@ describe('renderPermissionConfig', () => {
       rule({ id: 1, createdAt: 10, permission: 'read', pattern: 'C:/a/*' }),
       rule({ id: 2, createdAt: 20, permission: 'read', pattern: 'C:/a/b/*' }),
     ])
-    expect(Object.keys(out['read'] ?? {})).toEqual(['C:/a/*', 'C:/a/b/*'])
+    expect(Object.keys(out['read'] ?? {})).toEqual(['C:/a/*', 'C:/a/**', 'C:/a/b/*', 'C:/a/b/**'])
   })
   it('skips empty patterns', () => {
     expect(renderPermissionConfig([rule({ pattern: '   ' })])).toEqual({})
@@ -85,5 +90,30 @@ describe('mergePermissionConfigInto', () => {
       { webfetch: { 'https://gone/*': 'allow' } }
     ) as { permission: Record<string, Record<string, string>> }
     expect(merged.permission).toEqual({})
+  })
+})
+
+describe('queueConfigWrite', () => {
+  it('runs tasks in call order and returns results', async () => {
+    const order: number[] = []
+    const slow = queueConfigWrite(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+      order.push(1)
+      return 'a'
+    })
+    const fast = queueConfigWrite(async () => {
+      order.push(2)
+      return 'b'
+    })
+    expect(await slow).toBe('a')
+    expect(await fast).toBe('b')
+    expect(order).toEqual([1, 2])
+  })
+  it('keeps chain alive after a failure', async () => {
+    const bad = queueConfigWrite(async () => {
+      throw new Error('boom')
+    })
+    await expect(bad).rejects.toThrow('boom')
+    expect(await queueConfigWrite(async () => 'ok')).toBe('ok')
   })
 })
