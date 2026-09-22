@@ -75,7 +75,7 @@ try {
 } catch {
   Write-Output "[package 3/7] WARN: embed patch failed: $_"
 }
-bun build --compile --target=bun backend/src/index.ts --outfile $exePath
+bun build --compile --target=bun --define PACKAGE_VERSION:"'$version'" backend/src/index.ts --outfile $exePath
 $compileExit = $LASTEXITCODE
 if ($didPatch -and $embedBackup) {
   Set-Content -Path $embedSrc -Value $embedBackup -NoNewline
