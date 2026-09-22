@@ -3,7 +3,7 @@ import path from 'node:path'
 import { logger } from '../utils/logger'
 import type { CommandRun, CommandRunStatus } from '../db/command-run-queries'
 import type { Database } from 'bun:sqlite'
-import { getConfigPath } from '@opencode-webui/shared'
+import { getConfigPath, getWorkspacePath } from '@opencode-webui/shared'
 import { getSkillAutoReview, getSkillAutoUpdate } from '../db/queries'
 
 /**
@@ -100,12 +100,16 @@ function rememberReviewSession(sessionId: string): void {
   }
 }
 
-/** 스킬 파일 존재 여부로 kind 판별 (project → global 순). */
+/** 스킬 파일 존재 여부로 kind 판별 (project → workspace → global 순). */
 export function resolveCommandKind(directory: string | null | undefined, commandName: string): 'skill' | 'command' {
   const clean = commandName.trim().replace(/[\\:*?"<>|]/g, '-')
   if (!clean) return 'command'
   try {
     if (directory && existsSync(path.join(directory, '.opencode', 'skills', clean, 'SKILL.md'))) return 'skill'
+  } catch {}
+  try {
+    const wsSkills = path.join(getWorkspacePath(), '.opencode', 'skills', clean, 'SKILL.md')
+    if (existsSync(wsSkills)) return 'skill'
   } catch {}
   try {
     const root = getConfigPath()
