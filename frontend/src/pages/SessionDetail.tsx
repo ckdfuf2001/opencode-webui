@@ -20,7 +20,7 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { useCommands } from "@/hooks/useCommands";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -174,6 +174,7 @@ export function SessionDetail() {
   useEffect(() => {
     setTotalKnown(null);
     setIsLoadingMore(false);
+    setTopRank(null);
   }, [sessionId]);
   // 서버 total을 리액티브로 구독 — 폴링마다 갱신돼 새 메시지·캐시 변동에도 잔여 표시가 흔들리지 않는다.
   const liveTotal = useRecentTotal(sessionId);
@@ -368,8 +369,44 @@ export function SessionDetail() {
     ? Math.max(0, totalKnown - (baseMessages?.length ?? 0))
     : 0;
   // 라벨 단일 숫자: 캐시 안 가려진 수 + 서버 잔여. 모드별 다른 숫자 번갈아 표시 금지.
-  const olderAvailable = start + remainingOnServer;
+  // 단, 점프 병합 뒤 캐시에 틈이 생기면 위 공식이 gap까지 오래된 쪽으로 잡아
+  // 어긋나므로, 윈도우 상단 메시지 기준 rank(서버 COUNT)를 우선한다.
+  const [topRank, setTopRank] = useState<{ id: string; older: number } | null>(null);
+  const [rankEpoch, setRankEpoch] = useState(0);
+  const rankInflightRef = useRef<string | null>(null);
+  const prevBaseLenRef = useRef(0);
+  const olderAvailable = topRank && baseMessages?.[start]?.info.id === topRank.id
+    ? topRank.older
+    : start + remainingOnServer;
   const hasMore = olderAvailable > 0;
+  // 윈도우 상단이 바뀌면 rank를 다시 센다. 스트리밍 append(상단 동일)는 스킵.
+  // truncate 등으로 길이가 줄면 같은 상단이라도 rank가 바뀌므로 epoch으로 재조회한다.
+  useEffect(() => {
+    const len = baseMessages?.length ?? 0;
+    if (len < prevBaseLenRef.current) {
+      prevBaseLenRef.current = len;
+      setTopRank(null);
+      setRankEpoch((e) => e + 1);
+      return;
+    }
+    prevBaseLenRef.current = len;
+  }, [baseMessages?.length]);
+  useEffect(() => {
+    const top = baseMessages?.[start];
+    const topId = top?.info.id;
+    if (!sessionId || !topId || topId.startsWith('optimistic')) return;
+    if (topRank?.id === topId || rankInflightRef.current === topId) return;
+    rankInflightRef.current = topId;
+    void fetchMessageRank(sessionId, topId).then((older) => {
+      if (rankInflightRef.current === topId) rankInflightRef.current = null;
+      if (older == null) return;
+      const cur = baseMessagesRef.current;
+      const curTop = cur?.[Math.min(start, Math.max(0, (cur?.length ?? 0) - WINDOW_SIZE))];
+      if (curTop?.info.id !== topId) return; // 이미 다른 위치로 이동 — stale 버림
+      setTopRank({ id: topId, older });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, start, baseMessages?.length, rankEpoch]);
   // useAutoScroll의 추종 해제 함수 (아래 useAutoScroll 선언 뒤에 연결)
   const markDisengagedRef = useRef<(() => void) | null>(null);
   // 윈도우 이동 후 시각 위치 유지용: 앵커 메시지 기준 보정.

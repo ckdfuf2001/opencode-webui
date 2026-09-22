@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import {
   countSessionMessages,
   listSessionMessages,
+  rankSessionMessage,
   recentSessionMessages,
   windowSessionMessages,
   messagesByIds,
@@ -85,6 +86,23 @@ export function createSessionMessageRoutes() {
     }
   })
 
+  // GET /api/session-messages/:sessionId/rank?messageId=
+  // 윈도우 상단 메시지보다 오래된 개수 — 점프 병합 뒤 캐시 틈이 생기면
+  // total-len 공식이 어긋나므로 상단 기준으로 직접 센다 (COUNT 1회).
+  app.get('/:sessionId/rank', async (c) => {
+    try {
+      const sessionId = c.req.param('sessionId')
+      const messageId = c.req.query('messageId') || ''
+      if (!messageId) return c.json({ error: 'messageId query parameter is required' }, 400)
+      const result = await rankSessionMessage(sessionId, messageId)
+      if (!result) return dbUnavailable(c)
+      if (!result.found) return c.json({ error: 'Message not found' }, 404)
+      return c.json({ total: result.total, older: result.older })
+    } catch (error: unknown) {
+      logger.error('Failed to rank session message:', error)
+      return c.json({ error: error instanceof Error ? error.message : 'Failed to rank message' }, 500)
+    }
+  })
   // GET /api/session-messages/:sessionId/window?around=&limit= / ?before=&limit=
   // 점프용 윈도우 — around면 전후 limit개, before면 앵커 이전 limit개만 (parts 포함, cap 적용).
   // before는 load-more(오래된 쪽 확장)용. 응답에 total/hasMore가 같이 오므로

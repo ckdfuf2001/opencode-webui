@@ -54,7 +54,10 @@ description: Re-apply post-v0.10.33 work onto the v0.10.33 base without S2 works
 - 검증: vitest + CRUD→opencode.json 실측 + live ask 포착 판정
 
 ### Phase 3 — chat behaviors
-- `47c767f` edit/truncate, `6553189` reload 반영, `5fd3353`/`3f85c71` 커맨드칩
+- `47c767f` edit/truncate → **스킵 확정** (내용이 상위 코드에 이미 포함됨)
+- `6553189` reload 반영 → **스킵 확정** (이미 존재 확인)
+- `5fd3353`/`3f85c71`/`3e6cedd` 커맨드칩 3건 → **묶음 연기**. 구 코드 대수술이라
+  blind merge 금지. live 세션에서 칩 표시 실측 후 필요분만 수동 이식.
 - `b4a2e63` rank, `35ccbe0`+`d13aefe` SessionList, `6f83680` question descendants
 - `2f46e4f` 중 repo-sessions (repo dir 1순위 유지 + wsroot strict 보조), full-output stopPropagation, model override
 - `7f3e98f` twin-drop 가드, `41e723f`+`390f27c` 빈응답 가드
