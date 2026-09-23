@@ -224,10 +224,27 @@ def _extract_pdf_text(source_path):
     return "\n\n".join(pages)
 
 
+def _frozen_roots():
+    """PyInstaller onefile anchor dirs (release/scripts/*.exe → release/).
+
+    Frozen 상태에서는 __file__ 기준 탐색이 번들 임시폴더(_MEI*)를 가리키고,
+    스폰 CWD(opencode는 workspace/)도 어긋나므로 exe 위치를 기준으로 찾는다.
+    """
+    import sys
+    if not getattr(sys, "frozen", False):
+        return []
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    return [os.path.abspath(os.path.join(exe_dir, ".."))]
+
+
 def _resolve_bundled_tesseract():
     """bin/tesseract/tesseract.exe 가 있으면 우선 사용 (pull 후 바로 동작)."""
     candidates = [
         os.path.join(os.path.dirname(__file__), "..", "..", "bin", "tesseract", "tesseract.exe"),
+    ]
+    for root in _frozen_roots():
+        candidates.append(os.path.join(root, "bin", "tesseract", "tesseract.exe"))
+    candidates += [
         os.path.join(os.getcwd(), "bin", "tesseract", "tesseract.exe"),
         os.path.join(os.getcwd(), "release", "bin", "tesseract", "tesseract.exe"),
         os.path.join(tempfile.gettempdir(), "tesseract-ocr", "tesseract.exe"),
@@ -257,10 +274,13 @@ def _extract_image_text_with_boxes(source_path):
         bundled_tessdata = os.path.join(os.path.dirname(bundled), "tessdata")
     else:
         # PATH tesseract라도 번들 tessdata가 있으면 한글을 위해 그걸 쓰자
-        for p in [
+        tessdata_candidates = [
             os.path.join(os.path.dirname(__file__), "..", "..", "bin", "tesseract", "tessdata"),
-            os.path.join(os.getcwd(), "bin", "tesseract", "tessdata"),
-        ]:
+        ]
+        for root in _frozen_roots():
+            tessdata_candidates.append(os.path.join(root, "bin", "tesseract", "tessdata"))
+        tessdata_candidates.append(os.path.join(os.getcwd(), "bin", "tesseract", "tessdata"))
+        for p in tessdata_candidates:
             ap = os.path.abspath(p)
             if os.path.isdir(ap) and os.path.isfile(os.path.join(ap, "kor.traineddata")):
                 bundled_tessdata = ap

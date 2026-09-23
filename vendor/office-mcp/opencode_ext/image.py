@@ -22,15 +22,35 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _frozen_roots() -> list[str]:
+    """PyInstaller onefile anchor dirs.
+
+    Frozen exe는 <root>/scripts/*.exe 로 나가고, __file__ 기준 탐색은
+    번들 임시폴더(_MEI*)를 가리켜 실패한다. exe 위치 기준으로
+    <root>/bin/tesseract 를 찾는다. dev(python 실행)에서는 빈 목록.
+    """
+    import sys
+
+    if not getattr(sys, "frozen", False):
+        return []
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    return [os.path.abspath(os.path.join(exe_dir, ".."))]
+
+
 def resolve_bundled_tesseract() -> str | None:
     """Return bundled bin/tesseract/tesseract.exe when present.
 
-    Checked relative to this file first (vendor/office-mcp/opencode_ext/),
+    Checked relative to this file first (vendor/office-mcp/opencode_ext),
+    then the frozen exe location (portable release/scripts/*.exe),
     then the historical checkout locations.
     """
     candidates = [
         os.path.join(_HERE, "..", "..", "..", "bin", "tesseract", "tesseract.exe"),
         os.path.join(_HERE, "..", "..", "..", "release", "bin", "tesseract", "tesseract.exe"),
+    ]
+    for root in _frozen_roots():
+        candidates.append(os.path.join(root, "bin", "tesseract", "tesseract.exe"))
+    candidates += [
         os.path.join(os.getcwd(), "bin", "tesseract", "tesseract.exe"),
         os.path.join(os.getcwd(), "release", "bin", "tesseract", "tesseract.exe"),
         os.path.join(tempfile.gettempdir(), "tesseract-ocr", "tesseract.exe"),
@@ -50,8 +70,10 @@ def _use_bundled_tessdata() -> None:
     """
     candidates = [
         os.path.join(_HERE, "..", "..", "..", "bin", "tesseract", "tessdata"),
-        os.path.join(os.getcwd(), "bin", "tesseract", "tessdata"),
     ]
+    for root in _frozen_roots():
+        candidates.append(os.path.join(root, "bin", "tesseract", "tessdata"))
+    candidates.append(os.path.join(os.getcwd(), "bin", "tesseract", "tessdata"))
     for p in candidates:
         ap = os.path.abspath(p)
         if os.path.isdir(ap) and os.path.isfile(os.path.join(ap, "kor.traineddata")):
@@ -110,12 +132,20 @@ def read_image(source_path: str) -> dict[str, Any]:
     try:
         pytesseract.get_tesseract_version()
     except Exception as exc:
+        import sys
+
         hint = bundled or "PATH"
+        searched = os.pathsep.join(
+            [os.path.dirname(os.path.abspath(sys.executable)), os.getcwd()]
+            if getattr(sys, "frozen", False)
+            else [os.getcwd()]
+        )
         raise RuntimeError(
             f"Tesseract OCR engine not found (tried {hint}). "
             "Run `npm run tesseract:install` or install Tesseract "
             "(https://github.com/UB-Mannheim/tesseract/wiki) and ensure "
-            "`tesseract` is in PATH. Bundled path: bin/tesseract/tesseract.exe"
+            "`tesseract` is in PATH. Bundled path: bin/tesseract/tesseract.exe "
+            f"(searched from: {searched})"
         ) from exc
     img = Image.open(source_path)
     if img.mode not in ("RGB", "L"):
