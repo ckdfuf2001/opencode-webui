@@ -14,7 +14,8 @@ const VENDOR_EXE = join(vendorDir, 'tesseract-ocr-w64-setup.exe')
 // UB-Mannheim Tesseract 5.4.0 portable installer (Windows x64) + tessdata
 const TESSERACT_URL = process.env.TESSERACT_URL || 'https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe'
 const TESSDATA_BASE = 'https://raw.githubusercontent.com/tesseract-ocr/tessdata/main'
-const LANGS = ['eng', 'kor']
+// equ = 수식/기호 모델. kor+eng+equ 조합으로 기호 커버 (낱개 파일로 다국어+기호 통합 파일은 없음)
+const LANGS = ['eng', 'kor', 'equ']
 
 function log(msg) { console.log('[install-tesseract] ' + msg) }
 function fail(msg) { console.error('[install-tesseract] ' + msg); process.exit(1) }

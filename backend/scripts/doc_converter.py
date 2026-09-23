@@ -284,10 +284,22 @@ def _extract_image_text_with_boxes(source_path):
     # RGB로 변환 (팰트/알파 대응)
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
-    # kor+eng를 먼저 시도 — kor 데이터가 없으면 eng로 fallback되지만 한글은 안 나오므로 명확한 에러로 안내
+    # 저해상도 업스케일: Tesseract는 300DPI 전후에서 정확도가 나온다.
+    # 긴 변 2000px 미만이면 2x LANCZOS (상한 5000px — 연산량 폭증 방지).
+    # boxes는 아래에서 원본 좌표로 역보정한다.
+    w0, h0 = img.size
+    scale = 1.0
+    if max(w0, h0) < 2000:
+        scale = min(2.0, 5000.0 / max(w0, h0))
+        if scale > 1.01:
+            img = img.resize((int(w0 * scale + 0.5), int(h0 * scale + 0.5)), Image.LANCZOS)
+        else:
+            scale = 1.0
+    # kor+eng+equ를 먼저 시도 (equ=수식/기호, 낱개 통합 파일은 없으므로 조합).
+    # equ만 없고 kor는 있으면 다음 체인으로 폴백. kor 자체가 없으면 명확한 에러로 안내.
     last_exc = None
     lang_used = "eng"
-    for lang in ("kor+eng", "eng"):
+    for lang in ("kor+eng+equ", "kor+eng", "eng"):
         try:
             cfg = "--oem 1 --psm 6" if "kor" in lang else "--oem 3 --psm 6"
             data = pytesseract.image_to_data(img, lang=lang, config=cfg, output_type=Output.DICT)
@@ -296,6 +308,10 @@ def _extract_image_text_with_boxes(source_path):
         except Exception as exc:
             last_exc = exc
             msg = str(exc).lower()
+            is_load_error = "failed loading language" in msg or "traineddata" in msg
+            if is_load_error and "+equ" in lang:
+                # equ 부재 가능 — kor+eng 체인에서 kor 유무를 다시 판정한다
+                continue
             # kor 데이터 없음 → 한글 출력 안 됨 원인이므로 명확히 안내하고 eng로 숨기지 않음
             if "kor" in msg or "traineddata" in msg or "failed loading language" in msg:
                 raise RuntimeError(
@@ -318,12 +334,13 @@ def _extract_image_text_with_boxes(source_path):
         except Exception:
             conf = -1
         # conf -1은 제외, 너무 낮은 신뢰도도 제외하려면 threshold 조정 가능
+        # 업스케일했으면 원본 좌표로 역보정 (호출자는 원본 기준 박스를 기대한다)
         boxes.append({
             "text": t,
-            "left": int(data["left"][i]),
-            "top": int(data["top"][i]),
-            "width": int(data["width"][i]),
-            "height": int(data["height"][i]),
+            "left": int(data["left"][i] / scale),
+            "top": int(data["top"][i] / scale),
+            "width": int(data["width"][i] / scale),
+            "height": int(data["height"][i] / scale),
             "conf": conf,
             "block_num": int(data.get("block_num", [0]*n)[i]),
             "line_num": int(data.get("line_num", [0]*n)[i]),
