@@ -3,8 +3,10 @@ openpyxl
 python-pptx
 pypdf
 extract-msg
+olefile
 pywin32
 psutil
 fastmcp
+mcp>=1.2.0
 Pillow
 pytesseract

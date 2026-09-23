@@ -1,0 +1,951 @@
+"""Conversions between the Python world and Office COM.
+
+Collected here are the things that would otherwise repeat in every controller:
+colours (Office stores them as BGR, not RGB), units (points / centimetres /
+inches / EMU), numeric Office enum constants, and cleaning values returned
+by COM into a JSON-serialisable form.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import os
+from typing import Any, Iterable, Sequence
+
+try:
+    import pywintypes
+
+    com_error = pywintypes.com_error
+    COM_AVAILABLE = True
+except ImportError:  # pragma: no cover - platforms without pywin32 (CI, tests)
+
+    class com_error(Exception):  # type: ignore[no-redef]
+        """Stand-in used when pywin32 is unavailable (tests off Windows)."""
+
+    COM_AVAILABLE = False
+
+
+POINTS_PER_INCH = 72.0
+POINTS_PER_CM = 28.3464567
+EMU_PER_POINT = 12700
+
+MSO_TRUE = -1
+MSO_FALSE = 0
+
+NAMED_COLORS: dict[str, tuple[int, int, int]] = {
+    "black": (0, 0, 0),
+    "white": (255, 255, 255),
+    "red": (255, 0, 0),
+    "green": (0, 176, 80),
+    "blue": (0, 112, 192),
+    "yellow": (255, 255, 0),
+    "orange": (255, 153, 0),
+    "purple": (112, 48, 160),
+    "pink": (255, 102, 204),
+    "gray": (128, 128, 128),
+    "grey": (128, 128, 128),
+    "lightgray": (217, 217, 217),
+    "lightgrey": (217, 217, 217),
+    "darkgray": (64, 64, 64),
+    "darkgrey": (64, 64, 64),
+    "brown": (132, 60, 12),
+    "navy": (0, 32, 96),
+    "teal": (0, 128, 128),
+    "gold": (255, 192, 0),
+    "silver": (191, 191, 191),
+}
+
+PP_LAYOUTS: dict[str, int] = {
+    "title": 1,
+    "title_content": 2,
+    "text": 2,
+    "two_content": 3,
+    "two_column_text": 3,
+    "table": 4,
+    "text_and_chart": 5,
+    "chart_and_text": 6,
+    "org_chart": 7,
+    "chart": 8,
+    "title_only": 11,
+    "blank": 12,
+    "text_and_object": 13,
+    "large_object": 15,
+    "object": 16,
+    "four_objects": 24,
+    "vertical_text": 25,
+    "vertical_title_and_text": 27,
+    "two_objects": 29,
+    "custom": 32,
+    "section_header": 33,
+    "comparison": 34,
+    "content_with_caption": 35,
+    "picture_with_caption": 36,
+}
+
+CHART_TYPES: dict[str, int] = {
+    "column": 51,
+    "column_clustered": 51,
+    "bar": 57,
+    "bar_clustered": 57,
+    "column_stacked": 52,
+    "bar_stacked": 58,
+    "line": 4,
+    "line_markers": 65,
+    "pie": 5,
+    "pie_3d": -4102,
+    "doughnut": -4120,
+    "area": 1,
+    "area_stacked": 76,
+    "scatter": -4169,
+    "radar": -4151,
+    "bubble": 15,
+    "column_3d": -4100,
+    "stock": 88,
+}
+
+SHAPE_TYPES: dict[str, int] = {
+    "rectangle": 1,
+    "rounded_rectangle": 5,
+    "oval": 9,
+    "circle": 9,
+    "triangle": 7,
+    "right_triangle": 8,
+    "diamond": 4,
+    "pentagon": 51,
+    "hexagon": 10,
+    "chevron": 52,
+    "star": 92,
+    "arrow_right": 33,
+    "arrow_left": 34,
+    "arrow_up": 35,
+    "arrow_down": 36,
+    "callout": 105,
+    "cloud": 179,
+    "heart": 21,
+    "smiley": 17,
+    "plus": 11,
+    "line_shape": 20,
+}
+
+PP_TRANSITIONS: dict[str, int] = {
+    "none": 0,
+    "cut": 257,
+    "cut_through_black": 258,
+    "random": 513,
+    "blinds_horizontal": 769,
+    "blinds_vertical": 770,
+    "checkerboard_across": 1025,
+    "checkerboard_down": 1026,
+    "cover_left": 1281,
+    "cover_up": 1282,
+    "cover_right": 1283,
+    "cover_down": 1284,
+    "dissolve": 1537,
+    "fade": 1793,
+    "uncover_left": 2049,
+    "uncover_up": 2050,
+    "uncover_right": 2051,
+    "uncover_down": 2052,
+    "random_bars_horizontal": 2305,
+    "random_bars_vertical": 2306,
+    "strips_up_left": 2561,
+    "strips_down_right": 2564,
+    "wipe_left": 2817,
+    "wipe_up": 2818,
+    "wipe_right": 2819,
+    "wipe_down": 2820,
+    "box_out": 3073,
+    "box_in": 3074,
+    "zoom_in": 3345,
+    "zoom_out": 3347,
+    "split_horizontal_out": 3585,
+    "split_horizontal_in": 3586,
+    "split_vertical_out": 3587,
+    "split_vertical_in": 3588,
+    "appear": 3844,
+    "circle_out": 3845,
+    "diamond_out": 3846,
+    "comb_horizontal": 3847,
+    "comb_vertical": 3848,
+    "fade_smoothly": 3849,
+    "newsflash": 3850,
+    "plus_out": 3851,
+    "push_down": 3852,
+    "push_left": 3853,
+    "push_right": 3854,
+    "push_up": 3855,
+    "wedge": 3856,
+    "wheel_1": 3857,
+    "wheel_2": 3858,
+    "wheel_3": 3859,
+    "wheel_4": 3860,
+    "wheel_8": 3861,
+    "vortex_left": 3863,
+    "vortex_right": 3865,
+    "ripple": 3867,
+    "glitter_diamond_left": 3872,
+    "glitter_hexagon_left": 3876,
+    "gallery_left": 3880,
+    "gallery_right": 3881,
+    "conveyor_left": 3882,
+    "conveyor_right": 3883,
+    "doors_vertical": 3884,
+    "doors_horizontal": 3885,
+    "window_vertical": 3886,
+    "window_horizontal": 3887,
+    "warp_in": 3888,
+    "warp_out": 3889,
+    "fly_through_in": 3890,
+    "fly_through_out": 3891,
+    "reveal_smooth_left": 3894,
+    "reveal_smooth_right": 3895,
+    "honeycomb": 3898,
+    "ferris_wheel_left": 3899,
+    "switch_left": 3901,
+    "switch_right": 3903,
+    "flip_left": 3905,
+    "flip_right": 3907,
+    "flashbulb": 3909,
+    "shred_strips_in": 3910,
+    "cube_left": 3914,
+    "cube_right": 3916,
+    "rotate_left": 3918,
+    "rotate_right": 3920,
+    "box_left": 3922,
+    "box_right": 3924,
+    "orbit_left": 3926,
+    "orbit_right": 3928,
+    "pan_left": 3930,
+    "pan_right": 3932,
+    "fall_over_left": 3934,
+    "drape_left": 3936,
+    "curtains": 3938,
+    "wind_left": 3939,
+    "wind_right": 3940,
+    "prestige": 3941,
+    "fracture": 3942,
+    "crush": 3943,
+    "peel_off_left": 3944,
+    "page_curl_single_left": 3946,
+    "page_curl_double_left": 3948,
+    "airplane_left": 3950,
+    "origami_left": 3952,
+    "morph": 3954,
+    "morph_by_word": 3955,
+    "morph_by_char": 3956,
+}
+
+MSO_ALIGN: dict[str, int] = {
+    "left": 0,
+    "center": 1,
+    "right": 2,
+    "top": 3,
+    "middle": 4,
+    "bottom": 5,
+}
+
+MSO_DISTRIBUTE: dict[str, int] = {
+    "horizontal": 0,
+    "horizontally": 0,
+    "vertical": 1,
+    "vertically": 1,
+}
+
+MSO_THEME_COLORS: dict[str, int] = {
+    "dark1": 1,
+    "text1": 13,
+    "light1": 2,
+    "background1": 14,
+    "dark2": 3,
+    "text2": 15,
+    "light2": 4,
+    "background2": 16,
+    "accent1": 5,
+    "accent2": 6,
+    "accent3": 7,
+    "accent4": 8,
+    "accent5": 9,
+    "accent6": 10,
+    "hyperlink": 11,
+    "followed_hyperlink": 12,
+}
+
+MSO_GRADIENT_STYLES: dict[str, int] = {
+    "horizontal": 1,
+    "vertical": 2,
+    "diagonal_up": 3,
+    "diagonal_down": 4,
+    "from_corner": 5,
+    "from_title": 6,
+    "from_center": 7,
+}
+
+MSO_LINE_DASHES: dict[str, int] = {
+    "solid": 1,
+    "square_dot": 2,
+    "round_dot": 3,
+    "dash": 4,
+    "dash_dot": 5,
+    "dash_dot_dot": 6,
+    "long_dash": 7,
+    "long_dash_dot": 8,
+    "long_dash_dot_dot": 9,
+}
+
+MSO_ANCHORS: dict[str, int] = {
+    "top": 1,
+    "middle": 3,
+    "center": 3,
+    "bottom": 4,
+}
+
+XL_LEGEND_POSITIONS: dict[str, int] = {
+    "bottom": -4107,
+    "corner": 2,
+    "left": -4131,
+    "right": -4152,
+    "top": -4160,
+}
+
+PP_EXPORT_FILTERS: dict[str, str] = {
+    ".png": "PNG",
+    ".jpg": "JPG",
+    ".jpeg": "JPG",
+    ".gif": "GIF",
+    ".bmp": "BMP",
+    ".wmf": "WMF",
+    ".emf": "EMF",
+}
+
+MSO_ZORDER: dict[str, int] = {
+    "front": 0,
+    "bring_to_front": 0,
+    "back": 1,
+    "send_to_back": 1,
+    "forward": 2,
+    "bring_forward": 2,
+    "backward": 3,
+    "send_backward": 3,
+}
+
+MSO_ANIM_EFFECTS: dict[str, int] = {
+    "appear": 1,
+    "fly": 2,
+    "blinds": 3,
+    "box": 4,
+    "checkerboard": 5,
+    "circle": 6,
+    "crawl": 7,
+    "diamond": 8,
+    "dissolve": 9,
+    "fade": 10,
+    "flash_once": 11,
+    "peek": 12,
+    "plus": 13,
+    "random_bars": 14,
+    "spiral": 15,
+    "split": 16,
+    "stretch": 17,
+    "strips": 18,
+    "swivel": 19,
+    "wedge": 20,
+    "wheel": 21,
+    "wipe": 22,
+    "zoom": 23,
+    "random": 24,
+    "boomerang": 25,
+    "bounce": 26,
+    "color_reveal": 27,
+    "credits": 28,
+    "ease_in": 29,
+    "float": 30,
+    "grow_and_turn": 31,
+    "light_speed": 32,
+    "pinwheel": 33,
+    "rise_up": 34,
+    "swish": 35,
+    "thin_line": 36,
+    "unfold": 37,
+    "whip": 38,
+    "ascend": 39,
+    "center_revolve": 40,
+    "faded_swivel": 41,
+    "descend": 42,
+    "sling": 43,
+    "spinner": 44,
+    "stretchy": 45,
+    "zip": 46,
+    "arc_up": 47,
+    "faded_zoom": 48,
+    "glide": 49,
+    "expand": 50,
+    "flip": 51,
+    "shimmer": 52,
+    "fold": 53,
+    "change_fill_color": 54,
+    "change_font": 55,
+    "change_font_color": 56,
+    "change_font_size": 57,
+    "change_font_style": 58,
+    "grow_shrink": 59,
+    "change_line_color": 60,
+    "spin": 61,
+    "transparency": 62,
+    "bold_flash": 63,
+    "blast": 64,
+    "bold_reveal": 65,
+    "color_blend": 68,
+    "color_wave": 69,
+    "darken": 73,
+    "desaturate": 74,
+    "flash_bulb": 75,
+    "flicker": 76,
+    "grow_with_color": 77,
+    "lighten": 78,
+    "teeter": 80,
+    "vertical_grow": 81,
+    "wave": 82,
+    "path_circle": 86,
+    "path_diamond": 88,
+    "path_5_point_star": 90,
+    "path_square": 92,
+    "path_heart": 94,
+    "path_down": 127,
+    "path_left": 120,
+    "path_right": 149,
+    "path_up": 148,
+    "path_arc_up": 129,
+    "path_wave": 132,
+    "path_zigzag": 123,
+    "3d_arrive": 151,
+    "3d_turntable": 152,
+    "3d_swing": 153,
+    "3d_jump_and_turn": 154,
+}
+
+MSO_ANIM_TRIGGERS: dict[str, int] = {
+    "none": 0,
+    "on_click": 1,
+    "on_page_click": 1,
+    "with_previous": 2,
+    "after_previous": 3,
+    "on_shape_click": 4,
+}
+
+MSO_ANIM_LEVELS: dict[str, int] = {
+    "shape": 0,
+    "none": 0,
+    "by_paragraph": 1,
+    "all_levels": 1,
+    "first_level": 2,
+    "second_level": 3,
+    "third_level": 4,
+    "fourth_level": 5,
+    "fifth_level": 6,
+    "chart_all_at_once": 7,
+    "chart_by_category": 8,
+    "chart_by_category_elements": 9,
+    "chart_by_series": 10,
+    "chart_by_series_elements": 11,
+}
+
+WD_ALIGNMENTS: dict[str, int] = {
+    "left": 0,
+    "center": 1,
+    "centre": 1,
+    "right": 2,
+    "justify": 3,
+}
+
+WD_BUILTIN_STYLES: dict[str, int] = {
+    "normal": -1,
+    "heading 1": -2,
+    "heading 2": -3,
+    "heading 3": -4,
+    "heading 4": -5,
+    "heading 5": -6,
+    "heading 6": -7,
+    "heading 7": -8,
+    "heading 8": -9,
+    "heading 9": -10,
+    "title": -63,
+    "subtitle": -74,
+    "list bullet": -48,
+    "list number": -49,
+    "caption": -35,
+    "quote": -88,
+}
+
+XL_COMPARISON_OPERATORS: dict[str, int] = {
+    "between": 1,
+    "not_between": 2,
+    "equal": 3,
+    "not_equal": 4,
+    "greater": 5,
+    "less": 6,
+    "greater_equal": 7,
+    "less_equal": 8,
+}
+
+XL_VALIDATION_TYPES: dict[str, int] = {
+    "list": 3,
+    "whole_number": 1,
+    "integer": 1,
+    "decimal": 2,
+    "date": 4,
+    "time": 5,
+    "text_length": 6,
+    "custom": 7,
+}
+
+XL_VALIDATION_ALERTS: dict[str, int] = {
+    "stop": 1,
+    "warning": 2,
+    "information": 3,
+    "info": 3,
+}
+
+XL_SORT_ORDERS: dict[str, int] = {
+    "asc": 1,
+    "ascending": 1,
+    "desc": 2,
+    "descending": 2,
+}
+
+XL_PASTE_TYPES: dict[str, int] = {
+    "all": -4104,
+    "values": -4163,
+    "formats": -4122,
+}
+
+WD_TABLE_STYLES: dict[str, int] = {
+    "normal": -106,
+    "light_shading": -159,
+    "light_shading_accent1": -173,
+    "light_list": -160,
+    "light_list_accent1": -174,
+    "light_grid": -161,
+    "light_grid_accent1": -175,
+    "medium_shading1": -162,
+    "medium_shading1_accent1": -176,
+    "medium_shading2": -163,
+    "medium_shading2_accent1": -177,
+    "medium_list1": -164,
+    "medium_list1_accent1": -178,
+    "medium_list2": -165,
+    "medium_grid1": -166,
+    "medium_grid2": -167,
+    "medium_grid3": -168,
+    "dark_list": -169,
+    "colorful_shading": -170,
+    "colorful_list": -171,
+    "colorful_grid": -172,
+}
+
+WD_SECTION_BREAKS: dict[str, int] = {
+    "next_page": 2,
+    "continuous": 3,
+    "even_page": 4,
+    "odd_page": 5,
+}
+
+XL_SAVE_FORMATS: dict[str, int] = {
+    ".xlsx": 51,
+    ".xlsm": 52,
+    ".xlsb": 50,
+    ".xls": 56,
+    ".csv": 6,
+    ".pdf": 57,
+}
+
+PP_SAVE_FORMATS: dict[str, int] = {
+    ".pptx": 24,
+    ".pptm": 25,
+    ".ppt": 1,
+    ".pdf": 32,
+    ".potx": 27,
+}
+
+WD_SAVE_FORMATS: dict[str, int] = {
+    ".docx": 16,
+    ".docm": 13,
+    ".doc": 0,
+    ".pdf": 17,
+    ".txt": 2,
+    ".rtf": 6,
+}
+
+
+def parse_color(value: Any) -> int:
+    """Turns a human-written colour into the BGR number Office expects.
+
+    Accepts ``"#RRGGBB"``, ``"RRGGBB"``, a name (``"red"``, ``"navy"``),
+    an ``(r, g, b)`` tuple or list, and a plain RGB integer.
+    """
+    if value is None:
+        raise ValueError("Colour cannot be empty")
+
+    if isinstance(value, (tuple, list)):
+        if len(value) != 3:
+            raise ValueError("A colour tuple must have exactly 3 RGB components")
+        r, g, b = (int(component) for component in value)
+    elif isinstance(value, int):
+        r, g, b = (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF
+    elif isinstance(value, str):
+        text = value.strip().lower()
+        if text in NAMED_COLORS:
+            r, g, b = NAMED_COLORS[text]
+        else:
+            hex_text = text.lstrip("#")
+            if len(hex_text) == 3:
+                hex_text = "".join(ch * 2 for ch in hex_text)
+            if len(hex_text) != 6:
+                raise ValueError(f"Unknown colour: {value!r}")
+            try:
+                r, g, b = (int(hex_text[i : i + 2], 16) for i in (0, 2, 4))
+            except ValueError as exc:
+                raise ValueError(f"Unknown colour: {value!r}") from exc
+    else:
+        raise ValueError(f"Nieobslugiwany typ koloru: {type(value).__name__}")
+
+    for component in (r, g, b):
+        if not 0 <= component <= 255:
+            raise ValueError("Colour components must be within 0-255")
+
+    return (b << 16) | (g << 8) | r
+
+
+def bgr_to_hex(value: Any) -> str | None:
+    """Inverse of :func:`parse_color` - turns a BGR number into ``#RRGGBB``."""
+    if value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    b, g, r = (number >> 16) & 0xFF, (number >> 8) & 0xFF, number & 0xFF
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def points(value: Any, unit: str = "pt") -> float:
+    """Converts a value to points (the positioning unit in Office)."""
+    number = float(value)
+    unit = (unit or "pt").lower()
+    if unit in ("pt", "point", "points"):
+        return number
+    if unit in ("cm", "centimeter", "centimeters"):
+        return number * POINTS_PER_CM
+    if unit in ("mm", "millimeter", "millimeters"):
+        return number * POINTS_PER_CM / 10
+    if unit in ("in", "inch", "inches"):
+        return number * POINTS_PER_INCH
+    if unit in ("emu",):
+        return number / EMU_PER_POINT
+    raise ValueError(f"Unknown unit: {unit}")
+
+
+def points_to_emu(value: float) -> int:
+    return int(round(float(value) * EMU_PER_POINT))
+
+
+def emu_to_points(value: float) -> float:
+    return float(value) / EMU_PER_POINT
+
+
+def to_python(value: Any) -> Any:
+    """Reduces a COM value to a type that can be serialised to JSON."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return round(value, 6) if value % 1 else value
+
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
+        return value.isoformat()
+
+    if isinstance(value, (tuple, list)):
+        return [to_python(item) for item in value]
+
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:  # noqa: BLE001
+            return str(value)
+
+    return str(value)
+
+
+def to_matrix(values: Any) -> list[list[Any]]:
+    """Normalises input into a rectangular 2D matrix (list of lists)."""
+    if values is None:
+        return []
+
+    if not isinstance(values, (list, tuple)):
+        return [[values]]
+
+    rows: list[list[Any]] = []
+    for row in values:
+        if isinstance(row, (list, tuple)):
+            rows.append(list(row))
+        else:
+            rows.append([row])
+
+    width = max((len(row) for row in rows), default=0)
+    for row in rows:
+        row.extend([None] * (width - len(row)))
+    return rows
+
+
+def from_com_matrix(value: Any) -> list[list[Any]]:
+    """Zamienia wynik ``Range.Value`` (skalar / krotka krotek) na liste list."""
+    if value is None:
+        return [[None]]
+    if not isinstance(value, (tuple, list)):
+        return [[to_python(value)]]
+    if value and not isinstance(value[0], (tuple, list)):
+        return [[to_python(item) for item in value]]
+    return [[to_python(cell) for cell in row] for row in value]
+
+
+def to_com_matrix(values: Sequence[Sequence[Any]]) -> tuple[tuple[Any, ...], ...]:
+    """Turns a Python matrix into a tuple of tuples - the form Excel accepts."""
+    return tuple(tuple(row) for row in to_matrix(values))
+
+
+def com_address(target: Any, absolute: bool = True) -> str:
+    """Range address ($A$1:$C$5) resilient to COM dispatch differences.
+
+    Depending on whether pywin32 knows the typelib of a given Excel instance,
+    ``Range.Address`` is either a method or already a string - in the worksheet
+    embedded in a PowerPoint chart it is the latter.
+    """
+    address = target.Address
+    if callable(address):
+        try:
+            return str(address(absolute, absolute))
+        except (TypeError, com_error):
+            return str(address())
+    return str(address)
+
+
+def normalize_path(path: str, must_exist: bool = False) -> str:
+    """Expands ``~`` and environment variables, returns an absolute Windows path."""
+    if not path or not isinstance(path, str):
+        raise ValueError("Path must be a non-empty string")
+    expanded = os.path.abspath(os.path.expandvars(os.path.expanduser(path.strip())))
+    if must_exist and not os.path.isfile(expanded):
+        raise FileNotFoundError(expanded)
+    return expanded
+
+
+def save_format_for(path: str, formats: dict[str, int], default: int) -> int:
+    """Picks the Office save-format constant from the file extension."""
+    extension = os.path.splitext(path)[1].lower()
+    return formats.get(extension, default)
+
+
+def lookup_constant(
+    name: Any,
+    mapping: dict[str, int],
+    label: str,
+) -> int:
+    """Translates a friendly name (``"bar"``, ``"blank"``) into an Office constant."""
+    if isinstance(name, bool):
+        raise ValueError(f"Invalid value for {label}: {name!r}")
+    if isinstance(name, int):
+        return name
+    if not isinstance(name, str):
+        raise ValueError(f"Invalid value for {label}: {name!r}")
+
+    key = name.strip().lower().replace("-", "_").replace(" ", "_")
+    if key in mapping:
+        return mapping[key]
+
+    available = ", ".join(sorted(mapping))
+    raise ValueError(f"Unknown {label}: {name!r}. Available: {available}")
+
+
+XL_CATEGORY_AXIS = 1
+XL_VALUE_AXIS = 2
+
+
+def apply_chart_format(
+    chart: Any,
+    series_colors: Any = None,
+    text_color: Any = None,
+    background: Any = None,
+    legend: Any = None,
+    data_labels: bool | None = None,
+    gridlines: bool | None = None,
+    title: str | None = None,
+    value_axis_min: float | None = None,
+    value_axis_max: float | None = None,
+) -> dict[str, Any]:
+    """Formats a chart - shared by PowerPoint and Excel.
+
+    The chart object model is the same in both apps (it comes from Excel), so
+    the logic lives here and controllers only supply the ``Chart`` object.
+    """
+    applied: dict[str, Any] = {}
+    series_count = int(chart.SeriesCollection().Count)
+
+    if series_colors:
+        for position, color in enumerate(series_colors, start=1):
+            if position > series_count:
+                break
+            series = chart.SeriesCollection(position)
+            rgb = parse_color(color)
+            # Bar and pie series take their colour from the fill, but line and
+            # scatter series from the outline - we set both, otherwise a line
+            # chart keeps the theme colour despite the call reporting success.
+            try:
+                series.Format.Fill.Visible = MSO_TRUE
+                series.Format.Fill.Solid()
+                series.Format.Fill.ForeColor.RGB = rgb
+            except com_error:
+                pass
+            try:
+                series.Format.Line.ForeColor.RGB = rgb
+            except com_error:
+                pass
+        applied["series_colored"] = min(len(series_colors), series_count)
+
+    if background is not None:
+        if str(background).strip().lower() == "none":
+            chart.ChartArea.Format.Fill.Visible = MSO_FALSE
+            chart.ChartArea.Format.Line.Visible = MSO_FALSE
+            try:
+                chart.PlotArea.Format.Fill.Visible = MSO_FALSE
+            except com_error:
+                pass
+        else:
+            chart.ChartArea.Format.Fill.Solid()
+            chart.ChartArea.Format.Fill.ForeColor.RGB = parse_color(background)
+        applied["background"] = str(background)
+
+    if title is not None:
+        chart.HasTitle = MSO_TRUE
+        chart.ChartTitle.Text = str(title)
+        applied["title"] = str(title)
+
+    if legend is not None:
+        if legend is False or str(legend).strip().lower() in ("none", "false"):
+            chart.HasLegend = MSO_FALSE
+            applied["legend"] = False
+        else:
+            chart.HasLegend = MSO_TRUE
+            if legend is not True:
+                chart.Legend.Position = lookup_constant(
+                    legend, XL_LEGEND_POSITIONS, "legend"
+                )
+            applied["legend"] = legend if legend is not True else "on"
+
+    if data_labels is not None:
+        for position in range(1, series_count + 1):
+            chart.SeriesCollection(position).HasDataLabels = (
+                MSO_TRUE if data_labels else MSO_FALSE
+            )
+        applied["data_labels"] = bool(data_labels)
+
+    if gridlines is not None:
+        try:
+            chart.Axes(XL_VALUE_AXIS).HasMajorGridlines = (
+                MSO_TRUE if gridlines else MSO_FALSE
+            )
+            applied["gridlines"] = bool(gridlines)
+        except com_error:
+            applied["gridlines"] = None
+
+    # Office picks the axis range automatically and, when values are close,
+    # can start it far from zero - a 522 vs 478 gap then looks like double.
+    # An explicit range is the only way to straighten that out.
+    if value_axis_min is not None or value_axis_max is not None:
+        try:
+            axis = chart.Axes(XL_VALUE_AXIS)
+            if value_axis_min is not None:
+                axis.MinimumScale = float(value_axis_min)
+                applied["value_axis_min"] = float(value_axis_min)
+            if value_axis_max is not None:
+                axis.MaximumScale = float(value_axis_max)
+                applied["value_axis_max"] = float(value_axis_max)
+        except com_error:
+            applied["value_axis"] = None
+
+    if text_color is not None:
+        rgb = parse_color(text_color)
+        setters = [
+            lambda: setattr(chart.Axes(XL_CATEGORY_AXIS).TickLabels.Font, "Color", rgb),
+            lambda: setattr(chart.Axes(XL_VALUE_AXIS).TickLabels.Font, "Color", rgb),
+            lambda: setattr(chart.Legend.Font, "Color", rgb),
+            lambda: setattr(chart.ChartTitle.Font, "Color", rgb),
+        ]
+        # Data labels have their own font - without this they keep the theme
+        # colour and stand out from the rest of the chart.
+        for position in range(1, series_count + 1):
+            setters.append(
+                lambda index=position: setattr(
+                    chart.SeriesCollection(index).DataLabels().Font, "Color", rgb
+                )
+            )
+        for setter in setters:
+            try:
+                setter()
+            except com_error:
+                pass
+        applied["text_color"] = bgr_to_hex(rgb)
+
+    return applied
+
+
+def constant_name(value: Any, mapping: dict[str, int]) -> str | None:
+    """Inverse of :func:`lookup_constant` - turns an Office number into a name.
+
+    Several names can point at the same constant (aliases in the maps), so the
+    first match in dictionary order wins.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    for name, constant in mapping.items():
+        if constant == number:
+            return name
+    return None
+
+
+def chunked(items: Iterable[Any], size: int) -> Iterable[list[Any]]:
+    """Dzieli iterowalne na porcje o zadanym rozmiarze."""
+    chunk: list[Any] = []
+    for item in items:
+        chunk.append(item)
+        if len(chunk) >= size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
+
+def column_letter(index: int) -> str:
+    """Turns a 1-based column number into an Excel column letter."""
+    if index < 1:
+        raise ValueError("Column number must be >= 1")
+    letters = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def column_index(letter: str) -> int:
+    """Turns an Excel column letter into a 1-based number."""
+    letters = str(letter).strip().upper()
+    if not letters.isalpha():
+        raise ValueError(f"Invalid column reference: {letter!r}")
+    result = 0
+    for char in letters:
+        result = result * 26 + (ord(char) - 64)
+    return result

@@ -22,6 +22,8 @@ temp/
 
 vendor/*
 !vendor/README.md
+!vendor/office-mcp/
+!vendor/office-mcp/**
 
 release/
 backend/generated/

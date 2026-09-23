@@ -28,6 +28,9 @@ function buildDocReaderMcp(): Record<string, unknown> {
         OPCODE_WEBUI_WORKSPACE: getWorkspacePath(),
         // doc-reader 상대경로 루트 = workspace/repos (채팅 멘션이 레포 기준이라 매핑 불필요)
         OPCODE_WEBUI_REPOS: getReposPath(),
+        // office-mcp fork Bridge (8766 — 8765는 legacy doc-converter와 충돌)
+        OFFICE_BRIDGE_HOST: '127.0.0.1',
+        OFFICE_BRIDGE_PORT: '8766',
       },
     },
   }
@@ -737,12 +740,32 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
     }
     const defaultCommand = (entry as Record<string, unknown>).command
     const existingCommand = Array.isArray(existing.command) ? existing.command : []
-    if (JSON.stringify(existingCommand) !== JSON.stringify(defaultCommand)) {
+    if (id === 'doc-reader') {
+      // office-mcp fork 이관: 구 doc_reader_mcp.py/구 exe면 명령 교체 + 부족한 env 보충.
       const joined = existingCommand.map(String).join(' ')
-      if (/doc_reader_mcp\.py/.test(joined)) {
-        mcp[id] = { ...existing, command: defaultCommand }
-        logger.info(`Repaired default MCP server entry: ${id}`)
+      const isOurs = /doc_reader_mcp\.py|doc-reader(\.exe)?|office-mcp|vendor/.test(joined) || existingCommand.length === 0
+      if (isOurs) {
+        let changed = false
+        const next: Record<string, unknown> = { ...existing }
+        if (JSON.stringify(existingCommand) !== JSON.stringify(defaultCommand)) {
+          next.command = defaultCommand
+          changed = true
+        }
+        const defaultEnv = ((entry as Record<string, unknown>).env ?? {}) as Record<string, string>
+        const env = { ...((existing.env as Record<string, string>) ?? {}) } as Record<string, string>
+        for (const [key, value] of Object.entries(defaultEnv)) {
+          if (!(key in env)) {
+            env[key] = value
+            changed = true
+          }
+        }
+        if (changed) {
+          next.env = env
+          mcp[id] = next
+          logger.info(`Repaired default MCP server entry: ${id}`)
+        }
       }
+      continue
     }
   }
   return { ...content, mcp } as T
@@ -879,7 +902,9 @@ export function killLingeringAgentBrowser(): void {
     '$processes = Get-CimInstance Win32_Process | Where-Object {',
     "  ($_.Name -eq 'agent-browser.exe') -or",
     "  ($_.ExecutablePath -like '*agent-browser*') -or",
-    "  ($_.CommandLine -like '*doc_reader_mcp.py*')",
+    "  ($_.CommandLine -like '*doc_reader_mcp.py*') -or",
+    "  ($_.CommandLine -like '*office-mcp*server.py') -or",
+    "  ($_.Name -eq 'office-mcp.exe')",
     '}',
     'foreach ($process in $processes) {',
     '  Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue',
@@ -922,7 +947,9 @@ export function releaseAgentBrowserForDirectory(_directory: string): void {
     '$processes = Get-CimInstance Win32_Process | Where-Object {',
     "  ($_.Name -eq 'agent-browser.exe') -or",
     "  ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*agent-browser*') -or",
-    "  ($_.CommandLine -like '*doc_reader_mcp.py*')",
+    "  ($_.CommandLine -like '*doc_reader_mcp.py*') -or",
+    "  ($_.CommandLine -like '*office-mcp*server.py') -or",
+    "  ($_.Name -eq 'office-mcp.exe')",
     '}',
     'foreach ($process in $processes) {',
     '  taskkill /PID $process.ProcessId /T /F | Out-Null',

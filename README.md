@@ -112,7 +112,7 @@ A full-stack web application for running [OpenCode](https://github.com/sst/openc
 - **File-Lock Requirement** - In-place editing needs the target file to not be open/locked in Office; a busy workbook returns a clear permission error until the owning app is closed
 
 ### MCP Document Tools
-- **`doc-reader` MCP server** (FastMCP/stdio) - Registers `read_document(path)` and `edit_document(path, operations)` so the assistant can read and modify DRM-protected Office/PDF files in chat
+- **`doc-reader` MCP server** (office-mcp fork in `vendor/office-mcp`, stdio) - 129 live Office tools (`ppt_*`/`xl_*`/`doc_*`) plus our `msg_*` (Outlook .msg + attachments), `embedded_*` (OLE objects in xlsx/pptx/docx) and `read_document(path)`/`edit_document(path, operations)` compat so the assistant can read and modify Office/PDF/MSG files in chat
 
 ### Remote Access
 - **Relative API Base** - The frontend resolves `VITE_API_URL` as an empty default so the client always talks to the web server origin it was loaded from, enabling access from other PCs on the network
@@ -298,8 +298,9 @@ dependencies with `pnpm`, copies the vendored **opencode** from `vendor/` into `
 
 #### (Optional) Register the Document MCP tools
 
-The `doc-reader` MCP server (`read_document` / `edit_document`) lets the
-assistant read and edit Office/PDF files (including DRM-protected ones) in
+The `doc-reader` MCP server (office-mcp fork: `ppt_*`/`xl_*`/`doc_*` live tools
+plus `msg_*`/`embedded_*` and `read_document` / `edit_document` compat) lets the
+assistant read and edit Office/PDF/MSG files (including DRM-protected ones) in
 chat. The backend registers the server automatically at startup: every time the
 server boots, `syncDefaultConfigToDisk()` merges it into the git-ignored
 workspace config (`workspace/.config/opencode/opencode.json`) if it is not
@@ -324,13 +325,15 @@ already there. To use these tools in chat:
    "mcp": {
      "doc-reader": {
        "type": "local",
-       "command": [
-         "python",
-         "D:\\path\\to\\opencode_web\\backend\\scripts\\doc_reader_mcp.py"
+      "command": [
+        "python",
+        "D:\\path\\to\\opencode_web\\vendor\\office-mcp\\server.py"
 ],
         "env": {
           "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5001",
-          "OPCODE_WEBUI_WORKSPACE": "D:\\path\\to\\opencode_web\\workspace"
+          "OPCODE_WEBUI_WORKSPACE": "D:\\path\\to\\opencode_web\\workspace",
+          "OFFICE_BRIDGE_HOST": "127.0.0.1",
+          "OFFICE_BRIDGE_PORT": "8766"
        }
      }
    }

@@ -50,7 +50,8 @@
   (doc-reader, agent-browser) are handled via
   `backend/src/services/default-mcp.ts` (`mergeDefaultMcpEntries`): missing
   entries are added, and existing entries are **repaired** — command (doc-reader
-  must point at `backend/scripts/doc_reader_mcp.py`, never a relative
+  must point at `vendor/office-mcp/server.py` (legacy `backend/scripts/doc_reader_mcp.py`
+  also accepted), never a relative
    `..\backend\...` path that breaks in per-repo sessions; agent-browser must
    point at the stock native `mcp` entry `[bin, 'mcp', '--namespace', 'opencode']`),
   env vars ( `AGENT_BROWSER_NAMESPACE=opencode` +

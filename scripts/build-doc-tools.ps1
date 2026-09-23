@@ -11,7 +11,22 @@ if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
 
 $common = @('--onefile', '--clean', '--noconfirm', "--distpath=$dist", "--workpath=$work", "--specpath=$work")
 
-Write-Output '[doc-tools] building doc-reader.exe'
+Write-Output '[doc-tools] building office-mcp.exe (doc-reader: office-mcp fork)'
+python -m PyInstaller @common `
+  --copy-metadata fastmcp `
+  --copy-metadata mcp `
+  --hidden-import extract_msg `
+  --hidden-import olefile `
+  --hidden-import docx `
+  --hidden-import openpyxl `
+  --hidden-import pptx `
+  --hidden-import pypdf `
+  --collect-submodules opencode_ext `
+  --name office-mcp `
+  (Join-Path $root 'vendor\office-mcp\server.py')
+if ($LASTEXITCODE -ne 0) { throw 'office-mcp build failed' }
+
+Write-Output '[doc-tools] building doc-reader.exe (legacy fallback)'
 python -m PyInstaller @common `
   --copy-metadata fastmcp `
   --copy-metadata mcp `
@@ -26,6 +41,7 @@ python -m PyInstaller @common `
   --hidden-import win32timezone `
   --hidden-import psutil `
   --hidden-import extract_msg `
+  --hidden-import olefile `
   --hidden-import docx `
   --name doc-converter `
   (Join-Path $root 'backend\scripts\doc_converter.py')

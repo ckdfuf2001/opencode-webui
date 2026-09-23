@@ -1,0 +1,11 @@
+mcp>=1.2.0
+pywin32>=306; sys_platform == "win32"
+pytest>=8.0.0
+# OPENCODE-FORK: our-only features (msg + embedded + compat read/edit)
+extract-msg
+olefile
+python-docx
+openpyxl
+python-pptx
+pypdf
+Pillow

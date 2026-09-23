@@ -26,18 +26,23 @@ const workspacePath = resolveWorkspacePath()
 const configDir = join(workspacePath, '.config', 'opencode')
 const configFile = join(configDir, 'opencode.json')
 
-const docReaderScript = join(root, 'backend', 'scripts', 'doc_reader_mcp.py')
+const docReaderScript = join(root, 'vendor', 'office-mcp', 'server.py')
+const docReaderLegacy = join(root, 'backend', 'scripts', 'doc_reader_mcp.py')
+const docReaderCommand = existsSync(docReaderScript) ? docReaderScript : docReaderLegacy
 const workspaceBackend = `http://127.0.0.1:${process.env.PORT || '5002'}`
 
 const defaultMcp = {
   'doc-reader': {
     type: 'local',
     enabled: true,
-    command: ['python', docReaderScript],
+    command: ['python', docReaderCommand],
     env: {
       OPCODE_WEBUI_BACKEND: workspaceBackend,
       OPCODE_WEBUI_WORKSPACE: workspacePath,
       OPCODE_WEBUI_REPOS: join(workspacePath, 'repos'),
+      // office-mcp fork Bridge (8766 — 8765는 legacy doc-converter와 충돌)
+      OFFICE_BRIDGE_HOST: '127.0.0.1',
+      OFFICE_BRIDGE_PORT: '8766',
     },
   },
 }

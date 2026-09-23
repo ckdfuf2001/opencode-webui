@@ -66,9 +66,12 @@ the user's `~/.config/opencode`.
 
 `backend/src/services/default-mcp.ts` owns the built-in MCP servers (v0.7.8+):
 
-- `doc-reader` — FastMCP/stdio Python server
-  (`backend/scripts/doc_reader_mcp.py` or portable `scripts/doc-reader.exe`)
-  with `OPCODE_WEBUI_BACKEND` / `OPCODE_WEBUI_WORKSPACE` env.
+- `doc-reader` — office-mcp fork (`vendor/office-mcp/server.py`, upstream
+  https://github.com/JulianPoleszczuk/office-mcp + our `msg_*`/`embedded_*` and
+  `read_document`/`edit_document`/`download_attachment` compat; Bridge port 8766,
+  or portable `scripts/office-mcp.exe`) with `OPCODE_WEBUI_BACKEND` /
+  `OPCODE_WEBUI_WORKSPACE` env. Legacy fallback `backend/scripts/doc_reader_mcp.py`
+  (`scripts/doc-reader.exe`) is kept until preview/converter fully migrate.
 - `playwright` — `npx --yes @playwright/mcp@latest --headless --isolated`
   (no daemon, `--isolated` gives per-call browser contexts, safe for concurrent
   sessions). First use auto-installs via npx cache.
@@ -90,8 +93,8 @@ Portable start/stop scripts (`scripts/start_opencode_webui_exe.*`,
 config entries exist and **repairs** them on every sync:
 
 1. `command` — replaced with the canonical absolute paths when they differ
-   (doc-reader must point at `scripts/doc-reader.exe` or
-   `backend/scripts/doc_reader_mcp.py`, never a relative `..\backend\...` path).
+   (doc-reader must point at `scripts/office-mcp.exe` or
+   `vendor/office-mcp/server.py`, never a relative `..\backend\...` path).
 2. `enabled: true` — forced on (except `playwright` user-disabled is respected).
 3. `env` — each default key/value is merged in when missing or stale
    (e.g. `NO_PROXY` loopback bypass for Playwright).

@@ -158,7 +158,7 @@ opencode는 **복수형 디렉터리**(`agents/`, `commands/`, `skills/`, `plugi
    `syncDefaultConfigToDisk()`가 DB의 기본 config를 이 파일로 다시 쓴다. MCP 기본값
    (doc-reader, agent-browser)은 `backend/src/services/default-mcp.ts`의
    `mergeDefaultMcpEntries()`가 **없으면 병합하고, 기존 항목도 canonical 절대경로 커맨드로
-   보수한다**(doc-reader는 반드시 `backend/scripts/doc_reader_mcp.py` 절대경로 — 상대경로
+   보수한다**(doc-reader는 반드시 `vendor/office-mcp/server.py` 절대경로 — 상대경로
    `..\backend\...`는 repo 세션에서 스크립트를 못 찾아 실패, agent-browser는
    `bin/agent-browser/.meta.json` 기준 이진 경로) + `enabled: true` 강제.
    따라서 MCP는 이 파일을 직접 수정하지 말고 앱 설정(또는 DB)으로 관리한다.

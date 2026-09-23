@@ -33,7 +33,7 @@ powershell -NoProfile -Command "$cwd = (Get-Location).Path; Get-CimInstance Win3
 
 REM 5) Kill opencode and doc tools spawned by this folder
 powershell -NoProfile -Command "$cwd = (Get-Location).Path; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'opencode.exe' -and $_.ExecutablePath -like ($cwd + '*') } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null; Write-Host ('[DEV STOP] killed opencode PID ' + $_.ProcessId) }"
-powershell -NoProfile -Command "$cwd = (Get-Location).Path; Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'doc-converter.exe' -or $_.Name -eq 'doc-reader.exe') -and $_.ExecutablePath -like ($cwd + '*') } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null }"
+powershell -NoProfile -Command "$cwd = (Get-Location).Path; Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'doc-converter.exe' -or $_.Name -eq 'doc-reader.exe' -or $_.Name -eq 'office-mcp.exe') -and $_.ExecutablePath -like ($cwd + '*') } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null }"
 
 REM 6) Kill vite's esbuild child if any
 taskkill /IM esbuild.exe /T /F >nul 2>&1
