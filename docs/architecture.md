@@ -72,7 +72,9 @@ the user's `~/.config/opencode`.
   `read_document`/`edit_document`/`download_attachment` compat; Bridge port 8766,
   or portable `scripts/office-mcp.exe`) with `OPCODE_WEBUI_BACKEND` /
   `OPCODE_WEBUI_WORKSPACE` / `OPCODE_WEBUI_ROOT` (설치 루트, 번들 tesseract 탐색 기준)
-  env. `scripts/doc-reader.exe`는 빌드에서 제거됨 —
+  env. 수동 실행은 `office-mcp gen-env [dir]` / `doc-converter gen-env [dir]`로
+  `.env` 생성 (경로 생략 시 실행한 곳, 기존 값 유지) — 시작 시 cwd→exe 순으로 자동로드.
+  `scripts/doc-reader.exe`는 빌드에서 제거됨 —
   구 폴백이 필요하면 `python backend/scripts/doc_reader_mcp.py`로 동작한다.
   (`doc-converter.exe`는 프리뷰 변환용 별개 바이너리로 유지.)
 - `playwright` — `npx --yes @playwright/mcp@latest --headless --isolated`
