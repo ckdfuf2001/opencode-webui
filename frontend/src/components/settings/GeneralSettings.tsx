@@ -145,7 +145,7 @@ export function GeneralSettings() {
           </div>
           <Switch
             id="sseStreaming"
-            checked={preferences?.sseStreaming ?? true}
+            checked={preferences?.sseStreaming ?? false}
             onCheckedChange={(checked) => updateSettings({ sseStreaming: checked })}
           />
         </div>

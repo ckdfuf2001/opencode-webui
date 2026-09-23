@@ -155,7 +155,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   // SSE off 모드: 폴링으로 완료됐을 때만 보여준다. 생성 중 partial은 숨기고
   // Generating 플레이스홀더만 그린다 (뒤에서 실시간 병합이 도는 느낌 제거).
   const { preferences } = useSettings()
-  const sseOn = preferences?.sseStreaming ?? true
+  const sseOn = preferences?.sseStreaming ?? false
   // bash 감시자: opencode가 timeout에 kill하지 못하고 running이 고착되면
   // 중단 확인 토스트만 띄운다 (자동 abort 금지 — 되돌릴 수 없는 동작이라 사용자 판단에 맡긴다).
   // (opencode 기본 2분·최대 10분 강제 + grace 60초. 정상 종료분은 status가 바뀌어 스킵된다.)

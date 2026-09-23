@@ -23,8 +23,9 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank } from "@/hooks/useOpenCode";
 import { useQueuedChats } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
-import { useOpencodeHealth } from "@/hooks/useOpencodeHealth";
+import { useBackendConnection } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
 import { shouldPlaySound, shouldPush, sendPushNotification } from "@/lib/notifications";
@@ -676,10 +677,14 @@ export function SessionDetail() {
     data: dbStatuses,
     isError: statusError,
     isFetching: statusFetching,
+    failureCount: statusFails,
   } = useSessionStatusMap();
-  const { data: opencodeHealthy, isError: healthError, isFetching: healthFetching } = useOpencodeHealth();
-  const isConnected = !healthError && !!opencodeHealthy && !statusError && !!dbStatuses;
-  const isReconnecting = (healthError && healthFetching) || (statusError && statusFetching) || (!opencodeHealthy && !healthError);
+  const { connected: isConnected, reconnecting: isReconnecting } = useBackendConnection({
+    data: dbStatuses,
+    isError: statusError,
+    isFetching: statusFetching,
+    failureCount: statusFails,
+  });
   const dbBusy = !!sessionId && dbStatuses?.some((s) => s.sessionId === sessionId && s.status === "busy") === true;
   // 세션 리스트 배지와 동일한 기준: 이 세션 또는 하위 세션이 busy 면 Working.
   const descendantBusy = !!sessionId && dbStatuses?.some(
@@ -697,7 +702,7 @@ export function SessionDetail() {
   const isStreaming = isConnected && !recentlyAborted && ((!!lastMessage && isMessageStreaming(lastMessage)) || dbBusy || descendantBusy || (sessionId ? hasActiveSend(sessionId) : false));
   // SSE off면 폴링만으로 갱신 (reasoning·응답 실시간 스트리밍 없음).
   // 끄는 순간 진행 중 per-send 스트림까지 kill-switch로 닫는다.
-  const sseOn = preferences?.sseStreaming ?? true
+  const sseOn = preferences?.sseStreaming ?? false
   useEffect(() => {
     if (!sseOn) closeAllSessionSSE()
   }, [sseOn])
@@ -1674,6 +1679,7 @@ if (results.length > 0) {
               />
             </div>
             {opcodeUrl && repoDirectory && (
+              <ErrorBoundary label="MessageThread">
               <MessageThread 
                 opcodeUrl={opcodeUrl} 
                 sessionID={sessionId} 
@@ -1692,6 +1698,7 @@ if (results.length > 0) {
                 invocations={invocationByMessage}
                 onOpenCommandHistory={() => setCommandsOpen(true)}
               />
+              </ErrorBoundary>
             )}
             {currentQuestion && (
               <div className="mt-2">
