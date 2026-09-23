@@ -139,6 +139,34 @@ function resolveAgentBrowser(): AgentBrowserInfo | null {
   }
 }
 
+/**
+ * 번들 chromium 경로 (bin/agent-browser/.meta.json → executable).
+ * agent-browser 데몬과 무관하게 playwright MCP가 직접 쓴다.
+ * 없으면 '' — 이 경우 시스템 Chrome 탐색(기존 동작)으로 폴백한다.
+ */
+export function resolveBundledChromium(): string {
+  try {
+    const metaFile = path.join(process.cwd(), 'bin', 'agent-browser', '.meta.json')
+    if (!existsSync(metaFile)) return ''
+    const meta = JSON.parse(readFileSync(metaFile, 'utf8')) as { executable?: string }
+    const exe = meta.executable ? path.join(process.cwd(), meta.executable) : ''
+    return exe && existsSync(exe) ? exe : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Playwright MCP 실행 명령. 번들 chromium이 있으면 --executable-path로
+ * 고정한다 (시스템 Chrome 미설치 머신에서 initializeServer 실패 방지).
+ * 없으면 기존대로 시스템 탐색에 맡긴다.
+ */
+export function buildPlaywrightCommand(executablePath: string): string[] {
+  const command = ['npx', '--yes', '@playwright/mcp@latest', '--headless', '--isolated']
+  if (executablePath) command.push('--executable-path', executablePath)
+  return command
+}
+
 function buildAgentBrowserMcp(
   _namespace: string = AGENT_BROWSER_NAMESPACE,
 ): Record<string, unknown> {
@@ -152,7 +180,7 @@ function buildAgentBrowserMcp(
     playwright: {
       type: 'local',
       enabled: true,
-      command: ['npx', '--yes', '@playwright/mcp@latest', '--headless', '--isolated'],
+      command: buildPlaywrightCommand(resolveBundledChromium()),
       env,
     },
   }
@@ -740,8 +768,7 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
     }
     const defaultCommand = (entry as Record<string, unknown>).command
     const existingCommand = Array.isArray(existing.command) ? existing.command : []
-    if (id === 'doc-reader') {
-      // office-mcp fork 이관: 구 doc_reader_mcp.py/구 exe면 명령 교체 + 부족한 env 보충.
+    if (id === 'doc-reader') {      // office-mcp fork 이관: 구 doc_reader_mcp.py/구 exe면 명령 교체 + 부족한 env 보충.
       const joined = existingCommand.map(String).join(' ')
       const isOurs = /doc_reader_mcp\.py|doc-reader(\.exe)?|office-mcp|vendor/.test(joined) || existingCommand.length === 0
       if (isOurs) {
@@ -762,6 +789,18 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
         if (changed) {
           next.env = env
           mcp[id] = next
+          logger.info(`Repaired default MCP server entry: ${id}`)
+        }
+      }
+      continue
+    }
+    if (id === 'playwright') {
+      // 우리 모양(npx @playwright/mcp)이면 명령을 최신으로 고친다.
+      // 번들 chromium 고정 등이 없으면 여기서 붙는다. enabled 등 다른 키는 유지.
+      const joined = existingCommand.map(String).join(' ')
+      if (/playwright\/mcp/.test(joined)) {
+        if (JSON.stringify(existingCommand) !== JSON.stringify(defaultCommand)) {
+          mcp[id] = { ...existing, command: defaultCommand }
           logger.info(`Repaired default MCP server entry: ${id}`)
         }
       }
