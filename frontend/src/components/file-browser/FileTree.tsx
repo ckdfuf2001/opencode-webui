@@ -274,16 +274,16 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
+            <DropdownMenuItem onClick={handleRename}>
+              <PenLine className="w-4 h-4 mr-2" />
+              Rename
+            </DropdownMenuItem>
             {!file.isDirectory && onMentionFile && (
               <DropdownMenuItem onClick={() => onMentionFile(file)}>
                 <AtSign className="w-4 h-4 mr-2" />
                 Mention on chat
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onClick={handleRename}>
-              <PenLine className="w-4 h-4 mr-2" />
-              Rename
-            </DropdownMenuItem>
             {!file.isDirectory && isBrowserViewable(file.name) && (
               <DropdownMenuItem onClick={() => openHtmlInNewTab(file.path, file.name)}>
                 <Globe className="w-4 h-4 mr-2" />
