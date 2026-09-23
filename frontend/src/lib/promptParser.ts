@@ -1,5 +1,5 @@
 import type { ContentPart, FileInfo } from '@/api/types'
-import { normSlash } from '@opencode-webui/shared'
+import { normSlash } from '@opencode-webui/shared/lib/repoPath'
 
 export const MENTION_PATTERN = /@(?:"([^"]*)"|'([^']*)'|(\S+))/g
 export const MENTION_TRIGGER_PATTERN = /(^|\s)@"([^"]*)$/

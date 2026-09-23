@@ -9,7 +9,7 @@ import { ToolCallPart, CappedOutput } from './ToolCallPart'
 import { useTTS } from '@/hooks/useTTS'
 import { useSettings } from '@/hooks/useSettings'
 import { getFileStat } from '@/api/files'
-import { toWsPath, toDisplayPath } from '@opencode-webui/shared'
+import { toWsPath, toDisplayPath } from '@opencode-webui/shared/lib/repoPath'
 import { copyTextToClipboard } from '@/lib/clipboard'
 
 type Part = components['schemas']['Part']

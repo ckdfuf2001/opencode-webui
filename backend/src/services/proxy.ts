@@ -877,24 +877,26 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     if (!isLongRunning || !response.body) {
       releaseBusy()
-      // S1: 세션 생성 시 소속 레포를 1회 기록 (directory가 아직 레포별인 시점 값).
-      // 응답은 그대로 돌려주고 매핑은 백그라운드로 (실패해도 무시).
+      // S1: 세션 생성 시 소속 레포를 1회 기록한다 (자연 directory 그대로, 강제 없음).
+      // 응답 전에 확정한다 — 생성 직후 목록 조회가 바로 붙게.
+      // 로컬 sqlite 1회라 지연은 무시 수준이다.
       if (method === 'POST' && cleanEventPath === '/session' && response.ok && proxyDb) {
         try {
-          const clone = response.clone()
           const dirRaw = query['directory']
           let dir: string | undefined
           try { dir = dirRaw ? decodeURIComponent(dirRaw) : undefined } catch { dir = dirRaw }
-          void clone.json()
-            .then(async (created: unknown) => {
-              const sid = (created as { id?: string } | null)?.id
-              if (!sid || !dir || !proxyDb) return
-              const { resolveRepoId } = await import('./command-runs')
-              const { setSessionRepoIfAbsent } = await import('../db/session-repo-queries')
-              const repoId = resolveRepoId(proxyDb, dir)
-              if (repoId != null) setSessionRepoIfAbsent(proxyDb, sid, repoId)
-            })
-            .catch(() => {})
+          if (dir) {
+            const created = (await response.clone().json().catch(() => null)) as { id?: string } | null
+            const sid = created?.id
+            if (sid) {
+              try {
+                const { resolveRepoId } = await import('./command-runs')
+                const { setSessionRepoIfAbsent } = await import('../db/session-repo-queries')
+                const repoId = resolveRepoId(proxyDb, dir)
+                if (repoId != null) setSessionRepoIfAbsent(proxyDb, sid, repoId)
+              } catch {}
+            }
+          }
         } catch {}
       }
       try {

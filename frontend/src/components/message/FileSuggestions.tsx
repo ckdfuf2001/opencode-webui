@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { FileHit } from '@/hooks/useFileSearch'
-import { getDirectory, getFilename } from '@opencode-webui/shared'
+import { getDirectory, getFilename } from '@opencode-webui/shared/lib/repoPath'
 
 interface FileSuggestionsProps {
   isOpen: boolean

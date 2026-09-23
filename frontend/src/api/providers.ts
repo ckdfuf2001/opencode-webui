@@ -115,6 +115,48 @@ export function formatModelName(model: Model): string {
   return model.name || model.id;
 }
 
+// 제공자 목록 캐시 (5분). 존재 확인용으로만 쓴다.
+let providersCache: { at: number; list: ProviderWithModels[] } | null = null;
+const PROVIDERS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getCachedProviders(): Promise<ProviderWithModels[] | null> {
+  if (providersCache && Date.now() - providersCache.at < PROVIDERS_CACHE_TTL_MS) {
+    return providersCache.list;
+  }
+  try {
+    const list = await getProvidersWithModels();
+    providersCache = { at: Date.now(), list };
+    return list;
+  } catch {
+    return providersCache?.list ?? null;
+  }
+}
+
+export function modelExistsIn(list: ProviderWithModels[], modelKey: string): boolean {
+  const slash = modelKey.indexOf('/');
+  if (slash <= 0) return false;
+  const provider = list.find((p) => p.id === modelKey.slice(0, slash));
+  if (!provider) return false;
+  return provider.models.some((m) => m.id === modelKey.slice(slash + 1));
+}
+
+/**
+ * 후보 중 실제 제공되는 첫 모델을 고른다. 제공 중지된 기본값·세션값이
+ * 전송을 망가뜨리는 것을 막는다. 목록을 모르면(fail-open) 첫 후보 그대로.
+ */
+export async function resolveUsableModel(candidates: (string | null | undefined)[]): Promise<{ model: string; skipped: string[] }> {
+  const keys = candidates.filter((c): c is string => !!c && c.includes('/'));
+  if (keys.length === 0) return { model: '', skipped: [] };
+  const list = await getCachedProviders();
+  if (!list || list.length === 0) return { model: keys[0]!, skipped: [] };
+  const skipped: string[] = [];
+  for (const k of keys) {
+    if (modelExistsIn(list, k)) return { model: k, skipped };
+    skipped.push(k);
+  }
+  return { model: '', skipped };
+}
+
 export function formatProviderName(
   provider: Provider | ProviderWithModels,
 ): string {

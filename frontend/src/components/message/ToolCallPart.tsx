@@ -51,7 +51,7 @@ export function CappedOutput({ text, red }: { text: string; red?: boolean }) {  
         {expanded ? text : text.slice(0, OUTPUT_RENDER_LIMIT)}
       </pre>
       <button
-        onClick={() => setExpanded((v) => !v)}
+        onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
         className="mt-1 text-[11px] text-blue-400 hover:text-blue-300 cursor-pointer"
       >
         {expanded ? 'Collapse' : `Show full output (${text.length.toLocaleString()} chars)`}

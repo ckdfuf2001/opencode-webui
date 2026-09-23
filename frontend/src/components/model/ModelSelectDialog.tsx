@@ -15,6 +15,7 @@ import {
   formatProviderName,
 } from "@/api/providers";
 import { useSettings } from "@/hooks/useSettings";
+import { getSessionModelOverride, setSessionModelOverride } from "@/lib/sessionModelOverride";
 import { useOpenCodeClient, useSession } from "@/hooks/useOpenCode";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
@@ -56,10 +57,13 @@ export function ModelSelectDialog({
     const m = (sessionData as unknown as { model?: { providerID: string; id: string } })?.model;
     return m?.providerID && m?.id ? `${m.providerID}/${m.id}` : null;
   })();
+  // 세션 오버라이드(직접 선택)가 서버값보다 우선 — 서버 session.model은
+  // 제공 중지된 옛값일 수 있고 opencode에 변경 API가 없다.
+  const sessionOverride = sessionId ? getSessionModelOverride(sessionId) : null;
   const currentModel = forDefault
     ? preferences?.defaultModel || ""
     : sessionId
-      ? sessionModelKey || preferences?.defaultModel || ""
+      ? sessionOverride || sessionModelKey || preferences?.defaultModel || ""
       : preferences?.defaultModel || "";
 
   const loadProviders = useCallback(async () => {
@@ -165,8 +169,7 @@ export function ModelSelectDialog({
       const sessionsKey = ["opencode", "sessions", opcodeUrl, directory] as const;
       // 낙천 업데이트: 현재 모델이 존재하지 않는(지원 중단된) 모델이어도
       // 클릭 즉시 컴포저 라벨이 바뀌게 한다. 실패하면 되돌리고 사유를 표시한다.
-      const previous = queryClient.getQueryData(sessionKey);
-      const previousSessions = queryClient.getQueryData(sessionsKey);
+      setSessionModelOverride(sessionId, newModel);
       queryClient.setQueryData(sessionKey, (old: unknown) => {
         if (!old || typeof old !== "object") return old;
         return { ...(old as Record<string, unknown>), model: { providerID: providerId, id: modelId } };
@@ -178,42 +181,22 @@ export function ModelSelectDialog({
           (s as { id?: string }).id === sessionId ? { ...s, model: { providerID: providerId, id: modelId } } : s
         );
       });
+      // opencode에 세션 모델 변경 API가 없다 (POST /session/:id/model은
+      // 스펙에 없고 HTML 200만 돌려줘서 persist가 안 된다 — 전환 후
+      // refetch 때 옛 모델로 되돌아가던 원인). 서버 호출 없이 낙관 캐시+
+      // 오버라이드+큐 동기화만 한다. 전송마다 모델을 명시하므로 실동작은 보장된다.
+      // 큐에 enqueue 시점에 박아둔 모델이 있으면 새 모델로 동기화한다.
+      // (안 하면 세션을 바꿔도 대기열이 실패했던 옛 모델로 발송된다.)
+      // sending 항목은 서버에서 제외한다 — 이미 발송된 슬롯이라 회수 불가.
+      // 큐 동기화 실패가 세션 전환까지 되돌리면 안 되므로 경고만 남긴다.
       try {
-        await client.switchModel(sessionId, {
-          id: modelId,
-          providerID: providerId,
-        });
-        // NOTE: 아래 invalidate를 해제하지 말 것 — opencode 서버 반영 전 refetch가
-        // 들어오면 낙관 업데이트가 옛 모델로 되돌아가 라벨이 깜빡인다/틀어진다.
-        // 낙관 캐시를 정본으로 유지하고, 큐 스냅샷만 별도 동기화한다.
-        //queryClient.invalidateQueries({
-        //  queryKey: sessionKey,
-        //});
-        //queryClient.invalidateQueries({
-        //  queryKey: sessionsKey,
-        //});
-        // 큐에 enqueue 시점에 박아둔 모델이 있으면 새 모델로 동기화한다.
-        // (안 하면 세션을 바꿔도 대기열이 실패했던 옛 모델로 발송된다.)
-        // sending 항목은 서버에서 제외한다 — 이미 발송된 슬롯이라 회수 불가.
-        // 큐 동기화 실패가 세션 전환까지 되돌리면 안 되므로 경고만 남긴다.
-        try {
-          const updated = await updateQueuedChatsModel(sessionId, { providerID: providerId, modelID: modelId });
-          queryClient.setQueryData(chatQueueKeys.session(sessionId), updated);
-        } catch (e) {
-          showToast.warning(
-            `Session model switched, but queued messages may still use the previous model: ${e instanceof Error ? e.message : "unknown error"}`,
-            { duration: 6000 },
-          );
-        }
-      } catch (error) {
-        if (previous !== undefined) queryClient.setQueryData(sessionKey, previous);
-        if (previousSessions !== undefined) queryClient.setQueryData(sessionsKey, previousSessions);
-        showToast.error(
-          `Session model not switched (default saved): ${error instanceof Error ? error.message : "unknown error"}`,
+        const updated = await updateQueuedChatsModel(sessionId, { providerID: providerId, modelID: modelId });
+        queryClient.setQueryData(chatQueueKeys.session(sessionId), updated);
+      } catch (e) {
+        showToast.warning(
+          `Session model switched, but queued messages may still use the previous model: ${e instanceof Error ? e.message : "unknown error"}`,
           { duration: 6000 },
         );
-        onOpenChange(false);
-        return;
       }
     }
 

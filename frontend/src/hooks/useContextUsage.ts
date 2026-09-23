@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import { useMessages, RECENT_MESSAGE_LIMIT } from './useOpenCode'
 import { useSettings } from './useSettings'
+import { getSessionModelOverride } from '@/lib/sessionModelOverride'
 import { useQuery } from '@tanstack/react-query'
 import type { components } from '@/api/opencode-types'
 
@@ -156,8 +157,9 @@ export const useContextUsage = (opcodeUrl: string | null | undefined, sessionID:
   })
 
   return useMemo(() => {
-    // Get current model from preferences immediately
-    let currentModel = preferences?.defaultModel || null
+    // 세션 오버라이드(직접 선택) > webui 기본값 순. 서버 session.model은
+    // 제공 중지된 옛값일 수 있다.
+    let currentModel = getSessionModelOverride(sessionID) || preferences?.defaultModel || null
 
     if (!messages || messages.length === 0) {
       // Still try to get context limit from preferences model even without messages

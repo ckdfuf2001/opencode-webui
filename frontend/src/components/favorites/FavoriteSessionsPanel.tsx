@@ -13,7 +13,7 @@ import { shouldPush, sendPushNotification, getSessionOverride } from '@/lib/noti
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import { listRepos } from '@/api/repos'
-import { toWsPath } from '@opencode-webui/shared'
+import { toWsPath } from '@opencode-webui/shared/lib/repoPath'
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
 
 export function FavoriteSessionsPanel() {
