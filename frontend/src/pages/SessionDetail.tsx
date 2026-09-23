@@ -42,7 +42,7 @@ import { useCommandRunsBySession } from "@/hooks/useCommandRuns";
 import { showToast } from "@/lib/toast";
 import { uploadFileWithProgress, isUploadInFlight, DuplicateUploadError } from "@/api/files";
 import { UntrackedSuggestionBanner } from "@/components/UntrackedSuggestionBanner";
-import { toWsPath, reposDirOf } from "@opencode-webui/shared";
+import { toWsPath, reposDirOf } from "@opencode-webui/shared/lib/repoPath";
 
 interface InjectedFile {
   token: number;
