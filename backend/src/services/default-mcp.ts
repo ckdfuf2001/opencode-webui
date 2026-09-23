@@ -26,6 +26,10 @@ function buildDocReaderMcp(): Record<string, unknown> {
       env: {
         OPCODE_WEBUI_BACKEND: workspaceBackend,
         OPCODE_WEBUI_WORKSPACE: getWorkspacePath(),
+        // 설치 루트 (bin/ 보유 dir). office-mcp가 번들 tesseract를 찾는 기준.
+        // opencode는 MCP entry env를 자식에게 전달하므로 frozen-exe 위치 추측보다
+        // 이 값이 우선이다. merge 시 부족분 보충으로 기존 설치에도 전파된다.
+        OPCODE_WEBUI_ROOT: process.cwd(),
         // doc-reader 상대경로 루트 = workspace/repos (채팅 멘션이 레포 기준이라 매핑 불필요)
         OPCODE_WEBUI_REPOS: getReposPath(),
         // office-mcp fork Bridge (8766 — 8765는 legacy doc-converter와 충돌)

@@ -10,6 +10,7 @@
       "env": {
         "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5001",
         "OPCODE_WEBUI_WORKSPACE": "REPLACE_WITH_CLONE_DIR\\workspace",
+        "OPCODE_WEBUI_ROOT": "REPLACE_WITH_CLONE_DIR",
         "OPCODE_WEBUI_REPOS": "REPLACE_WITH_CLONE_DIR\\workspace\\repos",
         "OFFICE_BRIDGE_HOST": "127.0.0.1",
         "OFFICE_BRIDGE_PORT": "8766"

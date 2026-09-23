@@ -58,6 +58,22 @@ def test_read_image_text_shape(tmp_path) -> None:
     assert payload["boxes"] and payload["text"]
 
 
+def test_env_root_takes_priority(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "approot"
+    exe = root / "bin" / "tesseract" / "tesseract.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"fake")
+    (root / "bin" / "tesseract" / "tessdata").mkdir(parents=True)
+    monkeypatch.setenv("OPCODE_WEBUI_ROOT", str(root))
+    assert imgmod._env_roots() == [os.path.abspath(str(root))]
+    assert imgmod.resolve_bundled_tesseract() == os.path.abspath(str(exe))
+
+
+def test_invalid_env_root_ignored(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OPCODE_WEBUI_ROOT", str(tmp_path / "nope"))
+    assert imgmod._env_roots() == []
+
+
 def test_compat_image_branch(tmp_path) -> None:
     from opencode_ext import compat
 

@@ -237,11 +237,23 @@ def _frozen_roots():
     return [os.path.abspath(os.path.join(exe_dir, ".."))]
 
 
+def _env_roots():
+    """명시 루트 (OPCODE_WEBUI_ROOT). 백엔드가 doc-converter 스폰 env로 내려준다."""
+    root = (os.environ.get("OPCODE_WEBUI_ROOT") or "").strip().strip("\"'")
+    if not root:
+        return []
+    ap = os.path.abspath(root)
+    return [ap] if os.path.isdir(ap) else []
+
+
 def _resolve_bundled_tesseract():
     """bin/tesseract/tesseract.exe 가 있으면 우선 사용 (pull 후 바로 동작)."""
-    candidates = [
+    candidates = []
+    for root in _env_roots():
+        candidates.append(os.path.join(root, "bin", "tesseract", "tesseract.exe"))
+    candidates.append(
         os.path.join(os.path.dirname(__file__), "..", "..", "bin", "tesseract", "tesseract.exe"),
-    ]
+    )
     for root in _frozen_roots():
         candidates.append(os.path.join(root, "bin", "tesseract", "tesseract.exe"))
     candidates += [
@@ -274,9 +286,12 @@ def _extract_image_text_with_boxes(source_path):
         bundled_tessdata = os.path.join(os.path.dirname(bundled), "tessdata")
     else:
         # PATH tesseract라도 번들 tessdata가 있으면 한글을 위해 그걸 쓰자
-        tessdata_candidates = [
+        tessdata_candidates = []
+        for root in _env_roots():
+            tessdata_candidates.append(os.path.join(root, "bin", "tesseract", "tessdata"))
+        tessdata_candidates.append(
             os.path.join(os.path.dirname(__file__), "..", "..", "bin", "tesseract", "tessdata"),
-        ]
+        )
         for root in _frozen_roots():
             tessdata_candidates.append(os.path.join(root, "bin", "tesseract", "tessdata"))
         tessdata_candidates.append(os.path.join(os.getcwd(), "bin", "tesseract", "tessdata"))

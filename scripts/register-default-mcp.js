@@ -39,6 +39,7 @@ const defaultMcp = {
     env: {
       OPCODE_WEBUI_BACKEND: workspaceBackend,
       OPCODE_WEBUI_WORKSPACE: workspacePath,
+      OPCODE_WEBUI_ROOT: root,
       OPCODE_WEBUI_REPOS: join(workspacePath, 'repos'),
       // office-mcp fork Bridge (8766 — 8765는 legacy doc-converter와 충돌)
       OFFICE_BRIDGE_HOST: '127.0.0.1',

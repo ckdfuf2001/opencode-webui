@@ -22,6 +22,19 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _env_roots() -> list[str]:
+    """명시 루트 (OPCODE_WEBUI_ROOT, 설치 루트 = bin/ 보유 dir).
+
+    백엔드가 doc-reader MCP entry env로 내려준다. frozen-exe 위치 추측보다
+    우선한다 — CWD·번들 위치와 무관하게 확정되기 때문.
+    """
+    root = (os.environ.get("OPCODE_WEBUI_ROOT") or "").strip().strip("\"'")
+    if not root:
+        return []
+    ap = os.path.abspath(root)
+    return [ap] if os.path.isdir(ap) else []
+
+
 def _frozen_roots() -> list[str]:
     """PyInstaller onefile anchor dirs.
 
@@ -44,7 +57,10 @@ def resolve_bundled_tesseract() -> str | None:
     then the frozen exe location (portable release/scripts/*.exe),
     then the historical checkout locations.
     """
-    candidates = [
+    candidates = []
+    for root in _env_roots():
+        candidates.append(os.path.join(root, "bin", "tesseract", "tesseract.exe"))
+    candidates += [
         os.path.join(_HERE, "..", "..", "..", "bin", "tesseract", "tesseract.exe"),
         os.path.join(_HERE, "..", "..", "..", "release", "bin", "tesseract", "tesseract.exe"),
     ]
@@ -68,9 +84,10 @@ def _use_bundled_tessdata() -> None:
     Must be the tessdata directory itself — pointing at its parent makes
     Tesseract fail with "Failed loading language" (measured before).
     """
-    candidates = [
-        os.path.join(_HERE, "..", "..", "..", "bin", "tesseract", "tessdata"),
-    ]
+    candidates = []
+    for root in _env_roots():
+        candidates.append(os.path.join(root, "bin", "tesseract", "tessdata"))
+    candidates.append(os.path.join(_HERE, "..", "..", "..", "bin", "tesseract", "tessdata"))
     for root in _frozen_roots():
         candidates.append(os.path.join(root, "bin", "tesseract", "tessdata"))
     candidates.append(os.path.join(os.getcwd(), "bin", "tesseract", "tessdata"))

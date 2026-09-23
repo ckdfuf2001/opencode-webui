@@ -36,6 +36,8 @@ function startConverterProcess(): Promise<boolean> {
       cwd: process.cwd(),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      // 설치 루트 명시 (exe CWD·opencode 스폰 CWD와 무관하게 번들 tesseract 확정)
+      env: { ...process.env, OPCODE_WEBUI_ROOT: process.cwd() },
     })
     converterProcess = child
     child.stdout?.on('data', (data) => logger.debug(`[doc-converter] ${data}`))

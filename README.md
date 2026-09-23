@@ -332,6 +332,7 @@ already there. To use these tools in chat:
         "env": {
           "OPCODE_WEBUI_BACKEND": "http://127.0.0.1:5001",
           "OPCODE_WEBUI_WORKSPACE": "D:\\path\\to\\opencode_web\\workspace",
+          "OPCODE_WEBUI_ROOT": "D:\\path\\to\\opencode_web",
           "OFFICE_BRIDGE_HOST": "127.0.0.1",
           "OFFICE_BRIDGE_PORT": "8766"
        }
