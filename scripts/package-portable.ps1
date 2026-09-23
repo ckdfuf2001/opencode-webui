@@ -105,10 +105,11 @@ if (Test-Path $srcTess) {
 # browser automation now via Playwright MCP (npx, no bin copy needed)
 
 Write-Output '[package 6/7] doc tools exe'
+# doc-reader.exe는 제거됨 — office-mcp.exe가 MCP를, doc-converter.exe가 프리뷰 변환을 담당.
+# 구 폴백이 필요하면 python backend/scripts/doc_reader_mcp.py 로 동작한다.
 $officeMcp = Join-Path $release 'scripts/office-mcp.exe'
-$docReader = Join-Path $release 'scripts/doc-reader.exe'
 $docConverter = Join-Path $release 'scripts/doc-converter.exe'
-$needDocTools = (-not (Test-Path $officeMcp)) -or (-not (Test-Path $docReader)) -or (-not (Test-Path $docConverter))
+$needDocTools = (-not (Test-Path $officeMcp)) -or (-not (Test-Path $docConverter))
 if ($needDocTools -and -not $SkipDocTools) {
   & (Join-Path $PSScriptRoot 'build-doc-tools.ps1')
   if ($LASTEXITCODE -ne 0) { throw 'doc-tools build failed' }

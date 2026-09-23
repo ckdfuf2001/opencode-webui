@@ -26,14 +26,6 @@ python -m PyInstaller @common `
   (Join-Path $root 'vendor\office-mcp\server.py')
 if ($LASTEXITCODE -ne 0) { throw 'office-mcp build failed' }
 
-Write-Output '[doc-tools] building doc-reader.exe (legacy fallback)'
-python -m PyInstaller @common `
-  --copy-metadata fastmcp `
-  --copy-metadata mcp `
-  --name doc-reader `
-  (Join-Path $root 'backend\scripts\doc_reader_mcp.py')
-if ($LASTEXITCODE -ne 0) { throw 'doc-reader build failed' }
-
 Write-Output '[doc-tools] building doc-converter.exe'
 python -m PyInstaller @common `
   --hidden-import win32com.client `

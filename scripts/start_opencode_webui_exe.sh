@@ -47,12 +47,12 @@ if command -v npx >/dev/null 2>&1 && npx --yes @playwright/mcp --help >/dev/null
 else
   say "ok: playwright will auto-install on first browser use (npx)"
 fi
-if [ -f ./scripts/doc-reader.exe ]; then
-  say "ok: doc-reader.exe"
+if [ -f ./scripts/office-mcp.exe ]; then
+  say "ok: office-mcp.exe"
 elif command -v python >/dev/null 2>&1; then
-  say "ok: doc-reader via python fallback"
+  say "ok: doc-reader via python fallback (vendor/office-mcp)"
 else
-  warn "doc-reader.exe missing and python not found — doc-reader MCP cannot start"
+  warn "office-mcp.exe missing and python not found — doc-reader MCP cannot start"
 fi
 if command -v git >/dev/null 2>&1; then
   say "ok: git ($(git --version 2>/dev/null))"

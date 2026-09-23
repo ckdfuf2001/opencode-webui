@@ -109,26 +109,21 @@ def _extract_pptx_text(path: str) -> str:
 
 
 def _extract_image_text(path: str) -> str:
+    # 단일 OCR 구현으로 통일 — opencode_ext.image가 equ 체인+업스케일을 담당한다.
+    # (여기에 독자 OCR 로직을 두면 둘이 어긋난다.)
     try:
-        from PIL import Image
-        import pytesseract
+        from opencode_ext.image import read_image_text
     except ImportError as exc:
         return f"[image: {os.path.basename(path)}] (OCR deps missing: {exc})"
     try:
-        pytesseract.get_tesseract_version()
-    except Exception as exc:
-        return f"[image: {os.path.basename(path)}] (Tesseract engine not found: {exc})"
-    img = Image.open(path)
-    if img.mode not in ("RGB", "L"):
-        img = img.convert("RGB")
-    for lang in ("kor+eng", "eng"):
-        try:
-            return pytesseract.image_to_string(img, lang=lang).strip()
-        except Exception as exc:
-            if "kor" in str(exc).lower() and lang != "eng":
-                continue
-            raise
-    return ""
+        return read_image_text(path)
+    except RuntimeError:
+        # read_image_text는 엔진 부재 시 describe로 degrade하므로 여기까지 오는
+        # RuntimeError는 kor 데이터 누락 등이다. 호출자(read_document_text)가
+        # backend 폴백으로 이어가게 빈 문자열이 아니라 사유를 남긴다.
+        return f"[image: {os.path.basename(path)}] (OCR unavailable)"
+    except Exception:
+        return ""
 
 
 def _extract_legacy_com_text(path: str) -> str:

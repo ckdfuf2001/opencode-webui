@@ -67,11 +67,13 @@ the user's `~/.config/opencode`.
 `backend/src/services/default-mcp.ts` owns the built-in MCP servers (v0.7.8+):
 
 - `doc-reader` — office-mcp fork (`vendor/office-mcp/server.py`, upstream
-  https://github.com/JulianPoleszczuk/office-mcp + our `msg_*`/`embedded_*` and
+  https://github.com/JulianPoleszczuk/office-mcp + our `msg_*`/`embedded_*`,
+  `image_read` (kor+eng+equ OCR + 저해상도 업스케일) and
   `read_document`/`edit_document`/`download_attachment` compat; Bridge port 8766,
   or portable `scripts/office-mcp.exe`) with `OPCODE_WEBUI_BACKEND` /
-  `OPCODE_WEBUI_WORKSPACE` env. Legacy fallback `backend/scripts/doc_reader_mcp.py`
-  (`scripts/doc-reader.exe`) is kept until preview/converter fully migrate.
+  `OPCODE_WEBUI_WORKSPACE` env. `scripts/doc-reader.exe`는 빌드에서 제거됨 —
+  구 폴백이 필요하면 `python backend/scripts/doc_reader_mcp.py`로 동작한다.
+  (`doc-converter.exe`는 프리뷰 변환용 별개 바이너리로 유지.)
 - `playwright` — `npx --yes @playwright/mcp@latest --headless --isolated`
   (no daemon, `--isolated` gives per-call browser contexts, safe for concurrent
   sessions). First use auto-installs via npx cache.

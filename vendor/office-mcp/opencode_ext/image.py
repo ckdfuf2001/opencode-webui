@@ -3,8 +3,9 @@
 Ported from backend/scripts/doc_converter.py so the office-mcp fork keeps
 our unique image behavior: Pillow + pytesseract text plus per-word boxes
 ``{"text": str, "boxes": [{text, left, top, width, height, conf}]}``,
-bundled-tesseract-first resolution, kor tessdata priority, and a
-Pillow-only describe fallback when no OCR engine exists.
+bundled-tesseract-first resolution, kor tessdata priority,
+kor+eng+equ language chain, low-res 2x upscale (boxes scaled back),
+and a Pillow-only describe fallback when no OCR engine exists.
 Public helpers return plain Python types; the MCP wrappers in server.py
 turn them into {"ok": ...} replies.
 """
@@ -119,9 +120,20 @@ def read_image(source_path: str) -> dict[str, Any]:
     img = Image.open(source_path)
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
-    # kor+eng를 먼저 시도 — kor 데이터가 없으면 eng로 숨기지 않고 명확한 에러로 안내
+    # 저해상도 업스케일 (backend/scripts/doc_converter.py와 동일):
+    # 긴 변 2000px 미만이면 2x LANCZOS (상한 5000px). boxes는 원본 좌표로 역보정.
+    w0, h0 = img.size
+    scale = 1.0
+    if max(w0, h0) < 2000:
+        scale = min(2.0, 5000.0 / max(w0, h0))
+        if scale > 1.01:
+            img = img.resize((int(w0 * scale + 0.5), int(h0 * scale + 0.5)), Image.LANCZOS)
+        else:
+            scale = 1.0
+    # kor+eng+equ를 먼저 시도 (equ=수식/기호. 낱개 통합 파일은 없으므로 조합).
+    # equ만 없고 kor는 있으면 다음 체인으로 폴백한다.
     lang_used = "eng"
-    for lang in ("kor+eng", "eng"):
+    for lang in ("kor+eng+equ", "kor+eng", "eng"):
         try:
             cfg = "--oem 1 --psm 6" if "kor" in lang else "--oem 3 --psm 6"
             data = pytesseract.image_to_data(img, lang=lang, config=cfg, output_type=Output.DICT)
@@ -129,6 +141,9 @@ def read_image(source_path: str) -> dict[str, Any]:
             break
         except Exception as exc:
             msg = str(exc).lower()
+            is_load_error = "failed loading language" in msg or "traineddata" in msg
+            if is_load_error and "+equ" in lang:
+                continue
             if "kor" in msg or "traineddata" in msg or "failed loading language" in msg:
                 raise RuntimeError(
                     "Korean OCR data (kor.traineddata) not found. Run "
@@ -151,11 +166,12 @@ def read_image(source_path: str) -> dict[str, Any]:
             conf = -1
         boxes.append(
             {
+                # 업스케일했으면 원본 좌표로 역보정
                 "text": t,
-                "left": int(data["left"][i]),
-                "top": int(data["top"][i]),
-                "width": int(data["width"][i]),
-                "height": int(data["height"][i]),
+                "left": int(data["left"][i] / scale),
+                "top": int(data["top"][i] / scale),
+                "width": int(data["width"][i] / scale),
+                "height": int(data["height"][i] / scale),
                 "conf": conf,
             }
         )
