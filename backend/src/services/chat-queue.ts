@@ -1019,16 +1019,6 @@ async function dispatchQueuedChat(
   } catch (e) {
     logger.debug(`Skill-check injection skipped for session ${sessionID}:`, e)
   }
-  // S3: workspace 규약 주입 — 큐 경로(주 발송로)에도 세션 레포 한 줄을 붙인다.
-  try {
-    if (queueDb && !outgoingText.includes('<workspace-scope>')) {
-      const { buildWorkspaceScopeBlock } = await import('./workspace-scope')
-      const wsBlock = buildWorkspaceScopeBlock(queueDb, sessionID, directory)
-      if (wsBlock) outgoingText = `${wsBlock}${outgoingText}`
-    }
-  } catch (e) {
-    logger.debug(`Workspace scope injection skipped for session ${sessionID}:`, e)
-  }
   const messageBody: Record<string, unknown> = { parts: [{ type: 'text', text: outgoingText }] }
   if (chat.agent) messageBody.agent = chat.agent
   if (chat.model) messageBody.model = chat.model

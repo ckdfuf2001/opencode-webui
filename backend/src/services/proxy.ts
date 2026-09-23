@@ -473,27 +473,6 @@ export async function proxyRequest(request: Request, method: string, pathname: s
       }
     }
 
-    // S3: workspace 규약 주입 — 직접 전송에도 세션 레포 한 줄을 붙인다.
-    // (큐 경로는 dispatchQueuedChat에서 동일 처리. strip은 프론트 stripRecall.)
-    try {
-      const wsMatch = cleanEventPath.match(/^\/session\/([^/]+)\/message$/)
-      if (method === 'POST' && body && proxyDb && wsMatch?.[1]) {
-        const wsParsed = JSON.parse(body) as { parts?: { type?: string; text?: string }[] }
-        const wsFirst = wsParsed?.parts?.find((p) => p.type === 'text' && typeof p.text === 'string') as { type: string; text: string } | undefined
-        if (wsFirst && !wsFirst.text.includes('<workspace-scope>')) {
-          const wsDir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
-          const { buildWorkspaceScopeBlock } = await import('./workspace-scope')
-          const wsBlock = buildWorkspaceScopeBlock(proxyDb, wsMatch[1], wsDir)
-          if (wsBlock) {
-            wsFirst.text = `${wsBlock}${wsFirst.text}`
-            body = JSON.stringify(wsParsed)
-          }
-        }
-      }
-    } catch (e) {
-      logger.debug('workspace scope injection skipped:', e)
-    }
-
     // 본문을 재작성한 경우(기본 모델 주입·run-context·recall) 원본
     // Content-Length와 길이가 어긋나 opencode가 다음 요청 경계를 못 찾아
     // 행업된다. 재작성 뒤에는 길이를 다시 맞춘다.
