@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { globToRegex, ruleMatches } from '../../src/services/permission-auto-approver'
+import { globToRegex, ruleMatches, normalizeActionName } from '../../src/services/permission-auto-approver'
 import type { PermissionRule } from '../../src/types/permission-rule'
 
 function rule(partial: Partial<PermissionRule> = {}): PermissionRule {
@@ -221,6 +221,61 @@ describe('ruleMatches', () => {
     ).toBe(true)
     expect(
       ruleMatches(rule({ permission: 'read', pattern: 'file?.txt' }), { id: 'x', sessionID: 's', permission: 'read', pattern: 'file.txt' }),
+    ).toBe(false)
+  })
+})
+
+describe('v0.12.0: v2 shape (action/resources) 호환', () => {
+  it('normalizes v2 action names to v1 canonical', () => {
+    expect(normalizeActionName('shell')).toBe('bash')
+    expect(normalizeActionName('subagent')).toBe('task')
+    expect(normalizeActionName('bash')).toBe('bash')
+    expect(normalizeActionName('*')).toBe('*')
+    expect(normalizeActionName(undefined)).toBeUndefined()
+  })
+
+  it('matches v1 bash rule against v2 shell ask via resources', () => {
+    expect(
+      ruleMatches(rule({ permission: 'bash', pattern: 'echo hooktest*' }), {
+        id: 'x',
+        sessionID: 's',
+        action: 'shell',
+        resources: ['echo hooktest v2shape'],
+        v2: true,
+      }),
+    ).toBe(true)
+    expect(
+      ruleMatches(rule({ permission: 'bash', pattern: 'echo other*' }), {
+        id: 'x',
+        sessionID: 's',
+        action: 'shell',
+        resources: ['echo hooktest v2shape'],
+        v2: true,
+      }),
+    ).toBe(false)
+  })
+
+  it('matches v1 task rule against v2 subagent ask', () => {
+    expect(
+      ruleMatches(rule({ permission: 'task', pattern: 'reviewer' }), {
+        id: 'x',
+        sessionID: 's',
+        action: 'subagent',
+        resources: ['reviewer'],
+        v2: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('does not cross-match unrelated v2 actions', () => {
+    expect(
+      ruleMatches(rule({ permission: 'bash', pattern: '*' }), {
+        id: 'x',
+        sessionID: 's',
+        action: 'read',
+        resources: ['anything'],
+        v2: true,
+      }),
     ).toBe(false)
   })
 })

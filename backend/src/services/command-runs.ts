@@ -15,9 +15,13 @@ import { captureRunVersions, findTargetPath, isPathIgnored } from './run-version
 import { createSuggestion, deriveTrackPath } from './untracked-suggestions'
 import { logger } from '../utils/logger'
 
-/** 슬래시 방향과 끝 슬래시를 정규화한다. Windows 경로 비교를 위해 필요. */
+/** 슬래시 방향·확장 prefix·끝 슬래시를 정규화한다. Windows 경로 비교용. */
 function normalizePath(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '')
+  return p
+    .replace(/^\\\\\?\\/, '')
+    .replace(/\\/g, '/')
+    .replace(/^\/\/\?\//, '')
+    .replace(/\/+$/, '')
 }
 
 /**

@@ -1,6 +1,4 @@
 import type { Database } from 'bun:sqlite'
-import path from 'node:path'
-import { getReposPath } from '@opencode-webui/shared'
 import { listRepos } from '../db/queries'
 import { setSessionRepoIfAbsent } from '../db/session-repo-queries'
 import { listSessionDirectories } from './command-runs'
@@ -29,8 +27,10 @@ export async function backfillSessionRepoMap(db: Database): Promise<number> {
   for (const repo of repos) {
     let dirs: string[]
     try {
-      const currentDir = path.resolve(getReposPath(), path.basename(repo.localPath))
-      dirs = listSessionDirectories(db, repo.id, currentDir)
+      // v0.12.0: fullPath 직접 사용. basename 재조합은 group/repo 같은
+      // 중첩 localPath에서 앞부분이 잘려 매칭 실패하므로 금지.
+      if (!repo.fullPath) continue
+      dirs = listSessionDirectories(db, repo.id, repo.fullPath)
     } catch {
       continue
     }

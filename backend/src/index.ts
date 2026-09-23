@@ -199,11 +199,10 @@ const DEFAULT_OPENCODE_CONFIG = {
     session_child_cycle_reverse: '<leader>left',
     terminal_suspend: 'ctrl+z',
   },
-  permission: {
-    bash: {
-      '*': 'allow',
-    },
-  },
+  // v0.12.0: 기본 permission 비움 — ask가 기본이고, 허용은 webui 룰이
+  // live 자동승인자(once 응답)로 강제한다. 파일 선행 allow는 가로채기를
+  // 우회하므로 넣지 않는다 (WEBUI_PERMISSION_FILE_SYNC=1 opt-in 제외).
+  permission: {},
 }
 
 async function ensureDefaultConfigExists(): Promise<void> {
@@ -263,9 +262,9 @@ async function syncDefaultConfigToDisk(): Promise<void> {
       settingsService.updateOpenCodeConfig(defaultConfig.name, { content: merged }, 'default')
       logger.info('Merged default MCP servers into default config')
     }
-    // 전역 allow 룰 → opencode.json permission 블록 (재기동 후에도 ask 부활 방지).
+    // v0.12.0: 파일 동기화는 기본 OFF — 룰은 live 자동승인자(once)가 강제하고,
+    // 여기서의 sync는 이전 렌더분 정리(sidecar diff) + opt-in 시 전역 룰 반영용.
     // 최종 파일 쓰기는 여기서 한 번만 한다 — 위에서 직접 쓰면 permission 병합을 덮어쓴다.
-    // 파일 변경은 다음 opencode 시작부터 적용, 그 전에는 live 자동승인이 커버.
     try {
       const { syncPermissionConfigToDisk } = await import('./services/permission-config')
       await syncPermissionConfigToDisk(db)

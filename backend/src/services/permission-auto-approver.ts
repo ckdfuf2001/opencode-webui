@@ -9,10 +9,11 @@ import { resolveRepoId } from './command-runs'
  * 서버 측 자동승인자 — opencode /event를 직접 구독해 권한 요청을 규칙대로 응답한다.
  * 프론트 폴링 방식의 문제(탭 닫힘·중복 탭·2초 지연·60초 규칙 lag)를 없앤다.
  *
- * 설계 원칙:
+ * 설계 원칙 (v0.12.0: webui 단일 소유):
  * - 판단은 여기서, 표시는 프론트 (다이얼로그·뱃지는 그대로 living 목록을 보여준다).
  * - 세션 로컬스토리지 룰은 백엔드가 볼 수 없어 프론트가 계속 담당한다 (빠른 경로).
- * - 응답은 'always' 1회 (60초 TTL dedupe로 중복 응답 방지).
+ * - 응답은 'once' (단건 승인 — 소유권은 webui DB가 갖고 opencode 메모리는
+ *   stateless로 둔다. 재기동 전/후 동작이 동일해진다. 60초 TTL dedupe로 중복 응답 방지).
  * - repo 스코프가 확정될 때만 승인한다. directory 해석 실패 시에는
  *   응답하지 않고 다이얼로그에 맡긴다 (다른 레포 규칙 오승인 방지).
  * - 실패해도 조용히 넘긴다 — 사용자가 다이얼로그에서 직접 처리할 수 있다.
@@ -27,6 +28,23 @@ export interface AskedPermission {
   patterns?: string[]
   always?: string[]
   metadata?: Record<string, unknown>
+  // v2 shape (opencode v2: action/resources). 있으면 v2 응답 경로를 쓴다.
+  action?: string
+  resources?: string[]
+  v2?: boolean
+}
+
+// v1 ↔ v2 액션명 매핑. DB 룰은 v1 명칭(bash/task)으로 저장하고,
+// 매칭 시점에 양쪽을 v1 canonical로 정규화한다.
+const V2_TO_V1_ACTION: Record<string, string> = {
+  shell: 'bash',
+  subagent: 'task',
+}
+
+export function normalizeActionName(action: string | undefined): string | undefined {
+  if (!action) return action
+  const lower = action.toLowerCase()
+  return V2_TO_V1_ACTION[lower] ?? action
 }
 
 const ASK_TYPES = new Set(['permission.asked', 'permission.updated', 'permission.v2.asked'])
@@ -105,6 +123,8 @@ function getActualPatterns(permission: AskedPermission): string[] {
     ...asString(metadata.parentDir),
     ...asString(metadata.directory),
     ...asArray(metadata.directories),
+    // v2: 요청 리소스가 최상위 resources[]에 온다
+    ...asArray(permission.resources),
   ]
   return [...normalized, ...metadataPatterns]
 }
@@ -127,8 +147,10 @@ function getCandidatePatterns(permission: AskedPermission): string[] {
 }
 
 export function ruleMatches(rule: PermissionRule, permission: AskedPermission): boolean {
-  const type = permission.permission ?? permission.type
-  if (rule.permission !== '*' && rule.permission !== type) return false
+  // v1(shell→bash, subagent→task) 명칭 차이를 흡수한다. 룰은 v1 명칭으로 저장.
+  const type = normalizeActionName(permission.action ?? permission.permission ?? permission.type)
+  const ruleType = normalizeActionName(rule.permission)
+  if (ruleType !== '*' && ruleType !== type) return false
   const regex = globToRegex(rule.pattern)
   return getCandidatePatterns(permission).some((candidate) => {
     if (!candidate) return false
@@ -169,6 +191,8 @@ function normalizePermission(raw: unknown): AskedPermission | null {
     patterns?: unknown
     always?: unknown
     metadata?: unknown
+    action?: unknown
+    resources?: unknown
   }
   if (typeof r.id !== 'string' || !r.id) return null
   if (typeof r.sessionID !== 'string' || !r.sessionID) return null
@@ -180,6 +204,11 @@ function normalizePermission(raw: unknown): AskedPermission | null {
       : undefined
   const always = Array.isArray(r.always)
     ? r.always.filter((p): p is string => typeof p === 'string')
+    : undefined
+  // v2 shape: { action, resources[] }. 필드 유무로 판정한다 (이벤트명과 무관하게).
+  const action = typeof r.action === 'string' ? r.action : undefined
+  const resources = Array.isArray(r.resources)
+    ? r.resources.filter((p): p is string => typeof p === 'string')
     : undefined
   return {
     id: r.id,
@@ -193,6 +222,9 @@ function normalizePermission(raw: unknown): AskedPermission | null {
       r.metadata && typeof r.metadata === 'object'
         ? (r.metadata as Record<string, unknown>)
         : undefined,
+    action,
+    resources,
+    v2: action !== undefined && resources !== undefined ? true : undefined,
   }
 }
 
@@ -262,11 +294,13 @@ async function replyPermission(
   const { ensureServerAuth } = await import('./opencode-auth')
   const base = await resolveBase()
   const headers = ensureServerAuth({ 'Content-Type': 'application/json' })
+  // v0.12.0: 'once' 단건 승인. 소유권은 webui DB가 갖고 opencode 메모리는
+  // stateless로 둔다 (재기동 전/후 동일 동작, ask 부활 없음).
   if (isV2) {
     const res = await fetch(`${base}/permission/${encodeURIComponent(permissionID)}/reply`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ reply: 'always' }),
+      body: JSON.stringify({ reply: 'once' }),
       signal: AbortSignal.timeout(10_000),
     })
     if (!res.ok) throw new Error(`v2 reply HTTP ${res.status}`)
@@ -277,7 +311,7 @@ async function replyPermission(
     {
       method: 'POST',
       headers,
-      body: JSON.stringify({ response: 'always' }),
+      body: JSON.stringify({ response: 'once' }),
       signal: AbortSignal.timeout(10_000),
     },
   )
@@ -294,7 +328,8 @@ async function handleAskedPermission(
   const permission = normalizePermission(raw)
   if (!permission) return
   if (wasResponded(permission.id)) return
-  const isV2 = eventType === 'permission.v2.asked'
+  // v2 판정: 페이로드 shape 우선, 이벤트명 보조 (sweep는 v1형으로 들어오므로)
+  const isV2 = permission.v2 === true || eventType === 'permission.v2.asked'
   // sweep(재조정)에서는 미승인 사유를 debug로 낮춘다 — 매 주기 info/warn이 쌓이는 것을 막는다.
   // 이벤트 경로(실시간 첫 처리)는 기존대로 info/warn을 유지한다.
   const logSkip = opts?.quiet
@@ -307,7 +342,7 @@ async function handleAskedPermission(
     const alwaysHint = Array.isArray(permission.always) && permission.always.length > 0
       ? ` alwaysSuggestions=${permission.always.length}(excluded from match)`
       : ''
-    return `${permission.id} type=${permission.permission ?? permission.type} session=${permission.sessionID} candidates=[${shown}]${cands.length > 4 ? ` +${cands.length - 4}` : ''}${alwaysHint}`
+    return `${permission.id} type=${permission.action ?? permission.permission ?? permission.type} session=${permission.sessionID} candidates=[${shown}]${cands.length > 4 ? ` +${cands.length - 4}` : ''}${alwaysHint}`
   }
   // directory → repo 스코프가 확정될 때만 승인한다.
   // 해석 실패 시 전체 규칙 폴백은 다른 레포의 규칙으로 승인할 수 있어 금지 —
@@ -367,7 +402,7 @@ async function handleAskedPermission(
   markResponded(permission.id)
   try {
     await replyPermission(permission.sessionID, permission.id, isV2, resolveBase)
-    logger.info(`Auto-approved permission ${permission.id} (${permission.permission ?? permission.type}) for session ${permission.sessionID}`)
+    logger.info(`Auto-approved(once) permission ${permission.id} (${permission.action ?? permission.permission ?? permission.type}) for session ${permission.sessionID}`)
   } catch (e) {
     // 응답 실패(404/409 등)는 dedupe를 풀어 다음 이벤트에서 재시도한다.
     // 성공 전에 mark하면 실패가 영구 미승인으로 굳는다.

@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   toOpencodePatterns,
   renderPermissionConfig,
+  renderPermissionConfigV2,
   mergePermissionConfigInto,
+  mergePermissionConfigV2Into,
+  isPermissionFileSyncEnabled,
+  getPermissionSchema,
   queueConfigWrite,
 } from '../../src/services/permission-config'
 import type { PermissionRule } from '../../src/types/permission-rule'
@@ -90,6 +94,79 @@ describe('mergePermissionConfigInto', () => {
       { webfetch: { 'https://gone/*': 'allow' } }
     ) as { permission: Record<string, Record<string, string>> }
     expect(merged.permission).toEqual({})
+  })
+})
+
+describe('v0.12.0: file-sync gate and schema env', () => {
+  it('file sync is off by default', () => {
+    delete process.env.WEBUI_PERMISSION_FILE_SYNC
+    expect(isPermissionFileSyncEnabled()).toBe(false)
+    process.env.WEBUI_PERMISSION_FILE_SYNC = '1'
+    expect(isPermissionFileSyncEnabled()).toBe(true)
+    delete process.env.WEBUI_PERMISSION_FILE_SYNC
+  })
+  it('schema defaults to v1', () => {
+    delete process.env.OPENCODE_PERMISSION_SCHEMA
+    expect(getPermissionSchema()).toBe('v1')
+    process.env.OPENCODE_PERMISSION_SCHEMA = 'v2'
+    expect(getPermissionSchema()).toBe('v2')
+    delete process.env.OPENCODE_PERMISSION_SCHEMA
+  })
+})
+
+describe('renderPermissionConfigV2', () => {
+  it('renders global rules as action/resource/effect entries', () => {
+    const out = renderPermissionConfigV2([
+      rule({ id: 1, permission: 'bash', pattern: 'git status *' }),
+      rule({ id: 2, repoId: 7, permission: 'edit', pattern: 'C:/repo/*' }),
+    ])
+    expect(out).toEqual([{ action: 'shell', resource: 'git status *', effect: 'allow' }])
+  })
+  it('maps task to subagent and expands * to v2 actions', () => {
+    const out = renderPermissionConfigV2([rule({ id: 1, permission: 'task', pattern: 'reviewer' })])
+    expect(out).toEqual([{ action: 'subagent', resource: 'reviewer', effect: 'allow' }])
+    const star = renderPermissionConfigV2([rule({ id: 2, permission: '*', pattern: 'C:/safe/*' })])
+    const actions = new Set(star.map((e) => e.action))
+    expect(actions.has('shell')).toBe(true)
+    expect(actions.has('subagent')).toBe(true)
+    expect(actions.has('doom_loop')).toBe(false)
+    expect(actions.has('bash')).toBe(false)
+    expect(actions.has('task')).toBe(false)
+  })
+  it('skips catch-all and doom_loop', () => {
+    expect(renderPermissionConfigV2([rule({ id: 1, permission: 'bash', pattern: '*' })])).toEqual([])
+    expect(renderPermissionConfigV2([rule({ id: 2, permission: 'doom_loop', pattern: 'repeat *' })])).toEqual([])
+  })
+})
+
+describe('mergePermissionConfigV2Into', () => {
+  it('replaces previously rendered entries, keeps hand entries', () => {
+    const merged = mergePermissionConfigV2Into(
+      {
+        permissions: [
+          { action: 'shell', resource: 'old *', effect: 'allow' },
+          { action: 'read', resource: 'hand/*', effect: 'allow' },
+        ],
+      },
+      [{ action: 'shell', resource: 'new *', effect: 'allow' }],
+      [{ action: 'shell', resource: 'old *', effect: 'allow' }],
+    ) as { permissions: Array<{ action: string; resource: string; effect: string }> }
+    expect(merged.permissions).toEqual([
+      { action: 'read', resource: 'hand/*', effect: 'allow' },
+      { action: 'shell', resource: 'new *', effect: 'allow' },
+    ])
+  })
+  it('drops the permissions key when nothing remains', () => {
+    const merged = mergePermissionConfigV2Into(
+      { permissions: [{ action: 'shell', resource: 'old *', effect: 'allow' }], other: 1 },
+      [],
+      [{ action: 'shell', resource: 'old *', effect: 'allow' }],
+    ) as { other: number; permissions?: unknown }
+    expect(merged).toEqual({ other: 1 })
+  })
+  it('leaves hand entries alone when both lists are empty', () => {
+    const content = { permissions: [{ action: 'read', resource: 'hand/*', effect: 'deny' }] }
+    expect(mergePermissionConfigV2Into(content, [], [])).toEqual(content)
   })
 })
 

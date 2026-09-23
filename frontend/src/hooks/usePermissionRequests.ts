@@ -155,11 +155,18 @@ function normalizePermission(raw: unknown): Permission | null {
     always?: string[]
     metadata?: Record<string, unknown>
     tool?: { messageID?: string; callID?: string }
+    // v2 shape (opencode v2): { action, resources[] }
+    action?: unknown
+    resources?: unknown
   }
   if (!r.id || !r.sessionID) return null
-  const rawPatterns = r.patterns ?? r.pattern
+  const isV2 = typeof r.action === 'string' && Array.isArray(r.resources)
+  const v2Resources = isV2
+    ? (r.resources as unknown[]).filter((x): x is string => typeof x === 'string' && !!x)
+    : []
+  const rawPatterns = v2Resources.length > 0 ? v2Resources : (r.patterns ?? r.pattern)
   const patterns = Array.isArray(rawPatterns) ? rawPatterns : rawPatterns ? [rawPatterns] : []
-  const type = r.permission ?? 'permission'
+  const type = (isV2 ? (r.action as string) : undefined) ?? r.permission ?? 'permission'
   return {
     id: r.id,
     sessionID: r.sessionID,
@@ -173,6 +180,7 @@ function normalizePermission(raw: unknown): Permission | null {
     messageID: r.tool?.messageID ?? '',
     callID: r.tool?.callID,
     tool: r.tool,
+    v2: isV2 ? true : undefined,
     time: { created: Date.now() },
   }
 }

@@ -4,12 +4,17 @@ import type { PermissionRule } from '../types/permission-rule'
 
 /**
  * DB permission_rules(전역) → opencode.json permission 블록 렌더러.
- * 백엔드 자동승인은 사후 응답이라 opencode 재기동 시 ask가 부활한다
- * (opencode의 always는 프로세스 메모리에만 남는다).
- * 전역 allow 룰을 config 파일에 써두면 재기동 후에도 ask 자체가 안 생긴다.
- * opencode는 permission을 기동 시점에만 읽으므로, 파일 변경은 다음
- * opencode 시작부터 적용된다. 그 전에는 live 자동승인(SSE+sweep)이 커버한다.
- * → 룰 변경 후 즉시 적용하려면 opencode 재시작(POST /api/opencode-restart).
+ *
+ * v0.12.0: 기본 OFF. 소유권은 webui DB가 갖고, 매 ask를 live 자동승인자가
+ * 'once'로 응답한다 (opencode 메모리는 stateless — 재기동 전/후 동일 동작).
+ * 파일에 allow를 미리 써두면 ask 자체가 안 생겨 가로채기가 우회되므로,
+ * 파일 렌더는 opt-in이다: WEBUI_PERMISSION_FILE_SYNC=1 일 때만 전역 룰을
+ * opencode.json에 쓴다 (다음 opencode 시작부터 적용 — opencode는 permission을
+ * 기동 시점에만 읽는다. 즉시 적용하려면 POST /api/opencode-restart).
+ * OFF 상태에서도 sidecar diff로 이전 렌더분은 1회 정리된다 (수기 항목 유지).
+ *
+ * 스키마: OPENCODE_PERMISSION_SCHEMA=v1|v2 (기본 v1 = 번들 v1.18.x).
+ * v2 바이너리로 교체하면 v2로 바꿔 permissions 배열로 렌더한다.
  */
 
 // opencode config permission 키. '*' 룰은 전부로 확장한다.
@@ -27,6 +32,53 @@ export const PERMISSION_CONFIG_KEYS = [
   'skill',
   'external_directory',
 ]
+
+/** 파일 렌더 opt-in 플래그. 기본 OFF — 룰은 live once-승인으로만 강제된다. */
+export function isPermissionFileSyncEnabled(): boolean {
+  return process.env.WEBUI_PERMISSION_FILE_SYNC === '1'
+}
+
+/** 렌더 스키마 선택. v2 바이너리로 교체했을 때만 'v2'로 바꾼다. */
+export function getPermissionSchema(): 'v1' | 'v2' {
+  return process.env.OPENCODE_PERMISSION_SCHEMA === 'v2' ? 'v2' : 'v1'
+}
+
+// v1 → v2 액션명 매핑 (DB 룰은 v1 명칭으로 저장). 매핑 없는 키는 그대로 둔다.
+const V1_TO_V2_ACTION: Record<string, string> = {
+  bash: 'shell',
+  task: 'subagent',
+}
+
+export const V2_PERMISSION_ACTIONS = [
+  'shell',
+  'edit',
+  'read',
+  'webfetch',
+  'websearch',
+  'glob',
+  'grep',
+  'subagent',
+  'skill',
+  'external_directory',
+]
+
+export interface V2PermissionEntry {
+  action: string
+  resource: string
+  effect: 'allow'
+}
+
+function toV2Actions(permission: string): string[] {
+  if (permission === '*') return [...V2_PERMISSION_ACTIONS]
+  const lower = (permission ?? '').toLowerCase()
+  if (!lower) return []
+  if (lower === 'doom_loop') return ['doom_loop']
+  return [V1_TO_V2_ACTION[lower] ?? permission]
+}
+
+function isCatchAllPattern(raw: string): boolean {
+  return !raw.replace(/\\/g, '/').replace(/\*/g, '').replace(/\//g, '')
+}
 
 /**
  * 우리 패턴 → opencode 패턴 목록.
@@ -68,6 +120,66 @@ export function toOpencodePatterns(pattern: string): string[] {
     push(`${base}/**`)
   }
   return out
+}
+
+/**
+ * v2 스키마 렌더: permissions: [{ action, resource, effect: 'allow' }].
+ * 전역 룰만, catch-all 제외, 오래된 것부터 (뒤 규칙이 이긴다) — v1과 동일 정책.
+ * doom_loop는 v2 코어 액션이 아니라 제외한다.
+ */
+export function renderPermissionConfigV2(rules: PermissionRule[]): V2PermissionEntry[] {
+  const out: V2PermissionEntry[] = []
+  const seen = new Set<string>()
+  const ordered = [...rules]
+    .filter((r) => r.repoId == null)
+    .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id - b.id)
+  for (const r of ordered) {
+    const raw = (r.pattern ?? '').trim()
+    if (!raw) continue
+    if (isCatchAllPattern(raw)) {
+      logger.warn(`Skipping catch-all permission rule #${r.id} (${r.permission}) in v2 opencode config render`)
+      continue
+    }
+    if ((r.permission ?? '').toLowerCase() === 'doom_loop') {
+      logger.warn(`Skipping doom_loop rule #${r.id} in v2 render (not a v2 core action)`)
+      continue
+    }
+    for (const action of toV2Actions(r.permission)) {
+      for (const resource of toOpencodePatterns(raw)) {
+        const key = `${action}\n${resource}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ action, resource, effect: 'allow' })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * v2 배열 병합: 직전 렌더(sidecar-v2)에 있던 항목만 제거하고 이번 렌더를 추가.
+ * 수기 entries는 유지된다. effect가 allow가 아닌 수기 항목은 건드리지 않는다.
+ */
+export function mergePermissionConfigV2Into<T extends Record<string, unknown>>(
+  content: T,
+  rendered: V2PermissionEntry[],
+  previous: V2PermissionEntry[] = [],
+): T {
+  const existing = (content as Record<string, unknown>).permissions
+  const list: V2PermissionEntry[] = Array.isArray(existing)
+    ? (existing as V2PermissionEntry[]).filter((e) => e && typeof e === 'object')
+    : []
+  const prevKeys = new Set(previous.map((e) => `${e.action}\n${e.resource}`))
+  const kept = list.filter((e) => !prevKeys.has(`${(e as V2PermissionEntry).action}\n${(e as V2PermissionEntry).resource}`))
+  const next = [...kept]
+  for (const e of rendered) {
+    if (!next.some((k) => k.action === e.action && k.resource === e.resource)) next.push(e)
+  }
+  if (next.length === 0) {
+    const { permissions: _drop, ...rest } = content as Record<string, unknown> & { permissions?: unknown }
+    return rest as T
+  }
+  return { ...content, permissions: next }
 }
 
 /**
@@ -147,34 +259,57 @@ export async function writeFileAtomic(filePath: string, content: string): Promis
   await fs.rename(tmp, filePath)
 }
 
+async function readSidecarJson<T>(sidecarPath: string, fallback: T, isValid: (v: unknown) => v is T): Promise<T> {
+  const { readFileContent } = await import('./file-operations')
+  try {
+    const raw = await readFileContent(sidecarPath)
+    const parsed: unknown = JSON.parse(raw)
+    if (isValid(parsed)) return parsed
+  } catch {
+    // 첫 실행 — sidecar 없음
+  }
+  return fallback
+}
+
 /**
  * 전역 룰 렌더를 content에 합치고 sidecar를 갱신한다.
  * DB row·파일 쓰기는 호출자가 한다 (호출 경로마다 row 처리·원자적 쓰기가 다르다).
+ *
+ * v0.12.0: WEBUI_PERMISSION_FILE_SYNC=1 일 때만 렌더한다. OFF면 빈 렌더로
+ * 합쳐 이전 렌더분을 1회 정리한다 (수기 항목은 유지). 스키마 전환(v1↔v2) 시에도
+ * 반대편 sidecar 기준으로 반대편 렌더분을 정리한다.
  */
 export async function applyGlobalPermissionRules(
   db: Database,
   content: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const { listGlobalPermissionRules } = await import('../db/permission-rule-queries')
-  const rendered = renderPermissionConfig(listGlobalPermissionRules(db))
+  const rules = listGlobalPermissionRules(db)
+  const fileSync = isPermissionFileSyncEnabled()
+  const schema = getPermissionSchema()
+  const renderedV1 = fileSync && schema === 'v1' ? renderPermissionConfig(rules) : {}
+  const renderedV2 = fileSync && schema === 'v2' ? renderPermissionConfigV2(rules) : []
   const { getOpenCodeConfigFilePath } = await import('@opencode-webui/shared')
-  const { readFileContent } = await import('./file-operations')
   const sidecarPath = `${getOpenCodeConfigFilePath()}.webui-permission`
-  let previous: Record<string, Record<string, string>> = {}
+  const sidecarV2Path = `${sidecarPath}-v2`
+  const previous = await readSidecarJson<Record<string, Record<string, string>>>(
+    sidecarPath, {}, (v): v is Record<string, Record<string, string>> => !!v && typeof v === 'object' && !Array.isArray(v),
+  )
+  const previousV2 = await readSidecarJson<V2PermissionEntry[]>(
+    sidecarV2Path, [], (v): v is V2PermissionEntry[] => Array.isArray(v),
+  )
+  let merged = mergePermissionConfigInto(content, renderedV1, previous)
+  merged = mergePermissionConfigV2Into(merged, renderedV2, previousV2)
   try {
-    const raw = await readFileContent(sidecarPath)
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      previous = parsed as Record<string, Record<string, string>>
-    }
-  } catch {
-    // 첫 실행 — sidecar 없음
-  }
-  const merged = mergePermissionConfigInto(content, rendered, previous)
-  try {
-    await writeFileAtomic(sidecarPath, JSON.stringify(rendered, null, 2))
+    await writeFileAtomic(sidecarPath, JSON.stringify(renderedV1, null, 2))
+    await writeFileAtomic(sidecarV2Path, JSON.stringify(renderedV2, null, 2))
   } catch (e) {
     logger.warn('Permission render sidecar write failed:', e instanceof Error ? e.message : e)
+  }
+  if (!fileSync && rules.length > 0) {
+    logger.info(
+      `Permission file sync is off (WEBUI_PERMISSION_FILE_SYNC!=1): ${rules.length} global rule(s) enforced live via once-replies only, not written to opencode.json`,
+    )
   }
   return merged
 }
@@ -198,11 +333,9 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
       db,
       defaultConfig.content as Record<string, unknown>
     )
-    const before = JSON.stringify(
-      ((defaultConfig.content as Record<string, unknown>).permission as unknown) ?? null
-    )
-    const after = JSON.stringify((merged.permission as unknown) ?? null)
-    const rowChanged = before !== after
+    const permOf = (c: Record<string, unknown>): string =>
+      JSON.stringify([(c.permission as unknown) ?? null, (c.permissions as unknown) ?? null])
+    const rowChanged = permOf(defaultConfig.content as Record<string, unknown>) !== permOf(merged)
     if (rowChanged) {
       settingsService.updateOpenCodeConfig(defaultConfig.name, { content: merged }, 'default')
       logger.info('Merged global permission allow rules into default opencode config')
@@ -212,15 +345,14 @@ export async function syncPermissionConfigToDisk(db: Database): Promise<boolean>
     let diskChanged = true
     try {
       const diskRaw = await readFileContent(configPath)
-      const diskJson = JSON.parse(diskRaw) as { permission?: unknown }
-      diskChanged =
-        JSON.stringify(diskJson?.permission ?? null) !==
-        JSON.stringify((merged.permission as unknown) ?? null)
+      const diskJson = JSON.parse(diskRaw) as Record<string, unknown>
+      diskChanged = permOf(diskJson) !== permOf(merged)
     } catch (e) {
       const code = (e as { code?: unknown })?.code
       if (code === 'ENOENT') {
         diskChanged =
-          Object.keys((merged.permission as Record<string, unknown> | undefined) ?? {}).length > 0
+          Object.keys((merged.permission as Record<string, unknown> | undefined) ?? {}).length > 0 ||
+          ((merged.permissions as unknown[]) ?? []).length > 0
       } else {
         diskChanged = true
       }

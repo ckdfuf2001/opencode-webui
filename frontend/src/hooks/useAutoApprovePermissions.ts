@@ -36,6 +36,25 @@ function isPathLike(value: string): boolean {
   return value.includes('/') || value.includes('\\') || /^[A-Za-z]:/.test(value)
 }
 
+// v0.12.0: v1 ↔ v2 액션명 매핑. 룰은 v1 명칭(bash/task)으로 저장하고,
+// 매칭 시점에 v1 canonical로 정규화한다.
+const V2_TO_V1_ACTION: Record<string, string> = {
+  shell: 'bash',
+  subagent: 'task',
+}
+
+function getActionName(permission: Permission): string | undefined {
+  const raw = (permission as unknown as { action?: unknown }).action
+  if (typeof raw === 'string' && raw) return raw
+  return permission.permission ?? permission.type
+}
+
+function normalizeActionName(action: string | undefined): string | undefined {
+  if (!action) return action
+  const lower = action.toLowerCase()
+  return V2_TO_V1_ACTION[lower] ?? action
+}
+
 function getActualPatterns(permission: Permission): string[] {
   const patterns = permission.patterns ?? permission.pattern
   const normalized = Array.isArray(patterns) ? patterns : patterns ? [patterns] : []
@@ -46,6 +65,7 @@ function getActualPatterns(permission: Permission): string[] {
   // external_directory=metadata.filepath/parentDir (+directories 배열형도 옴)
   const asArray = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : []
+  const raw = permission as unknown as { resources?: unknown }
   const metadataPatterns = [
     ...asString(metadata.command),
     ...asString(metadata.path),
@@ -54,6 +74,8 @@ function getActualPatterns(permission: Permission): string[] {
     ...asString(metadata.parentDir),
     ...asString(metadata.directory),
     ...asArray(metadata.directories),
+    // v2: 요청 리소스가 최상위 resources[]에 온다
+    ...asArray(raw.resources),
   ]
   return [...normalized, ...metadataPatterns]
 }
@@ -73,8 +95,9 @@ function getCandidatePatterns(permission: Permission): string[] {
 }
 
 function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
-  const type = permission.permission ?? permission.type
-  if (rule.permission !== '*' && rule.permission !== type) return false
+  const type = normalizeActionName(getActionName(permission))
+  const ruleType = normalizeActionName(rule.permission)
+  if (ruleType !== '*' && ruleType !== type) return false
   const regex = globToRegex(rule.pattern)
   return getCandidatePatterns(permission).some(candidate => {
     if (!candidate) return false
@@ -117,10 +140,11 @@ async function handlePermissionAdd(permission: Permission): Promise<void> {
       recentlyProcessed.add(permission.id)
       setTimeout(() => { recentlyProcessed.delete(permission.id) }, 60_000)
       try {
+        // v0.12.0: 'once' 단건 승인 (소유권은 webui 룰이, opencode 메모리는 stateless)
         if (permission.v2) {
-          await client.respondToPermissionV2(permission.id, 'always')
+          await client.respondToPermissionV2(permission.id, 'once')
         } else {
-          await client.respondToPermission(permission.sessionID, permission.id, 'always')
+          await client.respondToPermission(permission.sessionID, permission.id, 'once')
         }
         // sessionID 동봉 — 배지 캐시 즉시 정리용 (아래 remove 구독자가 사용)
         permissionEvents.emit({ type: 'remove', permissionID: permission.id, permission })

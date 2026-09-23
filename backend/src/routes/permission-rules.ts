@@ -42,9 +42,10 @@ export function createPermissionRuleRoutes(db: Database) {
       }
 
       const rule = permissionRuleDb.createPermissionRule(db, { ...validated, repoId })
-      // 전역 룰 변경은 opencode.json permission 블록에 반영한다.
-      // 파일은 다음 opencode 시작부터 적용, 그 전에는 live 자동승인이 커버.
-      // 즉시 적용하려면 POST /api/opencode-restart 로 opencode 재시작.
+      // v0.12.0: 룰 변경은 live 자동승인자(SSE+sweep)가 즉시 강제한다 (once 응답).
+      // 파일 동기화는 기본 OFF(WEBUI_PERMISSION_FILE_SYNC=1 일 때만 전역 룰을
+      // opencode.json에 쓰며, 그 경우 다음 opencode 시작부터 적용 —
+      // 즉시 적용하려면 POST /api/opencode-restart 로 opencode 재시작).
       // await로 기다린다 — 요청 순서대로 파일에 반영되게 (빠른 연속 CRUD 순서 보장).
       await queuePermissionConfigSync(db)
       return c.json(rule, 201)

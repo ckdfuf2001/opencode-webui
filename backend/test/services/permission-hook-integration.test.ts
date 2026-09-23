@@ -130,7 +130,7 @@ describe('permission hook integration (stub opencode server)', () => {
     }
   }
 
-  it('replies always to a matching repo rule via v1 endpoint', async () => {
+  it('replies once to a matching repo rule via v1 endpoint', async () => {
     const sub = subscribe(mockDb())
     try {
       await new Promise((r) => setTimeout(r, 300))
@@ -138,7 +138,7 @@ describe('permission hook integration (stub opencode server)', () => {
       await waitForReplies(1)
       expect(replies).toHaveLength(1)
       expect(replies[0]!.url).toBe('/session/ses-1/permissions/per-1')
-      expect(replies[0]!.body).toEqual({ response: 'always' })
+      expect(replies[0]!.body).toEqual({ response: 'once' })
     } finally {
       sub.stop()
     }
@@ -208,7 +208,24 @@ describe('permission hook integration (stub opencode server)', () => {
       await waitForReplies(1)
       expect(replies).toHaveLength(1)
       expect(replies[0]!.url).toBe('/permission/per-3/reply')
-      expect(replies[0]!.body).toEqual({ reply: 'always' })
+      expect(replies[0]!.body).toEqual({ reply: 'once' })
+    } finally {
+      sub.stop()
+    }
+  })
+
+  it('uses v2 endpoint for v2-shaped payloads on the v1 event name (sweep path)', async () => {
+    const sub = subscribe(mockDb())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked(
+        { id: 'per-4', sessionID: 'ses-1', action: 'shell', resources: ['echo hooktest v2shape'] },
+        'permission.asked',
+      )
+      await waitForReplies(1)
+      expect(replies).toHaveLength(1)
+      expect(replies[0]!.url).toBe('/permission/per-4/reply')
+      expect(replies[0]!.body).toEqual({ reply: 'once' })
     } finally {
       sub.stop()
     }
