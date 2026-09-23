@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger'
-import { getConfigPath, getOpenCodeConfigFilePath } from '@opencode-webui/shared'
+import { getConfigPath, getOpenCodeConfigFilePath, getReposPath, getWorkspacePath } from '@opencode-webui/shared'
+import { resolveCreateDirectory } from '@opencode-webui/shared/lib/repoPath'
 import { ensureServerAuth } from './opencode-auth'
 import { opencodeServerManager } from './opencode-single-server'
 import { truncateSessionMessages, deleteSessionMessage, stripAllReasoningParts } from './opencode-db'
@@ -330,6 +331,18 @@ export async function proxyRequest(request: Request, method: string, pathname: s
   const abortMatch = abortPath.match(/^\/session\/([^/]+)\/abort$/)
   if (method === 'POST' && abortMatch?.[1]) {
     try { clearSendingOnAbort(abortMatch[1]!) } catch {}
+  }
+
+  // 세션 생성: 상대 directory는 절대화한다.
+  // 프론트가 레포 기준 상대경로(workspaceRel = localPath, 예: 'sap docker')를 보내고,
+  // opencode는 서버 cwd(workspace 루트) 기준으로 해석해서 엉뚱한 곳(workspace/<name>)에
+  // 세션이 생기고 목록에 안 뜨던 문제. 절대경로·빈 값은 그대로 둔다.
+  if (method === 'POST' && pathname.replace(/^\/api\/opencode/, '') === '/session' && query?.['directory']) {
+    try {
+      query = { ...query, directory: resolveCreateDirectory(query['directory'], getReposPath(), getWorkspacePath()) }
+    } catch (e) {
+      logger.debug('create directory resolve skipped:', e instanceof Error ? e.message : e)
+    }
   }
 
   const search = query ? '?' + new URLSearchParams(query).toString() : ''

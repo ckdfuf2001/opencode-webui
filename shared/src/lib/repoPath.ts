@@ -73,6 +73,30 @@ export function getRepoRel(wsPath: WsPath, repoRoot: string): string | null {
 }
 
 /**
+ * 세션 생성용 directory 해석. 프론트가 레포 기준 상대경로(workspaceRel =
+ * localPath, 예: 'sap docker')를 보내고, opencode는 서버 cwd(workspace 루트)
+ * 기준으로 해석해서 엉뚱한 곳(workspace/<name>)에 세션이 생기던 문제 대응.
+ * - 절대경로(드라이브·/·UNC): 그대로 (슬래시 정규화 없이 원문 유지)
+ * - 'repos/...' 로 시작: workspace 루트 기준
+ * - 그 외 상대경로: repos 디렉터리 기준
+ * opencode가 두 형태를 다 받아들이므로 반환은 '/' 구분 그대로 둔다.
+ */
+export function resolveCreateDirectory(rawDir: string, reposBase: string, wsRoot: string): string {
+  let dir = rawDir
+  try {
+    dir = decodeURIComponent(rawDir)
+  } catch {
+    // keep raw
+  }
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(dir)) return dir
+  const rel = dir.replace(/\\/g, '/').replace(/^\/+/, '')
+  if (!rel) return wsRoot
+  const reposName = normSlash(reposBase).split('/').pop()?.toLowerCase() ?? 'repos'
+  const head = (rel.split('/')[0] ?? '').toLowerCase()
+  const base = head === reposName ? normSlash(wsRoot).replace(/\/+$/, '') : normSlash(reposBase).replace(/\/+$/, '')
+  return `${base}/${rel}`
+}
+/**
  * 레포 절대경로 + workspaceRel에서 파일 API 기준 루트(repos 디렉터리 절대경로) 역산.
  * backend가 fullPath = join(reposDir, localPath)로 만들고, 파일 API가
  * reposDir 기준으로 resolve하므로, 이 값이 absToWsPath의 기준점이 된다.

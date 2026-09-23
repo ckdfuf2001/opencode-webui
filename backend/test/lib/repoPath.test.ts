@@ -10,6 +10,7 @@ import {
   getFilename,
   getRepoRel,
   reposDirOf,
+  resolveCreateDirectory,
 } from '@opencode-webui/shared'
 
 describe('repoPath', () => {
@@ -180,6 +181,24 @@ describe('repoPath', () => {
     it('접미사가 안 맞으면 null', () => {
       expect(reposDirOf('C:/w/repos/aaa', 'bbb')).toBeNull()
       expect(reposDirOf('', 'aaa')).toBeNull()
+    })
+  })
+  describe('resolveCreateDirectory', () => {
+    const repos = 'C:/w/workspace/repos'
+    const ws = 'C:/w/workspace'
+    it('레포 상대경로는 repos 기준 절대화', () => {
+      expect(resolveCreateDirectory('sap docker', repos, ws)).toBe('C:/w/workspace/repos/sap docker')
+      expect(resolveCreateDirectory('aaa', repos, ws)).toBe('C:/w/workspace/repos/aaa')
+    })
+    it('repos/ prefix는 workspace 기준', () => {
+      expect(resolveCreateDirectory('repos/aaa', repos, ws)).toBe('C:/w/workspace/repos/aaa')
+    })
+    it('절대경로는 그대로', () => {
+      expect(resolveCreateDirectory('C:/other/dir', repos, ws)).toBe('C:/other/dir')
+      expect(resolveCreateDirectory('C:\\other\\dir', repos, ws)).toBe('C:\\other\\dir')
+    })
+    it('빈 값은 workspace 루트', () => {
+      expect(resolveCreateDirectory('', repos, ws)).toBe(ws)
     })
   })
 })
