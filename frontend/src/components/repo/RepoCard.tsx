@@ -148,8 +148,8 @@ export function RepoCard({
                    onSelect ? "cursor-pointer" : "cursor-not-allowed opacity-60"
                  }`}
                >
-                 {repoName}
-               </h3>
+                  #{repo.id}. {repoName}
+                </h3>
              {repo.isWorktree && (
               <Badge
                 className="text-xs px-2.5 py-0.5 bg-purple-600/20 text-purple-400 border-purple-600/40"

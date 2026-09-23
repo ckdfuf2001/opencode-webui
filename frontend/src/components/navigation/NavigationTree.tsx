@@ -211,7 +211,7 @@ const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE
                   className={`flex-1 flex items-center gap-2 px-1 py-1 rounded text-sm truncate hover:bg-accent text-left ${isActive ? 'bg-accent text-accent-foreground' : 'text-foreground'}`}
                 >
                   <FolderGit2 className="w-3 h-3 shrink-0" />
-                  <span className="truncate text-xs">{repoName}</span>
+                  <span className="truncate text-xs">#{repo.id}. {repoName}</span>
                   {working > 0 && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-blue-500"><Loader2 className="w-3 h-3 animate-spin" />{working}</span>}
                   {pending > 0 && !working && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-amber-500"><ShieldAlert className="w-3 h-3" />{pending}</span>}
                   {cancelled > 0 && !working && !pending && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-gray-500"><CancelledBadge size="sm" />{cancelled}</span>}

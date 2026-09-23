@@ -146,7 +146,7 @@ export function SessionDetailHeader({
           <BackButton to={`/repos/${repoId}`} onClick={onNavOpen} className="text-xs sm:text-sm" />
           <div className="min-w-0 flex-1">
             <p className="text-[10px] sm:text-xs text-muted-foreground truncate">
-              {repoName}
+              #{repo.id}. {repoName}
             </p>
             {isEditing ? (
               <form onSubmit={handleTitleSubmit} className="min-w-0">
