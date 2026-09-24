@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { globToRegex, ruleMatches, normalizeActionName, kickPermissionSweep } from '../../src/services/permission-auto-approver'
+import { globToRegex, ruleMatches, normalizeActionName, kickPermissionSweep, suggestionsWithinRules } from '../../src/services/permission-auto-approver'
 import type { PermissionRule } from '../../src/types/permission-rule'
 
 function rule(partial: Partial<PermissionRule> = {}): PermissionRule {
@@ -277,6 +277,24 @@ describe('v0.12.0: v2 shape (action/resources) 호환', () => {
         v2: true,
       }),
     ).toBe(false)
+  })
+})
+
+describe('suggestionsWithinRules', () => {
+  const rules = [rule({ permission: 'external_directory', pattern: 'C:/work/*' })]
+  const base = { id: 'x', sessionID: 's', permission: 'external_directory' }
+  it('제안이 룰 안에 있으면 true', () => {
+    expect(suggestionsWithinRules(rules, { ...base, always: ['C:/work/sub/*'] })).toBe(true)
+  })
+  it('제안이 룰보다 넓으면 false', () => {
+    expect(suggestionsWithinRules(rules, { ...base, always: ['C:/other/*'] })).toBe(false)
+  })
+  it('제안 일부만 벗어나도 false', () => {
+    expect(suggestionsWithinRules(rules, { ...base, always: ['C:/work/sub/*', 'C:/other/*'] })).toBe(false)
+  })
+  it('제안 없으면 false', () => {
+    expect(suggestionsWithinRules(rules, base)).toBe(false)
+    expect(suggestionsWithinRules(rules, { ...base, always: [] })).toBe(false)
   })
 })
 

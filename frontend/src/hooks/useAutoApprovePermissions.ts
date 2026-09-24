@@ -130,6 +130,24 @@ function ruleMatches(rule: PermissionRule, permission: Permission): boolean {
   })
 }
 
+/** 제안 패턴이 전부 매칭 룰 커버리지 안인지 (백엔드 suggestionsWithinRules와 동일 규칙). */
+function suggestionsWithinRules(rules: PermissionRule[], permission: Permission): boolean {
+  const raw = (permission as unknown as { always?: unknown }).always
+  const suggested = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === 'string' && !!p) : []
+  if (suggested.length === 0) return false
+  return suggested.every(s =>
+    rules.some(rule =>
+      ruleMatches(rule as unknown as PermissionRule, {
+        ...permission,
+        pattern: undefined,
+        patterns: [s],
+        metadata: {},
+        always: undefined,
+      } as unknown as Permission),
+    ),
+  )
+}
+
 async function handlePermissionAdd(permission: Permission): Promise<void> {
   if (recentlyProcessed.has(permission.id)) return
 
@@ -140,11 +158,13 @@ async function handlePermissionAdd(permission: Permission): Promise<void> {
       recentlyProcessed.add(permission.id)
       setTimeout(() => { recentlyProcessed.delete(permission.id) }, 60_000)
       try {
-        // v0.12.0: 'once' 단건 승인 (소유권은 webui 룰이, opencode 메모리는 stateless)
+        // v0.12.1: 제안⊆룰이면 'always' 영속, 아니면 'once' (백엔드와 동일)
+        const useAlways = suggestionsWithinRules(sessRules, permission)
+        const reply = useAlways ? 'always' : 'once'
         if (permission.v2) {
-          await client.respondToPermissionV2(permission.id, 'once')
+          await client.respondToPermissionV2(permission.id, reply)
         } else {
-          await client.respondToPermission(permission.sessionID, permission.id, 'once')
+          await client.respondToPermission(permission.sessionID, permission.id, reply)
         }
         // sessionID 동봉 — 배지 캐시 즉시 정리용 (아래 remove 구독자가 사용)
         permissionEvents.emit({ type: 'remove', permissionID: permission.id, permission })
