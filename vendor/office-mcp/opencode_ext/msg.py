@@ -29,6 +29,17 @@ def _dedup_doubled_segment(base: str, rel: str) -> str | None:
 def _pick_existing(primary: str, fallback: str | None) -> str:
     """실재 파일 우선 — 쓰기 경로(미존재) 등은 기존 primary 동작 유지."""
     if fallback and fallback != primary and os.path.isfile(fallback):
+        try:
+            print(
+                f"[doc-reader] dedup doubled segment "
+                f"primary={primary!r} healed={fallback!r} "
+                f"REPOS={os.environ.get('OPCODE_WEBUI_REPOS', '')!r} "
+                f"WORKSPACE={os.environ.get('OPCODE_WEBUI_WORKSPACE', '')!r} "
+                f"cwd={os.getcwd()!r}",
+                flush=True,
+            )
+        except Exception:
+            pass
         return fallback
     return primary
 
