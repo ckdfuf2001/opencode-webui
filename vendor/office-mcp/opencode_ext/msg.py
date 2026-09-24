@@ -12,11 +12,33 @@ import re
 from typing import Any
 
 
+def _dedup_doubled_segment(base: str, rel: str) -> str | None:
+    """`<repo>/<repo>/...` 이중 세그먼트 해소.
+
+    호출 체인 어딘가(모델 인자·stale 엔트리·중복 prefix)에서 레포명이 두 번
+    붙어 `repos/doc-reader/doc-reader/...` 가 되면 File not found가 된다.
+    첫 두 세그먼트가 같고 앞이 실재 레포 dir이면 한 겹 벗긴 후보를 돌려준다.
+    """
+    segs = rel.split("/")
+    if len(segs) >= 3 and segs[0] and segs[0] == segs[1]:
+        if os.path.isdir(os.path.join(base, segs[0])):
+            return os.path.join(base, *segs[1:])
+    return None
+
+
+def _pick_existing(primary: str, fallback: str | None) -> str:
+    """실재 파일 우선 — 쓰기 경로(미존재) 등은 기존 primary 동작 유지."""
+    if fallback and fallback != primary and os.path.isfile(fallback):
+        return fallback
+    return primary
+
+
 def resolve_path(path_value: str) -> str:
     """Resolve workspace-relative paths like the old doc-reader did.
 
     Absolute paths pass through. Relative paths are resolved against
     OPCODE_WEBUI_REPOS (preferred), OPCODE_WEBUI_WORKSPACE, or cwd.
+    이중 세그먼트(`<repo>/<repo>/...`)는 실재 파일 기준으로 자가치유한다.
     """
     if os.path.isabs(path_value):
         return path_value
@@ -28,14 +50,14 @@ def resolve_path(path_value: str) -> str:
             return base
         if rel.startswith("repos/"):
             return os.path.join(base, rel[len("repos/"):])
-        return os.path.join(base, rel)
+        return _pick_existing(os.path.join(base, rel), _dedup_doubled_segment(base, rel))
     ws = os.path.abspath(os.environ.get("OPCODE_WEBUI_WORKSPACE", os.getcwd()))
     repos_dir = os.path.join(ws, "repos")
     if rel.startswith("repos/"):
         return os.path.join(ws, rel)
     first = rel.split("/", 1)[0]
     if first and os.path.isdir(os.path.join(repos_dir, first)):
-        return os.path.join(repos_dir, rel)
+        return _pick_existing(os.path.join(repos_dir, rel), _dedup_doubled_segment(repos_dir, rel))
     return os.path.join(ws, path_value)
 
 

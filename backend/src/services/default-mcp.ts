@@ -748,6 +748,39 @@ export function defaultMcpEntries(): Record<string, unknown> {
   return { ...buildDocReaderMcp(), ...buildAgentBrowserMcp() }
 }
 
+/**
+ * stale path env 자가복구 (v0.12.1).
+ * merge는 부족분만 보충해서, 과거에 잘못 들어간 절대경로(예: 레포 suffix가
+ * 붙은 OPCODE_WEBUI_REPOS)가 영원히 남는다 — 그게 `<repo>/<repo>/...` 이중
+ * 경로 File not found의 원인이다. 관리 키(ROOT/WORKSPACE/REPOS)에 한해:
+ * 현재값과 계산값이 다르고, 계산값은 디스크에 있고 현재값은 없으면 계산값으로
+ * 교체한다. 둘 다 없으면 손대지 않는다 (일시적 마운트 해제 등 오판 방지).
+ */
+const MANAGED_PATH_ENV_KEYS = ['OPCODE_WEBUI_ROOT', 'OPCODE_WEBUI_WORKSPACE', 'OPCODE_WEBUI_REPOS']
+
+export function repairStalePathEnv(
+  env: Record<string, string>,
+  defaults: Record<string, string>,
+  exists: (p: string) => boolean = existsSync,
+): { env: Record<string, string>; changed: boolean; repaired: string[] } {
+  const next = { ...env }
+  const repaired: string[] = []
+  for (const key of MANAGED_PATH_ENV_KEYS) {
+    const cur = next[key]
+    const def = defaults[key]
+    if (!cur || !def || cur === def) continue
+    let defExists = false
+    let curExists = false
+    try { defExists = exists(def) } catch { /* treat as missing */ }
+    try { curExists = exists(cur) } catch { /* treat as missing */ }
+    if (defExists && !curExists) {
+      next[key] = def
+      repaired.push(key)
+    }
+  }
+  return { env: next, changed: repaired.length > 0, repaired }
+}
+
 export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(content: T): T {
   // 판단 최소화: 없는 항목은 채우고, 우리 모양이면 루트만 고치고,
   // 사용자 커스텀은 손대지 않는다.
@@ -783,12 +816,18 @@ export function mergeDefaultMcpEntries<T extends Record<string, unknown>>(conten
           changed = true
         }
         const defaultEnv = ((entry as Record<string, unknown>).env ?? {}) as Record<string, string>
-        const env = { ...((existing.env as Record<string, string>) ?? {}) } as Record<string, string>
+        let env = { ...((existing.env as Record<string, string>) ?? {}) } as Record<string, string>
         for (const [key, value] of Object.entries(defaultEnv)) {
           if (!(key in env)) {
             env[key] = value
             changed = true
           }
+        }
+        const stale = repairStalePathEnv(env, defaultEnv)
+        if (stale.changed) {
+          env = stale.env
+          changed = true
+          logger.warn(`Repaired stale path env in MCP entry ${id}: ${stale.repaired.join(', ')}`)
         }
         if (changed) {
           next.env = env

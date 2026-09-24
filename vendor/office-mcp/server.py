@@ -2454,8 +2454,11 @@ def image_read(path: str) -> dict[str, Any]:
             return {"ok": False, "error": {"type": "FileNotFoundError", "message": f"File not found: {target}"}}
         try:
             result = _image.read_image(target)
-        except RuntimeError:
-            return {"ok": True, "result": {"text": _image.describe_image(target), "boxes": []}}
+        except RuntimeError as exc:
+            reason = str(exc).split("\n")[0][:200]
+            base = _image.describe_image(target)
+            text = f"{base} (OCR unavailable: {reason})" if reason else base
+            return {"ok": True, "result": {"text": text, "boxes": []}}
         return {"ok": True, "result": result}
     except Exception as exc:
         return {"ok": False, "error": {"type": type(exc).__name__, "message": str(exc)}}

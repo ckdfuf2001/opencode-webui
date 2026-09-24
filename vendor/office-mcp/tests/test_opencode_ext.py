@@ -100,3 +100,27 @@ def test_msg_path_helpers(tmp_path, monkeypatch) -> None:
     d = msgmod.default_attachment_dir("/tmp/mail/report.msg")
     assert d.endswith("report_msg")
     assert msgmod._human_size(2048) == "2.0 KB"
+
+
+def test_resolve_path_heals_doubled_repo_segment(tmp_path, monkeypatch) -> None:
+    # repos/doc-reader/doc-reader/chat_uploads/image.png → 한 겹 벗기기
+    real = tmp_path / "doc-reader" / "chat_uploads"
+    real.mkdir(parents=True)
+    (real / "image.png").write_bytes(b"fake")
+    monkeypatch.setenv("OPCODE_WEBUI_REPOS", str(tmp_path))
+    doubled = msgmod.resolve_path("doc-reader/doc-reader/chat_uploads/image.png").replace("\\", "/")
+    assert doubled.endswith("doc-reader/chat_uploads/image.png")
+    assert not doubled.endswith("doc-reader/doc-reader/chat_uploads/image.png")
+    # 정상 단일 경로는 그대로
+    single = msgmod.resolve_path("doc-reader/chat_uploads/image.png").replace("\\", "/")
+    assert single.endswith("doc-reader/chat_uploads/image.png")
+
+
+def test_resolve_path_prefers_existing_primary(tmp_path, monkeypatch) -> None:
+    # 진짜로 이중 디렉터리가 있으면 primary를 유지한다 (치유 오판 방지)
+    nested = tmp_path / "doc-reader" / "doc-reader"
+    nested.mkdir(parents=True)
+    (nested / "a.txt").write_bytes(b"x")
+    monkeypatch.setenv("OPCODE_WEBUI_REPOS", str(tmp_path))
+    got = msgmod.resolve_path("doc-reader/doc-reader/a.txt").replace("\\", "/")
+    assert got.endswith("doc-reader/doc-reader/a.txt")

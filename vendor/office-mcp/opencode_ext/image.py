@@ -234,12 +234,14 @@ def read_image_text(source_path: str) -> str:
     """Old read_document shape for images: text plus boxes JSON.
 
     Falls back to describe_image() when no OCR engine exists so image
-    reads degrade instead of failing outright.
+    reads degrade instead of failing outright. 실패 사유를 꼬리에 붙여
+    (File not found와 엔진 부재를 구분) 다음 진단을 가능하게 한다.
     """
     try:
         result = read_image(source_path)
-    except RuntimeError:
-        return describe_image(source_path)
+    except RuntimeError as exc:
+        reason = str(exc).split("\n")[0][:200]
+        return f"{describe_image(source_path)} (OCR unavailable: {reason})" if reason else describe_image(source_path)
     text = result.get("text", "")
     boxes = result.get("boxes", [])
     if boxes:
