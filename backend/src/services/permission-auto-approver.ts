@@ -415,13 +415,26 @@ async function handleAskedPermission(
  * 재조정 sweep: SSE로 놓친 ask를 잡는다.
  * ask 생성 이벤트를 못 받으면(백엔드 재시작·단절 구간) 프론트 폴링에만 보이고
  * 자동승인이 영원히 안 돈다. 살아있는 목록을 주기로 읽어 같은 판정기로 처리한다.
- * - v1형(reply에 sessionID 필요)으로 처리한다. v2 ask는 이벤트 경로가 담당한다.
+ * - v2 shape 페이로드는 normalize에서 감지해 v2 응답 경로를 쓴다.
  * - 응답 성공/실패 처리는 handleAskedPermission과 동일(dedupe+재시도).
  * - 미승인 사유 로그는 quiet로 낮춰 스팸을 막는다. 승인은 info 유지.
  */
 const SWEEP_INTERVAL_MS = 45_000
 const SWEEP_START_DELAY_MS = 3_000
 let sweepRunning = false
+
+/**
+ * 룰 CRUD 직후 즉시 재조정 (다음 45초 주기를 기다리지 않는다).
+ * ask가 룰보다 먼저 뜬 경우 — 사용자가 다이얼로그 보고 룰을 등록하는
+ * 바로 그 흐름 — 가만히 두면 최대 45초간 다이얼로그가 잔류한다.
+ * 실행 중이면 주기 tick이 처리하므로 중복 실행하지 않는다.
+ */
+export function kickPermissionSweep(db: Database): void {
+  if (sweepRunning) return
+  void sweepPendingPermissions(db, defaultBaseUrl).catch((e) => {
+    logger.debug('Auto-approve kick sweep failed:', e instanceof Error ? e.message : e)
+  })
+}
 
 async function sweepPendingPermissions(
   db: Database,

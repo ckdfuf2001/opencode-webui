@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { globToRegex, ruleMatches, normalizeActionName } from '../../src/services/permission-auto-approver'
+import { globToRegex, ruleMatches, normalizeActionName, kickPermissionSweep } from '../../src/services/permission-auto-approver'
 import type { PermissionRule } from '../../src/types/permission-rule'
 
 function rule(partial: Partial<PermissionRule> = {}): PermissionRule {
@@ -277,6 +277,21 @@ describe('v0.12.0: v2 shape (action/resources) 호환', () => {
         v2: true,
       }),
     ).toBe(false)
+  })
+})
+
+describe('kickPermissionSweep', () => {
+  it('서버가 죽어있어도 throw하지 않는다 (내부에서 흡수)', async () => {
+    expect(() => kickPermissionSweep({} as never)).not.toThrow()
+    // fire-and-forget 비동기 종료 대기 (unhandled rejection 방지 확인)
+    await new Promise((r) => setTimeout(r, 300))
+  })
+  it('실행 중이면 중복 실행하지 않는다', async () => {
+    expect(() => {
+      kickPermissionSweep({} as never)
+      kickPermissionSweep({} as never)
+    }).not.toThrow()
+    await new Promise((r) => setTimeout(r, 300))
   })
 })
 

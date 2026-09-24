@@ -48,6 +48,14 @@ export function createPermissionRuleRoutes(db: Database) {
       // 즉시 적용하려면 POST /api/opencode-restart 로 opencode 재시작).
       // await로 기다린다 — 요청 순서대로 파일에 반영되게 (빠른 연속 CRUD 순서 보장).
       await queuePermissionConfigSync(db)
+      // 이미 떠 있는 ask(룰보다 먼저 생긴 것)는 SSE가 못 잡으므로 즉시 재조정 —
+      // 안 하면 다음 sweep(45초)까지 다이얼로그가 잔류한다.
+      try {
+        const { kickPermissionSweep } = await import('../services/permission-auto-approver')
+        kickPermissionSweep(db)
+      } catch (e) {
+        logger.debug('Permission kick sweep skipped:', e instanceof Error ? e.message : e)
+      }
       return c.json(rule, 201)
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -66,6 +74,12 @@ export function createPermissionRuleRoutes(db: Database) {
         return c.json({ error: 'Permission rule not found' }, 404)
       }
       await queuePermissionConfigSync(db)
+      try {
+        const { kickPermissionSweep } = await import('../services/permission-auto-approver')
+        kickPermissionSweep(db)
+      } catch (e) {
+        logger.debug('Permission kick sweep skipped:', e instanceof Error ? e.message : e)
+      }
       return c.json({ success: true })
     } catch (error) {
       logger.error('Failed to delete permission rule:', error)
