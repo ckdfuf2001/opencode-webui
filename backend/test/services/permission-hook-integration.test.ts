@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import { subscribeOpencodeEvents } from '../../src/services/permission-auto-approver'
+import { subscribeOpencodeEvents, kickPermissionSweep } from '../../src/services/permission-auto-approver'
 
 function mockDb() {
   // ?�제 listPermissionRules(db, repoId)??repo_id = ? �??�터?�다 ??목도 ?�일?�게 ?�작
@@ -87,6 +87,21 @@ describe('permission hook integration (stub opencode server)', () => {
         res.end(JSON.stringify({ id: sid, directory: '/repo/test' }))
         return
       }
+      if (req.method === 'GET' && url.pathname === '/permission') {
+        // opencode v1.18+ 스코프: 전역 조회는 비고, ?directory= 에만 해당 ask가 잡힌다.
+        // 레거시 전역 sweep에는 빈 목록을 돌려줘 기존 테스트와 간섭하지 않는다.
+        // 디렉터리별로 다른 ask ID를 돌려줘 테스트 간 dedupe 간섭을 막는다.
+        const dir = url.searchParams.get('directory') ?? ''
+        const items =
+          dir === '/repo/test'
+            ? [{ id: 'per-sweep-1', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'echo hooktest sweep' } }]
+            : dir === '/other/test'
+              ? [{ id: 'per-sweep-2', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'echo hooktest sweep' } }]
+              : []
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(items))
+        return
+      }
       if (req.method === 'POST' && url.pathname.endsWith('/reply')) {
         const body = await readBody(req)
         replies.push({ url: url.pathname, body: JSON.parse(body) })
@@ -130,7 +145,7 @@ describe('permission hook integration (stub opencode server)', () => {
     }
   }
 
-  it('replies once to a matching repo rule via v1 endpoint', async () => {
+  it('replies once to a matching repo rule via v1 endpoint (no suggestions)', async () => {
     const sub = subscribe(mockDb())
     try {
       await new Promise((r) => setTimeout(r, 300))
@@ -138,6 +153,46 @@ describe('permission hook integration (stub opencode server)', () => {
       await waitForReplies(1)
       expect(replies).toHaveLength(1)
       expect(replies[0]!.url).toBe('/session/ses-1/permissions/per-1')
+      expect(replies[0]!.body).toEqual({ response: 'once' })
+    } finally {
+      sub.stop()
+    }
+  })
+
+  it('replies always when suggestions are within rule coverage', async () => {
+    const sub = subscribe(mockDb())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked({
+        id: 'per-1a',
+        sessionID: 'ses-1',
+        permission: 'bash',
+        metadata: { command: 'echo hooktest now' },
+        always: ['echo hooktest *'],
+      })
+      await waitForReplies(1)
+      expect(replies).toHaveLength(1)
+      expect(replies[0]!.url).toBe('/session/ses-1/permissions/per-1a')
+      expect(replies[0]!.body).toEqual({ response: 'always' })
+    } finally {
+      sub.stop()
+    }
+  })
+
+  it('replies once when suggestions exceed rule coverage', async () => {
+    const sub = subscribe(mockDb())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked({
+        id: 'per-1b',
+        sessionID: 'ses-1',
+        permission: 'bash',
+        metadata: { command: 'echo hooktest now' },
+        always: ['rm -rf /*'],
+      })
+      await waitForReplies(1)
+      expect(replies).toHaveLength(1)
+      expect(replies[0]!.url).toBe('/session/ses-1/permissions/per-1b')
       expect(replies[0]!.body).toEqual({ response: 'once' })
     } finally {
       sub.stop()
@@ -197,6 +252,45 @@ describe('permission hook integration (stub opencode server)', () => {
     }
   }, 15000)
 
+  const waitForReplyId = async (id: string, ms = 15000): Promise<CapturedReply> => {
+    const start = Date.now()
+    for (;;) {
+      const found = replies.find((r) => r.url.endsWith(`/${id}`))
+      if (found) return found
+      if (Date.now() - start > ms) throw new Error(`no reply for ${id} within ${ms}ms (got ${replies.length})`)
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
+
+  it('per-directory feed approves directory-scoped asks via SSE', async () => {
+    const sub = subscribeOpencodeEvents(mockDb(), {
+      getBaseUrl: () => baseUrl,
+      getDirectories: () => ['/repo/test'],
+    })
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked({ id: 'per-dir-1', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'echo hooktest now' } })
+      // 피드 자체 sweep(3s)이 per-sweep-1을 먼저 승인할 수 있어 ID 지정 대기한다
+      const found = await waitForReplyId('per-dir-1')
+      expect(found.url).toBe('/session/ses-1/permissions/per-dir-1')
+      expect(found.body).toEqual({ response: 'once' })
+    } finally {
+      sub.stop()
+    }
+  }, 20000)
+
+  it('kick sweeps directory-scoped asks (global list is blind)', async () => {
+    // sweepRunning이 이전 테스트의 진행 중 sweep으로 잡혀 있을 수 있어 재시도한다
+    const t0 = Date.now()
+    while (replies.length < 1 && Date.now() - t0 < 15000) {
+      kickPermissionSweep(mockDb(), { getBaseUrl: () => baseUrl, getDirectories: () => ['/other/test'] })
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+    const found = await waitForReplyId('per-sweep-2')
+    expect(found.url).toBe('/session/ses-1/permissions/per-sweep-2')
+    expect(found.body).toEqual({ response: 'once' })
+  }, 20000)
+
   it('uses v2 endpoint for v2.asked events', async () => {
     const sub = subscribe(mockDb())
     try {
@@ -209,6 +303,29 @@ describe('permission hook integration (stub opencode server)', () => {
       expect(replies).toHaveLength(1)
       expect(replies[0]!.url).toBe('/permission/per-3/reply')
       expect(replies[0]!.body).toEqual({ reply: 'once' })
+    } finally {
+      sub.stop()
+    }
+  })
+
+  it('uses v2 always-reply when v2 suggestions are within coverage', async () => {
+    const sub = subscribe(mockDb())
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      emitAsked(
+        {
+          id: 'per-3a',
+          sessionID: 'ses-1',
+          action: 'shell',
+          resources: ['echo hooktest v2covered'],
+          always: ['echo hooktest *'],
+        },
+        'permission.v2.asked',
+      )
+      await waitForReplies(1)
+      expect(replies).toHaveLength(1)
+      expect(replies[0]!.url).toBe('/permission/per-3a/reply')
+      expect(replies[0]!.body).toEqual({ reply: 'always' })
     } finally {
       sub.stop()
     }
