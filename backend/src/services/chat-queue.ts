@@ -62,7 +62,7 @@ const failedUntil = new Map<string, number>()
 // failed 헤드는 순서 유지를 위해 다음 항목을 막는다. 사용자가 X로 지우거나
 // 수동 재시도(retry)하면 해제. 자동 재시도는 하지 않는다 (retry storm 방지).
 const failCount = new Map<string, number>()
-const MAX_CONSECUTIVE_FAILURES = 5
+const MAX_CONSECUTIVE_FAILURES = 1
 const inFlight = new Set<string>()
 // 발송 중 fetch를 취소하기 위한 세션별 AbortController.
 // clearSendingOnAbort/clearQueuedChats(중단 버튼)가 이것을 abort한다.
