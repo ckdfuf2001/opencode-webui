@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis, Star } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AddBranchWorkspaceDialog } from "./AddBranchWorkspaceDialog";
@@ -220,22 +220,34 @@ export function RepoCard({
             </div>
           )}
           <div className="flex gap-2 flex-wrap">
+            {isReady ? (
               <Button
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (e.ctrlKey || e.metaKey) {
-                  window.open(`${window.location.origin}/repos/${repo.id}`, '_blank');
-                  return;
-                }
-                navigate(`/repos/${repo.id}`);
-              }}
-              disabled={!isReady}
-              className="cursor-pointer flex-1 h-10 sm:h-9 px-3"
-            >
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Open
-            </Button>
+                size="sm"
+                asChild
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3"
+              >
+                <Link
+                  to={`/repos/${repo.id}`}
+                  onClick={(e) => {
+                    // 카드 onClick보다 우선 (뒤 클릭과 중복 네비게이션 방지).
+                    // 수식키·중클릭은 네이티브 새 탭 처리.
+                    e.stopPropagation();
+                  }}
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Open
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3"
+              >
+                <ExternalLink className="w-4 h-4 mr-2" />
+                Open
+              </Button>
+            )}
 	    
 
               <Button
