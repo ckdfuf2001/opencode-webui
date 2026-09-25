@@ -267,7 +267,16 @@ export const SessionList = ({
           ? "bg-muted border-border"
           : "bg-card border-border hover:bg-muted/60 hover:border-ring"
     } hover:shadow-lg`;
-    const handleTileClick = (e: React.MouseEvent) => {
+    // 캡처 단계에서 처리: 자식 stopPropagation이 먼저 돌아도 항상 실행된다.
+    // (버블 단계면 자식이 전파를 끊어 가드가 안 돌고 네이티브 이동이 그대로 일어남)
+    const handleTileClickCapture = (e: React.MouseEvent) => {
+      // 타일 내 컨트롤(체크·펼치기·즐찾·삭제) 클릭은 네비게이션 금지.
+      // 자식 stopPropagation만으로는 앵커 네이티브 기본 이동이 안 막히므로 여기서 차단.
+      // (Radix Checkbox는 preventDefault를 먹이면 토글 자체가 죽으니 자식 쪽은 건드리지 않음)
+      if ((e.target as HTMLElement | null)?.closest?.('[data-tile-control]')) {
+        e.preventDefault();
+        return;
+      }
       // 수식키·중클릭은 브라우저 네이티브 처리(새 탭)에 맡긴다
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
       e.preventDefault();
@@ -286,9 +295,10 @@ export const SessionList = ({
                     toggleSessionSelection(session.id, checked === true);
                   }
                 }}
+                data-tile-control
                 onClick={(e) => {
-                  // 링크 타일 안: 네비게이션 차단이 stopPropagation만으로 안 막히므로 preventDefault 필수
-                  e.preventDefault();
+                  // preventDefault 금지: Radix 합성 핸들러가 defaultPrevented를 보면
+                  // 토글 자체를 스킵한다. 네비게이션 차단은 타일 핸들러의 closest 가드가 담당.
                   e.stopPropagation();
                 }}
                 className="w-5 h-5 flex-shrink-0 mt-0.5"
@@ -297,6 +307,7 @@ export const SessionList = ({
                 <div className="flex items-center gap-2">
                   {hasChildren && (
                     <button
+                      data-tile-control
                       className="h-4 w-4 p-0 text-muted-foreground hover:text-foreground bg-transparent border-none cursor-pointer flex-shrink-0"
                       onClick={(e) => {
                         e.preventDefault();
@@ -358,7 +369,7 @@ export const SessionList = ({
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-1 shrink-0" data-tile-control>
               <button
                 type="button"
                 className={`h-6 w-6 p-0 bg-transparent border-none cursor-pointer flex items-center justify-center ${isFav(session.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'}`}
@@ -384,7 +395,7 @@ export const SessionList = ({
         {href ? (
           <Link
             to={href}
-            onClick={handleTileClick}
+            onClickCapture={handleTileClickCapture}
             className={`rounded-lg border bg-card text-card-foreground shadow-sm block no-underline ${tileClass}`}
           >
             {tileContent}
