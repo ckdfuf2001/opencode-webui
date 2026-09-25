@@ -11,19 +11,10 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare, Check, X, GripVertical } from "lucide-react";
 import { RepoCard } from "./RepoCard";
 import { clearRepoNotifyData } from "@/lib/notifications";
+import { REPO_ORDER_KEY, applySavedOrder, saveRepoOrder } from "@/lib/repoOrder";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { renameSessionRepo } from "@/api/repos";
 import { showToast } from "@/lib/toast";
-
-const REPO_ORDER_KEY = 'repo-order:v1';
-
-function applySavedOrder<T extends { id: number }>(list: T[], order: number[]): T[] {
-  if (order.length === 0) return list;
-  const pos = new Map(order.map((id, i) => [id, i]));
-  const ranked = list.filter((r) => pos.has(r.id)).sort((a, b) => pos.get(a.id)! - pos.get(b.id)!);
-  const rankedIds = new Set(ranked.map((r) => r.id));
-  return [...ranked, ...list.filter((r) => !rankedIds.has(r.id))];
-}
 
 export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const queryClient = useQueryClient();
@@ -169,9 +160,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
 
   const persistOrder = (ids: number[]) => {
     setRepoOrder(ids);
-    try {
-      localStorage.setItem(REPO_ORDER_KEY, JSON.stringify(ids));
-    } catch {}
+    saveRepoOrder(ids);
   };
 
   const handleDropOnRepo = (e: ReactDragEvent, targetId: number, after: boolean) => {

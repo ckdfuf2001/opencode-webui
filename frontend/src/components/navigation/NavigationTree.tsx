@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { listFavorites, addFavorite, removeFavorite } from '@/api/favorites'
+import { loadRepoOrder, applySavedOrder } from '@/lib/repoOrder'
 import { showToast } from '@/lib/toast'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
 import { deleteRepo } from '@/api/repos'
@@ -162,9 +163,9 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
         )}
       </div>
 
-      {/* Repos */}
+      {/* Repos — 카드 목록과 같은 로컬 순서 (드래그 정렬 반영) */}
       <div className="flex flex-col gap-0.5">
-        {repos?.map(repo => {
+        {applySavedOrder(repos ?? [], loadRepoOrder()).map(repo => {
           const repoName = repo.repoUrl ? repo.repoUrl.split('/').pop()?.replace('.git','') || repo.localPath : repo.localPath
           const isActive = isRepoActive(repo.id)
           const isExpanded = expandedRepos.has(repo.id)
