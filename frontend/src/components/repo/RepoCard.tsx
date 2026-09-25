@@ -114,8 +114,8 @@ export function RepoCard({
           : "border-border hover:border-border hover:shadow-blue-900/20"
       }`}
     >
-       <div className="p-2 sm:p-6">
-         <div className="mb-4">
+       <div className="px-2 pb-2 pt-1.5 sm:px-6 sm:pb-6 sm:pt-3">
+          <div className="mb-4">
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="flex items-center gap-2 min-w-0">
               {dragHandle}
@@ -139,7 +139,7 @@ export function RepoCard({
                      onSelect(repo.id, !isSelected);
                    }
                  }}
-                 className={`font-semibold text-lg text-foreground truncate group-hover:text-blue-400 transition-colors ${
+                 className={`font-semibold text-lg leading-tight text-foreground truncate group-hover:text-blue-400 transition-colors ${
                    onSelect && showCheckbox ? "cursor-pointer" : ""
                  }`}
                >
