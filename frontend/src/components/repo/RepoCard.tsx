@@ -140,14 +140,14 @@ export function RepoCard({
                 </h3>
               {branchToDisplay && (repo.isWorktree ? (
                 <span
-                  className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground bg-muted/60 border border-border rounded-full px-2 py-0.5 flex-shrink-0"
+                  className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-medium text-muted-foreground bg-muted/60 border border-border rounded-full px-2 py-0.5 flex-shrink-0"
                   title={`Current branch: ${branchToDisplay}`}
                 >
                   <GitBranch className="w-3 h-3" />
                   <span className="max-w-[140px] truncate">{branchToDisplay}</span>
                 </span>
               ) : (
-                <span onClick={(e) => e.stopPropagation()} className="flex-shrink-0" title={`Current branch: ${branchToDisplay}`}>
+                <span onClick={(e) => e.stopPropagation()} className="flex-shrink-0 mt-0.5" title={`Current branch: ${branchToDisplay}`}>
                   <BranchSwitcher
                     repoId={repo.id}
                     currentBranch={branchToDisplay}

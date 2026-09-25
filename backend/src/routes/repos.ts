@@ -15,6 +15,7 @@ import { executeCommand } from '../utils/process'
 import * as scheduleQueries from '../db/schedule-queries'
 import * as permissionRuleQueries from '../db/permission-rule-queries'
 import path from 'path'
+import { existsSync } from 'node:fs'
 
 const REPO_EXPORT_VERSION = 2
 const EXPORT_MAX_FILE_BYTES = 500000
@@ -752,13 +753,21 @@ export function createRepoRoutes(database: Database) {
     try {
       const id = parseInt(c.req.param('id'))
       const repo = db.getRepoById(database, id)
-      
+
       if (!repo) {
         return c.json({ error: 'Repo not found' }, 404)
       }
-      
+
+      // 디렉터리 없는 stale 레포(DB 잔재): 500 대신 빈 목록.
+      // 폴링 엔드포인트라 500이면 콘솔·재시도 스팸이 된다.
+      const repoPath = path.resolve(getReposPath(), repo.localPath)
+      if (!existsSync(repoPath)) {
+        logger.debug(`Branches requested for missing directory (repo ${id}): ${repoPath}`)
+        return c.json({ local: [], remote: [], current: null })
+      }
+
       const branches = await repoService.listBranches(repo)
-      
+
       return c.json(branches)
     } catch (error: any) {
       logger.error('Failed to list branches:', error)
@@ -770,14 +779,20 @@ export function createRepoRoutes(database: Database) {
     try {
       const id = parseInt(c.req.param('id'))
       const repo = db.getRepoById(database, id)
-      
+
       if (!repo) {
         return c.json({ error: 'Repo not found' }, 404)
       }
-      
+
+      // 위와 동일: 디렉터리 없으면 빈 상태 (10초 폴링 500 스팸 방지)
       const repoPath = path.resolve(getReposPath(), repo.localPath)
+      if (!existsSync(repoPath)) {
+        logger.debug(`Git status requested for missing directory (repo ${id}): ${repoPath}`)
+        return c.json({ branch: '', ahead: 0, behind: 0, files: [], hasChanges: false, missing: true })
+      }
+
       const status = await gitOperations.getGitStatus(repoPath)
-      
+
       return c.json(status)
     } catch (error: any) {
       logger.error('Failed to get git status:', error)
