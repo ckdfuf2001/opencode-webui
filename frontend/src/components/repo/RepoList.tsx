@@ -389,10 +389,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                     isSelected={selectedRepos.has(repo.id)}
                     onSelect={handleSelectRepo}
                     showCheckbox={selectMode}
-                    onEnterSelectMode={() => {
-                      setSelectedRepos(new Set());
-                      setSelectMode(true);
-                    }}
                     dragHandle={
                       <span
                         draggable

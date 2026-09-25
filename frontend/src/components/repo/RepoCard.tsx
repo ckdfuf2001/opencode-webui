@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis, Star, Check } from "lucide-react";
+import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis, Star } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -36,8 +36,6 @@ interface RepoCardProps {
   pendingCount?: number;
   /** false면 체크박스 숨김 (Select 모드에서만 표시) */
   showCheckbox?: boolean;
-  /** ... 메뉴의 Select 항목 → 선택 모드 진입 */
-  onEnterSelectMode?: () => void;
   /** 드래그 정렬 핸들 (제목 행 맨 앞) */
   dragHandle?: ReactNode;
 }
@@ -52,7 +50,6 @@ export function RepoCard({
   workingCount = 0,
   pendingCount = 0,
   showCheckbox = true,
-  onEnterSelectMode,
   dragHandle,
 }: RepoCardProps) {
   const queryClient = useQueryClient();
@@ -211,11 +208,6 @@ export function RepoCard({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                    {!showCheckbox && onEnterSelectMode && (
-                      <DropdownMenuItem onClick={() => onEnterSelectMode()}>
-                        <Check className="w-4 h-4 mr-2" /> Select
-                      </DropdownMenuItem>
-                    )}
                     <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending}>
                       <Copy className="w-4 h-4 mr-2" /> Clone (skill/커맨드/설정/인덱스)
                     </DropdownMenuItem>
