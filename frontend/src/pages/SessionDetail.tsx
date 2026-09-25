@@ -172,6 +172,8 @@ export function SessionDetail() {
   // total을 모르면 버튼을 숨긴다 (60개 추정은 오탐이라 제거).
   const [totalKnown, setTotalKnown] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // edit-resend/truncate/delete 처리 중 표시 (큐영역). abort→작업 순서로 진행된다.
+  const [opProgress, setOpProgress] = useState<{ label: string } | null>(null);
   useEffect(() => {
     setTotalKnown(null);
     setIsLoadingMore(false);
@@ -1464,9 +1466,28 @@ export function SessionDetail() {
     setInjectedPrompt(null)
   }, []);
 
+  // 파괴적 작업(edit-resend/truncate/delete) 전 세션을 idle로 만든다.
+  // 생성 중 DB를 자르면 abort 레이스가 나므로, busy면 abort 승인 후 진행한다.
+  // abort 실패해도 작업은 진행한다 (서버 다운이면 어차피 idle).
+  const ensureIdleAbort = useCallback(async (): Promise<void> => {
+    if (!sessionId) return
+    const busy = dbBusy || descendantBusy || hasActiveSend(sessionId) ||
+      (!!lastMessage && isMessageStreaming(lastMessage))
+    if (!busy) return
+    setOpProgress({ label: 'aborting...' })
+    try {
+      await abortSession.mutateAsync(sessionId)
+    } catch {
+      // best effort — 아래 작업은 계속 진행
+    }
+  }, [sessionId, dbBusy, descendantBusy, lastMessage, abortSession]);
+
   const handleResendEdit = useCallback(async (messageID: string): Promise<boolean> => {
     if (!sessionId) return false
+    setOpProgress({ label: 'truncating...' })
     try {
+      await ensureIdleAbort()
+      setOpProgress({ label: 'truncating...' })
       const result = await truncateSession.mutateAsync({ sessionID: sessionId, messageID })
       if (!result?.success) {
         showToast.error('Failed to truncate session')
@@ -1485,8 +1506,10 @@ export function SessionDetail() {
     } catch (error) {
       showToast.error((error as Error).message || 'Failed to truncate session')
       return false
+    } finally {
+      setOpProgress(null)
     }
-  }, [sessionId, truncateSession]);
+  }, [sessionId, truncateSession, ensureIdleAbort]);
 
   const handleTruncate = useCallback((messageID: string) => {
     if (!sessionId) return
@@ -1495,7 +1518,10 @@ export function SessionDetail() {
 
   const handleDeleteMessage = useCallback(async (messageID: string) => {
     if (!sessionId) return
+    setOpProgress({ label: 'deleting...' })
     try {
+      await ensureIdleAbort()
+      setOpProgress({ label: 'deleting...' })
       const result = await deleteMessageMutation.mutateAsync({ sessionID: sessionId, messageID })
       if (!result?.success) {
         showToast.error('Failed to delete message')
@@ -1506,8 +1532,10 @@ export function SessionDetail() {
       showToast.success('Message (this turn) deleted')
     } catch (error) {
       showToast.error((error as Error).message || 'Failed to delete message')
+    } finally {
+      setOpProgress(null)
     }
-  }, [sessionId, deleteMessageMutation]);
+  }, [sessionId, deleteMessageMutation, ensureIdleAbort]);
 
   const handleInjectedPromptConsumed = useCallback(() => {
     setInjectedPrompt(null)
@@ -1697,6 +1725,7 @@ if (results.length > 0) {
                 highlightedMessageID={highlightedMessageID}
                 invocations={invocationByMessage}
                 onOpenCommandHistory={() => setCommandsOpen(true)}
+                actionsDisabled={opProgress !== null}
               />
               </ErrorBoundary>
             )}
@@ -1775,6 +1804,7 @@ if (results.length > 0) {
                 onCompact={handleCompact}
                 onNewSession={handleNewSession}
                 isStreaming={isStreaming}
+                queueActivityLabel={opProgress?.label ?? null}
               />
             </div>
             </div>

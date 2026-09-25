@@ -103,6 +103,8 @@ interface MessageThreadProps {
   invocations?: Map<string, { name: string; runId: string; args: string | null }>
   /** 칩 클릭 → 커맨드 히스토리 창 열기 */
   onOpenCommandHistory?: () => void
+  /** abort+삭제/잘라내기 진행 중 — 파괴적 아이콘 잠금 */
+  actionsDisabled?: boolean
 }
 
 export const isMessageStreaming = (msg: MessageWithParts): boolean => {
@@ -115,7 +117,7 @@ const isMessageThinking = (msg: MessageWithParts): boolean => {
   return msg.parts.length === 0 && isMessageStreaming(msg)
 }
 
-export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, repoRoot, reposRootAbs, isLoading, sessionID, invocations, onOpenCommandHistory, opcodeUrl }: MessageThreadProps) {
+export const MessageThread = memo(function MessageThread({ messages, onFileClick, onEditMessage, onTruncate, onDelete, hiddenAfterID, onCancelEdit, highlightedMessageID, directory, repoRoot, reposRootAbs, isLoading, sessionID, invocations, onOpenCommandHistory, opcodeUrl, actionsDisabled }: MessageThreadProps) {
   // 윈도우는 SessionDetail이 단일 소유 (WINDOW_SIZE/windowStart).
   // 여기서 이중으로 자르면 "Show earlier"가 동작 안 하고 스크롤이 튄다.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -309,7 +311,8 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 {msg.info.role === 'user' && onEditMessage && !streaming && (
                   <button
                     onClick={() => onEditMessage(msg.info.id, getEditablePrompt(msg, invocations?.get(msg.info.id), reposRootAbs ?? ''))}
-                    className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+                    disabled={actionsDisabled}
+                    className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
                     title="Edit and resend"
                   >
                     <CornerDownLeft className="w-3.5 h-3.5" />
@@ -318,7 +321,8 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 {msg.info.role === 'user' && onTruncate && !streaming && (
                   <button
                     onClick={() => onTruncate(msg.info.id)}
-                    className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer"
+                    disabled={actionsDisabled}
+                    className="p-1 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
                     title="Delete this message and everything after"
                   >
                     <Scissors className="w-3.5 h-3.5" />
@@ -327,7 +331,8 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 {msg.info.role === 'user' && onDelete && (
                   <button
                     onClick={() => onDelete(msg.info.id)}
-                    className="p-1 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-500 cursor-pointer"
+                    disabled={actionsDisabled}
+                    className="p-1 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-500 cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
                     title="Delete this message turn"
                   >
                     <Eraser className="w-3.5 h-3.5" />

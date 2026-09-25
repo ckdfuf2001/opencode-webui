@@ -6,9 +6,11 @@ import { API_BASE_URL } from '@/config'
 
 interface ChatQueueStripProps {
   sessionID: string
+  /** abort+삭제/잘라내기 진행 중 표시 (예: "deleting..."). 설정되면 큐 내용과 무관하게 표시 */
+  activityLabel?: string | null
 }
 
-export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
+export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps) {
   const { data: items = [] } = useQueuedChats(sessionID)
   const removeChat = useRemoveQueuedChat()
   const moveChat = useMoveQueuedChat()
@@ -53,6 +55,18 @@ export function ChatQueueStrip({ sessionID }: ChatQueueStripProps) {
         body: JSON.stringify({ enabled: v }),
       }).catch(() => {})
     } catch {}
+  }
+
+  // 파괴적 작업 진행 중 (abort→truncate/delete): 큐 내용과 무관하게 상태만 표시
+  if (activityLabel) {
+    return (
+      <div className="w-full max-w-4xl px-4 pb-1">
+        <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium bg-muted/40 text-muted-foreground">
+          <Clock className="h-3 w-3 shrink-0 animate-spin" />
+          <span className="truncate opacity-80">{activityLabel}</span>
+        </div>
+      </div>
+    )
   }
 
   if (items.length === 0) {

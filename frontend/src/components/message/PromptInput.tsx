@@ -97,6 +97,8 @@ interface PromptInputProps {
   onCompact?: () => void
   onNewSession?: () => void
   isStreaming?: boolean
+  /** abort+삭제/잘라내기 진행 중 표시 (큐영역). null이면 표시 안 함 */
+  queueActivityLabel?: string | null
 }
 
 export function PromptInput({ 
@@ -122,7 +124,8 @@ export function PromptInput({
   onResendEdit,
   autoScrollEnabled,
   onAutoScrollChange,
-  isStreaming: isStreamingProp
+  isStreaming: isStreamingProp,
+  queueActivityLabel,
 }: PromptInputProps) {
   const [prompt, setPrompt] = useState('')
   const [modelName, setModelName] = useState<string>('')
@@ -1020,7 +1023,7 @@ useEffect(() => {
 
   return (
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 mx-2 mb-2 w-[90%] max-w-4xl">
-      <ChatQueueStrip sessionID={sessionID} />
+      <ChatQueueStrip sessionID={sessionID} activityLabel={queueActivityLabel} />
       {uploadProgress && (
         <div className="mb-2 px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400">
           <div className="flex items-center justify-between gap-2 mb-1">
