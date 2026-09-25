@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, type DragEvent as ReactDragEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listRepos, deleteRepo } from "@/api/repos";
 import { listSchedules } from "@/api/schedules";
@@ -8,12 +8,22 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare, Check, X } from "lucide-react";
+import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare, Check, X, GripVertical } from "lucide-react";
 import { RepoCard } from "./RepoCard";
 import { clearRepoNotifyData } from "@/lib/notifications";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { renameSessionRepo } from "@/api/repos";
 import { showToast } from "@/lib/toast";
+
+const REPO_ORDER_KEY = 'repo-order:v1';
+
+function applySavedOrder<T extends { id: number }>(list: T[], order: number[]): T[] {
+  if (order.length === 0) return list;
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const ranked = list.filter((r) => pos.has(r.id)).sort((a, b) => pos.get(a.id)! - pos.get(b.id)!);
+  const rankedIds = new Set(ranked.map((r) => r.id));
+  return [...ranked, ...list.filter((r) => !rankedIds.has(r.id))];
+}
 
 export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const queryClient = useQueryClient();
@@ -24,6 +34,19 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const [isEditMode, setIsEditMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [pendingBulk, setPendingBulk] = useState<{ repos: number[]; sessions: string[] } | null>(null);
+  // 카드 체크박스 표시 모드 (... 메뉴 Select/Done으로 토글)
+  const [selectMode, setSelectMode] = useState(false);
+  // 카드 순서 (개인별, localStorage — 서버에 저장 안 함)
+  const [repoOrder, setRepoOrder] = useState<number[]>(() => {
+    try {
+      const raw = localStorage.getItem(REPO_ORDER_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((n) => typeof n === 'number') : [];
+    } catch {
+      return [];
+    }
+  });
+  const [dropTargetId, setDropTargetId] = useState<number | null>(null);
 
   const {
     data: repos,
@@ -125,8 +148,14 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
     return acc;
   }, [] as NonNullable<typeof repos>);
 
-  const filteredRepos = dedupedRepos.filter((repo) => {
-    const repoName = repo.repoUrl 
+  const orderedRepos = useMemo(
+    () => applySavedOrder(dedupedRepos, repoOrder),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dedupedRepos, repoOrder.join(',')],
+  );
+
+  const filteredRepos = orderedRepos.filter((repo) => {
+    const repoName = repo.repoUrl
       ? repo.repoUrl.split("/").slice(-1)[0].replace(".git", "")
       : repo.localPath;
     const searchTarget = repo.repoUrl || repo.localPath || "";
@@ -135,6 +164,31 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
       searchTarget.toLowerCase().includes(searchQuery.toLowerCase())
     );
   });
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedRepos(new Set());
+  };
+
+  const persistOrder = (ids: number[]) => {
+    setRepoOrder(ids);
+    try {
+      localStorage.setItem(REPO_ORDER_KEY, JSON.stringify(ids));
+    } catch {}
+  };
+
+  const handleDropOnRepo = (e: ReactDragEvent, targetId: number) => {
+    e.preventDefault();
+    setDropTargetId(null);
+    const raw = e.dataTransfer.getData('text/repo-id');
+    const draggedId = raw ? parseInt(raw, 10) : NaN;
+    if (!Number.isInteger(draggedId) || draggedId === targetId) return;
+    const ids = orderedRepos.map((r) => r.id).filter((id) => id !== draggedId);
+    const at = ids.indexOf(targetId);
+    if (at < 0) return;
+    ids.splice(at, 0, draggedId);
+    persistOrder(ids);
+  };
 
   const handleSelectRepo = (id: number, selected: boolean) => {
     const newSelected = new Set(selectedRepos);
@@ -185,6 +239,11 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           <Button variant={isEditMode ? "default" : "outline"} size="icon" className="hidden md:flex h-8 w-8" onClick={() => { setIsEditMode(v => !v); if (isEditMode) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) } }} title={isEditMode ? "완료" : "편집"}>
             <Pencil className="w-4 h-4" />
           </Button>
+          {selectMode && !isEditMode && (
+            <Button variant="default" size="sm" className="hidden md:flex h-8 whitespace-nowrap" onClick={exitSelectMode} title="선택 모드 종료">
+              Done
+            </Button>
+          )}
           {/* 편집 모드: 최상단 Repository 체크 + 삭제 */}
           {isEditMode ? (
             <>
@@ -229,6 +288,10 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => { if (selectMode) exitSelectMode(); else { setSelectedRepos(new Set()); setSelectMode(true) } }}>
+                <Check className="w-4 h-4 mr-2" />
+                {selectMode ? "Done" : "Select"}
+              </DropdownMenuItem>
               {filteredRepos.length > 0 && (
                 <DropdownMenuItem onClick={handleSelectAll}>
                   {filteredRepos.every((repo) => selectedRepos.has(repo.id))
@@ -312,22 +375,53 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-4 w-full">
               {filteredRepos.map((repo) => (
-                <RepoCard
+                <div
                   key={repo.id}
-                  repo={repo}
-                  onDelete={(id) => {
-                    setRepoToDelete(id);
-                    setDeleteDialogOpen(true);
+                  onDragOver={(e) => {
+                    if (!e.dataTransfer.types.includes('text/repo-id')) return;
+                    e.preventDefault();
+                    setDropTargetId(repo.id);
                   }}
-                  isDeleting={
-                    deleteMutation.isPending && repoToDelete === repo.id
-                  }
-                  isSelected={selectedRepos.has(repo.id)}
-                  onSelect={handleSelectRepo}
-                  scheduleCount={scheduleCounts[repo.id] ?? 0}
-                  workingCount={workingCounts[repo.id] ?? 0}
-                  pendingCount={pendingCounts[repo.id] ?? 0}
-                />
+                  onDragLeave={() => setDropTargetId((cur) => (cur === repo.id ? null : cur))}
+                  onDrop={(e) => handleDropOnRepo(e, repo.id)}
+                  className={`rounded-xl transition-shadow ${dropTargetId === repo.id ? 'ring-2 ring-blue-500 shadow-lg' : ''}`}
+                >
+                  <RepoCard
+                    repo={repo}
+                    onDelete={(id) => {
+                      setRepoToDelete(id);
+                      setDeleteDialogOpen(true);
+                    }}
+                    isDeleting={
+                      deleteMutation.isPending && repoToDelete === repo.id
+                    }
+                    isSelected={selectedRepos.has(repo.id)}
+                    onSelect={handleSelectRepo}
+                    showCheckbox={selectMode}
+                    onEnterSelectMode={() => {
+                      setSelectedRepos(new Set());
+                      setSelectMode(true);
+                    }}
+                    dragHandle={
+                      <span
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/repo-id', String(repo.id));
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEnd={() => setDropTargetId(null)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-foreground shrink-0 p-0.5 -ml-1"
+                        title="드래그해서 순서 변경 (이 PC에만 저장)"
+                      >
+                        <GripVertical className="w-4 h-4" />
+                      </span>
+                    }
+                    scheduleCount={scheduleCounts[repo.id] ?? 0}
+                    workingCount={workingCounts[repo.id] ?? 0}
+                    pendingCount={pendingCounts[repo.id] ?? 0}
+                  />
+                </div>
               ))}
             </div>
           )}
