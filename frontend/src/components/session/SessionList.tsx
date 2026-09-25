@@ -1,6 +1,7 @@
 import { useState, useMemo, Fragment } from "react";
 import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession, isRecentlyAborted, isCancelledUntilNextSend } from "@/hooks/useOpenCode";
 import { Link, useNavigate } from "react-router-dom";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -195,7 +196,6 @@ export const SessionList = ({
     sessionId: string,
     e: React.MouseEvent<HTMLButtonElement>,
   ) => {
-    e.preventDefault();
     e.stopPropagation();
     setSessionToDelete(sessionId);
     setDeleteDialogOpen(true);
@@ -255,35 +255,40 @@ export const SessionList = ({
     const isExpanded = expandedSessions.has(session.id);
     const isOrphan = !!session.parentID && !visibleSessionIDs.has(session.parentID);
     const subtreeSelection = getSubtreeSelectionState(node);
-
-    // 타일 전체를 네이티브 링크로: 우클릭 새 탭 열기·중클릭·Ctrl+클릭이 동작한다.
-    // 일반 좌클릭은 기존 onSelectSession 흐름 유지(다이얼로그 닫기 등).
-    const href = sessionHrefBase ? `${sessionHrefBase}/${session.id}` : undefined;
-    const tileClass = `p-3 cursor-pointer transition-all ${
-      selectedSessions.has(session.id)
-        ? "border-blue-500 shadow-lg shadow-blue-900/30 bg-muted"
-        : activeSessionID === session.id
-          ? "bg-muted border-border"
-          : "bg-card border-border hover:bg-muted/60 hover:border-ring"
-    } hover:shadow-lg`;
-    // 캡처 단계에서 처리: 자식 stopPropagation이 먼저 돌아도 항상 실행된다.
-    // (버블 단계면 자식이 전파를 끊어 가드가 안 돌고 네이티브 이동이 그대로 일어남)
-    const handleTileClickCapture = (e: React.MouseEvent) => {
-      // 타일 내 컨트롤(체크·펼치기·즐찾·삭제) 클릭은 네비게이션 금지.
-      // 자식 stopPropagation만으로는 앵커 네이티브 기본 이동이 안 막히므로 여기서 차단.
-      // (Radix Checkbox는 preventDefault를 먹이면 토글 자체가 죽으니 자식 쪽은 건드리지 않음)
-      if ((e.target as HTMLElement | null)?.closest?.('[data-tile-control]')) {
-        e.preventDefault();
+    // 제목만 네이티브 링크 (우클릭 새 탭·중클릭·Ctrl+클릭). 나머지는 기존 동작 유지.
+    const titleHref = sessionHrefBase ? `${sessionHrefBase}/${session.id}` : undefined;
+    const handleTitleClick = (e: React.MouseEvent) => {
+      // 수식키·중클릭은 네이티브 처리, 버블만 차단 (바깥 타일 onClick 중복 방지)
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) {
+        e.stopPropagation();
         return;
       }
-      // 수식키·중클릭은 브라우저 네이티브 처리(새 탭)에 맡긴다
-      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
       e.preventDefault();
+      e.stopPropagation();
       onSelectSession(session.id);
     };
 
-    // 체크박스는 링크 밖(왼쪽 고유 영역) — 어떤 전파/기본값 간섭도 받지 않는다.
-    const checkNode = (
+    return (
+      <Fragment key={session.id}>
+        <Card
+          className={`p-3 cursor-pointer transition-all ${
+            selectedSessions.has(session.id)
+              ? "border-blue-500 shadow-lg shadow-blue-900/30 bg-muted"
+              : activeSessionID === session.id
+                ? "bg-muted border-border"
+                : "bg-card border-border hover:bg-muted/60 hover:border-ring"
+          } hover:shadow-lg`}
+          onClick={(e) => {
+            if ((e.ctrlKey || e.metaKey) && sessionHrefBase) {
+              e.preventDefault();
+              window.open(`${window.location.origin}${sessionHrefBase}/${session.id}`, '_blank');
+              return;
+            }
+            onSelectSession(session.id);
+          }}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2 flex-1 min-w-0">
               <Checkbox
                 checked={subtreeSelection}
                 onCheckedChange={(checked) => {
@@ -293,18 +298,17 @@ export const SessionList = ({
                     toggleSessionSelection(session.id, checked === true);
                   }
                 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
                 className="w-5 h-5 flex-shrink-0 mt-0.5"
               />
-    );
-    const titleBlock = (
-              <>
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   {hasChildren && (
                     <button
-                      data-tile-control
                       className="h-4 w-4 p-0 text-muted-foreground hover:text-foreground bg-transparent border-none cursor-pointer flex-shrink-0"
                       onClick={(e) => {
-                        e.preventDefault();
                         e.stopPropagation();
                         toggleExpand(session.id);
                       }}
@@ -318,7 +322,18 @@ export const SessionList = ({
                     </button>
                   )}
                   <h3 className="text-sm font-medium text-foreground truncate">
-                    {session.title || "Untitled Session"}
+                    {titleHref ? (
+                      <Link
+                        to={titleHref}
+                        onClick={handleTitleClick}
+                        className="no-underline text-inherit hover:text-blue-400 transition-colors"
+                        title="Open in new tab (right-click)"
+                      >
+                        {session.title || "Untitled Session"}
+                      </Link>
+                    ) : (
+                      session.title || "Untitled Session"
+                    )}
                   </h3>
                   {dbBusyIds.has(session.id) ? (
                     <span
@@ -361,14 +376,13 @@ export const SessionList = ({
                     })}
                   </span>
                 </div>
-              </>
-    );
-    const actionsBlock = (
-            <div className="flex items-center gap-1 shrink-0" data-tile-control>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
                 className={`h-6 w-6 p-0 bg-transparent border-none cursor-pointer flex items-center justify-center ${isFav(session.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'}`}
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(session.id, session.title) }}
+                onClick={(e) => { e.stopPropagation(); toggleFav(session.id, session.title) }}
                 title={isFav(session.id) ? '즐겨찾기 해제' : '즐겨찾기 등록'}
               >
                 <Star className={`w-4 h-4 ${isFav(session.id) ? 'fill-amber-500' : ''}`} />
@@ -382,31 +396,8 @@ export const SessionList = ({
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
-    );
-
-    return (
-      <Fragment key={session.id}>
-        <div className={`rounded-lg border bg-card text-card-foreground shadow-sm ${tileClass}`}>
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-start gap-2 flex-1 min-w-0">
-              {checkNode}
-              {href ? (
-                <Link
-                  to={href}
-                  onClickCapture={handleTileClickCapture}
-                  className="flex-1 min-w-0 block no-underline text-inherit"
-                >
-                  {titleBlock}
-                </Link>
-              ) : (
-                <div className="flex-1 min-w-0" onClick={() => onSelectSession(session.id)}>
-                  {titleBlock}
-                </div>
-              )}
-            </div>
-            {actionsBlock}
           </div>
-        </div>
+        </Card>
         {hasChildren && isExpanded && (
           <div className="ml-6 border-l border-border pl-3 flex flex-col gap-2">
             {node.children.map((child) => renderSessionNode(child))}
