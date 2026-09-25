@@ -154,6 +154,138 @@ export function killLingeringOpenCodeServers(): void {
   }
 }
 
+/**
+ * 인스턴스 reload 안전장치 — 같은 디렉터리를 공유하는 세션 보호용.
+ *
+ * opencode는 디렉터리당 인스턴스 1개를 공유하므로, 한 세션의 truncate가
+ * 유발하는 `POST /instance/dispose?directory=X` 가 같은 디렉터리에서
+ * 스트리밍 중인 다른 세션을 abort시킨다 (opencode.log `disposing instance`
+ * 뒤 `process ... error=Aborted`). 그래서 dispose 전에 해당 디렉터리의
+ * busy 세션을 확인하고, 있으면 reload를 미뤄 idle 때로 넘긴다.
+ *
+ * - fetchBusySessionIds: live 진실 (`/session/status?directory=`).
+ *   조회 실패는 [] (fail-open — 서버 다운이면 reload 어차피 스킵됨).
+ * - queue/flush: 지연 큐. session-status poller의 busy→idle 전이에서
+ *   flushPendingInstanceReloads()가 소진한다. 30분 TTL + 200개 상한.
+ */
+const PENDING_RELOAD_TTL_MS = 30 * 60 * 1000
+const PENDING_RELOAD_MAX = 200
+const pendingInstanceReloads = new Map<string, number>()
+
+export async function fetchBusySessionIds(
+  baseUrl: string,
+  directory: string,
+  headers: Record<string, string> = {},
+  timeoutMs = 5000,
+): Promise<string[]> {
+  try {
+    const response = await fetch(`${baseUrl}/session/status?directory=${encodeURIComponent(directory)}`, {
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (!response.ok) return []
+    const map = (await response.json()) as Record<string, { type?: string }>
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return []
+    return Object.entries(map)
+      .filter(([, info]) => info?.type === 'busy')
+      .map(([sessionId]) => sessionId)
+  } catch {
+    return []
+  }
+}
+
+export function queuePendingInstanceReload(directory: string): void {
+  if (!directory) return
+  pendingInstanceReloads.set(directory, Date.now())
+  if (pendingInstanceReloads.size > PENDING_RELOAD_MAX) {
+    const oldest = pendingInstanceReloads.keys().next().value as string | undefined
+    if (oldest !== undefined) pendingInstanceReloads.delete(oldest)
+  }
+  const now = Date.now()
+  for (const [dir, at] of pendingInstanceReloads) {
+    if (now - at > PENDING_RELOAD_TTL_MS) pendingInstanceReloads.delete(dir)
+  }
+}
+
+export function pendingInstanceReloadCount(): number {
+  return pendingInstanceReloads.size
+}
+
+/** 테스트용 스냅샷 (production에서는 flush 경로로만 소진). */
+export function pendingInstanceReloadDirs(): string[] {
+  return [...pendingInstanceReloads.keys()]
+}
+
+/** 테스트 격리용: 지연 큐 비우기. */
+export function clearPendingInstanceReloads(): void {
+  pendingInstanceReloads.clear()
+}
+
+/**
+ * dispose 실행 본체 (게이트+실행). reloadDirectory가 서버 생존 확인 후 위임한다.
+ * busy 세션이 하나라도 있으면 dispose를 건너뛰고 지연 큐에 넣어 false 반환.
+ */
+export async function attemptInstanceReload(
+  baseUrl: string,
+  directory: string,
+  headers: Record<string, string> = {},
+): Promise<boolean> {
+  let busy: string[] = []
+  try {
+    busy = await fetchBusySessionIds(baseUrl, directory, headers)
+  } catch (error) {
+    logger.debug(`Busy check failed for ${directory}, proceeding with reload:`, error)
+  }
+  if (busy.length > 0) {
+    queuePendingInstanceReload(directory)
+    logger.warn(
+      `Deferred instance reload for ${directory}: busy session(s) ${busy.join(', ')} would be aborted — retrying when idle`,
+    )
+    return false
+  }
+  const url = `${baseUrl}/instance/dispose?directory=${encodeURIComponent(directory)}`
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!response.ok) {
+      logger.warn(`Instance reload failed for ${directory} (HTTP ${response.status})`)
+      return false
+    }
+    logger.info(`Reloaded OpenCode instance for ${directory}`)
+    return true
+  } catch (error) {
+    logger.warn(`Instance reload error for ${directory}:`, error)
+    return false
+  }
+}
+
+/**
+ * 지연된 reload를 소진한다. reloader 미지정 시 실제 reloadDirectory로 수행하며,
+ * 아직 busy면 reloadDirectory가 다시 큐에 넣으므로 소실되지 않는다.
+ * 스냅샷 위를 순회하므로 재등록 루프가 없다. 수행된 디렉터리 목록 반환.
+ */
+export async function flushPendingInstanceReloads(
+  reloader?: (directory: string) => Promise<unknown>,
+): Promise<string[]> {
+  const run = reloader ?? ((directory: string) => opencodeServerManager.reloadDirectory(directory))
+  const done: string[] = []
+  for (const directory of [...pendingInstanceReloads.keys()]) {
+    try {
+      const proceeded = await run(directory)
+      // false 반환(busy로 재지연)은 큐에 남긴다. true·기타는 소진.
+      if (proceeded === false) continue
+      pendingInstanceReloads.delete(directory)
+      done.push(directory)
+    } catch {
+      // 실패는 큐에 남긴다 — 다음 flush에서 재시도
+    }
+  }
+  return done
+}
+
 class OpenCodeServerManager {
   private static instance: OpenCodeServerManager
   private serverProcess: any = null
@@ -546,35 +678,28 @@ class OpenCodeServerManager {
    * Reload a single project instance by disk-changing capture without
    * restarting the whole OpenCode process. opencode 1.18+ loads commands,
    * skills, agents, MCP prompts lazily per directory and re-scans on
-   * /instance/dispose. This preserves active sessions and other directories.
+   * /instance/dispose. Other directories are unaffected.
+   *
+   * NOTE: the SAME directory shares one instance — dispose aborts streaming
+   * turns of sibling sessions (`process ... error=Aborted`). So when any
+   * session in this directory is busy, the reload is deferred (queued) and
+   * retried when the directory goes idle. Returns true when the dispose was
+   * attempted, false when deferred/skipped.
    */
-  async reloadDirectory(directory: string): Promise<void> {
+  async reloadDirectory(directory: string): Promise<boolean> {
     if (!this.serverPid && !this.isHealthy) {
       await this.ensureRunning()
     }
     if (!this.isHealthy) {
       logger.warn('OpenCode server not healthy; skipping instance reload')
-      return
+      return false
     }
     const headers: Record<string, string> = {}
     const auth = getServerAuthHeader()
     if (auth) headers.Authorization = auth
-    const url = `${this.getUrl()}/instance/dispose?directory=${encodeURIComponent(directory)}`
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        signal: AbortSignal.timeout(15_000),
-      })
-      if (!response.ok) {
-        logger.warn(`Instance reload failed for ${directory} (HTTP ${response.status})`)
-        return
-      }
-      logger.info(`Reloaded OpenCode instance for ${directory}`)
-      this.isHealthy = true
-    } catch (error) {
-      logger.warn(`Instance reload error for ${directory}:`, error)
-    }
+    const proceeded = await attemptInstanceReload(this.getUrl(), directory, headers)
+    if (proceeded) this.isHealthy = true
+    return proceeded
   }
 
   /**
@@ -582,7 +707,9 @@ class OpenCodeServerManager {
    * replacement by listing commands. Sessions and history are preserved.
    */
   async reloadAndVerify(directory: string): Promise<boolean> {
-    await this.reloadDirectory(directory)
+    const proceeded = await this.reloadDirectory(directory)
+    // deferred(지연)도 false — 호출자는 기존처럼 warn 후 계속한다 (투명 복구 없음).
+    if (!proceeded) return false
     if (!this.isHealthy) return false
     const headers: Record<string, string> = {}
     const auth = getServerAuthHeader()
@@ -609,8 +736,7 @@ class OpenCodeServerManager {
     let succeeded = 0
     for (const directory of unique) {
       try {
-        await this.reloadDirectory(directory)
-        succeeded++
+        if (await this.reloadDirectory(directory)) succeeded++
       } catch (error) {
         logger.warn(`Instance reload failed for ${directory}:`, error)
       }

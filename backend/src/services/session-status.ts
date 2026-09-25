@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { opencodeServerManager } from './opencode-single-server'
+import { opencodeServerManager, flushPendingInstanceReloads } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { resolveRepoId, resolveLiveDirectory } from './command-runs'
 import * as crDb from '../db/command-run-queries'
@@ -110,6 +110,11 @@ export function startSessionStatusPoller(db: Database): void {
         if (!snapshot) continue // 조회 실패 디렉터리는 마지막 상태 유지
         if (row.status === 'busy' && !snapshot.busySessionIds.has(row.sessionId)) {
           logger.info(`Session ${row.sessionId} marked idle by status poller`)
+          // busy→idle 전이를 기회로 미뤄둔 인스턴스 reload를 소진한다.
+          // (truncate 등이 sibling 스트리밍 중이라 dispose를 미룬 경우)
+          void flushPendingInstanceReloads().catch((error) => {
+            logger.debug('Pending instance reload flush failed:', error instanceof Error ? error.message : error)
+          })
           // SSE 제거로 프론트가 session.idle 을 받지 않으므로 커맨드 런 종료 처리를 여기서 한다.
           try {
             for (const run of crDb.listCommandRunsBySession(db, row.sessionId)) {
