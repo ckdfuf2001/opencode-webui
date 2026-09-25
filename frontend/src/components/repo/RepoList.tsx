@@ -148,11 +148,8 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
     return acc;
   }, [] as NonNullable<typeof repos>);
 
-  const orderedRepos = useMemo(
-    () => applySavedOrder(dedupedRepos, repoOrder),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dedupedRepos, repoOrder.join(',')],
-  );
+  // early return 뒤에 hook을 두면 순서가 바뀌어 에러가 나므로 메모 없이 계산
+  const orderedRepos = applySavedOrder(dedupedRepos, repoOrder);
 
   const filteredRepos = orderedRepos.filter((repo) => {
     const repoName = repo.repoUrl
