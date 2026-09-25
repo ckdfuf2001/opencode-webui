@@ -196,6 +196,7 @@ export const SessionList = ({
     sessionId: string,
     e: React.MouseEvent<HTMLButtonElement>,
   ) => {
+    e.preventDefault();
     e.stopPropagation();
     setSessionToDelete(sessionId);
     setDeleteDialogOpen(true);
@@ -286,6 +287,8 @@ export const SessionList = ({
                   }
                 }}
                 onClick={(e) => {
+                  // 링크 타일 안: 네비게이션 차단이 stopPropagation만으로 안 막히므로 preventDefault 필수
+                  e.preventDefault();
                   e.stopPropagation();
                 }}
                 className="w-5 h-5 flex-shrink-0 mt-0.5"
@@ -296,6 +299,7 @@ export const SessionList = ({
                     <button
                       className="h-4 w-4 p-0 text-muted-foreground hover:text-foreground bg-transparent border-none cursor-pointer flex-shrink-0"
                       onClick={(e) => {
+                        e.preventDefault();
                         e.stopPropagation();
                         toggleExpand(session.id);
                       }}
@@ -358,7 +362,7 @@ export const SessionList = ({
               <button
                 type="button"
                 className={`h-6 w-6 p-0 bg-transparent border-none cursor-pointer flex items-center justify-center ${isFav(session.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'}`}
-                onClick={(e) => { e.stopPropagation(); toggleFav(session.id, session.title) }}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(session.id, session.title) }}
                 title={isFav(session.id) ? '즐겨찾기 해제' : '즐겨찾기 등록'}
               >
                 <Star className={`w-4 h-4 ${isFav(session.id) ? 'fill-amber-500' : ''}`} />
