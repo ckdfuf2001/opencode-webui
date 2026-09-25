@@ -46,7 +46,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
       return [];
     }
   });
-  const [dropTargetId, setDropTargetId] = useState<number | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: number; after: boolean } | null>(null);
 
   const {
     data: repos,
@@ -174,17 +174,26 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
     } catch {}
   };
 
-  const handleDropOnRepo = (e: ReactDragEvent, targetId: number) => {
+  const handleDropOnRepo = (e: ReactDragEvent, targetId: number, after: boolean) => {
     e.preventDefault();
-    setDropTargetId(null);
+    setDropTarget(null);
     const raw = e.dataTransfer.getData('text/repo-id');
     const draggedId = raw ? parseInt(raw, 10) : NaN;
     if (!Number.isInteger(draggedId) || draggedId === targetId) return;
     const ids = orderedRepos.map((r) => r.id).filter((id) => id !== draggedId);
     const at = ids.indexOf(targetId);
     if (at < 0) return;
-    ids.splice(at, 0, draggedId);
+    ids.splice(after ? at + 1 : at, 0, draggedId);
     persistOrder(ids);
+  };
+
+  const handleDragOverRepo = (e: ReactDragEvent, targetId: number) => {
+    if (!e.dataTransfer.types.includes('text/repo-id')) return;
+    e.preventDefault();
+    // 카드 상반신에 놓으면 앞, 하반신에 놓으면 뒤 (아래로 끌 때 필수)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const after = e.clientY - rect.top > rect.height / 2;
+    setDropTarget((cur) => (cur && cur.id === targetId && cur.after === after ? cur : { id: targetId, after }));
   };
 
   const handleSelectRepo = (id: number, selected: boolean) => {
@@ -374,14 +383,10 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
               {filteredRepos.map((repo) => (
                 <div
                   key={repo.id}
-                  onDragOver={(e) => {
-                    if (!e.dataTransfer.types.includes('text/repo-id')) return;
-                    e.preventDefault();
-                    setDropTargetId(repo.id);
-                  }}
-                  onDragLeave={() => setDropTargetId((cur) => (cur === repo.id ? null : cur))}
-                  onDrop={(e) => handleDropOnRepo(e, repo.id)}
-                  className={`rounded-xl transition-shadow ${dropTargetId === repo.id ? 'ring-2 ring-blue-500 shadow-lg' : ''}`}
+                  onDragOver={(e) => handleDragOverRepo(e, repo.id)}
+                  onDragLeave={() => setDropTarget((cur) => (cur && cur.id === repo.id ? null : cur))}
+                  onDrop={(e) => handleDropOnRepo(e, repo.id, dropTarget?.id === repo.id ? dropTarget.after : false)}
+                  className={`rounded-xl transition-shadow ${dropTarget?.id === repo.id ? 'ring-2 ring-blue-500 shadow-lg' : ''}`}
                 >
                   <RepoCard
                     repo={repo}
@@ -406,7 +411,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                           e.dataTransfer.setData('text/repo-id', String(repo.id));
                           e.dataTransfer.effectAllowed = 'move';
                         }}
-                        onDragEnd={() => setDropTargetId(null)}
+                        onDragEnd={() => setDropTarget(null)}
                         onClick={(e) => e.stopPropagation()}
                         className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-foreground shrink-0 p-0.5 -ml-1"
                         title="드래그해서 순서 변경 (이 PC에만 저장)"
