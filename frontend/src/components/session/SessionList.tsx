@@ -1,7 +1,6 @@
 import { useState, useMemo, Fragment } from "react";
 import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession, isRecentlyAborted, isCancelledUntilNextSend } from "@/hooks/useOpenCode";
 import { Link, useNavigate } from "react-router-dom";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -283,9 +282,8 @@ export const SessionList = ({
       onSelectSession(session.id);
     };
 
-    const tileContent = (
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-start gap-2 flex-1 min-w-0">
+    // 체크박스는 링크 밖(왼쪽 고유 영역) — 어떤 전파/기본값 간섭도 받지 않는다.
+    const checkNode = (
               <Checkbox
                 checked={subtreeSelection}
                 onCheckedChange={(checked) => {
@@ -295,15 +293,11 @@ export const SessionList = ({
                     toggleSessionSelection(session.id, checked === true);
                   }
                 }}
-                data-tile-control
-                onClick={(e) => {
-                  // preventDefault 금지: Radix 합성 핸들러가 defaultPrevented를 보면
-                  // 토글 자체를 스킵한다. 네비게이션 차단은 타일 핸들러의 closest 가드가 담당.
-                  e.stopPropagation();
-                }}
                 className="w-5 h-5 flex-shrink-0 mt-0.5"
               />
-              <div className="flex-1 min-w-0">
+    );
+    const titleBlock = (
+              <>
                 <div className="flex items-center gap-2">
                   {hasChildren && (
                     <button
@@ -367,8 +361,9 @@ export const SessionList = ({
                     })}
                   </span>
                 </div>
-              </div>
-            </div>
+              </>
+    );
+    const actionsBlock = (
             <div className="flex items-center gap-1 shrink-0" data-tile-control>
               <button
                 type="button"
@@ -387,24 +382,31 @@ export const SessionList = ({
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
-          </div>
     );
 
     return (
       <Fragment key={session.id}>
-        {href ? (
-          <Link
-            to={href}
-            onClickCapture={handleTileClickCapture}
-            className={`rounded-lg border bg-card text-card-foreground shadow-sm block no-underline ${tileClass}`}
-          >
-            {tileContent}
-          </Link>
-        ) : (
-          <Card className={tileClass} onClick={() => onSelectSession(session.id)}>
-            {tileContent}
-          </Card>
-        )}
+        <div className={`rounded-lg border bg-card text-card-foreground shadow-sm ${tileClass}`}>
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2 flex-1 min-w-0">
+              {checkNode}
+              {href ? (
+                <Link
+                  to={href}
+                  onClickCapture={handleTileClickCapture}
+                  className="flex-1 min-w-0 block no-underline text-inherit"
+                >
+                  {titleBlock}
+                </Link>
+              ) : (
+                <div className="flex-1 min-w-0" onClick={() => onSelectSession(session.id)}>
+                  {titleBlock}
+                </div>
+              )}
+            </div>
+            {actionsBlock}
+          </div>
+        </div>
         {hasChildren && isExpanded && (
           <div className="ml-6 border-l border-border pl-3 flex flex-col gap-2">
             {node.children.map((child) => renderSessionNode(child))}
