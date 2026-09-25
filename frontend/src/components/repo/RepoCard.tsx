@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, Copy, Download, Ellipsis, Star } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
@@ -46,7 +46,6 @@ export function RepoCard({
   workingCount = 0,
   pendingCount = 0,
 }: RepoCardProps) {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites });
@@ -103,17 +102,7 @@ export function RepoCard({
 
   return (
     <div
-      onClick={(e) => {
-        if (e.ctrlKey || e.metaKey) {
-          e.preventDefault();
-          window.open(`${window.location.origin}/repos/${repo.id}`, '_blank');
-          return;
-        }
-        if (isReady && !e.defaultPrevented) {
-          navigate(`/repos/${repo.id}`);
-        }
-      }}
-      className={`group relative bg-gradient-to-br from-card to-card-hover border rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg w-full cursor-pointer ${
+      className={`group relative bg-gradient-to-br from-card to-card-hover border rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg w-full ${
         isSelected
           ? "border-blue-500 shadow-lg shadow-blue-900/30"
           : "border-border hover:border-border hover:shadow-blue-900/20"
