@@ -137,7 +137,7 @@ export function RepoCard({
                   className="w-5 h-5"
                 />
               )}
-<h3 
+ <h3
                  onClick={(e) => {
                    e.stopPropagation();
                    if (onSelect) {
@@ -150,6 +150,15 @@ export function RepoCard({
                >
                   #{repo.id}. {repoName}
                 </h3>
+              {branchToDisplay && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground bg-muted/60 border border-border rounded-full px-2 py-0.5 flex-shrink-0"
+                  title={`Current branch: ${branchToDisplay}`}
+                >
+                  <GitBranch className="w-3 h-3" />
+                  <span className="max-w-[140px] truncate">{branchToDisplay}</span>
+                </span>
+              )}
              {repo.isWorktree && (
               <Badge
                 className="text-xs px-2.5 py-0.5 bg-purple-600/20 text-purple-400 border-purple-600/40"
@@ -204,10 +213,6 @@ export function RepoCard({
                 </DropdownMenu>
               </div>
           </div>
-          <p className="text-sm text-muted-foreground truncate flex items-center gap-1">
-              <GitBranch className="w-3 h-3" />
-              {branchToDisplay}
-            </p>
         </div>
 
         
