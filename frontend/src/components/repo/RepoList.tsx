@@ -382,10 +382,9 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                         onDragEnd={() => setDropTarget(null)}
                         onClick={(e) => e.stopPropagation()}
                         title="드래그해서 순서 변경 (이 PC에만 저장)"
-                        className="absolute left-0 top-0 z-10 h-10 w-10 cursor-grab active:cursor-grabbing hover:brightness-125"
+                        className="absolute left-0 top-0 z-10 h-5 w-5 cursor-grab active:cursor-grabbing bg-blue-500/70 hover:bg-blue-500"
                         style={{
                           clipPath: 'polygon(0 0, 100% 0, 0 100%)',
-                          background: 'repeating-linear-gradient(-45deg, rgba(148,163,184,0.5) 0 2px, transparent 2px 7px)',
                         }}
                       />
                     }
