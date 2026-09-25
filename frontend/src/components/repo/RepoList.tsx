@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare, Check, X, GripVertical } from "lucide-react";
+import { Loader2, GitBranch, Search, Trash2, Ellipsis, Plus, Pencil, MessageSquare, Check, X } from "lucide-react";
 import { RepoCard } from "./RepoCard";
 import { clearRepoNotifyData } from "@/lib/notifications";
 import { REPO_ORDER_KEY, applySavedOrder, saveRepoOrder } from "@/lib/repoOrder";
@@ -25,8 +25,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   const [isEditMode, setIsEditMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [pendingBulk, setPendingBulk] = useState<{ repos: number[]; sessions: string[] } | null>(null);
-  // 카드 체크박스 표시 모드 (... 메뉴 Select/Done으로 토글)
-  const [selectMode, setSelectMode] = useState(false);
   // 카드 순서 (개인별, localStorage — 서버에 저장 안 함)
   const [repoOrder, setRepoOrder] = useState<number[]>(() => {
     try {
@@ -153,11 +151,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
     );
   });
 
-  const exitSelectMode = () => {
-    setSelectMode(false);
-    setSelectedRepos(new Set());
-  };
-
   const persistOrder = (ids: number[]) => {
     setRepoOrder(ids);
     saveRepoOrder(ids);
@@ -234,11 +227,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           <Button variant={isEditMode ? "default" : "outline"} size="icon" className="hidden md:flex h-8 w-8" onClick={() => { setIsEditMode(v => !v); if (isEditMode) { setSelectedRepos(new Set()); setSelectedSessions(new Set()) } }} title={isEditMode ? "완료" : "편집"}>
             <Pencil className="w-4 h-4" />
           </Button>
-          {selectMode && !isEditMode && (
-            <Button variant="default" size="sm" className="hidden md:flex h-8 whitespace-nowrap" onClick={exitSelectMode} title="선택 모드 종료">
-              Done
-            </Button>
-          )}
           {/* 편집 모드: 최상단 Repository 체크 + 삭제 */}
           {isEditMode ? (
             <>
@@ -283,10 +271,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => { if (selectMode) exitSelectMode(); else { setSelectedRepos(new Set()); setSelectMode(true) } }}>
-                <Check className="w-4 h-4 mr-2" />
-                {selectMode ? "Done" : "Select"}
-              </DropdownMenuItem>
               {filteredRepos.length > 0 && (
                 <DropdownMenuItem onClick={handleSelectAll}>
                   {filteredRepos.every((repo) => selectedRepos.has(repo.id))
@@ -388,7 +372,6 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                     }
                     isSelected={selectedRepos.has(repo.id)}
                     onSelect={handleSelectRepo}
-                    showCheckbox={selectMode}
                     dragHandle={
                       <span
                         draggable
@@ -398,11 +381,13 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                         }}
                         onDragEnd={() => setDropTarget(null)}
                         onClick={(e) => e.stopPropagation()}
-                        className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-foreground shrink-0 p-0.5 -ml-1"
                         title="드래그해서 순서 변경 (이 PC에만 저장)"
-                      >
-                        <GripVertical className="w-4 h-4" />
-                      </span>
+                        className="absolute left-0 top-0 z-10 h-10 w-10 cursor-grab active:cursor-grabbing hover:brightness-125"
+                        style={{
+                          clipPath: 'polygon(0 0, 100% 0, 0 100%)',
+                          background: 'repeating-linear-gradient(-45deg, rgba(148,163,184,0.5) 0 2px, transparent 2px 7px)',
+                        }}
+                      />
                     }
                     scheduleCount={scheduleCounts[repo.id] ?? 0}
                     workingCount={workingCounts[repo.id] ?? 0}

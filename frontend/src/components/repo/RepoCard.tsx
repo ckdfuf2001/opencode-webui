@@ -34,9 +34,7 @@ interface RepoCardProps {
   scheduleCount?: number;
   workingCount?: number;
   pendingCount?: number;
-  /** false면 체크박스 숨김 (Select 모드에서만 표시) */
-  showCheckbox?: boolean;
-  /** 드래그 정렬 핸들 (제목 행 맨 앞) */
+  /** 드래그 정렬 핸들 (카드 좌상단 대각선 코너) */
   dragHandle?: ReactNode;
 }
 
@@ -49,7 +47,6 @@ export function RepoCard({
   scheduleCount = 0,
   workingCount = 0,
   pendingCount = 0,
-  showCheckbox = true,
   dragHandle,
 }: RepoCardProps) {
   const queryClient = useQueryClient();
@@ -119,7 +116,7 @@ export function RepoCard({
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="flex items-center gap-2 min-w-0">
               {dragHandle}
-  {showCheckbox && onSelect && (
+  {onSelect && (
                 <Checkbox
                   id="select-repo"
                   checked={isSelected}
@@ -135,12 +132,12 @@ export function RepoCard({
  <h3
                  onClick={(e) => {
                    e.stopPropagation();
-                   if (onSelect && showCheckbox) {
+                   if (onSelect) {
                      onSelect(repo.id, !isSelected);
                    }
                  }}
                  className={`font-semibold text-lg text-foreground truncate group-hover:text-blue-400 transition-colors ${
-                   onSelect && showCheckbox ? "cursor-pointer" : ""
+                   onSelect ? "cursor-pointer" : ""
                  }`}
                >
                   #{repo.id}. {repoName}
