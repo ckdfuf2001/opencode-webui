@@ -1,6 +1,6 @@
 import { useState, useMemo, Fragment } from "react";
 import { useSessions, useDeleteSession, useSessionStatusMap, useCreateSession, isRecentlyAborted, isCancelledUntilNextSend } from "@/hooks/useOpenCode";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -256,25 +256,24 @@ export const SessionList = ({
     const isOrphan = !!session.parentID && !visibleSessionIDs.has(session.parentID);
     const subtreeSelection = getSubtreeSelectionState(node);
 
-    return (
-      <Fragment key={session.id}>
-        <Card
-          className={`p-3 cursor-pointer transition-all ${
-            selectedSessions.has(session.id)
-              ? "border-blue-500 shadow-lg shadow-blue-900/30 bg-muted"
-              : activeSessionID === session.id
-                ? "bg-muted border-border"
-                : "bg-card border-border hover:bg-muted/60 hover:border-ring"
-          } hover:shadow-lg`}
-          onClick={(e) => {
-            if ((e.ctrlKey || e.metaKey) && sessionHrefBase) {
-              e.preventDefault();
-              window.open(`${window.location.origin}${sessionHrefBase}/${session.id}`, '_blank');
-              return;
-            }
-            onSelectSession(session.id);
-          }}
-        >
+    // 타일 전체를 네이티브 링크로: 우클릭 새 탭 열기·중클릭·Ctrl+클릭이 동작한다.
+    // 일반 좌클릭은 기존 onSelectSession 흐름 유지(다이얼로그 닫기 등).
+    const href = sessionHrefBase ? `${sessionHrefBase}/${session.id}` : undefined;
+    const tileClass = `p-3 cursor-pointer transition-all ${
+      selectedSessions.has(session.id)
+        ? "border-blue-500 shadow-lg shadow-blue-900/30 bg-muted"
+        : activeSessionID === session.id
+          ? "bg-muted border-border"
+          : "bg-card border-border hover:bg-muted/60 hover:border-ring"
+    } hover:shadow-lg`;
+    const handleTileClick = (e: React.MouseEvent) => {
+      // 수식키·중클릭은 브라우저 네이티브 처리(새 탭)에 맡긴다
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      e.preventDefault();
+      onSelectSession(session.id);
+    };
+
+    const tileContent = (
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-start gap-2 flex-1 min-w-0">
               <Checkbox
@@ -374,7 +373,23 @@ export const SessionList = ({
               </button>
             </div>
           </div>
-        </Card>
+    );
+
+    return (
+      <Fragment key={session.id}>
+        {href ? (
+          <Link
+            to={href}
+            onClick={handleTileClick}
+            className={`rounded-lg border bg-card text-card-foreground shadow-sm block no-underline ${tileClass}`}
+          >
+            {tileContent}
+          </Link>
+        ) : (
+          <Card className={tileClass} onClick={() => onSelectSession(session.id)}>
+            {tileContent}
+          </Card>
+        )}
         {hasChildren && isExpanded && (
           <div className="ml-6 border-l border-border pl-3 flex flex-col gap-2">
             {node.children.map((child) => renderSessionNode(child))}
