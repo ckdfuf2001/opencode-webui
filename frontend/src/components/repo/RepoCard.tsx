@@ -139,7 +139,7 @@ export function RepoCard({
                      onSelect(repo.id, !isSelected);
                    }
                  }}
-                 className={`font-bold text-xl leading-tight text-foreground truncate group-hover:text-blue-400 transition-colors ${
+                 className={`font-semibold text-lg text-foreground truncate group-hover:text-blue-400 transition-colors ${
                    onSelect && showCheckbox ? "cursor-pointer" : ""
                  }`}
                >
