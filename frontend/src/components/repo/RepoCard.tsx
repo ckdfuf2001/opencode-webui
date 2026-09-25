@@ -6,8 +6,8 @@ import { Loader2, Trash2, GitBranch, ExternalLink, CalendarClock, ShieldAlert, C
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AddBranchWorkspaceDialog } from "./AddBranchWorkspaceDialog";
 import { ScheduleSettingsDialog } from "@/components/schedule/ScheduleSettingsDialog";
+import { BranchSwitcher } from "./BranchSwitcher";
 import { OPENCODE_API_ENDPOINT } from "@/config";
 import { cloneRepo, exportRepo } from "@/api/repos";
 import { cloneRepoNotifyData } from "@/lib/notifications";
@@ -48,7 +48,6 @@ export function RepoCard({
 }: RepoCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [addBranchOpen, setAddBranchOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const { data: favs } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites });
   const favId = `repo-${repo.id}`;
@@ -150,7 +149,7 @@ export function RepoCard({
                >
                   #{repo.id}. {repoName}
                 </h3>
-              {branchToDisplay && (
+              {branchToDisplay && (repo.isWorktree ? (
                 <span
                   className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground bg-muted/60 border border-border rounded-full px-2 py-0.5 flex-shrink-0"
                   title={`Current branch: ${branchToDisplay}`}
@@ -158,7 +157,17 @@ export function RepoCard({
                   <GitBranch className="w-3 h-3" />
                   <span className="max-w-[140px] truncate">{branchToDisplay}</span>
                 </span>
-              )}
+              ) : (
+                <span onClick={(e) => e.stopPropagation()} className="flex-shrink-0" title={`Current branch: ${branchToDisplay}`}>
+                  <BranchSwitcher
+                    repoId={repo.id}
+                    currentBranch={branchToDisplay}
+                    isWorktree={repo.isWorktree}
+                    repoUrl={repo.repoUrl}
+                    repoLocalPath={repo.localPath}
+                  />
+                </span>
+              ))}
              {repo.isWorktree && (
               <Badge
                 className="text-xs px-2.5 py-0.5 bg-purple-600/20 text-purple-400 border-purple-600/40"
@@ -255,20 +264,6 @@ export function RepoCard({
             )}
 	    
 
-              <Button
-                size="sm"
-									
-                variant="outline"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setAddBranchOpen(true);
-                }}
-                disabled={!isReady || !repo.repoUrl}
-                className="h-10 sm:h-9 w-10 p-0"
-              >
-                <GitBranch className="w-4 h-4" />
-              </Button>
-
             <Button
               size="sm"
               variant="outline"
@@ -302,14 +297,6 @@ export function RepoCard({
             </Button>          </div>
         </div>
       </div>
-
-      {repo.repoUrl && (
-        <AddBranchWorkspaceDialog
-          open={addBranchOpen}
-          onOpenChange={setAddBranchOpen}
-          repoUrl={repo.repoUrl}
-        />
-      )}
 
       <ScheduleSettingsDialog
         open={scheduleOpen}
