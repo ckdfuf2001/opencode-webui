@@ -1,10 +1,13 @@
 import { useRef, useEffect, useCallback } from 'react'
 
 const SCROLL_LOCK_MS = 300
-// 히스테리시스: 맨 아래 근처(<=NEAR)면 추종 유지/복귀, 확실히 멀어져야(>FAR)
-// 추종 해제. 경계에서 들락날락하며 깜빡이는 것 방지.
+// 히스테리시스: 확실히 멀어져야(>FAR) 추종 해제, 진짜 맨 아래(<=REENGAGE)에
+// 닿아야 복귀. 중간 읽기 구간에서는 현상 유지 — 특히 휠-업 해제 직후 이어지는
+// 스크롤 이벤트가 NEAR(120) 안에 있다고 복귀해버리면, 다음 폴링에 맨 아래로
+// 끌려가는 yank 루프가 된다 (작게 올리기 2~3번 반복 증상).
 const NEAR_BOTTOM_PX = 120
 const FAR_BOTTOM_PX = 200
+const REENGAGE_BOTTOM_PX = 8
 
 interface MessageInfo {
   role: string
@@ -128,8 +131,8 @@ export function useAutoScroll<T extends Message>({
     }
 
     // ON이면 위치와 무관하게 항상 추종(해제 금지). OFF일 때만 위치로 판단한다.
-    // OFF + 히스테리시스로 "애매하게 위"에서는 유지한다: NEAR 이하면 복귀,
-    // FAR을 넘어야 해제, 사이는 현상 유지.
+    // OFF + 히스테리시스: 진짜 맨 아래(REENGAGE 이하)에서만 복귀,
+    // FAR을 넘어야 해제, 사이 읽기 구간은 현상 유지(명시적 해제를 뒤집지 않는다).
     const handleScroll = () => {
       if (enabledRef.current) {
         if (userDisengagedRef.current) {
@@ -140,7 +143,7 @@ export function useAutoScroll<T extends Message>({
         return
       }
       const distToBottom = container.scrollHeight - (container.scrollTop + container.clientHeight)
-      if (distToBottom <= NEAR_BOTTOM_PX) {
+      if (distToBottom <= REENGAGE_BOTTOM_PX) {
         if (userDisengagedRef.current) {
           userDisengagedRef.current = false
           onScrollStateChange?.(false)

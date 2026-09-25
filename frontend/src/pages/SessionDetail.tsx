@@ -556,6 +556,10 @@ export function SessionDetail() {
     // shift량은 API loaded가 아니라 병합 전후 실측으로 계산한다.
     // 겹침·스트리밍 tail 증가가 있어도 이전 최상단의 새 인덱스가 정확한 prepend량이다.
     const prevOldestId = baseMessages?.[0]?.info.id;
+    // 서버 확정 소진: 같은 최상단에 잔여 0이면 조회 생략 (짧은 채팅에서
+    // 위로 올릴 때마다 빈 왕복 + 캐시 재생성으로 화면이 뛰던 원인).
+    // rank가 갱신 중이거나 상단이 바뀌면(topRank id 불일치) 정상 조회한다.
+    if (prevOldestId && topRank?.id === prevOldestId && topRank.older <= 0) return;
     lastShiftAtRef.current = Date.now();
     setIsLoadingMore(true);
     try {
@@ -586,7 +590,7 @@ export function SessionDetail() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [isLoadingMore, sessionId, baseMessages, queryClient, opcodeUrl, repoDirectory]);
+  }, [isLoadingMore, sessionId, baseMessages, queryClient, opcodeUrl, repoDirectory, topRank]);
   const handleLoadMore = useCallback(() => {
     const len = baseMessages?.length ?? 0;
     const cur = windowStartRef.current ?? Math.max(0, len - WINDOW_SIZE);
