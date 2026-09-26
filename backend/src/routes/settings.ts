@@ -5,7 +5,7 @@ import { SettingsService } from '../services/settings'
 import { writeActiveOpenCodeConfigFile, setActiveOpenCodeConfigModel } from '../services/default-mcp'
 import { patchOpenCodeConfig } from '../services/proxy'
 import { AuthService } from '../services/auth'
-import { getOpenCodeConfigFilePath } from '@opencode-webui/shared'
+import { getOpenCodeConfigFilePath, getWorkspacePath } from '@opencode-webui/shared'
 import { 
   UserPreferencesSchema, 
   OpenCodeConfigSchema,
@@ -322,6 +322,7 @@ export function createSettingsRoutes(db: Database) {
   async function applyConfigPatch(
     config: { name: string; content: Record<string, unknown>; isDefault: boolean },
     patch: Record<string, unknown>,
+    opts?: { reloadOnly?: boolean },
   ) {
     const nextContent = { ...config.content, ...patch }
     const updated = settingsService.updateOpenCodeConfig(config.name, { content: nextContent }, 'default')
@@ -331,6 +332,16 @@ export function createSettingsRoutes(db: Database) {
     if (updated.isDefault) {
       writeActiveOpenCodeConfigFile(JSON.stringify(updated.content, null, 2))
       await patchOpenCodeConfig(updated.content)
+      if (opts?.reloadOnly) {
+        // 인스턴스 reload 는 전체 재기동보다 가볍다. provider 에 models 만 추가하는
+        // 경우(모델 선택창을 여는 동안)에는 이것으로 충분해 UX 가 끊기지 않는다.
+        try {
+          await opencodeServerManager.reloadAndVerify(getWorkspacePath())
+        } catch (error) {
+          logger.error('Failed to reload OpenCode instance after config change:', error)
+        }
+        return updated
+      }
       // opencode 는 provider 레지스트리를 부팅 시에 만든다 — 재시작 없이는 반영 안 됨.
       try {
         await opencodeServerManager.restart()
@@ -340,6 +351,69 @@ export function createSettingsRoutes(db: Database) {
     }
     return updated
   }
+
+  /**
+   * 커스텀 provider 의 모델을 baseURL 에서 조회해 config 에 저장한다.
+   *
+   * opencode 는 커스텀 provider 에 `models` 선언이 있어야 모델 목록을 만든다.
+   * Add Provider 의 Models 칸을 비우면 선언이 없어 목록에 안 뜨고, 보내도
+   * `ProviderModelNotFoundError: Model not found: <id>/<model>` 로 실패한다.
+   * 조회만 해서 화면에 보여주면 실제로는 못 쓰므로 config 에 반드시 써야 한다.
+   */
+  app.post('/opencode-configs/:name/providers/:providerId/models/refresh', async (c) => {
+    try {
+      const configName = c.req.param('name')
+      const providerId = c.req.param('providerId')
+
+      const config = configName === 'default'
+        ? settingsService.getDefaultOpenCodeConfig('default')
+        : settingsService.getOpenCodeConfigByName(configName, 'default')
+      if (!config) return c.json({ error: 'Config not found' }, 404)
+
+      const provider = (config.content.provider as Record<string, {
+        options?: { baseURL?: string }
+        models?: Record<string, { name: string }>
+      }>) || {}
+      const baseURL = provider[providerId]?.options?.baseURL
+      if (!baseURL) return c.json({ error: 'Provider has no baseURL' }, 400)
+
+      const authService = new AuthService()
+      const apiKey = await authService.getApiKey(providerId)
+      if (!apiKey) return c.json({ error: 'No API key stored for this provider' }, 400)
+
+      const res = await fetch(`${baseURL.replace(/\/+$/, '')}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!res.ok) return c.json({ error: `Upstream responded ${res.status}` }, 502)
+      const body = await res.json() as { data?: Array<{ id?: unknown }>; models?: Array<{ id?: unknown }> }
+      const ids = [...new Set([...(body.data ?? []), ...(body.models ?? [])]
+        .map((m) => (typeof m?.id === 'string' ? m.id : ''))
+        .filter(Boolean))]
+      if (ids.length === 0) return c.json({ error: 'Upstream returned no models' }, 502)
+
+      const entry = provider[providerId] ?? {}
+      const models: Record<string, { name: string }> = { ...(entry.models ?? {}) }
+      let added = 0
+      for (const id of ids) {
+        if (!models[id]) {
+          models[id] = { name: id }
+          added++
+        }
+      }
+
+      const updated = await applyConfigPatch(
+        config,
+        { provider: { ...provider, [providerId]: { ...entry, models } } },
+        { reloadOnly: true },
+      )
+      logger.info(`Refreshed models for provider '${providerId}': ${ids.length} available, ${added} newly persisted`)
+      return c.json({ success: true, count: ids.length, added, config: updated })
+    } catch (error) {
+      logger.error('Failed to refresh provider models:', error)
+      return c.json({ error: 'Failed to refresh provider models' }, 500)
+    }
+  })
 
   // 커스텀 provider 등록(추가/갱신). opencode config 의 provider 레코드 하나를
   // 쓰고 활성 파일·opencode 를 동기화한다. openai 호환 baseURL 은

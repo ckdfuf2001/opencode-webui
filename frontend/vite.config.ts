@@ -1,9 +1,33 @@
 import path from "path";
+import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { DEFAULTS } from "../shared/src/config/defaults";
+
+/**
+ * 저장소의 .env 에서 KEY=VALUE 를 그대로 읽는다 (간단한 .env 용).
+ * loadEnv 는 process.env 를 우선하므로, 다른 설치본이 남긴 환경변수
+ * (예: 시스템 전역 PORT=5002) 가 .env 의 PORT 를 덮어쓴다. 그 결과 /api
+ * 프록시가 다른 백엔드로 물러나 UI 가 엉뚱한 인스턴스의 데이터를 보여준다.
+ * 저장소 .env 가 의도된 값이므로 파일을 직접 읽어 우선한다.
+ */
+function readEnvFile(file: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return out;
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!m) continue;
+    out[m[1]!] = m[2]!.replace(/^["']|["']$/g, "");
+  }
+  return out;
+}
 
 function getBuildMeta(): { sha: string; time: string; tag: string } {
   try {
@@ -23,8 +47,15 @@ function getBuildMeta(): { sha: string; time: string; tag: string } {
 const buildMeta = getBuildMeta();
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
-  const backendPort = Number(env.PORT) || Number(process.env.PORT) || DEFAULTS.SERVER.PORT;
+  const repoRoot = path.resolve(__dirname, "..");
+  const env = loadEnv(mode, repoRoot, "");
+  // .env 파일 값을 최우선으로 쓴다 —ambient PORT 로 다른 백엔드에 물러나면
+  // 화면/쓰기가 전부 그 인스턴스에 contra버린다 (설정 삭제가 안 먹히는 symptom).
+  const fileEnv = readEnvFile(path.join(repoRoot, ".env"));
+  const backendPort = Number(fileEnv.PORT) || Number(env.PORT) || Number(process.env.PORT) || DEFAULTS.SERVER.PORT;
+  if (backendPort !== Number(DEFAULTS.SERVER.PORT)) {
+    console.log(`[vite] /api proxy -> http://localhost:${backendPort} (from .env)`);
+  }
 
   return {
     envDir: path.resolve(__dirname, ".."),

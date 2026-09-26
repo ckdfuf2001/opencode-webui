@@ -4,6 +4,18 @@ cd /d "%~dp0\.."
 
 if not exist "logs" mkdir logs
 
+REM .env 의 PORT/OPENCODE_SERVER_PORT/HOST 를 자식 프로세스에 명시적으로 넘긴다.
+REM 이 스크립트를 띄운 셸에 환경변수 PORT 가 남아 있으면(다른 설치본, 시스템 전역
+REM 5002 등) vite/백엔드가 그 값을 우선해 엉뚱한 백엔드·opencode 에 붙는다.
+REM 증상: UI 가 다른 인스턴스 데이터를 보여주고 설정 저장/삭제가 안 먹힌다.
+for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
+  if /i "%%a"=="PORT" set "PORT=%%b"
+  if /i "%%a"=="HOST" set "HOST=%%b"
+  if /i "%%a"=="OPENCODE_SERVER_PORT" set "OPENCODE_SERVER_PORT=%%b"
+  if /i "%%a"=="OPENCODE_HOST" set "OPENCODE_HOST=%%b"
+)
+echo [DEV START] resolved from .env - PORT=%PORT% OPENCODE_SERVER_PORT=%OPENCODE_SERVER_PORT%
+
 echo [DEV START] launching pnpm dev (backend + frontend)...
 where pnpm >nul 2>&1
 if %errorlevel% neq 0 (

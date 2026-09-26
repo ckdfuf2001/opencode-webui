@@ -35,8 +35,7 @@ export function createProvidersRoutes(db: Database) {
   app.get('/:id/credentials', async (c) => {
     try {
       const providerId = c.req.param('id')
-      const entry = await authService.get(providerId)
-      const apiKey = typeof entry?.apiKey === 'string' ? entry.apiKey : null
+      const apiKey = await authService.getApiKey(providerId)
       return c.json({ apiKey })
     } catch (error) {
       logger.error('Failed to read provider credentials:', error)
@@ -68,8 +67,7 @@ export function createProvidersRoutes(db: Database) {
         return c.json({ error: 'Provider has no baseURL' }, 400)
       }
 
-      const entry = await authService.get(providerId)
-      const apiKey = typeof entry?.apiKey === 'string' ? entry.apiKey : null
+      const apiKey = await authService.getApiKey(providerId)
       if (!apiKey) {
         return c.json({ error: 'No API key stored for this provider' }, 400)
       }

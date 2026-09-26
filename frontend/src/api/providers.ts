@@ -242,15 +242,24 @@ export const providerCredentialsApi = {
 
 /**
  * provider 의 모델 목록을 서버에 물어본다 (custom provider 용).
- * 백엔드가 config 의 baseURL + 저장된 키로 GET {baseURL}/models 를 호출한다.
- * 실패하면 빈 배열 — 목록에서 그 provider 가 빠질 뿐이고 앱은 계속 동작한다.
+ * 백엔드가 config 의 baseURL + 저장된 키로 GET {baseURL}/models 를 호출해
+ * **config 에 models 로 저장까지** 한다. opencode 는 커스텀 provider 의 models
+ * 선언이 있어야 모델을 알아서, 저장하지 않으면 목록엔 보여도 전송은
+ * ProviderModelNotFoundError 로 실패한다.
+ * 실패하면 빈 배열 — 그 provider 가 빠질 뿐이고 앱은 계속 동작한다.
  */
 export async function fetchProviderModels(providerId: string): Promise<Model[]> {
   try {
-    const { data } = await axios.get(
-      `${API_BASE_URL}/api/providers/${encodeURIComponent(providerId)}/models`,
+    const { data } = await axios.post(
+      `${API_BASE_URL}/api/settings/opencode-configs/default/providers/${encodeURIComponent(providerId)}/models/refresh`,
     );
-    return Array.isArray(data?.models) ? (data.models as Model[]) : [];
+    const count = typeof data?.count === 'number' ? data.count : 0;
+    if (count === 0) return [];
+    // 방금 config 에 저장했으므로 다시 읽어 실제 반영된 목록을 돌려준다.
+    const providers = await getProviders();
+    const provider = providers.find((p) => p.id === providerId);
+    const models = provider?.models ?? {};
+    return Object.entries(models).map(([id, m]) => ({ ...m, id: m?.id || id, name: m?.name || id }) as Model);
   } catch {
     return [];
   }
