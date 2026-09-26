@@ -231,7 +231,7 @@ export function RepoCard({
               <Button
                 size="sm"
                 asChild
-                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-blue-600 hover:bg-blue-700 text-white"
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-blue-400 hover:bg-blue-500 text-white"
               >
                 <Link
                   to={`/repos/${repo.id}`}
@@ -249,7 +249,7 @@ export function RepoCard({
               <Button
                 size="sm"
                 disabled
-                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-blue-600 hover:bg-blue-700 text-white"
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-blue-400 hover:bg-blue-500 text-white"
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
                 Open
@@ -272,16 +272,16 @@ export function RepoCard({
               <span className="text-xs tabular-nums">{scheduleCount}</span>
             </Button>
 
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(repo.id);
-              }}
-              disabled={isDeleting}
-              className="h-10 sm:h-9 w-10 p-0"
-            >
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(repo.id);
+                }}
+                disabled={isDeleting}
+                className="h-10 sm:h-9 w-10 p-0 text-zinc-500 hover:text-red-500 hover:border-red-500/40"
+              >
               {isDeleting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
