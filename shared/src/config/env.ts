@@ -110,7 +110,33 @@ export const getWorkspacePath = () => ENV.WORKSPACE.BASE_PATH
 export const getReposPath = () => path.join(ENV.WORKSPACE.BASE_PATH, ENV.WORKSPACE.REPOS_DIR)
 export const getConfigPath = () => path.join(ENV.WORKSPACE.BASE_PATH, ENV.WORKSPACE.CONFIG_DIR)
 export const getOpenCodeConfigFilePath = () => path.join(ENV.WORKSPACE.BASE_PATH, ENV.WORKSPACE.CONFIG_DIR, 'opencode.json')
-export const getAuthPath = () => path.join(ENV.WORKSPACE.BASE_PATH, ENV.WORKSPACE.AUTH_FILE)
+
+/**
+ * opencode 의 데이터 디렉터리 (auth.json 이 여기 있다).
+ * opencode 는 XDG_DATA_HOME 을 따라가며, 없으면 사용자 홈의
+ * `.local/share/opencode` 을 쓴다. webui 가 열코드로 열쇠를 다른 곳에 쓰면
+ * opencode 는 그 파일을 아예 보지 못해 401 이 난다.
+ * OPENCODE_DATA_DIR 로 직접 지정할 수도 있다(포터블 배포 등).
+ */
+export const getOpenCodeDataPath = (): string => {
+  const explicit = getEnvString('OPENCODE_DATA_DIR', '')
+  if (explicit) return explicit
+  const xdg = getEnvString('XDG_DATA_HOME', '')
+  if (xdg) return path.join(xdg, 'opencode')
+  return path.join(os.homedir(), '.local', 'share', 'opencode')
+}
+
+/**
+ * provider 자격증명 파일. 기본값은 opencode 네이티브 위치여야 한다 —
+ * 여기가 어긋나면 키를 저장해도 opencode 가 읽지 못한다.
+ * WORKSPACE.AUTH_FILE 을 명시한 경우에만 workspace 기준으로 덮어쓴다.
+ */
+export const getAuthPath = () => {
+  if (ENV.WORKSPACE.AUTH_FILE) {
+    return path.join(ENV.WORKSPACE.BASE_PATH, ENV.WORKSPACE.AUTH_FILE)
+  }
+  return path.join(getOpenCodeDataPath(), 'auth.json')
+}
 export const getDatabasePath = () => ENV.DATABASE.PATH
 
 export const getApiUrl = (port: number = ENV.SERVER.PORT): string => {

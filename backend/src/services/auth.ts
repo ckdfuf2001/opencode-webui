@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import path from 'path'
-import { getAuthPath } from '@opencode-webui/shared'
+import { getAuthPath, getWorkspacePath } from '@opencode-webui/shared'
 import { logger } from '../utils/logger'
 import { AuthCredentialsSchema } from '../../../shared/src/schemas/auth'
 import type { z } from 'zod'
@@ -10,6 +10,34 @@ type AuthEntry = AuthCredentials[string]
 
 export class AuthService {
   private authPath = getAuthPath()
+
+  /**
+   * 예전 webui 가 쓰던 workspace 안쪽 경로. opencode 는 이 파일을 읽지 않아서
+   * 키가 여기만 있으면 조용히 401 이 났다. 새 경로가 비었을 때만 읽어 이어받는다.
+   */
+  private legacyAuthPath(): string {
+    return path.join(getWorkspacePath(), '.opencode', 'state', 'opencode', 'auth.json')
+  }
+
+  private async migrateLegacyIfEmpty(): Promise<void> {
+    try {
+      const current = await this.getAll()
+      if (Object.keys(current).length > 0) return
+      if (this.legacyAuthPath() === this.authPath) return
+      const raw = await fs.readFile(this.legacyAuthPath(), 'utf-8')
+      const parsed = JSON.parse(raw)
+      const entries = AuthCredentialsSchema.parse(parsed)
+      if (Object.keys(entries).length === 0) return
+      await fs.mkdir(path.dirname(this.authPath), { recursive: true })
+      await fs.writeFile(this.authPath, JSON.stringify(entries, null, 2), { mode: 0o600 })
+      logger.warn(
+        `Migrated provider credentials from legacy path ${this.legacyAuthPath()} to ${this.authPath} `
+        + '(opencode only reads the latter)',
+      )
+    } catch {
+      // 없거나 읽을 수 없으면 무시 — 신규 설치에서는 정상
+    }
+  }
 
   async getAll(): Promise<AuthCredentials> {
     try {
@@ -43,6 +71,7 @@ export class AuthService {
   }
 
   async set(providerId: string, apiKey: string): Promise<void> {
+    await this.migrateLegacyIfEmpty()
     const auth = await this.getAll()
     // opencode 가 실제로 읽는 형식. type:'apiKey'/apiKey 로 쓰면 opencode 가
     // 무시해서 요청에 Authorization 헤더가 붙지 않는다 (401).

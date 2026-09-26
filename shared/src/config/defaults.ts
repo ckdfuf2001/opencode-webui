@@ -24,7 +24,11 @@ export const DEFAULTS = {
     BASE_PATH: './workspace',
     REPOS_DIR: 'repos',
     CONFIG_DIR: '.config/opencode',
-    AUTH_FILE: '.opencode/state/opencode/auth.json',
+    // 빈 값 = opencode 네이티브 데이터 디렉터리를 쓴다 (getAuthPath 참고).
+    // 예전 값('.opencode/state/opencode/auth.json') 은 opencode 가 읽지 않아서
+    // provider 키가 저장돼도 요청에 붙지 않았다(401). 여기 경로를 직접 지정하면
+    // 그때는 또 opencode 와 어긋난다 — 비워둔다.
+    AUTH_FILE: '',
   },
 
   TIMEOUTS: {
