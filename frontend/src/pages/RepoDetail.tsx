@@ -7,6 +7,7 @@ import { SessionFilePanel } from "@/components/file-browser/SessionFilePanel";
 import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
 import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
+import { RepoName } from "@/components/repo/RepoName";
 import { SwitchConfigDialog } from "@/components/repo/SwitchConfigDialog";
 import { BackButton } from "@/components/ui/back-button";
 import { useOpenCodeClient } from "@/hooks/useOpenCode";
@@ -130,7 +131,7 @@ export function RepoDetail() {
             <BackButton onClick={() => setNavOpen(true)} />
             <div className="flex items-center gap-2">
               <h1 className="text-base font-semibold bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
-                {repoName}
+                <RepoName id={repoId} name={repoName} />
               </h1>
               <Button
                 variant="ghost"
