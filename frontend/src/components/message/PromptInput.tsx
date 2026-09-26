@@ -9,7 +9,7 @@ import { useFileSearch } from '@/hooks/useFileSearch'
 import { useUserBash } from '@/stores/userBashStore'
 import { useChatAttached } from '@/stores/chatAttachedStore'
 import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
-import { listQueuedChats } from '@/api/chat-queue'
+import { listQueuedChats, setQueuePaused } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
 import { useContextUsage } from '@/hooks/useContextUsage'
 
@@ -452,6 +452,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const handleStop = () => {
     abortSession.mutate(sessionID)
     onCancelEdit?.()
+    // Stop = abort + 큐 유지(일시정지): abort 후 idle이 되면 폴러가 대기분을
+    // 즉시 재발송하던 문제를 막는다. 재개는 큐 스트립의 재생 버튼(Start).
+    try {
+      localStorage.setItem(`queue-paused:${sessionID}`, '1')
+    } catch {}
+    window.dispatchEvent(new CustomEvent('queue-paused', { detail: { sessionID, paused: true } }))
+    setQueuePaused(sessionID, true).catch(() => {})
   }
 
   // 생성 중 전송 = 큐 적재. 백엔드 폴러가 idle 전환 시 발송한다.

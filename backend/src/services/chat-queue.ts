@@ -109,8 +109,10 @@ export function setQuickMode(sessionID: string, enabled: boolean): void {
 export function isQuickMode(sessionID: string): boolean {
   return quickModeSessions.has(sessionID)
 }
-// 일시정지: 진행 중 generation은 끊지 않고 큐 신규 발송만 멈춘다.
-// sending 확인(발송 확정) 분기는 계속 돌아 완료된 슬롯을 정리한다.
+// 일시정지(Stop): 이 세션의 큐 신규 발송만 멈춘다 (세션별).
+// 이미 sending으로 넘어간 항목은 건드리지 않는다 — pause로 opencode 턴을
+// 끊을 수 없어 queued로 되돌리면 표기만 멈춘 것처럼 되고 resume 시 중복
+// 발송된다. 중단(Stop)의 턴 취소는 /abort 경로(clearSendingOnAbort)가 담당.
 const pausedSessions = new Set<string>()
 export function setQueuePaused(sessionID: string, paused: boolean): void {
   if (paused) pausedSessions.add(sessionID)
@@ -330,6 +332,8 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if (Date.now() - (lastBusyAt.get(sessionID) ?? 0) < IDLE_GRACE_MS) return
 
   // await 동안 다른 발송 경로(폴러 / proxy flush)가 이 slot 을 선점했을 수 있으므로 재검사.
+  // 일시정지된 세션은 여기서도 멈춘다 (busy 대기 중 pause가 끼어든 TOCTOU 대응).
+  if (pausedSessions.has(sessionID)) return
   if (inFlight.has(sessionID)) return
   if ((failedUntil.get(sessionID) ?? 0) > Date.now()) return
   const current = queues.get(sessionID)
@@ -626,6 +630,9 @@ export function flushReadyQueues(busySessions: Set<string>): void {
   const base = opencodeServerManager.getUrl()
 
   for (const [sessionID] of [...queues]) {
+    // 일시정지된 세션은 폴러에서 건너뛴다 — dispatchHead의 sending-확정 분기가
+    // paused를 무시하고 네트워크 조회까지 하던 것을 막는다 (세션별 정지).
+    if (pausedSessions.has(sessionID)) continue
     if (busySessions.has(sessionID)) {
       lastBusyAt.set(sessionID, Date.now())
       continue
@@ -650,6 +657,11 @@ function pruneIdleSessionState(): void {
 /** 채팅 완료 이벤트로 1개 세션의 큐를 즉시 발송한다. 세션이 여전히 working 중이면 발송을 건너뛰고 폴러가 이어받는다. */
 export function flushQueueForSession(sessionId: string, directory?: string): void {
   if (!queues.has(sessionId)) return
+  // 일시정지 중 enqueue·proxy 완료 콜백이 깨우지 못하게 입구 차단 (세션별 정지).
+  if (pausedSessions.has(sessionId)) {
+    if (directory) queueDirs.set(sessionId, directory)
+    return
+  }
   if (inFlight.has(sessionId)) return
   if ((failedUntil.get(sessionId) ?? 0) > Date.now()) return
   if (directory) queueDirs.set(sessionId, directory)

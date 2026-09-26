@@ -30,6 +30,15 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paused: v }),
     }).catch(() => {})
+    // Stop 버튼(PromptInput)이 걸어둔 일시정지를 스트립 UI에 반영한다.
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ sessionID: string; paused: boolean }>
+      if (ce.detail?.sessionID === sessionID && typeof ce.detail.paused === 'boolean') {
+        setPaused(ce.detail.paused)
+      }
+    }
+    window.addEventListener('queue-paused', handler as EventListener)
+    return () => window.removeEventListener('queue-paused', handler as EventListener)
   }, [sessionID])
   const togglePaused = () => {
     const v = !paused
@@ -92,47 +101,43 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
     )
   }
 
-  // 일시정지 중 빈 큐: 정지 pill(재생 포함) + 기존 펼치기/Fast-Q 유지
-  const pausedPill = paused ? (
-    <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium bg-zinc-500/10 border-zinc-500/30 text-zinc-400">
-      <Clock className="h-3 w-3 shrink-0" />
-      <span className="shrink-0 font-semibold">Paused — queue held</span>
-      <button
-        type="button"
-        aria-label="Resume queue"
-        title="Resume queue"
-        className="rounded p-0.5 opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
-        onClick={togglePaused}
-      >
-        <Play className="h-3 w-3" />
-      </button>
-    </div>
-  ) : null
-
   if (items.length === 0) {
     if (minimized) {
       return (
         <div className="w-full max-w-4xl px-4 pb-1 flex items-center gap-1.5">
-          {pausedPill}
           <button
             type="button"
             onClick={() => setMinimized(false)}
-            className={`inline-flex items-center justify-center w-5 h-5 rounded-full border backdrop-blur-sm transition-colors ${allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20 hover:bg-yellow-500/15' : 'border-border bg-background/90 hover:bg-muted'}`}
-            title="Queue empty — click to expand"
+            className={`inline-flex items-center justify-center gap-1 w-5 h-5 rounded-full border backdrop-blur-sm transition-colors ${paused ? 'bg-zinc-500/10 border-zinc-500/30 hover:bg-zinc-500/15' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20 hover:bg-yellow-500/15' : 'border-border bg-background/90 hover:bg-muted'}`}
+            title={paused ? 'Queue paused — click to expand' : 'Queue empty — click to expand'}
             aria-label="Expand queue"
           >
-            <ChevronRight className={`w-3 h-3 ${allowInterrupt ? 'text-yellow-600' : 'text-muted-foreground'}`} />
+            <ChevronRight className={`w-3 h-3 ${paused ? 'text-zinc-400' : allowInterrupt ? 'text-yellow-600' : 'text-muted-foreground'}`} />
           </button>
+          {paused && (
+            <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-px text-[10px] font-semibold text-zinc-400">Paused</span>
+          )}
         </div>
       )
     }
     return (
       <div className="w-full max-w-4xl px-4 pb-1">
-        {pausedPill && <div className="mb-1.5">{pausedPill}</div>}
-        <div className={`rounded-xl border backdrop-blur-sm px-3 py-2 text-xs ${allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'border-border bg-background/90'}`}>
+        <div className={`rounded-xl border backdrop-blur-sm px-3 py-2 text-xs ${paused ? 'bg-zinc-500/10 border-zinc-500/30' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'border-border bg-background/90'}`}>
           <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
             <Clock className="w-3 h-3 shrink-0" />
             <span className="flex-1">Queue is empty</span>
+            {paused && (
+              <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-px text-[10px] font-semibold text-zinc-400">Paused</span>
+            )}
+            <button
+              type="button"
+              onClick={togglePaused}
+              className="inline-flex items-center justify-center rounded border border-border bg-muted/50 px-1.5 h-5 hover:bg-accent"
+              title={paused ? 'Resume queue' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
+              aria-label={paused ? 'Resume queue' : 'Pause queue'}
+            >
+              {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+            </button>
           <button
             type="button"
             onClick={toggleInterrupt}
@@ -246,18 +251,10 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
               <span className="shrink-0 text-muted-foreground">→</span>
               <span className="min-w-0 flex-1 truncate break-words opacity-60">
                 {sendingItem.text}
-                <span className="ml-1.5 text-[10px]">sending</span>
               </span>
+              {/* 정지/재생은 맨 위 헤더에만 — sending 행에 달면 멈춘 것처럼 보여 위치가 헷갈린다.
+                  sending은 pause로 못 끊고(표기는 sending 유지) X로만 취소한다. */}
               <span className="flex shrink-0 items-center gap-0.5">
-                <button
-                  type="button"
-                  aria-label={paused ? 'Resume queue' : 'Pause queue'}
-                  title={paused ? 'Resume queue (generation은 계속)' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
-                  className="rounded p-0.5 text-muted-foreground opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
-                  onClick={togglePaused}
-                >
-                  {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
-                </button>
                 <button
                   type="button"
                   aria-label="Cancel sending message"
