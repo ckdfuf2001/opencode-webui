@@ -205,11 +205,11 @@ export function RepoCard({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending}>
-                      <Copy className="w-4 h-4 mr-2" /> Clone (skill/커맨드/설정/인덱스)
+                    <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending} title="Copy automation files (skill/command/agent/tool, .opencode), permission rules, schedules and recall indexes">
+                      <Copy className="w-4 h-4 mr-2" /> Clone
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending}>
-                      <Download className="w-4 h-4 mr-2" /> Export 설정+인덱스
+                    <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending} title="Download automation files, permission rules, schedules and recall indexes as JSON">
+                      <Download className="w-4 h-4 mr-2" /> Export
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
