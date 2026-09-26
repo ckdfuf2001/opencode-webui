@@ -265,7 +265,7 @@ export function RepoCard({
                 setScheduleOpen(true);
               }}
               disabled={!isReady}
-              className="h-10 sm:h-9 px-2 gap-1"
+              className="h-10 sm:h-9 px-2 gap-1 text-zinc-500"
               title="Schedules"
             >
               <CalendarClock className="w-4 h-4" />
