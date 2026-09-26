@@ -225,7 +225,9 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
       )
     }
 
-    if (!file.content) return null
+    // 빈 파일도 편집 모드에서는 textarea를 보여준다 (편집 버튼은 isTextFile일 때만 뜨므로 안전).
+    // 없으면 +버튼 생성 직후 편집 진입 시 저장/취소 버튼만 뜨고 에디터가 안 열린다.
+    if (!file.content && viewMode !== 'edit') return null
 
     if (isTextFile) {
       if (viewMode === 'edit') {
@@ -245,7 +247,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
       }
       
       try {
-        const textContent = decodeBase64(file.content)
+        const textContent = decodeBase64(file.content ?? '')
         const lines = textContent.split('\n')
         return (
           <div className={`pb-[200px] text-sm bg-muted text-foreground rounded font-mono ${
