@@ -71,11 +71,49 @@ async function getProvidersFromOpenCode(): Promise<Provider[] | null> {
   return null;
 }
 
-export async function getProviders(): Promise<Provider[]> {
-  const fromOpenCode = await getProvidersFromOpenCode();
-  if (fromOpenCode && fromOpenCode.length > 0) return fromOpenCode;
+/**
+ * opencode config 의 provider 레코드(우리가 등록한 커스텀 provider).
+ * opencode 의 /config/providers 는 내장 카탈로그만 주므로 커스텀이 빠져 있다.
+ * 모델 선택 목록과 resolveUsableModel 이 이걸 못 보면 커스텀 provider 가
+ * "제공 중지된 모델" 로 판정돼 전송까지 막힌다.
+ */
+async function getCustomProvidersFromConfig(): Promise<Provider[]> {
+  try {
+    const { data } = await axios.get(
+      `${API_BASE_URL}/api/settings/opencode-configs/default`,
+    );
+    const provider = (data?.content?.provider ?? {}) as Record<string, {
+      name?: string;
+      npm?: string;
+      options?: { baseURL?: string };
+      models?: Record<string, Omit<Model, "id">>;
+    }>;
+    return Object.entries(provider).map(([id, entry]) => ({
+      id,
+      name: entry?.name || id,
+      npm: entry?.npm,
+      env: [],
+      models: (entry?.models ?? {}) as Record<string, Model>,
+      options: entry?.options,
+    }));
+  } catch (error) {
+    // 설정 조회 실패는 fail-open — opencode 카탈로그만으로 버틴다.
+    console.warn("Failed to load custom providers from config", error);
+    return [];
+  }
+}
 
-  return [];
+export async function getProviders(): Promise<Provider[]> {
+  const [fromOpenCode, custom] = await Promise.all([
+    getProvidersFromOpenCode(),
+    getCustomProvidersFromConfig(),
+  ]);
+  const base = fromOpenCode && fromOpenCode.length > 0 ? fromOpenCode : [];
+  if (custom.length === 0) return base;
+
+  // 카탈로그에 이미 있으면 합치지 않는다 (opencode 쪽 메타데이터를 신뢰).
+  const seen = new Set(base.map((p) => p.id));
+  return [...base, ...custom.filter((p) => !seen.has(p.id))];
 }
 
 export async function getProvidersWithModels(): Promise<ProviderWithModels[]> {
@@ -118,6 +156,14 @@ export function formatModelName(model: Model): string {
 // 제공자 목록 캐시 (5분). 존재 확인용으로만 쓴다.
 let providersCache: { at: number; list: ProviderWithModels[] } | null = null;
 const PROVIDERS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * provider 추가/제거 직후엔 모듈 캐시를 즉시 버린다. 안 비우면 resolveUsableModel
+ * 이 5분간 옛 목록으로 새 provider를 '제공 중지된 모델'로 판정해 기본값을 막는다.
+ */
+export function invalidateProvidersCache(): void {
+  providersCache = null;
+}
 
 async function getCachedProviders(): Promise<ProviderWithModels[] | null> {
   if (providersCache && Date.now() - providersCache.at < PROVIDERS_CACHE_TTL_MS) {
@@ -176,6 +222,13 @@ export const providerCredentialsApi = {
     return data.hasCredentials;
   },
 
+  /** 저장된 키 값. 없으면 null. 키 설정 다이얼로그 프리필용. */
+  get: async (providerId: string): Promise<string | null> => {
+    const { data } = await axios.get(
+      `${API_BASE_URL}/api/providers/${encodeURIComponent(providerId)}/credentials`
+    );
+    return data.apiKey ?? null;
+  },
   set: async (providerId: string, apiKey: string): Promise<void> => {
     await axios.post(`${API_BASE_URL}/api/providers/${providerId}/credentials`, {
       apiKey,
@@ -186,3 +239,19 @@ export const providerCredentialsApi = {
     await axios.delete(`${API_BASE_URL}/api/providers/${providerId}/credentials`);
   },
 };
+
+/**
+ * provider 의 모델 목록을 서버에 물어본다 (custom provider 용).
+ * 백엔드가 config 의 baseURL + 저장된 키로 GET {baseURL}/models 를 호출한다.
+ * 실패하면 빈 배열 — 목록에서 그 provider 가 빠질 뿐이고 앱은 계속 동작한다.
+ */
+export async function fetchProviderModels(providerId: string): Promise<Model[]> {
+  try {
+    const { data } = await axios.get(
+      `${API_BASE_URL}/api/providers/${encodeURIComponent(providerId)}/models`,
+    );
+    return Array.isArray(data?.models) ? (data.models as Model[]) : [];
+  } catch {
+    return [];
+  }
+}

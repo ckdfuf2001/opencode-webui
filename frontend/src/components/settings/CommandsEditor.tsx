@@ -19,7 +19,7 @@ interface CommandsEditorProps {
 
 function commandToItem(name: string, command: Command): ResourceItem<Command> {
   const badges: { label: string; className: string }[] = []
-  if (command.agent) badges.push({ label: command.agent, className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' })
+  if (command.agent) badges.push({ label: command.agent, className: 'bg-primary/15 text-primary border-primary/30' })
   if (command.model) badges.push({ label: command.model.split('/').pop() || command.model, className: 'bg-purple-500/15 text-purple-400 border-purple-500/30' })
   if (command.subtask) badges.push({ label: 'subtask', className: 'bg-amber-500/15 text-amber-400 border-amber-500/30' })
 

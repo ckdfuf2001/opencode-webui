@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Search, Check } from "lucide-react";
 import {
   getProvidersWithModels,
+  fetchProviderModels,
   formatModelName,
   formatProviderName,
 } from "@/api/providers";
@@ -70,7 +71,12 @@ export function ModelSelectDialog({
     try {
       setLoading(true);
       const data = await getProvidersWithModels();
-      setProviders(data);
+      // 커스텀 provider 를 config 에 models 없이 등록하면 모델 목록이 비어
+      // 필터(모델 1개 이상)에서 통째로 사라진다. baseURL 의 /models 로 채운다.
+      const filled = await Promise.all(
+        data.map(async (p) => (p.models.length > 0 ? p : { ...p, models: await fetchProviderModels(p.id) })),
+      );
+      setProviders(filled);
 
       if (currentModel) {
         const [providerId] = currentModel.split("/");

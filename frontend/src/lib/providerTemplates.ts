@@ -13,6 +13,11 @@ export interface ProviderTemplate {
       context: number
       output: number
     }
+    /** opencode 모델 플래그. reasoning/tool_call 은 모델 선택·요약 판정에 쓰인다. */
+    reasoning?: boolean
+    tool_call?: boolean
+    attachment?: boolean
+    temperature?: boolean
   }>
   requiresApiKey: boolean
   docsUrl?: string
@@ -315,6 +320,50 @@ export const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     npm: '@ai-sdk/openai-compatible',
     requiresApiKey: true,
     docsUrl: 'https://opencode.ai/docs/providers/#github-copilot',
+  },
+  {
+    id: 'nvidia',
+    name: 'NVIDIA NIM',
+    description: 'Free-tier OpenAI-compatible inference at build.nvidia.com (rate limits apply)',
+    npm: '@ai-sdk/openai-compatible',
+    options: {
+      baseURL: 'https://integrate.api.nvidia.com/v1',
+    },
+    requiresApiKey: true,
+    docsUrl: 'https://build.nvidia.com/models',
+    // NIM 카탈로그는 자주 바뀐다(신규/폐기 모델 발생). 전체 목록은
+    // GET {baseURL}/models 로, 'Free Endpoint' 필터는 build.nvidia.com/models 에서 확인.
+    // 여기 박는 건 채팅에 자주 쓰는 골라놓은 목록이라 없는 모델은 수동으로 추가하면 된다.
+    models: {
+      'nvidia/nemotron-3-super-120b-a12b': {
+        name: 'Nemotron 3 Super 120B A12B',
+      },
+      'nvidia/nemotron-3-ultra-550b-a55b': {
+        name: 'Nemotron 3 Ultra 550B A55B',
+      },
+      'nvidia/nemotron-3.5-lightning-30b-a3b': {
+        name: 'Nemotron 3.5 Lightning 30B A3B',
+      },
+      'nvidia/llama-3.1-70b-instruct': {
+        name: 'Llama 3.1 70B Instruct',
+      },
+      'nvidia/llama-3.2-90b-vision-instruct': {
+        name: 'Llama 3.2 90B Vision Instruct',
+        attachment: true,
+      },
+      'openai/gpt-oss-120b': {
+        name: 'GPT-OSS 120B',
+      },
+      'openai/gpt-oss-20b': {
+        name: 'GPT-OSS 20B',
+      },
+      'moonshotai/kimi-k3': {
+        name: 'Kimi K3',
+      },
+      'deepseek-ai/deepseek-v4-pro-0813': {
+        name: 'DeepSeek V4 Pro',
+      },
+    },
   },
   {
     id: 'ollama',

@@ -236,7 +236,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                   <span>All</span>
                 </label>
               )}
-              <Button onClick={handleBatchDelete} variant="destructive" size="icon" disabled={selectedRepos.size === 0 && selectedSessions.size === 0} className="hidden md:flex h-8 w-8" title="삭제">
+              <Button onClick={handleBatchDelete} variant="outline" size="icon" disabled={selectedRepos.size === 0 && selectedSessions.size === 0} className="hidden md:flex h-8 w-8 text-muted-foreground enabled:hover:text-white enabled:hover:bg-[#A64552] enabled:hover:border-[#A64552] dark:enabled:hover:bg-[#91343F] dark:enabled:hover:border-[#91343F]" title="삭제">
                 <Trash2 className="w-4 h-4" />
               </Button>
             </>
@@ -247,7 +247,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                   {filteredRepos.every((repo) => selectedRepos.has(repo.id)) ? "Deselect All" : "Select All"}
                 </Button>
               )}
-              <Button onClick={handleBatchDelete} variant="destructive" size="icon" disabled={selectedRepos.size === 0} className="hidden md:flex h-8 w-8" title="삭제">
+              <Button onClick={handleBatchDelete} variant="outline" size="icon" disabled={selectedRepos.size === 0} className="hidden md:flex h-8 w-8 text-muted-foreground enabled:hover:text-white enabled:hover:bg-[#A64552] enabled:hover:border-[#A64552] dark:enabled:hover:bg-[#91343F] dark:enabled:hover:border-[#91343F]" title="삭제">
                 <Trash2 className="w-4 h-4" />
               </Button>
             </>
@@ -488,7 +488,7 @@ function EditRepoRow({ repo, isSelected, selectedSessions, onRepoChecked, onSess
         <Checkbox checked={isSelected} onCheckedChange={(v) => onRepoChecked(v === true, sessionIds)} />
         <GitBranch className="w-4 h-4 text-muted-foreground shrink-0" />
         <span className="font-medium text-sm flex-1 truncate" title={repo.localPath}>{repo.localPath}</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteRepo(repo.id)} disabled={isDeleting} title="레포 삭제"><Trash2 className="w-4 h-4" /></Button>
+        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground enabled:hover:text-white enabled:hover:bg-[#A64552] dark:enabled:hover:bg-[#91343F]" onClick={() => onDeleteRepo(repo.id)} disabled={isDeleting} title="레포 삭제"><Trash2 className="w-4 h-4" /></Button>
       </div>
       {sessions && sessions.length > 0 ? (
         <div className="ml-6 space-y-1 border-l pl-3 max-h-[32vh] overflow-y-auto pr-1">

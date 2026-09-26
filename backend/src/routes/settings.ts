@@ -4,6 +4,7 @@ import type { Database } from 'bun:sqlite'
 import { SettingsService } from '../services/settings'
 import { writeActiveOpenCodeConfigFile, setActiveOpenCodeConfigModel } from '../services/default-mcp'
 import { patchOpenCodeConfig } from '../services/proxy'
+import { AuthService } from '../services/auth'
 import { getOpenCodeConfigFilePath } from '@opencode-webui/shared'
 import { 
   UserPreferencesSchema, 
@@ -25,6 +26,50 @@ const CreateOpenCodeConfigSchema = z.object({
 const UpdateOpenCodeConfigSchema = z.object({
   content: OpenCodeConfigSchema,
   isDefault: z.boolean().optional(),
+})
+
+/**
+ * provider 변경 여부. opencode 는 provider 레지스트리를 부팅 시 한 번만
+ * 만들기 때문에 config provider 추가/삭제만으로는 반영되지 않는다
+ * (MCP 와 달리 재시작 대상). 키 순서 무관하게 비교한다.
+ */
+export function hasProviderChanged(oldContent: Record<string, unknown>, newContent: Record<string, unknown>): boolean {
+  const oldProvider = (oldContent.provider as Record<string, unknown>) || {}
+  const newProvider = (newContent.provider as Record<string, unknown>) || {}
+  const oldKeys = Object.keys(oldProvider).sort()
+  const newKeys = Object.keys(newProvider).sort()
+  if (oldKeys.length !== newKeys.length) return true
+  if (JSON.stringify(oldKeys) !== JSON.stringify(newKeys)) return true
+  for (const key of oldKeys) {
+    if (JSON.stringify(oldProvider[key]) !== JSON.stringify(newProvider[key])) return true
+  }
+  return false
+}
+
+const ProviderModelSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  limit: z.object({
+    context: z.number().int().positive(),
+    output: z.number().int().positive(),
+  }).optional(),
+  reasoning: z.boolean().optional(),
+  tool_call: z.boolean().optional(),
+  attachment: z.boolean().optional(),
+  temperature: z.boolean().optional(),
+})
+
+// opencode provider id 규칙: 소문자/숫자로 시작, 소문자·숫자·.`-`/`_` 허용.
+const ProviderIdSchema = z.string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Provider ID must be lowercase alphanumeric with . _ - (start with letter or digit)')
+
+export const UpsertProviderSchema = z.object({
+  id: ProviderIdSchema,
+  name: z.string().min(1).max(120).optional(),
+  npm: z.string().min(1).max(200).default('@ai-sdk/openai-compatible'),
+  baseURL: z.string().url('Base URL must be a valid URL').max(500).optional().or(z.literal('').transform(() => undefined)),
+  models: z.record(z.string().min(1).max(200), ProviderModelSchema).optional(),
 })
 
 function hasMcpChanged(oldContent: Record<string, unknown>, newContent: Record<string, unknown>): boolean {
@@ -193,8 +238,8 @@ export function createSettingsRoutes(db: Database) {
         
         await patchOpenCodeConfig(config.content)
         
-        if (existingConfig && hasMcpChanged(existingConfig.content, config.content)) {
-          logger.info('MCP configuration changed, restarting OpenCode server')
+        if (existingConfig && (hasMcpChanged(existingConfig.content, config.content) || hasProviderChanged(existingConfig.content, config.content))) {
+          logger.info('MCP/provider configuration changed, restarting OpenCode server')
           await opencodeServerManager.restart()
         }
       }
@@ -261,6 +306,129 @@ export function createSettingsRoutes(db: Database) {
     } catch (error) {
       logger.error('Failed to get default OpenCode config:', error)
       return c.json({ error: 'Failed to get default OpenCode config' }, 500)
+    }
+  })
+
+  // 기본 설정을 돌려준다. 기본 설정이 아직 없는 초기 상태(=AddProvider의
+  // 커스텀 등록이 404로 실패하던 원인)면 'default' 설정을 생성해 준다.
+  function ensureDefaultConfig(userId: string) {
+    const existing = settingsService.getDefaultOpenCodeConfig(userId)
+    if (existing) return existing
+    logger.info('No default OpenCode config found — creating empty default for provider registration')
+    return settingsService.createOpenCodeConfig({ name: 'default', content: {} }, userId)
+  }
+
+  /** config 변경을 저장 → 활성 파일 반영 → opencode 재시작까지 한 번에. */
+  async function applyConfigPatch(
+    config: { name: string; content: Record<string, unknown>; isDefault: boolean },
+    patch: Record<string, unknown>,
+  ) {
+    const nextContent = { ...config.content, ...patch }
+    const updated = settingsService.updateOpenCodeConfig(config.name, { content: nextContent }, 'default')
+    if (!updated) {
+      throw new Error('Failed to persist config change')
+    }
+    if (updated.isDefault) {
+      writeActiveOpenCodeConfigFile(JSON.stringify(updated.content, null, 2))
+      await patchOpenCodeConfig(updated.content)
+      // opencode 는 provider 레지스트리를 부팅 시에 만든다 — 재시작 없이는 반영 안 됨.
+      try {
+        await opencodeServerManager.restart()
+      } catch (error) {
+        logger.error('Failed to restart OpenCode after config change:', error)
+      }
+    }
+    return updated
+  }
+
+  // 커스텀 provider 등록(추가/갱신). opencode config 의 provider 레코드 하나를
+  // 쓰고 활성 파일·opencode 를 동기화한다. openai 호환 baseURL 은
+  // npm('@ai-sdk/openai-compatible') + options.baseURL 조합으로 전달한다.
+  app.post('/opencode-configs/:name/providers', async (c) => {
+    try {
+      const configName = c.req.param('name')
+      const validated = UpsertProviderSchema.parse(await c.req.json())
+
+      const config = configName === 'default'
+        ? ensureDefaultConfig('default')
+        : settingsService.getOpenCodeConfigByName(configName, 'default')
+      if (!config) return c.json({ error: 'Config not found' }, 404)
+
+      const currentProvider = (config.content.provider as Record<string, unknown>) || {}
+      const existing = (currentProvider[validated.id] as Record<string, unknown> | undefined) || {}
+      const entry: Record<string, unknown> = {
+        ...existing,
+        npm: validated.npm,
+        name: validated.name || existing.name || validated.id,
+        ...(validated.baseURL ? { options: { ...(existing.options as Record<string, unknown> || {}), baseURL: validated.baseURL } } : {}),
+        ...(validated.models && Object.keys(validated.models).length > 0 ? { models: validated.models } : {}),
+      }
+
+      const updated = await applyConfigPatch(config, { provider: { ...currentProvider, [validated.id]: entry } })
+      logger.info(`Registered provider '${validated.id}' in config '${config.name}'`)
+      return c.json({ success: true, config: updated, providerId: validated.id })
+    } catch (error) {
+      logger.error('Failed to register provider:', error)
+      if (error instanceof z.ZodError) {
+        return c.json({ error: 'Invalid provider data', details: error.issues }, 400)
+      }
+      return c.json({ error: 'Failed to register provider' }, 500)
+    }
+  })
+
+  // provider 제거. 두 가지를 모두 처리한다.
+  // - 커스텀(config 의 provider 레코드): 레코드를 지운다.
+  // - opencode 기본 제공분(레코드가 없음): 지울 대상이 없으므로 disabled_providers 로
+  //   숨기고 저장된 키를 지운다. 그래야 목록에서 사라져 "삭제"로 의미가 맞는다.
+  app.delete('/opencode-configs/:name/providers/:providerId', async (c) => {
+    try {
+      const configName = c.req.param('name')
+      const providerId = c.req.param('providerId')
+
+      const config = configName === 'default'
+        ? settingsService.getDefaultOpenCodeConfig('default')
+        : settingsService.getOpenCodeConfigByName(configName, 'default')
+      if (!config) return c.json({ error: 'Config not found' }, 404)
+
+      const currentProvider = (config.content.provider as Record<string, unknown>) || {}
+      const currentDisabled = Array.isArray(config.content.disabled_providers)
+        ? (config.content.disabled_providers as string[])
+        : []
+      const isCustom = providerId in currentProvider
+      if (!isCustom && currentDisabled.includes(providerId)) {
+        return c.json({ error: 'Provider is already removed' }, 409)
+      }
+
+      const patch: Record<string, unknown> = isCustom
+        ? (() => {
+            const { [providerId]: _removed, ...rest } = currentProvider
+            return { provider: rest }
+          })()
+        : { disabled_providers: [...currentDisabled, providerId] }
+
+      const updated = await applyConfigPatch(config, patch)
+
+      // auth.json 에 키를 남겨두면 provider 가 사라진 뒤에도 키가 고아로 남는다 —
+      // 같이 지워야 재등록 시 새 키를 넣는 흐름이 깨끗해진다.
+      let credentialsRemoved = false
+      try {
+        const authService = new AuthService()
+        if (await authService.has(providerId)) {
+          await authService.delete(providerId)
+          credentialsRemoved = true
+        }
+      } catch (error) {
+        logger.error(`Failed to clear credentials for provider '${providerId}':`, error)
+      }
+
+      logger.info(
+        `Removed provider '${providerId}' from config '${config.name}' `
+        + `(mode: ${isCustom ? 'custom record' : 'disabled_providers'}, credentials cleared: ${credentialsRemoved})`,
+      )
+      return c.json({ success: true, config: updated, credentialsRemoved, mode: isCustom ? 'unregistered' : 'disabled' })
+    } catch (error) {
+      logger.error('Failed to remove provider:', error)
+      return c.json({ error: 'Failed to remove provider' }, 500)
     }
   })
 

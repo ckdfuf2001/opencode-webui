@@ -101,7 +101,7 @@ export function OpenCodeBinarySetting() {
                 href="https://github.com/sst/opencode/releases"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-500 hover:text-blue-400 underline underline-offset-2"
+                className="text-primary hover:text-primary-hover underline underline-offset-2"
               >
                 github.com/sst/opencode/releases
               </a>

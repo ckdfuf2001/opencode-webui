@@ -33,7 +33,7 @@ export function AgentsEditor({ agents, onChange }: { agents: Record<string, any>
               description: agent.description ?? '',
               icon: FileTextIcon,
               badges: [
-                { label: APPROVAL_TYPE_LABELS[inferApprovalType(agent)], className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+                { label: APPROVAL_TYPE_LABELS[inferApprovalType(agent)], className: 'bg-primary/15 text-primary border-primary/30' },
                 { label: agent.mode, className: 'bg-purple-500/15 text-purple-400 border-purple-500/30' },
                 ...(agent.disable ? [{ label: 'disabled', className: 'bg-red-500/15 text-red-400 border-red-500/30' }] : []),
                 ...(agent.model?.providerID ? [{ label: `${agent.model.providerID}/${agent.model.modelID}`, className: 'bg-gray-500/15 text-gray-400 border-gray-500/30' }] : []),

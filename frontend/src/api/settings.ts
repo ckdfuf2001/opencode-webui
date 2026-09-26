@@ -10,6 +10,23 @@ import type {
 } from './types/settings'
 import { API_BASE_URL } from '@/config'
 
+/** 커스텀 provider 등록 payload. openai 호환은 npm + options.baseURL 조합. */
+export interface UpsertProviderRequest {
+  /** opencode provider id — 소문자/숫자로 시작, . _ - 허용 */
+  id: string
+  name?: string
+  npm?: string
+  baseURL?: string
+  models?: Record<string, {
+    name?: string
+    limit?: { context: number; output: number }
+    reasoning?: boolean
+    tool_call?: boolean
+    attachment?: boolean
+    temperature?: boolean
+  }>
+}
+
 export const settingsApi = {
   getSettings: async (userId = 'default'): Promise<SettingsResponse> => {
     const { data } = await axios.get(`${API_BASE_URL}/api/settings`, {
@@ -97,6 +114,34 @@ export const settingsApi = {
     } catch {
       return null
     }
+  },
+
+  /**
+   * 커스텀 provider 등록(추가/갱신). 전용 엔드포인트를 탄다 —
+   * 범용 PUT 은 기본 config 가 아직 없을 때 404 로 실패하고(초기 설치 상태),
+   * config 의 provider 레코드를 쓰고 활성 파일·opencode 재시작까지 처리한다.
+   */
+  upsertProvider: async (
+    provider: UpsertProviderRequest,
+    configName = 'default',
+  ): Promise<{ success: boolean; providerId: string; config: OpenCodeConfig }> => {
+    const { data } = await axios.post(
+      `${API_BASE_URL}/api/settings/opencode-configs/${encodeURIComponent(configName)}/providers`,
+      provider,
+    )
+    return data
+  },
+
+  /** provider 제거. 커스텀은 config 레코드 삭제, 기본 제공분은 disabled_providers 로 숨긴다.
+   *  mode: 'unregistered' = 레코드 삭제, 'disabled' = 기본 제공분 숨김. */
+  removeProvider: async (
+    providerId: string,
+    configName = 'default',
+  ): Promise<{ success: boolean; credentialsRemoved: boolean; mode?: 'unregistered' | 'disabled' }> => {
+    const { data } = await axios.delete(
+      `${API_BASE_URL}/api/settings/opencode-configs/${encodeURIComponent(configName)}/providers/${encodeURIComponent(providerId)}`,
+    )
+    return data
   },
 
   getCustomCommands: async (userId = 'default'): Promise<CustomCommand[]> => {

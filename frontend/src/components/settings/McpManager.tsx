@@ -32,7 +32,7 @@ function getServerDescription(serverConfig: any): string {
 function mcpToItem(serverId: string, serverConfig: any): any {
   const badges: { label: string; className: string }[] = [
     { label: serverConfig.enabled ? 'Enabled' : 'Disabled', className: serverConfig.enabled ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
-    { label: serverConfig.type, className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+    { label: serverConfig.type, className: 'bg-primary/15 text-primary border-primary/30' },
   ]
 
   return {

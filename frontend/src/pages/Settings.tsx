@@ -15,25 +15,25 @@ export function Settings() {
           <TabsList className="grid w-full grid-cols-4 mb-8 bg-[#141414] border border-[#262626] p-1">
             <TabsTrigger
               value="general"
-              className="data-[state=active]:bg-blue-800 data-[state=active]:text-white text-zinc-400"
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-zinc-400"
             >
               General
             </TabsTrigger>
             <TabsTrigger
               value="permissions"
-              className="data-[state=active]:bg-blue-800 data-[state=active]:text-white text-zinc-400"
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-zinc-400"
             >
               Permissions
             </TabsTrigger>
             <TabsTrigger 
               value="shortcuts"
-              className="data-[state=active]:bg-blue-800 data-[state=active]:text-white text-zinc-400"
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-zinc-400"
             >
               Shortcuts
             </TabsTrigger>
             <TabsTrigger 
               value="opencode"
-              className="data-[state=active]:bg-blue-800 data-[state=active]:text-white text-zinc-400"
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-zinc-400"
             >
               OpenCode
             </TabsTrigger>

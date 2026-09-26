@@ -43,16 +43,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           <Tabs defaultValue="general" className="w-full flex flex-col flex-1 min-h-0">
             <div className="px-6 pt-6 pb-4 flex-shrink-0">
               <TabsList className="grid w-full grid-cols-4 bg-card border border-border p-1">
-                <TabsTrigger value="general" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-muted-foreground transition-all duration-200">
+                <TabsTrigger value="general" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground transition-all duration-200">
                   General
                 </TabsTrigger>
-                <TabsTrigger value="shortcuts" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-muted-foreground transition-all duration-200">
+                <TabsTrigger value="shortcuts" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground transition-all duration-200">
                   Shortcuts
                 </TabsTrigger>
-                <TabsTrigger value="opencode" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-muted-foreground transition-all duration-200">
+                <TabsTrigger value="opencode" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground transition-all duration-200">
                   OpenCode
                 </TabsTrigger>
-                <TabsTrigger value="providers" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white text-muted-foreground transition-all duration-200">
+                <TabsTrigger value="providers" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground transition-all duration-200">
                   Providers
                 </TabsTrigger>
               </TabsList>
@@ -107,7 +107,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   >
                     <div className="flex items-center gap-4">
                       <div className="p-3 bg-accent rounded-lg">
-                        <item.icon className="w-6 h-6 text-blue-400" />
+                        <item.icon className="w-6 h-6 text-primary" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="font-semibold text-foreground mb-1">{item.label}</h3>
