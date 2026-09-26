@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, Pause, Play, RotateCcw, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, RotateCcw, X } from 'lucide-react'
 import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat, useRetryQueuedChat, useSetQueuePaused } from '@/hooks/useChatQueue'
 import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
@@ -132,11 +132,11 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
             <button
               type="button"
               onClick={togglePaused}
-              className="inline-flex items-center justify-center rounded border border-border bg-muted/50 px-1.5 h-5 hover:bg-accent"
+              className="inline-flex items-center justify-center rounded bg-transparent px-1.5 h-5 opacity-60 hover:opacity-100"
               title={paused ? 'Resume queue' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
               aria-label={paused ? 'Resume queue' : 'Pause queue'}
             >
-              {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+              <span className="text-[11px] leading-none select-none">{paused ? '▶' : '❚❚'}</span>
             </button>
           <button
             type="button"
@@ -222,11 +222,11 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
           <button
             type="button"
             onClick={togglePaused}
-            className="ml-auto inline-flex items-center justify-center rounded border border-border bg-muted/50 px-1.5 h-5 hover:bg-accent"
+            className="ml-auto inline-flex items-center justify-center rounded bg-transparent px-1.5 h-5 opacity-60 hover:opacity-100"
             title={paused ? 'Resume queue (generation은 계속)' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
             aria-label={paused ? 'Resume queue' : 'Pause queue'}
           >
-            {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+            <span className="text-[11px] leading-none select-none">{paused ? '▶' : '❚❚'}</span>
           </button>
           <button
             type="button"
