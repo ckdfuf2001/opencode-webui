@@ -134,7 +134,7 @@ export function SwitchConfigDialog({
             <Button
               onClick={handleSwitch}
               disabled={!selectedConfig || switching || selectedConfig === currentConfigName}
-              className="bg-[#0047BB] hover:bg-[#003DA5] disabled:opacity-50"
+              className="bg-[#4C678D] hover:bg-[#3E5573] disabled:opacity-50"
             >
               {switching ? (
                 <>
