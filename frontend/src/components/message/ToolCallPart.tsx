@@ -3,6 +3,7 @@ import type { components } from '@/api/opencode-types'
 import { useSettings } from '@/hooks/useSettings'
 import { useUserBash } from '@/stores/userBashStore'
 import { detectFileReferences } from '@/lib/fileReferences'
+import { useDragClickGuard } from '@/lib/useDragClickGuard'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { Copy } from 'lucide-react'
 
@@ -109,6 +110,9 @@ function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (fi
 export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps) {
   const { preferences } = useSettings()
   const { userBashCommands } = useUserBash()
+  // 툴 출력을 클릭하면 접히는데, 드래그로 텍스트를 선택하고 손을 떼도
+  // click 이 올라와 읽던 내용이 닫혔다. 드래그/선택은 클릭으로 치지 않는다.
+  const dragGuard = useDragClickGuard()
   const outputRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const ptyPreRef = useRef<HTMLPreElement>(null)
@@ -325,7 +329,8 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
       {expanded && (
         <div
           className="bg-card space-y-2 p-2 cursor-pointer"
-          onClick={() => setExpanded(false)}
+          onPointerDown={dragGuard.onPointerDown}
+          onClick={(e) => dragGuard.clickUnlessDrag(e, () => setExpanded(false))}
         >
           {part.state.status === 'running' && (
             (part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') ? (

@@ -1,4 +1,5 @@
 import { memo, useState, useEffect, type ReactNode } from 'react'
+import { useDragClickGuard } from '@/lib/useDragClickGuard'
 import type { components } from '@/api/opencode-types'
 import { Copy, Volume2, Square, Loader2, Zap } from 'lucide-react'
 import { TextPart } from './TextPart'
@@ -252,6 +253,9 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
   const { preferences } = useSettings()
   const showReasoning = preferences?.showReasoning ?? true
   const copyableContent = getCopyableContent(part, allParts)
+  // reasoning 본문 클릭 시 접히는데, 드래그로 텍스트를 선택하고 손을 떼도
+  // click 이 올라와 읽던 내용이 닫혔다. 드래그/선택은 클릭으로 치지 않는다.
+  const dragGuard = useDragClickGuard()
   
   switch (part.type) {
     case 'text': {
@@ -351,7 +355,17 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
                 <CopyButton content={copyableContent} title="Copy reasoning" />
               </span>
             </summary>
-            <div className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap cursor-pointer" onClick={(e) => { const d = (e.currentTarget.closest('details') as HTMLDetailsElement); if (d) d.open = false; }}>
+            <div
+              className="p-4 bg-muted/50 text-sm text-foreground/80 whitespace-pre-wrap cursor-pointer"
+              onPointerDown={dragGuard.onPointerDown}
+              onClick={(e) => {
+                const el = e.currentTarget
+                dragGuard.clickUnlessDrag(e, () => {
+                  const d = el.closest('details') as HTMLDetailsElement | null
+                  if (d) d.open = false
+                })
+              }}
+            >
               {waiting ? <span className="shine-loading text-xs">Reasoning...</span> : part.text}
             </div>
           </details>
