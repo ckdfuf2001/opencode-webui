@@ -389,7 +389,7 @@ export const SessionList = ({
               </button>
               <button
                 type="button"
-                className="h-6 w-6 p-0 text-muted-foreground hover:text-red-400 bg-transparent border-none cursor-pointer flex items-center justify-center"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-[#91343F] bg-transparent border-none cursor-pointer flex items-center justify-center"
                 onClick={(e) => handleDelete(session.id, e)}
                 title="삭제"
               >

@@ -280,7 +280,7 @@ export function RepoCard({
                   onDelete(repo.id);
                 }}
                 disabled={isDeleting}
-                className="h-10 sm:h-9 w-10 p-0 text-zinc-500 hover:text-red-500 hover:border-red-500/40"
+                className="h-10 sm:h-9 w-10 p-0 text-zinc-500 hover:text-[#91343F] hover:border-[#91343F]/40"
               >
               {isDeleting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
