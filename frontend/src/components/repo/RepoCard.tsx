@@ -208,7 +208,7 @@ export function RepoCard({
                     <DropdownMenuItem onClick={() => cloneMut.mutate()} disabled={!isReady || cloneMut.isPending} title="Copy automation files (skill/command/agent/tool, .opencode), permission rules, schedules and recall indexes">
                       <Copy className="w-4 h-4 mr-2" /> Clone
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending} title="Download automation files, permission rules, schedules and recall indexes as JSON">
+                    <DropdownMenuItem onClick={() => exportMut.mutate()} disabled={!isReady || exportMut.isPending} title="Download automation files (skill/command/agent/tool, .opencode), permission rules, schedules and recall indexes as JSON">
                       <Download className="w-4 h-4 mr-2" /> Export
                     </DropdownMenuItem>
                   </DropdownMenuContent>
