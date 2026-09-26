@@ -92,31 +92,28 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
     )
   }
 
-  // 일시정지 + 빈 큐: 회색 pill + 재생 버튼 (재개 통로)
-  if (paused && items.length === 0) {
-    return (
-      <div className="w-full max-w-4xl px-4 pb-1">
-        <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium bg-zinc-500/10 border-zinc-500/30 text-zinc-400">
-          <Clock className="h-3 w-3 shrink-0" />
-          <span className="shrink-0 font-semibold">Paused — queue held</span>
-          <button
-            type="button"
-            aria-label="Resume queue"
-            title="Resume queue"
-            className="rounded p-0.5 opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
-            onClick={togglePaused}
-          >
-            <Play className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-    )
-  }
+  // 일시정지 중 빈 큐: 정지 pill(재생 포함) + 기존 펼치기/Fast-Q 유지
+  const pausedPill = paused ? (
+    <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium bg-zinc-500/10 border-zinc-500/30 text-zinc-400">
+      <Clock className="h-3 w-3 shrink-0" />
+      <span className="shrink-0 font-semibold">Paused — queue held</span>
+      <button
+        type="button"
+        aria-label="Resume queue"
+        title="Resume queue"
+        className="rounded p-0.5 opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
+        onClick={togglePaused}
+      >
+        <Play className="h-3 w-3" />
+      </button>
+    </div>
+  ) : null
 
   if (items.length === 0) {
     if (minimized) {
       return (
-        <div className="w-full max-w-4xl px-4 pb-1">
+        <div className="w-full max-w-4xl px-4 pb-1 flex items-center gap-1.5">
+          {pausedPill}
           <button
             type="button"
             onClick={() => setMinimized(false)}
@@ -131,6 +128,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
     }
     return (
       <div className="w-full max-w-4xl px-4 pb-1">
+        {pausedPill && <div className="mb-1.5">{pausedPill}</div>}
         <div className={`rounded-xl border backdrop-blur-sm px-3 py-2 text-xs ${allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'border-border bg-background/90'}`}>
           <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
             <Clock className="w-3 h-3 shrink-0" />
