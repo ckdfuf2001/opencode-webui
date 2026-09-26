@@ -1140,7 +1140,7 @@ useEffect(() => {
           {showStop && (
             <button
               onClick={handleStop}
-              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-destructive hover:bg-destructive/90 text-destructive-foreground transition-colors"
+              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-[#91343F] hover:bg-[#91343F]/90 text-white transition-colors"
               title={`Stop generating (${abortKs})`}
             >
               Stop
