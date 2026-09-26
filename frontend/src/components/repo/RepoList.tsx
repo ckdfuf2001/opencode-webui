@@ -255,7 +255,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           <Button
             onClick={() => onAddRepo?.()}
             size="sm"
-            className="bg-[#4C678D] hover:bg-[#3E5573] text-white hidden md:flex whitespace-nowrap h-8"
+            className="bg-[#0F4A7E] hover:bg-[#0C3B65] text-white hidden md:flex whitespace-nowrap h-8"
           >
             <Plus className="w-4 h-4 mr-1" />
             Repository
@@ -291,7 +291,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
           <Button
             onClick={() => onAddRepo?.()}
             size="icon"
-            className="bg-[#4C678D] hover:bg-[#3E5573] text-white md:hidden h-8 w-8"
+            className="bg-[#0F4A7E] hover:bg-[#0C3B65] text-white md:hidden h-8 w-8"
             title="Repository"
           >
             <Plus className="w-4 h-4" />
@@ -382,7 +382,7 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
                         onDragEnd={() => setDropTarget(null)}
                         onClick={(e) => e.stopPropagation()}
                         title="드래그해서 순서 변경 (이 PC에만 저장)"
-                        className="absolute left-0 top-0 z-10 h-5 w-5 cursor-grab active:cursor-grabbing bg-[#4C678D]/70 hover:bg-[#4C678D]"
+                        className="absolute left-0 top-0 z-10 h-5 w-5 cursor-grab active:cursor-grabbing bg-[#0F4A7E]/70 hover:bg-[#0F4A7E]"
                         style={{
                           clipPath: 'polygon(0 0, 100% 0, 0 100%)',
                         }}
