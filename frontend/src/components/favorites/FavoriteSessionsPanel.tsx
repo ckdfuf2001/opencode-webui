@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, type ClipboardEvent, type DragEve
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye, GripVertical, Loader2, ShieldAlert } from 'lucide-react'
 import { CancelledBadge } from '../session/CancelledBadge'
+import { RepoName } from '../repo/RepoName'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
@@ -362,7 +363,7 @@ export function FavoriteSessionsPanel() {
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-muted-foreground truncate">{repo?.localPath || f.directory || f.sessionId.slice(0, 8)}</div>
+                      <div className="text-[11px] text-muted-foreground truncate">{repo && repo.localPath ? <RepoName id={repo.id} name={repo.localPath} /> : (f.directory || f.sessionId.slice(0, 8))}</div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                       {!isRepoFav && <Button variant="ghost" size="sm" className="h-6 text-xs px-2" asChild><a href={f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`}>이동</a></Button>}

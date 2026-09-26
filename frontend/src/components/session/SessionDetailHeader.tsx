@@ -1,6 +1,7 @@
 import { BackButton } from "@/components/ui/back-button";
 import { ContextUsageIndicator } from "@/components/session/ContextUsageIndicator";
 import { BranchSwitcher } from "@/components/repo/BranchSwitcher";
+import { RepoName } from "@/components/repo/RepoName";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2, Settings, FolderOpen, Briefcase, ShieldCheck, ShieldAlert } from "lucide-react";
@@ -146,7 +147,7 @@ export function SessionDetailHeader({
           <BackButton to={`/repos/${repoId}`} onClick={onNavOpen} className="text-xs sm:text-sm" />
           <div className="min-w-0 flex-1">
             <p className="text-[10px] sm:text-xs text-muted-foreground truncate">
-              #{repo.id}. {repoName}
+              <RepoName id={repo.id} name={repoName} />
             </p>
             {isEditing ? (
               <form onSubmit={handleTitleSubmit} className="min-w-0">

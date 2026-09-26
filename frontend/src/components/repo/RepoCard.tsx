@@ -13,6 +13,7 @@ import { cloneRepo, exportRepo } from "@/api/repos";
 import { cloneRepoNotifyData } from "@/lib/notifications";
 import { showToast } from "@/lib/toast";
 import { listFavorites, addFavorite, removeFavorite } from "@/api/favorites";
+import { RepoName } from "./RepoName";
 
 interface RepoCardProps {
   repo: {
@@ -140,7 +141,7 @@ export function RepoCard({
                    onSelect ? "cursor-pointer" : ""
                  }`}
                >
-                  #{repo.id}. {repoName}
+                   <RepoName id={repo.id} name={repoName} />
                 </h3>
               {branchToDisplay && (repo.isWorktree ? (
                 <span
