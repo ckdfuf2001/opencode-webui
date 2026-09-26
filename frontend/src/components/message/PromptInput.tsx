@@ -1150,7 +1150,7 @@ useEffect(() => {
             data-submit-prompt
             onClick={showStop ? handleQueue : handleSubmit}
             disabled={(!prompt.trim() && !showStop) || disabled || isContextCritical || willExceed}
-            className={`px-5 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               isContextCritical || willExceed
                 ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
                 : showStop
