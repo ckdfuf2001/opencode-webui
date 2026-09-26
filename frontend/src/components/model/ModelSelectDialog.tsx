@@ -234,24 +234,6 @@ export function ModelSelectDialog({
         </DialogHeader>
 
         <div className="flex flex-col flex-1 min-h-0 space-y-4 overflow-hidden">
-          {/* Use as default — 세션에서만 노출, 체크 시에만 전체 적용 */}
-          {sessionId && !forDefault && (
-            <div className="flex items-center gap-2 px-1 py-1.5 rounded-md bg-[#0a0a0a] border border-[#333]">
-              <Checkbox
-                id="use-as-default"
-                checked={useAsDefault}
-                onCheckedChange={(v) => setUseAsDefault(v === true)}
-                className="border-zinc-500 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
-              />
-              <Label htmlFor="use-as-default" className="text-sm text-zinc-300 cursor-pointer flex-1">
-                Use as default <span className="text-zinc-500">— also update default model for new sessions</span>
-              </Label>
-              {preferences?.defaultModel && (
-                <span className="text-xs text-zinc-500 font-mono truncate max-w-[180px]">{preferences.defaultModel}</span>
-              )}
-            </div>
-          )}
-
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400" />
@@ -399,6 +381,21 @@ export function ModelSelectDialog({
               </div>
             )}
           </div>
+
+          {/* Use as default — 세션에서만 노출, 체크 시에만 전체 적용 / 하단 모델명 표기 위 */}
+          {sessionId && !forDefault && (
+            <div className="flex items-center gap-2 px-1 py-1.5 rounded-md bg-[#0a0a0a] border border-[#333] shrink-0">
+              <Checkbox
+                id="use-as-default"
+                checked={useAsDefault}
+                onCheckedChange={(v) => setUseAsDefault(v === true)}
+                className="border-zinc-500 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+              />
+              <Label htmlFor="use-as-default" className="text-sm text-zinc-300 cursor-pointer flex-1">
+                Use as default <span className="text-zinc-500">— also update default model for new sessions</span>
+              </Label>
+            </div>
+          )}
 
           {/* Current Selection */}
           <div className="pt-4 border-t border-[#333] space-y-1 shrink-0">
