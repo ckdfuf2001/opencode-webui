@@ -74,6 +74,14 @@ export async function retryQueuedChat(sessionID: string, id: string): Promise<Qu
   )
 }
 
+/** 일시정지: generation은 유지, 큐 신규 발송만 멈춘다. 해제 시 즉시 재개 시도. */
+export async function setQueuePaused(sessionID: string, paused: boolean): Promise<{ ok: boolean; paused: boolean }> {
+  return request<{ ok: boolean; paused: boolean }>(
+    `/${encodeURIComponent(sessionID)}/paused`,
+    jsonInit('POST', { paused }),
+  )
+}
+
 /**
  * 세션 모델 변경 시 큐에 스냅샷된 모델을 동기화한다.
  * sending 항목은 서버에서 건드리지 않는다 (이미 발송된 슬롯).

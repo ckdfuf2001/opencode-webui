@@ -109,6 +109,17 @@ export function setQuickMode(sessionID: string, enabled: boolean): void {
 export function isQuickMode(sessionID: string): boolean {
   return quickModeSessions.has(sessionID)
 }
+// 일시정지: 진행 중 generation은 끊지 않고 큐 신규 발송만 멈춘다.
+// sending 확인(발송 확정) 분기는 계속 돌아 완료된 슬롯을 정리한다.
+const pausedSessions = new Set<string>()
+export function setQueuePaused(sessionID: string, paused: boolean): void {
+  if (paused) pausedSessions.add(sessionID)
+  else pausedSessions.delete(sessionID)
+  logger.info(`Queue ${paused ? 'paused' : 'resumed'} for session ${sessionID}`)
+}
+export function isQueuePaused(sessionID: string): boolean {
+  return pausedSessions.has(sessionID)
+}
 export function hasAnyQueuedChats(): boolean {
   return queues.size > 0
 }
@@ -308,6 +319,8 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
     logger.info(`Confirmed queued chat delivered to session ${sessionID} (idle observed)`)
     return
   }
+  // 일시정지 중에는 신규 발송만 멈춘다 (위 sending 확정 분기는 그대로 통과).
+  if (pausedSessions.has(sessionID)) return
   if (await isSessionBusy(sessionID)) {
     lastBusyAt.set(sessionID, Date.now())
     return

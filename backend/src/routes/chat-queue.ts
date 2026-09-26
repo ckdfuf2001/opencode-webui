@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, retryQueuedChat, setQuickMode, updateQueuedChatsModel } from '../services/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, retryQueuedChat, setQuickMode, setQueuePaused, updateQueuedChatsModel } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
@@ -128,6 +128,21 @@ export function createChatQueueRoutes() {
       if (error instanceof z.ZodError) return c.json({ error: 'Invalid model payload' }, 400)
       logger.error('Failed to update queued chat model:', error)
       return c.json({ error: 'Failed to update queued chat model' }, 500)
+    }
+  })
+
+  // 일시정지: 진행 중 generation은 유지, 큐 신규 발송만 멈춘다. 해제 시 즉시 재개 시도.
+  app.post('/:sessionId/paused', async (c) => {
+    try {
+      const sessionId = c.req.param('sessionId')
+      const body = await c.req.json().catch(() => ({} as Record<string, unknown>))
+      const paused = !!(body as { paused?: boolean }).paused
+      setQueuePaused(sessionId, paused)
+      if (!paused) flushQueueForSession(sessionId)
+      return c.json({ ok: true, paused })
+    } catch (error) {
+      logger.error('Failed to set queue paused:', error)
+      return c.json({ error: 'Failed to set queue paused' }, 500)
     }
   })
 

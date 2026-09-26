@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, updateQueuedChatsModel, type EnqueueChatOptions } from '@/api/chat-queue'
+import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, setQueuePaused, updateQueuedChatsModel, type EnqueueChatOptions } from '@/api/chat-queue'
 import { showToast } from '@/lib/toast'
 
 export const chatQueueKeys = {
@@ -118,6 +118,16 @@ export function useRetryQueuedChat() {
     },
     onError: (error) => {
       showToast.error(error instanceof Error ? error.message : 'Failed to retry queued message', { duration: 5000 })
+    },
+  })
+}
+
+export function useSetQueuePaused() {
+  return useMutation({
+    mutationFn: ({ sessionID, paused }: { sessionID: string; paused: boolean }) =>
+      setQueuePaused(sessionID, paused),
+    onError: (error) => {
+      showToast.error(error instanceof Error ? error.message : 'Failed to set queue pause', { duration: 4000 })
     },
   })
 }

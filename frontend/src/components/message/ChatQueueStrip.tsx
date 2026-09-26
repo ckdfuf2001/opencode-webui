@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, RotateCcw, X } from 'lucide-react'
-import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat, useRetryQueuedChat } from '@/hooks/useChatQueue'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, Pause, Play, RotateCcw, X } from 'lucide-react'
+import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat, useRetryQueuedChat, useSetQueuePaused } from '@/hooks/useChatQueue'
 import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 
@@ -15,7 +15,30 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
   const removeChat = useRemoveQueuedChat()
   const moveChat = useMoveQueuedChat()
   const retryChat = useRetryQueuedChat()
+  const setPausedMut = useSetQueuePaused()
   const [minimized, setMinimized] = useState(true)
+  // 일시정지: generation은 유지, 큐 신규 발송만 멈춘다 (localStorage 미러 + 백엔드 동기화)
+  const [paused, setPaused] = useState(false)
+  useEffect(() => {
+    let v = false
+    try {
+      v = localStorage.getItem(`queue-paused:${sessionID}`) === '1'
+    } catch {}
+    setPaused(v)
+    fetch(`${API_BASE_URL}/api/chat-queue/${encodeURIComponent(sessionID)}/paused`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused: v }),
+    }).catch(() => {})
+  }, [sessionID])
+  const togglePaused = () => {
+    const v = !paused
+    setPaused(v)
+    try {
+      localStorage.setItem(`queue-paused:${sessionID}`, v ? '1' : '0')
+    } catch {}
+    setPausedMut.mutate({ sessionID, paused: v })
+  }
   const sendingItem = items.find((item) => item.status === 'sending')
   const failedItem = !sendingItem ? items.find((item) => item.status === 'failed') : undefined
   // failed 발생 시 자동 펼침 — minimized 고정이면 Retry 버튼을 못 찾아 먹통처럼 보인다.
@@ -64,6 +87,27 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
         <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium bg-muted/40 text-muted-foreground">
           <Clock className="h-3 w-3 shrink-0 animate-spin" />
           <span className="truncate opacity-80">{activityLabel}</span>
+        </div>
+      </div>
+    )
+  }
+
+  // 일시정지 + 빈 큐: 회색 pill + 재생 버튼 (재개 통로)
+  if (paused && items.length === 0) {
+    return (
+      <div className="w-full max-w-4xl px-4 pb-1">
+        <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium bg-zinc-500/10 border-zinc-500/30 text-zinc-400">
+          <Clock className="h-3 w-3 shrink-0" />
+          <span className="shrink-0 font-semibold">Paused — queue held</span>
+          <button
+            type="button"
+            aria-label="Resume queue"
+            title="Resume queue"
+            className="rounded p-0.5 opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
+            onClick={togglePaused}
+          >
+            <Play className="h-3 w-3" />
+          </button>
         </div>
       </div>
     )
@@ -119,7 +163,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
         <button
           type="button"
           onClick={() => setMinimized(false)}
-          className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/15' : 'bg-muted/40 text-muted-foreground hover:bg-muted'}`}
+          className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${paused ? 'bg-zinc-500/10 border-zinc-500/30 text-zinc-400 hover:bg-zinc-500/15' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/15' : 'bg-muted/40 text-muted-foreground hover:bg-muted'}`}
           title="Expand queue"
         >
           {sendingItem ? (
@@ -130,10 +174,15 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
             <Clock className="h-3 w-3 shrink-0" />
           )}
           <span className="shrink-0 font-semibold">({restItems.length})</span>
+          {paused && (
+            <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-px text-[10px] font-semibold">Paused</span>
+          )}
           {sendingItem ? (
             <span className="truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : failedItem ? (
             <span className="truncate text-destructive">Failed to send — tap Retry or X on the item</span>
+          ) : paused ? (
+            <span className="shrink-0">Queue held</span>
           ) : (
             <span className="shrink-0">Waiting to send</span>
           )}
@@ -145,7 +194,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
 
   return (
     <div className="w-full max-w-4xl px-4 pb-1">
-      <div className={`rounded-lg border px-3 py-2 text-xs ${allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'bg-muted/40'}`}>
+      <div className={`rounded-lg border px-3 py-2 text-xs ${paused ? 'bg-zinc-500/10 border-zinc-500/30' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'bg-muted/40'}`}>
         <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
           {sendingItem ? (
             <Clock className="h-3 w-3 shrink-0 animate-spin" />
@@ -155,17 +204,31 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
             <Clock className="h-3 w-3 shrink-0" />
           )}
           <span className="shrink-0 font-semibold">({restItems.length})</span>
+          {paused && (
+            <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-px text-[10px] font-semibold">Paused</span>
+          )}
           {sendingItem ? (
             <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
           ) : failedItem ? (
             <span className="min-w-0 flex-1 truncate text-destructive">Failed to send — Retry or remove the item below</span>
+          ) : paused ? (
+            <span className="flex-1">Queue held — resume to send</span>
           ) : (
             <span className="flex-1">Waiting to send</span>
           )}
           <button
             type="button"
+            onClick={togglePaused}
+            className="ml-auto inline-flex items-center justify-center rounded border border-border bg-muted/50 px-1.5 h-5 hover:bg-accent"
+            title={paused ? 'Resume queue (generation은 계속)' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
+            aria-label={paused ? 'Resume queue' : 'Pause queue'}
+          >
+            {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+          </button>
+          <button
+            type="button"
             onClick={toggleInterrupt}
-            className={`ml-auto inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
+            className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
             title={allowInterrupt ? 'Send queue after every generation\nInterruption may skip some processing' : 'Send queue after working end'}
           >
             {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
@@ -188,6 +251,15 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
                 <span className="ml-1.5 text-[10px]">sending</span>
               </span>
               <span className="flex shrink-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  aria-label={paused ? 'Resume queue' : 'Pause queue'}
+                  title={paused ? 'Resume queue (generation은 계속)' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
+                  className="rounded p-0.5 text-muted-foreground opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
+                  onClick={togglePaused}
+                >
+                  {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+                </button>
                 <button
                   type="button"
                   aria-label="Cancel sending message"
