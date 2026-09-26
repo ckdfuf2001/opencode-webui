@@ -1140,7 +1140,7 @@ useEffect(() => {
           {showStop && (
             <button
               onClick={handleStop}
-              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-[#91343F] hover:bg-[#91343F]/90 text-white transition-colors"
+              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-[#A64552] hover:bg-[#91343F] text-white transition-colors"
               title={`Stop generating (${abortKs})`}
             >
               Stop
@@ -1154,8 +1154,8 @@ useEffect(() => {
               isContextCritical || willExceed
                 ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
                 : showStop
-                  ? 'bg-[#185A8C] hover:bg-[#0F4A7E] text-white'
-                  : 'bg-[#185A8C] hover:bg-[#0F4A7E] disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white'
+                  ? 'bg-[#2E6B9E] hover:bg-[#185A8C] text-white'
+                  : 'bg-[#2E6B9E] hover:bg-[#185A8C] disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white'
             }`}
             title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? `Queue message (${submitKs})` : `Send (${submitKs})`}
           >
