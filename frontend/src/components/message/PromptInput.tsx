@@ -1154,8 +1154,8 @@ useEffect(() => {
               isContextCritical || willExceed
                 ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
                 : showStop
-                  ? 'bg-[#003DA5] hover:bg-[#002F80] text-white'
-                  : 'bg-[#003DA5] hover:bg-[#002F80] disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white'
+                  ? 'bg-[#0047BB] hover:bg-[#003DA5] text-white'
+                  : 'bg-[#0047BB] hover:bg-[#003DA5] disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white'
             }`}
             title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? `Queue message (${submitKs})` : `Send (${submitKs})`}
           >

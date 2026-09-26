@@ -1675,7 +1675,7 @@ if (results.length > 0) {
           </button>
           <button
             onClick={() => handleNewSession()}
-            className="px-2 py-1 rounded-md bg-[#003DA5] text-white text-[11px] font-medium hover:bg-[#002F80] shrink-0"
+            className="px-2 py-1 rounded-md bg-[#0047BB] text-white text-[11px] font-medium hover:bg-[#003DA5] shrink-0"
           >
             New Session
           </button>
@@ -1982,7 +1982,7 @@ if (results.length > 0) {
               <button
                 onClick={handleNewSession}
                 disabled={createSessionMutation.isPending}
-                className="px-3 py-1.5 rounded-md bg-[#003DA5] text-white text-sm disabled:opacity-50 hover:bg-[#002F80]"
+                className="px-3 py-1.5 rounded-md bg-[#0047BB] text-white text-sm disabled:opacity-50 hover:bg-[#003DA5]"
               >
                 {createSessionMutation.isPending ? "Creating..." : "New Session"}
               </button>
