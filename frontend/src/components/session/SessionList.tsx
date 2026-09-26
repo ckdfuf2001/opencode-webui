@@ -461,7 +461,7 @@ export const SessionList = ({
             onClick={handleCreateSession}
             disabled={createSession.isPending}
             size="sm"
-            className="bg-[#0F4A7E] hover:bg-[#0C3B65] text-white hidden md:flex whitespace-nowrap h-8"
+            className="bg-[#185A8C] hover:bg-[#0F4A7E] text-white hidden md:flex whitespace-nowrap h-8"
           >
             <Plus className="w-4 h-4 mr-1" />
             Session
@@ -500,7 +500,7 @@ export const SessionList = ({
             onClick={handleCreateSession}
             disabled={createSession.isPending}
             size="icon"
-            className="bg-[#0F4A7E] hover:bg-[#0C3B65] text-white md:hidden h-8 w-8"
+            className="bg-[#185A8C] hover:bg-[#0F4A7E] text-white md:hidden h-8 w-8"
             title="Session"
           >
             <Plus className="w-4 h-4" />

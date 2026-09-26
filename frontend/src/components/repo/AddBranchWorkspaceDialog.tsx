@@ -99,7 +99,7 @@ export function AddBranchWorkspaceDialog({
           <Button
             type="submit"
             disabled={!branch || mutation.isPending}
-            className="w-full bg-[#0F4A7E] hover:bg-[#0C3B65] text-white"
+            className="w-full bg-[#185A8C] hover:bg-[#0F4A7E] text-white"
           >
             {mutation.isPending ? (
               <>

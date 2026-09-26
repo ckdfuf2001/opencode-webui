@@ -231,7 +231,7 @@ export function RepoCard({
               <Button
                 size="sm"
                 asChild
-                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#0F4A7E] hover:bg-[#0C3B65] text-white"
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#185A8C] hover:bg-[#0F4A7E] text-white"
               >
                 <Link
                   to={`/repos/${repo.id}`}
@@ -249,7 +249,7 @@ export function RepoCard({
               <Button
                 size="sm"
                 disabled
-                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#0F4A7E] hover:bg-[#0C3B65] text-white"
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#185A8C] hover:bg-[#0F4A7E] text-white"
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
                 Open
