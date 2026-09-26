@@ -3,7 +3,42 @@ import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import { AuthService } from '../services/auth'
 import { SetCredentialRequestSchema } from '../../../shared/src/schemas/auth'
+import { opencodeServerManager } from '../services/opencode-single-server'
+import { ensureServerAuth } from '../services/opencode-auth'
 import { logger } from '../utils/logger'
+
+/**
+ * opencode 의 인증 API 를 호출한다.
+ *
+ * opencode 는 시작 시 auth.json 을 읽어 **메모리에 캐시**한다. 그래서 파일만
+ * 바꾸면 실행 중인 인스턴스에는 반영되지 않아, 키를 새로 저장해도 재시작
+ * 전까지 401 로 실패한다 (사용자가 "잠깐 응답 못하다가 나중에 됨"으로 겪던 것).
+ * opencode 의 PUT/DELETE /auth/{id} 는 메모리 갱신과 파일 저장을 함께 하므로
+ * 재시작 없이 즉시 반영된다.
+ *
+ * 반환값 false = opencode 가 응답하지 않음(재시작 중 등). 이때도 파일은 이미
+ * 저장돼 있으므로 다음 기동 때 반영된다.
+ */
+async function syncOpencodeAuth(providerId: string, body: { type: 'api'; key: string } | null): Promise<boolean> {
+  try {
+    const url = `${opencodeServerManager.getUrl()}/auth/${encodeURIComponent(providerId)}`
+    const res = await fetch(url, {
+      method: body ? 'PUT' : 'DELETE',
+      headers: ensureServerAuth(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) {
+      logger.warn(`opencode auth sync for '${providerId}' returned HTTP ${res.status}`)
+      return false
+    }
+    void res.text().catch(() => {})
+    return true
+  } catch (error) {
+    logger.warn(`opencode auth sync for '${providerId}' failed (will apply on next start):`, error)
+    return false
+  }
+}
 
 export function createProvidersRoutes(db: Database) {
   const app = new Hono()
@@ -98,9 +133,12 @@ export function createProvidersRoutes(db: Database) {
       const providerId = c.req.param('id')
       const body = await c.req.json()
       const validated = SetCredentialRequestSchema.parse(body)
-      
+
+      // 1) 파일에 먼저 저장 (opencode 가 죽어 있어도 다음 기동에 반영되게)
       await authService.set(providerId, validated.apiKey)
-      return c.json({ success: true })
+      // 2) 실행 중인 opencode 메모리에 즉시 반영 (재시작 없이 바로 쓸 수 있게)
+      const live = await syncOpencodeAuth(providerId, { type: 'api', key: validated.apiKey })
+      return c.json({ success: true, live })
     } catch (error) {
       logger.error('Failed to set provider credentials:', error)
       if (error instanceof z.ZodError) {
@@ -114,7 +152,8 @@ export function createProvidersRoutes(db: Database) {
     try {
       const providerId = c.req.param('id')
       await authService.delete(providerId)
-      return c.json({ success: true })
+      const live = await syncOpencodeAuth(providerId, null)
+      return c.json({ success: true, live })
     } catch (error) {
       logger.error('Failed to delete provider credentials:', error)
       return c.json({ error: 'Failed to delete provider credentials' }, 500)

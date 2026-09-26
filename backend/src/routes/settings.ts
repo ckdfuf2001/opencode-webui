@@ -331,7 +331,12 @@ export function createSettingsRoutes(db: Database) {
     }
     if (updated.isDefault) {
       writeActiveOpenCodeConfigFile(JSON.stringify(updated.content, null, 2))
-      await patchOpenCodeConfig(updated.content)
+      // provider 변경은 opencode 의 PATCH /config 가 거부한다(500). 파일은 이미
+      // 썼으므로 아래 reload/재시동이 실제 반영 수단이다 — 헛된 500 로그를 막는다.
+      const touchesProvider = Object.prototype.hasOwnProperty.call(patch, 'provider')
+      if (!touchesProvider) {
+        await patchOpenCodeConfig(updated.content)
+      }
       if (opts?.reloadOnly) {
         // 인스턴스 reload 는 전체 재기동보다 가볍다. provider 에 models 만 추가하는
         // 경우(모델 선택창을 여는 동안)에는 이것으로 충분해 UX 가 끊기지 않는다.

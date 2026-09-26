@@ -660,7 +660,16 @@ class OpenCodeServerManager {
       try {
         logger.info('Restarting OpenCode server')
         invalidateBinaryCache()
-        await this.stop()
+        if (!this.isManaged) {
+          // startServer() 는 포트에 이미 healthy 한 OpenCode 가 있으면 그냥 붙기만
+          // 한다(attached, isManaged=false). 이 상태에서 stop() 은 no-op 이라
+          // restart() 가 조용히 실패하고, provider/config 변경이 영영 반영되지
+          // 않는다. 포트를 점유한 게 진짜 OpenCode 일 때만 넘겨받아 새로 띄운다
+          // (남의 프로그램은 건드리지 않는다).
+          await this.takeOverAttachedServer()
+        } else {
+          await this.stop()
+        }
         await new Promise(r => setTimeout(r, 1000))
         await this.start()
       } finally {
@@ -668,6 +677,36 @@ class OpenCodeServerManager {
       }
     })()
     return this.restartPromise
+  }
+
+  /**
+   * 우리가 spawn 하지 않고 붙어 있는 OpenCode 를 정리하고 소유권을 가져온다.
+   * 포트 점유 프로세스가 OpenCode 가 아니면 손대지 않고 경고만 남긴다
+   * (다른 프로그램을 죽여 포트를 뺏는 사고 방지).
+   */
+  private async takeOverAttachedServer(): Promise<void> {
+    if (!(await this.verifyOpenCodeServer())) {
+      logger.error(
+        `Cannot force-restart: port ${this.port} is not answering as an OpenCode server. ` +
+        `Config changes (providers/models) will not take effect. ` +
+        `Set OPENCODE_SERVER_PORT in .env to a free port and restart the backend.`,
+      )
+      return
+    }
+    const procs = await this.findProcessesByPort(this.port)
+    if (procs.length === 0) {
+      logger.warn(`Attached OpenCode on port ${this.port} has no discoverable process; spawning a fresh one`)
+    } else {
+      logger.info(`Taking over attached OpenCode on port ${this.port} (pids: ${procs.map(p => p.pid).join(', ')}) to apply config changes`)
+    }
+    for (const proc of procs) {
+      await this.killPidTreeWindows(proc.pid, `Attached OpenCode on port ${this.port}`)
+    }
+    // 이제 이 포트는 우리가 소유·관리한다 — 다음 stop()/restart() 가 실제로 동작하도록.
+    this.isManaged = true
+    this.serverPid = null
+    this.isHealthy = false
+    this.hasLoggedHealthy = false
   }
 
   getPort(): number {

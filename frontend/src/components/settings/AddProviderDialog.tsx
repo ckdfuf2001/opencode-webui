@@ -9,6 +9,7 @@ import { Loader2, ExternalLink } from 'lucide-react'
 import { PROVIDER_TEMPLATES, type ProviderTemplate } from '@/lib/providerTemplates'
 import { settingsApi } from '@/api/settings'
 import { invalidateProvidersCache } from '@/api/providers'
+import { waitForOpencodeHealthy } from '@/lib/opencodeHealth'
 import { showToast } from '@/lib/toast'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
@@ -72,8 +73,15 @@ export function AddProviderDialog({ open, onOpenChange }: AddProviderDialogProps
       queryClient.invalidateQueries({ queryKey: ['opencode-config'] })
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       queryClient.invalidateQueries({ queryKey: ['provider-credentials'] })
-      showToast.success(`Provider '${providerId.trim()}' registered`)
+      const id = providerId.trim()
+      showToast.success(`Provider '${id}' registered — waiting for OpenCode to restart…`)
       handleClose()
+      // provider 등록은 opencode 재시동을 유발한다. 재시동 중에 보내면 실패하고
+      // 목록도 비어 보이므로, healthy 가 된 뒤 새로고침해 깨끗한 상태로 맞춘다.
+      void waitForOpencodeHealthy().then((ok) => {
+        if (ok) window.location.reload()
+        else showToast.warning(`Provider '${id}' registered, but OpenCode did not come back — reload the page or restart OpenCode manually`)
+      })
     },
     onError: (error) => {
       const msg = axiosErrorMessage(error)

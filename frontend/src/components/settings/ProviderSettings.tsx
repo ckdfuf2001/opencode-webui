@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Loader2, Key, Check, X, Plus, Trash2 } from 'lucide-react'
 import { providerCredentialsApi, getProviders, invalidateProvidersCache, type Provider } from '@/api/providers'
 import { settingsApi } from '@/api/settings'
+import { waitForOpencodeHealthy } from '@/lib/opencodeHealth'
 import { showToast } from '@/lib/toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AddProviderDialog } from './AddProviderDialog'
@@ -165,9 +166,14 @@ export function ProviderSettings() {
       const verb = result?.mode === 'disabled' ? 'removed' : 'unregistered'
       showToast.success(
         result?.credentialsRemoved
-          ? `Provider '${providerId}' ${verb} (API key removed)`
-          : `Provider '${providerId}' ${verb}`,
+          ? `Provider '${providerId}' ${verb} (API key removed) — waiting for OpenCode to restart…`
+          : `Provider '${providerId}' ${verb} — waiting for OpenCode to restart…`,
       )
+      // 제거도 opencode 재시동을 유발한다 — healthy 후 새로고침.
+      void waitForOpencodeHealthy().then((ok) => {
+        if (ok) window.location.reload()
+        else showToast.warning('OpenCode did not come back — reload the page or restart OpenCode manually')
+      })
     },
     onError: (error) => {
       showToast.error(error instanceof Error ? error.message : 'Failed to remove provider', { duration: 5000 })
