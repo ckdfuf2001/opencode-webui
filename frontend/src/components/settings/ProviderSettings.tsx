@@ -148,6 +148,10 @@ export function ProviderSettings() {
       showToast.success(
         result.removed ? `API key removed for ${providerId}` : `API key saved for ${providerId}`,
       )
+      // 모델 선택창/세션 화면이 provider·모델 목록을 각자 캐시하고 있어, 쿼리
+      // 무효화만으로는 이미 열린 화면이 갱신되지 않는다(세션을 나갔다 와야 반영).
+      // 설정 변경은 드문 동작이니 새로고침으로 확실히 맞춘다. 토스트를 잠깐 보여준 뒤 실행.
+      setTimeout(() => window.location.reload(), 600)
     },
     onError: (error) => {
       showToast.error(error instanceof Error ? error.message : 'Failed to save API key', { duration: 5000 })
