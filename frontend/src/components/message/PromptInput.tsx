@@ -1148,7 +1148,7 @@ useEffect(() => {
           {showStop && (
             <button
               onClick={handleStop}
-              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-[#A64552] hover:bg-[#91343F] text-white transition-colors"
+              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-red-600/20 border border-red-600/30 text-red-600 dark:text-red-400 hover:bg-red-600/30 transition-colors"
               title={`Stop generating (${abortKs})`}
             >
               Stop
@@ -1158,12 +1158,10 @@ useEffect(() => {
             data-submit-prompt
             onClick={showStop ? handleQueue : handleSubmit}
             disabled={(!prompt.trim() && !showStop) || disabled || isContextCritical || willExceed}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
               isContextCritical || willExceed
-                ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
-                : showStop
-                  ? 'bg-[#2E6B9E] hover:bg-[#185A8C] text-white'
-                  : 'bg-[#2E6B9E] hover:bg-[#185A8C] disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white'
+                ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50 border-border'
+                : 'bg-blue-600/20 border-blue-600/30 text-blue-600 dark:text-blue-400 hover:bg-blue-600/30 disabled:bg-muted disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed'
             }`}
             title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? `Queue message (${submitKs})` : `Send (${submitKs})`}
           >

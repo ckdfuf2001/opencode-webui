@@ -152,12 +152,12 @@ export function GeneralSettings() {
 
         <div className="flex flex-row items-center justify-between rounded-lg border border-border p-4">
           <div className="space-y-0.5">
-            <Label htmlFor="cancelStopsQueue" className="text-base">취소 시 큐도 중지</Label>
+            <Label htmlFor="cancelStopsQueue" className="text-base">Stop also stops the queue</Label>
             <p className="text-sm text-muted-foreground">
-              Stop(취소)를 눌렀을 때 대기 중인 큐 전송도 함께 멈춥니다.
+              When on, pressing Stop also pauses queued messages (resume with the queue's play button).
             </p>
             <p className="text-sm text-muted-foreground">
-              끄면(기본) 생성만 취소되고 큐는 계속 발송됩니다.
+              Off (default): Stop cancels only the current generation; the queue keeps sending.
             </p>
           </div>
           <Switch

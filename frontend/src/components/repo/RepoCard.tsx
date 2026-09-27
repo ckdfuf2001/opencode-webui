@@ -232,7 +232,7 @@ export function RepoCard({
               <Button
                 size="sm"
                 asChild
-                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#185A8C] hover:bg-[#0F4A7E] text-white"
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#2E7CC0]/70 hover:bg-[#2E7CC0] text-white"
               >
                 <Link
                   to={`/repos/${repo.id}`}
@@ -250,7 +250,7 @@ export function RepoCard({
               <Button
                 size="sm"
                 disabled
-                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#185A8C] hover:bg-[#0F4A7E] text-white"
+                className="cursor-pointer flex-1 h-10 sm:h-9 px-3 bg-[#2E7CC0]/70 hover:bg-[#2E7CC0] text-white"
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
                 Open
@@ -281,7 +281,7 @@ export function RepoCard({
                   onDelete(repo.id);
                 }}
                 disabled={isDeleting}
-                className="h-10 sm:h-9 w-10 p-0 text-zinc-500 enabled:hover:text-white enabled:hover:bg-[#A64552] enabled:hover:border-[#A64552] dark:enabled:hover:bg-[#91343F] dark:enabled:hover:border-[#91343F]"
+                className="h-10 sm:h-9 w-10 p-0 text-zinc-500 enabled:hover:text-white enabled:hover:bg-[#C0505F]/70 enabled:hover:border-[#C0505F]/70 dark:enabled:hover:bg-[#A64552]/70 dark:enabled:hover:border-[#A64552]/70"
               >
               {isDeleting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
