@@ -1,4 +1,4 @@
-import { memo, useMemo, useEffect, useRef } from 'react'
+import { memo, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useSettings } from '@/hooks/useSettings'
 import { useAbortSession } from '@/hooks/useOpenCode'
 import { MessagePart } from './MessagePart'
@@ -166,7 +166,7 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   const abortRef = useRef(abortSession.mutate)
   abortRef.current = abortSession.mutate
   const watchdogFiredRef = useRef<{ sessionID: string; keys: Set<string> }>({ sessionID: '', keys: new Set() })
-  useEffect(() => {
+  const runBashWatchdog = useCallback(() => {
     if (!messages || !sessionID) return
     if (watchdogFiredRef.current.sessionID !== sessionID) {
       watchdogFiredRef.current = { sessionID, keys: new Set() }
@@ -202,6 +202,29 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, sessionID])
+
+  useEffect(() => { runBashWatchdog() }, [runBashWatchdog])
+
+  // 위 감시자는 messages 가 바뀔 때만 돈다. 조용히 오래 도는 bash 는 파트 갱신이
+  // 없어서 이펙트가 다시 실행되지 않는다 -> SSE on/off·폴링 주기와 무관하게
+  // running bash 가 있으면 주기적으로도 검사한다.
+  useEffect(() => {
+    if (!messages || !sessionID) return
+    const hasRunningBash = messages.some((m) =>
+      m.info.role === 'assistant'
+      && (m.parts ?? []).some((p) => {
+        const t = (p as { type?: string }).type
+        const tool = (p as { tool?: string }).tool
+        const status = (p as { state?: { status?: string } }).state?.status
+        return t === 'tool'
+          && (tool === 'bash' || tool === 'shell' || tool === 'terminal')
+          && status === 'running'
+      }),
+    )
+    if (!hasRunningBash) return
+    const id = setInterval(runBashWatchdog, 20_000)
+    return () => clearInterval(id)
+  }, [messages, sessionID, runBashWatchdog])
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
