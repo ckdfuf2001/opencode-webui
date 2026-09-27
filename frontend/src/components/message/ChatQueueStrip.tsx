@@ -123,7 +123,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
     return (
       <div className="w-full max-w-4xl px-4 pb-1">
         <div className={`rounded-xl border backdrop-blur-sm px-3 py-2 text-xs ${paused ? 'bg-zinc-500/10 border-zinc-500/30' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'border-border bg-background/90'}`}>
-          <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
+          <div className={`mb-1 flex items-center gap-1.5 font-medium ${allowInterrupt ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground'}`}>
             <Clock className="w-3 h-3 shrink-0" />
             <span className="flex-1">Queue is empty</span>
             {paused && (
@@ -198,7 +198,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
   return (
     <div className="w-full max-w-4xl px-4 pb-1">
       <div className={`rounded-lg border px-3 py-2 text-xs ${paused ? 'bg-zinc-500/10 border-zinc-500/30' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'bg-muted/40'}`}>
-        <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
+        <div className={`mb-1 flex items-center gap-1.5 font-medium ${allowInterrupt && !paused ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground'}`}>
           {sendingItem ? (
             <Clock className="h-3 w-3 shrink-0 animate-spin" />
           ) : failedItem ? (

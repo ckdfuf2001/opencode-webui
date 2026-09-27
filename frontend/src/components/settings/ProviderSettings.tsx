@@ -316,7 +316,7 @@ export function ProviderSettings() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="text-muted-foreground hover:text-white hover:bg-[#C0505F]/70 hover:border-[#C0505F]/70 dark:hover:bg-[#A64552]/70 dark:hover:border-[#A64552]/70"
+                        className="text-muted-foreground hover:text-white hover:bg-[#A64552] hover:border-[#A64552] dark:hover:bg-[#91343F] dark:hover:border-[#91343F]"
                         onClick={() => handleRemoveProvider(provider.id, provider.custom)}
                         disabled={removeProviderMutation.isPending && pendingRemoval === provider.id}
                         title={provider.custom

@@ -1033,7 +1033,7 @@ useEffect(() => {
     <div className="backdrop-blur-md bg-background opacity-95 border border-border rounded-xl p-2 mx-2 mb-2 w-[90%] max-w-4xl">
       <ChatQueueStrip sessionID={sessionID} activityLabel={queueActivityLabel} />
       {uploadProgress && (
-        <div className="mb-2 px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400">
+        <div className="mb-2 px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/30 text-foreground">
           <div className="flex items-center justify-between gap-2 mb-1">
             <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
             <span className="flex items-center gap-2 shrink-0">
@@ -1148,7 +1148,7 @@ useEffect(() => {
           {showStop && (
             <button
               onClick={handleStop}
-              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-red-600/20 border border-red-600/30 text-red-600 dark:text-red-400 hover:bg-red-600/30 transition-colors"
+              className="px-4 py-1.5 rounded-lg text-sm font-medium bg-[#A64552] hover:bg-[#91343F] text-white transition-colors"
               title={`Stop generating (${abortKs})`}
             >
               Stop
@@ -1158,10 +1158,12 @@ useEffect(() => {
             data-submit-prompt
             onClick={showStop ? handleQueue : handleSubmit}
             disabled={(!prompt.trim() && !showStop) || disabled || isContextCritical || willExceed}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               isContextCritical || willExceed
-                ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50 border-border'
-                : 'bg-blue-600/20 border-blue-600/30 text-blue-600 dark:text-blue-400 hover:bg-blue-600/30 disabled:bg-muted disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed'
+                ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
+                : showStop
+                  ? 'bg-[#2E6B9E] hover:bg-[#185A8C] text-white'
+                  : 'bg-[#2E6B9E] hover:bg-[#185A8C] disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-white'
             }`}
             title={isContextCritical || willExceed ? 'Send blocked: context exceeded' : showStop ? `Queue message (${submitKs})` : `Send (${submitKs})`}
           >

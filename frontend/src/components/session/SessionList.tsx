@@ -389,7 +389,7 @@ export const SessionList = ({
               </button>
               <button
                 type="button"
-                className="h-6 w-6 p-0 text-muted-foreground hover:text-[#A64552] bg-transparent border-none cursor-pointer flex items-center justify-center"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-[#91343F] bg-transparent border-none cursor-pointer flex items-center justify-center"
                 onClick={(e) => handleDelete(session.id, e)}
                 title="삭제"
               >
@@ -461,7 +461,7 @@ export const SessionList = ({
             onClick={handleCreateSession}
             disabled={createSession.isPending}
             size="sm"
-            className="bg-[#2E7CC0]/70 hover:bg-[#2E7CC0] text-white hidden md:flex whitespace-nowrap h-8"
+            className="bg-[#185A8C] hover:bg-[#0F4A7E] text-white hidden md:flex whitespace-nowrap h-8"
           >
             <Plus className="w-4 h-4 mr-1" />
             Session
@@ -500,7 +500,7 @@ export const SessionList = ({
             onClick={handleCreateSession}
             disabled={createSession.isPending}
             size="icon"
-            className="bg-[#2E7CC0]/70 hover:bg-[#2E7CC0] text-white md:hidden h-8 w-8"
+            className="bg-[#185A8C] hover:bg-[#0F4A7E] text-white md:hidden h-8 w-8"
             title="Session"
           >
             <Plus className="w-4 h-4" />
