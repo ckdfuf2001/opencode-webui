@@ -52,6 +52,8 @@ export interface UserPreferences {
   pushNotificationEnabled?: boolean
   pushNotificationDuration?: number
   sseStreaming?: boolean
+  /** 취소(Stop) 시 대기 중인 큐 전송도 멈출지. 기본 false = 큐는 계속 발송. */
+  cancelStopsQueue?: boolean
 }
 
 export interface SettingsResponse {
@@ -127,4 +129,5 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
   sseStreaming: false,
+  cancelStopsQueue: false,
 }

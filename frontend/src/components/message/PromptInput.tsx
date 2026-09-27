@@ -452,8 +452,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
   const handleStop = () => {
     abortSession.mutate(sessionID)
     onCancelEdit?.()
-    // Stop = abort + 큐 유지(일시정지): abort 후 idle이 되면 폴러가 대기분을
-    // 즉시 재발송하던 문제를 막는다. 재개는 큐 스트립의 재생 버튼(Start).
+    // 취소 시 큐 전송까지 멈출지는 설정 옵션이다 (기본: 멈추지 않음 = 큐는 계속 발송).
+    // 켜져 있으면 Stop이 큐를 일시정지하고, 스트립의 재생 버튼으로 재개한다.
+    if (!preferences?.cancelStopsQueue) return
     try {
       localStorage.setItem(`queue-paused:${sessionID}`, '1')
     } catch {}

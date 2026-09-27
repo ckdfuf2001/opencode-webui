@@ -150,6 +150,23 @@ export function GeneralSettings() {
           />
         </div>
 
+        <div className="flex flex-row items-center justify-between rounded-lg border border-border p-4">
+          <div className="space-y-0.5">
+            <Label htmlFor="cancelStopsQueue" className="text-base">취소 시 큐도 중지</Label>
+            <p className="text-sm text-muted-foreground">
+              Stop(취소)를 눌렀을 때 대기 중인 큐 전송도 함께 멈춥니다.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              끄면(기본) 생성만 취소되고 큐는 계속 발송됩니다.
+            </p>
+          </div>
+          <Switch
+            id="cancelStopsQueue"
+            checked={preferences?.cancelStopsQueue ?? false}
+            onCheckedChange={(checked) => updateSettings({ cancelStopsQueue: checked })}
+          />
+        </div>
+
         <div className="rounded-lg border border-border p-4 space-y-4">
           <h3 className="text-base font-medium">완료 알림</h3>
           <div className="flex flex-row items-center justify-between">
