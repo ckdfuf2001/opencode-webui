@@ -321,6 +321,26 @@ server = _McpServer(
 )
 
 
+# Bridge file params that may carry a `<workspace>/<repo>/...` absolute path
+# missing the `repos/` segment (same agent mistake as in msg.resolve_path).
+# Only absolute workspace paths are repaired; bare names (theme names),
+# relative paths and foreign absolutes pass through untouched.
+_BRIDGE_PATH_KEYS = frozenset({"path", "image_path", "media_path", "template"})
+
+
+def _resolve_bridge_path(value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    try:
+        from opencode_ext.msg import repair_absolute_workspace_path as _repair
+    except Exception:
+        return value
+    try:
+        return _repair(value)
+    except Exception:
+        return value
+
+
 def call_bridge(
     app: str,
     action: str,
@@ -333,6 +353,9 @@ def call_bridge(
         for key, value in (params or {}).items()
         if value is not None or key in keep_none
     }
+    for key in _BRIDGE_PATH_KEYS:
+        if key in cleaned:
+            cleaned[key] = _resolve_bridge_path(cleaned[key])
 
     try:
         response = client.call(app, action, cleaned)

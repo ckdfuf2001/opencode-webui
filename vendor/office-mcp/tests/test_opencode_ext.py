@@ -110,3 +110,49 @@ def test_resolve_path_single_prefix(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OPCODE_WEBUI_REPOS", str(tmp_path))
     single = msgmod.resolve_path("doc-reader/chat_uploads/image.png").replace("\\", "/")
     assert single.endswith("doc-reader/chat_uploads/image.png")
+
+
+def _make_ws(tmp_path, monkeypatch):
+    ws = tmp_path / "workspace"
+    repos = ws / "repos" / "aaa"
+    repos.mkdir(parents=True)
+    (repos / "spec.docx").write_bytes(b"fake")
+    monkeypatch.setenv("OPCODE_WEBUI_WORKSPACE", str(ws))
+    monkeypatch.setenv("OPCODE_WEBUI_REPOS", str(ws / "repos"))
+    return ws
+
+
+def test_repair_absolute_workspace_path_missing_repos(tmp_path, monkeypatch) -> None:
+    # <ws>/aaa/spec.docx (repos 빠짐) -> <ws>/repos/aaa/spec.docx
+    ws = _make_ws(tmp_path, monkeypatch)
+    broken = os.path.join(str(ws), "aaa", "spec.docx")
+    fixed = msgmod.repair_absolute_workspace_path(broken)
+    assert fixed.replace("\\", "/").endswith("workspace/repos/aaa/spec.docx")
+    assert msgmod.resolve_path(broken).replace("\\", "/").endswith("workspace/repos/aaa/spec.docx")
+
+
+def test_repair_absolute_workspace_path_keeps_good_paths(tmp_path, monkeypatch) -> None:
+    ws = _make_ws(tmp_path, monkeypatch)
+    good = os.path.join(str(ws), "repos", "aaa", "spec.docx")
+    assert msgmod.repair_absolute_workspace_path(good) == good
+    # workspace 루트 실파일이 있으면 원본 유지
+    root_file = ws / "notes.txt"
+    root_file.write_text("hi")
+    assert msgmod.repair_absolute_workspace_path(str(root_file)) == str(root_file)
+    # 첫 세그먼트가 레포가 아니면 손대지 않음
+    other = os.path.join(str(ws), "cache", "tts", "x.mp3")
+    assert msgmod.repair_absolute_workspace_path(other) == other
+    # workspace 밖 절대경로는 그대로
+    foreign = str(tmp_path / "elsewhere" / "f.docx")
+    assert msgmod.repair_absolute_workspace_path(foreign) == foreign
+    # 상대경로·빈값은 그대로
+    assert msgmod.repair_absolute_workspace_path("aaa/spec.docx") == "aaa/spec.docx"
+
+
+def test_repair_absolute_workspace_path_new_file(tmp_path, monkeypatch) -> None:
+    # 둘 다 없으면(신규 생성) 레포 휴리스틱상 보정본을 돌려준다
+    ws = _make_ws(tmp_path, monkeypatch)
+    broken = os.path.join(str(ws), "aaa", "new.pptx")
+    assert not os.path.exists(broken)
+    fixed = msgmod.repair_absolute_workspace_path(broken)
+    assert fixed.replace("\\", "/").endswith("workspace/repos/aaa/new.pptx")

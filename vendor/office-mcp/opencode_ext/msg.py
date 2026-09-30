@@ -12,14 +12,62 @@ import re
 from typing import Any
 
 
+def repair_absolute_workspace_path(path_value: str) -> str:
+    """Fix absolute `<workspace>/<repo>/...` (missing `repos/` segment).
+
+    The agent sometimes joins OPCODE_WEBUI_WORKSPACE with the repo name and
+    forgets the `repos/` level, producing an absolute path that does not
+    exist (e.g. `<ws>/aaa/x.docx` instead of `<ws>/repos/aaa/x.docx`).
+    Absolute paths used to pass through untouched, so every such call ended
+    in File not found. Repair only when all of the following hold, otherwise
+    return the input unchanged:
+    - the path is absolute and lives under OPCODE_WEBUI_WORKSPACE,
+    - but NOT under OPCODE_WEBUI_REPOS (already correct),
+    - its first workspace-relative segment is an existing repos subdir,
+    - and the repaired candidate exists, or the original does not
+      (new-file creation where neither exists yet).
+    A real file directly under the workspace root always wins.
+    """
+    if not os.path.isabs(path_value):
+        return path_value
+    try:
+        norm = os.path.normpath(path_value)
+        repos = os.environ.get("OPCODE_WEBUI_REPOS", "")
+        ws_raw = os.environ.get("OPCODE_WEBUI_WORKSPACE", "")
+        ws = os.path.abspath(ws_raw) if ws_raw else ""
+        repos_dir = os.path.abspath(repos) if repos else (
+            os.path.join(ws, "repos") if ws else ""
+        )
+        if not ws or not repos_dir:
+            return path_value
+        if norm == repos_dir or norm.startswith(repos_dir + os.sep):
+            return path_value
+        if norm != ws and not norm.startswith(ws + os.sep):
+            return path_value
+        rel = os.path.relpath(norm, ws).replace("\\", "/")
+        if rel in ("repos", ".") or rel.startswith("repos/") or rel.startswith(".."):
+            return path_value
+        first = rel.split("/", 1)[0]
+        if not first or not os.path.isdir(os.path.join(repos_dir, first)):
+            return path_value
+        candidate = os.path.join(repos_dir, rel)
+        if os.path.exists(candidate) or not os.path.exists(norm):
+            return candidate
+        return path_value
+    except Exception:
+        return path_value
+
+
 def resolve_path(path_value: str) -> str:
     """Resolve workspace-relative paths like the old doc-reader did.
 
-    Absolute paths pass through. Relative paths are resolved against
-    OPCODE_WEBUI_REPOS (preferred), OPCODE_WEBUI_WORKSPACE, or cwd.
+    Absolute `<workspace>/<repo>/...` paths missing the `repos/` segment
+    are repaired (see repair_absolute_workspace_path); other absolute paths
+    pass through. Relative paths are resolved against OPCODE_WEBUI_REPOS
+    (preferred), OPCODE_WEBUI_WORKSPACE, or cwd.
     """
     if os.path.isabs(path_value):
-        return path_value
+        return repair_absolute_workspace_path(path_value)
     rel = str(path_value).replace("\\", "/").lstrip("/")
     repos = os.environ.get("OPCODE_WEBUI_REPOS", "")
     if repos and os.path.isdir(repos):
