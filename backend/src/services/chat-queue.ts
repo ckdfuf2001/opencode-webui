@@ -63,6 +63,12 @@ const failedUntil = new Map<string, number>()
 // 수동 재시도(retry)하면 해제. 자동 재시도는 하지 않는다 (retry storm 방지).
 const failCount = new Map<string, number>()
 const MAX_CONSECUTIVE_FAILURES = 1
+// 연속 타임아웃 횟수. 5분 턴이 한 번 끊겼다고 곧바로 failed로 고정하면
+// 장시간 작업이 무조건 큐를 멈추므로, 이 상한까지는 queued 유지 + 백오프로
+// 자동 재시도한다. 상한 초과 시에만 failed로 고정(무한 5분 재시도 스톰 방지).
+const timeoutCount = new Map<string, number>()
+const MAX_CONSECUTIVE_TIMEOUTS = 3
+const TIMEOUT_RETRY_BACKOFF_MS = 10_000
 const inFlight = new Set<string>()
 // 발송 중 fetch를 취소하기 위한 세션별 AbortController.
 // clearSendingOnAbort/clearQueuedChats(중단 버튼)가 이것을 abort한다.
@@ -93,6 +99,26 @@ export function isQuotaRejection(status?: number, bodyText?: string): boolean {
   if (!QUOTA_BODY_PATTERNS.some((p) => lower.includes(p))) return false
   if (status === undefined) return true
   return status === 429 || status === 400 || status === 402 || status === 403
+}
+/**
+ * opencode 내부 타임아웃(300s/5분) 등 시간 초과 실패 판정.
+ * 장시간 턴이 서버에서 끊기면 504(또는 timeout 문구의 5xx)로 돌아오는데,
+ * 기존에는 일반 실패로 세어 MAX_CONSECUTIVE_FAILURES=1에 즉시 failed가 되고
+ * failed 헤드가 큐 전체를 막았다. 일시적(transient)으로 보고 queued 유지 +
+ * 백오프로 자동 재시도한다. proxy.ts의 isTimeoutResponse와 같은 기준.
+ */
+export function isTimeoutFailure(status?: number, bodyText?: string): boolean {
+  if (status === 504 || status === 408) return true
+  if (status !== undefined && status >= 500 && status <= 599 && bodyText) {
+    const lower = bodyText.toLowerCase()
+    return (
+      lower.includes('timeout') ||
+      lower.includes('timed out') ||
+      lower.includes('deadline exceeded') ||
+      lower.includes('deadline')
+    )
+  }
+  return false
 }
 // 세션별 opencode 디렉터리. busy 체크·발송을 세션의 실제 디렉터리로 조회해야
 // workspace 기준으로 조회해 repo 세션을 idle 로 오판하지 않는다.
@@ -170,6 +196,7 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
     queues.delete(sessionID)
     queueDirs.delete(sessionID)
     failCount.delete(sessionID)
+    timeoutCount.delete(sessionID)
     failedUntil.delete(sessionID)
   }
   return true
@@ -200,6 +227,7 @@ export function updateQueuedChatsModel(
     }
   }
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   failedUntil.delete(sessionID)
   logger.info(`Updated queued chat model for session ${sessionID} to ${model.providerID}/${model.modelID}`)
   return [...queue]
@@ -243,6 +271,7 @@ export function clearQueuedChats(sessionID: string): number {
   queues.delete(sessionID)
   queueDirs.delete(sessionID)
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   failedUntil.delete(sessionID)
   logger.info(`Cleared ${count} queued chat(s) for session ${sessionID}`)
   return count
@@ -265,6 +294,7 @@ export function clearSendingOnAbort(sessionID: string): void {
   lastBusyAt.delete(sessionID)
   failedUntil.delete(sessionID)
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   markRecentlyAborted(sessionID)
 }
 
@@ -318,6 +348,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
     }
     failedUntil.delete(sessionID)
     failCount.delete(sessionID)
+    timeoutCount.delete(sessionID)
     logger.info(`Confirmed queued chat delivered to session ${sessionID} (idle observed)`)
     return
   }
@@ -359,6 +390,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
         failCount.delete(sessionID)
+        timeoutCount.delete(sessionID)
         // 같은 텍스트의 뒤쪽 중복(더블 전송 등)은 이번 성공으로 전달된 것으로 보고 제거.
         // sending은 drop 대상에서 제외된다 (이미 opencode로 넘어감).
         dropDeliveredDuplicates(sessionID, next.text)
@@ -368,6 +400,10 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         // 성공하지 않는다. 5회 쿨다운 재시도로 시간만 끌지 말고 즉시 failed로
         // 고정해 사용자가 가위(truncate)·모델 원복으로 복구하게 한다.
         recordDeterministicFailure(sessionID, next.id, result.detail)
+      } else if (result.transient) {
+        // opencode 타임아웃(5분 내부 타임아웃 등): failed로 고정하지 않고
+        // queued 유지 + 백오프로 자동 재시도한다.
+        recordTransientTimeout(sessionID, next.id)
       } else {
         recordFailure(sessionID, next.id)
       }
@@ -408,6 +444,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
 function recordFailure(sessionID: string, id: string): void {
   const count = (failCount.get(sessionID) ?? 0) + 1
   failCount.set(sessionID, count)
+  timeoutCount.delete(sessionID)
   const queue = queues.get(sessionID)
   const head = queue?.[0]?.id === id ? queue[0] : undefined
   if (head) {
@@ -428,6 +465,25 @@ function recordFailure(sessionID: string, id: string): void {
 }
 
 /**
+ * 타임아웃(5분 opencode 내부 타임아웃 등) 기록. 즉시 failed로 고정하지 않고
+ * queued 유지 + 백오프로 자동 재시도한다. 같은 메시지가 상한까지 연속으로
+ * 타임아웃되면 그때 failed로 고정한다 (독성 메시지 무한 재시도 방지).
+ */
+export function recordTransientTimeout(sessionID: string, id: string): void {
+  const count = (timeoutCount.get(sessionID) ?? 0) + 1
+  timeoutCount.set(sessionID, count)
+  if (count >= MAX_CONSECUTIVE_TIMEOUTS) {
+    timeoutCount.delete(sessionID)
+    logger.warn(`Queued chat for session ${sessionID} timed out ${count} times in a row; marked failed`)
+    recordFailure(sessionID, id)
+    return
+  }
+  markHeadQueued(sessionID, id)
+  failedUntil.set(sessionID, Date.now() + TIMEOUT_RETRY_BACKOFF_MS)
+  logger.warn(`Queued chat for session ${sessionID} hit opencode timeout (${count}/${MAX_CONSECUTIVE_TIMEOUTS}); keep queued for auto-retry`)
+}
+
+/**
  * provider가 히스토리의 reasoning 암호문을 거부한 경우
  * (Anthropic `encrypted_content was not issued to this caller` 등).
  * 모델 전환·중간 네트워크 실패 뒤 이전 모델의 reasoning 블록이 히스토리에
@@ -441,6 +497,7 @@ export function isReasoningEncryptedMismatch(bodyText: string): boolean {
 
 function recordDeterministicFailure(sessionID: string, id: string, detail?: string): void {
   failCount.set(sessionID, MAX_CONSECUTIVE_FAILURES)
+  timeoutCount.delete(sessionID)
   const queue = queues.get(sessionID)
   const head = queue?.[0]?.id === id ? queue[0] : undefined
   if (head) {
@@ -509,6 +566,7 @@ export function dropDeliveredDuplicates(sessionID: string, text: string): number
     // 고아를 치웠으니 실패 카운트·백오프도 초기화 — 남은 항목이 있으면
     // 다음 폴러에 바로 재시도된다 (stale 실패 상태 고착 방지).
     failCount.delete(sessionID)
+    timeoutCount.delete(sessionID)
     failedUntil.delete(sessionID)
     logger.info(`Dropped ${removed} delivered duplicate(s) for session ${sessionID} after direct-send success`)
   }
@@ -533,6 +591,7 @@ export function retryQueuedChat(sessionID: string, id: string): QueuedChat[] | n
   delete item.sendingSince
   failedUntil.delete(sessionID)
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   logger.info(`Manual retry of queued chat for session ${sessionID} (id ${id})`)
   if (queue[0]?.id === id) {
     void dispatchHead(opencodeServerManager.getUrl(), sessionID)
@@ -652,6 +711,9 @@ function pruneIdleSessionState(): void {
   for (const [sid, at] of lastBusyAt) {
     if (!queues.has(sid) && now - at > IDLE_STATE_TTL_MS) lastBusyAt.delete(sid)
   }
+  for (const [sid] of timeoutCount) {
+    if (!queues.has(sid)) timeoutCount.delete(sid)
+  }
 }
 
 /** 채팅 완료 이벤트로 1개 세션의 큐를 즉시 발송한다. 세션이 여전히 working 중이면 발송을 건너뛰고 폴러가 이어받는다. */
@@ -672,6 +734,8 @@ interface DispatchResult {
   sent: boolean
   /** true면 재시도해도 절대 성공하지 않는 결정적 provider 거부 (reasoning 암호문 불일치 등) */
   nonRetryable?: boolean
+  /** true면 opencode 타임아웃 등 일시적 실패 — queued 유지 + 백오프 자동 재시도 */
+  transient?: boolean
   status?: number
   detail?: string
 }
@@ -1005,6 +1069,19 @@ async function dispatchQueuedChat(
         logger.warn(`Queued command /${cmd} rejected with quota/billing HTTP ${cmdRes.status} — marked failed without retry`)
         return { sent: false, nonRetryable: true, status: cmdRes.status, detail: body.slice(0, 300) }
       }
+      // opencode 타임아웃(5분): /message 폴백으로 즉시 재탕하지 않고 transient로
+      // 돌려보내 queued 유지 + 백오프 후 전체 디스패치를 재시도한다.
+      if (isTimeoutFailure(cmdRes.status, body)) {
+        try {
+          if (queueDb && runId) {
+            const { finishRunSafe } = await import('./command-runs')
+            await finishRunSafe(queueDb, runId, 'failed')
+          }
+        } catch {}
+        finishPendingSkillRun(false)
+        logger.warn(`Queued command /${cmd} hit opencode timeout HTTP ${cmdRes.status} — keep queued for auto-retry`)
+        return { sent: false, transient: true, status: cmdRes.status, detail: body.slice(0, 300) }
+      }
       try {
         if (queueDb && runId) {
           const { finishRunSafe } = await import('./command-runs')
@@ -1124,6 +1201,10 @@ async function dispatchQueuedChat(
           logger.warn(`Queued chat heal-retry hit quota/billing HTTP ${retryRes.status} for session ${sessionID} — leaving failed`)
           return { sent: false, nonRetryable: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
         }
+        if (isTimeoutFailure(retryRes.status, retryBody)) {
+          logger.warn(`Queued chat heal-retry hit opencode timeout HTTP ${retryRes.status} for session ${sessionID} — keep queued for auto-retry`)
+          return { sent: false, transient: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
+        }
         if (retryRes.status !== 400 || !isReasoningEncryptedMismatch(retryBody)) {
           return { sent: false, status: retryRes.status }
         }
@@ -1157,6 +1238,13 @@ async function dispatchQueuedChat(
       logger.warn(`Queued chat hit quota/billing HTTP ${sendRes.status} for session ${sessionID} — marked failed without retry`)
       finishPendingSkillRun(false)
       return { sent: false, nonRetryable: true, status: sendRes.status, detail: body.slice(0, 300) }
+    }
+    // opencode 타임아웃(5분 내부 타임아웃 등): failed로 고정하지 않고 transient로
+    // 돌려보내 queued 유지 + 백오프 후 자동 재시도한다.
+    if (isTimeoutFailure(sendRes.status, body)) {
+      logger.warn(`Queued chat hit opencode timeout HTTP ${sendRes.status} for session ${sessionID} — keep queued for auto-retry`)
+      finishPendingSkillRun(false)
+      return { sent: false, transient: true, status: sendRes.status, detail: body.slice(0, 300) }
     }
     if (sendRes.status === 400 && isReasoningEncryptedMismatch(body)) {
       const healed = await healMismatchAndRetryOnce(body)
