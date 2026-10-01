@@ -21,7 +21,7 @@ import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDi
 import { useCommands } from "@/hooks/useCommands";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank } from "@/hooks/useOpenCode";
-import { useQueuedChats } from "@/hooks/useChatQueue";
+import { useQueuedChats, chatQueueKeys } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -788,34 +788,58 @@ export function SessionDetail() {
     if (was && (!isStreaming || aborted)) {
       // 첫 채팅 등에서 polling/SSE 경합으로 isStreaming이 잠깐 false→true로 튀는 경우 이중 트리거 방지 — 800ms 디바운스
       const debounce = setTimeout(() => {
-        if (prevStreamingRef.current) return;
-        if (!isCancel) {
-          // working 공백(연결 흔들림·자식 세션 종료 등)에 complete가 아닌데 발송하지 않도록
-          // 마지막 어시스턴트 메시지 finished + DB busy 아님을 재확인한다
-          const cur = messagesRef.current;
-          const last = cur?.[cur.length - 1] as any;
-          const lastDone = !!last && last.info?.role === 'assistant' && !!((last.info?.time as any)?.completed);
-          if (!lastDone) return;
-          try {
-            const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"]);
-            if (statuses?.some((s) => s.sessionId === sessionId && s.status === 'busy') === true) return;
-          } catch {}
-        }
-        if (canSound) void playCompletionTick();
-        if (canPush) {
-          const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
-          const curRepo = repoRef.current
-          const curSession = sessionRef.current as unknown as { title?: string } | undefined
-          const repoLabel = curRepo ? (curRepo.repoUrl ? curRepo.repoUrl.split("/").pop()?.replace(".git","") || curRepo.localPath : curRepo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
-          const sessLabel = curSession?.title || 'Untitled Session';
-          const body = `${repoLabel} · ${sessLabel}`;
-          sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0)
-        }
+        void (async () => {
+          if (prevStreamingRef.current) return;
+          if (!isCancel) {
+            // 큐에 대기 중인 후속 턴이 있으면 아직 완료가 아니다 — 턴 사이 idle 공백
+            // (폴러·백오프 지연, 특히 타임아웃 재시도 10s)에 완료 푸시/소리가 나갔다가
+            // 다음 턴이 시작되면 "진행 중인데 완료" 오표시가 된다. 백엔드 기준으로
+            // fresh하게 재조회 후 판단한다 (2s 폴링 캐시 staleness 방지).
+            try {
+              if (sessionId) {
+                await queryClient.refetchQueries({ queryKey: chatQueueKeys.session(sessionId) });
+                const fresh = queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId)) ?? [];
+                if (fresh.some((item) => item?.status === 'queued' || item?.status === 'sending')) return;
+              }
+            } catch {
+              // 재조회 실패 시 캐시 기준으로 폴백 (stale할 수 있어 queued만 본다)
+              try {
+                const cached = queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId)) ?? [];
+                if (cached.some((item) => item?.status === 'queued' || item?.status === 'sending')) return;
+              } catch {}
+            }
+            if (prevStreamingRef.current) return;
+            // working 공백(연결 흔들림·자식 세션 종료 등)에 complete가 아닌데 발송하지 않도록
+            // 마지막 어시스턴트 메시지 finished + DB busy 아님을 재확인한다
+            const cur = messagesRef.current;
+            const last = cur?.[cur.length - 1] as any;
+            const lastDone = !!last && last.info?.role === 'assistant' && !!((last.info?.time as any)?.completed);
+            if (!lastDone) return;
+            try {
+              const statuses = queryClient.getQueryData<{ sessionId: string; status: string }[]>(["session-status-db"]);
+              if (statuses?.some((s) => s.sessionId === sessionId && s.status === 'busy') === true) return;
+            } catch {}
+          }
+          if (canSound) void playCompletionTick();
+          if (canPush) {
+            const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
+            const curRepo = repoRef.current
+            const curSession = sessionRef.current as unknown as { title?: string } | undefined
+            const repoLabel = curRepo ? (curRepo.repoUrl ? curRepo.repoUrl.split("/").pop()?.replace(".git","") || curRepo.localPath : curRepo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
+            const sessLabel = curSession?.title || 'Untitled Session';
+            const body = `${repoLabel} · ${sessLabel}`;
+            sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0)
+          }
+        })();
       }, 800);
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
       // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
       // 폴링 지연(2s) 고려해 3.5초 뒤 재확인한다.
       const timer = setTimeout(() => {
+        // 취소로 끝난 스트리밍이면 빈 응답 토스트를 띄우지 않는다. 메시지 판별만으로는
+        // 부족하다 — 폴링 지연으로 중단된 assistant 메시지가 아직 안 보이면 마지막이
+        // user 메시지로 보여 isUserWithoutReply 오탐이 난다.
+        if (aborted || (sessionId && isRecentlyAborted(sessionId))) return;
         const cur = messagesRef.current;
         if (!cur || cur.length === 0) return;
         const last = cur[cur.length - 1] as any;
