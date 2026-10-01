@@ -82,18 +82,15 @@ describe('isTimeoutFailure (opencode 5분 내부 타임아웃 판정)', () => {
   })
 })
 
-describe('recordTransientTimeout (유예 후 failed)', () => {
-  it('상한 전까지는 queued 유지, 상한에서 failed', () => {
+describe('recordTransientTimeout (failed 고정 없음)', () => {
+  it('몇 번을 기록해도 queued 유지', () => {
     const s = sid()
     enqueueQueuedChat(s, 'long turn prompt', '/ws')
     const id = listQueuedChats(s)[0]!.id
-    recordTransientTimeout(s, id)
-    expect(listQueuedChats(s)[0]!.status).toBe('queued')
-    recordTransientTimeout(s, id)
-    expect(listQueuedChats(s)[0]!.status).toBe('queued')
-    // 3번째 연속 타임아웃에서 failed로 고정
-    recordTransientTimeout(s, id)
-    expect(listQueuedChats(s)[0]!.status).toBe('failed')
+    for (let i = 0; i < 5; i++) {
+      recordTransientTimeout(s, id)
+      expect(listQueuedChats(s)[0]!.status).toBe('queued')
+    }
   })
 })
 
