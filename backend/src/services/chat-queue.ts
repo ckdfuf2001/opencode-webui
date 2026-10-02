@@ -421,11 +421,15 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         logger.info(`Queued chat for session ${sessionID} connect error (${code}), keep queued for auto-retry after NW recovery`)
         return
       }
-      if (name !== 'TimeoutError' && name !== 'AbortError') {
-        recordFailure(sessionID, next.id)
-      } else {
+      if (name === 'TimeoutError' || name === 'AbortError') {
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        return
       }
+      // 그 외 전송 오류(HTTP 응답 없이 fetch가 죽은 경우 — 5분 턴 중 서버측
+      // 타임아웃으로 연결이 끊긴 형태 포함): 턴의 생사를 알 수 없으므로 failed로
+      // 고정하지 않고 transient로 queued 유지 + 백오프한다. 서버가 정말 죽었으면
+      // 다음 발송 전 busy 게이트(상태 조회 실패=busy 취급)가 발송을 막는다.
+      recordTransientTimeout(sessionID, next.id)
     })
     .finally(() => {
       inFlight.delete(sessionID)
@@ -1177,8 +1181,8 @@ async function dispatchQueuedChat(
           logger.warn(`Queued chat heal-retry hit quota/billing HTTP ${retryRes.status} for session ${sessionID} — leaving failed`)
           return { sent: false, nonRetryable: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
         }
-        if (isTimeoutFailure(retryRes.status, retryBody)) {
-          logger.warn(`Queued chat heal-retry hit opencode timeout HTTP ${retryRes.status} for session ${sessionID} — keep queued for auto-retry`)
+        if (retryRes.status >= 500) {
+          logger.warn(`Queued chat heal-retry hit opencode 5xx HTTP ${retryRes.status} for session ${sessionID} — keep queued for auto-retry`)
           return { sent: false, transient: true, status: retryRes.status, detail: retryBody.slice(0, 300) }
         }
         if (retryRes.status !== 400 || !isReasoningEncryptedMismatch(retryBody)) {
@@ -1215,10 +1219,11 @@ async function dispatchQueuedChat(
       finishPendingSkillRun(false)
       return { sent: false, nonRetryable: true, status: sendRes.status, detail: body.slice(0, 300) }
     }
-    // opencode 타임아웃(5분 내부 타임아웃 등): failed로 고정하지 않고 transient로
-    // 돌려보내 queued 유지 + 백오프 후 자동 재시도한다.
-    if (isTimeoutFailure(sendRes.status, body)) {
-      logger.warn(`Queued chat hit opencode timeout HTTP ${sendRes.status} for session ${sessionID} — keep queued for auto-retry`)
+    // 5xx는 서버측 실패(5분 내부 타임아웃의 504 포함, 문구 없는 500 포함)로
+    // 간주해 failed로 고정하지 않고 transient로 돌려보내 queued 유지 +
+    // 백오프 후 자동 재시도한다. 4xx(클라이언트 오류)는 그대로 failed.
+    if (sendRes.status >= 500) {
+      logger.warn(`Queued chat hit opencode 5xx HTTP ${sendRes.status} for session ${sessionID} — keep queued for auto-retry`)
       finishPendingSkillRun(false)
       return { sent: false, transient: true, status: sendRes.status, detail: body.slice(0, 300) }
     }

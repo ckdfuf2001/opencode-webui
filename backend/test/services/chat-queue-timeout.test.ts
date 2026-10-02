@@ -126,4 +126,83 @@ describe('504 응답 시 큐가 즉시 failed가 되지 않는다', () => {
     // 기존 버그: MAX_CONSECUTIVE_FAILURES=1에 즉시 failed. 수정 후: queued 유지.
     expect(head!.status).toBe('queued')
   })
+
+  it('timeout 문구 없는 500도 queued 유지 (5xx는 서버측 실패로 간주)', async () => {
+    const s = sid()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        const u = String(url)
+        if (u.includes('/message')) {
+          return {
+            ok: false,
+            status: 500,
+            text: async () => 'Internal server error',
+            json: async () => ({}),
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => '',
+          json: async () => (u.includes('/session/status') ? {} : []),
+        }
+      }),
+    )
+    enqueueQueuedChat(s, 'another long task', '/ws')
+    flushQueueForSession(s)
+    await new Promise((r) => setTimeout(r, 500))
+    expect(listQueuedChats(s)[0]!.status).toBe('queued')
+  })
+
+  it('코드 없는 전송 오류(TypeError)도 queued 유지', async () => {
+    const s = sid()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        const u = String(url)
+        if (u.includes('/message')) {
+          throw new TypeError('fetch failed')
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => '',
+          json: async () => (u.includes('/session/status') ? {} : []),
+        }
+      }),
+    )
+    enqueueQueuedChat(s, 'yet another long task', '/ws')
+    flushQueueForSession(s)
+    await new Promise((r) => setTimeout(r, 500))
+    expect(listQueuedChats(s)[0]!.status).toBe('queued')
+  })
+
+  it('400 같은 4xx는 그대로 failed (클라이언트 오류)', async () => {
+    const s = sid()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        const u = String(url)
+        if (u.includes('/message')) {
+          return {
+            ok: false,
+            status: 400,
+            text: async () => 'bad request: unknown part type',
+            json: async () => ({}),
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => '',
+          json: async () => (u.includes('/session/status') ? {} : []),
+        }
+      }),
+    )
+    enqueueQueuedChat(s, 'broken prompt', '/ws')
+    flushQueueForSession(s)
+    await new Promise((r) => setTimeout(r, 500))
+    expect(listQueuedChats(s)[0]!.status).toBe('failed')
+  })
 })
