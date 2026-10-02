@@ -47,12 +47,17 @@ export function useQueuedChats(sessionID?: string | null) {
   })
 }
 
+export function wasRecentlyRemoved(sessionID: string, id: string): boolean {
+  const at = recentlyRemovedAt.get(`${sessionID}:${id}`)
+  return at != null && Date.now() - at <= RECENTLY_REMOVED_MS
+}
+
 export function useEnqueueQueuedChat() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ sessionID, text, directory, model, agent, reviewWanted, autoApply }: { sessionID: string; text: string; directory?: string } & EnqueueChatOptions) =>
-      enqueueQueuedChat(sessionID, text, directory, { model, agent, reviewWanted, autoApply }),
+    mutationFn: ({ sessionID, text, directory, model, agent, reviewWanted, autoApply, kind, messageID }: { sessionID: string; text: string; directory?: string } & EnqueueChatOptions) =>
+      enqueueQueuedChat(sessionID, text, directory, { model, agent, reviewWanted, autoApply, kind, messageID }),
     onSuccess: (queue, { sessionID }) => {
       queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
     },

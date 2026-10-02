@@ -20,8 +20,8 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { useCommands } from "@/hooks/useCommands";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useDeleteMessage, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank } from "@/hooks/useOpenCode";
-import { useQueuedChats, chatQueueKeys } from "@/hooks/useChatQueue";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank, dropBackfilledId } from "@/hooks/useOpenCode";
+import { useQueuedChats, chatQueueKeys, useEnqueueQueuedChat, wasRecentlyRemoved } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
@@ -172,8 +172,6 @@ export function SessionDetail() {
   // total을 모르면 버튼을 숨긴다 (60개 추정은 오탐이라 제거).
   const [totalKnown, setTotalKnown] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  // edit-resend/truncate/delete 처리 중 표시 (큐영역). abort→작업 순서로 진행된다.
-  const [opProgress, setOpProgress] = useState<{ label: string } | null>(null);
   useEffect(() => {
     setTotalKnown(null);
     setIsLoadingMore(false);
@@ -737,7 +735,6 @@ export function SessionDetail() {
   const abortSession = useAbortSession(opcodeUrl, repoDirectory);
   const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
   const truncateSession = useTruncateSession(opcodeUrl, repoDirectory);
-  const deleteMessageMutation = useDeleteMessage(opcodeUrl, repoDirectory);
   const summarizeSession = useSummarizeSession(opcodeUrl, repoDirectory);
   const ctx = useContextUsage(opcodeUrl, sessionId, repoDirectory);
   const { open: openSettings } = useSettingsDialog();
@@ -795,19 +792,16 @@ export function SessionDetail() {
             // (폴러·백오프 지연, 특히 타임아웃 재시도 10s)에 완료 푸시/소리가 나갔다가
             // 다음 턴이 시작되면 "진행 중인데 완료" 오표시가 된다. 백엔드 기준으로
             // fresh하게 재조회 후 판단한다 (2s 폴링 캐시 staleness 방지).
-            try {
-              if (sessionId) {
-                await queryClient.refetchQueries({ queryKey: chatQueueKeys.session(sessionId) });
-                const fresh = queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId)) ?? [];
-                if (fresh.some((item) => item?.status === 'queued' || item?.status === 'sending')) return;
-              }
-            } catch {
-              // 재조회 실패 시 캐시 기준으로 폴백 (stale할 수 있어 queued만 본다)
+            const readCachedQueue = (): Array<{ status?: string }> => {
+              if (!sessionId) return [];
               try {
-                const cached = queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId)) ?? [];
-                if (cached.some((item) => item?.status === 'queued' || item?.status === 'sending')) return;
-              } catch {}
-            }
+                return queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId)) ?? [];
+              } catch { return []; }
+            };
+            try {
+              if (sessionId) await queryClient.refetchQueries({ queryKey: chatQueueKeys.session(sessionId) });
+            } catch { /* 재조회 실패 시 캐시 기준으로 폴백 */ }
+            if (readCachedQueue().some((item) => item?.status === 'queued' || item?.status === 'sending')) return;
             if (prevStreamingRef.current) return;
             // working 공백(연결 흔들림·자식 세션 종료 등)에 complete가 아닌데 발송하지 않도록
             // 마지막 어시스턴트 메시지 finished + DB busy 아님을 재확인한다
@@ -1494,33 +1488,51 @@ export function SessionDetail() {
     setInjectedPrompt(null)
   }, []);
 
-  // 파괴적 작업(edit-resend/truncate/delete) 전 세션을 idle로 만든다.
-  // 생성 중 DB를 자르면 abort 레이스가 나므로, busy면 abort 승인 후 진행한다.
-  // abort 실패해도 작업은 진행한다 (서버 다운이면 어차피 idle).
-  const ensureIdleAbort = useCallback(async (): Promise<void> => {
-    if (!sessionId) return
-    const busy = dbBusy || descendantBusy || hasActiveSend(sessionId) ||
-      (!!lastMessage && isMessageStreaming(lastMessage))
-    if (!busy) return
-    setOpProgress({ label: 'aborting...' })
-    try {
-      await abortSession.mutateAsync(sessionId)
-    } catch {
-      // best effort — 아래 작업은 계속 진행
+  // 파괴적 작업(truncate/delete)은 큐에 넣어 순서대로 처리한다.
+  // 큐에 있으면 idle이 되는 대로, 실행 중이면 현 턴이 끝난 뒤 실행된다.
+  // abort로 턴을 끊고 바로 자르는 기존 방식은 큐 순서가 어긋나
+  // "보내지 말아야 할 때 전송"되던 원인이라 쓰지 않는다.
+  const enqueueOp = useEnqueueQueuedChat();
+  // enqueue 결과에서 잡은 큐 아이템 id 추적: 목록에서 사라지면(실행 완료)
+  // 메시지 무효화 + 완료 토스트. X로 지운 건 조용히 해제한다.
+  const pendingOpsRef = useRef(new Map<string, { kind: 'truncate' | 'delete' }>());
+  useEffect(() => {
+    if (pendingOpsRef.current.size === 0) return;
+    const gone: string[] = [];
+    for (const [id, op] of pendingOpsRef.current) {
+      const still = (queuedForBadge as Array<{ id: string }>)?.some((q) => q.id === id);
+      if (!still) {
+        gone.push(id);
+        if (sessionId && !wasRecentlyRemoved(sessionId, id)) {
+          queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
+          queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionId, repoDirectory) });
+          showToast.success(op.kind === 'truncate' ? 'Truncate completed' : 'Message deleted');
+        }
+      }
     }
-  }, [sessionId, dbBusy, descendantBusy, lastMessage, abortSession]);
+    for (const id of gone) pendingOpsRef.current.delete(id);
+  }, [queuedForBadge, sessionId, opcodeUrl, repoDirectory, queryClient]);
 
   const handleResendEdit = useCallback(async (messageID: string): Promise<boolean> => {
     if (!sessionId) return false
-    setOpProgress({ label: 'truncating...' })
+    if (messageID.startsWith('optimistic_')) return true // 로컬 전용 — 서버에 없음
+    // 낙관 UI: 커서 이후를 즉시 숨긴다 (기존 onMutate와 동일)
+    const messagesKey = messagesQueryKey(opcodeUrl, sessionId, repoDirectory)
+    await queryClient.cancelQueries({ queryKey: messagesKey })
+    const previous = queryClient.getQueryData<any[]>(messagesKey)
     try {
-      await ensureIdleAbort()
-      setOpProgress({ label: 'truncating...' })
-      const result = await truncateSession.mutateAsync({ sessionID: sessionId, messageID })
-      if (!result?.success) {
-        showToast.error('Failed to truncate session')
-        return false
+      const cursor = previous?.find((m: any) => m?.info?.id === messageID)
+      if (previous && cursor) {
+        const cursorTime = cursor.info.time?.created ?? 0
+        const removedIds = new Set(
+          previous.filter((m: any) => (m?.info?.time?.created ?? 0) >= cursorTime).map((m: any) => m?.info?.id),
+        )
+        for (const id of removedIds) dropBackfilledId(sessionId, id as string)
+        queryClient.setQueryData(messagesKey, previous.filter((m: any) => (m?.info?.time?.created ?? 0) < cursorTime))
       }
+      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'truncate', messageID })
+      const op = [...queue].reverse().find((q: any) => q?.kind === 'truncate' && q?.messageID === messageID)
+      if (op) pendingOpsRef.current.set(op.id, { kind: 'truncate' })
       setHiddenAfterID(null)
       setInjectedPrompt(null)
       // edit & resend 후 스크롤이 위로 튀는 것 방지 — 즉시 맨 아래로 고정
@@ -1531,13 +1543,11 @@ export function SessionDetail() {
         if (c) c.scrollTop = c.scrollHeight
       }))
       return true
-    } catch (error) {
-      showToast.error((error as Error).message || 'Failed to truncate session')
+    } catch {
+      if (previous) queryClient.setQueryData(messagesKey, previous)
       return false
-    } finally {
-      setOpProgress(null)
     }
-  }, [sessionId, truncateSession, ensureIdleAbort]);
+  }, [sessionId, opcodeUrl, repoDirectory, queryClient, enqueueOp]);
 
   const handleTruncate = useCallback((messageID: string) => {
     if (!sessionId) return
@@ -1546,24 +1556,27 @@ export function SessionDetail() {
 
   const handleDeleteMessage = useCallback(async (messageID: string) => {
     if (!sessionId) return
-    setOpProgress({ label: 'deleting...' })
+    if (messageID.startsWith('optimistic_')) {
+      const key = messagesQueryKey(opcodeUrl, sessionId, repoDirectory)
+      queryClient.setQueryData(key, (old: any) => old?.filter((m: any) => m?.info?.id !== messageID))
+      return
+    }
+    // 낙관 UI: 즉시 숨기고 큐에 넣어 순서대로 실행한다
+    const key = messagesQueryKey(opcodeUrl, sessionId, repoDirectory)
+    await queryClient.cancelQueries({ queryKey: key })
+    const previous = queryClient.getQueryData<any[]>(key)
     try {
-      await ensureIdleAbort()
-      setOpProgress({ label: 'deleting...' })
-      const result = await deleteMessageMutation.mutateAsync({ sessionID: sessionId, messageID })
-      if (!result?.success) {
-        showToast.error('Failed to delete message')
-        return
-      }
+      dropBackfilledId(sessionId, messageID)
+      if (previous) queryClient.setQueryData(key, previous.filter((m: any) => m?.info?.id !== messageID))
+      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'delete', messageID })
+      const op = [...queue].reverse().find((q: any) => q?.kind === 'delete' && q?.messageID === messageID)
+      if (op) pendingOpsRef.current.set(op.id, { kind: 'delete' })
       setHiddenAfterID(null)
       setInjectedPrompt(null)
-      showToast.success('Message (this turn) deleted')
-    } catch (error) {
-      showToast.error((error as Error).message || 'Failed to delete message')
-    } finally {
-      setOpProgress(null)
+    } catch {
+      if (previous) queryClient.setQueryData(key, previous)
     }
-  }, [sessionId, deleteMessageMutation, ensureIdleAbort]);
+  }, [sessionId, opcodeUrl, repoDirectory, queryClient, enqueueOp]);
 
   const handleInjectedPromptConsumed = useCallback(() => {
     setInjectedPrompt(null)
@@ -1753,7 +1766,7 @@ if (results.length > 0) {
                 highlightedMessageID={highlightedMessageID}
                 invocations={invocationByMessage}
                 onOpenCommandHistory={() => setCommandsOpen(true)}
-                actionsDisabled={opProgress !== null}
+                actionsDisabled={false}
               />
               </ErrorBoundary>
             )}
@@ -1832,7 +1845,7 @@ if (results.length > 0) {
                 onCompact={handleCompact}
                 onNewSession={handleNewSession}
                 isStreaming={isStreaming}
-                queueActivityLabel={opProgress?.label ?? null}
+                queueActivityLabel={null}
               />
             </div>
             </div>

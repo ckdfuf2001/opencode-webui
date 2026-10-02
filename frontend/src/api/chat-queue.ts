@@ -1,8 +1,12 @@
 import { API_BASE_URL } from '@/config'
 
+export type QueueItemKind = 'chat' | 'truncate' | 'delete'
+
 export interface QueuedChat {
   id: string
+  kind: QueueItemKind
   text: string
+  messageID?: string
   createdAt: number
   status: 'queued' | 'sending' | 'failed'
   model?: { providerID: string; modelID: string }
@@ -20,6 +24,9 @@ export interface EnqueueChatOptions {
   /** 세션 리뷰/자동변경 오버라이드 스냅샷 (undefined면 상속 = 레포 설정). */
   reviewWanted?: boolean
   autoApply?: boolean
+  kind?: QueueItemKind
+  /** truncate/delete 대상 메시지 ID (op 아이템 필수). */
+  messageID?: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
