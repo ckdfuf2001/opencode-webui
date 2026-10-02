@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
 import { isReasoningMismatchText, healReasoningTail, sweepPollutedStubs, asOutgoingModel, preSendStripIfMismatch, findNewMismatch } from './reasoning-heal'
-import { stripAllReasoningParts } from './opencode-db'
+import { stripAllReasoningParts, truncateSessionMessages, deleteSessionMessage } from './opencode-db'
 import { recentSessionMessages } from './session-message-db'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled } from '../db/session-status-queries'
@@ -16,9 +16,15 @@ export function setChatQueueDb(db: Database): void {
   queueDb = db
 }
 
+/** 큐 아이템 종류. chat=채팅 발송, truncate/delete=파괴적 op(순서 보장 실행). */
+export type QueueItemKind = 'chat' | 'truncate' | 'delete'
+
 export interface QueuedChat {
   id: string
+  kind: QueueItemKind
   text: string
+  /** truncate/delete 대상 메시지 ID (op 아이템만). */
+  messageID?: string
   createdAt: number
   status: 'queued' | 'sending' | 'failed'
   model?: { providerID: string; modelID: string }
@@ -39,6 +45,15 @@ export interface EnqueueOptions {
   agent?: string
   reviewWanted?: boolean
   autoApply?: boolean
+  kind?: QueueItemKind
+  /** truncate/delete 대상 메시지 ID (op 아이템 필수). */
+  messageID?: string
+}
+
+/** op 아이템 표시 라벨 (strip 렌더용 — text 필드에 저장). */
+export function opItemLabel(kind: QueueItemKind, messageID: string): string {
+  const short = messageID.length > 8 ? `…${messageID.slice(-8)}` : messageID
+  return kind === 'truncate' ? `Truncate from ${short}` : `Delete ${short}`
 }
 
 const MAX_QUEUE_LENGTH = 20
@@ -159,11 +174,23 @@ export function listQueuedChats(sessionID: string): QueuedChat[] {
 }
 
 export function enqueueQueuedChat(sessionID: string, text: string, directory?: string, opts?: EnqueueOptions): QueuedChat[] {
-  const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
+  const kind = opts?.kind ?? 'chat'
+  let trimmed: string
+  let messageID: string | undefined
+  if (kind === 'chat') {
+    trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
+    if (!trimmed) throw new Error('text is required for chat queue items')
+  } else {
+    if (!opts?.messageID) throw new Error(`messageID is required for ${kind} queue items`)
+    messageID = opts.messageID
+    trimmed = text?.trim() || opItemLabel(kind, messageID)
+  }
   const queue = queues.get(sessionID) ?? []
   queue.push({
     id: crypto.randomUUID(),
+    kind,
     text: trimmed,
+    ...(messageID ? { messageID } : {}),
     createdAt: Date.now(),
     status: 'queued',
     ...(opts?.model ? { model: opts.model } : {}),
@@ -174,7 +201,7 @@ export function enqueueQueuedChat(sessionID: string, text: string, directory?: s
   while (queue.length > MAX_QUEUE_LENGTH) queue.shift()
   queues.set(sessionID, queue)
   if (directory) queueDirs.set(sessionID, directory)
-  logger.info(`Queued chat message for session ${sessionID} (position ${queue.length})`)
+  logger.info(`Queued ${kind} for session ${sessionID} (position ${queue.length})`)
   return [...queue]
 }
 
@@ -214,7 +241,8 @@ export function updateQueuedChatsModel(
   const queue = queues.get(sessionID)
   if (!queue) return null
   for (const item of queue) {
-    if (item.status === 'sending') continue
+    // op(truncate/delete)는 모델과 무관 — 건드리지 않는다 (failed op도 수동 retry까지 유지).
+    if (item.status === 'sending' || item.kind !== 'chat') continue
     item.model = { ...model }
     // 모델이 바뀌었으니 이전 실패 카운트/시각은 무효 — 새 모델로 즉시 재시도 가능하게
     if (item.status === 'failed') {
@@ -362,6 +390,43 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   if ((failedUntil.get(sessionID) ?? 0) > Date.now()) return
   const current = queues.get(sessionID)
   if (!current || current.length === 0 || current[0]?.id !== next.id) return
+
+  // 파괴적 op(truncate/delete): 채팅과 같은 FIFO 슬롯으로 순서 보장 실행한다.
+  // busy·pause·backoff 게이트는 위에서 이미 통과했다.
+  if (next.kind === 'truncate' || next.kind === 'delete') {
+    next.status = 'sending'
+    next.sendingSince = Date.now()
+    inFlight.add(sessionID)
+    logger.info(`Dispatching queued ${next.kind} op to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
+    void dispatchOpItem(sessionID, next)
+      .then((ok) => {
+        if (recentlyAbortedBackend.has(sessionID)) {
+          failedUntil.delete(sessionID)
+          return
+        }
+        if (ok) {
+          removeHeadIf(sessionID, next.id)
+          failedUntil.delete(sessionID)
+          failCount.delete(sessionID)
+          logger.info(`Flushed queued ${next.kind} op to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
+        } else {
+          recordFailure(sessionID, next.id)
+        }
+      })
+      .catch((error) => {
+        if (recentlyAbortedBackend.has(sessionID)) {
+          failedUntil.delete(sessionID)
+          return
+        }
+        logger.warn(`Queued ${next.kind} op errored for session ${sessionID}:`, error)
+        recordTransientTimeout(sessionID, next.id)
+      })
+      .finally(() => {
+        inFlight.delete(sessionID)
+        inFlightControllers.delete(sessionID)
+      })
+    return
+  }
 
   // 제거는 확정 후에만: sending 표시 후 응답 확인(HTTP 2xx 즉시, 타임아웃은 idle 관찰) 시 제거.
   // 실패(연결 에러·거부)는 queued로 되돌리고 backoff.
@@ -537,7 +602,8 @@ export function dropDeliveredDuplicates(sessionID: string, text: string): number
   let removed = 0
   for (let i = queue.length - 1; i >= 0; i--) {
     const item = queue[i]
-    if (!item || item.status === 'sending') continue
+    // op(truncate/delete)는 채팅 중복 판정에서 제외 — 라벨이 달라도 지우면 안 된다.
+    if (!item || item.status === 'sending' || item.kind !== 'chat') continue
     if (normalizeQueueText(item.text) === norm) {
       queue.splice(i, 1)
       removed++
@@ -817,6 +883,57 @@ async function checkTurnError(sessionID: string, sinceMs: number): Promise<strin
     r = await checkTurnOnce(sessionID, sinceMs)
   }
   return r.kind === 'error' ? r.name : null
+}
+
+/**
+ * 큐 op(truncate/delete) 실행. proxy.ts handleTruncate/handleDelete와 같은
+ * 본체(DB 자르기 + 인스턴스 reload) — 순서 보장을 위해 큐 슬롯에서 돈다.
+ * 대상이 이미 없으면 멱등 성공(true). 예외·실패(null)는 false.
+ */
+async function dispatchOpItem(sessionID: string, item: QueuedChat): Promise<boolean> {
+  const directory = resolveQueueDir(sessionID)
+  try {
+    if (!item.messageID) {
+      logger.warn(`Queued ${item.kind} op for session ${sessionID} has no messageID — marked failed`)
+      return false
+    }
+    if (item.kind === 'truncate') {
+      const result = await truncateSessionMessages(sessionID, item.messageID)
+      if (!result) return false
+      if ((result.messagesRemoved ?? 0) > 0 && directory) {
+        try {
+          const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+          logger.info(`Queued truncate op for session ${sessionID}: removed ${result.messagesRemoved} message(s), instance reload ${reloaded ? 'verified' : 'NOT verified'}`)
+        } catch (e) {
+          logger.warn(`Queued truncate op instance reload threw for session ${sessionID}:`, e)
+        }
+      } else {
+        logger.info(`Queued truncate op for session ${sessionID}: nothing removed (idempotent success)`)
+      }
+      return true
+    }
+    if (item.kind === 'delete') {
+      const result = await deleteSessionMessage(sessionID, item.messageID)
+      if (!result) {
+        // 대상이 이미 없으면(null) 이미 지워진 것과 같아 성공으로 본다.
+        logger.warn(`Queued delete op target missing for session ${sessionID} — treated as idempotent success`)
+        return true
+      }
+      if (directory) {
+        try {
+          const reloaded = await opencodeServerManager.reloadAndVerify(directory)
+          logger.info(`Queued delete op for session ${sessionID}: instance reload ${reloaded ? 'verified' : 'NOT verified'}`)
+        } catch (e) {
+          logger.warn(`Queued delete op instance reload threw for session ${sessionID}:`, e)
+        }
+      }
+      return true
+    }
+    return false
+  } catch (e) {
+    logger.warn(`Queued ${item.kind} op failed for session ${sessionID}:`, e)
+    return false
+  }
 }
 
 async function dispatchQueuedChat(

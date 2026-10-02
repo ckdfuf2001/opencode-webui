@@ -4,12 +4,21 @@ import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, c
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
-  text: z.string().trim().min(1).max(16_000),
+  text: z.string().trim().max(16_000).optional(),
+  kind: z.enum(['chat', 'truncate', 'delete']).default('chat'),
+  messageID: z.string().min(1).max(256).optional(),
   directory: z.string().min(1).max(1024).optional(),
   model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }).optional(),
   agent: z.string().min(1).max(255).optional(),
   reviewWanted: z.boolean().optional(),
   autoApply: z.boolean().optional(),
+}).superRefine((v, ctx) => {
+  if (v.kind === 'chat' && !v.text) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'text is required for chat items' })
+  }
+  if (v.kind !== 'chat' && !v.messageID) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `messageID is required for ${v.kind} items` })
+  }
 })
 
 const MoveChatSchema = z.object({
@@ -39,7 +48,9 @@ export function createChatQueueRoutes() {
       const sessionId = c.req.param('sessionId')
       const body = await c.req.json()
       const validated = EnqueueChatSchema.parse(body)
-      const queue = enqueueQueuedChat(sessionId, validated.text, validated.directory, {
+      const queue = enqueueQueuedChat(sessionId, validated.text ?? '', validated.directory, {
+        kind: validated.kind,
+        messageID: validated.messageID,
         model: validated.model,
         agent: validated.agent,
         reviewWanted: validated.reviewWanted,
