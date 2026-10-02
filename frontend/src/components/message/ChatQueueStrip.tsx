@@ -198,53 +198,6 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
   return (
     <div className="w-full max-w-4xl px-4 pb-1">
       <div className={`rounded-lg border px-3 py-2 text-xs ${paused ? 'bg-zinc-500/10 border-zinc-500/30' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'bg-muted/40'}`}>
-        <div className={`mb-1 flex items-center gap-1.5 font-medium ${allowInterrupt && !paused ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground'}`}>
-          {sendingItem ? (
-            <Clock className="h-3 w-3 shrink-0 animate-spin" />
-          ) : failedItem ? (
-            <X className="h-3 w-3 shrink-0 text-destructive" />
-          ) : (
-            <Clock className="h-3 w-3 shrink-0" />
-          )}
-          <span className="shrink-0 font-semibold">({restItems.length})</span>
-          {paused && (
-            <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-px text-[10px] font-semibold">Paused</span>
-          )}
-          {sendingItem ? (
-            <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
-          ) : failedItem ? (
-            <span className="min-w-0 flex-1 truncate text-destructive">Failed to send — Retry or remove the item below</span>
-          ) : paused ? (
-            <span className="flex-1">Queue held — resume to send</span>
-          ) : (
-            <span className="flex-1">Waiting to send</span>
-          )}
-          <button
-            type="button"
-            onClick={togglePaused}
-            className="ml-auto inline-flex items-center justify-center rounded bg-transparent px-1.5 h-5 opacity-60 hover:opacity-100"
-            title={paused ? 'Resume queue (generation은 계속)' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
-            aria-label={paused ? 'Resume queue' : 'Pause queue'}
-          >
-            <span className="text-[11px] leading-none select-none">{paused ? '▶' : '❚❚'}</span>
-          </button>
-          <button
-            type="button"
-            onClick={toggleInterrupt}
-            className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
-            title={allowInterrupt ? 'Send queue after every generation\nInterruption may skip some processing' : 'Send queue after working end'}
-          >
-            {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
-          </button>
-          <button
-            type="button"
-            aria-label="Minimize queue"
-            className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground"
-            onClick={() => setMinimized(true)}
-          >
-            <ChevronDown className="w-3 h-3" />
-          </button>
-        </div>
         <ul className="space-y-1">
           {sendingItem && (
             <li key={sendingItem.id} className="group flex items-center gap-2">
@@ -252,7 +205,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
               <span className="min-w-0 flex-1 truncate break-words opacity-60">
                 {sendingItem.text}
               </span>
-              {/* 정지/재생은 맨 위 헤더에만 — sending 행에 달면 멈춘 것처럼 보여 위치가 헷갈린다.
+              {/* 정지/재생은 맨 아래 헤더에만 — sending 행에 달면 멈춘 것처럼 보여 위치가 헷갈린다.
                   sending은 pause로 못 끊고(표기는 sending 유지) X로만 취소한다. */}
               <span className="flex shrink-0 items-center gap-0.5">
                 <button
@@ -326,6 +279,53 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
             </li>
           ))}
         </ul>
+        <div className={`mt-1 flex items-center gap-1.5 font-medium ${allowInterrupt && !paused ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground'}`}>
+          {sendingItem ? (
+            <Clock className="h-3 w-3 shrink-0 animate-spin" />
+          ) : failedItem ? (
+            <X className="h-3 w-3 shrink-0 text-destructive" />
+          ) : (
+            <Clock className="h-3 w-3 shrink-0" />
+          )}
+          <span className="shrink-0 font-semibold">({restItems.length})</span>
+          {paused && (
+            <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-px text-[10px] font-semibold">Paused</span>
+          )}
+          {sendingItem ? (
+            <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
+          ) : failedItem ? (
+            <span className="min-w-0 flex-1 truncate text-destructive">Failed to send — Retry or remove the item above</span>
+          ) : paused ? (
+            <span className="flex-1">Queue held — resume to send</span>
+          ) : (
+            <span className="flex-1">Waiting to send</span>
+          )}
+          <button
+            type="button"
+            onClick={togglePaused}
+            className="ml-auto inline-flex items-center justify-center rounded bg-transparent px-1.5 h-5 opacity-60 hover:opacity-100"
+            title={paused ? 'Resume queue (generation은 계속)' : 'Pause queue (신규 발송만 멈춤, generation은 계속)'}
+            aria-label={paused ? 'Resume queue' : 'Pause queue'}
+          >
+            <span className="text-[11px] leading-none select-none">{paused ? '▶' : '❚❚'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleInterrupt}
+            className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 h-5 rounded border transition-colors ${allowInterrupt ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/20' : 'bg-muted/50 hover:bg-accent'}`}
+            title={allowInterrupt ? 'Send queue after every generation\nInterruption may skip some processing' : 'Send queue after working end'}
+          >
+            {allowInterrupt ? 'Fast-Q' : 'Std-Q'}
+          </button>
+          <button
+            type="button"
+            aria-label="Minimize queue"
+            className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground"
+            onClick={() => setMinimized(true)}
+          >
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        </div>
       </div>
     </div>
   )

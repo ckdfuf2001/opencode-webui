@@ -153,16 +153,55 @@ if (Test-Path $zipPathRoot) { Remove-Item $zipPathRoot -Force }
 $items = Get-ChildItem -Path $release -Force | Where-Object { $_.Name -notin @('logs','data','workspace') }
 if (-not $items) { throw 'nothing to package in release/' }
 $tempList = $items | ForEach-Object { $_.FullName }
-try {
-  Compress-Archive -Path $tempList -DestinationPath $zipPathRoot -Force
-} catch {
-  Write-Output "[package zip] first compress failed (likely lock), retry after 3s: $_"
-  Start-Sleep -Seconds 3
-  # 재시도 전 잔여 잠금 재확인
+
+# 방금 복사한 exe를 Windows Defender가 스캔하면서 잠깐 잠그는 일이 흔하다.
+# Compress-Archive는 그 순간 실패하고, 실패한 시도의 **부분 zip**을 남기기도 한다
+# (그대로 배포하면 깨진 압축이 나간다). 그래서 매 시도마다 부분 zip을 지우고
+# 다시 만들며, 결과물이 실제로 열리는지(엔트리 수)까지 확인한 뒤에만 성공 처리한다.
+function Test-ZipReadable([string]$path) {
   try {
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -like "$release*" } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
+    $count = $zip.Entries.Count
+    $zip.Dispose()
+    return $count
+  } catch {
+    return -1
+  }
+}
+
+$attempts = 5
+$delaySeconds = 2
+$zipped = $false
+for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+  if (Test-Path $zipPathRoot) { Remove-Item $zipPathRoot -Force -ErrorAction SilentlyContinue }
+  # release 하위에서 실행 중인 프로세스(직전 실행 잔재) 정리
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.ExecutablePath -like "$release*" } |
+      ForEach-Object {
+        Write-Output "  killing lock holder PID $($_.ProcessId) $($_.Name)"
+        taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null
+      }
   } catch {}
-  Compress-Archive -Path $tempList -DestinationPath $zipPathRoot -Force
+  try {
+    Compress-Archive -Path $tempList -DestinationPath $zipPathRoot -Force -ErrorAction Stop
+    $entryCount = Test-ZipReadable $zipPathRoot
+    if ($entryCount -gt 0) {
+      $zipped = $true
+      break
+    }
+    Write-Output "[package zip] attempt $attempt produced an unreadable archive; retrying"
+  } catch {
+    Write-Output "[package zip] attempt $attempt failed (likely a transient lock): $($_.Exception.Message.Trim())"
+  }
+  Start-Sleep -Seconds $delaySeconds
+  $delaySeconds = [Math]::Min($delaySeconds * 2, 20)
+}
+if (-not $zipped) {
+  if (Test-Path $zipPathRoot) { Remove-Item $zipPathRoot -Force -ErrorAction SilentlyContinue }
+  throw ("packaging failed after $attempts attempts - a process or antivirus is holding files under $release. " +
+    "Close any running opencode-webui, add a Defender exclusion for '$release', then retry.")
 }
 $z = Get-Item $zipPathRoot
 Write-Output ("  {0} ({1:N1} MB) -> {2}" -f $z.Name, ($z.Length / 1MB), $z.FullName)
