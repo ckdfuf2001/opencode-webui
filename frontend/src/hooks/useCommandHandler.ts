@@ -164,15 +164,19 @@ export function useCommandHandler({
           const isEmpty = !result || (typeof result === 'object' && Object.keys(result).length === 0)
           // upstream 은 성공 시 boolean 을 반환한다. 명시적 false 는 요약 실패를 뜻한다.
           const failed = result === false
-          if (isEmpty) {
-            showToast.warning('The summarize response was empty. This may be a timeout — check the message list.')
-            hasError = true
-          } else if (failed) {
+          if (failed) {
             showToast.warning('Summarize (compact) did not complete. It may have failed because the context is too large — try truncating previous messages.')
             hasError = true
           } else {
+            // 빈 응답(timeout 삼킴 포함)도 서버측 요약은 끝났을 수 있어 기준점을 찍는다 —
+            // 안 찍으면 컴팩트 이전 큰 토큰이 계속 잡혀 사용량이 초기화되지 않는다.
+            // (경고 다이얼로그 compact 경로와 동일 정책: false 명시 때만 제외)
             markSessionCompacted(sessionID)
-            showToast.warning('Context summarized — handled autonomously by the WebUI.')
+            if (isEmpty) {
+              showToast.warning('The summarize response was empty. This may be a timeout — check the message list.')
+            } else {
+              showToast.warning('Context summarized — handled autonomously by the WebUI.')
+            }
           }
           await queryClient.invalidateQueries({ queryKey: ['messages', opcodeUrl, sessionID] })
           await queryClient.invalidateQueries({ queryKey: ['session', opcodeUrl, sessionID] })
