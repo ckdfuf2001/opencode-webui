@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, RotateCcw, Scissors, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, Minimize2, RotateCcw, Scissors, Trash2, X } from 'lucide-react'
 import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat, useRetryQueuedChat, useSetQueuePaused } from '@/hooks/useChatQueue'
 import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
@@ -226,6 +226,8 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
                 <span title="Truncate (queued op)"><Scissors className="h-3 w-3 shrink-0 text-amber-500" /></span>
               ) : item.kind === 'delete' ? (
                 <span title="Delete message (queued op)"><Trash2 className="h-3 w-3 shrink-0 text-red-400" /></span>
+              ) : item.kind === 'compact' ? (
+                <span title="Compact summary (queued op)"><Minimize2 className="h-3 w-3 shrink-0 text-blue-400" /></span>
               ) : (
                 <span className="shrink-0 text-muted-foreground">{index + 1}.</span>
               )}

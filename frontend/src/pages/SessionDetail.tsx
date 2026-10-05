@@ -20,7 +20,7 @@ import { CommandsPanel } from "@/components/command/CommandsPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 import { useCommands } from "@/hooks/useCommands";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useSummarizeSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank, dropBackfilledId } from "@/hooks/useOpenCode";
+import { useSession, useSessions, useAbortSession, useUpdateSession, useOpenCodeClient, useMessages, usePollLastMessage, useEphemeralSessionSSE, useTruncateSession, useReconcileOrphanedStreams, useSessionStatusMap, useCreateSession, useSendPrompt, closeAllSessionSSE, isRecentlyAborted, hasActiveSend, isCancelledUntilNextSend, RECENT_MESSAGE_LIMIT, useRecentTotal, releaseMessageAnchors, reloadMissingPins, ensureMessageLoaded, loadOlderMessages, loadAllSessionMessages, messagesQueryKey, fetchMessageRank, dropBackfilledId } from "@/hooks/useOpenCode";
 import { useQueuedChats, chatQueueKeys, useEnqueueQueuedChat, wasRecentlyRemoved } from "@/hooks/useChatQueue";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
@@ -735,8 +735,30 @@ export function SessionDetail() {
   const abortSession = useAbortSession(opcodeUrl, repoDirectory);
   const updateSession = useUpdateSession(opcodeUrl, repoDirectory);
   const truncateSession = useTruncateSession(opcodeUrl, repoDirectory);
-  const summarizeSession = useSummarizeSession(opcodeUrl, repoDirectory);
   const ctx = useContextUsage(opcodeUrl, sessionId, repoDirectory);
+  // 파괴적 op(truncate/delete/compact) 큐 enqueue + 완료 추적.
+  // handleCompact(handleResendEdit/handleDeleteMessage)보다 먼저 선언되어야 한다 (TDZ).
+  const enqueueOp = useEnqueueQueuedChat();
+  // enqueue 결과에서 잡은 큐 아이템 id 추적: 목록에서 사라지면(실행 완료)
+  // 메시지 무효화 + 완료 토스트. X로 지운 건 조용히 해제한다.
+  const pendingOpsRef = useRef(new Map<string, { kind: 'truncate' | 'delete' | 'compact' }>());
+  useEffect(() => {
+    if (pendingOpsRef.current.size === 0) return;
+    const gone: string[] = [];
+    for (const [id, op] of pendingOpsRef.current) {
+      const still = (queuedForBadge as Array<{ id: string }>)?.some((q) => q.id === id);
+      if (!still) {
+        gone.push(id);
+        if (sessionId && !wasRecentlyRemoved(sessionId, id)) {
+          if (op.kind === 'compact') markSessionCompacted(sessionId);
+          queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
+          queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionId, repoDirectory) });
+          showToast.success(op.kind === 'truncate' ? 'Truncate completed' : op.kind === 'delete' ? 'Message deleted' : 'Session summarized (compact). Context cleaned up.');
+        }
+      }
+    }
+    for (const id of gone) pendingOpsRef.current.delete(id);
+  }, [queuedForBadge, sessionId, opcodeUrl, repoDirectory, queryClient]);
   const { open: openSettings } = useSettingsDialog();
   const [lengthModal, setLengthModal] = useState<{ open: boolean; messageId: string | null }>({ open: false, messageId: null });
   const [isCompacting, setIsCompacting] = useState(false);
@@ -1011,11 +1033,13 @@ export function SessionDetail() {
       const providerID = modelStr.slice(0, slashIdx);
       const modelID = modelStr.slice(slashIdx + 1);
       if (!providerID || !modelID) throw new Error("Invalid model info.");
-      const ok = await summarizeSession.mutateAsync({ sessionID: sessionId, providerID, modelID });
-      if (ok === false) throw new Error("The server could not complete summarize (compact). Try again, or truncate earlier messages instead.");
+      // 큐 최상단에 compact op로 넣는다 — 실행 중 턴이 끝나면 가장 먼저 요약된다.
+      // 직접 호출하면 턴 실행 중에 끼어들어 순서가 어긋난다.
+      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'compact', model: { providerID, modelID }, toTop: true });
+      const op = [...queue].reverse().find((q: any) => q?.kind === 'compact');
+      if (op) pendingOpsRef.current.set(op.id, { kind: 'compact' });
       lastCompactAtRef.current = Date.now()
-      markSessionCompacted(sessionId)
-      showToast.success("Session summarized (compact). Context cleaned up.", { duration: 4000 });
+      showToast.success("Compact queued at top — runs when the current turn finishes.", { duration: 4000 });
       setLengthModal({ open: false, messageId: null });
       setWindowStart(null);
       // 컴팩트 후에는 최근만 보이고 하단으로
@@ -1024,11 +1048,11 @@ export function SessionDetail() {
         if (c) c.scrollTop = c.scrollHeight;
       });
     } catch (e) {
-      showToast.error((e as Error).message || "Summarize (compact) failed. Try truncating earlier messages manually.");
+      showToast.error((e as Error).message || "Failed to queue compact. Try truncating earlier messages manually.");
     } finally {
       setIsCompacting(false);
     }
-  }, [sessionId, summarizeSession, ctx.currentModel, messages]);
+  }, [sessionId, ctx.currentModel, messages, enqueueOp, repoDirectory]);
 
   const handleAutoTruncate = useCallback(async () => {
     if (!messages || !sessionId) return;
@@ -1492,27 +1516,7 @@ export function SessionDetail() {
   // 큐에 있으면 idle이 되는 대로, 실행 중이면 현 턴이 끝난 뒤 실행된다.
   // abort로 턴을 끊고 바로 자르는 기존 방식은 큐 순서가 어긋나
   // "보내지 말아야 할 때 전송"되던 원인이라 쓰지 않는다.
-  const enqueueOp = useEnqueueQueuedChat();
-  // enqueue 결과에서 잡은 큐 아이템 id 추적: 목록에서 사라지면(실행 완료)
-  // 메시지 무효화 + 완료 토스트. X로 지운 건 조용히 해제한다.
-  const pendingOpsRef = useRef(new Map<string, { kind: 'truncate' | 'delete' }>());
-  useEffect(() => {
-    if (pendingOpsRef.current.size === 0) return;
-    const gone: string[] = [];
-    for (const [id, op] of pendingOpsRef.current) {
-      const still = (queuedForBadge as Array<{ id: string }>)?.some((q) => q.id === id);
-      if (!still) {
-        gone.push(id);
-        if (sessionId && !wasRecentlyRemoved(sessionId, id)) {
-          queryClient.invalidateQueries({ queryKey: ["opencode", "session", opcodeUrl, sessionId, repoDirectory] });
-          queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionId, repoDirectory) });
-          showToast.success(op.kind === 'truncate' ? 'Truncate completed' : 'Message deleted');
-        }
-      }
-    }
-    for (const id of gone) pendingOpsRef.current.delete(id);
-  }, [queuedForBadge, sessionId, opcodeUrl, repoDirectory, queryClient]);
-
+  // (enqueueOp/pendingOpsRef/완료 추적은 상단에서 선언 — TDZ 방지)
   const handleResendEdit = useCallback(async (messageID: string): Promise<boolean> => {
     if (!sessionId) return false
     if (messageID.startsWith('optimistic_')) return true // 로컬 전용 — 서버에 없음
@@ -1530,7 +1534,7 @@ export function SessionDetail() {
         for (const id of removedIds) dropBackfilledId(sessionId, id as string)
         queryClient.setQueryData(messagesKey, previous.filter((m: any) => (m?.info?.time?.created ?? 0) < cursorTime))
       }
-      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'truncate', messageID })
+      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'truncate', messageID, toTop: true })
       const op = [...queue].reverse().find((q: any) => q?.kind === 'truncate' && q?.messageID === messageID)
       if (op) pendingOpsRef.current.set(op.id, { kind: 'truncate' })
       setHiddenAfterID(null)
@@ -1568,7 +1572,7 @@ export function SessionDetail() {
     try {
       dropBackfilledId(sessionId, messageID)
       if (previous) queryClient.setQueryData(key, previous.filter((m: any) => m?.info?.id !== messageID))
-      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'delete', messageID })
+      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'delete', messageID, toTop: true })
       const op = [...queue].reverse().find((q: any) => q?.kind === 'delete' && q?.messageID === messageID)
       if (op) pendingOpsRef.current.set(op.id, { kind: 'delete' })
       setHiddenAfterID(null)
@@ -2011,10 +2015,10 @@ if (results.length > 0) {
               </button>
               <button
                 onClick={handleCompact}
-                disabled={isCompacting || summarizeSession.isPending}
+                disabled={isCompacting}
                 className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm disabled:opacity-50"
               >
-                {isCompacting || summarizeSession.isPending ? "Summarizing..." : "Compact"}
+                {isCompacting ? "Queueing..." : "Compact"}
               </button>
               <button
                 onClick={handleNewSession}

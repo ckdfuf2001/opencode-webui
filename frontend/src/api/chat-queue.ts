@@ -1,6 +1,6 @@
 import { API_BASE_URL } from '@/config'
 
-export type QueueItemKind = 'chat' | 'truncate' | 'delete'
+export type QueueItemKind = 'chat' | 'truncate' | 'delete' | 'compact'
 
 export interface QueuedChat {
   id: string
@@ -27,6 +27,8 @@ export interface EnqueueChatOptions {
   kind?: QueueItemKind
   /** truncate/delete 대상 메시지 ID (op 아이템 필수). */
   messageID?: string
+  /** true면 맨 앞(발송 중 헤드 뒤)에 넣는다 — compact 등 우선 op용. */
+  toTop?: boolean
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
