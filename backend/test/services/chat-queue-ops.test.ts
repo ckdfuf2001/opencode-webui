@@ -176,3 +176,62 @@ describe('op는 chat 전용 로직에서 제외', () => {
     expect(listQueuedChats(s).map((q) => q.kind)).toEqual(['delete', 'chat'])
   })
 })
+
+describe('compact op + toTop enqueue', () => {
+  it('compact는 model 필수, 없으면 throw', () => {
+    const s = sid()
+    expect(() => enqueueQueuedChat(s, '', '/ws', { kind: 'compact' })).toThrow()
+    expect(listQueuedChats(s)).toEqual([])
+  })
+  it('toTop은 맨 앞에 넣는다', () => {
+    const s = sid()
+    enqueueQueuedChat(s, 'chat a', '/ws')
+    enqueueQueuedChat(s, 'chat b', '/ws')
+    enqueueQueuedChat(s, '', '/ws', { kind: 'compact', model: { providerID: 'p', modelID: 'm' }, toTop: true })
+    expect(listQueuedChats(s).map((q) => q.kind)).toEqual(['compact', 'chat', 'chat'])
+  })
+  it('toTop도 발송 중 헤드는 건드리지 않는다 (1번에 삽입)', () => {
+    const s = sid()
+    enqueueQueuedChat(s, 'chat a', '/ws')
+    listQueuedChats(s)[0]!.status = 'sending'
+    enqueueQueuedChat(s, '', '/ws', { kind: 'compact', model: { providerID: 'p', modelID: 'm' }, toTop: true })
+    expect(listQueuedChats(s).map((q) => q.kind)).toEqual(['chat', 'compact'])
+  })
+  it('compact op가 /summarize로 실행되고 큐가 비워진다', async () => {
+    const s = sid()
+    const seen: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        const u = String(url)
+        seen.push(u)
+        if (u.includes('/summarize')) {
+          return { ok: true, status: 200, text: async () => 'true', json: async () => ({}) }
+        }
+        return { ok: true, status: 200, text: async () => '', json: async () => (u.includes('/session/status') ? {} : []) }
+      }),
+    )
+    enqueueQueuedChat(s, '', '/ws', { kind: 'compact', model: { providerID: 'p', modelID: 'm' } })
+    flushQueueForSession(s)
+    await new Promise((r) => setTimeout(r, 800))
+    expect(seen.some((u) => u.includes('/summarize'))).toBe(true)
+    expect(listQueuedChats(s)).toEqual([])
+  })
+  it('compact 500이면 queued 유지 (transient)', async () => {
+    const s = sid()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        const u = String(url)
+        if (u.includes('/summarize')) {
+          return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) }
+        }
+        return { ok: true, status: 200, text: async () => '', json: async () => (u.includes('/session/status') ? {} : []) }
+      }),
+    )
+    enqueueQueuedChat(s, '', '/ws', { kind: 'compact', model: { providerID: 'p', modelID: 'm' } })
+    flushQueueForSession(s)
+    await new Promise((r) => setTimeout(r, 800))
+    expect(listQueuedChats(s)[0]!.status).toBe('queued')
+  })
+})

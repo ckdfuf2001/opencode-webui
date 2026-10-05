@@ -16,8 +16,8 @@ export function setChatQueueDb(db: Database): void {
   queueDb = db
 }
 
-/** 큐 아이템 종류. chat=채팅 발송, truncate/delete=파괴적 op(순서 보장 실행). */
-export type QueueItemKind = 'chat' | 'truncate' | 'delete'
+/** 큐 아이템 종류. chat=채팅 발송, 나머지는 파괴적 op(순서 보장 실행). */
+export type QueueItemKind = 'chat' | 'truncate' | 'delete' | 'compact'
 
 export interface QueuedChat {
   id: string
@@ -48,11 +48,14 @@ export interface EnqueueOptions {
   kind?: QueueItemKind
   /** truncate/delete 대상 메시지 ID (op 아이템 필수). */
   messageID?: string
+  /** true면 맨 앞(발송 중 헤드 뒤)에 넣는다 — compact 등 우선 op용. */
+  toTop?: boolean
 }
 
 /** op 아이템 표시 라벨 (strip 렌더용 — text 필드에 저장). */
-export function opItemLabel(kind: QueueItemKind, messageID: string): string {
-  const short = messageID.length > 8 ? `…${messageID.slice(-8)}` : messageID
+export function opItemLabel(kind: QueueItemKind, messageID?: string): string {
+  if (kind === 'compact') return 'Compact summary'
+  const short = messageID && messageID.length > 8 ? `…${messageID.slice(-8)}` : (messageID ?? '')
   return kind === 'truncate' ? `Truncate from ${short}` : `Delete ${short}`
 }
 
@@ -180,13 +183,16 @@ export function enqueueQueuedChat(sessionID: string, text: string, directory?: s
   if (kind === 'chat') {
     trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
     if (!trimmed) throw new Error('text is required for chat queue items')
+  } else if (kind === 'compact') {
+    if (!opts?.model?.providerID || !opts?.model?.modelID) throw new Error('model is required for compact queue items')
+    trimmed = text?.trim() || opItemLabel(kind)
   } else {
     if (!opts?.messageID) throw new Error(`messageID is required for ${kind} queue items`)
     messageID = opts.messageID
     trimmed = text?.trim() || opItemLabel(kind, messageID)
   }
   const queue = queues.get(sessionID) ?? []
-  queue.push({
+  const item: QueuedChat = {
     id: crypto.randomUUID(),
     kind,
     text: trimmed,
@@ -197,8 +203,16 @@ export function enqueueQueuedChat(sessionID: string, text: string, directory?: s
     ...(opts?.agent ? { agent: opts.agent } : {}),
     ...(opts?.reviewWanted !== undefined ? { reviewWanted: opts.reviewWanted } : {}),
     ...(opts?.autoApply !== undefined ? { autoApply: opts.autoApply } : {}),
-  })
-  while (queue.length > MAX_QUEUE_LENGTH) queue.shift()
+  }
+  if (opts?.toTop) {
+    // 발송 중 헤드는 슬롯이라 건드리지 않는다 — 그 뒤(1번)에 넣는다.
+    const headLocked = queue[0]?.status === 'sending'
+    queue.splice(headLocked ? 1 : 0, 0, item)
+    while (queue.length > MAX_QUEUE_LENGTH) queue.pop()
+  } else {
+    queue.push(item)
+    while (queue.length > MAX_QUEUE_LENGTH) queue.shift()
+  }
   queues.set(sessionID, queue)
   if (directory) queueDirs.set(sessionID, directory)
   logger.info(`Queued ${kind} for session ${sessionID} (position ${queue.length})`)
@@ -391,24 +405,26 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   const current = queues.get(sessionID)
   if (!current || current.length === 0 || current[0]?.id !== next.id) return
 
-  // 파괴적 op(truncate/delete): 채팅과 같은 FIFO 슬롯으로 순서 보장 실행한다.
+  // 파괴적 op(truncate/delete/compact): 채팅과 같은 FIFO 슬롯으로 순서 보장 실행한다.
   // busy·pause·backoff 게이트는 위에서 이미 통과했다.
-  if (next.kind === 'truncate' || next.kind === 'delete') {
+  if (next.kind === 'truncate' || next.kind === 'delete' || next.kind === 'compact') {
     next.status = 'sending'
     next.sendingSince = Date.now()
     inFlight.add(sessionID)
     logger.info(`Dispatching queued ${next.kind} op to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
     void dispatchOpItem(sessionID, next)
-      .then((ok) => {
+      .then((result) => {
         if (recentlyAbortedBackend.has(sessionID)) {
           failedUntil.delete(sessionID)
           return
         }
-        if (ok) {
+        if (result === true) {
           removeHeadIf(sessionID, next.id)
           failedUntil.delete(sessionID)
           failCount.delete(sessionID)
           logger.info(`Flushed queued ${next.kind} op to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
+        } else if (result === 'transient') {
+          recordTransientTimeout(sessionID, next.id)
         } else {
           recordFailure(sessionID, next.id)
         }
@@ -886,13 +902,39 @@ async function checkTurnError(sessionID: string, sinceMs: number): Promise<strin
 }
 
 /**
- * 큐 op(truncate/delete) 실행. proxy.ts handleTruncate/handleDelete와 같은
- * 본체(DB 자르기 + 인스턴스 reload) — 순서 보장을 위해 큐 슬롯에서 돈다.
- * 대상이 이미 없으면 멱등 성공(true). 예외·실패(null)는 false.
+ * 큐 op(truncate/delete/compact) 실행. proxy.ts 핸들러들과 같은 본체 —
+ * 순서 보장을 위해 큐 슬롯에서 돈다. true=성공, false=결정적 실패,
+ * 'transient'=일시적 실패(queued 유지 + 백오프).
+ * 대상이 이미 없으면 멱등 성공(true). 전송 계열 예외는 transient.
  */
-async function dispatchOpItem(sessionID: string, item: QueuedChat): Promise<boolean> {
+async function dispatchOpItem(sessionID: string, item: QueuedChat): Promise<boolean | 'transient'> {
   const directory = resolveQueueDir(sessionID)
   try {
+    if (item.kind === 'compact') {
+      if (!item.model) {
+        logger.warn(`Queued compact op for session ${sessionID} has no model — marked failed`)
+        return false
+      }
+      const base = opencodeServerManager.getUrl()
+      const res = await fetch(`${base}/session/${sessionID}/summarize?directory=${encodeURIComponent(directory)}`, {
+        method: 'POST',
+        headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ providerID: item.model.providerID, modelID: item.model.modelID }),
+        signal: AbortSignal.timeout(600_000),
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        if (res.status >= 500) {
+          logger.warn(`Queued compact op hit opencode 5xx HTTP ${res.status} for session ${sessionID} — keep queued for auto-retry`)
+          return 'transient'
+        }
+        logger.warn(`Queued compact op rejected HTTP ${res.status} for session ${sessionID}: ${body.slice(0, 200)}`)
+        return false
+      }
+      void res.text().catch(() => {})
+      logger.info(`Queued compact op succeeded for session ${sessionID}`)
+      return true
+    }
     if (!item.messageID) {
       logger.warn(`Queued ${item.kind} op for session ${sessionID} has no messageID — marked failed`)
       return false
@@ -931,8 +973,9 @@ async function dispatchOpItem(sessionID: string, item: QueuedChat): Promise<bool
     }
     return false
   } catch (e) {
-    logger.warn(`Queued ${item.kind} op failed for session ${sessionID}:`, e)
-    return false
+    // 전송 계열 예외(연결 끊김 등): 턴 생사를 알 수 없으므로 failed 대신 transient.
+    logger.warn(`Queued ${item.kind} op errored for session ${sessionID} — keep queued for auto-retry:`, e)
+    return 'transient'
   }
 }
 

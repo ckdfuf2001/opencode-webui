@@ -5,8 +5,9 @@ import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
   text: z.string().trim().max(16_000).optional(),
-  kind: z.enum(['chat', 'truncate', 'delete']).default('chat'),
+  kind: z.enum(['chat', 'truncate', 'delete', 'compact']).default('chat'),
   messageID: z.string().min(1).max(256).optional(),
+  toTop: z.boolean().optional(),
   directory: z.string().min(1).max(1024).optional(),
   model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }).optional(),
   agent: z.string().min(1).max(255).optional(),
@@ -16,8 +17,11 @@ const EnqueueChatSchema = z.object({
   if (v.kind === 'chat' && !v.text) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'text is required for chat items' })
   }
-  if (v.kind !== 'chat' && !v.messageID) {
+  if ((v.kind === 'truncate' || v.kind === 'delete') && !v.messageID) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: `messageID is required for ${v.kind} items` })
+  }
+  if (v.kind === 'compact' && (!v.model?.providerID || !v.model?.modelID)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'model is required for compact items' })
   }
 })
 
@@ -51,6 +55,7 @@ export function createChatQueueRoutes() {
       const queue = enqueueQueuedChat(sessionId, validated.text ?? '', validated.directory, {
         kind: validated.kind,
         messageID: validated.messageID,
+        toTop: validated.toTop,
         model: validated.model,
         agent: validated.agent,
         reviewWanted: validated.reviewWanted,
