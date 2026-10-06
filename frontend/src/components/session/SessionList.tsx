@@ -335,7 +335,7 @@ export const SessionList = ({
                       session.title || "Untitled Session"
                     )}
                   </h3>
-                  {dbBusyIds.has(session.id) ? (
+                  {dbBusyIds.has(session.id) && !dbPendingCounts[session.id] ? (
                     <span
                       className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-500 bg-blue-500/10 border border-blue-500/30 rounded-full px-2 py-0.5 flex-shrink-0"
                       title="LLM is answering"

@@ -231,13 +231,14 @@ export function FavoriteSessionsPanel() {
         // repo 일치: repoId 우선, 아니면 directory 문자열 일치
         const match = (s: { repoId?: number | null; directory?: string | null }) =>
           s.repoId === f.repoId || s.directory === f.directory
-        working += dbStatuses.filter((s) => s.status === 'busy' && match(s)).length
+        working += dbStatuses.filter((s) => s.status === 'busy' && !((s.pendingPermissions ?? 0) > 0) && match(s)).length
         pending += dbStatuses.filter(match).reduce((a, s) => a + (s.pendingPermissions ?? 0), 0)
         cancelled += dbStatuses.filter((s) => (s as unknown as { isCancelled?: boolean }).isCancelled && s.status !== 'busy' && match(s)).length
       } else {
         const st = dbStatuses.find((s) => s.sessionId === f.sessionId)
         if (!st) continue
-        if (st.status === 'busy') working += 1
+        // 승인 대기(퍼미션/퀘스천) 중인 세션은 working에서 제외 — 방패 배지가 대신 표시된다 (상태는 busy 유지).
+        if (st.status === 'busy' && !((st.pendingPermissions ?? 0) > 0)) working += 1
         pending += st.pendingPermissions ?? 0
         if ((st as unknown as { isCancelled?: boolean }).isCancelled && st.status !== 'busy') cancelled += 1
       }
@@ -300,7 +301,7 @@ export function FavoriteSessionsPanel() {
               // 레포 즐겨찾기: workspace처럼 레포 단위 집계 배찌 (개수 포함)
               const matchRepo = (s: { repoId?: number | null; directory?: string | null }) =>
                 isRepoFav && (s.repoId === f.repoId || (repo && s.directory === repo.workspaceRel) || s.directory === f.directory)
-              const repoWorking = isRepoFav ? (dbStatuses?.filter(s => s.status === 'busy' && matchRepo(s)).length ?? 0) : 0
+              const repoWorking = isRepoFav ? (dbStatuses?.filter(s => s.status === 'busy' && !((s.pendingPermissions ?? 0) > 0) && matchRepo(s)).length ?? 0) : 0
               const repoPending = isRepoFav ? (dbStatuses?.filter(s => matchRepo(s)).reduce((a, s) => a + (s.pendingPermissions ?? 0), 0) ?? 0) : 0
               const repoCancelled = isRepoFav ? (dbStatuses?.filter(s => (s as unknown as { isCancelled?: boolean }).isCancelled && s.status !== 'busy' && matchRepo(s)).length ?? 0) : 0
               const isActive = activeId === f.sessionId
@@ -344,7 +345,12 @@ export function FavoriteSessionsPanel() {
                         <span className="cursor-grab active:cursor-grabbing p-0.5 -ml-1 text-muted-foreground hover:text-foreground" draggable={false} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}><GripVertical className="w-3 h-3" /></span>
                         {isRepoFav ? <FolderGit2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" /> : <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />}
                         <span className="text-xs font-medium truncate" title={f.title}>{f.title}</span>
-                        {busy && <span title="Working" className="inline-flex shrink-0"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
+                        {busy && !(((status as unknown as { pendingPermissions?: number } | undefined)?.pendingPermissions ?? 0) > 0) && <span title="Working" className="inline-flex shrink-0"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
+                        {((status as unknown as { pendingPermissions?: number } | undefined)?.pendingPermissions ?? 0) > 0 && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-500 shrink-0" title={`${status?.pendingPermissions} approval(s) pending`}>
+                            <ShieldAlert className="w-3 h-3" />{status?.pendingPermissions}
+                          </span>
+                        )}
                         {status?.isCancelled && !busy && <CancelledBadge size="sm" />}
                         {isRepoFav && <span className="text-[10px] px-1 py-0 rounded bg-muted text-muted-foreground">레포</span>}
                         {isRepoFav && repoWorking > 0 && (
@@ -457,8 +463,8 @@ function SessionBadges({ sessionId }: { sessionId: string }) {
   if (!busy && !pending && !cancelled) return null
   return (
     <span className="inline-flex items-center gap-1 shrink-0">
-      {busy && <span title="Working" className="inline-flex"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
-      {pending > 0 && !busy && (
+      {busy && !(pending > 0) && <span title="Working" className="inline-flex"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
+      {pending > 0 && (
         <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-500" title={`${pending} approval(s) pending`}>
           <ShieldAlert className="w-3 h-3" />{pending}
         </span>
@@ -616,8 +622,8 @@ function RepoSessionsPopup({ repoId, directory, selectedSessionId, onSessionSele
               <div key={sid} className="flex items-center gap-2 p-2 rounded border bg-background hover:bg-muted/50 cursor-pointer" onClick={() => onSessionSelect?.(sid, title)}>
                 <MessageSquare className="w-3 h-3 shrink-0 text-muted-foreground" />
                 <span className="flex-1 truncate text-xs font-medium" title={title}>{title}</span>
-                {busy && <span title="Working" className="inline-flex shrink-0"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
-                {pending > 0 && !busy && (
+                {busy && !(pending > 0) && <span title="Working" className="inline-flex shrink-0"><Loader2 className="w-3 h-3 animate-spin text-blue-500" /></span>}
+                {pending > 0 && (
                   <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-500 shrink-0" title={`${pending} approval(s) pending`}>
                     <ShieldAlert className="w-3 h-3" />{pending}
                   </span>

@@ -76,7 +76,8 @@ export function NavigationTree({ onNavigate, onNewRepo }: NavigationTreeProps) {
     if (!dbStatuses || !repos) return 0
     const repo = repos.find(r => r.id === repoId)
     if (!repo) return 0
-    return dbStatuses.filter(s => s.status === 'busy' && (s.repoId === repoId || s.directory === repo.workspaceRel)).length
+    // 승인 대기(퍼미션/퀘스천) 중인 세션은 working에서 제외 — 방패 배지가 대신 표시된다 (상태는 busy 유지).
+    return dbStatuses.filter(s => s.status === 'busy' && !((s.pendingPermissions ?? 0) > 0) && (s.repoId === repoId || s.directory === repo.workspaceRel)).length
   }
 
   const getPendingCount = (repoId: number) => {
@@ -215,7 +216,7 @@ const cached = queryClient.getQueryData<any[]>(['opencode', 'sessions', OPENCODE
                   <FolderGit2 className="w-3 h-3 shrink-0" />
                   <span className="truncate text-xs"><RepoName id={repo.id} name={repoName} /></span>
                   {working > 0 && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-blue-500"><Loader2 className="w-3 h-3 animate-spin" />{working}</span>}
-                  {pending > 0 && !working && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-amber-500"><ShieldAlert className="w-3 h-3" />{pending}</span>}
+                  {pending > 0 && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-amber-500"><ShieldAlert className="w-3 h-3" />{pending}</span>}
                   {cancelled > 0 && !working && !pending && <span className="ml-auto flex items-center gap-0.5 text-[10px] text-gray-500"><CancelledBadge size="sm" />{cancelled}</span>}
                 </a>
                 {editMode ? (
@@ -475,8 +476,8 @@ function RepoSessions({ repoId, directory, onNavigate, editMode, selectedSession
           >
             <MessageSquare className="w-3 h-3 shrink-0" />
             <span className="truncate flex-1">{title || 'Untitled'}</span>
-            {isBusy && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
-            {pending > 0 && !isBusy && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
+            {isBusy && !(pending > 0) && <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />}
+            {pending > 0 && <ShieldAlert className="w-3 h-3 text-amber-500 shrink-0" />}
             {isCancelled && !isBusy && !pending && <CancelledBadge size="sm" />}
           </a>
         )}

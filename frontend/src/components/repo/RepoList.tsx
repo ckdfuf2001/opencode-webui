@@ -70,6 +70,8 @@ export function RepoList({ onAddRepo }: { onAddRepo?: () => void }) {
   };
   const workingCounts = (dbStatuses ?? []).reduce<Record<number, number>>((acc, entry) => {
     if (entry.status !== "busy") return acc;
+    // 승인 대기(퍼미션/퀘스천) 중인 세션은 working에서 제외 — 방패 배지가 대신 표시된다 (상태는 busy 유지).
+    if ((entry.pendingPermissions ?? 0) > 0) return acc;
     const repoId = resolveRepoIdOf(entry);
     if (repoId == null) return acc;
     acc[repoId] = (acc[repoId] ?? 0) + 1;

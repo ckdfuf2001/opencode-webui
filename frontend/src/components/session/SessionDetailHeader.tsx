@@ -198,7 +198,8 @@ export function SessionDetailHeader({
               {isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}
             </span>
           </div>
-          {isWorking && (
+          {/* 승인 대기(퍼미션/퀘스천)가 있으면 Working 배지는 숨긴다 — 방패 배지가 대신 표시, 상태는 유지 */}
+          {isWorking && !((pendingPermissions ?? 0) > 0) && (
             <div
               className="flex items-center gap-1 rounded-full bg-blue-500/10 border border-blue-500/30 px-2 py-0.5"
               title="LLM is answering"
