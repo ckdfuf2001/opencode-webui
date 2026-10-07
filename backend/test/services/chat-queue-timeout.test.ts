@@ -51,6 +51,7 @@ import {
   flushQueueForSession,
   isTimeoutFailure,
   recordTransientTimeout,
+  recordTimeoutFailure,
 } from '../../src/services/chat-queue'
 
 let n = 0
@@ -82,26 +83,33 @@ describe('isTimeoutFailure (opencode 5분 내부 타임아웃 판정)', () => {
   })
 })
 
-describe('recordTransientTimeout (상한 전까지 queued 유지)', () => {
-  it('상한 전까지는 queued 유지, 상한부터 failed 고정', () => {
+describe('recordTransientTimeout (일반 타임아웃은 queued 유지)', () => {
+  it('몇 번을 기록해도 queued 유지', () => {
     const s = sid()
     enqueueQueuedChat(s, 'long turn prompt', '/ws')
     const id = listQueuedChats(s)[0]!.id
-    recordTransientTimeout(s, id)
-    expect(listQueuedChats(s)[0]!.status).toBe('queued')
-    recordTransientTimeout(s, id)
-    expect(listQueuedChats(s)[0]!.status).toBe('queued')
-    // 3번째 연속 타임아웃: 무한 재시도 대신 failed 고정
-    recordTransientTimeout(s, id)
+    for (let i = 0; i < 5; i++) {
+      recordTransientTimeout(s, id)
+      expect(listQueuedChats(s)[0]!.status).toBe('queued')
+    }
+  })
+})
+
+describe('recordTimeoutFailure (opencode 확정 타임아웃은 즉시 failed)', () => {
+  it('첫 기록부터 failed 고정 + attempts/failedAt', () => {
+    const s = sid()
+    enqueueQueuedChat(s, '6-minute analysis', '/ws')
+    const id = listQueuedChats(s)[0]!.id
+    recordTimeoutFailure(s, id, 'Gateway Timeout (504)')
     const head = listQueuedChats(s)[0]!
     expect(head.status).toBe('failed')
-    expect(head.attempts).toBe(3)
+    expect(head.attempts).toBe(1)
     expect(head.failedAt).toBeDefined()
   })
 })
 
-describe('504 응답 시 큐가 즉시 failed가 되지 않는다', () => {
-  it('첫 504는 queued 유지 + 백오프로 자동 재시도 예약', async () => {
+describe('504 응답 시 큐가 즉시 failed로 끊긴다 (백단이 끊어야 이어간다)', () => {
+  it('첫 504(확정 타임아웃)는 failed 고정 — 재시도 없음', async () => {
     const s = sid()
     vi.stubGlobal(
       'fetch',
@@ -129,8 +137,8 @@ describe('504 응답 시 큐가 즉시 failed가 되지 않는다', () => {
     await new Promise((r) => setTimeout(r, 500))
     const head = listQueuedChats(s)[0]
     expect(head).toBeDefined()
-    // 기존 버그: MAX_CONSECUTIVE_FAILURES=1에 즉시 failed. 수정 후: queued 유지.
-    expect(head!.status).toBe('queued')
+    // opencode가 턴을 죽였다는 확정이므로 같은 죽음을 반복하지 않고 즉시 failed.
+    expect(head!.status).toBe('failed')
   })
 
   it('timeout 문구 없는 500도 queued 유지 (5xx는 서버측 실패로 간주)', async () => {

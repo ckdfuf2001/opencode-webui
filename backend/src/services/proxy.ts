@@ -7,6 +7,7 @@ import { truncateSessionMessages, deleteSessionMessage, stripAllReasoningParts }
 import { acquireBusy, type BusyToken } from './busy-tracker'
 import { flushQueueForSession, clearSendingOnAbort, dropDeliveredDuplicates } from './chat-queue'
 import { healReasoningTail, sweepPollutedStubs, isReasoningMismatchText, asOutgoingModel, preSendStripIfMismatch } from './reasoning-heal'
+import { markSessionStatusIdle } from '../db/session-status-queries'
 import { readRecallPrefs } from './recall'
 import { open, readFile, stat, appendFile } from 'fs/promises'
 import os from 'os'
@@ -654,6 +655,17 @@ export async function proxyRequest(request: Request, method: string, pathname: s
             lower.includes('deadline exceeded') ||
             lower.includes('deadline')))
       if (isTimeoutResponse) {
+        // opencode 확정 타임아웃(300s 내부 한도): 턴은 이미 죽었다.
+        // 폴러를 기다리지 말고 이 세션을 즉시 idle로 정정해 스피너를 멈추고
+        // 다음 전송 길을 연다 (백단이 끊어야 opencode가 이어간다).
+        // proxy 자체 600s abort는 턴 생사 불명이라 여기서 끊지 않는다
+        // (아래 catch에서 busy 유지).
+        try {
+          const sidMatch = cleanEventPath.match(/^\/session\/([^/]+)\/(message|command|shell)$/)
+          if (proxyDb && sidMatch?.[1]) {
+            markSessionStatusIdle(proxyDb, sidMatch[1]!, Date.now())
+          }
+        } catch {}
         // opencode 내부 타임아웃은 300s (5분), proxy 타임아웃(600s)과 구분한다.
         const opencodeHint = ' - OpenCode internal timeout (300s / 5분). The session turn is too long or the model is still generating. Please retry or reduce context.'
         let parsed: Record<string, unknown> | undefined
