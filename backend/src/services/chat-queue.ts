@@ -36,7 +36,7 @@ export interface QueuedChat {
   sendingSince?: number
   /** failed로 바뀐 시각. 일시적 네트워크 오류 후 자동 재시도 쿨다운용. */
   failedAt?: number
-  /** 누적 실패 횟수(타임아웃 제외). 영구 failed 판정용. */
+  /** 누적 실패 횟수(타임아웃 포함). 영구 failed 판정용. */
   attempts?: number
 }
 
@@ -84,7 +84,12 @@ const MAX_CONSECUTIVE_FAILURES = 1
 // 타임아웃은 failed로 고정하지 않는다. 5분 턴이 끊겼다고 failed가 되면
 // 장시간 작업이 무조건 큐를 멈추므로, queued 유지 + 백오프로 계속 자동
 // 재시도한다. 독성 메시지는 사용자가 X로 지우거나 수동 retry한다.
+// 단, 같은 메시지가 연속으로 타임아웃만 반복하면(매번 300s를 넘는 턴 등)
+// 재시도해도 절대 성공하지 않아 스피너가 영원히 도므로, 상한을 넘기면
+// failed로 고정해 무한 재시도를 끊는다. 사용자는 중단·가위·재시도로 복구.
 const TIMEOUT_RETRY_BACKOFF_MS = 10_000
+const timeoutCount = new Map<string, number>()
+const MAX_CONSECUTIVE_TIMEOUTS = 3
 const inFlight = new Set<string>()
 // 발송 중 fetch를 취소하기 위한 세션별 AbortController.
 // clearSendingOnAbort/clearQueuedChats(중단 버튼)가 이것을 abort한다.
@@ -235,6 +240,7 @@ export function removeQueuedChat(sessionID: string, id: string): boolean {
     queues.delete(sessionID)
     queueDirs.delete(sessionID)
     failCount.delete(sessionID)
+    timeoutCount.delete(sessionID)
     failedUntil.delete(sessionID)
   }
   return true
@@ -266,6 +272,7 @@ export function updateQueuedChatsModel(
     }
   }
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   failedUntil.delete(sessionID)
   logger.info(`Updated queued chat model for session ${sessionID} to ${model.providerID}/${model.modelID}`)
   return [...queue]
@@ -309,6 +316,7 @@ export function clearQueuedChats(sessionID: string): number {
   queues.delete(sessionID)
   queueDirs.delete(sessionID)
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   failedUntil.delete(sessionID)
   logger.info(`Cleared ${count} queued chat(s) for session ${sessionID}`)
   return count
@@ -331,6 +339,7 @@ export function clearSendingOnAbort(sessionID: string): void {
   lastBusyAt.delete(sessionID)
   failedUntil.delete(sessionID)
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   markRecentlyAborted(sessionID)
 }
 
@@ -384,6 +393,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
     }
     failedUntil.delete(sessionID)
     failCount.delete(sessionID)
+    timeoutCount.delete(sessionID)
     logger.info(`Confirmed queued chat delivered to session ${sessionID} (idle observed)`)
     return
   }
@@ -422,6 +432,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
           removeHeadIf(sessionID, next.id)
           failedUntil.delete(sessionID)
           failCount.delete(sessionID)
+          timeoutCount.delete(sessionID)
           logger.info(`Flushed queued ${next.kind} op to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
         } else if (result === 'transient') {
           recordTransientTimeout(sessionID, next.id)
@@ -464,6 +475,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         removeHeadIf(sessionID, next.id)
         failedUntil.delete(sessionID)
         failCount.delete(sessionID)
+        timeoutCount.delete(sessionID)
         // 같은 텍스트의 뒤쪽 중복(더블 전송 등)은 이번 성공으로 전달된 것으로 보고 제거.
         // sending은 drop 대상에서 제외된다 (이미 opencode로 넘어감).
         dropDeliveredDuplicates(sessionID, next.text)
@@ -503,7 +515,9 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         return
       }
       if (name === 'TimeoutError' || name === 'AbortError') {
-        failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        // fetch 자체 타임아웃(600s proxy 한도 등): 턴 생사 불명이므로
+        // 횟수를 세어 상한을 넘기면 failed로 고정한다.
+        recordTransientTimeout(sessionID, next.id)
         return
       }
       // 그 외 전송 오류(HTTP 응답 없이 fetch가 죽은 경우 — 5분 턴 중 서버측
@@ -541,13 +555,31 @@ function recordFailure(sessionID: string, id: string): void {
 }
 
 /**
- * 타임아웃(5분 opencode 내부 타임아웃 등) 기록. failed로 고정하지 않고
- * queued 유지 + 백오프로 계속 자동 재시도한다.
+ * 타임아웃(5분 opencode 내부 타임아웃 등) 기록. 상한 전까지는 failed로
+ * 고정하지 않고 queued 유지 + 백오프로 자동 재시도한다.
+ * 상한을 넘기면 구조적 문제(매번 시간초과되는 턴)로 보고 failed로 고정해
+ * 무한 재시도·스피너 고착을 끊는다. X로 지우거나 수동 retry하면 해제.
  */
 export function recordTransientTimeout(sessionID: string, id: string): void {
+  const count = (timeoutCount.get(sessionID) ?? 0) + 1
+  timeoutCount.set(sessionID, count)
+  const queue = queues.get(sessionID)
+  const head = queue?.[0]?.id === id ? queue[0] : undefined
+  if (head) {
+    head.attempts = (head.attempts ?? 0) + 1
+  }
+  if (count >= MAX_CONSECUTIVE_TIMEOUTS) {
+    if (head) {
+      head.status = 'failed'
+      head.failedAt = Date.now()
+    }
+    logger.error(`Queued chat for session ${sessionID} timed out ${count} times in a row; marked failed, auto-retry stopped (turn exceeds opencode timeout every time — abort the stuck turn, truncate, or split the work and retry manually)`)
+    try { if (queueDb) setSessionCancelled(queueDb, sessionID) } catch {}
+    return
+  }
   markHeadQueued(sessionID, id)
   failedUntil.set(sessionID, Date.now() + TIMEOUT_RETRY_BACKOFF_MS)
-  logger.warn(`Queued chat for session ${sessionID} hit opencode timeout; keep queued for auto-retry`)
+  logger.warn(`Queued chat for session ${sessionID} hit opencode timeout (${count}/${MAX_CONSECUTIVE_TIMEOUTS}); keep queued for auto-retry`)
 }
 
 /**
@@ -633,6 +665,7 @@ export function dropDeliveredDuplicates(sessionID: string, text: string): number
     // 고아를 치웠으니 실패 카운트·백오프도 초기화 — 남은 항목이 있으면
     // 다음 폴러에 바로 재시도된다 (stale 실패 상태 고착 방지).
     failCount.delete(sessionID)
+    timeoutCount.delete(sessionID)
     failedUntil.delete(sessionID)
     logger.info(`Dropped ${removed} delivered duplicate(s) for session ${sessionID} after direct-send success`)
   }
@@ -657,6 +690,7 @@ export function retryQueuedChat(sessionID: string, id: string): QueuedChat[] | n
   delete item.sendingSince
   failedUntil.delete(sessionID)
   failCount.delete(sessionID)
+  timeoutCount.delete(sessionID)
   logger.info(`Manual retry of queued chat for session ${sessionID} (id ${id})`)
   if (queue[0]?.id === id) {
     void dispatchHead(opencodeServerManager.getUrl(), sessionID)

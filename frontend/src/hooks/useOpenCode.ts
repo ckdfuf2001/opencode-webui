@@ -444,13 +444,45 @@ function isProxyTimeoutError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   const anyErr = error as Record<string, unknown>
   const status = (anyErr.response as { status?: number } | undefined)?.status
-  if (status === 504) {
-    const data = (anyErr.response as { data?: unknown } | undefined)?.data as Record<string, unknown> | undefined
-    const msg = ((data?.error as string) || (data?.message as string) || (anyErr.message as string) || '').toLowerCase()
-    if (msg.includes('proxy timeout') || msg.includes('600s') || msg.includes('gateway timeout')) return true
-  }
-  const msg = ((anyErr.message as string) || '').toLowerCase()
-  return msg.includes('[backend proxy] gateway timeout') || msg.includes('proxy timeout')
+  // 504/408은 정의상 타임아웃이다 — 본문 문구에 관계없이 타임아웃으로 취급한다.
+  // (백엔드가 opencode 내부 300s 타임아웃을 504로 정규화하는데, JSON 파싱
+  // 케이스는 본문에 'gateway timeout' 문구가 없어 기존 판정을 비껴갔다.)
+  if (status === 504 || status === 408) return true
+  const data = (anyErr.response as { data?: unknown } | undefined)?.data as Record<string, unknown> | undefined
+  const msg = ((data?.error as string) || (data?.message as string) || (anyErr.message as string) || '').toLowerCase()
+  if (msg.includes('proxy timeout') || msg.includes('600s') || msg.includes('gateway timeout')) return true
+  const emsg = ((anyErr.message as string) || '').toLowerCase()
+  return emsg.includes('[backend proxy] gateway timeout') || emsg.includes('proxy timeout')
+}
+
+/**
+ * 전송 타임아웃 알림. 타임아웃은 서버 턴이 계속 돌 수 있어 스피너가
+ * 고착처럼 보인다 — 조용히 넘기지 말고 중단 액션 포함 경고로 알리고
+ * 세션 상태·메시지를 즉시 새로고침해 화면이 실상을 따라가게 한다.
+ */
+function notifySendTimeout(
+  queryClient: ReturnType<typeof useQueryClient>,
+  client: Pick<OpenCodeClient, 'abortSession'> | null,
+  opcodeUrl: string | null | undefined,
+  directory: string | undefined,
+  sessionID: string,
+  formatted: string,
+): void {
+  queryClient.invalidateQueries({ queryKey: ["session-status-db"] })
+  queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) })
+  showToast.warning(`요청이 타임아웃됐습니다 — 서버는 아직 작업 중일 수 있어 계속 도는 것처럼 보입니다. 고착이면 중단하세요. (${formatted})`, {
+    id: `proxy-timeout:${sessionID}`,
+    duration: 20000,
+    action: {
+      label: "중단하기",
+      onClick: () => {
+        try {
+          const p = client?.abortSession(sessionID) as Promise<unknown> | undefined
+          if (p && typeof p.catch === "function") p.catch(() => {})
+        } catch {}
+      },
+    },
+  })
 }
 
 // Format server error similar to OpenCode's formatServerError - 40x provider-agnostic
@@ -2015,7 +2047,11 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       // 서버 응답 없음(한 번 전송 후 포기)도 캔슬 배찌 대상 — DB에도 저장
       markCancelledUntilNextSend(sessionID)
       fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'POST' }).catch(() => {})
-      if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {
+      if (isAbortCancellation(error)) {
+        // 사용자 중단 — 조용히
+      } else if (isProxyTimeoutError(error)) {
+        notifySendTimeout(queryClient, client, opcodeUrl, directory, sessionID, formatted)
+      } else {
         showToast.error(formatted, { duration: 8000 });
       }
     },
@@ -2204,7 +2240,11 @@ export const useSendShell = (opcodeUrl: string | null | undefined, directory?: s
         (old) => old?.filter((msg) => !msg.info.id.startsWith("optimistic_") && !msg.info.id.startsWith("optimistic_sending_")),
       );
       pendingOptimistic.delete(sessionID)
-      if (!isAbortCancellation(error) && !isProxyTimeoutError(error)) {
+      if (isAbortCancellation(error)) {
+        // 사용자 중단 — 조용히
+      } else if (isProxyTimeoutError(error)) {
+        notifySendTimeout(queryClient, client, opcodeUrl, directory, sessionID, formatted)
+      } else {
         showToast.error(formatted, { duration: 8000 });
       }
     },
