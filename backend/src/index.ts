@@ -23,6 +23,7 @@ import { createCommandRunRoutes } from './routes/command-runs'
 import { createSearchRoutes } from './routes/search'
 import { createClientLogRoutes } from './routes/client-logs'
 import { createSessionStatusRoutes } from './routes/session-status'
+import { createNotifyRoutes } from './routes/notify'
 import { createSessionRepoRoutes } from './routes/session-repos'
 import { createChatQueueRoutes } from './routes/chat-queue'
 import { createCommandHooksRoutes } from './routes/command-hooks'
@@ -314,6 +315,7 @@ app.route('/api/preview', createPreviewRoutes())
 app.route('/api/command-runs', createCommandRunRoutes(db))
 app.route('/api/search', createSearchRoutes(db))
   app.route('/api/session-status', createSessionStatusRoutes(db))
+  app.route('/api/notify', createNotifyRoutes(db))
   app.route('/api/session-repos', createSessionRepoRoutes(db))
   app.route('/api/chat-queue', createChatQueueRoutes())
   app.route('/api/command-hooks', createCommandHooksRoutes(db))

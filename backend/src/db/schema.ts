@@ -174,6 +174,28 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_session_repo_map_repo ON session_repo_map(repo_id);
+
+    -- 알림 오버라이드 (전역 user_preferences → 레포 → 세션 순 상속, NULL=상속).
+    -- 프론트 localStorage에서 이전한 단일 진실 통로. skill_*는 프론트 큐 발송용으로만 쓴다.
+    CREATE TABLE IF NOT EXISTS notify_overrides (
+      scope TEXT NOT NULL,
+      target TEXT NOT NULL,
+      push_enabled INTEGER,
+      sound_enabled INTEGER,
+      sound_on_cancel_enabled INTEGER,
+      skill_auto_enabled INTEGER,
+      skill_review_enabled INTEGER,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (scope, target)
+    );
+
+    -- 알림 라벨 판단용 세션별 마지막 사용자 액션 (재시작 이후에도 유지).
+    -- last_send_at: 새 전송(enqueue·직접전송), last_abort_at: 중단 보고.
+    CREATE TABLE IF NOT EXISTS notify_state (
+      session_id TEXT PRIMARY KEY,
+      last_send_at INTEGER NOT NULL DEFAULT 0,
+      last_abort_at INTEGER NOT NULL DEFAULT 0
+    );
   
    `)
   

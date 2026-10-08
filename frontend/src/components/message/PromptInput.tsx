@@ -25,7 +25,7 @@ import type { MessageWithParts, FileInfo, ContentPart } from '@/api/types'
 import { getFileStat, uploadFileWithProgress, isUploadInFlight, DuplicateUploadError, abortAllUploads } from '@/api/files'
 import { getSessionModelOverride } from '@/lib/sessionModelOverride'
 import { showToast } from '@/lib/toast'
-import { getSessionOverride } from '@/lib/notifications'
+import { useOverrideSource } from '@/hooks/useNotifyOverrides'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -191,6 +191,7 @@ export function PromptInput({
   const session = sessionData.data as SessionWithModel | undefined
 const { data: config } = useConfig(opcodeUrl)
 const { preferences } = useSettings()
+const overrideSource = useOverrideSource()
 const ks = preferences?.keyboardShortcuts
 const abortKs = ks?.abort ?? 'Escape'
 const toggleModeKs = ks?.toggleMode ?? 'Tab'
@@ -260,7 +261,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     let reviewWanted: boolean | undefined
     let autoApply: boolean | undefined
     try {
-      const ov = getSessionOverride(sessionID)
+      const ov = overrideSource.session(sessionID)
       reviewWanted = ov.skillReviewEnabled
       autoApply = ov.skillAutoEnabled
     } catch {}

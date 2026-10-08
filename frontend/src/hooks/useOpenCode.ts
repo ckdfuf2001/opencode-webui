@@ -12,6 +12,7 @@ import { showToast } from "@/lib/toast"
 import { markSessionIdle } from "./useSessionActivity"
 import { clearSessionNotifyData } from "@/lib/notifications"
 import { listSessionStatuses } from "@/api/session-status"
+import { reportAborted } from "@/api/notify"
 import { stripMemoryRecall } from "@/lib/stripRecall"
 import { API_BASE_URL } from "@/config"
 
@@ -485,6 +486,8 @@ function notifySendTimeout(
         try {
           const p = client?.abortSession(sessionID) as Promise<unknown> | undefined
           if (p && typeof p.catch === "function") p.catch(() => {})
+          // 백단 알림 라벨 판단용 중단 보고
+          reportAborted(sessionID)
         } catch {}
       },
     },
@@ -2098,6 +2101,8 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
       const pendingAtAbort = pendingOptimistic.get(sessionID)
       abortActiveSend(sessionID)
       recentlyAborted.set(sessionID, Date.now());
+      // 백단 알림 라벨 판단용 중단 보고 (fire-and-forget)
+      reportAborted(sessionID);
       await queryClient.cancelQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) })
       await queryClient.cancelQueries({ queryKey: ["opencode", "last-message", opcodeUrl, sessionID, directory] })
       markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);

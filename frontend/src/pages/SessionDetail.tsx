@@ -28,7 +28,8 @@ import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useBackendConnection } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
-import { shouldPlaySound, shouldPush, sendPushNotification } from "@/lib/notifications";
+import { shouldPlaySound } from "@/lib/notifications";
+import { useOverrideSource } from "@/hooks/useNotifyOverrides";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -55,6 +56,8 @@ export function SessionDetail() {
   const navigate = useNavigate();
   const repoId = parseInt(id || "0");
   const { preferences } = useSettings();
+  // 알림 설정 소스 (백단 API 캐시 + 레거시 폴백). OS 토스트는 백단이 발송, 여기는 틱 소리만.
+  const overrideSource = useOverrideSource();
   const messageContainerRef = useRef<HTMLDivElement>(null);
   // 로딩 스피너 조기 리턴 때문에 effect 시점에 컨테이너가 없을 수 있어서
   // 콜백 ref로 실제 노드를 추적하고 리스너 effect 의존성에 넣는다
@@ -802,8 +805,7 @@ export function SessionDetail() {
     // cancel/abort 시에도 완료음 재생 — was가 true였다면 streaming이 꺼질 때(또는 abort 직후) 모두 재생
     const aborted = sessionId ? isRecentlyAborted(sessionId) : false;
     const isCancel = aborted;
-    const canSound = shouldPlaySound(sessionId, isCancel, preferences ?? {}, repoId);
-    const canPush = shouldPush(sessionId, preferences ?? {}, repoId);
+    const canSound = shouldPlaySound(sessionId, isCancel, preferences ?? {}, repoId, overrideSource);
     if (was && (!isStreaming || aborted)) {
       // 첫 채팅 등에서 polling/SSE 경합으로 isStreaming이 잠깐 false→true로 튀는 경우 이중 트리거 방지 — 800ms 디바운스
       const debounce = setTimeout(() => {
@@ -839,15 +841,6 @@ export function SessionDetail() {
             } catch {}
           }
           if (canSound) void playCompletionTick();
-          if (canPush) {
-            const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
-            const curRepo = repoRef.current
-            const curSession = sessionRef.current as unknown as { title?: string } | undefined
-            const repoLabel = curRepo ? (curRepo.repoUrl ? curRepo.repoUrl.split("/").pop()?.replace(".git","") || curRepo.localPath : curRepo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
-            const sessLabel = curSession?.title || 'Untitled Session';
-            const body = `${repoLabel} · ${sessLabel}`;
-            sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0)
-          }
         })();
       }, 800);
       // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
@@ -916,15 +909,8 @@ export function SessionDetail() {
         } catch {}
         // 스냅샷 시점과 현재가 다른 권한이면 무시 (이미 자동승인으로 제거된 경우)
         if (currentPermission?.id !== pid) return
-        if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
-        if (shouldPush(sessionId, preferences ?? {}, repoId)) {
-          const title = '승인이 필요합니다';
-          const pattern = (currentPermission as unknown as { pattern?: string[]; permission?: string })?.pattern?.[0] ?? (currentPermission as unknown as { permission?: string })?.permission ?? '';
-          const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.workspaceRel : repo.workspaceRel) : `repo ${repoId}`;
-          const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
-          const body = `${repoLabel} · ${sessLabel}${pattern ? ` — ${pattern}` : ''}`;
-          sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
-        }
+        // OS 토스트는 백단이 발송 — 여기는 틱 소리만.
+        if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId, overrideSource)) void playCompletionTick();
       }, 1200);
     } else if (!pid) {
       prevPermissionIdRef.current = null;
@@ -937,13 +923,8 @@ export function SessionDetail() {
     const qid = currentQuestion?.id ?? null;
     if (qid && qid !== prevQuestionIdRef.current) {
       prevQuestionIdRef.current = qid;
-      if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId)) void playCompletionTick();
-      if (shouldPush(sessionId, preferences ?? {}, repoId)) {
-        const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.workspaceRel : repo.workspaceRel) : (repoId ? `repo ${repoId}` : 'Workspace');
-        const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
-        const body = `${repoLabel} · ${sessLabel}`;
-        sendPushNotification('질문이 도착했습니다', { body, tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
-      }
+      // OS 토스트는 백단이 발송 — 여기는 틱 소리만.
+      if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId, overrideSource)) void playCompletionTick();
     } else if (!qid) {
       prevQuestionIdRef.current = null;
     }

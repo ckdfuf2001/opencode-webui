@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { TTSSettings } from './TTSSettings'
-import { isPushSupported, ensurePushPermission } from '@/lib/notifications'
+import { sendTestToast } from '@/api/notify'
 
 export function GeneralSettings() {
   const { preferences, isLoading, updateSettings, isUpdating } = useSettings()
@@ -35,7 +35,6 @@ export function GeneralSettings() {
       setGitToken(preferences.gitToken || '')
       setRepoTrackPathsInput((preferences.repoTrackPaths ?? []).join(', '))
       setBlockedExtInput((preferences.blockedUploadExtensions ?? []).join(', '))
-      try { localStorage.setItem('opencode-push-duration', String(preferences.pushNotificationDuration ?? 0)) } catch {}
     }
   }, [preferences])
 
@@ -195,24 +194,36 @@ export function GeneralSettings() {
             <div className="space-y-0.5">
               <Label htmlFor="pushNotificationEnabled" className="text-sm">PC 푸시 알림 (글로벌)</Label>
               <p className="text-xs text-muted-foreground">
-                {isPushSupported() ? '브라우저 알림으로 완료/권한요청을 알림' : '이 브라우저는 푸시 알림을 지원하지 않음'}
+                백단이 직접 OS 알림 발송 — 브라우저가 꺼져 있어도 수신
               </p>
             </div>
-            <Switch
-              id="pushNotificationEnabled"
-              checked={preferences?.pushNotificationEnabled ?? false}
-              onCheckedChange={async (checked) => {
-                if (checked) {
-                  const perm = await ensurePushPermission()
-                  if (perm !== 'granted') {
-                    showToast.error('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.')
-                    return
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={!preferences?.pushNotificationEnabled}
+                title="백단 OS 토스트 테스트"
+                onClick={async () => {
+                  try {
+                    const ok = await sendTestToast()
+                    if (ok) showToast.success('테스트 알림 발송됨')
+                    else showToast.error('알림 발송 실패 (Windows 전용)')
+                  } catch (e) {
+                    showToast.error(e instanceof Error ? e.message : '알림 발송 실패')
                   }
-                }
-                updateSettings({ pushNotificationEnabled: checked })
-              }}
-              disabled={!isPushSupported()}
-            />
+                }}
+              >
+                테스트
+              </Button>
+              <Switch
+                id="pushNotificationEnabled"
+                checked={preferences?.pushNotificationEnabled ?? false}
+                onCheckedChange={(checked) => {
+                  updateSettings({ pushNotificationEnabled: checked })
+                }}
+              />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Label htmlFor="pushDuration" className="text-xs">유지 시간(초, 0=닫기 전까지) — 세션/레포 알림에도 적용</Label>
@@ -228,7 +239,6 @@ export function GeneralSettings() {
                 const v = parseInt(e.target.value, 10)
                 const n = Number.isNaN(v) ? 0 : Math.max(0, Math.min(86400, v))
                 updateSettings({ pushNotificationDuration: n })
-                try { localStorage.setItem('opencode-push-duration', String(n)) } catch {}
               }}
             />
           </div>
