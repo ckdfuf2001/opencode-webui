@@ -384,6 +384,12 @@ export function isRecentlyAborted(sessionID: string): boolean {
   return true;
 }
 
+// 새 전송이 시작되면 abort 기록을 지운다 — 이전 턴 중단이 다음 턴 완료 알림에
+// '취소됨'으로 오표시되는 것을 막는다 (12초 윈도우 stale).
+export function clearRecentlyAborted(sessionID: string): void {
+  recentlyAborted.delete(sessionID);
+}
+
 type PromptPart = NonNullable<SendPromptRequest["parts"]>[number];
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -1729,6 +1735,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       if (!client) throw new Error("No client available");
 
       clearCancelledUntilNextSend(sessionID);
+      clearRecentlyAborted(sessionID);
       fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
       const optimisticUserID = `optimistic_user_${Date.now()}_${Math.random()}`;
 

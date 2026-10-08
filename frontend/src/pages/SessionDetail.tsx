@@ -809,22 +809,24 @@ export function SessionDetail() {
       const debounce = setTimeout(() => {
         void (async () => {
           if (prevStreamingRef.current) return;
-          if (!isCancel) {
-            // 큐에 대기 중인 후속 턴이 있으면 아직 완료가 아니다 — 턴 사이 idle 공백
-            // (폴러·백오프 지연, 특히 타임아웃 재시도 10s)에 완료 푸시/소리가 나갔다가
-            // 다음 턴이 시작되면 "진행 중인데 완료" 오표시가 된다. 백엔드 기준으로
-            // fresh하게 재조회 후 판단한다 (2s 폴링 캐시 staleness 방지).
-            const readCachedQueue = (): Array<{ status?: string }> => {
-              if (!sessionId) return [];
-              try {
-                return queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId)) ?? [];
-              } catch { return []; }
-            };
+          // 큐에 대기 중인 후속 턴이 있으면 아직 완료가 아니다 — 턴 사이 idle 공백
+          // (폴러·백오프 지연, 특히 타임아웃 재시도 10s)에 완료 푸시/소리가 나갔다가
+          // 다음 턴이 시작되면 "진행 중인데 완료" 오표시가 된다. 백엔드 기준으로
+          // fresh하게 재조회 후 판단한다 (2s 폴링 캐시 staleness 방지).
+          // 취소 라벨이라도 큐가 남아 있으면 다음 턴이 이어지므로 알림을 보내지 않는다 —
+          // 이전 턴 중단 직후 재전송한 경우 턴 사이 공백에 '취소됨'이 오탐으로 간다.
+          const readCachedQueue = (): Array<{ status?: string }> => {
+            if (!sessionId) return [];
             try {
-              if (sessionId) await queryClient.refetchQueries({ queryKey: chatQueueKeys.session(sessionId) });
-            } catch { /* 재조회 실패 시 캐시 기준으로 폴백 */ }
-            if (readCachedQueue().some((item) => item?.status === 'queued' || item?.status === 'sending')) return;
-            if (prevStreamingRef.current) return;
+              return queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId)) ?? [];
+            } catch { return []; }
+          };
+          try {
+            if (sessionId) await queryClient.refetchQueries({ queryKey: chatQueueKeys.session(sessionId) });
+          } catch { /* 재조회 실패 시 캐시 기준으로 폴백 */ }
+          if (readCachedQueue().some((item) => item?.status === 'queued' || item?.status === 'sending')) return;
+          if (prevStreamingRef.current) return;
+          if (!isCancel) {
             // working 공백(연결 흔들림·자식 세션 종료 등)에 complete가 아닌데 발송하지 않도록
             // 마지막 어시스턴트 메시지 finished + DB busy 아님을 재확인한다
             const cur = messagesRef.current;

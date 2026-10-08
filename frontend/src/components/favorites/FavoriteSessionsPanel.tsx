@@ -6,7 +6,7 @@ import { RepoName } from '../repo/RepoName'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
-import { useSessionStatusMap, useMessages, useSessions, clearCancelledUntilNextSend } from '@/hooks/useOpenCode'
+import { useSessionStatusMap, useMessages, useSessions, clearCancelledUntilNextSend, clearRecentlyAborted } from '@/hooks/useOpenCode'
 import { permissionEvents } from '@/hooks/usePermissionRequests'
 import { useEnqueueQueuedChat, useQueuedChats } from '@/hooks/useChatQueue'
 import { useSettings } from '@/hooks/useSettings'
@@ -658,6 +658,7 @@ function MiniSendButton({ sessionId, directory, draft, selectedSessionId, onSent
         if (selectedSessionId) {
           targetId = selectedSessionId
           try { clearCancelledUntilNextSend(targetId) } catch {}
+          try { clearRecentlyAborted(targetId) } catch {}
           try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(targetId)}/cancelled`, { method: 'DELETE' }) } catch {}
         } else {
           const res = await fetch(`${API_BASE_URL}/api/opencode/session?directory=${encodeURIComponent(directory)}`, {
@@ -670,6 +671,7 @@ function MiniSendButton({ sessionId, directory, draft, selectedSessionId, onSent
         }
       } else {
         try { clearCancelledUntilNextSend(targetId) } catch {}
+        try { clearRecentlyAborted(targetId) } catch {}
         try { await fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(targetId)}/cancelled`, { method: 'DELETE' }) } catch {}
       }
       // 큐 경유 발송 — PromptInput과 동일 경로 (busy/취소 중에도 유실 없이 순서 보존)

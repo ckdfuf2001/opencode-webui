@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from 'react'
-import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap, clearCancelledUntilNextSend, hasActiveSend, RECENT_MESSAGE_LIMIT } from '@/hooks/useOpenCode'
+import { useSendPrompt, useAbortSession, useMessages, useSendShell, useConfig, useSession, isRecentlyAborted, useSessionStatusMap, clearCancelledUntilNextSend, clearRecentlyAborted, hasActiveSend, RECENT_MESSAGE_LIMIT } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 import { useSettings } from '@/hooks/useSettings'
 import { useCommands } from '@/hooks/useCommands'
@@ -382,6 +382,8 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         const text = prompt.trim()
         if (text) {
           clearCancelledUntilNextSend(sessionID)
+          clearRecentlyAborted(sessionID)
+          fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
           enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
         } else {
           releaseWithRestore()
@@ -403,6 +405,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         .join('\n')
       if (text.trim()) {
         clearCancelledUntilNextSend(sessionID)
+        clearRecentlyAborted(sessionID)
         fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
         enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
       } else {
@@ -422,6 +425,8 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           .join('\n')
         if (text.trim()) {
           clearCancelledUntilNextSend(sessionID)
+          clearRecentlyAborted(sessionID)
+          fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
           enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
         } else {
           releaseWithRestore()
@@ -439,6 +444,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
       .join('\n')
     if (!finalText.trim()) { releaseWithRestore(); return }
     clearCancelledUntilNextSend(sessionID)
+    clearRecentlyAborted(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
     enqueueAndClear({ sessionID, text: finalText, directory, ...queueDispatchOpts() }, snapshot)
     } catch {
@@ -483,6 +489,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     if (!text.trim()) { sendLockRef.current = false; setPrompt(snapshot); return }
     // 첫 전송도 큐 경유: 스트립에 sending 표시가 뜨고 응답 확인 후 제거된다.
     clearCancelledUntilNextSend(sessionID)
+    clearRecentlyAborted(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
     enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
     } catch {
