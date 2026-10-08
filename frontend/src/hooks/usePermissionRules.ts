@@ -3,6 +3,9 @@ import {
   listPermissionRules,
   createPermissionRule,
   deletePermissionRule,
+  listSessionPermissionRules,
+  createSessionPermissionRule,
+  deleteSessionPermissionRule,
 } from '@/api/permission-rules'
 
 export function usePermissionRules(repoId?: number) {
@@ -43,6 +46,38 @@ export function useDeletePermissionRule() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['permission-rules', variables.repoId ?? 'global'] })
       queryClient.invalidateQueries({ queryKey: ['permission-rules', 'global-scope'] })
+    },
+  })
+}
+
+/** 세션 전용 룰 (백단 소유 — 탭 닫힘과 무관하게 자동승인된다). */
+export function useSessionPermissionRules(sessionId?: string | null) {
+  return useQuery({
+    queryKey: ['session-permission-rules', sessionId ?? ''],
+    queryFn: () => listSessionPermissionRules(sessionId!),
+    enabled: !!sessionId,
+  })
+}
+
+export function useCreateSessionPermissionRule() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ sessionId, permission, pattern }: { sessionId: string; permission: string; pattern: string }) =>
+      createSessionPermissionRule(sessionId, permission, pattern),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['session-permission-rules', variables.sessionId] })
+    },
+  })
+}
+
+export function useDeleteSessionPermissionRule() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, sessionId }: { id: string; sessionId: string }) => deleteSessionPermissionRule(id),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['session-permission-rules', variables.sessionId] })
     },
   })
 }

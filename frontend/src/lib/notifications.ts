@@ -67,34 +67,17 @@ export function clearLegacyNotifyOverrides(): void {
   } catch {}
 }
 
-// 세션별 permission rule (로컬)
-export interface SessionPermissionRule { id: string; permission: string; pattern: string; createdAt: number }
-export function getSessionPermissionRules(sessionId: string): SessionPermissionRule[] {
+// 세션 permission rule 마이그레이션용 레거시 읽기 (룰 자체는 백단 소유).
+export interface LegacySessionPermissionRule { id: string; permission: string; pattern: string; createdAt: number }
+export function readAllLegacySessionPermissionRules(): Record<string, LegacySessionPermissionRule[]> {
   try {
     const raw = localStorage.getItem(SESSION_PERM_KEY)
-    const map = raw ? JSON.parse(raw) as Record<string, SessionPermissionRule[]> : {}
-    return map[sessionId] ?? []
-  } catch { return [] }
+    return raw ? JSON.parse(raw) as Record<string, LegacySessionPermissionRule[]> : {}
+  } catch { return {} }
 }
-export function addSessionPermissionRule(sessionId: string, rule: Omit<SessionPermissionRule, 'id' | 'createdAt'>): SessionPermissionRule {
-  const map = (() => { try { const r = localStorage.getItem(SESSION_PERM_KEY); return r ? JSON.parse(r) as Record<string, SessionPermissionRule[]> : {} } catch { return {} } })()
-  const list = map[sessionId] ?? []
-  const created: SessionPermissionRule = { id: `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`, createdAt: Date.now(), ...rule }
-  list.push(created)
-  map[sessionId] = list
-  try { localStorage.setItem(SESSION_PERM_KEY, JSON.stringify(map)) } catch {}
-  window.dispatchEvent(new CustomEvent('opencode:session-perm-changed', { detail: { sessionId } }))
-  return created
-}
-export function deleteSessionPermissionRule(sessionId: string, ruleId: string): void {
+export function clearLegacySessionPermissionRules(): void {
   try {
-    const raw = localStorage.getItem(SESSION_PERM_KEY)
-    const map = raw ? JSON.parse(raw) as Record<string, SessionPermissionRule[]> : {}
-    const list = (map[sessionId] ?? []).filter(r => r.id !== ruleId)
-    if (list.length === 0) delete map[sessionId]
-    else map[sessionId] = list
-    localStorage.setItem(SESSION_PERM_KEY, JSON.stringify(map))
-    window.dispatchEvent(new CustomEvent('opencode:session-perm-changed', { detail: { sessionId } }))
+    localStorage.removeItem(SESSION_PERM_KEY)
   } catch {}
 }
 
@@ -192,9 +175,12 @@ export function getEffectiveSkillReview(repoId: number | string | undefined, ses
   return { repo, session: sessOv, effective }
 }
 export function clearSessionNotifyData(sessionId: string): void {
-  // 백단 오버라이드 삭제 (fire-and-forget) + 로컬 permission rule 정리.
+  // 백단 오버라이드 + 세션 룰 삭제 (fire-and-forget) + 로컬 permission rule 정리.
   try {
     void import('@/api/notify').then((m) => m.clearNotifyOverride('session', sessionId).catch(() => {}))
+  } catch {}
+  try {
+    void import('@/api/permission-rules').then((m) => m.deleteSessionPermissionRulesBySession(sessionId).catch(() => {}))
   } catch {}
   try {
     const raw = localStorage.getItem(SESSION_PERM_KEY)

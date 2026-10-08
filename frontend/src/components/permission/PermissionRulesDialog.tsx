@@ -13,8 +13,8 @@ import { getSkillAutoUpdate, setSkillAutoUpdate, getSkillAutoReview, setSkillAut
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
-import { getSessionPermissionRules, addSessionPermissionRule, deleteSessionPermissionRule } from '@/lib/notifications'
 import { useNotifyOverrides, useOverrideSource, useSetNotifyOverride } from '@/hooks/useNotifyOverrides'
+import { useSessionPermissionRules, useCreateSessionPermissionRule, useDeleteSessionPermissionRule } from '@/hooks/usePermissionRules'
 import type { NotifyOverridePatch } from '@/api/notify'
 
 interface PermissionRulesDialogProps {
@@ -114,7 +114,10 @@ export function PermissionRulesDialog({
   const [repoPushOverride, setRepoPushOverrideState] = useState<boolean | undefined>(undefined)
   const [notifyTab, setNotifyTab] = useState<'global' | 'repo' | 'session'>(scope)
   const [skillTab, setSkillTab] = useState<'global' | 'repo' | 'session'>(scope)
-  const [sessionPermRules, setSessionPermRules] = useState<ReturnType<typeof getSessionPermissionRules>>([])
+  // 세션 룰 (백단 소유 — 탭 닫힘과 무관하게 자동승인된다)
+  const { data: sessionPermRules = [] } = useSessionPermissionRules(open ? sessionId : undefined)
+  const createSessionRule = useCreateSessionPermissionRule()
+  const deleteSessionRule = useDeleteSessionPermissionRule()
   // 의존성: 자동 변경은 자동 리뷰가 켜져 있을 때만 켤 수 있다 (리뷰 없는 직접 수정 방지).
   // 레포 실효값 (서버 GET auto-update는 이미 review AND로 내려온다) + 세션 오버라이드 합성.
   const repoReviewOn = skillReview?.enabled ?? false
@@ -153,25 +156,15 @@ export function PermissionRulesDialog({
         setSessionPushOverrideState(ov.pushEnabled)
         setSessionSkillOverrideState(ov.skillAutoEnabled)
         setSessionReviewOverrideState(ov.skillReviewEnabled)
-        setSessionPermRules(getSessionPermissionRules(sessionId))
       } else {
         setSessionSoundOverrideState(undefined)
         setSessionCancelOverrideState(undefined)
         setSessionPushOverrideState(undefined)
         setSessionSkillOverrideState(undefined)
         setSessionReviewOverrideState(undefined)
-        setSessionPermRules([])
       }
     }
     readOv()
-    // 세션 permission rule(로컬) 변경만 리스너로 반영 — 오버라이드는 쿼리 캐시로 갱신된다.
-    const handler = () => {
-      if (sessionId) setSessionPermRules(getSessionPermissionRules(sessionId))
-    }
-    window.addEventListener('opencode:session-perm-changed', handler)
-    return () => {
-      window.removeEventListener('opencode:session-perm-changed', handler)
-    }
   }, [open, repoId, sessionId, notifyList, overrideSource])
   // effective values with hierarchy display
   const globalSoundOn = preferences?.completionSoundEnabled !== false
@@ -191,8 +184,7 @@ export function PermissionRulesDialog({
     setSaving(true)
     try {
       if (ruleScope === 'session' && sessionId) {
-        addSessionPermissionRule(sessionId, { permission, pattern: pattern.trim() })
-        setSessionPermRules(getSessionPermissionRules(sessionId))
+        await createSessionRule.mutateAsync({ sessionId, permission, pattern: pattern.trim() })
         showToast.success('세션 전용 permission rule 추가됨 (이 세션에서만 동작)')
       } else {
         if (!repoId) {
@@ -221,11 +213,14 @@ export function PermissionRulesDialog({
       setDeletingId(null)
     }
   }
-  const handleDeleteSessionRule = (id: string) => {
+  const handleDeleteSessionRule = async (id: string) => {
     if (!sessionId) return
-    deleteSessionPermissionRule(sessionId, id)
-    setSessionPermRules(getSessionPermissionRules(sessionId))
-    showToast.success('세션 룰 제거됨')
+    try {
+      await deleteSessionRule.mutateAsync({ id, sessionId })
+      showToast.success('세션 룰 제거됨')
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : 'Failed to remove session rule.')
+    }
   }
   const handleSaveRepoEdit = async (id: number) => {
     if (!editRepoPattern.trim()) { setEditingRepoId(null); return }
@@ -238,14 +233,15 @@ export function PermissionRulesDialog({
     } catch (e) { showToast.error(e instanceof Error?e.message:'수정 실패') }
     setEditingRepoId(null)
   }
-  const handleSaveSessionEdit = (id: string) => {
+  const handleSaveSessionEdit = async (id: string) => {
     if (!editSessionPattern.trim() || !sessionId) { setEditingSessionId(null); return }
     const orig = sessionPermRules.find(r=>r.id===id)
     if (!orig || (orig.pattern===editSessionPattern.trim() && orig.permission===editSessionPermission)) { setEditingSessionId(null); return }
-    deleteSessionPermissionRule(sessionId, id)
-    addSessionPermissionRule(sessionId, { permission: editSessionPermission, pattern: editSessionPattern.trim() })
-    setSessionPermRules(getSessionPermissionRules(sessionId))
-    showToast.success('수정됨')
+    try {
+      await deleteSessionRule.mutateAsync({ id, sessionId })
+      await createSessionRule.mutateAsync({ sessionId, permission: editSessionPermission, pattern: editSessionPattern.trim() })
+      showToast.success('수정됨')
+    } catch (e) { showToast.error(e instanceof Error?e.message:'수정 실패') }
     setEditingSessionId(null)
   }
 
@@ -450,7 +446,7 @@ export function PermissionRulesDialog({
         {/* 세션 룰 */}
         {scope === 'session' && (
           <>
-            <div className="text-xs font-medium text-muted-foreground mt-2">세션 룰 (로컬) — {sessionPermRules.length}개 {sessionPermRules.length>0 && <span className="font-normal">· 이 세션에서만 동작, 레포보다 우선</span>}</div>
+            <div className="text-xs font-medium text-muted-foreground mt-2">세션 룰 (백단) — {sessionPermRules.length}개 {sessionPermRules.length>0 && <span className="font-normal">· 이 세션에서만 동작, 레포보다 우선</span>}</div>
             {sessionPermRules.length === 0 ? null : (
               <div className="space-y-2">
                 {sessionPermRules.map((rule) => (

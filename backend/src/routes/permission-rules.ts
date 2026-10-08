@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import * as permissionRuleDb from '../db/permission-rule-queries'
+import * as sessionPermissionRuleDb from '../db/session-permission-rule-queries'
 import { getRepoById } from '../db/queries'
 import { queuePermissionConfigSync } from '../services/permission-config'
 import { logger } from '../utils/logger'
@@ -84,6 +85,76 @@ export function createPermissionRuleRoutes(db: Database) {
     } catch (error) {
       logger.error('Failed to delete permission rule:', error)
       return c.json({ error: 'Failed to delete permission rule' }, 500)
+    }
+  })
+
+  // --- 세션 전용 룰 (백단 소유 — 탭 닫힘과 무관하게 자동승인된다) ---
+  const CreateSessionRuleSchema = z.object({
+    permission: z.string().min(1).max(255),
+    pattern: z.string().min(1).max(10000),
+  })
+
+  // GET /api/permission-rules/session/:sessionId
+  app.get('/session/:sessionId', (c) => {
+    try {
+      return c.json(sessionPermissionRuleDb.listSessionPermissionRules(db, c.req.param('sessionId')))
+    } catch (error) {
+      logger.error('Failed to list session permission rules:', error)
+      return c.json({ error: 'Failed to list session permission rules' }, 500)
+    }
+  })
+
+  // POST /api/permission-rules/session/:sessionId
+  app.post('/session/:sessionId', async (c) => {
+    try {
+      const body = await c.req.json()
+      const validated = CreateSessionRuleSchema.parse(body)
+      const rule = sessionPermissionRuleDb.createSessionPermissionRule(db, {
+        sessionId: c.req.param('sessionId'),
+        ...validated,
+      })
+      try {
+        const { kickPermissionSweep } = await import('../services/permission-auto-approver')
+        kickPermissionSweep(db)
+      } catch (e) {
+        logger.debug('Permission kick sweep skipped:', e instanceof Error ? e.message : e)
+      }
+      return c.json(rule, 201)
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return c.json({ error: 'Invalid session permission rule data', details: error.issues }, 400)
+      }
+      logger.error('Failed to create session permission rule:', error)
+      return c.json({ error: 'Failed to create session permission rule' }, 500)
+    }
+  })
+
+  // DELETE /api/permission-rules/session/rule/:ruleId
+  app.delete('/session/rule/:ruleId', async (c) => {
+    try {
+      const deleted = sessionPermissionRuleDb.deleteSessionPermissionRule(db, c.req.param('ruleId'))
+      if (!deleted) return c.json({ error: 'Session permission rule not found' }, 404)
+      try {
+        const { kickPermissionSweep } = await import('../services/permission-auto-approver')
+        kickPermissionSweep(db)
+      } catch (e) {
+        logger.debug('Permission kick sweep skipped:', e instanceof Error ? e.message : e)
+      }
+      return c.json({ success: true })
+    } catch (error) {
+      logger.error('Failed to delete session permission rule:', error)
+      return c.json({ error: 'Failed to delete session permission rule' }, 500)
+    }
+  })
+
+  // DELETE /api/permission-rules/session/:sessionId — 세션 삭제 시 orphan 정리
+  app.delete('/session/:sessionId', (c) => {
+    try {
+      sessionPermissionRuleDb.deleteSessionPermissionRulesBySession(db, c.req.param('sessionId'))
+      return c.json({ success: true })
+    } catch (error) {
+      logger.error('Failed to delete session permission rules:', error)
+      return c.json({ error: 'Failed to delete session permission rules' }, 500)
     }
   })
 

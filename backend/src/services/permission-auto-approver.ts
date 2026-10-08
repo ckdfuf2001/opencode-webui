@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import { logger } from '../utils/logger'
 import { listApplicableRules } from '../db/permission-rule-queries'
+import { listSessionPermissionRules } from '../db/session-permission-rule-queries'
 import { getSessionRepo } from '../db/session-repo-queries'
 import { listRepos } from '../db/queries'
 import type { PermissionRule } from '../types/permission-rule'
@@ -11,9 +12,9 @@ import { getWorkspacePath } from '@opencode-webui/shared'
  * 서버 측 자동승인자 — opencode /event를 직접 구독해 권한 요청을 규칙대로 응답한다.
  * 프론트 폴링 방식의 문제(탭 닫힘·중복 탭·2초 지연·60초 규칙 lag)를 없앤다.
  *
- * 설계 원칙 (v0.12.1: webui 단일 소유 + 퍼레이드 방지):
+ * 설계 원칙 (v0.12.1: webui 단일 소유 + 퍼레이드 방지, v0.12.x: 세션 룰도 백엔드 소유):
  * - 판단은 여기서, 표시는 프론트 (다이얼로그·뱃지는 그대로 living 목록을 보여준다).
- * - 세션 로컬스토리지 룰은 백엔드가 볼 수 없어 프론트가 계속 담당한다 (빠른 경로).
+ * - 세션 전용 룰도 백엔드 DB 소유라 탭 닫힘과 무관하게 승인된다 (프론트 자동승인 폐지).
  * - 응답은 제안⊆룰이면 'always', 아니면 'once'.
  *   'always'는 opencode 세션 메모리에 제안 패턴을 저장할 뿐 소유권은 webui DB가
  *   유지한다 (재시작 시 휘발 → live 승인자가 재시딩). once 일변도에서는
@@ -378,9 +379,20 @@ async function handleAskedPermission(
       : ''
     return `${permission.id} type=${permission.action ?? permission.permission ?? permission.type} session=${permission.sessionID} candidates=[${shown}]${cands.length > 4 ? ` +${cands.length - 4}` : ''}${alwaysHint}`
   }
-  // directory → repo 스코프가 확정될 때만 승인한다.
+  // 세션 전용 룰 — repo 스코프 없이 이 세션에만 적용, 레포/전역보다 우선한다.
+  let sessionRules: PermissionRule[] = []
+  try {
+    sessionRules = listSessionPermissionRules(db, permission.sessionID).map((r) => ({
+      id: -1,
+      repoId: null,
+      permission: r.permission,
+      pattern: r.pattern,
+      createdAt: r.createdAt,
+    }))
+  } catch {}
+  // directory → repo 스코프가 확정될 때만 레포/전역 룰로 승인한다.
   // 해석 실패 시 전체 규칙 폴백은 다른 레포의 규칙으로 승인할 수 있어 금지 —
-  // 이 경우 응답하지 않고 사용자 다이얼로그에 맡긴다.
+  // 세션 룰이 있으면 그걸로만 판정하고, 그것도 없으면 사용자 다이얼로그에 맡긴다.
   // S1 정본(session_repo_map)을 먼저 보고, 없으면 directory 역산 + session_status 순.
   let repoId: number | null = null
   let sessionDir: string | undefined
@@ -392,12 +404,15 @@ async function handleAskedPermission(
     sessionDir = directory
     if (repoId == null) {
       if (!directory) {
-        logSkip(`Auto-approve skip (no session directory): ${describe()}`)
-        return
+        if (sessionRules.length === 0) {
+          logSkip(`Auto-approve skip (no session directory): ${describe()}`)
+          return
+        }
+      } else {
+        repoId = resolveRepoId(db, directory)
       }
-      repoId = resolveRepoId(db, directory)
     }
-    if (repoId == null) {
+    if (repoId == null && sessionRules.length === 0) {
       // 폴백: 폴러가 session_status에 기록한 repo_id. 디렉터리 표기 차이
       // (대소문자·심링크·이동)로 resolveRepoId가 빗나간 경우를 구한다.
       try {
@@ -409,7 +424,7 @@ async function handleAskedPermission(
         }
       } catch {}
     }
-    if (repoId == null) {
+    if (repoId == null && sessionRules.length === 0) {
       logSkip(`Auto-approve skip (no repo for dir): ${describe()} dir=${directory}`)
       return
     }
@@ -419,20 +434,22 @@ async function handleAskedPermission(
     else logger.warn(`Auto-approve directory resolve failed for session ${permission.sessionID}:`, e)
     return
   }
-  let candidateRules: PermissionRule[]
-  try {
-    candidateRules = listApplicableRules(db, repoId)
-  } catch (e) {
-    if (opts?.quiet) logger.debug(`Auto-approve rules read failed (repo ${repoId}):`, e)
-    else logger.warn(`Auto-approve rules read failed (repo ${repoId}):`, e)
-    return
+  let candidateRules: PermissionRule[] = [...sessionRules]
+  if (repoId != null) {
+    try {
+      candidateRules = [...candidateRules, ...listApplicableRules(db, repoId)]
+    } catch (e) {
+      if (opts?.quiet) logger.debug(`Auto-approve rules read failed (repo ${repoId}):`, e)
+      else logger.warn(`Auto-approve rules read failed (repo ${repoId}):`, e)
+      if (candidateRules.length === 0) return
+    }
   }
   if (candidateRules.length === 0) {
-    logSkip(`Auto-approve skip (no rules for repo ${repoId}): ${describe()}`)
+    logSkip(`Auto-approve skip (no rules for session ${permission.sessionID}): ${describe()}`)
     return
   }
   if (!candidateRules.some((rule) => ruleMatches(rule, permission))) {
-    logSkip(`Auto-approve no-match (${candidateRules.length} repo+global rules): ${describe()}`)
+    logSkip(`Auto-approve no-match (${candidateRules.length} session+repo+global rules): ${describe()}`)
     return
   }
   // 제안이 룰 커버리지 안이면 always로 영속시켜 다이얼로그 퍼레이드를 끊는다.
@@ -448,6 +465,34 @@ async function handleAskedPermission(
     // 성공 전에 mark하면 실패가 영구 미승인으로 굳는다.
     unmarkResponded(permission.id)
     logger.debug(`Auto-approve reply failed for ${permission.id} (will retry on next event):`, e)
+  }
+}
+
+/**
+ * 알림 억제용 pure 판정 (응답 없이 매칭만 본다).
+ * 세션 룰은 repo 없이도, 레포/전역 룰은 repoId가 있을 때만 본다.
+ */
+export function isPermissionAutoApprovable(
+  db: Database,
+  sessionId: string,
+  repoId: number | null,
+  raw: unknown,
+): boolean {
+  const permission = normalizePermission(raw)
+  if (!permission) return false
+  try {
+    const sessionRules: PermissionRule[] = listSessionPermissionRules(db, sessionId).map((r) => ({
+      id: -1,
+      repoId: null,
+      permission: r.permission,
+      pattern: r.pattern,
+      createdAt: r.createdAt,
+    }))
+    if (sessionRules.some((rule) => ruleMatches(rule, permission))) return true
+    if (repoId == null) return false
+    return listApplicableRules(db, repoId).some((rule) => ruleMatches(rule, permission))
+  } catch {
+    return false
   }
 }
 

@@ -29,9 +29,15 @@ vi.mock('../../src/db/session-status-queries', () => ({
   getSessionStatusRow: () => null,
 }))
 
+vi.mock('../../src/db/session-permission-rule-queries', () => ({
+  listSessionPermissionRules: () => sessionRules,
+}))
+
 vi.mock('../../src/db/queries', () => ({
   listRepos: () => [],
 }))
+
+let sessionRules: Array<{ id: string; sessionId: string; permission: string; pattern: string; createdAt: number }> = []
 
 let queued: Array<{ status: string }> = []
 vi.mock('../../src/services/chat-queue', () => ({
@@ -55,7 +61,14 @@ vi.mock('../../src/services/os-notify', () => ({
   showOsToast: vi.fn(() => true),
 }))
 
-vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })))
+vi.stubGlobal(
+  'fetch',
+  vi.fn(async (url: unknown) =>
+    String(url).includes('/permission')
+      ? { ok: true, json: async () => [{ id: 'perm-1', sessionID: 's1', permission: 'bash', patterns: ['git status'] }] }
+      : { ok: false },
+  ),
+)
 
 const toast = vi.mocked(showOsToast)
 
@@ -75,6 +88,7 @@ beforeEach(() => {
   resetNotifyWatcherState()
   queued = []
   lastMessage = null
+  sessionRules = []
   notifyState.lastSendAt = 0
   notifyState.lastAbortAt = 0
 })
@@ -189,5 +203,16 @@ describe('processNotifyTick pending', () => {
     await flush()
     expect(toast).toHaveBeenCalledTimes(2)
     expect(toast.mock.calls[1]![0]).toBe('질문이 도착했습니다')
+  })
+
+  it('자동승인 대상 승인은 토스트하지 않는다', async () => {
+    sessionRules = [{ id: 'sess-1', sessionId: 's1', permission: 'bash', pattern: 'git status', createdAt: 0 }]
+    const now = 1_000_000
+    processNotifyTick({} as never, tickInput('s1', true, { perm: 1 }), now)
+    processNotifyTick({} as never, tickInput('s1', true, { perm: 1 }), now + 5_000)
+    await flush()
+    processNotifyTick({} as never, tickInput('s1', true, { perm: 1 }), now + 10_000)
+    await flush()
+    expect(toast).not.toHaveBeenCalled()
   })
 })

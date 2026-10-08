@@ -595,6 +595,18 @@ logger.info('Schedule runner started')
 startSessionStatusPoller(db)
 logger.info('Session status poller started')
 
+// 토스트 클릭 이동용: 실제 바인드 포트 확정 + URL 프로토콜 등록 (win32).
+try {
+  const { setWebuiPort } = await import('./services/webui-base')
+  setWebuiPort(PORT)
+  if (process.platform === 'win32') {
+    const { ensureToastActivation } = await import('./services/os-notify')
+    ensureToastActivation()
+  }
+} catch (e) {
+  logger.debug('Toast activation setup skipped:', e instanceof Error ? e.message : e)
+}
+
 // S1 백필: 기존 세션의 소속 레포를 현재 directory로 역산해 1회 기록.
 // opencode 부팅을 기다렸다가 1회만 (S2 이전 directory 값이 유효할 때).
 setTimeout(() => {

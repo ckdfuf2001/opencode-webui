@@ -189,6 +189,17 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       PRIMARY KEY (scope, target)
     );
 
+    -- 세션 전용 permission auto-approve 룰 (프론트 localStorage에서 이전).
+    -- repo_id 없이 세션에만 적용, 레포/전역 룰보다 우선한다.
+    CREATE TABLE IF NOT EXISTS session_permission_rules (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      pattern TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_permission_rules_session ON session_permission_rules(session_id);
+
     -- 알림 라벨 판단용 세션별 마지막 사용자 액션 (재시작 이후에도 유지).
     -- last_send_at: 새 전송(enqueue·직접전송), last_abort_at: 중단 보고.
     CREATE TABLE IF NOT EXISTS notify_state (

@@ -99,7 +99,7 @@ export function createNotifyRoutes(db: Database) {
       const body = (await c.req.json().catch(() => ({}))) as { title?: unknown; body?: unknown }
       const title = typeof body.title === 'string' && body.title ? body.title.slice(0, 200) : '테스트 알림'
       const text = typeof body.body === 'string' && body.body ? body.body.slice(0, 400) : 'PC 알림이 정상적으로 동작합니다.'
-      const ok = showOsToast(title, text)
+      const ok = showOsToast(title, text, { path: '/' })
       return c.json({ ok })
     } catch (error) {
       logger.error('Failed to send test notification:', error)

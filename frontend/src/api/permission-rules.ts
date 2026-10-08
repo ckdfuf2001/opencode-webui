@@ -44,3 +44,63 @@ export async function deletePermissionRule(id: number): Promise<void> {
     throw new Error(error?.error || 'Failed to delete permission rule')
   }
 }
+
+export interface SessionPermissionRule {
+  id: string
+  sessionId: string
+  permission: string
+  pattern: string
+  createdAt: number
+}
+
+export async function listSessionPermissionRules(sessionId: string): Promise<SessionPermissionRule[]> {
+  const response = await fetch(`${API_BASE_URL}/api/permission-rules/session/${encodeURIComponent(sessionId)}`)
+
+  if (!response.ok) {
+    throw new Error('Failed to list session permission rules')
+  }
+
+  return response.json()
+}
+
+export async function createSessionPermissionRule(
+  sessionId: string,
+  permission: string,
+  pattern: string,
+): Promise<SessionPermissionRule> {
+  const response = await fetch(`${API_BASE_URL}/api/permission-rules/session/${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ permission, pattern }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null)
+    throw new Error(error?.error || 'Failed to create session permission rule')
+  }
+
+  return response.json()
+}
+
+export async function deleteSessionPermissionRule(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/permission-rules/session/rule/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null)
+    throw new Error(error?.error || 'Failed to delete session permission rule')
+  }
+}
+
+/** 세션 삭제 시 orphan 정리. */
+export async function deleteSessionPermissionRulesBySession(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/permission-rules/session/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null)
+    throw new Error(error?.error || 'Failed to delete session permission rules')
+  }
+}

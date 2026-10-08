@@ -11,6 +11,8 @@ import { listQueuedChats } from './chat-queue'
 import { recentSessionMessages } from './session-message-db'
 import { opencodeServerManager } from './opencode-single-server'
 import { ensureServerAuth } from './opencode-auth'
+import { isPermissionAutoApprovable } from './permission-auto-approver'
+import { sessionWebPath } from './webui-base'
 import { showOsToast } from './os-notify'
 import { logger } from '../utils/logger'
 
@@ -217,12 +219,72 @@ function handlePendingEdge(
   if (count > edge.notifiedCount) {
     if (!edge.firstSeenAt) edge.firstSeenAt = now
     if (now - edge.firstSeenAt >= PENDING_GRACE_MS) {
-      const title = kind === 'perm' ? '승인이 필요합니다' : '질문이 도착했습니다'
-      void notifyPending(db, sessionId, info, title, sample, count, expireSeconds)
-      edge.notifiedCount = count
-      edge.firstSeenAt = 0
+      if (kind === 'perm') {
+        // 자동승인 대상은 토스트 없이 승인자에게 맡긴다 (중복 확인 방지용 선점).
+        edge.notifiedCount = count
+        edge.firstSeenAt = 0
+        void verifyAndNotifyPerm(db, sessionId, info, count, expireSeconds)
+      } else {
+        const title = '질문이 도착했습니다'
+        void notifyPending(db, sessionId, info, title, sample, count, expireSeconds)
+        edge.notifiedCount = count
+        edge.firstSeenAt = 0
+      }
     }
   }
+}
+
+/** 승인 대기 중 자동승인 불가분만 토스트한다. 전량 승인 가능이면 조용히 넘어간다. */
+async function verifyAndNotifyPerm(
+  db: Database,
+  sessionId: string,
+  info: NotifyTickSessionInfo,
+  count: number,
+  expireSeconds: number | undefined,
+): Promise<void> {
+  try {
+    const items = await fetchSessionPermItems(info.directory, sessionId)
+    if (items.length === 0) return
+    const actionable = items.filter((item) => !isPermissionAutoApprovable(db, sessionId, info.repoId, item))
+    if (actionable.length === 0) return
+    const first = actionable[0] as Record<string, unknown>
+    await notifyPending(
+      db,
+      sessionId,
+      info,
+      '승인이 필요합니다',
+      extractItemSample(first),
+      actionable.length,
+      expireSeconds,
+    )
+  } catch (error) {
+    logger.debug(`Perm verify skipped for ${sessionId}:`, error instanceof Error ? error.message : error)
+  }
+}
+
+async function fetchSessionPermItems(directory: string, sessionId: string): Promise<unknown[]> {
+  const qs = directory && directory !== 'global' ? `?directory=${encodeURIComponent(directory)}` : ''
+  const url = `${opencodeServerManager.getUrl()}/permission${qs}`
+  const res = await fetch(url, {
+    headers: ensureServerAuth({}),
+    signal: AbortSignal.timeout(2_500),
+  })
+  if (!res.ok) return []
+  const list = (await res.json()) as Array<{ sessionID?: string }>
+  if (!Array.isArray(list)) return []
+  return list.filter((item) => item?.sessionID === sessionId)
+}
+
+function extractItemSample(item: Record<string, unknown>): string | undefined {
+  const raw = (item.patterns ?? item.pattern) as unknown
+  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []
+  const first = arr.find((v): v is string => typeof v === 'string' && v.length > 0)
+  if (first) return first.slice(0, 120)
+  for (const key of ['permission', 'action', 'type'] as const) {
+    const v = item[key]
+    if (typeof v === 'string' && v.length > 0) return v.slice(0, 120)
+  }
+  return undefined
 }
 
 function safeGetNotifyState(db: Database, sessionId: string): { lastSendAt: number; lastAbortAt: number } {
@@ -241,7 +303,7 @@ async function notifySession(
   expireSeconds: number | undefined,
 ): Promise<void> {
   const body = await buildSessionBody(db, info, sessionId)
-  showOsToast(title, body, { expireSeconds })
+  showOsToast(title, body, { expireSeconds, path: sessionWebPath(info.repoId, sessionId) })
 }
 
 async function notifyPending(
@@ -256,7 +318,7 @@ async function notifyPending(
   let body = await buildSessionBody(db, info, sessionId)
   if (sample) body += ` — ${sample}`
   if (count > 1) body += ` (+${count - 1}건)`
-  showOsToast(title, body, { expireSeconds })
+  showOsToast(title, body, { expireSeconds, path: sessionWebPath(info.repoId, sessionId) })
 }
 
 async function buildSessionBody(db: Database, info: NotifyTickSessionInfo, sessionId: string): Promise<string> {

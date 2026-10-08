@@ -9,7 +9,6 @@ import { ExposeCommands } from './pages/ExposeCommands'
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
-import { startAutoApprover } from './hooks/useAutoApprovePermissions'
 import { useNotifyMigration } from './hooks/useNotifyOverrides'
 import { useReleaseCacheOnHidden } from './hooks/useOpenCode'
 import { useEffect } from 'react'
@@ -17,7 +16,7 @@ import { BUILD_LABEL, logBuildInfo } from './lib/build-info'
 import { HtmlViewerMenu } from './components/html/HtmlViewerMenu'
 import { FavoriteSessionsPanel } from './components/favorites/FavoriteSessionsPanel'
 
-startAutoApprover()
+// 자동승인은 백단이 전담한다 (세션 룰 포함 — 탭 닫힘과 무관).
 
 const queryClient = new QueryClient({
   defaultOptions: {

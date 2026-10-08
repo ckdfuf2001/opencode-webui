@@ -900,16 +900,12 @@ export function SessionDetail() {
     const pid = currentPermission?.id ?? null;
     if (pid && pid !== prevPermissionIdRef.current) {
       prevPermissionIdRef.current = pid;
-      const permSnapshot = currentPermission
       setTimeout(async () => {
         if (prevPermissionIdRef.current !== pid) return;
-        try {
-          const { isPermissionAutoApprovable } = await import('@/hooks/useAutoApprovePermissions')
-          if (permSnapshot && isPermissionAutoApprovable(permSnapshot as unknown as never)) return
-        } catch {}
         // 스냅샷 시점과 현재가 다른 권한이면 무시 (이미 자동승인으로 제거된 경우)
         if (currentPermission?.id !== pid) return
         // OS 토스트는 백단이 발송 — 여기는 틱 소리만.
+        // (자동승인 대상이어도 틱은 울린다 — 레포/전역 룰과 동일 동작)
         if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId, overrideSource)) void playCompletionTick();
       }, 1200);
     } else if (!pid) {
