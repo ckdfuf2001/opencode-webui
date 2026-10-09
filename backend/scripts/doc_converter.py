@@ -32,7 +32,6 @@ def _strip_zone_identifier(source_path):
         pass
 
 
-_OFFICE_EXES = {"EXCEL.EXE", "WINWORD.EXE", "POWERPNT.EXE"}
 _LOCK_FILE = os.path.join(CACHE_DIR, "office_pids.json")
 _managed = set()
 
@@ -52,21 +51,6 @@ def _ensure_deps(additional=(), require_com=True):
                 f"Missing Python dependency '{mod}'. "
                 f"Run: {_INSTALL_HINT}"
             ) from exc
-
-
-def _office_pids():
-    """Snapshot of the PIDs of running Office applications."""
-    out = {}
-    try:
-        import psutil
-
-        for proc in psutil.process_iter(["pid", "name"]):
-            name = (proc.info["name"] or "").upper()
-            if name in _OFFICE_EXES:
-                out.setdefault(name, set()).add(proc.info["pid"])
-    except Exception:
-        pass
-    return out
 
 
 def _persist():
@@ -107,18 +91,53 @@ def _reap_stale():
     _persist()
 
 
-def _kill_new_office(before):
-    """Force-quit any Office process spawned since the snapshot, so files
-    opened by COM automation do not stay locked. Persists PIDs to disk so a
-    crash cannot leave a zombie that holds a file lock."""
-    for exe, old_pids in before.items():
-        fresh = _office_pids().get(exe, set())
-        for pid in fresh - old_pids:
-            _managed.add((exe, pid))
+def _app_pid(app):
+    """자신이 띄운 Office 인스턴스의 PID (Hwnd 경유). 윈도우가 없으면 None."""
+    try:
+        hwnd = int(app.Hwnd or 0)
+    except Exception:
+        return None
+    if not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        pid = wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+        return int(pid.value) or None
+    except Exception:
+        return None
+
+
+def _quit_app(app, pid, exe_name):
+    """자신의 인스턴스만 종료한다.
+    예전 스냅샷-diff 방식은 병렬 변환 중인 다른 요청의 인스턴스까지 죽여서
+    동시에 연 문서를 실패시켰다."""
+    try:
+        app.Quit()
+    except Exception:
+        pass
+    if not pid:
+        return
+    try:
+        import time as _time
+
+        _time.sleep(1.0)
+    except Exception:
+        pass
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        if proc.is_running() and (proc.name() or "").upper() == exe_name:
+            _managed.add((exe_name, pid))
             _persist()
-            _reap(exe, pid)
-            _managed.discard((exe, pid))
-    _persist()
+            _reap(exe_name, pid)
+            _managed.discard((exe_name, pid))
+            _persist()
+    except Exception:
+        pass
 
 
 def cache_path(source_path):
@@ -140,27 +159,37 @@ def _export(source_path, tmp_path):
         try:
             app.Visible = False
             app.DisplayAlerts = False
+            try:
+                app.AutomationSecurity = 3
+            except Exception:
+                pass
+            pid = _app_pid(app)
             doc = app.Documents.Open(source_path, ReadOnly=True)
             try:
                 doc.SaveAs(tmp_path, FileFormat=17)
             finally:
                 doc.Close(False)
         finally:
-            app.Quit()
+            _quit_app(app, pid, "WINWORD.EXE")
     elif ext in XLS_EXTS:
         app = win32com.client.DispatchEx("Excel.Application")
         try:
             # 조용한 자동화: 창·상태바("게시 중 %")·이벤트·링크 프롬프트 전부 억제.
-            # 하나라도 빠지면 Excel 창이 화면에 뜬다.
+            # ExportAsFixedFormat은 게시 진행 다이얼로그를 띄우므로
+            # 조용한 SaveAs PDF(17)로 내보낸다 (PageSetup은 동일 적용).
             app.Visible = False
             app.ScreenUpdating = False
             app.DisplayAlerts = False
             app.EnableEvents = False
             app.AskToUpdateLinks = False
             app.DisplayStatusBar = False
+            try:
+                app.AutomationSecurity = 3
+            except Exception:
+                pass
+            pid = _app_pid(app)
             wb = app.Workbooks.Open(source_path, UpdateLinks=0, ReadOnly=True)
             try:
-                # PageSetup 쓰기 동안 프린터 통신(리페인트 유발)을 끊는다.
                 app.PrintCommunication = False
                 try:
                     for ws in wb.Worksheets:
@@ -171,21 +200,30 @@ def _export(source_path, tmp_path):
                         ws.PageSetup.FitToPagesTall = False
                 finally:
                     app.PrintCommunication = True
-                wb.ExportAsFixedFormat(0, tmp_path)
+                wb.SaveAs(tmp_path, FileFormat=17)
             finally:
-                wb.Close(False)
+                try:
+                    wb.Close(False)
+                except Exception:
+                    pass
+                _quit_app(app, pid, "EXCEL.EXE")
         finally:
-            app.Quit()
+            pass
     elif ext in PPT_EXTS:
         app = win32com.client.DispatchEx("PowerPoint.Application")
         try:
+            try:
+                app.AutomationSecurity = 3
+            except Exception:
+                pass
+            pid = _app_pid(app)
             pres = app.Presentations.Open(source_path, ReadOnly=True, WithWindow=False)
             try:
                 pres.SaveAs(tmp_path, 32)
             finally:
                 pres.Close()
         finally:
-            app.Quit()
+            _quit_app(app, pid, "POWERPNT.EXE")
 
 
 def convert(source_path, refresh=False):
@@ -207,13 +245,11 @@ def convert(source_path, refresh=False):
     import pythoncom
 
     tmp_path = out_path[:-4] + ".conv.pdf"
-    before = _office_pids()
     pythoncom.CoInitialize()
     try:
         _export(source_path, tmp_path)
     finally:
         pythoncom.CoUninitialize()
-        _kill_new_office(before)
 
     if not os.path.exists(tmp_path):
         raise RuntimeError("Conversion produced no output")
@@ -430,13 +466,14 @@ def _extract_word_text(source_path):
         app.Visible = False
         app.ScreenUpdating = False
         app.DisplayAlerts = False
+        pid = _app_pid(app)
         doc = app.Documents.Open(source_path, ReadOnly=True)
         try:
             return doc.Content.Text
         finally:
             doc.Close(False)
     finally:
-        app.Quit()
+        _quit_app(app, pid, "WINWORD.EXE")
 
 
 def _extract_excel_text(source_path):
@@ -450,6 +487,7 @@ def _extract_excel_text(source_path):
         app.EnableEvents = False
         app.AskToUpdateLinks = False
         app.DisplayStatusBar = False
+        pid = _app_pid(app)
         wb = app.Workbooks.Open(source_path, UpdateLinks=0, ReadOnly=True)
         try:
             lines = []
@@ -476,7 +514,7 @@ def _extract_excel_text(source_path):
         finally:
             wb.Close(False)
     finally:
-        app.Quit()
+        _quit_app(app, pid, "EXCEL.EXE")
 
 
 def _extract_powerpoint_text(source_path):
@@ -484,6 +522,7 @@ def _extract_powerpoint_text(source_path):
 
     app = win32com.client.DispatchEx("PowerPoint.Application")
     try:
+        pid = _app_pid(app)
         pres = app.Presentations.Open(source_path, ReadOnly=True, WithWindow=False)
         try:
             lines = []
@@ -500,7 +539,7 @@ def _extract_powerpoint_text(source_path):
         finally:
             pres.Close()
     finally:
-        app.Quit()
+        _quit_app(app, pid, "POWERPNT.EXE")
 
 
 def _clean_msg_field(value):
@@ -726,7 +765,6 @@ def extract_text(source_path):
 
     import pythoncom
 
-    before = _office_pids()
     pythoncom.CoInitialize()
     try:
         if ext in DOC_EXTS:
@@ -738,7 +776,6 @@ def extract_text(source_path):
         raise ValueError(f"Unsupported document type: {ext}")
     finally:
         pythoncom.CoUninitialize()
-        _kill_new_office(before)
 
 
 def text_cache_path(source_path):
@@ -1110,7 +1147,7 @@ def _edit_word_com(path, operations):
         doc.Save()
     finally:
         doc.Close(False)
-        app.Quit()
+        _quit_app(app, _app_pid(app), "WINWORD.EXE")
     return results
 
 
@@ -1124,6 +1161,7 @@ def _edit_excel_com(path, operations):
     app.EnableEvents = False
     app.AskToUpdateLinks = False
     app.DisplayStatusBar = False
+    pid = _app_pid(app)
     wb = app.Workbooks.Open(path, UpdateLinks=0)
     results = []
     try:
@@ -1211,7 +1249,7 @@ def _edit_excel_com(path, operations):
         wb.Save()
     finally:
         wb.Close(False)
-        app.Quit()
+        _quit_app(app, pid, "EXCEL.EXE")
     return results
 
 
@@ -1219,6 +1257,7 @@ def _edit_powerpoint_com(path, operations):
     import win32com.client
 
     app = win32com.client.DispatchEx("PowerPoint.Application")
+    pid = _app_pid(app)
     pres = app.Presentations.Open(path, WithWindow=False)
     results = []
     try:
@@ -1312,7 +1351,7 @@ def _edit_powerpoint_com(path, operations):
         pres.Save()
     finally:
         pres.Close()
-        app.Quit()
+        _quit_app(app, pid, "POWERPNT.EXE")
     return results
 
 
@@ -1344,13 +1383,11 @@ def edit_document(source_path, operations):
     _ensure_deps()
     import pythoncom
 
-    before = _office_pids()
     pythoncom.CoInitialize()
     try:
         return _edit_legacy(source_path, ext, operations)
     finally:
         pythoncom.CoUninitialize()
-        _kill_new_office(before)
 
 
 def _read_msg_attachment(source_path, index):
