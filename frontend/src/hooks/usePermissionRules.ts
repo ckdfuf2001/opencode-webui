@@ -75,7 +75,7 @@ export function useDeleteSessionPermissionRule() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ id, sessionId }: { id: string; sessionId: string }) => deleteSessionPermissionRule(id),
+    mutationFn: ({ id }: { id: string; sessionId: string }) => deleteSessionPermissionRule(id),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['session-permission-rules', variables.sessionId] })
     },

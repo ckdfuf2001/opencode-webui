@@ -7,8 +7,8 @@ const OVERRIDES_KEY = 'opencode-session-notify-overrides'
 const REPO_OVERRIDES_KEY = 'opencode-repo-notify-overrides'
 const SESSION_PERM_KEY = 'opencode-session-permission-rules'
 
-type SessionOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean; skillReviewEnabled?: boolean }
-type RepoOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean; skillReviewEnabled?: boolean }
+export type SessionOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean; skillReviewEnabled?: boolean }
+export type RepoOverride = { soundEnabled?: boolean; soundOnCancelEnabled?: boolean; pushEnabled?: boolean; skillAutoEnabled?: boolean; skillReviewEnabled?: boolean }
 type OverridesMap = Record<string, SessionOverride>
 type RepoOverridesMap = Record<string, RepoOverride>
 

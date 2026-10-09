@@ -10,7 +10,6 @@ import { useSessionStatusMap, useMessages, useSessions, clearCancelledUntilNextS
 import { useOverrideSource } from '@/hooks/useNotifyOverrides'
 import { permissionEvents } from '@/hooks/usePermissionRequests'
 import { useEnqueueQueuedChat, useQueuedChats } from '@/hooks/useChatQueue'
-import { useOverrideSource } from '@/hooks/useNotifyOverrides'
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import { listRepos } from '@/api/repos'

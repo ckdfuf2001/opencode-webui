@@ -15,6 +15,8 @@ import {
   readAllLegacySessionPermissionRules,
   clearLegacySessionPermissionRules,
   type OverrideSource,
+  type SessionOverride,
+  type RepoOverride,
 } from '@/lib/notifications'
 import { createSessionPermissionRule } from '@/api/permission-rules'
 
@@ -25,11 +27,20 @@ const SESSION_RULES_MIGRATION_FLAG = 'opencode-session-rules-migrated-v1'
 
 function toSource(list: NotifyOverride[] | undefined): OverrideSource {
   if (!list || list.length === 0) return legacyOverrideSource
-  const sessions = new Map<string, NotifyOverride>()
-  const repos = new Map<string, NotifyOverride>()
+  const sessions = new Map<string, SessionOverride>()
+  const repos = new Map<string, RepoOverride>()
+  // API null(상속)을 undefined로 정규화 — SessionOverride/RepoOverride와 타입 일치.
+  const norm = (v: boolean | null | undefined): boolean | undefined => (v == null ? undefined : v)
   for (const o of list) {
-    if (o.scope === 'session') sessions.set(o.target, o)
-    else repos.set(String(o.target), o)
+    const patch = {
+      pushEnabled: norm(o.pushEnabled),
+      soundEnabled: norm(o.soundEnabled),
+      soundOnCancelEnabled: norm(o.soundOnCancelEnabled),
+      skillAutoEnabled: norm(o.skillAutoEnabled),
+      skillReviewEnabled: norm(o.skillReviewEnabled),
+    }
+    if (o.scope === 'session') sessions.set(o.target, patch)
+    else repos.set(String(o.target), patch)
   }
   if (sessions.size === 0 && repos.size === 0) return legacyOverrideSource
   return {
