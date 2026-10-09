@@ -85,7 +85,9 @@ const VirtualizedLine = memo(function VirtualizedLine({
         transform: `translate3d(0, ${top}px, 0)`,
         height,
         left: 0,
-        right: 0,
+        // wrap off면 행을 내용 너비까지 키워 바깥 overflow-auto가 가로 스크롤을 만들게 한다.
+        // (left+right 고정은 행을 컨테이너 너비로 가둬 ellipsis로 잘라먹는다)
+        ...(lineWrap ? { right: 0 } : { width: 'max-content', minWidth: '100%' }),
       }}
     >
       <div
@@ -116,8 +118,8 @@ const VirtualizedLine = memo(function VirtualizedLine({
         />
       ) : (
         <div
-          className={`flex-1 pl-2 ${
-            lineWrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-hidden text-ellipsis'
+          className={`flex-1 pl-2 pr-2 ${
+            lineWrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
           }`}
           style={{ lineHeight: `${lineHeight}px` }}
         >
