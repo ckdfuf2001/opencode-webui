@@ -365,22 +365,30 @@ useEffect(() => {
   }
 
   const handleRefresh = () => {
+    // 트리에서 펼쳐둔 하위 경로(['files', subpath] 캐시)까지 전부 무효화한다.
+    // 현재 경로만 다시 읽으면 열린 하위 폴더가 stale로 남는다.
+    queryClient.invalidateQueries({ queryKey: ['files'] })
     loadFiles(currentPath)
   }
 
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ path: string }>).detail
-      if (!detail?.path) { loadFiles(currentPath); return }
+      if (!detail?.path) {
+        queryClient.invalidateQueries({ queryKey: ['files'] })
+        loadFiles(currentPath)
+        return
+      }
       const changed = detail.path.replace(/\\/g, '/')
       const cur = currentPath.replace(/\\/g, '/')
       if (changed === cur || changed.startsWith(cur + '/') || cur.startsWith(changed + '/')) {
+        queryClient.invalidateQueries({ queryKey: ['files'] })
         loadFiles(currentPath)
       }
     }
     window.addEventListener('opencode:files-changed', handler as EventListener)
     return () => window.removeEventListener('opencode:files-changed', handler as EventListener)
-  }, [currentPath])
+  }, [currentPath, queryClient])
 
   const ensureDropDirs = useCallback(async (dirs: string[]) => {
     const unique = [...new Set(dirs.map((d) => normalizePath(d)).filter(Boolean))]

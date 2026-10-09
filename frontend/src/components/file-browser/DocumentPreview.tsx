@@ -636,42 +636,227 @@ function sheetToHtmlWithHeaders(ws: { '!ref'?: string; [key: string]: any }, XLS
 }
 
 function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }) {
-  const [html, setHtml] = useState('')
+  const [sheets, setSheets] = useState<{ name: string; html: string; images: { src: string; name: string }[]; skippedImages: number }[]>([])
+  const [active, setActive] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    const urls: string[] = []
     ;(async () => {
       try {
         const mod = await import('xlsx')
         const XLSX = mod.default ?? mod
+        const JSZip = (await import('jszip')).default
+        const zip = await JSZip.loadAsync(data)
         const wb = XLSX.read(new Uint8Array(data), { type: 'array', cellStyles: true }) as any
         const sheetStyles: any[] = wb.Styles || []
-        const parts = wb.SheetNames.map((name: string) => {
+        // workbook rel 체인으로 시트별 drawing 연결 (이미지 귀속용)
+        const sheetDrawings = await mapSheetDrawings(zip).catch(() => new Map<string, string>())
+        const parts = []
+        for (const name of wb.SheetNames as string[]) {
           const ws = wb.Sheets[name]
-          return '<div class="xlsx-sheet"><h3>' + name + '</h3>' + sheetToHtmlWithHeaders(ws, XLSX, sheetStyles) + '</div>'
-        })
-        if (!cancelled) setHtml(parts.join(''))
+          const html = sheetToHtmlWithHeaders(ws, XLSX, sheetStyles)
+          const { images, skipped } = await loadSheetImages(zip, sheetDrawings.get(name), urls).catch(() => ({ images: [], skipped: 0 }))
+          parts.push({ name, html, images, skippedImages: skipped })
+        }
+        if (!cancelled) {
+          setSheets(parts)
+          setActive(0)
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to parse spreadsheet')
       }
     })()
     return () => {
       cancelled = true
-      setHtml('')
+      setSheets([])
+      setActive(0)
       setError(null)
+      for (const u of urls) {
+        try { URL.revokeObjectURL(u) } catch {}
+      }
     }
   }, [data])
 
   if (error) return <ErrorNote msg={error} />
-  if (!html) return SPINNER
+  if (sheets.length === 0) return SPINNER
+  const cur = sheets[Math.min(active, sheets.length - 1)]!
   return (
     <DocumentShell fileName={fileName}>
       {(zoom) => (
-        <div className="xlsx-preview p-3" style={{ zoom }} dangerouslySetInnerHTML={{ __html: html }} />
+        <div className="xlsx-preview" style={{ zoom }}>
+          {sheets.length > 1 && (
+            <div className="flex items-center gap-1 px-3 pt-2 overflow-x-auto border-b border-border bg-background sticky top-0">
+              {sheets.map((s, i) => (
+                <button
+                  key={`${s.name}-${i}`}
+                  type="button"
+                  onClick={() => setActive(i)}
+                  title={s.name}
+                  className={`shrink-0 max-w-[160px] truncate px-2.5 py-1.5 text-xs rounded-t-md border border-b-0 transition-colors ${
+                    i === active
+                      ? 'bg-muted font-medium text-foreground border-border'
+                      : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50'
+                  }`}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="p-3" dangerouslySetInnerHTML={{ __html: cur.html }} />
+          {(cur.images.length > 0 || cur.skippedImages > 0) && (
+            <div className="px-3 pb-3">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">
+                Images ({cur.images.length}{cur.skippedImages > 0 ? `, ${cur.skippedImages} unrenderable` : ''})
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {cur.images.map((img, i) => (
+                  <a key={i} href={img.src} target="_blank" rel="noreferrer" title={img.name}>
+                    <img
+                      src={img.src}
+                      alt={img.name}
+                      className="max-h-40 max-w-full rounded border border-border bg-white object-contain"
+                      loading="lazy"
+                    />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </DocumentShell>
   )
+}
+
+/** workbook rel 체인으로 시트 이름 → drawing 경로를 연결한다. */
+async function mapSheetDrawings(zip: any): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const readXml = async (path: string): Promise<Document | null> => {
+    const f = zip.files[path]
+    if (!f || f.dir) return null
+    try {
+      return new DOMParser().parseFromString(await f.async('string'), 'application/xml')
+    } catch {
+      return null
+    }
+  }
+  const relsOf = async (path: string): Promise<Map<string, string>> => {
+    // path: 'xl/worksheets/sheet1.xml' → rels: 'xl/worksheets/_rels/sheet1.xml.rels'
+    const slash = path.lastIndexOf('/')
+    const relsPath = `${path.slice(0, slash)}/_rels/${path.slice(slash + 1)}.rels`
+    const doc = await readXml(relsPath)
+    const map = new Map<string, string>()
+    if (!doc) return map
+    const rels = Array.from(doc.getElementsByTagName('Relationship'))
+    for (const r of rels) {
+      const id = r.getAttribute('Id')
+      const target = r.getAttribute('Target')
+      if (id && target) map.set(id, target)
+    }
+    return map
+  }
+  const resolve = (base: string, target: string): string => {
+    // '../drawings/drawing1.xml' → base 디렉토리 기준 정규화
+    const dir = base.slice(0, base.lastIndexOf('/'))
+    const parts: string[] = []
+    for (const seg of `${dir}/${target}`.split('/')) {
+      if (seg === '..') parts.pop()
+      else if (seg !== '.' && seg !== '') parts.push(seg)
+    }
+    return parts.join('/')
+  }
+  const wb = await readXml('xl/workbook.xml')
+  if (!wb) return out
+  const wbRels = await relsOf('xl/workbook.xml')
+  const sheets = Array.from(wb.getElementsByTagName('sheet'))
+  for (const s of sheets) {
+    const name = s.getAttribute('name')
+    const rid = s.getAttribute('r:id')
+    if (!name || !rid) continue
+    const wsTarget = wbRels.get(rid)
+    if (!wsTarget) continue
+    const wsPath = resolve('xl/workbook.xml', wsTarget)
+    const wsRels = await relsOf(wsPath)
+    for (const [, target] of wsRels) {
+      if (/drawing/i.test(target)) {
+        out.set(name, resolve(wsPath, target))
+        break
+      }
+    }
+  }
+  return out
+}
+
+const RENDERABLE_IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+}
+
+/** drawing의 embedded 이미지를 blob URL로 꺼낸다 (브라우저 표시 불가 형식은 세기만). */
+async function loadSheetImages(
+  zip: any,
+  drawingPath: string | undefined,
+  urls: string[],
+): Promise<{ images: { src: string; name: string }[]; skipped: number }> {
+  const images: { src: string; name: string }[] = []
+  let skipped = 0
+  if (!drawingPath) return { images, skipped }
+  const f = zip.files[drawingPath]
+  if (!f || f.dir) return { images, skipped }
+  const doc = new DOMParser().parseFromString(await f.async('string'), 'application/xml')
+  // drawing rels에서 embed id → media 경로
+  const slash = drawingPath.lastIndexOf('/')
+  const relsPath = `${drawingPath.slice(0, slash)}/_rels/${drawingPath.slice(slash + 1)}.rels`
+  const relsFile = zip.files[relsPath]
+  const relMap = new Map<string, string>()
+  if (relsFile && !relsFile.dir) {
+    try {
+      const relsDoc = new DOMParser().parseFromString(await relsFile.async('string'), 'application/xml')
+      for (const r of Array.from(relsDoc.getElementsByTagName('Relationship'))) {
+        const id = r.getAttribute('Id')
+        const target = r.getAttribute('Target')
+        if (id && target) relMap.set(id, target)
+      }
+    } catch {}
+  }
+  const dir = drawingPath.slice(0, slash)
+  const seen = new Set<string>()
+  const blips = Array.from(doc.getElementsByTagName('a:blip'))
+  for (const blip of blips) {
+    const embed = blip.getAttribute('r:embed')
+    if (!embed || seen.has(embed)) continue
+    seen.add(embed)
+    const target = relMap.get(embed)
+    if (!target) continue
+    const parts: string[] = []
+    for (const seg of `${dir}/${target}`.split('/')) {
+      if (seg === '..') parts.pop()
+      else if (seg !== '.' && seg !== '') parts.push(seg)
+    }
+    const mediaPath = parts.join('/')
+    const mediaFile = zip.files[mediaPath]
+    if (!mediaFile || mediaFile.dir) continue
+    const ext = (mediaPath.split('.').pop() ?? '').toLowerCase()
+    const mime = RENDERABLE_IMAGE_MIME[ext]
+    if (!mime) {
+      skipped += 1
+      continue
+    }
+    const buf: Uint8Array = await mediaFile.async('uint8array')
+    const blob = new Blob([buf.slice()], { type: mime })
+    const src = URL.createObjectURL(blob)
+    urls.push(src)
+    images.push({ src, name: mediaPath.split('/').pop() ?? mediaPath })
+  }
+  return { images, skipped }
 }
 
 const PPTX_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'

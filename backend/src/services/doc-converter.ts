@@ -47,6 +47,10 @@ function startConverterProcess(): Promise<boolean> {
     })
 
     let attempts = 0
+    // 438MB 번들 cold start(압축 해제+Defender 스캔+soffice init)는 20초를 넘긴다.
+    // 10초 예산이면 기동 직전 kill이 반복돼 영원히 503이다 — 90초까지 기다린다.
+    const MAX_ATTEMPTS = 180
+    const POLL_MS = 500
     const poll = async () => {
       attempts += 1
       try {
@@ -58,13 +62,14 @@ function startConverterProcess(): Promise<boolean> {
       } catch {
         // not up yet
       }
-      if (attempts > 40) {
-        logger.warn('Document converter failed to start')
+      if (attempts >= MAX_ATTEMPTS) {
+        logger.warn('Document converter failed to start (90s budget exceeded)')
         child.kill()
         if (converterProcess === child) converterProcess = null
         return resolve(false)
       }
-      setTimeout(poll, 250)
+      if (attempts === 1) logger.info('Starting document converter (first boot may take ~30s)')
+      setTimeout(poll, POLL_MS)
     }
     setTimeout(poll, 400)
   })
