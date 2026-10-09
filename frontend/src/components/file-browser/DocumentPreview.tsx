@@ -81,9 +81,13 @@ function useRawFile(path: string, enabled = true) {
   return { data, status, error }
 }
 
+/** 변환 서비스 부팅 대기 예산 — doc-converter cold start가 20~90초 걸린다. */
+const WARM_RETRY_MS = 5000
+const WARM_RETRY_MAX = 24
+
 function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
   const [data, setData] = useState<ArrayBuffer | null>(null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading')
+  const [status, setStatus] = useState<'loading' | 'warming' | 'ready' | 'unavailable' | 'error'>('loading')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -93,31 +97,46 @@ function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
       return
     }
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let retries = 0
     setStatus('loading')
     setData(null)
     setError('')
     const refresh = refreshKey > 0 ? '&refresh=1' : ''
-    fetch(`${API_BASE_URL}/api/preview/pdf?path=${encodeURIComponent(path)}${refresh}`)
-      .then(async (res) => {
-        if (res.status === 503) {
-          if (!cancelled) setStatus('unavailable')
-          return
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const buf = await res.arrayBuffer()
-        if (!cancelled) {
-          setData(buf)
-          setStatus('ready')
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : 'Failed to convert document')
-          setStatus('error')
-        }
-      })
+    const load = () => {
+      fetch(`${API_BASE_URL}/api/preview/pdf?path=${encodeURIComponent(path)}${refresh}`)
+        .then(async (res) => {
+          if (cancelled) return
+          if (res.status === 503) {
+            // 변환 서비스가 아직 안 떴다 — 끄지 말고 기동될 때까지 재시도한다.
+            // (첫 요청이 부팅을 트리거하므로 503을 곧바로 폴백 확정하면 안 된다)
+            if (retries < WARM_RETRY_MAX) {
+              retries += 1
+              setStatus('warming')
+              timer = setTimeout(load, WARM_RETRY_MS)
+            } else {
+              setStatus('unavailable')
+            }
+            return
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const buf = await res.arrayBuffer()
+          if (!cancelled) {
+            setData(buf)
+            setStatus('ready')
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            setError(e instanceof Error ? e.message : 'Failed to convert document')
+            setStatus('error')
+          }
+        })
+    }
+    load()
     return () => {
       cancelled = true
+      if (timer) clearTimeout(timer)
       setData(null)
       setStatus('unavailable')
     }
@@ -378,6 +397,18 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
 
   if (!kind) return null
 
+  const renderRawBody = (): ReactNode => {
+    if (rawStatus === 'loading') return SPINNER
+    if (rawStatus === 'ready' && raw) {
+      if (kind === 'pdf') return <PdfViewer data={raw} fileName={file.name} />
+      if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} />
+      if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} />
+      return <PptxViewer data={raw} fileName={file.name} />
+    }
+    if (rawStatus === 'error') return <ErrorNote msg={rawError} />
+    return null
+  }
+
   let body: ReactNode
   if (kind === 'msg') {
     if (extracted.status === 'loading') {
@@ -394,18 +425,12 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   } else if (converted.status === 'ready' && converted.data) {
     body = <PdfViewer data={converted.data} fileName={file.name} />
   } else if (hasClientFallback) {
-    if (rawStatus === 'loading') {
-      body = SPINNER
-    } else if (rawStatus === 'ready' && raw) {
-      if (kind === 'pdf') body = <PdfViewer data={raw} fileName={file.name} />
-      else if (kind === 'docx') body = <DocxViewer data={raw} fileName={file.name} />
-      else if (kind === 'xlsx') body = <XlsxViewer data={raw} fileName={file.name} />
-      else body = <PptxViewer data={raw} fileName={file.name} />
-    } else if (rawStatus === 'error') {
-      body = <ErrorNote msg={rawError} />
-    } else {
-      body = null
-    }
+    // 변환 서비스 부팅 중(warming)에도 로컬 파서를 그대로 보여주고, 준비되면 PDF로 조용히 전환된다.
+    body = renderRawBody()
+  } else if (converted.status === 'warming') {
+    body = SPINNER
+  } else if (converted.status === 'error' && converted.error) {
+    body = <ErrorNote msg={converted.error} />
   } else {
     body = <ConversionRequiredNote msg={converted.error} />
   }
