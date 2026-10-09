@@ -420,15 +420,13 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     } else {
       body = <ErrorNote msg={extracted.error} />
     }
-  } else if (converted.status === 'loading') {
-    body = SPINNER
+  } else if (converted.status === 'loading' || converted.status === 'warming') {
+    // 첨부터 PDF 준비될 때까지 로딩 표시 (경과시간 포함). 로컬 파서는 폴백용으로만 둔다.
+    body = <ConvertingView />
   } else if (converted.status === 'ready' && converted.data) {
     body = <PdfViewer data={converted.data} fileName={file.name} />
   } else if (hasClientFallback) {
-    // 변환 서비스 부팅 중(warming)에도 로컬 파서를 그대로 보여주고, 준비되면 PDF로 조용히 전환된다.
     body = renderRawBody()
-  } else if (converted.status === 'warming') {
-    body = SPINNER
   } else if (converted.status === 'error' && converted.error) {
     body = <ErrorNote msg={converted.error} />
   } else {
@@ -438,6 +436,23 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   return (
     <div className="h-full flex flex-col min-h-0 min-w-0 overflow-hidden">
       {body}
+    </div>
+  )
+}
+
+/** PDF 준비될 때까지 로딩 표시 (경과시간 포함 — 진짜 퍼센트는 변환기가 안 준다). */
+function ConvertingView() {
+  const [secs, setSecs] = useState(0)
+  useEffect(() => {
+    const t0 = Date.now()
+    const id = setInterval(() => setSecs(Math.floor((Date.now() - t0) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-center px-6">
+      <Loader2 className="w-6 h-6 animate-spin text-muted-foreground mb-2" />
+      <p className="text-sm text-muted-foreground">PDF 변환 중… {secs}초</p>
+      <p className="text-xs text-muted-foreground mt-1">첫 기동은 1분 정도 걸릴 수 있습니다</p>
     </div>
   )
 }
