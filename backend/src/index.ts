@@ -595,14 +595,6 @@ logger.info('Schedule runner started')
 startSessionStatusPoller(db)
 logger.info('Session status poller started')
 
-// 토스트 클릭 이동용: 실제 바인드 포트 확정 (launch URL 생성용).
-try {
-  const { setWebuiPort } = await import('./services/webui-base')
-  setWebuiPort(PORT)
-} catch (e) {
-  logger.debug('WebUI port setup skipped:', e instanceof Error ? e.message : e)
-}
-
 // S1 백필: 기존 세션의 소속 레포를 현재 directory로 역산해 1회 기록.
 // opencode 부팅을 기다렸다가 1회만 (S2 이전 directory 값이 유효할 때).
 setTimeout(() => {

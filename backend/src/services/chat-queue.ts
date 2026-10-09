@@ -7,7 +7,6 @@ import { stripAllReasoningParts, truncateSessionMessages, deleteSessionMessage }
 import { recentSessionMessages } from './session-message-db'
 import { getWorkspacePath } from '@opencode-webui/shared'
 import { getSessionStatusRow, setSessionCancelled, markSessionStatusIdle } from '../db/session-status-queries'
-import { touchNotifySend } from '../db/notify-queries'
 import { resolveLiveDirectory, resolveRepoId } from './command-runs'
 import { buildRecall, readRecallPrefs } from './recall'
 import { logger } from '../utils/logger'
@@ -216,10 +215,6 @@ export function enqueueQueuedChat(sessionID: string, text: string, directory?: s
   }
   queues.set(sessionID, queue)
   if (directory) queueDirs.set(sessionID, directory)
-  // 새 전송 신호 — 알림 라벨 판단용 (stale 중단 오탐 방지).
-  try {
-    if (queueDb) touchNotifySend(queueDb, sessionID)
-  } catch {}
   logger.info(`Queued ${kind} for session ${sessionID} (position ${queue.length})`)
   return [...queue]
 }

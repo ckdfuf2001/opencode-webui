@@ -13,6 +13,7 @@ import { getSkillAutoUpdate, setSkillAutoUpdate, getSkillAutoReview, setSkillAut
 import type { PermissionRule } from '@/api/types'
 import { showToast } from '@/lib/toast'
 import { useSettings } from '@/hooks/useSettings'
+import { getNotificationSettingsUrl, isPushSupported, ensurePushPermission } from '@/lib/notifications'
 import { useNotifyOverrides, useOverrideSource, useSetNotifyOverride } from '@/hooks/useNotifyOverrides'
 import { useSessionPermissionRules, useCreateSessionPermissionRule, useDeleteSessionPermissionRule } from '@/hooks/usePermissionRules'
 import type { NotifyOverridePatch } from '@/api/notify'
@@ -517,9 +518,11 @@ export function PermissionRulesDialog({
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
-                  <p className="text-xs text-muted-foreground">백단이 직접 발송 (브라우저 꺼짐 대응)</p>
+                  {typeof Notification !== 'undefined' && Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
                 </div>
-                <Switch checked={globalPushOn} onCheckedChange={(v) => { updateSettings({ pushNotificationEnabled: v }); }} />
+                <Switch checked={globalPushOn} onCheckedChange={async (v) => { if (v) { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } updateSettings({ pushNotificationEnabled: v }); }} />
               </div>
             </>
           )}
@@ -543,8 +546,11 @@ export function PermissionRulesDialog({
                 <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
                   <p className="text-xs text-muted-foreground">전역 {globalPushOn?'ON':'OFF'} → 적용 {(repoPushOverride ?? globalPushOn)?'ON':'OFF'}{repoPushOverride===undefined?' (상속)':''}</p>
+                  {typeof Notification !== 'undefined' && Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
                 </div>
-                <Switch checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn} onCheckedChange={(v) => { const next = v === globalPushOn ? undefined : v; saveRepoOv(repoId!, { pushEnabled: next }); setRepoPushOverrideState(next); }} />
+                <Switch checked={repoPushOverride !== undefined ? repoPushOverride : globalPushOn} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const next = v === globalPushOn ? undefined : v; saveRepoOv(repoId!, { pushEnabled: next }); setRepoPushOverrideState(next); }} />
               </div>
             </>
           )}
@@ -568,8 +574,11 @@ export function PermissionRulesDialog({
                 <div className="space-y-0.5">
                   <Label className="text-sm flex items-center gap-1"><Bell className="w-3 h-3" /> OS notification</Label>
                   <p className="text-xs text-muted-foreground">상위 {(repoPushOverride ?? globalPushOn)?'ON':'OFF'} → 적용 {(sessionPushOverride ?? (repoPushOverride ?? globalPushOn))?'ON':'OFF'}{sessionPushOverride===undefined?' (상속)':''}</p>
+                  {typeof Notification !== 'undefined' && Notification.permission === 'denied' && (
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded break-all block mt-1">{getNotificationSettingsUrl()}</code>
+                  )}
                 </div>
-                <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} onCheckedChange={(v) => { const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; saveSessionOv(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
+                <Switch checked={sessionPushOverride !== undefined ? sessionPushOverride : (repoPushOverride !== undefined ? repoPushOverride : globalPushOn)} disabled={!isPushSupported()} onCheckedChange={async (v) => { if (v && isPushSupported() && Notification.permission !== 'granted') { const perm = await ensurePushPermission(); if (perm !== 'granted') { showToast.error(getNotificationSettingsUrl() || '브라우저에서 알림이 차단되어 있습니다'); return; } } const parent = repoPushOverride !== undefined ? repoPushOverride : globalPushOn; const next = v === parent ? undefined : v; saveSessionOv(sessionId!, { pushEnabled: next }); setSessionPushOverrideState(next); }} />
               </div>
             </>
             )}

@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
 import type { Database } from 'bun:sqlite'
 import { listSessionStatus, setSessionCancelled, clearSessionCancelled } from '../db/session-status-queries'
-import { touchNotifyAbort, touchNotifySend } from '../db/notify-queries'
 import { logger } from '../utils/logger'
 
 export function createSessionStatusRoutes(db: Database) {
@@ -34,24 +33,10 @@ export function createSessionStatusRoutes(db: Database) {
     try {
       const id = c.req.param('id')
       clearSessionCancelled(db, id)
-      // 새 전송 신호로도 쓴다 — 직접전송 경로가 매번 호출하므로 알림 라벨 판단용으로 기록.
-      try { touchNotifySend(db, id) } catch {}
       return c.json({ ok: true })
     } catch (error) {
       logger.error('Failed to clear cancelled:', error)
       return c.json({ error: 'Failed to clear cancelled' }, 500)
-    }
-  })
-
-  // POST /api/session-status/:id/aborted — 중단 보고 (알림 라벨 판단용, fire-and-forget).
-  app.post('/:id/aborted', async (c) => {
-    try {
-      const id = c.req.param('id')
-      try { touchNotifyAbort(db, id) } catch {}
-      return c.json({ ok: true })
-    } catch (error) {
-      logger.error('Failed to record abort:', error)
-      return c.json({ error: 'Failed to record abort' }, 500)
     }
   })
 

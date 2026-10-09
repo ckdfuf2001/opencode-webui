@@ -14,12 +14,6 @@ import {
   setSessionCancelled,
   upsertSessionStatus,
 } from '../db/session-status-queries'
-import {
-  fillMissingBusy,
-  getPrevBusySessions,
-  processNotifyTick,
-  type NotifyTickInput,
-} from './notify-watcher'
 import { logger } from '../utils/logger'
 const POLL_INTERVAL_MS = 1_000
 const FETCH_TIMEOUT_MS = 2_500
@@ -28,9 +22,6 @@ const IDLE_ROW_TTL_MS = 30 * 24 * 60 * 60 * 1000
 interface DirectorySnapshot {
   busySessionIds: Set<string>
   pendingPermissions: Map<string, number>
-  /** 승인 대기 분리 (알림용 — DB에는 merged로 저장) */
-  pendingPerm: Map<string, { count: number; sample?: string }>
-  pendingQuestion: Map<string, number>
 }/**
  * opencode 의 /session/status (busy 세션)와 /permission (승인 대기)을 주기적으로
  * 읽어 webui DB(session_status)에 반영한다. SSE 이벤트 유실과 무관하게 프론트가
@@ -141,43 +132,13 @@ export function startSessionStatusPoller(db: Database): void {
 
       // 등록되지 않은 디렉터리 세션의 승인 대기/작업 중은 디렉터리별 조회에 안 잡힌다.
       // 전역 조회로 보완하지 않으면 승인 카드가 뜨지 않아 영원히 멈춘 것처럼 보인다.
-      let globalNotifyExtras: Map<string, { repoId: number | null; directory: string; busy: boolean; perm: number; permSample?: string; question: number }> = new Map()
       try {
-        globalNotifyExtras = await mergeGlobalFallback(db, snapshots, touched, busySessionIds, now)
+        await mergeGlobalFallback(db, snapshots, touched, busySessionIds, now)
       } catch (error) {
         logger.debug('Global session fallback skipped:', error)
       }
 
       pruneIdleSessionStatus(db, IDLE_ROW_TTL_MS, now)
-
-      // 백단 OS 알림 (프론트 꺼짐 대응) — busy→idle·승인대기·질문 전이 감지.
-      try {
-        const tickInput: NotifyTickInput = { busyNow: busySessionIds, info: new Map() }
-        for (const [directory, snapshot] of snapshots) {
-          const repoId = resolveRepoId(db, directory)
-          const register = (sessionId: string) => {
-            if (tickInput.info.has(sessionId)) return
-            tickInput.info.set(sessionId, {
-              repoId,
-              directory,
-              perm: snapshot.pendingPerm.get(sessionId)?.count ?? 0,
-              permSample: snapshot.pendingPerm.get(sessionId)?.sample,
-              question: snapshot.pendingQuestion.get(sessionId) ?? 0,
-            })
-          }
-          for (const sessionId of snapshot.busySessionIds) register(sessionId)
-          for (const sessionId of snapshot.pendingPerm.keys()) register(sessionId)
-          for (const sessionId of snapshot.pendingQuestion.keys()) register(sessionId)
-        }
-        for (const [sessionId, extra] of globalNotifyExtras) {
-          if (!tickInput.info.has(sessionId)) tickInput.info.set(sessionId, extra)
-          if (extra.busy) tickInput.busyNow.add(sessionId)
-        }
-        fillMissingBusy(db, tickInput, getPrevBusySessions())
-        processNotifyTick(db, tickInput, now)
-      } catch (error) {
-        logger.debug('Notify watcher skipped:', error instanceof Error ? error.message : error)
-      }
 
       // idle 이 된 세션의 채팅 큐 헤드를 발송한다 (SSE session.idle 대체).
       flushReadyQueues(busySessionIds)
@@ -214,34 +175,19 @@ async function collectDirectorySnapshots(db: Database): Promise<Map<string, Dire
   const snapshots = new Map<string, DirectorySnapshot>()
   for (const directory of directories) {
     try {
-      const [busySessionIds, permItems, questionItems] = await Promise.all([
+      const [busySessionIds, pendingPermissions, pendingQuestions] = await Promise.all([
         fetchBusySessions(directory),
-        fetchPendingItems(directory, 'permission'),
-        fetchPendingItems(directory, 'question'),
+        fetchPendingCounts(directory, 'permission'),
+        fetchPendingCounts(directory, 'question'),
       ])
-      const pendingPerm = new Map<string, { count: number; sample?: string }>()
-      for (const item of permItems) {
-        const sessionId = item?.sessionID
-        if (!sessionId) continue
-        const prev = pendingPerm.get(sessionId)
-        const sample = prev?.sample ?? extractPermSample(item)
-        pendingPerm.set(sessionId, { count: (prev?.count ?? 0) + 1, sample: sample || undefined })
-      }
-      const pendingQuestion = new Map<string, number>()
-      for (const item of questionItems) {
-        const sessionId = item?.sessionID
-        if (!sessionId) continue
-        pendingQuestion.set(sessionId, (pendingQuestion.get(sessionId) ?? 0) + 1)
-      }
       // question/permission 대기는 세션이 사용자 입력을 기다리는 running 상태다.
-      for (const sessionId of pendingPerm.keys()) busySessionIds.add(sessionId)
-      for (const sessionId of pendingQuestion.keys()) busySessionIds.add(sessionId)
-      const merged = new Map<string, number>()
-      for (const [sessionId, entry] of pendingPerm) merged.set(sessionId, entry.count)
-      for (const [sessionId, count] of pendingQuestion) {
+      for (const sessionId of pendingPermissions.keys()) busySessionIds.add(sessionId)
+      for (const sessionId of pendingQuestions.keys()) busySessionIds.add(sessionId)
+      const merged = new Map<string, number>(pendingPermissions)
+      for (const [sessionId, count] of pendingQuestions) {
         merged.set(sessionId, (merged.get(sessionId) ?? 0) + count)
       }
-      snapshots.set(directory, { busySessionIds, pendingPermissions: merged, pendingPerm, pendingQuestion })
+      snapshots.set(directory, { busySessionIds, pendingPermissions: merged })
     } catch {
       // 이 디렉터리 조회 실패는 전체 사이클을 중단시키지 않는다.
       // 실패한 디렉터리의 행은 다음 틱까지 마지막 상태를 유지한다.
@@ -268,27 +214,9 @@ async function fetchBusySessions(directory?: string): Promise<Set<string>> {
 
 interface PendingItemLike {
   sessionID?: string
-  patterns?: unknown
-  pattern?: unknown
-  permission?: unknown
-  action?: unknown
-  type?: unknown
 }
 
-/** 승인 카드 본문용 샘플 (pattern[0] → permission/action 순). */
-function extractPermSample(item: PendingItemLike): string {
-  const raw = item.patterns ?? item.pattern
-  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []
-  const first = arr.find((v): v is string => typeof v === 'string' && v.length > 0)
-  if (first) return first.slice(0, 120)
-  for (const key of ['permission', 'action', 'type'] as const) {
-    const v = item[key]
-    if (typeof v === 'string' && v.length > 0) return v.slice(0, 120)
-  }
-  return ''
-}
-
-async function fetchPendingItems(directory: string | undefined, kind: 'permission' | 'question'): Promise<PendingItemLike[]> {
+async function fetchPendingCounts(directory: string | undefined, kind: 'permission' | 'question'): Promise<Map<string, number>> {
   const qs = directory ? `?directory=${encodeURIComponent(directory)}` : ''
   const url = `${opencodeServerManager.getUrl()}/${kind}${qs}`
   const response = await fetch(url, {
@@ -297,13 +225,9 @@ async function fetchPendingItems(directory: string | undefined, kind: 'permissio
   })
   if (!response.ok) throw new Error(`${kind} ${response.status}`)
   const list = (await response.json()) as PendingItemLike[]
-  if (!Array.isArray(list)) return []
-  return list
-}
-
-async function fetchPendingCounts(directory: string | undefined, kind: 'permission' | 'question'): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
-  for (const item of await fetchPendingItems(directory, kind)) {
+  if (!Array.isArray(list)) return counts
+  for (const item of list) {
     const sessionId = item?.sessionID
     if (!sessionId) continue
     counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1)
@@ -317,35 +241,19 @@ async function mergeGlobalFallback(
   touched: Set<string>,
   busySessionIds: Set<string>,
   now: number,
-): Promise<Map<string, { repoId: number | null; directory: string; busy: boolean; perm: number; permSample?: string; question: number }>> {
-  const extras = new Map<string, { repoId: number | null; directory: string; busy: boolean; perm: number; permSample?: string; question: number }>()
-  const [globalBusy, globalPermItems, globalQItems] = await Promise.all([
+): Promise<void> {
+  const [globalBusy, globalPerm, globalQ] = await Promise.all([
     fetchBusySessions(undefined),
-    fetchPendingItems(undefined, 'permission'),
-    fetchPendingItems(undefined, 'question'),
+    fetchPendingCounts(undefined, 'permission'),
+    fetchPendingCounts(undefined, 'question'),
   ])
-  const globalPerm = new Map<string, { count: number; sample?: string }>()
-  for (const item of globalPermItems) {
-    const sessionId = item?.sessionID
-    if (!sessionId) continue
-    const prev = globalPerm.get(sessionId)
-    const sample = prev?.sample ?? extractPermSample(item)
-    globalPerm.set(sessionId, { count: (prev?.count ?? 0) + 1, sample: sample || undefined })
-  }
-  const globalQ = new Map<string, number>()
-  for (const item of globalQItems) {
-    const sessionId = item?.sessionID
-    if (!sessionId) continue
-    globalQ.set(sessionId, (globalQ.get(sessionId) ?? 0) + 1)
-  }
   const knownBusy = new Set<string>()
   const knownPending = new Set<string>()
   for (const snapshot of snapshots.values()) {
     for (const id of snapshot.busySessionIds) knownBusy.add(id)
     for (const id of snapshot.pendingPermissions.keys()) knownPending.add(id)
   }
-  const mergedPending = new Map<string, number>()
-  for (const [id, entry] of globalPerm) mergedPending.set(id, entry.count)
+  const mergedPending = new Map<string, number>(globalPerm)
   for (const [id, count] of globalQ) mergedPending.set(id, (mergedPending.get(id) ?? 0) + count)
 
   const existing = new Map(listSessionStatus(db).map((row) => [row.sessionId, row]))
@@ -359,25 +267,15 @@ async function mergeGlobalFallback(
     const pending = mergedPending.get(sessionId) ?? 0
     const busy = globalBusy.has(sessionId) || pending > 0
     logger.info(`Session ${sessionId} tracked via global fallback (busy=${busy}, pending=${pending})`)
-    const repoId = resolveRepoId(db, directory)
     upsertSessionStatus(db, {
       sessionId,
       directory,
-      repoId,
+      repoId: resolveRepoId(db, directory),
       status: busy ? 'busy' : 'idle',
       pendingPermissions: pending,
       updatedAt: now,
     })
     touched.add(sessionId)
     if (busy) busySessionIds.add(sessionId)
-    extras.set(sessionId, {
-      repoId,
-      directory,
-      busy,
-      perm: globalPerm.get(sessionId)?.count ?? 0,
-      permSample: globalPerm.get(sessionId)?.sample,
-      question: globalQ.get(sessionId) ?? 0,
-    })
   }
-  return extras
 }

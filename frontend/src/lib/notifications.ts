@@ -1,5 +1,5 @@
-// OS 토스트는 백단이 직접 발송한다 (프론트 꺼짐 대응).
-// 프론트는 완료 틱 소리만 담당하고, 설정값은 백단 API가 단일 진실 통로다.
+// OS 토스트는 프론트(브라우저 Notification API)가 발송한다.
+// 설정값(오버라이드)은 백단 API가 단일 진실 통로, 소리/푸시 판정만 여기서 한다.
 // localStorage에는 마이그레이션 전 레거시 값만 남는다 (폴백 읽기용).
 
 // per-session overrides stored in localStorage
@@ -209,4 +209,142 @@ export function cloneRepoNotifyData(sourceRepoId: number | string, targetRepoId:
       } catch {}
     })
   } catch {}
+}
+
+// OS 토스트 표시 (브라우저 Notification API — 프론트가 발송 주체).
+export function isPushSupported(): boolean {
+  return typeof window !== 'undefined' && 'Notification' in window && window.isSecureContext
+}
+
+export async function ensurePushPermission(): Promise<NotificationPermission | null> {
+  if (!isPushSupported()) return null
+  if (Notification.permission === 'granted') return 'granted'
+  if (Notification.permission === 'denied') return 'denied'
+  try {
+    const perm = await Notification.requestPermission()
+    return perm
+  } catch {
+    return null
+  }
+}
+
+export async function sendPushNotification(title: string, opts?: NotificationOptions, url?: string, durationSec?: number): Promise<void> {
+  try {
+    if (!isPushSupported()) return
+    if (Notification.permission !== 'granted') return
+    const duration = typeof durationSec === 'number' ? durationSec : (() => { try { const raw = localStorage.getItem('opencode-push-duration'); if (raw != null) { const n = parseInt(raw, 10); if (!Number.isNaN(n) && n >= 0) return n; } } catch {} return 0 })()
+    const requireInteraction = duration === 0
+    const baseOpts: NotificationOptions & { renotify?: boolean } = {
+      badge: '/favicon.svg',
+      icon: '/favicon.svg',
+      requireInteraction,
+      silent: false,
+      // 같은 tag(sessionId) 교체 시 조용히 바뀌어 취소 알림이 안 온 것처럼 보임 → 항상 재알림
+      renotify: true,
+      ...opts,
+      data: { ...((opts as unknown as { data?: Record<string, unknown> } | undefined)?.data ?? {}), ...(url ? { url } : {}) },
+    }
+    // 유튜브 등도 ServiceWorker showNotification을 사용 — 백그라운드/다른 탭에서도 OS 알림이 뜨도록
+    if ('serviceWorker' in navigator) {
+      try {
+        // 이미 등록된 SW가 있으면 그대로 사용
+        const ready = await Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise<null>((res) => setTimeout(() => res(null), 400)),
+        ])
+        if (ready) {
+          await (ready as ServiceWorkerRegistration).showNotification(title, baseOpts)
+          if (duration > 0) {
+            setTimeout(async () => {
+              try {
+                const notifs = await (ready as ServiceWorkerRegistration).getNotifications({ tag: (opts as unknown as { tag?: string })?.tag ?? undefined } as never)
+                notifs.forEach((nn) => { try { nn.close() } catch {} })
+              } catch {}
+            }, duration * 1000)
+          }
+          return
+        }
+      } catch {}
+      // SW가 없으면 최소 SW를 동적으로 등록해 OS 알림 시도
+      try {
+        const swCode = `self.addEventListener('notificationclick', function(e){e.notification.close(); var url=(e.notification.data&&e.notification.data.url)||'/'; var target=url; try{target=new URL(url,self.registration.scope).href;}catch(_){} e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){ for(var i=0;i<cs.length;i++){ try{ if(cs[i].url&&cs[i].url.indexOf(target)!==-1) return cs[i].focus(); }catch(_){} } if(cs.length>0){ var c=cs[0]; try{ if(c.navigate) return c.navigate(target).then(function(cc){return cc.focus();}); }catch(_){} return c.focus(); } return clients.openWindow(target); }));}); self.addEventListener('push', function(e){});`
+        const blob = new Blob([swCode], { type: 'text/javascript' })
+        const url = URL.createObjectURL(blob)
+        const reg = await navigator.serviceWorker.register(url, { scope: '/' })
+        await navigator.serviceWorker.ready
+        await reg.showNotification(title, baseOpts)
+        if (duration > 0) {
+          setTimeout(async () => {
+            try {
+              const notifs = await reg.getNotifications({ tag: (opts as unknown as { tag?: string })?.tag ?? undefined } as never)
+              notifs.forEach((nn) => { try { nn.close() } catch {} })
+            } catch {}
+          }, duration * 1000)
+        }
+        return
+      } catch {}
+    }
+    const n = new Notification(title, baseOpts as NotificationOptions)
+    n.onclick = () => {
+      try {
+        window.focus()
+        if (url) window.location.href = url
+      } catch {}
+      n.close()
+    }
+    if (duration > 0) {
+      setTimeout(() => { try { n.close() } catch {} }, duration * 1000)
+    }
+  } catch {}
+}
+
+export function triggerTestPush(): void {
+  void sendPushNotification('테스트 알림', { body: 'PC 푸시 알림이 정상적으로 동작합니다.', tag: 'test-push' } as NotificationOptions)
+}
+
+export function getNotificationSettingsUrl(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (ua.includes('Edg')) return 'edge://settings/privacy/sitePermissions/allPermissions/notifications'
+  if (ua.includes('Chrome') && !ua.includes('Edg')) return 'chrome://settings/content/notifications'
+  if (ua.includes('Firefox')) return 'about:preferences#privacy'
+  if (ua.includes('Safari') && !ua.includes('Chrome')) return ''
+  return ''
+}
+
+export function getNotificationSettingsHelp(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (ua.includes('Edg')) return 'Edge: edge://settings/privacy/sitePermissions/allPermissions/notifications 또는 주소창 자물쇠 → 사이트 권한 → 알림'
+  if (ua.includes('Chrome') && !ua.includes('Edg')) return 'Chrome: chrome://settings/content/notifications 또는 주소창 자물쇠 → 사이트 설정 → 알림'
+  if (ua.includes('Firefox')) return 'Firefox: about:preferences#privacy → 권한 → 알림 → 설정'
+  if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari: 설정 → 웹사이트 → 알림'
+  return '브라우저 주소창 자물쇠 → 사이트 설정 → 알림'
+}
+
+export function openNotificationSettings(): boolean {
+  const url = getNotificationSettingsUrl()
+  if (!url) return false
+  // edge:// / chrome://는 웹에서 직접 열면 about:blank#blocked로 차단됨 — 새탭에 안내 페이지를 열어 값을 넣어줌
+  if (url.startsWith('edge://') || url.startsWith('chrome://')) {
+    try { void navigator.clipboard?.writeText(url) } catch {}
+    try {
+      const w = window.open('about:blank', '_blank')
+      if (w) {
+        const esc = url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>알림 설정</title><style>body{font-family:system-ui;padding:32px;max-width:640px;margin:40px auto;line-height:1.6}code{background:#f1f5f9;padding:6px 10px;border-radius:6px;word-break:break-all;display:block;margin:12px 0;font-size:14px}button{margin-top:12px;padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer}button:hover{background:#1d4ed8}.muted{color:#64748b;font-size:13px;margin-top:16px}</style></head><body><h2>브라우저 알림 설정</h2><p>아래 주소를 <b>클립보드에 복사</b>했습니다. 새탭을 열고 주소창에 <b>붙여넣기(Ctrl+V)</b> 후 Enter로 이동하세요.</p><code id="u">${esc}</code><button onclick="navigator.clipboard.writeText(document.getElementById('u').textContent).then(()=>{this.textContent='복사됨!'; setTimeout(()=>this.textContent='복사',1500)})">복사</button><p class="muted">또는 주소창 왼쪽 자물쇠 → 사이트 권한 → 알림 에서 허용으로 변경</p><p class="muted">브라우저 보안상 웹에서 edge://를 직접 열 수 없어 새탭에 값을 넣어드렸습니다.</p></body></html>`
+        w.document.open()
+        w.document.write(html)
+        w.document.close()
+        try { w.focus() } catch {}
+        return true
+      }
+    } catch {}
+    return false
+  }
+  try {
+    const w = window.open(url, '_blank')
+    if (!w || w.closed) return false
+    return true
+  } catch {
+    return false
+  }
 }

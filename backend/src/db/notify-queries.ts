@@ -111,28 +111,3 @@ export function upsertNotifyOverride(
 export function deleteNotifyOverride(db: Database, scope: NotifyScope, target: string): void {
   db.query('DELETE FROM notify_overrides WHERE scope = ? AND target = ?').run(scope, target)
 }
-
-/** 새 전송 신호 — 직접전송(DELETE /cancelled 경유)·큐 enqueue에서 기록. */
-export function touchNotifySend(db: Database, sessionId: string, at = Date.now()): void {
-  db.query(
-    `INSERT INTO notify_state (session_id, last_send_at, last_abort_at)
-     VALUES (?, ?, 0)
-     ON CONFLICT(session_id) DO UPDATE SET last_send_at = excluded.last_send_at`,
-  ).run(sessionId, at)
-}
-
-/** 중단 보고 — useAbortSession에서 fire-and-forget으로 기록. */
-export function touchNotifyAbort(db: Database, sessionId: string, at = Date.now()): void {
-  db.query(
-    `INSERT INTO notify_state (session_id, last_send_at, last_abort_at)
-     VALUES (?, 0, ?)
-     ON CONFLICT(session_id) DO UPDATE SET last_abort_at = excluded.last_abort_at`,
-  ).run(sessionId, at)
-}
-
-export function getNotifyState(db: Database, sessionId: string): { lastSendAt: number; lastAbortAt: number } {
-  const row = db
-    .query('SELECT last_send_at, last_abort_at FROM notify_state WHERE session_id = ?')
-    .get(sessionId) as { last_send_at: number; last_abort_at: number } | undefined
-  return { lastSendAt: row?.last_send_at ?? 0, lastAbortAt: row?.last_abort_at ?? 0 }
-}

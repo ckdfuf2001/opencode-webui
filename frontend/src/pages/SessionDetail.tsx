@@ -28,7 +28,7 @@ import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { useBackendConnection } from "@/hooks/useOpencodeHealth";
 import { OPENCODE_API_ENDPOINT, API_BASE_URL } from "@/config";
 import { playCompletionTick } from "@/lib/sounds";
-import { shouldPlaySound } from "@/lib/notifications";
+import { shouldPlaySound, shouldPush, sendPushNotification } from "@/lib/notifications";
 import { useOverrideSource } from "@/hooks/useNotifyOverrides";
 import { useSettings } from "@/hooks/useSettings";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -806,6 +806,7 @@ export function SessionDetail() {
     const aborted = sessionId ? isRecentlyAborted(sessionId) : false;
     const isCancel = aborted;
     const canSound = shouldPlaySound(sessionId, isCancel, preferences ?? {}, repoId, overrideSource);
+    const canPush = shouldPush(sessionId, preferences ?? {}, repoId, overrideSource);
     if (was && (!isStreaming || aborted)) {
       // 첫 채팅 등에서 polling/SSE 경합으로 isStreaming이 잠깐 false→true로 튀는 경우 이중 트리거 방지 — 800ms 디바운스
       const debounce = setTimeout(() => {
@@ -841,6 +842,15 @@ export function SessionDetail() {
             } catch {}
           }
           if (canSound) void playCompletionTick();
+          if (canPush) {
+            const title = isCancel ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
+            const curRepo = repoRef.current
+            const curSession = sessionRef.current as unknown as { title?: string } | undefined
+            const repoLabel = curRepo ? (curRepo.repoUrl ? curRepo.repoUrl.split("/").pop()?.replace(".git","") || curRepo.localPath : curRepo.localPath) : (repoId ? `repo ${repoId}` : 'Workspace');
+            const sessLabel = curSession?.title || 'Untitled Session';
+            const body = `${repoLabel} · ${sessLabel}`;
+            sendPushNotification(title, { body, tag: sessionId }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0)
+          }
         })();
       }, 800);
       // 빈 응답 휴리스틱 토스트는 제거함.
@@ -871,7 +881,7 @@ export function SessionDetail() {
     }
   }, [isStreaming, sessionId, opcodeUrl, repoDirectory, queryClient]);
 
-  // 권한 요청 도착 시 소리/푸시 — 자동승인 대상이면 OS 푸시 생략 (툴 알림 전 선조치)
+  // 권한 요청 도착 시 소리/푸시 (자동승인분도 도착 틱은 울린다 — 레포/전역 룰과 동일)
   const prevPermissionIdRef = useRef<string | null>(null);
   useEffect(() => {
     const pid = currentPermission?.id ?? null;
@@ -881,9 +891,15 @@ export function SessionDetail() {
         if (prevPermissionIdRef.current !== pid) return;
         // 스냅샷 시점과 현재가 다른 권한이면 무시 (이미 자동승인으로 제거된 경우)
         if (currentPermission?.id !== pid) return
-        // OS 토스트는 백단이 발송 — 여기는 틱 소리만.
-        // (자동승인 대상이어도 틱은 울린다 — 레포/전역 룰과 동일 동작)
         if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId, overrideSource)) void playCompletionTick();
+        if (shouldPush(sessionId, preferences ?? {}, repoId, overrideSource)) {
+          const title = '승인이 필요합니다';
+          const pattern = (currentPermission as unknown as { pattern?: string[]; permission?: string })?.pattern?.[0] ?? (currentPermission as unknown as { permission?: string })?.permission ?? '';
+          const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.workspaceRel : repo.workspaceRel) : `repo ${repoId}`;
+          const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
+          const body = `${repoLabel} · ${sessLabel}${pattern ? ` — ${pattern}` : ''}`;
+          sendPushNotification(title, { body, tag: `perm-${pid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
+        }
       }, 1200);
     } else if (!pid) {
       prevPermissionIdRef.current = null;
@@ -896,8 +912,13 @@ export function SessionDetail() {
     const qid = currentQuestion?.id ?? null;
     if (qid && qid !== prevQuestionIdRef.current) {
       prevQuestionIdRef.current = qid;
-      // OS 토스트는 백단이 발송 — 여기는 틱 소리만.
       if (shouldPlaySound(sessionId, false, preferences ?? {}, repoId, overrideSource)) void playCompletionTick();
+      if (shouldPush(sessionId, preferences ?? {}, repoId, overrideSource)) {
+        const repoLabel = repo ? (repo.repoUrl ? repo.repoUrl.split("/").pop()?.replace(".git","") || repo.workspaceRel : repo.workspaceRel) : (repoId ? `repo ${repoId}` : 'Workspace');
+        const sessLabel = (session as unknown as { title?: string })?.title || sessionId?.slice(0,8) || '';
+        const body = `${repoLabel} · ${sessLabel}`;
+        sendPushNotification('질문이 도착했습니다', { body, tag: `q-${qid}` }, id ? `/repos/${id}/sessions/${sessionId}` : `/session/${sessionId}`, preferences?.pushNotificationDuration ?? 0);
+      }
     } else if (!qid) {
       prevQuestionIdRef.current = null;
     }

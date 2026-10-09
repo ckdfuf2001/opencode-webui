@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, type ClipboardEvent, type DragEvent } from 'react'
+import { useState, useEffect, useMemo, useRef, type ClipboardEvent, type DragEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Star, X, Send, Trash2, MessageSquare, FolderGit2, Eye, GripVertical, Loader2, ShieldAlert } from 'lucide-react'
 import { CancelledBadge } from '../session/CancelledBadge'
@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { listFavorites, removeFavorite } from '@/api/favorites'
 import { useSessionStatusMap, useMessages, useSessions, clearCancelledUntilNextSend, clearRecentlyAborted } from '@/hooks/useOpenCode'
+import { useSettings } from '@/hooks/useSettings'
+import { shouldPush, sendPushNotification } from '@/lib/notifications'
 import { useOverrideSource } from '@/hooks/useNotifyOverrides'
 import { permissionEvents } from '@/hooks/usePermissionRequests'
 import { useEnqueueQueuedChat, useQueuedChats } from '@/hooks/useChatQueue'
@@ -30,6 +32,7 @@ export function FavoriteSessionsPanel() {
   const { data: favorites = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: listFavorites, staleTime: 10_000 })
   const { data: dbStatuses } = useSessionStatusMap()
   const { data: repos } = useQuery({ queryKey: ['repos'], queryFn: listRepos, enabled: pinned })
+  const { preferences } = useSettings()
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['favorites'] })
 
@@ -158,8 +161,36 @@ export function FavoriteSessionsPanel() {
     })
   }, [qc])
 
-  // OS 토스트는 백단이 발송하므로 프론트 푸시 이펙트는 제거됨.
-  // (소리는 열린 세션에서만 — SessionDetail 담당)
+  // OS 토스트는 프론트가 발송한다 (완료 푸시 — 소리는 열린 세션에서만).
+  // SessionDetail이 열려 있는 세션은 그쪽이 알리므로 중복 방지용으로 건너뛴다.
+  // 레포 즐겨찾기는 집계 대상이라 제외 — 개별 세션 즐겨찾기가 담당한다.
+  // 설정값(오버라이드)은 백단 API 캐시 우선으로 읽는다.
+  const overrideSourceForPush = useOverrideSource()
+  const prevFavBusyRef = useRef<Record<string, boolean>>({})
+  useEffect(() => {
+    if (!favorites.length || !dbStatuses?.length) return
+    const prev = prevFavBusyRef.current
+    const next: Record<string, boolean> = {}
+    for (const f of favorites) {
+      if (f.sessionId.startsWith('repo-')) continue
+      const st = dbStatuses.find((s) => s.sessionId === f.sessionId)
+      const busy = st?.status === 'busy'
+      next[f.sessionId] = busy
+      if (prev[f.sessionId] === true && !busy) {
+        try {
+          if (typeof window !== 'undefined' && window.location.pathname.includes(f.sessionId)) continue
+        } catch {}
+        if (!shouldPush(f.sessionId, preferences ?? {}, f.repoId ?? undefined, overrideSourceForPush)) continue
+        const cancelled = (st as unknown as { isCancelled?: boolean } | undefined)?.isCancelled === true
+        const title = cancelled ? '응답이 취소되었습니다' : '응답이 완료되었습니다'
+        const dirName = (f.directory ?? '').split(/[/\\]+/).filter(Boolean).pop() ?? ''
+        const body = `${dirName ? dirName + ' · ' : ''}${f.title || f.sessionId.slice(0, 8)}`
+        const url = f.repoId ? `/repos/${f.repoId}/sessions/${f.sessionId}` : `/session/${f.sessionId}`
+        void sendPushNotification(title, { body, tag: f.sessionId }, url, preferences?.pushNotificationDuration ?? 0)
+      }
+    }
+    prevFavBusyRef.current = next
+  }, [favorites, dbStatuses, preferences, overrideSourceForPush])
 
   // 리스트 순서 드래그 — localStorage에 순서 유지
   const [dragIdx, setDragIdx] = useState<number | null>(null)

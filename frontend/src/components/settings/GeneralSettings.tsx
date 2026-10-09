@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { TTSSettings } from './TTSSettings'
-import { sendTestToast } from '@/api/notify'
+import { isPushSupported, ensurePushPermission, triggerTestPush } from '@/lib/notifications'
 
 export function GeneralSettings() {
   const { preferences, isLoading, updateSettings, isUpdating } = useSettings()
@@ -194,7 +194,7 @@ export function GeneralSettings() {
             <div className="space-y-0.5">
               <Label htmlFor="pushNotificationEnabled" className="text-sm">PC 푸시 알림 (글로벌)</Label>
               <p className="text-xs text-muted-foreground">
-                백단이 직접 OS 알림 발송 — 브라우저가 꺼져 있어도 수신
+                {isPushSupported() ? '브라우저 알림으로 완료/권한요청을 알림' : '이 브라우저는 푸시 알림을 지원하지 않음'}
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -202,26 +202,25 @@ export function GeneralSettings() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                disabled={!preferences?.pushNotificationEnabled}
-                title="백단 OS 토스트 테스트"
-                onClick={async () => {
-                  try {
-                    const ok = await sendTestToast()
-                    if (ok) showToast.success('테스트 알림 발송됨')
-                    else showToast.error('알림 발송 실패 (Windows 전용)')
-                  } catch (e) {
-                    showToast.error(e instanceof Error ? e.message : '알림 발송 실패')
-                  }
-                }}
+                title="브라우저 테스트 알림"
+                onClick={() => triggerTestPush()}
               >
                 테스트
               </Button>
               <Switch
                 id="pushNotificationEnabled"
                 checked={preferences?.pushNotificationEnabled ?? false}
-                onCheckedChange={(checked) => {
+                onCheckedChange={async (checked) => {
+                  if (checked) {
+                    const perm = await ensurePushPermission()
+                    if (perm !== 'granted') {
+                      showToast.error('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.')
+                      return
+                    }
+                  }
                   updateSettings({ pushNotificationEnabled: checked })
                 }}
+                disabled={!isPushSupported()}
               />
             </div>
           </div>

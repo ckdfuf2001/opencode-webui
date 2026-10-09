@@ -50,14 +50,3 @@ export async function setNotifyOverride(
 export async function clearNotifyOverride(scope: NotifyScope, target: string): Promise<void> {
   await request<{ ok: boolean }>(`/overrides/${scope}/${encodeURIComponent(target)}`, jsonInit('DELETE'))
 }
-
-/** 백단 OS 토스트 테스트 (설정 화면용). */
-export async function sendTestToast(): Promise<boolean> {
-  const res = await request<{ ok: boolean }>('/test', jsonInit('POST', {}))
-  return res.ok
-}
-
-/** 중단 보고 — 백단 알림 라벨 판단용 (fire-and-forget). */
-export function reportAborted(sessionId: string): void {
-  fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionId)}/aborted`, { method: 'POST' }).catch(() => {})
-}
