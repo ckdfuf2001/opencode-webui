@@ -87,21 +87,23 @@ export function upsertNotifyOverride(
   target: string,
   patch: NotifyOverridePatch,
 ): NotifyOverride | null {
-  const sets: string[] = []
   const vals: Array<number | null> = []
   for (let i = 0; i < PATCH_KEYS.length; i++) {
     const key = PATCH_KEYS[i]!
     if (patch[key] !== undefined) {
-      sets.push(`${OVERRIDE_FIELDS[i]} = ?`)
       vals.push(toInt(patch[key]))
     }
   }
-  if (sets.length === 0) return getNotifyOverride(db, scope, target)
+  if (vals.length === 0) return getNotifyOverride(db, scope, target)
   const now = Date.now()
+  const insertCols = OVERRIDE_FIELDS.filter((_, i) => patch[PATCH_KEYS[i]!] !== undefined)
+  // DO UPDATE SET은 excluded.* 참조 — INSERT 플레이스홀더와 개수를 맞추기 위함
+  // (?를 쓰면 바인드 개수가 어긋나 500이 난다).
+  const updateSets = insertCols.map((c) => `${c} = excluded.${c}`)
   db.query(
-    `INSERT INTO notify_overrides (scope, target, ${OVERRIDE_FIELDS.filter((_, i) => patch[PATCH_KEYS[i]!] !== undefined).join(', ')}, updated_at)
+    `INSERT INTO notify_overrides (scope, target, ${insertCols.join(', ')}, updated_at)
      VALUES (?, ?, ${vals.map(() => '?').join(', ')}, ?)
-     ON CONFLICT(scope, target) DO UPDATE SET ${sets.join(', ')}, updated_at = excluded.updated_at`,
+     ON CONFLICT(scope, target) DO UPDATE SET ${updateSets.join(', ')}, updated_at = excluded.updated_at`,
   ).run(scope, target, ...vals, now)
   return getNotifyOverride(db, scope, target)
 }

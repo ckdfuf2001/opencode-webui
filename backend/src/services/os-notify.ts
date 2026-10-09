@@ -6,12 +6,11 @@ import { getWebuiBaseUrl } from './webui-base'
  * Windows OS 토스트 (무의존 — PowerShell WinRT ToastNotificationManager).
  * 프론트(브라우저)가 꺼져 있어도 백단이 직접 PC에 알린다.
  *
- * 클릭 이동: `opencode-webui://` 프로토콜을 HKCU에 등록하고
- * 토스트 launch에 세션 URL을 실어 기본 브라우저 새 창으로 연다.
+ * 클릭 이동: launch에 http(s) URL을 그대로 넣어 OS가 기본 브라우저로 연다
+ * (유튜브 웹 알림과 같은 방식 — 별도 스크립트/프로토콜 등록 없음).
  */
 
 const APP_ID = 'opencode-webui'
-const PROTOCOL = 'opencode-webui'
 
 export function showOsToast(
   title: string,
@@ -23,7 +22,6 @@ export function showOsToast(
     return false
   }
   try {
-    ensureToastActivation()
     const url = opts?.path ? `${getWebuiBaseUrl()}${opts.path}` : undefined
     const script = buildToastScript(title, body, opts?.expireSeconds, url)
     // UTF-16LE base64로 넘겨 따옴표/한글 깨짐을 피한다.
@@ -33,7 +31,15 @@ export function showOsToast(
       windowsHide: true,
     })
     if (res.status !== 0) {
-      logger.warn(`OS toast failed: ${res.stderr?.toString().trim().slice(0, 300) ?? res.error}`)
+      const detail = [
+        `status=${res.status}`,
+        res.signal ? `signal=${res.signal}` : '',
+        res.error ? `error=${res.error instanceof Error ? res.error.message : res.error}` : '',
+        res.stderr ? `stderr=${res.stderr.toString().trim().slice(0, 300)}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+      logger.warn(`OS toast failed: ${detail}`)
       return false
     }
     return true
@@ -63,16 +69,13 @@ function buildToastScript(title: string, body: string, expireSeconds?: number, u
   const expire = long
     ? ''
     : `$toast.ExpirationTime = [DateTimeOffset]::Now.AddSeconds(${Math.min(3600, Math.max(5, Math.floor(expireSeconds)))})`
-  const loadXml = url
-    ? `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; $xml.LoadXml(${psSingleQuote(
-        `<toast launch="${PROTOCOL}://open?url=${encodeURIComponent(url)}" activationType="protocol" duration="${long ? 'long' : 'short'}"><visual><binding template="ToastGeneric"><text>${t}</text><text>${b}</text></binding></visual></toast>`,
-      )})`
-    : [
-        `$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)`,
-        `$texts = $xml.GetElementsByTagName("text")`,
-        `$texts.Item(0).AppendChild($xml.CreateTextNode(${psSingleQuote(title.slice(0, 200))})) > $null`,
-        `$texts.Item(1).AppendChild($xml.CreateTextNode(${psSingleQuote(body.slice(0, 400))})) > $null`,
-      ].join('\r\n')
+  // launch가 http(s)면 OS가 기본 브라우저로 직접 연다.
+  const launchAttr = url ? ` launch="${escapeXml(url)}"` : ''
+  const loadXml =
+    `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; ` +
+    `$xml.LoadXml(${psSingleQuote(
+      `<toast${launchAttr} duration="${long ? 'long' : 'short'}"><visual><binding template="ToastGeneric"><text>${t}</text><text>${b}</text></binding></visual></toast>`,
+    )})`
   return [
     `$ErrorActionPreference = 'Stop'`,
     `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null`,
@@ -84,53 +87,4 @@ function buildToastScript(title: string, body: string, expireSeconds?: number, u
   ]
     .filter(Boolean)
     .join('\r\n')
-}
-
-let activationEnsured = false
-
-/** URL 프로토콜 핸들러 등록. 실패해도 토스트 표시는 계속한다. */
-export function ensureToastActivation(): void {
-  if (activationEnsured || process.platform !== 'win32') return
-  activationEnsured = true
-  try {
-    ensureProtocolHandler()
-  } catch (error) {
-    logger.debug(`Toast protocol register skipped: ${error instanceof Error ? error.message : error}`)
-  }
-}
-
-function regQuery(key: string): string | null {
-  try {
-    const res = spawnSync('reg.exe', ['query', key, '/ve'], { timeout: 10_000, windowsHide: true, encoding: 'utf8' })
-    if (res.status !== 0) return null
-    return (res.stdout as string) ?? null
-  } catch {
-    return null
-  }
-}
-
-function regAdd(key: string, value: string): boolean {
-  const res = spawnSync('reg.exe', ['add', key, '/ve', '/t', 'REG_SZ', '/d', value, '/f'], {
-    timeout: 10_000,
-    windowsHide: true,
-    encoding: 'utf8',
-  })
-  return res.status === 0
-}
-
-/**
- * HKCU URL 프로토콜 등록 — 클릭 시 기본 브라우저로 세션 URL을 연다.
- * 핸들러: %1(opencode-webui://open?url=...)에서 url 파라미터를 꺼내 Start-Process.
- * 핸들러 본문은 exe 경로와 무관하므로 한 번 등록이면 유지된다.
- */
-function ensureProtocolHandler(): void {
-  const base = `HKCU\\Software\\Classes\\${PROTOCOL}`
-  const current = regQuery(`${base}\\shell\\open\\command`)
-  if (current && current.includes('Start-Process $u') && current.includes('?url=')) return
-  const handler = `powershell.exe -NoProfile -WindowStyle Hidden -Command $a='%1'; $u=[uri]::UnescapeDataString($a.Substring($a.IndexOf('?url=')+5)); Start-Process $u`
-  regAdd(base, `URL:${PROTOCOL} OpenCode WebUI`)
-  spawnSync('reg.exe', ['add', base, '/v', 'URL Protocol', '/t', 'REG_SZ', '/d', '', '/f'], { timeout: 10_000, windowsHide: true })
-  if (regAdd(`${base}\\shell\\open\\command`, handler)) {
-    logger.info('Toast protocol handler registered (opencode-webui://)')
-  }
 }
