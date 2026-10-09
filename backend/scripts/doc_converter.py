@@ -150,16 +150,27 @@ def _export(source_path, tmp_path):
     elif ext in XLS_EXTS:
         app = win32com.client.DispatchEx("Excel.Application")
         try:
+            # 조용한 자동화: 창·상태바("게시 중 %")·이벤트·링크 프롬프트 전부 억제.
+            # 하나라도 빠지면 Excel 창이 화면에 뜬다.
             app.Visible = False
+            app.ScreenUpdating = False
             app.DisplayAlerts = False
-            wb = app.Workbooks.Open(source_path, ReadOnly=True)
+            app.EnableEvents = False
+            app.AskToUpdateLinks = False
+            app.DisplayStatusBar = False
+            wb = app.Workbooks.Open(source_path, UpdateLinks=0, ReadOnly=True)
             try:
-                for ws in wb.Worksheets:
-                    ws.PageSetup.PrintHeadings = True
-                    ws.PageSetup.PrintGridlines = True
-                    ws.PageSetup.Zoom = False
-                    ws.PageSetup.FitToPagesWide = 1
-                    ws.PageSetup.FitToPagesTall = False
+                # PageSetup 쓰기 동안 프린터 통신(리페인트 유발)을 끊는다.
+                app.PrintCommunication = False
+                try:
+                    for ws in wb.Worksheets:
+                        ws.PageSetup.PrintHeadings = True
+                        ws.PageSetup.PrintGridlines = True
+                        ws.PageSetup.Zoom = False
+                        ws.PageSetup.FitToPagesWide = 1
+                        ws.PageSetup.FitToPagesTall = False
+                finally:
+                    app.PrintCommunication = True
                 wb.ExportAsFixedFormat(0, tmp_path)
             finally:
                 wb.Close(False)
@@ -417,6 +428,7 @@ def _extract_word_text(source_path):
     app = win32com.client.DispatchEx("Word.Application")
     try:
         app.Visible = False
+        app.ScreenUpdating = False
         app.DisplayAlerts = False
         doc = app.Documents.Open(source_path, ReadOnly=True)
         try:
@@ -433,8 +445,12 @@ def _extract_excel_text(source_path):
     app = win32com.client.DispatchEx("Excel.Application")
     try:
         app.Visible = False
+        app.ScreenUpdating = False
         app.DisplayAlerts = False
-        wb = app.Workbooks.Open(source_path, ReadOnly=True)
+        app.EnableEvents = False
+        app.AskToUpdateLinks = False
+        app.DisplayStatusBar = False
+        wb = app.Workbooks.Open(source_path, UpdateLinks=0, ReadOnly=True)
         try:
             lines = []
             for ws in wb.Worksheets:
@@ -1027,6 +1043,7 @@ def _edit_word_com(path, operations):
 
     app = win32com.client.DispatchEx("Word.Application")
     app.Visible = False
+    app.ScreenUpdating = False
     app.DisplayAlerts = False
     doc = app.Documents.Open(path)
     results = []
@@ -1102,8 +1119,12 @@ def _edit_excel_com(path, operations):
 
     app = win32com.client.DispatchEx("Excel.Application")
     app.Visible = False
+    app.ScreenUpdating = False
     app.DisplayAlerts = False
-    wb = app.Workbooks.Open(path)
+    app.EnableEvents = False
+    app.AskToUpdateLinks = False
+    app.DisplayStatusBar = False
+    wb = app.Workbooks.Open(path, UpdateLinks=0)
     results = []
     try:
         for op in operations:
