@@ -843,35 +843,12 @@ export function SessionDetail() {
           if (canSound) void playCompletionTick();
         })();
       }, 800);
-      // 빈 응답 감지: free quota 만료 등으로 LLM이 아무 텍스트 없이 종료된 경우 토스트
-      // 단, 사용자가 직접 cancel/abort 한 경우는 제외한다.
-      // 폴링 지연(2s) 고려해 3.5초 뒤 재확인한다.
-      const timer = setTimeout(() => {
-        // 취소로 끝난 스트리밍이면 빈 응답 토스트를 띄우지 않는다. 메시지 판별만으로는
-        // 부족하다 — 폴링 지연으로 중단된 assistant 메시지가 아직 안 보이면 마지막이
-        // user 메시지로 보여 isUserWithoutReply 오탐이 난다.
-        if (aborted || (sessionId && isRecentlyAborted(sessionId))) return;
-        const cur = messagesRef.current;
-        if (!cur || cur.length === 0) return;
-        const last = cur[cur.length - 1] as any;
-        const errName = last.info?.error?.name ?? last.info?.error?.data?.name
-        const isAborted = errName === "MessageAbortedError" || last.info?.finish === "aborted" || (last.parts?.some((p: any) => p.type === "step-finish" && p.reason === "aborted"))
-        if (isAborted) return;
-        const hasVisible = last.parts.some((p: any) => {
-          if (p.type === "text" && typeof p.text === "string" && p.text.trim()) return true;
-          if (p.type === "tool" || p.type === "patch" || p.type === "file" || p.type === "agent" || p.type === "reasoning") return true;
-          return false;
-        });
-        const isEmptyAssistant = last.info.role === "assistant" && !hasVisible;
-        const isUserWithoutReply = last.info.role === "user";
-        if ((isEmptyAssistant || isUserWithoutReply) && last.info.id !== lastBillingToastRef.current) {
-          showToast.error(
-            "The LLM response was empty. Please check your quota.",
-            { duration: 10000 },
-          );
-        }
-      }, 3500);
-      return () => { clearTimeout(debounce); clearTimeout(timer); };
+      // 빈 응답 휴리스틱 토스트는 제거함.
+      // 스트리밍 플래그가 꺼진 3.5초 뒤 캐시 마지막 메시지로 빈 응답을 판정했는데,
+      // SSE-off 5초 폴링 지연·턴 사이 idle 공백·step-only 파트 시점에 마지막이
+      // user 메시지나 미완성 assistant로 보여 정상 응답에도 quota 오탐이 났다.
+      // 진짜 quota 고갈은 본문 문구 감지(아래 billing effect) + 에러 배지로 그대로 알린다.
+      return () => { clearTimeout(debounce); };
     }
     // NOTE: repo/session을 dep에 넣지 말 것 — 완료 후 invalidate로 객체가 바뀌면
     // 예약된 알림 타이머가 취소된다 (라벨은 위 ref로 읽는다).
