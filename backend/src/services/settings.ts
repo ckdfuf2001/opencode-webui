@@ -137,6 +137,21 @@ export class SettingsService {
         flags.keyboardDefaultsUnified = true
       }
 
+      // sseStreaming 키가 없는 기존 저장값은 false로 명시화한다.
+      // 키가 없으면 검증 기본값에 따라 true로 부활해, 다른 설정 토글과 무관하게 SSE가 켜진다.
+      // 명시적 true/false는 절대 건드리지 않는다.
+      if (row && !flags.sseStreamingDefaultApplied) {
+        const parsed = JSON.parse(row.preferences) as Record<string, unknown>
+        if (!Object.prototype.hasOwnProperty.call(parsed, 'sseStreaming')) {
+          parsed.sseStreaming = false
+          this.db
+            .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
+            .run(JSON.stringify(parsed), Date.now(), 'default')
+          logger.info('Migrated missing sseStreaming key to false (explicit off)')
+        }
+        flags.sseStreamingDefaultApplied = true
+      }
+
       this.db
         .query('UPDATE user_preferences SET preferences = ?, updated_at = ? WHERE user_id = ?')
         .run(JSON.stringify(flags), Date.now(), MIGRATION_USER)

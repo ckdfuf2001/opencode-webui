@@ -67,8 +67,9 @@ export const UserPreferencesSchema = z.object({
   completionSoundOnCancel: z.boolean().default(true),
   pushNotificationEnabled: z.boolean().default(false),
   pushNotificationDuration: z.number().int().min(0).max(86400).default(0),
-  // SSE 스트리밍: reasoning·응답 델타를 실시간 병합. off면 폴링만으로 갱신. 기본 on.
-  sseStreaming: z.boolean().default(true),
+  // SSE 스트리밍: reasoning·응답 델타를 실시간 병합. off면 폴링만으로 갱신. 기본 off
+  // (on이 기본이면 설정 변경과 무관하게 true로 부활한다 — 프론트 기본값과 통일).
+  sseStreaming: z.boolean().default(false),
   // 취소(Stop) 시 대기 중인 큐 전송도 함께 멈출지. 기본 false = 큐는 계속 발송.
   // true면 Stop이 큐를 일시정지하고, 사용자가 재생 버튼으로 재개해야 한다.
   cancelStopsQueue: z.boolean().default(false),
@@ -102,7 +103,7 @@ export const DEFAULT_USER_PREFERENCES = {
   completionSoundOnCancel: true,
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
-  sseStreaming: true,
+  sseStreaming: false,
 };
 
 export const SettingsResponseSchema = z.object({

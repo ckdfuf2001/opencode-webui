@@ -2,7 +2,7 @@ import { memo, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useSettings } from '@/hooks/useSettings'
 import { useAbortSession } from '@/hooks/useOpenCode'
 import { MessagePart } from './MessagePart'
-import { CornerDownLeft, Scissors, Eraser, X, Copy, Loader2 } from 'lucide-react'
+import { CornerDownLeft, Scissors, Eraser, X, Copy } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
 import { ERROR_MESSAGE_ID_PREFIX } from '@/lib/chatErrors'
 import { MENTION_PATTERN } from '@/lib/promptParser'
@@ -155,8 +155,8 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   const highlightedIdx = highlightedMessageID ? preVisible.findIndex(({ msg }) => msg.info.id === highlightedMessageID) : -1
   void highlightedIdx
   // SSE off 모드: 순수 텍스트 스트리밍 구간은 Generating 플레이스홀더만 그린다.
-  // 툴 호출이 시작된 뒤에는 고정된 앞부분(텍스트·완료 파트)과 running 툴 상태만 보여준다 (시작과 끝만).
-  // running 툴 output은 완료될 때까지 숨겨 churn을 막는다.
+  // 툴 호출이 시작된 뒤에는 고정된 앞부분(텍스트·완료 파트)만 보여주고,
+  // 실행 중 툴은 로딩 표시 없이 완료될 때까지 숨긴다 (시작과 끝만).
   const { preferences } = useSettings()
   const sseOn = preferences?.sseStreaming ?? false
   // bash 감시자: opencode가 timeout에 kill하지 못하고 running이 고착되면
@@ -385,16 +385,9 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                     return parts.map((part, index) => {
                       const pType = (part as { type?: string }).type
                       const tStatus = (part as { state?: { status?: string } }).state?.status
-                      // SSE-off 진행 중: 미완료 툴은 상태 행만 (output 숨김), 완료/실패는 통째로 표시.
+                      // SSE-off 진행 중: 미완료 툴은 로딩 표시 없이 통째로 숨긴다. 완료/실패분만 표시.
                       if (!!sseOffStreaming && pType === 'tool' && tStatus !== 'completed' && tStatus !== 'error') {
-                        const tool = (part as { tool?: string }).tool ?? 'tool'
-                        return (
-                          <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`} className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="w-3 h-3 animate-spin text-blue-500 shrink-0" />
-                            <span className="font-mono">{tool}</span>
-                            <span className="opacity-70">{tStatus ?? 'running'}…</span>
-                          </div>
-                        )
+                        return null
                       }
                       return (
                         <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`}>
