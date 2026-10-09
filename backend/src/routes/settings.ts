@@ -125,9 +125,20 @@ export function createSettingsRoutes(db: Database) {
       const userId = c.req.query('userId') || 'default'
       const body = await c.req.json()
       const validated = UpdateSettingsSchema.parse(body)
-      
+      // partial 스키마도 inner default가 살아있어 빠진 키까지 기본값으로 채워진다.
+      // 그대로 병합하면 안 건드린 설정이 전부 기본값으로 리셋되므로,
+      // 요청에 실제로 담긴 키만 업데이트한다 (설정끼리 영향 차단).
+      const rawPrefs = body?.preferences && typeof body.preferences === 'object' ? body.preferences : {}
+      const updates: Record<string, unknown> = {}
+      for (const key of Object.keys(rawPrefs)) {
+        updates[key] = (validated.preferences as Record<string, unknown>)[key]
+      }
+
       const previous = settingsService.getSettings(userId)
-      const settings = settingsService.updateSettings(validated.preferences, userId)
+      const settings = settingsService.updateSettings(
+        updates as Partial<(typeof previous)['preferences']>,
+        userId,
+      )
 
       const previousBin = previous.preferences.opencodeBin || null
       const nextBin = settings.preferences.opencodeBin || null
