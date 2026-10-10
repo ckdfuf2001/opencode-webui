@@ -595,6 +595,14 @@ logger.info('Schedule runner started')
 startSessionStatusPoller(db)
 logger.info('Session status poller started')
 
+// 문서 변환기 백그라운드 예열 — 첫 미리보기 1분 대기를 없앤다 (부팅은 막지 않는다).
+try {
+  const { prewarmDocConverter } = await import('./services/doc-converter')
+  prewarmDocConverter()
+} catch (e) {
+  logger.debug('Doc converter prewarm skipped:', e instanceof Error ? e.message : e)
+}
+
 // S1 백필: 기존 세션의 소속 레포를 현재 directory로 역산해 1회 기록.
 // opencode 부팅을 기다렸다가 1회만 (S2 이전 directory 값이 유효할 때).
 setTimeout(() => {

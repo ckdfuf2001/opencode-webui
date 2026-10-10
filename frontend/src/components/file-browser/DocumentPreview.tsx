@@ -89,6 +89,8 @@ function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
   const [data, setData] = useState<ArrayBuffer | null>(null)
   const [status, setStatus] = useState<'loading' | 'warming' | 'ready' | 'unavailable' | 'error'>('loading')
   const [error, setError] = useState('')
+  // 깨진 캐시(PDF 아님)면 1회만 refresh로 재생성해 자동 치유한다.
+  const [healed, setHealed] = useState(false)
 
   useEffect(() => {
     if (!enabled) {
@@ -99,12 +101,14 @@ function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
     let retries = 0
+    const abort = new AbortController()
     setStatus('loading')
     setData(null)
     setError('')
-    const refresh = refreshKey > 0 ? '&refresh=1' : ''
+    const useRefresh = refreshKey > 0 || healed
+    const refresh = useRefresh ? '&refresh=1' : ''
     const load = () => {
-      fetch(`${API_BASE_URL}/api/preview/pdf?path=${encodeURIComponent(path)}${refresh}`)
+      fetch(`${API_BASE_URL}/api/preview/pdf?path=${encodeURIComponent(path)}${refresh}`, { signal: abort.signal })
         .then(async (res) => {
           if (cancelled) return
           if (res.status === 503) {
@@ -121,28 +125,40 @@ function useConvertedPdf(path: string, refreshKey = 0, enabled = true) {
           }
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           const buf = await res.arrayBuffer()
-          if (!cancelled) {
-            setData(buf)
-            setStatus('ready')
+          if (cancelled) return
+          // 깨진 캐시(동시 변환 경합의 잔재)면 1회만 재생성한다.
+          if (!isPdfBuffer(buf) && !healed) {
+            setHealed(true)
+            return
           }
+          if (!isPdfBuffer(buf)) throw new Error('Invalid PDF structure')
+          setData(buf)
+          setStatus('ready')
         })
         .catch((e) => {
-          if (!cancelled) {
-            setError(e instanceof Error ? e.message : 'Failed to convert document')
-            setStatus('error')
-          }
+          if (cancelled) return
+          if (e instanceof DOMException && e.name === 'AbortError') return
+          setError(e instanceof Error ? e.message : 'Failed to convert document')
+          setStatus('error')
         })
     }
     load()
     return () => {
       cancelled = true
+      abort.abort()
       if (timer) clearTimeout(timer)
       setData(null)
       setStatus('unavailable')
     }
-  }, [path, refreshKey, enabled])
+  }, [path, refreshKey, enabled, healed])
 
   return { data, status, error }
+}
+
+function isPdfBuffer(buf: ArrayBuffer): boolean {
+  if (buf.byteLength < 5) return false
+  const head = new Uint8Array(buf.slice(0, 5))
+  return head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46 && head[4] === 0x2d
 }
 
 function useExtractedText(path: string, refreshKey = 0, enabled = true) {
@@ -652,7 +668,12 @@ function cellBorderInline(cell: any, styles: any[] | undefined): string {
   return parts.length ? ` style="${parts.join(';')}"` : ''
 }
 
-function sheetToHtmlWithHeaders(ws: { '!ref'?: string; [key: string]: any }, XLSX: any, styles?: any[]) {
+function sheetToHtmlWithHeaders(
+  ws: { '!ref'?: string; [key: string]: any },
+  XLSX: any,
+  styles?: any[],
+  imagesByCell?: Map<string, { src: string; name: string }[]>,
+) {
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
   const startCol = range.s.c
   const startRow = range.s.r
@@ -668,11 +689,24 @@ function sheetToHtmlWithHeaders(ws: { '!ref'?: string; [key: string]: any }, XLS
       const cell = ws[addr]
       const val = cell ? XLSX.utils.format_cell(cell) : ''
       const cls = cell && cell.t === 'n' ? ' class="xlsx-num"' : ''
-      cells.push(`<td${cls}${cellBorderInline(cell, styles)}>${escapeHtml(val)}</td>`)
+      const inline = imagesByCell?.get(`${r},${c}`)
+      let extra = ''
+      if (inline) {
+        for (const im of inline) {
+          extra += `<br><img src="${im.src}" alt="${escapeHtml(im.name)}" style="max-width:220px;max-height:160px;object-fit:contain" loading="lazy"/>`
+        }
+      }
+      cells.push(`<td${cls}${cellBorderInline(cell, styles)}>${escapeHtml(val)}${extra}</td>`)
     }
     rows.push(`<tr>${cells.join('')}</tr>`)
   }
-  return `<table class="xlsx-table">${rows.join('')}</table>`
+  return {
+    html: `<table class="xlsx-table">${rows.join('')}</table>`,
+    startRow,
+    startCol,
+    endRow,
+    endCol,
+  }
 }
 
 function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }) {
@@ -696,9 +730,25 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
         const parts = []
         for (const name of wb.SheetNames as string[]) {
           const ws = wb.Sheets[name]
-          const html = sheetToHtmlWithHeaders(ws, XLSX, sheetStyles)
-          const { images, skipped } = await loadSheetImages(zip, sheetDrawings.get(name), urls).catch(() => ({ images: [], skipped: 0 }))
-          parts.push({ name, html, images, skippedImages: skipped })
+          const table = sheetToHtmlWithHeaders(ws, XLSX, sheetStyles)
+          const loaded = await loadSheetImages(zip, sheetDrawings.get(name), urls).catch(() => ({ images: [], skipped: 0 }))
+          // 앵커가 표 범위 안이면 셀 안에 직접 넣고, 나머지만 하단 갤러리로.
+          const imagesByCell = new Map<string, { src: string; name: string }[]>()
+          const gallery: { src: string; name: string }[] = []
+          for (const im of loaded.images) {
+            if (im.col >= table.startCol && im.col <= table.endCol && im.row >= table.startRow && im.row <= table.endRow) {
+              const key = `${im.row},${im.col}`
+              const list = imagesByCell.get(key) ?? []
+              list.push({ src: im.src, name: im.name })
+              imagesByCell.set(key, list)
+            } else {
+              gallery.push({ src: im.src, name: im.name })
+            }
+          }
+          const html = imagesByCell.size > 0
+            ? sheetToHtmlWithHeaders(ws, XLSX, sheetStyles, imagesByCell).html
+            : table.html
+          parts.push({ name, html, images: gallery, skippedImages: loaded.skipped })
         }
         if (!cancelled) {
           setSheets(parts)
@@ -846,8 +896,8 @@ async function loadSheetImages(
   zip: any,
   drawingPath: string | undefined,
   urls: string[],
-): Promise<{ images: { src: string; name: string }[]; skipped: number }> {
-  const images: { src: string; name: string }[] = []
+): Promise<{ images: { src: string; name: string; col: number; row: number }[]; skipped: number }> {
+  const images: { src: string; name: string; col: number; row: number }[] = []
   let skipped = 0
   if (!drawingPath) return { images, skipped }
   const f = zip.files[drawingPath]
@@ -868,34 +918,51 @@ async function loadSheetImages(
       }
     } catch {}
   }
+  const num = (el: Element | undefined | null, tag: string): number => {
+    if (!el) return -1
+    const n = el.getElementsByTagName(tag)[0]
+    if (!n?.textContent) return -1
+    const v = parseInt(n.textContent, 10)
+    return Number.isNaN(v) ? -1 : v
+  }
   const dir = drawingPath.slice(0, slash)
   const seen = new Set<string>()
-  const blips = Array.from(doc.getElementsByTagName('a:blip'))
-  for (const blip of blips) {
-    const embed = blip.getAttribute('r:embed')
-    if (!embed || seen.has(embed)) continue
-    seen.add(embed)
-    const target = relMap.get(embed)
-    if (!target) continue
-    const parts: string[] = []
-    for (const seg of `${dir}/${target}`.split('/')) {
-      if (seg === '..') parts.pop()
-      else if (seg !== '.' && seg !== '') parts.push(seg)
+  // 앵커 단위로 훑어 셀 좌표(xdr:from col/row)를 함께 잡는다.
+  const anchors = [
+    ...Array.from(doc.getElementsByTagName('xdr:twoCellAnchor')),
+    ...Array.from(doc.getElementsByTagName('xdr:oneCellAnchor')),
+  ]
+  for (const anchor of anchors) {
+    const from = anchor.getElementsByTagName('xdr:from')[0]
+    const col = num(from, 'xdr:col')
+    const row = num(from, 'xdr:row')
+    const blips = Array.from(anchor.getElementsByTagName('a:blip'))
+    for (const blip of blips) {
+      const embed = blip.getAttribute('r:embed')
+      if (!embed || seen.has(embed)) continue
+      seen.add(embed)
+      const target = relMap.get(embed)
+      if (!target) continue
+      const parts: string[] = []
+      for (const seg of `${dir}/${target}`.split('/')) {
+        if (seg === '..') parts.pop()
+        else if (seg !== '.' && seg !== '') parts.push(seg)
+      }
+      const mediaPath = parts.join('/')
+      const mediaFile = zip.files[mediaPath]
+      if (!mediaFile || mediaFile.dir) continue
+      const ext = (mediaPath.split('.').pop() ?? '').toLowerCase()
+      const mime = RENDERABLE_IMAGE_MIME[ext]
+      if (!mime) {
+        skipped += 1
+        continue
+      }
+      const buf: Uint8Array = await mediaFile.async('uint8array')
+      const blob = new Blob([buf.slice()], { type: mime })
+      const src = URL.createObjectURL(blob)
+      urls.push(src)
+      images.push({ src, name: mediaPath.split('/').pop() ?? mediaPath, col, row })
     }
-    const mediaPath = parts.join('/')
-    const mediaFile = zip.files[mediaPath]
-    if (!mediaFile || mediaFile.dir) continue
-    const ext = (mediaPath.split('.').pop() ?? '').toLowerCase()
-    const mime = RENDERABLE_IMAGE_MIME[ext]
-    if (!mime) {
-      skipped += 1
-      continue
-    }
-    const buf: Uint8Array = await mediaFile.async('uint8array')
-    const blob = new Blob([buf.slice()], { type: mime })
-    const src = URL.createObjectURL(blob)
-    urls.push(src)
-    images.push({ src, name: mediaPath.split('/').pop() ?? mediaPath })
   }
   return { images, skipped }
 }

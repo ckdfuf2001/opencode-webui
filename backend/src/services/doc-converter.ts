@@ -92,30 +92,50 @@ async function ensureConverter(): Promise<boolean> {
   }
 }
 
+/** 백단 기동 직후 백그라운드 예열 — 첫 미리보기에서 1분 대기를 없앤다. */
+export function prewarmDocConverter(): void {
+  void ensureConverter().catch(() => {})
+}
+
+// 같은 파일 동시 변환은 하나로 합친다 (이동 중 재요청·재시도 중복 방지).
+const inflightConverts = new Map<string, Promise<Buffer>>()
+
 export async function convertToPdf(userPath: string, refresh = false): Promise<Buffer> {
   const validatedPath = await resolveWorkspaceFile(userPath)
   if (!isConvertibleDocument(validatedPath)) {
     throw { message: 'Unsupported document type', statusCode: 400 }
   }
 
-  const ready = await ensureConverter()
-  if (!ready) {
-    throw { message: 'Document conversion service is unavailable', statusCode: 503 }
+  if (!refresh) {
+    const inflight = inflightConverts.get(validatedPath)
+    if (inflight) return inflight
   }
+  const task = (async (): Promise<Buffer> => {
+    const ready = await ensureConverter()
+    if (!ready) {
+      throw { message: 'Document conversion service is unavailable', statusCode: 503 }
+    }
 
-  const { status, body } = await fetchJson(`${CONVERTER_BASE}/convert`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: validatedPath, refresh }),
-  })
+    const { status, body } = await fetchJson(`${CONVERTER_BASE}/convert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: validatedPath, refresh }),
+    })
 
-  if (status !== 200 || !body?.pdfPath) {
-    const message = body?.error || 'Document conversion failed'
-    logger.error(`Document conversion failed for ${userPath}: ${message}`)
-    throw { message, statusCode: 500 }
+    if (status !== 200 || !body?.pdfPath) {
+      const message = body?.error || 'Document conversion failed'
+      logger.error(`Document conversion failed for ${userPath}: ${message}`)
+      throw { message, statusCode: 500 }
+    }
+
+    return fs.readFile(body.pdfPath)
+  })()
+  inflightConverts.set(validatedPath, task)
+  try {
+    return await task
+  } finally {
+    if (inflightConverts.get(validatedPath) === task) inflightConverts.delete(validatedPath)
   }
-
-  return fs.readFile(body.pdfPath)
 }
 
 export type ExtractedMessage = {

@@ -244,7 +244,7 @@ def convert(source_path, refresh=False):
 
     import pythoncom
 
-    tmp_path = out_path[:-4] + ".conv.pdf"
+    tmp_path = _unique_tmp_path(out_path, ".pdf")
     pythoncom.CoInitialize()
     try:
         _export(source_path, tmp_path)
@@ -253,8 +253,41 @@ def convert(source_path, refresh=False):
 
     if not os.path.exists(tmp_path):
         raise RuntimeError("Conversion produced no output")
-    os.replace(tmp_path, out_path)
+    try:
+        os.replace(tmp_path, out_path)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
     return out_path, False
+
+
+def _unique_tmp_path(final_path, suffix):
+    """동시 변환이 같은 tmp를 공유하면 캐시가 깨진다 — 요청별 고유 tmp."""
+    import uuid
+
+    return f"{final_path[:-4]}.conv-{os.getpid()}-{uuid.uuid4().hex[:8]}{suffix}"
+
+
+def _atomic_write_text(final_path, data):
+    """텍스트 캐시 원자 기록 (동시 쓰기 깨짐 방지). 실패해도 조용히 넘긴다."""
+    import uuid
+
+    tmp_path = f"{final_path}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(data)
+        os.replace(tmp_path, final_path)
+    except Exception:
+        pass
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def _extract_pdf_text(source_path):
@@ -1575,18 +1608,10 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     except Exception as exc:
                         data = f"{_describe_image(source_path)} (text extraction unavailable: {exc})"
-                        try:
-                            with open(out_path, "w", encoding="utf-8") as f:
-                                f.write(data)
-                        except Exception:
-                            pass
+                        _atomic_write_text(out_path, data)
                 if data is None:
                     data = extract_text(source_path)
-                    try:
-                        with open(out_path, "w", encoding="utf-8") as f:
-                            f.write(data)
-                    except Exception:
-                        pass
+                    _atomic_write_text(out_path, data)
             # 캐시 히트인데 이미지였으면 박스 파일도 같이 반환
             resp = {"text": data, "fileName": os.path.basename(source_path)}
             if ext in IMAGE_EXTS:
