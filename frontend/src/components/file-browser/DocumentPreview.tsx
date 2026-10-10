@@ -704,7 +704,7 @@ function sheetToHtmlWithHeaders(
   ws: { '!ref'?: string; [key: string]: any },
   XLSX: any,
   styles?: any[],
-  imagesByCell?: Map<string, { src: string; name: string }[]>,
+  imagesByCell?: Map<string, { src: string; name: string; w: number; h: number }[]>,
 ) {
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
   const startCol = range.s.c
@@ -725,7 +725,11 @@ function sheetToHtmlWithHeaders(
       let extra = ''
       if (inline) {
         for (const im of inline) {
-          extra += `<br><img src="${im.src}" alt="${escapeHtml(im.name)}" style="max-width:220px;max-height:160px;object-fit:contain" loading="lazy"/>`
+          const size =
+            im.w > 0 && im.h > 0
+              ? `width:${Math.round(im.w)}px;height:${Math.round(im.h)}px;`
+              : 'max-width:220px;max-height:160px;'
+          extra += `<br><img src="${im.src}" alt="${escapeHtml(im.name)}" style="${size}object-fit:contain" loading="lazy"/>`
         }
       }
       cells.push(`<td${cls}${cellBorderInline(cell, styles)}>${escapeHtml(val)}${extra}</td>`)
@@ -764,14 +768,29 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
           const ws = wb.Sheets[name]
           const table = sheetToHtmlWithHeaders(ws, XLSX, sheetStyles)
           const loaded = await loadSheetImages(zip, sheetDrawings.get(name), urls).catch(() => ({ images: [], skipped: 0 }))
+          // 표시 크기: oneCell은 ext 그대로, twoCell은 셀 span으로 계산, 둘 다 없으면 축소 표시.
+          const colW = columnPixelWidths(ws)
+          const rowH = rowPixelHeights(ws)
+          const spanPx = (im: SheetImage): { w: number; h: number } | null => {
+            if (im.isTwoCell && im.toCol > im.col && im.toRow > im.row) {
+              let w = 0
+              for (let c = im.col; c < im.toCol; c++) w += colW(c)
+              let h = 0
+              for (let r = im.row; r < im.toRow; r++) h += rowH(r)
+              if (w > 0 && h > 0) return { w, h }
+            }
+            if (im.extW > 0 && im.extH > 0) return { w: im.extW, h: im.extH }
+            return null
+          }
           // 앵커가 표 범위 안이면 셀 안에 직접 넣고, 나머지만 하단 갤러리로.
-          const imagesByCell = new Map<string, { src: string; name: string }[]>()
+          const imagesByCell = new Map<string, { src: string; name: string; w: number; h: number }[]>()
           const gallery: { src: string; name: string }[] = []
           for (const im of loaded.images) {
-            if (im.col >= table.startCol && im.col <= table.endCol && im.row >= table.startRow && im.row <= table.endRow) {
+            const sized = spanPx(im)
+            if (im.col >= table.startCol && im.col <= table.endCol && im.row >= table.startRow && im.row <= table.endRow && sized) {
               const key = `${im.row},${im.col}`
               const list = imagesByCell.get(key) ?? []
-              list.push({ src: im.src, name: im.name })
+              list.push({ src: im.src, name: im.name, w: sized.w, h: sized.h })
               imagesByCell.set(key, list)
             } else {
               gallery.push({ src: im.src, name: im.name })
@@ -923,13 +942,43 @@ const RENDERABLE_IMAGE_MIME: Record<string, string> = {
   svg: 'image/svg+xml',
 }
 
+/** 열 너비 px (wch→px 근사, Calibri 11 기준). */
+function columnPixelWidths(ws: any): (c: number) => number {
+  const cols = ws?.['!cols'] as Array<{ wch?: number }> | undefined
+  return (c: number) => {
+    const wch = cols?.[c]?.wch ?? 8.43
+    return Math.max(8, Math.round(wch * 7 + 5))
+  }
+}
+
+/** 행 높이 px (hpt→px, 기본 15pt). */
+function rowPixelHeights(ws: any): (r: number) => number {
+  const rows = ws?.['!rows'] as Array<{ hpt?: number }> | undefined
+  return (r: number) => {
+    const hpt = rows?.[r]?.hpt ?? 15
+    return Math.max(8, Math.round((hpt * 96) / 72))
+  }
+}
+
 /** drawing의 embedded 이미지를 blob URL로 꺼낸다 (브라우저 표시 불가 형식은 세기만). */
+interface SheetImage {
+  src: string
+  name: string
+  col: number
+  row: number
+  toCol: number
+  toRow: number
+  extW: number
+  extH: number
+  isTwoCell: boolean
+}
+
 async function loadSheetImages(
   zip: any,
   drawingPath: string | undefined,
   urls: string[],
-): Promise<{ images: { src: string; name: string; col: number; row: number }[]; skipped: number }> {
-  const images: { src: string; name: string; col: number; row: number }[] = []
+): Promise<{ images: SheetImage[]; skipped: number }> {
+  const images: SheetImage[] = []
   let skipped = 0
   if (!drawingPath) return { images, skipped }
   const f = zip.files[drawingPath]
@@ -965,9 +1014,22 @@ async function loadSheetImages(
     ...Array.from(doc.getElementsByTagName('xdr:oneCellAnchor')),
   ]
   for (const anchor of anchors) {
+    const isTwoCell = (anchor as Element).tagName === 'xdr:twoCellAnchor'
     const from = anchor.getElementsByTagName('xdr:from')[0]
     const col = num(from, 'xdr:col')
     const row = num(from, 'xdr:row')
+    const to = anchor.getElementsByTagName('xdr:to')[0]
+    const toCol = num(to, 'xdr:col')
+    const toRow = num(to, 'xdr:row')
+    // 표시 크기 (없으면 셀에 맞게 축소 표시)
+    let w = -1
+    let h = -1
+    const pic = anchor.getElementsByTagName('xdr:pic')[0]
+    const ext = pic ? firstChild(firstChild(pic, 'xdr:spPr'), 'a:ext') : undefined
+    if (ext) {
+      w = emuPx(ext.getAttribute('cx'))
+      h = emuPx(ext.getAttribute('cy'))
+    }
     const blips = Array.from(anchor.getElementsByTagName('a:blip'))
     for (const blip of blips) {
       const embed = blip.getAttribute('r:embed')
@@ -993,7 +1055,7 @@ async function loadSheetImages(
       const blob = new Blob([buf.slice()], { type: mime })
       const src = URL.createObjectURL(blob)
       urls.push(src)
-      images.push({ src, name: mediaPath.split('/').pop() ?? mediaPath, col, row })
+      images.push({ src, name: mediaPath.split('/').pop() ?? mediaPath, col, row, toCol, toRow, extW: w, extH: h, isTwoCell })
     }
   }
   return { images, skipped }
@@ -1334,6 +1396,8 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
 }
 
 const PPTX_RENDER_WIDTH = 960
+/** pt → EMU (폰트 크기를 좌표계로 환산용). */
+const PT_TO_EMU = 12700
 
 function PptxSlideView({ slide }: { slide: PptxSlideData }) {
   const k = PPTX_RENDER_WIDTH / (slide.width > 0 ? slide.width : 9144000)
@@ -1365,18 +1429,18 @@ function PptxSlideView({ slide }: { slide: PptxSlideData }) {
                       <br />
                     ) : (
                       p.runs.map((r, j) => (
-                        <span
-                          key={j}
-                          style={{
-                            fontWeight: r.bold ? 700 : undefined,
-                            fontStyle: r.italic ? 'italic' : undefined,
-                            fontSize: r.sizePt ? r.sizePt * k : undefined,
-                            color: r.color ?? undefined,
-                            fontFamily: r.font ? `"${r.font}", sans-serif` : undefined,
-                          }}
-                        >
-                          {r.text}
-                        </span>
+                          <span
+                            key={j}
+                            style={{
+                              fontWeight: r.bold ? 700 : undefined,
+                              fontStyle: r.italic ? 'italic' : undefined,
+                              fontSize: r.sizePt ? r.sizePt * PT_TO_EMU * k : undefined,
+                              color: r.color ?? undefined,
+                              fontFamily: r.font ? `"${r.font}", sans-serif` : undefined,
+                            }}
+                          >
+                            {r.text}
+                          </span>
                       ))
                     )}
                   </p>
@@ -1405,7 +1469,7 @@ function PptxSlideView({ slide }: { slide: PptxSlideData }) {
                     {s.rows.map((row, i) => (
                       <tr key={i}>
                         {row.map((cell, j) => (
-                          <td key={j} style={{ border: '1px solid #999', padding: px(36), color: baseColor, verticalAlign: 'top' }}>
+                          <td key={j} style={{ border: '1px solid #999', padding: 4, color: baseColor, verticalAlign: 'top' }}>
                             {cell.map((p, pi) => (
                               <p key={pi} style={{ textAlign: (PPTX_ALIGN[p.align ?? ''] ?? 'left') as CSSProperties['textAlign'], margin: 0 }}>
                                 {p.runs.map((r, ri) => (
@@ -1414,7 +1478,7 @@ function PptxSlideView({ slide }: { slide: PptxSlideData }) {
                                     style={{
                                       fontWeight: r.bold ? 700 : undefined,
                                       fontStyle: r.italic ? 'italic' : undefined,
-                                      fontSize: r.sizePt ? r.sizePt * k : undefined,
+                                      fontSize: r.sizePt ? r.sizePt * PT_TO_EMU * k : undefined,
                                       color: r.color ?? undefined,
                                     }}
                                   >
