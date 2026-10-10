@@ -12,6 +12,9 @@ from urllib.parse import quote, urlparse
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "opencode-doc-conv")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# 변환 로직이 바뀌면 올린다 (구 캐시 무효화 — 예: Excel SaveAs 17은 PDF가 아니라 xlt였다).
+CACHE_VERSION = 2
+
 DOC_EXTS = {".docx", ".doc", ".docm", ".dotm"}
 XLS_EXTS = {".xlsx", ".xls", ".xlsm", ".xltx", ".xltm", ".xlsb"}
 PPT_EXTS = {".pptx", ".ppt", ".pptm", ".ppsx", ".potx"}
@@ -146,7 +149,7 @@ def cache_path(source_path):
         key = f"{st.st_mtime_ns}:{st.st_size}:{os.path.abspath(source_path)}"
     except OSError:
         key = os.path.abspath(source_path)
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"v{CACHE_VERSION}:{key}".encode("utf-8")).hexdigest()
     return os.path.join(CACHE_DIR, digest + ".pdf")
 
 
@@ -190,17 +193,9 @@ def _export(source_path, tmp_path):
             pid = _app_pid(app)
             wb = app.Workbooks.Open(source_path, UpdateLinks=0, ReadOnly=True)
             try:
-                app.PrintCommunication = False
-                try:
-                    for ws in wb.Worksheets:
-                        ws.PageSetup.PrintHeadings = True
-                        ws.PageSetup.PrintGridlines = True
-                        ws.PageSetup.Zoom = False
-                        ws.PageSetup.FitToPagesWide = 1
-                        ws.PageSetup.FitToPagesTall = False
-                finally:
-                    app.PrintCommunication = True
-                wb.SaveAs(tmp_path, FileFormat=17)
+                # FileFormat 57이 Excel의 PDF다 (17은 Word-PDF/Excel-xlt라 OLE가 나온다).
+                # PageSetup은 건드리지 않는다 — 원본 인쇄 설정을 그대로 내보낸다.
+                wb.SaveAs(tmp_path, FileFormat=57)
             finally:
                 try:
                     wb.Close(False)
@@ -1491,14 +1486,15 @@ def _touch_activity(begin=True):
 
 def _ensure_single_instance():
     """이미 떠 있으면 조용히 종료 — 포트 경합·중복 상주를 막는다.
-    뮤텍스라 크래시 잔재가 남지 않는다."""
+    뮤텍스라 크래시 잔재가 남지 않는다. 포트별로 구분 (dev 병행용)."""
     if os.name != "nt":
         return True
     try:
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
-        handle = kernel32.CreateMutexW(None, True, "opencode-doc-converter-8765")
+        port = int(os.environ.get("DOC_CONVERTER_PORT", "8765"))
+        handle = kernel32.CreateMutexW(None, True, f"opencode-doc-converter-{port}")
         if not handle:
             return True
         if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
