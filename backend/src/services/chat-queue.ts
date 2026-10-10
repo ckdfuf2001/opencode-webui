@@ -59,6 +59,14 @@ export function opItemLabel(kind: QueueItemKind, messageID?: string): string {
   return kind === 'truncate' ? `Truncate from ${short}` : `Delete ${short}`
 }
 
+export type CompactionSlashName = 'compact' | 'summarize'
+
+export function matchCompactionSlash(commandName: string): CompactionSlashName | null {
+  const name = commandName.trim()
+  if (name === 'compact' || name === 'summarize') return name
+  return null
+}
+
 const MAX_QUEUE_LENGTH = 20
 const MAX_TEXT_LENGTH = 16_000
 const REQUEST_TIMEOUT_MS = 1_500
@@ -942,6 +950,33 @@ async function checkTurnError(sessionID: string, sinceMs: number): Promise<strin
  * 'transient'=일시적 실패(queued 유지 + 백오프).
  * 대상이 이미 없으면 멱등 성공(true). 전송 계열 예외는 transient.
  */
+interface SummarizeOutcome {
+  ok: boolean
+  transient: boolean
+  status?: number
+  detail?: string
+}
+
+async function postSessionSummarize(
+  base: string,
+  sessionID: string,
+  directory: string,
+  model: { providerID: string; modelID: string },
+): Promise<SummarizeOutcome> {
+  const res = await fetch(`${base}/session/${sessionID}/summarize?directory=${encodeURIComponent(directory)}`, {
+    method: 'POST',
+    headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID }),
+    signal: AbortSignal.timeout(600_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    return { ok: false, transient: res.status >= 500, status: res.status, detail: body.slice(0, 300) }
+  }
+  void res.text().catch(() => {})
+  return { ok: true, transient: false }
+}
+
 async function dispatchOpItem(sessionID: string, item: QueuedChat): Promise<boolean | 'transient'> {
   const directory = resolveQueueDir(sessionID)
   try {
@@ -951,22 +986,15 @@ async function dispatchOpItem(sessionID: string, item: QueuedChat): Promise<bool
         return false
       }
       const base = opencodeServerManager.getUrl()
-      const res = await fetch(`${base}/session/${sessionID}/summarize?directory=${encodeURIComponent(directory)}`, {
-        method: 'POST',
-        headers: ensureServerAuth({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ providerID: item.model.providerID, modelID: item.model.modelID }),
-        signal: AbortSignal.timeout(600_000),
-      })
-      if (!res.ok) {
-        const body = await res.text().catch(() => '')
-        if (res.status >= 500) {
-          logger.warn(`Queued compact op hit opencode 5xx HTTP ${res.status} for session ${sessionID} — keep queued for auto-retry`)
-          return 'transient'
-        }
-        logger.warn(`Queued compact op rejected HTTP ${res.status} for session ${sessionID}: ${body.slice(0, 200)}`)
+      const outcome = await postSessionSummarize(base, sessionID, directory, item.model)
+      if (!outcome.ok && outcome.transient) {
+        logger.warn(`Queued compact op hit opencode 5xx HTTP ${outcome.status} for session ${sessionID} — keep queued for auto-retry`)
+        return 'transient'
+      }
+      if (!outcome.ok) {
+        logger.warn(`Queued compact op rejected HTTP ${outcome.status} for session ${sessionID}: ${(outcome.detail ?? '').slice(0, 200)}`)
         return false
       }
-      void res.text().catch(() => {})
       logger.info(`Queued compact op succeeded for session ${sessionID}`)
       return true
     }
@@ -1012,6 +1040,80 @@ async function dispatchOpItem(sessionID: string, item: QueuedChat): Promise<bool
     logger.warn(`Queued ${item.kind} op errored for session ${sessionID} — keep queued for auto-retry:`, e)
     return 'transient'
   }
+}
+
+async function dispatchCompactionSlash(
+  base: string,
+  sessionID: string,
+  directory: string,
+  chat: QueuedChat,
+  args: string,
+  name: CompactionSlashName,
+): Promise<DispatchResult> {
+  if (args.trim()) {
+    logger.info(`Queued /${name} ignores arguments for session ${sessionID}: ${args.trim().slice(0, 120)}`)
+  }
+  let runId: string | null = null
+  try {
+    if (queueDb) {
+      const { recordRunStartSafe, resolveRepoId } = await import('./command-runs')
+      const run = await recordRunStartSafe(queueDb, {
+        sessionId: sessionID,
+        commandName: name,
+        args: args.trim() || null,
+        directory,
+        repoId: resolveRepoId(queueDb, directory),
+        origin: 'chat',
+        kind: 'command',
+        reviewWanted: chat.reviewWanted,
+        autoApply: chat.autoApply,
+      })
+      runId = run?.id ?? null
+    }
+  } catch (e) {
+    logger.debug(`Compaction run record skipped for /${name}:`, e)
+  }
+  const finishCompactionRun = async (status: 'completed' | 'failed'): Promise<void> => {
+    try {
+      if (queueDb && runId) {
+        const { finishRunSafe } = await import('./command-runs')
+        await finishRunSafe(queueDb, runId, status)
+      }
+    } catch (e) {
+      logger.debug(`Compaction run finish skipped for /${name}:`, e)
+    }
+  }
+  if (!chat.model) {
+    logger.warn(`Queued /${name} has no model for session ${sessionID} — marked failed`)
+    await finishCompactionRun('failed')
+    return { sent: false, nonRetryable: true, status: 400, detail: 'Summarize requires providerID/modelID — select a model first.' }
+  }
+  let outcome: SummarizeOutcome
+  try {
+    outcome = await postSessionSummarize(base, sessionID, directory, chat.model)
+  } catch (e) {
+    logger.warn(`Queued /${name} summarize threw for session ${sessionID} — keep queued for auto-retry:`, e)
+    await finishCompactionRun('failed')
+    return { sent: false, transient: true, detail: 'summarize request failed before responding — queued for auto-retry' }
+  }
+  if (outcome.ok) {
+    logger.info(`Queued /${name} summarized session ${sessionID} via /summarize`)
+    await finishCompactionRun('completed')
+    return { sent: true }
+  }
+  if (outcome.transient) {
+    logger.warn(`Queued /${name} hit opencode 5xx HTTP ${outcome.status} for session ${sessionID} — keep queued for auto-retry`)
+    await finishCompactionRun('failed')
+    return { sent: false, transient: true, status: outcome.status, detail: outcome.detail }
+  }
+  if (isQuotaRejection(outcome.status, outcome.detail)) {
+    logger.warn(`Queued /${name} rejected with quota/billing HTTP ${outcome.status} for session ${sessionID} — marked failed without retry`)
+    await finishCompactionRun('failed')
+    return { sent: false, nonRetryable: true, status: outcome.status, detail: outcome.detail }
+  }
+  logger.warn(`Queued /${name} rejected HTTP ${outcome.status} for session ${sessionID}: ${outcome.detail ?? ''}`)
+  await finishCompactionRun('failed')
+  return { sent: false, nonRetryable: true, status: outcome.status, detail: outcome.detail }
 }
 
 async function dispatchQueuedChat(
@@ -1159,6 +1261,10 @@ async function dispatchQueuedChat(
         }
       } catch (e) {
         logger.debug('Skill pre-resolve skipped:', e)
+      }
+      const compactionName = matchCompactionSlash(probe)
+      if (!messageTextOverride && compactionName) {
+        return dispatchCompactionSlash(base, sessionID, directory, chat, cmdMatch[2] ?? '', compactionName)
       }
     }
   }
