@@ -705,6 +705,7 @@ function sheetToHtmlWithHeaders(
   XLSX: any,
   styles?: any[],
   imagesByCell?: Map<string, { src: string; name: string; w: number; h: number }[]>,
+  colWidthsPx?: number[],
 ) {
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
   const startCol = range.s.c
@@ -712,7 +713,13 @@ function sheetToHtmlWithHeaders(
   const endCol = range.e.c
   const endRow = range.e.r
   const headerCells: string[] = ['<th class="xlsx-corner"></th>']
-  for (let c = startCol; c <= endCol; c++) headerCells.push(`<th class="xlsx-col-head"><span>${XLSX.utils.encode_col(c)}</span></th>`)
+  const colgroup: string[] = ['<col style="width:32px">']
+  for (let c = startCol; c <= endCol; c++) {
+    headerCells.push(`<th class="xlsx-col-head"><span>${XLSX.utils.encode_col(c)}</span></th>`)
+    const w = colWidthsPx?.[c - startCol]
+    if (w && w > 0) colgroup.push(`<col style="width:${Math.round(w)}px">`)
+    else colgroup.push('<col>')
+  }
   const rows: string[] = [`<tr>${headerCells.join('')}</tr>`]
   for (let r = startRow; r <= endRow; r++) {
     const cells: string[] = [`<th class="xlsx-row-head"><span>${r + 1}</span></th>`]
@@ -737,7 +744,8 @@ function sheetToHtmlWithHeaders(
     rows.push(`<tr>${cells.join('')}</tr>`)
   }
   return {
-    html: `<table class="xlsx-table">${rows.join('')}</table>`,
+    // 엑셀처럼 고정폭 + 넘침 표시: 내용이 길면 옆 빈 셀 위로 그냥 보인다 (열이 늘어나지 않음).
+    html: `<table class="xlsx-table" style="table-layout:fixed;width:auto"><colgroup>${colgroup.join('')}</colgroup>${rows.join('')}</table>`,
     startRow,
     startCol,
     endRow,
@@ -766,11 +774,11 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
         const parts = []
         for (const name of wb.SheetNames as string[]) {
           const ws = wb.Sheets[name]
-          const table = sheetToHtmlWithHeaders(ws, XLSX, sheetStyles)
-          const loaded = await loadSheetImages(zip, sheetDrawings.get(name), urls).catch(() => ({ images: [], skipped: 0 }))
-          // 표시 크기: oneCell은 ext 그대로, twoCell은 셀 span으로 계산, 둘 다 없으면 축소 표시.
           const colW = columnPixelWidths(ws)
           const rowH = rowPixelHeights(ws)
+          const table = sheetToHtmlWithHeaders(ws, XLSX, sheetStyles, undefined, colWidthsFor(ws, XLSX))
+          const loaded = await loadSheetImages(zip, sheetDrawings.get(name), urls).catch(() => ({ images: [], skipped: 0 }))
+          // 표시 크기: oneCell은 ext 그대로, twoCell은 셀 span으로 계산, 둘 다 없으면 축소 표시.
           const spanPx = (im: SheetImage): { w: number; h: number } | null => {
             if (im.isTwoCell && im.toCol > im.col && im.toRow > im.row) {
               let w = 0
@@ -797,7 +805,7 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
             }
           }
           const html = imagesByCell.size > 0
-            ? sheetToHtmlWithHeaders(ws, XLSX, sheetStyles, imagesByCell).html
+            ? sheetToHtmlWithHeaders(ws, XLSX, sheetStyles, imagesByCell, colWidthsFor(ws, XLSX)).html
             : table.html
           parts.push({ name, html, images: gallery, skippedImages: loaded.skipped })
         }
@@ -940,6 +948,21 @@ const RENDERABLE_IMAGE_MIME: Record<string, string> = {
   bmp: 'image/bmp',
   webp: 'image/webp',
   svg: 'image/svg+xml',
+}
+
+/** 시트 표시 범위에 맞춘 열 너비(px) 배열. */
+function colWidthsFor(ws: any, XLSX: any): number[] {
+  const colW = columnPixelWidths(ws)
+  let startCol = 0
+  let endCol = 0
+  try {
+    const range = XLSX.utils.decode_range(ws?.['!ref'] || 'A1')
+    startCol = range.s.c
+    endCol = range.e.c
+  } catch {}
+  const out: number[] = []
+  for (let c = startCol; c <= endCol; c++) out.push(colW(c))
+  return out
 }
 
 /** 열 너비 px (wch→px 근사, Calibri 11 기준). */
