@@ -715,11 +715,17 @@ function sheetToHtmlWithHeaders(
   const endRow = range.e.r
   const headerCells: string[] = ['<th class="xlsx-corner"></th>']
   const colgroup: string[] = ['<col style="width:32px">']
+  let totalWidth = 32
   for (let c = startCol; c <= endCol; c++) {
     headerCells.push(`<th class="xlsx-col-head"><span>${XLSX.utils.encode_col(c)}</span></th>`)
     const w = colWidthsPx?.[c - startCol]
-    if (w && w > 0) colgroup.push(`<col style="width:${Math.round(w)}px">`)
-    else colgroup.push('<col>')
+    if (w && w > 0) {
+      const wi = Math.round(w)
+      colgroup.push(`<col style="width:${wi}px">`)
+      totalWidth += wi
+    } else {
+      colgroup.push('<col>')
+    }
   }
   const rows: string[] = [`<tr>${headerCells.join('')}</tr>`]
   for (let r = startRow; r <= endRow; r++) {
@@ -746,7 +752,8 @@ function sheetToHtmlWithHeaders(
   }
   return {
     // 엑셀처럼 고정폭 + 넘침 표시: 내용이 길면 옆 빈 셀 위로 그냥 보인다 (열이 늘어나지 않음).
-    html: `<table class="xlsx-table" style="table-layout:fixed;width:auto"><colgroup>${colgroup.join('')}</colgroup>${rows.join('')}</table>`,
+    // fixed는 확정 width가 있어야 먹으므로 합산폭을 명시한다 (width:auto면 내용 기준으로 풀린다).
+    html: `<table class="xlsx-table" style="table-layout:fixed;width:${totalWidth}px"><colgroup>${colgroup.join('')}</colgroup>${rows.join('')}</table>`,
     startRow,
     startCol,
     endRow,
@@ -1086,8 +1093,8 @@ async function loadSheetImages(
 }
 
 /** EMU → px (96dpi). */
-const emuPx = (v: string | null | undefined): number => {
-  const n = parseFloat(v ?? '')
+const emuPx = (v: string | number | null | undefined): number => {
+  const n = typeof v === 'number' ? v : parseFloat(v ?? '')
   return Number.isNaN(n) ? 0 : n / (914400 / 96)
 }
 
@@ -1440,12 +1447,13 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
 }
 
 const PPTX_RENDER_WIDTH = 960
-/** pt → EMU (폰트 크기를 좌표계로 환산용). */
-const PT_TO_EMU = 12700
 
 function PptxSlideView({ slide }: { slide: PptxSlideData }) {
-  const k = PPTX_RENDER_WIDTH / (slide.width > 0 ? slide.width : 9144000)
-  const px = (emu: number) => Math.max(0, emu * k)
+  // collectPptxShapes가 EMU→px(96dpi)로 환산済み이므로 k는 px→렌더px 비율이다.
+  // (EMU 그대로 나누면 1/9525로 축소돼 텍스트가 0.001px가 된다)
+  const naturalW = emuPx(slide.width > 0 ? slide.width : 9144000) || 1
+  const k = PPTX_RENDER_WIDTH / naturalW
+  const px = (v: number) => Math.max(0, v * k)
   const bg = slide.bg ?? '#FFFFFF'
   const dark = lumIsDark(bg)
   const baseColor = dark ? '#F5F5F5' : '#1A1A1A'
@@ -1487,7 +1495,7 @@ function PptxSlideView({ slide }: { slide: PptxSlideData }) {
                             style={{
                               fontWeight: r.bold ? 700 : undefined,
                               fontStyle: r.italic ? 'italic' : undefined,
-                              fontSize: r.sizePt ? r.sizePt * PT_TO_EMU * k : undefined,
+                              fontSize: r.sizePt ? r.sizePt * (96 / 72) * k : undefined,
                               color: r.color ?? undefined,
                               fontFamily: r.font ? `"${r.font}", sans-serif` : undefined,
                             }}
@@ -1531,7 +1539,7 @@ function PptxSlideView({ slide }: { slide: PptxSlideData }) {
                                     style={{
                                       fontWeight: r.bold ? 700 : undefined,
                                       fontStyle: r.italic ? 'italic' : undefined,
-                                      fontSize: r.sizePt ? r.sizePt * PT_TO_EMU * k : undefined,
+                                      fontSize: r.sizePt ? r.sizePt * (96 / 72) * k : undefined,
                                       color: r.color ?? undefined,
                                     }}
                                   >
