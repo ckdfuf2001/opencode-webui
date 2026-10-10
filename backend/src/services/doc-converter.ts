@@ -7,7 +7,7 @@ import { resolveDocConverterCommand } from './doc-tools'
 
 const CONVERTER_PORT = parseInt(process.env.DOC_CONVERTER_PORT || '8765', 10)
 const CONVERTER_BASE = `http://127.0.0.1:${CONVERTER_PORT}`
-const SUPPORTED_EXTENSIONS = new Set(['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt'])
+const SUPPORTED_EXTENSIONS = new Set(['.docx', '.doc', '.docm', '.dotm', '.xlsx', '.xls', '.xlsm', '.xltx', '.xltm', '.xlsb', '.pptx', '.ppt', '.pptm', '.ppsx', '.potx'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'])
 
 let converterProcess: ChildProcess | null = null

@@ -14,10 +14,11 @@ type ExtractedMsg = {
 export function detectDocKind(name: string): DocKind | null {
   const ext = name.split('.').pop()?.toLowerCase()
   if (ext === 'pdf') return 'pdf'
-  if (ext === 'docx') return 'docx'
+  if (ext === 'docx' || ext === 'docm' || ext === 'dotm') return 'docx'
   if (ext === 'doc') return 'doc'
-  if (ext === 'xlsx' || ext === 'xls') return 'xlsx'
-  if (ext === 'pptx') return 'pptx'
+  if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsm' || ext === 'xltx' || ext === 'xltm') return 'xlsx'
+  if (ext === 'xlsb') return 'xls'
+  if (ext === 'pptx' || ext === 'pptm' || ext === 'ppsx' || ext === 'potx') return 'pptx'
   if (ext === 'ppt') return 'ppt'
   if (ext === 'msg') return 'msg'
   return null
@@ -1176,6 +1177,26 @@ interface PptxSlideData {
   height: number
   bg: string | null
   shapes: PptxShape[]
+  fallbackLines: string[]
+}
+
+/** 도형이 하나도 안 잡힌 슬라이드용 텍스트 폴백 (플레이스홀더 상속 등). */
+function extractSlideText(doc: Document): string[] {
+  const paras = Array.from(doc.getElementsByTagName('a:p'))
+  const lines: string[] = []
+  for (const p of paras) {
+    // 테이블 셀 텍스트는 표 렌더가 담당 — 여기선 제외
+    let node: Node | null = p
+    let inTable = false
+    while (node) {
+      if ((node as Element).tagName === 'a:tbl') { inTable = true; break }
+      node = node.parentNode
+    }
+    if (inTable) continue
+    const line = Array.from(p.getElementsByTagName('a:t')).map((t) => t.textContent ?? '').join('')
+    if (line.trim()) lines.push(line)
+  }
+  return lines
 }
 
 function parseXfrm(el: Element | null): { x: number; y: number; w: number; h: number } {
@@ -1385,7 +1406,7 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
               },
             }, `${index}`, shapes)
           }
-          result.push({ index, width: slideW, height: slideH, bg, shapes })
+          result.push({ index, width: slideW, height: slideH, bg, shapes, fallbackLines: shapes.length === 0 ? extractSlideText(doc) : [] })
         }
         if (!cancelled) setSlides(result)
       } catch (e) {
@@ -1435,6 +1456,15 @@ function PptxSlideView({ slide }: { slide: PptxSlideData }) {
         className="relative overflow-hidden rounded-md border border-border shadow-sm mx-auto"
         style={{ width: PPTX_RENDER_WIDTH, height: PPTX_RENDER_WIDTH * (slide.height / slide.width), background: bg }}
       >
+        {slide.shapes.length === 0 && slide.fallbackLines.length > 0 && (
+          <div className="absolute inset-0 overflow-auto p-6" style={{ color: baseColor }}>
+            <ul className="space-y-1">
+              {slide.fallbackLines.map((line, i) => (
+                <li key={i} className="text-sm">{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {slide.shapes.map((s) => {
           const style: CSSProperties = {
             position: 'absolute',

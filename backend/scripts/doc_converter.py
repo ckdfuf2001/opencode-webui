@@ -12,9 +12,9 @@ from urllib.parse import quote, urlparse
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "opencode-doc-conv")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-DOC_EXTS = {".docx", ".doc"}
-XLS_EXTS = {".xlsx", ".xls"}
-PPT_EXTS = {".pptx", ".ppt"}
+DOC_EXTS = {".docx", ".doc", ".docm", ".dotm"}
+XLS_EXTS = {".xlsx", ".xls", ".xlsm", ".xltx", ".xltm", ".xlsb"}
+PPT_EXTS = {".pptx", ".ppt", ".pptm", ".ppsx", ".potx"}
 SUPPORTED_EXTS = DOC_EXTS | XLS_EXTS | PPT_EXTS
 # 가벼운 OCR용 이미지 확장자 (Pillow + pytesseract, Tesseract 본체 별도 설치 필요)
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
