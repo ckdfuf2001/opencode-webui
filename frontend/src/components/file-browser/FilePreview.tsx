@@ -160,6 +160,17 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   }, [isFullscreen])
 
   useEffect(() => {
+    const onRequest = (e: Event) => {
+      if ((e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen && !isFullscreen) {
+        setIsFullscreen(true)
+        window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: true } }))
+      }
+    }
+    window.addEventListener('fileFullscreenRequest', onRequest)
+    return () => window.removeEventListener('fileFullscreenRequest', onRequest)
+  }, [isFullscreen])
+
+  useEffect(() => {
     if (!isFullscreen) return
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
