@@ -1,3 +1,7 @@
+param(
+  # 비어 있으면 전체 빌드, 지정하면 해당 타겟만 (예: -Only doc-converter)
+  [string[]]$Only = @()
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root 'release\scripts'
@@ -11,6 +15,9 @@ if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
 
 $common = @('--onefile', '--clean', '--noconfirm', "--distpath=$dist", "--workpath=$work", "--specpath=$work")
 
+$targets = if ($Only.Count -gt 0) { $Only } else { @('office-mcp', 'doc-converter') }
+
+if ($targets -contains 'office-mcp') {
 Write-Output '[doc-tools] building office-mcp.exe (doc-reader: office-mcp fork)'
 python -m PyInstaller @common `
   --copy-metadata fastmcp `
@@ -25,7 +32,9 @@ python -m PyInstaller @common `
   --name office-mcp `
   (Join-Path $root 'vendor\office-mcp\server.py')
 if ($LASTEXITCODE -ne 0) { throw 'office-mcp build failed' }
+}
 
+if ($targets -contains 'doc-converter') {
 Write-Output '[doc-tools] building doc-converter.exe'
 python -m PyInstaller @common `
   --hidden-import win32com.client `
@@ -38,6 +47,7 @@ python -m PyInstaller @common `
   --name doc-converter `
   (Join-Path $root 'backend\scripts\doc_converter.py')
 if ($LASTEXITCODE -ne 0) { throw 'doc-converter build failed' }
+}
 
 Write-Output '[doc-tools] built:'
 Get-ChildItem $dist | ForEach-Object { Write-Output ("  {0}  ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB)) }

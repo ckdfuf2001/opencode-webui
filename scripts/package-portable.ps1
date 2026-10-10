@@ -109,14 +109,30 @@ Write-Output '[package 6/7] doc tools exe'
 # 구 폴백이 필요하면 python backend/scripts/doc_reader_mcp.py 로 동작한다.
 $officeMcp = Join-Path $release 'scripts/office-mcp.exe'
 $docConverter = Join-Path $release 'scripts/doc-converter.exe'
-$needDocTools = (-not (Test-Path $officeMcp)) -or (-not (Test-Path $docConverter))
-if ($needDocTools -and -not $SkipDocTools) {
-  & (Join-Path $PSScriptRoot 'build-doc-tools.ps1')
+# 소스가 exe보다 새로우면 재빌드 (안 그러면 고친 .py가 패키지에 안 들어간다).
+$staleTargets = @()
+if (-not (Test-Path $docConverter)) { $staleTargets += 'doc-converter' }
+elseif ((Get-Item (Join-Path $root 'backend\scripts\doc_converter.py')).LastWriteTime -gt (Get-Item $docConverter).LastWriteTime) {
+  Write-Output '[package 6/7] doc_converter.py changed -> rebuild doc-converter.exe'
+  $staleTargets += 'doc-converter'
+}
+if (-not (Test-Path $officeMcp)) { $staleTargets += 'office-mcp' }
+else {
+  $newestVendor = Get-ChildItem -Path (Join-Path $root 'vendor\office-mcp') -Filter '*.py' -Recurse -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($newestVendor -and $newestVendor.LastWriteTime -gt (Get-Item $officeMcp).LastWriteTime) {
+    Write-Output '[package 6/7] vendor/office-mcp changed -> rebuild office-mcp.exe'
+    $staleTargets += 'office-mcp'
+  }
+}
+$staleTargets = @($staleTargets | Select-Object -Unique)
+if ($staleTargets.Count -gt 0 -and -not $SkipDocTools) {
+  & (Join-Path $PSScriptRoot 'build-doc-tools.ps1') -Only $staleTargets
   if ($LASTEXITCODE -ne 0) { throw 'doc-tools build failed' }
 } elseif ($SkipDocTools) {
   Write-Output '[package 6/7] skipped (SkipDocTools)'
 } else {
-  Write-Output '[package 6/7] ok: doc tools already present'
+  Write-Output '[package 6/7] ok: doc tools up to date'
 }
 
 # browser automation via Playwright MCP (npx, no proxy needed)
