@@ -1490,9 +1490,11 @@ export function SessionDetail() {
   }, []);
 
   // 파괴적 작업(truncate/delete)은 큐에 넣어 순서대로 처리한다.
-  // 큐에 있으면 idle이 되는 대로, 실행 중이면 현 턴이 끝난 뒤 실행된다.
-  // abort로 턴을 끊고 바로 자르는 기존 방식은 큐 순서가 어긋나
-  // "보내지 말아야 할 때 전송"되던 원인이라 쓰지 않는다.
+  // 큐에 있으면 idle이 되는 대로 실행된다.
+  // truncate/edit-resend는 예외로 sending 중인 턴이 있으면 먼저 취소한다 —
+  // toTop만으로는 sending 헤드 뒤(1번)에 들어가 현 턴이 끝난 뒤에 잘라서,
+  // 잘라내려는 구간이 이미 전송/생성되는 문제가 있다.
+  // erase(delete)는 진행 중 턴과 무관한 단일 턴 삭제라 취소하지 않는다.
   // (enqueueOp/pendingOpsRef/완료 추적은 상단에서 선언 — TDZ 방지)
   const handleResendEdit = useCallback(async (messageID: string): Promise<boolean> => {
     if (!sessionId) return false
@@ -1511,6 +1513,14 @@ export function SessionDetail() {
         for (const id of removedIds) dropBackfilledId(sessionId, id as string)
         queryClient.setQueryData(messagesKey, previous.filter((m: any) => (m?.info?.time?.created ?? 0) < cursorTime))
       }
+      // sending 중인 턴이 있으면 먼저 취소한다 — 백엔드 abort가 sending 큐 슬롯도
+      // 함께 비우므로(clearSendingOnAbort) 뒤이은 toTop enqueue가 곧바로 head가 된다.
+      // abort 실패해도 truncate 자체는 진행한다.
+      const cachedQueue = queryClient.getQueryData<Array<{ status?: string }>>(chatQueueKeys.session(sessionId))
+      const queueSending = (cachedQueue ?? (queuedForBadge as Array<{ status?: string }>)).some((q) => q?.status === 'sending')
+      if (queueSending || hasActiveSend(sessionId) || isStreaming) {
+        try { await abortSession.mutateAsync(sessionId) } catch { /* abort 실패해도 truncate은 진행 */ }
+      }
       const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'truncate', messageID, toTop: true })
       const op = [...queue].reverse().find((q: any) => q?.kind === 'truncate' && q?.messageID === messageID)
       if (op) pendingOpsRef.current.set(op.id, { kind: 'truncate' })
@@ -1528,7 +1538,7 @@ export function SessionDetail() {
       if (previous) queryClient.setQueryData(messagesKey, previous)
       return false
     }
-  }, [sessionId, opcodeUrl, repoDirectory, queryClient, enqueueOp]);
+  }, [sessionId, opcodeUrl, repoDirectory, queryClient, enqueueOp, abortSession, queuedForBadge, isStreaming]);
 
   const handleTruncate = useCallback((messageID: string) => {
     if (!sessionId) return
