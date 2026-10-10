@@ -828,8 +828,8 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
       {(zoom) => (
         <div className="xlsx-preview" style={{ zoom }}>
           {sheets.length > 1 && (
-            <div className="flex items-center gap-1 px-3 pt-2 overflow-x-auto border-b border-border bg-background sticky top-0 z-10">
-              {/* thead 행/열 헤더(sticky top-0, z-1/2)보다 위 — 스크롤해도 탭이 가려지지 않는다 */}
+            <div className="flex items-center gap-1 px-3 pt-2 overflow-x-auto border-b border-border bg-background sticky top-0 left-0 z-10">
+              {/* thead 행/열 헤더(sticky top-0, z-1/2)보다 위 + 가로 스크롤에도 고정 — 내용만 움직인다 */}
               {sheets.map((s, i) => (
                 <button
                   key={`${s.name}-${i}`}
