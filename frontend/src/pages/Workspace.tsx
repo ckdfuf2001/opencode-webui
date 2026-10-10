@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { FileBrowser } from '@/components/file-browser/FileBrowser'
+import { OPENCODE_API_ENDPOINT } from '@/config'
 import { ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
@@ -27,7 +28,12 @@ export function Workspace() {
       </div>
 
       <div className="flex-1 overflow-hidden p-4">
-        <FileBrowser />
+        <FileBrowser
+          analysis={{
+            opcodeUrl: OPENCODE_API_ENDPOINT,
+            onOpenSession: (_rid, sid) => navigate(`/session/${sid}`),
+          }}
+        />
       </div>
     </div>
   )

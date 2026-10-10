@@ -238,6 +238,13 @@ export function RepoDetail() {
             width={filePanelWidth}
             onClose={() => setFileBrowserOpen(false)}
             onOpenFullscreen={() => setFileBrowserFullscreenOpen(true)}
+            analysis={{
+              opcodeUrl,
+              directory: repoDirectory,
+              repoId,
+              onOpenSession: (rid, sid) =>
+                navigate(rid ? `/repos/${rid}/sessions/${sid}` : `/session/${sid}`),
+            }}
           />
         )}
       </div>
@@ -281,6 +288,13 @@ export function RepoDetail() {
           onClose={() => setFileBrowserFullscreenOpen(false)}
           basePath={repo.workspaceRel}
           repoName={repoName}
+          analysis={{
+            opcodeUrl,
+            directory: repoDirectory,
+            repoId,
+            onOpenSession: (rid, sid) =>
+              navigate(rid ? `/repos/${rid}/sessions/${sid}` : `/session/${sid}`),
+          }}
         />
       <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
       <AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoOpen} />

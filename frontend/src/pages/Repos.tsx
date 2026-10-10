@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { RepoList } from "@/components/repo/RepoList";
 import { AddRepoDialog } from "@/components/repo/AddRepoDialog";
 import { FileBrowserSheet } from "@/components/file-browser/FileBrowserSheet";
@@ -12,6 +13,7 @@ import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { NavigationPanel } from "@/components/navigation/NavigationPanel";
 import { PermissionRulesDialog } from "@/components/permission/PermissionRulesDialog";
 export function Repos() {
+  const navigate = useNavigate();
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
@@ -87,6 +89,10 @@ export function Repos() {
         onClose={handleCloseFileBrowser}
         basePath=""
         repoName="Workspace Root"
+        analysis={{
+          opcodeUrl: OPENCODE_API_ENDPOINT,
+          onOpenSession: (_rid, sid) => navigate(`/session/${sid}`),
+        }}
       />
       <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
       <PermissionRulesDialog open={permissionRulesOpen} onOpenChange={setPermissionRulesOpen} />

@@ -4,6 +4,8 @@ import { FileTree } from './FileTree'
 import { FileOperations } from './FileOperations'
 import { FilePreview } from './FilePreview'
 import { MobileFilePreviewModal } from './MobileFilePreviewModal'
+import { FileAnalysisBar } from './FileAnalysisBar'
+import type { FileAnalysisContext } from '@/hooks/useFileAnalysis'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -154,6 +156,8 @@ interface FileBrowserProps {
   onDirectoryLoad?: (info: { workspaceRoot?: string; currentPath: string }) => void
   /** 채팅 멘션 — 있으면 트리 ... 메뉴에 "Mention on chat"이 뜬다 */
   onMentionFile?: (file: FileInfo) => void
+  /** 있으면 하단에 파일 분석바 (모델 선택 + 분석 + 세션 전달) */
+  analysis?: FileAnalysisContext
 }
 
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
@@ -182,7 +186,7 @@ function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: Fi
   )
 }
 
-export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad, onMentionFile }: FileBrowserProps) {
+export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad, onMentionFile, analysis }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState(basePath)
   const queryClient = useQueryClient()
   const { data: files, isLoading: queryLoading, error: filesQueryError } = useQuery<FileInfo, Error>({
@@ -776,7 +780,9 @@ useEffect(() => {
           )}
         </div>
 
- {/* Mobile: File Preview Modal */}
+        {analysis && <FileAnalysisBar file={selectedFile} context={analysis} />}
+
+  {/* Mobile: File Preview Modal */}
         <MobileFilePreviewModal 
           isOpen={isMobile && isPreviewModalOpen}
           onClose={handleCloseModal}
@@ -905,6 +911,8 @@ useEffect(() => {
           )}
         </CardContent>
       </Card>
+
+      {analysis && <FileAnalysisBar file={selectedFile} context={analysis} />}
 
 {/* Mobile: File Preview Modal */}
       <MobileFilePreviewModal 

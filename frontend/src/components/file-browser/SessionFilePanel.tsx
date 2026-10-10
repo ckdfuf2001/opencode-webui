@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { PathDisplay } from '@/components/ui/path-display'
 import { X, Maximize2 } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
+import type { FileAnalysisContext } from '@/hooks/useFileAnalysis'
 
 interface SessionFilePanelProps {
   basePath?: string
@@ -13,9 +14,10 @@ interface SessionFilePanelProps {
   onClose: () => void
   onOpenFullscreen?: () => void
   onMentionFile?: (file: FileInfo) => void
+  analysis?: FileAnalysisContext
 }
 
-export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSelectedFile, width = 380, onClose, onOpenFullscreen, onMentionFile }: SessionFilePanelProps) {
+export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSelectedFile, width = 380, onClose, onOpenFullscreen, onMentionFile, analysis }: SessionFilePanelProps) {
   const [displayPath, setDisplayPath] = useState<string>('/')
 
   const handleDirectoryLoad = useCallback((info: { workspaceRoot?: string; currentPath: string }) => {
@@ -63,6 +65,7 @@ export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSe
           initialSelectedFile={initialSelectedFile}
           onDirectoryLoad={handleDirectoryLoad}
           onMentionFile={onMentionFile}
+          analysis={analysis}
         />
       </div>
     </div>

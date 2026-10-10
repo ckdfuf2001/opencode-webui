@@ -1864,6 +1864,7 @@ if (results.length > 0) {
             onClose={handleFileBrowserClose}
             onOpenFullscreen={() => setFileBrowserFullscreenOpen(true)}
             onMentionFile={handleMentionFile}
+            analysis={{ sessionId, opcodeUrl, directory: repoDirectory, repoId }}
           />
         )}
       </div>
@@ -1875,6 +1876,7 @@ if (results.length > 0) {
         repoName={repo?.repoUrl?.split("/").pop()?.replace(".git", "") || repo?.workspaceRel || "Repository"}
         initialSelectedFile={selectedFilePath}
         onMentionFile={handleMentionFile}
+        analysis={{ sessionId, opcodeUrl, directory: repoDirectory, repoId }}
       />
 
       <ModelSelectDialog
