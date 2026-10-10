@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, Suspense, lazy, Component } from 'react'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
+import { createInstance } from 'i18next'
+import { I18nextProvider, initReactI18next } from 'react-i18next'
+import { translationsEn } from 'pptx-react-viewer/i18n'
 import 'pptx-react-viewer/styles.css'
 
 const PowerPointViewer = lazy(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
 )
+
+const pptxI18n = createInstance()
+void pptxI18n.use(initReactI18next).init({
+  lng: 'en',
+  fallbackLng: 'en',
+  resources: { en: { translation: translationsEn } },
+  interpolation: { escapeValue: false },
+})
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
@@ -1133,7 +1144,9 @@ function PptxViewer({ data, fileName, onFail }: { data: ArrayBuffer; fileName?: 
     <div className="h-full min-h-[480px]">
       <PptxViewerBoundary onFail={onFail}>
         <Suspense fallback={SPINNER}>
-          <PowerPointViewer content={content} fileName={fileName} canEdit={false} />
+          <I18nextProvider i18n={pptxI18n}>
+            <PowerPointViewer content={content} fileName={fileName} canEdit={false} />
+          </I18nextProvider>
         </Suspense>
       </PptxViewerBoundary>
     </div>
