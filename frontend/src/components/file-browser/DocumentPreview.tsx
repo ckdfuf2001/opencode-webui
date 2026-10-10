@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode, type CSSProperties } from 'react'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
@@ -405,11 +405,19 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
 
 export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refreshKey?: number }) {
   const kind = detectDocKind(file.name)
-  const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg')
+  // office 문서(docx/xlsx/pptx)는 네이티브(빠른 보기) 우선 — PDF 변환 없이 바로 본다.
+  // PDF가 필요하면 토글로 서버 변환을 켠다.
+  const isOfficeNative = kind === 'docx' || kind === 'xlsx' || kind === 'pptx'
+  const [pdfMode, setPdfMode] = useState(false)
+  useEffect(() => { setPdfMode(false) }, [file.path])
+  const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 
   const hasClientFallback = kind ? CONVERTABLE_CLIENT_KINDS.has(kind) : false
-  const { data: raw, status: rawStatus, error: rawError } = useRawFile(file.path, hasClientFallback && converted.status !== 'ready')
+  const { data: raw, status: rawStatus, error: rawError } = useRawFile(
+    file.path,
+    isOfficeNative ? !pdfMode : (hasClientFallback && converted.status !== 'ready'),
+  )
 
   if (!kind) return null
 
@@ -441,6 +449,8 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     body = <ConvertingView />
   } else if (converted.status === 'ready' && converted.data) {
     body = <PdfViewer data={converted.data} fileName={file.name} />
+  } else if (isOfficeNative && !pdfMode) {
+    body = renderRawBody()
   } else if (hasClientFallback) {
     body = renderRawBody()
   } else if (converted.status === 'error' && converted.error) {
@@ -451,6 +461,28 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
 
   return (
     <div className="h-full flex flex-col min-h-0 min-w-0 overflow-hidden">
+      {isOfficeNative && (
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-border bg-background flex-shrink-0">
+          <div className="flex items-center rounded-md bg-muted p-0.5">
+            <button
+              type="button"
+              onClick={() => setPdfMode(false)}
+              className={`h-6 text-xs px-2 rounded ${!pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+              title="변환 없이 바로 보기"
+            >
+              빠른 보기
+            </button>
+            <button
+              type="button"
+              onClick={() => setPdfMode(true)}
+              className={`h-6 text-xs px-2 rounded ${pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+              title="서버에서 PDF로 변환해서 보기"
+            >
+              PDF
+            </button>
+          </div>
+        </div>
+      )}
       {body}
     </div>
   )
@@ -967,22 +999,229 @@ async function loadSheetImages(
   return { images, skipped }
 }
 
-const PPTX_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
-
-function parseSlideXml(xml: string): string[] {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml')
-  const paras = Array.from(doc.getElementsByTagNameNS(PPTX_NS, 'p'))
-  return paras
-    .map((p) => Array.from(p.getElementsByTagNameNS(PPTX_NS, 't')).map((t) => t.textContent ?? '').join(''))
-    .filter((line) => line.trim())
+/** EMU → px (96dpi). */
+const emuPx = (v: string | null | undefined): number => {
+  const n = parseFloat(v ?? '')
+  return Number.isNaN(n) ? 0 : n / (914400 / 96)
 }
 
+function attr(el: Element | undefined | null, name: string): string | null {
+  return el?.getAttribute(name) ?? null
+}
+
+function firstChild(el: Element | undefined | null, tag: string): Element | null {
+  if (!el) return null
+  const list = el.getElementsByTagName(tag)
+  return list.length > 0 ? (list[0] as Element) : null
+}
+
+/** a:solidFill → css 색. 스킴색은 근사치. */
+function fillColor(fillEl: Element | undefined | null): string | null {
+  if (!fillEl) return null
+  const srgb = firstChild(fillEl, 'a:srgbClr')
+  const v = attr(srgb, 'val')
+  if (v && /^[0-9a-fA-F]{6}$/.test(v)) return `#${v}`
+  const scheme = attr(firstChild(fillEl, 'a:schemeClr'), 'val')
+  if (scheme) {
+    const map: Record<string, string> = {
+      dk1: '#000000', lt1: '#FFFFFF', dk2: '#444444', lt2: '#EEEEEE',
+      tx1: '#222222', bg1: '#FFFFFF', accent1: '#4472C4', accent2: '#ED7D31',
+      accent3: '#A5A5A5', accent4: '#FFC000', accent5: '#5B9BD5', accent6: '#70AD47',
+    }
+    if (map[scheme]) return map[scheme]
+  }
+  return null
+}
+
+interface PptxRun { text: string; bold: boolean; italic: boolean; sizePt: number | null; color: string | null; font: string | null }
+interface PptxPara { runs: PptxRun[]; align: string | null }
+
+function directChildren(el: Element, tag: string): Element[] {
+  const out: Element[] = []
+  for (const node of Array.from(el.childNodes)) {
+    if ((node as Element).tagName === tag) out.push(node as Element)
+  }
+  return out
+}
+
+function parsePptxParas(txBody: Element | null): PptxPara[] {
+  if (!txBody) return []
+  const paras: PptxPara[] = []
+  for (const p of directChildren(txBody, 'a:p')) {
+    const pPr = firstChild(p, 'a:pPr')
+    const algn = attr(pPr, 'algn')
+    const runs: PptxRun[] = []
+    for (const r of directChildren(p, 'a:r')) {
+      const rPr = firstChild(r, 'a:rPr')
+      const t = firstChild(r, 'a:t')
+      const text = t?.textContent ?? ''
+      if (!text) continue
+      const sz = attr(rPr, 'sz')
+      const szPt = sz ? parseFloat(sz) / 100 : null
+      runs.push({
+        text,
+        bold: attr(rPr, 'b') === '1',
+        italic: attr(rPr, 'i') === '1',
+        sizePt: szPt && !Number.isNaN(szPt) ? szPt : null,
+        color: fillColor(firstChild(rPr, 'a:solidFill')),
+        font: attr(firstChild(rPr, 'a:latin'), 'typeface'),
+      })
+    }
+    if (runs.length === 0) {
+      // 빈 단락도 줄바꿈으로 유지 (텍스트 없는 장식은 스킵)
+      if (p.getElementsByTagName('a:br').length > 0 || (p.textContent ?? '')) {
+        paras.push({ runs: [], align: algn })
+      }
+      continue
+    }
+    paras.push({ runs, align: algn })
+  }
+  return paras
+}
+
+type PptxShape =
+  | { kind: 'text'; key: string; x: number; y: number; w: number; h: number; paras: PptxPara[] }
+  | { kind: 'pic'; key: string; x: number; y: number; w: number; h: number; src: string; name: string }
+  | { kind: 'table'; key: string; x: number; y: number; w: number; h: number; cols: number[]; rows: PptxPara[][][] }
+  | { kind: 'other'; key: string; x: number; y: number; w: number; h: number; label: string }
+
+interface PptxSlideData {
+  index: number
+  width: number
+  height: number
+  bg: string | null
+  shapes: PptxShape[]
+}
+
+function parseXfrm(el: Element | null): { x: number; y: number; w: number; h: number } {
+  const xfrm = firstChild(el, 'a:xfrm')
+  const off = firstChild(xfrm, 'a:off')
+  const ext = firstChild(xfrm, 'a:ext')
+  return {
+    x: emuPx(attr(off, 'x')),
+    y: emuPx(attr(off, 'y')),
+    w: emuPx(attr(ext, 'cx')),
+    h: emuPx(attr(ext, 'cy')),
+  }
+}
+
+interface PptxShapeCtx {
+  loadImage: (embed: string) => Promise<{ src: string; name: string } | null>
+}
+
+/**
+ * spTree(또는 그룹) 직하 도형을 재귀 수집한다. 좌표는 EMU 절대값으로 환산.
+ * 그룹(p:grpSp) 자식은 chOff/chExt → off/ext 매핑으로 변환한다.
+ * 알 수 없는 태그(nvGrpSpPr 같은 속성 조각 포함)는 조용히 스킵.
+ */
+async function collectPptxShapes(
+  parent: Element,
+  ox: number,
+  oy: number,
+  sx: number,
+  sy: number,
+  ctx: PptxShapeCtx,
+  keyPrefix: string,
+  out: PptxShape[],
+): Promise<void> {
+  let key = 0
+  const kids = Array.from(parent.childNodes).filter(
+    (n): n is Element => typeof (n as Element).tagName === 'string',
+  )
+  for (const el of kids) {
+    const tag = el.tagName
+    const nextKey = `${keyPrefix}-${key++}`
+    if (tag === 'p:grpSp') {
+      const grpPr = firstChild(el, 'p:grpSpPr')
+      const g = parseXfrm(firstChild(grpPr, 'a:xfrm'))
+      const chOff = firstChild(grpPr, 'a:chOff')
+      const chExt = firstChild(grpPr, 'a:chExt')
+      const chOffX = emuPx(attr(chOff, 'x'))
+      const chOffY = emuPx(attr(chOff, 'y'))
+      const chExtCx = emuPx(attr(chExt, 'cx')) || 1
+      const chExtCy = emuPx(attr(chExt, 'cy')) || 1
+      const kx = g.w > 0 ? g.w / chExtCx : 1
+      const ky = g.h > 0 ? g.h / chExtCy : 1
+      await collectPptxShapes(
+        el,
+        ox + (g.x - chOffX * kx) * sx,
+        oy + (g.y - chOffY * ky) * sy,
+        sx * kx,
+        sy * ky,
+        ctx,
+        nextKey,
+        out,
+      )
+      continue
+    }
+    if (tag === 'p:sp') {
+      const r = parseXfrm(firstChild(el, 'p:spPr'))
+      const paras = parsePptxParas(firstChild(el, 'p:txBody'))
+      if (r.w <= 0 || r.h <= 0 || paras.length === 0) continue
+      out.push({ kind: 'text', key: nextKey, x: ox + r.x * sx, y: oy + r.y * sy, w: r.w * sx, h: r.h * sy, paras })
+      continue
+    }
+    if (tag === 'p:pic') {
+      const r = parseXfrm(firstChild(el, 'p:spPr'))
+      if (r.w <= 0 || r.h <= 0) continue
+      const blip = firstChild(firstChild(el, 'p:blipFill'), 'a:blip')
+      const img = blip ? await ctx.loadImage(blip.getAttribute('r:embed') ?? '') : null
+      if (!img) continue
+      out.push({ kind: 'pic', key: nextKey, x: ox + r.x * sx, y: oy + r.y * sy, w: r.w * sx, h: r.h * sy, src: img.src, name: img.name })
+      continue
+    }
+    if (tag === 'p:graphicFrame') {
+      const r = parseXfrm(firstChild(el, 'a:xfrm'))
+      const tbl = firstChild(firstChild(el, 'a:graphic'), 'a:tbl')
+      if (!tbl || r.w <= 0 || r.h <= 0) continue
+      const { cols, rows } = parsePptxTable(tbl)
+      if (rows.length === 0) continue
+      out.push({ kind: 'table', key: nextKey, x: ox + r.x * sx, y: oy + r.y * sy, w: r.w * sx, h: r.h * sy, cols, rows })
+      continue
+    }
+    // p:cxnSp(연결선) 및 속성 조각(nvGrpSpPr 등)은 스킵
+  }
+}
+
+function parsePptxTable(tbl: Element | null): { cols: number[]; rows: PptxPara[][][] } {
+  const cols: number[] = []
+  const rows: PptxPara[][][] = []
+  if (!tbl) return { cols, rows }
+  const grid = firstChild(tbl, 'a:tblGrid')
+  if (grid) {
+    for (const gc of directChildren(grid, 'a:gridCol')) {
+      cols.push(emuPx(attr(gc, 'w')))
+    }
+  }
+  for (const tr of directChildren(tbl, 'a:tr')) {
+    const cells: PptxPara[][] = []
+    for (const tc of directChildren(tr, 'a:tc')) {
+      cells.push(parsePptxParas(firstChild(tc, 'a:txBody')))
+    }
+    rows.push(cells)
+  }
+  return { cols, rows }
+}
+
+function lumIsDark(hex: string | null): boolean {
+  if (!hex) return false
+  const m = hex.replace('#', '')
+  if (m.length !== 6) return false
+  const r = parseInt(m.slice(0, 2), 16)
+  const g = parseInt(m.slice(2, 4), 16)
+  const b = parseInt(m.slice(4, 6), 16)
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5
+}
+
+const PPTX_ALIGN: Record<string, string> = { l: 'left', ctr: 'center', r: 'right', just: 'justify', dist: 'justify' }
+
 function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }) {
-  const [slides, setSlides] = useState<{ index: number; lines: string[] }[]>([])
+  const [slides, setSlides] = useState<PptxSlideData[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    const urls: string[] = []
     ;(async () => {
       try {
         const JSZip = (await import('jszip')).default
@@ -994,13 +1233,74 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
             const nb = parseInt(b.match(/slide(\d+)\.xml/)![1], 10)
             return na - nb
           })
-        const result: { index: number; lines: string[] }[] = []
+        // 프레젠테이션 규격 (슬라이드 가로 고정 렌더용)
+        let slideW = 9144000
+        let slideH = 5143500
+        try {
+          const presFile = zip.files['ppt/presentation.xml']
+          if (presFile && !presFile.dir) {
+            const presDoc = new DOMParser().parseFromString(await presFile.async('string'), 'application/xml')
+            const sldSz = presDoc.getElementsByTagName('p:sldSz')[0]
+            if (sldSz) {
+              slideW = parseFloat(sldSz.getAttribute('cx') ?? '') || slideW
+              slideH = parseFloat(sldSz.getAttribute('cy') ?? '') || slideH
+            }
+          }
+        } catch {}
+        const result: PptxSlideData[] = []
         for (const name of slideNames) {
+          const index = parseInt(name.match(/slide(\d+)\.xml/)![1], 10)
           const xml = await zip.files[name].async('string')
-          result.push({
-            index: parseInt(name.match(/slide(\d+)\.xml/)![1], 10),
-            lines: parseSlideXml(xml),
-          })
+          const doc = new DOMParser().parseFromString(xml, 'application/xml')
+          const cSld = doc.getElementsByTagName('p:cSld')[0]
+          const bgFill = cSld ? firstChild(firstChild(firstChild(cSld, 'p:bg'), 'p:bgPr'), 'a:solidFill') : null
+          const bg = fillColor(bgFill as Element | null)
+          // 슬라이드 rels (이미지 해결용)
+          const slash = name.lastIndexOf('/')
+          const relsPath = `${name.slice(0, slash)}/_rels/${name.slice(slash + 1)}.rels`
+          const relMap = new Map<string, string>()
+          const relsFile = zip.files[relsPath]
+          if (relsFile && !relsFile.dir) {
+            try {
+              const relsDoc = new DOMParser().parseFromString(await relsFile.async('string'), 'application/xml')
+              for (const r of Array.from(relsDoc.getElementsByTagName('Relationship'))) {
+                const id = r.getAttribute('Id')
+                const target = r.getAttribute('Target')
+                if (id && target) relMap.set(id, target)
+              }
+            } catch {}
+          }
+          const dir = name.slice(0, slash)
+          const resolveMedia = (target: string): string | null => {
+            const parts: string[] = []
+            for (const seg of `${dir}/${target}`.split('/')) {
+              if (seg === '..') parts.pop()
+              else if (seg !== '.' && seg !== '') parts.push(seg)
+            }
+            return parts.join('/')
+          }
+          const shapes: PptxShape[] = []
+          const spTree = cSld ? firstChild(cSld, 'p:spTree') : null
+          if (spTree) {
+            await collectPptxShapes(spTree, 0, 0, 1, 1, {
+              loadImage: async (embed: string) => {
+                const target = relMap.get(embed)
+                if (!target) return null
+                const mediaPath = resolveMedia(target)
+                if (!mediaPath) return null
+                const mf = zip.files[mediaPath]
+                if (!mf || mf.dir) return null
+                const ext = (mediaPath.split('.').pop() ?? '').toLowerCase()
+                const mime = RENDERABLE_IMAGE_MIME[ext]
+                if (!mime) return null
+                const buf: Uint8Array = await mf.async('uint8array')
+                const src = URL.createObjectURL(new Blob([buf.slice()], { type: mime }))
+                urls.push(src)
+                return { src, name: mediaPath.split('/').pop() ?? mediaPath }
+              },
+            }, `${index}`, shapes)
+          }
+          result.push({ index, width: slideW, height: slideH, bg, shapes })
         }
         if (!cancelled) setSlides(result)
       } catch (e) {
@@ -1011,6 +1311,9 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
       cancelled = true
       setSlides([])
       setError(null)
+      for (const u of urls) {
+        try { URL.revokeObjectURL(u) } catch {}
+      }
     }
   }, [data])
 
@@ -1020,25 +1323,127 @@ function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   return (
     <DocumentShell fileName={fileName}>
       {(zoom) => (
-        <div className="p-3 space-y-3" style={{ zoom }}>
+        <div className="p-3 space-y-6" style={{ zoom }}>
           {slides.map((slide) => (
-            <div key={slide.index} className="rounded-md border border-border bg-muted/30 p-3">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">Slide {slide.index}</p>
-              {slide.lines.length > 0 ? (
-                <ul className="space-y-1">
-                  {slide.lines.map((line, i) => (
-                    <li key={i} className="text-sm text-foreground">
-                      {line}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-muted-foreground italic">(no text)</p>
-              )}
-            </div>
+            <PptxSlideView key={slide.index} slide={slide} />
           ))}
         </div>
       )}
     </DocumentShell>
+  )
+}
+
+const PPTX_RENDER_WIDTH = 960
+
+function PptxSlideView({ slide }: { slide: PptxSlideData }) {
+  const k = PPTX_RENDER_WIDTH / (slide.width > 0 ? slide.width : 9144000)
+  const px = (emu: number) => Math.max(0, emu * k)
+  const bg = slide.bg ?? '#FFFFFF'
+  const dark = lumIsDark(bg)
+  const baseColor = dark ? '#F5F5F5' : '#1A1A1A'
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">Slide {slide.index}</p>
+      <div
+        className="relative overflow-hidden rounded-md border border-border shadow-sm mx-auto"
+        style={{ width: PPTX_RENDER_WIDTH, height: PPTX_RENDER_WIDTH * (slide.height / slide.width), background: bg }}
+      >
+        {slide.shapes.map((s) => {
+          const style: CSSProperties = {
+            position: 'absolute',
+            left: px(s.x),
+            top: px(s.y),
+            width: px(s.w),
+            height: px(s.h),
+          }
+          if (s.kind === 'text') {
+            return (
+              <div key={s.key} style={{ ...style, overflow: 'hidden', color: baseColor }}>
+                {s.paras.map((p, i) => (
+                  <p key={i} style={{ textAlign: (PPTX_ALIGN[p.align ?? ''] ?? 'left') as CSSProperties['textAlign'], margin: 0 }}>
+                    {p.runs.length === 0 ? (
+                      <br />
+                    ) : (
+                      p.runs.map((r, j) => (
+                        <span
+                          key={j}
+                          style={{
+                            fontWeight: r.bold ? 700 : undefined,
+                            fontStyle: r.italic ? 'italic' : undefined,
+                            fontSize: r.sizePt ? r.sizePt * k : undefined,
+                            color: r.color ?? undefined,
+                            fontFamily: r.font ? `"${r.font}", sans-serif` : undefined,
+                          }}
+                        >
+                          {r.text}
+                        </span>
+                      ))
+                    )}
+                  </p>
+                ))}
+              </div>
+            )
+          }
+          if (s.kind === 'pic') {
+            return (
+              <div key={s.key} style={style}>
+                <img src={s.src} alt={s.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} draggable={false} />
+              </div>
+            )
+          }
+          if (s.kind === 'table') {
+            const total = s.cols.reduce((a, b) => a + b, 0) || 1
+            return (
+              <div key={s.key} style={{ ...style, overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                  <colgroup>
+                    {s.cols.map((c, i) => (
+                      <col key={i} style={{ width: `${(c / total) * 100}%` }} />
+                    ))}
+                  </colgroup>
+                  <tbody>
+                    {s.rows.map((row, i) => (
+                      <tr key={i}>
+                        {row.map((cell, j) => (
+                          <td key={j} style={{ border: '1px solid #999', padding: px(36), color: baseColor, verticalAlign: 'top' }}>
+                            {cell.map((p, pi) => (
+                              <p key={pi} style={{ textAlign: (PPTX_ALIGN[p.align ?? ''] ?? 'left') as CSSProperties['textAlign'], margin: 0 }}>
+                                {p.runs.map((r, ri) => (
+                                  <span
+                                    key={ri}
+                                    style={{
+                                      fontWeight: r.bold ? 700 : undefined,
+                                      fontStyle: r.italic ? 'italic' : undefined,
+                                      fontSize: r.sizePt ? r.sizePt * k : undefined,
+                                      color: r.color ?? undefined,
+                                    }}
+                                  >
+                                    {r.text}
+                                  </span>
+                                ))}
+                              </p>
+                            ))}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          }
+          return (
+            <div
+              key={s.key}
+              style={style}
+              className="border border-dashed border-muted-foreground/40 rounded flex items-center justify-center"
+              title={s.label}
+            >
+              <span className="text-[10px] text-muted-foreground">{s.label}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
