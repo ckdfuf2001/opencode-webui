@@ -1462,6 +1462,86 @@ def _read_msg_attachment(source_path, index):
             pass
 
 
+_ACTIVITY = {"last": 0.0, "active": 0}
+_ACTIVITY_LOCK = None
+
+
+def _activity_lock():
+    global _ACTIVITY_LOCK
+    if _ACTIVITY_LOCK is None:
+        import threading
+
+        _ACTIVITY_LOCK = threading.Lock()
+    return _ACTIVITY_LOCK
+
+
+def _touch_activity(begin=True):
+    """요청 시작/종료 기록 (유휴 종료 판단용)."""
+    import time
+
+    try:
+        with _activity_lock():
+            _ACTIVITY["last"] = time.time()
+            _ACTIVITY["active"] += 1 if begin else -1
+            if _ACTIVITY["active"] < 0:
+                _ACTIVITY["active"] = 0
+    except Exception:
+        pass
+
+
+def _ensure_single_instance():
+    """이미 떠 있으면 조용히 종료 — 포트 경합·중복 상주를 막는다.
+    뮤텍스라 크래시 잔재가 남지 않는다."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.CreateMutexW(None, True, "opencode-doc-converter-8765")
+        if not handle:
+            return True
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(handle)
+            return False
+        global _SINGLE_INSTANCE_HANDLE
+        _SINGLE_INSTANCE_HANDLE = handle
+        return True
+    except Exception:
+        return True
+
+
+_SINGLE_INSTANCE_HANDLE = None
+
+
+def _start_idle_watchdog(server, idle_seconds=900):
+    """요청이 없으면 스스로 종료 — 탐색기를 닫아도 상주하던 메모리 반환.
+    백단은 exit 이벤트로 감지하고 다음 요청에 다시 띄운다."""
+    import threading
+    import time
+
+    _touch_activity(False)  # last=now으로 초기화 (부팅 직후 종료 방지)
+
+    def watch():
+        while True:
+            try:
+                time.sleep(60)
+                with _activity_lock():
+                    idle = time.time() - _ACTIVITY["last"]
+                    active = _ACTIVITY["active"]
+                if active <= 0 and idle >= idle_seconds:
+                    try:
+                        server.shutdown()
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                return
+
+    t = threading.Thread(target=watch, daemon=True)
+    t.start()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[doc-converter] " + (fmt % args) + "\n")
@@ -1482,6 +1562,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "Not found"})
 
     def do_POST(self):
+        _touch_activity(True)
+        try:
+            self._do_post_inner()
+        finally:
+            _touch_activity(False)
+
+    def _do_post_inner(self):
         parsed = urlparse(self.path)
         if parsed.path == "/extract":
             self._handle_extract()
@@ -1784,8 +1871,12 @@ def main():
         return
     load_env_file()
     _reap_stale()
+    if not _ensure_single_instance():
+        print("another doc-converter is already running; exiting")
+        return
     port = int(os.environ.get("DOC_CONVERTER_PORT", "8765"))
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    _start_idle_watchdog(server)
     server.serve_forever()
 
 
