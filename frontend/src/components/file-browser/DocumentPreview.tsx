@@ -425,7 +425,7 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
 
 export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refreshKey?: number }) {
   const kind = detectDocKind(file.name)
-  // office 문서(docx/xlsx/pptx)는 네이티브(빠른 보기) 우선 — PDF 변환 없이 바로 본다.
+  // office 문서(docx/xlsx/pptx)는 바로 보기 우선 — PDF 변환 없이 바로 본다.
   // PDF가 필요하면 토글로 서버 변환을 켠다.
   const isOfficeNative = kind === 'docx' || kind === 'xlsx' || kind === 'pptx'
   const [pdfMode, setPdfMode] = useState(false)
@@ -490,15 +490,15 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
               className={`h-6 text-xs px-2 rounded ${!pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="변환 없이 바로 보기"
             >
-              빠른 보기
+              바로 보기
             </button>
             <button
               type="button"
               onClick={() => setPdfMode(true)}
               className={`h-6 text-xs px-2 rounded ${pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
-              title="서버에서 PDF로 변환해서 보기"
+              title="서버에서 Office로 PDF 변환해서 보기"
             >
-              PDF
+              Office(PDF)
             </button>
           </div>
         </div>
