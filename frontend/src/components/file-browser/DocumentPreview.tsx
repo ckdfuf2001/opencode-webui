@@ -6,11 +6,19 @@ const SpreadsheetEditor = lazy(() =>
 )
 
 const PptxViewer = lazy(() => import('./PptxViewer'))
+
+const WordEditor = lazy(() =>
+  import('docx-react-viewer').then((m) => ({ default: m.WordEditor })),
+)
+
+const VisioViewer = lazy(() =>
+  import('visio-react-viewer').then((m) => ({ default: m.VisioViewer })),
+)
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 
-type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg'
+type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
 type ExtractedMsg = {
   html?: string
@@ -27,6 +35,7 @@ export function detectDocKind(name: string): DocKind | null {
   if (ext === 'pptx' || ext === 'pptm' || ext === 'ppsx' || ext === 'potx') return 'pptx'
   if (ext === 'ppt') return 'ppt'
   if (ext === 'msg') return 'msg'
+  if (ext === 'vsdx' || ext === 'vsd') return 'visio'
   return null
 }
 
@@ -415,15 +424,16 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   // office 문서(docx/xlsx/pptx)는 바로 보기 우선 — PDF 변환 없이 바로 본다.
   // PDF가 필요하면 토글로 서버 변환을 켠다.
   const isOfficeNative = kind === 'docx' || kind === 'xlsx' || kind === 'pptx'
+  const isViewerOnly = kind === 'visio'
   const [pdfMode, setPdfMode] = useState(false)
   useEffect(() => { setPdfMode(false) }, [file.path])
-  const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && (!isOfficeNative || pdfMode))
+  const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && kind !== 'visio' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 
   const hasClientFallback = kind ? CONVERTABLE_CLIENT_KINDS.has(kind) : false
   const { data: raw, status: rawStatus, error: rawError } = useRawFile(
     file.path,
-    isOfficeNative ? !pdfMode : (hasClientFallback && converted.status !== 'ready'),
+    isOfficeNative ? !pdfMode : isViewerOnly || (hasClientFallback && converted.status !== 'ready'),
   )
 
   if (!kind) return null
@@ -434,6 +444,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
       if (kind === 'pdf') return <PdfViewer data={raw} fileName={file.name} />
       if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} />
       if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} />
+      if (kind === 'visio') return <OfficeVisioViewer data={raw} fileName={file.name} />
       return <PptxViewer key={file.path} data={raw} fileName={file.name} onFail={() => setPdfMode(true)} />
     }
     if (rawStatus === 'error') return <ErrorNote msg={rawError} />
@@ -456,6 +467,8 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     body = <ConvertingView />
   } else if (converted.status === 'ready' && converted.data) {
     body = <PdfViewer data={converted.data} fileName={file.name} />
+  } else if (isViewerOnly) {
+    body = renderRawBody()
   } else if (converted.status === 'error' && converted.error && (pdfMode || !hasClientFallback)) {
     body = <ErrorNote msg={converted.error} />
   } else if (isOfficeNative && !pdfMode) {
@@ -646,39 +659,78 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
   )
 }
 
-function DocxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }) {
-  const [html, setHtml] = useState('')
+function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
+  const [model, setModel] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
-        const mod = await import('mammoth')
-        const mammoth = mod.default ?? mod
-        const result = await mammoth.convertToHtml({ arrayBuffer: data.slice(0) })
-        if (!cancelled) setHtml(result.value)
+        const { createDocument, loadDocument } = await import('docx-react-viewer')
+        if (cancelled) return
+        setModel(createDocument())
+        const loaded = await loadDocument(new Uint8Array(data.slice(0)))
+        if (!cancelled) setModel(loaded.model)
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to parse document')
       }
     })()
     return () => {
       cancelled = true
-      setHtml('')
+      setModel(null)
       setError(null)
     }
   }, [data])
 
   if (error) return <ErrorNote msg={error} />
-  if (!html) return SPINNER
+  if (!model) return SPINNER
   return (
-    <DocumentShell fileName={fileName}>
-      {(zoom) => (
-        <div className="p-4" style={{ zoom }}>
-          <div className="docx-preview prose-enhanced max-w-full" dangerouslySetInnerHTML={{ __html: html }} />
-        </div>
-      )}
-    </DocumentShell>
+    <div className="docxengine-host h-full min-h-[480px]">
+      <Suspense fallback={SPINNER}>
+        <WordEditor
+          documentModel={model}
+          onDocumentChange={setModel}
+          readOnly={true}
+          showToolbar={false}
+          onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
+        />
+      </Suspense>
+    </div>
+  )
+}
+
+function OfficeVisioViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
+  const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const [handle, setHandle] = useState<{ load: (b: Uint8Array) => Promise<void> } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!handle) return
+    let cancelled = false
+    handle.load(content).catch((e) => {
+      if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [handle, content])
+
+  useEffect(() => {
+    setError(null)
+    setHandle(null)
+  }, [data])
+
+  if (error) return <ErrorNote msg={error} />
+  return (
+    <div className="visioengine-host h-full min-h-[480px]">
+      <Suspense fallback={SPINNER}>
+        <VisioViewer
+          ref={setHandle}
+          showToolbar={false}
+        />
+      </Suspense>
+    </div>
   )
 }
 
