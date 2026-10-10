@@ -712,8 +712,9 @@ function sheetToHtmlWithHeaders(
   styles?: any[],
   imagesByCell?: Map<string, { src: string; name: string; w: number; h: number }[]>,
   colWidthsPx?: number[],
+  rangeOverride?: { startCol: number; startRow: number; endCol: number; endRow: number },
 ) {
-  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+  const range = rangeOverride ?? XLSX.utils.decode_range(ws['!ref'] || 'A1')
   const startCol = range.s.c
   const startRow = range.s.r
   const endCol = range.e.c
@@ -789,7 +790,6 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
           const ws = wb.Sheets[name]
           const colW = columnPixelWidths(ws)
           const rowH = rowPixelHeights(ws)
-          const table = sheetToHtmlWithHeaders(ws, XLSX, sheetStyles, undefined, colWidthsFor(ws, XLSX))
           const loaded = await loadSheetImages(zip, sheetDrawings.get(name), urls).catch(() => ({ images: [], skipped: 0 }))
           // 표시 크기: oneCell은 ext 그대로, twoCell은 셀 span으로 계산, 둘 다 없으면 축소 표시.
           const spanPx = (im: SheetImage): { w: number; h: number } | null => {
@@ -803,12 +803,23 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
             if (im.extW > 0 && im.extH > 0) return { w: im.extW, h: im.extH }
             return null
           }
+          // 이미지 앵커가 값 범위(!ref) 밖에 있으면 표를 앵커까지 넓힌다.
+          // (내용 아래 떠 있는 마지막 이미지가 갤러리로 떨어지던 문제)
+          const base = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+          const ext = { startCol: base.s.c, startRow: base.s.r, endCol: base.e.c, endRow: base.e.r }
+          for (const im of loaded.images) {
+            if (im.col < 0 || im.row < 0) continue
+            ext.startCol = Math.min(ext.startCol, im.col)
+            ext.startRow = Math.min(ext.startRow, im.row)
+            ext.endCol = Math.max(ext.endCol, im.col, im.toCol > im.col ? im.toCol : im.col)
+            ext.endRow = Math.max(ext.endRow, im.row, im.toRow > im.row ? im.toRow : im.row)
+          }
           // 앵커가 표 범위 안이면 셀 안에 직접 넣고, 나머지만 하단 갤러리로.
           const imagesByCell = new Map<string, { src: string; name: string; w: number; h: number }[]>()
           const gallery: { src: string; name: string }[] = []
           for (const im of loaded.images) {
             const sized = spanPx(im)
-            if (im.col >= table.startCol && im.col <= table.endCol && im.row >= table.startRow && im.row <= table.endRow && sized) {
+            if (im.col >= ext.startCol && im.col <= ext.endCol && im.row >= ext.startRow && im.row <= ext.endRow && sized) {
               const key = `${im.row},${im.col}`
               const list = imagesByCell.get(key) ?? []
               list.push({ src: im.src, name: im.name, w: sized.w, h: sized.h })
@@ -817,9 +828,11 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
               gallery.push({ src: im.src, name: im.name })
             }
           }
-          const html = imagesByCell.size > 0
-            ? sheetToHtmlWithHeaders(ws, XLSX, sheetStyles, imagesByCell, colWidthsFor(ws, XLSX)).html
-            : table.html
+          const html = sheetToHtmlWithHeaders(
+            ws, XLSX, sheetStyles,
+            imagesByCell.size > 0 ? imagesByCell : undefined,
+            colWidthsFor(ws, XLSX, ext), ext,
+          ).html
           parts.push({ name, html, images: gallery, skippedImages: loaded.skipped })
         }
         if (!cancelled) {
@@ -964,15 +977,17 @@ const RENDERABLE_IMAGE_MIME: Record<string, string> = {
 }
 
 /** 시트 표시 범위에 맞춘 열 너비(px) 배열. */
-function colWidthsFor(ws: any, XLSX: any): number[] {
+function colWidthsFor(ws: any, XLSX: any, range?: { startCol: number; endCol: number }): number[] {
   const colW = columnPixelWidths(ws)
-  let startCol = 0
-  let endCol = 0
-  try {
-    const range = XLSX.utils.decode_range(ws?.['!ref'] || 'A1')
-    startCol = range.s.c
-    endCol = range.e.c
-  } catch {}
+  let startCol = range?.startCol ?? 0
+  let endCol = range?.endCol ?? 0
+  if (!range) {
+    try {
+      const decoded = XLSX.utils.decode_range(ws?.['!ref'] || 'A1')
+      startCol = decoded.s.c
+      endCol = decoded.e.c
+    } catch {}
+  }
   const out: number[] = []
   for (let c = startCol; c <= endCol; c++) out.push(colW(c))
   return out
