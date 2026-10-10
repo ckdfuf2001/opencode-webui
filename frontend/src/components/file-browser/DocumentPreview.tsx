@@ -714,11 +714,11 @@ function sheetToHtmlWithHeaders(
   colWidthsPx?: number[],
   rangeOverride?: { startCol: number; startRow: number; endCol: number; endRow: number },
 ) {
-  const range = rangeOverride ?? XLSX.utils.decode_range(ws['!ref'] || 'A1')
-  const startCol = range.s.c
-  const startRow = range.s.r
-  const endCol = range.e.c
-  const endRow = range.e.r
+  const dim = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+  const startCol = rangeOverride?.startCol ?? dim.s.c
+  const startRow = rangeOverride?.startRow ?? dim.s.r
+  const endCol = rangeOverride?.endCol ?? dim.e.c
+  const endRow = rangeOverride?.endRow ?? dim.e.r
   const headerCells: string[] = ['<th class="xlsx-corner"></th>']
   const colgroup: string[] = ['<col style="width:32px">']
   let totalWidth = 32
@@ -1127,7 +1127,7 @@ function firstChild(el: Element | undefined | null, tag: string): Element | null
 function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }) {
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   return (
-    <div className="h-full min-h-0">
+    <div className="h-full min-h-[480px]">
       <Suspense fallback={SPINNER}>
         <PowerPointViewer content={content} fileName={fileName} canEdit={false} />
       </Suspense>
