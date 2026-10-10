@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, Suspense, lazy } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode, Suspense, lazy, Component } from 'react'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
 import 'pptx-react-viewer/styles.css'
 
@@ -433,7 +433,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
       if (kind === 'pdf') return <PdfViewer data={raw} fileName={file.name} />
       if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} />
       if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} />
-      return <PptxViewer data={raw} fileName={file.name} />
+      return <PptxViewer key={file.path} data={raw} fileName={file.name} onFail={() => setPdfMode(true)} />
     }
     if (rawStatus === 'error') return <ErrorNote msg={rawError} />
     return null
@@ -703,7 +703,7 @@ function cellBorderInline(cell: any, styles: any[] | undefined): string {
       parts.push(`border-${side}:1px solid ${color}`)
     }
   }
-  return parts.length ? ` style="${parts.join(';')}"` : ''
+  return parts.length ? `${parts.join(';')};` : ''
 }
 
 function sheetToHtmlWithHeaders(
@@ -743,16 +743,19 @@ function sheetToHtmlWithHeaders(
       const cls = cell && cell.t === 'n' ? ' class="xlsx-num"' : ''
       const inline = imagesByCell?.get(`${r},${c}`)
       let extra = ''
+      let tdPos = ''
       if (inline) {
+        tdPos = 'position:relative;'
         for (const im of inline) {
           const size =
             im.w > 0 && im.h > 0
               ? `width:${Math.round(im.w)}px;height:${Math.round(im.h)}px;`
-              : 'max-width:220px;max-height:160px;'
-          extra += `<br><img src="${im.src}" alt="${escapeHtml(im.name)}" style="${size}object-fit:contain;max-width:none" loading="lazy"/>`
+              : 'width:220px;height:160px;'
+          extra += `<img src="${im.src}" alt="${escapeHtml(im.name)}" style="position:absolute;left:0;top:0;${size}object-fit:contain;max-width:none" loading="lazy"/>`
         }
       }
-      cells.push(`<td${cls}${cellBorderInline(cell, styles)}>${escapeHtml(val)}${extra}</td>`)
+      const tdCss = `${tdPos}${cellBorderInline(cell, styles)}`
+      cells.push(`<td${cls}${tdCss ? ` style="${tdCss}"` : ''}>${escapeHtml(val)}${extra}</td>`)
     }
     rows.push(`<tr>${cells.join('')}</tr>`)
   }
@@ -1124,13 +1127,28 @@ function firstChild(el: Element | undefined | null, tag: string): Element | null
   return list.length > 0 ? (list[0] as Element) : null
 }
 
-function PptxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }) {
+function PptxViewer({ data, fileName, onFail }: { data: ArrayBuffer; fileName?: string; onFail: () => void }) {
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   return (
     <div className="h-full min-h-[480px]">
-      <Suspense fallback={SPINNER}>
-        <PowerPointViewer content={content} fileName={fileName} canEdit={false} />
-      </Suspense>
+      <PptxViewerBoundary onFail={onFail}>
+        <Suspense fallback={SPINNER}>
+          <PowerPointViewer content={content} fileName={fileName} canEdit={false} />
+        </Suspense>
+      </PptxViewerBoundary>
     </div>
   )
+}
+
+class PptxViewerBoundary extends Component<{ onFail: () => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+  componentDidCatch(): void {
+    this.props.onFail()
+  }
+  render(): ReactNode {
+    return this.state.failed ? null : this.props.children
+  }
 }
