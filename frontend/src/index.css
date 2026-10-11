@@ -304,21 +304,11 @@ body {
   white-space: nowrap;
 }
 
-.xlsxengine-host xlsx-editor {
-  display: block;
-  height: 100%;
-  min-height: 480px;
-}
-
-.docxengine-host docx-editor {
-  display: block;
-  height: 100%;
-  min-height: 480px;
-}
-
+.xlsxengine-host xlsx-editor,
+.docxengine-host docx-editor,
 .visioengine-host > * {
   display: block;
-  height: 100%;
+  height: var(--xvh, 480px);
   min-height: 480px;
 }
 

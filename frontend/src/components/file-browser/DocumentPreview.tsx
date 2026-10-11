@@ -17,6 +17,7 @@ const VisioViewer = lazy(() =>
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
+import EngineHost from './EngineHost'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
@@ -707,7 +708,7 @@ function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
   if (error) return <ErrorNote msg={error} />
   if (!model) return SPINNER
   return (
-    <div className="docxengine-host h-full min-h-[480px]">
+    <EngineHost className="docxengine-host h-full min-h-[480px]">
       <Suspense fallback={SPINNER}>
         <WordEditor
           documentModel={model}
@@ -717,7 +718,7 @@ function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
           onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
         />
       </Suspense>
-    </div>
+    </EngineHost>
   )
 }
 
@@ -744,14 +745,14 @@ function OfficeVisioViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
 
   if (error) return <ErrorNote msg={error} />
   return (
-    <div className="visioengine-host h-full min-h-[480px]">
+    <EngineHost className="visioengine-host h-full min-h-[480px]">
       <Suspense fallback={SPINNER}>
         <VisioViewer
           ref={setHandle}
           showToolbar={false}
         />
       </Suspense>
-    </div>
+    </EngineHost>
   )
 }
 
@@ -760,7 +761,7 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   if (error) return <ErrorNote msg={error} />
   return (
-    <div className="xlsxengine-host h-full min-h-[480px]">
+    <EngineHost className="xlsxengine-host h-full min-h-[480px]">
       <Suspense fallback={SPINNER}>
         <SpreadsheetEditor
           bytes={content}
@@ -771,6 +772,6 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
           onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
         />
       </Suspense>
-    </div>
+    </EngineHost>
   )
 }
