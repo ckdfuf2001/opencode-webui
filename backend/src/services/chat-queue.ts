@@ -227,6 +227,52 @@ export function enqueueQueuedChat(sessionID: string, text: string, directory?: s
   return [...queue]
 }
 
+/**
+ * edit-resend 원자 삽입: [truncate, 본문]을 한 번에 큐 맨앞(발송 중 헤드 뒤)에 넣는다.
+ * 두 번 나눠 넣으면 사이 폴링에 본문이 먼저 발송돼 send -> truncate이 된다.
+ * 동기 splice라 중간 발송이 끼어들 수 없고, 호출부(route)가 한 번만 flush한다.
+ */
+export function enqueueResend(
+  sessionID: string,
+  text: string,
+  messageID: string,
+  directory?: string,
+  opts?: Pick<EnqueueOptions, 'model' | 'agent' | 'reviewWanted' | 'autoApply'>,
+): QueuedChat[] {
+  const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
+  if (!trimmed) throw new Error('text is required for chat queue items')
+  if (!messageID) throw new Error('messageID is required for truncate queue items')
+  const queue = queues.get(sessionID) ?? []
+  const now = Date.now()
+  const trunc: QueuedChat = {
+    id: crypto.randomUUID(),
+    kind: 'truncate',
+    text: opItemLabel('truncate', messageID),
+    messageID,
+    createdAt: now,
+    status: 'queued',
+  }
+  const body: QueuedChat = {
+    id: crypto.randomUUID(),
+    kind: 'chat',
+    text: trimmed,
+    createdAt: now,
+    status: 'queued',
+    ...(opts?.model ? { model: opts.model } : {}),
+    ...(opts?.agent ? { agent: opts.agent } : {}),
+    ...(opts?.reviewWanted !== undefined ? { reviewWanted: opts.reviewWanted } : {}),
+    ...(opts?.autoApply !== undefined ? { autoApply: opts.autoApply } : {}),
+  }
+  // 발송 중 헤드는 슬롯이라 건드리지 않는다 — 그 뒤(1번)에 [truncate, 본문] 순서로 넣는다.
+  const headLocked = queue[0]?.status === 'sending'
+  queue.splice(headLocked ? 1 : 0, 0, trunc, body)
+  while (queue.length > MAX_QUEUE_LENGTH) queue.pop()
+  queues.set(sessionID, queue)
+  if (directory) queueDirs.set(sessionID, directory)
+  logger.info(`Queued resend (truncate+chat) for session ${sessionID} (position ${queue.length})`)
+  return [...queue]
+}
+
 export function removeQueuedChat(sessionID: string, id: string): boolean {
   const queue = queues.get(sessionID)
   if (!queue) return false

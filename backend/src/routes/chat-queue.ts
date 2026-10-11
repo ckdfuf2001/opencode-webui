@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, retryQueuedChat, setQuickMode, setQueuePaused, updateQueuedChatsModel } from '../services/chat-queue'
+import { enqueueQueuedChat, enqueueResend, listQueuedChats, moveQueuedChat, removeQueuedChat, clearQueuedChats, flushQueueForSession, retryQueuedChat, setQuickMode, setQueuePaused, updateQueuedChatsModel } from '../services/chat-queue'
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
@@ -27,6 +27,16 @@ const EnqueueChatSchema = z.object({
 
 const MoveChatSchema = z.object({
   toTop: z.boolean().default(false),
+})
+
+const ResendChatSchema = z.object({
+  text: z.string().trim().min(1).max(16_000),
+  messageID: z.string().min(1).max(256),
+  directory: z.string().min(1).max(1024).optional(),
+  model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }).optional(),
+  agent: z.string().min(1).max(255).optional(),
+  reviewWanted: z.boolean().optional(),
+  autoApply: z.boolean().optional(),
 })
 
 const UpdateQueueModelSchema = z.object({
@@ -70,6 +80,28 @@ export function createChatQueueRoutes() {
       }
       logger.error('Failed to enqueue chat:', error)
       return c.json({ error: 'Failed to enqueue chat' }, 500)
+    }
+  })
+
+  // edit-resend 원자 삽입: [truncate, 본문]을 한 번에 맨앞에 넣고 한 번만 flush한다.
+  app.post('/:sessionId/resend', async (c) => {
+    try {
+      const sessionId = c.req.param('sessionId')
+      const validated = ResendChatSchema.parse(await c.req.json())
+      const queue = enqueueResend(sessionId, validated.text, validated.messageID, validated.directory, {
+        model: validated.model,
+        agent: validated.agent,
+        reviewWanted: validated.reviewWanted,
+        autoApply: validated.autoApply,
+      })
+      flushQueueForSession(sessionId, validated.directory)
+      return c.json(queue, 201)
+    } catch (error: any) {
+      if (error?.name === 'ZodError') {
+        return c.json({ error: 'Invalid resend payload', details: error.issues }, 400)
+      }
+      logger.error('Failed to enqueue resend:', error)
+      return c.json({ error: 'Failed to enqueue resend' }, 500)
     }
   })
 

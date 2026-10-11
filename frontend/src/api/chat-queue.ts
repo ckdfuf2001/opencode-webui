@@ -58,6 +58,20 @@ export async function enqueueQueuedChat(sessionID: string, text: string, directo
   return request<QueuedChat[]>(`/${encodeURIComponent(sessionID)}`, jsonInit('POST', { text, directory, ...opts }))
 }
 
+/** edit-resend 원자 삽입: [truncate, 본문]을 한 번에 맨앞에 넣는다. */
+export async function enqueueResend(
+  sessionID: string,
+  text: string,
+  messageID: string,
+  directory?: string,
+  opts?: Pick<EnqueueChatOptions, 'model' | 'agent' | 'reviewWanted' | 'autoApply'>,
+): Promise<QueuedChat[]> {
+  return request<QueuedChat[]>(
+    `/${encodeURIComponent(sessionID)}/resend`,
+    jsonInit('POST', { text, messageID, directory, ...opts }),
+  )
+}
+
 export async function removeQueuedChat(sessionID: string, id: string): Promise<void> {
   await request<{ success: boolean }>(`/${encodeURIComponent(sessionID)}/${encodeURIComponent(id)}`, jsonInit('DELETE'))
 }

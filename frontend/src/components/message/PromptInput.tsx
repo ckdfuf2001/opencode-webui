@@ -8,7 +8,7 @@ import { useFileSearch } from '@/hooks/useFileSearch'
 
 import { useUserBash } from '@/stores/userBashStore'
 import { useChatAttached } from '@/stores/chatAttachedStore'
-import { useEnqueueQueuedChat, useMoveQueuedChat } from '@/hooks/useChatQueue'
+import { useEnqueueQueuedChat, useEnqueueResend } from '@/hooks/useChatQueue'
 import { listQueuedChats, setQueuePaused } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
 import { useContextUsage } from '@/hooks/useContextUsage'
@@ -175,7 +175,7 @@ export function PromptInput({
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
   const enqueueQueued = useEnqueueQueuedChat()
-  const moveQueued = useMoveQueuedChat()
+  const resendQueued = useEnqueueResend()
   const [allowInterrupt, setAllowInterrupt] = useState(false)
   useEffect(() => {
     try { setAllowInterrupt(localStorage.getItem(`queue-allow-interrupt:${sessionID}`) === '1') } catch {}
@@ -291,28 +291,23 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     })
   }
 
-  // edit-resend: truncate을 toTop으로 먼저 넣고 본문을 그 뒤에 — 최종 [truncate, 본문].
-  // 반대로(body 먼저) 넣으면 느린 abort 사이에 body 발송이 먼저 시작돼서
-  // send -> truncate이 된다. idle에서 body가 앞으로 튀었으면 truncate을 앞으로 당긴다.
+  // edit-resend: [truncate, 본문] 원자 삽입 - 한 번에 큐 1, 2번에 들어간다.
+  // 나눠 넣으면 사이 폴링에 본문이 먼저 발송돼 send -> truncate이 된다.
+  // onResendEdit은 낙관 UI + 취소까지만 하고 enqueue는 여기서 한 번에 한다.
   const enqueueResendBody = async (text: string): Promise<boolean> => {
     if (!editTargetMessageID || !onResendEdit) return false
-    const truncated = await onResendEdit(editTargetMessageID)
-    if (!truncated) return false
-    let queue: Array<{ id: string; kind: string; status: string }> = []
+    const ready = await onResendEdit(editTargetMessageID)
+    if (!ready) return false
     try {
-      queue = await enqueueQueued.mutateAsync({ sessionID, text, directory, ...queueDispatchOpts(), toTop: true })
+      await resendQueued.mutateAsync({
+        sessionID,
+        text,
+        messageID: editTargetMessageID,
+        directory,
+        ...queueDispatchOpts(),
+      })
     } catch {
       return false
-    }
-    const ti = queue.findIndex((q) => q.kind === 'truncate')
-    // truncate보다 앞에 있는 미발송 chat은 갓 넣은 본문이다 (기존 항목은 뒤로 밀린다).
-    const bi = queue.findIndex((q) => (q.kind ?? 'chat') === 'chat')
-    if (ti >= 0 && bi >= 0 && bi < ti && queue[bi]?.status !== 'sending' && queue[ti]?.status !== 'sending') {
-      try {
-        await moveQueued.mutateAsync({ sessionID, id: queue[ti]!.id, toTop: true })
-      } catch {
-        /* 순서 보정은 best-effort */
-      }
     }
     return true
   }
@@ -375,8 +370,7 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     const releaseWithRestore = () => { sendLockRef.current = false; setPrompt(snapshot) }
     try {
 
-    // edit-resend는 본문 전송 지점에서 body→truncate 순서로 toTop 처리한다
-    // (enqueueResendBody). 여기서 truncate부터 하면 본문이 큐 맨끝에 밀린다.
+    // edit-resend는 본문 전송 지점에서 원자 resend 하나로 처리한다 (enqueueResendBody).
     const isResend = !!(editTargetMessageID && onResendEdit)
 
     if (isBashMode) {

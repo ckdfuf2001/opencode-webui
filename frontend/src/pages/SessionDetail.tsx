@@ -1491,11 +1491,16 @@ export function SessionDetail() {
 
   // 파괴적 작업(truncate/delete)은 큐에 넣어 순서대로 처리한다.
   // 큐에 있으면 idle이 되는 대로 실행된다.
+  // edit-resend는 본문 전송 지점에서 원자 resend 하나로 [truncate, 본문]을 넣는다
+  // (enqueueResendBody). 여기서 truncate부터 하면 본문이 큐 맨끝에 밀리고,
+  // 본문부터 하면 느린 abort 사이에 본문 발송이 먼저 시작돼 send -> truncate이 된다.
   // truncate/edit-resend는 예외로 sending 중인 턴이 있으면 먼저 취소한다 —
   // toTop만으로는 sending 헤드 뒤(1번)에 들어가 현 턴이 끝난 뒤에 잘라서,
   // 잘라내려는 구간이 이미 전송/생성되는 문제가 있다.
   // erase(delete)는 진행 중 턴과 무관한 단일 턴 삭제라 취소하지 않는다.
   // (enqueueOp/pendingOpsRef/완료 추적은 상단에서 선언 — TDZ 방지)
+  // handleResendEdit은 낙관 UI + 취소까지만 하고 enqueue는 호출부가 한다:
+  // 가위(truncate 단독)는 여기서 truncate을 넣고, 재전송은 원자 resend를 쓴다.
   const handleResendEdit = useCallback(async (messageID: string): Promise<boolean> => {
     if (!sessionId) return false
     if (messageID.startsWith('optimistic_')) return true // 로컬 전용 — 서버에 없음
@@ -1521,9 +1526,6 @@ export function SessionDetail() {
       if (queueSending || hasActiveSend(sessionId) || isStreaming) {
         try { await abortSession.mutateAsync(sessionId) } catch { /* abort 실패해도 truncate은 진행 */ }
       }
-      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'truncate', messageID, toTop: true })
-      const op = [...queue].reverse().find((q: any) => q?.kind === 'truncate' && q?.messageID === messageID)
-      if (op) pendingOpsRef.current.set(op.id, { kind: 'truncate' })
       setHiddenAfterID(null)
       setInjectedPrompt(null)
       // edit & resend 후 스크롤이 위로 튀는 것 방지 — 즉시 맨 아래로 고정
@@ -1538,12 +1540,20 @@ export function SessionDetail() {
       if (previous) queryClient.setQueryData(messagesKey, previous)
       return false
     }
-  }, [sessionId, opcodeUrl, repoDirectory, queryClient, enqueueOp, abortSession, queuedForBadge, isStreaming]);
+  }, [sessionId, opcodeUrl, repoDirectory, queryClient, abortSession, queuedForBadge, isStreaming]);
 
-  const handleTruncate = useCallback((messageID: string) => {
+  const handleTruncate = useCallback(async (messageID: string) => {
     if (!sessionId) return
-    handleResendEdit(messageID)
-  }, [sessionId, handleResendEdit]);
+    try {
+      const ready = await handleResendEdit(messageID)
+      if (!ready) return
+      const queue = await enqueueOp.mutateAsync({ sessionID: sessionId, text: '', directory: repoDirectory, kind: 'truncate', messageID, toTop: true })
+      const op = [...queue].reverse().find((q: any) => q?.kind === 'truncate' && q?.messageID === messageID)
+      if (op) pendingOpsRef.current.set(op.id, { kind: 'truncate' })
+    } catch {
+      /* enqueue 실패는 useEnqueueQueuedChat이 토스트 표시 */
+    }
+  }, [sessionId, repoDirectory, enqueueOp, handleResendEdit]);
 
   const handleDeleteMessage = useCallback(async (messageID: string) => {
     if (!sessionId) return

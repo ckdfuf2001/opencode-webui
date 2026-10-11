@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { enqueueQueuedChat, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, setQueuePaused, updateQueuedChatsModel, type EnqueueChatOptions } from '@/api/chat-queue'
+import { enqueueQueuedChat, enqueueResend, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, setQueuePaused, updateQueuedChatsModel, type EnqueueChatOptions } from '@/api/chat-queue'
 import { showToast } from '@/lib/toast'
 
 export const chatQueueKeys = {
@@ -58,6 +58,21 @@ export function useEnqueueQueuedChat() {
   return useMutation({
     mutationFn: ({ sessionID, text, directory, model, agent, reviewWanted, autoApply, kind, messageID, toTop }: { sessionID: string; text: string; directory?: string } & EnqueueChatOptions) =>
       enqueueQueuedChat(sessionID, text, directory, { model, agent, reviewWanted, autoApply, kind, messageID, toTop }),
+    onSuccess: (queue, { sessionID }) => {
+      queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
+    },
+    onError: (error) => {
+      showToast.error(error instanceof Error ? error.message : 'Failed to queue message', { duration: 5000 })
+    },
+  })
+}
+
+export function useEnqueueResend() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ sessionID, text, messageID, directory, model, agent, reviewWanted, autoApply }: { sessionID: string; text: string; messageID: string; directory?: string } & Pick<EnqueueChatOptions, 'model' | 'agent' | 'reviewWanted' | 'autoApply'>) =>
+      enqueueResend(sessionID, text, messageID, directory, { model, agent, reviewWanted, autoApply }),
     onSuccess: (queue, { sessionID }) => {
       queryClient.setQueryData(chatQueueKeys.session(sessionID), queue)
     },
