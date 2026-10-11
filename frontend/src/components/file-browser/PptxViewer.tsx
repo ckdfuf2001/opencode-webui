@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -34,6 +34,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [unlocked, setUnlocked] = useState<Uint8Array | null>(null)
   const viewerRef = useRef<{ getContent: () => Promise<Uint8Array> } | null>(null)
+  const setViewerRef = useCallback(
+    (h: { getContent: () => Promise<Uint8Array> } | null) => {
+      viewerRef.current = h
+    },
+    [],
+  )
   const [saving, setSaving] = useState(false)
   useEffect(() => {
     const onSave = () => {
@@ -59,6 +65,18 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [savePath, fileName, saving])
+  // 상단 코멘트 버튼: 우측 패널의 Comments 탭을 눌러준다.
+  useEffect(() => {
+    const onComments = () => {
+      const wrap = wrapRef.current
+      if (!wrap) return
+      const tabs = Array.from(wrap.querySelectorAll('[role="tab"]'))
+      const tab = tabs.find((t) => /^\s*comments\s*$/i.test(t.textContent ?? '')) as HTMLElement | undefined
+      tab?.click()
+    }
+    window.addEventListener('pptxCommentsRequest', onComments)
+    return () => window.removeEventListener('pptxCommentsRequest', onComments)
+  }, [])
   const [pw, setPw] = useState('')
   const [pwError, setPwError] = useState<string | null>(null)
   const [unlocking, setUnlocking] = useState(false)
@@ -87,7 +105,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       if (userSizedRef.current) return
       const aside = wrap.querySelector('aside')
       if (!(aside instanceof HTMLElement)) return
-      const w = Math.round(Math.min(300, Math.max(160, wrap.clientWidth * 0.16)))
+      const w = Math.round(Math.min(560, Math.max(200, wrap.clientWidth * 0.22)))
       aside.style.width = `${w}px`
     }
     const onPointerDown = (e: Event) => {
@@ -138,9 +156,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           <I18nextProvider i18n={pptxI18n}>
             <PowerPointViewer
               key={editing ? 'edit' : 'view'}
-              ref={(h) => {
-                viewerRef.current = h
-              }}
+              ref={setViewerRef}
               content={unlocked ?? content}
               fileName={fileName}
               canEdit={editing}
