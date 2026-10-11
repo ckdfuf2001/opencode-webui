@@ -18,6 +18,7 @@ import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import EngineHost from './EngineHost'
+import { hasDocxComments, layoutAnchoredTextBoxes, toggleDocxComments } from './docxAnchorLayout'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
@@ -510,6 +511,16 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
               Office(PDF)
             </button>
           </div>
+          {kind === 'docx' && !pdfMode && (
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('docxCommentsToggle'))}
+              className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
+              title="코멘트 패널 열기/닫기"
+            >
+              코멘트
+            </button>
+          )}
           {kind === 'pptx' && !pdfMode && (
             <button
               type="button"
@@ -685,33 +696,81 @@ function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [handle, setHandle] = useState<{ load: (b: Uint8Array) => Promise<void> } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [laidOut, setLaidOut] = useState(0)
+  const wrapRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!handle) return
     let cancelled = false
-    handle.load(content).catch((e) => {
-      if (!cancelled) setError(e instanceof Error ? e.message : String(e))
-    })
+    let timer: ReturnType<typeof setTimeout> | null = null
+    handle
+      .load(content)
+      .then(() => {
+        // 렌더가 자리 잡은 뒤 떠있는 텍스트상자를 앵커 좌표에 배치한다.
+        timer = setTimeout(() => {
+          if (cancelled || !wrapRef.current) return
+          void layoutAnchoredTextBoxes(content, wrapRef.current).then((n) => {
+            if (!cancelled) setLaidOut(n)
+          })
+        }, 350)
+        // 코멘트가 있으면 패널을 같이 열어준다.
+        void hasDocxComments(content).then((has) => {
+          if (!cancelled && has && wrapRef.current) toggleDocxComments(wrapRef.current)
+        })
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
     return () => {
       cancelled = true
+      if (timer) clearTimeout(timer)
     }
   }, [handle, content])
 
   useEffect(() => {
     setError(null)
+    setLaidOut(0)
   }, [data])
+
+  // 리플로우(리사이즈·줌)되면 앵커 배치를 다시 맞춘다.
+  useEffect(() => {
+    if (!laidOut || !wrapRef.current) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const ro = new ResizeObserver(() => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (wrapRef.current) void layoutAnchoredTextBoxes(content, wrapRef.current)
+      }, 400)
+    })
+    ro.observe(wrapRef.current)
+    return () => {
+      ro.disconnect()
+      if (timer) clearTimeout(timer)
+    }
+  }, [laidOut, content])
+
+  // 상단 코멘트 버튼에서 날아오는 토글 요청.
+  useEffect(() => {
+    const onToggle = () => {
+      if (wrapRef.current) toggleDocxComments(wrapRef.current)
+    }
+    window.addEventListener('docxCommentsToggle', onToggle)
+    return () => window.removeEventListener('docxCommentsToggle', onToggle)
+  }, [])
 
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host h-full min-h-[480px]">
-      <Suspense fallback={SPINNER}>
-        <WordEditor
-          ref={setHandle}
-          readOnly={true}
-          showToolbar={false}
-          onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
-        />
-      </Suspense>
+      <div ref={wrapRef} className="h-full min-h-0">
+        <Suspense fallback={SPINNER}>
+          <WordEditor
+            ref={setHandle}
+            readOnly={true}
+            showToolbar={false}
+            onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
+          />
+        </Suspense>
+      </div>
     </EngineHost>
   )
 }

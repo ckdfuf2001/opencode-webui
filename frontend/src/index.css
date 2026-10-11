@@ -316,6 +316,12 @@ body {
   display: none;
 }
 
+/* compact에서는 스테이지 뒤 패널 스플리터가 썸네일 스플리터와 겹친다.
+   패널 쪽을 숨겨 드래그바가 왼쪽(썸네일)만 조절하게 한다. */
+.pptx-preview-compact main + [role='separator'] {
+  display: none;
+}
+
 .p-6 {
   padding: calc(var(--spacing) * 4);
 }

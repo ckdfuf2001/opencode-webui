@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useMemo, useState, type ReactNode } from 'react'
+import { Component, Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -48,6 +48,41 @@ export default function PptxViewer({ data, fileName, editing, onFail }: { data: 
       setUnlocking(false)
     }
   }
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const userSizedRef = useRef(false)
+  useEffect(() => { userSizedRef.current = false }, [data])
+  useEffect(() => {
+    if (editing) return
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const fitThumbs = () => {
+      if (userSizedRef.current) return
+      const aside = wrap.querySelector('aside')
+      if (!(aside instanceof HTMLElement)) return
+      const w = Math.round(Math.min(300, Math.max(160, wrap.clientWidth * 0.16)))
+      aside.style.width = `${w}px`
+    }
+    const onPointerDown = (e: Event) => {
+      if ((e.target as HTMLElement).closest?.('[role="separator"]')) userSizedRef.current = true
+    }
+    wrap.addEventListener('pointerdown', onPointerDown)
+    fitThumbs()
+    // 뷰어는 lazy 마운트라 aside가 늦게 생긴다. 생기면 한 번 맞춘다.
+    const mo = new MutationObserver(() => {
+      if (wrap.querySelector('aside')) {
+        fitThumbs()
+        mo.disconnect()
+      }
+    })
+    mo.observe(wrap, { childList: true, subtree: true })
+    const ro = new ResizeObserver(fitThumbs)
+    ro.observe(wrap)
+    return () => {
+      mo.disconnect()
+      ro.disconnect()
+      wrap.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [editing, data])
   if (!unlocked && isEncryptedOle(content)) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center px-6 gap-3">
@@ -69,11 +104,12 @@ export default function PptxViewer({ data, fileName, editing, onFail }: { data: 
     )
   }
   return (
-    <div className={`h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}>
+    <div ref={wrapRef} className={`h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}>
       <PptxViewerBoundary onFail={onFail}>
         <Suspense fallback={SPINNER}>
           <I18nextProvider i18n={pptxI18n}>
             <PowerPointViewer
+              key={editing ? 'edit' : 'view'}
               content={unlocked ?? content}
               fileName={fileName}
               canEdit={editing}
