@@ -45,18 +45,18 @@ export const FileOperations = memo(function FileOperations({ onUpload, onCreate 
           variant="outline"
           size="sm"
           asChild
-          className="group-hover:bg-accent group-hover:text-accent-foreground dark:group-hover:bg-input/50"
+          className="h-7 w-7 p-0 has-[>svg]:px-0 btn-soft-border group-hover:bg-accent group-hover:text-accent-foreground dark:group-hover:bg-input/50"
         >
           <label htmlFor="file-upload" className="cursor-pointer flex items-center">
-            <Upload className="w-4 h-4" />
+            <Upload className="w-3 h-3" />
           </label>
         </Button>
       </div>
 
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogTrigger asChild>
-          <Button variant="outline" size="sm">
-            <Plus className="w-4 h-4" />
+          <Button variant="outline" size="sm" className="h-7 w-7 p-0 has-[>svg]:px-0 btn-soft-border">
+            <Plus className="w-3 h-3" />
           </Button>
         </DialogTrigger>
         <DialogContent>

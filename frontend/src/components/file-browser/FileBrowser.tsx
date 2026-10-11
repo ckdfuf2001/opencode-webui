@@ -168,8 +168,8 @@ function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: Fi
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Sort">
-          <ArrowUpDown className="w-4 h-4" />
+        <Button variant="outline" size="icon" className="h-7 w-7 shrink-0 btn-soft-border" title="Sort">
+          <ArrowUpDown className="w-3 h-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -696,8 +696,8 @@ useEffect(() => {
           <div className={`${isMobile ? 'w-full' : 'w-[30%] min-w-[160px]'} border-r border-border flex flex-col min-h-0`}>
             <div className="sticky top-0 z-20 bg-background flex flex-col gap-2 py-3 flex-shrink-0 pointer-events-auto">
               <div className="flex items-center justify-between pointer-events-auto">
-                <Button variant="outline" size="sm" onClick={handleRefresh} className="pointer-events-auto">
-                  <RefreshCw className="w-4 h-4" />
+                <Button variant="outline" size="sm" onClick={handleRefresh} className="pointer-events-auto h-7 w-7 p-0 has-[>svg]:px-0 btn-soft-border">
+                  <RefreshCw className="w-3 h-3" />
                 </Button>
                 <FileOperations
                   onUpload={handleUpload}
@@ -814,8 +814,8 @@ useEffect(() => {
               <FolderOpen className="w-5 h-5" />
               File Browser
             </CardTitle>
-            <Button variant="outline" size="sm" onClick={handleRefresh}>
-              <RefreshCw className="w-4 h-4" />
+            <Button variant="outline" size="sm" onClick={handleRefresh} className="h-7 w-7 p-0 has-[>svg]:px-0 btn-soft-border">
+              <RefreshCw className="w-3 h-3" />
             </Button>
           </div>
           
@@ -845,8 +845,8 @@ useEffect(() => {
           <div className={`${isMobile ? 'w-full' : 'w-1/3 min-w-[160px]'} border-r flex flex-col min-h-0`}>
             <div className="flex flex-col gap-2 mb-4 flex-shrink-0">
               <div className="flex items-center justify-between">
-                <Button variant="outline" size="sm" onClick={handleRefresh}>
-                  <RefreshCw className="w-4 h-4" />
+                <Button variant="outline" size="sm" onClick={handleRefresh} className="h-7 w-7 p-0 has-[>svg]:px-0 btn-soft-border">
+                  <RefreshCw className="w-3 h-3" />
                 </Button>
                 <FileOperations
                   onUpload={handleUpload}

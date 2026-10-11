@@ -322,6 +322,18 @@ body {
   display: none;
 }
 
+/* 탐색기 버튼 테두리 — 채팅 영역처럼 연하게.
+   unlayered라 Button outline의 dark:border-input을 이긴다. */
+.btn-soft-border {
+  border-color: color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+.btn-soft-green {
+  border-color: color-mix(in srgb, #16a34a 60%, transparent);
+}
+.btn-soft-red {
+  border-color: color-mix(in srgb, var(--color-destructive) 60%, transparent);
+}
+
 .p-6 {
   padding: calc(var(--spacing) * 4);
 }
