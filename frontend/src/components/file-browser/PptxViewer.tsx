@@ -189,18 +189,52 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     }
   }
   const wrapRef = useRef<HTMLDivElement>(null)
-  // 드래그로 썸네일 너비를 손대면 고정폭으로 전환한다 (CSS가 data-user-sized를 본다).
-  // 기본은 flex-grow가 남는 폭을 채운다 — JS로 너비를 직접 쓰지 않는다.
+  // 썸네일이 남는 폭을 다 채운다. CSS flex-grow가 1차, JS 실측이 2차로 같은 값을 쓴다
+  // (라이브러리가 렌더 때마다 되돌려서 양쪽 다 필요). 드래그하면 고정폭으로 전환.
   useEffect(() => {
     const wrap = wrapRef.current
     if (!wrap) return
+    const fillThumbs = () => {
+      if (wrap.dataset.userSized === '1') return
+      const aside = wrap.querySelector('aside')
+      if (!(aside instanceof HTMLElement)) return
+      const vis = (el: Element | null) => {
+        if (!(el instanceof HTMLElement)) return 0
+        const r = el.getBoundingClientRect()
+        return r.width > 0 ? r.width : 0
+      }
+      let taken = 0
+      wrap.querySelectorAll('[role="separator"], [role="complementary"], [data-pptx-comments]').forEach((el) => {
+        taken += vis(el)
+      })
+      const w = Math.max(200, Math.round(wrap.clientWidth - taken - 4))
+      if (Math.abs(aside.getBoundingClientRect().width - w) > 1) aside.style.width = `${w}px`
+    }
     const onPointerDown = (e: Event) => {
       if ((e.target as HTMLElement).closest?.('[role="separator"]')) {
         wrap.dataset.userSized = '1'
       }
     }
     wrap.addEventListener('pointerdown', onPointerDown)
-    return () => wrap.removeEventListener('pointerdown', onPointerDown)
+    fillThumbs()
+    const ro = new ResizeObserver(fillThumbs)
+    ro.observe(wrap)
+    // aside 자체 리사이즈(라이브러리 되돌림)에도 맞춘다.
+    const asideRO = new ResizeObserver(fillThumbs)
+    const mo = new MutationObserver(() => {
+      const aside = wrap.querySelector('aside')
+      if (aside instanceof HTMLElement) {
+        fillThumbs()
+        asideRO.observe(aside)
+      }
+    })
+    mo.observe(wrap, { childList: true, subtree: true })
+    return () => {
+      wrap.removeEventListener('pointerdown', onPointerDown)
+      ro.disconnect()
+      asideRO.disconnect()
+      mo.disconnect()
+    }
   }, [editing, data])
   useEffect(() => {
     delete wrapRef.current?.dataset.userSized
