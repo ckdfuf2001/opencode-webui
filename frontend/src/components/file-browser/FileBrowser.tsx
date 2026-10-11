@@ -551,17 +551,20 @@ useEffect(() => {
       const response = await fetch(`${API_BASE_URL}/api/files/${path}`, {
         method: 'DELETE',
       })
-      
+
       if (!response.ok) {
         throw new Error(`Delete failed: ${response.statusText}`)
       }
-      
+
+      // 펼쳐둔 하위 폴더 캐시(['files', subpath])까지 버린다 — 안 그러면
+      // 지운 파일이 하위 트리에 그대로 남는다 (새로고침 버튼과 동일 처리).
+      queryClient.invalidateQueries({ queryKey: ['files'] })
       await loadFiles(currentPath)
       setSelectedFile(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed')
     }
-  }, [currentPath])
+  }, [currentPath, queryClient])
 
   const handleRename = useCallback(async (oldPath: string, newPath: string) => {
     try {
@@ -574,12 +577,13 @@ useEffect(() => {
       if (!response.ok) {
         throw new Error(`Rename failed: ${response.statusText}`)
       }
-      
+
+      queryClient.invalidateQueries({ queryKey: ['files'] })
       await loadFiles(currentPath)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Rename failed')
     }
-  }, [currentPath])
+  }, [currentPath, queryClient])
 
   const handleDownload = useCallback(async (file: FileInfo) => {
     try {
