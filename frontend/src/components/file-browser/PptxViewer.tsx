@@ -72,15 +72,28 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [savePath, fileName, saving])
-  // 상단 코멘트 버튼: 우측 패널의 Comments 탭을 눌러준다.
+  // 상단 코멘트 버튼: Comments 탭 토글 (켜져 있으면 Properties로 복귀).
   useEffect(() => {
     const onComments = () => {
       const wrap = wrapRef.current
       if (!wrap) return
-      const tabs = Array.from(wrap.querySelectorAll('[role="tab"]'))
-      // 탭 라벨에 뱃지/카운트가 붙을 수 있어서 포함 매칭한다.
-      const tab = tabs.find((t) => /comment/i.test(t.textContent ?? '')) as HTMLElement | undefined
-      tab?.click()
+      const tabs = Array.from(wrap.querySelectorAll('[role="tab"]')) as HTMLElement[]
+      if (!tabs.length) {
+        showToast.info('우측 패널이 닫혀 있어 코멘트를 열 수 없습니다')
+        return
+      }
+      const comments = tabs.find((t) => /comment/i.test(t.textContent ?? ''))
+      if (!comments) return
+      const isOpen = (t: HTMLElement) =>
+        t.getAttribute('aria-selected') === 'true' || (t.dataset?.state ?? '') === 'active'
+      if (isOpen(comments)) {
+        const back =
+          tabs.find((t) => t !== comments && /propert/i.test(t.textContent ?? '')) ??
+          tabs.find((t) => t !== comments)
+        back?.click()
+      } else {
+        comments.click()
+      }
     }
     window.addEventListener('pptxCommentsRequest', onComments)
     return () => window.removeEventListener('pptxCommentsRequest', onComments)
@@ -113,8 +126,16 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       if (userSizedRef.current) return
       const aside = wrap.querySelector('aside')
       if (!(aside instanceof HTMLElement)) return
-      const w = Math.round(Math.min(560, Math.max(200, wrap.clientWidth * 0.22)))
-      // 라이브러리가 렌더 때마다 180px로 되돌려서 RO로 감시 + 다를 때만 쓴다 (루프 방지).
+      // 미리보기창 남는 폭을 썸네일이 다 채운다 (우측 패널·스플리터 제외).
+      const panel = wrap.querySelector('[role="complementary"]') as HTMLElement | null
+      const panelW = panel ? panel.getBoundingClientRect().width : 0
+      let sepsW = 0
+      wrap.querySelectorAll('[role="separator"]').forEach((s) => {
+        const r = (s as HTMLElement).getBoundingClientRect()
+        if (r.width > 0) sepsW += r.width
+      })
+      const w = Math.max(200, Math.round(wrap.clientWidth - panelW - sepsW - 4))
+      // 라이브러리가 렌더 때마다 되돌려서 RO로 감시 + 다를 때만 쓴다 (루프 방지).
       if (Math.abs(aside.getBoundingClientRect().width - w) > 1) aside.style.width = `${w}px`
     }
     const onPointerDown = (e: Event) => {
