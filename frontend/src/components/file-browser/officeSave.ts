@@ -81,9 +81,11 @@ export function useOfficeSave(serverPath: string, fileName: string, handle: Save
       handle.markClean()
       void queryClient.invalidateQueries({ queryKey: ['files'] })
       showToast.success('저장했습니다')
+      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
       return true
     } catch (e) {
       showToast.error(e instanceof Error ? e.message : '저장 실패')
+      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false } }))
       return false
     } finally {
       setSaving(false)

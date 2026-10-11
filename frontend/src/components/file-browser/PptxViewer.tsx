@@ -58,8 +58,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
             }),
           ),
         )
-        .then(() => showToast.success('저장했습니다'))
-        .catch((e) => showToast.error(e instanceof Error ? e.message : '저장 실패'))
+        .then(() => {
+          showToast.success('저장했습니다')
+          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
+        })
+        .catch((e) => {
+          showToast.error(e instanceof Error ? e.message : '저장 실패')
+          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false } }))
+        })
         .finally(() => setSaving(false))
     }
     window.addEventListener('officeSaveRequest', onSave)
@@ -71,7 +77,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       const wrap = wrapRef.current
       if (!wrap) return
       const tabs = Array.from(wrap.querySelectorAll('[role="tab"]'))
-      const tab = tabs.find((t) => /^\s*comments\s*$/i.test(t.textContent ?? '')) as HTMLElement | undefined
+      // 탭 라벨에 뱃지/카운트가 붙을 수 있어서 포함 매칭한다.
+      const tab = tabs.find((t) => /comment/i.test(t.textContent ?? '')) as HTMLElement | undefined
       tab?.click()
     }
     window.addEventListener('pptxCommentsRequest', onComments)
@@ -106,26 +113,32 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       const aside = wrap.querySelector('aside')
       if (!(aside instanceof HTMLElement)) return
       const w = Math.round(Math.min(560, Math.max(200, wrap.clientWidth * 0.22)))
-      aside.style.width = `${w}px`
+      // 라이브러리가 렌더 때마다 180px로 되돌려서 RO로 감시 + 다를 때만 쓴다 (루프 방지).
+      if (Math.abs(aside.getBoundingClientRect().width - w) > 1) aside.style.width = `${w}px`
     }
     const onPointerDown = (e: Event) => {
       if ((e.target as HTMLElement).closest?.('[role="separator"]')) userSizedRef.current = true
     }
     wrap.addEventListener('pointerdown', onPointerDown)
     fitThumbs()
-    // 뷰어는 lazy 마운트라 aside가 늦게 생긴다. 생기면 한 번 맞춘다.
+    const ro = new ResizeObserver(fitThumbs)
+    ro.observe(wrap)
+    // aside 자체 리사이즈(라이브러리 되돌림·슬라이드 전환)에도 맞춘다.
+    const asideRO = new ResizeObserver(fitThumbs)
+    // 뷰어는 lazy 마운트라 aside가 늦게 생긴다. 생기면 맞추고 감시 붙인다.
     const mo = new MutationObserver(() => {
-      if (wrap.querySelector('aside')) {
+      const aside = wrap.querySelector('aside')
+      if (aside instanceof HTMLElement) {
         fitThumbs()
+        asideRO.observe(aside)
         mo.disconnect()
       }
     })
     mo.observe(wrap, { childList: true, subtree: true })
-    const ro = new ResizeObserver(fitThumbs)
-    ro.observe(wrap)
     return () => {
       mo.disconnect()
       ro.disconnect()
+      asideRO.disconnect()
       wrap.removeEventListener('pointerdown', onPointerDown)
     }
   }, [editing, data])

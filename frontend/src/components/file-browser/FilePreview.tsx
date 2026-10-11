@@ -164,14 +164,17 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
 
   useEffect(() => {
     const onRequest = (e: Event) => {
-      if ((e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen && !isFullscreen) {
+      const want = (e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen
+      if (want && !isFullscreen) {
         setIsFullscreen(true)
         window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: true } }))
+      } else if (want === false && isFullscreen) {
+        exitFullscreen()
       }
     }
     window.addEventListener('fileFullscreenRequest', onRequest)
     return () => window.removeEventListener('fileFullscreenRequest', onRequest)
-  }, [isFullscreen])
+  }, [isFullscreen, exitFullscreen])
 
   useEffect(() => {
     if (!isFullscreen) return

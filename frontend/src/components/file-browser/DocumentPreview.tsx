@@ -438,6 +438,16 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     window.addEventListener('fileFullscreenChange', onFs)
     return () => window.removeEventListener('fileFullscreenChange', onFs)
   }, [])
+  // 저장 성공하면 편집을 끝내고 전체화면에서 복귀한다 (채팅 자리로).
+  useEffect(() => {
+    const onDone = (e: Event) => {
+      if (!(e as CustomEvent<{ ok?: boolean }>).detail?.ok) return
+      setEditing(false)
+      window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
+    }
+    window.addEventListener('officeSaveDone', onDone as EventListener)
+    return () => window.removeEventListener('officeSaveDone', onDone as EventListener)
+  }, [])
   const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && kind !== 'visio' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 
@@ -519,9 +529,10 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
                 onClick={() => {
                   const next = !editing
                   setEditing(next)
-                  if (next && kind === 'pptx') {
-                    window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
-                  }
+                  // 편집은 전체화면으로 (전 문서 통일), 끝나면 채팅 자리로 복귀.
+                  window.dispatchEvent(
+                    new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: next } }),
+                  )
                 }}
                 className={`h-6 text-xs px-2 rounded ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
                 title="편집 모드"
