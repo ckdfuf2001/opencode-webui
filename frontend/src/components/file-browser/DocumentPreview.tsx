@@ -511,16 +511,6 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
               Office(PDF)
             </button>
           </div>
-          {kind === 'docx' && !pdfMode && (
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent('docxCommentsToggle'))}
-              className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-              title="코멘트 패널 열기/닫기"
-            >
-              코멘트
-            </button>
-          )}
           {(kind === 'pptx' || kind === 'docx' || kind === 'xlsx') && !pdfMode && (
             <button
               type="button"
@@ -531,10 +521,20 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
                   window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
                 }
               }}
-              className={`h-6 text-xs px-2 rounded ml-auto ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+              className={`h-6 text-xs px-2 rounded ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="편집 모드 (저장은 아직 안 됨)"
             >
               {editing ? '편집 종료' : '편집'}
+            </button>
+          )}
+          {kind === 'docx' && !pdfMode && (
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('docxCommentsToggle'))}
+              className="h-6 text-xs px-2 rounded ml-auto text-muted-foreground hover:text-foreground"
+              title="코멘트 패널 열기/닫기"
+            >
+              코멘트
             </button>
           )}
         </div>
