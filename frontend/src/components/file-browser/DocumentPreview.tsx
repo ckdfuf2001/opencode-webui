@@ -682,37 +682,31 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
 }
 
 function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
-  const [model, setModel] = useState<any>(null)
+  const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const [handle, setHandle] = useState<{ load: (b: Uint8Array) => Promise<void> } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!handle) return
     let cancelled = false
-    ;(async () => {
-      try {
-        const { createDocument, loadDocument } = await import('docx-react-viewer')
-        if (cancelled) return
-        setModel(createDocument())
-        const loaded = await loadDocument(new Uint8Array(data.slice(0)))
-        if (!cancelled) setModel(loaded.model)
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to parse document')
-      }
-    })()
+    handle.load(content).catch((e) => {
+      if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+    })
     return () => {
       cancelled = true
-      setModel(null)
-      setError(null)
     }
+  }, [handle, content])
+
+  useEffect(() => {
+    setError(null)
   }, [data])
 
   if (error) return <ErrorNote msg={error} />
-  if (!model) return SPINNER
   return (
     <EngineHost className="docxengine-host h-full min-h-[480px]">
       <Suspense fallback={SPINNER}>
         <WordEditor
-          documentModel={model}
-          onDocumentChange={setModel}
+          ref={setHandle}
           readOnly={true}
           showToolbar={false}
           onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
