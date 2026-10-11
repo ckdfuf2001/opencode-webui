@@ -69,7 +69,7 @@ export default function PptxViewer({ data, fileName, editing, onFail }: { data: 
     )
   }
   return (
-    <div className="h-full min-h-[480px]">
+    <div className={`h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}>
       <PptxViewerBoundary onFail={onFail}>
         <Suspense fallback={SPINNER}>
           <I18nextProvider i18n={pptxI18n}>

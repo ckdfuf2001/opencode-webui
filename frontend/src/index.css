@@ -312,6 +312,10 @@ body {
   min-height: 480px;
 }
 
+.pptx-preview-compact main {
+  display: none;
+}
+
 .p-6 {
   padding: calc(var(--spacing) * 4);
 }
