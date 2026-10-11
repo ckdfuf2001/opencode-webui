@@ -8,7 +8,7 @@ import { useFileSearch } from '@/hooks/useFileSearch'
 
 import { useUserBash } from '@/stores/userBashStore'
 import { useChatAttached } from '@/stores/chatAttachedStore'
-import { useEnqueueQueuedChat, useRemoveQueuedChat } from '@/hooks/useChatQueue'
+import { useEnqueueQueuedChat, useMoveQueuedChat } from '@/hooks/useChatQueue'
 import { listQueuedChats, setQueuePaused } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
 import { useContextUsage } from '@/hooks/useContextUsage'
@@ -175,7 +175,7 @@ export function PromptInput({
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
   const enqueueQueued = useEnqueueQueuedChat()
-  const removeQueued = useRemoveQueuedChat()
+  const moveQueued = useMoveQueuedChat()
   const [allowInterrupt, setAllowInterrupt] = useState(false)
   useEffect(() => {
     try { setAllowInterrupt(localStorage.getItem(`queue-allow-interrupt:${sessionID}`) === '1') } catch {}
@@ -291,26 +291,28 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     })
   }
 
-  // edit-resend 본문: toTop으로 먼저 넣고 truncate을 그 앞으로 — 최종 [truncate, 본문].
-  // truncate만 먼저 toTop하면 본문이 큐 맨끝에 밀리는 문제를 고친다.
-  // truncate까지 실패하면 넣었던 본문도 빼낸다(best-effort — 스트립에서 수동 제거도 가능).
+  // edit-resend: truncate을 toTop으로 먼저 넣고 본문을 그 뒤에 — 최종 [truncate, 본문].
+  // 반대로(body 먼저) 넣으면 느린 abort 사이에 body 발송이 먼저 시작돼서
+  // send -> truncate이 된다. idle에서 body가 앞으로 튀었으면 truncate을 앞으로 당긴다.
   const enqueueResendBody = async (text: string): Promise<boolean> => {
     if (!editTargetMessageID || !onResendEdit) return false
-    let queue: Array<{ id: string; kind: string; text: string; createdAt: number }> = []
+    const truncated = await onResendEdit(editTargetMessageID)
+    if (!truncated) return false
+    let queue: Array<{ id: string; kind: string; status: string }> = []
     try {
       queue = await enqueueQueued.mutateAsync({ sessionID, text, directory, ...queueDispatchOpts(), toTop: true })
     } catch {
       return false
     }
-    const truncated = await onResendEdit(editTargetMessageID)
-    if (!truncated) {
-      const body = [...queue]
-        .filter((q) => q.kind === 'chat' && q.text === text)
-        .sort((a, b) => b.createdAt - a.createdAt)[0]
-      if (body) {
-        try { await removeQueued.mutateAsync({ sessionID, id: body.id }) } catch { /* 남으면 스트립에서 제거 */ }
+    const ti = queue.findIndex((q) => q.kind === 'truncate')
+    // truncate보다 앞에 있는 미발송 chat은 갓 넣은 본문이다 (기존 항목은 뒤로 밀린다).
+    const bi = queue.findIndex((q) => (q.kind ?? 'chat') === 'chat')
+    if (ti >= 0 && bi >= 0 && bi < ti && queue[bi]?.status !== 'sending' && queue[ti]?.status !== 'sending') {
+      try {
+        await moveQueued.mutateAsync({ sessionID, id: queue[ti]!.id, toTop: true })
+      } catch {
+        /* 순서 보정은 best-effort */
       }
-      return false
     }
     return true
   }
