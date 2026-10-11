@@ -426,7 +426,15 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   const isOfficeNative = kind === 'docx' || kind === 'xlsx' || kind === 'pptx'
   const isViewerOnly = kind === 'visio'
   const [pdfMode, setPdfMode] = useState(false)
-  useEffect(() => { setPdfMode(false) }, [file.path])
+  const [pptxEditing, setPptxEditing] = useState(false)
+  useEffect(() => { setPdfMode(false); setPptxEditing(false) }, [file.path])
+  useEffect(() => {
+    const onFs = (e: Event) => {
+      if (!(e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen) setPptxEditing(false)
+    }
+    window.addEventListener('fileFullscreenChange', onFs)
+    return () => window.removeEventListener('fileFullscreenChange', onFs)
+  }, [])
   const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && kind !== 'visio' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 
@@ -445,7 +453,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
       if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} />
       if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} />
       if (kind === 'visio') return <OfficeVisioViewer data={raw} fileName={file.name} />
-      return <PptxViewer key={file.path} data={raw} fileName={file.name} onFail={() => setPdfMode(true)} />
+      return <PptxViewer key={file.path} data={raw} fileName={file.name} editing={pptxEditing} onFail={() => setPdfMode(true)} />
     }
     if (rawStatus === 'error') return <ErrorNote msg={rawError} />
     return null
@@ -486,7 +494,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
           <div className="flex items-center rounded-md bg-muted p-0.5">
             <button
               type="button"
-              onClick={() => setPdfMode(false)}
+              onClick={() => { setPdfMode(false); setPptxEditing(false) }}
               className={`h-6 text-xs px-2 rounded ${!pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="변환 없이 바로 보기"
             >
@@ -494,13 +502,26 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
             </button>
             <button
               type="button"
-              onClick={() => setPdfMode(true)}
+              onClick={() => { setPdfMode(true); setPptxEditing(false) }}
               className={`h-6 text-xs px-2 rounded ${pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="서버에서 Office로 PDF 변환해서 보기"
             >
               Office(PDF)
             </button>
           </div>
+          {kind === 'pptx' && !pdfMode && (
+            <button
+              type="button"
+              onClick={() => {
+                setPptxEditing(true)
+                window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
+              }}
+              className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
+              title="편집 모드 (우리 전체화면으로 열기, 저장은 아직 안 됨)"
+            >
+              편집
+            </button>
+          )}
         </div>
       )}
       {body}

@@ -1,8 +1,7 @@
-import { Component, Suspense, lazy, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Component, Suspense, lazy, useMemo, useState, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
-import type { ViewerMode } from 'pptx-react-viewer'
 import { translationsEn } from 'pptx-react-viewer/i18n'
 import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
@@ -19,11 +18,6 @@ void pptxI18n.use(initReactI18next).init({
   interpolation: { escapeValue: false },
 })
 
-const PPTX_RIBBON_TABS = [
-  'file', 'home', 'insert', 'draw', 'design', 'transitions',
-  'animations', 'slideShow', 'record', 'review', 'view', 'help',
-] as const
-
 const SPINNER = (
   <div className="flex items-center justify-center py-12">
     <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
@@ -34,18 +28,12 @@ function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
 }
 
-export default function PptxViewer({ data, fileName, onFail }: { data: ArrayBuffer; fileName?: string; onFail: () => void }) {
+export default function PptxViewer({ data, fileName, editing, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; onFail: () => void }) {
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
-  const [editing, setEditing] = useState(false)
   const [unlocked, setUnlocked] = useState<Uint8Array | null>(null)
   const [pw, setPw] = useState('')
   const [pwError, setPwError] = useState<string | null>(null)
   const [unlocking, setUnlocking] = useState(false)
-  const prevMode = useRef<ViewerMode | null>(null)
-  const customization = useMemo(
-    () => ({ ribbon: { hiddenTabs: editing ? [] : [...PPTX_RIBBON_TABS] } }),
-    [editing],
-  )
   const unlock = async () => {
     if (!pw || unlocking) return
     setUnlocking(true)
@@ -88,19 +76,8 @@ export default function PptxViewer({ data, fileName, onFail }: { data: ArrayBuff
             <PowerPointViewer
               content={unlocked ?? content}
               fileName={fileName}
-              canEdit={false}
-              customization={customization}
-              onModeChange={(m) => {
-                if (m === 'edit') {
-                  setEditing(true)
-                  if (prevMode.current === 'preview') {
-                    window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
-                  }
-                } else if (m === 'preview') {
-                  setEditing(false)
-                }
-                prevMode.current = m
-              }}
+              canEdit={editing}
+              showToolbar={editing}
             />
           </I18nextProvider>
         </Suspense>
