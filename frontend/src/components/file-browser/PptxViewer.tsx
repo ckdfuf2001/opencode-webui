@@ -54,15 +54,20 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setSaving(true)
       void h
         .getContent()
-        .then((bytes) =>
-          saveOfficeBytes(
+        .then(async (bytes) => {
+          await saveOfficeBytes(
             savePath,
             fileName ?? 'presentation.pptx',
             new Blob([bytes as unknown as BlobPart], {
               type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
             }),
-          ),
-        )
+          )
+          // 저장된 바이트로 기준을 갱신한다 — 안 그러면 다음 코멘트 추가가 이전 내용을 덮는다.
+          const fresh = new Uint8Array(bytes)
+          setSavedBytes(fresh)
+          const cs = await loadPptxComments(fresh)
+          setComments(cs)
+        })
         .then(() => {
           showToast.success('저장했습니다')
           window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
@@ -184,56 +189,22 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     }
   }
   const wrapRef = useRef<HTMLDivElement>(null)
-  const userSizedRef = useRef(false)
-  useEffect(() => { userSizedRef.current = false }, [data])
+  // 드래그로 썸네일 너비를 손대면 고정폭으로 전환한다 (CSS가 data-user-sized를 본다).
+  // 기본은 flex-grow가 남는 폭을 채운다 — JS로 너비를 직접 쓰지 않는다.
   useEffect(() => {
-    if (editing) return
     const wrap = wrapRef.current
     if (!wrap) return
-    const fitThumbs = () => {
-      if (userSizedRef.current) return
-      const aside = wrap.querySelector('aside')
-      if (!(aside instanceof HTMLElement)) return
-      // 미리보기창 남는 폭을 썸네일이 다 채운다 (우측 패널·코멘트·스플리터 제외).
-      const panel = wrap.querySelector('[role="complementary"]') as HTMLElement | null
-      const panelW = panel ? panel.getBoundingClientRect().width : 0
-      const ours = wrap.querySelector('[data-pptx-comments]') as HTMLElement | null
-      const oursW = ours ? ours.getBoundingClientRect().width : 0
-      let sepsW = 0
-      wrap.querySelectorAll('[role="separator"]').forEach((s) => {
-        const r = (s as HTMLElement).getBoundingClientRect()
-        if (r.width > 0) sepsW += r.width
-      })
-      const w = Math.max(200, Math.round(wrap.clientWidth - panelW - oursW - sepsW - 4))
-      // 라이브러리가 렌더 때마다 되돌려서 RO로 감시 + 다를 때만 쓴다 (루프 방지).
-      if (Math.abs(aside.getBoundingClientRect().width - w) > 1) aside.style.width = `${w}px`
-    }
     const onPointerDown = (e: Event) => {
-      if ((e.target as HTMLElement).closest?.('[role="separator"]')) userSizedRef.current = true
+      if ((e.target as HTMLElement).closest?.('[role="separator"]')) {
+        wrap.dataset.userSized = '1'
+      }
     }
     wrap.addEventListener('pointerdown', onPointerDown)
-    fitThumbs()
-    const ro = new ResizeObserver(fitThumbs)
-    ro.observe(wrap)
-    // aside 자체 리사이즈(라이브러리 되돌림·슬라이드 전환)에도 맞춘다.
-    const asideRO = new ResizeObserver(fitThumbs)
-    // 뷰어는 lazy 마운트라 aside가 늦게 생긴다. 생기면 맞추고 감시 붙인다.
-    const mo = new MutationObserver(() => {
-      const aside = wrap.querySelector('aside')
-      if (aside instanceof HTMLElement) {
-        fitThumbs()
-        asideRO.observe(aside)
-        mo.disconnect()
-      }
-    })
-    mo.observe(wrap, { childList: true, subtree: true })
-    return () => {
-      mo.disconnect()
-      ro.disconnect()
-      asideRO.disconnect()
-      wrap.removeEventListener('pointerdown', onPointerDown)
-    }
+    return () => wrap.removeEventListener('pointerdown', onPointerDown)
   }, [editing, data])
+  useEffect(() => {
+    delete wrapRef.current?.dataset.userSized
+  }, [data])
   if (!unlocked && isEncryptedOle(content)) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center px-6 gap-3">
