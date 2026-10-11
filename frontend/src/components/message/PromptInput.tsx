@@ -8,7 +8,7 @@ import { useFileSearch } from '@/hooks/useFileSearch'
 
 import { useUserBash } from '@/stores/userBashStore'
 import { useChatAttached } from '@/stores/chatAttachedStore'
-import { useEnqueueQueuedChat } from '@/hooks/useChatQueue'
+import { useEnqueueQueuedChat, useRemoveQueuedChat } from '@/hooks/useChatQueue'
 import { listQueuedChats, setQueuePaused } from '@/api/chat-queue'
 import { ChatQueueStrip } from './ChatQueueStrip'
 import { useContextUsage } from '@/hooks/useContextUsage'
@@ -175,6 +175,7 @@ export function PromptInput({
   const sendShell = useSendShell(opcodeUrl, directory)
   const abortSession = useAbortSession(opcodeUrl, directory)
   const enqueueQueued = useEnqueueQueuedChat()
+  const removeQueued = useRemoveQueuedChat()
   const [allowInterrupt, setAllowInterrupt] = useState(false)
   useEffect(() => {
     try { setAllowInterrupt(localStorage.getItem(`queue-allow-interrupt:${sessionID}`) === '1') } catch {}
@@ -290,6 +291,30 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     })
   }
 
+  // edit-resend 본문: toTop으로 먼저 넣고 truncate을 그 앞으로 — 최종 [truncate, 본문].
+  // truncate만 먼저 toTop하면 본문이 큐 맨끝에 밀리는 문제를 고친다.
+  // truncate까지 실패하면 넣었던 본문도 빼낸다(best-effort — 스트립에서 수동 제거도 가능).
+  const enqueueResendBody = async (text: string): Promise<boolean> => {
+    if (!editTargetMessageID || !onResendEdit) return false
+    let queue: Array<{ id: string; kind: string; text: string; createdAt: number }> = []
+    try {
+      queue = await enqueueQueued.mutateAsync({ sessionID, text, directory, ...queueDispatchOpts(), toTop: true })
+    } catch {
+      return false
+    }
+    const truncated = await onResendEdit(editTargetMessageID)
+    if (!truncated) {
+      const body = [...queue]
+        .filter((q) => q.kind === 'chat' && q.text === text)
+        .sort((a, b) => b.createdAt - a.createdAt)[0]
+      if (body) {
+        try { await removeQueued.mutateAsync({ sessionID, id: body.id }) } catch { /* 남으면 스트립에서 제거 */ }
+      }
+      return false
+    }
+    return true
+  }
+
   const buildValidatedParts = async (): Promise<ContentPart[]> => {    if (attachedFiles.size === 0) return parsePromptToParts(prompt, attachedFiles)
 
     const mentionedKeys = new Set<string>()
@@ -348,11 +373,9 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     const releaseWithRestore = () => { sendLockRef.current = false; setPrompt(snapshot) }
     try {
 
-    // 편집 재전송이면 경로(커맨드/일반/큐)와 무관하게 먼저 잘라낸다
-    if (editTargetMessageID && onResendEdit) {
-      const truncated = await onResendEdit(editTargetMessageID)
-      if (!truncated) { releaseWithRestore(); return }
-    }
+    // edit-resend는 본문 전송 지점에서 body→truncate 순서로 toTop 처리한다
+    // (enqueueResendBody). 여기서 truncate부터 하면 본문이 큐 맨끝에 밀린다.
+    const isResend = !!(editTargetMessageID && onResendEdit)
 
     if (isBashMode) {
       const command = prompt.startsWith('!') ? prompt.slice(1) : prompt
@@ -385,7 +408,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           clearCancelledUntilNextSend(sessionID)
           clearRecentlyAborted(sessionID)
           fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+          if (isResend) {
+            const ok = await enqueueResendBody(text)
+            if (ok) { sendLockRef.current = false; setAttachedFiles(new Map()); onSubmitted?.() }
+            else releaseWithRestore()
+          } else {
+            enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+          }
         } else {
           releaseWithRestore()
         }
@@ -408,7 +437,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
         clearCancelledUntilNextSend(sessionID)
         clearRecentlyAborted(sessionID)
         fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-        enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+        if (isResend) {
+          const ok = await enqueueResendBody(text)
+          if (ok) { sendLockRef.current = false; setAttachedFiles(new Map()); onSubmitted?.() }
+          else releaseWithRestore()
+        } else {
+          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+        }
       } else {
         releaseWithRestore()
       }
@@ -428,7 +463,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
           clearCancelledUntilNextSend(sessionID)
           clearRecentlyAborted(sessionID)
           fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-          enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+          if (isResend) {
+            const ok = await enqueueResendBody(text)
+            if (ok) { sendLockRef.current = false; setAttachedFiles(new Map()); onSubmitted?.() }
+            else releaseWithRestore()
+          } else {
+            enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+          }
         } else {
           releaseWithRestore()
         }
@@ -447,7 +488,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     clearCancelledUntilNextSend(sessionID)
     clearRecentlyAborted(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-    enqueueAndClear({ sessionID, text: finalText, directory, ...queueDispatchOpts() }, snapshot)
+    if (isResend) {
+      const ok = await enqueueResendBody(finalText)
+      if (ok) { sendLockRef.current = false; setAttachedFiles(new Map()); onSubmitted?.() }
+      else releaseWithRestore()
+    } else {
+      enqueueAndClear({ sessionID, text: finalText, directory, ...queueDispatchOpts() }, snapshot)
+    }
     } catch {
       // 검증/재전송 중 예외 시 입력 복원 + 락 해제 (그대로 두면 전송이 영구 차단된다)
       releaseWithRestore()
@@ -492,7 +539,13 @@ const { commands, filterCommands, refreshIfStale, refresh: refreshCommands } = u
     clearCancelledUntilNextSend(sessionID)
     clearRecentlyAborted(sessionID)
     fetch(`${API_BASE_URL}/api/session-status/${encodeURIComponent(sessionID)}/cancelled`, { method: 'DELETE' }).catch(() => {})
-    enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+    if (editTargetMessageID && onResendEdit) {
+      const ok = await enqueueResendBody(text)
+      if (ok) { sendLockRef.current = false; setAttachedFiles(new Map()); onSubmitted?.() }
+      else { sendLockRef.current = false; setPrompt(snapshot) }
+    } else {
+      enqueueAndClear({ sessionID, text, directory, ...queueDispatchOpts() }, snapshot)
+    }
     } catch {
       sendLockRef.current = false
       setPrompt(snapshot)
