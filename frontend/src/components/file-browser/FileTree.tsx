@@ -123,7 +123,12 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
   const setManualStore = (v: boolean) => {
     useFileTreeExpand.getState().setExplicit(expandStoreKey, normPath, v)
   }
-  const expanded = manual ?? (onRevealPath || (expandKnown === true && file.isDirectory && file.children !== undefined))
+  const autoExpanded = manual ?? (onRevealPath || (expandKnown === true && file.isDirectory && file.children !== undefined))
+  // 검색 모드(expandKnown)에서는 이전에 접어둔 폴더라도 결과 경로를 펼친다.
+  // manual=false가 있으면 자동 펼침이 막혀서 매치가 안 보이기 때문. 검색이 끝나면
+  // manual 값을 건드리지 않았으므로 원래 펼침 상태로 돌아간다.
+  const searchExpanded = expandKnown === true && file.isDirectory && file.children !== undefined
+  const expanded = searchExpanded ? true : autoExpanded
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
