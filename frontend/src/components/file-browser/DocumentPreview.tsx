@@ -428,11 +428,11 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   const isOfficeNative = kind === 'docx' || kind === 'xlsx' || kind === 'pptx'
   const isViewerOnly = kind === 'visio'
   const [pdfMode, setPdfMode] = useState(false)
-  const [pptxEditing, setPptxEditing] = useState(false)
-  useEffect(() => { setPdfMode(false); setPptxEditing(false) }, [file.path])
+  const [editing, setEditing] = useState(false)
+  useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
   useEffect(() => {
     const onFs = (e: Event) => {
-      if (!(e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen) setPptxEditing(false)
+      if (!(e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen) setEditing(false)
     }
     window.addEventListener('fileFullscreenChange', onFs)
     return () => window.removeEventListener('fileFullscreenChange', onFs)
@@ -452,10 +452,10 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     if (rawStatus === 'loading') return SPINNER
     if (rawStatus === 'ready' && raw) {
       if (kind === 'pdf') return <PdfViewer data={raw} fileName={file.name} />
-      if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} />
-      if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} />
+      if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} editing={editing} />
+      if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} editing={editing} />
       if (kind === 'visio') return <OfficeVisioViewer data={raw} fileName={file.name} />
-      return <PptxViewer key={file.path} data={raw} fileName={file.name} editing={pptxEditing} onFail={() => setPdfMode(true)} />
+      return <PptxViewer key={file.path} data={raw} fileName={file.name} editing={editing} onFail={() => setPdfMode(true)} />
     }
     if (rawStatus === 'error') return <ErrorNote msg={rawError} />
     return null
@@ -496,7 +496,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
           <div className="flex items-center rounded-md bg-muted p-0.5">
             <button
               type="button"
-              onClick={() => { setPdfMode(false); setPptxEditing(false) }}
+              onClick={() => { setPdfMode(false); setEditing(false) }}
               className={`h-6 text-xs px-2 rounded ${!pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="변환 없이 바로 보기"
             >
@@ -504,7 +504,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
             </button>
             <button
               type="button"
-              onClick={() => { setPdfMode(true); setPptxEditing(false) }}
+              onClick={() => { setPdfMode(true); setEditing(false) }}
               className={`h-6 text-xs px-2 rounded ${pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="서버에서 Office로 PDF 변환해서 보기"
             >
@@ -521,17 +521,20 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
               코멘트
             </button>
           )}
-          {kind === 'pptx' && !pdfMode && (
+          {(kind === 'pptx' || kind === 'docx' || kind === 'xlsx') && !pdfMode && (
             <button
               type="button"
               onClick={() => {
-                setPptxEditing(true)
-                window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
+                const next = !editing
+                setEditing(next)
+                if (next && kind === 'pptx') {
+                  window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
+                }
               }}
-              className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-              title="편집 모드 (우리 전체화면으로 열기, 저장은 아직 안 됨)"
+              className={`h-6 text-xs px-2 rounded ml-auto ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+              title="편집 모드 (저장은 아직 안 됨)"
             >
-              편집
+              {editing ? '편집 종료' : '편집'}
             </button>
           )}
         </div>
@@ -692,7 +695,7 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
   )
 }
 
-function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
+function DocxViewer({ data, editing = false }: { data: ArrayBuffer; fileName?: string; editing?: boolean }) {
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [handle, setHandle] = useState<{ load: (b: Uint8Array) => Promise<void> } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -706,6 +709,7 @@ function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
     handle
       .load(content)
       .then(() => {
+        if (editing) return
         // 렌더가 자리 잡은 뒤 떠있는 텍스트상자를 앵커 좌표에 배치한다.
         timer = setTimeout(() => {
           if (cancelled || !wrapRef.current) return
@@ -725,16 +729,16 @@ function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [handle, content])
+  }, [handle, content, editing])
 
   useEffect(() => {
     setError(null)
     setLaidOut(0)
   }, [data])
 
-  // 리플로우(리사이즈·줌)되면 앵커 배치를 다시 맞춘다.
+  // 리플로우(리사이즈·줌)되면 앵커 배치를 다시 맞춘다. 편집 모드는 제외.
   useEffect(() => {
-    if (!laidOut || !wrapRef.current) return
+    if (!laidOut || editing || !wrapRef.current) return
     let timer: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
       if (timer) clearTimeout(timer)
@@ -747,7 +751,7 @@ function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
       ro.disconnect()
       if (timer) clearTimeout(timer)
     }
-  }, [laidOut, content])
+  }, [laidOut, content, editing])
 
   // 상단 코멘트 버튼에서 날아오는 토글 요청.
   useEffect(() => {
@@ -761,12 +765,12 @@ function DocxViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host h-full min-h-[480px]">
-      <div ref={wrapRef} className="h-full min-h-0">
+      <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="h-full min-h-0">
         <Suspense fallback={SPINNER}>
           <WordEditor
             ref={setHandle}
-            readOnly={true}
-            showToolbar={false}
+            readOnly={!editing}
+            showToolbar={editing}
             onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
           />
         </Suspense>
@@ -809,7 +813,7 @@ function OfficeVisioViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
   )
 }
 
-function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }) {
+function XlsxViewer({ data, fileName, editing = false }: { data: ArrayBuffer; fileName?: string; editing?: boolean }) {
   const [error, setError] = useState<string | null>(null)
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   if (error) return <ErrorNote msg={error} />
@@ -817,11 +821,12 @@ function XlsxViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string }
     <EngineHost className="xlsxengine-host h-full min-h-[480px]">
       <Suspense fallback={SPINNER}>
         <SpreadsheetEditor
+          key={editing ? 'edit' : 'view'}
           bytes={content}
           fileName={fileName}
-          readOnly={true}
-          showToolbar={false}
-          showFormulaBar={false}
+          readOnly={!editing}
+          showToolbar={editing}
+          showFormulaBar={editing}
           onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
         />
       </Suspense>
