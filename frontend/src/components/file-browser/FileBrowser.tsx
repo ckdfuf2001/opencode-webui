@@ -154,6 +154,8 @@ interface FileBrowserProps {
   onDirectoryLoad?: (info: { workspaceRoot?: string; currentPath: string }) => void
   /** 채팅 멘션 — 있으면 트리 ... 메뉴에 "Mention on chat"이 뜬다 */
   onMentionFile?: (file: FileInfo) => void
+  /** 전체화면 시트에서 열릴 때 미리보기 액션을 펼침 상태로 */
+  expandPreviewActions?: boolean
 }
 
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
@@ -182,7 +184,7 @@ function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: Fi
   )
 }
 
-export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad, onMentionFile }: FileBrowserProps) {
+export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad, onMentionFile, expandPreviewActions = false }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState(basePath)
   const queryClient = useQueryClient()
   const { data: files, isLoading: queryLoading, error: filesQueryError } = useQuery<FileInfo, Error>({
@@ -764,15 +766,15 @@ useEffect(() => {
           
           {/* Desktop only: Preview panel */}
           {!isMobile && (
-            <div className="flex-1 overflow-y-auto min-h-0 h-full">
-              {selectedFile && !selectedFile.isDirectory ? (
-                <FilePreview file={selectedFile} />
-              ) : (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  Select a file to preview
-                </div>
-              )}
-            </div>
+          <div className="flex-1 overflow-y-auto min-h-0 h-full">
+            {selectedFile && !selectedFile.isDirectory ? (
+              <FilePreview file={selectedFile} expandActions={expandPreviewActions} />
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground">
+                Select a file to preview
+              </div>
+            )}
+          </div>
           )}
         </div>
 

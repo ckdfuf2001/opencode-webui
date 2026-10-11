@@ -267,7 +267,7 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
             <Button
               variant="ghost"
               size="sm"
-              className="w-2.5 h-6 p-0 has-[>svg]:px-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+              className="h-7 w-7 p-0 has-[>svg]:px-0 shrink-0 opacity-70 hover:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
               onClick={(e) => e.stopPropagation()}
             >
               <DotsThreeVertical className="w-3 h-3" />
@@ -310,11 +310,11 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
         </DropdownMenu>
 
         {file.isDirectory && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-4 h-4 p-0"
-            title={expanded ? '접기' : '펼치기'}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              title={expanded ? '접기' : '펼치기'}
             onClick={(e) => {
               e.stopPropagation()
               setManualStore(!expanded)

@@ -20,9 +20,11 @@ interface FilePreviewProps {
   onCloseModal?: () => void
   onFileSaved?: () => void
   initialLineNumber?: number
+  /** 탐색기 전체화면 시트 등 넓을 때 헤더 액션을 펼침 */
+  expandActions?: boolean
 }
 
-export const FilePreview = memo(function FilePreview({ file, hideHeader = false, isMobileModal = false, onCloseModal, onFileSaved, initialLineNumber }: FilePreviewProps) {
+export const FilePreview = memo(function FilePreview({ file, hideHeader = false, isMobileModal = false, onCloseModal, onFileSaved, initialLineNumber, expandActions = false }: FilePreviewProps) {
   const [viewMode, setViewMode] = useState<'preview' | 'edit'>('preview')
   const [editContent, setEditContent] = useState('')
   const [isSaving, setIsSaving] = useState(false)
@@ -402,6 +404,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     },
   ]
   const visibleActions = headerActions.filter((a) => a.show)
+  const showAllActions = isFullscreen || expandActions
 
   return (
     <div className={`${isFullscreen ? 'fixed inset-0 z-[100] bg-background flex flex-col' : 'h-full flex flex-col bg-background'}`} style={isFullscreen ? GPU_ACCELERATED_STYLE : undefined} onContextMenu={(e) => { if (isFullscreen) e.stopPropagation() }}>
@@ -426,7 +429,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
             </div>
             
             <div className="flex items-center gap-1 flex-shrink-0 mt-1">
-              {isFullscreen ? (
+              {showAllActions ? (
                 visibleActions.map((a) => (
                   <Button
                     key={a.key}
