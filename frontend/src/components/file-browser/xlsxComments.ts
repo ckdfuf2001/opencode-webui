@@ -96,18 +96,27 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
     const wbRelsDoc = await readXml('xl/_rels/workbook.xml.rels')
     const wbRels = new Map(parseRels(wbRelsDoc).map((r) => [r.id, r.target]))
 
-    // 스레드형 작성자 표.
+    // 스레드형 작성자 표: workbook rels에서 person 파트를 찾는다
+    // (기본 xl/persons/person.xml 아닐 수 있음).
     const persons = new Map<string, string>()
-    const personDoc = await readXml('xl/persons/person.xml')
-    const personList = (personDoc?.['personList'] ?? personDoc?.['x:personList']) as
-      | Record<string, unknown>
-      | undefined
-    for (const p of asArray(
-      personList?.['person'] ?? personList?.['x:person'],
-    ) as Record<string, unknown>[]) {
-      const id = String(p['@_id'] ?? p['@_personId'] ?? '')
-      const name = String(p['@_displayName'] ?? '')
-      if (id) persons.set(id, name || 'Unknown')
+    const personRel = wbRelsDoc
+      ? parseRels(wbRelsDoc).find((r) => r.type.endsWith('/person'))
+      : undefined
+    const personPaths = personRel ? [joinTarget('xl', personRel.target)] : []
+    personPaths.push('xl/persons/person.xml')
+    for (const pp of personPaths) {
+      if (persons.size > 0) break
+      const personDoc = await readXml(pp)
+      const personList = (personDoc?.['personList'] ?? personDoc?.['x:personList']) as
+        | Record<string, unknown>
+        | undefined
+      for (const p of asArray(
+        personList?.['person'] ?? personList?.['x:person'],
+      ) as Record<string, unknown>[]) {
+        const id = String(p['@_id'] ?? p['@_personId'] ?? '')
+        const name = String(p['@_displayName'] ?? '')
+        if (id) persons.set(id, name || 'Unknown')
+      }
     }
 
     for (let si = 0; si < sheets.length; si++) {
@@ -168,11 +177,14 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
         }
       }
 
-      // 기존(레거시) 코멘트.
+      // 기존(레거시) 코멘트. 같은 셀에 스레드형이 있으면 중복이라 건너뛴다.
       const legRel = rels.find(
         (r) => r.type.endsWith('/comments') && !r.type.endsWith('/threadedComment'),
       )
       if (legRel) {
+        const threadedCells = new Set(
+          out.filter((c) => c.sheetIndex === si).map((c) => c.ref.toUpperCase()),
+        )
         const legDoc = await readXml(joinTarget(dir, legRel.target))
         const cm = (legDoc?.['comments'] ?? legDoc?.['x:comments']) as
           | Record<string, unknown>
@@ -186,10 +198,12 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
         ) as Record<string, unknown>[]
         for (const c of list) {
           const ai = Number(c['@_authorId'] ?? 0)
+          const ref = String(c['@_ref'] ?? '')
+          if (ref && threadedCells.has(ref.toUpperCase())) continue
           out.push({
             sheet: name,
             sheetIndex: si,
-            ref: String(c['@_ref'] ?? ''),
+            ref,
             author: authors[ai] ?? 'Unknown',
             text: norm(collectText(c['text'] ?? c['x:text'])),
             replies: [],

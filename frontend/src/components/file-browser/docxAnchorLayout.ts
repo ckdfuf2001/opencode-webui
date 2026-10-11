@@ -193,7 +193,9 @@ function resolveY(box: AnchorBox, geom: PageGeom, phLocalY: number, pageLocalH: 
 export async function hasDocxComments(bytes: Uint8Array): Promise<boolean> {
   try {
     const zip = await JSZip.loadAsync(bytes)
-    return Object.keys(zip.files).some((n) => /(^|\/)word\/comments\d*\.xml$/.test(n))
+    return Object.keys(zip.files).some((n) =>
+      /(^|\/)word\/comments\d*\.xml$/.test(n) || /(^|\/)word\/commentsExtended\.xml$/.test(n),
+    )
   } catch {
     return false
   }

@@ -77,7 +77,10 @@ function joinTarget(baseDir: string, target: string): string {
 
 const txBodyText = (cm: Record<string, unknown>): string => {
   const bodies = asArray(childByLocal(cm, 'txBody'))
-  return norm(bodies.map(collectText).join(' '))
+  if (bodies.length) return norm(bodies.map(collectText).join(' '))
+  // 레거시(p:cm)는 p:text에 평문이 직접 들어있다.
+  const plain = childByLocal(cm, 'text')
+  return norm(typeof plain === 'string' ? plain : collectText(plain))
 }
 
 export async function loadPptxComments(bytes: Uint8Array): Promise<PptxComment[]> {
@@ -110,26 +113,32 @@ export async function loadPptxComments(bytes: Uint8Array): Promise<PptxComment[]
       parseRels(await readXml('ppt/_rels/presentation.xml.rels')).map((r) => [r.id, r.target]),
     )
 
-    // 작성자 표 (모던 authors.xml + 레거시 commentAuthors.xml).
+    // 작성자 표: 모던은 presentation rels로 위치를 찾는다
+    // (ppt/authors/author1.xml 등. 없으면 ppt/authors.xml 폴백).
     const authors = new Map<string, string>()
-    const authorsDoc = await readXml('ppt/authors.xml')
-    if (authorsDoc) {
-      const lst = childByLocal(authorsDoc, 'authorLst')
-      for (const a of asArray(childByLocal((lst ?? {}) as Record<string, unknown>, 'author'))) {
+    const loadAuthorList = (doc: Record<string, unknown> | null, listLocal: string, itemLocal: string) => {
+      if (!doc) return
+      const lst = childByLocal(doc, listLocal)
+      for (const a of asArray(childByLocal((lst ?? {}) as Record<string, unknown>, itemLocal))) {
         const o = a as Record<string, unknown>
         const id = String(o['@_id'] ?? '')
-        if (id) authors.set(id, String(o['@_name'] ?? 'Unknown'))
+        if (id && !authors.has(id)) authors.set(id, String(o['@_name'] ?? 'Unknown'))
       }
     }
+    const MODERN_AUTHOR_REL = 'http://schemas.microsoft.com/office/2018/10/relationships/authors'
+    const presRelsDoc = await readXml('ppt/_rels/presentation.xml.rels')
+    const authorTargets: string[] = []
+    if (presRelsDoc) {
+      for (const r of parseRels(presRelsDoc)) {
+        if (r.type === MODERN_AUTHOR_REL && r.target) authorTargets.push(r.target)
+      }
+    }
+    for (const t of authorTargets) {
+      loadAuthorList(await readXml(joinTarget('ppt', t)), 'authorLst', 'author')
+    }
+    loadAuthorList(await readXml('ppt/authors.xml'), 'authorLst', 'author')
     const legacyAuthorsDoc = await readXml('ppt/commentAuthors.xml')
-    if (legacyAuthorsDoc) {
-      const lst = childByLocal(legacyAuthorsDoc, 'cmAuthorLst')
-      for (const a of asArray(childByLocal((lst ?? {}) as Record<string, unknown>, 'cmAuthor'))) {
-        const o = a as Record<string, unknown>
-        const id = String(o['@_id'] ?? '')
-        if (id) authors.set(id, String(o['@_name'] ?? 'Unknown'))
-      }
-    }
+    loadAuthorList(legacyAuthorsDoc, 'cmAuthorLst', 'cmAuthor')
 
     const parseCm = (cm: Record<string, unknown>): { author: string; text: string; created: string } => ({
       author: authors.get(String(cm['@_authorId'] ?? '')) ?? 'Unknown',
@@ -158,27 +167,57 @@ export async function loadPptxComments(bytes: Uint8Array): Promise<PptxComment[]
           string,
           unknown
         >[]
-        // 답글: 중첩 cm 또는 parentId 참조.
+        // 답글: (1) 모던 p188:replyLst/p188:reply, (2) 중첩 cm,
+        // (3) parentId 참조, (4) 레거시 p15:threadingInfo parentCm (authorId+idx).
         const roots: typeof items = []
-        const byId = new Map<string, number>()
+        const byKey = new Map<string, number>()
         items.forEach((cm, idx) => {
-          const id = String(cm['@_id'] ?? '')
-          if (id) byId.set(id, idx)
+          const suffix = String(cm['@_idx'] ?? cm['@_id'] ?? '')
+          if (suffix) byKey.set(`${String(cm['@_authorId'] ?? '')}:${suffix}`, idx)
         })
         const children = new Map<number, typeof items>()
         const claimed = new Set<number>()
+        const threadParentKey = (cm: Record<string, unknown>): string | null => {
+          for (const ext of asArray(childByLocal(cm, 'extLst'))) {
+            for (const e of asArray(
+              childByLocal((ext ?? {}) as Record<string, unknown>, 'ext'),
+            )) {
+              const info = childByLocal((e ?? {}) as Record<string, unknown>, 'threadingInfo')
+              if (!info) continue
+              const p = childByLocal(info as Record<string, unknown>, 'parentCm') as
+                | Record<string, unknown>
+                | undefined
+              if (p) return `${String(p['@_authorId'] ?? '')}:${String(p['@_idx'] ?? '')}`
+            }
+          }
+          return null
+        }
         items.forEach((cm) => {
+          // 모던 답글 목록.
+          const replyNodes = asArray(childByLocal(cm, 'replyLst')).flatMap((rl) =>
+            asArray(childByLocal((rl ?? {}) as Record<string, unknown>, 'reply')),
+          ) as typeof items
+          if (replyNodes.length) {
+            const idx = items.indexOf(cm)
+            children.set(idx, [...(children.get(idx) ?? []), ...replyNodes])
+          }
           const nested = asArray(childByLocal(cm, 'cm')) as typeof items
           if (nested.length) {
             const idx = items.indexOf(cm)
             children.set(idx, [...(children.get(idx) ?? []), ...nested])
           }
-          const parent = String(cm['@_parentId'] ?? cm['@_parent'] ?? '')
-          const pi = byId.get(parent)
-          if (pi !== undefined) {
-            children.set(pi, [...(children.get(pi) ?? []), cm])
+          const parent =
+            String(cm['@_parentId'] ?? cm['@_parent'] ?? '') || threadParentKey(cm) || ''
+          const pi = parent ? byKey.get(parent) : undefined
+          // parentId 형태(id만)도 키 끝과 매칭해본다.
+          const piById =
+            pi ??
+            (parent && !parent.includes(':')
+              ? items.findIndex((o) => String(o['@_id'] ?? '') === parent)
+              : undefined)
+          if (piById !== undefined && piById >= 0) {
+            children.set(piById, [...(children.get(piById) ?? []), cm])
             claimed.add(items.indexOf(cm))
-            return
           }
         })
         items.forEach((cm) => {
