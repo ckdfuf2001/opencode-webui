@@ -322,6 +322,11 @@ body {
   display: none;
 }
 
+/* 미리보기에서는 라이브러리 속성 패널을 숨긴다 — 썸네일 크게 + 우리 코멘트 패널. */
+.pptx-preview-compact [role='complementary'] {
+  display: none;
+}
+
 /* 탐색기 버튼 테두리 — 채팅 영역처럼 연하게.
    unlayered라 Button outline의 dark:border-input을 이긴다. */
 .btn-soft-border {

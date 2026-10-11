@@ -9,6 +9,7 @@ import { saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { lazyWithRetry } from './lazyRetry'
 import { loadPptxComments, type PptxComment } from './pptxComments'
+import { addPptxComment } from './pptxCommentWriter'
 
 const PowerPointViewer = lazyWithRetry(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
@@ -33,7 +34,9 @@ function isEncryptedOle(data: Uint8Array): boolean {
 }
 
 export default function PptxViewer({ data, fileName, editing, savePath, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void }) {
-  const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
+  const content = savedBytes ?? baseContent
   const [unlocked, setUnlocked] = useState<Uint8Array | null>(null)
   const viewerRef = useRef<{ getContent: () => Promise<Uint8Array> } | null>(null)
   const setViewerRef = useCallback(
@@ -77,11 +80,27 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [comments, setComments] = useState<PptxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [slideIdx, setSlideIdx] = useState(0)
+  const [curSlide, setCurSlide] = useState(0)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [author, setAuthor] = useState(() => {
+    try {
+      return localStorage.getItem('ppt-comment-author') ?? ''
+    } catch {
+      return ''
+    }
+  })
+  const [draft, setDraft] = useState('')
+  const [adding, setAdding] = useState(false)
   useEffect(() => {
-    let dead = false
     setComments([])
     setShowComments(false)
     setSlideIdx(0)
+    setCurSlide(0)
+    setSavedBytes(null)
+    setDraft('')
+  }, [data])
+  useEffect(() => {
+    let dead = false
     void loadPptxComments(content).then((cs) => {
       if (dead) return
       setComments(cs)
@@ -103,7 +122,49 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       showToast.info('편집 중에는 슬라이드 이동을 하지 않습니다')
       return
     }
-    setSlideIdx(Math.max(0, c.slideNo - 1))
+    const idx = Math.max(0, c.slideNo - 1)
+    setSlideIdx(idx)
+    setCurSlide(idx)
+  }
+  const addComment = async () => {
+    const text = draft.trim()
+    if (!text || adding) return
+    if (!savePath) {
+      showToast.error('저장 경로가 없습니다')
+      return
+    }
+    const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
+    const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'Me')
+    setAdding(true)
+    try {
+      const target = curSlide + 1
+      const next = await addPptxComment(content, { slideNo: target, authorName: name, text })
+      await saveOfficeBytes(
+        savePath,
+        fileName ?? 'presentation.pptx',
+        new Blob([next as unknown as BlobPart], {
+          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        }),
+      )
+      setSavedBytes(next)
+      setDraft('')
+      try {
+        localStorage.setItem('ppt-comment-author', name)
+      } catch {
+        /* 무시 */
+      }
+      const cs = await loadPptxComments(next)
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+      setSlideIdx(target - 1)
+      setCurSlide(target - 1)
+      setReloadKey((v) => v + 1)
+      showToast.success('코멘트 저장했습니다')
+    } catch (e) {
+      showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
+    } finally {
+      setAdding(false)
+    }
   }
   const [pw, setPw] = useState('')
   const [pwError, setPwError] = useState<string | null>(null)
@@ -201,13 +262,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
             <Suspense fallback={SPINNER}>
               <I18nextProvider i18n={pptxI18n}>
                 <PowerPointViewer
-                  key={`${editing ? 'edit' : 'view'}#${slideIdx}`}
+                  key={`${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}`}
                   ref={setViewerRef}
                   content={unlocked ?? content}
                   fileName={fileName}
                   canEdit={editing}
                   showToolbar={editing}
                   initialSlide={slideIdx}
+                  onActiveSlideChange={(i: number) => setCurSlide(i)}
                 />
               </I18nextProvider>
             </Suspense>
@@ -218,6 +280,31 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
             <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0">
               코멘트 ({comments.length})
             </div>
+            {!editing && (
+              <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">
+                <input
+                  value={author}
+                  onChange={(e) => setAuthor(e.target.value)}
+                  placeholder="이름"
+                  className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none"
+                />
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder={`코멘트 입력 (슬라이드 ${curSlide + 1})`}
+                  rows={2}
+                  className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                />
+                <Button
+                  size="sm"
+                  className="w-full h-7 text-xs"
+                  disabled={!draft.trim() || adding}
+                  onClick={() => void addComment()}
+                >
+                  {adding ? '저장 중…' : '코멘트 저장'}
+                </Button>
+              </div>
+            )}
             <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
               {comments.length === 0 && (
                 <p className="text-xs text-muted-foreground px-1">코멘트 없음</p>
