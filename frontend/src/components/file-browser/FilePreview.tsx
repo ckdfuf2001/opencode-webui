@@ -1,10 +1,11 @@
-import { useState, useCallback, useRef, useEffect, memo } from 'react'
+import { useState, useCallback, useRef, useEffect, memo, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Download, X, PenLine, Save, X as XIcon, WrapText, RefreshCw, Maximize2, Minimize2 } from 'lucide-react'
+import { Download, X, PenLine, Save, X as XIcon, WrapText, RefreshCw, Maximize2, Minimize2, MoreHorizontal } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { VirtualizedTextView, type VirtualizedTextViewHandle } from '@/components/ui/virtualized-text-view'
 import { DocumentPreview, detectDocKind } from './DocumentPreview'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
 
 
@@ -316,6 +317,92 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const showSaveButton = viewMode === 'edit'
   const showCancelButton = viewMode === 'edit'
 
+  const headerActions: Array<{
+    key: string
+    label: string
+    title: string
+    icon: ReactNode
+    className: string
+    disabled?: boolean
+    show: boolean
+    run: () => void
+  }> = [
+    {
+      key: 'fullscreen',
+      label: isFullscreen ? '전체화면 나가기' : '전체화면 들어가기',
+      title: isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen',
+      icon: isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />,
+      className: 'h-7 w-7 p-0',
+      show: !isMobileModal,
+      run: toggleFullscreen,
+    },
+    {
+      key: 'wrap',
+      label: lineWrap ? '줄바꿈 끄기' : '줄바꿈 켜기',
+      title: lineWrap ? 'Disable line wrap' : 'Enable line wrap',
+      icon: <WrapText className="w-3 h-3" />,
+      className: `h-7 w-7 p-0 ${lineWrap ? 'bg-primary text-primary-foreground' : ''}`,
+      show: isTextFile,
+      run: () => setLineWrap(!lineWrap),
+    },
+    {
+      key: 'edit',
+      label: '편집',
+      title: 'Edit',
+      icon: <PenLine className="w-3 h-3" />,
+      className: 'h-7 w-7 p-0',
+      show: isTextFile && viewMode !== 'edit',
+      run: handleEdit,
+    },
+    {
+      key: 'save',
+      label: '저장',
+      title: 'Save',
+      icon: <Save className="w-3 h-3" />,
+      className: 'border-green-600 bg-green-600/10 text-green-600 hover:bg-green-600/20 h-7 w-7 p-0',
+      disabled: isSaving || (shouldVirtualize && !hasVirtualizedChanges),
+      show: showSaveButton,
+      run: () => { if (shouldVirtualize) { void handleVirtualizedSaveClick() } else { void handleSave() } },
+    },
+    {
+      key: 'cancel',
+      label: '취소',
+      title: 'Cancel',
+      icon: <XIcon className="w-3 h-3" />,
+      className: 'border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20 h-7 w-7 p-0',
+      show: showCancelButton,
+      run: handleCancel,
+    },
+    {
+      key: 'refresh',
+      label: '새로고침',
+      title: 'Refresh',
+      icon: <RefreshCw className="w-3 h-3" />,
+      className: 'h-7 w-7 p-0',
+      show: viewMode !== 'edit',
+      run: handleRefresh,
+    },
+    {
+      key: 'download',
+      label: '다운로드',
+      title: 'Download',
+      icon: <Download className="w-3 h-3" />,
+      className: 'h-7 w-7 p-0',
+      show: viewMode !== 'edit',
+      run: handleDownload,
+    },
+    {
+      key: 'close',
+      label: '닫기',
+      title: 'Close',
+      icon: <X className="w-3 h-3" />,
+      className: 'border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20 h-7 w-7 p-0',
+      show: viewMode !== 'edit' && isMobileModal && !!onCloseModal,
+      run: () => onCloseModal?.(),
+    },
+  ]
+  const visibleActions = headerActions.filter((a) => a.show)
+
   return (
     <div className={`${isFullscreen ? 'fixed inset-0 z-[100] bg-background flex flex-col' : 'h-full flex flex-col bg-background'}`} style={isFullscreen ? GPU_ACCELERATED_STYLE : undefined} onContextMenu={(e) => { if (isFullscreen) e.stopPropagation() }}>
       {!hideHeader && (
@@ -339,64 +426,48 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
             </div>
             
             <div className="flex items-center gap-1 flex-shrink-0 mt-1">
-              {!isMobileModal && (
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); toggleFullscreen() }} 
-                  className="h-7 w-7 p-0"
-                  title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-                >
-                  {isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-                </Button>
-              )}
-              
-              {isTextFile && (
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); setLineWrap(!lineWrap) }} 
-                  className={`h-7 w-7 p-0 ${lineWrap ? 'bg-primary text-primary-foreground' : ''}`}
-                  title={lineWrap ? "Disable line wrap" : "Enable line wrap"}
-                >
-                  <WrapText className="w-3 h-3" />
-                </Button>
-              )}
-              
-              {isTextFile && viewMode !== 'edit' && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleEdit() }} className="h-7 w-7 p-0">
-                  <PenLine className="w-3 h-3" />
-                </Button>
-              )}
-              
-              {showSaveButton && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); if (shouldVirtualize) { handleVirtualizedSaveClick() } else { handleSave() } }} disabled={isSaving || (shouldVirtualize && !hasVirtualizedChanges)} className="border-green-600 bg-green-600/10 text-green-600 hover:bg-green-600/20 h-7 w-7 p-0">
-                  <Save className="w-3 h-3" />
-                </Button>
-              )}
-              
-              {showCancelButton && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleCancel() }} className="border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20 h-7 w-7 p-0">
-                  <XIcon className="w-3 h-3" />
-                </Button>
-              )}
-              
-              {viewMode !== 'edit' && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleRefresh() }} className="h-7 w-7 p-0" title="Refresh">
-                  <RefreshCw className="w-3 h-3" />
-                </Button>
-              )}
-
-              {viewMode !== 'edit' && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDownload() }} className="h-7 w-7 p-0">
-                  <Download className="w-3 h-3" />
-                </Button>
-              )}
-              
-              {viewMode !== 'edit' && isMobileModal && onCloseModal && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); e.preventDefault(); onCloseModal() }} className="border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20 h-7 w-7 p-0">
-                  <X className="w-3 h-3" />
-                </Button>
+              {isFullscreen ? (
+                visibleActions.map((a) => (
+                  <Button
+                    key={a.key}
+                    variant="outline"
+                    size="sm"
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); a.run() }}
+                    disabled={a.disabled}
+                    className={a.className}
+                    title={a.title}
+                  >
+                    {a.icon}
+                  </Button>
+                ))
+              ) : (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-7 w-7 p-0"
+                      title="더보기"
+                    >
+                      <MoreHorizontal className="w-3 h-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="z-[80]">
+                    {visibleActions.map((a) => (
+                      <DropdownMenuItem
+                        key={a.key}
+                        disabled={a.disabled}
+                        onSelect={() => a.run()}
+                      >
+                        <span className="flex items-center gap-2">
+                          {a.icon}
+                          {a.label}
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
             </div>
           </div>
