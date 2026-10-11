@@ -1,25 +1,66 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, Suspense, lazy } from 'react'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
+import { lazyWithRetry } from './lazyRetry'
 
-const SpreadsheetEditor = lazy(() =>
-  import('@christophervr/xlsx-react-viewer').then((m) => ({ default: m.SpreadsheetEditor })),
-)
+const loadSpreadsheetEditor = () =>
+  import('@christophervr/xlsx-react-viewer').then((m) => ({ default: m.SpreadsheetEditor }))
 
-const PptxViewer = lazy(() => import('./PptxViewer'))
+const loadPptxViewer = () => import('./PptxViewer')
 
-const WordEditor = lazy(() =>
-  import('docx-react-viewer').then((m) => ({ default: m.WordEditor })),
-)
+const loadWordEditor = () =>
+  import('docx-react-viewer').then((m) => ({ default: m.WordEditor }))
 
-const VisioViewer = lazy(() =>
-  import('visio-react-viewer').then((m) => ({ default: m.VisioViewer })),
-)
+const loadVisioViewer = () =>
+  import('visio-react-viewer').then((m) => ({ default: m.VisioViewer }))
+
+let SpreadsheetEditor = lazyWithRetry(loadSpreadsheetEditor)
+let PptxViewer = lazyWithRetry(loadPptxViewer)
+let WordEditor = lazyWithRetry(loadWordEditor)
+let VisioViewer = lazyWithRetry(loadVisioViewer)
+
+/** 청크 재시도: 실패한 lazy를 새걸로 갈아끼운다 (다시 시도 버튼용). */
+function bustViewerChunks(): void {
+  SpreadsheetEditor = lazyWithRetry(loadSpreadsheetEditor)
+  PptxViewer = lazyWithRetry(loadPptxViewer)
+  WordEditor = lazyWithRetry(loadWordEditor)
+  VisioViewer = lazyWithRetry(loadVisioViewer)
+}
+
+/** 뷰어 청크 로드 실패 시 다시 시도/PDF 폴백을 보여준다. */
+class ViewerLoadBoundary extends Component<
+  { onRetry: () => void; onPdf?: () => void; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+  render(): ReactNode {
+    if (!this.state.failed) return this.props.children
+    return (
+      <div className="flex flex-col items-center justify-center py-12 gap-2 text-center px-6">
+        <p className="text-sm text-muted-foreground">미리보기를 불러오지 못했습니다.</p>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={this.props.onRetry}>
+            다시 시도
+          </Button>
+          {this.props.onPdf && (
+            <Button size="sm" variant="outline" onClick={this.props.onPdf}>
+              PDF로 보기
+            </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+}
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import EngineHost from './EngineHost'
 import { hasDocxComments, layoutAnchoredTextBoxes, toggleDocxComments } from './docxAnchorLayout'
-import { useOfficeSave, toggleXlsxComments } from './officeSave'
+import { useOfficeSave } from './officeSave'
+import { loadXlsxComments, type XlsxComment } from './xlsxComments'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
@@ -430,7 +471,12 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   const isViewerOnly = kind === 'visio'
   const [pdfMode, setPdfMode] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [viewerRetry, setViewerRetry] = useState(0)
   useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
+  const retryViewer = () => {
+    bustViewerChunks()
+    setViewerRetry((v) => v + 1)
+  }
   useEffect(() => {
     const onFs = (e: Event) => {
       if (!(e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen) setEditing(false)
@@ -462,11 +508,34 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   const renderRawBody = (): ReactNode => {
     if (rawStatus === 'loading') return SPINNER
     if (rawStatus === 'ready' && raw) {
+      const bkey = `${file.path}#${viewerRetry}`
       if (kind === 'pdf') return <PdfViewer data={raw} fileName={file.name} />
-      if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
-      if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
-      if (kind === 'visio') return <OfficeVisioViewer data={raw} fileName={file.name} />
-      return <PptxViewer key={file.path} data={raw} fileName={file.name} editing={editing} savePath={file.path} onFail={() => setPdfMode(true)} />
+      if (kind === 'docx') {
+        return (
+          <ViewerLoadBoundary key={bkey} onRetry={retryViewer}>
+            <DocxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
+          </ViewerLoadBoundary>
+        )
+      }
+      if (kind === 'xlsx') {
+        return (
+          <ViewerLoadBoundary key={bkey} onRetry={retryViewer}>
+            <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
+          </ViewerLoadBoundary>
+        )
+      }
+      if (kind === 'visio') {
+        return (
+          <ViewerLoadBoundary key={bkey} onRetry={retryViewer}>
+            <OfficeVisioViewer data={raw} fileName={file.name} />
+          </ViewerLoadBoundary>
+        )
+      }
+      return (
+        <ViewerLoadBoundary key={bkey} onRetry={retryViewer} onPdf={() => setPdfMode(true)}>
+          <PptxViewer key={file.path} data={raw} fileName={file.name} editing={editing} savePath={file.path} onFail={() => setPdfMode(true)} />
+        </ViewerLoadBoundary>
+      )
     }
     if (rawStatus === 'error') return <ErrorNote msg={rawError} />
     return null
@@ -908,9 +977,28 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   const [xlsxHandle, setXlsxHandle] = useState<{
     save: () => Promise<Blob>
     markClean: () => void
+    select?: (ref: string) => void
+    setActiveSheet?: (index: number) => void
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
   const { save } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
+  const [comments, setComments] = useState<XlsxComment[]>([])
+  const [showComments, setShowComments] = useState(false)
+
+  // 코멘트가 있으면 목록 패널을 같이 열어준다 (보기/편집 공통).
+  useEffect(() => {
+    let dead = false
+    setComments([])
+    setShowComments(false)
+    void loadXlsxComments(content).then((cs) => {
+      if (dead) return
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+    })
+    return () => {
+      dead = true
+    }
+  }, [content])
 
   // 뷰어 툴바 저장 가로채기 (기본 다운로드를 막고 제자리 저장) + 상단 저장 버튼.
   useEffect(() => {
@@ -933,31 +1021,83 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [save])
-  // 상단 코멘트 버튼 (보기/편집 공통).
+  // 상단 코멘트 버튼: 우측 목록 패널을 여닫는다.
   useEffect(() => {
     const onToggle = () => {
-      if (listenRef.current) toggleXlsxComments(listenRef.current)
+      setShowComments((v) => !v)
     }
     window.addEventListener('xlsxCommentsToggle', onToggle)
     return () => window.removeEventListener('xlsxCommentsToggle', onToggle)
   }, [])
 
+  const openComment = (c: XlsxComment) => {
+    try {
+      xlsxHandle?.setActiveSheet?.(c.sheetIndex)
+    } catch {
+      /* 무시 */
+    }
+    setTimeout(() => {
+      try {
+        xlsxHandle?.select?.(c.ref)
+      } catch {
+        /* 무시 */
+      }
+    }, 80)
+  }
+
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="xlsxengine-host h-full min-h-[480px]">
-      <div ref={listenRef} className="h-full min-h-0">
-        <Suspense fallback={SPINNER}>
-          <SpreadsheetEditor
-            key={editing ? 'edit' : 'view'}
-            ref={setXlsxHandle}
-            bytes={content}
-            fileName={fileName}
-            readOnly={!editing}
-            showToolbar={editing}
-            showFormulaBar={editing}
-            onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
-          />
-        </Suspense>
+      <div ref={listenRef} className="flex h-full min-h-0">
+        <div className="flex-1 min-w-0 h-full">
+          <Suspense fallback={SPINNER}>
+            <SpreadsheetEditor
+              key={editing ? 'edit' : 'view'}
+              ref={setXlsxHandle}
+              bytes={content}
+              fileName={fileName}
+              readOnly={!editing}
+              showToolbar={editing}
+              showFormulaBar={editing}
+              onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
+            />
+          </Suspense>
+        </div>
+        {showComments && (
+          <div className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
+            <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0">
+              코멘트 ({comments.length})
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
+              {comments.length === 0 && (
+                <p className="text-xs text-muted-foreground px-1">코멘트 없음</p>
+              )}
+              {comments.map((c, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => openComment(c)}
+                  className="w-full text-left rounded-md border border-border/60 p-2 hover:bg-muted/60 transition-colors"
+                  title={`${c.sheet}!${c.ref}로 이동`}
+                >
+                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <span className="truncate">{c.sheet}</span>
+                    <span className="shrink-0 font-mono">{c.ref}</span>
+                    {c.resolved && <span className="shrink-0">· 해결됨</span>}
+                  </div>
+                  <div className="text-xs font-medium mt-0.5">{c.author}</div>
+                  <div className="text-xs whitespace-pre-wrap break-words mt-0.5">{c.text}</div>
+                  {c.replies.map((r, j) => (
+                    <div key={j} className="mt-1.5 pl-2 border-l-2 border-border">
+                      <div className="text-xs font-medium">{r.author}</div>
+                      <div className="text-xs whitespace-pre-wrap break-words">{r.text}</div>
+                    </div>
+                  ))}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </EngineHost>
   )

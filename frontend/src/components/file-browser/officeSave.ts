@@ -23,49 +23,6 @@ type SaveHandle = {
 } | null
 
 /**
- * ooxml 뷰어(docx/xlsx)의 코멘트 패널을 토글한다.
- * 리본 액션 요소에 office-ribbon-comments를 쏘면 된다
- * (docx: 코멘트 패널, xlsx: review.show-comments).
- */
-export function toggleOfficeComments(root: HTMLElement, editorTag: string): boolean {
-  const editor = root.querySelector(editorTag)
-  if (!editor) return false
-  const target =
-    (editor.shadowRoot?.querySelector('office-ui-ribbon-actions') as HTMLElement | null) ?? editor
-  target.dispatchEvent(new CustomEvent('office-ribbon-comments', { bubbles: true, composed: true }))
-  return true
-}
-
-/**
- * xlsx 코멘트: 툴바가 없어도 타이틀바에 office-command-search로
- * review.show-comments를 직접 실행한다. 보기 모드에서도 동작.
- */
-export function toggleXlsxComments(root: HTMLElement): boolean {
-  const editor = root.querySelector('xlsx-editor')
-  if (!editor?.shadowRoot) return false
-  const sr = editor.shadowRoot
-  const ribbonActions = sr.querySelector('office-ui-ribbon-actions') as HTMLElement | null
-  if (ribbonActions) {
-    ribbonActions.dispatchEvent(
-      new CustomEvent('office-ribbon-comments', { bubbles: true, composed: true }),
-    )
-    return true
-  }
-  const titleBar = sr.querySelector('office-ui-title-bar') as HTMLElement | null
-  if (titleBar) {
-    titleBar.dispatchEvent(
-      new CustomEvent('office-command-search', {
-        detail: { command: 'review.show-comments' },
-        bubbles: true,
-        composed: true,
-      }),
-    )
-    return true
-  }
-  return false
-}
-
-/**
  * 뷰어 툴바 저장 가로채기 + 상단 저장 버튼 공용.
  * handle이 없거나 저장 중이면 false.
  */
