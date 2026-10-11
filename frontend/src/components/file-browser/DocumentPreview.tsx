@@ -59,6 +59,7 @@ import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import EngineHost from './EngineHost'
 import { hasDocxComments, layoutAnchoredTextBoxes, toggleDocxComments } from './docxAnchorLayout'
+import { sanitizeDocxForEdit } from './docxEditSanitize'
 import { useOfficeSave } from './officeSave'
 import { loadXlsxComments, type XlsxComment } from './xlsxComments'
 
@@ -837,8 +838,22 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     if (!handle) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
-    handle
-      .load(content)
+    // 편집 모드에서는 저장 거부하는 인라인 OOXML을 미리 정리한다 (보기 모드는 원본).
+    void (editing ? sanitizeDocxForEdit(content) : Promise.resolve(content))
+      .then((bytes) => {
+        if (cancelled) return
+        // 선택된 상자가 보이게 (ProseMirror 선택 링).
+        const sr = wrapRef.current?.querySelector('docx-editor')?.shadowRoot
+        if (sr && !sr.querySelector('[data-anchor-ring]')) {
+          const st = document.createElement('style')
+          st.setAttribute('data-anchor-ring', '1')
+          st.textContent =
+            '.dve-paper .dve-image-placeholder.ProseMirror-selectednode{' +
+            'outline:2px solid var(--word,#2b579a);outline-offset:1px}'
+          sr.appendChild(st)
+        }
+        return handle.load(bytes)
+      })
       .then(() => {
         // 렌더가 자리 잡은 뒤 떠있는 텍스트상자를 앵커 좌표에 배치한다 (보기/편집 공통).
         timer = setTimeout(() => {
