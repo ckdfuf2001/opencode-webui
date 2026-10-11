@@ -20,7 +20,9 @@ import { listAllIndexedRepos } from '../services/git-indexer'
 import { buildRecall } from '../services/recall'
 import { logger } from '../utils/logger'
 
-const SearchSchema = z.object({ q: z.string().max(500).optional(), k: z.coerce.number().int().min(1).max(50).optional(), offset: z.coerce.number().int().min(0).max(10000).optional() })
+const SearchSchema = z.object({ q: z.string().optional(), k: z.coerce.number().int().min(1).max(50).optional(), offset: z.coerce.number().int().min(0).max(10000).optional() })
+// FTS MATCH 부하 방지 상한 — 초과분은 자르고 검색한다 (400 거절 대신).
+const MAX_SEARCH_Q = 500
 const ExpandSchema = z.object({ messageId: z.string().min(1), n: z.coerce.number().int().min(0).max(20).optional() })
 const ReindexMessagesSchema = z.object({ sessionId: z.string().optional() })
 const ReindexCommitsSchema = z.object({ repoId: z.coerce.number().int().optional(), force: z.boolean().optional() })
@@ -45,8 +47,8 @@ export function createSearchRoutes(db: Database) {
         repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
         sessionId,
       }
-      const hits = searchMessages(db, parsed.q || '', opts)
-      const total = countMessageMatches(db, parsed.q || '', opts)
+      const hits = searchMessages(db, (parsed.q || '').slice(0, MAX_SEARCH_Q), opts)
+      const total = countMessageMatches(db, (parsed.q || '').slice(0, MAX_SEARCH_Q), opts)
       const offset = parsed.offset ?? 0
       return c.json({ hits, total, hasMore: offset + hits.length < total })
     } catch (error) {
@@ -124,7 +126,7 @@ export function createSearchRoutes(db: Database) {
       })
       const repoIdRaw = c.req.query('repoId')
       const repoId = repoIdRaw != null && repoIdRaw !== '' ? parseInt(repoIdRaw, 10) : undefined
-      const hits = searchCommits(db, parsed.q || '', {
+      const hits = searchCommits(db, (parsed.q || '').slice(0, MAX_SEARCH_Q), {
         k: parsed.k,
         repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
       })

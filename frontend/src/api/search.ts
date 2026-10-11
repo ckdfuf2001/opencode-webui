@@ -59,8 +59,8 @@ export async function searchMessages(params: {
   signal?: AbortSignal
 }): Promise<MessageSearchPage> {
   const sp = new URLSearchParams()
-  // 백엔드 zod 상한(q 500자) 초과면 400 Invalid query — 긴 붙여넣기 잘라서 보낸다.
-  if (params.q) sp.set('q', params.q.slice(0, 500))
+  // 길이 상한은 서버가 잘라서 처리한다 (400 대신 앞부분으로 검색).
+  if (params.q) sp.set('q', params.q)
   if (params.k != null) sp.set('k', String(params.k))
   if (params.offset != null) sp.set('offset', String(params.offset))
   if (params.repoId != null) sp.set('repoId', String(params.repoId))
@@ -91,7 +91,7 @@ export async function searchCommits(params: {
   repoId?: number
 }): Promise<CommitSearchHit[]> {
   const sp = new URLSearchParams()
-  if (params.q) sp.set('q', params.q.slice(0, 500))
+  if (params.q) sp.set('q', params.q)
   if (params.k != null) sp.set('k', String(params.k))
   if (params.repoId != null) sp.set('repoId', String(params.repoId))
   const res = await fetch(`${API_BASE_URL}/api/search/commits?${sp.toString()}`)
@@ -168,7 +168,7 @@ export async function recall(
   q: string,
   opts: { k?: number; repoId?: number; sessionId?: string; offset?: number; signal?: AbortSignal } = {},
 ): Promise<RecallPage> {
-  const sp = new URLSearchParams({ q: q.slice(0, 500) })
+  const sp = new URLSearchParams({ q })
   if (opts.k != null) sp.set('k', String(opts.k))
   if (opts.offset != null) sp.set('offset', String(opts.offset))
   if (opts.repoId != null) sp.set('repoId', String(opts.repoId))
