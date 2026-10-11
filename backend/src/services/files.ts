@@ -200,7 +200,7 @@ export async function getFileStat(userPath: string): Promise<{ exists: boolean; 
   }
 }
 
-export async function uploadFile(userPath: string, file: File, blockedExtensions?: unknown): Promise<FileUploadResult> {
+export async function uploadFile(userPath: string, file: File, blockedExtensions?: unknown, opts?: { overwrite?: boolean }): Promise<FileUploadResult> {
   if (file.size > FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES) {
     throw { message: `File too large (max ${FILE_LIMITS.MAX_UPLOAD_SIZE_BYTES} bytes)`, statusCode: 400 }
   }
@@ -213,15 +213,30 @@ export async function uploadFile(userPath: string, file: File, blockedExtensions
   }
   
   const validatedPath = validatePath(userPath)
+  const buffer = await file.arrayBuffer()
+  // 미리보기 편집 저장: 같은 자리에 덮어쓴다 (유니크 이름 생성 안 함).
+  if (opts?.overwrite === true) {
+    const stat = await fs.stat(validatedPath).catch(() => null)
+    if (stat?.isDirectory()) {
+      throw { message: 'Cannot overwrite a directory', statusCode: 400 }
+    }
+    await fs.mkdir(path.dirname(validatedPath), { recursive: true })
+    await writeFileContent(validatedPath, Buffer.from(buffer))
+    const savedName = path.basename(validatedPath)
+    return {
+      name: savedName,
+      path: userPath,
+      size: file.size,
+      mimeType: file.type || getMimeType(file.name, new Uint8Array()),
+    }
+  }
   // T15: 저장 파일명 정규화 — 공백·괄호 등은 셸 계열 도구와 따옴표 없는
   // 멘션에서 말썽이므로 `_`로 치환한다 (한글 등 유니코드 파일명은 유지).
   // 충돌 접미사는 기존 `name (1).ext` 대신 `name_1.ext` 형식으로 합친다.
   const sluggedName = slugUploadName(fileName)
   const fullPath = await resolveUniquePath(validatedPath, sluggedName)
   const savedName = path.basename(fullPath)
-  
-  const buffer = await file.arrayBuffer()
-  
+
   await writeFileContent(fullPath, Buffer.from(buffer))
   
   return {

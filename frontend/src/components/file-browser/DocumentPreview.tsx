@@ -19,6 +19,7 @@ import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import EngineHost from './EngineHost'
 import { hasDocxComments, layoutAnchoredTextBoxes, toggleDocxComments } from './docxAnchorLayout'
+import { useOfficeSave } from './officeSave'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
@@ -452,10 +453,10 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     if (rawStatus === 'loading') return SPINNER
     if (rawStatus === 'ready' && raw) {
       if (kind === 'pdf') return <PdfViewer data={raw} fileName={file.name} />
-      if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} editing={editing} />
-      if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} editing={editing} />
+      if (kind === 'docx') return <DocxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
+      if (kind === 'xlsx') return <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
       if (kind === 'visio') return <OfficeVisioViewer data={raw} fileName={file.name} />
-      return <PptxViewer key={file.path} data={raw} fileName={file.name} editing={editing} onFail={() => setPdfMode(true)} />
+      return <PptxViewer key={file.path} data={raw} fileName={file.name} editing={editing} savePath={file.path} onFail={() => setPdfMode(true)} />
     }
     if (rawStatus === 'error') return <ErrorNote msg={rawError} />
     return null
@@ -512,30 +513,42 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
             </button>
           </div>
           {(kind === 'pptx' || kind === 'docx' || kind === 'xlsx') && !pdfMode && (
-            <button
-              type="button"
-              onClick={() => {
-                const next = !editing
-                setEditing(next)
-                if (next && kind === 'pptx') {
-                  window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
-                }
-              }}
-              className={`h-6 text-xs px-2 rounded ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
-              title="편집 모드 (저장은 아직 안 됨)"
-            >
-              {editing ? '편집 종료' : '편집'}
-            </button>
-          )}
-          {kind === 'docx' && !pdfMode && (
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent('docxCommentsToggle'))}
-              className="h-6 text-xs px-2 rounded ml-auto text-muted-foreground hover:text-foreground"
-              title="코멘트 패널 열기/닫기"
-            >
-              코멘트
-            </button>
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !editing
+                  setEditing(next)
+                  if (next && kind === 'pptx') {
+                    window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }))
+                  }
+                }}
+                className={`h-6 text-xs px-2 rounded ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+                title="편집 모드"
+              >
+                {editing ? '편집 종료' : '편집'}
+              </button>
+              {editing && (
+                <button
+                  type="button"
+                  onClick={() => window.dispatchEvent(new CustomEvent('officeSaveRequest'))}
+                  className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
+                  title="현재 파일에 덮어쓰기"
+                >
+                  저장
+                </button>
+              )}
+              {kind === 'docx' && (
+                <button
+                  type="button"
+                  onClick={() => window.dispatchEvent(new CustomEvent('docxCommentsToggle'))}
+                  className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
+                  title="코멘트 패널 열기/닫기"
+                >
+                  코멘트
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -695,14 +708,19 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
   )
 }
 
-function DocxViewer({ data, editing = false }: { data: ArrayBuffer; fileName?: string; editing?: boolean }) {
+function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
-  const [handle, setHandle] = useState<{ load: (b: Uint8Array) => Promise<void> } | null>(null)
+  const [handle, setHandle] = useState<{
+    load: (b: Uint8Array) => Promise<void>
+    save: () => Promise<Blob>
+    markClean: () => void
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [laidOut, setLaidOut] = useState(0)
   const laidOutRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
   const relayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { save } = useOfficeSave(path, fileName ?? 'document.docx', handle)
   // 편집 중 노드가 다시 그려지면 오버레이가 날아가서 다시 맞춘다.
   const scheduleRelayout = () => {
     if (!laidOutRef.current || !wrapRef.current) return
@@ -779,6 +797,28 @@ function DocxViewer({ data, editing = false }: { data: ArrayBuffer; fileName?: s
     return () => window.removeEventListener('docxCommentsToggle', onToggle)
   }, [])
 
+  // 뷰어 툴바 저장 가로채기 (기본 다운로드를 막고 제자리 저장) + 상단 저장 버튼.
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const onFileCommand = (e: Event) => {
+      const cmd = (e as CustomEvent<{ command?: string }>).detail?.command
+      if (cmd === 'save') {
+        e.preventDefault()
+        void save()
+      }
+    }
+    el.addEventListener('file-command', onFileCommand)
+    return () => el.removeEventListener('file-command', onFileCommand)
+  }, [save, editing])
+  useEffect(() => {
+    const onSave = () => {
+      void save()
+    }
+    window.addEventListener('officeSaveRequest', onSave)
+    return () => window.removeEventListener('officeSaveRequest', onSave)
+  }, [save])
+
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host h-full min-h-[480px]">
@@ -831,23 +871,57 @@ function OfficeVisioViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
   )
 }
 
-function XlsxViewer({ data, fileName, editing = false }: { data: ArrayBuffer; fileName?: string; editing?: boolean }) {
+function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
   const [error, setError] = useState<string | null>(null)
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const [xlsxHandle, setXlsxHandle] = useState<{
+    save: () => Promise<Blob>
+    markClean: () => void
+  } | null>(null)
+  const listenRef = useRef<HTMLDivElement>(null)
+  const { save } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
+
+  // 뷰어 툴바 저장 가로채기 (기본 다운로드를 막고 제자리 저장) + 상단 저장 버튼.
+  useEffect(() => {
+    const el = listenRef.current
+    if (!el) return
+    const onFileCommand = (e: Event) => {
+      const cmd = (e as CustomEvent<{ command?: string }>).detail?.command
+      if (cmd === 'save') {
+        e.preventDefault()
+        void save()
+      }
+    }
+    el.addEventListener('file-command', onFileCommand)
+    return () => el.removeEventListener('file-command', onFileCommand)
+  }, [save, editing])
+  useEffect(() => {
+    const onSave = () => {
+      void save()
+    }
+    window.addEventListener('officeSaveRequest', onSave)
+    return () => window.removeEventListener('officeSaveRequest', onSave)
+  }, [save])
+
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="xlsxengine-host h-full min-h-[480px]">
-      <Suspense fallback={SPINNER}>
-        <SpreadsheetEditor
-          key={editing ? 'edit' : 'view'}
-          bytes={content}
-          fileName={fileName}
-          readOnly={!editing}
-          showToolbar={editing}
-          showFormulaBar={editing}
-          onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
-        />
-      </Suspense>
+      <div ref={listenRef} className="h-full min-h-0">
+        <Suspense fallback={SPINNER}>
+          <SpreadsheetEditor
+            key={editing ? 'edit' : 'view'}
+            ref={(h) => {
+              setXlsxHandle(h)
+            }}
+            bytes={content}
+            fileName={fileName}
+            readOnly={!editing}
+            showToolbar={editing}
+            showFormulaBar={editing}
+            onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
+          />
+        </Suspense>
+      </div>
     </EngineHost>
   )
 }

@@ -5,6 +5,8 @@ import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
 import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
+import { saveOfficeBytes } from './officeSave'
+import { showToast } from '@/lib/toast'
 
 const PowerPointViewer = lazy(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
@@ -28,9 +30,35 @@ function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
 }
 
-export default function PptxViewer({ data, fileName, editing, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; onFail: () => void }) {
+export default function PptxViewer({ data, fileName, editing, savePath, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void }) {
   const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [unlocked, setUnlocked] = useState<Uint8Array | null>(null)
+  const viewerRef = useRef<{ getContent: () => Promise<Uint8Array> } | null>(null)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    const onSave = () => {
+      if (saving) return
+      const h = viewerRef.current
+      if (!h || !savePath) return
+      setSaving(true)
+      void h
+        .getContent()
+        .then((bytes) =>
+          saveOfficeBytes(
+            savePath,
+            fileName ?? 'presentation.pptx',
+            new Blob([bytes as unknown as BlobPart], {
+              type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            }),
+          ),
+        )
+        .then(() => showToast.success('저장했습니다'))
+        .catch((e) => showToast.error(e instanceof Error ? e.message : '저장 실패'))
+        .finally(() => setSaving(false))
+    }
+    window.addEventListener('officeSaveRequest', onSave)
+    return () => window.removeEventListener('officeSaveRequest', onSave)
+  }, [savePath, fileName, saving])
   const [pw, setPw] = useState('')
   const [pwError, setPwError] = useState<string | null>(null)
   const [unlocking, setUnlocking] = useState(false)
@@ -110,6 +138,9 @@ export default function PptxViewer({ data, fileName, editing, onFail }: { data: 
           <I18nextProvider i18n={pptxI18n}>
             <PowerPointViewer
               key={editing ? 'edit' : 'view'}
+              ref={(h) => {
+                viewerRef.current = h
+              }}
               content={unlocked ?? content}
               fileName={fileName}
               canEdit={editing}

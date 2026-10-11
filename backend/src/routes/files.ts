@@ -114,7 +114,9 @@ export function createFileRoutes(database: Database) {
       } catch {
         blocked = undefined
       }
-      const result = await fileService.uploadFile(path, file, blocked)
+      const result = await fileService.uploadFile(path, file, blocked, {
+        overwrite: c.req.query('overwrite') === '1',
+      })
       return c.json(result)
     } catch (error: any) {
       logger.error('Failed to upload file:', error)
