@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { lazyWithRetry } from './lazyRetry'
+import { loadPptxComments, type PptxComment } from './pptxComments'
 
 const PowerPointViewer = lazyWithRetry(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
@@ -72,32 +73,38 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [savePath, fileName, saving])
-  // 상단 코멘트 버튼: Comments 탭 토글 (켜져 있으면 Properties로 복귀).
+  // 상단 코멘트 버튼: 우측 우리 목록 패널을 여닫는다 (docx/xlsx와 통일).
+  const [comments, setComments] = useState<PptxComment[]>([])
+  const [showComments, setShowComments] = useState(false)
+  const [slideIdx, setSlideIdx] = useState(0)
+  useEffect(() => {
+    let dead = false
+    setComments([])
+    setShowComments(false)
+    setSlideIdx(0)
+    void loadPptxComments(content).then((cs) => {
+      if (dead) return
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+    })
+    return () => {
+      dead = true
+    }
+  }, [content])
   useEffect(() => {
     const onComments = () => {
-      const wrap = wrapRef.current
-      if (!wrap) return
-      const tabs = Array.from(wrap.querySelectorAll('[role="tab"]')) as HTMLElement[]
-      if (!tabs.length) {
-        showToast.info('우측 패널이 닫혀 있어 코멘트를 열 수 없습니다')
-        return
-      }
-      const comments = tabs.find((t) => /comment/i.test(t.textContent ?? ''))
-      if (!comments) return
-      const isOpen = (t: HTMLElement) =>
-        t.getAttribute('aria-selected') === 'true' || (t.dataset?.state ?? '') === 'active'
-      if (isOpen(comments)) {
-        const back =
-          tabs.find((t) => t !== comments && /propert/i.test(t.textContent ?? '')) ??
-          tabs.find((t) => t !== comments)
-        back?.click()
-      } else {
-        comments.click()
-      }
+      setShowComments((v) => !v)
     }
     window.addEventListener('pptxCommentsRequest', onComments)
     return () => window.removeEventListener('pptxCommentsRequest', onComments)
   }, [])
+  const openComment = (c: PptxComment) => {
+    if (editing) {
+      showToast.info('편집 중에는 슬라이드 이동을 하지 않습니다')
+      return
+    }
+    setSlideIdx(Math.max(0, c.slideNo - 1))
+  }
   const [pw, setPw] = useState('')
   const [pwError, setPwError] = useState<string | null>(null)
   const [unlocking, setUnlocking] = useState(false)
@@ -126,15 +133,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       if (userSizedRef.current) return
       const aside = wrap.querySelector('aside')
       if (!(aside instanceof HTMLElement)) return
-      // 미리보기창 남는 폭을 썸네일이 다 채운다 (우측 패널·스플리터 제외).
+      // 미리보기창 남는 폭을 썸네일이 다 채운다 (우측 패널·코멘트·스플리터 제외).
       const panel = wrap.querySelector('[role="complementary"]') as HTMLElement | null
       const panelW = panel ? panel.getBoundingClientRect().width : 0
+      const ours = wrap.querySelector('[data-pptx-comments]') as HTMLElement | null
+      const oursW = ours ? ours.getBoundingClientRect().width : 0
       let sepsW = 0
       wrap.querySelectorAll('[role="separator"]').forEach((s) => {
         const r = (s as HTMLElement).getBoundingClientRect()
         if (r.width > 0) sepsW += r.width
       })
-      const w = Math.max(200, Math.round(wrap.clientWidth - panelW - sepsW - 4))
+      const w = Math.max(200, Math.round(wrap.clientWidth - panelW - oursW - sepsW - 4))
       // 라이브러리가 렌더 때마다 되돌려서 RO로 감시 + 다를 때만 쓴다 (루프 방지).
       if (Math.abs(aside.getBoundingClientRect().width - w) > 1) aside.style.width = `${w}px`
     }
@@ -186,20 +195,58 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   }
   return (
     <div ref={wrapRef} className={`h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}>
-      <PptxViewerBoundary onFail={onFail}>
-        <Suspense fallback={SPINNER}>
-          <I18nextProvider i18n={pptxI18n}>
-            <PowerPointViewer
-              key={editing ? 'edit' : 'view'}
-              ref={setViewerRef}
-              content={unlocked ?? content}
-              fileName={fileName}
-              canEdit={editing}
-              showToolbar={editing}
-            />
-          </I18nextProvider>
-        </Suspense>
-      </PptxViewerBoundary>
+      <div className="flex h-full min-h-0">
+        <div className="flex-1 min-w-0 h-full">
+          <PptxViewerBoundary onFail={onFail}>
+            <Suspense fallback={SPINNER}>
+              <I18nextProvider i18n={pptxI18n}>
+                <PowerPointViewer
+                  key={`${editing ? 'edit' : 'view'}#${slideIdx}`}
+                  ref={setViewerRef}
+                  content={unlocked ?? content}
+                  fileName={fileName}
+                  canEdit={editing}
+                  showToolbar={editing}
+                  initialSlide={slideIdx}
+                />
+              </I18nextProvider>
+            </Suspense>
+          </PptxViewerBoundary>
+        </div>
+        {showComments && (
+          <div data-pptx-comments className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
+            <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0">
+              코멘트 ({comments.length})
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
+              {comments.length === 0 && (
+                <p className="text-xs text-muted-foreground px-1">코멘트 없음</p>
+              )}
+              {comments.map((c, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => openComment(c)}
+                  className="w-full text-left rounded-md border border-border/60 p-2 hover:bg-muted/60 transition-colors"
+                  title={`${c.slideNo}번 슬라이드로 이동`}
+                >
+                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <span className="shrink-0 font-mono">슬라이드 {c.slideNo}</span>
+                  </div>
+                  <div className="text-xs font-medium mt-0.5">{c.author}</div>
+                  <div className="text-xs whitespace-pre-wrap break-words mt-0.5">{c.text}</div>
+                  {c.replies.map((r, j) => (
+                    <div key={j} className="mt-1.5 pl-2 border-l-2 border-border">
+                      <div className="text-xs font-medium">{r.author}</div>
+                      <div className="text-xs whitespace-pre-wrap break-words">{r.text}</div>
+                    </div>
+                  ))}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
