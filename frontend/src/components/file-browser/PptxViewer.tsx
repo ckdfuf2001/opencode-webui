@@ -1,5 +1,5 @@
 import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, RefreshCw } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
@@ -81,7 +81,22 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [savePath, fileName, saving])
-  // 상단 코멘트 버튼: 우측 우리 목록 패널을 여닫는다 (docx/xlsx와 통일).
+  // lib에서 코멘트 추가 등 모델이 바뀌면 우리 목록도 다시 읽는다 (저장 전에도 보인다).
+  const refreshComments = useCallback(async () => {
+    const h = viewerRef.current
+    if (!h) return
+    try {
+      const bytes = await h.getContent()
+      const cs = await loadPptxComments(new Uint8Array(bytes))
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+    } catch {
+      /* 무시 */
+    }
+  }, [])
+  const onViewerContentChange = useCallback(async () => {
+    await refreshComments()
+  }, [refreshComments])
   const [comments, setComments] = useState<PptxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [slideIdx, setSlideIdx] = useState(0)
@@ -226,6 +241,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   showToolbar={editing}
                   initialSlide={slideIdx}
                   onActiveSlideChange={(i: number) => setCurSlide(i)}
+                  onContentChange={() => void onViewerContentChange()}
                 />
               </I18nextProvider>
             </Suspense>
@@ -233,8 +249,16 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         </div>
         {showComments && (
           <div data-pptx-comments className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
-            <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0">
-              코멘트 ({comments.length})
+            <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0 flex items-center gap-1">
+              <span className="flex-1">코멘트 ({comments.length})</span>
+              <button
+                type="button"
+                onClick={() => void refreshComments()}
+                className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                title="다시 읽기"
+              >
+                <RefreshCw className="w-3 h-3" />
+              </button>
             </div>
             {!editing && (
               <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">

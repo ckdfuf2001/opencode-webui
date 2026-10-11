@@ -1,5 +1,5 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
-import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File } from 'lucide-react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
+import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw } from 'lucide-react'
 import { lazyWithRetry } from './lazyRetry'
 
 const loadSpreadsheetEditor = () =>
@@ -992,6 +992,7 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   const [xlsxHandle, setXlsxHandle] = useState<{
     save: () => Promise<Blob>
     markClean: () => void
+    saveBytes?: (format?: 'xlsx' | 'csv') => Promise<Uint8Array>
     select?: (ref: string) => void
     setActiveSheet?: (index: number) => void
   } | null>(null)
@@ -999,6 +1000,32 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   const { save } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
   const [comments, setComments] = useState<XlsxComment[]>([])
   const [showComments, setShowComments] = useState(false)
+  const xlsxRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // lib에서 바뀌면(편집·코멘트) 목록도 다시 읽는다 (저장 전에도 보인다).
+  const refreshXlsxComments = useCallback(async () => {
+    try {
+      const bytes = xlsxHandle?.saveBytes
+        ? await xlsxHandle.saveBytes('xlsx')
+        : content
+      const cs = await loadXlsxComments(bytes)
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+    } catch {
+      /* 무시 */
+    }
+  }, [content, xlsxHandle])
+  const scheduleXlsxRefresh = useCallback(() => {
+    if (xlsxRefreshTimer.current) clearTimeout(xlsxRefreshTimer.current)
+    xlsxRefreshTimer.current = setTimeout(() => {
+      void refreshXlsxComments()
+    }, 1200)
+  }, [refreshXlsxComments])
+  useEffect(
+    () => () => {
+      if (xlsxRefreshTimer.current) clearTimeout(xlsxRefreshTimer.current)
+    },
+    [],
+  )
 
   // 코멘트가 있으면 목록 패널을 같이 열어준다 (보기/편집 공통).
   useEffect(() => {
@@ -1066,22 +1093,31 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
-            <SpreadsheetEditor
-              key={editing ? 'edit' : 'view'}
-              ref={setXlsxHandle}
-              bytes={content}
-              fileName={fileName}
-              readOnly={!editing}
-              showToolbar={editing}
-              showFormulaBar={editing}
-              onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
-            />
+          <SpreadsheetEditor
+            key={editing ? 'edit' : 'view'}
+            ref={setXlsxHandle}
+            bytes={content}
+            fileName={fileName}
+            readOnly={!editing}
+            showToolbar={editing}
+            showFormulaBar={editing}
+            onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
+            onWorkbookChange={() => scheduleXlsxRefresh()}
+          />
           </Suspense>
         </div>
         {showComments && (
           <div className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
-            <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0">
-              코멘트 ({comments.length})
+            <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0 flex items-center gap-1">
+              <span className="flex-1">코멘트 ({comments.length})</span>
+              <button
+                type="button"
+                onClick={() => void refreshXlsxComments()}
+                className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                title="다시 읽기"
+              >
+                <RefreshCw className="w-3 h-3" />
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
               {comments.length === 0 && (
