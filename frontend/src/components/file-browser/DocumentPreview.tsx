@@ -700,7 +700,20 @@ function DocxViewer({ data, editing = false }: { data: ArrayBuffer; fileName?: s
   const [handle, setHandle] = useState<{ load: (b: Uint8Array) => Promise<void> } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [laidOut, setLaidOut] = useState(0)
+  const laidOutRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const relayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 편집 중 노드가 다시 그려지면 오버레이가 날아가서 다시 맞춘다.
+  const scheduleRelayout = () => {
+    if (!laidOutRef.current || !wrapRef.current) return
+    if (relayoutTimer.current) clearTimeout(relayoutTimer.current)
+    relayoutTimer.current = setTimeout(() => {
+      if (wrapRef.current) void layoutAnchoredTextBoxes(content, wrapRef.current)
+    }, 500)
+  }
+  useEffect(() => () => {
+    if (relayoutTimer.current) clearTimeout(relayoutTimer.current)
+  }, [])
 
   useEffect(() => {
     if (!handle) return
@@ -709,12 +722,14 @@ function DocxViewer({ data, editing = false }: { data: ArrayBuffer; fileName?: s
     handle
       .load(content)
       .then(() => {
-        if (editing) return
-        // 렌더가 자리 잡은 뒤 떠있는 텍스트상자를 앵커 좌표에 배치한다.
+        // 렌더가 자리 잡은 뒤 떠있는 텍스트상자를 앵커 좌표에 배치한다 (보기/편집 공통).
         timer = setTimeout(() => {
           if (cancelled || !wrapRef.current) return
           void layoutAnchoredTextBoxes(content, wrapRef.current).then((n) => {
-            if (!cancelled) setLaidOut(n)
+            if (!cancelled) {
+              setLaidOut(n)
+              laidOutRef.current = n
+            }
           })
         }, 350)
         // 코멘트가 있으면 패널을 같이 열어준다.
@@ -734,18 +749,20 @@ function DocxViewer({ data, editing = false }: { data: ArrayBuffer; fileName?: s
   useEffect(() => {
     setError(null)
     setLaidOut(0)
+    laidOutRef.current = 0
   }, [data])
 
-  // 리플로우(리사이즈·줌)되면 앵커 배치를 다시 맞춘다. 편집 모드는 제외.
+  // 리플로우(리사이즈·줌·편집 변경)되면 앵커 배치를 다시 맞춘다.
   useEffect(() => {
-    if (!laidOut || editing || !wrapRef.current) return
+    if (!laidOut || !wrapRef.current) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    const ro = new ResizeObserver(() => {
+    const relayout = () => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         if (wrapRef.current) void layoutAnchoredTextBoxes(content, wrapRef.current)
       }, 400)
-    })
+    }
+    const ro = new ResizeObserver(relayout)
     ro.observe(wrapRef.current)
     return () => {
       ro.disconnect()
@@ -771,6 +788,7 @@ function DocxViewer({ data, editing = false }: { data: ArrayBuffer; fileName?: s
             ref={setHandle}
             readOnly={!editing}
             showToolbar={editing}
+            onDocumentChange={scheduleRelayout}
             onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
           />
         </Suspense>
