@@ -138,8 +138,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       showToast.error('저장 경로가 없습니다')
       return
     }
+    // 작성자 통일을 위해 lib 기본값('You')과 맞춘다. 파일에 작성자가 1명이면 그걸 쓴다.
     const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
-    const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'Me')
+    const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
     setAdding(true)
     try {
       const target = curSlide + 1
