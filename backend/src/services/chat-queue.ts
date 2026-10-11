@@ -68,7 +68,6 @@ export function matchCompactionSlash(commandName: string): CompactionSlashName |
 }
 
 const MAX_QUEUE_LENGTH = 20
-const MAX_TEXT_LENGTH = 16_000
 const REQUEST_TIMEOUT_MS = 1_500
 // opencode는 턴이 끝나야 응답 헤더를 보낸다. SAP 분석 같은 장시간 턴(로그상 9분+)이
 // 90초에 항상 TimeoutError가 나서 sending limbo가 반복되므로 proxy long-running(600s)에 맞춘다.
@@ -189,7 +188,7 @@ export function enqueueQueuedChat(sessionID: string, text: string, directory?: s
   let trimmed: string
   let messageID: string | undefined
   if (kind === 'chat') {
-    trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
+    trimmed = text.trim()
     if (!trimmed) throw new Error('text is required for chat queue items')
   } else if (kind === 'compact') {
     if (!opts?.model?.providerID || !opts?.model?.modelID) throw new Error('model is required for compact queue items')
@@ -239,7 +238,7 @@ export function enqueueResend(
   directory?: string,
   opts?: Pick<EnqueueOptions, 'model' | 'agent' | 'reviewWanted' | 'autoApply'>,
 ): QueuedChat[] {
-  const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH)
+  const trimmed = text.trim()
   if (!trimmed) throw new Error('text is required for chat queue items')
   if (!messageID) throw new Error('messageID is required for truncate queue items')
   const queue = queues.get(sessionID) ?? []
@@ -686,7 +685,7 @@ function markHeadQueued(sessionID: string, id: string): void {
 }
 
 function normalizeQueueText(text: string): string {
-  return text.trim().slice(0, MAX_TEXT_LENGTH)
+  return text.trim()
 }
 
 /**

@@ -4,7 +4,7 @@ import { enqueueQueuedChat, enqueueResend, listQueuedChats, moveQueuedChat, remo
 import { logger } from '../utils/logger'
 
 const EnqueueChatSchema = z.object({
-  text: z.string().trim().max(16_000).optional(),
+  text: z.string().trim().optional(),
   kind: z.enum(['chat', 'truncate', 'delete', 'compact']).default('chat'),
   messageID: z.string().min(1).max(256).optional(),
   toTop: z.boolean().optional(),
@@ -30,7 +30,7 @@ const MoveChatSchema = z.object({
 })
 
 const ResendChatSchema = z.object({
-  text: z.string().trim().min(1).max(16_000),
+  text: z.string().trim().min(1),
   messageID: z.string().min(1).max(256),
   directory: z.string().min(1).max(1024).optional(),
   model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }).optional(),
