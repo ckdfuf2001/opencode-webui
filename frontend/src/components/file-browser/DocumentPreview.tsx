@@ -19,7 +19,7 @@ import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import EngineHost from './EngineHost'
 import { hasDocxComments, layoutAnchoredTextBoxes, toggleDocxComments } from './docxAnchorLayout'
-import { useOfficeSave, toggleOfficeComments } from './officeSave'
+import { useOfficeSave, toggleXlsxComments } from './officeSave'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
@@ -548,7 +548,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
                   코멘트
                 </button>
               )}
-              {kind === 'xlsx' && editing && (
+              {kind === 'xlsx' && (
                 <button
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('xlsxCommentsToggle'))}
@@ -922,10 +922,10 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [save])
-  // 상단 코멘트 버튼 (편집 모드에서만 — 리본 명령으로 코멘트를 연다).
+  // 상단 코멘트 버튼 (보기/편집 공통).
   useEffect(() => {
     const onToggle = () => {
-      if (listenRef.current) toggleOfficeComments(listenRef.current, 'xlsx-editor')
+      if (listenRef.current) toggleXlsxComments(listenRef.current)
     }
     window.addEventListener('xlsxCommentsToggle', onToggle)
     return () => window.removeEventListener('xlsxCommentsToggle', onToggle)
