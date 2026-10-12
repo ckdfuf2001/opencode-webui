@@ -28,6 +28,18 @@ function asArray<T>(v: T | T[] | undefined | null): T[] {
   return Array.isArray(v) ? v : [v]
 }
 
+/** prefix·대소문자 무시하고 자식을 찾는다 (ThreadedComments/threadedComments 등). */
+function kid(obj: unknown, ...locals: string[]): unknown {
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return undefined
+  const wants = locals.map((l) => l.toLowerCase())
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (k.startsWith('@_')) continue
+    const name = k.includes(':') ? k.slice(k.indexOf(':') + 1) : k
+    if (wants.includes(name.toLowerCase())) return v
+  }
+  return undefined
+}
+
 function collectText(node: unknown): string {
   if (typeof node === 'string') return node
   if (typeof node !== 'object' || node === null) return ''
@@ -66,6 +78,23 @@ function parseRels(doc: unknown): Rel[] {
       target: String(r['@_Target'] ?? ''),
     }),
   )
+}
+
+export async function loadXlsxSheetNames(bytes: Uint8Array): Promise<string[]> {
+  try {
+    const zip = await JSZip.loadAsync(bytes)
+    const f = zip.file('xl/workbook.xml')
+    if (!f) return []
+    const wb = parser.parse(await f.async('string')) as Record<string, unknown>
+    const sheets = asArray(
+      ((wb?.['workbook'] as Record<string, unknown> | undefined)?.['sheets'] as
+        | Record<string, unknown>
+        | undefined)?.['sheet'],
+    ) as Record<string, unknown>[]
+    return sheets.map((s) => String(s['@_name'] ?? ''))
+  } catch {
+    return []
+  }
 }
 
 export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]> {
@@ -107,12 +136,8 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
     for (const pp of personPaths) {
       if (persons.size > 0) break
       const personDoc = await readXml(pp)
-      const personList = (personDoc?.['personList'] ?? personDoc?.['x:personList']) as
-        | Record<string, unknown>
-        | undefined
-      for (const p of asArray(
-        personList?.['person'] ?? personList?.['x:person'],
-      ) as Record<string, unknown>[]) {
+      const personList = kid(personDoc, 'personList') as Record<string, unknown> | undefined
+      for (const p of asArray(kid(personList, 'person')) as Record<string, unknown>[]) {
         const id = String(p['@_id'] ?? p['@_personId'] ?? '')
         const name = String(p['@_displayName'] ?? '')
         if (id) persons.set(id, name || 'Unknown')
@@ -136,12 +161,8 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
       const tcRel = rels.find((r) => r.type.endsWith('/threadedComment'))
       if (tcRel) {
         const tcDoc = await readXml(joinTarget(dir, tcRel.target))
-        const list = (tcDoc?.['threadedComments'] ?? tcDoc?.['x:threadedComments']) as
-          | Record<string, unknown>
-          | undefined
-        const items = asArray(
-          list?.['threadedComment'] ?? list?.['x:threadedComment'],
-        ) as Record<string, unknown>[]
+        const list = kid(tcDoc, 'threadedComments') as Record<string, unknown> | undefined
+        const items = asArray(kid(list, 'threadedComment')) as Record<string, unknown>[]
         const byId = new Map<string, number>()
         items.forEach((tc, idx) => {
           const id = String(tc['@_id'] ?? '')
@@ -162,7 +183,7 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
         })
         const toReply = (tc: Record<string, unknown>): XlsxCommentReply => ({
           author: persons.get(String(tc['@_personId'] ?? '')) ?? 'Unknown',
-          text: norm(collectText(tc['text'] ?? tc['x:text'])),
+          text: norm(collectText(kid(tc, 'text'))),
         })
         for (const tc of roots) {
           out.push({
@@ -170,7 +191,7 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
             sheetIndex: si,
             ref: String(tc['@_ref'] ?? ''),
             author: persons.get(String(tc['@_personId'] ?? '')) ?? 'Unknown',
-            text: norm(collectText(tc['text'] ?? tc['x:text'])),
+            text: norm(collectText(kid(tc, 'text'))),
             replies: (children.get(items.indexOf(tc)) ?? []).map(toReply),
             resolved: String(tc['@_done'] ?? '') === '1',
           })
@@ -186,15 +207,12 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
           out.filter((c) => c.sheetIndex === si).map((c) => c.ref.toUpperCase()),
         )
         const legDoc = await readXml(joinTarget(dir, legRel.target))
-        const cm = (legDoc?.['comments'] ?? legDoc?.['x:comments']) as
-          | Record<string, unknown>
-          | undefined
-        const authors = asArray(cm?.['authors']).flatMap((a) =>
-          asArray((a as Record<string, unknown>)?.['author'] ?? (a as Record<string, unknown>)?.['x:author']),
+        const cm = kid(legDoc, 'comments') as Record<string, unknown> | undefined
+        const authors = asArray(kid(cm, 'authors')).flatMap((a) =>
+          asArray(kid(a, 'author')),
         ).map((a) => (typeof a === 'string' ? a : norm(collectText(a))))
         const list = asArray(
-          (cm?.['commentList'] as Record<string, unknown> | undefined)?.['comment'] ??
-            (cm?.['commentList'] as Record<string, unknown> | undefined)?.['x:comment'],
+          kid(kid(cm, 'commentList'), 'comment'),
         ) as Record<string, unknown>[]
         for (const c of list) {
           const ai = Number(c['@_authorId'] ?? 0)
@@ -205,7 +223,7 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
             sheetIndex: si,
             ref,
             author: authors[ai] ?? 'Unknown',
-            text: norm(collectText(c['text'] ?? c['x:text'])),
+            text: norm(collectText(kid(c, 'text'))),
             replies: [],
             resolved: false,
           })

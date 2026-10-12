@@ -60,8 +60,10 @@ import { Button } from '@/components/ui/button'
 import EngineHost from './EngineHost'
 import { hasDocxComments, layoutAnchoredTextBoxes, toggleDocxComments } from './docxAnchorLayout'
 import { sanitizeDocxForEdit } from './docxEditSanitize'
-import { useOfficeSave } from './officeSave'
-import { loadXlsxComments, type XlsxComment } from './xlsxComments'
+import { useOfficeSave, saveOfficeBytes } from './officeSave'
+import { showToast } from '@/lib/toast'
+import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
+import { addXlsxComment } from './xlsxCommentWriter'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
@@ -995,11 +997,67 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     saveBytes?: (format?: 'xlsx' | 'csv') => Promise<Uint8Array>
     select?: (ref: string) => void
     setActiveSheet?: (index: number) => void
+    getSelection?: () => string
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
   const { save } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
   const [comments, setComments] = useState<XlsxComment[]>([])
   const [showComments, setShowComments] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [author, setAuthor] = useState(() => {
+    try {
+      return localStorage.getItem('xlsx-comment-author') ?? ''
+    } catch {
+      return ''
+    }
+  })
+  const [draft, setDraft] = useState('')
+  const [adding, setAdding] = useState(false)
+  const addComment = async () => {
+    const text = draft.trim()
+    if (!text || adding) return
+    let ref = ''
+    try {
+      ref = xlsxHandle?.getSelection?.() ?? ''
+    } catch {
+      ref = ''
+    }
+    if (!ref.trim()) {
+      showToast.info('셀을 먼저 선택하세요')
+      return
+    }
+    setAdding(true)
+    try {
+      const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
+      const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+      // 선택 문자열에 시트명이 있으면 해당 시트, 없으면 0번 시트.
+      let sheetIndex = 0
+      const m = ref.match(/^'((?:[^']|'')+)'!|^([^!]+)!/)
+      const sheetName = (m?.[1] ?? m?.[2] ?? '').replace(/''/g, "'")
+      if (sheetName) {
+        const names = await loadXlsxSheetNames(content)
+        const found = names.findIndex((n) => n === sheetName)
+        if (found >= 0) sheetIndex = found
+      }
+      const next = await addXlsxComment(content, { sheetIndex, ref, authorName: name, text })
+      await saveOfficeBytes(path, fileName ?? 'workbook.xlsx', new Blob([next as unknown as BlobPart]))
+      setDraft('')
+      try {
+        localStorage.setItem('xlsx-comment-author', name)
+      } catch {
+        /* 무시 */
+      }
+      const cs = await loadXlsxComments(next)
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+      setReloadKey((v) => v + 1)
+      showToast.success('코멘트 저장했습니다')
+    } catch (e) {
+      showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
+    } finally {
+      setAdding(false)
+    }
+  }
   const xlsxRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // lib에서 바뀌면(편집·코멘트) 목록도 다시 읽는다 (저장 전에도 보인다).
   const refreshXlsxComments = useCallback(async () => {
@@ -1094,7 +1152,7 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
           <SpreadsheetEditor
-            key={editing ? 'edit' : 'view'}
+            key={editing ? `edit-${reloadKey}` : `view-${reloadKey}`}
             ref={setXlsxHandle}
             bytes={content}
             fileName={fileName}
@@ -1107,7 +1165,7 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
           </Suspense>
         </div>
         {showComments && (
-          <div className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
+          <div data-xlsx-comments className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
             <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0 flex items-center gap-1">
               <span className="flex-1">코멘트 ({comments.length})</span>
               <button
@@ -1119,6 +1177,31 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
                 <RefreshCw className="w-3 h-3" />
               </button>
             </div>
+            {!editing && (
+              <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">
+                <input
+                  value={author}
+                  onChange={(e) => setAuthor(e.target.value)}
+                  placeholder="이름"
+                  className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none"
+                />
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder="코멘트 입력 (선택한 셀)"
+                  rows={2}
+                  className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                />
+                <Button
+                  size="sm"
+                  className="w-full h-7 text-xs"
+                  disabled={!draft.trim() || adding}
+                  onClick={() => void addComment()}
+                >
+                  {adding ? '저장 중…' : '코멘트 저장'}
+                </Button>
+              </div>
+            )}
             <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
               {comments.length === 0 && (
                 <p className="text-xs text-muted-foreground px-1">코멘트 없음</p>
