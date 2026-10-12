@@ -58,8 +58,10 @@ import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
 import EngineHost from './EngineHost'
-import { hasDocxComments, layoutAnchoredTextBoxes, toggleDocxComments } from './docxAnchorLayout'
+import { layoutAnchoredTextBoxes } from './docxAnchorLayout'
 import { sanitizeDocxForEdit } from './docxEditSanitize'
+import { loadDocxComments, type DocxComment } from './docxComments'
+import { addDocxComment, replyDocxComment, setDocxCommentDone, editDocxComment, deleteDocxComment } from './docxCommentWriter'
 import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
@@ -812,7 +814,9 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
 }
 
 function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
-  const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
+  const content = savedBytes ?? baseContent
   const [handle, setHandle] = useState<{
     load: (b: Uint8Array) => Promise<void>
     save: () => Promise<Blob>
@@ -824,6 +828,128 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const wrapRef = useRef<HTMLDivElement>(null)
   const relayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { save } = useOfficeSave(path, fileName ?? 'document.docx', handle)
+  const [comments, setComments] = useState<DocxComment[]>([])
+  const [showComments, setShowComments] = useState(false)
+  const [author, setAuthor] = useState(() => {
+    try {
+      return localStorage.getItem('docx-comment-author') ?? ''
+    } catch {
+      return ''
+    }
+  })
+  const [draft, setDraft] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [replyTo, setReplyTo] = useState<string | null>(null)
+  const [replyDraft, setReplyDraft] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [deleteArm, setDeleteArm] = useState<string | null>(null)
+  useEffect(() => {
+    setSavedBytes(null)
+  }, [data])
+  // 파일 op 한 번: 편집 중이면 뷰어 모델을 먼저 파일에 굳히고(편집을 날리지 않기 위해),
+  // op 적용 → 저장 → 패널 새로고침 순서로 처리한다 (뷰어는 content 변경으로 리로드).
+  const mutateDocxComments = async (
+    op: (base: Uint8Array) => Promise<Uint8Array>,
+  ): Promise<boolean> => {
+    try {
+      let base = content
+      if (editing) {
+        if (!handle?.save) return false
+        const blob: Blob = await handle.save()
+        const cur = new Uint8Array(await blob.arrayBuffer())
+        await saveOfficeBytes(path, fileName ?? 'document.docx', new Blob([cur as unknown as BlobPart]))
+        base = cur
+      }
+      const next = await op(base)
+      await saveOfficeBytes(path, fileName ?? 'document.docx', new Blob([next as unknown as BlobPart]))
+      setSavedBytes(next)
+      const cs = await loadDocxComments(next)
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+      return true
+    } catch (e) {
+      showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
+      return false
+    }
+  }
+  const commentAuthorName = () => {
+    const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
+    return author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+  }
+  const addComment = async () => {
+    const text = draft.trim()
+    if (!text || adding) return
+    setAdding(true)
+    try {
+      const name = commentAuthorName()
+      const ok = await mutateDocxComments((base) =>
+        addDocxComment(base, { authorName: name, text }),
+      )
+      if (!ok) return
+      setDraft('')
+      try {
+        localStorage.setItem('docx-comment-author', name)
+      } catch {
+        /* 무시 */
+      }
+      showToast.success('코멘트 저장했습니다')
+    } finally {
+      setAdding(false)
+    }
+  }
+  const sendReply = async (c: DocxComment) => {
+    const text = replyDraft.trim()
+    if (!text || busyId || !c.cid) return
+    setBusyId(`reply:${c.cid}`)
+    try {
+      const ok = await mutateDocxComments((base) =>
+        replyDocxComment(base, { parentCid: c.cid, authorName: commentAuthorName(), text }),
+      )
+      if (ok) {
+        setReplyTo(null)
+        setReplyDraft('')
+        showToast.success('답글 저장했습니다')
+      }
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const toggleResolve = async (c: DocxComment) => {
+    if (busyId || !c.cid) return
+    setBusyId(`resolve:${c.cid}`)
+    try {
+      await mutateDocxComments((base) => setDocxCommentDone(base, { cid: c.cid, done: !c.resolved }))
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const saveEdit = async (c: { cid: string }) => {
+    const text = editDraft.trim()
+    if (!text || busyId) return
+    setBusyId(`edit:${c.cid}`)
+    try {
+      await mutateDocxComments((base) => editDocxComment(base, { cid: c.cid, text }))
+      setEditingId(null)
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const doDelete = async (c: { cid: string }) => {
+    if (busyId || !c.cid) return
+    if (deleteArm !== c.cid) {
+      setDeleteArm(c.cid)
+      return
+    }
+    setDeleteArm(null)
+    setBusyId(`delete:${c.cid}`)
+    try {
+      await mutateDocxComments((base) => deleteDocxComment(base, c.cid))
+    } finally {
+      setBusyId(null)
+    }
+  }
   // 편집 중 노드가 다시 그려지면 오버레이가 날아가서 다시 맞춘다.
   const scheduleRelayout = () => {
     if (!laidOutRef.current || !wrapRef.current) return
@@ -867,9 +993,11 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
             }
           })
         }, 350)
-        // 코멘트가 있으면 패널을 같이 열어준다.
-        void hasDocxComments(content).then((has) => {
-          if (!cancelled && has && wrapRef.current) toggleDocxComments(wrapRef.current)
+        // 코멘트가 있으면 목록 패널을 같이 열어준다.
+        void loadDocxComments(content).then((cs) => {
+          if (cancelled) return
+          setComments(cs)
+          if (cs.length > 0) setShowComments(true)
         })
       })
       .catch((e) => {
@@ -905,10 +1033,25 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     }
   }, [laidOut, content, editing])
 
-  // 상단 코멘트 버튼에서 날아오는 토글 요청.
+  // 코멘트가 있으면 목록 패널을 같이 열어준다 (보기/편집 공통).
+  useEffect(() => {
+    let dead = false
+    setComments([])
+    setShowComments(false)
+    void loadDocxComments(content).then((cs) => {
+      if (dead) return
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+    })
+    return () => {
+      dead = true
+    }
+  }, [content])
+
+  // 상단 코멘트 버튼: 우측 목록 패널을 여닫는다.
   useEffect(() => {
     const onToggle = () => {
-      if (wrapRef.current) toggleDocxComments(wrapRef.current)
+      setShowComments((v) => !v)
     }
     window.addEventListener('docxCommentsToggle', onToggle)
     return () => window.removeEventListener('docxCommentsToggle', onToggle)
@@ -937,18 +1080,234 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   }, [save])
 
   if (error) return <ErrorNote msg={error} />
+  const refreshDocxComments = useCallback(async () => {
+    try {
+      const cs = await loadDocxComments(content)
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+    } catch {
+      /* 무시 */
+    }
+  }, [content])
   return (
     <EngineHost className="docxengine-host h-full min-h-[480px]">
-      <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="h-full min-h-0">
-        <Suspense fallback={SPINNER}>
-          <WordEditor
-            ref={setHandle}
-            readOnly={!editing}
-            showToolbar={editing}
-            onDocumentChange={scheduleRelayout}
-            onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
-          />
-        </Suspense>
+      <div className="flex h-full min-h-0">
+        <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
+          <Suspense fallback={SPINNER}>
+            <WordEditor
+              ref={setHandle}
+              readOnly={!editing}
+              showToolbar={editing}
+              onDocumentChange={scheduleRelayout}
+              onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
+            />
+          </Suspense>
+        </div>
+        {showComments && (
+          <div data-docx-comments className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
+            <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0 flex items-center gap-1">
+              <span className="flex-1">코멘트 ({comments.length})</span>
+              <button
+                type="button"
+                onClick={() => void refreshDocxComments()}
+                className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                title="다시 읽기"
+              >
+                <RefreshCw className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">
+              <input
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+                placeholder="이름"
+                className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none"
+              />
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="코멘트 입력 (문서 앞부분)"
+                rows={2}
+                className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+              />
+              <Button
+                size="sm"
+                className="w-full h-7 text-xs"
+                disabled={!draft.trim() || adding}
+                onClick={() => void addComment()}
+              >
+                {adding ? '저장 중…' : '코멘트 저장'}
+              </Button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
+              {comments.length === 0 && (
+                <p className="text-xs text-muted-foreground px-1">코멘트 없음</p>
+              )}
+              {comments.map((c, i) => (
+                <div
+                  key={`${c.cid || i}`}
+                  className="rounded-md border border-border/60 p-2"
+                >
+                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <span className="truncate flex-1">{c.anchor || '문서 앞부분'}</span>
+                    {c.resolved && <span className="shrink-0">· 해결됨</span>}
+                  </div>
+                  <div className="text-xs font-medium mt-0.5">{c.author}</div>
+                  {editingId === c.cid ? (
+                    <div className="mt-0.5" onClick={(e) => e.stopPropagation()}>
+                      <textarea
+                        value={editDraft}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        rows={2}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                      />
+                    </div>
+                  ) : (
+                    <div className="text-xs whitespace-pre-wrap break-words mt-0.5">{c.text}</div>
+                  )}
+                  {c.replies.map((r, j) => (
+                    <div key={j} className="mt-1.5 pl-2 border-l-2 border-border">
+                      <div className="text-xs font-medium">{r.author}</div>
+                      {editingId === r.cid ? (
+                        <textarea
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          rows={2}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none mt-0.5"
+                        />
+                      ) : (
+                        <div className="text-xs whitespace-pre-wrap break-words">{r.text}</div>
+                      )}
+                      {r.cid && (
+                        <div className="flex items-center gap-0.5 mt-1">
+                          <XlsxIconBtn
+                            title="수정"
+                            onClick={() => {
+                              setEditingId(r.cid)
+                              setEditDraft(r.text)
+                              setReplyTo(null)
+                              setDeleteArm(null)
+                            }}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </XlsxIconBtn>
+                          <XlsxIconBtn
+                            title={deleteArm === r.cid ? '확인: 삭제' : '삭제'}
+                            danger={deleteArm === r.cid}
+                            onClick={() => void doDelete({ cid: r.cid })}
+                          >
+                            {deleteArm === r.cid ? <Check className="w-3 h-3" /> : <Trash2 className="w-3 h-3" />}
+                          </XlsxIconBtn>
+                          {editingId === r.cid && (
+                            <>
+                              <XlsxIconBtn title="저장" onClick={() => void saveEdit({ cid: r.cid })}>
+                                <Check className="w-3 h-3" />
+                              </XlsxIconBtn>
+                              <XlsxIconBtn title="취소" onClick={() => setEditingId(null)}>
+                                <X className="w-3 h-3" />
+                              </XlsxIconBtn>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {replyTo === c.cid && c.cid && (
+                    <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
+                      <textarea
+                        value={replyDraft}
+                        onChange={(e) => setReplyDraft(e.target.value)}
+                        placeholder="답글 입력"
+                        rows={2}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                      />
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          className="h-6 text-[11px] flex-1"
+                          disabled={!replyDraft.trim() || !!busyId}
+                          onClick={() => void sendReply(c)}
+                        >
+                          답글 저장
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 text-[11px]"
+                          onClick={() => {
+                            setReplyTo(null)
+                            setReplyDraft('')
+                          }}
+                        >
+                          취소
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {editingId === c.cid && c.cid && (
+                    <div className="flex items-center gap-1 mt-1.5" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        size="sm"
+                        className="h-6 text-[11px] flex-1"
+                        disabled={!editDraft.trim() || !!busyId}
+                        onClick={() => void saveEdit(c)}
+                      >
+                        저장
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[11px]"
+                        onClick={() => setEditingId(null)}
+                      >
+                        취소
+                      </Button>
+                    </div>
+                  )}
+                  {c.cid && (
+                    <div className="flex items-center gap-0.5 mt-1.5">
+                      <XlsxIconBtn
+                        title="답글"
+                        onClick={() => {
+                          setReplyTo(replyTo === c.cid ? null : c.cid)
+                          setReplyDraft('')
+                          setEditingId(null)
+                          setDeleteArm(null)
+                        }}
+                      >
+                        <Reply className="w-3 h-3" />
+                      </XlsxIconBtn>
+                      <XlsxIconBtn
+                        title="수정"
+                        onClick={() => {
+                          setEditingId(c.cid)
+                          setEditDraft(c.text)
+                          setReplyTo(null)
+                          setDeleteArm(null)
+                        }}
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </XlsxIconBtn>
+                      <XlsxIconBtn
+                        title={c.resolved ? '미해결로' : '해결됨으로'}
+                        onClick={() => void toggleResolve(c)}
+                      >
+                        {c.resolved ? <RotateCcw className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                      </XlsxIconBtn>
+                      <XlsxIconBtn
+                        title={deleteArm === c.cid ? '확인: 삭제' : '삭제'}
+                        danger={deleteArm === c.cid}
+                        onClick={() => void doDelete(c)}
+                      >
+                        {deleteArm === c.cid ? <Check className="w-3 h-3" /> : <Trash2 className="w-3 h-3" />}
+                      </XlsxIconBtn>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </EngineHost>
   )
