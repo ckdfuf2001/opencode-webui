@@ -91,6 +91,11 @@ function elLocal(el: Element): string {
   return n.includes(':') ? n.slice(n.indexOf(':') + 1) : n
 }
 
+/** DOM 직렬화 (파싱 때 딸려온 xml 선언이 있으면 제거 — 중복 선언 방지). */
+function serializeXmlBody(doc: XMLDocument): string {
+  return new XMLSerializer().serializeToString(doc).replace(/^<\?xml[^?]*\?>\s*/, '')
+}
+
 /** threaded 파트를 전부 돌며 mutate — 하나라도 건드렸으면 새 바이트. */
 async function mutateThreadedParts(
   bytes: Uint8Array,
@@ -114,7 +119,7 @@ async function mutateThreadedParts(
         zip.file(
           name,
           '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-            new XMLSerializer().serializeToString(doc),
+            serializeXmlBody(doc),
         )
         touched = true
       }
@@ -246,7 +251,7 @@ export async function replyXlsxComment(
       zip.file(
         name,
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-          new XMLSerializer().serializeToString(doc),
+          serializeXmlBody(doc),
       )
       parentRef = parentRef ?? ''
       break
@@ -328,7 +333,7 @@ export async function deleteXlsxComment(bytes: Uint8Array, tid: string): Promise
         zip.file(
           name,
           '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-            new XMLSerializer().serializeToString(doc),
+            serializeXmlBody(doc),
         )
       }
     }
@@ -382,7 +387,7 @@ export async function deleteXlsxComment(bytes: Uint8Array, tid: string): Promise
       zip.file(
         name,
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-          new XMLSerializer().serializeToString(doc),
+          serializeXmlBody(doc),
       )
     }
   }
@@ -440,7 +445,7 @@ export async function deleteXlsxComment(bytes: Uint8Array, tid: string): Promise
       zip.file(
         name,
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-          new XMLSerializer().serializeToString(doc),
+          serializeXmlBody(doc),
       )
     }
   }

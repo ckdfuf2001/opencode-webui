@@ -1,5 +1,5 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
-import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw } from 'lucide-react'
+import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { lazyWithRetry } from './lazyRetry'
 
 const loadSpreadsheetEditor = () =>
@@ -63,7 +63,7 @@ import { sanitizeDocxForEdit } from './docxEditSanitize'
 import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
-import { addXlsxComment } from './xlsxCommentWriter'
+import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
 
 type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
 
@@ -988,9 +988,39 @@ function OfficeVisioViewer({ data }: { data: ArrayBuffer; fileName?: string }) {
   )
 }
 
+function XlsxIconBtn({
+  title,
+  danger,
+  onClick,
+  children,
+}: {
+  title: string
+  danger?: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      className={`inline-flex items-center justify-center h-6 w-6 rounded hover:bg-muted ${
+        danger ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
 function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
   const [error, setError] = useState<string | null>(null)
-  const content = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
+  const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
+  const content = savedBytes ?? baseContent
   const [xlsxHandle, setXlsxHandle] = useState<{
     save: () => Promise<Blob>
     markClean: () => void
@@ -1013,6 +1043,42 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   })
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
+  const [replyTo, setReplyTo] = useState<string | null>(null)
+  const [replyDraft, setReplyDraft] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [deleteArm, setDeleteArm] = useState<string | null>(null)
+  useEffect(() => {
+    setSavedBytes(null)
+  }, [data])
+  // 파일 op 한 번: 편집 중이면 뷰어 모델을 먼저 파일에 굳히고(편집을 날리지 않기 위해),
+  // op 적용 → 저장 → 패널 새로고침 → 뷰어 리마운트 순서로 처리한다.
+  const mutateXlsxComments = async (
+    op: (base: Uint8Array) => Promise<Uint8Array>,
+  ): Promise<boolean> => {
+    try {
+      let base = content
+      if (editing) {
+        if (!xlsxHandle?.save) return false
+        const blob: Blob = await xlsxHandle.save()
+        const cur = new Uint8Array(await blob.arrayBuffer())
+        await saveOfficeBytes(path, fileName ?? 'workbook.xlsx', new Blob([cur as unknown as BlobPart]))
+        base = cur
+      }
+      const next = await op(base)
+      await saveOfficeBytes(path, fileName ?? 'workbook.xlsx', new Blob([next as unknown as BlobPart]))
+      setSavedBytes(next)
+      const cs = await loadXlsxComments(next)
+      setComments(cs)
+      if (cs.length > 0) setShowComments(true)
+      setReloadKey((v) => v + 1)
+      return true
+    } catch (e) {
+      showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
+      return false
+    }
+  };
   const addComment = async () => {
     const text = draft.trim()
     if (!text || adding) return
@@ -1039,23 +1105,72 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
         const found = names.findIndex((n) => n === sheetName)
         if (found >= 0) sheetIndex = found
       }
-      const next = await addXlsxComment(content, { sheetIndex, ref, authorName: name, text })
-      await saveOfficeBytes(path, fileName ?? 'workbook.xlsx', new Blob([next as unknown as BlobPart]))
+      const ok = await mutateXlsxComments((base) =>
+        addXlsxComment(base, { sheetIndex, ref, authorName: name, text }),
+      )
+      if (!ok) return
       setDraft('')
       try {
         localStorage.setItem('xlsx-comment-author', name)
       } catch {
         /* 무시 */
       }
-      const cs = await loadXlsxComments(next)
-      setComments(cs)
-      if (cs.length > 0) setShowComments(true)
-      setReloadKey((v) => v + 1)
       showToast.success('코멘트 저장했습니다')
-    } catch (e) {
-      showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
     } finally {
       setAdding(false)
+    }
+  }
+  const sendReply = async (c: XlsxComment) => {
+    const text = replyDraft.trim()
+    if (!text || busyId || !c.tid) return
+    setBusyId(`reply:${c.tid}`)
+    try {
+      const existingAuthors = [...new Set(comments.map((x) => x.author).filter((a) => a && a !== 'Unknown'))]
+      const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+      const ok = await mutateXlsxComments((base) =>
+        replyXlsxComment(base, { parentTid: c.tid, authorName: name, text }),
+      )
+      if (ok) {
+        setReplyTo(null)
+        setReplyDraft('')
+        showToast.success('답글 저장했습니다')
+      }
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const toggleResolve = async (c: XlsxComment) => {
+    if (busyId || !c.tid) return
+    setBusyId(`resolve:${c.tid}`)
+    try {
+      await mutateXlsxComments((base) => setXlsxCommentDone(base, { tid: c.tid, done: !c.resolved }))
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const saveEdit = async (c: { tid: string }) => {
+    const text = editDraft.trim()
+    if (!text || busyId) return
+    setBusyId(`edit:${c.tid}`)
+    try {
+      await mutateXlsxComments((base) => editXlsxComment(base, { tid: c.tid, text }))
+      setEditingId(null)
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const doDelete = async (c: { tid: string }) => {
+    if (busyId || !c.tid) return
+    if (deleteArm !== c.tid) {
+      setDeleteArm(c.tid)
+      return
+    }
+    setDeleteArm(null)
+    setBusyId(`delete:${c.tid}`)
+    try {
+      await mutateXlsxComments((base) => deleteXlsxComment(base, c.tid))
+    } finally {
+      setBusyId(null)
     }
   }
   const xlsxRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1177,57 +1292,202 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
                 <RefreshCw className="w-3 h-3" />
               </button>
             </div>
-            {!editing && (
-              <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">
-                <input
-                  value={author}
-                  onChange={(e) => setAuthor(e.target.value)}
-                  placeholder="이름"
-                  className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none"
-                />
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder="코멘트 입력 (선택한 셀)"
-                  rows={2}
-                  className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
-                />
-                <Button
-                  size="sm"
-                  className="w-full h-7 text-xs"
-                  disabled={!draft.trim() || adding}
-                  onClick={() => void addComment()}
-                >
-                  {adding ? '저장 중…' : '코멘트 저장'}
-                </Button>
-              </div>
-            )}
+            <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">
+              <input
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+                placeholder="이름"
+                className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none"
+              />
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="코멘트 입력 (선택한 셀)"
+                rows={2}
+                className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+              />
+              <Button
+                size="sm"
+                className="w-full h-7 text-xs"
+                disabled={!draft.trim() || adding}
+                onClick={() => void addComment()}
+              >
+                {adding ? '저장 중…' : '코멘트 저장'}
+              </Button>
+            </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
               {comments.length === 0 && (
                 <p className="text-xs text-muted-foreground px-1">코멘트 없음</p>
               )}
               {comments.map((c, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => openComment(c)}
-                  className="w-full text-left rounded-md border border-border/60 p-2 hover:bg-muted/60 transition-colors"
-                  title={`${c.sheet}!${c.ref}로 이동`}
+                <div
+                  key={`${c.tid || c.ref || i}`}
+                  className="rounded-md border border-border/60 p-2"
                 >
-                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <span className="truncate">{c.sheet}</span>
-                    <span className="shrink-0 font-mono">{c.ref}</span>
-                    {c.resolved && <span className="shrink-0">· 해결됨</span>}
-                  </div>
-                  <div className="text-xs font-medium mt-0.5">{c.author}</div>
-                  <div className="text-xs whitespace-pre-wrap break-words mt-0.5">{c.text}</div>
+                  <button
+                    type="button"
+                    onClick={() => openComment(c)}
+                    className="w-full text-left"
+                    title={`${c.sheet}!${c.ref}로 이동`}
+                  >
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <span className="truncate">{c.sheet}</span>
+                      <span className="shrink-0 font-mono">{c.ref}</span>
+                      {c.resolved && <span className="shrink-0">· 해결됨</span>}
+                    </div>
+                    <div className="text-xs font-medium mt-0.5">{c.author}</div>
+                    {editingId === (c.tid || `legacy:${i}`) ? (
+                      <span className="block mt-0.5" onClick={(e) => e.stopPropagation()}>
+                        <textarea
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          rows={2}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                        />
+                      </span>
+                    ) : (
+                      <div className="text-xs whitespace-pre-wrap break-words mt-0.5">{c.text}</div>
+                    )}
+                  </button>
                   {c.replies.map((r, j) => (
                     <div key={j} className="mt-1.5 pl-2 border-l-2 border-border">
                       <div className="text-xs font-medium">{r.author}</div>
-                      <div className="text-xs whitespace-pre-wrap break-words">{r.text}</div>
+                      {editingId === r.tid ? (
+                        <textarea
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          rows={2}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none mt-0.5"
+                        />
+                      ) : (
+                        <div className="text-xs whitespace-pre-wrap break-words">{r.text}</div>
+                      )}
+                      {r.tid && (
+                        <div className="flex items-center gap-0.5 mt-1">
+                          <XlsxIconBtn
+                            title="수정"
+                            onClick={() => {
+                              setEditingId(r.tid)
+                              setEditDraft(r.text)
+                              setReplyTo(null)
+                              setDeleteArm(null)
+                            }}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </XlsxIconBtn>
+                          <XlsxIconBtn
+                            title={deleteArm === r.tid ? '확인: 삭제' : '삭제'}
+                            danger={deleteArm === r.tid}
+                            onClick={() => void doDelete({ tid: r.tid })}
+                          >
+                            {deleteArm === r.tid ? <Check className="w-3 h-3" /> : <Trash2 className="w-3 h-3" />}
+                          </XlsxIconBtn>
+                          {editingId === r.tid && (
+                            <>
+                              <XlsxIconBtn title="저장" onClick={() => void saveEdit({ tid: r.tid })}>
+                                <Check className="w-3 h-3" />
+                              </XlsxIconBtn>
+                              <XlsxIconBtn title="취소" onClick={() => setEditingId(null)}>
+                                <X className="w-3 h-3" />
+                              </XlsxIconBtn>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
-                </button>
+                  {replyTo === c.tid && c.tid && (
+                    <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
+                      <textarea
+                        value={replyDraft}
+                        onChange={(e) => setReplyDraft(e.target.value)}
+                        placeholder="답글 입력"
+                        rows={2}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                      />
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          className="h-6 text-[11px] flex-1"
+                          disabled={!replyDraft.trim() || !!busyId}
+                          onClick={() => void sendReply(c)}
+                        >
+                          답글 저장
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 text-[11px]"
+                          onClick={() => {
+                            setReplyTo(null)
+                            setReplyDraft('')
+                          }}
+                        >
+                          취소
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {editingId === (c.tid || `legacy:${i}`) && c.tid && (
+                    <div className="flex items-center gap-1 mt-1.5" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        size="sm"
+                        className="h-6 text-[11px] flex-1"
+                        disabled={!editDraft.trim() || !!busyId}
+                        onClick={() => void saveEdit(c)}
+                      >
+                        저장
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[11px]"
+                        onClick={() => setEditingId(null)}
+                      >
+                        취소
+                      </Button>
+                    </div>
+                  )}
+                  {c.tid && (
+                    <div className="flex items-center gap-0.5 mt-1.5">
+                      <XlsxIconBtn
+                        title="답글"
+                        onClick={() => {
+                          setReplyTo(replyTo === c.tid ? null : c.tid)
+                          setReplyDraft('')
+                          setEditingId(null)
+                          setDeleteArm(null)
+                        }}
+                      >
+                        <Reply className="w-3 h-3" />
+                      </XlsxIconBtn>
+                      <XlsxIconBtn
+                        title="수정"
+                        onClick={() => {
+                          setEditingId(c.tid)
+                          setEditDraft(c.text)
+                          setReplyTo(null)
+                          setDeleteArm(null)
+                        }}
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </XlsxIconBtn>
+                      <XlsxIconBtn
+                        title={c.resolved ? '미해결로' : '해결됨으로'}
+                        onClick={() => void toggleResolve(c)}
+                      >
+                        {c.resolved ? <RotateCcw className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                      </XlsxIconBtn>
+                      <XlsxIconBtn
+                        title={deleteArm === c.tid ? '확인: 삭제' : '삭제'}
+                        danger={deleteArm === c.tid}
+                        onClick={() => void doDelete(c)}
+                      >
+                        {deleteArm === c.tid ? <Check className="w-3 h-3" /> : <Trash2 className="w-3 h-3" />}
+                      </XlsxIconBtn>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </div>
