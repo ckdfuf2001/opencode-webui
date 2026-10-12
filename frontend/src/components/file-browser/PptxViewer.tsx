@@ -204,36 +204,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setUnlocking(false)
     }
   }
-  const wrapRef = useRef<HTMLDivElement>(null)
-  // 미리보기 썸네일 확대: 라이브러리는 썸네일을 고정 px로 그려서(aside만 늘어나고
-  // 썸네일은 그대로) 창 크기에 맞춰 aside에 zoom을 건다. 라이브러리는 zoom을
-  // 건드리지 않아 충돌이 없다. 편집 모드는 네이티브(드래그) 그대로 쓴다.
-  useEffect(() => {
-    if (editing) return
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const applyZoom = () => {
-      const aside = wrap.querySelector('aside')
-      if (!(aside instanceof HTMLElement)) return
-      const ours = wrap.querySelector('[data-pptx-comments]') as HTMLElement | null
-      const oursW = ours ? ours.getBoundingClientRect().width : 0
-      const fillW = wrap.clientWidth - oursW - 16
-      const z = Math.min(2.5, Math.max(1, fillW / 180))
-      const cur = Number((aside.style as CSSStyleDeclaration & { zoom?: string }).zoom) || 1
-      if (Math.abs(cur - z) > 0.03) aside.style.zoom = String(Math.round(z * 100) / 100)
-    }
-    applyZoom()
-    const ro = new ResizeObserver(applyZoom)
-    ro.observe(wrap)
-    const mo = new MutationObserver(() => {
-      if (wrap.querySelector('aside')) applyZoom()
-    })
-    mo.observe(wrap, { childList: true, subtree: true })
-    return () => {
-      ro.disconnect()
-      mo.disconnect()
-    }
-  }, [editing, data, showComments])
   if (!unlocked && isEncryptedOle(content)) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center px-6 gap-3">
@@ -255,7 +225,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     )
   }
   return (
-    <div ref={wrapRef} className={`h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}>
+    <div className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}>
       <div className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <PptxViewerBoundary onFail={onFail}>
@@ -277,7 +247,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           </PptxViewerBoundary>
         </div>
         {showComments && (
-          <div data-pptx-comments className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
+          <div data-pptx-comments className="absolute right-2 top-2 bottom-2 w-72 z-30 border border-border bg-background flex flex-col rounded-lg shadow-xl">
             <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0 flex items-center gap-1">
               <span className="flex-1">코멘트 ({comments.length})</span>
               <button

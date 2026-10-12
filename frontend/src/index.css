@@ -312,30 +312,12 @@ body {
   min-height: 480px;
 }
 
-.pptx-preview-compact main {
-  display: none;
-}
-
-/* compact에서는 스테이지 뒤 패널 스플리터가 썸네일 스플리터와 겹친다.
-   패널 쪽을 숨겨 드래그바가 왼쪽(썸네일)만 조절하게 한다. */
 .pptx-preview-compact main + [role='separator'] {
   display: none;
 }
 
-/* 미리보기에서는 라이브러리 속성 패널을 숨긴다 — 썸네일 크게 + 우리 코멘트 패널. */
+/* 미리보기에서는 라이브러리 속성 패널을 숨긴다 — 썸네일+본문만, 코멘트는 오버레이. */
 .pptx-preview-compact [role='complementary'] {
-  display: none;
-}
-
-/* 썸네일 스트립이 남는 폭을 다 채운다 (inline width/flex를 이긴다).
-   미리보기에서는 드래그 리사이즈 대신 채우기를 우선한다. */
-.pptx-preview-compact aside {
-  flex: 1 1 auto !important;
-  width: auto !important;
-  max-width: none !important;
-  min-width: 200px;
-}
-.pptx-preview-compact [role='separator'] {
   display: none;
 }
 
