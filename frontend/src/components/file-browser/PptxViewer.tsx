@@ -1,5 +1,5 @@
 import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
@@ -9,7 +9,7 @@ import { saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { lazyWithRetry } from './lazyRetry'
 import { loadPptxComments, loadPptxSlideSize, type PptxComment } from './pptxComments'
-import { addPptxComment } from './pptxCommentWriter'
+import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
 
 const PowerPointViewer = lazyWithRetry(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
@@ -196,12 +196,55 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     setAdding(true)
     try {
       const target = curSlide + 1
-      const next = await addPptxComment(content, {
-        slideNo: target,
-        authorName: name,
-        text,
-        pos: pos ?? undefined,
-      })
+      const ok = await mutatePptxComments((base) =>
+        addPptxComment(base, {
+          slideNo: target,
+          authorName: name,
+          text,
+          pos: pos ?? undefined,
+        }),
+      )
+      if (!ok) return
+      setDraft('')
+      setPos(null)
+      setPlacing(false)
+      try {
+        localStorage.setItem('ppt-comment-author', name)
+      } catch {
+        /* 무시 */
+      }
+      setSlideIdx(target - 1)
+      setCurSlide(target - 1)
+      showToast.success('코멘트 저장했습니다')
+    } finally {
+      setAdding(false)
+    }
+  }
+  // 파일 op 한 번: 편집 중이면 뷰어 모델을 먼저 파일에 굳히고(편집을 날리지 않기 위해),
+  // op 적용 → 저장 → 패널 새로고침 → 뷰어 리마운트 순서로 처리한다.
+  const mutatePptxComments = async (
+    op: (base: Uint8Array) => Promise<Uint8Array>,
+  ): Promise<boolean> => {
+    if (!savePath) {
+      showToast.error('저장 경로가 없습니다')
+      return false
+    }
+    try {
+      let base = content
+      if (editing) {
+        const h = viewerRef.current
+        if (!h) return false
+        const cur = new Uint8Array(await h.getContent())
+        await saveOfficeBytes(
+          savePath,
+          fileName ?? 'presentation.pptx',
+          new Blob([cur as unknown as BlobPart], {
+            type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          }),
+        )
+        base = cur
+      }
+      const next = await op(base)
       await saveOfficeBytes(
         savePath,
         fileName ?? 'presentation.pptx',
@@ -210,26 +253,118 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         }),
       )
       setSavedBytes(next)
-      setDraft('')
-      setPos(null)
-      setPlacing(false)
-      setPlacing(false)
-      try {
-        localStorage.setItem('ppt-comment-author', name)
-      } catch {
-        /* 무시 */
-      }
       const cs = await loadPptxComments(next)
       setComments(cs)
       if (cs.length > 0) setShowComments(true)
-      setSlideIdx(target - 1)
-      setCurSlide(target - 1)
       setReloadKey((v) => v + 1)
-      showToast.success('코멘트 저장했습니다')
+      return true
     } catch (e) {
       showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
+      return false
+    }
+  }
+  const [replyTo, setReplyTo] = useState<string | null>(null)
+  const [replyDraft, setReplyDraft] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [deleteArm, setDeleteArm] = useState<string | null>(null)
+  const sendReply = async (parent: PptxComment) => {
+    const text = replyDraft.trim()
+    if (!text || busyId) return
+    if (parent.format !== 'modern') {
+      showToast.info('레거시 코멘트 답글은 지원하지 않습니다')
+      return
+    }
+    setBusyId(`reply:${parent.cid}`)
+    try {
+      const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
+      const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+      const ok = await mutatePptxComments((base) =>
+        replyPptxComment(base, { parentCid: parent.cid, authorName: name, text }),
+      )
+      if (ok) {
+        setReplyTo(null)
+        setReplyDraft('')
+        showToast.success('답글 저장했습니다')
+      }
     } finally {
-      setAdding(false)
+      setBusyId(null)
+    }
+  }
+  const toggleResolve = async (c: PptxComment) => {
+    if (busyId || c.format !== 'modern') return
+    setBusyId(`resolve:${c.cid}`)
+    try {
+      await mutatePptxComments((base) =>
+        setPptxCommentDone(base, { cid: c.cid, done: !c.resolved }),
+      )
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const toggleResolveReply = async (c: PptxComment, r: { cid: string; resolved: boolean }) => {
+    if (busyId || c.format !== 'modern') {
+      if (c.format !== 'modern') showToast.info('레거시 코멘트 해결 표시는 지원하지 않습니다')
+      return
+    }
+    setBusyId(`resolve:${r.cid}`)
+    try {
+      await mutatePptxComments((base) =>
+        setPptxCommentDone(base, { cid: r.cid, done: !r.resolved }),
+      )
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const saveEdit = async (c: PptxComment) => {
+    const text = editDraft.trim()
+    if (!text || busyId) return
+    setBusyId(`edit:${c.cid}`)
+    try {
+      await mutatePptxComments((base) => editPptxComment(base, { cid: c.cid, text }))
+      setEditingId(null)
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const saveReplyEdit = async (r: { cid: string }) => {
+    const text = editDraft.trim()
+    if (!text || busyId) return
+    setBusyId(`edit:${r.cid}`)
+    try {
+      await mutatePptxComments((base) => editPptxComment(base, { cid: r.cid, text }))
+      setEditingId(null)
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const doDeleteReply = async (r: { cid: string }) => {
+    if (busyId) return
+    if (deleteArm !== r.cid) {
+      setDeleteArm(r.cid)
+      return
+    }
+    setDeleteArm(null)
+    setBusyId(`delete:${r.cid}`)
+    try {
+      await mutatePptxComments((base) => deletePptxComment(base, r.cid))
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const doDelete = async (c: { cid: string; format: string }) => {
+    if (busyId) return
+    if (deleteArm !== c.cid) {
+      setDeleteArm(c.cid)
+      return
+    }
+    setDeleteArm(null)
+    setBusyId(`delete:${c.cid}`)
+    try {
+      await mutatePptxComments((base) => deletePptxComment(base, c.cid))
+    } finally {
+      setBusyId(null)
     }
   }
   const [pw, setPw] = useState('')
@@ -308,79 +443,266 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                 <RefreshCw className="w-3 h-3" />
               </button>
             </div>
-            {!editing && (
-              <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">
-                <input
-                  value={author}
-                  onChange={(e) => setAuthor(e.target.value)}
-                  placeholder="이름"
-                  className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none"
-                />
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder={`코멘트 입력 (슬라이드 ${curSlide + 1})`}
-                  rows={2}
-                  className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
-                />
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs flex-1"
-                    onClick={() => {
-                      setPos(null)
-                      setPlacing((v) => !v)
-                    }}
-                  >
-                    {placing ? '위치 클릭 대기 중…' : pos ? '위치 다시 찍기' : '📍 위치 찍기'}
-                  </Button>
-                </div>
-                {pos && (
-                  <p className="text-[11px] text-muted-foreground">
-                    지정됨: {(pos.x / 914400).toFixed(1)}″, {(pos.y / 914400).toFixed(1)}″
-                  </p>
-                )}
-                <Button
-                  size="sm"
-                  className="w-full h-7 text-xs"
-                  disabled={!draft.trim() || adding}
-                  onClick={() => void addComment()}
-                >
-                  {adding ? '저장 중…' : '코멘트 저장'}
-                </Button>
-              </div>
-            )}
+            <div className="p-2 border-b border-border flex-shrink-0 space-y-1.5">
+              <input
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+                placeholder="이름"
+                className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none"
+              />
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder={`코멘트 입력 (슬라이드 ${curSlide + 1})`}
+                rows={2}
+                className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+              />
+              {!editing && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs flex-1"
+                      onClick={() => {
+                        setPos(null)
+                        setPlacing((v) => !v)
+                      }}
+                    >
+                      {placing ? '위치 클릭 대기 중…' : pos ? '위치 다시 찍기' : '📍 위치 찍기'}
+                    </Button>
+                  </div>
+                  {pos && (
+                    <p className="text-[11px] text-muted-foreground">
+                      지정됨: {(pos.x / 914400).toFixed(1)}″, {(pos.y / 914400).toFixed(1)}″
+                    </p>
+                  )}
+                </>
+              )}
+              <Button
+                size="sm"
+                className="w-full h-7 text-xs"
+                disabled={!draft.trim() || adding}
+                onClick={() => void addComment()}
+              >
+                {adding ? '저장 중…' : '코멘트 저장'}
+              </Button>
+            </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
               {comments.length === 0 && (
                 <p className="text-xs text-muted-foreground px-1">코멘트 없음</p>
               )}
               {comments.map((c, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => openComment(c)}
-                  className="w-full text-left rounded-md border border-border/60 p-2 hover:bg-muted/60 transition-colors"
-                  title={`${c.slideNo}번 슬라이드로 이동`}
+                <div
+                  key={`${c.cid || i}`}
+                  className="rounded-md border border-border/60 p-2"
                 >
-                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <span className="shrink-0 font-mono">슬라이드 {c.slideNo}</span>
-                  </div>
-                  <div className="text-xs font-medium mt-0.5">{c.author}</div>
-                  <div className="text-xs whitespace-pre-wrap break-words mt-0.5">{c.text}</div>
+                  <button
+                    type="button"
+                    onClick={() => openComment(c)}
+                    className="w-full text-left"
+                    title={`${c.slideNo}번 슬라이드로 이동`}
+                  >
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <span className="shrink-0 font-mono">슬라이드 {c.slideNo}</span>
+                      {c.resolved && <span className="shrink-0">· 해결됨</span>}
+                    </div>
+                    <div className="text-xs font-medium mt-0.5">{c.author}</div>
+                    {editingId === c.cid ? (
+                      <span className="block mt-0.5" onClick={(e) => e.stopPropagation()}>
+                        <textarea
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          rows={2}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                        />
+                      </span>
+                    ) : (
+                      <div className="text-xs whitespace-pre-wrap break-words mt-0.5">{c.text}</div>
+                    )}
+                  </button>
                   {c.replies.map((r, j) => (
                     <div key={j} className="mt-1.5 pl-2 border-l-2 border-border">
                       <div className="text-xs font-medium">{r.author}</div>
-                      <div className="text-xs whitespace-pre-wrap break-words">{r.text}</div>
+                      {editingId === r.cid ? (
+                        <span className="block mt-0.5">
+                          <textarea
+                            value={editDraft}
+                            onChange={(e) => setEditDraft(e.target.value)}
+                            rows={2}
+                            className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                          />
+                        </span>
+                      ) : (
+                        <div className="text-xs whitespace-pre-wrap break-words">{r.text}</div>
+                      )}
+                      <div className="flex items-center gap-0.5 mt-1">
+                        <IconBtn
+                          title="수정"
+                          onClick={() => {
+                            setEditingId(r.cid)
+                            setEditDraft(r.text)
+                            setReplyTo(null)
+                            setDeleteArm(null)
+                          }}
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </IconBtn>
+                        <IconBtn
+                          title={r.resolved ? '미해결로' : '해결됨으로'}
+                          onClick={() => void toggleResolveReply(c, r)}
+                        >
+                          {r.resolved ? <RotateCcw className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                        </IconBtn>
+                        <IconBtn
+                          title={deleteArm === r.cid ? '확인: 삭제' : '삭제'}
+                          danger={deleteArm === r.cid}
+                          onClick={() => void doDeleteReply(r)}
+                        >
+                          {deleteArm === r.cid ? <Check className="w-3 h-3" /> : <Trash2 className="w-3 h-3" />}
+                        </IconBtn>
+                        {editingId === r.cid && (
+                          <>
+                            <IconBtn
+                              title="저장"
+                              onClick={() => void saveReplyEdit(r)}
+                            >
+                              <Check className="w-3 h-3" />
+                            </IconBtn>
+                            <IconBtn title="취소" onClick={() => setEditingId(null)}>
+                              <X className="w-3 h-3" />
+                            </IconBtn>
+                          </>
+                        )}
+                      </div>
                     </div>
                   ))}
-                </button>
+                  {replyTo === c.cid && (
+                    <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
+                      <textarea
+                        value={replyDraft}
+                        onChange={(e) => setReplyDraft(e.target.value)}
+                        placeholder="답글 입력"
+                        rows={2}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
+                      />
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          className="h-6 text-[11px] flex-1"
+                          disabled={!replyDraft.trim() || !!busyId}
+                          onClick={() => void sendReply(c)}
+                        >
+                          답글 저장
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 text-[11px]"
+                          onClick={() => {
+                            setReplyTo(null)
+                            setReplyDraft('')
+                          }}
+                        >
+                          취소
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {editingId === c.cid && (
+                    <div className="flex items-center gap-1 mt-1.5" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        size="sm"
+                        className="h-6 text-[11px] flex-1"
+                        disabled={!editDraft.trim() || !!busyId}
+                        onClick={() => void saveEdit(c)}
+                      >
+                        저장
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[11px]"
+                        onClick={() => setEditingId(null)}
+                      >
+                        취소
+                      </Button>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-0.5 mt-1.5">
+                    <IconBtn
+                      title="답글"
+                      onClick={() => {
+                        setReplyTo(replyTo === c.cid ? null : c.cid)
+                        setReplyDraft('')
+                        setEditingId(null)
+                        setDeleteArm(null)
+                      }}
+                    >
+                      <Reply className="w-3 h-3" />
+                    </IconBtn>
+                    <IconBtn
+                      title="수정"
+                      onClick={() => {
+                        setEditingId(c.cid)
+                        setEditDraft(c.text)
+                        setReplyTo(null)
+                        setDeleteArm(null)
+                      }}
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </IconBtn>
+                    {c.format === 'modern' && (
+                      <IconBtn
+                        title={c.resolved ? '미해결로' : '해결됨으로'}
+                        onClick={() => void toggleResolve(c)}
+                      >
+                        {c.resolved ? <RotateCcw className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                      </IconBtn>
+                    )}
+                    <IconBtn
+                      title={deleteArm === c.cid ? '확인: 삭제' : '삭제'}
+                      danger={deleteArm === c.cid}
+                      onClick={() => void doDelete(c)}
+                    >
+                      {deleteArm === c.cid ? <Check className="w-3 h-3" /> : <Trash2 className="w-3 h-3" />}
+                    </IconBtn>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+function IconBtn({
+  title,
+  danger,
+  onClick,
+  children,
+}: {
+  title: string
+  danger?: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      className={`inline-flex items-center justify-center h-6 w-6 rounded hover:bg-muted ${
+        danger ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 

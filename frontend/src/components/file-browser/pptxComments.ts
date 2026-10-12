@@ -6,6 +6,9 @@ export type PptxCommentReply = {
   author: string
   text: string
   created: string
+  /** 답글 식별자 (모던 reply @id). */
+  cid: string
+  resolved: boolean
 }
 
 export type PptxComment = {
@@ -14,6 +17,11 @@ export type PptxComment = {
   text: string
   created: string
   replies: PptxCommentReply[]
+  /** 코멘트 식별자 (모던 @id, 레거시 authorId:idx). */
+  cid: string
+  /** 'modern' | 'legacy' — 액션 지원 범위가 다르다. */
+  format: 'modern' | 'legacy'
+  resolved: boolean
 }
 
 const parser = new XMLParser({
@@ -159,10 +167,11 @@ export async function loadPptxComments(bytes: Uint8Array): Promise<PptxComment[]
     const legacyAuthorsDoc = await readXml('ppt/commentAuthors.xml')
     loadAuthorList(legacyAuthorsDoc, 'cmAuthorLst', 'cmAuthor')
 
-    const parseCm = (cm: Record<string, unknown>): { author: string; text: string; created: string } => ({
+    const parseCm = (cm: Record<string, unknown>): { author: string; text: string; created: string; resolved: boolean } => ({
       author: authors.get(String(cm['@_authorId'] ?? '')) ?? 'Unknown',
       text: txBodyText(cm),
       created: String(cm['@_created'] ?? cm['@_dt'] ?? ''),
+      resolved: String(cm['@_status'] ?? '').toLowerCase() === 'resolved',
     })
 
     for (let i = 0; i < sldIds.length; i++) {
@@ -245,14 +254,29 @@ export async function loadPptxComments(bytes: Uint8Array): Promise<PptxComment[]
         for (const cm of roots) {
           const main = parseCm(cm)
           const idx = items.indexOf(cm)
+          // p188: 접두 키가 있으면 모던, 아니면 레거시.
+          const modern = Object.keys(cm).some((k) => k.startsWith('p188:'))
           out.push({
             slideNo: i + 1,
             author: main.author,
             text: main.text,
             created: main.created,
+            cid:
+              String(cm['@_id'] ?? '') ||
+              `${String(cm['@_authorId'] ?? '')}:${String(cm['@_idx'] ?? '')}`,
+            format: modern ? 'modern' : 'legacy',
+            resolved: main.resolved,
             replies: (children.get(idx) ?? []).map((r) => {
               const p = parseCm(r)
-              return { author: p.author, text: p.text, created: p.created }
+              return {
+                author: p.author,
+                text: p.text,
+                created: p.created,
+                resolved: p.resolved,
+                cid:
+                  String(r['@_id'] ?? '') ||
+                  `${String(r['@_authorId'] ?? '')}:${String(r['@_idx'] ?? '')}`,
+              }
             }),
           })
         }

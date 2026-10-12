@@ -8,10 +8,12 @@ import { XMLParser } from 'fast-xml-parser'
 
 const COMMENTS_REL_TYPE = 'http://schemas.microsoft.com/office/2018/10/relationships/comments'
 const COMMENTS_CT = 'application/vnd.ms-powerpoint.comments+xml'
+const AUTHORS_REL_TYPE = 'http://schemas.microsoft.com/office/2018/10/relationships/authors'
 const NS_DECL =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
   'xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"'
+const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -23,6 +25,281 @@ const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 const guid = () => `{${crypto.randomUUID().toUpperCase()}}`
+
+const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+const P188_NS = 'http://schemas.microsoft.com/office/powerpoint/2018/8/main'
+
+function localName(el: Element): string {
+  const n = el.localName ?? el.tagName
+  return n.includes(':') ? n.slice(n.indexOf(':') + 1) : n
+}
+
+/** DOM 직렬화 (파싱 때 딸려온 xml 선언이 있으면 제거 — 중복 선언 방지). */
+function serializeXmlBody(doc: XMLDocument): string {
+  return new XMLSerializer().serializeToString(doc).replace(/^<\?xml[^?]*\?>\s*/, '')
+}
+
+/** part XML에서 id가 일치하는 cm/reply 엘리먼트와 소속 cmLst를 찾는다. */
+function findCommentNode(
+  doc: XMLDocument,
+  cid: string,
+): { node: Element; topCm: Element; modern: boolean } | null {
+  const all = Array.from(doc.getElementsByTagName('*')) as Element[]
+  // 1) 직접 id 일치 (모던 cm/reply @id).
+  for (const el of all) {
+    const ln = localName(el)
+    if ((ln === 'cm' || ln === 'reply') && el.getAttribute('id') === cid) {
+      let top: Element = el
+      let p: Element | null = el
+      while (p) {
+        if (localName(p) === 'cm') top = p
+        const parent: ParentNode | null = p.parentNode
+        p = parent && (parent as Element).localName !== undefined ? (parent as Element) : null
+      }
+      const modern = el.prefix === 'p188' || el.tagName.startsWith('p188:')
+      return { node: el, topCm: top, modern }
+    }
+  }
+  // 2) 레거시 authorId:idx 키.
+  const m = /^([^:]*):([^:]*)$/.exec(cid)
+  if (m) {
+    for (const el of all) {
+      if (
+        localName(el) === 'cm' &&
+        el.getAttribute('authorId') === m[1] &&
+        el.getAttribute('idx') === m[2]
+      ) {
+        return { node: el, topCm: el, modern: false }
+      }
+    }
+  }
+  return null
+}
+
+function txBodyFor(doc: XMLDocument, text: string, modern: boolean): Element {
+  const mk = (ns: string | null, tag: string): Element => doc.createElementNS(ns, tag)
+  if (modern) {
+    const tx = mk(P188_NS, 'p188:txBody')
+    tx.appendChild(mk(A_NS, 'a:bodyPr'))
+    tx.appendChild(mk(A_NS, 'a:lstStyle'))
+    const p = mk(A_NS, 'a:p')
+    const r = mk(A_NS, 'a:r')
+    const rPr = mk(A_NS, 'a:rPr')
+    rPr.setAttribute('lang', 'ko-KR')
+    const t = mk(A_NS, 'a:t')
+    t.setAttribute('xml:space', 'preserve')
+    t.textContent = text
+    r.appendChild(rPr)
+    r.appendChild(t)
+    p.appendChild(r)
+    tx.appendChild(p)
+    return tx
+  }
+  const p = mk(A_NS, 'a:p')
+  const r = mk(A_NS, 'a:r')
+  const t = mk(A_NS, 'a:t')
+  t.setAttribute('xml:space', 'preserve')
+  t.textContent = text
+  r.appendChild(t)
+  p.appendChild(r)
+  const tx = doc.createElement('p:txBody')
+  tx.appendChild(p)
+  return tx
+}
+
+function replaceTxBody(cm: Element, doc: XMLDocument, text: string, modern: boolean): void {
+  const txs = Array.from(cm.childNodes).filter(
+    (n): n is Element => n.nodeType === 1 && localName(n as Element) === 'txBody',
+  )
+  for (const old of txs) cm.removeChild(old)
+  // 네이티브 순서: replyLst -> txBody -> extLst. txBody는 replyLst 뒤에 둔다.
+  const anchor = Array.from(cm.childNodes).find(
+    (n) => n.nodeType === 1 && localName(n as Element) === 'extLst',
+  )
+  cm.insertBefore(txBodyFor(doc, text, modern), anchor ?? null)
+}
+
+async function mutateCommentParts(
+  bytes: Uint8Array,
+  mutate: (doc: XMLDocument, partName: string) => boolean,
+): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  let touched = false
+  for (const name of Object.keys(zip.files)) {
+    if (!/ppt\/comments\/.*\.xml$/i.test(name)) continue
+    const file = zip.file(name)
+    if (!file) continue
+    const xml = await file.async('string')
+    let doc: XMLDocument
+    try {
+      doc = new DOMParser().parseFromString(xml, 'application/xml')
+    } catch {
+      continue
+    }
+    if (doc.getElementsByTagName('parsererror').length > 0) continue
+    try {
+      if (mutate(doc, name)) {
+        zip.file(name, XML_DECL + serializeXmlBody(doc))
+        touched = true
+      }
+    } catch {
+      continue
+    }
+  }
+  if (!touched) throw new Error('comment not found')
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+/** 모던 작성자 확보 (기존 author 파트에서 이름 매칭, 없으면 첫 파트에 추가). */
+async function ensureModernAuthorId(zip: JSZip, authorName: string): Promise<string> {
+  const readText = async (path: string): Promise<string | null> => {
+    const f = zip.file(path)
+    return f ? f.async('string') : null
+  }
+  const candidates: string[] = ['ppt/authors.xml']
+  try {
+    const presRels = await readText('ppt/_rels/presentation.xml.rels')
+    if (presRels) {
+      const doc = new DOMParser().parseFromString(presRels, 'application/xml')
+      for (const rel of Array.from(doc.getElementsByTagName('Relationship'))) {
+        if (
+          rel.getAttribute('Type') ===
+          'http://schemas.microsoft.com/office/2018/10/relationships/authors'
+        ) {
+          const t = rel.getAttribute('Target') ?? ''
+          candidates.push(t.startsWith('/') ? t.slice(1) : `ppt/${t}`)
+        }
+      }
+    }
+  } catch {
+    /* 무시 */
+  }
+  for (const path of candidates) {
+    const xml = await readText(path)
+    if (!xml) continue
+    let doc: XMLDocument
+    try {
+      doc = new DOMParser().parseFromString(xml, 'application/xml')
+    } catch {
+      continue
+    }
+    const authors = Array.from(doc.getElementsByTagName('*')).filter(
+      (e) => localName(e) === 'author',
+    )
+    for (const a of authors) {
+      if (a.getAttribute('name') === authorName) {
+        const id = a.getAttribute('id')
+        if (id) {
+          await ensureAuthorsRel(zip)
+          return id
+        }
+      }
+    }
+    // 첫 번째로 찾은 파트에 추가한다.
+    const id = guid()
+    const el = doc.createElementNS(P188_NS, 'p188:author')
+    el.setAttribute('id', id)
+    el.setAttribute('name', authorName)
+    el.setAttribute('initials', authorName.replace(/\s+/g, '').slice(0, 2).toUpperCase() || 'ME')
+    el.setAttribute('userId', randomUserId())
+    el.setAttribute('providerId', 'Windows Live')
+    const lst = Array.from(doc.getElementsByTagName('*')).find((e) => localName(e) === 'authorLst')
+    if (lst) {
+      lst.appendChild(el)
+      zip.file(path, XML_DECL + serializeXmlBody(doc))
+      await ensureAuthorsRel(zip)
+      return id
+    }
+  }
+  throw new Error('author store missing')
+}
+
+const nowStamp = (): string => new Date().toISOString().replace(/Z$/, '')
+
+/** 답글 추가 (모던 전용). parentCid가 reply면 그 최상위 cm에 단다. */
+export async function replyPptxComment(
+  bytes: Uint8Array,
+  opts: { parentCid: string; authorName: string; text: string },
+): Promise<Uint8Array> {
+  const text = opts.text.trim()
+  if (!text) throw new Error('empty comment')
+  const authorName = opts.authorName.trim() || 'You'
+  const zip = await JSZip.loadAsync(bytes)
+  const authorId = await ensureModernAuthorId(zip, authorName)
+  let done = false
+  for (const name of Object.keys(zip.files)) {
+    if (!/ppt\/comments\/.*\.xml$/i.test(name)) continue
+    const file = zip.file(name)
+    if (!file) continue
+    const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml')
+    if (doc.getElementsByTagName('parsererror').length > 0) continue
+    const found = findCommentNode(doc, opts.parentCid)
+    if (!found || !found.modern) continue
+    const top = found.topCm
+    let lst = Array.from(top.childNodes).find(
+      (n): n is Element => n.nodeType === 1 && localName(n as Element) === 'replyLst',
+    )
+    const tx = Array.from(top.childNodes).find(
+      (n): n is Element => n.nodeType === 1 && localName(n as Element) === 'txBody',
+    )
+    if (!lst) {
+      lst = doc.createElementNS(P188_NS, 'p188:replyLst')
+      top.insertBefore(lst, tx ?? null)
+    } else if (tx && (lst.compareDocumentPosition(tx) & 2) !== 0) {
+      // replyLst가 txBody 뒤에 있으면 앞으로 옮긴다 (네이티브 순서: replyLst -> txBody).
+      top.insertBefore(lst, tx)
+    }
+    const reply = doc.createElementNS(P188_NS, 'p188:reply')
+    reply.setAttribute('id', guid())
+    reply.setAttribute('authorId', authorId)
+    reply.setAttribute('created', nowStamp())
+    reply.appendChild(txBodyFor(doc, text, true))
+    lst.appendChild(reply)
+    zip.file(name, XML_DECL + serializeXmlBody(doc))
+    done = true
+    break
+  }
+  if (!done) throw new Error('comment not found')
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+/** 해결 토글 (모던 cm/reply). */
+export async function setPptxCommentDone(
+  bytes: Uint8Array,
+  opts: { cid: string; done: boolean },
+): Promise<Uint8Array> {
+  return mutateCommentParts(bytes, (doc) => {
+    const found = findCommentNode(doc, opts.cid)
+    if (!found || !found.modern) return false
+    found.node.setAttribute('status', opts.done ? 'resolved' : 'active')
+    return true
+  })
+}
+
+/** 본문 수정 (모던 cm/reply). */
+export async function editPptxComment(
+  bytes: Uint8Array,
+  opts: { cid: string; text: string },
+): Promise<Uint8Array> {
+  const text = opts.text.trim()
+  if (!text) throw new Error('empty comment')
+  return mutateCommentParts(bytes, (doc) => {
+    const found = findCommentNode(doc, opts.cid)
+    if (!found || !found.modern) return false
+    replaceTxBody(found.node, doc, text, true)
+    return true
+  })
+}
+
+/** 삭제 (모던 cm은 답글ごと, reply는 낱개). */
+export async function deletePptxComment(bytes: Uint8Array, cid: string): Promise<Uint8Array> {
+  return mutateCommentParts(bytes, (doc) => {
+    const found = findCommentNode(doc, cid)
+    if (!found || !found.modern) return false
+    found.node.parentNode?.removeChild(found.node)
+    return true
+  })
+}
 
 function randomUserId(): string {
   const b = crypto.getRandomValues(new Uint8Array(8))
@@ -36,6 +313,25 @@ function insertBeforeClose(xml: string, local: string, snippet: string): string 
   const m = re.exec(xml)
   if (!m || m.index === undefined) return null
   return `${xml.slice(0, m.index)}${snippet}${xml.slice(m.index)}`
+}
+
+/** authors.xml이 있으면 presentation rels에 authors 관계를 보장한다 (없으면 데스크톱이 작성자를 못 읽는다). */
+async function ensureAuthorsRel(zip: JSZip): Promise<void> {
+  if (!zip.file('ppt/authors.xml')) return
+  const path = 'ppt/_rels/presentation.xml.rels'
+  const f = zip.file(path)
+  if (!f) return
+  const xml = await f.async('string')
+  if (xml.includes(AUTHORS_REL_TYPE)) return
+  let max = 0
+  for (const m of xml.matchAll(/Id="rId(\d+)"/g)) {
+    const n = Number(m[1])
+    if (Number.isFinite(n) && n > max) max = n
+  }
+  const snippet =
+    `<Relationship Id="rId${max + 1}" Type="${AUTHORS_REL_TYPE}" Target="authors.xml"/>`
+  const next = insertBeforeClose(xml, 'Relationships', snippet)
+  if (next) zip.file(path, next)
 }
 
 type NameMap = Map<string, string>
@@ -137,6 +433,7 @@ export async function addPptxComment(
       await ensureAuthorsCt()
     }
     zip.file('ppt/authors.xml', authorsXml)
+    await ensureAuthorsRel(zip)
   }
 
   // authors.xml content type이 없으면(새로 만든 경우) 등록한다.
