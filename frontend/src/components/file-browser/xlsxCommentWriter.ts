@@ -86,6 +86,367 @@ const normRef = (ref: string): string => {
   return m.replace(/\$/g, '').trim().toUpperCase()
 }
 
+function elLocal(el: Element): string {
+  const n = el.localName ?? el.tagName
+  return n.includes(':') ? n.slice(n.indexOf(':') + 1) : n
+}
+
+/** threaded 파트를 전부 돌며 mutate — 하나라도 건드렸으면 새 바이트. */
+async function mutateThreadedParts(
+  bytes: Uint8Array,
+  mutate: (doc: XMLDocument, partName: string) => boolean,
+): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  let touched = false
+  for (const name of Object.keys(zip.files)) {
+    if (!/xl\/threadedComments\/.*\.xml$/i.test(name)) continue
+    const file = zip.file(name)
+    if (!file) continue
+    let doc: XMLDocument
+    try {
+      doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml')
+    } catch {
+      continue
+    }
+    if (doc.getElementsByTagName('parsererror').length > 0) continue
+    try {
+      if (mutate(doc, name)) {
+        zip.file(
+          name,
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+            new XMLSerializer().serializeToString(doc),
+        )
+        touched = true
+      }
+    } catch {
+      continue
+    }
+  }
+  if (!touched) throw new Error('comment not found')
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+function findThreaded(doc: XMLDocument, tid: string): Element | null {
+  for (const el of Array.from(doc.getElementsByTagName('*'))) {
+    if (elLocal(el) === 'threadedComment' && el.getAttribute('id') === tid) return el
+  }
+  return null
+}
+
+/** 스레드 작성자 확보 (persons 파트 탐색/추가). */
+async function ensureThreadedPerson(zip: JSZip, authorName: string): Promise<string> {
+  const readText = async (path: string): Promise<string | null> => {
+    const f = zip.file(path)
+    return f ? f.async('string') : null
+  }
+  const wbRelsXml = await readText('xl/_rels/workbook.xml.rels')
+  let personPath = 'xl/persons/person.xml'
+  if (wbRelsXml) {
+    try {
+      const doc = new DOMParser().parseFromString(wbRelsXml, 'application/xml')
+      for (const rel of Array.from(doc.getElementsByTagName('Relationship'))) {
+        if ((rel.getAttribute('Type') ?? '').endsWith('/person')) {
+          const t = rel.getAttribute('Target') ?? ''
+          personPath = t.startsWith('/') ? t.slice(1) : `xl/${t}`
+          break
+        }
+      }
+    } catch {
+      /* 무시 */
+    }
+  }
+  let xml = await readText(personPath)
+  if (xml) {
+    try {
+      const doc = new DOMParser().parseFromString(xml, 'application/xml')
+      for (const p of Array.from(doc.getElementsByTagName('*'))) {
+        if (elLocal(p) === 'person' && p.getAttribute('displayName') === authorName) {
+          const id = p.getAttribute('id') ?? p.getAttribute('personId')
+          if (id) return id
+        }
+      }
+    } catch {
+      /* 무시 */
+    }
+  }
+  const id = guid()
+  const snippet =
+    `<person displayName="${esc(authorName)}" id="${id}" ` +
+    `userId="${randomUserId()}" providerId="Windows Live"/>`
+  if (xml) {
+    const next = insertBeforeClose(xml, 'personList', snippet)
+    if (!next) throw new Error('person part shape unknown')
+    zip.file(personPath, next)
+  } else {
+    zip.file(
+      personPath,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+        `<personList xmlns="${TC_NS}" xmlns:x="${X_NS}">${snippet}</personList>`,
+    )
+    const ctPath = '[Content_Types].xml'
+    const ctXml = await readText(ctPath)
+    if (ctXml && !ctXml.includes(`/${personPath}`)) {
+      const ctNext = insertBeforeClose(
+        ctXml,
+        'Types',
+        `<Override PartName="/${personPath}" ContentType="${PERSON_CT}"/>`,
+      )
+      if (ctNext) zip.file(ctPath, ctNext)
+    }
+  }
+  return id
+}
+
+const threadStamp = (): string => {
+  const now = new Date()
+  const pad = (n: number, l = 2) => String(n).padStart(l, '0')
+  return (
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+    `T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${pad(now.getMilliseconds(), 3).slice(0, 2)}`
+  )
+}
+
+/** 답글 추가. 부모의 ref/시트를 그대로 쓴다. */
+export async function replyXlsxComment(
+  bytes: Uint8Array,
+  opts: { parentTid: string; authorName: string; text: string },
+): Promise<Uint8Array> {
+  const text = opts.text.trim()
+  if (!text) throw new Error('empty comment')
+  const authorName = opts.authorName.trim() || 'You'
+  const zip = await JSZip.loadAsync(bytes)
+  const personId = await ensureThreadedPerson(zip, authorName)
+  let parentRef: string | null = null
+  for (const name of Object.keys(zip.files)) {
+    if (!/xl\/threadedComments\/.*\.xml$/i.test(name)) continue
+    const file = zip.file(name)
+    if (!file) continue
+    try {
+      const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml')
+      const parent = findThreaded(doc, opts.parentTid)
+      if (!parent) continue
+      parentRef = parent.getAttribute('ref')
+      // 기존과 같은 태그 모양으로 만든다 (prefix 유무).
+      const probe = Array.from(doc.getElementsByTagName('*')).find(
+        (e) => elLocal(e) === 'threadedComment',
+      )
+      const tcTag = probe ? probe.tagName : 'threadedComment'
+      const txTag = tcTag.includes(':') ? `${tcTag.split(':')[0]}:text` : 'text'
+      const reply = doc.createElementNS(TC_NS, tcTag)
+      reply.setAttribute('ref', parentRef ?? '')
+      reply.setAttribute('dT', threadStamp())
+      reply.setAttribute('personId', personId)
+      reply.setAttribute('id', guid())
+      reply.setAttribute('parentId', opts.parentTid)
+      const t = doc.createElementNS(TC_NS, txTag)
+      t.textContent = text
+      reply.appendChild(t)
+      const root = doc.documentElement
+      root.appendChild(reply)
+      zip.file(
+        name,
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+          new XMLSerializer().serializeToString(doc),
+      )
+      parentRef = parentRef ?? ''
+      break
+    } catch {
+      continue
+    }
+  }
+  if (parentRef === null) throw new Error('comment not found')
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+/** 해결 토글 (스레드). */
+export async function setXlsxCommentDone(
+  bytes: Uint8Array,
+  opts: { tid: string; done: boolean },
+): Promise<Uint8Array> {
+  return mutateThreadedParts(bytes, (doc) => {
+    const el = findThreaded(doc, opts.tid)
+    if (!el) return false
+    if (opts.done) el.setAttribute('done', '1')
+    else el.removeAttribute('done')
+    return true
+  })
+}
+
+/** 본문 수정 (스레드). */
+export async function editXlsxComment(
+  bytes: Uint8Array,
+  opts: { tid: string; text: string },
+): Promise<Uint8Array> {
+  const text = opts.text.trim()
+  if (!text) throw new Error('empty comment')
+  return mutateThreadedParts(bytes, (doc) => {
+    const el = findThreaded(doc, opts.tid)
+    if (!el) return false
+    const probe = Array.from(el.childNodes).find(
+      (n): n is Element => n.nodeType === 1 && elLocal(n as Element) === 'text',
+    )
+    const tag = probe ? probe.tagName : el.tagName.includes(':') ? `${el.tagName.split(':')[0]}:text` : 'text'
+    if (probe) el.removeChild(probe)
+    const t = doc.createElementNS(TC_NS, tag)
+    t.textContent = text
+    el.appendChild(t)
+    return true
+  })
+}
+
+/** 삭제 (스레드 + 답글 + 레거시 그림자 + 고아 VML). */
+export async function deleteXlsxComment(bytes: Uint8Array, tid: string): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  const doomed = new Set<string>([tid])
+  const refs = new Set<string>()
+  let everRemoved = false
+  // 스레드 본체 + 자식 답글 제거 (여러 패스: 손자까지).
+  for (let pass = 0; pass < 10; pass++) {
+    let removed = false
+    for (const name of Object.keys(zip.files)) {
+      if (!/xl\/threadedComments\/.*\.xml$/i.test(name)) continue
+      const file = zip.file(name)
+      if (!file) continue
+      const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml')
+      if (doc.getElementsByTagName('parsererror').length > 0) continue
+      let dirty = false
+      for (const el of Array.from(doc.getElementsByTagName('*'))) {
+        if (elLocal(el) !== 'threadedComment') continue
+        const id = el.getAttribute('id') ?? ''
+        const parent = el.getAttribute('parentId') ?? ''
+        if (doomed.has(id) || (parent && doomed.has(parent))) {
+          const ref = el.getAttribute('ref')
+          if (ref) refs.add(ref.toUpperCase())
+          if (id) doomed.add(id)
+          el.parentNode?.removeChild(el)
+          dirty = true
+          removed = true
+          everRemoved = true
+        }
+      }
+      if (dirty) {
+        zip.file(
+          name,
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+            new XMLSerializer().serializeToString(doc),
+        )
+      }
+    }
+    if (!removed) break
+  }
+  if (!everRemoved) throw new Error('comment not found')
+  // 레거시 그림자 제거 (xr:uid 일치).
+  for (const name of Object.keys(zip.files)) {
+    if (!/^xl\/comments\/.*\.xml$/i.test(name)) continue
+    const file = zip.file(name)
+    if (!file) continue
+    const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml')
+    if (doc.getElementsByTagName('parsererror').length > 0) continue
+    let dirty = false
+    for (const el of Array.from(doc.getElementsByTagName('*'))) {
+      if (elLocal(el) !== 'comment') continue
+      const uid = el.getAttribute('xr:uid') ?? ''
+      if (doomed.has(uid)) {
+        const ref = el.getAttribute('ref')
+        if (ref) refs.add(ref.toUpperCase())
+        el.parentNode?.removeChild(el)
+        dirty = true
+      }
+    }
+    if (dirty) {
+      // authors 재구축: 남은 stub의 xr:uid 기준으로 tc 링크를 다시 맞춘다 (고아 제거 + 자가 치유).
+      const authorsEl = Array.from(doc.getElementsByTagName('*')).find(
+        (e) => elLocal(e) === 'authors',
+      )
+      if (authorsEl) {
+        const kept: string[] = []
+        for (const el of Array.from(doc.getElementsByTagName('*'))) {
+          if (elLocal(el) !== 'comment') continue
+          const uid = el.getAttribute('xr:uid') ?? ''
+          let ni = kept.findIndex((t) => t === `tc=${uid}`)
+          if (ni < 0) {
+            ni = kept.length
+            kept.push(`tc=${uid}`)
+          }
+          el.setAttribute('authorId', String(ni))
+          el.setAttribute('shapeId', '0')
+        }
+        for (const child of Array.from(authorsEl.childNodes)) authorsEl.removeChild(child)
+        const ns = doc.documentElement.namespaceURI ?? undefined
+        kept.forEach((t) => {
+          const a = ns ? doc.createElementNS(ns, 'author') : doc.createElement('author')
+          a.textContent = t
+          authorsEl.appendChild(a)
+        })
+      }
+      zip.file(
+        name,
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+          new XMLSerializer().serializeToString(doc),
+      )
+    }
+  }
+  const stillUsed = new Set<string>()
+  const collectRefs = async (re: RegExp) => {
+    for (const name of Object.keys(zip.files)) {
+      if (!re.test(name)) continue
+      const file = zip.file(name)
+      if (!file) continue
+      try {
+        const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml')
+        for (const el of Array.from(doc.getElementsByTagName('*'))) {
+          const ln = elLocal(el)
+          if (ln !== 'threadedComment' && ln !== 'comment') continue
+          const ref = el.getAttribute('ref')
+          if (ref) stillUsed.add(ref.toUpperCase())
+        }
+      } catch {
+        /* 무시 */
+      }
+    }
+  }
+  await collectRefs(/^xl\/threadedComments\/.*\.xml$/i)
+  await collectRefs(/^xl\/comments\/.*\.xml$/i)
+  for (const name of Object.keys(zip.files)) {
+    if (!/^xl\/drawings\/vmlDrawing\d+\.vml$/i.test(name)) continue
+    const file = zip.file(name)
+    if (!file) continue
+    const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml')
+    if (doc.getElementsByTagName('parsererror').length > 0) continue
+    let dirty = false
+    for (const shape of Array.from(doc.getElementsByTagName('*'))) {
+      if (elLocal(shape) !== 'shape' || !shape.hasAttribute('id')) continue
+      const row = Array.from(shape.getElementsByTagName('*')).find((e) => elLocal(e) === 'Row')
+        ?.textContent?.trim()
+      const col = Array.from(shape.getElementsByTagName('*')).find((e) => elLocal(e) === 'Column')
+        ?.textContent?.trim()
+      if (row === undefined || col === undefined) continue
+      let n = Number(col)
+      let letters = ''
+      if (Number.isFinite(n) && n >= 0) {
+        n = Math.floor(n)
+        do {
+          letters = String.fromCharCode(65 + (n % 26)) + letters
+          n = Math.floor(n / 26) - 1
+        } while (n >= 0)
+      }
+      const ref = `${letters}${Number(row) + 1}`
+      if ([...refs].some((r) => r === ref) && !stillUsed.has(ref)) {
+        shape.parentNode?.removeChild(shape)
+        dirty = true
+      }
+    }
+    if (dirty) {
+      zip.file(
+        name,
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+          new XMLSerializer().serializeToString(doc),
+      )
+    }
+  }
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
 /** A1 표기를 0-based (col, row)로 바꾼다. */
 function refToCell(ref: string): { col: number; row: number } | null {
   const m = /^([A-Za-z]+)(\d+)$/.exec(normRef(ref))
@@ -362,11 +723,11 @@ async function writeLegacyShadow(
     const m = [...legXml.matchAll(/<author>([\s\S]*?)<\/author>/g)].map((x) => x[1])
     const found = m.findIndex((a) => a === authorTag)
     if (found >= 0) return found
-    const next = legXml.replace(/(<authors[^>]*>)/, `$1<author>${esc(authorTag)}</author>`)
+    const next = legXml.replace(/<\/authors>/, `<author>${esc(authorTag)}</author></authors>`)
     legXml = next
     return m.length
   })()
-  const stub = `<comment ref="${esc(ref)}" authorId="${authorIdx}" shapeId="${authorIdx}" xr:uid="${esc(threadedId)}">` +
+  const stub = `<comment ref="${esc(ref)}" authorId="${authorIdx}" shapeId="0" xr:uid="${esc(threadedId)}">` +
     `<text><t>${esc(`${LEGACY_PLACEHOLDER_HEAD}${text}`)}</t></text></comment>`
   {
     const next = insertBeforeClose(legXml, 'commentList', stub)

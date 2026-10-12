@@ -5,6 +5,8 @@ import { XMLParser } from 'fast-xml-parser'
 export type XlsxCommentReply = {
   author: string
   text: string
+  /** 스레드 @id (답글/삭제용). */
+  tid: string
 }
 
 export type XlsxComment = {
@@ -15,6 +17,8 @@ export type XlsxComment = {
   text: string
   replies: XlsxCommentReply[]
   resolved: boolean
+  /** 스레드 @id (레거시는 빈 문자열 — 읽기 전용). */
+  tid: string
 }
 
 const parser = new XMLParser({
@@ -184,6 +188,7 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
         const toReply = (tc: Record<string, unknown>): XlsxCommentReply => ({
           author: persons.get(String(tc['@_personId'] ?? '')) ?? 'Unknown',
           text: norm(collectText(kid(tc, 'text'))),
+          tid: String(tc['@_id'] ?? ''),
         })
         for (const tc of roots) {
           out.push({
@@ -194,6 +199,7 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
             text: norm(collectText(kid(tc, 'text'))),
             replies: (children.get(items.indexOf(tc)) ?? []).map(toReply),
             resolved: String(tc['@_done'] ?? '') === '1',
+            tid: String(tc['@_id'] ?? ''),
           })
         }
       }
@@ -226,6 +232,7 @@ export async function loadXlsxComments(bytes: Uint8Array): Promise<XlsxComment[]
             text: norm(collectText(kid(c, 'text'))),
             replies: [],
             resolved: false,
+            tid: '',
           })
         }
       }
