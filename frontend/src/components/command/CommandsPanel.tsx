@@ -329,6 +329,8 @@ interface McpExplorerItem {
   type: string
   status: string
   detail: string
+  pending?: boolean
+  liveError?: string
 }
 
 const EXPLORER_TABS: { value: ExplorerResourceType; label: string; Icon: typeof Box }[] = [
@@ -350,6 +352,17 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [restartingKey, setRestartingKey] = useState<string | null>(null)
   const [bannerRestarting, setBannerRestarting] = useState(false)
+  const explorerQueryClient = useQueryClient()
+
+  const scheduleMcpRefresh = () => {
+    // 재시작 직후 서버가 내려가 있어 조회가 실패할 수 있어 지연 재조회
+    for (const ms of [2500, 8000]) {
+      setTimeout(() => {
+        explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'mcp'] })
+        explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'config'] })
+      }, ms)
+    }
+  }
 
   useEffect(() => {
     if (focusCommand) {
@@ -390,7 +403,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
       return list.sort((a, b) => a.name.localeCompare(b.name))
     }
     if (tab === 'mcp') {
-      const list = mcpServers.filter(m => m.id.toLowerCase().includes(q) || m.detail.toLowerCase().includes(q))
+      const list = mcpServers.filter(m => m.id.toLowerCase().includes(q) || m.detail.toLowerCase().includes(q) || m.status.toLowerCase().includes(q))
       return list.sort((a, b) => a.id.localeCompare(b.id))
     }
     if (tab === 'tool') {
@@ -487,6 +500,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
     try {
       await settingsApi.restartOpenCodeServer()
       showToast.success(`opencode 재시작 요청됨 (MCP "${serverId}" 적용).`)
+      scheduleMcpRefresh()
     } catch (err) {
       console.error('Failed to restart OpenCode server:', err)
       showToast.error('opencode 재시작 실패.')
@@ -501,6 +515,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
     try {
       await settingsApi.restartOpenCodeServer()
       showToast.success('opencode 재시작 요청됨.')
+      scheduleMcpRefresh()
     } catch (err) {
       console.error('Failed to restart OpenCode server:', err)
       showToast.error('opencode 재시작 실패.')
@@ -676,17 +691,32 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                   ? (item as RegistryEntry).scope
                   : (item as AgentExplorerItem).scope || 'agent'
               const Icon = tab === 'mcp' ? Plug : tab === 'tool' ? Puzzle : Bot
+              const isMcpPending = tab === 'mcp' && (item as McpExplorerItem).pending === true
               const badgeClass = tab === 'mcp'
-                ? (badge === 'connected' || badge === 'local' ? 'bg-green-500/15 text-green-400 border border-green-500/30' : 'bg-blue-500/15 text-blue-400 border border-blue-500/30')
+                ? (badge === 'connected'
+                    ? 'bg-green-500/15 text-green-400 border border-green-500/30'
+                    : badge === 'failed'
+                      ? 'bg-red-500/15 text-red-400 border border-red-500/30'
+                      : badge === 'pending'
+                        ? 'bg-zinc-500/15 text-zinc-400 border border-zinc-500/30'
+                        : 'bg-zinc-500/15 text-zinc-400 border border-zinc-500/30')
                 : tab === 'tool'
                   ? (badge === 'project' ? SCOPE_DISPLAY.project.className : SCOPE_DISPLAY.global.className)
                   : (badge === 'project' ? SCOPE_DISPLAY.project.className : SCOPE_DISPLAY.global.className)
+              const badgeLabel = tab === 'mcp' && badge === 'pending' ? '재시작 필요' : badge
+              const mcpIconClass = tab === 'mcp'
+                ? (badge === 'connected'
+                    ? 'text-green-500'
+                    : badge === 'failed'
+                      ? 'text-red-500'
+                      : 'text-zinc-500/60')
+                : 'text-muted-foreground'
               return (
                 <div
                   key={name}
                   className={`rounded-md border transition-colors ${
                     isSelected ? 'border-primary/50 bg-primary/5' : 'border-transparent hover:bg-muted/40'
-                  }`}
+                  } ${isMcpPending ? 'opacity-60' : ''}`}
                 >
                   <div className="flex items-center gap-1 pl-2">
                     <Checkbox
@@ -701,17 +731,25 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                       className="flex-1 flex items-center gap-2 px-1 py-1.5 text-left"
                       onClick={() => setSelected(isSelected ? null : { name, description, template: '', agent: '', model: '', subtask: false, scope: 'global' })}
                     >
-                    <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                    <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${mcpIconClass}`} />
                     <span className="font-mono text-xs font-medium flex-1 min-w-0 truncate">{name}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${badgeClass}`}>
-                      {badge}
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${badgeClass}`} title={tab === 'mcp' && isMcpPending ? 'opencode 재시작 후 적용됩니다' : undefined}>
+                      {badgeLabel}
                     </span>
                     {isSelected ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                   </button>
                   </div>
                   {isSelected && (
                     <div className="px-3 py-2 border-t border-border/50 space-y-1.5">
-                      <p className="text-xs text-muted-foreground break-words">{description}</p>
+                      <p className="text-xs text-muted-foreground break-words">{description || 'No description.'}</p>
+                      {tab === 'mcp' && isMcpPending && (
+                        <p className="text-[11px] text-zinc-400">
+                          신규 추가됨 — opencode 재시작 후 정상 색상으로 표시됩니다.
+                        </p>
+                      )}
+                      {tab === 'mcp' && (item as McpExplorerItem).liveError && (
+                        <p className="text-[11px] text-red-400 break-words">{(item as McpExplorerItem).liveError}</p>
+                      )}
                       <div className="flex items-center gap-3 pt-0.5 flex-wrap">
                         <button
                           type="button"
@@ -1343,6 +1381,7 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
       await refresh()
       queryClient.invalidateQueries({ queryKey: ['registry-list'] })
       queryClient.invalidateQueries({ queryKey: ['opencode', 'config', opcodeUrl, directory] })
+      queryClient.invalidateQueries({ queryKey: ['opencode', 'mcp', opcodeUrl, directory] })
       window.dispatchEvent(new CustomEvent('opencode:commands-refreshed'))
     } finally {
       setRefreshing(false)
@@ -1646,20 +1685,47 @@ export function CommandsPanel({ open, onClose, opcodeUrl, sessionID, directory, 
     return [...fromConfig, ...fromRegistry].sort((a, b) => a.name.localeCompare(b.name))
   }, [config, agentsRegistry])
 
+  // opencode 실시간 MCP 상태 (GET /mcp). 설정에는 있지만 여기에 없으면 재시작 전(미적용).
+  const { data: mcpLiveStatus } = useQuery({
+    queryKey: ['opencode', 'mcp', opcodeUrl, directory],
+    queryFn: async () => {
+      const client = createOpenCodeClient(opcodeUrl ?? '', directory)
+      return client.getMcpStatus()
+    },
+    enabled: open && !!opcodeUrl,
+    staleTime: 15_000,
+    gcTime: 60_000,
+    retry: false,
+    refetchOnMount: 'always',
+  })
+
   const mcpServers = useMemo<McpExplorerItem[]>(() => {
     const map = config?.mcp
     if (!map) return []
     return Object.entries(map).map(([id, cfg]) => {
       const c = cfg as { type?: string; command?: string[]; url?: string; enabled?: boolean }
       const detail = c.type === 'local' ? (c.command ?? []).join(' ') : (c.url ?? '')
+      const live = mcpLiveStatus?.[id] as { status?: string; error?: string } | undefined
+      // 실시간 상태가 없으면 opencode가 아직 모르는 신규(재시작 필요) → 회색 pending
+      if (!live) {
+        return {
+          id,
+          type: c.type ?? 'remote',
+          status: c.enabled === false ? 'disabled' : 'pending',
+          detail,
+          pending: c.enabled !== false,
+        }
+      }
       return {
         id,
         type: c.type ?? 'remote',
-        status: c.enabled === false ? 'disabled' : (c.type ?? 'remote'),
+        status: live.status ?? 'connected',
         detail,
+        pending: false,
+        liveError: live.error,
       }
     })
-  }, [config])
+  }, [config, mcpLiveStatus])
 
   // ??륁뵠筌왖 ?뚢뫂???쎈뱜 ?袁り숲: ?紐꾨???= ?????紐꾨? ??딅７ ??= ??????딅７, 域???= ?袁⑷퍥.
   const scopedItems = useMemo(() => {

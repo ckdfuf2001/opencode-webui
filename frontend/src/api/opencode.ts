@@ -219,6 +219,11 @@ export class OpenCodeClient {
     return response.data ?? []
   }
 
+  async getMcpStatus(): Promise<Record<string, { status: 'connected' | 'disabled' | 'failed'; error?: string }>> {
+    const response = await this.client.get(`/mcp`)
+    return (response.data ?? {}) as Record<string, { status: 'connected' | 'disabled' | 'failed'; error?: string }>
+  }
+
   async listCommands(timeoutMs?: number) {
     const response = await this.client.get<CommandListResponse>(
       '/command',
