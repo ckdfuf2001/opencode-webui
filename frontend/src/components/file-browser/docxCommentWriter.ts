@@ -532,7 +532,7 @@ export async function deleteDocxComment(bytes: Uint8Array, cid: string): Promise
     const doc = new DOMParser().parseFromString(exXml, 'application/xml')
     const exEls = Array.from(doc.getElementsByTagName('*'))
     const idf = zip.file('word/comments.xml')
-    const idPara = new Map<string, string>()
+    const idPara = new Map<string, number>()
     if (idf) {
       const cxml = await idf.async('string')
       for (const m of cxml.matchAll(/<w:comment\s[^>]*w:id="(\d+)"[^>]*>[\s\S]*?<\/w:comment>/g)) {

@@ -56,17 +56,6 @@ function attr(obj: unknown, ...locals: string[]): string {
   return ''
 }
 
-function collectText(node: unknown): string {
-  if (typeof node === 'string') return node
-  if (typeof node !== 'object' || node === null) return ''
-  let s = ''
-  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-    if (k.startsWith('@_')) continue
-    s += collectText(v)
-  }
-  return s
-}
-
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
 
 /** 문서 범위 텍스트 (commentRangeStart~End 사이 w:t 이어붙이기, 최대 40자). */
