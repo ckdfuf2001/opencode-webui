@@ -66,7 +66,7 @@ function asArray<T>(v: T | T[] | undefined | null): T[] {
 
 export async function addPptxComment(
   bytes: Uint8Array,
-  opts: { slideNo: number; authorName: string; text: string },
+  opts: { slideNo: number; authorName: string; text: string; pos?: { x: number; y: number } },
 ): Promise<Uint8Array> {
   const text = opts.text.trim()
   if (!text) throw new Error('empty comment')
@@ -177,13 +177,16 @@ export async function addPptxComment(
   const cmId = guid()
   const created = new Date().toISOString().replace(/Z$/, '')
   // sldMkLst 없으면 파워포인트가 파일을 거부한다 (cId 값은 무관).
+  // pos 없으면 왼쪽 위(1인치)로 간다.
+  const px = Math.max(0, Math.round(opts.pos?.x ?? 914400))
+  const py = Math.max(0, Math.round(opts.pos?.y ?? 914400))
   const mark =
     `<pc:sldMkLst xmlns:pc="http://schemas.microsoft.com/office/powerpoint/2013/main/command">` +
     `<pc:docMk/><pc:sldMk cId="1" sldId="${esc(sldId)}"/></pc:sldMkLst>`
   const cm =
     `<p188:cm id="${cmId}" authorId="${authorId}" created="${created}">` +
     mark +
-    `<p188:pos x="1270000" y="1270000"/>` +
+    `<p188:pos x="${px}" y="${py}"/>` +
     `<p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"/>` +
     `<a:t xml:space="preserve">${esc(text)}</a:t></a:r></a:p></p188:txBody></p188:cm>`
   if (commentPath && (await readText(commentPath))) {

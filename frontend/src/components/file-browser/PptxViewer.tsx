@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { lazyWithRetry } from './lazyRetry'
-import { loadPptxComments, type PptxComment } from './pptxComments'
+import { loadPptxComments, loadPptxSlideSize, type PptxComment } from './pptxComments'
 import { addPptxComment } from './pptxCommentWriter'
 
 const PowerPointViewer = lazyWithRetry(() =>
@@ -111,6 +111,41 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   })
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
+  const [placing, setPlacing] = useState(false)
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const [slideSize, setSlideSize] = useState({ cx: 12192000, cy: 6858000 })
+  const stageRef = useRef<HTMLDivElement>(null)
+  // 슬라이드 클릭으로 코멘트 위치를 찍는다 (미리보기에서만).
+  const onStageClickCapture = (e: React.MouseEvent) => {
+    if (!placing || editing) return
+    const stage = stageRef.current?.querySelector('main')
+    if (!(stage instanceof HTMLElement)) return
+    const r = stage.getBoundingClientRect()
+    const cxPx = slideSize.cx / 9525
+    const cyPx = slideSize.cy / 9525
+    const scale = Math.min(r.width / cxPx, r.height / cyPx)
+    const fw = cxPx * scale
+    const fh = cyPx * scale
+    const ox = r.left + (r.width - fw) / 2
+    const oy = r.top + (r.height - fh) / 2
+    const lx = e.clientX - ox
+    const ly = e.clientY - oy
+    if (lx < 0 || ly < 0 || lx > fw || ly > fh) return
+    setPos({
+      x: Math.round((lx / fw) * slideSize.cx),
+      y: Math.round((ly / fh) * slideSize.cy),
+    })
+    setPlacing(false)
+  }
+  useEffect(() => {
+    let dead = false
+    void loadPptxSlideSize(content).then((s) => {
+      if (!dead) setSlideSize(s)
+    })
+    return () => {
+      dead = true
+    }
+  }, [content])
   useEffect(() => {
     setComments([])
     setShowComments(false)
@@ -118,6 +153,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     setCurSlide(0)
     setSavedBytes(null)
     setDraft('')
+    setPos(null)
+    setPlacing(false)
   }, [data])
   useEffect(() => {
     let dead = false
@@ -159,7 +196,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     setAdding(true)
     try {
       const target = curSlide + 1
-      const next = await addPptxComment(content, { slideNo: target, authorName: name, text })
+      const next = await addPptxComment(content, {
+        slideNo: target,
+        authorName: name,
+        text,
+        pos: pos ?? undefined,
+      })
       await saveOfficeBytes(
         savePath,
         fileName ?? 'presentation.pptx',
@@ -169,6 +211,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       )
       setSavedBytes(next)
       setDraft('')
+      setPos(null)
+      setPlacing(false)
+      setPlacing(false)
       try {
         localStorage.setItem('ppt-comment-author', name)
       } catch {
@@ -225,7 +270,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     )
   }
   return (
-    <div className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}>
+    <div
+      ref={stageRef}
+      onClickCapture={onStageClickCapture}
+      className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
+    >
       <div className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <PptxViewerBoundary onFail={onFail}>
@@ -274,6 +323,24 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   rows={2}
                   className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs outline-none resize-none"
                 />
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs flex-1"
+                    onClick={() => {
+                      setPos(null)
+                      setPlacing((v) => !v)
+                    }}
+                  >
+                    {placing ? '위치 클릭 대기 중…' : pos ? '위치 다시 찍기' : '📍 위치 찍기'}
+                  </Button>
+                </div>
+                {pos && (
+                  <p className="text-[11px] text-muted-foreground">
+                    지정됨: {(pos.x / 914400).toFixed(1)}″, {(pos.y / 914400).toFixed(1)}″
+                  </p>
+                )}
                 <Button
                   size="sm"
                   className="w-full h-7 text-xs"

@@ -83,6 +83,25 @@ const txBodyText = (cm: Record<string, unknown>): string => {
   return norm(typeof plain === 'string' ? plain : collectText(plain))
 }
 
+/** 슬라이드 크기(EMU). 위치 클릭→EMU 변환용. */
+export async function loadPptxSlideSize(bytes: Uint8Array): Promise<{ cx: number; cy: number }> {
+  const fallback = { cx: 12192000, cy: 6858000 }
+  try {
+    const zip = await JSZip.loadAsync(bytes)
+    const f = zip.file('ppt/presentation.xml')
+    if (!f) return fallback
+    const pres = parser.parse(await f.async('string')) as Record<string, unknown>
+    const root = (childByLocal(pres, 'presentation') ?? pres) as Record<string, unknown>
+    const sldSz = childByLocal(root, 'sldSz') as Record<string, unknown> | undefined
+    const cx = Number(sldSz?.['@_cx'] ?? 0)
+    const cy = Number(sldSz?.['@_cy'] ?? 0)
+    if (cx > 0 && cy > 0) return { cx, cy }
+  } catch {
+    /* 무시 */
+  }
+  return fallback
+}
+
 export async function loadPptxComments(bytes: Uint8Array): Promise<PptxComment[]> {
   const out: PptxComment[] = []
   let zip: JSZip
