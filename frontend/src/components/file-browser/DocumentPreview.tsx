@@ -810,7 +810,14 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const laidOutRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
   const relayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { save } = useOfficeSave(path, fileName ?? 'document.docx', handle)
+  // 사용자가 직접 건드린 뒤에는 우리 relayout이 stale 바이트로 되돌리면 안 된다.
+  // lib 모델이 주인이므로 dirty 동안은 배치 건너뛰기.
+  const [docDirty, setDocDirty] = useState(false)
+  const onSavedDoc = useCallback((bytes: Uint8Array) => {
+    setSavedBytes(new Uint8Array(bytes))
+    setDocDirty(false)
+  }, [])
+  const { save } = useOfficeSave(path, fileName ?? 'document.docx', handle, onSavedDoc)
   const [comments, setComments] = useState<DocxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [author, setAuthor] = useState(() => {
@@ -933,7 +940,9 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     }
   }
   // 편집 중 노드가 다시 그려지면 오버레이가 날아가서 다시 맞춘다.
+  // 단 사용자가 모델을 건드린 뒤(dirty)에는 stale 바이트로 되돌리면 안 된다.
   const scheduleRelayout = () => {
+    if (docDirty) return
     if (!laidOutRef.current || !wrapRef.current) return
     if (relayoutTimer.current) clearTimeout(relayoutTimer.current)
     relayoutTimer.current = setTimeout(() => {
@@ -965,6 +974,8 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
         return handle.load(bytes)
       })
       .then(() => {
+        // 로드 직후 모델은 깨끗하다 (이전 dirty 잔재 무시).
+        setDocDirty(false)
         // 렌더가 자리 잡은 뒤 떠있는 텍스트상자를 앵커 좌표에 배치한다 (보기/편집 공통).
         timer = setTimeout(() => {
           if (cancelled || !wrapRef.current) return
@@ -994,13 +1005,16 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     setError(null)
     setLaidOut(0)
     laidOutRef.current = 0
+    setDocDirty(false)
   }, [data])
 
   // 리플로우(리사이즈·줌·편집 변경)되면 앵커 배치를 다시 맞춘다.
+  // dirty 동안은 lib 모델이 주인이라 건드리지 않는다.
   useEffect(() => {
     if (!laidOut || !wrapRef.current) return
     let timer: ReturnType<typeof setTimeout> | null = null
     const relayout = () => {
+      if (docDirty) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         if (wrapRef.current) void layoutAnchoredTextBoxes(content, wrapRef.current)
@@ -1012,7 +1026,7 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
       ro.disconnect()
       if (timer) clearTimeout(timer)
     }
-  }, [laidOut, content, editing])
+  }, [laidOut, content, editing, docDirty])
 
   // 코멘트가 있으면 목록 패널을 같이 열어준다 (보기/편집 공통).
   useEffect(() => {
@@ -1082,6 +1096,7 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
               showToolbar={editing}
               theme={appTheme}
               onDocumentChange={scheduleRelayout}
+              onDirtyChange={setDocDirty}
               onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
             />
           </Suspense>

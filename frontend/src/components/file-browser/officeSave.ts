@@ -25,8 +25,14 @@ type SaveHandle = {
 /**
  * 뷰어 툴바 저장 가로채기 + 상단 저장 버튼 공용.
  * handle이 없거나 저장 중이면 false.
+ * onSaved는 저장된 바이트 후처리용 (모델 기준 상태 갱신 등).
  */
-export function useOfficeSave(serverPath: string, fileName: string, handle: SaveHandle) {
+export function useOfficeSave(
+  serverPath: string,
+  fileName: string,
+  handle: SaveHandle,
+  onSaved?: (bytes: Uint8Array) => void,
+) {
   const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
   const save = useCallback(async (): Promise<boolean> => {
@@ -36,6 +42,11 @@ export function useOfficeSave(serverPath: string, fileName: string, handle: Save
       const blob = await handle.save()
       await saveOfficeBytes(serverPath, fileName, blob)
       handle.markClean()
+      try {
+        onSaved?.(new Uint8Array(await blob.arrayBuffer()))
+      } catch {
+        // 후처리 실패는 저장 성공과 무관
+      }
       void queryClient.invalidateQueries({ queryKey: ['files'] })
       showToast.success('저장했습니다')
       window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
@@ -47,6 +58,6 @@ export function useOfficeSave(serverPath: string, fileName: string, handle: Save
     } finally {
       setSaving(false)
     }
-  }, [serverPath, fileName, handle, saving, queryClient])
+  }, [serverPath, fileName, handle, saving, queryClient, onSaved])
   return { save, saving }
 }
