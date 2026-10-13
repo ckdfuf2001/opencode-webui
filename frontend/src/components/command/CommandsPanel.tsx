@@ -352,7 +352,9 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [restartingKey, setRestartingKey] = useState<string | null>(null)
   const [bannerRestarting, setBannerRestarting] = useState(false)
+  const [checkingKey, setCheckingKey] = useState<string | null>(null)
   const explorerQueryClient = useQueryClient()
+  const hasPendingMcp = useMemo(() => mcpServers.some((m) => m.pending === true), [mcpServers])
 
   const scheduleMcpRefresh = () => {
     // 재시작 직후 서버가 내려가 있어 조회가 실패할 수 있어 지연 재조회
@@ -524,6 +526,23 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
     }
   }
 
+  // 수동 상태 확인 — 자동 폴링은 하지 않는다 (기본적으로 체크 불필요, 필요할 때만 수동 확인)
+  const handleCheckMcp = async (serverId: string) => {
+    if (checkingKey || restartingKey || bannerRestarting) return
+    setCheckingKey(serverId)
+    try {
+      await explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'mcp'] })
+      await explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'config'] })
+      await explorerQueryClient.refetchQueries({ queryKey: ['opencode', 'mcp'] })
+      showToast.success(`MCP "${serverId}" 상태 확인됨.`)
+    } catch (err) {
+      console.error('Failed to check MCP status:', err)
+      showToast.error('MCP 상태 확인 실패.')
+    } finally {
+      setCheckingKey(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -642,7 +661,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
           </DropdownMenu>
         </div>
         {error && <p className="text-[11px] text-destructive mt-1">{error}</p>}
-        {tab === 'mcp' && (
+        {tab === 'mcp' && hasPendingMcp && (
           <div className="mt-1.5 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
             <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-amber-500" />
             <div className="flex-1 min-w-0">
@@ -653,7 +672,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
               <button
                 type="button"
                 onClick={handleBannerRestart}
-                disabled={bannerRestarting || restartingKey != null || deletingKey != null || bulkDeleting}
+                disabled={bannerRestarting || restartingKey != null || checkingKey != null || deletingKey != null || bulkDeleting}
                 className="mt-1 inline-flex items-center gap-1 rounded border border-amber-500/40 px-2 py-0.5 text-[11px] font-medium text-amber-600 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed dark:text-amber-400"
               >
                 {bannerRestarting ? (
@@ -750,10 +769,11 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                       {tab === 'mcp' && (item as McpExplorerItem).liveError && (
                         <p className="text-[11px] text-red-400 break-words">{(item as McpExplorerItem).liveError}</p>
                       )}
-                      <div className="flex items-center gap-3 pt-0.5 flex-wrap">
+                      <div className="flex items-center justify-between gap-2 pt-0.5 flex-wrap">
+                        <div className="flex items-center gap-3">
                         <button
                           type="button"
-                          disabled={deletingKey === name || restartingKey === name || bulkDeleting}
+                          disabled={deletingKey === name || restartingKey === name || checkingKey === name || bulkDeleting}
                           onClick={() => onEdit?.(tab === 'mcp' ? 'mcp' : tab === 'tool' ? 'tool' : 'agent', { name, scope: (item as { scope?: string }).scope ?? 'global', description: (item as AgentExplorerItem).description, mode: (item as AgentExplorerItem).mode, id: 'id' in item ? (item as McpExplorerItem).id : undefined })}
                           className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:no-underline"
                         >
@@ -761,7 +781,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                         </button>
                         <button
                           type="button"
-                          disabled={deletingKey === name || restartingKey === name || bulkDeleting}
+                          disabled={deletingKey === name || restartingKey === name || checkingKey === name || bulkDeleting}
                           onClick={() => onClone?.(tab === 'mcp' ? 'mcp' : tab === 'tool' ? 'tool' : 'agent', { name, scope: (item as { scope?: string }).scope ?? 'global', description: (item as AgentExplorerItem).description, mode: (item as AgentExplorerItem).mode, id: 'id' in item ? (item as McpExplorerItem).id : undefined })}
                           className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:no-underline"
                         >
@@ -769,7 +789,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                         </button>
                         <button
                           type="button"
-                          disabled={deletingKey === name || restartingKey === name || bulkDeleting}
+                          disabled={deletingKey === name || restartingKey === name || checkingKey === name || bulkDeleting}
                           onClick={() => handleSingleDelete(tab === 'mcp' ? 'mcp' : tab === 'tool' ? 'tool' : 'agent', { name, scope: (item as { scope?: string }).scope ?? 'global', id: 'id' in item ? (item as McpExplorerItem).id : undefined })}
                           className="inline-flex items-center gap-1 text-[11px] text-destructive hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:no-underline"
                         >
@@ -780,10 +800,12 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                           )}
                           {deletingKey === name ? '삭제중...' : 'Delete'}
                         </button>
+                        </div>
                         {tab === 'mcp' && (
+                          <div className="flex items-center gap-3">
                           <button
                             type="button"
-                            disabled={deletingKey === name || restartingKey === name || bulkDeleting || bannerRestarting}
+                            disabled={deletingKey === name || restartingKey === name || checkingKey === name || bulkDeleting || bannerRestarting}
                             onClick={() => handleRestartMcp(name)}
                             title="opencode 재시작 (MCP 적용)"
                             className="inline-flex items-center gap-1 text-[11px] text-amber-600 hover:text-amber-500 hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:no-underline dark:text-amber-400"
@@ -795,6 +817,21 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                             )}
                             {restartingKey === name ? '재시작중...' : 'Restart'}
                           </button>
+                          <button
+                            type="button"
+                            disabled={deletingKey === name || restartingKey === name || checkingKey === name || bulkDeleting || bannerRestarting}
+                            onClick={() => handleCheckMcp(name)}
+                            title="MCP 상태 수동 확인"
+                            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:no-underline"
+                          >
+                            {checkingKey === name ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-3 h-3" />
+                            )}
+                            {checkingKey === name ? '확인중...' : 'Check'}
+                          </button>
+                          </div>
                         )}
                       </div>
                     </div>
