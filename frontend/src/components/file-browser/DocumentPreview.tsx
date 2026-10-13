@@ -2,17 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Susp
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { lazyWithRetry } from './lazyRetry'
 import { ViewerLoadBoundary } from './ViewerBoundaries'
-
-const loadSpreadsheetEditor = () =>
-  import('@christophervr/xlsx-react-viewer').then((m) => ({ default: m.SpreadsheetEditor }))
-
-const loadPptxViewer = () => import('./PptxViewer')
-
-const loadWordEditor = () =>
-  import('docx-react-viewer').then((m) => ({ default: m.WordEditor }))
-
-const loadVisioViewer = () =>
-  import('visio-react-viewer').then((m) => ({ default: m.VisioViewer }))
+import { loadPptxViewer, loadSpreadsheetEditor, loadVisioViewer, loadWordEditor } from './viewerLoaders'
 
 let SpreadsheetEditor = lazyWithRetry(loadSpreadsheetEditor)
 let PptxViewer = lazyWithRetry(loadPptxViewer)
