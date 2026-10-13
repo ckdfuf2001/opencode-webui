@@ -13,9 +13,10 @@ interface FileBrowserSheetProps {
   repoName?: string
   initialSelectedFile?: string
   onMentionFile?: (file: FileInfo) => void
+  onFileSelect?: (file: FileInfo) => void
 }
 
-export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose, basePath = '', repoName, initialSelectedFile, onMentionFile }: FileBrowserSheetProps) {
+export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose, basePath = '', repoName, initialSelectedFile, onMentionFile, onFileSelect }: FileBrowserSheetProps) {
   const normalizedBasePath = basePath || '.'
   const [isEditing, setIsEditing] = useState(false)
   const [displayPath, setDisplayPath] = useState<string>('/')
@@ -110,6 +111,7 @@ export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose
             initialSelectedFile={initialSelectedFile}
             onDirectoryLoad={handleDirectoryLoad}
             onMentionFile={onMentionFile}
+            onFileSelect={onFileSelect}
             expandPreviewActions={true}
           />
         </div>

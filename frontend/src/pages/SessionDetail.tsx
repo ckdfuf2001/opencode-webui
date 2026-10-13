@@ -100,6 +100,8 @@ export function SessionDetail() {
   const [hiddenAfterID, setHiddenAfterID] = useState<string | null>(null);
   const [highlightedMessageID, setHighlightedMessageID] = useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
+  // 탐색기(인라인 패널/전체창)에서 고른 파일 — 양쪽이 같은 파일을 보도록 공유한다.
+  const [explorerSelectedPath, setExplorerSelectedPath] = useState<string | undefined>();
   const [globalUpload, setGlobalUpload] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null);
   const [filePanelWidth, setFilePanelWidth] = useState(380);
   const [autoScrollOverride, setAutoScrollOverride] = useState<boolean | null>(null);
@@ -1372,6 +1374,8 @@ export function SessionDetail() {
     }
     
     setSelectedFilePath(pathToOpen)
+    // 채팅에서 연 파일이 우선되도록 탐색기 선택은 비운다.
+    setExplorerSelectedPath(undefined)
     setFileBrowserOpen(true)
   }, [repo?.workspaceRel]);
 
@@ -1880,10 +1884,12 @@ if (results.length > 0) {
             basePath={repo.workspaceRel}
             repoName={repo.repoUrl?.split("/").pop()?.replace(".git", "") || repo.workspaceRel || "Repository"}
             initialSelectedFile={selectedFilePath}
+            selectedFilePath={explorerSelectedPath}
             width={filePanelWidth}
             onClose={handleFileBrowserClose}
             onOpenFullscreen={() => setFileBrowserFullscreenOpen(true)}
             onMentionFile={handleMentionFile}
+            onFileSelect={(f) => setExplorerSelectedPath(f.path)}
           />
         )}
       </div>
@@ -1893,8 +1899,9 @@ if (results.length > 0) {
         onClose={() => setFileBrowserFullscreenOpen(false)}
         basePath={repo?.workspaceRel}
         repoName={repo?.repoUrl?.split("/").pop()?.replace(".git", "") || repo?.workspaceRel || "Repository"}
-        initialSelectedFile={selectedFilePath}
+        initialSelectedFile={explorerSelectedPath ?? selectedFilePath}
         onMentionFile={handleMentionFile}
+        onFileSelect={(f) => setExplorerSelectedPath(f.path)}
       />
 
       <ModelSelectDialog

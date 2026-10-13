@@ -32,6 +32,8 @@ export function RepoDetail() {
   const repoId = parseInt(id || "0");
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [fileBrowserFullscreenOpen, setFileBrowserFullscreenOpen] = useState(false);
+  // 탐색기(인라인 패널/전체창)에서 고른 파일 — 양쪽이 같은 파일을 보도록 공유한다.
+  const [explorerSelectedPath, setExplorerSelectedPath] = useState<string | undefined>();
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [switchConfigOpen, setSwitchConfigOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -236,8 +238,10 @@ export function RepoDetail() {
             basePath={repo.workspaceRel}
             repoName={repoName}
             width={filePanelWidth}
+            selectedFilePath={explorerSelectedPath}
             onClose={() => setFileBrowserOpen(false)}
             onOpenFullscreen={() => setFileBrowserFullscreenOpen(true)}
+            onFileSelect={(f) => setExplorerSelectedPath(f.path)}
           />
         )}
       </div>
@@ -281,6 +285,8 @@ export function RepoDetail() {
           onClose={() => setFileBrowserFullscreenOpen(false)}
           basePath={repo.workspaceRel}
           repoName={repoName}
+          initialSelectedFile={explorerSelectedPath}
+          onFileSelect={(f) => setExplorerSelectedPath(f.path)}
         />
       <NavigationPanel open={navOpen} onClose={() => setNavOpen(false)} onNewRepo={() => setAddRepoOpen(true)} />
       <AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoOpen} />

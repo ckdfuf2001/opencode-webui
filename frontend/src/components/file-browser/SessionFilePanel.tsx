@@ -9,13 +9,16 @@ interface SessionFilePanelProps {
   basePath?: string
   repoName?: string
   initialSelectedFile?: string
+  /** 상위가 들고 있는 실시간 선택 (있으면 initialSelectedFile보다 우선). */
+  selectedFilePath?: string
   width?: number
   onClose: () => void
   onOpenFullscreen?: () => void
   onMentionFile?: (file: FileInfo) => void
+  onFileSelect?: (file: FileInfo) => void
 }
 
-export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSelectedFile, width = 380, onClose, onOpenFullscreen, onMentionFile }: SessionFilePanelProps) {
+export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSelectedFile, selectedFilePath, width = 380, onClose, onOpenFullscreen, onMentionFile, onFileSelect }: SessionFilePanelProps) {
   const [displayPath, setDisplayPath] = useState<string>('/')
 
   const handleDirectoryLoad = useCallback((info: { workspaceRoot?: string; currentPath: string }) => {
@@ -60,9 +63,10 @@ export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSe
         <FileBrowser
           basePath={basePath || '.'}
           embedded
-          initialSelectedFile={initialSelectedFile}
+          initialSelectedFile={selectedFilePath ?? initialSelectedFile}
           onDirectoryLoad={handleDirectoryLoad}
           onMentionFile={onMentionFile}
+          onFileSelect={onFileSelect}
         />
       </div>
     </div>

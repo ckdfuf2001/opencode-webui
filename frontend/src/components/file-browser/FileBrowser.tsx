@@ -228,6 +228,9 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   }, [searchQuery])
   const [sortBy, setSortBy] = useState<FileSort>('name-asc')
   const [loading, setLoading] = useState(false)
+  // 파일 본문 로딩은 트리 스피너와 분리한다 — 파일 클릭마다 트리가 통째로
+  // 스피너로 바뀌는 깜빡임을 없애기 위해 미리보기 쪽에서만 표시한다.
+  const [fileLoading, setFileLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState<{ name: string; loaded: number; total: number; index: number; count: number } | null>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -332,19 +335,19 @@ useEffect(() => {
       setSelectedFile(null)
       return
     }
-    
-    // Fetch the full file content when selecting a file
-    setLoading(true)
+
+    // Fetch the full file content when selecting a file (tree stays as-is).
+    setFileLoading(true)
     try {
       const response = await fetch(`${API_BASE_URL}/api/files/${file.path}`)
       if (!response.ok) {
         throw new Error(`Failed to load file: ${response.statusText}`)
       }
-      
+
       const fullFileData = await response.json()
       setSelectedFile(fullFileData)
       onFileSelect?.(fullFileData)
-      
+
       // On mobile, open preview in modal
       if (isMobile) {
         setIsPreviewModalOpen(true)
@@ -353,7 +356,7 @@ useEffect(() => {
       showToast.error(err instanceof Error ? err.message : 'Failed to load file', { duration: 5000 })
       setSelectedFile(null)
     } finally {
-      setLoading(false)
+      setFileLoading(false)
     }
   }, [onFileSelect, isMobile])
 
@@ -773,6 +776,11 @@ useEffect(() => {
           <div className="flex-1 overflow-y-auto min-h-0 h-full">
             {selectedFile && !selectedFile.isDirectory ? (
               <FilePreview file={selectedFile} expandActions={expandPreviewActions} />
+            ) : fileLoading ? (
+              <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span className="text-sm">Loading file...</span>
+              </div>
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">
                 Select a file to preview
