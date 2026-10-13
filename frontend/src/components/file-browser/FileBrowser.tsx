@@ -603,7 +603,19 @@ useEffect(() => {
     }
   }, [])
 
+  const hasFilePayload = (e: React.DragEvent) => {
+    try {
+      const types = Array.from(e.dataTransfer?.types ?? []) as string[]
+      if (types.includes('Files')) return true
+      return (e.dataTransfer?.files?.length ?? 0) > 0
+    } catch {
+      return false
+    }
+  }
+
   const handleDragEnter = (e: React.DragEvent) => {
+    // 파일 드래그가 아니면 에디터 내부 이동 등에 간섭하지 않는다.
+    if (!hasFilePayload(e)) return
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(true)
@@ -621,11 +633,18 @@ useEffect(() => {
   }
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (!hasFilePayload(e)) return
     e.preventDefault()
     e.stopPropagation()
   }
 
   const handleDrop = async (e: React.DragEvent) => {
+    // 파일 드래그가 아니면 에디터가 처리하게 둔다 (이동 방해 + 토스트 금지).
+    // 단 탐색기 바깥 내비게이션은 막는다.
+    if (!hasFilePayload(e)) {
+      e.preventDefault()
+      return
+    }
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(false)
