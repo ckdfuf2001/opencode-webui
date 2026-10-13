@@ -114,7 +114,12 @@ export async function sanitizeDocxForEdit(bytes: Uint8Array): Promise<Uint8Array
       continue
     }
     if (!changed) continue
-    const out = XML_DECL + new XMLSerializer().serializeToString(doc)
+    // XMLSerializer는 원본에 있던 선언을 그대로 싣고 나온다.
+    // 그대로 앞에 선언을 붙이면 선언이 2개(두 번째가 문서 중간)가 돼서
+    // "xml declaration which is only at the start"로 파싱이 죽는다.
+    // (?<=\s로 선언문만 벗긴다 — xml-stylesheet 같은 PI는 건드리지 않는다.)
+    const serialized = new XMLSerializer().serializeToString(doc).replace(/^<\?xml\s[^?]*\?>\s*/, '')
+    const out = XML_DECL + serialized
     zip.file(name, out)
     touched = true
   }

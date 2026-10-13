@@ -7,8 +7,8 @@ import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
 import { saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
-import { lazyWithRetry } from './lazyRetry'
 import { PptxViewerBoundary } from './ViewerBoundaries'
+import { PowerPointViewer } from 'pptx-react-viewer'
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
 import { collabApi, collabServerUrl } from '@/api/collab'
@@ -16,10 +16,6 @@ import { YCollabSession, buildCollaborationConfig, colorForName } from '@/lib/yc
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
-
-const PowerPointViewer = lazyWithRetry(() =>
-  import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
-)
 
 const pptxI18n = createInstance()
 void pptxI18n.use(initReactI18next).init({

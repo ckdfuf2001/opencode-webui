@@ -19,7 +19,6 @@ import { Bell } from 'lucide-react'
 import { BUILD_LABEL, logBuildInfo } from './lib/build-info'
 import { HtmlViewerMenu } from './components/html/HtmlViewerMenu'
 import { FavoriteSessionsPanel } from './components/favorites/FavoriteSessionsPanel'
-import { preloadViewers } from './components/file-browser/viewerPreload'
 
 // 자동승인은 백단이 전담한다 (세션 룰 포함 — 탭 닫힘과 무관).
 
@@ -87,9 +86,6 @@ function AppContent() {
   // 레거시 localStorage 알림 설정을 백단으로 1회 이전
   useNotifyMigration()
   useEffect(() => { logBuildInfo() }, [])
-  // 문서 뷰어 청크 유휴 예열 (정적 import 대신 — 초기 로드 무겁게 안 하고
-  // 파일 오픈 시 캐시 히트로 fetch 레이스를 피한다).
-  useEffect(() => { preloadViewers() }, [])
   // 전역 Esc: 채팅창 외에서는 열려있는 패널(즐찾/html/workspace/탐색기 등) 모두 닫기 — 레포/세션 리스트에서도 동작해야 하므로 App 레벨에서 처리
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
