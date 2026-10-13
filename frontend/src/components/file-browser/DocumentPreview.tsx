@@ -39,14 +39,14 @@ class ViewerLoadBoundary extends Component<
     if (!this.state.failed) return this.props.children
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-2 text-center px-6">
-        <p className="text-sm text-muted-foreground">미리보기를 불러오지 못했습니다.</p>
+        <p className="text-sm text-muted-foreground">Failed to load preview.</p>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={this.props.onRetry}>
-            다시 시도
+            Retry
           </Button>
           {this.props.onPdf && (
             <Button size="sm" variant="outline" onClick={this.props.onPdf}>
-              PDF로 보기
+              View as PDF
             </Button>
           )}
         </div>
