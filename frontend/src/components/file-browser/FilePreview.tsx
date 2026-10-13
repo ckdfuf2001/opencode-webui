@@ -4,7 +4,8 @@ import { Download, X, PenLine, Save, X as XIcon, WrapText, RefreshCw, Maximize2,
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { VirtualizedTextView, type VirtualizedTextViewHandle } from '@/components/ui/virtualized-text-view'
-import { DocumentPreview, detectDocKind } from './DocumentPreview'
+import { DocumentPreview } from './DocumentPreview'
+import { detectDocKind } from './docKind'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
 

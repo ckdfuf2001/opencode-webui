@@ -1,6 +1,7 @@
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { lazyWithRetry } from './lazyRetry'
+import { ViewerLoadBoundary } from './ViewerBoundaries'
 
 const loadSpreadsheetEditor = () =>
   import('@christophervr/xlsx-react-viewer').then((m) => ({ default: m.SpreadsheetEditor }))
@@ -25,41 +26,6 @@ function bustViewerChunks(): void {
   WordEditor = lazyWithRetry(loadWordEditor)
   VisioViewer = lazyWithRetry(loadVisioViewer)
 }
-
-/** 뷰어 청크 로드 실패 시 다시 시도/PDF 폴백을 보여준다. 원인 문구도 표시한다. */
-class ViewerLoadBoundary extends Component<
-  { onRetry: () => void; onPdf?: () => void; children: ReactNode },
-  { failed: boolean; message: string }
-> {
-  state = { failed: false, message: '' }
-  static getDerivedStateFromError(): { failed: boolean; message: string } {
-    return { failed: true, message: '' }
-  }
-  componentDidCatch(error: unknown): void {
-    this.setState({ message: error instanceof Error ? error.message : String(error) })
-  }
-  render(): ReactNode {
-    if (!this.state.failed) return this.props.children
-    return (
-      <div className="flex flex-col items-center justify-center py-12 gap-2 text-center px-6">
-        <p className="text-sm text-muted-foreground">Failed to load preview.</p>
-        {this.state.message && (
-          <p className="text-[11px] text-muted-foreground/70 font-mono break-all max-w-md">{this.state.message}</p>
-        )}
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={this.props.onRetry}>
-            Retry
-          </Button>
-          {this.props.onPdf && (
-            <Button size="sm" variant="outline" onClick={this.props.onPdf}>
-              View as PDF
-            </Button>
-          )}
-        </div>
-      </div>
-    )
-  }
-}
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
@@ -72,26 +38,11 @@ import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
-
-type DocKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'ppt' | 'msg' | 'visio'
+import { detectDocKind, type DocKind } from './docKind'
 
 type ExtractedMsg = {
   html?: string
   attachments?: Array<{ name: string; size: number; cid: string; mime: string }>
-}
-
-export function detectDocKind(name: string): DocKind | null {
-  const ext = name.split('.').pop()?.toLowerCase()
-  if (ext === 'pdf') return 'pdf'
-  if (ext === 'docx' || ext === 'docm' || ext === 'dotm') return 'docx'
-  if (ext === 'doc') return 'doc'
-  if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsm' || ext === 'xltx' || ext === 'xltm') return 'xlsx'
-  if (ext === 'xlsb') return 'xls'
-  if (ext === 'pptx' || ext === 'pptm' || ext === 'ppsx' || ext === 'potx') return 'pptx'
-  if (ext === 'ppt') return 'ppt'
-  if (ext === 'msg') return 'msg'
-  if (ext === 'vsdx' || ext === 'vsd') return 'visio'
-  return null
 }
 
 const CONVERTABLE_CLIENT_KINDS = new Set<DocKind>(['pdf', 'docx', 'xlsx', 'pptx'])
