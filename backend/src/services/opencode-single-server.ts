@@ -338,7 +338,11 @@ class OpenCodeServerManager {
   }
 
   async start(): Promise<void> {
-    if (this.isHealthy || this.isStarting) {
+    if (this.isStarting) {
+      logger.info('OpenCode server start already in progress; waiting for the in-flight attempt')
+      return
+    }
+    if (this.isHealthy) {
       if (!this.hasLoggedHealthy) {
         this.hasLoggedHealthy = true
         logger.info('OpenCode server already running and healthy')
@@ -419,13 +423,23 @@ class OpenCodeServerManager {
     this.launch(candidate, serverDirectory, binPath, isDevelopment)
 
     if (!(await this.waitForHealth(STARTUP_HEALTH_TIMEOUT_MS))) {
+      this.consecutiveLaunchFailures++
       logger.warn(`OpenCode failed to become healthy on port ${candidate}`)
+      if (this.consecutiveLaunchFailures >= 3) {
+        logger.error(
+          `OpenCode failed to start ${this.consecutiveLaunchFailures} times in a row on port ${candidate}. ` +
+          `If spawned servers exit instantly with ServeError, the port is likely held by a ghost socket ` +
+          `(a leaked child of a killed server still owns the listen handle — netstat shows a dead PID). ` +
+          `Set OPENCODE_SERVER_PORT in .env to a free port and restart the backend.`
+        )
+      }
       if (this.serverPid) {
         await this.teardownCurrent()
       }
       throw new Error(`OpenCode server failed to become healthy on port ${candidate}`)
     }
 
+    this.consecutiveLaunchFailures = 0
     this.isHealthy = true
     this.startHealthMonitor()
     logger.info(`OpenCode server is healthy on port ${candidate}`)
@@ -807,6 +821,7 @@ class OpenCodeServerManager {
   }
 
   private healthFailCount = 0
+  private consecutiveLaunchFailures = 0
   private healthMonitor: ReturnType<typeof setInterval> | null = null
 
   startHealthMonitor(intervalMs = 8000): void {
