@@ -859,21 +859,34 @@ class OpenCodeServerManager {
   }
 
   async checkHealth(): Promise<boolean> {
-    try {
-      const headers: Record<string, string> = {}
-      const auth = getServerAuthHeader()
-      if (auth) headers.Authorization = auth
-      const response = await fetch(`${this.getUrl()}/doc`, {
-        headers,
-        signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS)
-      })
-      const ok = response.ok
-      this.isHealthy = ok
-      return ok
-    } catch {
-      this.isHealthy = false
-      return false
+    // loopback 일시 거부(EACCES 등)는 1회 재시도 — 짧은 창이라 곧 통과한다.
+    // 재시도해도 안 되면 진짜 다운으로 본다.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const headers: Record<string, string> = {}
+        const auth = getServerAuthHeader()
+        if (auth) headers.Authorization = auth
+        const response = await fetch(`${this.getUrl()}/doc`, {
+          headers,
+          signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS)
+        })
+        const ok = response.ok
+        this.isHealthy = ok
+        return ok
+      } catch (err) {
+        const code = (err as { cause?: { code?: unknown }; code?: unknown })?.cause?.code
+          ?? (err as { code?: unknown })?.code
+        const transient = typeof code === 'string'
+          && ['EACCES', 'EPERM', 'ECONNREFUSED', 'ECONNRESET', 'WSAEACCES'].includes(code.toUpperCase())
+        if (!transient || attempt >= 2) {
+          this.isHealthy = false
+          return false
+        }
+        await new Promise((r) => setTimeout(r, 300))
+      }
     }
+    this.isHealthy = false
+    return false
   }
 
   private async verifyOpenCodeServer(): Promise<boolean> {

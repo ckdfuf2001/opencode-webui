@@ -525,6 +525,11 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           || normalized === 'ECONNRESET'
           || normalized === 'ENOTFOUND'
           || normalized === 'EAI_AGAIN'
+          // loopback 일시 거부(WFP 드라이버 개입 등): 짧은 창이라 재시도면 통과한다
+          || normalized === 'EACCES'
+          || normalized === 'EPERM'
+          || normalized === 'WSAEACCES'
+          || normalized.includes('10013')
           || normalized === 'CONNECTIONREFUSED'
           || normalized === 'CONNECTIONRESET'
           || normalized === 'CONNECTIONCLOSED'
