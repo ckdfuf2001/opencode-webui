@@ -58,10 +58,10 @@ export class YCollabSession {
   private getSession: (() => Promise<ResumeOutcome>) | null = null
   private onTerminalError: ((kind: 'external_change' | 'epoch_mismatch') => void) | null = null
 
-  constructor(
-    readonly url: string,
-    private user: YCollabUser,
-  ) {
+  readonly url: string
+
+  constructor(url: string, user: YCollabUser) {
+    this.url = url
     this.awareness.setLocalState({ userName: user.name, userColor: user.color })
     // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아낀다.
     this.doc.on('update', this.onDocUpdate)
@@ -290,7 +290,6 @@ export class YCollabSession {
   }
 
   setUser(user: YCollabUser): void {
-    this.user = user
     this.awareness.setLocalState({ userName: user.name, userColor: user.color })
   }
 

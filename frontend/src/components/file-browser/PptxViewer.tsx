@@ -49,35 +49,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     [],
   )
   const [saving, setSaving] = useState(false)
-  useEffect(() => {
-    const onSave = () => {
-      if (saving) return
-      const h = viewerRef.current
-      if (!h || !savePath) return
-      setSaving(true)
-      void h
-        .getContent()
-        .then(async (bytes) => {
-          // collab 저장 경로로 일원화 (baseHash 검사). solo면 직접 저장.
-          const fresh = new Uint8Array(bytes)
-          const ok = await persistBytes(fresh)
-          if (!ok) throw new Error('Save rejected')
-          const cs = await loadPptxComments(fresh)
-          setComments(cs)
-        })
-        .then(() => {
-          showToast.success('저장했습니다')
-          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
-        })
-        .catch((e) => {
-          showToast.error(e instanceof Error ? e.message : '저장 실패')
-          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false } }))
-        })
-        .finally(() => setSaving(false))
-    }
-    window.addEventListener('officeSaveRequest', onSave)
-    return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [savePath, fileName, saving, persistBytes])
   // lib에서 코멘트 추가 등 모델이 바뀌면 우리 목록도 다시 읽는다 (저장 전에도 보인다).
   const refreshComments = useCallback(async () => {
     const h = viewerRef.current
@@ -182,6 +153,38 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       // 무시
     }
   }, [fileName])
+
+  // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
+  // 평가되므로 앞에서 참조하면 TDZ가 난다).
+  useEffect(() => {
+    const onSave = () => {
+      if (saving) return
+      const h = viewerRef.current
+      if (!h || !savePath) return
+      setSaving(true)
+      void h
+        .getContent()
+        .then(async (bytes) => {
+          // collab 저장 경로로 일원화 (baseHash 검사). solo면 직접 저장.
+          const fresh = new Uint8Array(bytes)
+          const ok = await persistBytes(fresh)
+          if (!ok) throw new Error('Save rejected')
+          const cs = await loadPptxComments(fresh)
+          setComments(cs)
+        })
+        .then(() => {
+          showToast.success('저장했습니다')
+          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
+        })
+        .catch((e) => {
+          showToast.error(e instanceof Error ? e.message : '저장 실패')
+          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false } }))
+        })
+        .finally(() => setSaving(false))
+    }
+    window.addEventListener('officeSaveRequest', onSave)
+    return () => window.removeEventListener('officeSaveRequest', onSave)
+  }, [savePath, fileName, saving, persistBytes])
 
   // 편집 진입/종료에 맞춰 collab 세션 생명주기 관리. 실패하면 solo로 폴백.
   useEffect(() => {
