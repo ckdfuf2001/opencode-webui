@@ -169,7 +169,7 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
       await upsertHtmlPage({ name: file.name, kind: 'file', path: file.path })
       showToast.success(`Added to managed pages: ${file.name}`)
     } catch (error) {
-      showToast.error(error instanceof Error ? error.message : '등록 실패')
+      showToast.error(error instanceof Error ? error.message : 'Registration failed')
     }
   }
 
@@ -319,7 +319,7 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
               variant="ghost"
               size="sm"
               className="h-7 w-7 p-0"
-              title={expanded ? '접기' : '펼치기'}
+              title={expanded ? 'Collapse' : 'Expand'}
             onClick={(e) => {
               e.stopPropagation()
               setManualStore(!expanded)
@@ -333,7 +333,7 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
           className="flex items-center gap-1 flex-1"
           onClick={handleClick}
           onDoubleClick={handleDoubleClick}
-          title={file.isDirectory ? '클릭: 펼치기/접기, 더블클릭: 폴더로 이동' : file.name}
+          title={file.isDirectory ? 'Click: expand/collapse, double-click: open folder' : file.name}
         >
           {getFileIcon()}
           
@@ -358,7 +358,7 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
             <Globe className="w-3 h-3 shrink-0 text-emerald-400" />
           )}
           {isAttached && !editing && (
-            <span title="채팅에 첨부됨">
+            <span title="Attached to chat">
               <Paperclip className="w-3 h-3 shrink-0 text-amber-500" />
             </span>
           )}
@@ -369,7 +369,7 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
       {file.isDirectory && expanded && (
         <div>
           {childrenLoading && children.length === 0 && (
-            <div className="text-xs text-muted-foreground py-1" style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}>불러오는 중...</div>
+            <div className="text-xs text-muted-foreground py-1" style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}>Loading...</div>
           )}
           {children.map((child) => (
             <TreeNode
@@ -429,7 +429,7 @@ export const FileTree = memo(function FileTree({ files, onFileSelect, onDirector
         <div
           className="flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group"
           onClick={handleGoUp}
-          title="상위 폴더로 이동"
+          title="Go to parent folder"
         >
           <span className="w-4 shrink-0" />
           <FolderUp className="w-4 h-4 shrink-0" />

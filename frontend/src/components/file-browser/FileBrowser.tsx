@@ -411,7 +411,7 @@ useEffect(() => {
     const freshItems = items.filter(({ file }) => !isUploadInFlight(file))
     if (freshItems.length === 0 && dirs.length === 0) return
     if (freshItems.length < items.length) {
-      showToast.info(`이미 업로드 중인 ${items.length - freshItems.length}개 파일은 제외합니다`)
+      showToast.info(`Skipping ${items.length - freshItems.length} file(s) already uploading`)
     }
     setLoading(true)
     setError(null)
@@ -476,7 +476,7 @@ useEffect(() => {
     if (fileArray.length === 0) return
     const freshFiles = fileArray.filter((f) => !isUploadInFlight(f))
     if (freshFiles.length < fileArray.length) {
-      showToast.info(`이미 업로드 중인 ${fileArray.length - freshFiles.length}개 파일은 제외합니다`)
+      showToast.info(`Skipping ${fileArray.length - freshFiles.length} file(s) already uploading`)
     }
     if (freshFiles.length === 0) return
     let successCount = 0
@@ -633,7 +633,7 @@ useEffect(() => {
     } else if (e.dataTransfer.files.length > 0) {
       await handleUpload(e.dataTransfer.files)
     } else {
-      showToast.info('드롭한 항목에서 업로드할 파일을 찾지 못했습니다')
+      showToast.info('No uploadable files found in dropped items')
     }
   }
 
@@ -723,7 +723,7 @@ useEffect(() => {
             {uploadProgress && (
               <div className="px-1 py-2 text-xs text-blue-600 dark:text-blue-400 flex-shrink-0">
                 <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
+                  <span className="truncate">Uploading {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
                   <span className="font-mono shrink-0">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
@@ -826,7 +826,7 @@ useEffect(() => {
           {uploadProgress && (
             <div className="px-1 py-2 text-xs text-blue-600 dark:text-blue-400">
               <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="truncate">업로드 중 {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
+                <span className="truncate">Uploading {uploadProgress.index}/{uploadProgress.count} — {uploadProgress.name}</span>
                 <span className="font-mono shrink-0">{Math.round((uploadProgress.loaded / Math.max(uploadProgress.total, 1)) * 100)}%</span>
               </div>
               <div className="h-1.5 rounded-full bg-blue-500/20 overflow-hidden">
