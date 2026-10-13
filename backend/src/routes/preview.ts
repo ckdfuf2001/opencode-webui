@@ -33,7 +33,7 @@ export function createPreviewRoutes() {
       const lock = await lockInfo(parsed.path)
       if (lock.active) {
         return c.json(
-          { error: 'File is being collaboratively edited by a user', roomId: lock.roomId },
+          { error: '사용자가 공동편집 중입니다. 편집을 마친 뒤 다시 요청하세요', roomId: lock.roomId },
           409,
         )
       }

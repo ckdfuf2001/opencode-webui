@@ -483,6 +483,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   const [pdfMode, setPdfMode] = useState(false)
   const [editing, setEditing] = useState(false)
   const [viewerRetry, setViewerRetry] = useState(0)
+  const [endingEdit, setEndingEdit] = useState(false)
   useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
   const retryViewer = () => {
     bustViewerChunks()
@@ -505,6 +506,46 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     window.addEventListener('officeSaveDone', onDone as EventListener)
     return () => window.removeEventListener('officeSaveDone', onDone as EventListener)
   }, [])
+  // P1-6: 편집 종료는 flush가 끝날 때까지 기다린다. 실패하면 편집 유지(유실 방지).
+  const requestOfficeSave = useCallback((): Promise<boolean> => {
+    return new Promise((resolve) => {
+      let done = false
+      const timer = setTimeout(() => {
+        if (done) return
+        done = true
+        window.removeEventListener('officeSaveDone', onDone)
+        resolve(false)
+      }, 10000)
+      const onDone = (e: Event) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        window.removeEventListener('officeSaveDone', onDone as EventListener)
+        resolve(!!(e as CustomEvent<{ ok?: boolean }>).detail?.ok)
+      }
+      window.addEventListener('officeSaveDone', onDone as EventListener)
+      window.dispatchEvent(new CustomEvent('officeSaveRequest'))
+    })
+  }, [])
+  const endEditing = useCallback(async (after?: () => void) => {
+    if (!editing || endingEdit) {
+      after?.()
+      return
+    }
+    setEndingEdit(true)
+    try {
+      const ok = await requestOfficeSave()
+      if (ok) {
+        setEditing(false)
+        window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
+        after?.()
+      } else {
+        showToast.error('Save failed — staying in edit mode')
+      }
+    } finally {
+      setEndingEdit(false)
+    }
+  }, [editing, endingEdit, requestOfficeSave])
   const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && kind !== 'visio' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 
@@ -587,7 +628,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
           <div className="flex items-center rounded-md bg-muted p-0.5">
             <button
               type="button"
-              onClick={() => { setPdfMode(false); setEditing(false) }}
+              onClick={() => { setPdfMode(false); void endEditing() }}
               className={`h-6 text-xs px-2 rounded ${!pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="View directly without conversion"
             >
@@ -595,7 +636,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
             </button>
             <button
               type="button"
-              onClick={() => { setPdfMode(true); setEditing(false) }}
+              onClick={() => { void endEditing(() => setPdfMode(true)) }}
               className={`h-6 text-xs px-2 rounded ${pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
               title="View as PDF converted on server"
             >
@@ -607,17 +648,21 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
               <button
                 type="button"
                 onClick={() => {
-                  const next = !editing
-                  setEditing(next)
+                  if (editing) {
+                    void endEditing()
+                    return
+                  }
+                  setEditing(true)
                   // 편집은 전체화면으로 (전 문서 통일), 끝나면 채팅 자리로 복귀.
                   window.dispatchEvent(
-                    new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: next } }),
+                    new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }),
                   )
                 }}
-                className={`h-6 text-xs px-2 rounded ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+                disabled={endingEdit}
+                className={`h-6 text-xs px-2 rounded disabled:opacity-50 ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
                 title="Edit mode"
               >
-                {editing ? 'Done' : 'Edit'}
+                {endingEdit ? 'Saving…' : editing ? 'Done' : 'Edit'}
               </button>
               {editing && (
                 <button

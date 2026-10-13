@@ -1053,27 +1053,37 @@ export const openApiSpec = {
     '/api/collab/session': {
       post: {
         tags: ['collab'],
-        summary: 'Create or join a volatile Yjs room for a workspace file (first caller is host)',
+        summary: 'Create, join, or resume a volatile Yjs room for a workspace file (first caller is host)',
         requestBody: {
           required: true,
           content: {
             'application/json': {
-              schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+              schema: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string' },
+                  resumeEpoch: { type: 'string' },
+                  knownHash: { type: 'string' },
+                  clientId: { type: 'integer' },
+                },
+                required: ['path'],
+              },
             },
           },
         },
         responses: {
-          '200': { description: 'roomId, role (host/guest), fileHash' },
+          '200': { description: 'roomId, role (host/guest/resume), epoch, lastHash' },
           '400': { description: 'Invalid request' },
           '403': { description: 'Path traversal detected' },
           '404': { description: 'File not found' },
+          '409': { description: 'external_change or epoch_mismatch (see code)' },
         },
       },
     },
     '/api/collab/save': {
       post: {
         tags: ['collab'],
-        summary: 'Owner-only snapshot write-back (409 on baseHash mismatch, no auto-merge)',
+        summary: 'Owner-only snapshot write-back (409 on disk/lastHash mismatch, no auto-merge)',
         requestBody: {
           required: true,
           content: {
@@ -1086,7 +1096,7 @@ export const openApiSpec = {
                   baseHash: { type: 'string' },
                   bytesB64: { type: 'string' },
                 },
-                required: ['roomId', 'clientId', 'baseHash', 'bytesB64'],
+                required: ['roomId', 'clientId', 'bytesB64'],
               },
             },
           },
@@ -1095,7 +1105,7 @@ export const openApiSpec = {
           '200': { description: 'Saved, returns newHash' },
           '400': { description: 'Invalid request' },
           '404': { description: 'No such room' },
-          '409': { description: 'Not owner, owner offline, or file changed' },
+          '409': { description: 'not_owner/owner_offline/not_seeded/conflict (see code)' },
           '413': { description: 'File too large' },
         },
       },
@@ -1134,7 +1144,7 @@ export const openApiSpec = {
         summary: 'Whether a path has an active room (for AI-edit 409 and external-change banner)',
         parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
         responses: {
-          '200': { description: 'active flag with roomId/owner/externalChanged when active' },
+          '200': { description: 'active flag with roomId/owner/epoch/lastHash/externalChanged when active' },
           '400': { description: 'Missing path' },
         },
       },

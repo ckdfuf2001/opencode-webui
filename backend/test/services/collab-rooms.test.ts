@@ -19,12 +19,14 @@ const {
   createSession,
   currentDiskHash,
   removeConn,
+  resetCollabForTests,
+  setRoomTtlMs,
+  sweepRooms,
   handoff,
   hashBytes,
   isOwner,
   lockInfo,
   normalizeAbs,
-  resetCollabForTests,
   roomIdForAbs,
   rooms,
 } = await import('../../src/services/collab-rooms')
@@ -50,14 +52,14 @@ describe('collab room id', () => {
 })
 
 describe('session', () => {
-  it('first is host, second is guest, same room', async () => {
+  it('first is host, second is guest, same room+epoch', async () => {
     const s1 = await createSession(NOTE_REL)
     const s2 = await createSession(NOTE_REL)
     expect(s1.roomId).toBe(s2.roomId)
     expect(s1.role).toBe('host')
     expect(s2.role).toBe('guest')
-    expect(s1.fileHash).toBe(s2.fileHash)
-    expect(s1.fileHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(s1.epoch).toBe(s2.epoch)
+    expect(s1.lastHash).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('missing file -> 404', async () => {
@@ -68,31 +70,94 @@ describe('session', () => {
     const outside = path.resolve(tmp, '..', 'outside.txt')
     await expect(createSession(outside)).rejects.toMatchObject({ statusCode: 403 })
   })
+
+  it('orphan room + fresh session disposes and recreates as host', async () => {
+    const s1 = await createSession(NOTE_REL)
+    // 붙었다 나간 고아 (everConnected=true, conns=0).
+    const w = sock()
+    addConn(s1.roomId, w)
+    removeConn(s1.roomId, w)
+    const s2 = await createSession(NOTE_REL)
+    expect(s2.role).toBe('host')
+    expect(s2.epoch).not.toBe(s1.epoch)
+  })
+
+  it('never-connected room + second session joins as guest (no race)', async () => {
+    const s1 = await createSession(NOTE_REL)
+    const s2 = await createSession(NOTE_REL)
+    expect(s2.role).toBe('guest')
+    expect(s2.epoch).toBe(s1.epoch)
+  })
+
+  it('live room + wrong epoch -> epoch_mismatch', async () => {
+    const s1 = await createSession(NOTE_REL)
+    addConn(s1.roomId, sock())
+    await expect(
+      createSession(NOTE_REL, { resumeEpoch: 'deadbeef', knownHash: s1.lastHash }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'epoch_mismatch' })
+  })
+})
+
+describe('resume table', () => {
+  it('same epoch rejoins; owner restored from everOwner', async () => {
+    const s1 = await createSession(NOTE_REL)
+    const room = rooms.get(s1.roomId)!
+    room.everOwner.add(11)
+    const r = await createSession(NOTE_REL, { resumeEpoch: s1.epoch, knownHash: s1.lastHash, clientId: 11 })
+    expect(r.role).toBe('resume')
+    expect(r.epoch).toBe(s1.epoch)
+    expect(isOwner(room, 11)).toBe(true)
+  })
+
+  it('disk changed while away -> external_change', async () => {
+    const s1 = await createSession(NOTE_REL)
+    await fs.writeFile(path.join(tmp, NOTE_REL), 'outsider')
+    await expect(
+      createSession(NOTE_REL, { resumeEpoch: s1.epoch, knownHash: s1.lastHash }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'external_change' })
+  })
 })
 
 describe('owner + save', () => {
-  it('first conn owns; only owner saves; stale baseHash conflicts', async () => {
-    const { roomId, fileHash } = await createSession(NOTE_REL)
-    const room = rooms.get(roomId)!
+  it('only owner saves; judgment is server lastHash (P0-2)', async () => {
+    await createSession(NOTE_REL)
+    const s = await createSession(NOTE_REL)
+    const room = rooms.get(s.roomId)!
     const a = sock()
     const b = sock()
-    addConn(roomId, a)
-    addConn(roomId, b)
-    // awareness 도착 전이므로 ownerIds를 직접 심는다 (WS 경로는 릴레이 테스트에서 검증).
+    addConn(s.roomId, a)
+    addConn(s.roomId, b)
+    room.ownerConn = a
     room.ownerIds.add(7)
+    room.seeded = true
     expect(isOwner(room, 7)).toBe(true)
     expect(isOwner(room, 8)).toBe(false)
 
-    expect(checkSave(roomId, 8, 10)).toMatchObject({ ok: false, status: 409 })
-    expect(checkSave(roomId, 7, 10)).toMatchObject({ ok: true })
+    expect(checkSave(s.roomId, 8, 10)).toMatchObject({ ok: false, status: 409, code: 'not_owner' })
+    expect(checkSave(s.roomId, 7, 10)).toMatchObject({ ok: true })
 
-    const next = new TextEncoder().encode('hello v2')
-    const applied = await applySave(roomId, fileHash, next)
+    // owner 저장 후 승계된 쪽은 stale baseHash 없이도 저장된다 (서버 lastHash 기준).
+    const applied = await applySave(s.roomId, new TextEncoder().encode('hello v2'))
     expect('newHash' in applied).toBe(true)
-    expect(await currentDiskHash(roomId)).toBe(hashBytes(next))
+    expect(await currentDiskHash(s.roomId)).toBe(hashBytes(new TextEncoder().encode('hello v2')))
+    // 같은 내용 또 저장해도 lastHash 일치로 통과한다.
+    const again = await applySave(s.roomId, new TextEncoder().encode('hello v2'))
+    expect('newHash' in applied && 'newHash' in again).toBe(true)
 
-    const stale = await applySave(roomId, fileHash, new TextEncoder().encode('stale'))
-    expect('conflict' in stale).toBe(true)
+    // 외부 변경 후 저장은 conflict.
+    await fs.writeFile(path.join(tmp, NOTE_REL), 'outsider')
+    const conflicted = await applySave(s.roomId, new TextEncoder().encode('late'))
+    expect('conflict' in conflicted).toBe(true)
+  })
+
+  it('save before seed -> not_seeded (P1-1)', async () => {
+    const s = await createSession(NOTE_REL)
+    const room = rooms.get(s.roomId)!
+    const a = sock()
+    addConn(s.roomId, a)
+    room.ownerConn = a
+    room.ownerIds.add(7)
+    expect(checkSave(s.roomId, 7, 10)).toMatchObject({ ok: false, status: 409, code: 'not_seeded' })
   })
 
   it('unknown room -> 404', () => {
@@ -108,8 +173,8 @@ describe('handoff', () => {
     const b = sock()
     addConn(roomId, a)
     addConn(roomId, b)
+    room.ownerConn = a
     room.ownerIds.add(7)
-    // b의 clientId를 등록 (awareness 도착 시뮬레이션)
     room.conns.get(b)!.clientIds.add(9)
 
     expect(handoff(roomId, 8, 9)).toMatchObject({ ok: false, status: 409 })
@@ -129,49 +194,60 @@ describe('handoff', () => {
     addConn(roomId, b)
     room.conns.get(a)!.clientIds.add(7)
     room.conns.get(b)!.clientIds.add(9)
+    room.ownerConn = a
     room.ownerIds.add(7)
     removeConn(roomId, a)
     expect(isOwner(room, 9)).toBe(true)
     expect(room.conns.has(a)).toBe(false)
   })
 
-  it('last conn out disposes the room', async () => {
+  it('empty room lingers for TTL then disposes (P1-3)', async () => {
+    setRoomTtlMs(100)
     const { roomId } = await createSession(NOTE_REL)
     const a = sock()
     addConn(roomId, a)
     removeConn(roomId, a)
+    expect(rooms.has(roomId)).toBe(true)
+    await new Promise((r) => setTimeout(r, 150))
+    sweepRooms()
     expect(rooms.has(roomId)).toBe(false)
   })
 })
 
 describe('lock + external watch', () => {
-  it('inactive without conns, active with conns', async () => {
+  it('inactive without conns, active with conns (no per-poll hash)', async () => {
     const before = await lockInfo(NOTE_REL)
     expect(before).toMatchObject({ active: false })
-    const { roomId } = await createSession(NOTE_REL)
+    const { roomId, epoch } = await createSession(NOTE_REL)
     addConn(roomId, sock())
     const during = await lockInfo(NOTE_REL)
-    expect(during).toMatchObject({ active: true, roomId })
+    expect(during).toMatchObject({ active: true, roomId, epoch })
+    expect(typeof during.lastHash).toBe('string')
+    expect('diskHash' in during).toBe(false)
   })
 
-  it('external change flips the flag (own saves ignored)', async () => {
-    const { roomId, fileHash } = await createSession(NOTE_REL)
-    addConn(roomId, sock())
-    // 외부에서 직접 쓰기 (우리 save 경로가 아님)
-    await fs.writeFile(path.join(tmp, NOTE_REL), 'outsider')
+  it('external change flips the flag; save then conflicts (P0-2)', async () => {
+    await createSession(NOTE_REL)
+    const s = await createSession(NOTE_REL)
+    addConn(s.roomId, sock())
+    const before = await fs.readFile(path.join(tmp, NOTE_REL))
+    // 외부에서 직접 쓰기 (우리 save 경로가 아님) — 반드시 기존 내용과 다르게.
+    await fs.writeFile(path.join(tmp, NOTE_REL), `outsider-${Date.now()}`)
     for (let i = 0; i < 40; i++) {
       const info = await lockInfo(NOTE_REL)
       if (info.externalChanged) break
       await new Promise((r) => setTimeout(r, 250))
       if (i === 39) throw new Error('external change not detected')
     }
-    // 우리 저장은 플래그를 끈다
-    const disk = await currentDiskHash(roomId)
-    const applied = await applySave(roomId, disk!, new TextEncoder().encode('owner v3'))
+    // 외부 변경 뒤 저장은 conflict (자동 병합 없음).
+    const conflicted = await applySave(s.roomId, new TextEncoder().encode('late'))
+    expect('conflict' in conflicted).toBe(true)
+    // 원복 후 저장하면 성공하고 플래그가 꺼진다.
+    await fs.writeFile(path.join(tmp, NOTE_REL), before)
+    const applied = await applySave(s.roomId, new Uint8Array(before))
     expect('newHash' in applied).toBe(true)
     const after = await lockInfo(NOTE_REL)
     expect(after.externalChanged).toBe(false)
-    expect(fileHash).not.toBe((applied as { newHash: string }).newHash)
   })
 
   it('normalizeAbs is used for indexing', async () => {

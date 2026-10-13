@@ -11,8 +11,7 @@ import { lazyWithRetry } from './lazyRetry'
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
 import { collabApi, collabServerUrl } from '@/api/collab'
-import { YCollabSession, colorForName } from '@/lib/ycollab'
-import type { CollaborationConfig } from 'pptx-react-viewer'
+import { YCollabSession, buildCollaborationConfig, colorForName } from '@/lib/ycollab'
 
 const PowerPointViewer = lazyWithRetry(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
@@ -58,16 +57,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       void h
         .getContent()
         .then(async (bytes) => {
-          await saveOfficeBytes(
-            savePath,
-            fileName ?? 'presentation.pptx',
-            new Blob([bytes as unknown as BlobPart], {
-              type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            }),
-          )
-          // 저장된 바이트로 기준을 갱신한다 — 안 그러면 다음 코멘트 추가가 이전 내용을 덮는다.
+          // collab 저장 경로로 일원화 (baseHash 검사). solo면 직접 저장.
           const fresh = new Uint8Array(bytes)
-          setSavedBytes(fresh)
+          const ok = await persistBytes(fresh)
+          if (!ok) throw new Error('Save rejected')
           const cs = await loadPptxComments(fresh)
           setComments(cs)
         })
@@ -83,7 +76,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [savePath, fileName, saving])
+  }, [savePath, fileName, saving, persistBytes])
   // lib에서 코멘트 추가 등 모델이 바뀌면 우리 목록도 다시 읽는다 (저장 전에도 보인다).
   const refreshComments = useCallback(async () => {
     const h = viewerRef.current
@@ -118,29 +111,38 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [collab, setCollab] = useState<{
     session: YCollabSession
     roomId: string
+    epoch: string
     role: 'owner' | 'collaborator'
   } | null>(null)
   const [collabKey, setCollabKey] = useState(0)
   const [collabNotice, setCollabNotice] = useState<string | null>(null)
+  const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
+  const [connBadge, setConnBadge] = useState<{ status: string; synced: boolean }>({ status: 'connecting', synced: false })
   const baseHashRef = useRef<string | null>(null)
   const collabRef = useRef<typeof collab>(null)
   collabRef.current = collab
+  const toastedStatus = useRef<string | null>(null)
 
-  // 저장 일원화: collab 중이면 owner save API(baseHash 검사), 아니면 직접 저장.
+  // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
+  // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다.
   const persistBytes = useCallback(async (bytes: Uint8Array): Promise<boolean> => {
     const c = collabRef.current
     if (c && savePath) {
-      const res = await collabApi.save(c.roomId, c.session.clientId, baseHashRef.current ?? '', bytes)
+      const res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current)
       if (res.ok) {
         baseHashRef.current = res.newHash
+        c.session.knownHash = res.newHash
         setSavedBytes(new Uint8Array(bytes))
         return true
       }
       if (res.reason === 'conflict') {
-        setCollabNotice('Changed elsewhere — close and reopen to resync (no auto-merge).')
+        setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
+      } else if (res.reason === 'not_seeded') {
+        setCollabNotice('아직 동기화 전입니다. 잠시 후 다시 저장하세요.')
       } else {
         setCollabNotice(res.message ?? 'Save denied (not owner).')
       }
+      showToast.error(res.message ?? 'Save failed')
       return false
     }
     if (!savePath) return false
@@ -155,12 +157,30 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     return true
   }, [fileName, savePath])
 
-  // owner write-back (lib이 변경 debounce 후 호출).
+  // owner write-back (lib이 변경 debounce 후 호출). synced 전에는 저장하지 않는다.
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
     if (!c || c.role !== 'owner') return
+    if (!c.session.synced) return
     await persistBytes(bytes)
   }, [persistBytes])
+
+  // 내 사본 다운로드 (409 터미널 탈출용).
+  const offerMineDownload = useCallback(async () => {
+    try {
+      const h = viewerRef.current
+      if (!h) return
+      const bytes = new Uint8Array(await h.getContent())
+      const blob = new Blob([bytes as unknown as BlobPart], {
+        type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      })
+      const url = URL.createObjectURL(blob)
+      const base = (fileName ?? 'presentation.pptx').replace(/\.pptx$/i, '')
+      setMineFile({ url, name: `${base}.mine.pptx` })
+    } catch {
+      // 무시
+    }
+  }, [fileName])
 
   // 편집 진입/종료에 맞춰 collab 세션 생명주기 관리. 실패하면 solo로 폴백.
   useEffect(() => {
@@ -175,10 +195,19 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           name,
           color: colorForName(name),
         })
+        session.knownHash = info.lastHash
+        wireSessionRecovery(session)
         session.connect()
-        baseHashRef.current = info.fileHash
+        baseHashRef.current = info.lastHash
         setCollabNotice(null)
-        setCollab({ session, roomId: info.roomId, role: info.role === 'host' ? 'owner' : 'collaborator' })
+        setMineFile(null)
+        toastedStatus.current = null
+        setCollab({
+          session,
+          roomId: info.roomId,
+          epoch: info.epoch,
+          role: info.role === 'host' ? 'owner' : 'collaborator',
+        })
       } catch {
         if (!dead) setCollab(null)
       }
@@ -191,7 +220,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       // ref는 체인이 끝날 때까지 유지한다 (persistBytes가 ref를 읽기 때문).
       void (async () => {
         try {
-          if (c.role === 'owner') {
+          if (c.role === 'owner' && c.session.synced) {
             const h = viewerRef.current
             if (h) await persistBytes(new Uint8Array(await h.getContent()))
           }
@@ -210,10 +239,63 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, savePath])
 
-  // owner 승계 감지 + 외부변경 배너 (5초 폴).
+  // 세션 복구 배선: resume → 같은 doc으로 WS 재오픈 (리마운트 없음).
+  const wireSessionRecovery = (session: YCollabSession) => {
+    session.setRecovery({
+      getSession: async () => {
+        const c = collabRef.current
+        const sp = savePath
+        if (!c || !sp) return { kind: 'retry' as const }
+        try {
+          const info = await collabApi.session(sp, {
+            resumeEpoch: c.epoch,
+            knownHash: session.knownHash,
+            clientId: session.clientId,
+          })
+          return {
+            kind: 'ok' as const,
+            info: { roomId: info.roomId, role: info.role, epoch: info.epoch, lastHash: info.lastHash },
+          }
+        } catch (e) {
+          const code = (e as { code?: string })?.code
+          if (code === 'external_change' || code === 'epoch_mismatch') {
+            return { kind: 'terminal' as const, terminal: code }
+          }
+          return { kind: 'retry' as const }
+        }
+      },
+      onTerminalError: (kind) => {
+        if (kind === 'external_change') {
+          setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
+        } else {
+          setCollabNotice('다른 세션이 시작됨 — 다시 열기.')
+        }
+        void offerMineDownload()
+        showToast.error(kind === 'external_change' ? '외부에서 변경됨' : '다른 세션이 시작됨')
+      },
+    })
+    // 연결 상태 배지 + 전이 토스트(각 한 번).
+    session.subscribe(() => {
+      const snap = session.getSnapshot()
+      setConnBadge({ status: snap.status, synced: snap.synced })
+      if (snap.status === 'disconnected' && toastedStatus.current !== 'disconnected') {
+        toastedStatus.current = 'disconnected'
+        showToast.warning('연결이 끊김 — 재연결 중')
+      } else if (snap.status === 'connected' && toastedStatus.current === 'disconnected') {
+        toastedStatus.current = 'connected'
+        showToast.success('다시 연결됨')
+      } else if (snap.status === 'error' && toastedStatus.current !== 'error') {
+        toastedStatus.current = 'error'
+        showToast.error('공동편집 오류')
+      }
+    })
+  }
+
+  // owner 승계 감지 + 외부변경 배너 + knownHash 갱신 (5초 폴).
+  // room 소멸 시 solo로 되돌아가지 않고 resume 플로우로 간다.
   useEffect(() => {
     if (!collab || !savePath) return
-    const id = setInterval(() => {
+    const poll = () => {
       void (async () => {
         const c = collabRef.current
         if (!c) return
@@ -223,17 +305,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         } catch {
           return
         }
-        if (!lock || !lock.active) {
-          // room 소멸(백엔드 재시작 등) → solo로 복귀.
-          c.session.destroy()
-          collabRef.current = null
-          setCollab(null)
-          baseHashRef.current = null
-          setCollabNotice(null)
-          return
+        if (!lock || !lock.active) return // 재연결 루프가 resume 처리
+        if (lock.lastHash) {
+          baseHashRef.current = lock.lastHash
+          c.session.knownHash = lock.lastHash
         }
         if (lock.externalChanged) {
-          setCollabNotice('Changed elsewhere — close and reopen to resync (no auto-merge).')
+          setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
         }
         const me = c.session.clientId
         const amOwner = (lock.owner ?? []).includes(me)
@@ -241,7 +319,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           // 승계됨: 즉시 flush 후 role 반영(리마운트).
           try {
             const h = viewerRef.current
-            if (h) await persistBytes(new Uint8Array(await h.getContent()))
+            if (h && c.session.synced) await persistBytes(new Uint8Array(await h.getContent()))
           } catch {
             // 무시
           }
@@ -256,10 +334,42 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           }
         }
       })()
-    }, 5000)
+    }
+    // P1-2: sync 직후 5초를 기다리지 않고 바로 1회 실행한다.
+    poll()
+    const id = setInterval(poll, 5000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collab, savePath])
+
+  // P1-5: 탭이 숨겨지면 owner는 즉시 flush (모바일 홈 버튼 대응).
+  useEffect(() => {
+    if (!collab) return
+    const onVis = () => {
+      const c = collabRef.current
+      if (document.visibilityState === 'hidden') {
+        if (c && c.role === 'owner' && c.session.synced) {
+          const h = viewerRef.current
+          if (h) {
+            void h
+              .getContent()
+              .then((b) => persistBytes(new Uint8Array(b)))
+              .catch(() => {})
+          }
+        }
+      } else {
+        collabRef.current?.session.poke()
+      }
+    }
+    const onOnline = () => collabRef.current?.session.poke()
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('online', onOnline)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('online', onOnline)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collab])
   useEffect(() => {
     setComments([])
     setShowComments(false)
@@ -267,6 +377,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     setCurSlide(0)
     setSavedBytes(null)
     setDraft('')
+    setMineFile((prev) => {
+      if (prev) {
+        try {
+          URL.revokeObjectURL(prev.url)
+        } catch {
+          // 무시
+        }
+      }
+      return null
+    })
+    setCollabNotice(null)
   }, [data])
   useEffect(() => {
     let dead = false
@@ -339,6 +460,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       showToast.error('저장 경로가 없습니다')
       return false
     }
+    // P2-1: collaborator는 코멘트 저장 불가 (서버도 409로 막는다).
+    if (collabRef.current && collabRef.current.role !== 'owner') {
+      showToast.info('공동편집 중에는 owner만 코멘트를 저장할 수 있습니다')
+      return false
+    }
     // 세션 밖에서 저장하는데 누군가 편집 중이면 base가 stale이라 덮어쓴다. 차단.
     if (!collabRef.current) {
       try {
@@ -366,7 +492,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       const cs = await loadPptxComments(next)
       setComments(cs)
       if (cs.length > 0) setShowComments(true)
-      setReloadKey((v) => v + 1)
+      // P2-2: collab 중 리마운트 금지 — 같은 doc을 다시 seed할 위험이 있다.
+      if (!collabRef.current) setReloadKey((v) => v + 1)
       return true
     } catch (e) {
       showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
@@ -494,6 +621,25 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setUnlocking(false)
     }
   }
+  // 공동편집 설정 (편집 모드 + 세션 성공 때만). 실패하면 solo(기존 동작).
+  // P0-4: 모든 hook은 early return보다 위에 있어야 한다 (React #300).
+  // 복호화한 바이트를 디스크에 그대로 쓸 수 있어 암호 문서는 공동편집 제외.
+  const authorName = author.trim() || 'You'
+  const isDecrypted = unlocked !== null
+  const collaboration = useMemo(
+    () =>
+      buildCollaborationConfig(collab, {
+        editing,
+        authorName,
+        isDecrypted,
+        writeBackDebounceMs: 2500,
+        onWriteBack: (bytes: Uint8Array) => {
+          void handleWriteBack(bytes)
+        },
+      }),
+    [collab, editing, authorName, isDecrypted, handleWriteBack],
+  )
+
   if (!unlocked && isEncryptedOle(content)) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center px-6 gap-3">
@@ -514,31 +660,50 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       </div>
     )
   }
-  // 공동편집 설정 (편집 모드 + 세션 성공 때만). 실패하면 solo(기존 동작).
-  const authorName = author.trim() || 'You'
-  const collaboration = useMemo((): CollaborationConfig | undefined => {
-    if (!collab || !editing) return undefined
-    return {
-      roomId: collab.roomId,
-      // externalSession을 쓰므로 무시된다.
-      serverUrl: '',
-      externalSession: collab.session.toExternal() as unknown as CollaborationConfig['externalSession'],
-      userName: authorName,
-      userColor: colorForName(authorName),
-      role: collab.role,
-      onWriteBack: (bytes: Uint8Array) => {
-        void handleWriteBack(bytes)
-      },
-    }
-  }, [collab, collabKey, editing, authorName, handleWriteBack])
 
   return (
     <div
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
     >
+      {isDecrypted && editing && (
+        <div className="px-3 py-1.5 border-b border-border text-[11px] text-muted-foreground">
+          Encrypted documents cannot be co-edited — editing solo.
+        </div>
+      )}
+      {collab && (
+        <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
+          <span
+            className={`inline-block w-1.5 h-1.5 rounded-full ${
+              connBadge.status === 'connected'
+                ? 'bg-green-500'
+                : connBadge.status === 'error'
+                  ? 'bg-red-500'
+                  : 'bg-amber-500 animate-pulse'
+            }`}
+          />
+          <span>
+            {connBadge.status === 'connected'
+              ? `연결됨 (${collab.role})`
+              : connBadge.status === 'error'
+                ? '오류'
+                : connBadge.status === 'disconnected'
+                  ? '재연결 중'
+                  : '연결 중'}
+          </span>
+        </div>
+      )}
       {collabNotice && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-600 dark:text-amber-400">
           <span className="flex-1">{collabNotice}</span>
+          {mineFile && (
+            <a
+              href={mineFile.url}
+              download={mineFile.name}
+              className="shrink-0 underline underline-offset-2 hover:text-amber-500"
+            >
+              내 사본 다운로드
+            </a>
+          )}
           <button
             type="button"
             onClick={() => setCollabNotice(null)}
@@ -599,7 +764,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
               <Button
                 size="sm"
                 className="w-full h-7 text-xs"
-                disabled={!draft.trim() || adding}
+                disabled={!draft.trim() || adding || (collab !== null && collab.role !== 'owner')}
+                title={collab !== null && collab.role !== 'owner' ? '공동편집 중에는 owner만 코멘트를 저장할 수 있습니다' : undefined}
                 onClick={() => void addComment()}
               >
                 {adding ? '저장 중…' : '코멘트 저장'}

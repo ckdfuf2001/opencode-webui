@@ -399,7 +399,7 @@ def _collab_locked(path: str | None) -> dict[str, Any] | None:
             "ok": False,
             "error": {
                 "type": "CollabLocked",
-                "message": "File is being collaboratively edited by a user",
+                "message": "사용자가 공동편집 중입니다. 편집을 마친 뒤 다시 요청하세요",
                 "roomId": info.get("roomId"),
             },
         }

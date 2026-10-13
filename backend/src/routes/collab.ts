@@ -18,12 +18,15 @@ import { logger } from '../utils/logger'
 
 const SessionSchema = z.object({
   path: z.string().min(1),
+  resumeEpoch: z.string().min(1).optional(),
+  knownHash: z.string().min(1).optional(),
+  clientId: z.number().int().optional(),
 })
 
 const SaveSchema = z.object({
   roomId: z.string().min(1),
   clientId: z.number().int(),
-  baseHash: z.string().min(1),
+  baseHash: z.string().optional(),
   bytesB64: z.string().min(1),
 })
 
@@ -48,8 +51,11 @@ function errJson(c: { json: (o: unknown, s?: number) => Response }, error: unkno
   if (error instanceof z.ZodError) {
     return c.json({ error: 'Invalid request', details: error.issues }, 400)
   }
-  const e = error as { message?: string; statusCode?: number }
-  return c.json({ error: e?.message || 'Request failed' }, e?.statusCode || fallback)
+  const e = error as { message?: string; statusCode?: number; code?: string; currentHash?: string | null }
+  const body: Record<string, unknown> = { error: e?.message || 'Request failed' }
+  if (e?.code) body.code = e.code
+  if (e?.currentHash !== undefined) body.currentHash = e.currentHash
+  return c.json(body, e?.statusCode || fallback)
 }
 
 const app = new Hono()
@@ -57,7 +63,11 @@ const app = new Hono()
 app.post('/session', async (c) => {
   try {
     const body = SessionSchema.parse(await c.req.json())
-    const result = await createSession(body.path)
+    const result = await createSession(body.path, {
+      resumeEpoch: body.resumeEpoch,
+      knownHash: body.knownHash,
+      clientId: body.clientId,
+    })
     return c.json(result)
   } catch (error) {
     return errJson(c, error, 500)
@@ -74,11 +84,15 @@ app.post('/save', async (c) => {
       return c.json({ error: 'Invalid bytesB64' }, 400)
     }
     const check = checkSave(body.roomId, body.clientId, bytes.length)
-    if (!check.ok) return c.json({ error: check.error }, check.status || 409)
-    const applied = await applySave(body.roomId, body.baseHash, bytes)
+    if (!check.ok) return c.json({ error: check.error, code: check.code }, check.status || 409)
+    const applied = await applySave(body.roomId, bytes)
     if ('conflict' in applied) {
       return c.json(
-        { error: 'File changed on disk since baseHash (no auto-merge)', currentHash: applied.currentHash },
+        {
+          error: 'File changed on disk since last save (no auto-merge)',
+          code: 'conflict',
+          currentHash: applied.currentHash,
+        },
         409,
       )
     }
@@ -92,7 +106,7 @@ app.post('/handoff', async (c) => {
   try {
     const body = HandoffSchema.parse(await c.req.json())
     const result = handoff(body.roomId, body.fromClientId, body.toClientId)
-    if (!result.ok) return c.json({ error: result.error }, result.status || 409)
+    if (!result.ok) return c.json({ error: result.error, code: result.code }, result.status || 409)
     return c.json({ ok: true, owner: result.owner })
   } catch (error) {
     return errJson(c, error, 500)

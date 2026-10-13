@@ -3,8 +3,9 @@ import { API_BASE_URL } from '@/config'
 
 export interface CollabSessionInfo {
   roomId: string
-  role: 'host' | 'guest'
-  fileHash: string
+  role: 'host' | 'guest' | 'resume'
+  epoch: string
+  lastHash: string
   path: string
 }
 
@@ -12,13 +13,14 @@ export interface CollabLockInfo {
   active: boolean
   roomId?: string
   owner?: number[]
+  epoch?: string
+  lastHash?: string
   externalChanged?: boolean
-  diskHash?: string | null
 }
 
 export type CollabSaveResult =
   | { ok: true; newHash: string }
-  | { ok: false; reason: 'conflict' | 'denied' | 'error'; currentHash?: string | null; message?: string }
+  | { ok: false; reason: 'conflict' | 'denied' | 'not_seeded' | 'error'; currentHash?: string | null; code?: string; message?: string }
 
 /** ws(s)://<origin>/api/collab — 폰·PC 모두 같은 origin으로 붙는다. */
 export function collabServerUrl(): string {
@@ -27,16 +29,32 @@ export function collabServerUrl(): string {
 }
 
 export const collabApi = {
-  session: async (path: string): Promise<CollabSessionInfo> => {
-    const { data } = await axios.post(`${API_BASE_URL}/api/collab/session`, { path })
-    return data
+  session: async (
+    path: string,
+    resume?: { resumeEpoch?: string; knownHash?: string | null; clientId?: number },
+  ): Promise<CollabSessionInfo> => {
+    try {
+      const { data } = await axios.post(`${API_BASE_URL}/api/collab/session`, {
+        path,
+        resumeEpoch: resume?.resumeEpoch,
+        knownHash: resume?.knownHash ?? undefined,
+        clientId: resume?.clientId,
+      })
+      return data
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        const body = error.response.data as { error?: string; code?: string }
+        throw { code: body?.code ?? 'conflict', message: body?.error }
+      }
+      throw error
+    }
   },
 
   save: async (
     roomId: string,
     clientId: number,
-    baseHash: string,
     bytes: Uint8Array,
+    baseHash?: string | null,
   ): Promise<CollabSaveResult> => {
     let binary = ''
     const chunk = 0x8000
@@ -47,20 +65,18 @@ export const collabApi = {
       const { data } = await axios.post(`${API_BASE_URL}/api/collab/save`, {
         roomId,
         clientId,
-        baseHash,
+        baseHash: baseHash ?? undefined,
         bytesB64: btoa(binary),
       })
       return { ok: true, newHash: data.newHash }
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
-        const body = error.response.data as { error?: string; currentHash?: string | null }
-        const conflict = body?.currentHash !== undefined
-        return {
-          ok: false,
-          reason: conflict ? 'conflict' : 'denied',
-          currentHash: body?.currentHash ?? null,
-          message: body?.error,
+        const body = error.response.data as { error?: string; code?: string; currentHash?: string | null }
+        if (body?.code === 'not_seeded') return { ok: false, reason: 'not_seeded', code: body.code, message: body.error }
+        if (body?.code === 'conflict' || body?.currentHash !== undefined) {
+          return { ok: false, reason: 'conflict', currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
         }
+        return { ok: false, reason: 'denied', code: body?.code, message: body?.error }
       }
       return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Save failed' }
     }
