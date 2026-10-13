@@ -501,11 +501,11 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
     setRestartingKey(serverId)
     try {
       await settingsApi.restartOpenCodeServer()
-      showToast.success(`opencode 재시작 요청됨 (MCP "${serverId}" 적용).`)
+      showToast.success(`OpenCode restart requested (applying MCP "${serverId}").`)
       scheduleMcpRefresh()
     } catch (err) {
       console.error('Failed to restart OpenCode server:', err)
-      showToast.error('opencode 재시작 실패.')
+      showToast.error('Failed to restart OpenCode.')
     } finally {
       setRestartingKey(null)
     }
@@ -516,11 +516,11 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
     setBannerRestarting(true)
     try {
       await settingsApi.restartOpenCodeServer()
-      showToast.success('opencode 재시작 요청됨.')
+      showToast.success('OpenCode restart requested.')
       scheduleMcpRefresh()
     } catch (err) {
       console.error('Failed to restart OpenCode server:', err)
-      showToast.error('opencode 재시작 실패.')
+      showToast.error('Failed to restart OpenCode.')
     } finally {
       setBannerRestarting(false)
     }
@@ -534,10 +534,10 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
       await explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'mcp'] })
       await explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'config'] })
       await explorerQueryClient.refetchQueries({ queryKey: ['opencode', 'mcp'] })
-      showToast.success(`MCP "${serverId}" 상태 확인됨.`)
+      showToast.success(`MCP "${serverId}" status checked.`)
     } catch (err) {
       console.error('Failed to check MCP status:', err)
-      showToast.error('MCP 상태 확인 실패.')
+      showToast.error('Failed to check MCP status.')
     } finally {
       setCheckingKey(null)
     }
@@ -655,7 +655,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                 ) : (
                   <Trash2 className="w-3.5 h-3.5 mr-2" />
                 )}
-                {bulkDeleting ? `삭제중... (${bulkSelection.size})` : `Delete All (${bulkSelection.size})`}
+                {bulkDeleting ? `Deleting... (${bulkSelection.size})` : `Delete All (${bulkSelection.size})`}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -666,7 +666,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
             <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-amber-500" />
             <div className="flex-1 min-w-0">
               <p className="text-[11px] leading-snug text-amber-600 dark:text-amber-400">
-                MCP 추가/수정/삭제 후에는 opencode 재시작이 필요합니다.
+                MCP changes require an OpenCode restart.
                 <span className="text-muted-foreground"> (Setting → OpenCode → Restart Server)</span>
               </p>
               <button
@@ -680,7 +680,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                 ) : (
                   <RefreshCw className="w-3 h-3" />
                 )}
-                {bannerRestarting ? '재시작중...' : '지금 재시작'}
+                {bannerRestarting ? 'Restarting...' : 'Restart now'}
               </button>
             </div>
           </div>
@@ -722,7 +722,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                 : tab === 'tool'
                   ? (badge === 'project' ? SCOPE_DISPLAY.project.className : SCOPE_DISPLAY.global.className)
                   : (badge === 'project' ? SCOPE_DISPLAY.project.className : SCOPE_DISPLAY.global.className)
-              const badgeLabel = tab === 'mcp' && badge === 'pending' ? '재시작 필요' : badge
+              const badgeLabel = tab === 'mcp' && badge === 'pending' ? 'Restart required' : badge
               const mcpIconClass = tab === 'mcp'
                 ? (badge === 'connected'
                     ? 'text-green-500'
@@ -752,7 +752,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                     >
                     <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${mcpIconClass}`} />
                     <span className="font-mono text-xs font-medium flex-1 min-w-0 truncate">{name}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${badgeClass}`} title={tab === 'mcp' && isMcpPending ? 'opencode 재시작 후 적용됩니다' : undefined}>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${badgeClass}`} title={tab === 'mcp' && isMcpPending ? 'Applies after an OpenCode restart' : undefined}>
                       {badgeLabel}
                     </span>
                     {isSelected ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
@@ -763,7 +763,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                       <p className="text-xs text-muted-foreground break-words">{description || 'No description.'}</p>
                       {tab === 'mcp' && isMcpPending && (
                         <p className="text-[11px] text-zinc-400">
-                          신규 추가됨 — opencode 재시작 후 정상 색상으로 표시됩니다.
+                          Newly added — will show the normal color after an OpenCode restart.
                         </p>
                       )}
                       {tab === 'mcp' && (item as McpExplorerItem).liveError && (
@@ -798,7 +798,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                           ) : (
                             <Trash2 className="w-3 h-3" />
                           )}
-                          {deletingKey === name ? '삭제중...' : 'Delete'}
+                          {deletingKey === name ? 'Deleting...' : 'Delete'}
                         </button>
                         </div>
                         {tab === 'mcp' && (
@@ -807,7 +807,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                             type="button"
                             disabled={deletingKey === name || restartingKey === name || checkingKey === name || bulkDeleting || bannerRestarting}
                             onClick={() => handleRestartMcp(name)}
-                            title="opencode 재시작 (MCP 적용)"
+                            title="Restart OpenCode (apply MCP)"
                             className="inline-flex items-center gap-1 text-[11px] text-amber-600 hover:text-amber-500 hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:no-underline dark:text-amber-400"
                           >
                             {restartingKey === name ? (
@@ -815,13 +815,13 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                             ) : (
                               <RefreshCw className="w-3 h-3" />
                             )}
-                            {restartingKey === name ? '재시작중...' : 'Restart'}
+                            {restartingKey === name ? 'Restarting...' : 'Restart'}
                           </button>
                           <button
                             type="button"
                             disabled={deletingKey === name || restartingKey === name || checkingKey === name || bulkDeleting || bannerRestarting}
                             onClick={() => handleCheckMcp(name)}
-                            title="MCP 상태 수동 확인"
+                            title="Check MCP status manually"
                             className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:no-underline"
                           >
                             {checkingKey === name ? (
@@ -829,7 +829,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                             ) : (
                               <CheckCircle2 className="w-3 h-3" />
                             )}
-                            {checkingKey === name ? '확인중...' : 'Check'}
+                            {checkingKey === name ? 'Checking...' : 'Check'}
                           </button>
                           </div>
                         )}
@@ -936,7 +936,7 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
                             ) : (
                               <Trash2 className="w-3 h-3" />
                             )}
-                            {deletingKey === command.name ? '삭제중...' : 'Delete'}
+                            {deletingKey === command.name ? 'Deleting...' : 'Delete'}
                           </button>
                         </div>
                       )}
@@ -1137,7 +1137,7 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
           <div className="flex-1 min-w-0">
             <Select value={selectedRepo} onValueChange={setSelectedRepo}>
               <SelectTrigger className="w-full h-7 text-xs min-w-0 [&>span]:truncate">
-                <SelectValue placeholder="레포 선택" />
+                <SelectValue placeholder="Select repository" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Repositories</SelectItem>
@@ -1244,19 +1244,19 @@ function RecallPanel({ repoId, sessionId, onUseInChat }: { repoId?: number; sess
         {!debouncedQ ? (
           <div className="flex flex-col items-center justify-center h-full px-6 text-center">
             <Brain className="w-8 h-8 mb-2 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">Recall (FTS) — 최근 대화·커밋에서 관련 기억을 찾습니다.</p>
-            <p className="text-xs text-muted-foreground/70 mt-1">서치 페이지와 동일: 레포/갯수 필터, git/chat 구분, 클립보드·채팅 사용</p>
+            <p className="text-sm text-muted-foreground">Recall (FTS) — find related memories from recent chats & commits.</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">Same as the Search page: repo/hit filters, git/chat split, copy & use-in-chat</p>
           </div>
         ) : isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
           </div>
         ) : isError ? (
-          <p className="text-sm text-destructive">검색 실패: {(error as Error).message}</p>
+          <p className="text-sm text-destructive">Search failed: {(error as Error).message}</p>
         ) : !data || filteredHits.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
             <Search className="w-8 h-8 mb-2 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">결과 없음</p>
+            <p className="text-sm text-muted-foreground">No results</p>
           </div>
         ) : (
           <>
