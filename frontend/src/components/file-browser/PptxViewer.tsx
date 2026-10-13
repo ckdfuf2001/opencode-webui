@@ -14,6 +14,8 @@ import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, 
 import { collabApi, collabServerUrl } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, colorForName } from '@/lib/ycollab'
 import { useMobile } from '@/hooks/useMobile'
+import { useTheme } from '@/hooks/useTheme'
+import { pptxThemeColors } from './viewerTheme'
 
 const PowerPointViewer = lazyWithRetry(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
@@ -42,6 +44,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // 보기 모드에서도 좁은 화면에선 모바일 바를 켜야 슬라이드 시트에 닿는다.
   // (데스크톱은 editing 그대로라 변화 없음)
   const narrowViewport = useMobile()
+  const appTheme = useTheme()
+  const viewerTheme = useMemo(() => ({ colors: pptxThemeColors(appTheme === 'dark') }), [appTheme])
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
@@ -731,6 +735,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   fileName={fileName}
                   canEdit={editing}
                   showToolbar={editing || narrowViewport}
+                  theme={viewerTheme}
                   initialSlide={slideIdx}
                   onActiveSlideChange={(i: number) => setCurSlide(i)}
                   onContentChange={() => void onViewerContentChange()}

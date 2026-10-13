@@ -39,6 +39,7 @@ import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
 import { detectDocKind, type DocKind } from './docKind'
+import { useTheme } from '@/hooks/useTheme'
 
 type ExtractedMsg = {
   html?: string
@@ -816,6 +817,7 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
 }
 
 function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
+  const appTheme = useTheme()
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
@@ -1099,6 +1101,7 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
               ref={setHandle}
               readOnly={!editing}
               showToolbar={editing}
+              theme={appTheme}
               onDocumentChange={scheduleRelayout}
               onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
             />
@@ -1377,6 +1380,7 @@ function XlsxIconBtn({
 }
 
 function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
+  const appTheme = useTheme()
   const [error, setError] = useState<string | null>(null)
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
@@ -1631,6 +1635,7 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
             readOnly={!editing}
             showToolbar={editing}
             showFormulaBar={editing}
+            theme={appTheme}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}
           />
