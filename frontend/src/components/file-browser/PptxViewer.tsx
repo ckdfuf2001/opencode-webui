@@ -10,6 +10,9 @@ import { showToast } from '@/lib/toast'
 import { lazyWithRetry } from './lazyRetry'
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
+import { collabApi, collabServerUrl } from '@/api/collab'
+import { YCollabSession, colorForName } from '@/lib/ycollab'
+import type { CollaborationConfig } from 'pptx-react-viewer'
 
 const PowerPointViewer = lazyWithRetry(() =>
   import('pptx-react-viewer').then((m) => ({ default: m.PowerPointViewer })),
@@ -111,6 +114,152 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   })
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
+  // 공동편집 (편집 모드에서만 세션 참가 — 보기만 할 때는 AI 차단을 걸지 않는다).
+  const [collab, setCollab] = useState<{
+    session: YCollabSession
+    roomId: string
+    role: 'owner' | 'collaborator'
+  } | null>(null)
+  const [collabKey, setCollabKey] = useState(0)
+  const [collabNotice, setCollabNotice] = useState<string | null>(null)
+  const baseHashRef = useRef<string | null>(null)
+  const collabRef = useRef<typeof collab>(null)
+  collabRef.current = collab
+
+  // 저장 일원화: collab 중이면 owner save API(baseHash 검사), 아니면 직접 저장.
+  const persistBytes = useCallback(async (bytes: Uint8Array): Promise<boolean> => {
+    const c = collabRef.current
+    if (c && savePath) {
+      const res = await collabApi.save(c.roomId, c.session.clientId, baseHashRef.current ?? '', bytes)
+      if (res.ok) {
+        baseHashRef.current = res.newHash
+        setSavedBytes(new Uint8Array(bytes))
+        return true
+      }
+      if (res.reason === 'conflict') {
+        setCollabNotice('Changed elsewhere — close and reopen to resync (no auto-merge).')
+      } else {
+        setCollabNotice(res.message ?? 'Save denied (not owner).')
+      }
+      return false
+    }
+    if (!savePath) return false
+    await saveOfficeBytes(
+      savePath,
+      fileName ?? 'presentation.pptx',
+      new Blob([bytes as unknown as BlobPart], {
+        type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      }),
+    )
+    setSavedBytes(new Uint8Array(bytes))
+    return true
+  }, [fileName, savePath])
+
+  // owner write-back (lib이 변경 debounce 후 호출).
+  const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
+    const c = collabRef.current
+    if (!c || c.role !== 'owner') return
+    await persistBytes(bytes)
+  }, [persistBytes])
+
+  // 편집 진입/종료에 맞춰 collab 세션 생명주기 관리. 실패하면 solo로 폴백.
+  useEffect(() => {
+    if (!editing || !savePath) return
+    let dead = false
+    const name = author.trim() || 'You'
+    void (async () => {
+      try {
+        const info = await collabApi.session(savePath)
+        if (dead) return
+        const session = new YCollabSession(`${collabServerUrl()}/${info.roomId}`, {
+          name,
+          color: colorForName(name),
+        })
+        session.connect()
+        baseHashRef.current = info.fileHash
+        setCollabNotice(null)
+        setCollab({ session, roomId: info.roomId, role: info.role === 'host' ? 'owner' : 'collaborator' })
+      } catch {
+        if (!dead) setCollab(null)
+      }
+    })()
+    return () => {
+      dead = true
+      const c = collabRef.current
+      if (!c) return
+      // 나갈 때: owner면 마지막 flush 후 세션 파괴 (서버가 남은 쪽으로 자동 승계).
+      // ref는 체인이 끝날 때까지 유지한다 (persistBytes가 ref를 읽기 때문).
+      void (async () => {
+        try {
+          if (c.role === 'owner') {
+            const h = viewerRef.current
+            if (h) await persistBytes(new Uint8Array(await h.getContent()))
+          }
+        } catch {
+          // 무시
+        } finally {
+          c.session.destroy()
+          if (collabRef.current === c) {
+            collabRef.current = null
+            setCollab(null)
+            baseHashRef.current = null
+          }
+        }
+      })()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, savePath])
+
+  // owner 승계 감지 + 외부변경 배너 (5초 폴).
+  useEffect(() => {
+    if (!collab || !savePath) return
+    const id = setInterval(() => {
+      void (async () => {
+        const c = collabRef.current
+        if (!c) return
+        let lock: Awaited<ReturnType<typeof collabApi.lock>> | null = null
+        try {
+          lock = await collabApi.lock(savePath)
+        } catch {
+          return
+        }
+        if (!lock || !lock.active) {
+          // room 소멸(백엔드 재시작 등) → solo로 복귀.
+          c.session.destroy()
+          collabRef.current = null
+          setCollab(null)
+          baseHashRef.current = null
+          setCollabNotice(null)
+          return
+        }
+        if (lock.externalChanged) {
+          setCollabNotice('Changed elsewhere — close and reopen to resync (no auto-merge).')
+        }
+        const me = c.session.clientId
+        const amOwner = (lock.owner ?? []).includes(me)
+        if (amOwner && c.role !== 'owner') {
+          // 승계됨: 즉시 flush 후 role 반영(리마운트).
+          try {
+            const h = viewerRef.current
+            if (h) await persistBytes(new Uint8Array(await h.getContent()))
+          } catch {
+            // 무시
+          }
+          if (collabRef.current === c) {
+            setCollab({ ...c, role: 'owner' })
+            setCollabKey((v) => v + 1)
+          }
+        } else if (!amOwner && c.role !== 'collaborator') {
+          if (collabRef.current === c) {
+            setCollab({ ...c, role: 'collaborator' })
+            setCollabKey((v) => v + 1)
+          }
+        }
+      })()
+    }, 5000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collab, savePath])
   useEffect(() => {
     setComments([])
     setShowComments(false)
@@ -182,6 +331,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   }
   // 파일 op 한 번: 편집 중이면 뷰어 모델을 먼저 파일에 굳히고(편집을 날리지 않기 위해),
   // op 적용 → 저장 → 패널 새로고침 → 뷰어 리마운트 순서로 처리한다.
+  // 저장은 persistBytes로 일원화한다 (collab 중이면 baseHash 검사).
   const mutatePptxComments = async (
     op: (base: Uint8Array) => Promise<Uint8Array>,
   ): Promise<boolean> => {
@@ -189,29 +339,29 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       showToast.error('저장 경로가 없습니다')
       return false
     }
+    // 세션 밖에서 저장하는데 누군가 편집 중이면 base가 stale이라 덮어쓴다. 차단.
+    if (!collabRef.current) {
+      try {
+        const lock = await collabApi.lock(savePath)
+        if (lock.active) {
+          setCollabNotice('Someone is editing — join edit mode to participate.')
+          return false
+        }
+      } catch {
+        // 조회 실패는 통과 (fail-open)
+      }
+    }
     try {
       let base = content
       if (editing) {
         const h = viewerRef.current
         if (!h) return false
         const cur = new Uint8Array(await h.getContent())
-        await saveOfficeBytes(
-          savePath,
-          fileName ?? 'presentation.pptx',
-          new Blob([cur as unknown as BlobPart], {
-            type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-          }),
-        )
+        if (!(await persistBytes(cur))) return false
         base = cur
       }
       const next = await op(base)
-      await saveOfficeBytes(
-        savePath,
-        fileName ?? 'presentation.pptx',
-        new Blob([next as unknown as BlobPart], {
-          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        }),
-      )
+      if (!(await persistBytes(new Uint8Array(next)))) return false
       setSavedBytes(next)
       const cs = await loadPptxComments(next)
       setComments(cs)
@@ -364,17 +514,47 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       </div>
     )
   }
+  // 공동편집 설정 (편집 모드 + 세션 성공 때만). 실패하면 solo(기존 동작).
+  const authorName = author.trim() || 'You'
+  const collaboration = useMemo((): CollaborationConfig | undefined => {
+    if (!collab || !editing) return undefined
+    return {
+      roomId: collab.roomId,
+      // externalSession을 쓰므로 무시된다.
+      serverUrl: '',
+      externalSession: collab.session.toExternal() as unknown as CollaborationConfig['externalSession'],
+      userName: authorName,
+      userColor: colorForName(authorName),
+      role: collab.role,
+      onWriteBack: (bytes: Uint8Array) => {
+        void handleWriteBack(bytes)
+      },
+    }
+  }, [collab, collabKey, editing, authorName, handleWriteBack])
+
   return (
     <div
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
     >
+      {collabNotice && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-600 dark:text-amber-400">
+          <span className="flex-1">{collabNotice}</span>
+          <button
+            type="button"
+            onClick={() => setCollabNotice(null)}
+            className="shrink-0 underline underline-offset-2 hover:text-amber-500"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <PptxViewerBoundary onFail={onFail}>
             <Suspense fallback={SPINNER}>
               <I18nextProvider i18n={pptxI18n}>
                 <PowerPointViewer
-                  key={`${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}`}
+                  key={`${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}#${collab ? `${collab.role}-${collabKey}` : 'solo'}`}
                   ref={setViewerRef}
                   content={unlocked ?? content}
                   fileName={fileName}
@@ -383,6 +563,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   initialSlide={slideIdx}
                   onActiveSlideChange={(i: number) => setCurSlide(i)}
                   onContentChange={() => void onViewerContentChange()}
+                  collaboration={collaboration}
                 />
               </I18nextProvider>
             </Suspense>

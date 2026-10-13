@@ -81,6 +81,8 @@ export default defineConfig(({ mode }) => {
         "/api": {
           target: backendTarget,
           changeOrigin: true,
+          // /api/collab WS 릴레이 업그레이드 전달.
+          ws: true,
         },
       },
     },

@@ -36,6 +36,7 @@ import { createSessionMessageRoutes } from './routes/session-messages'
 import { createSessionHealRoutes } from './routes/session-heal'
 import { createSessionModelCheckRoutes } from './routes/session-model-check'
 import { createPtyRoutes } from './routes/pty'
+import { createCollabRoutes, registerCollabSockets } from './routes/collab'
 import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-frontend'
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
@@ -330,6 +331,9 @@ app.route('/api/search', createSearchRoutes(db))
   app.route('/api/session-model-check', createSessionModelCheckRoutes())
 app.route('/api/pty', createPtyRoutes())
 app.route('/api/logs', createClientLogRoutes())
+app.route('/api/collab', createCollabRoutes())
+// y-websocket 호환 릴레이는 루트 앱 업그레이드 라우팅이 필요해서 별도 등록.
+const { injectWebSocket } = registerCollabSockets(app)
 
 app.get('/api/openapi.json', (c) => c.json(openApiSpec))
 
@@ -512,6 +516,7 @@ const startServer = async (retries = 2): Promise<void> => {
         hostname: HOST,
       })
       httpServer = server
+      injectWebSocket(server)
       server.on('listening', () => resolve())
       server.on('error', (err: NodeJS.ErrnoException) => reject(err))
     })

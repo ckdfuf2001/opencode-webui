@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { convertToPdf, extractDocumentText, editDocument, extractAttachment } from '../services/doc-converter'
+import { lockInfo } from '../services/collab-rooms'
 
 const EDIT_OPERATIONS_SCHEMA = z.object({
   path: z.string().min(1),
@@ -28,6 +29,14 @@ export function createPreviewRoutes() {
       return c.json({ error: 'Invalid request body', details: error?.issues || [] }, 400)
     }
     try {
+      // 공동편집 중 AI 직접 편집은 금지 — owner 저장을 덮어쓴다.
+      const lock = await lockInfo(parsed.path)
+      if (lock.active) {
+        return c.json(
+          { error: 'File is being collaboratively edited by a user', roomId: lock.roomId },
+          409,
+        )
+      }
       const result = await editDocument(parsed.path, parsed.operations)
       return c.json(result)
     } catch (error: any) {

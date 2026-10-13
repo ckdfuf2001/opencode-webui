@@ -1045,7 +1045,97 @@ export const openApiSpec = {
         responses: {
           '200': { description: 'Edit result' },
           '400': { description: 'Invalid request body' },
+          '409': { description: 'File is being collaboratively edited by a user' },
           '500': { description: 'Edit failed' },
+        },
+      },
+    },
+    '/api/collab/session': {
+      post: {
+        tags: ['collab'],
+        summary: 'Create or join a volatile Yjs room for a workspace file (first caller is host)',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'roomId, role (host/guest), fileHash' },
+          '400': { description: 'Invalid request' },
+          '403': { description: 'Path traversal detected' },
+          '404': { description: 'File not found' },
+        },
+      },
+    },
+    '/api/collab/save': {
+      post: {
+        tags: ['collab'],
+        summary: 'Owner-only snapshot write-back (409 on baseHash mismatch, no auto-merge)',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  roomId: { type: 'string' },
+                  clientId: { type: 'integer' },
+                  baseHash: { type: 'string' },
+                  bytesB64: { type: 'string' },
+                },
+                required: ['roomId', 'clientId', 'baseHash', 'bytesB64'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Saved, returns newHash' },
+          '400': { description: 'Invalid request' },
+          '404': { description: 'No such room' },
+          '409': { description: 'Not owner, owner offline, or file changed' },
+          '413': { description: 'File too large' },
+        },
+      },
+    },
+    '/api/collab/handoff': {
+      post: {
+        tags: ['collab'],
+        summary: 'Transfer room ownership to another connected client',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  roomId: { type: 'string' },
+                  fromClientId: { type: 'integer' },
+                  toClientId: { type: 'integer' },
+                },
+                required: ['roomId', 'fromClientId', 'toClientId'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Handoff done, returns owner list' },
+          '400': { description: 'Invalid request' },
+          '404': { description: 'No such room' },
+          '409': { description: 'Not owner or target offline' },
+        },
+      },
+    },
+    '/api/collab/lock': {
+      get: {
+        tags: ['collab'],
+        summary: 'Whether a path has an active room (for AI-edit 409 and external-change banner)',
+        parameters: [{ name: 'path', in: 'query', required: true, schema: { type: 'string' } }],
+        responses: {
+          '200': { description: 'active flag with roomId/owner/externalChanged when active' },
+          '400': { description: 'Missing path' },
         },
       },
     },

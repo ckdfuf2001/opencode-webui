@@ -373,6 +373,45 @@ def call_bridge(
     return {"ok": False, "error": response.error}
 
 
+# --- 공동편집 lock 게이트 (Phase 0) -------------------------------------------
+# 사람이 브라우저에서 공동편집 중인 파일은 AI가 열기/저장하지 않는다.
+# room은 백엔드 메모리에만 있어 백엔드가 닿지 않으면 잠금도 없는 셈이다
+# (fail-open). 경로는 백엔드가 workspace 기준으로 정규화한다.
+_OPEN_PATHS: dict[str, str] = {}
+
+
+def _collab_locked(path: str | None) -> dict[str, Any] | None:
+    """잠겨 있으면 409相当 dict, 아니면 None. 백엔드 불능이면 통과(fail-open)."""
+    if not path:
+        return None
+    backend = os.environ.get("OPCODE_WEBUI_BACKEND", "").rstrip("/")
+    if not backend:
+        return None
+    try:
+        url = backend + "/api/collab/lock?path=" + urllib.parse.quote(path, safe="")
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            info = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - 잠금 조회 실패는 통과
+        logger.debug("collab lock lookup failed (fail-open): %s", exc)
+        return None
+    if isinstance(info, dict) and info.get("active"):
+        return {
+            "ok": False,
+            "error": {
+                "type": "CollabLocked",
+                "message": "File is being collaboratively edited by a user",
+                "roomId": info.get("roomId"),
+            },
+        }
+    return None
+
+
+def _track_open(app: str, path: str, result: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(result, dict) and result.get("ok"):
+        _OPEN_PATHS[app] = path
+    return result
+
+
 @server.tool()
 def office_status() -> dict[str, Any]:
     """COM bridge state: whether the Bridge runs and which Office apps are connected."""
@@ -396,18 +435,29 @@ def ppt_create_presentation(path: str, template: str | None = None) -> dict[str,
 @server.tool()
 def ppt_open_presentation(path: str) -> dict[str, Any]:
     """Opens an existing presentation; if already open, activates its window."""
-    return call_bridge("powerpoint", "open_presentation", {"path": path})
+    denied = _collab_locked(path)
+    if denied is not None:
+        return denied
+    return _track_open("powerpoint", path, call_bridge("powerpoint", "open_presentation", {"path": path}))
 
 
 @server.tool()
 def ppt_save(path: str | None = None) -> dict[str, Any]:
     """Saves the current presentation; with 'path' saves it as a new file."""
+    denied = _collab_locked(path if path else _OPEN_PATHS.get("powerpoint"))
+    if denied is not None:
+        return denied
     return call_bridge("powerpoint", "save", {"path": path})
 
 
 @server.tool()
 def ppt_close(save: bool = True) -> dict[str, Any]:
     """Closes the current presentation, saving changes by default."""
+    if save:
+        denied = _collab_locked(_OPEN_PATHS.get("powerpoint"))
+        if denied is not None:
+            return denied
+    _OPEN_PATHS.pop("powerpoint", None)
     return call_bridge("powerpoint", "close", {"save": save})
 
 
@@ -1392,18 +1442,29 @@ def xl_create_workbook(path: str) -> dict[str, Any]:
 @server.tool()
 def xl_open_workbook(path: str) -> dict[str, Any]:
     """Opens an existing workbook; if already open, activates its window."""
-    return call_bridge("excel", "open_workbook", {"path": path})
+    denied = _collab_locked(path)
+    if denied is not None:
+        return denied
+    return _track_open("excel", path, call_bridge("excel", "open_workbook", {"path": path}))
 
 
 @server.tool()
 def xl_save(path: str | None = None) -> dict[str, Any]:
     """Saves the current workbook; with 'path' saves it as a new file."""
+    denied = _collab_locked(path if path else _OPEN_PATHS.get("excel"))
+    if denied is not None:
+        return denied
     return call_bridge("excel", "save", {"path": path})
 
 
 @server.tool()
 def xl_close(save: bool = True) -> dict[str, Any]:
     """Closes the current workbook, saving changes by default."""
+    if save:
+        denied = _collab_locked(_OPEN_PATHS.get("excel"))
+        if denied is not None:
+            return denied
+    _OPEN_PATHS.pop("excel", None)
     return call_bridge("excel", "close", {"save": save})
 
 
@@ -2174,18 +2235,29 @@ def doc_create_document(path: str, template: str | None = None) -> dict[str, Any
 @server.tool()
 def doc_open_document(path: str) -> dict[str, Any]:
     """Opens an existing document; if already open, activates its window."""
-    return call_bridge("word", "open_document", {"path": path})
+    denied = _collab_locked(path)
+    if denied is not None:
+        return denied
+    return _track_open("word", path, call_bridge("word", "open_document", {"path": path}))
 
 
 @server.tool()
 def doc_save(path: str | None = None) -> dict[str, Any]:
     """Saves the current document; with 'path' saves it as a new file."""
+    denied = _collab_locked(path if path else _OPEN_PATHS.get("word"))
+    if denied is not None:
+        return denied
     return call_bridge("word", "save", {"path": path})
 
 
 @server.tool()
 def doc_close(save: bool = True) -> dict[str, Any]:
     """Closes the current document, saving changes by default."""
+    if save:
+        denied = _collab_locked(_OPEN_PATHS.get("word"))
+        if denied is not None:
+            return denied
+    _OPEN_PATHS.pop("word", None)
     return call_bridge("word", "close", {"save": save})
 
 

@@ -1,0 +1,149 @@
+import { Hono } from 'hono'
+import { z } from 'zod'
+import { createNodeWebSocket } from '@hono/node-ws'
+import {
+  addConn,
+  applySave,
+  checkSave,
+  createSession,
+  handoff,
+  isValidRoomId,
+  lockInfo,
+  removeConn,
+  rooms,
+  wsMessage,
+  MAX_SAVE_BYTES,
+} from '../services/collab-rooms'
+import { logger } from '../utils/logger'
+
+const SessionSchema = z.object({
+  path: z.string().min(1),
+})
+
+const SaveSchema = z.object({
+  roomId: z.string().min(1),
+  clientId: z.number().int(),
+  baseHash: z.string().min(1),
+  bytesB64: z.string().min(1),
+})
+
+const HandoffSchema = z.object({
+  roomId: z.string().min(1),
+  fromClientId: z.number().int(),
+  toClientId: z.number().int(),
+})
+
+function toBytes(data: unknown): Uint8Array | null {
+  if (data instanceof Uint8Array) return data
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  if (typeof data === 'string') return null
+  try {
+    return new Uint8Array(data as ArrayBuffer)
+  } catch {
+    return null
+  }
+}
+
+function errJson(c: { json: (o: unknown, s?: number) => Response }, error: unknown, fallback: number): Response {
+  if (error instanceof z.ZodError) {
+    return c.json({ error: 'Invalid request', details: error.issues }, 400)
+  }
+  const e = error as { message?: string; statusCode?: number }
+  return c.json({ error: e?.message || 'Request failed' }, e?.statusCode || fallback)
+}
+
+const app = new Hono()
+
+app.post('/session', async (c) => {
+  try {
+    const body = SessionSchema.parse(await c.req.json())
+    const result = await createSession(body.path)
+    return c.json(result)
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.post('/save', async (c) => {
+  try {
+    const body = SaveSchema.parse(await c.req.json())
+    let bytes: Uint8Array
+    try {
+      bytes = Buffer.from(body.bytesB64, 'base64')
+    } catch {
+      return c.json({ error: 'Invalid bytesB64' }, 400)
+    }
+    const check = checkSave(body.roomId, body.clientId, bytes.length)
+    if (!check.ok) return c.json({ error: check.error }, check.status || 409)
+    const applied = await applySave(body.roomId, body.baseHash, bytes)
+    if ('conflict' in applied) {
+      return c.json(
+        { error: 'File changed on disk since baseHash (no auto-merge)', currentHash: applied.currentHash },
+        409,
+      )
+    }
+    return c.json({ saved: true, newHash: applied.newHash })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.post('/handoff', async (c) => {
+  try {
+    const body = HandoffSchema.parse(await c.req.json())
+    const result = handoff(body.roomId, body.fromClientId, body.toClientId)
+    if (!result.ok) return c.json({ error: result.error }, result.status || 409)
+    return c.json({ ok: true, owner: result.owner })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.get('/lock', async (c) => {
+  const path = c.req.query('path') ?? ''
+  if (!path) return c.json({ error: 'Missing path' }, 400)
+  return c.json(await lockInfo(path))
+})
+
+export function createCollabRoutes(): Hono {
+  return app
+}
+
+/**
+ * y-websocket 호환 릴레이 (Phase 0).
+ * upgrade 라우팅이 루트 앱을 타야 해서 여기서 직접 등록한다.
+ * serverUrl 뒤에 roomId를 붙이면 되므로 클라이언트는
+ * `ws(s)://<origin>/api/collab` 을 넘기면 된다.
+ * injectWebSocket(server)는 index.ts의 startServer에서 호출한다.
+ */
+export function registerCollabSockets(rootApp: Hono): { injectWebSocket: (server: unknown) => void } {
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app: rootApp as never })
+  rootApp.get('/api/collab/:room', upgradeWebSocket((c) => {
+    const roomId = c.req.param('room') ?? ''
+    return {
+      onOpen(_evt, ws) {
+        if (!isValidRoomId(roomId) || !rooms.has(roomId)) {
+          try {
+            ;(ws as unknown as { close: (code?: number, reason?: string) => void }).close(1008, 'No such room')
+          } catch { /* 무시 */ }
+          return
+        }
+        addConn(roomId, ws)
+      },
+      onMessage(evt, ws) {
+        const data = toBytes((evt as { data?: unknown })?.data)
+        if (!data || !rooms.has(roomId)) return
+        wsMessage(roomId, ws, data)
+      },
+      onClose(_evt, ws) {
+        if (rooms.has(roomId)) removeConn(roomId, ws)
+      },
+      onError(err) {
+        logger.warn('Collab socket error:', err)
+      },
+    }
+  }))
+  return { injectWebSocket: injectWebSocket as (server: unknown) => void }
+}
+
+export { MAX_SAVE_BYTES }
