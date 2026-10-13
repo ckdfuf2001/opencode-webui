@@ -53,6 +53,7 @@ import { settingsApi } from '@/api/settings'
 import { registryApi, type RegistryType, type RegistryScope, type RegistryEntry } from '@/api/registry'
 import { ScheduleManager } from '@/components/schedule/ScheduleManager'
 import { showToast } from '@/lib/toast'
+import { waitForOpencodeHealthy } from '@/lib/opencodeHealth'
 import type { MessageWithParts, Part } from '@/api/types'
 
 function commandNeedsArgs(command: CommandWithScope): boolean {
@@ -357,13 +358,20 @@ function CommandExplorer({ commands, skills, agents, mcpServers, plugins, loadin
   const hasPendingMcp = useMemo(() => mcpServers.some((m) => m.pending === true), [mcpServers])
 
   const scheduleMcpRefresh = () => {
-    // 재시작 직후 서버가 내려가 있어 조회가 실패할 수 있어 지연 재조회
-    for (const ms of [2500, 8000]) {
-      setTimeout(() => {
-        explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'mcp'] })
-        explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'config'] })
-      }, ms)
-    }
+    // 재시작 직후 서버가 내려가 있어, 고정 지연 후 조회하면 실패하고
+    // retry:false라 stale한 failed가 그대로 남는다. healthy 확인 후 재조회한다.
+    void (async () => {
+      const ok = await waitForOpencodeHealthy(90_000)
+      explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'mcp'] })
+      explorerQueryClient.invalidateQueries({ queryKey: ['opencode', 'config'] })
+      if (ok) {
+        try {
+          await explorerQueryClient.refetchQueries({ queryKey: ['opencode', 'mcp'] })
+        } catch {
+          // refetch 실패는 다음 포커스/마운트 때 갱신된다
+        }
+      }
+    })()
   }
 
   useEffect(() => {

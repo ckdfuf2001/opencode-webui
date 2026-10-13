@@ -111,6 +111,13 @@ function invalidateBinaryCache(): void {
 const OPENCODE_DEFAULT_PORT = ENV.OPENCODE.PORT
 const OPENCODE_SERVER_DIRECTORY = getWorkspacePath()
 const OPENCODE_CONFIG_PATH = getOpenCodeConfigFilePath()
+// Cold start 실측: listen까지 ~4s, MCP(npx/python) 로딩 중 /doc 무응답 ~9s,
+// healthy까지 ~13s. npx 최초 다운로드면 더 길어진다. 20s budget으로는
+// 뜨는 중인 서버를 teardown이 죽이는 크래시 루프에 빠진다.
+const STARTUP_HEALTH_TIMEOUT_MS = 90_000
+// Busy loop(MCP 초기화 중)에도 /doc가 3s 안에 못 답하는 게 실측됨.
+// 짧은 probe가 healthy 오판 → auto-restart 오발의 원인이라 여유를 둔다.
+const HEALTH_PROBE_TIMEOUT_MS = 8_000
 
 export function killLingeringOpenCodeServers(): void {
   if (process.platform !== 'win32') {
@@ -349,7 +356,7 @@ class OpenCodeServerManager {
     this.isStarting = true
     try {
       if (this.serverPid) {
-        if (await this.waitForHealth(20000)) {
+        if (await this.waitForHealth(STARTUP_HEALTH_TIMEOUT_MS)) {
           this.isHealthy = true
           logger.info(`OpenCode server is healthy on port ${this.port}`)
           return
@@ -411,7 +418,7 @@ class OpenCodeServerManager {
 
     this.launch(candidate, serverDirectory, binPath, isDevelopment)
 
-    if (!(await this.waitForHealth(20000))) {
+    if (!(await this.waitForHealth(STARTUP_HEALTH_TIMEOUT_MS))) {
       logger.warn(`OpenCode failed to become healthy on port ${candidate}`)
       if (this.serverPid) {
         await this.teardownCurrent()
@@ -651,10 +658,21 @@ class OpenCodeServerManager {
     this.hasLoggedHealthy = false
   }
 
-  async restart(): Promise<void> {
+  async restart(opts?: { skipIfHealthy?: boolean }): Promise<void> {
     if (this.restartPromise) {
       logger.info('Restart already in progress; joining existing restart')
       return this.restartPromise
+    }
+    // 선행 시작이 진행 중이면 끝날 때까지 기다린다 — 갓 띄우는 서버를
+    // monitor/ensure tick이 겹쳐 죽이는 overlap을 방지. healthy가 되면
+    // auto-restart 목적(죽은 서버 살리기)은 달성된 셈이라 스킵한다.
+    if (this.isStarting) {
+      logger.info('Start already in progress; waiting for it before restart')
+      const becameHealthy = await this.waitForHealth(STARTUP_HEALTH_TIMEOUT_MS)
+      if (becameHealthy && opts?.skipIfHealthy) {
+        logger.info('Server became healthy during restart wait; skipping auto-restart')
+        return
+      }
     }
     this.restartPromise = (async () => {
       try {
@@ -794,6 +812,9 @@ class OpenCodeServerManager {
   startHealthMonitor(intervalMs = 8000): void {
     if (this.healthMonitor) return
     this.healthMonitor = setInterval(async () => {
+      // 시작/재시작이 진행 중이면 판단 보류 — 뜨는 중 probe 실패를
+      // 카운트하면 overlap kill → 크래시 루프가 된다.
+      if (this.isStarting || this.restartPromise) return
       const healthy = await this.checkHealth()
       if (healthy) {
         this.healthFailCount = 0
@@ -810,7 +831,7 @@ class OpenCodeServerManager {
         this.healthFailCount = 0
         logger.warn('OpenCode unhealthy — attempting auto restart')
         try {
-          await this.restart()
+          await this.restart({ skipIfHealthy: true })
         } catch (e) {
           logger.error('Auto restart failed:', e)
         }
@@ -829,7 +850,7 @@ class OpenCodeServerManager {
       if (auth) headers.Authorization = auth
       const response = await fetch(`${this.getUrl()}/doc`, {
         headers,
-        signal: AbortSignal.timeout(3000)
+        signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS)
       })
       const ok = response.ok
       this.isHealthy = ok
