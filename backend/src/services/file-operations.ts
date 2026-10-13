@@ -38,7 +38,12 @@ export async function writeFileContent(
     
     await fs.mkdir(path.dirname(fullPath), { recursive: true })
     
-    await fs.writeFile(fullPath, Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'))
+    // 원자적 교체: 동시 저장/읽기 중에 반만 쓰인 파일이 보이지 않게 tmp에 쓰고 rename.
+    // rename은 같은 볼륨에서 원자적이라 리더는 항상 완전한 구/신 버전을 본다.
+    const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')
+    const tmp = `${fullPath}.tmp-${process.pid}-${Date.now()}`
+    await fs.writeFile(tmp, buf)
+    await fs.rename(tmp, fullPath)
     logger.info(`Wrote file to: ${fullPath}`)
   } catch (error) {
     throw new Error(`Failed to write file ${filePath}: ${error}`)
