@@ -26,20 +26,26 @@ function bustViewerChunks(): void {
   VisioViewer = lazyWithRetry(loadVisioViewer)
 }
 
-/** 뷰어 청크 로드 실패 시 다시 시도/PDF 폴백을 보여준다. */
+/** 뷰어 청크 로드 실패 시 다시 시도/PDF 폴백을 보여준다. 원인 문구도 표시한다. */
 class ViewerLoadBoundary extends Component<
   { onRetry: () => void; onPdf?: () => void; children: ReactNode },
-  { failed: boolean }
+  { failed: boolean; message: string }
 > {
-  state = { failed: false }
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true }
+  state = { failed: false, message: '' }
+  static getDerivedStateFromError(): { failed: boolean; message: string } {
+    return { failed: true, message: '' }
+  }
+  componentDidCatch(error: unknown): void {
+    this.setState({ message: error instanceof Error ? error.message : String(error) })
   }
   render(): ReactNode {
     if (!this.state.failed) return this.props.children
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-2 text-center px-6">
         <p className="text-sm text-muted-foreground">Failed to load preview.</p>
+        {this.state.message && (
+          <p className="text-[11px] text-muted-foreground/70 font-mono break-all max-w-md">{this.state.message}</p>
+        )}
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={this.props.onRetry}>
             Retry
@@ -583,15 +589,15 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
               type="button"
               onClick={() => { setPdfMode(false); setEditing(false) }}
               className={`h-6 text-xs px-2 rounded ${!pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
-              title="변환 없이 바로 보기"
+              title="View directly without conversion"
             >
-              바로 보기
+              View
             </button>
             <button
               type="button"
               onClick={() => { setPdfMode(true); setEditing(false) }}
               className={`h-6 text-xs px-2 rounded ${pdfMode ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
-              title="서버에서 Office로 PDF 변환해서 보기"
+              title="View as PDF converted on server"
             >
               Office(PDF)
             </button>
@@ -609,18 +615,18 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
                   )
                 }}
                 className={`h-6 text-xs px-2 rounded ${editing ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'}`}
-                title="편집 모드"
+                title="Edit mode"
               >
-                {editing ? '편집 종료' : '편집'}
+                {editing ? 'Done' : 'Edit'}
               </button>
               {editing && (
                 <button
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('officeSaveRequest'))}
                   className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-                  title="현재 파일에 덮어쓰기"
+                  title="Overwrite current file"
                 >
-                  저장
+                  Save
                 </button>
               )}
               {kind === 'docx' && (
@@ -628,9 +634,9 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('docxCommentsToggle'))}
                   className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-                  title="코멘트 패널 열기/닫기"
+                  title="Toggle comments panel"
                 >
-                  코멘트
+                  Comments
                 </button>
               )}
               {kind === 'xlsx' && (
@@ -638,9 +644,9 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('xlsxCommentsToggle'))}
                   className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-                  title="코멘트 보기"
+                  title="Show comments"
                 >
-                  코멘트
+                  Comments
                 </button>
               )}
               {kind === 'pptx' && (
@@ -648,9 +654,9 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('pptxCommentsRequest'))}
                   className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-                  title="코멘트 보기"
+                  title="Show comments"
                 >
-                  코멘트
+                  Comments
                 </button>
               )}
             </div>

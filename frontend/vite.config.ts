@@ -53,8 +53,12 @@ export default defineConfig(({ mode }) => {
   // 화면/쓰기가 전부 그 인스턴스에 contra버린다 (설정 삭제가 안 먹히는 symptom).
   const fileEnv = readEnvFile(path.join(repoRoot, ".env"));
   const backendPort = Number(fileEnv.PORT) || Number(env.PORT) || Number(process.env.PORT) || DEFAULTS.SERVER.PORT;
+  // 프록시 타겟은 127.0.0.1 고정 — localhost는 ::1이 먼저 resolve되고
+  // 백엔드는 IPv4-only(0.0.0.0)라 node-http-proxy가 ::1에서 ECONNREFUSED로
+  // 죽는 간헐 실패가 난다. 브라우저도 http://127.0.0.1:5173 접속 권장.
+  const backendTarget = `http://127.0.0.1:${backendPort}`;
   if (backendPort !== Number(DEFAULTS.SERVER.PORT)) {
-    console.log(`[vite] /api proxy -> http://localhost:${backendPort} (from .env)`);
+    console.log(`[vite] /api proxy -> ${backendTarget} (from .env)`);
   }
 
   return {
@@ -75,7 +79,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         "/api": {
-          target: `http://localhost:${backendPort}`,
+          target: backendTarget,
           changeOrigin: true,
         },
       },
