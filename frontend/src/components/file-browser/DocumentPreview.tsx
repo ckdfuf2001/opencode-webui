@@ -869,7 +869,6 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
       setSavedBytes(next)
       const cs = await loadDocxComments(next)
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
       return true
     } catch (e) {
       showToast.error(e instanceof Error ? e.message : '코멘트 저장 실패')
@@ -995,11 +994,10 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
             }
           })
         }, 350)
-        // 코멘트가 있으면 목록 패널을 같이 열어준다.
+        // 코멘트 목록은 미리 읽어둔다 (패널은 기본 닫힘, 토글로 연다).
         void loadDocxComments(content).then((cs) => {
           if (cancelled) return
           setComments(cs)
-          if (cs.length > 0) setShowComments(true)
         })
       })
       .catch((e) => {
@@ -1043,7 +1041,6 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     void loadDocxComments(content).then((cs) => {
       if (dead) return
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
     })
     return () => {
       dead = true
@@ -1088,7 +1085,6 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     try {
       const cs = await loadDocxComments(content)
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
     } catch {
       /* 무시 */
     }
@@ -1435,7 +1431,6 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
       setSavedBytes(next)
       const cs = await loadXlsxComments(next)
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
       setReloadKey((v) => v + 1)
       return true
     } catch (e) {
@@ -1546,7 +1541,6 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
         : content
       const cs = await loadXlsxComments(bytes)
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
     } catch {
       /* 무시 */
     }
@@ -1572,7 +1566,6 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     void loadXlsxComments(content).then((cs) => {
       if (dead) return
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
     })
     return () => {
       dead = true

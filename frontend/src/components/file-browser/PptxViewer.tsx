@@ -57,7 +57,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       const bytes = await h.getContent()
       const cs = await loadPptxComments(new Uint8Array(bytes))
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
     } catch {
       /* 무시 */
     }
@@ -398,7 +397,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     void loadPptxComments(content).then((cs) => {
       if (dead) return
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
     })
     return () => {
       dead = true
@@ -495,7 +493,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setSavedBytes(next)
       const cs = await loadPptxComments(next)
       setComments(cs)
-      if (cs.length > 0) setShowComments(true)
       // P2-2: collab 중 리마운트 금지 — 같은 doc을 다시 seed할 위험이 있다.
       if (!collabRef.current) setReloadKey((v) => v + 1)
       return true
@@ -739,7 +736,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           </PptxViewerBoundary>
         </div>
         {showComments && (
-          <div data-pptx-comments className="absolute right-2 top-2 bottom-2 w-72 z-30 border border-border bg-background flex flex-col rounded-lg shadow-xl">
+          <div data-pptx-comments className="absolute right-0 top-0 bottom-0 w-72 z-30 border-l border-border bg-background flex flex-col min-h-0">
             <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0 flex items-center gap-1">
               <span className="flex-1">코멘트 ({comments.length})</span>
               <button
