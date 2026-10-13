@@ -1079,7 +1079,9 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [save])
 
-  if (error) return <ErrorNote msg={error} />
+  // 조건부 early-return보다 뒤에 hook이 오면 렌더마다 hook 개수가 달라져
+  // React #300("fewer hooks than expected")으로 터진다. error 분기는 모든
+  // hook 뒤(최종 return 직전)에서 처리한다.
   const refreshDocxComments = useCallback(async () => {
     try {
       const cs = await loadDocxComments(content)
@@ -1089,6 +1091,7 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
       /* 무시 */
     }
   }, [content])
+  if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host h-full min-h-[480px]">
       <div className="flex h-full min-h-0">
