@@ -280,6 +280,10 @@ describe('view-mode rules (V5)', () => {
     expect(room.ownerConn).toBe(null)
     const info = await lockInfo(NOTE_REL)
     expect(info.active).toBe(false)
+    // view-only room도 참가자바용 participants는 돌려준다.
+    expect(info.participants).toEqual([
+      { id: 'v1', name: 'Grace', color: '#000', mode: 'view', slide: undefined },
+    ])
   })
 
   it('unknown mode defaults to eligible editor', async () => {

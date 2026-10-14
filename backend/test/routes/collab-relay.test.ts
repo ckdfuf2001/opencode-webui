@@ -193,6 +193,17 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     await waitFor(() => b.doc.getText('t').toString() === 'hello', 'B got hello')
     b.doc.getText('t').insert(5, ' world')
     await waitFor(() => a.doc.getText('t').toString() === 'hello world', 'A got world')
+    // awareness app 필드가 서버 participants로 보인다 (전체 체인).
+    let names: string[] = []
+    for (let i = 0; i < 100; i++) {
+      const lock = (await (
+        await testFetch(`${baseUrl}/api/collab/lock?path=${encodeURIComponent('repos/aaa/shared.txt')}`)
+      ).json()) as { participants?: { name: string; mode: string }[] }
+      names = (lock.participants ?? []).map((p) => p.name)
+      if (names.includes('a') && names.includes('b')) break
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    expect(names).toEqual(expect.arrayContaining(['a', 'b']))
     a.destroy()
     b.destroy()
   })

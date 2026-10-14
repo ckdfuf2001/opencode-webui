@@ -11,7 +11,7 @@ import { PptxViewerBoundary } from './ViewerBoundaries'
 import { PowerPointViewer } from 'pptx-react-viewer'
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
-import { collabApi, collabServerUrl } from '@/api/collab'
+import { collabApi, collabServerUrl, type CollabParticipant } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, colorForName } from '@/lib/ycollab'
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
@@ -83,13 +83,16 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   })
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
-  // 공동편집 (편집 모드에서만 세션 참가 — 보기만 할 때는 AI 차단을 걸지 않는다).
+  // 공동편집 (파일 열림부터 세션 참가 — 보기 모드는 view로, AI 차단을 걸지 않는다).
   const [collab, setCollab] = useState<{
     session: YCollabSession
     roomId: string
     epoch: string
-    role: 'owner' | 'collaborator'
+    role: 'owner' | 'collaborator' | 'viewer'
+    editRole: 'owner' | 'collaborator'
+    intent: 'create' | 'join'
   } | null>(null)
+  const [participants, setParticipants] = useState<CollabParticipant[]>([])
   const [collabKey, setCollabKey] = useState(0)
   const [collabNotice, setCollabNotice] = useState<string | null>(null)
   const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
@@ -97,6 +100,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const baseHashRef = useRef<string | null>(null)
   const collabRef = useRef<typeof collab>(null)
   collabRef.current = collab
+  const editingRef = useRef(editing)
+  editingRef.current = editing
   const toastedStatus = useRef<string | null>(null)
 
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
@@ -190,11 +195,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [savePath, fileName, saving, persistBytes])
 
-  // 편집 진입/종료에 맞춰 collab 세션 생명주기 관리. 실패하면 solo로 폴백.
+  // 세션 생명주기: 파일 열림 ~ 닫힘. 보기 모드도 view로 참가한다 (AI 차단 없음).
+  // 편집 진입/종료는 아래 모드 전환 effect가 처리한다. 실패하면 solo로 폴백.
   useEffect(() => {
-    if (!editing || !savePath) return
+    if (!savePath) return
     let dead = false
     const name = author.trim() || 'You'
+    const startEditing = editingRef.current
     void (async () => {
       try {
         const info = await collabApi.session(savePath)
@@ -202,7 +209,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         const session = new YCollabSession(`${collabServerUrl()}/${info.roomId}`, {
           name,
           color: colorForName(name),
-        })
+        }, { mode: startEditing ? 'edit' : 'view' })
         session.knownHash = info.lastHash
         wireSessionRecovery(session)
         session.connect()
@@ -210,11 +217,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         setCollabNotice(null)
         setMineFile(null)
         toastedStatus.current = null
+        const editRole = info.role === 'host' ? 'owner' : 'collaborator'
         setCollab({
           session,
           roomId: info.roomId,
           epoch: info.epoch,
-          role: info.role === 'host' ? 'owner' : 'collaborator',
+          role: startEditing ? editRole : 'viewer',
+          editRole,
+          intent: info.role === 'host' ? 'create' : 'join',
         })
       } catch {
         if (!dead) setCollab(null)
@@ -236,11 +246,42 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           // 무시
         } finally {
           c.session.destroy()
+          setParticipants([])
           if (collabRef.current === c) {
             collabRef.current = null
             setCollab(null)
             baseHashRef.current = null
           }
+        }
+      })()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savePath])
+
+  // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, viewer만 리마운트).
+  useEffect(() => {
+    const c = collabRef.current
+    if (!c || !savePath) return
+    if (editing && c.role === 'viewer') {
+      c.session.setMode('edit')
+      if (collabRef.current === c) {
+        setCollab({ ...c, role: c.editRole })
+        setCollabKey((v) => v + 1)
+      }
+    } else if (!editing && c.role !== 'viewer') {
+      void (async () => {
+        try {
+          if (c.role === 'owner' && c.session.synced) {
+            const h = viewerRef.current
+            if (h) await persistBytes(new Uint8Array(await h.getContent()))
+          }
+        } catch {
+          // 무시
+        } finally {
+          if (collabRef.current !== c) return
+          c.session.setMode('view')
+          setCollab({ ...c, role: 'viewer' })
+          setCollabKey((v) => v + 1)
         }
       })()
     }
@@ -313,7 +354,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         } catch {
           return
         }
-        if (!lock || !lock.active) return // 재연결 루프가 resume 처리
+        if (!lock || !lock.active) {
+          // view-only room이어도 참가자바는 갱신한다.
+          if (lock) setParticipants(lock.participants ?? [])
+          return // 재연결 루프가 resume 처리
+        }
+        setParticipants(lock.participants ?? [])
         if (lock.lastHash) {
           baseHashRef.current = lock.lastHash
           c.session.knownHash = lock.lastHash
@@ -323,6 +369,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         }
         const me = c.session.clientId
         const amOwner = (lock.owner ?? []).includes(me)
+        // 보기 모드에선 role을 건드리지 않는다 (전환 effect 전담).
+        if (!editingRef.current) return
         if (amOwner && c.role !== 'owner') {
           // 승계됨: 즉시 flush 후 role 반영(리마운트).
           try {
@@ -627,7 +675,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setUnlocking(false)
     }
   }
-  // 공동편집 설정 (편집 모드 + 세션 성공 때만). 실패하면 solo(기존 동작).
+  // 공동편집 설정 (세션 성공 때만 — 편집은 owner/collaborator, 보기는 viewer). 실패하면 solo(기존 동작).
   // P0-4: 모든 hook은 early return보다 위에 있어야 한다 (React #300).
   // 복호화한 바이트를 디스크에 그대로 쓸 수 있어 암호 문서는 공동편집 제외.
   const authorName = author.trim() || 'You'
@@ -636,6 +684,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     () =>
       buildCollaborationConfig(collab, {
         editing,
+        viewing: !editing,
         authorName,
         isDecrypted,
         writeBackDebounceMs: 2500,
@@ -696,6 +745,24 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   ? '재연결 중'
                   : '연결 중'}
           </span>
+        </div>
+      )}
+      {collab && participants.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
+          {participants.map((p) => (
+            <span key={p.id} className="inline-flex items-center gap-1 shrink-0">
+              <span
+                className="inline-block w-2 h-2 rounded-full"
+                style={{ backgroundColor: p.color }}
+              />
+              <span>
+                {p.name}
+                {String(collab.session.clientId) === p.id ? ' (you)' : ''}
+                {typeof p.slide === 'number' ? ` · slide ${p.slide}` : ''}
+                {p.mode === 'view' ? ' · view-only' : ''}
+              </span>
+            </span>
+          ))}
         </div>
       )}
       {collabNotice && (

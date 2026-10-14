@@ -12,6 +12,16 @@ export interface YCollabUser {
   color: string
 }
 
+/** 서버 connMode/participants가 읽는 awareness app 필드의 모드. */
+export type YCollabMode = 'view' | 'edit'
+
+export interface YCollabAppState {
+  id: number
+  name: string
+  color: string
+  mode: YCollabMode
+}
+
 export interface YCollabSessionResult {
   roomId: string
   role: 'host' | 'guest' | 'resume'
@@ -60,9 +70,16 @@ export class YCollabSession {
 
   readonly url: string
 
-  constructor(url: string, user: YCollabUser) {
+  constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode }) {
     this.url = url
-    this.awareness.setLocalState({ userName: user.name, userColor: user.color })
+    const mode = opts?.mode ?? 'edit'
+    // 서버가 읽는 app 필드(id/name/color/mode)를 처음부터 publish한다.
+    // presence 필드는 viewer lib이 빌려서 쓰므로 건드리지 않는다.
+    this.awareness.setLocalState({
+      userName: user.name,
+      userColor: user.color,
+      app: { id: this.doc.clientID, name: user.name, color: user.color, mode } satisfies YCollabAppState,
+    })
     // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아낀다.
     this.doc.on('update', this.onDocUpdate)
     this.awareness.on('update', this.onAwarenessUpdate)
@@ -301,7 +318,27 @@ export class YCollabSession {
   }
 
   setUser(user: YCollabUser): void {
-    this.awareness.setLocalState({ userName: user.name, userColor: user.color })
+    // 전체 setLocalState는 lib의 presence를 지우므로 필드 병합으로 갱신한다.
+    const prev = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
+    const prevApp = (prev.app ?? {}) as Record<string, unknown>
+    this.awareness.setLocalState({
+      ...prev,
+      userName: user.name,
+      userColor: user.color,
+      app: { ...prevApp, id: this.doc.clientID, name: user.name, color: user.color },
+    })
+  }
+
+  /** view/edit 전환. app.mode 갱신이 서버 owner 재선출을 유발한다. */
+  setMode(mode: YCollabMode): void {
+    const prev = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
+    const prevApp = (prev.app ?? {}) as Record<string, unknown>
+    this.awareness.setLocalStateField('app', {
+      ...prevApp,
+      id: this.doc.clientID,
+      mode,
+    })
+    // setLocalStateField는 awareness update를 일으켜 onAwarenessUpdate가 publish한다.
   }
 
   /** viewer에 빌려줄 externalSession 객체. */
@@ -365,7 +402,9 @@ export function colorForName(name: string): string {
 export interface CollabViewState {
   session: YCollabSession
   roomId: string
-  role: 'owner' | 'collaborator'
+  role: 'owner' | 'collaborator' | 'viewer'
+  /** 'create'면 빈 방에 seed, 'join'이면 방 상태를 adopt(ROOM 승리). */
+  intent: 'create' | 'join'
 }
 
 /**
@@ -377,13 +416,15 @@ export function buildCollaborationConfig(
   state: CollabViewState | null,
   opts: {
     editing: boolean
+    viewing: boolean
     authorName: string
     isDecrypted: boolean
     writeBackDebounceMs: number
     onWriteBack: (bytes: Uint8Array) => void
   },
 ): CollaborationConfig | undefined {
-  if (!state || !opts.editing || opts.isDecrypted) return undefined
+  if (!state || opts.isDecrypted) return undefined
+  if (!opts.editing && !opts.viewing) return undefined
   const userColor = colorForName(opts.authorName)
   return {
     roomId: state.roomId,
@@ -393,6 +434,7 @@ export function buildCollaborationConfig(
     userName: opts.authorName,
     userColor,
     role: state.role,
+    sessionIntent: state.intent,
     writeBackDebounceMs: opts.writeBackDebounceMs,
     onWriteBack: (bytes: Uint8Array) => {
       opts.onWriteBack(bytes)

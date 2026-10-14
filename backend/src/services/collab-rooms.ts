@@ -737,7 +737,8 @@ export async function lockInfo(userPath: string): Promise<LockInfo> {
   const id = pathIndex.get(normalizeAbs(abs)) ?? roomIdForAbs(abs)
   const room = rooms.get(id)
   if (!room || room.conns.size === 0) return { active: false }
-  if (!roomHasEditors(room)) return { active: false }
+  // view-only room도 참가자바용으로 participants는 돌려준다 (active는 edit 있을 때만).
+  if (!roomHasEditors(room)) return { active: false, roomId: id, participants: roomParticipants(room) }
   return {
     active: true,
     roomId: id,

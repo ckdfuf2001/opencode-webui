@@ -9,6 +9,14 @@ export interface CollabSessionInfo {
   path: string
 }
 
+export interface CollabParticipant {
+  id: string
+  name: string
+  color: string
+  mode: 'view' | 'edit'
+  slide?: number
+}
+
 export interface CollabLockInfo {
   active: boolean
   roomId?: string
@@ -16,6 +24,7 @@ export interface CollabLockInfo {
   epoch?: string
   lastHash?: string
   externalChanged?: boolean
+  participants?: CollabParticipant[]
 }
 
 export type CollabSaveResult =
