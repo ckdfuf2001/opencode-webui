@@ -59,6 +59,18 @@ export function readCollabUser(): CollabIdentity | null {
   }
 }
 
+/** 이름 제안 (user1, user2, … — 브라우저별 seq 유지). */
+export function suggestCollabName(): string {
+  try {
+    const seq = Number(localStorage.getItem('collab-user-seq') ?? 0) || 0
+    const next = seq + 1
+    localStorage.setItem('collab-user-seq', String(next))
+    return `user${next}`
+  } catch {
+    return 'user1'
+  }
+}
+
 export default function PptxViewer({ data, fileName, editing, savePath, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void }) {
   // lib는 768px 미만에서 썸네일 패널을 숨기고 모바일 바/시트로 바꾼다.
   // 보기 모드에서도 좁은 화면에선 모바일 바를 켜야 슬라이드 시트에 닿는다.
@@ -304,6 +316,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     let dead = false
     const user = readCollabUser()
     if (!user) {
+      setNameInput((prev) => prev || suggestCollabName())
       setNeedName(true)
       return
     }
@@ -490,6 +503,20 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     } catch {
       // 무시
     }
+    // 서버 meta push 즉시 반영 (폴 5초를 기다리지 않는다 — E9/E10 3초 충족).
+    session.onMeta((meta) => {
+      const c = collabRef.current
+      ownerIdRef.current = meta.ownerClientId
+      trackAiBlocked(meta.aiBlockedAt)
+      if (meta.externalChanged) {
+        setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
+      }
+      if (c && meta.lastHash) {
+        baseHashRef.current = meta.lastHash
+        session.knownHash = meta.lastHash
+      }
+      updateDebug()
+    })
   }
 
   // owner 승계 감지 + 외부변경 배너 + knownHash 갱신 (5초 폴).
@@ -967,6 +994,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           <div className="flex items-center gap-2">
             <input
               value={nameInput}
+              autoFocus
               onChange={(e) => setNameInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') submitName() }}
               placeholder="Name"
@@ -982,51 +1010,60 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         <div
           data-testid="collab-status"
           data-status={!online ? 'offline' : connBadge.status === 'disconnected' ? 'reconnecting' : connBadge.status}
-          className="flex items-center gap-1.5 px-3 py-1 border-b border-border text-[11px] text-muted-foreground"
+          className={(!online || connBadge.status !== 'connected')
+            ? 'flex items-center gap-1.5 px-3 py-1 border-b border-border text-[11px] text-muted-foreground'
+            : 'hidden'}
         >
+          {(!online || connBadge.status !== 'connected') && (
+          <>
           <span
             className={`inline-block w-1.5 h-1.5 rounded-full ${
-              connBadge.status === 'connected'
-                ? 'bg-green-500'
-                : connBadge.status === 'error'
-                  ? 'bg-red-500'
-                  : 'bg-amber-500 animate-pulse'
+              connBadge.status === 'error'
+                ? 'bg-red-500'
+                : 'bg-amber-500 animate-pulse'
             }`}
           />
           <span>
-            {connBadge.status === 'connected'
-              ? `연결됨 (${collab.role})`
+            {!online
+              ? '오프라인'
               : connBadge.status === 'error'
                 ? '오류'
                 : connBadge.status === 'disconnected'
                   ? '재연결 중'
                   : '연결 중'}
           </span>
+          </>
+          )}
         </div>
       )}
-      {collab && participants.length > 0 && (
+      {collab && (
         <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
-          {participants.map((p) => (
-            <span
-              key={p.id}
-              data-testid="collab-peer"
-              data-peer-id={p.id}
-              data-mode={p.mode}
-              {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
-              data-owner={p.owner ? 'true' : 'false'}
-              data-self={p.id === collab.userId ? 'true' : 'false'}
-              className="inline-flex items-center gap-1 shrink-0"
-            >
-              <span
-                className="inline-block w-2 h-2 rounded-full"
-                style={{ backgroundColor: p.color }}
-              />
-              <span>
-                {p.name}
-                {p.mode === 'edit' ? ' · 편집 중' : ''}
-                {typeof p.slide === 'number' ? ` · slide ${p.slide}` : ''}
-                {p.mode === 'view' ? ' · view-only' : ''}
-              </span>
+          {(['view', 'edit'] as const).map((mode, gi) => (
+            <span key={mode} className="inline-flex items-center gap-1 shrink-0">
+              {gi > 0 && <span className="mx-1">·</span>}
+              <span className="font-medium">{mode === 'view' ? 'viewer' : 'editor'} -</span>
+              {participants.filter((p) => p.mode === mode).map((p) => (
+                <span
+                  key={p.id}
+                  data-testid="collab-peer"
+                  data-peer-id={p.id}
+                  data-mode={p.mode}
+                  {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
+                  data-owner={p.owner ? 'true' : 'false'}
+                  data-self={p.id === collab.userId ? 'true' : 'false'}
+                  className="inline-flex items-center gap-1 shrink-0"
+                >
+                  <span
+                    className="inline-block w-2 h-2 rounded-full"
+                    style={{ backgroundColor: p.color }}
+                  />
+                  <span>
+                    {p.name}
+                    {p.id === collab.userId ? ' (you)' : ''}
+                    {p.mode === 'edit' ? ' (편집 중)' : ''}
+                  </span>
+                </span>
+              ))}
             </span>
           ))}
         </div>
