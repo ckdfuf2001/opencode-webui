@@ -34,6 +34,15 @@ export type ResumeOutcome =
   | { kind: 'terminal'; terminal: 'external_change' | 'epoch_mismatch' }
   | { kind: 'retry' }
 
+/** 서버 meta push (type 100) — lib은 모르는 서버→클라이언트 전용 채널. */
+export interface YCollabMeta {
+  ownerClientId: number | null
+  lastHash: string
+  epoch: string
+  externalChanged: boolean
+  aiBlockedAt: number | null
+}
+
 function toBytes(data: unknown): Uint8Array | null {
   if (data instanceof Uint8Array) return data
   if (data instanceof ArrayBuffer) return new Uint8Array(data)
@@ -65,10 +74,14 @@ export class YCollabSession {
   private retry = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private syncWatchdog: ReturnType<typeof setTimeout> | null = null
+  private connectTimer: ReturnType<typeof setTimeout> | null = null
   private getSession: (() => Promise<ResumeOutcome>) | null = null
   private onTerminalError: ((kind: 'external_change' | 'epoch_mismatch') => void) | null = null
   /** awareness app.id로 쓰는 안정 식별자 (E2E의 u-ada 등). 없으면 doc.clientID. */
   private readonly userId: string | number
+  /** 마지막 수신 meta (없으면 null). */
+  lastMeta: YCollabMeta | null = null
+  private metaListeners = new Set<(meta: YCollabMeta) => void>()
 
   readonly url: string
 
@@ -125,6 +138,22 @@ export class YCollabSession {
     const ws = new WebSocket(this.url)
     ws.binaryType = 'arraybuffer'
     this.ws = ws
+    // connect 블랙홀(loopback SYN 무응답) 대비: onopen 없이 5초가 가면
+    // 소켓을 버리고 재시도한다. 실패-빠름(EACCES)은 onerror 경로로 간다.
+    if (this.connectTimer) clearTimeout(this.connectTimer)
+    this.connectTimer = setTimeout(() => {
+      if (this.disposed || this.ws !== ws || ws.readyState === WebSocket.OPEN) return
+      try {
+        ws.close()
+      } catch {
+        // 무시
+      }
+      // onclose가 뒤따르면 정상 경로로 재시도된다. 안 뒤따르면 직접 예약.
+      if (!this.disposed && this.ws === ws) {
+        this.ws = null
+        this.scheduleReconnect()
+      }
+    }, 5000)
     // handshake 감시: step2 없이 오래 가면 이번 시도는 실패로 친다.
     if (this.syncWatchdog) clearTimeout(this.syncWatchdog)
     this.syncWatchdog = setTimeout(() => {
@@ -152,7 +181,8 @@ export class YCollabSession {
         a,
         awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.awareness.clientID]),
       )
-      this.send(encoding.toUint8Array(a))
+      const ab = encoding.toUint8Array(a)
+      this.send(ab)
     }
     ws.onmessage = (evt) => {
       const data = toBytes((evt as MessageEvent).data)
@@ -171,6 +201,22 @@ export class YCollabSession {
         }
       } else if (type === 1) {
         awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(d), this)
+      } else if (type === 100) {
+        // 서버 meta push (owner/lastHash/epoch/externalChanged/aiBlockedAt).
+        try {
+          const raw = decoding.readVarUint8Array(d)
+          const meta = JSON.parse(new TextDecoder().decode(raw)) as YCollabMeta
+          this.lastMeta = meta
+          this.metaListeners.forEach((l) => {
+            try {
+              l(meta)
+            } catch {
+              // 무시
+            }
+          })
+        } catch {
+          // 무시 (구서버 호환)
+        }
       }
     }
     ws.onclose = (evt) => {
@@ -320,6 +366,14 @@ export class YCollabSession {
     }
   }
 
+  /** 서버 meta push 구독 (owner/외부변경/AI차단 즉시 반영용). */
+  onMeta(listener: (meta: YCollabMeta) => void): () => void {
+    this.metaListeners.add(listener)
+    return () => {
+      this.metaListeners.delete(listener)
+    }
+  }
+
   setUser(user: YCollabUser): void {
     // 전체 setLocalState는 lib의 presence를 지우므로 필드 병합으로 갱신한다.
     const prev = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
@@ -369,6 +423,10 @@ export class YCollabSession {
       clearTimeout(this.syncWatchdog)
       this.syncWatchdog = null
     }
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer)
+      this.connectTimer = null
+    }
     try {
       this.doc.off('update', this.onDocUpdate)
     } catch {
@@ -385,6 +443,7 @@ export class YCollabSession {
       // 무시
     }
     this.ws = null
+    this.metaListeners.clear()
     try {
       this.doc.destroy()
     } catch {

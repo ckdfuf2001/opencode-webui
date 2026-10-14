@@ -305,17 +305,23 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     // 같은 doc으로 재연결 (리마운트 없음).
     a.reconnect()
     b.reconnect()
-    await waitFor(() => a.synced && b.synced, 'both resynced')
-    await new Promise((r) => setTimeout(r, 500))
+    await waitFor(() => a.synced && b.synced, 'both resynced', 20000)
     // 내용 중복 없이 유지된다.
     expect(a.doc.getText('t').toString().split('keepme').length - 1).toBe(1)
     expect(b.doc.getText('t').toString().split('keepme').length - 1).toBe(1)
-    // owner 재선출 + 저장 200 (둘 중 하나는 owner다).
-    const lock = (await (await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
-      active: boolean
-      owner: number[]
+    // owner 재선출을 조건 대기한다 (awareness 전파가 sync보다 늦을 수 있다 —
+    // 고정 500ms 대기는 loopback 차단 폭풍에 깨진다).
+    let lock = { active: false, owner: [] as number[] }
+    for (let i = 0; i < 100; i++) {
+      lock = (await (
+        await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)
+      ).json()) as { active: boolean; owner: number[] }
+      if (lock.active && lock.owner.length > 0) break
+      await new Promise((r) => setTimeout(r, 100))
     }
     expect(lock.active).toBe(true)
+    expect(lock.owner.length).toBeGreaterThan(0)
+    // owner 저장 200 (둘 중 하나는 owner다).
     const ownerId = lock.owner.includes(a.clientId) ? a.clientId : b.clientId
     const save = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
