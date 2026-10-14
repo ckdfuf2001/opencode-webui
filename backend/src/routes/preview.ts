@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { convertToPdf, extractDocumentText, editDocument, extractAttachment } from '../services/doc-converter'
-import { lockInfo } from '../services/collab-rooms'
+import { lockInfo, markAiBlocked } from '../services/collab-rooms'
 
 const EDIT_OPERATIONS_SCHEMA = z.object({
   path: z.string().min(1),
@@ -32,6 +32,8 @@ export function createPreviewRoutes() {
       // 공동편집 중 AI 직접 편집은 금지 — owner 저장을 덮어쓴다.
       const lock = await lockInfo(parsed.path)
       if (lock.active) {
+        // 차단 사실을 room에 기록한다 (참가자 화면의 AI-blocked 칩용).
+        if (lock.roomId) markAiBlocked(lock.roomId)
         return c.json(
           { error: '사용자가 공동편집 중입니다. 편집을 마친 뒤 다시 요청하세요', roomId: lock.roomId },
           409,

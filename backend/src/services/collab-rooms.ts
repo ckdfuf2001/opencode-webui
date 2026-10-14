@@ -6,7 +6,7 @@ import * as awarenessProtocol from 'y-protocols/awareness'
 import * as syncProtocol from 'y-protocols/sync'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
-import { resolveWorkspaceFile } from './files'
+import { resolveWorkspaceFile, workspaceRootAbs } from './files'
 import { writeFileContent } from './file-operations'
 import { logger } from '../utils/logger'
 
@@ -79,6 +79,8 @@ export interface CollabParticipant {
   color: string
   mode: 'view' | 'edit'
   slide?: number
+  /** 서버 owner 집합에 awareness clientId가 들어있는가. */
+  owner: boolean
 }
 
 export const rooms = new Map<string, CollabRoom>()
@@ -696,6 +698,7 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
         color: String(app.color ?? '#6366f1'),
         mode: app.mode === 'view' ? 'view' : 'edit',
         slide: typeof presence.activeSlideIndex === 'number' ? presence.activeSlideIndex + 1 : undefined,
+        owner: room.ownerIds.has(cid),
       })
     }
   } catch { /* 무시 */ }
@@ -720,6 +723,8 @@ export interface LockInfo {
   seeded?: boolean
   externalChanged?: boolean
   participants?: CollabParticipant[]
+  /** 마지막 AI 차단(409) 시각(ms). 칩 표시용으로 그대로 노출한다. */
+  aiBlockedAt?: number | null
 }
 
 /**
@@ -738,7 +743,9 @@ export async function lockInfo(userPath: string): Promise<LockInfo> {
   const room = rooms.get(id)
   if (!room || room.conns.size === 0) return { active: false }
   // view-only room도 참가자바용으로 participants는 돌려준다 (active는 edit 있을 때만).
-  if (!roomHasEditors(room)) return { active: false, roomId: id, participants: roomParticipants(room) }
+  if (!roomHasEditors(room)) {
+    return { active: false, roomId: id, participants: roomParticipants(room), aiBlockedAt: room.aiBlockedAt }
+  }
   return {
     active: true,
     roomId: id,
@@ -748,6 +755,7 @@ export async function lockInfo(userPath: string): Promise<LockInfo> {
     seeded: room.seeded,
     externalChanged: room.externalChanged,
     participants: roomParticipants(room),
+    aiBlockedAt: room.aiBlockedAt,
   }
 }
 
@@ -755,17 +763,21 @@ export async function lockInfo(userPath: string): Promise<LockInfo> {
 export interface RoomSummary {
   roomId: string
   path: string
+  /** workspace 상대경로 (탐색기 file.path 매칭용). */
+  rel: string
   epoch: string
   participants: CollabParticipant[]
 }
 
 export function listRooms(): RoomSummary[] {
   const out: RoomSummary[] = []
+  const root = workspaceRootAbs()
   for (const room of rooms.values()) {
     if (room.conns.size === 0) continue
     out.push({
       roomId: room.id,
       path: room.path,
+      rel: path.relative(root, room.path).replace(/\\/g, '/'),
       epoch: room.epoch,
       participants: roomParticipants(room),
     })

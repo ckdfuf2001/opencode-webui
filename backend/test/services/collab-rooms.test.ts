@@ -282,7 +282,7 @@ describe('view-mode rules (V5)', () => {
     expect(info.active).toBe(false)
     // view-only room도 참가자바용 participants는 돌려준다.
     expect(info.participants).toEqual([
-      { id: 'v1', name: 'Grace', color: '#000', mode: 'view', slide: undefined },
+      { id: 'v1', name: 'Grace', color: '#000', mode: 'view', slide: undefined, owner: false },
     ])
   })
 
@@ -308,7 +308,7 @@ describe('view-mode rules (V5)', () => {
     states.set(7, { app: { id: 'u1', name: 'Ada', color: '#e11d48', mode: 'edit' } })
     const full = await lockInfo(NOTE_REL)
     expect(full.participants).toEqual([
-      { id: 'u1', name: 'Ada', color: '#e11d48', mode: 'edit', slide: undefined },
+      { id: 'u1', name: 'Ada', color: '#e11d48', mode: 'edit', slide: undefined, owner: false },
     ])
   })
 
@@ -318,6 +318,9 @@ describe('view-mode rules (V5)', () => {
     markAiBlocked(roomId)
     const room = rooms.get(roomId)!
     expect(typeof room.aiBlockedAt).toBe('number')
+    // lock 응답에 그대로 노출된다 (E10 칩용).
+    const info = await lockInfo(NOTE_REL)
+    expect(info.aiBlockedAt).toBe(room.aiBlockedAt)
   })
 
   it('listRooms exposes active rooms', async () => {
@@ -327,6 +330,7 @@ describe('view-mode rules (V5)', () => {
     const list = listRooms()
     expect(list.length).toBe(1)
     expect(list[0].roomId).toBe(roomId)
+    expect(list[0].rel).toBe('repos/aaa/note.txt')
     expect(Array.isArray(list[0].participants)).toBe(true)
   })
 

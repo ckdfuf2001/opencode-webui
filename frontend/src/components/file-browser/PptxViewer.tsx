@@ -35,6 +35,30 @@ function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
 }
 
+export interface CollabIdentity {
+  id: string
+  name: string
+  color: string
+}
+
+/** localStorage collab-user (E2E는 addInitScript로 주입). 없으면 이름 모달. */
+export function readCollabUser(): CollabIdentity | null {
+  try {
+    const raw = localStorage.getItem('collab-user')
+    if (!raw) return null
+    const p = JSON.parse(raw) as { id?: unknown; name?: unknown; color?: unknown }
+    if (typeof p?.id !== 'string' || !p.id || typeof p?.name !== 'string' || !p.name.trim()) return null
+    const name = p.name.trim()
+    return {
+      id: p.id,
+      name,
+      color: typeof p.color === 'string' && p.color ? p.color : colorForName(name),
+    }
+  } catch {
+    return null
+  }
+}
+
 export default function PptxViewer({ data, fileName, editing, savePath, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void }) {
   // lib는 768px 미만에서 썸네일 패널을 숨기고 모바일 바/시트로 바꾼다.
   // 보기 모드에서도 좁은 화면에선 모바일 바를 켜야 슬라이드 시트에 닿는다.
@@ -91,8 +115,19 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     role: 'owner' | 'collaborator' | 'viewer'
     editRole: 'owner' | 'collaborator'
     intent: 'create' | 'join'
+    userId: string
   } | null>(null)
   const [participants, setParticipants] = useState<CollabParticipant[]>([])
+  const participantsRef = useRef<CollabParticipant[]>([])
+  participantsRef.current = participants
+  // E8: collab-user 없으면 이름 모달이 막는다.
+  const [needName, setNeedName] = useState(false)
+  const [nameInput, setNameInput] = useState('')
+  const [nameTick, setNameTick] = useState(0)
+  // E10: AI-blocked 칩 (서버 aiBlockedAt 래치 + 30초 클라이언트 만료).
+  const [aiBlocked, setAiBlocked] = useState(false)
+  const aiBlockRef = useRef<number | null>(null)
+  const aiShownAtRef = useRef(0)
   const [collabKey, setCollabKey] = useState(0)
   const [collabNotice, setCollabNotice] = useState<string | null>(null)
   const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
@@ -103,6 +138,61 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const editingRef = useRef(editing)
   editingRef.current = editing
   const toastedStatus = useRef<string | null>(null)
+  // E2E 디버그 훅 (?collabDebug=1일 때만 window.__collabDebug 유지).
+  const collabDebug = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('collabDebug') === '1'
+    } catch {
+      return false
+    }
+  }, [])
+  const ownerIdRef = useRef<number | null>(null)
+  const lastSaveRef = useRef<{ at: number; status: number } | null>(null)
+  const saveCountRef = useRef(0)
+  const save409Ref = useRef(0)
+  const updateDebug = useCallback(() => {
+    if (!collabDebug) return
+    try {
+      const c = collabRef.current
+      const w = window as unknown as { __collabDebug?: Record<string, unknown> }
+      let slideCountY = 0
+      try {
+        slideCountY = c ? c.session.doc.getArray('pptx:slides').length : 0
+      } catch {
+        slideCountY = 0
+      }
+      w.__collabDebug = {
+        mountCount: (w.__collabDebug?.mountCount as number | undefined) ?? 0,
+        role: c?.role ?? null,
+        synced: c?.session.synced ?? false,
+        ownerClientId: ownerIdRef.current,
+        clientId: c?.session.clientId ?? 0,
+        lastSave: lastSaveRef.current,
+        saveCount: saveCountRef.current,
+        save409Count: save409Ref.current,
+        slideCountY,
+      }
+    } catch {
+      // 무시
+    }
+  }, [collabDebug])
+  const [online, setOnline] = useState(() => {
+    try {
+      return typeof navigator === 'undefined' ? true : navigator.onLine
+    } catch {
+      return true
+    }
+  })
+  useEffect(() => {
+    const on = () => setOnline(true)
+    const off = () => setOnline(false)
+    window.addEventListener('online', on)
+    window.addEventListener('offline', off)
+    return () => {
+      window.removeEventListener('online', on)
+      window.removeEventListener('offline', off)
+    }
+  }, [])
 
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
   // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다.
@@ -110,6 +200,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     const c = collabRef.current
     if (c && savePath) {
       const res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current)
+      // E2E 디버그: 저장 결과 기록 (200/409 추적용).
+      saveCountRef.current += 1
+      if (res.ok) {
+        lastSaveRef.current = { at: Date.now(), status: 200 }
+      } else if (res.reason === 'conflict' || res.reason === 'denied') {
+        lastSaveRef.current = { at: Date.now(), status: 409 }
+        save409Ref.current += 1
+      } else {
+        lastSaveRef.current = { at: Date.now(), status: 0 }
+      }
+      updateDebug()
       if (res.ok) {
         baseHashRef.current = res.newHash
         c.session.knownHash = res.newHash
@@ -136,7 +237,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     )
     setSavedBytes(new Uint8Array(bytes))
     return true
-  }, [fileName, savePath])
+  }, [fileName, savePath, updateDebug])
 
   // owner write-back (lib이 변경 debounce 후 호출). synced 전에는 저장하지 않는다.
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
@@ -197,19 +298,25 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
 
   // 세션 생명주기: 파일 열림 ~ 닫힘. 보기 모드도 view로 참가한다 (AI 차단 없음).
   // 편집 진입/종료는 아래 모드 전환 effect가 처리한다. 실패하면 solo로 폴백.
+  // E8: collab-user 없으면 이름 모달이 막고, 입력 전까지 연결하지 않는다.
   useEffect(() => {
     if (!savePath) return
     let dead = false
-    const name = author.trim() || 'You'
+    const user = readCollabUser()
+    if (!user) {
+      setNeedName(true)
+      return
+    }
+    setNeedName(false)
     const startEditing = editingRef.current
     void (async () => {
       try {
         const info = await collabApi.session(savePath)
         if (dead) return
         const session = new YCollabSession(`${collabServerUrl()}/${info.roomId}`, {
-          name,
-          color: colorForName(name),
-        }, { mode: startEditing ? 'edit' : 'view' })
+          name: user.name,
+          color: user.color,
+        }, { mode: startEditing ? 'edit' : 'view', userId: user.id })
         session.knownHash = info.lastHash
         wireSessionRecovery(session)
         session.connect()
@@ -225,7 +332,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           role: startEditing ? editRole : 'viewer',
           editRole,
           intent: info.role === 'host' ? 'create' : 'join',
+          userId: user.id,
         })
+        updateDebug()
       } catch {
         if (!dead) setCollab(null)
       }
@@ -247,6 +356,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         } finally {
           c.session.destroy()
           setParticipants([])
+          aiBlockRef.current = null
+          setAiBlocked(false)
+          ownerIdRef.current = null
+          updateDebug()
           if (collabRef.current === c) {
             collabRef.current = null
             setCollab(null)
@@ -256,7 +369,38 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       })()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savePath])
+  }, [savePath, nameTick])
+
+  // E8: 이름 제출 — 저장 후 세션 생성 재시도.
+  const submitName = useCallback(() => {
+    const name = nameInput.trim()
+    if (!name) return
+    const user: CollabIdentity = {
+      id: `u-${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+      name,
+      color: colorForName(name),
+    }
+    try {
+      localStorage.setItem('collab-user', JSON.stringify(user))
+    } catch {
+      // 무시
+    }
+    setNeedName(false)
+    setNameInput('')
+    setNameTick((v) => v + 1)
+  }, [nameInput])
+
+  // E10: 서버 aiBlockedAt이 새로 찍히면 칩을 래치한다. 같은 값이면 유지.
+  // 표시는 래치 시점 기준 30초 (page.clock으로 앞당길 수 있다).
+  const trackAiBlocked = useCallback((blockedAt: number | null) => {
+    if (blockedAt != null && blockedAt !== aiBlockRef.current) {
+      aiBlockRef.current = blockedAt
+      aiShownAtRef.current = Date.now()
+    }
+    setAiBlocked(
+      aiBlockRef.current != null && Date.now() - aiShownAtRef.current < 30_000,
+    )
+  }, [])
 
   // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, viewer만 리마운트).
   useEffect(() => {
@@ -327,6 +471,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     session.subscribe(() => {
       const snap = session.getSnapshot()
       setConnBadge({ status: snap.status, synced: snap.synced })
+      updateDebug()
       if (snap.status === 'disconnected' && toastedStatus.current !== 'disconnected') {
         toastedStatus.current = 'disconnected'
         showToast.warning('연결이 끊김 — 재연결 중')
@@ -338,6 +483,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         showToast.error('공동편집 오류')
       }
     })
+    // Y 슬라이드 수 추적 (doc은 세션 동안 유지되므로 여기서 1회만).
+    const onDocUpdate = (): void => updateDebug()
+    try {
+      session.doc.on('update', onDocUpdate)
+    } catch {
+      // 무시
+    }
   }
 
   // owner 승계 감지 + 외부변경 배너 + knownHash 갱신 (5초 폴).
@@ -356,10 +508,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         }
         if (!lock || !lock.active) {
           // view-only room이어도 참가자바는 갱신한다.
-          if (lock) setParticipants(lock.participants ?? [])
+          if (lock) {
+            setParticipants(lock.participants ?? [])
+            trackAiBlocked(lock.aiBlockedAt ?? null)
+          }
+          updateDebug()
           return // 재연결 루프가 resume 처리
         }
         setParticipants(lock.participants ?? [])
+        trackAiBlocked(lock.aiBlockedAt ?? null)
+        ownerIdRef.current = (lock.owner ?? [])[0] ?? null
+        updateDebug()
         if (lock.lastHash) {
           baseHashRef.current = lock.lastHash
           c.session.knownHash = lock.lastHash
@@ -694,6 +853,81 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       }),
     [collab, editing, authorName, isDecrypted, handleWriteBack],
   )
+  const viewerRootRef = useRef<HTMLDivElement | null>(null)
+
+  // E2E: PowerPointViewer 마운트 횟수 (?collabDebug=1일 때만).
+  // viewer key가 바뀌면 리마운트되므로 key 문자열을 deps로 둔다.
+  const viewerKey = `${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}#${collab ? `${collab.role}-${collabKey}` : 'solo'}`
+  useEffect(() => {
+    if (!collabDebug) return
+    try {
+      const w = window as unknown as { __collabDebug?: Record<string, unknown> }
+      w.__collabDebug = {
+        ...(w.__collabDebug ?? {}),
+        mountCount: ((w.__collabDebug?.mountCount as number | undefined) ?? 0) + 1,
+      }
+    } catch {
+      // 무시
+    }
+  }, [viewerKey, collabDebug])
+
+  // E3: lib 원격 선택 오버레이에 계약 testid를 붙인다.
+  // lib 근거: pptx-react-viewer chunk-552NAFTD.js RemoteSelectionOverlay —
+  //   data-testid={`remote-selection-${sel.element.id}`},
+  //   data-pptx-remote-selection={sel.element.id} (border색+이름 라벨 포함).
+  // peer 판별은 border색→참가자 color 매칭, 폴백은 이름 라벨 매칭이다.
+  useEffect(() => {
+    if (!collab) return
+    const root = viewerRootRef.current
+    if (!root) return
+    const toHex = (css: string): string => {
+      const m = css.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i)
+      if (m) {
+        const h = (n: number): string => n.toString(16).padStart(2, '0')
+        return `#${h(Number(m[1]))}${h(Number(m[2]))}${h(Number(m[3]))}`.toLowerCase()
+      }
+      return css.trim().toLowerCase()
+    }
+    const tag = (el: Element): void => {
+      try {
+        if (el.getAttribute('data-testid') === 'collab-remote-selection') return
+        const html = el as HTMLElement
+        let peerId: string | null = null
+        const border = html.style.borderColor || window.getComputedStyle(html).borderColor
+        const hex = toHex(border)
+        const byColor = participantsRef.current.find((p) => p.color.toLowerCase() === hex)
+        if (byColor) {
+          peerId = byColor.id
+        } else {
+          const label = el.querySelector('span')?.textContent?.trim() ?? ''
+          const byName = label
+            ? participantsRef.current.find((p) => p.name === label)
+            : undefined
+          if (byName) peerId = byName.id
+        }
+        el.setAttribute('data-testid', 'collab-remote-selection')
+        if (peerId) el.setAttribute('data-peer-id', peerId)
+      } catch {
+        // 무시
+      }
+    }
+    const sweep = (node: ParentNode): void => {
+      node.querySelectorAll('[data-pptx-remote-selection]').forEach(tag)
+    }
+    sweep(root)
+    const mo = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) {
+          if (n instanceof Element) {
+            if (n.hasAttribute('data-pptx-remote-selection')) tag(n)
+            sweep(n)
+          }
+        }
+      }
+    })
+    mo.observe(root, { childList: true, subtree: true })
+    return () => mo.disconnect()
+  }, [collab, participants])
 
   if (!unlocked && isEncryptedOle(content)) {
     return (
@@ -718,6 +952,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
 
   return (
     <div
+      ref={viewerRootRef}
+      data-testid="pptx-viewer-root"
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
     >
       {isDecrypted && editing && (
@@ -725,8 +961,29 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           Encrypted documents cannot be co-edited — editing solo.
         </div>
       )}
+      {needName && (
+        <div data-testid="collab-name-modal" className="px-3 py-2 border-b border-border bg-background">
+          <p className="text-xs font-medium mb-1.5">Enter your name to join co-editing</p>
+          <div className="flex items-center gap-2">
+            <input
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitName() }}
+              placeholder="Name"
+              className="h-8 w-56 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            />
+            <Button size="sm" data-testid="collab-name-submit" onClick={submitName}>
+              Join
+            </Button>
+          </div>
+        </div>
+      )}
       {collab && (
-        <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
+        <div
+          data-testid="collab-status"
+          data-status={!online ? 'offline' : connBadge.status === 'disconnected' ? 'reconnecting' : connBadge.status}
+          className="flex items-center gap-1.5 px-3 py-1 border-b border-border text-[11px] text-muted-foreground"
+        >
           <span
             className={`inline-block w-1.5 h-1.5 rounded-full ${
               connBadge.status === 'connected'
@@ -748,21 +1005,35 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         </div>
       )}
       {collab && participants.length > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
+        <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
           {participants.map((p) => (
-            <span key={p.id} className="inline-flex items-center gap-1 shrink-0">
+            <span
+              key={p.id}
+              data-testid="collab-peer"
+              data-peer-id={p.id}
+              data-mode={p.mode}
+              {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
+              data-owner={p.owner ? 'true' : 'false'}
+              data-self={p.id === collab.userId ? 'true' : 'false'}
+              className="inline-flex items-center gap-1 shrink-0"
+            >
               <span
                 className="inline-block w-2 h-2 rounded-full"
                 style={{ backgroundColor: p.color }}
               />
               <span>
                 {p.name}
-                {String(collab.session.clientId) === p.id ? ' (you)' : ''}
+                {p.mode === 'edit' ? ' · 편집 중' : ''}
                 {typeof p.slide === 'number' ? ` · slide ${p.slide}` : ''}
                 {p.mode === 'view' ? ' · view-only' : ''}
               </span>
             </span>
           ))}
+        </div>
+      )}
+      {aiBlocked && (
+        <div data-testid="collab-ai-blocked" className="px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
+          AI 대기 중
         </div>
       )}
       {collabNotice && (
@@ -792,7 +1063,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
             <Suspense fallback={SPINNER}>
               <I18nextProvider i18n={pptxI18n}>
                 <PowerPointViewer
-                  key={`${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}#${collab ? `${collab.role}-${collabKey}` : 'solo'}`}
+                  key={viewerKey}
                   ref={setViewerRef}
                   content={unlocked ?? content}
                   fileName={fileName}

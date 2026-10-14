@@ -15,6 +15,7 @@ export interface CollabParticipant {
   color: string
   mode: 'view' | 'edit'
   slide?: number
+  owner: boolean
 }
 
 export interface CollabLockInfo {
@@ -25,6 +26,15 @@ export interface CollabLockInfo {
   lastHash?: string
   externalChanged?: boolean
   participants?: CollabParticipant[]
+  aiBlockedAt?: number | null
+}
+
+export interface CollabRoomSummary {
+  roomId: string
+  path: string
+  rel: string
+  epoch: string
+  participants: CollabParticipant[]
 }
 
 export type CollabSaveResult =
@@ -103,5 +113,10 @@ export const collabApi = {
   lock: async (path: string): Promise<CollabLockInfo> => {
     const { data } = await axios.get(`${API_BASE_URL}/api/collab/lock`, { params: { path } })
     return data
+  },
+
+  rooms: async (): Promise<CollabRoomSummary[]> => {
+    const { data } = await axios.get(`${API_BASE_URL}/api/collab/rooms`)
+    return (data?.rooms ?? []) as CollabRoomSummary[]
   },
 }

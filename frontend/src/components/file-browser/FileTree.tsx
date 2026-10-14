@@ -32,6 +32,7 @@ import { sortFileInfos, type FileSort } from '@/lib/fileSort'
 import { useFileTreeExpand } from '@/stores/fileTreeExpandStore'
 import { upsertHtmlPage } from '@/api/html-pages'
 import { showToast } from '@/lib/toast'
+import { matchRoomPeers, useCollabRooms } from './collabRoomsFeed'
 
 interface FileTreeProps {
   files: FileInfo[]
@@ -136,6 +137,9 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
   const rowRef = useRef<HTMLDivElement>(null)
   const isSelected = !!selectedFile?.path && normalizeTreePath(selectedFile.path) === normPath
   const isBrowserOpen = !file.isDirectory && (browserOpenPaths?.has(normPath) ?? false)
+  // E2E: 활성 collab room 참가자 아바타 (10초 poll 피드 공유).
+  const collabRooms = useCollabRooms()
+  const collabPeers = !file.isDirectory ? matchRoomPeers(collabRooms, file.path) : []
   // 하위 폴더는 펼칠 때만 불러온다 (눌렀을 때 1회 fetch, 이후 캐시).
   // children이 이미 있으면(검색 트리 등) 추가 요청 없이 그걸 쓴다.
   const needFetch = expanded && file.isDirectory && file.children === undefined
@@ -262,6 +266,8 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
     <div>
       <div
         ref={rowRef}
+        data-testid="file-row"
+        data-path={file.path}
         className={`flex items-center gap-0 py-1 hover:bg-muted rounded cursor-pointer group ${
           isSelected ? 'bg-blue-500/15' : ''
         }`}
@@ -353,6 +359,20 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
             />
           ) : (
             <span className={`text-sm truncate ${isSelected ? 'text-blue-400 font-medium' : isBrowserOpen ? 'text-emerald-400' : ''}`}>{file.name}</span>
+          )}
+          {collabPeers.length > 0 && !editing && (
+            <span className="inline-flex items-center -space-x-1 ml-1">
+              {collabPeers.map((p) => (
+                <span
+                  key={p.id}
+                  data-testid="file-row-collab-avatar"
+                  data-peer-id={p.id}
+                  title={p.name}
+                  className="inline-block w-2.5 h-2.5 rounded-full border border-background"
+                  style={{ backgroundColor: p.color }}
+                />
+              ))}
+            </span>
           )}
           {isBrowserOpen && !editing && (
             <Globe className="w-3 h-3 shrink-0 text-emerald-400" />

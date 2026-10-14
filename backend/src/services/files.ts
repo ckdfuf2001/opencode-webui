@@ -19,6 +19,11 @@ import type { ChunkedFileInfo, PatchOperation } from '@opencode-webui/shared'
 const SHARED_WORKSPACE_BASE = getReposPath()
 const WORKSPACE_ROOT = getWorkspacePath()
 
+/** collab rooms의 workspace 상대경로 계산용 (절대경로). */
+export function workspaceRootAbs(): string {
+  return path.resolve(WORKSPACE_ROOT)
+}
+
 const DEFAULT_BLOCKED_UPLOADS = new Set(
   (DEFAULT_BLOCKED_UPLOAD_EXTENSIONS ?? []).map((e) => e.toLowerCase()),
 )

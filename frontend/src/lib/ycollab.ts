@@ -16,7 +16,7 @@ export interface YCollabUser {
 export type YCollabMode = 'view' | 'edit'
 
 export interface YCollabAppState {
-  id: number
+  id: string | number
   name: string
   color: string
   mode: YCollabMode
@@ -67,18 +67,21 @@ export class YCollabSession {
   private syncWatchdog: ReturnType<typeof setTimeout> | null = null
   private getSession: (() => Promise<ResumeOutcome>) | null = null
   private onTerminalError: ((kind: 'external_change' | 'epoch_mismatch') => void) | null = null
+  /** awareness app.id로 쓰는 안정 식별자 (E2E의 u-ada 등). 없으면 doc.clientID. */
+  private readonly userId: string | number
 
   readonly url: string
 
-  constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode }) {
+  constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode; userId?: string }) {
     this.url = url
+    this.userId = opts?.userId ?? this.doc.clientID
     const mode = opts?.mode ?? 'edit'
     // 서버가 읽는 app 필드(id/name/color/mode)를 처음부터 publish한다.
     // presence 필드는 viewer lib이 빌려서 쓰므로 건드리지 않는다.
     this.awareness.setLocalState({
       userName: user.name,
       userColor: user.color,
-      app: { id: this.doc.clientID, name: user.name, color: user.color, mode } satisfies YCollabAppState,
+      app: { id: this.userId, name: user.name, color: user.color, mode } satisfies YCollabAppState,
     })
     // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아낀다.
     this.doc.on('update', this.onDocUpdate)
@@ -325,7 +328,7 @@ export class YCollabSession {
       ...prev,
       userName: user.name,
       userColor: user.color,
-      app: { ...prevApp, id: this.doc.clientID, name: user.name, color: user.color },
+      app: { ...prevApp, id: this.userId, name: user.name, color: user.color },
     })
   }
 
@@ -335,7 +338,7 @@ export class YCollabSession {
     const prevApp = (prev.app ?? {}) as Record<string, unknown>
     this.awareness.setLocalStateField('app', {
       ...prevApp,
-      id: this.doc.clientID,
+      id: this.userId,
       mode,
     })
     // setLocalStateField는 awareness update를 일으켜 onAwarenessUpdate가 publish한다.
