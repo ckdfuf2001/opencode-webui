@@ -8,6 +8,7 @@ import {
   createSession,
   handoff,
   isValidRoomId,
+  listRooms,
   lockInfo,
   removeConn,
   rooms,
@@ -117,6 +118,10 @@ app.get('/lock', async (c) => {
   const path = c.req.query('path') ?? ''
   if (!path) return c.json({ error: 'Missing path' }, 400)
   return c.json(await lockInfo(path))
+})
+
+app.get('/rooms', async (c) => {
+  return c.json({ rooms: listRooms() })
 })
 
 export function createCollabRoutes(): Hono {

@@ -119,7 +119,25 @@ describe('permission hook integration (stub opencode server)', () => {
       res.writeHead(404)
       res.end()
     })
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    // BrightVPN 실행 중 127.0.0.1 listen이 간헐적으로 EACCES로 실패하므로 재시도한다.
+    for (let i = 0; ; i++) {
+      const err = await new Promise<Error | null>((resolve) => {
+        const onErr = (e: Error): void => {
+          server.off('listening', onOk)
+          resolve(e)
+        }
+        const onOk = (): void => {
+          server.off('error', onErr)
+          resolve(null)
+        }
+        server.once('error', onErr)
+        server.once('listening', onOk)
+        server.listen(0, '127.0.0.1')
+      })
+      if (!err) break
+      if ((err as { code?: string }).code !== 'EACCES' || i >= 10) throw err
+      await new Promise((r) => setTimeout(r, 200 + i * 150))
+    }
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   })
 

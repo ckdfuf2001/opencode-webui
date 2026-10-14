@@ -52,10 +52,8 @@ export interface CollabRoom {
   order: unknown[]
   /** 현재 owner conn. */
   ownerConn: unknown | null
-  /** owner conn이 기여한 awareness clientID 집합. */
+  /** owner conn이 기여한 awareness clientID 집합 (표시용). */
   ownerIds: Set<number>
-  /** owner였던 clientID (재접속 승격 판단용, dispose 때만 초기화). */
-  everOwner: Set<number>
   /** 한 번이라도 WS가 붙은 적 있는가 (고아 재활용 판단용). */
   everConnected: boolean
   /** 원격 update를 한 번이라도 받은 doc인가 (seed 여부). */
@@ -67,6 +65,20 @@ export interface CollabRoom {
   /** 마지막으로 우리가 저장한(또는 room 생성 시 읽은) 해시. */
   lastHash: string
   externalChanged: boolean
+  /** 저장 직렬화 체인 (room 단위). */
+  saveChain: Promise<void>
+  /** 저장 중에는 watcher가 무시한다. */
+  saving: boolean
+  /** AI 편집이 409로 막힌 마지막 시각 (V7 칩용). */
+  aiBlockedAt: number | null
+}
+
+export interface CollabParticipant {
+  id: string
+  name: string
+  color: string
+  mode: 'view' | 'edit'
+  slide?: number
 }
 
 export const rooms = new Map<string, CollabRoom>()
@@ -91,10 +103,18 @@ export function sweepRooms(now: number = Date.now()): void {
     }
   }
 }
+/** type 99 keepalive: 유휴 room도 lastRxAt가 갱신되게 한다. */
+function sendKeepalive(room: CollabRoom): void {
+  if (room.conns.size === 0) return
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, 99)
+  broadcast(room, encoding.toUint8Array(e))
+}
 function ensureSweeper(): void {
   if (sweepTimer) return
   sweepTimer = setInterval(() => {
     sweepRooms()
+    for (const room of rooms.values()) sendKeepalive(room)
     if (rooms.size === 0 && sweepTimer) {
       clearInterval(sweepTimer)
       sweepTimer = null
@@ -155,6 +175,83 @@ function encodeAwareness(clients: number[], awareness: awarenessProtocol.Awarene
   return encoding.toUint8Array(e)
 }
 
+/** type 100 room meta (서버→클라이언트 전용, lib은 모름). */
+export interface RoomMeta {
+  ownerClientId: number | null
+  lastHash: string
+  epoch: string
+  externalChanged: boolean
+  aiBlockedAt: number | null
+}
+
+function roomMeta(room: CollabRoom): RoomMeta {
+  const owner = [...room.ownerIds][0] ?? null
+  return {
+    ownerClientId: owner,
+    lastHash: room.lastHash,
+    epoch: room.epoch,
+    externalChanged: room.externalChanged,
+    aiBlockedAt: room.aiBlockedAt,
+  }
+}
+
+function encodeMeta(room: CollabRoom): Uint8Array {
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, 100)
+  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify(roomMeta(room))))
+  return encoding.toUint8Array(e)
+}
+
+function broadcastMeta(room: CollabRoom): void {
+  if (room.conns.size === 0) return
+  broadcast(room, encodeMeta(room))
+}
+
+/** conn의 모드. app.mode가 전부 view면 'view', 모르면 edit 취급(하위 호환). */
+export function connMode(room: CollabRoom, ws: unknown): 'view' | 'edit' {
+  const info = room.conns.get(ws)
+  if (!info || info.clientIds.size === 0) return 'edit'
+  let sawKnown = false
+  for (const cid of info.clientIds) {
+    const st = room.awareness.getStates().get(cid) as { app?: { mode?: string } } | undefined
+    const mode = st?.app?.mode
+    if (typeof mode === 'string') {
+      sawKnown = true
+      if (mode !== 'view') return 'edit'
+    }
+  }
+  return sawKnown ? 'view' : 'edit'
+}
+
+/** owner 재선출: edit 참가자 중 가장 먼저 들어온 conn. 없으면 owner 해제. */
+function reevaluateOwner(room: CollabRoom): void {
+  const current = room.ownerConn
+  if (current !== null && current !== undefined && room.conns.has(current) && connMode(room, current) !== 'view') {
+    return
+  }
+  room.ownerConn = null
+  room.ownerIds = new Set()
+  for (const ws of room.order) {
+    if (!room.conns.has(ws)) continue
+    if (connMode(room, ws) === 'view') continue
+    room.ownerConn = ws
+    const info = room.conns.get(ws)
+    room.ownerIds = new Set(info ? [...info.clientIds] : [])
+    logger.info(`Collab room ${room.id}: owner elected`)
+    break
+  }
+  // owner가 실제로 바뀌었을 때만 푸시한다 (view-only room 스팸 방지).
+  if (room.ownerConn !== current) broadcastMeta(room)
+}
+
+/** AI 편집 409 시 기록 (V7 칩용). */
+export function markAiBlocked(roomId: string): void {
+  const room = rooms.get(roomId)
+  if (!room) return
+  room.aiBlockedAt = Date.now()
+  broadcastMeta(room)
+}
+
 function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
   const doc = new Y.Doc()
   const awareness = new awarenessProtocol.Awareness(doc)
@@ -169,7 +266,6 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     order: [],
     ownerConn: null,
     ownerIds: new Set(),
-    everOwner: new Set(),
     everConnected: false,
     seeded: false,
     emptySince: Date.now(),
@@ -177,6 +273,9 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     watchTimer: null,
     lastHash: seedHash,
     externalChanged: false,
+    saveChain: Promise.resolve(),
+    saving: false,
+    aiBlockedAt: null,
   }
   awareness.on('update', (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
@@ -187,18 +286,15 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
       added.forEach((cid) => info.clientIds.add(cid))
       removed.forEach((cid) => info.clientIds.delete(cid))
     }
-    // owner는 "살아 있음이 증명된 첫 conn"이다 (접속 순서가 아니라 awareness 기준).
-    // 이렇게 해야 재접속한 이전 owner가 게스트보다 늦게 붙어도 복원된다.
-    if (room.ownerConn === null && origin !== null && origin !== undefined && added.length > 0) {
-      room.ownerConn = origin
-      logger.info(`Collab room ${room.id}: owner conn assigned (first live awareness)`)
-    }
     if (origin !== null && origin !== undefined && origin === room.ownerConn) {
-      added.forEach((cid) => {
-        room.ownerIds.add(cid)
-        room.everOwner.add(cid)
-      })
+      added.forEach((cid) => room.ownerIds.add(cid))
       removed.forEach((cid) => room.ownerIds.delete(cid))
+    }
+    // owner가 비어 있거나 view-only가 되면 edit 참가자 중 첫 conn을 선출한다.
+    if (room.ownerConn === null || !room.conns.has(room.ownerConn)) {
+      reevaluateOwner(room)
+    } else if (connMode(room, room.ownerConn) === 'view') {
+      reevaluateOwner(room)
     }
     broadcast(room, encodeAwareness([...added, ...updated, ...removed], room.awareness))
   })
@@ -226,15 +322,21 @@ function startWatch(room: CollabRoom): void {
       if (room.watchTimer) clearTimeout(room.watchTimer)
       room.watchTimer = setTimeout(() => {
         void (async () => {
+          // 저장 중에 뜬 이벤트는 무시한다 (S6C).
+          if (room.saving) return
           try {
             const h = await hashFile(room.path)
             // 우리 저장 직후 해시와 같으면 무시한다.
             if (h !== room.lastHash && !room.externalChanged) {
               logger.warn(`Collab room ${room.id}: external change detected (not from owner save)`)
               room.externalChanged = true
+              broadcastMeta(room)
             }
           } catch {
-            room.externalChanged = true
+            if (!room.externalChanged) {
+              room.externalChanged = true
+              broadcastMeta(room)
+            }
           }
         })()
       }, 400)
@@ -358,25 +460,18 @@ export async function createSession(
   if (resumeEpoch !== existing.epoch) {
     throw { message: 'Another session started this file', statusCode: 409, code: 'epoch_mismatch' }
   }
-  // 같은 epoch 복귀: 디스크가 knownHash와 다르면 외부 변경으로 거부한다.
-  if (opts?.knownHash !== undefined && opts.knownHash !== null) {
+  // 같은 epoch 복귀: 판정은 서버 lastHash 기준이다 (클라이언트 knownHash 아님).
+  // 디스크가 마지막 저장과 다르면 외부 변경으로 거부한다.
+  {
     let disk: string | null = null
     try {
       disk = await hashFile(abs)
     } catch {
       throw { message: 'File not readable', statusCode: 404 }
     }
-    if (disk !== opts.knownHash) {
+    if (disk !== existing.lastHash) {
       throw { message: 'File changed while away (no auto-merge)', statusCode: 409, code: 'external_change', currentHash: disk }
     }
-  }
-  // 같은 epoch 복귀: 이전 owner였으면 즉시 복원한다.
-  const cid = opts?.clientId
-  if (
-    typeof cid === 'number' && Number.isInteger(cid) && existing.everOwner.has(cid)
-    && existing.ownerConn === null
-  ) {
-    existing.ownerIds.add(cid)
   }
   return { roomId: id, role: 'resume', epoch: existing.epoch, lastHash: existing.lastHash, path: abs }
 }
@@ -391,6 +486,7 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
     room.order.push(ws)
     room.emptySince = null
     room.everConnected = true
+    broadcastMeta(room)
   }
   const e = encoding.createEncoder()
   encoding.writeVarUint(e, 0)
@@ -459,17 +555,9 @@ function dropConnFromRoom(room: CollabRoom, ws: unknown): void {
   room.order = room.order.filter((w) => w !== ws)
   if (room.ownerConn === ws) {
     room.ownerConn = null
-    // 남은 사람 중 가장 먼저 들어온 conn으로 owner 승계.
-    const next = room.order[0] ?? null
-    if (next !== null && next !== undefined) {
-      room.ownerConn = next
-      const nextInfo = room.conns.get(next)
-      room.ownerIds = new Set(nextInfo ? [...nextInfo.clientIds] : [])
-      for (const cid of room.ownerIds) room.everOwner.add(cid)
-      logger.info(`Collab room ${room.id}: owner handed off to earliest remaining conn`)
-    } else {
-      room.ownerIds = new Set()
-    }
+    room.ownerIds = new Set()
+    // 남은 edit 참가자 중 가장 먼저 들어온 conn으로 승계.
+    reevaluateOwner(room)
   }
   if (room.conns.size === 0) {
     room.emptySince = Date.now()
@@ -490,18 +578,23 @@ export interface SaveCheck {
   code?: string
 }
 
+/** clientId가 현재 ownerConn에 속하는지 검증한다 (S6B). */
+function isCurrentOwner(room: CollabRoom, clientId: number): boolean {
+  if (!Number.isInteger(clientId)) return false
+  const oc = room.ownerConn
+  if (oc === null || oc === undefined || !room.conns.has(oc)) return false
+  const info = room.conns.get(oc)
+  return !!info && info.clientIds.has(clientId)
+}
+
 export function checkSave(roomId: string, clientId: number, byteLength: number): SaveCheck {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, status: 404, error: 'No such room', code: 'no_room' }
   if (!room.seeded) {
     return { ok: false, status: 409, error: 'Room has no synced content yet', code: 'not_seeded' }
   }
-  if (!Number.isInteger(clientId) || !room.ownerIds.has(clientId)) {
+  if (!isCurrentOwner(room, clientId)) {
     return { ok: false, status: 409, error: 'Only the current owner can save', code: 'not_owner' }
-  }
-  const ownerConn = room.ownerConn
-  if (ownerConn === null || ownerConn === undefined || !room.conns.has(ownerConn)) {
-    return { ok: false, status: 409, error: 'Owner is not connected', code: 'owner_offline' }
   }
   if (byteLength > MAX_SAVE_BYTES) {
     return { ok: false, status: 413, error: 'File too large', code: 'too_large' }
@@ -522,6 +615,7 @@ export async function currentDiskHash(roomId: string): Promise<string | null> {
 /**
  * owner 저장 적용. 판정은 서버의 lastHash 기준이다 (클라이언트 baseHash는
  * 진단용으로만 받는다). 디스크가 lastHash와 다르면 409 conflict (자동 병합 없음).
+ * room 단위 체인으로 직렬화한다 (S6C).
  */
 export async function applySave(
   roomId: string,
@@ -529,16 +623,32 @@ export async function applySave(
 ): Promise<{ newHash: string } | { conflict: true; currentHash: string | null }> {
   const room = rooms.get(roomId)
   if (!room) throw { message: 'No such room', statusCode: 404 }
-  const disk = await currentDiskHash(roomId)
-  if (disk !== room.lastHash) {
-    room.externalChanged = true
-    return { conflict: true, currentHash: disk }
-  }
-  await writeFileContent(room.path, Buffer.from(bytes))
-  const newHash = hashBytes(bytes)
-  room.lastHash = newHash
-  room.externalChanged = false
-  return { newHash }
+  const run = room.saveChain.then(async () => {
+    const disk = await currentDiskHash(roomId)
+    if (disk !== room.lastHash) {
+      room.externalChanged = true
+      broadcastMeta(room)
+      const r: { conflict: true; currentHash: string | null } = { conflict: true, currentHash: disk }
+      return r
+    }
+    room.saving = true
+    try {
+      await writeFileContent(room.path, Buffer.from(bytes))
+    } finally {
+      room.saving = false
+    }
+    const newHash = hashBytes(bytes)
+    room.lastHash = newHash
+    room.externalChanged = false
+    broadcastMeta(room)
+    const r: { newHash: string } = { newHash }
+    return r
+  })
+  room.saveChain = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
 }
 
 export { connOfClient }
@@ -554,7 +664,7 @@ export interface HandoffResult {
 export function handoff(roomId: string, fromClientId: number, toClientId: number): HandoffResult {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, status: 404, error: 'No such room', code: 'no_room' }
-  if (!room.ownerIds.has(fromClientId)) {
+  if (!isCurrentOwner(room, fromClientId)) {
     return { ok: false, status: 409, error: 'Only the current owner can hand off', code: 'not_owner' }
   }
   const toConn = connOfClient(room, toClientId)
@@ -564,7 +674,41 @@ export function handoff(roomId: string, fromClientId: number, toClientId: number
   room.ownerConn = toConn
   room.ownerIds = new Set([toClientId])
   logger.info(`Collab room ${roomId}: owner handed off ${fromClientId} -> ${toClientId}`)
+  broadcastMeta(room)
   return { ok: true, owner: [...room.ownerIds] }
+}
+
+/** awareness에서 참가자 목록을 읽는다 (서버는 읽기만, publish 금지). */
+export function roomParticipants(room: CollabRoom): CollabParticipant[] {
+  const out: CollabParticipant[] = []
+  try {
+    const states = room.awareness.getStates() as Map<number, {
+      app?: { id?: string; name?: string; color?: string; mode?: string }
+      userName?: string
+    }>
+    for (const [cid, st] of states) {
+      const app = st?.app
+      if (!app || typeof app !== 'object') continue
+      const presence = st as { activeSlideIndex?: number }
+      out.push({
+        id: String(app.id ?? cid),
+        name: String(app.name ?? st.userName ?? `user-${cid}`),
+        color: String(app.color ?? '#6366f1'),
+        mode: app.mode === 'view' ? 'view' : 'edit',
+        slide: typeof presence.activeSlideIndex === 'number' ? presence.activeSlideIndex + 1 : undefined,
+      })
+    }
+  } catch { /* 무시 */ }
+  return out
+}
+
+/** edit 모드 참가자가 한 명이라도 있는가. 모르면 edit 취급 (하위 호환). */
+export function roomHasEditors(room: CollabRoom): boolean {
+  if (room.conns.size === 0) return false
+  for (const ws of room.conns.keys()) {
+    if (connMode(room, ws) !== 'view') return true
+  }
+  return false
 }
 
 export interface LockInfo {
@@ -573,12 +717,14 @@ export interface LockInfo {
   owner?: number[]
   epoch?: string
   lastHash?: string
+  seeded?: boolean
   externalChanged?: boolean
+  participants?: CollabParticipant[]
 }
 
 /**
  * AI 편집 차단 + 외부변경 배너 + knownHash 갱신용 조회. 조용히 inactive를 돌려준다.
- * poll마다 파일을 hash하지 않는다 (watcher/save 시점의 lastHash를 쓴다).
+ * V5: edit 참가자가 있을 때만 active. poll마다 파일을 hash하지 않는다.
  */
 export async function lockInfo(userPath: string): Promise<LockInfo> {
   let abs: string | null = null
@@ -591,14 +737,39 @@ export async function lockInfo(userPath: string): Promise<LockInfo> {
   const id = pathIndex.get(normalizeAbs(abs)) ?? roomIdForAbs(abs)
   const room = rooms.get(id)
   if (!room || room.conns.size === 0) return { active: false }
+  if (!roomHasEditors(room)) return { active: false }
   return {
     active: true,
     roomId: id,
     owner: [...room.ownerIds],
     epoch: room.epoch,
     lastHash: room.lastHash,
+    seeded: room.seeded,
     externalChanged: room.externalChanged,
+    participants: roomParticipants(room),
   }
+}
+
+/** 활성 room 목록 (탐색기 아바타용, 10초 poll). */
+export interface RoomSummary {
+  roomId: string
+  path: string
+  epoch: string
+  participants: CollabParticipant[]
+}
+
+export function listRooms(): RoomSummary[] {
+  const out: RoomSummary[] = []
+  for (const room of rooms.values()) {
+    if (room.conns.size === 0) continue
+    out.push({
+      roomId: room.id,
+      path: room.path,
+      epoch: room.epoch,
+      participants: roomParticipants(room),
+    })
+  }
+  return out
 }
 
 /** 테스트용 리셋. */

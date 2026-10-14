@@ -16,6 +16,7 @@ const {
   addConn,
   applySave,
   checkSave,
+  connMode,
   createSession,
   currentDiskHash,
   removeConn,
@@ -25,7 +26,9 @@ const {
   handoff,
   hashBytes,
   isOwner,
+  listRooms,
   lockInfo,
+  markAiBlocked,
   normalizeAbs,
   roomIdForAbs,
   rooms,
@@ -99,17 +102,15 @@ describe('session', () => {
 })
 
 describe('resume table', () => {
-  it('same epoch rejoins; owner restored from everOwner', async () => {
+  it('same epoch rejoins (ownership comes from WS awareness, not session)', async () => {
     const s1 = await createSession(NOTE_REL)
-    const room = rooms.get(s1.roomId)!
-    room.everOwner.add(11)
     const r = await createSession(NOTE_REL, { resumeEpoch: s1.epoch, knownHash: s1.lastHash, clientId: 11 })
     expect(r.role).toBe('resume')
     expect(r.epoch).toBe(s1.epoch)
-    expect(isOwner(room, 11)).toBe(true)
+    expect(r.lastHash).toBe(s1.lastHash)
   })
 
-  it('disk changed while away -> external_change', async () => {
+  it('disk changed while away -> external_change (judged by server lastHash)', async () => {
     const s1 = await createSession(NOTE_REL)
     await fs.writeFile(path.join(tmp, NOTE_REL), 'outsider')
     await expect(
@@ -129,6 +130,7 @@ describe('owner + save', () => {
     addConn(s.roomId, b)
     room.ownerConn = a
     room.ownerIds.add(7)
+    room.conns.get(a)!.clientIds.add(7)
     room.seeded = true
     expect(isOwner(room, 7)).toBe(true)
     expect(isOwner(room, 8)).toBe(false)
@@ -175,6 +177,7 @@ describe('handoff', () => {
     addConn(roomId, b)
     room.ownerConn = a
     room.ownerIds.add(7)
+    room.conns.get(a)!.clientIds.add(7)
     room.conns.get(b)!.clientIds.add(9)
 
     expect(handoff(roomId, 8, 9)).toMatchObject({ ok: false, status: 409 })
@@ -254,5 +257,91 @@ describe('lock + external watch', () => {
     const { roomId } = await createSession(NOTE_REL)
     expect(roomId).toBe(roomIdForAbs(path.join(tmp, NOTE_REL)))
     expect(normalizeAbs('A\\B')).toBe(normalizeAbs('a/b'))
+  })
+
+  it('lock carries seeded flag (S1 client rule)', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    addConn(roomId, sock())
+    const info = await lockInfo(NOTE_REL)
+    expect(info).toMatchObject({ active: true, seeded: false })
+  })
+})
+
+describe('view-mode rules (V5)', () => {
+  it('view-only room: no election, lock inactive', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    const room = rooms.get(roomId)!
+    const a = sock()
+    addConn(roomId, a)
+    room.conns.get(a)!.clientIds.add(41)
+    const states = room.awareness.getStates() as Map<number, unknown>
+    states.set(41, { app: { id: 'v1', name: 'Grace', color: '#000', mode: 'view' } })
+    expect(connMode(room, a)).toBe('view')
+    expect(room.ownerConn).toBe(null)
+    const info = await lockInfo(NOTE_REL)
+    expect(info.active).toBe(false)
+  })
+
+  it('unknown mode defaults to eligible editor', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    const room = rooms.get(roomId)!
+    const a = sock()
+    addConn(roomId, a)
+    room.conns.get(a)!.clientIds.add(42)
+    expect(connMode(room, a)).toBe('edit')
+    const info = await lockInfo(NOTE_REL)
+    expect(info.active).toBe(true)
+  })
+
+  it('participants list reads awareness app fields (read-only)', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    addConn(roomId, sock())
+    const empty = await lockInfo(NOTE_REL)
+    expect(empty.participants ?? []).toEqual([])
+    expect(empty.active).toBe(true)
+    const room = rooms.get(roomId)!
+    const states = room.awareness.getStates() as Map<number, unknown>
+    states.set(7, { app: { id: 'u1', name: 'Ada', color: '#e11d48', mode: 'edit' } })
+    const full = await lockInfo(NOTE_REL)
+    expect(full.participants).toEqual([
+      { id: 'u1', name: 'Ada', color: '#e11d48', mode: 'edit', slide: undefined },
+    ])
+  })
+
+  it('markAiBlocked records timestamp', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    addConn(roomId, sock())
+    markAiBlocked(roomId)
+    const room = rooms.get(roomId)!
+    expect(typeof room.aiBlockedAt).toBe('number')
+  })
+
+  it('listRooms exposes active rooms', async () => {
+    expect(listRooms()).toEqual([])
+    const { roomId } = await createSession(NOTE_REL)
+    addConn(roomId, sock())
+    const list = listRooms()
+    expect(list.length).toBe(1)
+    expect(list[0].roomId).toBe(roomId)
+    expect(Array.isArray(list[0].participants)).toBe(true)
+  })
+
+  it('concurrent saves serialize to a consistent state (S6C)', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    const room = rooms.get(roomId)!
+    room.seeded = true
+    const a = new TextEncoder().encode('aaa')
+    const b = new TextEncoder().encode('bbb')
+    const [r1, r2] = await Promise.all([applySave(roomId, a), applySave(roomId, b)])
+    // 직렬화되므로 둘 다 성공하고, 최종 상태는 일관된다.
+    expect('newHash' in r1 && 'newHash' in r2).toBe(true)
+    const disk = await currentDiskHash(roomId)
+    expect(disk).toBe(room.lastHash)
+    const content = await fs.readFile(path.join(tmp, NOTE_REL), 'utf8')
+    expect(['aaa', 'bbb']).toContain(content)
+    // 그 뒤 외부 변경이 끼면 다음 저장은 conflict다.
+    await fs.writeFile(path.join(tmp, NOTE_REL), 'outsider')
+    const conflicted = await applySave(roomId, new TextEncoder().encode('late'))
+    expect('conflict' in conflicted).toBe(true)
   })
 })

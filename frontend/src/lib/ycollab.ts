@@ -168,7 +168,18 @@ export class YCollabSession {
       this.scheduleReconnect()
     }
     ws.onerror = () => {
-      if (!this.disposed && this.status === 'connecting') this.setStatus('error')
+      if (this.disposed || this.status !== 'connecting') return
+      // onclose가 뒤따르지 않는 구현도 있으므로 소켓을 직접 정리한다.
+      // onclose가 뒤따르면 가드(this.ws !== ws)로 no-op가 된다.
+      if (this.ws === ws) {
+        try {
+          ws.close()
+        } catch {
+          // 무시
+        }
+        this.ws = null
+      }
+      this.scheduleReconnect()
     }
   }
 

@@ -31,12 +31,68 @@ async function waitFor(cond: () => boolean, label: string, timeoutMs = 15000): P
 }
 
 async function postSession(baseUrl: string, body: Record<string, unknown>): Promise<{ status: number; json: any }> {
-  const r = await fetch(`${baseUrl}/api/collab/session`, {
+  const r = await testFetch(`${baseUrl}/api/collab/session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   return { status: r.status, json: await r.json() }
+}
+
+// BrightVPN 실행 중 loopback connect가 간헐적으로 EACCES로 실패한다.
+// 테스트 신뢰성을 위해 일시적 연결 오류는 재시도한다 (최대 약 5초).
+async function testFetch(url: string, init?: RequestInit, attempts = 12): Promise<Response> {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetch(url, init)
+    } catch (e) {
+      lastErr = e
+      const code = (e as { cause?: { code?: string } })?.cause?.code
+      if (code !== 'EACCES' && code !== 'ECONNREFUSED' && code !== 'ECONNRESET') throw e
+      await new Promise((r) => setTimeout(r, 150 + i * 100))
+    }
+  }
+  throw lastErr
+}
+
+// BrightVPN 실행 중 127.0.0.1 listen 자체가 간헐적으로 EACCES로 실패한다.
+// beforeAll 훅 타임아웃을 막기 위해 시작을 재시도한다.
+async function startRelay(): Promise<{ port: number; stop: () => Promise<void> }> {
+  const root = new Hono()
+  root.route('/api/collab', createCollabRoutes())
+  const { injectWebSocket } = registerCollabSockets(root)
+  let lastErr: unknown
+  for (let i = 0; i < 15; i++) {
+    const server = serve({ fetch: root.fetch, port: 0, hostname: '127.0.0.1' })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.on('listening', () => resolve())
+        server.on('error', (e) => reject(e))
+      })
+    } catch (e) {
+      lastErr = e
+      try {
+        server.close()
+      } catch { /* 무시 */ }
+      if ((e as { code?: string })?.code !== 'EACCES') throw e
+      await new Promise((r) => setTimeout(r, 200 + i * 150))
+      continue
+    }
+    injectWebSocket(server)
+    const port = (server.address() as AddressInfo).port
+    // 이후 런타임 에러는 조용히 삼키지 않는다 (EACCES 제외).
+    server.on('error', (e: Error & { code?: string }) => {
+      if (e?.code !== 'EACCES') console.error('[relay-test] server error', e)
+    })
+    return {
+      port,
+      stop: async () => {
+        await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())))
+      },
+    }
+  }
+  throw lastErr
 }
 
 describe('collab relay (live server, y-websocket compatible)', () => {
@@ -52,19 +108,11 @@ describe('collab relay (live server, y-websocket compatible)', () => {
   }
 
   beforeAll(async () => {
-    const root = new Hono()
-    root.route('/api/collab', createCollabRoutes())
-    const { injectWebSocket } = registerCollabSockets(root)
-    const server = serve({ fetch: root.fetch, port: 0, hostname: '127.0.0.1' })
-    injectWebSocket(server)
-    await new Promise<void>((resolve) => server.on('listening', () => resolve()))
-    const port = (server.address() as AddressInfo).port
-    baseUrl = `http://127.0.0.1:${port}`
-    wsBase = `ws://127.0.0.1:${port}`
-    stop = async () => {
-      await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())))
-    }
-  })
+    const { port: p, stop: st } = await startRelay()
+    baseUrl = `http://127.0.0.1:${p}`
+    wsBase = `ws://127.0.0.1:${p}`
+    stop = st
+  }, 60000)
 
   afterAll(async () => {
     for (const s of sessions) {
@@ -84,12 +132,31 @@ describe('collab relay (live server, y-websocket compatible)', () => {
   })
 
   it('T1a: step1-only server never marks synced (no premature sync)', async () => {
-    // step1만 보내고 step2를 주지 않는 서버.
-    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
-    await new Promise<void>((resolve) => wss.on('listening', () => resolve()))
+    // step1만 보내고 step2를 주지 않는 서버 (listen EACCES면 재시작).
+    let wss: WebSocketServer | null = null
+    for (let i = 0; i < 15; i++) {
+      const cand = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+      try {
+        await new Promise<void>((resolve, reject) => {
+          cand.on('listening', () => resolve())
+          cand.on('error', (e) => reject(e))
+        })
+        wss = cand
+        break
+      } catch (e) {
+        try {
+          cand.close()
+        } catch { /* 무시 */ }
+        if ((e as { code?: string })?.code !== 'EACCES') throw e
+        await new Promise((r) => setTimeout(r, 200 + i * 150))
+      }
+    }
+    if (!wss) throw new Error('canned server listen failed')
     const port = (wss.address() as AddressInfo).port
     let sawStep1 = false
+    let sawConn = false
     wss.on('connection', (ws) => {
+      sawConn = true
       const e = encoding.createEncoder()
       encoding.writeVarUint(e, 0)
       syncProtocol.writeSyncStep1(e, new Y.Doc())
@@ -103,9 +170,12 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     })
     const c = track(new YCollabSession(`ws://127.0.0.1:${port}/room`, { name: 't', color: '#000' }))
     c.connect()
-    await new Promise((r) => setTimeout(r, 600))
+    // step1 송신까지는 조건 대기 (결정적), synced는 절대 true가 되면 안 된다
+    // (이 서버는 step2를 주지 않으므로).
+    await waitFor(() => sawConn && sawStep1, 'client sent step1')
     expect(c.synced).toBe(false)
-    expect(sawStep1).toBe(true)
+    await new Promise((r) => setTimeout(r, 400))
+    expect(c.synced).toBe(false)
     c.destroy()
     await new Promise<void>((resolve) => wss.close(() => resolve()))
   })
@@ -143,7 +213,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     }, 'A is owner')
     // A 저장 (baseHash 없이도 서버 lastHash 기준 통과).
     const bytes = new TextEncoder().encode('owner-bytes')
-    const save1 = await fetch(`${baseUrl}/api/collab/save`, {
+    const save1 = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roomId, clientId: a.clientId, bytesB64: Buffer.from(bytes).toString('base64') }),
@@ -155,13 +225,13 @@ describe('collab relay (live server, y-websocket compatible)', () => {
       const room = rooms.rooms.get(roomId)
       return !!room && room.ownerIds.has(b.clientId)
     }, 'B promoted')
-    const save2 = await fetch(`${baseUrl}/api/collab/save`, {
+    const save2 = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roomId, clientId: b.clientId, bytesB64: Buffer.from(bytes).toString('base64') }),
     })
     expect(save2.status).toBe(200)
-    const lock = (await (await fetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
+    const lock = (await (await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
       externalChanged: boolean
     }
     expect(lock.externalChanged).toBe(false)
@@ -230,13 +300,13 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     expect(a.doc.getText('t').toString().split('keepme').length - 1).toBe(1)
     expect(b.doc.getText('t').toString().split('keepme').length - 1).toBe(1)
     // owner 재선출 + 저장 200 (둘 중 하나는 owner다).
-    const lock = (await (await fetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
+    const lock = (await (await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
       active: boolean
       owner: number[]
     }
     expect(lock.active).toBe(true)
     const ownerId = lock.owner.includes(a.clientId) ? a.clientId : b.clientId
-    const save = await fetch(`${baseUrl}/api/collab/save`, {
+    const save = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -251,7 +321,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
   })
 
   it('T4b: newcomer seeds new epoch; stale resume gets epoch_mismatch', async () => {
-    const lock0 = (await (await fetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
+    const lock0 = (await (await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
       active: boolean
     }
     expect(lock0.active).toBe(false)
@@ -295,11 +365,11 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     await waitFor(() => c.synced, 'C synced')
     await waitFor(async () => {
       const lock = (await (
-        await fetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)
+        await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)
       ).json()) as { owner: number[] }
       return lock.owner?.includes(c.clientId) ?? false
     }, 'C owns')
-    const save = await fetch(`${baseUrl}/api/collab/save`, {
+    const save = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roomId: s.json.roomId, clientId: c.clientId, bytesB64: Buffer.from('x').toString('base64') }),
@@ -315,7 +385,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
       await postSession(baseUrl, { path: 'repos/aaa/shared.txt' })
       await new Promise((r) => setTimeout(r, 250))
       rooms.sweepRooms()
-      const lock = (await (await fetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
+      const lock = (await (await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
         active: boolean
       }
       expect(lock.active).toBe(false)
@@ -325,12 +395,26 @@ describe('collab relay (live server, y-websocket compatible)', () => {
   })
 
   it('unknown room is refused', async () => {
-    const ws = new WebSocket(`${wsBase}/api/collab/f_${'0'.repeat(40)}`)
-    sockets.push(ws)
-    const code = await new Promise<number>((resolve) => {
-      ws.on('close', (c: number) => resolve(c))
-      setTimeout(() => resolve(-1), 5000)
-    })
+    // EACCES(일시적 loopback 차단)면 소켓을 버리고 재시도한다.
+    let code = -1
+    for (let attempt = 0; attempt < 12 && code !== 1008; attempt++) {
+      const ws = new WebSocket(`${wsBase}/api/collab/f_${'0'.repeat(40)}`)
+      sockets.push(ws)
+      code = await new Promise<number>((resolve) => {
+        ws.on('error', (e: Error & { code?: string }) => {
+          if (e?.code === 'EACCES' || e?.code === 'ECONNREFUSED') resolve(-2)
+        })
+        ws.on('close', (c: number) => resolve(c))
+        setTimeout(() => resolve(-1), 5000)
+      })
+      try {
+        ws.close()
+      } catch { /* 무시 */ }
+      if (code === -2) {
+        await new Promise((r) => setTimeout(r, 300))
+        code = -1
+      }
+    }
     expect(code).toBe(1008)
   })
 })
