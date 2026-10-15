@@ -89,6 +89,8 @@ export class YCollabSession {
   private onTerminalError: ((kind: 'external_change' | 'epoch_mismatch') => void) | null = null
   /** awareness app.id로 쓰는 안정 식별자 (E2E의 u-ada 등). 없으면 doc.clientID. */
   private readonly userId: string | number
+  /** 마지막 수신 시각 (half-open 감지용, D). */
+  lastRxAt: number = Date.now()
   /** 마지막 수신 meta (없으면 null). */
   lastMeta: YCollabMeta | null = null
   private metaListeners = new Set<(meta: YCollabMeta) => void>()
@@ -208,6 +210,8 @@ export class YCollabSession {
     ws.onmessage = (evt) => {
       const data = toBytes((evt as MessageEvent).data)
       if (!data) return
+      // D: 모든 수신(type 99 keepalive 포함)이 lastRxAt을 갱신한다.
+      this.lastRxAt = Date.now()
       const d = decoding.createDecoder(data)
       const type = decoding.readVarUint(d)
       if (type === 0) {
@@ -289,7 +293,7 @@ export class YCollabSession {
     }, delay)
   }
 
-  /** 화면 복귀·온라인 즉시 재시도. */
+  /** 화면 복귀·온라인 즉시 재시도. D: 소켓이 없거나 25초 무수신이면 재연결한다. */
   poke(): void {
     if (this.disposed) return
     if (this.reconnectTimer) {
@@ -297,7 +301,9 @@ export class YCollabSession {
       this.reconnectTimer = null
     }
     this.retry = 0
-    if (!this.ws) void this.recover()
+    if (!this.ws || Date.now() - this.lastRxAt > 25000) {
+      this.reconnect()
+    }
   }
 
   private async recover(): Promise<void> {

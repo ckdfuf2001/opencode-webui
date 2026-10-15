@@ -37,6 +37,12 @@ function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
 }
 
+interface PowerPointViewerHandle {
+  getContent: () => Promise<Uint8Array>
+  goTo?: (slideIndex: number) => void
+  setActiveSlideIndex?: (index: number) => void
+}
+
 export default function PptxViewer({ data, fileName, editing, savePath, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void }) {
   // lib는 768px 미만에서 썸네일 패널을 숨기고 모바일 바/시트로 바꾼다.
   // 보기 모드에서도 좁은 화면에선 모바일 바를 켜야 슬라이드 시트에 닿는다.
@@ -48,9 +54,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
   const [unlocked, setUnlocked] = useState<Uint8Array | null>(null)
-  const viewerRef = useRef<{ getContent: () => Promise<Uint8Array> } | null>(null)
+  const viewerRef = useRef<PowerPointViewerHandle | null>(null)
   const setViewerRef = useCallback(
-    (h: { getContent: () => Promise<Uint8Array> } | null) => {
+    (h: PowerPointViewerHandle | null) => {
       viewerRef.current = h
     },
     [],
@@ -68,11 +74,26 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       /* 무시 */
     }
   }, [])
-  const onViewerContentChange = useCallback(async () => {
-    await refreshComments()
+  // S5: 편집 중 getContent() 직렬화는 코멘트 패널이 열려 있을 때만, 2초 debounce로.
+  // collab owner는 write-back 스냅샷을 재사용한다.
+  const commentRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const onViewerContentChange = useCallback(() => {
+    if (commentRefreshTimer.current) clearTimeout(commentRefreshTimer.current)
+    commentRefreshTimer.current = setTimeout(() => {
+      if (!showCommentsRef.current) return
+      const snap = latestSavedRef.current
+      const c = collabRef.current
+      if (c && snap) {
+        void loadPptxComments(snap).then((cs) => setComments(cs)).catch(() => {})
+        return
+      }
+      void refreshComments()
+    }, 2000)
   }, [refreshComments])
   const [comments, setComments] = useState<PptxComment[]>([])
   const [showComments, setShowComments] = useState(false)
+  const showCommentsRef = useRef(false)
+  showCommentsRef.current = showComments
   const [slideIdx, setSlideIdx] = useState(0)
   const [curSlide, setCurSlide] = useState(0)
   const [reloadKey, setReloadKey] = useState(0)
@@ -207,6 +228,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
 
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
   // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다.
+  // S3: collab 중 content 고정. 저장 성공해도 setSavedBytes를 호출하지 않고
+  // latestSavedRef에만 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지).
+  const latestSavedRef = useRef<Uint8Array | null>(null)
   const persistBytes = useCallback(async (bytes: Uint8Array): Promise<boolean> => {
     const c = collabRef.current
     if (c && savePath) {
@@ -231,7 +255,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       if (res.ok) {
         baseHashRef.current = res.newHash
         c.session.knownHash = res.newHash
-        setSavedBytes(new Uint8Array(bytes))
+        // S3: content 고정 — 세션 종료 때 한 번만 반영한다.
+        latestSavedRef.current = new Uint8Array(bytes)
         return true
       }
       if (res.reason === 'conflict') {
@@ -405,6 +430,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           setMetaOwner(null)
           setMetaTick(0)
           setOwnerWait(false)
+          // S3: 세션 종료 때 한 번만 content에 반영한다.
+          if (latestSavedRef.current) {
+            setSavedBytes(latestSavedRef.current)
+            latestSavedRef.current = null
+          }
           updateDebug()
           if (collabRef.current === c) {
             collabRef.current = null
@@ -726,6 +756,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     const idx = Math.max(0, c.slideNo - 1)
     setSlideIdx(idx)
     setCurSlide(idx)
+    // S4: 리마운트 없이 lib에 이동을 요청한다.
+    try {
+      viewerRef.current?.goTo?.(idx)
+    } catch {
+      // 무시
+    }
   }
   const addComment = async () => {
     const text = draft.trim()
@@ -760,6 +796,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       }
       setSlideIdx(target - 1)
       setCurSlide(target - 1)
+      try {
+        viewerRef.current?.goTo?.(target - 1)
+      } catch {
+        // 무시
+      }
       showToast.success('코멘트 저장했습니다')
     } finally {
       setAdding(false)
@@ -793,7 +834,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       }
     }
     try {
-      let base = content
+      // S3: collab 중 content는 고정되므로 최신 저장본을 base로 쓴다.
+      let base = latestSavedRef.current ?? content
       if (editing) {
         const h = viewerRef.current
         if (!h) return false
@@ -803,7 +845,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       }
       const next = await op(base)
       if (!(await persistBytes(new Uint8Array(next)))) return false
-      setSavedBytes(next)
+      // S3: collab 중에는 content 고정 (세션 종료 때 반영).
+      if (collabRef.current) latestSavedRef.current = next
+      else setSavedBytes(next)
       const cs = await loadPptxComments(next)
       setComments(cs)
       // P2-2: collab 중 리마운트 금지 — 같은 doc을 다시 seed할 위험이 있다.
@@ -1106,8 +1150,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
 
   // E2E: PowerPointViewer 마운트 횟수 (?collabDebug=1일 때만).
   // viewer key가 바뀌면 리마운트되므로 key 문자열을 deps로 둔다.
-  // role/collabKey는 key에서 뺀다 (prop 런타임 변경으로 처리 — 리마운트 금지).
-  const viewerKey = `${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}#${collabGated && collab ? collab.roomId : 'solo'}`
+  // S4: slideIdx를 key에서 뺀다 — 이동은 lib goTo API로 한다 (리마운트 금지).
+  const viewerKey = `${editing ? 'edit' : 'view'}#${reloadKey}#${collabGated && collab ? collab.roomId : 'solo'}`
   useEffect(() => {
     if (!collabDebug) return
     try {
@@ -1383,10 +1427,15 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                       {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
                       title={p.isSelf ? '나' : `${p.name}의 슬라이드로 이동`}
                       onClick={() => {
-                        // follow: 그 사람의 슬라이드로 이동한다.
+                        // follow: 그 사람의 슬라이드로 이동한다 (S4: 리마운트 없이 goTo).
                         if (typeof p.slide === 'number' && p.slide >= 1) {
                           setSlideIdx(p.slide - 1)
                           setCurSlide(p.slide - 1)
+                          try {
+                            viewerRef.current?.goTo?.(p.slide - 1)
+                          } catch {
+                            // 무시 (fallback: initialSlide는 다음 마운트에 반영).
+                          }
                         }
                       }}
                       className="inline-flex items-center gap-1 shrink-0 hover:text-foreground"

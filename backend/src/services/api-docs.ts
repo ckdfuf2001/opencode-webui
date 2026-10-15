@@ -1110,34 +1110,6 @@ export const openApiSpec = {
         },
       },
     },
-    '/api/collab/handoff': {
-      post: {
-        tags: ['collab'],
-        summary: 'Transfer room ownership to another connected client',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: {
-                type: 'object',
-                properties: {
-                  roomId: { type: 'string' },
-                  fromClientId: { type: 'integer' },
-                  toClientId: { type: 'integer' },
-                },
-                required: ['roomId', 'fromClientId', 'toClientId'],
-              },
-            },
-          },
-        },
-        responses: {
-          '200': { description: 'Handoff done, returns owner list' },
-          '400': { description: 'Invalid request' },
-          '404': { description: 'No such room' },
-          '409': { description: 'Not owner or target offline' },
-        },
-      },
-    },
     '/api/collab/suggest-name': {
       post: {
         tags: ['collab'],

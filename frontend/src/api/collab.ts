@@ -101,15 +101,6 @@ export const collabApi = {
     }
   },
 
-  handoff: async (roomId: string, fromClientId: number, toClientId: number): Promise<boolean> => {
-    try {
-      await axios.post(`${API_BASE_URL}/api/collab/handoff`, { roomId, fromClientId, toClientId })
-      return true
-    } catch {
-      return false
-    }
-  },
-
   lock: async (path: string): Promise<CollabLockInfo> => {
     const { data } = await axios.get(`${API_BASE_URL}/api/collab/lock`, { params: { path } })
     return data

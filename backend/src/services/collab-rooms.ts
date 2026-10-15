@@ -38,7 +38,12 @@ export interface CollabSocket {
 interface ConnInfo {
   joinedAt: number
   clientIds: Set<number>
+  /** 마지막 수신 시각 (D: half-open 감지용). */
+  lastMsgAt: number
 }
+
+/** 무수신 conn 정리 임계값 (D). 테스트는 sweepDeadConns를 직접 호출한다. */
+export const DEAD_CONN_MS = 120_000
 
 export interface CollabRoom {
   id: string
@@ -106,6 +111,21 @@ export function sweepRooms(now: number = Date.now()): void {
     }
   }
 }
+/** D: 120초 무수신 conn은 half-open으로 보고 정리한다. */
+export function sweepDeadConns(now: number = Date.now()): void {
+  for (const room of [...rooms.values()]) {
+    for (const [ws, info] of [...room.conns.entries()]) {
+      if (now - info.lastMsgAt < DEAD_CONN_MS) continue
+      logger.info(`Collab room ${room.id}: dropping silent conn`)
+      try {
+        ;(ws as unknown as { close?: (code?: number) => void }).close?.(1001)
+      } catch {
+        // 무시
+      }
+      removeConn(room.id, ws)
+    }
+  }
+}
 /** type 99 keepalive: 유휴 room도 lastRxAt가 갱신되게 한다. */
 function sendKeepalive(room: CollabRoom): void {
   if (room.conns.size === 0) return
@@ -117,6 +137,7 @@ function ensureSweeper(): void {
   if (sweepTimer) return
   sweepTimer = setInterval(() => {
     sweepRooms()
+    sweepDeadConns()
     for (const room of rooms.values()) sendKeepalive(room)
     if (rooms.size === 0 && sweepTimer) {
       clearInterval(sweepTimer)
@@ -485,7 +506,7 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
   if (!room) return null
   const sock = ws as CollabSocket
   if (!room.conns.has(ws)) {
-    room.conns.set(ws, { joinedAt: Date.now(), clientIds: new Set() })
+    room.conns.set(ws, { joinedAt: Date.now(), clientIds: new Set(), lastMsgAt: Date.now() })
     room.order.push(ws)
     room.emptySince = null
     room.everConnected = true
@@ -509,13 +530,6 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
   return room
 }
 
-function connOfClient(room: CollabRoom, clientId: number): unknown | null {
-  for (const [ws, info] of room.conns) {
-    if (info.clientIds.has(clientId)) return ws
-  }
-  return null
-}
-
 export function isOwner(room: CollabRoom, clientId: number): boolean {
   return room.ownerIds.has(clientId)
 }
@@ -524,6 +538,7 @@ export function isOwner(room: CollabRoom, clientId: number): boolean {
 export function wsMessage(roomId: string, ws: unknown, data: Uint8Array): void {
   const room = rooms.get(roomId)
   if (!room || !room.conns.has(ws)) return
+  room.conns.get(ws)!.lastMsgAt = Date.now()
   let d: ReturnType<typeof decoding.createDecoder>
   try {
     d = decoding.createDecoder(data)
@@ -654,33 +669,6 @@ export async function applySave(
   return run
 }
 
-export { connOfClient }
-
-export interface HandoffResult {
-  ok: boolean
-  status?: number
-  error?: string
-  code?: string
-  owner?: number[]
-}
-
-export function handoff(roomId: string, fromClientId: number, toClientId: number): HandoffResult {
-  const room = rooms.get(roomId)
-  if (!room) return { ok: false, status: 404, error: 'No such room', code: 'no_room' }
-  if (!isCurrentOwner(room, fromClientId)) {
-    return { ok: false, status: 409, error: 'Only the current owner can hand off', code: 'not_owner' }
-  }
-  const toConn = connOfClient(room, toClientId)
-  if (toConn === null || toConn === undefined) {
-    return { ok: false, status: 409, error: 'Target is not connected', code: 'target_offline' }
-  }
-  room.ownerConn = toConn
-  room.ownerIds = new Set([toClientId])
-  logger.info(`Collab room ${roomId}: owner handed off ${fromClientId} -> ${toClientId}`)
-  broadcastMeta(room)
-  return { ok: true, owner: [...room.ownerIds] }
-}
-
 /** awareness에서 참가자 목록을 읽는다 (서버는 읽기만, publish 금지). */
 export function roomParticipants(room: CollabRoom): CollabParticipant[] {
   const out: CollabParticipant[] = []
@@ -718,6 +706,8 @@ export function roomHasEditors(room: CollabRoom): boolean {
 
 export interface LockInfo {
   active: boolean
+  /** conns는 0이지만 최근 편집 흔적이 있어 재연결 대기 중 (F). */
+  reconnecting?: boolean
   roomId?: string
   owner?: number[]
   epoch?: string
@@ -743,7 +733,22 @@ export async function lockInfo(userPath: string): Promise<LockInfo> {
   if (!abs) return { active: false }
   const id = pathIndex.get(normalizeAbs(abs)) ?? roomIdForAbs(abs)
   const room = rooms.get(id)
-  if (!room || room.conns.size === 0) return { active: false }
+  if (!room || room.conns.size === 0) {
+    // F: conns가 0이어도 everConnected + TTL 안이면 재연결 대기로 알린다.
+    // AI는 이 동안 편집하지 않는다 (409 유지).
+    if (room && room.everConnected && room.emptySince !== null && Date.now() - room.emptySince < roomTtlMs) {
+      return {
+        active: true,
+        reconnecting: true,
+        roomId: id,
+        epoch: room.epoch,
+        lastHash: room.lastHash,
+        participants: [],
+        aiBlockedAt: room.aiBlockedAt,
+      }
+    }
+    return { active: false }
+  }
   // view-only room도 참가자바용으로 participants는 돌려준다 (active는 edit 있을 때만).
   if (!roomHasEditors(room)) {
     return { active: false, roomId: id, participants: roomParticipants(room), aiBlockedAt: room.aiBlockedAt }

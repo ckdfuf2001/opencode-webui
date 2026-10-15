@@ -23,7 +23,8 @@ const {
   resetCollabForTests,
   setRoomTtlMs,
   sweepRooms,
-  handoff,
+  sweepDeadConns,
+  DEAD_CONN_MS,
   hashBytes,
   isOwner,
   listRooms,
@@ -167,27 +168,7 @@ describe('owner + save', () => {
   })
 })
 
-describe('handoff', () => {
-  it('owner transfers; non-owner and offline target rejected', async () => {
-    const { roomId } = await createSession(NOTE_REL)
-    const room = rooms.get(roomId)!
-    const a = sock()
-    const b = sock()
-    addConn(roomId, a)
-    addConn(roomId, b)
-    room.ownerConn = a
-    room.ownerIds.add(7)
-    room.conns.get(a)!.clientIds.add(7)
-    room.conns.get(b)!.clientIds.add(9)
-
-    expect(handoff(roomId, 8, 9)).toMatchObject({ ok: false, status: 409 })
-    expect(handoff(roomId, 7, 10)).toMatchObject({ ok: false, status: 409 })
-    const ok = handoff(roomId, 7, 9)
-    expect(ok).toMatchObject({ ok: true })
-    expect(isOwner(room, 9)).toBe(true)
-    expect(isOwner(room, 7)).toBe(false)
-  })
-
+describe('owner election (H: manual handoff removed, auto only)', () => {
   it('owner conn drop promotes earliest remaining', async () => {
     const { roomId } = await createSession(NOTE_REL)
     const room = rooms.get(roomId)!
@@ -214,6 +195,34 @@ describe('handoff', () => {
     await new Promise((r) => setTimeout(r, 150))
     sweepRooms()
     expect(rooms.has(roomId)).toBe(false)
+  })
+
+  it('silent conns are dropped after DEAD_CONN_MS (D)', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    const a = sock()
+    addConn(roomId, a)
+    expect(rooms.get(roomId)!.conns.size).toBe(1)
+    const info = rooms.get(roomId)!.conns.get(a) as { lastMsgAt: number }
+    info.lastMsgAt = Date.now() - DEAD_CONN_MS - 1000
+    sweepDeadConns()
+    expect(rooms.get(roomId)!.conns.size).toBe(0)
+  })
+
+  it('reconnecting window keeps AI blocked while conns are gone (F)', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    const a = sock()
+    addConn(roomId, a)
+    removeConn(roomId, a)
+    const during = await lockInfo(NOTE_REL)
+    expect(during).toMatchObject({ active: true, reconnecting: true, roomId })
+    setRoomTtlMs(1)
+    try {
+      sweepRooms(Date.now() + 1000)
+      const after = await lockInfo(NOTE_REL)
+      expect(after.active).toBe(false)
+    } finally {
+      setRoomTtlMs(30_000)
+    }
   })
 })
 

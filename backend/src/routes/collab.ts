@@ -8,7 +8,6 @@ import {
   applySave,
   checkSave,
   createSession,
-  handoff,
   isValidRoomId,
   listRooms,
   lockInfo,
@@ -31,12 +30,6 @@ const SaveSchema = z.object({
   clientId: z.number().int(),
   baseHash: z.string().optional(),
   bytesB64: z.string().min(1),
-})
-
-const HandoffSchema = z.object({
-  roomId: z.string().min(1),
-  fromClientId: z.number().int(),
-  toClientId: z.number().int(),
 })
 
 function toBytes(data: unknown): Uint8Array | null {
@@ -106,14 +99,8 @@ app.post('/save', async (c) => {
 })
 
 app.post('/handoff', async (c) => {
-  try {
-    const body = HandoffSchema.parse(await c.req.json())
-    const result = handoff(body.roomId, body.fromClientId, body.toClientId)
-    if (!result.ok) return c.json({ error: result.error, code: result.code }, result.status || 409)
-    return c.json({ ok: true, owner: result.owner })
-  } catch (error) {
-    return errJson(c, error, 500)
-  }
+  // H: 수동 handoff 제거됨 — owner는 awareness 기반 자동 선출만 쓴다.
+  return c.json({ error: 'Handoff was removed; ownership is elected automatically', code: 'removed' }, 410)
 })
 
 app.get('/lock', async (c) => {
