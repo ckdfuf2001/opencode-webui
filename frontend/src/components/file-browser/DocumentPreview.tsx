@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { ViewerLoadBoundary } from './ViewerBoundaries'
-import { SpreadsheetEditor } from '@christophervr/xlsx-react-viewer'
-import PptxViewer from './PptxViewer'
-import { WordEditor } from 'docx-react-viewer'
-import { VisioViewer } from 'visio-react-viewer'
+import { lazyWithRetry } from './lazyRetry'
+import { loadPptxViewer, loadSpreadsheetEditor, loadVisioViewer, loadWordEditor } from './viewerLoaders'
+
+let SpreadsheetEditor = lazyWithRetry(loadSpreadsheetEditor)
+let PptxViewer = lazyWithRetry(loadPptxViewer)
+let WordEditor = lazyWithRetry(loadWordEditor)
+let VisioViewer = lazyWithRetry(loadVisioViewer)
+
+/** 청크 로드 실패 시 lazy를 새걸로 갈아끼운다 (다시 시도 버튼용). */
+function bustViewerChunks(): void {
+  SpreadsheetEditor = lazyWithRetry(loadSpreadsheetEditor)
+  PptxViewer = lazyWithRetry(loadPptxViewer)
+  WordEditor = lazyWithRetry(loadWordEditor)
+  VisioViewer = lazyWithRetry(loadVisioViewer)
+}
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { Button } from '@/components/ui/button'
@@ -427,7 +438,7 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   const [endingEdit, setEndingEdit] = useState(false)
   useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
   const retryViewer = () => {
-    // 정적 import라 청크 교체는 불필요 — 키만 바꿔 리마운트한다.
+    bustViewerChunks()
     setViewerRetry((v) => v + 1)
   }
   useEffect(() => {

@@ -1,10 +1,15 @@
-import { useState, useCallback, useRef, useEffect, memo, type ReactNode } from 'react'
+import { useState, useCallback, useRef, useEffect, memo, Suspense, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Download, X, PenLine, Save, X as XIcon, WrapText, RefreshCw, Maximize2, Minimize2, MoreHorizontal } from 'lucide-react'
 import type { FileInfo } from '@/types/files'
 import { API_BASE_URL } from '@/config'
 import { VirtualizedTextView, type VirtualizedTextViewHandle } from '@/components/ui/virtualized-text-view'
-import { DocumentPreview } from './DocumentPreview'
+import { lazyWithRetry } from './lazyRetry'
+
+/** office/pdf 뷰어 청크는 파일 열 때만 로드한다 (시작 메모리 절감). */
+const DocumentPreview = lazyWithRetry(() =>
+  import('./DocumentPreview').then((m) => ({ default: m.DocumentPreview })),
+)
 import { detectDocKind } from './docKind'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
@@ -212,7 +217,11 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
 
   const renderContent = () => {
     if (docKind) {
-      return <DocumentPreview file={file} refreshKey={refreshKey} />
+      return (
+        <Suspense fallback={<div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Loading viewer…</div>}>
+          <DocumentPreview file={file} refreshKey={refreshKey} />
+        </Suspense>
+      )
     }
 
     if (file.mimeType?.startsWith('image/')) {

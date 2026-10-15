@@ -72,7 +72,7 @@ export function GeneralSettings() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="mode">Mode</Label>
+          <Label htmlFor="mode">Default agent (new sessions)</Label>
           <Select 
             value={preferences?.mode || 'build'} 
             onValueChange={(value) => updateSettings({ mode: value as 'plan' | 'build' })}
@@ -86,7 +86,8 @@ export function GeneralSettings() {
             </SelectContent>
           </Select>
           <p className="text-sm text-muted-foreground">
-            Plan mode: Read-only. Build mode: File changes enabled
+            Plan mode: Read-only. Build mode: File changes enabled.
+            The input box toggle overrides this for the current session.
           </p>
         </div>
 
