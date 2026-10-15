@@ -17,6 +17,8 @@ data/
 workspace/
 # Playwright cache (optional, not agent-browser)
 /.agent-browser-home/
+test-results/
+playwright-report/
 /config/
 temp/
 
