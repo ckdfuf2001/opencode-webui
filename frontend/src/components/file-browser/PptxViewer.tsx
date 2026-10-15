@@ -3,6 +3,7 @@ import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from '
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
+import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
 import { saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
@@ -1478,7 +1479,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                         {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
                         {p.device === 'mobile' ? '📱' : ''}
                         {status ? ` · ${status}` : ''}
-                        {typeof p.slide === 'number' ? ` · 슬${p.slide}` : ''}
                       </span>
                     </button>
                   )
@@ -1524,13 +1524,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                     <button
                       type="button"
                       data-testid="collab-rename-edit"
+                      title="이름 변경"
                       onClick={() => {
                         setRenameInput(self.name)
                         setRenaming(true)
                       }}
-                      className="underline underline-offset-2 hover:text-foreground"
+                      className="inline-flex items-center hover:text-foreground"
                     >
-                      편집
+                      <Pencil className="w-3 h-3" />
                     </button>
                   </span>
                 )}

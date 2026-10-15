@@ -4,12 +4,6 @@
 @layer lib, theme, base, components, utilities;
 @import "tailwindcss";
 
-/* PPT 뷰어 lib CSS는 충돌 유틸리티(.left-0 등)가 앱 규칙을 문서 순서로
- * 이기지 못하도록 전용 레이어에 넣는다.
- * 근거: sm:left-[50%](@media, 앱 utilities)가 lib의 평범 .left-0에 져서
- * 설정 다이얼로그가 좌상단 밖으로 나감 (rect -448,-237 실측). */
-@import "pptx-react-viewer/styles.css" layer(lib);
-
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {

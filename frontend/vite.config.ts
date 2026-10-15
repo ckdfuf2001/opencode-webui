@@ -65,7 +65,24 @@ export default defineConfig(({ mode }) => {
 
   return {
     envDir: path.resolve(__dirname, ".."),
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      // pptx-react-viewer CSS를 @layer lib 로 감싼다.
+      // @import ... layer() 구문은 빌드 경고(@property 미지원)를 유발하므로
+      // JS import 경로 그대로 두고 transform 단계에서 감싼다.
+      // lib 규칙은 모두 lib 레이어에 들어가고, index.css의 레이어 순서
+      // 선언(@layer lib, theme, ...)에 따라 앱 규칙이 동점을 이긴다.
+      {
+        name: 'pptx-viewer-layer',
+        enforce: 'pre',
+        transform(code, id) {
+          const fwd = id.replace(/\\/g, '/')
+          if (!fwd.endsWith('pptx-react-viewer/dist/pptx-viewer.css')) return null
+          return { code: `@layer lib{${code}}`, map: null }
+        },
+      },
+    ],
     define: {
       __BUILD_SHA__: JSON.stringify(buildMeta.sha),
       __BUILD_TIME__: JSON.stringify(buildMeta.time),
