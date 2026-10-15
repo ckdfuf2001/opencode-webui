@@ -19,6 +19,7 @@ import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxCo
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
+import { readCollabUser } from '@/lib/collabUser'
 
 type ExtractedMsg = {
   html?: string
@@ -831,7 +832,8 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const [showComments, setShowComments] = useState(false)
   const [author, setAuthor] = useState(() => {
     try {
-      return localStorage.getItem('docx-comment-author') ?? ''
+      // 저장된 값이 없으면 collab-user 이름을 처음 한 번만 기본값으로 가져온다.
+      return localStorage.getItem('docx-comment-author') ?? readCollabUser()?.name ?? ''
     } catch {
       return ''
     }
@@ -873,15 +875,19 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     }
   }
   const commentAuthorName = () => {
-    const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
-    return author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+    // 작성자 단일 통로: 입력값 → collab-user 이름. 가짜 기본값을 넣지 않는다.
+    return author.trim() || readCollabUser()?.name?.trim() || ''
   }
   const addComment = async () => {
     const text = draft.trim()
     if (!text || adding) return
+    const name = commentAuthorName()
+    if (!name) {
+      showToast.error('작성자 이름을 입력하세요')
+      return
+    }
     setAdding(true)
     try {
-      const name = commentAuthorName()
       const ok = await mutateDocxComments((base) =>
         addDocxComment(base, { authorName: name, text }),
       )
@@ -902,8 +908,13 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     if (!text || busyId || !c.cid) return
     setBusyId(`reply:${c.cid}`)
     try {
+      const name = commentAuthorName()
+      if (!name) {
+        showToast.error('작성자 이름을 입력하세요')
+        return
+      }
       const ok = await mutateDocxComments((base) =>
-        replyDocxComment(base, { parentCid: c.cid, authorName: commentAuthorName(), text }),
+        replyDocxComment(base, { parentCid: c.cid, authorName: name, text }),
       )
       if (ok) {
         setReplyTo(null)
@@ -1403,7 +1414,8 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   const [reloadKey, setReloadKey] = useState(0)
   const [author, setAuthor] = useState(() => {
     try {
-      return localStorage.getItem('xlsx-comment-author') ?? ''
+      // 저장된 값이 없으면 collab-user 이름을 처음 한 번만 기본값으로 가져온다.
+      return localStorage.getItem('xlsx-comment-author') ?? readCollabUser()?.name ?? ''
     } catch {
       return ''
     }
@@ -1460,8 +1472,12 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     }
     setAdding(true)
     try {
-      const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
-      const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+      // 작성자 단일 통로: 입력값 → collab-user 이름. 가짜 기본값을 넣지 않는다.
+      const name = author.trim() || readCollabUser()?.name?.trim() || ''
+      if (!name) {
+        showToast.error('작성자 이름을 입력하세요')
+        return
+      }
       // 선택 문자열에 시트명이 있으면 해당 시트, 없으면 0번 시트.
       let sheetIndex = 0
       const m = ref.match(/^'((?:[^']|'')+)'!|^([^!]+)!/)
@@ -1491,8 +1507,11 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     if (!text || busyId || !c.tid) return
     setBusyId(`reply:${c.tid}`)
     try {
-      const existingAuthors = [...new Set(comments.map((x) => x.author).filter((a) => a && a !== 'Unknown'))]
-      const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+      const name = author.trim() || readCollabUser()?.name?.trim() || ''
+      if (!name) {
+        showToast.error('작성자 이름을 입력하세요')
+        return
+      }
       const ok = await mutateXlsxComments((base) =>
         replyXlsxComment(base, { parentTid: c.tid, authorName: name, text }),
       )

@@ -100,6 +100,9 @@ app.post('/save', async (c) => {
 
 app.post('/handoff', async (c) => {
   // H: 수동 handoff 제거됨 — owner는 awareness 기반 자동 선출만 쓴다.
+  // 이 스텁은 owner 상태를 절대 바꾸지 않고 410만 돌려준다.
+  // TODO(v0.13): 이 라우트를 삭제한다.
+  logger.warn('Collab /handoff called by legacy client; ownership is automatic now')
   return c.json({ error: 'Handoff was removed; ownership is elected automatically', code: 'removed' }, 410)
 })
 

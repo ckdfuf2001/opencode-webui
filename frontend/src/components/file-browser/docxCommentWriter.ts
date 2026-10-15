@@ -361,7 +361,8 @@ export async function addDocxComment(
 ): Promise<Uint8Array> {
   const text = opts.text.trim()
   if (!text) throw new Error('empty comment')
-  const authorName = opts.authorName.trim() || 'You'
+  const authorName = opts.authorName.trim()
+  if (!authorName) throw new Error('작성자 이름을 입력해 주세요')
   const zip = await JSZip.loadAsync(bytes)
   await ensureCommentSystem(zip)
   const readText = async (path: string): Promise<string | null> => {
@@ -395,7 +396,8 @@ export async function replyDocxComment(
 ): Promise<Uint8Array> {
   const text = opts.text.trim()
   if (!text || !opts.parentCid) throw new Error('empty comment')
-  const authorName = opts.authorName.trim() || 'You'
+  const authorName = opts.authorName.trim()
+  if (!authorName) throw new Error('작성자 이름을 입력해 주세요')
   const parentId = Number(opts.parentCid)
   if (!Number.isFinite(parentId)) throw new Error('comment not found')
   const zip = await JSZip.loadAsync(bytes)
