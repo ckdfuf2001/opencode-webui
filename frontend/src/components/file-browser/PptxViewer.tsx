@@ -144,6 +144,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   collabRef.current = collab
   const editingRef = useRef(editing)
   editingRef.current = editing
+  // 세션 awareness mode의 진실 통로. role은 reconcile이 바꿀 수 있어서
+  // 토글 가드로 쓰면 poll이 먼저 뒤집는 레이스에 setMode가 스킵된다.
+  const sessionModeRef = useRef<'view' | 'edit'>('view')
   const toastedStatus = useRef<string | null>(null)
   // E2E 디버그 훅 (?collabDebug=1일 때만 window.__collabDebug 유지).
   const collabDebug = useMemo(() => {
@@ -178,6 +181,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         saveCount: saveCountRef.current,
         save409Count: save409Ref.current,
         slideCountY,
+        localMode: (c?.session.awareness.getLocalState() as { app?: { mode?: string } } | null)?.app?.mode ?? null,
       }
     } catch {
       // 무시
@@ -346,6 +350,37 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [savePath, fileName, saving, persistBytes])
 
+  // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, 리마운트 없음).
+  // role은 reconcile이 meta 기준으로 확정한다 (prop 런타임 변경 지원 — lib 확인됨).
+  // 토글 effect와 세션 생성 완료 시점이 함께 호출한다: 비동기 생성과 토글이
+  // 서로의 윈도우를 놓쳐도 modeRef 가드가 아니라 최신 editing으로 수렴한다.
+  const syncSessionMode = useCallback(() => {
+    const c = collabRef.current
+    if (!c || !savePath) return
+    if (editingRef.current && sessionModeRef.current !== 'edit') {
+      c.session.setMode('edit')
+      sessionModeRef.current = 'edit'
+      reconcileCollab()
+    } else if (!editingRef.current && sessionModeRef.current !== 'view') {
+      const target = c
+      void (async () => {
+        try {
+          if (isOwnerNow(collabRef.current) && target.session.synced) {
+            const h = viewerRef.current
+            if (h) await persistBytes(new Uint8Array(await h.getContent()))
+          }
+        } catch {
+          // 무시
+        } finally {
+          if (collabRef.current !== target) return
+          target.session.setMode('view')
+          sessionModeRef.current = 'view'
+          reconcileCollab()
+        }
+      })()
+    }
+  }, [savePath, persistBytes, reconcileCollab, isOwnerNow])
+
   // 세션 생명주기: 파일 열림 ~ 닫힘. 보기 모드도 view로 참가한다 (AI 차단 없음).
   // 편집 진입/종료는 아래 모드 전환 effect가 처리한다. 실패하면 solo로 폴백.
   // E8: collab-user 없으면 이름 모달이 막고, 입력 전까지 연결하지 않는다.
@@ -376,15 +411,20 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       return
     }
     setNeedName(false)
-    const startEditing = editingRef.current
+    // 클릭이 session POST를 가로지를 수 있으므로, 모드 판정은 await 뒤에서
+    // fresh하게 읽는다 (stale 캡처 금지).
     void (async () => {
       try {
         const info = await collabApi.session(savePath)
         if (dead) return
+        const userNow = collabUserRef.current
+        if (!userNow) return
+        const freshEditing = editingRef.current
+        sessionModeRef.current = freshEditing ? 'edit' : 'view'
         const session = new YCollabSession(`${collabServerUrl()}/${info.roomId}`, {
-          name: user.name,
-          color: user.color,
-        }, { mode: startEditing ? 'edit' : 'view', userId: user.id, device: narrowViewport ? 'mobile' : 'desktop' })
+          name: userNow.name,
+          color: userNow.color,
+        }, { mode: freshEditing ? 'edit' : 'view', userId: userNow.id, device: narrowViewport ? 'mobile' : 'desktop' })
         session.knownHash = info.lastHash
         wireSessionRecovery(session)
         session.connect()
@@ -397,13 +437,15 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           roomId: info.roomId,
           epoch: info.epoch,
           // 가판정 (join이 안전 기본값). meta+sync가 오면 reconcile이 확정한다.
-          role: startEditing ? 'collaborator' : 'viewer',
+          role: freshEditing ? 'collaborator' : 'viewer',
           intent: 'join',
-          userId: user.id,
+          userId: userNow.id,
         })
         setMetaTick(0)
         setMetaOwner(null)
         updateDebug()
+        // 생성 시점에 이미 편집 중이면 모드를 확정한다 (토글이 윈도우를 놓친 경우).
+        syncSessionMode()
       } catch {
         if (!dead) setCollab(null)
       }
@@ -507,30 +549,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
 
   // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, 리마운트 없음).
   // role은 reconcile이 meta 기준으로 확정한다 (prop 런타임 변경 지원 — lib 확인됨).
+  // 가드는 role이 아니라 sessionModeRef로 건다 (poll-reconcile과의 레이스 방지).
   useEffect(() => {
-    const c = collabRef.current
-    if (!c || !savePath) return
-    if (editing && c.role === 'viewer') {
-      c.session.setMode('edit')
-      reconcileCollab()
-    } else if (!editing && c.role !== 'viewer') {
-      void (async () => {
-        try {
-          if (isOwnerNow(collabRef.current) && c.session.synced) {
-            const h = viewerRef.current
-            if (h) await persistBytes(new Uint8Array(await h.getContent()))
-          }
-        } catch {
-          // 무시
-        } finally {
-          if (collabRef.current !== c) return
-          c.session.setMode('view')
-          reconcileCollab()
-        }
-      })()
-    }
+    syncSessionMode()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, savePath, reconcileCollab])
+  }, [editing, savePath, syncSessionMode])
 
   // 2.4: owner인데 join으로 마운트됐으면 3초 뒤 create로 한 번만 전환한다.
   useEffect(() => {

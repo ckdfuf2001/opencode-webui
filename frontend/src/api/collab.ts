@@ -53,12 +53,13 @@ export const collabApi = {
     resume?: { resumeEpoch?: string; knownHash?: string | null; clientId?: number },
   ): Promise<CollabSessionInfo> => {
     try {
+      // loopback SYN 블랙홀 대비: 무한 대기를 막는다 (실패하면 solo 폴백).
       const { data } = await axios.post(`${API_BASE_URL}/api/collab/session`, {
         path,
         resumeEpoch: resume?.resumeEpoch,
         knownHash: resume?.knownHash ?? undefined,
         clientId: resume?.clientId,
-      })
+      }, { timeout: 15000 })
       return data
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
