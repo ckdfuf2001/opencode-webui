@@ -96,10 +96,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     roomId: string
     epoch: string
     role: 'owner' | 'collaborator' | 'viewer'
-    editRole: 'owner' | 'collaborator'
     intent: 'create' | 'join'
     userId: string
   } | null>(null)
+  // 서버 meta(type 100)의 owner (렌더 판정용). ownerIdRef는 콜백용 미러.
+  const [metaOwner, setMetaOwner] = useState<number | null>(null)
+  const [metaTick, setMetaTick] = useState(0)
   const [participants, setParticipants] = useState<CollabParticipant[]>([])
   const participantsRef = useRef<CollabParticipant[]>([])
   participantsRef.current = participants
@@ -112,7 +114,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [aiBlocked, setAiBlocked] = useState(false)
   const aiBlockRef = useRef<number | null>(null)
   const aiShownAtRef = useRef(0)
-  const [collabKey, setCollabKey] = useState(0)
+  // owner 대기 (2.4 교착 대비): 10초 초과 시 재시도 버튼.
+  const [ownerWait, setOwnerWait] = useState(false)
   const [collabNotice, setCollabNotice] = useState<string | null>(null)
   const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
   const [connBadge, setConnBadge] = useState<{ status: string; synced: boolean }>({ status: 'connecting', synced: false })
@@ -178,6 +181,31 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     }
   }, [])
 
+  // P0-2: role/intent 단일 판정 (서버 meta + 내 clientId + doc 상태).
+  // session 응답의 host/guest는 resume/epoch에만 쓰고 판정에 쓰지 않는다.
+  // handleWriteBack보다 앞에서 정의한다 (TDZ 방지).
+  const isOwnerNow = useCallback((c: { session: YCollabSession } | null): boolean => {
+    return !!c && ownerIdRef.current != null && ownerIdRef.current === c.session.clientId
+  }, [])
+
+  const reconcileCollab = useCallback(() => {
+    const c = collabRef.current
+    if (!c) return
+    const editMode = editingRef.current
+    const owner = isOwnerNow(c)
+    const wantRole = !editMode ? 'viewer' : owner ? 'owner' : 'collaborator'
+    let empty = true
+    try {
+      empty = c.session.doc.getArray('pptx:slides').length === 0
+    } catch {
+      empty = true
+    }
+    const wantIntent = editMode && owner && empty ? 'create' : 'join'
+    if (c.role !== wantRole || c.intent !== wantIntent) {
+      setCollab({ ...c, role: wantRole, intent: wantIntent })
+    }
+  }, [isOwnerNow])
+
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
   // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다.
   const persistBytes = useCallback(async (bytes: Uint8Array): Promise<boolean> => {
@@ -229,11 +257,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     return true
   }, [fileName, savePath, updateDebug])
 
-  // owner write-back (lib이 변경 debounce 후 호출). synced 전에는 저장하지 않는다.
-  // 빈 덱 adopt 직후의 write-back은 스킵한다 (빈 파일로 덮어쓰기 방지).
+  // owner write-back (lib이 변경 debounce 후 호출). 서버 owner일 때만 저장한다.
+  // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
-    if (!c || c.role !== 'owner') return
+    if (!c || !isOwnerNow(c)) return
     if (!c.session.synced) return
     let slides = 0
     try {
@@ -243,7 +271,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     }
     if (slides === 0) return
     await persistBytes(bytes)
-  }, [persistBytes])
+  }, [persistBytes, isOwnerNow])
 
   // 내 사본 다운로드 (409 터미널 탈출용).
   const offerMineDownload = useCallback(async () => {
@@ -340,16 +368,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         setCollabNotice(null)
         setMineFile(null)
         toastedStatus.current = null
-        const editRole = info.role === 'host' ? 'owner' : 'collaborator'
         setCollab({
           session,
           roomId: info.roomId,
           epoch: info.epoch,
-          role: startEditing ? editRole : 'viewer',
-          editRole,
-          intent: info.role === 'host' ? 'create' : 'join',
+          // 가판정 (join이 안전 기본값). meta+sync가 오면 reconcile이 확정한다.
+          role: startEditing ? 'collaborator' : 'viewer',
+          intent: 'join',
           userId: user.id,
         })
+        setMetaTick(0)
+        setMetaOwner(null)
         updateDebug()
       } catch {
         if (!dead) setCollab(null)
@@ -363,7 +392,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       // ref는 체인이 끝날 때까지 유지한다 (persistBytes가 ref를 읽기 때문).
       void (async () => {
         try {
-          if (c.role === 'owner' && c.session.synced) {
+          if (isOwnerNow(c) && c.session.synced) {
             const h = viewerRef.current
             if (h) await persistBytes(new Uint8Array(await h.getContent()))
           }
@@ -375,6 +404,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           aiBlockRef.current = null
           setAiBlocked(false)
           ownerIdRef.current = null
+          setMetaOwner(null)
+          setMetaTick(0)
+          setOwnerWait(false)
           updateDebug()
           if (collabRef.current === c) {
             collabRef.current = null
@@ -429,20 +461,34 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     )
   }, [])
 
-  // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, viewer만 리마운트).
+  // P0-2 파생값 (렌더·타이머 공용). ref/live-doc 읽기이며,
+  // 구독·poll·meta가 렌더를 일으킬 때마다 재계산된다.
+  const amOwnerRender = !!collab && metaOwner != null && metaOwner === collab.session.clientId
+  const docEmptyRender = (() => {
+    if (!collab) return true
+    try {
+      return collab.session.doc.getArray('pptx:slides').length === 0
+    } catch {
+      return true
+    }
+  })()
+  const waitingForOwner =
+    !!collab && editing && collab.session.synced && metaTick > 0 && !amOwnerRender && docEmptyRender
+  const needCreateIntent =
+    !!collab && editing && amOwnerRender && docEmptyRender && collab.intent !== 'create'
+
+  // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, 리마운트 없음).
+  // role은 reconcile이 meta 기준으로 확정한다 (prop 런타임 변경 지원 — lib 확인됨).
   useEffect(() => {
     const c = collabRef.current
     if (!c || !savePath) return
     if (editing && c.role === 'viewer') {
       c.session.setMode('edit')
-      if (collabRef.current === c) {
-        setCollab({ ...c, role: c.editRole })
-        setCollabKey((v) => v + 1)
-      }
+      reconcileCollab()
     } else if (!editing && c.role !== 'viewer') {
       void (async () => {
         try {
-          if (c.role === 'owner' && c.session.synced) {
+          if (isOwnerNow(collabRef.current) && c.session.synced) {
             const h = viewerRef.current
             if (h) await persistBytes(new Uint8Array(await h.getContent()))
           }
@@ -451,13 +497,41 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         } finally {
           if (collabRef.current !== c) return
           c.session.setMode('view')
-          setCollab({ ...c, role: 'viewer' })
-          setCollabKey((v) => v + 1)
+          reconcileCollab()
         }
       })()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, savePath])
+  }, [editing, savePath, reconcileCollab])
+
+  // 2.4: owner인데 join으로 마운트됐으면 3초 뒤 create로 한 번만 전환한다.
+  useEffect(() => {
+    if (!needCreateIntent) return
+    const id = setTimeout(() => {
+      const cur = collabRef.current
+      if (!cur || !isOwnerNow(cur) || cur.intent === 'create') return
+      let stillEmpty = true
+      try {
+        stillEmpty = cur.session.doc.getArray('pptx:slides').length === 0
+      } catch {
+        stillEmpty = true
+      }
+      if (stillEmpty && collabRef.current === cur) {
+        setCollab({ ...cur, intent: 'create' })
+      }
+    }, 3000)
+    return () => clearTimeout(id)
+  }, [needCreateIntent, isOwnerNow])
+
+  // 2.4: owner도 방도 비어 있는데 10초가 넘으면 재시도 버튼을 보여준다.
+  useEffect(() => {
+    if (!waitingForOwner) {
+      setOwnerWait(false)
+      return
+    }
+    const id = setTimeout(() => setOwnerWait(true), 10000)
+    return () => clearTimeout(id)
+  }, [waitingForOwner])
 
   // 세션 복구 배선: resume → 같은 doc으로 WS 재오픈 (리마운트 없음).
   const wireSessionRecovery = (session: YCollabSession) => {
@@ -499,6 +573,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       const snap = session.getSnapshot()
       setConnBadge({ status: snap.status, synced: snap.synced })
       updateDebug()
+      reconcileCollab()
       if (snap.status === 'disconnected' && toastedStatus.current !== 'disconnected') {
         toastedStatus.current = 'disconnected'
         showToast.warning('연결이 끊김 — 재연결 중')
@@ -518,9 +593,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       // 무시
     }
     // 서버 meta push 즉시 반영 (폴 5초를 기다리지 않는다 — E9/E10 3초 충족).
+    // owner 판정의 단일 진실 통로이기도 하다 (role/intent는 reconcile이 확정).
     session.onMeta((meta) => {
       const c = collabRef.current
       ownerIdRef.current = meta.ownerClientId
+      setMetaOwner(meta.ownerClientId)
+      setMetaTick((v) => v + 1)
       trackAiBlocked(meta.aiBlockedAt)
       if (meta.externalChanged) {
         setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
@@ -530,6 +608,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         session.knownHash = meta.lastHash
       }
       updateDebug()
+      reconcileCollab()
     })
   }
 
@@ -559,6 +638,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         setParticipants(lock.participants ?? [])
         trackAiBlocked(lock.aiBlockedAt ?? null)
         ownerIdRef.current = (lock.owner ?? [])[0] ?? null
+        setMetaOwner(ownerIdRef.current)
         updateDebug()
         if (lock.lastHash) {
           baseHashRef.current = lock.lastHash
@@ -567,28 +647,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         if (lock.externalChanged) {
           setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
         }
-        const me = c.session.clientId
-        const amOwner = (lock.owner ?? []).includes(me)
-        // 보기 모드에선 role을 건드리지 않는다 (전환 effect 전담).
-        if (!editingRef.current) return
-        if (amOwner && c.role !== 'owner') {
-          // 승계됨: 즉시 flush 후 role 반영(리마운트).
-          try {
-            const h = viewerRef.current
-            if (h && c.session.synced) await persistBytes(new Uint8Array(await h.getContent()))
-          } catch {
-            // 무시
-          }
-          if (collabRef.current === c) {
-            setCollab({ ...c, role: 'owner' })
-            setCollabKey((v) => v + 1)
-          }
-        } else if (!amOwner && c.role !== 'collaborator') {
-          if (collabRef.current === c) {
-            setCollab({ ...c, role: 'collaborator' })
-            setCollabKey((v) => v + 1)
-          }
-        }
+        // role 판정은 reconcile(meta 기준)이 전담한다 — 여기서 flip·flush·리마운트 금지.
+        reconcileCollab()
       })()
     }
     // P1-2: sync 직후 5초를 기다리지 않고 바로 1회 실행한다.
@@ -604,7 +664,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     const onVis = () => {
       const c = collabRef.current
       if (document.visibilityState === 'hidden') {
-        if (c && c.role === 'owner' && c.session.synced) {
+        if (c && isOwnerNow(c) && c.session.synced) {
           const h = viewerRef.current
           if (h) {
             void h
@@ -883,15 +943,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setUnlocking(false)
     }
   }
-  // 공동편집 설정 (세션 성공 때만 — 편집은 owner/collaborator, 보기는 viewer). 실패하면 solo(기존 동작).
-  // P0-4: 모든 hook은 early return보다 위에 있어야 한다 (React #300).
-  // 복호화한 바이트를 디스크에 그대로 쓸 수 있어 암호 문서는 공동편집 제외.
-  // 신원은 collab-user 단일 통로 (lib presence와 동일).
+  // P0-2 마운트 게이트: 편집 모드는 synced+meta 수신 전에는 collab 없이 solo로
+  // 마운트한다 (판정 전 seed 금지). 보기 모드는 게이트 없이 바로 붙는다.
+  const collabGated = !editing || (connBadge.synced && metaTick > 0)
   const isDecrypted = unlocked !== null
   const collaboration = useMemo(
     () =>
       collabUser
-        ? buildCollaborationConfig(collab, {
+        ? buildCollaborationConfig(collabGated ? collab : null, {
             editing,
             viewing: !editing,
             user: { name: collabUser.name, color: collabUser.color },
@@ -902,13 +961,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
             },
           })
         : undefined,
-    [collab, editing, collabUser, isDecrypted, handleWriteBack],
+    [collabGated, collab, editing, collabUser, isDecrypted, handleWriteBack],
   )
   const viewerRootRef = useRef<HTMLDivElement | null>(null)
 
   // E2E: PowerPointViewer 마운트 횟수 (?collabDebug=1일 때만).
   // viewer key가 바뀌면 리마운트되므로 key 문자열을 deps로 둔다.
-  const viewerKey = `${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}#${collab ? `${collab.role}-${collabKey}` : 'solo'}`
+  // role/collabKey는 key에서 뺀다 (prop 런타임 변경으로 처리 — 리마운트 금지).
+  const viewerKey = `${editing ? 'edit' : 'view'}#${slideIdx}#${reloadKey}#${collabGated && collab ? collab.roomId : 'solo'}`
   useEffect(() => {
     if (!collabDebug) return
     try {
@@ -1028,6 +1088,28 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
               Join
             </Button>
           </div>
+        </div>
+      )}
+      {collab && editing && !collabGated && (
+        <div className="px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
+          연결 중…
+        </div>
+      )}
+      {collab && waitingForOwner && (
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
+          <span className="flex-1">문서를 여는 중…</span>
+          {ownerWait && (
+            <button
+              type="button"
+              onClick={() => {
+                setOwnerWait(false)
+                collabRef.current?.session.reconnect()
+              }}
+              className="shrink-0 underline underline-offset-2 hover:text-foreground"
+            >
+              owner 응답 없음 · 다시 시도
+            </button>
+          )}
         </div>
       )}
       {collab && (
