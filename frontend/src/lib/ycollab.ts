@@ -20,6 +20,7 @@ export interface YCollabAppState {
   name: string
   color: string
   mode: YCollabMode
+  device?: YCollabDevice
 }
 
 export interface YCollabSessionResult {
@@ -42,6 +43,15 @@ export interface YCollabMeta {
   externalChanged: boolean
   aiBlockedAt: number | null
 }
+
+/** Y.Doc 변경 집계 (작성자 판별용). writers가 비면 삭제-only일 수 있다. */
+export interface CollabActivity {
+  at: number
+  writers: number[]
+}
+
+/** app.device — usePeers의 모바일/데스크톱 구분용. */
+export type YCollabDevice = 'mobile' | 'desktop'
 
 function toBytes(data: unknown): Uint8Array | null {
   if (data instanceof Uint8Array) return data
@@ -82,10 +92,14 @@ export class YCollabSession {
   /** 마지막 수신 meta (없으면 null). */
   lastMeta: YCollabMeta | null = null
   private metaListeners = new Set<(meta: YCollabMeta) => void>()
+  /** clientId → 마지막 편집 시각 (step2 초기동기화 제외, 3.3). */
+  readonly lastEditAt = new Map<number, number>()
+  private activityListeners = new Set<(a: CollabActivity) => void>()
+  private applyingKind: number | null = null
 
   readonly url: string
 
-  constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode; userId?: string }) {
+  constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode; userId?: string; device?: YCollabDevice }) {
     this.url = url
     this.userId = opts?.userId ?? this.doc.clientID
     const mode = opts?.mode ?? 'edit'
@@ -94,10 +108,17 @@ export class YCollabSession {
     this.awareness.setLocalState({
       userName: user.name,
       userColor: user.color,
-      app: { id: this.userId, name: user.name, color: user.color, mode } satisfies YCollabAppState,
+      app: {
+        id: this.userId,
+        name: user.name,
+        color: user.color,
+        mode,
+        device: opts?.device ?? 'desktop',
+      } satisfies YCollabAppState,
     })
     // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아낀다.
     this.doc.on('update', this.onDocUpdate)
+    this.doc.on('update', this.onDocActivity)
     this.awareness.on('update', this.onAwarenessUpdate)
   }
 
@@ -192,7 +213,14 @@ export class YCollabSession {
       if (type === 0) {
         const e = encoding.createEncoder()
         encoding.writeVarUint(e, 0)
-        const t = syncProtocol.readSyncMessage(d, e, this.doc, this)
+        // 3.3: 뒤따르는 doc update의 종류를 구분한다 (step2 초기동기화 제외용).
+        this.applyingKind = decoding.peekVarUint(d)
+        let t: number
+        try {
+          t = syncProtocol.readSyncMessage(d, e, this.doc, this)
+        } finally {
+          this.applyingKind = null
+        }
         if (encoding.length(e) > 1) this.send(encoding.toUint8Array(e))
         if (t === syncProtocol.messageYjsSyncStep2 && !this.synced) {
           this.synced = true
@@ -315,6 +343,45 @@ export class YCollabSession {
     this.send(encoding.toUint8Array(e))
   }
 
+  /**
+   * 3.3 작성자 판별. update 안의 struct client ID로 누가 편집했는지 집계한다.
+   * - step2(초기 전체 동기화)는 과거 기록이라 제외한다.
+   * - 내 로컬 편집(origin !== this)은 항상 집계한다.
+   * - 삭제-only는 from/to에 잡히지 않는다. writers가 비면 수신 측에서
+   *   awareness 최근 갱신자로 폴백한다 (정확도 한계, 문서화됨).
+   */
+  private onDocActivity = (update: Uint8Array, origin: unknown): void => {
+    if (this.disposed) return
+    if (origin === this && this.applyingKind !== syncProtocol.messageYjsUpdate) return
+    const writers: number[] = []
+    try {
+      const { from, to } = Y.parseUpdateMeta(update)
+      for (const [client, clock] of to) {
+        if (clock > (from.get(client) ?? 0)) writers.push(client)
+      }
+    } catch {
+      // 파싱 실패는 writers 비움으로 처리 (폴백 경로).
+    }
+    const now = Date.now()
+    for (const w of writers) this.lastEditAt.set(w, now)
+    const activity: CollabActivity = { at: now, writers }
+    this.activityListeners.forEach((l) => {
+      try {
+        l(activity)
+      } catch {
+        // 무시
+      }
+    })
+  }
+
+  /** Y.Doc 변경(작성자 집계) 구독. */
+  onActivity(listener: (a: CollabActivity) => void): () => void {
+    this.activityListeners.add(listener)
+    return () => {
+      this.activityListeners.delete(listener)
+    }
+  }
+
   private onAwarenessUpdate = (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown,
@@ -433,6 +500,11 @@ export class YCollabSession {
       // 무시
     }
     try {
+      this.doc.off('update', this.onDocActivity)
+    } catch {
+      // 무시
+    }
+    try {
       this.awareness.off('update', this.onAwarenessUpdate)
     } catch {
       // 무시
@@ -444,6 +516,8 @@ export class YCollabSession {
     }
     this.ws = null
     this.metaListeners.clear()
+    this.activityListeners.clear()
+    this.lastEditAt.clear()
     try {
       this.doc.destroy()
     } catch {

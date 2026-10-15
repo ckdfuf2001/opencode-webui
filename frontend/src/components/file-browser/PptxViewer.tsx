@@ -11,9 +11,10 @@ import { PptxViewerBoundary } from './ViewerBoundaries'
 import { PowerPointViewer } from 'pptx-react-viewer'
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
-import { collabApi, collabServerUrl, type CollabParticipant } from '@/api/collab'
+import { collabApi, collabServerUrl } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE } from '@/lib/ycollab'
 import { useCollabUser, type CollabIdentity } from '@/lib/collabUser'
+import { activityLabel, peerActivity, usePeers, type Peer } from '@/lib/usePeers'
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
@@ -102,9 +103,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // 서버 meta(type 100)의 owner (렌더 판정용). ownerIdRef는 콜백용 미러.
   const [metaOwner, setMetaOwner] = useState<number | null>(null)
   const [metaTick, setMetaTick] = useState(0)
-  const [participants, setParticipants] = useState<CollabParticipant[]>([])
-  const participantsRef = useRef<CollabParticipant[]>([])
-  participantsRef.current = participants
+  // P0-3: 참가자는 usePeers(로컬 awareness)가 전담한다. lock poll은 AI/외부변경용.
   // E8: collab-user 없으면 이름 모달이 막는다.
   const [needName, setNeedName] = useState(false)
   const [nameInput, setNameInput] = useState('')
@@ -360,7 +359,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         const session = new YCollabSession(`${collabServerUrl()}/${info.roomId}`, {
           name: user.name,
           color: user.color,
-        }, { mode: startEditing ? 'edit' : 'view', userId: user.id })
+        }, { mode: startEditing ? 'edit' : 'view', userId: user.id, device: narrowViewport ? 'mobile' : 'desktop' })
         session.knownHash = info.lastHash
         wireSessionRecovery(session)
         session.connect()
@@ -400,7 +399,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           // 무시
         } finally {
           c.session.destroy()
-          setParticipants([])
           aiBlockRef.current = null
           setAiBlocked(false)
           ownerIdRef.current = null
@@ -627,15 +625,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           return
         }
         if (!lock || !lock.active) {
-          // view-only room이어도 참가자바는 갱신한다.
+          // P0-3: 참가자는 usePeers가 전담. lock은 AI-blocked만 본다.
           if (lock) {
-            setParticipants(lock.participants ?? [])
             trackAiBlocked(lock.aiBlockedAt ?? null)
           }
           updateDebug()
           return // 재연결 루프가 resume 처리
         }
-        setParticipants(lock.participants ?? [])
         trackAiBlocked(lock.aiBlockedAt ?? null)
         ownerIdRef.current = (lock.owner ?? [])[0] ?? null
         setMetaOwner(ownerIdRef.current)
@@ -965,6 +961,149 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   )
   const viewerRootRef = useRef<HTMLDivElement | null>(null)
 
+  // P0-3: selectedId → 도형 이름. Y doc을 BFS로 뒤져 id가 같은 엘리먼트의
+  // name/title/text를 읽는다 (필드 근거는 런타임 덤프로 확인 — E3에서 검증).
+  const getSelectedLabel = useCallback((selectedId: string): string | undefined => {
+    const c = collabRef.current
+    if (!c) return undefined
+    try {
+      const slides = c.session.doc.getArray('pptx:slides') as unknown as {
+        get(i: number): unknown
+        length: number
+      }
+      const seen = new Set<unknown>()
+      const queue: unknown[] = []
+      for (let i = 0; i < slides.length; i++) queue.push(slides.get(i))
+      let depth = 0
+      const labelOf = (m: Record<string, unknown>): string | undefined => {
+        const name = m['name']
+        if (typeof name === 'string' && name) return name.slice(0, 24)
+        const title = m['title']
+        if (typeof title === 'string' && title) return title.slice(0, 24)
+        const text = m['text']
+        if (typeof text === 'string' && text.trim()) return text.trim().slice(0, 24)
+        if (text && typeof (text as { toString?: unknown }).toString === 'function' && !Array.isArray(text)) {
+          try {
+            const s = String((text as { toString(): string }).toString())
+            if (s.trim()) return s.trim().slice(0, 24)
+          } catch {
+            // 무시
+          }
+        }
+        return undefined
+      }
+      while (queue.length > 0 && depth < 6) {
+        depth += 1
+        const cur = queue.shift()
+        if (!cur || typeof cur !== 'object' || seen.has(cur)) continue
+        seen.add(cur)
+        const rec = cur as Record<string, unknown>
+        const get = (rec as { get?: (k: string) => unknown }).get
+        if (typeof get === 'function') {
+          let id: unknown
+          try {
+            id = (rec as { get: (k: string) => unknown }).get('id')
+          } catch {
+            id = undefined
+          }
+          if (id === selectedId) {
+            const asRec: Record<string, unknown> = {}
+            for (const k of ['name', 'title', 'text']) {
+              try {
+                asRec[k] = (rec as { get: (k: string) => unknown }).get(k)
+              } catch {
+                // 무시
+              }
+            }
+            return labelOf(asRec)
+          }
+          for (const k of ['elements', 'children', 'shapes']) {
+            try {
+              const arr = (rec as { get: (k: string) => unknown }).get(k) as {
+                get?(i: number): unknown
+                length?: number
+              } | null
+              if (arr && typeof arr.length === 'number') {
+                for (let i = 0; i < arr.length; i++) {
+                  try {
+                    const item = typeof arr.get === 'function' ? arr.get(i) : (arr as unknown[])[i]
+                    if (item) queue.push(item)
+                  } catch {
+                    // 무시
+                  }
+                }
+              }
+            } catch {
+              // 무시
+            }
+          }
+        } else if (Array.isArray(cur)) {
+          for (const item of cur) queue.push(item)
+        }
+      }
+    } catch {
+      // 무시
+    }
+    return undefined
+  }, [])
+
+  // P0-3: 참가자는 로컬 awareness에서 직접 읽는다 (서버 poll 불필요).
+  const peers = usePeers(collab?.session ?? null, {
+    ownerClientId: metaOwner,
+    selfUserId: collab?.userId ?? '',
+    getSelectedLabel: (id) => getSelectedLabel(id),
+  })
+  const peersRef = useRef<Peer[]>([])
+  peersRef.current = peers
+
+  // P0-3: 입장/퇴장/모드전환 토스트 (같은 사람은 5초에 한 번).
+  const peerToastAt = useRef<Map<string, number>>(new Map())
+  const prevPeersRef = useRef<Map<string, string>>(new Map())
+  useEffect(() => {
+    if (!collab) return
+    const prev = prevPeersRef.current
+    const now = new Map<string, string>()
+    const at = Date.now()
+    for (const p of peers) {
+      if (p.isSelf) {
+        now.set(p.id, `${p.mode}`)
+        continue
+      }
+      now.set(p.id, `${p.mode}`)
+      const was = prev.get(p.id)
+      const lastToast = peerToastAt.current.get(p.id) ?? 0
+      if (was === undefined && at - lastToast > 5000) {
+        peerToastAt.current.set(p.id, at)
+        showToast.info(`${p.name}님이 ${p.mode === 'edit' ? '편집에' : '보기에'} 참여했습니다`)
+      } else if (was !== undefined && was !== p.mode && at - lastToast > 5000) {
+        peerToastAt.current.set(p.id, at)
+        showToast.info(`${p.name}님이 ${p.mode === 'edit' ? '편집에' : '보기에'} 참여했습니다`)
+      }
+    }
+    for (const [id] of prev) {
+      if (!now.has(id) && at - (peerToastAt.current.get(id) ?? 0) > 5000) {
+        peerToastAt.current.set(id, at)
+        showToast.info('참가자가 나갔습니다')
+      }
+    }
+    prevPeersRef.current = now
+  }, [peers, collab])
+
+  // P0-3: 같은 도형 선택 경고 (막지는 않는다).
+  const mySelectedId = (() => {
+    try {
+      const c = collabRef.current
+      const local = c?.session.awareness.getLocalState() as Record<string, unknown> | null
+      const pres = (local?.presence ?? null) as { selectedElementId?: unknown } | null
+      return typeof pres?.selectedElementId === 'string' ? pres.selectedElementId : null
+    } catch {
+      return null
+    }
+  })()
+  const sameShapePeers = mySelectedId
+    ? peers.filter((p) => !p.isSelf && p.selectedId === mySelectedId)
+    : []
+
   // E2E: PowerPointViewer 마운트 횟수 (?collabDebug=1일 때만).
   // viewer key가 바뀌면 리마운트되므로 key 문자열을 deps로 둔다.
   // role/collabKey는 key에서 뺀다 (prop 런타임 변경으로 처리 — 리마운트 금지).
@@ -1006,13 +1145,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         let peerId: string | null = null
         const border = html.style.borderColor || window.getComputedStyle(html).borderColor
         const hex = toHex(border)
-        const byColor = participantsRef.current.find((p) => p.color.toLowerCase() === hex)
+        const byColor = peersRef.current.find((p) => p.color.toLowerCase() === hex)
         if (byColor) {
           peerId = byColor.id
         } else {
           const label = el.querySelector('span')?.textContent?.trim() ?? ''
           const byName = label
-            ? participantsRef.current.find((p) => p.name === label)
+            ? peersRef.current.find((p) => p.name === label)
             : undefined
           if (byName) peerId = byName.id
         }
@@ -1038,7 +1177,82 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     })
     mo.observe(root, { childList: true, subtree: true })
     return () => mo.disconnect()
-  }, [collab, participants])
+  }, [collab, peers])
+
+  // P0-3: 슬라이드 점 (썸네일 + 모바일 시트 공용 앵커).
+  // lib 근거 (scratch DOM 덤프 2026-10-15):
+  //   ASIDE[role=navigation][aria-label=Slides] 하위 BUTTON[aria-label="Go to slide N"].
+  // lib 리렌더가 점을 지우므로 MutationObserver로 다시 그린다 (冪等).
+  useEffect(() => {
+    if (!collab) return
+    const root = viewerRootRef.current
+    if (!root) return
+    const paint = (): void => {
+      try {
+        const bySlide = new Map<number, Peer[]>()
+        for (const p of peersRef.current) {
+          if (p.slide == null) continue
+          const arr = bySlide.get(p.slide) ?? []
+          arr.push(p)
+          bySlide.set(p.slide, arr)
+        }
+        const btns = root.querySelectorAll('button[aria-label^="Go to slide "]')
+        btns.forEach((btn) => {
+          const m = (btn.getAttribute('aria-label') || '').match(/Go to slide (\d+)/)
+          if (!m) return
+          const list = bySlide.get(Number(m[1])) ?? []
+          btn.querySelectorAll('[data-collab-slide-dot]').forEach((d) => d.remove())
+          if (list.length === 0) return
+          const html = btn as HTMLElement
+          try {
+            if (window.getComputedStyle(html).position === 'static') html.style.position = 'relative'
+          } catch {
+            // 무시
+          }
+          list.slice(0, 3).forEach((p, i) => {
+            const dot = document.createElement('span')
+            dot.setAttribute('data-collab-slide-dot', p.id)
+            dot.title = p.name
+            const recent = p.lastEditAt != null && Date.now() - p.lastEditAt < 3000
+            dot.className = recent ? 'animate-pulse' : ''
+            dot.setAttribute(
+              'style',
+              `display:inline-block;width:8px;height:8px;border-radius:9999px;background:${p.color};` +
+                `position:absolute;right:${2 + i * 10}px;top:2px;border:1px solid #fff;z-index:5;` +
+                (recent ? `box-shadow:0 0 0 2px ${p.color}55;` : ''),
+            )
+            html.appendChild(dot)
+          })
+          if (list.length > 3) {
+            const more = document.createElement('span')
+            more.setAttribute('data-collab-slide-dot', 'more')
+            more.textContent = `+${list.length - 3}`
+            more.setAttribute(
+              'style',
+              'position:absolute;right:2px;top:12px;font-size:9px;line-height:1;z-index:5;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 3px;',
+            )
+            html.appendChild(more)
+          }
+        })
+      } catch {
+        // 무시
+      }
+    }
+    paint()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const mo = new MutationObserver(() => {
+      if (timer) return
+      timer = setTimeout(() => {
+        timer = null
+        paint()
+      }, 300)
+    })
+    mo.observe(root, { childList: true, subtree: true })
+    return () => {
+      if (timer) clearTimeout(timer)
+      mo.disconnect()
+    }
+  }, [collab, peers])
 
   if (!unlocked && isEncryptedOle(content)) {
     return (
@@ -1144,34 +1358,62 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       )}
       {collab && (
         <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
-          {(['view', 'edit'] as const).map((mode, gi) => (
-            <span key={mode} className="inline-flex items-center gap-1 shrink-0">
-              {gi > 0 && <span className="mx-1">·</span>}
-              <span className="font-medium">{mode === 'view' ? 'viewer' : 'editor'} -</span>
-              {participants.filter((p) => p.mode === mode).map((p) => (
-                <span
-                  key={p.id}
-                  data-testid="collab-peer"
-                  data-peer-id={p.id}
-                  data-mode={p.mode}
-                  {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
-                  data-owner={p.owner ? 'true' : 'false'}
-                  data-self={p.id === collab.userId ? 'true' : 'false'}
-                  className="inline-flex items-center gap-1 shrink-0"
-                >
-                  <span
-                    className="inline-block w-2 h-2 rounded-full"
-                    style={{ backgroundColor: p.color }}
-                  />
-                  <span>
-                    {p.name}
-                    {p.id === collab.userId ? ' (you)' : ''}
-                    {p.mode === 'edit' ? ' (편집 중)' : ''}
-                  </span>
-                </span>
-              ))}
-            </span>
-          ))}
+          {(['view', 'edit'] as const).map((mode, gi) => {
+            // 다른 사람을 앞에: self가 아닌 peer 우선 정렬.
+            const group = peers
+              .filter((p) => p.mode === mode)
+              .sort((a, b) => Number(a.isSelf) - Number(b.isSelf))
+            return (
+              <span key={mode} className="inline-flex items-center gap-1 shrink-0">
+                {gi > 0 && <span className="mx-1">·</span>}
+                <span className="font-medium">{mode === 'view' ? 'viewer' : 'editor'} -</span>
+                {group.map((p) => {
+                  const act = peerActivity(p, Date.now())
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      data-testid="collab-peer"
+                      data-peer-id={p.id}
+                      data-mode={p.mode}
+                      {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
+                      data-owner={p.isOwner ? 'true' : 'false'}
+                      data-self={p.isSelf ? 'true' : 'false'}
+                      data-activity={act}
+                      {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
+                      title={p.isSelf ? '나' : `${p.name}의 슬라이드로 이동`}
+                      onClick={() => {
+                        // follow: 그 사람의 슬라이드로 이동한다.
+                        if (typeof p.slide === 'number' && p.slide >= 1) {
+                          setSlideIdx(p.slide - 1)
+                          setCurSlide(p.slide - 1)
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 shrink-0 hover:text-foreground"
+                    >
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full${act === 'editing' ? ' animate-pulse' : ''}`}
+                        style={act === 'editing' ? { backgroundColor: p.color } : { border: `1.5px solid ${p.color}` }}
+                      />
+                      <span>
+                        {p.name}
+                        {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
+                        {p.isSelf ? ' (you)' : ''}
+                        {p.device === 'mobile' ? '📱' : ''}
+                        {` · ${activityLabel(p, Date.now())}`}
+                        {typeof p.slide === 'number' ? ` · 슬${p.slide}` : ''}
+                      </span>
+                    </button>
+                  )
+                })}
+              </span>
+            )
+          })}
+        </div>
+      )}
+      {collab && sameShapePeers.length > 0 && (
+        <div className="px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
+          {sameShapePeers.map((p) => p.name).join(', ')}도 이 도형을 편집 중
         </div>
       )}
       {aiBlocked && (
