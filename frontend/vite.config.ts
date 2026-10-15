@@ -52,7 +52,9 @@ export default defineConfig(({ mode }) => {
   // .env 파일 값을 최우선으로 쓴다 —ambient PORT 로 다른 백엔드에 물러나면
   // 화면/쓰기가 전부 그 인스턴스에 contra버린다 (설정 삭제가 안 먹히는 symptom).
   const fileEnv = readEnvFile(path.join(repoRoot, ".env"));
-  const backendPort = Number(fileEnv.PORT) || Number(env.PORT) || Number(process.env.PORT) || DEFAULTS.SERVER.PORT;
+  // E2E 하네스용 오버라이드 (e2e/collab webServer가 넘긴다). dev/prod에는 영향 없음.
+  const e2eBackendPort = Number(process.env.E2E_BACKEND_PORT) || 0;
+  const backendPort = e2eBackendPort || Number(fileEnv.PORT) || Number(env.PORT) || Number(process.env.PORT) || DEFAULTS.SERVER.PORT;
   // 프록시 타겟은 127.0.0.1 고정 — localhost는 ::1이 먼저 resolve되고
   // 백엔드는 IPv4-only(0.0.0.0)라 node-http-proxy가 ::1에서 ECONNREFUSED로
   // 죽는 간헐 실패가 난다. 브라우저도 http://127.0.0.1:5173 접속 권장.

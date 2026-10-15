@@ -136,6 +136,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [needName, setNeedName] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [nameTick, setNameTick] = useState(0)
+  const suggestedNameRef = useRef(false)
+  const nameFileRef = useRef<string | undefined>(undefined)
   // E10: AI-blocked 칩 (서버 aiBlockedAt 래치 + 30초 클라이언트 만료).
   const [aiBlocked, setAiBlocked] = useState(false)
   const aiBlockRef = useRef<number | null>(null)
@@ -211,6 +213,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const persistBytes = useCallback(async (bytes: Uint8Array): Promise<boolean> => {
     const c = collabRef.current
     if (c && savePath) {
+      // 빈 바이트는 서버가 400으로 거부한다. adopt 경합의 빈 덱이 디스크를
+      // 덮어쓰지 않게 여기서 막는다 (409도 아니다 — 그냥 스킵).
+      if (bytes.length === 0) {
+        setCollabNotice('Nothing to save yet — try again in a moment.')
+        return false
+      }
       const res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current)
       // E2E 디버그: 저장 결과 기록 (200/409 추적용).
       saveCountRef.current += 1
@@ -252,10 +260,18 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   }, [fileName, savePath, updateDebug])
 
   // owner write-back (lib이 변경 debounce 후 호출). synced 전에는 저장하지 않는다.
+  // 빈 덱 adopt 직후의 write-back은 스킵한다 (빈 파일로 덮어쓰기 방지).
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
     if (!c || c.role !== 'owner') return
     if (!c.session.synced) return
+    let slides = 0
+    try {
+      slides = c.session.doc.getArray('pptx:slides').length
+    } catch {
+      slides = 0
+    }
+    if (slides === 0) return
     await persistBytes(bytes)
   }, [persistBytes])
 
@@ -313,10 +329,20 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // E8: collab-user 없으면 이름 모달이 막고, 입력 전까지 연결하지 않는다.
   useEffect(() => {
     if (!savePath) return
+    // 파일이 바뀌면 이름 제안 상태를 초기화한다 (StrictMode 재실행과 구분).
+    if (nameFileRef.current !== savePath) {
+      nameFileRef.current = savePath
+      suggestedNameRef.current = false
+      setNameInput('')
+    }
     let dead = false
     const user = readCollabUser()
     if (!user) {
-      setNameInput((prev) => prev || suggestCollabName())
+      // StrictMode effect 이중 실행에도 seq가 한 번만 오르도록 가드한다.
+      if (!suggestedNameRef.current) {
+        suggestedNameRef.current = true
+        setNameInput(suggestCollabName())
+      }
       setNeedName(true)
       return
     }

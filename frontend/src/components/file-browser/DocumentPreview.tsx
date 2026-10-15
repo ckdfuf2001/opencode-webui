@@ -58,21 +58,30 @@ function useRawFile(path: string, enabled = true) {
     setStatus('loading')
     setData(null)
     setError('')
-    fetch(`${API_BASE_URL}/api/files/${path}?raw=true`)
-      .then(async (res) => {
+    // 간헐 loopback 차단은 1회 재시도한다 (HTTP 상태가 있으면 재시도 안 함).
+    const load = async (attempt: number): Promise<void> => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/files/${path}?raw=true`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const buf = await res.arrayBuffer()
         if (!cancelled) {
           setData(buf)
           setStatus('ready')
         }
-      })
-      .catch((e) => {
+      } catch (e) {
+        const status = (e as { status?: number })?.status
+        if (attempt === 0 && typeof status !== 'number' && !cancelled) {
+          await new Promise((r) => setTimeout(r, 800))
+          if (!cancelled) await load(1)
+          return
+        }
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Failed to load file')
           setStatus('error')
         }
-      })
+      }
+    }
+    void load(0)
     return () => {
       cancelled = true
       setData(null)

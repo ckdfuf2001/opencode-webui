@@ -107,7 +107,12 @@ function useDirChildren(dirPath: string, enabled: boolean) {
     },
     enabled,
     staleTime: 60 * 1000,
-    retry: false,
+    // 간헐 loopback 차단은 재시도한다 (HTTP 상태가 있으면 client 오류만 제외).
+    retry: (failureCount, error) => {
+      const status = (error as { status?: number })?.status
+      if (typeof status === 'number' && status >= 400 && status < 500) return false
+      return failureCount < 2
+    },
   })
 }
 

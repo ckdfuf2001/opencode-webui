@@ -23,6 +23,7 @@
     "build:frontend": "pnpm --filter frontend build",
     "test": "pnpm run test:backend",
     "test:backend": "pnpm --filter backend test",
+    "test:e2e:collab": "playwright test -c e2e/collab/playwright.config.ts",
     "generate:openapi": "bun scripts/generate-openapi.ts",
     "docker:build": "docker-compose build",
     "docker:up": "docker-compose up -d",
@@ -31,7 +32,10 @@
     "docker:restart": "docker-compose restart"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "@playwright/test": "^1.64.0",
+    "concurrently": "^9.1.0",
+    "fast-xml-parser": "^5.11.2",
+    "jszip": "^3.10.1"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
