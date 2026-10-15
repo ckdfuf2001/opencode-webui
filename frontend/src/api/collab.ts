@@ -115,6 +115,13 @@ export const collabApi = {
     return data
   },
 
+  suggestName: async (): Promise<string> => {
+    const { data } = await axios.post(`${API_BASE_URL}/api/collab/suggest-name`)
+    const name = (data as { name?: unknown })?.name
+    if (typeof name === 'string' && name) return name
+    throw new Error('Bad suggest-name response')
+  },
+
   rooms: async (): Promise<CollabRoomSummary[]> => {
     const { data } = await axios.get(`${API_BASE_URL}/api/collab/rooms`)
     return (data?.rooms ?? []) as CollabRoomSummary[]

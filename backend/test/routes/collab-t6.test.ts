@@ -15,7 +15,7 @@ describe('T6: collaboration config keeps the same doc across remounts', () => {
       const opts = {
         editing: true,
         viewing: false,
-        authorName: 't',
+        user: { name: 't', color: '#000' },
         isDecrypted: false,
         writeBackDebounceMs: 2500,
         onWriteBack: (b: Uint8Array) => writes.push(b),

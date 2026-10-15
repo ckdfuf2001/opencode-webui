@@ -1138,6 +1138,15 @@ export const openApiSpec = {
         },
       },
     },
+    '/api/collab/suggest-name': {
+      post: {
+        tags: ['collab'],
+        summary: 'Issue a server-side user name (user1, user2, … — counter persists in SQLite)',
+        responses: {
+          '200': { description: 'Issued name' },
+        },
+      },
+    },
     '/api/collab/lock': {
       get: {
         tags: ['collab'],

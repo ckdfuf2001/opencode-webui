@@ -7,6 +7,7 @@ import * as syncProtocol from 'y-protocols/sync'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import { resolveWorkspaceFile, workspaceRootAbs } from './files'
+import { readLibPresence } from '@opencode-webui/shared/lib/collab-presence'
 import { writeFileContent } from './file-operations'
 import { logger } from '../utils/logger'
 
@@ -691,13 +692,14 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
     for (const [cid, st] of states) {
       const app = st?.app
       if (!app || typeof app !== 'object') continue
-      const presence = st as { activeSlideIndex?: number }
+      // 슬라이스는 lib presence 키 아래에 있다 (shared 상수).
+      const lib = readLibPresence(st as Record<string, unknown>)
       out.push({
         id: String(app.id ?? cid),
         name: String(app.name ?? st.userName ?? `user-${cid}`),
         color: String(app.color ?? '#6366f1'),
         mode: app.mode === 'view' ? 'view' : 'edit',
-        slide: typeof presence.activeSlideIndex === 'number' ? presence.activeSlideIndex + 1 : undefined,
+        slide: lib?.slide !== undefined ? lib.slide + 1 : undefined,
         owner: room.ownerIds.has(cid),
       })
     }

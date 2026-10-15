@@ -331,7 +331,7 @@ app.route('/api/search', createSearchRoutes(db))
   app.route('/api/session-model-check', createSessionModelCheckRoutes())
 app.route('/api/pty', createPtyRoutes())
 app.route('/api/logs', createClientLogRoutes())
-app.route('/api/collab', createCollabRoutes())
+app.route('/api/collab', createCollabRoutes(db))
 // y-websocket 호환 릴레이는 루트 앱 업그레이드 라우팅이 필요해서 별도 등록.
 const { injectWebSocket } = registerCollabSockets(app)
 

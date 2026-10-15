@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
+import type { Database } from 'bun:sqlite'
 import { z } from 'zod'
 import { createNodeWebSocket } from '@hono/node-ws'
+import { issueCollabName } from '../db/collab-name-queries'
 import {
   addConn,
   applySave,
@@ -124,7 +126,19 @@ app.get('/rooms', async (c) => {
   return c.json({ rooms: listRooms() })
 })
 
-export function createCollabRoutes(): Hono {
+app.post('/suggest-name', async (c) => {
+  try {
+    return c.json({ name: issueCollabName(collabDb) })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+/** suggest-name용 db 핸들 (없으면 메모리 폴백). */
+let collabDb: Database | null = null
+
+export function createCollabRoutes(database?: Database | null): Hono {
+  if (database) collabDb = database
   return app
 }
 

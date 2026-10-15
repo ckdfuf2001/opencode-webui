@@ -207,7 +207,14 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       last_send_at INTEGER NOT NULL DEFAULT 0,
       last_abort_at INTEGER NOT NULL DEFAULT 0
     );
-  
+
+    -- 공동편집 자동 이름 발급 카운터 (user1, user2, … — 재시작해도 이어짐).
+    CREATE TABLE IF NOT EXISTS collab_name_seq (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      next INTEGER NOT NULL DEFAULT 1
+    );
+    INSERT OR IGNORE INTO collab_name_seq (id, next) VALUES (1, 1);
+   
    `)
   
   runMigrations(db)

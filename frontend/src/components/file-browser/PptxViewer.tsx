@@ -12,7 +12,8 @@ import { PowerPointViewer } from 'pptx-react-viewer'
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
 import { collabApi, collabServerUrl, type CollabParticipant } from '@/api/collab'
-import { YCollabSession, buildCollaborationConfig, colorForName } from '@/lib/ycollab'
+import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE } from '@/lib/ycollab'
+import { useCollabUser, type CollabIdentity } from '@/lib/collabUser'
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
@@ -33,42 +34,6 @@ const SPINNER = (
 
 function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
-}
-
-export interface CollabIdentity {
-  id: string
-  name: string
-  color: string
-}
-
-/** localStorage collab-user (E2E는 addInitScript로 주입). 없으면 이름 모달. */
-export function readCollabUser(): CollabIdentity | null {
-  try {
-    const raw = localStorage.getItem('collab-user')
-    if (!raw) return null
-    const p = JSON.parse(raw) as { id?: unknown; name?: unknown; color?: unknown }
-    if (typeof p?.id !== 'string' || !p.id || typeof p?.name !== 'string' || !p.name.trim()) return null
-    const name = p.name.trim()
-    return {
-      id: p.id,
-      name,
-      color: typeof p.color === 'string' && p.color ? p.color : colorForName(name),
-    }
-  } catch {
-    return null
-  }
-}
-
-/** 이름 제안 (user1, user2, … — 브라우저별 seq 유지). */
-export function suggestCollabName(): string {
-  try {
-    const seq = Number(localStorage.getItem('collab-user-seq') ?? 0) || 0
-    const next = seq + 1
-    localStorage.setItem('collab-user-seq', String(next))
-    return `user${next}`
-  } catch {
-    return 'user1'
-  }
 }
 
 export default function PptxViewer({ data, fileName, editing, savePath, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void }) {
@@ -110,6 +75,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [slideIdx, setSlideIdx] = useState(0)
   const [curSlide, setCurSlide] = useState(0)
   const [reloadKey, setReloadKey] = useState(0)
+  // 신원 단일 통로: collab-user (presence·코멘트 공통).
+  const [collabUser, saveCollabUser] = useCollabUser()
+  const collabUserRef = useRef(collabUser)
+  collabUserRef.current = collabUser
   const [author, setAuthor] = useState(() => {
     try {
       return localStorage.getItem('ppt-comment-author') ?? ''
@@ -117,6 +86,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       return ''
     }
   })
+  // 코멘트 작성자 기본값: collab-user 이름을 처음 한 번만 가져온다.
+  const authorOrUser = author.trim() || collabUser?.name || ''
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
   // 공동편집 (파일 열림부터 세션 참가 — 보기 모드는 view로, AI 차단을 걸지 않는다).
@@ -135,7 +106,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // E8: collab-user 없으면 이름 모달이 막는다.
   const [needName, setNeedName] = useState(false)
   const [nameInput, setNameInput] = useState('')
-  const [nameTick, setNameTick] = useState(0)
   const suggestedNameRef = useRef(false)
   const nameFileRef = useRef<string | undefined>(undefined)
   // E10: AI-blocked 칩 (서버 aiBlockedAt 래치 + 30초 클라이언트 만료).
@@ -336,12 +306,19 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setNameInput('')
     }
     let dead = false
-    const user = readCollabUser()
+    const user = collabUserRef.current
     if (!user) {
-      // StrictMode effect 이중 실행에도 seq가 한 번만 오르도록 가드한다.
+      // 서버 발급 이름으로 미리 채운다 (두 브라우저에서 서로 다름).
       if (!suggestedNameRef.current) {
         suggestedNameRef.current = true
-        setNameInput(suggestCollabName())
+        collabApi.suggestName().then(
+          (name) => {
+            if (!dead) setNameInput((prev) => prev || name)
+          },
+          () => {
+            // 발급 실패는 빈 입력으로 (fail-open — E8 빈 이름 단언 유지).
+          },
+        )
       }
       setNeedName(true)
       return
@@ -408,26 +385,37 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       })()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savePath, nameTick])
+  }, [savePath, collabUser])
 
-  // E8: 이름 제출 — 저장 후 세션 생성 재시도.
+  // E8: 이름 제출 — 방 참가자들과 겹치지 않는 색으로 저장 후 세션 생성.
   const submitName = useCallback(() => {
     const name = nameInput.trim()
     if (!name) return
-    const user: CollabIdentity = {
-      id: `u-${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
-      name,
-      color: colorForName(name),
-    }
-    try {
-      localStorage.setItem('collab-user', JSON.stringify(user))
-    } catch {
-      // 무시
-    }
-    setNeedName(false)
-    setNameInput('')
-    setNameTick((v) => v + 1)
-  }, [nameInput])
+    const sp = savePath
+    void (async () => {
+      let exclude: string[] = []
+      if (sp) {
+        try {
+          const lock = await collabApi.lock(sp)
+          exclude = (lock.participants ?? []).map((p) => p.color.toLowerCase())
+        } catch {
+          // 조회 실패는 무시 (fail-open).
+        }
+      }
+      const pool = COLLAB_PALETTE.filter((c) => !exclude.includes(c.toLowerCase()))
+      const color = (pool.length > 0 ? pool : [...COLLAB_PALETTE])[
+        Math.floor(Math.random() * (pool.length > 0 ? pool.length : COLLAB_PALETTE.length))
+      ]!
+      const user: CollabIdentity = {
+        id: `u-${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+        name,
+        color,
+      }
+      saveCollabUser(user)
+      setNeedName(false)
+      setNameInput('')
+    })()
+  }, [nameInput, savePath, saveCollabUser])
 
   // E10: 서버 aiBlockedAt이 새로 찍히면 칩을 래치한다. 같은 값이면 유지.
   // 표시는 래치 시점 기준 30초 (page.clock으로 앞당길 수 있다).
@@ -690,9 +678,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       showToast.error('저장 경로가 없습니다')
       return
     }
-    // 작성자 통일을 위해 lib 기본값('You')과 맞춘다. 파일에 작성자가 1명이면 그걸 쓴다.
+    // 작성자 단일 통로: collab-user 이름 우선, 없으면 기존 단일 작성자.
     const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
-    const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+    const name = authorOrUser || (existingAuthors.length === 1 ? existingAuthors[0]! : '')
+    if (!name) {
+      showToast.error('작성자 이름을 입력하세요')
+      return
+    }
     setAdding(true)
     try {
       const target = curSlide + 1
@@ -782,7 +774,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     setBusyId(`reply:${parent.cid}`)
     try {
       const existingAuthors = [...new Set(comments.map((c) => c.author).filter((a) => a && a !== 'Unknown'))]
-      const name = author.trim() || (existingAuthors.length === 1 ? existingAuthors[0] : 'You')
+      const name = authorOrUser || (existingAuthors.length === 1 ? existingAuthors[0]! : '')
+      if (!name) {
+        showToast.error('작성자 이름을 입력하세요')
+        return
+      }
       const ok = await mutatePptxComments((base) =>
         replyPptxComment(base, { parentCid: parent.cid, authorName: name, text }),
       )
@@ -890,21 +886,23 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // 공동편집 설정 (세션 성공 때만 — 편집은 owner/collaborator, 보기는 viewer). 실패하면 solo(기존 동작).
   // P0-4: 모든 hook은 early return보다 위에 있어야 한다 (React #300).
   // 복호화한 바이트를 디스크에 그대로 쓸 수 있어 암호 문서는 공동편집 제외.
-  const authorName = author.trim() || 'You'
+  // 신원은 collab-user 단일 통로 (lib presence와 동일).
   const isDecrypted = unlocked !== null
   const collaboration = useMemo(
     () =>
-      buildCollaborationConfig(collab, {
-        editing,
-        viewing: !editing,
-        authorName,
-        isDecrypted,
-        writeBackDebounceMs: 2500,
-        onWriteBack: (bytes: Uint8Array) => {
-          void handleWriteBack(bytes)
-        },
-      }),
-    [collab, editing, authorName, isDecrypted, handleWriteBack],
+      collabUser
+        ? buildCollaborationConfig(collab, {
+            editing,
+            viewing: !editing,
+            user: { name: collabUser.name, color: collabUser.color },
+            isDecrypted,
+            writeBackDebounceMs: 2500,
+            onWriteBack: (bytes: Uint8Array) => {
+              void handleWriteBack(bytes)
+            },
+          })
+        : undefined,
+    [collab, editing, collabUser, isDecrypted, handleWriteBack],
   )
   const viewerRootRef = useRef<HTMLDivElement | null>(null)
 

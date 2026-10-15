@@ -455,6 +455,9 @@ export class YCollabSession {
 
 const PALETTE = ['#e11d48', '#2563eb', '#059669', '#d97706', '#7c3aed', '#db2777', '#0891b2', '#65a30d']
 
+/** 참가자 색 팔레트 (신원 생성 시 1회 선택용 — 이름 해시 금지). */
+export const COLLAB_PALETTE: readonly string[] = PALETTE
+
 export function colorForName(name: string): string {
   let h = 0
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
@@ -479,7 +482,7 @@ export function buildCollaborationConfig(
   opts: {
     editing: boolean
     viewing: boolean
-    authorName: string
+    user: { name: string; color: string }
     isDecrypted: boolean
     writeBackDebounceMs: number
     onWriteBack: (bytes: Uint8Array) => void
@@ -487,14 +490,13 @@ export function buildCollaborationConfig(
 ): CollaborationConfig | undefined {
   if (!state || opts.isDecrypted) return undefined
   if (!opts.editing && !opts.viewing) return undefined
-  const userColor = colorForName(opts.authorName)
   return {
     roomId: state.roomId,
     // externalSession을 쓰므로 무시된다.
     serverUrl: '',
     externalSession: state.session.toExternal() as unknown as CollaborationConfig['externalSession'],
-    userName: opts.authorName,
-    userColor,
+    userName: opts.user.name,
+    userColor: opts.user.color,
     role: state.role,
     sessionIntent: state.intent,
     writeBackDebounceMs: opts.writeBackDebounceMs,
