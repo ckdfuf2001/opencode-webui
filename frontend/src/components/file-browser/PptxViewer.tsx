@@ -3,7 +3,6 @@ import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from '
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
-import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
 import { saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
@@ -13,7 +12,7 @@ import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
 import { collabApi, collabServerUrl } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE } from '@/lib/ycollab'
-import { useCollabUser, type CollabIdentity } from '@/lib/collabUser'
+import { useCollabUser } from '@/lib/collabUser'
 import { activityLabel, peerActivity, usePeers, type Peer } from '@/lib/usePeers'
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
@@ -76,7 +75,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   }, [])
   // S5: 편집 중 getContent() 직렬화는 코멘트 패널이 열려 있을 때만, 2초 debounce로.
   // collab owner는 write-back 스냅샷을 재사용한다.
+  // solo 편집은 자동 저장한다 (웹이므로 모든 변경은 저장된다 — 조용히).
   const commentRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onViewerContentChange = useCallback(() => {
     if (commentRefreshTimer.current) clearTimeout(commentRefreshTimer.current)
     commentRefreshTimer.current = setTimeout(() => {
@@ -89,6 +90,18 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       }
       void refreshComments()
     }, 2000)
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
+    autoSaveTimer.current = setTimeout(() => {
+      const c = collabRef.current
+      // collab 저장은 owner write-back이 전담한다. solo만 여기서 자동 저장한다.
+      if (c || !editingRef.current) return
+      const h = viewerRef.current
+      if (!h) return
+      void h
+        .getContent()
+        .then((b) => persistBytesRef.current(new Uint8Array(b), { quiet: true }))
+        .catch(() => {})
+    }, 2500)
   }, [refreshComments])
   const [comments, setComments] = useState<PptxComment[]>([])
   const [showComments, setShowComments] = useState(false)
@@ -125,11 +138,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [metaOwner, setMetaOwner] = useState<number | null>(null)
   const [metaTick, setMetaTick] = useState(0)
   // P0-3: 참가자는 usePeers(로컬 awareness)가 전담한다. lock poll은 AI/외부변경용.
-  // E8: collab-user 없으면 이름 모달이 막는다.
-  const [needName, setNeedName] = useState(false)
-  const [nameInput, setNameInput] = useState('')
-  const suggestedNameRef = useRef(false)
-  const nameFileRef = useRef<string | undefined>(undefined)
+  // 신원 모달 없음 — 없으면 서버 발급 기본 이름으로 자동 참가한다.
   // E10: AI-blocked 칩 (서버 aiBlockedAt 래치 + 30초 클라이언트 만료).
   const [aiBlocked, setAiBlocked] = useState(false)
   const aiBlockRef = useRef<number | null>(null)
@@ -231,11 +240,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   }, [isOwnerNow])
 
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
-  // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다.
-  // S3: collab 중 content 고정. 저장 성공해도 setSavedBytes를 호출하지 않고
-  // latestSavedRef에만 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지).
+  // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다
+  // (quiet 자동 저장만 조용히 실패한다).
+  // S3: content 고정 — 성공해도 setSavedBytes를 호출하지 않고 latestSavedRef에만
+  // 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지). 세션 종료·파일 교체 때 반영.
   const latestSavedRef = useRef<Uint8Array | null>(null)
-  const persistBytes = useCallback(async (bytes: Uint8Array): Promise<boolean> => {
+  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean }): Promise<boolean> => {
+    const quiet = opts?.quiet ?? false
     const c = collabRef.current
     if (c && savePath) {
       // 빈 바이트는 서버가 400으로 거부한다. adopt 경합의 빈 덱이 디스크를
@@ -270,20 +281,27 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       } else {
         setCollabNotice(res.message ?? 'Save denied (not owner).')
       }
-      showToast.error(res.message ?? 'Save failed')
+      if (!quiet) showToast.error(res.message ?? 'Save failed')
       return false
     }
     if (!savePath) return false
-    await saveOfficeBytes(
-      savePath,
-      fileName ?? 'presentation.pptx',
-      new Blob([bytes as unknown as BlobPart], {
-        type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      }),
-    )
-    setSavedBytes(new Uint8Array(bytes))
+    try {
+      await saveOfficeBytes(
+        savePath,
+        fileName ?? 'presentation.pptx',
+        new Blob([bytes as unknown as BlobPart], {
+          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        }),
+      )
+    } catch (e) {
+      if (!quiet) showToast.error(e instanceof Error ? e.message : '저장 실패')
+      return false
+    }
+    latestSavedRef.current = new Uint8Array(bytes)
     return true
   }, [fileName, savePath, updateDebug])
+  const persistBytesRef = useRef(persistBytes)
+  persistBytesRef.current = persistBytes
 
   // owner write-back (lib이 변경 debounce 후 호출). 서버 owner일 때만 저장한다.
   // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
@@ -383,34 +401,46 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
 
   // 세션 생명주기: 파일 열림 ~ 닫힘. 보기 모드도 view로 참가한다 (AI 차단 없음).
   // 편집 진입/종료는 아래 모드 전환 effect가 처리한다. 실패하면 solo로 폴백.
-  // E8: collab-user 없으면 이름 모달이 막고, 입력 전까지 연결하지 않는다.
+  // 신원이 없으면 서버 발급 기본 이름으로 즉시 만들어서 참가한다 (모달 없음).
   useEffect(() => {
     if (!savePath) return
-    // 파일이 바뀌면 이름 제안 상태를 초기화한다 (StrictMode 재실행과 구분).
-    if (nameFileRef.current !== savePath) {
-      nameFileRef.current = savePath
-      suggestedNameRef.current = false
-      setNameInput('')
-    }
     let dead = false
     const user = collabUserRef.current
     if (!user) {
-      // 서버 발급 이름으로 미리 채운다 (두 브라우저에서 서로 다름).
-      if (!suggestedNameRef.current) {
-        suggestedNameRef.current = true
-        collabApi.suggestName().then(
-          (name) => {
-            if (!dead) setNameInput((prev) => prev || name)
-          },
-          () => {
-            // 발급 실패는 빈 입력으로 (fail-open — E8 빈 이름 단언 유지).
-          },
-        )
-      }
-      setNeedName(true)
+      // 자동 참여: 기본 이름 발급 → 저장 → effect 재실행에서 참가한다.
+      void (async () => {
+        try {
+          const name = await collabApi.suggestName()
+          if (dead) return
+          let exclude: string[] = []
+          try {
+            const lock = await collabApi.lock(savePath)
+            exclude = (lock.participants ?? []).map((p) => p.color.toLowerCase())
+          } catch {
+            // 조회 실패는 무시 (fail-open).
+          }
+          if (dead) return
+          const pool = COLLAB_PALETTE.filter((c) => !exclude.includes(c.toLowerCase()))
+          const list = pool.length > 0 ? pool : [...COLLAB_PALETTE]
+          const color = list[Math.floor(Math.random() * list.length)]!
+          saveCollabUser({
+            id: `u-${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+            name,
+            color,
+          })
+        } catch {
+          // 발급 실패는 로컬 폴백으로 참가한다.
+          if (!dead) {
+            saveCollabUser({
+              id: `u-${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+              name: `user${Math.floor(Math.random() * 900 + 100)}`,
+              color: COLLAB_PALETTE[Math.floor(Math.random() * COLLAB_PALETTE.length)]!,
+            })
+          }
+        }
+      })()
       return
     }
-    setNeedName(false)
     // 클릭이 session POST를 가로지를 수 있으므로, 모드 판정은 await 뒤에서
     // fresh하게 읽는다 (stale 캡처 금지).
     void (async () => {
@@ -489,35 +519,31 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savePath, collabUser])
 
-  // E8: 이름 제출 — 방 참가자들과 겹치지 않는 색으로 저장 후 세션 생성.
-  const submitName = useCallback(() => {
-    const name = nameInput.trim()
-    if (!name) return
-    const sp = savePath
-    void (async () => {
-      let exclude: string[] = []
-      if (sp) {
+  // 이름 변경 (우측 내 칩에서 편집). 저장하면 전 viewer에 전파되고,
+  // lib presence 라벨도 바꾸기 위해 viewer를 리마운트한다 (같은 doc 유지).
+  const [renaming, setRenaming] = useState(false)
+  const [renameInput, setRenameInput] = useState('')
+  const submitRename = useCallback(() => {
+    const name = renameInput.trim()
+    if (!name) {
+      setRenaming(false)
+      return
+    }
+    const prev = collabUserRef.current
+    if (prev) {
+      saveCollabUser({ ...prev, name })
+      const c = collabRef.current
+      if (c) {
         try {
-          const lock = await collabApi.lock(sp)
-          exclude = (lock.participants ?? []).map((p) => p.color.toLowerCase())
+          c.session.setUser({ name, color: prev.color })
         } catch {
-          // 조회 실패는 무시 (fail-open).
+          // 무시
         }
       }
-      const pool = COLLAB_PALETTE.filter((c) => !exclude.includes(c.toLowerCase()))
-      const color = (pool.length > 0 ? pool : [...COLLAB_PALETTE])[
-        Math.floor(Math.random() * (pool.length > 0 ? pool.length : COLLAB_PALETTE.length))
-      ]!
-      const user: CollabIdentity = {
-        id: `u-${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
-        name,
-        color,
-      }
-      saveCollabUser(user)
-      setNeedName(false)
-      setNameInput('')
-    })()
-  }, [nameInput, savePath, saveCollabUser])
+    }
+    setRenaming(false)
+    setReloadKey((v) => v + 1)
+  }, [renameInput, saveCollabUser])
 
   // E10: 서버 aiBlockedAt이 새로 찍히면 칩을 래치한다. 같은 값이면 유지.
   // 표시는 래치 시점 기준 30초 (page.clock으로 앞당길 수 있다).
@@ -1353,24 +1379,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           Encrypted documents cannot be co-edited — editing solo.
         </div>
       )}
-      {needName && (
-        <div data-testid="collab-name-modal" className="px-3 py-2 border-b border-border bg-background">
-          <p className="text-xs font-medium mb-1.5">Enter your name to join co-editing</p>
-          <div className="flex items-center gap-2">
-            <input
-              value={nameInput}
-              autoFocus
-              onChange={(e) => setNameInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') submitName() }}
-              placeholder="Name"
-              className="h-8 w-56 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            />
-            <Button size="sm" data-testid="collab-name-submit" onClick={submitName}>
-              Join
-            </Button>
-          </div>
-        </div>
-      )}
       {collab && editing && !collabGated && (
         <div className="px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
           연결 중…
@@ -1426,16 +1434,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       {collab && (
         <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
           {(['view', 'edit'] as const).map((mode, gi) => {
-            // 다른 사람을 앞에: self가 아닌 peer 우선 정렬.
-            const group = peers
-              .filter((p) => p.mode === mode)
-              .sort((a, b) => Number(a.isSelf) - Number(b.isSelf))
+            const group = peers.filter((p) => p.mode === mode && !p.isSelf)
             return (
               <span key={mode} className="inline-flex items-center gap-1 shrink-0">
                 {gi > 0 && <span className="mx-1">·</span>}
                 <span className="font-medium">{mode === 'view' ? 'viewer' : 'editor'} -</span>
                 {group.map((p) => {
                   const act = peerActivity(p, Date.now())
+                  const status = act === 'idle' ? '' : activityLabel(p, Date.now())
                   return (
                     <button
                       key={p.id}
@@ -1445,10 +1451,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                       data-mode={p.mode}
                       {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
                       data-owner={p.isOwner ? 'true' : 'false'}
-                      data-self={p.isSelf ? 'true' : 'false'}
+                      data-self="false"
                       data-activity={act}
                       {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
-                      title={p.isSelf ? '나' : `${p.name}의 슬라이드로 이동`}
+                      title={`${p.name}의 슬라이드로 이동`}
                       onClick={() => {
                         // follow: 그 사람의 슬라이드로 이동한다 (S4: 리마운트 없이 goTo).
                         if (typeof p.slide === 'number' && p.slide >= 1) {
@@ -1470,9 +1476,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                       <span>
                         {p.name}
                         {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
-                        {p.isSelf ? ' (you)' : ''}
                         {p.device === 'mobile' ? '📱' : ''}
-                        {` · ${activityLabel(p, Date.now())}`}
+                        {status ? ` · ${status}` : ''}
                         {typeof p.slide === 'number' ? ` · 슬${p.slide}` : ''}
                       </span>
                     </button>
@@ -1481,6 +1486,66 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
               </span>
             )
           })}
+          {(() => {
+            const self = peers.find((p) => p.isSelf)
+            if (!self) return null
+            return (
+              <span className="inline-flex items-center gap-1 shrink-0 ml-auto">
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ backgroundColor: self.color }}
+                />
+                {renaming ? (
+                  <span className="inline-flex items-center gap-1">
+                    <input
+                      value={renameInput}
+                      autoFocus
+                      data-testid="collab-rename-input"
+                      onChange={(e) => setRenameInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') submitRename()
+                        if (e.key === 'Escape') setRenaming(false)
+                      }}
+                      placeholder="Name"
+                      className="h-6 w-28 rounded border border-input bg-background px-2 text-[11px] outline-none"
+                    />
+                    <button
+                      type="button"
+                      data-testid="collab-rename-submit"
+                      onClick={submitRename}
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      저장
+                    </button>
+                  </span>
+                ) : (
+                  <span>
+                    나: {self.name}{' '}
+                    <button
+                      type="button"
+                      data-testid="collab-rename-edit"
+                      onClick={() => {
+                        setRenameInput(self.name)
+                        setRenaming(true)
+                      }}
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      편집
+                    </button>
+                  </span>
+                )}
+                <span
+                  data-testid="collab-peer"
+                  data-peer-id={self.id}
+                  data-mode={self.mode}
+                  data-owner={self.isOwner ? 'true' : 'false'}
+                  data-self="true"
+                  data-activity={peerActivity(self, Date.now())}
+                  className="hidden"
+                />
+              </span>
+            )
+          })()}
         </div>
       )}
       {collab && sameShapePeers.length > 0 && (
