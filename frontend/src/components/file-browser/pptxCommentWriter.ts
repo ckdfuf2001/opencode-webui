@@ -224,7 +224,7 @@ export async function replyPptxComment(
   const text = opts.text.trim()
   if (!text) throw new Error('empty comment')
   const authorName = opts.authorName.trim()
-  if (!authorName) throw new Error('작성자 이름을 입력해 주세요')
+  if (!authorName) throw new Error('작성자 이름을 입력하세요')
   const zip = await JSZip.loadAsync(bytes)
   const authorId = await ensureModernAuthorId(zip, authorName)
   let done = false
@@ -368,7 +368,7 @@ export async function addPptxComment(
   const text = opts.text.trim()
   if (!text) throw new Error('empty comment')
   const authorName = opts.authorName.trim()
-  if (!authorName) throw new Error('작성자 이름을 입력해 주세요')
+  if (!authorName) throw new Error('작성자 이름을 입력하세요')
   const zip = await JSZip.loadAsync(bytes)
   const readText = async (path: string): Promise<string | null> => {
     const f = zip.file(path)

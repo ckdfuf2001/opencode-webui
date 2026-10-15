@@ -833,6 +833,8 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const [author, setAuthor] = useState(() => {
     try {
       // 저장된 값이 없으면 collab-user 이름을 처음 한 번만 기본값으로 가져온다.
+      // TODO(v0.13): 저장된 이름이 collab 이름 변경을 따라가지 않는다. 입력칸 초기값을
+      // collab-user에서 항상 읽도록 정리한다.
       return localStorage.getItem('docx-comment-author') ?? readCollabUser()?.name ?? ''
     } catch {
       return ''
@@ -906,13 +908,13 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const sendReply = async (c: DocxComment) => {
     const text = replyDraft.trim()
     if (!text || busyId || !c.cid) return
+    const name = commentAuthorName()
+    if (!name) {
+      showToast.error('작성자 이름을 입력하세요')
+      return
+    }
     setBusyId(`reply:${c.cid}`)
     try {
-      const name = commentAuthorName()
-      if (!name) {
-        showToast.error('작성자 이름을 입력하세요')
-        return
-      }
       const ok = await mutateDocxComments((base) =>
         replyDocxComment(base, { parentCid: c.cid, authorName: name, text }),
       )
@@ -1415,6 +1417,8 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   const [author, setAuthor] = useState(() => {
     try {
       // 저장된 값이 없으면 collab-user 이름을 처음 한 번만 기본값으로 가져온다.
+      // TODO(v0.13): 저장된 이름이 collab 이름 변경을 따라가지 않는다. 입력칸 초기값을
+      // collab-user에서 항상 읽도록 정리한다.
       return localStorage.getItem('xlsx-comment-author') ?? readCollabUser()?.name ?? ''
     } catch {
       return ''
@@ -1470,14 +1474,14 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
       showToast.info('셀을 먼저 선택하세요')
       return
     }
+    // 작성자 단일 통로: 입력값 → collab-user 이름. 가짜 기본값을 넣지 않는다.
+    const name = author.trim() || readCollabUser()?.name?.trim() || ''
+    if (!name) {
+      showToast.error('작성자 이름을 입력하세요')
+      return
+    }
     setAdding(true)
     try {
-      // 작성자 단일 통로: 입력값 → collab-user 이름. 가짜 기본값을 넣지 않는다.
-      const name = author.trim() || readCollabUser()?.name?.trim() || ''
-      if (!name) {
-        showToast.error('작성자 이름을 입력하세요')
-        return
-      }
       // 선택 문자열에 시트명이 있으면 해당 시트, 없으면 0번 시트.
       let sheetIndex = 0
       const m = ref.match(/^'((?:[^']|'')+)'!|^([^!]+)!/)
@@ -1505,13 +1509,13 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   const sendReply = async (c: XlsxComment) => {
     const text = replyDraft.trim()
     if (!text || busyId || !c.tid) return
+    const name = author.trim() || readCollabUser()?.name?.trim() || ''
+    if (!name) {
+      showToast.error('작성자 이름을 입력하세요')
+      return
+    }
     setBusyId(`reply:${c.tid}`)
     try {
-      const name = author.trim() || readCollabUser()?.name?.trim() || ''
-      if (!name) {
-        showToast.error('작성자 이름을 입력하세요')
-        return
-      }
       const ok = await mutateXlsxComments((base) =>
         replyXlsxComment(base, { parentTid: c.tid, authorName: name, text }),
       )
