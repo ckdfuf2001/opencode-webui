@@ -1,9 +1,11 @@
 import { defineConfig } from '@playwright/test'
+import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 
-const repoRoot = path.resolve(__dirname, '..', '..')
+const here = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.resolve(here, '..', '..')
 // 테스트마다 새로 만드는 격리 워크스페이스 (spec의 WORKSPACE_PATH).
 export const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collabe2e-'))
 fs.mkdirSync(path.join(wsDir, 'repos'), { recursive: true })
@@ -39,6 +41,8 @@ export default defineConfig({
       reuseExistingServer: false,
       env: {
         PORT: String(BACKEND_PORT),
+        // backend/index.ts ensureEnvFile이 .env(PORT=5001)로 덮으므로 전용 var로 지정.
+        E2E_BACKEND_PORT: String(BACKEND_PORT),
         OPENCODE_SERVER_PORT: String(OPENCODE_PORT),
         WORKSPACE_PATH: wsDir,
         DATABASE_PATH: path.join(wsDir, 'e2e.db'),

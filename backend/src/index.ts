@@ -70,6 +70,11 @@ const DB_PATH = getDatabasePath()
 
 async function ensureEnvFile(): Promise<void> {
   const envPath = path.resolve(process.cwd(), '.env')
+  // E2E 하네스용 오버라이드 (.env override보다 나중에 적용 — dev/prod에는 영향 없음).
+  const applyE2EPort = (): void => {
+    const p = Number(process.env.E2E_BACKEND_PORT)
+    if (p > 0 && Number.isInteger(p)) PORT = p
+  }
   if (await fileExists(envPath)) {
     logger.info('.env found, using existing env file')
     try {
@@ -99,6 +104,7 @@ async function ensureEnvFile(): Promise<void> {
       }
       if (updated) await writeFileContent(envPath, raw)
     } catch {}
+    applyE2EPort()
     return
   }
   try {
@@ -128,6 +134,7 @@ async function ensureEnvFile(): Promise<void> {
   } catch (error) {
     logger.warn('Failed to ensure .env file:', error)
   }
+  applyE2EPort()
 }
 
 process.on('unhandledRejection', (reason) => {

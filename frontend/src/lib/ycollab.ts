@@ -230,6 +230,15 @@ export class YCollabSession {
           this.synced = true
           this.retry = 0
           this.setStatus('connected')
+          // open 직후 awareness가 서버에 닿지 않은 경우 대비: sync 확정 시점에
+          // 스냅샷을 한 번 더 보낸다. 같은 clock이면 서버가 무시하므로 冪等하다.
+          const au = encoding.createEncoder()
+          encoding.writeVarUint(au, 1)
+          encoding.writeVarUint8Array(
+            au,
+            awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.awareness.clientID]),
+          )
+          this.send(encoding.toUint8Array(au))
         }
       } else if (type === 1) {
         awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(d), this)
