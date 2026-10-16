@@ -103,6 +103,7 @@ export interface CollabDebug {
   save409Count: number
   slideCountY: number
   localMode?: string | null
+  imageSync?: { pictures: number; withData: number; blobOnly: number } | null
 }
 
 export async function readDebug(page: Page): Promise<CollabDebug> {

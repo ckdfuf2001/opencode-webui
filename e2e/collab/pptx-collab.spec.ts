@@ -527,6 +527,29 @@ test.describe('pptx collab (desktop)', () => {
     void testName
     await closeTwo(t)
   })
+
+  test('E16: seeded images sync to joiners (no blob: URLs)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e16', 0)
+    const t = await twoPages(browser)
+    const testName = `E16[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    // A가 seed한 Y.Doc에 그림 data가 data: URL로 들어가야 한다 (blob: 금지).
+    await expect(async () => {
+      const d = await readDebug(t.pageA)
+      expect(d.imageSync?.pictures).toBeGreaterThan(0)
+      expect(d.imageSync?.blobOnly).toBe(0)
+      expect(d.imageSync?.withData).toBe(d.imageSync?.pictures)
+    }).toPass({ timeout: 15000 })
+    await openFile(t.pageB, f.name, 'view')
+    // B(joiner)도 같은 그림 데이터를 adopt해야 한다.
+    await expect(async () => {
+      const d = await readDebug(t.pageB)
+      expect(d.imageSync?.pictures).toBeGreaterThan(0)
+      expect(d.imageSync?.withData).toBe(d.imageSync?.pictures)
+    }).toPass({ timeout: 15000 })
+    void testName
+    await closeTwo(t)
+  })
 })
 
 test.describe('pptx collab (mobile 390x844)', () => {

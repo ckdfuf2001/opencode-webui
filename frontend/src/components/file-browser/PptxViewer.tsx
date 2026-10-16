@@ -22,6 +22,10 @@ import { activityLabel, peerActivity, usePeers, type Peer } from '@/lib/usePeers
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
+import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
+
+// lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
+ensurePptxImagesSyncable()
 
 const pptxI18n = createInstance()
 void pptxI18n.use(initReactI18next).init({
@@ -196,6 +200,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         save409Count: save409Ref.current,
         slideCountY,
         localMode: (c?.session.awareness.getLocalState() as { app?: { mode?: string } } | null)?.app?.mode ?? null,
+        imageSync: c ? countPptxDocImages(c.session.doc as unknown as Parameters<typeof countPptxDocImages>[0]) : null,
       }
     } catch {
       // 무시
