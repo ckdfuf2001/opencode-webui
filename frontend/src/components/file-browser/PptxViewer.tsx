@@ -1509,10 +1509,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
               className="inline-flex items-center gap-1 shrink-0 text-foreground"
             >
               <Eye className="w-3 h-3" />
-              <span className="truncate max-w-[120px]">
-                {followed.name}
-                {typeof followed.slide === 'number' ? ` · 슬${followed.slide}` : ''}
-              </span>
+              <span className="truncate max-w-[120px]">{followed.name}</span>
               <button
                 type="button"
                 data-testid="collab-follow-stop"
