@@ -72,16 +72,32 @@ app.post('/session', async (c) => {
 
 app.post('/save', async (c) => {
   try {
-    const body = SaveSchema.parse(await c.req.json())
+    let roomId: string
+    let clientId: number
     let bytes: Uint8Array
-    try {
-      bytes = Buffer.from(body.bytesB64, 'base64')
-    } catch {
-      return c.json({ error: 'Invalid bytesB64' }, 400)
+    const contentType = c.req.header('content-type') ?? ''
+    if (contentType.includes('application/octet-stream')) {
+      // M1: 바이너리 저장 (base64 없이 body 그대로). 메타는 헤더로.
+      roomId = c.req.header('x-collab-room') ?? ''
+      clientId = Number(c.req.header('x-collab-client'))
+      if (!roomId || !Number.isInteger(clientId)) {
+        return c.json({ error: 'Missing room/client headers' }, 400)
+      }
+      bytes = new Uint8Array(await c.req.arrayBuffer())
+    } else {
+      // TODO(v0.13): JSON+base64 경로를 삭제한다.
+      const body = SaveSchema.parse(await c.req.json())
+      try {
+        bytes = Buffer.from(body.bytesB64, 'base64')
+      } catch {
+        return c.json({ error: 'Invalid bytesB64' }, 400)
+      }
+      roomId = body.roomId
+      clientId = body.clientId
     }
-    const check = checkSave(body.roomId, body.clientId, bytes.length)
+    const check = checkSave(roomId, clientId, bytes.length)
     if (!check.ok) return c.json({ error: check.error, code: check.code }, check.status || 409)
-    const applied = await applySave(body.roomId, bytes)
+    const applied = await applySave(roomId, bytes)
     if ('conflict' in applied) {
       return c.json(
         {

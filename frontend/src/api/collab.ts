@@ -47,6 +47,58 @@ export function collabServerUrl(): string {
   return `${proto}://${window.location.host}/api/collab`
 }
 
+/** M1: 바이너리 저장 (base64 문자열을 만들지 않는다). 메타는 헤더로. */
+async function postSaveBinary(
+  roomId: string,
+  clientId: number,
+  bytes: Uint8Array,
+  baseHash?: string | null,
+): Promise<CollabSaveResult> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE_URL}/api/collab/save`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'x-collab-room': roomId,
+        'x-collab-client': String(clientId),
+        ...(baseHash ? { 'x-collab-base-hash': baseHash } : {}),
+      },
+      // 복사 없이 원본 버퍼를 그대로 보낸다.
+      body: bytes as unknown as BodyInit,
+    })
+  } catch (error) {
+    return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Save failed' }
+  }
+  if (res.ok) {
+    const data = (await res.json().catch(() => null)) as { newHash?: unknown } | null
+    return { ok: true, newHash: typeof data?.newHash === 'string' ? data.newHash : '' }
+  }
+  const body = (await res.json().catch(() => null)) as {
+    error?: string
+    code?: string
+    currentHash?: string | null
+  } | null
+  if (res.status === 409) {
+    if (body?.code === 'not_seeded') return { ok: false, reason: 'not_seeded', code: body.code, message: body.error }
+    if (body?.code === 'conflict' || body?.currentHash !== undefined) {
+      return { ok: false, reason: 'conflict', currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
+    }
+    return { ok: false, reason: 'denied', code: body?.code, message: body?.error }
+  }
+  return { ok: false, reason: 'error', message: body?.error ?? `Save failed (${res.status})` }
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  // 복사본으로 해시한다 (원본 버퍼 풀을 건드리지 않고 ArrayBuffer를 보장).
+  const copy = new Uint8Array(bytes)
+  const d = await crypto.subtle.digest('SHA-256', copy.buffer as ArrayBuffer)
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** room별 마지막 전송 해시 (재전송 생략용, 최대 20개). */
+const lastSentByRoom = new Map<string, { hash: string; newHash: string }>()
+
 export const collabApi = {
   session: async (
     path: string,
@@ -76,28 +128,29 @@ export const collabApi = {
     bytes: Uint8Array,
     baseHash?: string | null,
   ): Promise<CollabSaveResult> => {
-    let binary = ''
-    const chunk = 0x8000
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
-    }
+    // M1: 같은 바이트를 또 보내지 않는다 (sha256 비교, 서버와 같은 알고리즘).
+    // crypto.subtle이 없으면(비보안 컨텍스트) 생략 없이 바로 보낸다.
     try {
-      const { data } = await axios.post(`${API_BASE_URL}/api/collab/save`, {
-        roomId,
-        clientId,
-        baseHash: baseHash ?? undefined,
-        bytesB64: btoa(binary),
-      })
-      return { ok: true, newHash: data.newHash }
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 409) {
-        const body = error.response.data as { error?: string; code?: string; currentHash?: string | null }
-        if (body?.code === 'not_seeded') return { ok: false, reason: 'not_seeded', code: body.code, message: body.error }
-        if (body?.code === 'conflict' || body?.currentHash !== undefined) {
-          return { ok: false, reason: 'conflict', currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
-        }
-        return { ok: false, reason: 'denied', code: body?.code, message: body?.error }
+      let hash: string | null = null
+      try {
+        hash = await sha256Hex(bytes)
+      } catch {
+        hash = null
       }
+      if (hash) {
+        const prev = lastSentByRoom.get(roomId)
+        if (prev && prev.hash === hash) return { ok: true, newHash: prev.newHash }
+      }
+      const res = await postSaveBinary(roomId, clientId, bytes, baseHash)
+      if (res.ok && hash) {
+        lastSentByRoom.set(roomId, { hash, newHash: res.newHash })
+        if (lastSentByRoom.size > 20) {
+          const oldest = lastSentByRoom.keys().next()
+          if (!oldest.done) lastSentByRoom.delete(oldest.value)
+        }
+      }
+      return res
+    } catch (error) {
       return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Save failed' }
     }
   },

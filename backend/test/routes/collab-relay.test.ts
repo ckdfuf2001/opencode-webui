@@ -249,6 +249,40 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     b.destroy()
   })
 
+  it('T2b: binary save via octet-stream + headers (M1)', async () => {
+    const s = await postSession(baseUrl, { path: 'repos/aaa/shared.txt' })
+    const roomId = s.json.roomId as string
+    const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+    a.connect()
+    await waitFor(() => a.synced, 'A synced')
+    a.doc.getText('t').insert(0, 'x')
+    await waitFor(() => {
+      const room = rooms.rooms.get(roomId)
+      return !!room && room.ownerIds.has(a.clientId)
+    }, 'A is owner')
+    const bytes = new TextEncoder().encode('owner-binary-bytes')
+    const save = await testFetch(`${baseUrl}/api/collab/save`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-collab-room': roomId,
+        'x-collab-client': String(a.clientId),
+      },
+      body: bytes as unknown as BodyInit,
+    })
+    expect(save.status).toBe(200)
+    const body = (await save.json()) as { newHash?: string }
+    expect(typeof body.newHash).toBe('string')
+    // 헤더 누락이면 400.
+    const bad = await testFetch(`${baseUrl}/api/collab/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: bytes as unknown as BodyInit,
+    })
+    expect(bad.status).toBe(400)
+    a.destroy()
+  })
+
   it('T3: drop + offline edit + same-doc reconnect (no remount, no dup)', async () => {
     const s = await postSession(baseUrl, { path: 'repos/aaa/shared.txt' })
     const roomId = s.json.roomId as string
