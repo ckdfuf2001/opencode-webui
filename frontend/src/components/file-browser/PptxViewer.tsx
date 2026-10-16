@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
+import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X, Eye } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
@@ -1159,6 +1159,26 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const peersRef = useRef<Peer[]>([])
   peersRef.current = peers
 
+  // 팔로우: 선택한 사람의 슬라이드로 계속 따라간다 (선택한 경우에만 이동).
+  const [followId, setFollowId] = useState<string | null>(null)
+  const followed = followId ? peers.find((p) => p.id === followId) ?? null : null
+  useEffect(() => {
+    // 대상이 나가거나 슬라이드 정보가 없으면 추적을 멈춘다.
+    if (followId && !peers.some((p) => p.id === followId)) setFollowId(null)
+  }, [peers, followId])
+  useEffect(() => {
+    const s = followed?.slide
+    if (!followId || typeof s !== 'number' || s < 1) return
+    if (slideIdx === s - 1) return
+    setSlideIdx(s - 1)
+    setCurSlide(s - 1)
+    try {
+      viewerRef.current?.goTo?.(s - 1)
+    } catch {
+      // 무시 (fallback: initialSlide는 다음 마운트에 반영)
+    }
+  }, [followId, followed?.slide])
+
   // P0-3: 입장/퇴장/모드전환 토스트 (같은 사람은 5초에 한 번).
   const peerToastAt = useRef<Map<string, number>>(new Map())
   const prevPeersRef = useRef<Map<string, string>>(new Map())
@@ -1412,34 +1432,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         </div>
       )}
       {collab && (
+        // 상태는诊断용 속성(data-status)으로만 남긴다. 화면 배너는 중복 표시하지 않는다
+        // (앱 전역 연결 표시가 이미 있고, 같은 내용을 두 번 띄우면 혼란).
         <div
           data-testid="collab-status"
           data-status={!online ? 'offline' : connBadge.status === 'disconnected' ? 'reconnecting' : connBadge.status}
-          className={(!online || connBadge.status !== 'connected')
-            ? 'flex items-center gap-1.5 px-3 py-1 border-b border-border text-[11px] text-muted-foreground'
-            : 'hidden'}
-        >
-          {(!online || connBadge.status !== 'connected') && (
-          <>
-          <span
-            className={`inline-block w-1.5 h-1.5 rounded-full ${
-              connBadge.status === 'error'
-                ? 'bg-red-500'
-                : 'bg-amber-500 animate-pulse'
-            }`}
-          />
-          <span>
-            {!online
-              ? '오프라인'
-              : connBadge.status === 'error'
-                ? '오류'
-                : connBadge.status === 'disconnected'
-                  ? '재연결 중'
-                  : '연결 중'}
-          </span>
-          </>
-          )}
-        </div>
+          className="hidden"
+        />
       )}
       {collab && (
         <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
@@ -1463,10 +1462,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                       data-owner={p.isOwner ? 'true' : 'false'}
                       data-self="false"
                       data-activity={act}
+                      data-following={followId === p.id ? 'true' : 'false'}
                       {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
-                      title={`${p.name}의 슬라이드로 이동`}
+                      title={followId === p.id ? `${p.name} 팔로우 중 (클릭하면 해제)` : `${p.name} 팔로우`}
+                      aria-pressed={followId === p.id}
                       onClick={() => {
-                        // follow: 그 사람의 슬라이드로 이동한다 (S4: 리마운트 없이 goTo).
+                        // 팔로우 토글: 선택한 사람만 계속 따라간다. 해제하면 그만 따른다.
+                        if (followId === p.id) {
+                          setFollowId(null)
+                          return
+                        }
+                        setFollowId(p.id)
                         if (typeof p.slide === 'number' && p.slide >= 1) {
                           setSlideIdx(p.slide - 1)
                           setCurSlide(p.slide - 1)
@@ -1477,7 +1483,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                           }
                         }
                       }}
-                      className="inline-flex items-center gap-1 shrink-0 hover:text-foreground"
+                      className={`inline-flex items-center gap-1 shrink-0 hover:text-foreground${
+                        followId === p.id ? ' underline decoration-dotted underline-offset-2' : ''
+                      }`}
                     >
                       <span
                         className={`inline-block w-2 h-2 rounded-full${act === 'editing' ? ' animate-pulse' : ''}`}
@@ -1495,6 +1503,27 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
               </span>
             )
           })}
+          {followed && (
+            <span
+              data-testid="collab-following"
+              className="inline-flex items-center gap-1 shrink-0 text-foreground"
+            >
+              <Eye className="w-3 h-3" />
+              <span className="truncate max-w-[120px]">
+                {followed.name}
+                {typeof followed.slide === 'number' ? ` · 슬${followed.slide}` : ''}
+              </span>
+              <button
+                type="button"
+                data-testid="collab-follow-stop"
+                title="팔로우 해제"
+                onClick={() => setFollowId(null)}
+                className="underline underline-offset-2 hover:text-muted-foreground"
+              >
+                해제
+              </button>
+            </span>
+          )}
           {(() => {
             const self = peers.find((p) => p.isSelf)
             if (!self) return null
