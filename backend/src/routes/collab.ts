@@ -14,7 +14,6 @@ import {
   removeConn,
   rooms,
   wsMessage,
-  resetRoomFromDisk,
   MAX_SAVE_BYTES,
 } from '../services/collab-rooms'
 import { logger } from '../utils/logger'
@@ -37,6 +36,8 @@ const ResetRoomSchema = z.object({
   roomId: z.string().min(1),
   clientId: z.number().int(),
 })
+
+// TODO(v0.13): ResetRoomSchema 제거 — reset은 WS(type 101)로만 받는다.
 
 function toBytes(data: unknown): Uint8Array | null {
   if (data instanceof Uint8Array) return data
@@ -144,17 +145,6 @@ app.get('/lock', async (c) => {
   const path = c.req.query('path') ?? ''
   if (!path) return c.json({ error: 'Missing path' }, 400)
   return c.json(await lockInfo(path))
-})
-
-/** 4-2: 오염된 room을 디스크 원본 기준으로 재설정 (owner 전용). */
-app.post('/reset-room', async (c) => {
-  try {
-    const body = ResetRoomSchema.parse(await c.req.json())
-    const result = await resetRoomFromDisk(body.roomId, body.clientId)
-    return c.json(result)
-  } catch (error) {
-    return errJson(c, error, 500)
-  }
 })
 
 app.get('/rooms', async (c) => {

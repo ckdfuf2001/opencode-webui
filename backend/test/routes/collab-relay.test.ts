@@ -363,41 +363,53 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     a.destroy()
   })
 
-  it('T2e: reset-room rebuilds from disk (owner only, refuses on external change)', async () => {
+  it('T2e: reset closes every conn with 4001 and disposes the room (Q1/Q2)', async () => {
     await fs.writeFile(path.join(tmp, 'repos', 'aaa', 'reset.pptx'), 'seed')
     const s = await postSession(baseUrl, { path: 'repos/aaa/reset.pptx' })
     const roomId = s.json.roomId as string
     const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
     a.connect()
     await waitFor(() => a.synced, 'A synced')
+    const b = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'b', color: '#2563eb' }))
+    b.connect()
+    await waitFor(() => b.synced, 'B synced')
+    // A가 owner가 되게 만든다.
     a.doc.getText('t').insert(0, 'x')
     await waitFor(() => {
       const room = rooms.rooms.get(roomId)
       return !!room && room.ownerIds.has(a.clientId)
     }, 'A is owner')
-    // 방을 오염시킨다 (Y.Doc에 슬라이드/에셋 잔재).
-    const room = rooms.rooms.get(roomId)!
-    room.doc.getArray('pptx:slides').push([new Y.Map()])
-    room.doc.getMap('pptx:assets').set('img:mediaData', 'blob:stale')
-    const epochBefore = room.epoch
-    const postReset = (cid: number): Promise<Response> =>
-      testFetch(`${baseUrl}/api/collab/reset-room`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, clientId: cid }),
-      })
-    // 다른 clientId는 거부.
-    expect((await postReset(a.clientId + 99999)).status).toBe(403)
-    // owner면 성공: 새 epoch + Y.Doc 정리.
-    const ok = await postReset(a.clientId)
-    expect(ok.status).toBe(200)
-    const body = (await ok.json()) as { epoch?: string }
-    expect(body.epoch).toBeTruthy()
-    expect(body.epoch).not.toBe(epochBefore)
-    expect(room.doc.getArray('pptx:slides').length).toBe(0)
-    expect(room.doc.getMap('pptx:assets').size).toBe(0)
-    expect(room.seeded).toBe(false)
+    // guest(B)는 reset을 요청해도 무시되어야 한다 (conn 기준 권한).
+    const closeCodes: number[] = []
+    const sendReset = (ws: WebSocket): void => {
+      const e = encoding.createEncoder()
+      encoding.writeVarUint(e, 101)
+      ws.send(encoding.toUint8Array(e))
+    }
+    const rawA = (a as unknown as { ws: WebSocket }).ws
+    const rawB = (b as unknown as { ws: WebSocket }).ws
+    // ycollab은 브라우저 전역 WebSocket을 쓴다(.on이 아니라 addEventListener).
+    rawA.addEventListener('close', (e) => {
+      closeCodes.push((e as CloseEvent).code)
+    })
+    rawB.addEventListener('close', (e) => {
+      closeCodes.push((e as CloseEvent).code)
+    })
+    sendReset(rawB)
+    await new Promise((r) => setTimeout(r, 400))
+    expect(rooms.rooms.has(roomId)).toBe(true)
+    expect(closeCodes.length).toBe(0)
+    // owner가 type 101 전송 → 전원 4001 + room 해체.
+    sendReset(rawA)
+    await waitFor(() => closeCodes.length >= 2, 'both conns closed with 4001')
+    expect(closeCodes.every((c) => c === 4001)).toBe(true)
+    expect(rooms.rooms.has(roomId)).toBe(false)
+    // 재입장은 새 epoch로 host 권한이 돌아온다 (resume 없이).
+    const again = await postSession(baseUrl, { path: 'repos/aaa/reset.pptx' })
+    expect(again.json.role).toBe('host')
+    expect(again.json.epoch).toBeTruthy()
     a.destroy()
+    b.destroy()
   })
 
   it('T3: drop + offline edit + same-doc reconnect (no remount, no dup)', async () => {

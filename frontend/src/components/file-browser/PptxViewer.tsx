@@ -15,7 +15,7 @@ const PowerPointViewer = lazyWithRetry(() =>
 )
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
-import { collabApi, collabServerUrl } from '@/api/collab'
+import { collabApi, collabServerUrl, type ImageLossDetail } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE } from '@/lib/ycollab'
 import { useCollabUser } from '@/lib/collabUser'
 import { activityLabel, peerActivity, usePeers, type Peer } from '@/lib/usePeers'
@@ -121,6 +121,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const showCommentsRef = useRef(false)
   showCommentsRef.current = showComments
   const [slideIdx, setSlideIdx] = useState(0)
+  // Q1: 방 해체(4001) 후 파일 재로드로 새 세션을 만들도록 키를 bump한다.
+  const [renameSessionKey, setRenameSessionKey] = useState(0)
+  // Q2: 렌더 시점 ref 불일치 방지를 위해 배너 정보를 state로 관리한다.
+  const [imageLoss, setImageLoss] = useState<ImageLossDetail | null>(null)
   const [curSlide, setCurSlide] = useState(0)
   const curSlideRef = useRef(0)
   curSlideRef.current = curSlide
@@ -330,9 +334,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         // R1/R2: 자동 write-back을 중지하고(epoch당 1회), 다운로드 제안도 1회만.
         // 배너에서 "이미지 삭제 확정 저장"을 누르면 allowImageLoss로 다시 시도한다.
         logClient(`image_loss blocked media=${res.detail?.before.media ?? '?'}->${res.detail?.after.media ?? '?'}`)
-        if (!writeBackHaltedRef.current) {
+if (!writeBackHaltedRef.current) {
           writeBackHaltedRef.current = true
           lossPendingRef.current = new Uint8Array(bytes)
+          setImageLoss(res.detail ?? null)
           void offerMineDownloadRef.current?.()
         }
         const n = res.detail ? res.detail.before.media - res.detail.after.media : 0
@@ -420,36 +425,23 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     if (!pending) return
     lossPendingRef.current = null
     writeBackHaltedRef.current = false
-    const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, allowImageLoss: true })
+const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, allowImageLoss: true })
+    if (ok) setImageLoss(null)
     logClient(`image_loss_confirmed ok=${ok ? 1 : 0}`)
     if (ok) setCollabNotice(null)
   }, [])
 
-  /** 4-2: 오염 room 복구 — 디스크 기준으로 재설정하고 세션부터 다시 연다. */
-  const resetRoomFromDisk = useCallback(async () => {
+/** Q2: owner만 호출. 서버가 WS conn 기준으로 권한을 확인하고 전원을 해체시킨다. */
+  const requestRoomReset = useCallback(() => {
     const c = collabRef.current
     if (!c) return
-    try {
-      const r = await collabApi.resetRoom(c.roomId, c.session.clientId)
-      logClient(`reset_room epoch=${r.epoch}`)
-      // 파일 내용을 기준으로 다시 열어라: 세션 파괴 → 파일 재로드.
-      writeBackHaltedRef.current = false
-      lossPendingRef.current = null
-      setCollabNotice(null)
-      c.session.destroy()
-      collabRef.current = null
-      setCollab(null)
-      setMetaOwner(null)
-      ownerIdRef.current = null
-      setMetaTick(0)
-      setReloadKey((v) => v + 1)
-      setSlideIdx(0)
-      setCurSlide(0)
-    } catch (e) {
-      logClient(`reset_room_failed ${(e as Error)?.message ?? 'unknown'}`)
-      showToast.error('방을 재설정하지 못했습니다 (디스크가 변경되었을 수 있음).')
-    }
+    logClient('reset_request_sent')
+    c.session.requestReset()
+    showToast.info('owner가 파일 기준으로 다시 열었습니다')
   }, [])
+
+  /** guest용 안내 — 버튼은 owner에게만 보인다. */
+  const isResetOwner = isOwnerNow(collabRef.current)
 
   /** E2E/디버그용 클라이언트 로그 (?collabDebug=1에서만 수집, 상한 200). */
   const clientLogs = useRef<string[]>([])
@@ -605,9 +597,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         setMineFile(null)
         toastedStatus.current = null
         // 새 세션(epoch)이면 이미지 손실 정지/대기 바이트를 초기화한다.
-        writeBackHaltedRef.current = false
+writeBackHaltedRef.current = false
         lossPendingRef.current = null
         slidePublishedRef.current = false
+        setImageLoss(null)
         setCollab({
           session,
           roomId: info.roomId,
@@ -664,11 +657,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       })()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savePath, collabUser])
+  }, [savePath, collabUser, renameSessionKey])
 
   // 이름 변경 (우측 내 칩에서 편집). 저장하면 전 viewer에 전파되고,
   // lib presence 라벨도 바꾸기 위해 viewer를 리마운트한다 (같은 doc 유지).
-  const [renaming, setRenaming] = useState(false)
+const [renaming, setRenaming] = useState(false)
   const [renameInput, setRenameInput] = useState('')
   const submitRename = useCallback(() => {
     const name = renameInput.trim()
@@ -815,6 +808,26 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         toastedStatus.current = 'error'
         showToast.error('공동편집 오류')
       }
+    })
+    // Q1: 서버가 방을 해체했다(4001). resume 없이 새로 입장해 파일 기준으로 다시 시작한다.
+    session.onReset(() => {
+      logClient('room_reset_reload')
+      if (collabRef.current?.session === session) {
+        writeBackHaltedRef.current = false
+        lossPendingRef.current = null
+        setImageLoss(null)
+        collabRef.current = null
+        setCollab(null)
+        setMetaOwner(null)
+        ownerIdRef.current = null
+        setMetaTick(0)
+        // 파일 바이트로 다시 로드 (reloadKey + 파일 경로 기준으로 세션 재생성).
+        setReloadKey((v) => v + 1)
+        setSlideIdx(0)
+        setCurSlide(0)
+        setRenameSessionKey((v) => v + 1)
+      }
+      showToast.info('owner가 파일 기준으로 다시 열었습니다')
     })
     // Y 슬라이드 수 추적 (doc은 세션 동안 유지되므로 여기서 1회만).
     const onDocUpdate = (): void => updateDebug()
@@ -1737,16 +1750,21 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       {collabNotice && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-600 dark:text-amber-400">
           <span className="flex-1">{collabNotice}</span>
-          {(writeBackHaltedRef.current || lossPendingRef.current) && (
-            <button
-              type="button"
-              data-testid="collab-reset-room"
-              onClick={() => void resetRoomFromDisk()}
-              className="shrink-0 underline underline-offset-2 hover:text-amber-500"
-            >
-              파일 기준으로 다시 열기
-            </button>
-          )}
+{(imageLoss || lossPendingRef.current) &&
+            (isResetOwner ? (
+              <button
+                type="button"
+                data-testid="collab-reset-room"
+                onClick={() => requestRoomReset()}
+                className="shrink-0 underline underline-offset-2 hover:text-amber-500"
+              >
+                파일 기준으로 다시 열기
+              </button>
+            ) : (
+              <span data-testid="collab-reset-hint" className="shrink-0 opacity-80">
+                owner에게 다시 열기를 요청하세요
+              </span>
+            ))}
           {lossPendingRef.current && (
             <button
               type="button"

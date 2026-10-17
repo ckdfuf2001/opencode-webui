@@ -82,6 +82,9 @@ export class YCollabSession {
   private listeners = new Set<() => void>()
   private disposed = false
   private retry = 0
+  /** Q1: 서버가 4001로 닫았음(방 해체). 재연결 금지 플래그. */
+  private resetRequested = false
+  private resetListeners = new Set<() => void>()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private syncWatchdog: ReturnType<typeof setTimeout> | null = null
   private connectTimer: ReturnType<typeof setTimeout> | null = null
@@ -265,7 +268,16 @@ export class YCollabSession {
       this.ws = null
       if (this.disposed) return
       const e = evt as CloseEvent
-      if (e && (e as { code?: number }).code === 1008) {
+      const code = (e as { code?: number }).code
+      if (code === ROOM_RESET_CLOSE_CODE) {
+        // Q1: owner가 방을 해체했다. 재연결/재시도하지 않는다.
+        // resume 없이 새 방에 다시 들어가야 첫 입장자가 host로 파일 기준 재시드한다.
+        this.resetRequested = true
+        this.setStatus('disconnected')
+        this.emitReset()
+        return
+      }
+      if (code === 1008) {
         // room 없음 — 곧바로 session 재등록 경로로 간다.
         this.retry = 0
         void this.recover()
@@ -317,6 +329,12 @@ export class YCollabSession {
 
   private async recover(): Promise<void> {
     if (this.disposed) return
+    // Q1: 방 해체 통지를 받았으면 resume 경로를 쓰지 않는다(오염 doc 복원 방지).
+    if (this.resetRequested) {
+      this.resetRequested = false
+      this.emitReset()
+      return
+    }
     // 1) session 재등록 (resume). getSession 없으면 WS만 다시 연다.
     if (this.getSession) {
       let outcome: ResumeOutcome
@@ -417,6 +435,34 @@ export class YCollabSession {
         this.ws.send(data)
       } catch {
         // 다음 기회에 재전송된다 (Yjs는 상태를 다시 요청한다)
+      }
+    }
+  }
+
+  /** Q2: 서버에 방 재설정을 요청한다 (WS type 101). 권한은 서버가 conn 기준으로 판단. */
+  requestReset(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    const e = encoding.createEncoder()
+    encoding.writeVarUint(e, MSG_RESET_ROOM)
+    this.send(encoding.toUint8Array(e))
+  }
+
+  /** Q1: 서버가 방을 해체했을 때 1회 호출. 이 세션은 더 이상 쓰지 않는다. */
+  onReset(listener: () => void): () => void {
+    this.resetListeners.add(listener)
+    return () => {
+      this.resetListeners.delete(listener)
+    }
+  }
+
+  private emitReset(): void {
+    const listeners = [...this.resetListeners]
+    this.resetListeners.clear()
+    for (const l of listeners) {
+      try {
+        l()
+      } catch {
+        // 무시
       }
     }
   }
@@ -560,6 +606,11 @@ export class YCollabSession {
     this.listeners.clear()
   }
 }
+
+/** Q1: 서버 room 해체 통지 코드. */
+export const ROOM_RESET_CLOSE_CODE = 4001
+/** Q2: reset 요청 WS 메시지 타입. */
+export const MSG_RESET_ROOM = 101
 
 const PALETTE = ['#e11d48', '#2563eb', '#059669', '#d97706', '#7c3aed', '#db2777', '#0891b2', '#65a30d']
 

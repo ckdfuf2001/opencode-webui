@@ -558,6 +558,11 @@ export function wsMessage(roomId: string, ws: unknown, data: Uint8Array): void {
       if (encoding.length(e) > 1) sock.send(encoding.toUint8Array(e))
     } else if (messageType === 1) {
       awarenessProtocol.applyAwarenessUpdate(room.awareness, decoding.readVarUint8Array(d), ws)
+    } else if (messageType === MSG_RESET_ROOM) {
+      // Q2: reset은 WS로만 받는다 — body clientId는 owner 사칭에 취약하다.
+      // 이 conn이 ownerConn인지 서버가 직접 대조한다.
+      const result = resetRoomFromDisk(roomId, ws)
+      logger.info(`Collab room ${roomId}: reset request from conn → ${JSON.stringify(result)}`)
     }
   } catch (error) {
     logger.warn(`Collab room ${roomId}: bad message ignored`)
@@ -682,56 +687,39 @@ async function diskImageCounts(room: CollabRoom): Promise<{ media: number; refs:
   }
 }
 
+/** Q1: reset 통지용 WS close 코드. 클라이언트는 이 코드로 '재입장'을 안다. */
+export const CLOSE_ROOM_RESET = 4001
+/** Q2: reset 요청 WS 메시지 타입 (클라이언트→서버). */
+export const MSG_RESET_ROOM = 101
+
 /**
- * 오염된 room 복구: 디스크 원본을 기준으로 room을 새 epoch로 다시 만든다.
- * - 디스크 해시가 room.lastHash와 다르면(외부 변경) 거부한다 (409 external_change).
- * - Y.Doc을 비우고 새 epoch/새 clientID로 seed 권한을 다시 issuing한다.
- * - 진행 중 owner만 실행할 수 있다 (ownerConn/clientId 검증).
+ * Q1: 오염된 room 복구.
+ * doc을 제자리에서 비우지 않는다(그 순간 접속 중인 전원에게 빈 상태가 전파된다).
+ * 대신 전원 conn을 room_reset 코드로 닫고 room을 완전히 해체한다.
+ * 이후 각 클라이언트는 resume 없이 새로 입장한다 → 첫 입장자가 host로 파일 기준 재시드.
+ * 권한: 요청 conn이 현재 ownerConn인지 서버가 직접 확인한다 (clientId 사칭 불가).
  */
-export async function resetRoomFromDisk(
+export function resetRoomFromDisk(
   roomId: string,
-  clientId: number,
-): Promise<{ epoch: string; lastHash: string }> {
+  conn: unknown,
+): { ok: true } | { ok: false; reason: 'not_owner' | 'external_change' | 'no_room' } {
   const room = rooms.get(roomId)
-  if (!room) throw { message: 'No such room', statusCode: 404 }
-  if (!isCurrentOwner(room, clientId)) {
-    throw { message: 'Only the owner can reset the room', statusCode: 403, code: 'not_owner' }
-  }
-  const disk = await currentDiskHash(roomId)
-  if (disk === null) throw { message: 'File not readable', statusCode: 404 }
-  if (disk !== room.lastHash) {
-    room.externalChanged = true
-    broadcastMeta(room)
-    throw {
-      message: 'File changed on disk — reset refused (no auto-merge)',
-      statusCode: 409,
-      code: 'external_change',
-      currentHash: disk,
+  if (!room) return { ok: false, reason: 'no_room' }
+  if (room.ownerConn === null || room.ownerConn !== conn) return { ok: false, reason: 'not_owner' }
+  const diskHash = room.lastHash
+  // 전원 종료 → 재입장. 이 시점에 owner는 접속 중이므로 디스크 == lastHash가 정상.
+  for (const ws of [...room.conns.keys()]) {
+    try {
+      const sock = ws as { close?: (code?: number, reason?: string) => void }
+      sock.close?.(CLOSE_ROOM_RESET, 'room_reset')
+    } catch {
+      // 무시
     }
   }
-  // Y.Doc 초기화 (오염된 모델 제거).
-  const doc = room.doc
-  const slides = doc.getArray(YDOC_SLIDES_KEY)
-  const assets = doc.getMap(YDOC_ASSETS_KEY)
-  doc.transact(() => {
-    if (slides.length > 0) slides.delete(0, slides.length)
-    for (const key of [...assets.keys()]) assets.delete(key)
-  })
-  // 새 epoch + seed 대기 상태로 되돌린다.
-  room.epoch = randomUUID()
-  room.seeded = false
-  room.externalChanged = false
-  room.lastHash = disk
-  room.lastImageCounts = undefined
-  room.ownerIds = new Set()
-  for (const info of room.conns.values()) info.clientIds.clear()
-  broadcastMeta(room)
-  logger.warn(`Collab room ${roomId}: reset from disk (new epoch ${room.epoch})`)
-  return { epoch: room.epoch, lastHash: disk }
+  disposeRoom(room)
+  logger.warn(`Collab room ${roomId}: reset by owner — all conns closed (4001), room disposed (disk=${diskHash})`)
+  return { ok: true }
 }
-
-const YDOC_SLIDES_KEY = 'pptx:slides'
-const YDOC_ASSETS_KEY = 'pptx:assets'
 
 /**
  * owner 저장 적용. 판정은 서버의 lastHash 기준이다 (클라이언트 baseHash는
