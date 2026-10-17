@@ -709,6 +709,37 @@ test.describe('pptx collab (desktop)', () => {
     void testName
     await closeTwo(t)
   })
+
+  test('E20: peer slide survives edit<->view switch (F3 app republish)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e20', 0)
+    const t = await twoPages(browser)
+    const testName = `E20[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'view')
+    // A가 슬라이드 3으로 이동하고 publish.
+    await gotoSlide(t.pageA, 3)
+    const slideOfAda = async (): Promise<string | null> =>
+      t.pageB
+        .locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+        .getAttribute('data-slide')
+        .catch(() => null)
+    await expect(async () => {
+      expect(await slideOfAda()).toBe('3')
+    }).toPass({ timeout: 15000 })
+    // A가 view로 전환(리마운트 지점) → 상대 화면에서 15초간 계속 3이어야 한다.
+    // DocumentPreview의 편집 종료 버튼 라벨이 Done이다 (helpers/viewer.ts의 Edit와 짝).
+    await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 15000 })
+    const samples: (string | null)[] = []
+    const deadline = Date.now() + 15000
+    while (Date.now() < deadline) {
+      samples.push(await slideOfAda())
+      await t.pageB.waitForTimeout(200)
+    }
+    expect(samples.length).toBeGreaterThanOrEqual(60)
+    expect(samples.filter((s) => s !== '3')).toEqual([])
+    void testName
+    await closeTwo(t)
+  })
 })
 
 test.describe('pptx collab (mobile 390x844)', () => {

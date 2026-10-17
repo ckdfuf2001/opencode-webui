@@ -103,25 +103,25 @@ export class YCollabSession {
   private applyingKind: number | null = null
 
   readonly url: string
+  /** 최근 게시한 신원 (setUser이 app를 다시 채울 때 쓴다). */
+  private user!: YCollabUser
 
   constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode; userId?: string; device?: YCollabDevice }) {
     this.url = url
     this.userId = opts?.userId ?? this.doc.clientID
     const mode = opts?.mode ?? 'edit'
+    this.user = user
     // 서버가 읽는 app 필드(id/name/color/mode)를 처음부터 publish한다.
-    // presence 필드는 viewer lib이 빌려서 쓰므로 건드리지 않는다.
-    this.awareness.setLocalState({
-      userName: user.name,
-      userColor: user.color,
-      app: {
-        id: this.userId,
-        name: user.name,
-        color: user.color,
-        mode,
-        device: opts?.device ?? 'desktop',
-      } satisfies YCollabAppState,
-    })
-    // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아낀다.
+    // setLocalState(전체 교체)는 lib의 PRESENCE_FIELD를 지우므로 항상 field 단위로 쓴다.
+    // 표시의 단일 출처는 app.* 이며 최상위 userName/userColor는 쓰지 않는다 (v0.13에 제거).
+    this.awareness.setLocalStateField('app', {
+      id: this.userId,
+      name: user.name,
+      color: user.color,
+      mode,
+      device: opts?.device ?? 'desktop',
+    } as YCollabAppState)
+    // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아납니다.
     this.doc.on('update', this.onDocUpdate)
     this.doc.on('update', this.onDocActivity)
     this.awareness.on('update', this.onAwarenessUpdate)
@@ -503,15 +503,37 @@ export class YCollabSession {
   }
 
   setUser(user: YCollabUser): void {
-    // 전체 setLocalState는 lib의 presence를 지우므로 필드 병합으로 갱신한다.
-    const prev = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
-    const prevApp = (prev.app ?? {}) as Record<string, unknown>
-    this.awareness.setLocalState({
-      ...prev,
-      userName: user.name,
-      userColor: user.color,
-      app: { ...prevApp, id: this.userId, name: user.name, color: user.color },
+    // 전체 setLocalState는 lib의 PRESENCE_FIELD를 지우므로 field 병합으로 갱신한다.
+    const prevApp = ((this.awareness.getLocalState() ?? {}).app ?? {}) as Record<string, unknown>
+    this.awareness.setLocalStateField('app', {
+      ...prevApp,
+      id: this.userId,
+      name: user.name,
+      color: user.color,
     })
+    this.user = user
+  }
+
+  /**
+   * app 필드를 현재 값으로 다시 게시한다 (field 단위).
+   * lib이 presence를 빌려 쓰다가 dispose하는 경로에서 app가 사라지는 것을 복구용으로 방어한다.
+   * 확인 결과 borrowAwareness.dispose는 `{ ...current }` 스프레드라 app를 지우지 않지만,
+   *  안전망으로 남긴다 (E20).
+   */
+  republishApp(): void {
+    const st = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
+    const app = (st.app ?? {}) as Record<string, unknown>
+    if (Object.keys(app).length === 0) {
+      // app가 통째로 사라졌다면 지금 신원으로 다시 만든다.
+      this.awareness.setLocalStateField('app', {
+        id: this.userId,
+        name: this.user.name,
+        color: this.user.color,
+        mode: app.mode === 'view' ? 'view' : 'edit',
+      } as YCollabAppState)
+      return
+    }
+    this.awareness.setLocalStateField('app', { ...app })
   }
 
   /** view/edit 전환. app.mode 갱신이 서버 owner 재선출을 유발한다. */

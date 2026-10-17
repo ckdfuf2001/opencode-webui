@@ -509,9 +509,12 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   // role은 reconcile이 meta 기준으로 확정한다 (prop 런타임 변경 지원 — lib 확인됨).
   // 토글 effect와 세션 생성 완료 시점이 함께 호출한다: 비동기 생성과 토글이
   // 서로의 윈도우를 놓쳐도 modeRef 가드가 아니라 최신 editing으로 수렴한다.
-  const syncSessionMode = useCallback(() => {
+const syncSessionMode = useCallback(() => {
     const c = collabRef.current
     if (!c || !savePath) return
+    // E20/F3: edit↔view 전환은 viewer를 리마운트시키므로, 리스너/presence 정리 뒤
+    // app 필드가 살아 있는지 확인하고 없으면 즉시 다시 게시한다.
+    c.session.republishApp()
     if (editingRef.current && sessionModeRef.current !== 'edit') {
       c.session.setMode('edit')
       sessionModeRef.current = 'edit'
