@@ -556,24 +556,59 @@ test.describe('pptx collab (desktop)', () => {
   test('E18: image-loss save is blocked, then allowed by explicit confirm (R1/R2)', async ({ browser }, testInfo) => {
     const f = await freshFile('e18', 0)
     const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
     const testName = `E18[${testInfo.repeatEachIndex}]`
     await openFile(t.pageA, f.name, 'edit')
     // Y.Doc에는 blob: 이 없어야 한다 (앱 패치 확인).
     await expect(async () => {
       const d = await readDebug(t.pageA)
       expect(d.imageSync?.blobOnly ?? 0).toBe(0)
+      expect(d.imageSync?.pictures ?? 0).toBeGreaterThanOrEqual(3)
     }).toPass({ timeout: 15000 })
-    // 확인 다이얼로그가 뜨면 자동 저장 재시도가 멈춘 상태다.
+    const mediaBefore = (await readDeck(absForRel(f.rel))).mediaParts
+
+    // Q3: 이미지 삭제를 실제로 편집으로 유발한다 — lib이 잘라내도록 후킹한다.
+    await t.pageA.evaluate(() => {
+      ;(window as unknown as { __e18DropImages?: boolean }).__e18DropImages = true
+      const img = HTMLImageElement.prototype
+      const origGet = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'toDataURL')
+      if (origGet?.value) {
+        Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
+          value: function (...args: unknown[]) {
+            const orig = origGet.value as (this: HTMLCanvasElement, ...a: unknown[]) => string
+            const out = orig.apply(this, args as never)
+            return (window as unknown as { __e18DropImages?: boolean }).__e18DropImages ? '' : out
+          },
+          configurable: true,
+        })
+      }
+    })
+    // 이미지 요소를 선택해 삭제 키를 누른다 (모델에서 그림이 빠진다).
+    const pic = t.pageA.locator('[data-testid="pptx-viewer-root"] [data-element-id]').filter({ hasText: '' })
+    const count = await pic.count()
+    expect(count).toBeGreaterThan(0)
+    await pic.first().click()
+    await t.pageA.keyboard.press('Delete')
+    await t.pageA.evaluate(() => {
+      ;(window as unknown as { __e18DropImages?: boolean }).__e18DropImages = false
+    })
+
+    // Q3: 조건부 통과 금지 — 확인창이 반드시 떠야 한다.
     const confirm = t.pageA.getByTestId('collab-confirm-image-loss')
-    if (await confirm.count()) {
-      // R1: 자동 저장이 중지되어야 한다 (saveCount가 더 늘지 않는다).
-      const before = (await readDebug(t.pageA)).saveCount
-      await t.pageA.waitForTimeout(6000)
-      const after = (await readDebug(t.pageA)).saveCount
-      expect(after).toBe(before)
-      await confirm.click()
-      await t.pageA.waitForTimeout(2000)
-    }
+    await expect(confirm).toBeVisible({ timeout: 25000 })
+    // R1: 자동 저장이 중지되어야 한다 (6초간 saveCount 불변).
+    const before = (await readDebug(t.pageA)).saveCount
+    await t.pageA.waitForTimeout(6000)
+    expect((await readDebug(t.pageA)).saveCount).toBe(before)
+    // 디스크는 아직 원본 그대로.
+    expect((await readDeck(absForRel(f.rel))).mediaParts).toBe(mediaBefore)
+
+    // R2: 확인을 누르면 허용 저장 → 디스크 media 수가 줄어든다.
+    await confirm.click()
+    await t.pageA.waitForTimeout(3000)
+    await expect
+      .poll(async () => (await readDeck(absForRel(f.rel))).mediaParts, { timeout: 15000 })
+      .toBeLessThan(mediaBefore)
     void testName
     await closeTwo(t)
   })
@@ -597,6 +632,40 @@ test.describe('pptx collab (desktop)', () => {
     // 세션 수는 탭당 1.
     const d = await readDebug(t.pageA)
     expect(d.sessionCount).toBe(1)
+    void testName
+    await closeTwo(t)
+  })
+
+  test('E16b: joiner renders every seeded image (browser, 3-image fixture)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e16b', 0)
+    const t = await twoPages(browser)
+    const testName = `E16b[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    // seed한 A의 Y.Doc에 이미지가 data: URL로 실렸는지.
+    await expect(async () => {
+      const d = await readDebug(t.pageA)
+      expect(d.imageSync?.pictures ?? 0).toBeGreaterThanOrEqual(3)
+      expect(d.imageSync?.blobOnly).toBe(0)
+    }).toPass({ timeout: 20000 })
+    await openFile(t.pageB, f.name, 'view')
+    await expect(async () => {
+      const d = await readDebug(t.pageB)
+      expect(d.imageSync?.pictures ?? 0).toBeGreaterThanOrEqual(3)
+    }).toPass({ timeout: 20000 })
+    // B 화면의 모든 이미지가 실제로 로드됐어야 한다 (naturalWidth > 0).
+    await expect(async () => {
+      const broken = await t.pageB.evaluate(() => {
+        const imgs = Array.from(document.querySelectorAll('[data-testid="pptx-viewer-root"] img'))
+        return imgs.filter((i) => !(i as HTMLImageElement).naturalWidth || i.naturalWidth === 0).length
+      })
+      expect(broken).toBe(0)
+    }).toPass({ timeout: 20000 })
+    // 저장 후에도 디스크 media 수는 유지된다 (가드가 막지 않았다는 증거).
+    const before = await readDeck(absForRel(f.rel))
+    await t.pageB.waitForTimeout(2500)
+    const after = await readDeck(absForRel(f.rel))
+    expect(after.mediaParts).toBe(before.mediaParts)
+    expect(after.mediaParts).toBeGreaterThanOrEqual(3)
     void testName
     await closeTwo(t)
   })

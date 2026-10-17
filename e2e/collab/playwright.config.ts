@@ -25,6 +25,11 @@ export default defineConfig({
   timeout: 180_000,
   expect: { timeout: 3000 },
   reporter: [['list'], ['html', { open: 'never', outputFolder: './playwright-report' }]],
+  // Q4: Chrome(Chromium)과 Edge 둘 다 실행 — 이미지(data: URL) 렌처 브라우저 차이가 있던 사례.
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+    { name: 'msedge', use: { browserName: 'chromium', channel: 'msedge' } },
+  ],
   use: {
     baseURL: `http://127.0.0.1:${FRONTEND_PORT}`,
     trace: 'retain-on-failure',

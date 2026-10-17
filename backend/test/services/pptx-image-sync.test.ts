@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
 import JSZip from 'jszip'
 import * as Y from 'yjs'
 import { ensurePptxImagesSyncable } from '../../../frontend/src/lib/pptxImageSync'
@@ -109,5 +110,59 @@ describe('pptx collaboration image sync (4-1 census)', () => {
     expect(c.pictures).toBeGreaterThan(0)
     expect(c.blob).toBe(0)
     expect(c.data).toBe(c.pictures)
+  })
+
+  it('Q5: Y.Doc size grows with data: URLs (measure before switching to part refs)', async () => {
+    const core: typeof import('ooxml-core/pptx') = await import('ooxml-core/pptx')
+    const sync: typeof import('ooxml-core/pptx/editor/render/collaboration-sync') = await import(
+      'ooxml-core/pptx/editor/render/collaboration-sync'
+    )
+    const factories2 = {
+      createMap: () => new Y.Map(),
+      createArray: () => new Y.Array(),
+      createText: () => new Y.Text(),
+    }
+    // 큰 이미지 덱: fixture가 실제로 참조하는 media/image1.png를 2MB로 교체한다.
+    const big = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), randomBytes(2 * 1024 * 1024)])
+    const deck = await JSZip.loadAsync(fixture)
+    deck.file('ppt/media/image1.png', big)
+    const bytes = await deck.generateAsync({ type: 'nodebuffer' })
+    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+
+    const measure = async (label: string): Promise<number> => {
+      const handler = new core.PptxHandler()
+      const parsed = await handler.load(ab, {})
+      for (const slide of parsed.slides) {
+        for (const el of slide.elements) {
+          if ((el.type === 'picture' || el.type === 'image') && el.imagePath) {
+            el.imageData = await handler.getImageData(el.imagePath)
+          }
+        }
+      }
+      const doc = new Y.Doc()
+      sync.writeSlidesToYDoc(parsed.slides, doc, factories2, 'LOCAL')
+      const size = Y.encodeStateAsUpdate(doc).length
+      console.log(`Q5 ${label}: pptx=${bytes.length}B ydoc=${size}B ratio=${(size / bytes.length).toFixed(2)}x`)
+      return size
+    }
+
+    // 패치 전(blob) 크기
+    const runtimeProto = Object.getPrototypeOf(core.createDefaultPptxHandlerRuntime()) as Record<
+      string,
+      unknown
+    >
+    const original = runtimeProto.createImageUrl
+    const blobUrl = URL.createObjectURL(new Blob([new Uint8Array([1])], { type: 'image/png' }))
+    runtimeProto.createImageUrl = (() => blobUrl) as unknown as typeof original
+    const before = await measure('blob (before patch)')
+    runtimeProto.createImageUrl = original
+
+    // 패치 후(data:) 크기
+    ensurePptxImagesSyncable()
+    const after = await measure('data (after patch)')
+
+    // 보고: data: URL은 이미지 바이트가 Y.Doc에 그대로 실린다.
+    expect(after).toBeGreaterThan(before)
+    console.log(`Q5 data-url overhead: ${after - before}B over blob baseline`)
   })
 })

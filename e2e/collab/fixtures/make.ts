@@ -55,23 +55,31 @@ const slideLayoutRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 const theme = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="e2e"><a:themeElements><a:clrScheme name="e2e"><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt2><a:srgbClr val="F2F2F2"/></a:lt2><a:dk2><a:srgbClr val="0D0D0D"/></a:dk2><a:accent1><a:srgbClr val="2563EB"/></a:accent1><a:accent2><a:srgbClr val="059669"/></a:accent2></a:clrScheme><a:fmtScheme name="e2e"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`
 
-function slideXml(shapeName: string, text: string, y: number, shapeId: number, withPic = false): string {
-  const pic = withPic
-    ? `<p:pic><p:nvPicPr><p:cNvPr id="3" name="e2e-pic"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="914400" y="3200400"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`
-    : ''
+function slideXml(shapeName: string, text: string, y: number, shapeId: number, pics = 0): string {
+  const pic = (i: number): string =>
+    `<p:pic><p:nvPicPr><p:cNvPr id="${3 + i}" name="e2e-pic${i + 1}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId${2 + i}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${914400 + i * 1000000}" y="3200400"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`
+  const picXml = Array.from({ length: pics }, (_, i) => pic(i)).join('')
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="${shapeId}" name="${shapeName}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="${y}"/><a:ext cx="7315200" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="3200"/><a:t>${text}</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>${pic}</p:spTree></p:cSld></p:sld>`
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="${shapeId}" name="${shapeName}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="${y}"/><a:ext cx="7315200" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="3200"/><a:t>${text}</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>${picXml}</p:spTree></p:cSld></p:sld>`
 }
 
 const slideRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>`
 
 const slide1Rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>`
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image2.png"/></Relationships>`
+
+const slide2Rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image3.png"/></Relationships>`
 
 /** 1x1 빨간 PNG (E16 이미지 동기화 픽스처). */
 const PIXEL_PNG_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+/** Q4: 브라우저 E16용 — 서로 다른 색의 8x8 PNG 2개 추가 (총 3장). */
+const PIXEL_BLUE_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAF0lEQVQoU2NkYGD4z0AEYBxVSFJIMTAwMAAFHwUe/9VQn1sAAAAAElFTkSuQmCC'
+const PIXEL_GREEN_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAHElEQVQoz2NkYPjPQAxgJEbRQFA0EBQNBEUDQAAAABJRU5ErkJggg=='
 
 async function main(): Promise<void> {
   const zip = new JSZip()
@@ -87,10 +95,12 @@ async function main(): Promise<void> {
   zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels', slideLayoutRels)
   zip.file('ppt/theme/theme1.xml', theme)
   SLIDES.forEach((s, i) => {
-    zip.file(`ppt/slides/slide${i + 1}.xml`, slideXml(s.name, s.text, s.y, i + 2, i === 0))
-    zip.file(`ppt/slides/_rels/slide${i + 1}.xml.rels`, i === 0 ? slide1Rels : slideRels)
+    zip.file(`ppt/slides/slide${i + 1}.xml`, slideXml(s.name, s.text, s.y, i + 2, i === 0 ? 2 : i === 1 ? 1 : 0))
+    zip.file(`ppt/slides/_rels/slide${i + 1}.xml.rels`, i === 0 ? slide1Rels : i === 1 ? slide2Rels : slideRels)
   })
   zip.file('ppt/media/image1.png', Buffer.from(PIXEL_PNG_B64, 'base64'))
+  zip.file('ppt/media/image2.png', Buffer.from(PIXEL_BLUE_B64, 'base64'))
+  zip.file('ppt/media/image3.png', Buffer.from(PIXEL_GREEN_B64, 'base64'))
   const out = path.join(__dirname, 'collab-3slides.pptx')
   const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   await writeFile(out, buf)

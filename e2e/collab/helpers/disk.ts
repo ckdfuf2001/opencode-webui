@@ -20,6 +20,8 @@ function childByLocal(obj: Record<string, unknown>, local: string): unknown {
 /** shape 이름(cNvPr/@name)으로 텍스트를 읽는다. */
 export interface DeckSnapshot {
   slideCount: number
+  /** ppt/media/* 파트 수 (이미지 손실 가드 계측용). */
+  mediaParts: number
   textOf: (shapeName: string) => string | null
 }
 
@@ -93,6 +95,7 @@ export async function readDeck(absPath: string): Promise<DeckSnapshot> {
   }
   return {
     slideCount: sldIds.length,
+    mediaParts: Object.keys(zip.files).filter((n) => n.startsWith('ppt/media/') && !n.endsWith('/')).length,
     textOf: (shapeName: string) => texts.get(shapeName) ?? null,
   }
 }
