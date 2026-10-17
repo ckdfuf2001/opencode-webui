@@ -68,7 +68,7 @@ localStorage.setItem('collab-user', JSON.stringify({ id: 'u-ada', name: 'Ada', c
 | `collab-ai-blocked` | "AI 대기 중" 칩 | — |
 | `collab-name-modal` | 이름 입력 모달 | 안쪽 `input`, 확인 버튼 `collab-name-submit` |
 | `file-row` | 탐색기의 파일 행 | `data-path` |
-| `file-row-collab-avatar` | 파일 행 안의 아바타 | `data-peer-id` |
+| `file-row-collab-count` | 탐색기 인원 숫자 (👁 보기 / ✎ 편집) | `data-viewers`, `data-editors` |
 | `pptx-viewer-root` | viewer를 감싸는 요소 | — |
 
 ### 2.2 원격 선택 표시
@@ -122,7 +122,7 @@ window.__collabDebug = {
 **단언**
 - B 화면: `peer(B,'u-ada')`가 보이고 이름은 "Ada", `data-mode=edit`, `data-slide=2`, `data-owner=true`입니다.
 - A 화면: `peer(A,'u-grace')`가 보이고 `data-mode=view`입니다.
-- B의 탐색기: 해당 파일의 `file-row`에 `file-row-collab-avatar[data-peer-id=u-ada]`가 있습니다. 탐색기는 10초 poll이므로 timeout을 12초로 둡니다.
+- B의 탐색기: 해당 파일의 `file-row`에 `file-row-collab-count[data-editors="1"]`가 있습니다. 탐색기는 10초 poll이므로 timeout을 12초로 둡니다.
 - 이름이 기본값 `"You"`인 참여자가 없습니다. 본인은 이름 뒤 `(you)` 표기가 붙습니다 (예: `Grace (you)`).
   (초안의 `"You" 텍스트 없음` 단언은 2026-10-15 지시로 대체됨 — 모두가 "You"로 보이던 문제를 막는 것이 목적.)
 - 참여자 바는 한 줄이며 `viewer - … · editor - …` 두 그룹으로 표기합니다. `collab-status`는 연결됨 상태일 때 숨음(속성만 유지)합니다.

@@ -750,23 +750,37 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
   const out: CollabParticipant[] = []
   try {
     const states = room.awareness.getStates() as Map<number, {
-      app?: { id?: string; name?: string; color?: string; mode?: string }
+      app?: { id?: string; name?: string; color?: string; mode?: string; slide?: number }
       userName?: string
     }>
     for (const [cid, st] of states) {
       const app = st?.app
       if (!app || typeof app !== 'object') continue
-      // 슬라이스는 lib presence 키 아래에 있다 (shared 상수).
+      // 슬라이드는 app.slide(클라이언트가 게시한 값)를 우선한다.
+      // lib presence의 activeSlideIndex는 0 고정이라 fallback으로만 쓴다.
       const lib = readLibPresence(st as Record<string, unknown>)
+      const appSlide = typeof app.slide === 'number' && app.slide >= 1 ? app.slide : undefined
       out.push({
         id: String(app.id ?? cid),
         name: String(app.name ?? st.userName ?? `user-${cid}`),
         color: String(app.color ?? '#6366f1'),
         mode: app.mode === 'view' ? 'view' : 'edit',
-        slide: lib?.slide !== undefined ? lib.slide + 1 : undefined,
+        slide: appSlide ?? (lib?.slide !== undefined ? lib.slide + 1 : undefined),
         owner: room.ownerIds.has(cid),
       })
     }
+    // 2-2: 같은 user.id는 하나로 합친다 (edit > view, 그다음 서버 수신 순서).
+    const byId = new Map<string, CollabParticipant>()
+    for (const p of out) {
+      const prev = byId.get(p.id)
+      if (!prev) {
+        byId.set(p.id, p)
+        continue
+      }
+      const rank = (x: CollabParticipant): number => (x.mode === 'edit' ? 1 : 0) + (x.owner ? 2 : 0)
+      byId.set(p.id, rank(p) > rank(prev) ? p : prev)
+    }
+    return [...byId.values()]
   } catch { /* 무시 */ }
   return out
 }

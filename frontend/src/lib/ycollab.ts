@@ -480,6 +480,25 @@ export class YCollabSession {
     // setLocalStateField는 awareness update를 일으켜 onAwarenessUpdate가 publish한다.
   }
 
+  /**
+   * 현재 슬라이드 게시 (1부터).
+   * lib presence의 activeSlideIndex는 생성 시 0으로 고정되고 갱신되지 않으므로
+   * (chunk-552NAFTD.js createPresencePublisher) 우리 awareness app.slide를 쓴다.
+   * setMode/setUser처럼 필드 병합으로 갱신한다.
+   */
+  setSlide(n: number): void {
+    if (!Number.isFinite(n)) return
+    const slide = Math.max(1, Math.floor(n))
+    const prev = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
+    const prevApp = (prev.app ?? {}) as Record<string, unknown>
+    if (prevApp.slide === slide) return
+    this.awareness.setLocalStateField('app', {
+      ...prevApp,
+      id: this.userId,
+      slide,
+    })
+  }
+
   /** viewer에 빌려줄 externalSession 객체. */
   toExternal(): {
     doc: Y.Doc

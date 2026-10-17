@@ -39,7 +39,7 @@ export interface CollabRoomSummary {
 
 export type CollabSaveResult =
   | { ok: true; newHash: string }
-  | { ok: false; reason: 'conflict' | 'denied' | 'not_seeded' | 'error'; currentHash?: string | null; code?: string; message?: string }
+  | { ok: false; reason: 'conflict' | 'denied' | 'not_seeded' | 'image_loss' | 'error'; currentHash?: string | null; code?: string; message?: string }
 
 /** ws(s)://<origin>/api/collab — 폰·PC 모두 같은 origin으로 붙는다. */
 export function collabServerUrl(): string {
@@ -81,6 +81,9 @@ async function postSaveBinary(
   } | null
   if (res.status === 409) {
     if (body?.code === 'not_seeded') return { ok: false, reason: 'not_seeded', code: body.code, message: body.error }
+    if (body?.code === 'image_loss') {
+      return { ok: false, reason: 'image_loss', code: body.code, message: body.error }
+    }
     if (body?.code === 'conflict' || body?.currentHash !== undefined) {
       return { ok: false, reason: 'conflict', currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
     }

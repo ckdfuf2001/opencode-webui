@@ -365,20 +365,28 @@ function TreeNode({ file, level, expandStoreKey, sortBy = 'name-asc', onFileSele
           ) : (
             <span className={`text-sm truncate ${isSelected ? 'text-blue-400 font-medium' : isBrowserOpen ? 'text-emerald-400' : ''}`}>{file.name}</span>
           )}
-          {collabPeers.length > 0 && !editing && (
-            <span className="inline-flex items-center -space-x-1 ml-1">
-              {collabPeers.map((p) => (
-                <span
-                  key={p.id}
-                  data-testid="file-row-collab-avatar"
-                  data-peer-id={p.id}
-                  title={p.name}
-                  className="inline-block w-2.5 h-2.5 rounded-full border border-background"
-                  style={{ backgroundColor: p.color }}
-                />
-              ))}
-            </span>
-          )}
+          {collabPeers.length > 0 && !editing && (() => {
+            // 2-3: 아바타 대신 인원 숫자 (보기/편집). 서버가 user.id로 dedupe한다.
+            const viewers = collabPeers.filter((p) => p.mode === 'view').length
+            const editors = collabPeers.filter((p) => p.mode === 'edit').length
+            const names = collabPeers.map((p) => p.name).join(', ')
+            return (
+              <span
+                data-testid="file-row-collab-count"
+                data-viewers={viewers}
+                data-editors={editors}
+                title={names}
+                className="ml-1 inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+              >
+                {viewers > 0 && (
+                  <span data-testid="file-row-collab-viewers">👁 {viewers}</span>
+                )}
+                {editors > 0 && (
+                  <span data-testid="file-row-collab-editors">✎ {editors}</span>
+                )}
+              </span>
+            )
+          })()}
           {isBrowserOpen && !editing && (
             <Globe className="w-3 h-3 shrink-0 text-emerald-400" />
           )}

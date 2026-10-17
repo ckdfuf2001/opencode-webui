@@ -104,7 +104,7 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
     // app.id 기준 탭 병합.
     const byId = new Map<string, Peer & { tabCount: number }>()
     for (const [cid, st] of states) {
-      const app = (st?.app ?? null) as { id?: unknown; name?: unknown; color?: unknown; mode?: unknown; device?: unknown } | null
+      const app = (st?.app ?? null) as { id?: unknown; name?: unknown; color?: unknown; mode?: unknown; device?: unknown; slide?: unknown } | null
       const lib = readLibPresence(st)
       const id = String((app && typeof app.id !== 'undefined' ? app.id : cid) ?? cid)
       const name = String((app && app.name) ?? lib?.name ?? `user-${cid}`)
@@ -114,6 +114,8 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
       const lastEditAt = session.lastEditAt.get(cid)
       const lastActiveAt = lib?.updatedAt
       const selectedId = lib?.selectedId
+      // 슬라이드는 app.slide(우리가 게시한 값)를 우선한다. lib 값은 항상 0이라 무의미.
+      const appSlide = typeof app?.slide === 'number' && app.slide >= 1 ? app.slide : undefined
       const prev = byId.get(id)
       const peer: Peer & { tabCount: number } = {
         clientId: cid,
@@ -121,7 +123,7 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
         name,
         color,
         mode: prev ? (prev.mode === 'edit' || mode === 'edit' ? 'edit' : 'view') : mode,
-        slide: lib?.slide !== undefined ? lib.slide + 1 : prev?.slide,
+        slide: appSlide ?? (lib?.slide !== undefined ? lib.slide + 1 : prev?.slide),
         selectedId: selectedId ?? prev?.selectedId,
         selectedLabel: undefined,
         isOwner: o.ownerClientId != null && o.ownerClientId === cid,

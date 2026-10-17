@@ -108,7 +108,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       if (!h) return
       void h
         .getContent()
-        .then((b) => persistBytesRef.current(new Uint8Array(b), { quiet: true }))
+        .then((b) => persistBytesRef.current(new Uint8Array(b), { quiet: true, auto: true }))
         .catch(() => {})
     }, 2500)
   }, [refreshComments])
@@ -255,13 +255,33 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // S3: content 고정 — 성공해도 setSavedBytes를 호출하지 않고 latestSavedRef에만
   // 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지). 세션 종료·파일 교체 때 반영.
   const latestSavedRef = useRef<Uint8Array | null>(null)
-  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean }): Promise<boolean> => {
+  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean }): Promise<boolean> => {
     const quiet = opts?.quiet ?? false
+    const auto = opts?.auto ?? false
     const c = collabRef.current
     if (c && savePath) {
-      // 빈 바이트는 서버가 400으로 거부한다. adopt 경합의 빈 덱이 디스크를
-      // 덮어쓰지 않게 여기서 막는다 (409도 아니다 — 그냥 스킵).
+      // 빈 바이트: adopt 경합·lib 준비 전(getContent가 아직 0바이트)일 때 발생한다.
+      // 자동 경로는 조용히 스킵하고 500ms 뒤 1회 재시도한다 (배너 없음).
+      // 사용자가 직접 누른 저장일 때만 배너를 띄운다.
       if (bytes.length === 0) {
+        logClient(`empty_snapshot len=0 auto=${auto ? 1 : 0}`)
+        if (auto) {
+          if (!emptyRetryRef.current) {
+            emptyRetryRef.current = setTimeout(() => {
+              emptyRetryRef.current = null
+              const h = viewerRef.current
+              if (!h) return
+              void h
+                .getContent()
+                .then((b) => {
+                  if (new Uint8Array(b).length === 0) return
+                  return persistBytesRef.current(new Uint8Array(b), { quiet: true, auto: true })
+                })
+                .catch(() => {})
+            }, 500)
+          }
+          return false
+        }
         setCollabNotice('Nothing to save yet — try again in a moment.')
         return false
       }
@@ -270,7 +290,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       saveCountRef.current += 1
       if (res.ok) {
         lastSaveRef.current = { at: Date.now(), status: 200 }
-      } else if (res.reason === 'conflict' || res.reason === 'denied') {
+      } else if (res.reason === 'conflict' || res.reason === 'denied' || res.reason === 'image_loss') {
         lastSaveRef.current = { at: Date.now(), status: 409 }
         save409Ref.current += 1
       } else {
@@ -282,13 +302,20 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         c.session.knownHash = res.newHash
         // S3: content 고정 — 세션 종료 때 한 번만 반영한다.
         latestSavedRef.current = new Uint8Array(bytes)
+        // 저장 성공 시 남은 배너를 지운다 (5번: 배너가 안 사라지는 문제).
+        if (!auto) setCollabNotice(null)
         return true
       }
       if (res.reason === 'conflict') {
         setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
+      } else if (res.reason === 'image_loss') {
+        // 4-0: 이미지 손실 저장은 막았다. 사본을 내보낼 수 있게 한다.
+        logClient('image_loss blocked')
+        setCollabNotice('이미지 손실이 감지되어 저장을 막았습니다 — 내 사본을 내려받으세요.')
+        void offerMineDownloadRef.current?.()
       } else if (res.reason === 'not_seeded') {
         setCollabNotice('아직 동기화 전입니다. 잠시 후 다시 저장하세요.')
-      } else {
+      } else if (!auto) {
         setCollabNotice(res.message ?? 'Save denied (not owner).')
       }
       if (!quiet) showToast.error(res.message ?? 'Save failed')
@@ -345,6 +372,23 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       // 무시
     }
   }, [fileName])
+  const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
+  offerMineDownloadRef.current = offerMineDownload
+  const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** E2E/디버그용 클라이언트 로그 (?collabDebug=1에서만 수집, 상한 200). */
+  const clientLogs = useRef<string[]>([])
+  const logClient = (msg: string): void => {
+    if (!collabDebug) return
+    try {
+      clientLogs.current.push(`${Date.now() % 1000000} ${msg}`)
+      if (clientLogs.current.length > 200) clientLogs.current.splice(0, clientLogs.current.length - 200)
+      const w = window as unknown as { __collabDebug?: Record<string, unknown> }
+      w.__collabDebug = { ...(w.__collabDebug ?? {}), clientLogs: [...clientLogs.current] }
+    } catch {
+      // 무시
+    }
+  }
 
   // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
   // 평가되므로 앞에서 참조하면 TDZ가 난다).
@@ -359,7 +403,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         .then(async (bytes) => {
           // collab 저장 경로로 일원화 (baseHash 검사). solo면 직접 저장.
           const fresh = new Uint8Array(bytes)
-          const ok = await persistBytes(fresh)
+          const ok = await persistBytes(fresh, { quiet: true, auto: true })
           if (!ok) throw new Error('Save rejected')
           const cs = await loadPptxComments(fresh)
           setComments(cs)
@@ -395,7 +439,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         try {
           if (isOwnerNow(collabRef.current) && target.session.synced) {
             const h = viewerRef.current
-            if (h) await persistBytes(new Uint8Array(await h.getContent()))
+            if (h) await persistBytes(new Uint8Array(await h.getContent()), { quiet: true, auto: true })
           }
         } catch {
           // 무시
@@ -500,7 +544,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         try {
           if (isOwnerNow(c) && c.session.synced) {
             const h = viewerRef.current
-            if (h) await persistBytes(new Uint8Array(await h.getContent()))
+            if (h) await persistBytes(new Uint8Array(await h.getContent()), { quiet: true, auto: true })
           }
         } catch {
           // 무시
@@ -655,7 +699,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         showToast.error(kind === 'external_change' ? '외부에서 변경됨' : '다른 세션이 시작됨')
       },
     })
-    // 연결 상태 배지 + 전이 토스트(각 한 번).
+    // 3번: 연결 상태는 상단 바의 상태 표시로만 알린다.
+    // 끊김/복구는 트레이싱 모드에서만 (평소엔 중복 토스트 금지).
+    // terminal 오류는 사용자 행동이 필요하므로 유지.
     session.subscribe(() => {
       const snap = session.getSnapshot()
       setConnBadge({ status: snap.status, synced: snap.synced })
@@ -663,10 +709,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       reconcileCollab()
       if (snap.status === 'disconnected' && toastedStatus.current !== 'disconnected') {
         toastedStatus.current = 'disconnected'
-        showToast.warning('연결이 끊김 — 재연결 중')
+        if (collabDebug) showToast.warning('연결이 끊김 — 재연결 중')
       } else if (snap.status === 'connected' && toastedStatus.current === 'disconnected') {
         toastedStatus.current = 'connected'
-        showToast.success('다시 연결됨')
       } else if (snap.status === 'error' && toastedStatus.current !== 'error') {
         toastedStatus.current = 'error'
         showToast.error('공동편집 오류')
@@ -1179,20 +1224,21 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     }
   }, [followId, followed?.slide])
 
-  // P0-3: 입장/퇴장/모드전환 토스트 (같은 사람은 5초에 한 번).
+  // P0-3: 입장/퇴장/모드전환은 트레이싱 모드에서만 (평소엔 상단 바가 알린다).
   const peerToastAt = useRef<Map<string, number>>(new Map())
   const prevPeersRef = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     if (!collab) return
+    if (!collabDebug) {
+      prevPeersRef.current = new Map(peers.map((p) => [p.id, p.mode]))
+      return
+    }
     const prev = prevPeersRef.current
     const now = new Map<string, string>()
     const at = Date.now()
     for (const p of peers) {
-      if (p.isSelf) {
-        now.set(p.id, `${p.mode}`)
-        continue
-      }
       now.set(p.id, `${p.mode}`)
+      if (p.isSelf) continue
       const was = prev.get(p.id)
       const lastToast = peerToastAt.current.get(p.id) ?? 0
       if (was === undefined && at - lastToast > 5000) {
@@ -1624,7 +1670,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   showToolbar={editing || narrowViewport}
                   theme={viewerTheme}
                   initialSlide={slideIdx}
-                  onActiveSlideChange={(i: number) => setCurSlide(i)}
+                  onActiveSlideChange={(i: number) => {
+                    setCurSlide(i)
+                    setSlideIdx(i)
+                    // lib presence는 activeSlideIndex를 고정하므로 우리가 awareness에 싣는다.
+                    collabRef.current?.session.setSlide(i + 1)
+                  }}
                   onContentChange={() => void onViewerContentChange()}
                   collaboration={collaboration}
                 />
