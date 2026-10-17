@@ -1409,26 +1409,21 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           Encrypted documents cannot be co-edited — editing solo.
         </div>
       )}
-      {collab && editing && !collabGated && (
+      {/* 대기 배너는 띄우지 않는다 (앱 전역 연결 표시가 이미 있고, 로딩 화면이 PPT 위에 겹쳐 보임).
+    10초 넘게 owner 응답이 없었을 때만 조용히 재시도 affordance를 남긴다. */}
+      {collab && ownerWait && (
         <div className="px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
-          연결 중…
-        </div>
-      )}
-      {collab && waitingForOwner && (
-        <div className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
-          <span className="flex-1">문서를 여는 중…</span>
-          {ownerWait && (
-            <button
-              type="button"
-              onClick={() => {
-                setOwnerWait(false)
-                collabRef.current?.session.reconnect()
-              }}
-              className="shrink-0 underline underline-offset-2 hover:text-foreground"
-            >
-              owner 응답 없음 · 다시 시도
-            </button>
-          )}
+          <button
+            type="button"
+            data-testid="collab-owner-retry"
+            onClick={() => {
+              setOwnerWait(false)
+              collabRef.current?.session.reconnect()
+            }}
+            className="shrink-0 underline underline-offset-2 hover:text-foreground"
+          >
+            다시 시도
+          </button>
         </div>
       )}
       {collab && (
