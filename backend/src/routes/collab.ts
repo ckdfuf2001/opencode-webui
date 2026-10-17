@@ -76,6 +76,7 @@ app.post('/save', async (c) => {
     let clientId: number
     let bytes: Uint8Array
     const contentType = c.req.header('content-type') ?? ''
+    const forceImageLoss = c.req.header('x-collab-allow-image-loss') ?? ''
     if (contentType.includes('application/octet-stream')) {
       // M1: 바이너리 저장 (base64 없이 body 그대로). 메타는 헤더로.
       roomId = c.req.header('x-collab-room') ?? ''
@@ -97,13 +98,24 @@ app.post('/save', async (c) => {
     }
     const check = checkSave(roomId, clientId, bytes.length)
     if (!check.ok) return c.json({ error: check.error, code: check.code }, check.status || 409)
-    const applied = await applySave(roomId, bytes)
+    const applied = await applySave(roomId, bytes, { allowImageLoss: forceImageLoss === '1' })
     if ('conflict' in applied) {
       return c.json(
         {
           error: 'File changed on disk since last save (no auto-merge)',
           code: 'conflict',
           currentHash: applied.currentHash,
+        },
+        409,
+      )
+    }
+    if ('imageLoss' in applied) {
+      return c.json(
+        {
+          error: 'Image loss detected — save blocked. Download your copy.',
+          code: 'image_loss',
+          before: applied.before,
+          after: applied.after,
         },
         409,
       )

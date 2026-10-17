@@ -283,6 +283,46 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     a.destroy()
   })
 
+  it('T2c: image-loss save is blocked for pptx (4-0 guard)', async () => {
+    await fs.writeFile(path.join(tmp, 'repos', 'aaa', 'media.pptx'), 'seed')
+    const s = await postSession(baseUrl, { path: 'repos/aaa/media.pptx' })
+    const roomId = s.json.roomId as string
+    const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+    a.connect()
+    await waitFor(() => a.synced, 'A synced')
+    a.doc.getText('t').insert(0, 'x')
+    await waitFor(() => {
+      const room = rooms.rooms.get(roomId)
+      return !!room && room.ownerIds.has(a.clientId)
+    }, 'A is owner')
+    const withImages = new TextEncoder().encode(
+      'PKppt/media/image1.pngPKppt/media/image2.pngPK' +
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>' +
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image2.png"/>',
+    )
+    const post = (bytes: Uint8Array, allow?: boolean): Promise<Response> =>
+      testFetch(`${baseUrl}/api/collab/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'x-collab-room': roomId,
+          'x-collab-client': String(a.clientId),
+          ...(allow ? { 'x-collab-allow-image-loss': '1' } : {}),
+        },
+        body: bytes as unknown as BodyInit,
+      })
+    // 이미지가 있는 상태로 저장 성공.
+    expect((await post(withImages)).status).toBe(200)
+    // 이미지가 사라진 저장은 409 image_loss.
+    const lost = await post(new TextEncoder().encode('PKno media here'))
+    expect(lost.status).toBe(409)
+    const body = (await lost.json()) as { code?: string }
+    expect(body.code).toBe('image_loss')
+    // 명시적 승인은 통과.
+    expect((await post(new TextEncoder().encode('PKno media here'), true)).status).toBe(200)
+    a.destroy()
+  })
+
   it('T3: drop + offline edit + same-doc reconnect (no remount, no dup)', async () => {
     const s = await postSession(baseUrl, { path: 'repos/aaa/shared.txt' })
     const roomId = s.json.roomId as string

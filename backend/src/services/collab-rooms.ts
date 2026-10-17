@@ -71,6 +71,8 @@ export interface CollabRoom {
   /** 마지막으로 우리가 저장한(또는 room 생성 시 읽은) 해시. */
   lastHash: string
   externalChanged: boolean
+  /** 4-0 가드용: 마지막으로 계측한 디스크 이미지 수 (undefined=미계측). */
+  lastImageCounts: { media: number; refs: number } | null | undefined
   /** 저장 직렬화 체인 (room 단위). */
   saveChain: Promise<void>
   /** 저장 중에는 watcher가 무시한다. */
@@ -297,6 +299,7 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     watchTimer: null,
     lastHash: seedHash,
     externalChanged: false,
+    lastImageCounts: undefined,
     saveChain: Promise.resolve(),
     saving: false,
     aiBlockedAt: null,
@@ -631,14 +634,69 @@ export async function currentDiskHash(roomId: string): Promise<string | null> {
 }
 
 /**
+ * zip 바이트에서 이미지 파트 수와 slide rel의 image 관계 수를 센다.
+ * 이미지 손실 가드(4-0)와 계측에 쓴다. 읽기 실패면 null(판정하지 않음).
+ */
+export function countPptxImages(
+  bytes: Uint8Array,
+): { media: number; refs: number } | null {
+  try {
+    const buf = Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    ) as Buffer
+    // 로컬 헤더 탐색(중앙 디렉터리 파싱 불필요, 메모리 최소).
+    const text = buf.toString('latin1')
+    let media = 0
+    let refs = 0
+    // 파트 이름은 ZIP 로컬 헤더에서 'PK\x03\x04' 뒤 길이 필드 이후에 온다.
+    const re = /ppt\/media\/[^\x00]*?(?=\x00)/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(text)) !== null) {
+      if (m[0].length > 'ppt/media/'.length) media += 1
+      if (refs > 4000) break
+    }
+    // image 관계 수: TargetMode 없는 image 관계 Target 개수.
+    const reRef = /relationships\/image"[^>]*Target="/g
+    while ((m = reRef.exec(text)) !== null) {
+      refs += 1
+      if (refs > 4000) break
+    }
+    return { media, refs }
+  } catch {
+    return null
+  }
+}
+
+/** 직전 저장본(디스크)의 이미지 계측값. room에 캐시한다. */
+async function diskImageCounts(room: CollabRoom): Promise<{ media: number; refs: number } | null> {
+  if (room.lastImageCounts !== undefined) return room.lastImageCounts
+  try {
+    const buf = await fs.readFile(room.path)
+    const counts = countPptxImages(new Uint8Array(buf))
+    room.lastImageCounts = counts
+    return counts
+  } catch {
+    return null
+  }
+}
+
+/**
  * owner 저장 적용. 판정은 서버의 lastHash 기준이다 (클라이언트 baseHash는
  * 진단용으로만 받는다). 디스크가 lastHash와 다르면 409 conflict (자동 병합 없음).
  * room 단위 체인으로 직렬화한다 (S6C).
+ * 이미지 손실이 감지되면 저장하지 않고 409 image_loss로 거절한다 (4-0 가드).
  */
 export async function applySave(
   roomId: string,
   bytes: Uint8Array,
-): Promise<{ newHash: string } | { conflict: true; currentHash: string | null }> {
+  opts?: { allowImageLoss?: boolean },
+): Promise<
+  | { newHash: string }
+  | { conflict: true; currentHash: string | null }
+  | { imageLoss: true; before: { media: number; refs: number }; after: { media: number; refs: number } }
+> {
   const room = rooms.get(roomId)
   if (!room) throw { message: 'No such room', statusCode: 404 }
   const run = room.saveChain.then(async () => {
@@ -649,6 +707,23 @@ export async function applySave(
       const r: { conflict: true; currentHash: string | null } = { conflict: true, currentHash: disk }
       return r
     }
+    // 4-0 가드: pptx 저장에서 이미지(파트·관계)가 줄었으면 막는다.
+    // 명시적 승인(allowImageLoss)이 있을 때만 통과한다.
+    if (!opts?.allowImageLoss && /\.pptx$/i.test(room.path)) {
+      const before = await diskImageCounts(room)
+      const after = countPptxImages(bytes)
+      if (before && after && (after.media < before.media || after.refs < before.refs)) {
+        logger.warn(
+          `Collab room ${room.id}: image loss blocked (media ${before.media}->${after.media}, refs ${before.refs}->${after.refs})`,
+        )
+        const r: {
+          imageLoss: true
+          before: { media: number; refs: number }
+          after: { media: number; refs: number }
+        } = { imageLoss: true, before, after }
+        return r
+      }
+    }
     room.saving = true
     try {
       await writeFileContent(room.path, Buffer.from(bytes))
@@ -658,8 +733,9 @@ export async function applySave(
     const newHash = hashBytes(bytes)
     room.lastHash = newHash
     room.externalChanged = false
+    if (/\.pptx$/i.test(room.path)) room.lastImageCounts = countPptxImages(bytes)
     broadcastMeta(room)
-    const r: { newHash: string } = { newHash }
+    const r: { newHash: string } = { newHash: newHash }
     return r
   })
   room.saveChain = run.then(
