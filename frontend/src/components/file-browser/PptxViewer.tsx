@@ -23,6 +23,7 @@ import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
 import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
+import { acquireCollabSession, collabSessionCount, releaseCollabSession } from '@/lib/collabSessionRegistry'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
 ensurePptxImagesSyncable()
@@ -205,6 +206,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         slideCountY,
         localMode: (c?.session.awareness.getLocalState() as { app?: { mode?: string } } | null)?.app?.mode ?? null,
         imageSync: c ? countPptxDocImages(c.session.doc as unknown as Parameters<typeof countPptxDocImages>[0]) : null,
+        // 2-2: 탭당 세션 수 (E17: 1이어야 한다).
+        sessionCount: collabSessionCount(),
       }
     } catch {
       // 무시
@@ -574,13 +577,26 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         if (!userNow) return
         const freshEditing = editingRef.current
         sessionModeRef.current = freshEditing ? 'edit' : 'view'
-        const session = new YCollabSession(`${collabServerUrl()}/${info.roomId}`, {
-          name: userNow.name,
-          color: userNow.color,
-        }, { mode: freshEditing ? 'edit' : 'view', userId: userNow.id, device: narrowViewport ? 'mobile' : 'desktop' })
-        session.knownHash = info.lastHash
-        wireSessionRecovery(session)
-        session.connect()
+        // 2-2: 탭당 파일당 세션 1개 (인라인/전체화면 공유).
+        const { session, reused } = acquireCollabSession(
+          savePath,
+          () =>
+            new YCollabSession(
+              `${collabServerUrl()}/${info.roomId}`,
+              { name: userNow.name, color: userNow.color },
+              { mode: freshEditing ? 'edit' : 'view', userId: userNow.id, device: narrowViewport ? 'mobile' : 'desktop' },
+            ),
+          (created) => {
+            created.knownHash = info.lastHash
+            wireSessionRecovery(created)
+            created.connect()
+          },
+        )
+        // 공유 세션이면 신원/모드만 갱신한다 (연결·리스너 중복 없음).
+        if (reused) {
+          session.setUser({ name: userNow.name, color: userNow.color })
+          session.setMode(freshEditing ? 'edit' : 'view')
+        }
         baseHashRef.current = info.lastHash
         setCollabNotice(null)
         setMineFile(null)
@@ -622,7 +638,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         } catch {
           // 무시
         } finally {
-          c.session.destroy()
+          // 마지막 참조가 아니면 세션은 살려두고 이 뷰어의 상태만 정리한다 (2-2).
+          releaseCollabSession(savePath, (s) => s.destroy())
           aiBlockRef.current = null
           setAiBlocked(false)
           ownerIdRef.current = null

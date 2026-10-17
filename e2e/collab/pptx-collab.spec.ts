@@ -577,6 +577,29 @@ test.describe('pptx collab (desktop)', () => {
     void testName
     await closeTwo(t)
   })
+
+  test('E17: one session per tab (no duplicate peer on re-render/fullscreen)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e17', 0)
+    const t = await twoPages(browser)
+    const testName = `E17[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'view')
+    // B 화면에서 A는 1명이어야 한다 (같은 탭에서 세션이 2개 생기면 2명으로 보인다).
+    const selfOnB = t.pageB.locator('[data-testid="collab-peer"][data-self="true"]')
+    await expect(selfOnB).toHaveCount(1, { timeout: 15000 })
+    // 이름 변경 → 같은 세션이어야 한다.
+    await t.pageA.getByTestId('collab-rename-edit').click()
+    await t.pageA.getByTestId('collab-rename-input').fill('renamed-ada')
+    await t.pageA.getByTestId('collab-rename-submit').click()
+    await expect(t.pageB.getByTestId('collab-peer').filter({ hasText: 'renamed-ada' })).toHaveCount(1, {
+      timeout: 15000,
+    })
+    // 세션 수는 탭당 1.
+    const d = await readDebug(t.pageA)
+    expect(d.sessionCount).toBe(1)
+    void testName
+    await closeTwo(t)
+  })
 })
 
 test.describe('pptx collab (mobile 390x844)', () => {
