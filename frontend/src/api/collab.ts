@@ -186,6 +186,12 @@ export const collabApi = {
     throw new Error('Bad suggest-name response')
   },
 
+  /** 4-2: 오염된 room을 디스크 기준으로 재설정 (owner 전용). */
+  resetRoom: async (roomId: string, clientId: number): Promise<{ epoch: string; lastHash: string }> => {
+    const { data } = await axios.post(`${API_BASE_URL}/api/collab/reset-room`, { roomId, clientId })
+    return data
+  },
+
   rooms: async (): Promise<CollabRoomSummary[]> => {
     const { data } = await axios.get(`${API_BASE_URL}/api/collab/rooms`)
     return (data?.rooms ?? []) as CollabRoomSummary[]

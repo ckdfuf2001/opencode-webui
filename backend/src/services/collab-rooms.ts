@@ -683,6 +683,57 @@ async function diskImageCounts(room: CollabRoom): Promise<{ media: number; refs:
 }
 
 /**
+ * 오염된 room 복구: 디스크 원본을 기준으로 room을 새 epoch로 다시 만든다.
+ * - 디스크 해시가 room.lastHash와 다르면(외부 변경) 거부한다 (409 external_change).
+ * - Y.Doc을 비우고 새 epoch/새 clientID로 seed 권한을 다시 issuing한다.
+ * - 진행 중 owner만 실행할 수 있다 (ownerConn/clientId 검증).
+ */
+export async function resetRoomFromDisk(
+  roomId: string,
+  clientId: number,
+): Promise<{ epoch: string; lastHash: string }> {
+  const room = rooms.get(roomId)
+  if (!room) throw { message: 'No such room', statusCode: 404 }
+  if (!isCurrentOwner(room, clientId)) {
+    throw { message: 'Only the owner can reset the room', statusCode: 403, code: 'not_owner' }
+  }
+  const disk = await currentDiskHash(roomId)
+  if (disk === null) throw { message: 'File not readable', statusCode: 404 }
+  if (disk !== room.lastHash) {
+    room.externalChanged = true
+    broadcastMeta(room)
+    throw {
+      message: 'File changed on disk — reset refused (no auto-merge)',
+      statusCode: 409,
+      code: 'external_change',
+      currentHash: disk,
+    }
+  }
+  // Y.Doc 초기화 (오염된 모델 제거).
+  const doc = room.doc
+  const slides = doc.getArray(YDOC_SLIDES_KEY)
+  const assets = doc.getMap(YDOC_ASSETS_KEY)
+  doc.transact(() => {
+    if (slides.length > 0) slides.delete(0, slides.length)
+    for (const key of [...assets.keys()]) assets.delete(key)
+  })
+  // 새 epoch + seed 대기 상태로 되돌린다.
+  room.epoch = randomUUID()
+  room.seeded = false
+  room.externalChanged = false
+  room.lastHash = disk
+  room.lastImageCounts = undefined
+  room.ownerIds = new Set()
+  for (const info of room.conns.values()) info.clientIds.clear()
+  broadcastMeta(room)
+  logger.warn(`Collab room ${roomId}: reset from disk (new epoch ${room.epoch})`)
+  return { epoch: room.epoch, lastHash: disk }
+}
+
+const YDOC_SLIDES_KEY = 'pptx:slides'
+const YDOC_ASSETS_KEY = 'pptx:assets'
+
+/**
  * owner 저장 적용. 판정은 서버의 lastHash 기준이다 (클라이언트 baseHash는
  * 진단용으로만 받는다). 디스크가 lastHash와 다르면 409 conflict (자동 병합 없음).
  * room 단위 체인으로 직렬화한다 (S6C).

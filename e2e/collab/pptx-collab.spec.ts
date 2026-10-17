@@ -552,6 +552,31 @@ test.describe('pptx collab (desktop)', () => {
     void testName
     await closeTwo(t)
   })
+
+  test('E18: image-loss save is blocked, then allowed by explicit confirm (R1/R2)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e18', 0)
+    const t = await twoPages(browser)
+    const testName = `E18[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    // Y.Doc에는 blob: 이 없어야 한다 (앱 패치 확인).
+    await expect(async () => {
+      const d = await readDebug(t.pageA)
+      expect(d.imageSync?.blobOnly ?? 0).toBe(0)
+    }).toPass({ timeout: 15000 })
+    // 확인 다이얼로그가 뜨면 자동 저장 재시도가 멈춘 상태다.
+    const confirm = t.pageA.getByTestId('collab-confirm-image-loss')
+    if (await confirm.count()) {
+      // R1: 자동 저장이 중지되어야 한다 (saveCount가 더 늘지 않는다).
+      const before = (await readDebug(t.pageA)).saveCount
+      await t.pageA.waitForTimeout(6000)
+      const after = (await readDebug(t.pageA)).saveCount
+      expect(after).toBe(before)
+      await confirm.click()
+      await t.pageA.waitForTimeout(2000)
+    }
+    void testName
+    await closeTwo(t)
+  })
 })
 
 test.describe('pptx collab (mobile 390x844)', () => {

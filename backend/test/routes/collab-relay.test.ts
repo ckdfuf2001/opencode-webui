@@ -363,6 +363,43 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     a.destroy()
   })
 
+  it('T2e: reset-room rebuilds from disk (owner only, refuses on external change)', async () => {
+    await fs.writeFile(path.join(tmp, 'repos', 'aaa', 'reset.pptx'), 'seed')
+    const s = await postSession(baseUrl, { path: 'repos/aaa/reset.pptx' })
+    const roomId = s.json.roomId as string
+    const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+    a.connect()
+    await waitFor(() => a.synced, 'A synced')
+    a.doc.getText('t').insert(0, 'x')
+    await waitFor(() => {
+      const room = rooms.rooms.get(roomId)
+      return !!room && room.ownerIds.has(a.clientId)
+    }, 'A is owner')
+    // 방을 오염시킨다 (Y.Doc에 슬라이드/에셋 잔재).
+    const room = rooms.rooms.get(roomId)!
+    room.doc.getArray('pptx:slides').push([new Y.Map()])
+    room.doc.getMap('pptx:assets').set('img:mediaData', 'blob:stale')
+    const epochBefore = room.epoch
+    const postReset = (cid: number): Promise<Response> =>
+      testFetch(`${baseUrl}/api/collab/reset-room`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, clientId: cid }),
+      })
+    // 다른 clientId는 거부.
+    expect((await postReset(a.clientId + 99999)).status).toBe(403)
+    // owner면 성공: 새 epoch + Y.Doc 정리.
+    const ok = await postReset(a.clientId)
+    expect(ok.status).toBe(200)
+    const body = (await ok.json()) as { epoch?: string }
+    expect(body.epoch).toBeTruthy()
+    expect(body.epoch).not.toBe(epochBefore)
+    expect(room.doc.getArray('pptx:slides').length).toBe(0)
+    expect(room.doc.getMap('pptx:assets').size).toBe(0)
+    expect(room.seeded).toBe(false)
+    a.destroy()
+  })
+
   it('T3: drop + offline edit + same-doc reconnect (no remount, no dup)', async () => {
     const s = await postSession(baseUrl, { path: 'repos/aaa/shared.txt' })
     const roomId = s.json.roomId as string

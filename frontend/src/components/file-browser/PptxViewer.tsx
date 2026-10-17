@@ -419,6 +419,32 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     if (ok) setCollabNotice(null)
   }, [])
 
+  /** 4-2: 오염 room 복구 — 디스크 기준으로 재설정하고 세션부터 다시 연다. */
+  const resetRoomFromDisk = useCallback(async () => {
+    const c = collabRef.current
+    if (!c) return
+    try {
+      const r = await collabApi.resetRoom(c.roomId, c.session.clientId)
+      logClient(`reset_room epoch=${r.epoch}`)
+      // 파일 내용을 기준으로 다시 열어라: 세션 파괴 → 파일 재로드.
+      writeBackHaltedRef.current = false
+      lossPendingRef.current = null
+      setCollabNotice(null)
+      c.session.destroy()
+      collabRef.current = null
+      setCollab(null)
+      setMetaOwner(null)
+      ownerIdRef.current = null
+      setMetaTick(0)
+      setReloadKey((v) => v + 1)
+      setSlideIdx(0)
+      setCurSlide(0)
+    } catch (e) {
+      logClient(`reset_room_failed ${(e as Error)?.message ?? 'unknown'}`)
+      showToast.error('방을 재설정하지 못했습니다 (디스크가 변경되었을 수 있음).')
+    }
+  }, [])
+
   /** E2E/디버그용 클라이언트 로그 (?collabDebug=1에서만 수집, 상한 200). */
   const clientLogs = useRef<string[]>([])
   const logClient = (msg: string): void => {
@@ -1691,6 +1717,16 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       {collabNotice && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-600 dark:text-amber-400">
           <span className="flex-1">{collabNotice}</span>
+          {(writeBackHaltedRef.current || lossPendingRef.current) && (
+            <button
+              type="button"
+              data-testid="collab-reset-room"
+              onClick={() => void resetRoomFromDisk()}
+              className="shrink-0 underline underline-offset-2 hover:text-amber-500"
+            >
+              파일 기준으로 다시 열기
+            </button>
+          )}
           {lossPendingRef.current && (
             <button
               type="button"
