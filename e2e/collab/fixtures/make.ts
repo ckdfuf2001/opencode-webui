@@ -72,14 +72,65 @@ const slide1Rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 const slide2Rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image3.png"/></Relationships>`
 
-/** 1x1 빨간 PNG (E16 이미지 동기화 픽스처). */
-const PIXEL_PNG_B64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
-/** Q4: 브라우저 E16용 — 서로 다른 색의 8x8 PNG 2개 추가 (총 3장). */
-const PIXEL_BLUE_B64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAF0lEQVQoU2NkYGD4z0AEYBxVSFJIMTAwMAAFHwUe/9VQn1sAAAAAElFTkSuQmCC'
-const PIXEL_GREEN_B64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAHElEQVQoz2NkYPjPQAxgJEbRQFA0EBQNBEUDQAAAABJRU5ErkJggg=='
+/** Q4/V1: 진짜 유효한 PNG를 직접 만든다 (손으로 쓴 base64는 CRC가 틀려 브라우저가 못 읽는다). */
+import { deflateSync } from 'node:zlib'
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    t[n] = c >>> 0
+  }
+  return t
+})()
+
+function crc32(buf: Uint8Array): number {
+  let c = 0xffffffff
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff]! ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function chunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4)
+  len.writeUInt32BE(data.length, 0)
+  const typeBuf = Buffer.from(type, 'ascii')
+  const crc = Buffer.alloc(4)
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0)
+  return Buffer.concat([len, typeBuf, data, crc])
+}
+
+/** 8x8 단색 PNG (RGBA). */
+function makePng(r: number, g: number, b: number): Buffer {
+  const w = 8
+  const h = 8
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(w, 0)
+  ihdr.writeUInt32BE(h, 4)
+  ihdr[8] = 8 // bit depth
+  ihdr[9] = 6 // color type RGBA
+  const raw = Buffer.alloc(h * (1 + w * 4))
+  let o = 0
+  for (let y = 0; y < h; y++) {
+    raw[o++] = 0 // filter none
+    for (let x = 0; x < w; x++) {
+      raw[o++] = r
+      raw[o++] = g
+      raw[o++] = b
+      raw[o++] = 255
+    }
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
+const PIXEL_PNG = makePng(0xe1, 0x1d, 0x48)
+const PIXEL_BLUE = makePng(0x25, 0x63, 0xeb)
+const PIXEL_GREEN = makePng(0x05, 0x96, 0x69)
 
 async function main(): Promise<void> {
   const zip = new JSZip()
@@ -98,9 +149,9 @@ async function main(): Promise<void> {
     zip.file(`ppt/slides/slide${i + 1}.xml`, slideXml(s.name, s.text, s.y, i + 2, i === 0 ? 2 : i === 1 ? 1 : 0))
     zip.file(`ppt/slides/_rels/slide${i + 1}.xml.rels`, i === 0 ? slide1Rels : i === 1 ? slide2Rels : slideRels)
   })
-  zip.file('ppt/media/image1.png', Buffer.from(PIXEL_PNG_B64, 'base64'))
-  zip.file('ppt/media/image2.png', Buffer.from(PIXEL_BLUE_B64, 'base64'))
-  zip.file('ppt/media/image3.png', Buffer.from(PIXEL_GREEN_B64, 'base64'))
+  zip.file('ppt/media/image1.png', PIXEL_PNG)
+  zip.file('ppt/media/image2.png', PIXEL_BLUE)
+  zip.file('ppt/media/image3.png', PIXEL_GREEN)
   const out = path.join(__dirname, 'collab-3slides.pptx')
   const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   await writeFile(out, buf)

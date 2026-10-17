@@ -125,6 +125,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [renameSessionKey, setRenameSessionKey] = useState(0)
   // Q2: 렌더 시점 ref 불일치 방지를 위해 배너 정보를 state로 관리한다.
   const [imageLoss, setImageLoss] = useState<ImageLossDetail | null>(null)
+  // V3: reset 확인 대기 중인 참가자 수 (0이면 확인창 없음).
+  const [resetConfirmCount, setResetConfirmCount] = useState<number | null>(null)
   const [curSlide, setCurSlide] = useState(0)
   const curSlideRef = useRef(0)
   curSlideRef.current = curSlide
@@ -435,6 +437,20 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   const requestRoomReset = useCallback(() => {
     const c = collabRef.current
     if (!c) return
+    // V3: 다른 참가자가 있으면 확인창을 먼저 띄운다 (저장 안 된 변경이 사라짐).
+    const others = peersRef.current.filter((p) => !p.isSelf)
+    if (others.length > 0) {
+      setResetConfirmCount(others.length)
+      return
+    }
+    doResetRoom()
+  }, [])
+
+  /** 확인 후 실제 요청. */
+  const doResetRoom = useCallback(() => {
+    const c = collabRef.current
+    if (!c) return
+    setResetConfirmCount(null)
     logClient('reset_request_sent')
     c.session.requestReset()
     showToast.info('owner가 파일 기준으로 다시 열었습니다')
@@ -1747,9 +1763,31 @@ const [renaming, setRenaming] = useState(false)
           AI 대기 중
         </div>
       )}
-      {collabNotice && (
+{collabNotice && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-600 dark:text-amber-400">
           <span className="flex-1">{collabNotice}</span>
+          {resetConfirmCount != null && (
+            <span data-testid="collab-reset-confirm" className="inline-flex items-center gap-1">
+              <span>
+                참가자 {resetConfirmCount}명의 저장되지 않은 변경이 사라집니다. 계속할까요?
+              </span>
+              <button
+                type="button"
+                data-testid="collab-reset-confirm-yes"
+                onClick={() => doResetRoom()}
+                className="underline underline-offset-2"
+              >
+                진행
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetConfirmCount(null)}
+                className="underline underline-offset-2"
+              >
+                취소
+              </button>
+            </span>
+          )}
 {(imageLoss || lossPendingRef.current) &&
             (isResetOwner ? (
               <button
@@ -1807,12 +1845,12 @@ const [renaming, setRenaming] = useState(false)
                   showToolbar={editing || narrowViewport}
                   theme={viewerTheme}
                   initialSlide={slideIdx}
-                  onActiveSlideChange={(i: number) => {
-                    setCurSlide(i)
+onActiveSlideChange={(i: number) => {
+                    // V5(d): 리렌더·원격 update로 0이 튀는 호출은 게시하지 않는다.
+                    if (i >= 0) setCurSlide(i)
                     // lib presence는 activeSlideIndex가 0 고정이라 우리가 awareness에 싣는다.
-                    // (R4: slideIdx는 건드리지 않는다 — initialSlide가 다시 바뀌면
-                    //  lib이 리마운트/재이동할 수 있다. 마운트 초기값으로만 쓴다.)
-                    collabRef.current?.session.setSlide(i + 1)
+                    // (R4: slideIdx는 건드리지 않는다 — initialSlide가 바뀌면 lib이 재이동할 수 있다.)
+                    if (i >= 1) collabRef.current?.session.setSlide(i + 1)
                   }}
                   onContentChange={() => void onViewerContentChange()}
                   collaboration={collaboration}

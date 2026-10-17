@@ -165,4 +165,46 @@ describe('pptx collaboration image sync (4-1 census)', () => {
     expect(after).toBeGreaterThan(before)
     console.log(`Q5 data-url overhead: ${after - before}B over blob baseline`)
   })
+
+  it('Q5b: Y.Doc size stays flat across slide moves (no data: string accumulation)', async () => {
+    const core: typeof import('ooxml-core/pptx') = await import('ooxml-core/pptx')
+    const sync: typeof import('ooxml-core/pptx/editor/render/collaboration-sync') = await import(
+      'ooxml-core/pptx/editor/render/collaboration-sync'
+    )
+    const big = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), randomBytes(2 * 1024 * 1024)])
+    const deck = await JSZip.loadAsync(fixture)
+    deck.file('ppt/media/image1.png', big)
+    const bytes = await deck.generateAsync({ type: 'nodebuffer' })
+    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    const factories2 = {
+      createMap: () => new Y.Map(),
+      createArray: () => new Y.Array(),
+      createText: () => new Y.Text(),
+    }
+    ensurePptxImagesSyncable()
+    const handler = new core.PptxHandler()
+    const parsed = await handler.load(ab, {})
+    for (const slide of parsed.slides) {
+      for (const el of slide.elements) {
+        if ((el.type === 'picture' || el.type === 'image') && el.imagePath) {
+          el.imageData = await handler.getImageData(el.imagePath)
+        }
+      }
+    }
+    const doc = new Y.Doc()
+    sync.writeSlidesToYDoc(parsed.slides, doc, factories2, 'LOCAL')
+    const first = Y.encodeStateAsUpdate(doc).length
+    // 슬라이드 이동(상태 재게시)을 10번 반복 — Yjs 이력에 누적돼선 안 된다.
+    for (let i = 0; i < 10; i++) {
+      doc.getMap(YDOC_ASSETS_KEY).set('__move', String(i))
+    }
+    const afterMoves = Y.encodeStateAsUpdate(doc).length
+    console.log(
+      `Q5b ydoc: initial=${first}B after-10-moves=${afterMoves}B growth=${afterMoves - first}B`,
+    )
+    // 이동으로 Y.Doc이 다시 자라지 않아야 한다 (data: 문자열이 매번 새로 실리는 것만 정상).
+    expect(afterMoves - first).toBeLessThan(1024)
+  })
+
+const YDOC_ASSETS_KEY = 'pptx:assets'
 })

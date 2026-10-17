@@ -101,8 +101,10 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
     const states = session.awareness.getStates() as Map<number, Record<string, unknown>>
     const selfClientId = session.awareness.clientID
     const now = Date.now()
-    // app.id 기준 탭 병합.
-    const byId = new Map<string, Peer & { tabCount: number }>()
+    // V5-2: 같은 user.id가 여러 clientID(탭)로 보일 때 **가장 최근 상태 하나**만 대표로 쓴다.
+    // 기준: 1) app.slide가 있는 상태, 2) lib lastUpdated(최근), 3) clientID 순.
+    // 출처를 섞지 않으므로 mode·owner·slide가 서로 다른 탭에서 오는 일이 없다.
+    const byId = new Map<string, Peer & { tabCount: number; freshest: number }>()
     for (const [cid, st] of states) {
       const app = (st?.app ?? null) as { id?: unknown; name?: unknown; color?: unknown; mode?: unknown; device?: unknown; slide?: unknown } | null
       const lib = readLibPresence(st)
@@ -114,31 +116,67 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
       const lastEditAt = session.lastEditAt.get(cid)
       const lastActiveAt = lib?.updatedAt
       const selectedId = lib?.selectedId
-      // 슬라이드는 app.slide(우리가 게시한 값)를 우선한다. lib 값은 항상 0이라 무의미.
+      // lib presence의 activeSlideIndex는 0 고정 + 10초 재게시라 항상 1번이다.
+      // 그래서 fallback으로 쓰지 않는다. app.slide가 없으면 표시를 생략한다.
       const appSlide = typeof app?.slide === 'number' && app.slide >= 1 ? app.slide : undefined
+      const freshest = appSlide != null ? 2 : lastActiveAt != null ? 1 : 0
       const prev = byId.get(id)
-      const peer: Peer & { tabCount: number } = {
+      if (prev) {
+        prev.tabCount += 1
+        // 더 최신 상태가 나오면 대표를 교체한다.
+        if (freshest > prev.freshest || (freshest === prev.freshest && cid > prev.clientId)) {
+          const isOwnerNow = o.ownerClientId != null && o.ownerClientId === cid
+          const peer: Peer & { tabCount: number; freshest: number } = {
+            clientId: cid,
+            id,
+            name,
+            color,
+            mode,
+            slide: appSlide,
+            selectedId,
+            selectedLabel: undefined,
+            isOwner: isOwnerNow,
+            isSelf: id === o.selfUserId || (!o.selfUserId && cid === selfClientId),
+            device,
+            tabCount: prev.tabCount,
+            lastEditAt,
+            lastActiveAt,
+            freshest,
+          }
+          if (peer.selectedId && o.getSelectedLabel) {
+            peer.selectedLabel = o.getSelectedLabel(peer.selectedId, peer.slide)
+          }
+          byId.set(id, peer)
+        } else {
+          // 대표가 유지되더라도 활동/편집 시각은 최댓값을 유지한다.
+          prev.lastEditAt = maxTime(lastEditAt, prev.lastEditAt)
+          prev.lastActiveAt = maxTime(lastActiveAt, prev.lastActiveAt)
+        }
+        continue
+      }
+      const peer: Peer & { tabCount: number; freshest: number } = {
         clientId: cid,
         id,
         name,
         color,
-        mode: prev ? (prev.mode === 'edit' || mode === 'edit' ? 'edit' : 'view') : mode,
-        slide: appSlide ?? (lib?.slide !== undefined ? lib.slide + 1 : prev?.slide),
-        selectedId: selectedId ?? prev?.selectedId,
+        mode,
+        slide: appSlide,
+        selectedId,
         selectedLabel: undefined,
         isOwner: o.ownerClientId != null && o.ownerClientId === cid,
         isSelf: id === o.selfUserId || (!o.selfUserId && cid === selfClientId),
-        device: prev?.device ?? device,
-        tabCount: (prev?.tabCount ?? 0) + 1,
-        lastEditAt: maxTime(lastEditAt, prev?.lastEditAt),
-        lastActiveAt: maxTime(lastActiveAt, prev?.lastActiveAt),
+        device,
+        tabCount: 1,
+        lastEditAt,
+        lastActiveAt,
+        freshest,
       }
       if (peer.selectedId && o.getSelectedLabel) {
         peer.selectedLabel = o.getSelectedLabel(peer.selectedId, peer.slide)
       }
       byId.set(id, peer)
     }
-    const next = [...byId.values()].map((p) => ({ ...p }))
+    const next = [...byId.values()].map(({ freshest: _freshest, ...p }) => ({ ...p }))
     const prev = cacheRef.current
     if (samePeers(prev, next, now)) return prev
     cacheRef.current = next

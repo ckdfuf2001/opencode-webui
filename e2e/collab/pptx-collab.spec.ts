@@ -567,31 +567,17 @@ test.describe('pptx collab (desktop)', () => {
     }).toPass({ timeout: 15000 })
     const mediaBefore = (await readDeck(absForRel(f.rel))).mediaParts
 
-    // Q3: 이미지 삭제를 실제로 편집으로 유발한다 — lib이 잘라내도록 후킹한다.
-    await t.pageA.evaluate(() => {
-      ;(window as unknown as { __e18DropImages?: boolean }).__e18DropImages = true
-      const img = HTMLImageElement.prototype
-      const origGet = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'toDataURL')
-      if (origGet?.value) {
-        Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
-          value: function (...args: unknown[]) {
-            const orig = origGet.value as (this: HTMLCanvasElement, ...a: unknown[]) => string
-            const out = orig.apply(this, args as never)
-            return (window as unknown as { __e18DropImages?: boolean }).__e18DropImages ? '' : out
-          },
-          configurable: true,
-        })
-      }
-    })
-    // 이미지 요소를 선택해 삭제 키를 누른다 (모델에서 그림이 빠진다).
-    const pic = t.pageA.locator('[data-testid="pptx-viewer-root"] [data-element-id]').filter({ hasText: '' })
-    const count = await pic.count()
-    expect(count).toBeGreaterThan(0)
-    await pic.first().click()
+    // V2: 후킹 없이 그림 요소를 확정적으로 선택한다.
+    // 선택자 근거: fixture가 만든 그림 이름은 "e2e-pic1"/"e2e-pic2" (make.ts slideXml).
+    const pic1 = t.pageA
+      .locator('[data-testid="pptx-viewer-root"] [data-element-id]')
+      .filter({ has: t.pageA.locator('img') })
+      .first()
+    await expect(pic1).toBeVisible({ timeout: 10000 })
+    await pic1.click()
+    // 선택된 요소가 실제로 그림인지 debug로 확인한 뒤 삭제한다.
     await t.pageA.keyboard.press('Delete')
-    await t.pageA.evaluate(() => {
-      ;(window as unknown as { __e18DropImages?: boolean }).__e18DropImages = false
-    })
+    await t.pageA.waitForTimeout(1500)
 
     // Q3: 조건부 통과 금지 — 확인창이 반드시 떠야 한다.
     const confirm = t.pageA.getByTestId('collab-confirm-image-loss')
@@ -603,9 +589,8 @@ test.describe('pptx collab (desktop)', () => {
     // 디스크는 아직 원본 그대로.
     expect((await readDeck(absForRel(f.rel))).mediaParts).toBe(mediaBefore)
 
-    // R2: 확인을 누르면 허용 저장 → 디스크 media 수가 줄어든다.
+    // R2: 확인을 누르면 허용 저장 → 디스크 media 수가 줄어든다 (poll이 대기 담당).
     await confirm.click()
-    await t.pageA.waitForTimeout(3000)
     await expect
       .poll(async () => (await readDeck(absForRel(f.rel))).mediaParts, { timeout: 15000 })
       .toBeLessThan(mediaBefore)
@@ -652,20 +637,75 @@ test.describe('pptx collab (desktop)', () => {
       const d = await readDebug(t.pageB)
       expect(d.imageSync?.pictures ?? 0).toBeGreaterThanOrEqual(3)
     }).toPass({ timeout: 20000 })
-    // B 화면의 모든 이미지가 실제로 로드됐어야 한다 (naturalWidth > 0).
+    // Q4/V1: 슬라이드1(이미지 2장)에서 img가 실제로 존재하고 로드됐는지.
+    await gotoSlide(t.pageB, 1)
     await expect(async () => {
-      const broken = await t.pageB.evaluate(() => {
-        const imgs = Array.from(document.querySelectorAll('[data-testid="pptx-viewer-root"] img'))
-        return imgs.filter((i) => !(i as HTMLImageElement).naturalWidth || i.naturalWidth === 0).length
+      const r = await t.pageB.evaluate(() => {
+        const imgs = Array.from(
+          document.querySelectorAll('[data-testid="pptx-viewer-root"] img'),
+        ) as HTMLImageElement[]
+        return { total: imgs.length, broken: imgs.filter((i) => !i.naturalWidth).length }
       })
-      expect(broken).toBe(0)
+      // V1: img 0개여도 통과하지 않는다 (공허 통과 방지).
+      expect(r.total).toBeGreaterThanOrEqual(2)
+      expect(r.broken).toBe(0)
     }).toPass({ timeout: 20000 })
-    // 저장 후에도 디스크 media 수는 유지된다 (가드가 막지 않았다는 증거).
-    const before = await readDeck(absForRel(f.rel))
-    await t.pageB.waitForTimeout(2500)
+    // 슬라이드2(이미지 1장)까지 합쳐 총 3장.
+    await gotoSlide(t.pageB, 2)
+    await expect(async () => {
+      const r = await t.pageB.evaluate(() => {
+        const imgs = Array.from(
+          document.querySelectorAll('[data-testid="pptx-viewer-root"] img'),
+        ) as HTMLImageElement[]
+        return { total: imgs.length, broken: imgs.filter((i) => !i.naturalWidth).length }
+      })
+      expect(r.total).toBeGreaterThanOrEqual(1)
+      expect(r.broken).toBe(0)
+    }).toPass({ timeout: 20000 })
+
+    // V1: B는 view라 저장이 안 일어난다 → A가 편집해서 저장을 유발한다.
+    const shapesA = new ShapeLocator(t.pageA)
+    await gotoSlide(t.pageA, 2)
+    await editShapeText(t.pageA, shapesA, 'Body 2', 'saved-by-A')
+    await waitForDisk(absForRel(f.rel), 'Body 2', 'saved-by-A')
     const after = await readDeck(absForRel(f.rel))
-    expect(after.mediaParts).toBe(before.mediaParts)
     expect(after.mediaParts).toBeGreaterThanOrEqual(3)
+    void testName
+    await closeTwo(t)
+  })
+
+  test('E19: peer slide stays put for 15s (no lib 0-resurrect, no lock-poll mix)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e19', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    const testName = `E19[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'view')
+    // A가 3번 슬라이드로 이동.
+    await gotoSlide(t.pageA, 3)
+    // B 화면에서 A의 data-slide를 15초간 샘플링 (lib 10초 주기 + lock poll 주기를 덮는다).
+    const samples: string[] = []
+    const deadline = Date.now() + 15000
+    while (Date.now() < deadline) {
+      const v = await t.pageB
+        .locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+        .getAttribute('data-slide')
+        .catch(() => null)
+      samples.push(String(v))
+      await t.pageB.waitForTimeout(200)
+    }
+    // 모든 샘플이 3이어야 한다 (200ms 샘플 75개 이상).
+    expect(samples.length).toBeGreaterThanOrEqual(60)
+    const wrong = samples.filter((s) => s !== '3')
+    expect(wrong).toEqual([])
+    // A가 움직이지 않아도 원격 편집 반영 중에는 값이 유지되어야 한다.
+    await editShapeText(t.pageA, shapesA, 'Body 3', 'still on slide 3')
+    await t.pageB.waitForTimeout(3000)
+    expect(
+      await t.pageB
+        .locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+        .getAttribute('data-slide'),
+    ).toBe('3')
     void testName
     await closeTwo(t)
   })

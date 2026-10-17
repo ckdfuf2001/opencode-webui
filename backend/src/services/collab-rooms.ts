@@ -7,6 +7,8 @@ import * as syncProtocol from 'y-protocols/sync'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import { resolveWorkspaceFile, workspaceRootAbs } from './files'
+// V5: 슬라이드는 app.slide만 쓴다 (lib presence fallback 제거). readLibPresence는 미사용.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { readLibPresence } from '@opencode-webui/shared/lib/collab-presence'
 import { writeFileContent } from './file-operations'
 import { logger } from '../utils/logger'
@@ -795,16 +797,15 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
     for (const [cid, st] of states) {
       const app = st?.app
       if (!app || typeof app !== 'object') continue
-      // 슬라이드는 app.slide(클라이언트가 게시한 값)를 우선한다.
-      // lib presence의 activeSlideIndex는 0 고정이라 fallback으로만 쓴다.
-      const lib = readLibPresence(st as Record<string, unknown>)
+      // 슬라이드는 app.slide(클라이언트가 게시한 값)만 쓴다.
+      // lib presence의 activeSlideIndex는 0 고정 + 10초 재게시라 항상 1번이라 fallback 불가.
       const appSlide = typeof app.slide === 'number' && app.slide >= 1 ? app.slide : undefined
       out.push({
         id: String(app.id ?? cid),
         name: String(app.name ?? st.userName ?? `user-${cid}`),
         color: String(app.color ?? '#6366f1'),
         mode: app.mode === 'view' ? 'view' : 'edit',
-        slide: appSlide ?? (lib?.slide !== undefined ? lib.slide + 1 : undefined),
+        slide: appSlide,
         owner: room.ownerIds.has(cid),
       })
     }
