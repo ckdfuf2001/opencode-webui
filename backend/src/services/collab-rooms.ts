@@ -769,7 +769,8 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
         owner: room.ownerIds.has(cid),
       })
     }
-    // 2-2: 같은 user.id는 하나로 합친다 (edit > view, 그다음 서버 수신 순서).
+    // 2-2: 같은 user.id는 하나로 합친다. owner > edit > view 우선순위,
+    // 같은 등급이면 먼저 본(추가된) 항목을 유지한다.
     const byId = new Map<string, CollabParticipant>()
     for (const p of out) {
       const prev = byId.get(p.id)

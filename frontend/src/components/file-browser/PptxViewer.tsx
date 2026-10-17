@@ -118,6 +118,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   showCommentsRef.current = showComments
   const [slideIdx, setSlideIdx] = useState(0)
   const [curSlide, setCurSlide] = useState(0)
+  const curSlideRef = useRef(0)
+  curSlideRef.current = curSlide
+  // R4: sync 후 슬라이드 게시를 1회만 시도하기 위한 플래그 (세션마다 초기화).
+  const slidePublishedRef = useRef(false)
   const [reloadKey, setReloadKey] = useState(0)
   // 신원 단일 통로: collab-user (presence·코멘트 공통).
   const [collabUser, saveCollabUser] = useCollabUser()
@@ -255,7 +259,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // S3: content 고정 — 성공해도 setSavedBytes를 호출하지 않고 latestSavedRef에만
   // 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지). 세션 종료·파일 교체 때 반영.
   const latestSavedRef = useRef<Uint8Array | null>(null)
-  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean }): Promise<boolean> => {
+  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean; allowImageLoss?: boolean }): Promise<boolean> => {
     const quiet = opts?.quiet ?? false
     const auto = opts?.auto ?? false
     const c = collabRef.current
@@ -269,6 +273,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
           if (!emptyRetryRef.current) {
             emptyRetryRef.current = setTimeout(() => {
               emptyRetryRef.current = null
+              // R5: 재시도 직전에 owner·sync 상태를 다시 확인한다 (다른 파일로 옮겼을 수 있다).
+              const cur = collabRef.current
+              if (!cur || !isOwnerNow(cur) || !cur.session.synced) return
               const h = viewerRef.current
               if (!h) return
               void h
@@ -285,7 +292,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         setCollabNotice('Nothing to save yet — try again in a moment.')
         return false
       }
-      const res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current)
+      // R1: 이미지 손실로 자동 저장이 중지된 세션은 요청 자체를 보내지 않는다 (2.5초 루프 방지).
+      if (writeBackHaltedRef.current && auto) {
+        logClient('write_back_halted_skip')
+        return false
+      }
+      const res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
       // E2E 디버그: 저장 결과 기록 (200/409 추적용).
       saveCountRef.current += 1
       if (res.ok) {
@@ -309,10 +321,18 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       if (res.reason === 'conflict') {
         setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
       } else if (res.reason === 'image_loss') {
-        // 4-0: 이미지 손실 저장은 막았다. 사본을 내보낼 수 있게 한다.
-        logClient('image_loss blocked')
-        setCollabNotice('이미지 손실이 감지되어 저장을 막았습니다 — 내 사본을 내려받으세요.')
-        void offerMineDownloadRef.current?.()
+        // R1/R2: 자동 write-back을 중지하고(epoch당 1회), 다운로드 제안도 1회만.
+        // 배너에서 "이미지 삭제 확정 저장"을 누르면 allowImageLoss로 다시 시도한다.
+        logClient(`image_loss blocked media=${res.detail?.before.media ?? '?'}->${res.detail?.after.media ?? '?'}`)
+        if (!writeBackHaltedRef.current) {
+          writeBackHaltedRef.current = true
+          lossPendingRef.current = new Uint8Array(bytes)
+          void offerMineDownloadRef.current?.()
+        }
+        const n = res.detail ? res.detail.before.media - res.detail.after.media : 0
+        setCollabNotice(
+          `이미지가 ${n > 0 ? `${n}개 줄어서 ` : ''}저장을 막았습니다 — 삭제가 맞으면 확인하고 저장하세요.`,
+        )
       } else if (res.reason === 'not_seeded') {
         setCollabNotice('아직 동기화 전입니다. 잠시 후 다시 저장하세요.')
       } else if (!auto) {
@@ -375,6 +395,29 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
   offerMineDownloadRef.current = offerMineDownload
   const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // R5: 빈 스냅샷 재시도 타이머는 파일 전환/언마운트 때 반드시 해제한다.
+  // (해제 안 하면 다른 파일로 옮긴 뒤 그 파일 내용을 저장할 수 있다.)
+  useEffect(() => {
+    return () => {
+      if (emptyRetryRef.current) {
+        clearTimeout(emptyRetryRef.current)
+        emptyRetryRef.current = null
+      }
+    }
+  }, [savePath])
+  // R1: 이미지 손실로 자동 저장이 중지됐는지 (epoch당 1회, 세션 변경 시 초기화).
+  const writeBackHaltedRef = useRef(false)
+  const lossPendingRef = useRef<Uint8Array | null>(null)
+  /** R2: 배너에서 "이미지 삭제가 맞다"고 확인하면 allowImageLoss로 1회 저장한다. */
+  const confirmImageLossSave = useCallback(async () => {
+    const pending = lossPendingRef.current
+    if (!pending) return
+    lossPendingRef.current = null
+    writeBackHaltedRef.current = false
+    const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, allowImageLoss: true })
+    logClient(`image_loss_confirmed ok=${ok ? 1 : 0}`)
+    if (ok) setCollabNotice(null)
+  }, [])
 
   /** E2E/디버그용 클라이언트 로그 (?collabDebug=1에서만 수집, 상한 200). */
   const clientLogs = useRef<string[]>([])
@@ -401,9 +444,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       void h
         .getContent()
         .then(async (bytes) => {
-          // collab 저장 경로로 일원화 (baseHash 검사). solo면 직접 저장.
+          // 수동 저장 경로라 배너/토스트를 막지 않는다 (R3).
           const fresh = new Uint8Array(bytes)
-          const ok = await persistBytes(fresh, { quiet: true, auto: true })
+          const ok = await persistBytes(fresh, { quiet: true, auto: false })
           if (!ok) throw new Error('Save rejected')
           const cs = await loadPptxComments(fresh)
           setComments(cs)
@@ -516,6 +559,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         setCollabNotice(null)
         setMineFile(null)
         toastedStatus.current = null
+        // 새 세션(epoch)이면 이미지 손실 정지/대기 바이트를 초기화한다.
+        writeBackHaltedRef.current = false
+        lossPendingRef.current = null
+        slidePublishedRef.current = false
         setCollab({
           session,
           roomId: info.roomId,
@@ -707,6 +754,12 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       setConnBadge({ status: snap.status, synced: snap.synced })
       updateDebug()
       reconcileCollab()
+      // R4: sync 직후(재연결 포함) 현재 슬라이드를 1회 게시한다.
+      // 이동 전까지 app.slide가 없으면 상대는 lib fallback(=항상 1)을 본다.
+      if (snap.synced && !slidePublishedRef.current) {
+        slidePublishedRef.current = true
+        session.setSlide(curSlideRef.current + 1)
+      }
       if (snap.status === 'disconnected' && toastedStatus.current !== 'disconnected') {
         toastedStatus.current = 'disconnected'
         if (collabDebug) showToast.warning('연결이 끊김 — 재연결 중')
@@ -1638,6 +1691,16 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       {collabNotice && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-600 dark:text-amber-400">
           <span className="flex-1">{collabNotice}</span>
+          {lossPendingRef.current && (
+            <button
+              type="button"
+              data-testid="collab-confirm-image-loss"
+              onClick={() => void confirmImageLossSave()}
+              className="shrink-0 underline underline-offset-2 hover:text-amber-500"
+            >
+              이미지 삭제가 맞습니다 — 저장
+            </button>
+          )}
           {mineFile && (
             <a
               href={mineFile.url}
@@ -1672,8 +1735,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   initialSlide={slideIdx}
                   onActiveSlideChange={(i: number) => {
                     setCurSlide(i)
-                    setSlideIdx(i)
-                    // lib presence는 activeSlideIndex를 고정하므로 우리가 awareness에 싣는다.
+                    // lib presence는 activeSlideIndex가 0 고정이라 우리가 awareness에 싣는다.
+                    // (R4: slideIdx는 건드리지 않는다 — initialSlide가 다시 바뀌면
+                    //  lib이 리마운트/재이동할 수 있다. 마운트 초기값으로만 쓴다.)
                     collabRef.current?.session.setSlide(i + 1)
                   }}
                   onContentChange={() => void onViewerContentChange()}

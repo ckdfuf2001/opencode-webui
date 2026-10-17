@@ -1,6 +1,21 @@
 import { defineConfig } from 'vitest/config'
+import path from 'node:path'
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // 프론트 전용 라이브러리를 쓰는 교차 테스트(pptx 이미지 census)가 있다.
+      // 백엔드 node_modules에는 없으므로 서브패스까지 프론트 쪽으로 해석시킨다.
+      'ooxml-core/pptx/editor/render/collaboration-sync': path.resolve(
+        __dirname,
+        '../frontend/node_modules/ooxml-core/dist/pptx/editor/render/collaboration-sync.mjs'
+      ),
+      'ooxml-core/pptx': path.resolve(__dirname, '../frontend/node_modules/ooxml-core/dist/pptx/index.mjs'),
+      'ooxml-core': path.resolve(__dirname, '../frontend/node_modules/ooxml-core'),
+      'ooxml-ui': path.resolve(__dirname, '../frontend/node_modules/ooxml-ui'),
+      '@opencode-webui/shared': path.resolve(__dirname, '../shared/src'),
+    },
+  },
   test: {
     globals: true,
     environment: 'node',

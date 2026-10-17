@@ -37,9 +37,14 @@ export interface CollabRoomSummary {
   participants: CollabParticipant[]
 }
 
+export interface ImageLossDetail {
+  before: { media: number; refs: number }
+  after: { media: number; refs: number }
+}
+
 export type CollabSaveResult =
   | { ok: true; newHash: string }
-  | { ok: false; reason: 'conflict' | 'denied' | 'not_seeded' | 'image_loss' | 'error'; currentHash?: string | null; code?: string; message?: string }
+  | { ok: false; reason: 'conflict' | 'denied' | 'not_seeded' | 'image_loss' | 'error'; currentHash?: string | null; code?: string; message?: string; detail?: ImageLossDetail }
 
 /** ws(s)://<origin>/api/collab — 폰·PC 모두 같은 origin으로 붙는다. */
 export function collabServerUrl(): string {
@@ -53,6 +58,7 @@ async function postSaveBinary(
   clientId: number,
   bytes: Uint8Array,
   baseHash?: string | null,
+  allowImageLoss = false,
 ): Promise<CollabSaveResult> {
   let res: Response
   try {
@@ -63,6 +69,8 @@ async function postSaveBinary(
         'x-collab-room': roomId,
         'x-collab-client': String(clientId),
         ...(baseHash ? { 'x-collab-base-hash': baseHash } : {}),
+        // R2: 사용자가 "이미지 삭제 확정"을 눌렀을 때만 붙인다. 그 외엔 절대 안 붙는다.
+        ...(allowImageLoss ? { 'x-collab-allow-image-loss': '1' } : {}),
       },
       // 복사 없이 원본 버퍼를 그대로 보낸다.
       body: bytes as unknown as BodyInit,
@@ -82,7 +90,14 @@ async function postSaveBinary(
   if (res.status === 409) {
     if (body?.code === 'not_seeded') return { ok: false, reason: 'not_seeded', code: body.code, message: body.error }
     if (body?.code === 'image_loss') {
-      return { ok: false, reason: 'image_loss', code: body.code, message: body.error }
+      const d = body as unknown as ImageLossDetail
+      return {
+        ok: false,
+        reason: 'image_loss',
+        code: body.code,
+        message: body.error,
+        detail: d && typeof d.before === 'object' && typeof d.after === 'object' ? d : undefined,
+      }
     }
     if (body?.code === 'conflict' || body?.currentHash !== undefined) {
       return { ok: false, reason: 'conflict', currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
@@ -130,6 +145,7 @@ export const collabApi = {
     clientId: number,
     bytes: Uint8Array,
     baseHash?: string | null,
+    allowImageLoss = false,
   ): Promise<CollabSaveResult> => {
     // M1: 같은 바이트를 또 보내지 않는다 (sha256 비교, 서버와 같은 알고리즘).
     // crypto.subtle이 없으면(비보안 컨텍스트) 생략 없이 바로 보낸다.
@@ -144,7 +160,7 @@ export const collabApi = {
         const prev = lastSentByRoom.get(roomId)
         if (prev && prev.hash === hash) return { ok: true, newHash: prev.newHash }
       }
-      const res = await postSaveBinary(roomId, clientId, bytes, baseHash)
+      const res = await postSaveBinary(roomId, clientId, bytes, baseHash, allowImageLoss)
       if (res.ok && hash) {
         lastSentByRoom.set(roomId, { hash, newHash: res.newHash })
         if (lastSentByRoom.size > 20) {

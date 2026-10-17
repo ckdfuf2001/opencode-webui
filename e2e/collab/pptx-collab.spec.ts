@@ -125,8 +125,9 @@ test.describe('pptx collab (desktop)', () => {
     await expect(grace).toHaveAttribute('data-mode', 'view')
     // 탐색기 아바타 (10초 poll → 12초).
     const row = t.pageB.locator('[data-testid="file-row"]', { hasText: f.name })
-    await expect(row.locator('[data-testid="file-row-collab-editors"]')).toContainText('1', { timeout: 12000 })
-      await expect(row.locator('[data-testid="file-row-collab-viewers"]')).toContainText('1')
+    await expect(row.locator('[data-testid="file-row-collab-count"][data-editors="1"][data-viewers="1"]')).toBeVisible({
+        timeout: 12000,
+      })
     // 기본값 'You' 이름이 없음 (본인 표기는 소문자 '(you)').
     for (const p of [t.pageA, t.pageB]) {
       const text = await p.evaluate(() => document.body.innerText)

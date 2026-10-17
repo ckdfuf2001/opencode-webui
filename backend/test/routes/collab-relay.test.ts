@@ -318,8 +318,48 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     expect(lost.status).toBe(409)
     const body = (await lost.json()) as { code?: string }
     expect(body.code).toBe('image_loss')
-    // 명시적 승인은 통과.
-    expect((await post(new TextEncoder().encode('PKno media here'), true)).status).toBe(200)
+// 명시적 승인은 통과.
+    expect((await post(new TextEncoder().encode('PKno media here'), true)).status).toBe(200)
+    a.destroy()
+  })
+
+  it('T2d: repeated image_loss stays blocked; allow-header is the only way through (R1/R2)', async () => {
+    await fs.writeFile(path.join(tmp, 'repos', 'aaa', 'media2.pptx'), 'seed')
+    const s = await postSession(baseUrl, { path: 'repos/aaa/media2.pptx' })
+    const roomId = s.json.roomId as string
+    const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+    a.connect()
+    await waitFor(() => a.synced, 'A synced')
+    a.doc.getText('t').insert(0, 'x')
+    await waitFor(() => {
+      const room = rooms.rooms.get(roomId)
+      return !!room && room.ownerIds.has(a.clientId)
+    }, 'A is owner')
+    const good = new TextEncoder().encode(
+      'PKppt/media/image1.pngPK<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>',
+    )
+    const bad = new TextEncoder().encode('PKnothing')
+    const post = (bytes: Uint8Array, allow?: boolean): Promise<Response> =>
+      testFetch(`${baseUrl}/api/collab/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'x-collab-room': roomId,
+          'x-collab-client': String(a.clientId),
+          ...(allow ? { 'x-collab-allow-image-loss': '1' } : {}),
+        },
+        body: bytes as unknown as BodyInit,
+      })
+    expect((await post(good)).status).toBe(200)
+    // 자동 저장 반복(2.5초 간격 흉내) 3회 — 전부 409여야 한다.
+    for (let i = 0; i < 3; i++) {
+      const r = await post(bad)
+      expect(r.status).toBe(409)
+      expect(((await r.json()) as { code?: string }).code).toBe('image_loss')
+    }
+    // 디스크는 그대로다.
+    const onDisk = await fs.readFile(path.join(tmp, 'repos', 'aaa', 'media2.pptx'))
+    expect(onDisk.toString('utf8')).toBe(Buffer.from(good).toString('utf8'))
     a.destroy()
   })
 
