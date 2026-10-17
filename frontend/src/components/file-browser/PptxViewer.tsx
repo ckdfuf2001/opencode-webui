@@ -28,6 +28,9 @@ import { acquireCollabSession, collabSessionCount, releaseCollabSession } from '
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
 ensurePptxImagesSyncable()
 
+// 2-1: lib 내장 공유/아바타 UI를 끈다 — 참가자 표시는 우리 상단 바가 단일 통로다.
+const PPT_CUSTOMIZATION = { hiddenDialogs: ['share'] } as const
+
 const pptxI18n = createInstance()
 void pptxI18n.use(initReactI18next).init({
   lng: 'en',
@@ -1795,6 +1798,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
                   }}
                   onContentChange={() => void onViewerContentChange()}
                   collaboration={collaboration}
+                  // 2-1: lib 내장 presence 아바타/공유 버튼을 끈다 (우리 상단 바 하나만 남긴다).
+                  // 근거: chunk-JL7A7NDD.js UserAvatarBar(L77, data-testid="user-avatar-bar")
+                  // 는 툴바 share 버튼에서만 렌더되며(L4053), 그 렌더 조건이
+                  // pptx.isDialogAvailable(customization, "share") 다 (ooxml-ui chunk-MCHPNO42.mjs L51915).
+                  customization={PPT_CUSTOMIZATION}
                 />
               </I18nextProvider>
             </Suspense>
