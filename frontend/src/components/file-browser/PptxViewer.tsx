@@ -1767,11 +1767,9 @@ const peersRef = useRef<Peer[]>([])
                         {p.name}
                         {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
                         {p.device === 'mobile' ? '📱' : ''}
-                        {/* 표시 위치 규칙: where 우선, 없으면 slide에서 ("슬라이드 N"), 둘 다 없으면 생략.
-                        구버전 클라이언트는 where를 게시하지 않으므로 slide fallback이 필요하다.
-                        텍스트 노드로만 렌더한다(HTML 삽입 없음). */}
-                        {p.where ?? (typeof p.slide === 'number' ? `슬라이드 ${p.slide}` : '')}
-                        {p.where || typeof p.slide === 'number' ? ' · ' : ''}
+                        {/* 위치 글자는 화면에 띄우지 않는다. 위치 표시는 lib 자체 표시
+                        (좌측 썸네일 하이라이트) 하나만 남긴다.
+                        app.slide / data-slide는 그대로 유지 — 보이지 않지만 테스트가 읽는다. */}
                         {status ? ` · ${status}` : ''}
                       </span>
                     </button>

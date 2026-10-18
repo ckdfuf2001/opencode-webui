@@ -698,9 +698,9 @@ test.describe('pptx collab (desktop)', () => {
     expect(samples.length).toBeGreaterThanOrEqual(60)
     const wrong = samples.filter((s) => s !== '3')
     expect(wrong).toEqual([])
-    // H1: 화면 글자도 같은 샘플에서 '슬라이드 3'을 유지 (where가 한 update로 나갔는지).
+    // 위치 글자는 화면에 표시하지 않는다(방향 전환 규칙). data-slide만 단언한다.
     const textRow = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
-    await expect(textRow).toContainText('슬라이드 3')
+    await expect(textRow).not.toContainText('슬라이드')
     // A가 움직이지 않아도 원격 편집 반영 중에는 값이 유지되어야 한다.
     await editShapeText(t.pageA, shapesA, 'Body 3', 'still on slide 3')
     await t.pageB.waitForTimeout(3000)
@@ -721,17 +721,13 @@ test.describe('pptx collab (desktop)', () => {
     await openFile(t.pageB, f.name, 'view')
     // A가 슬라이드 3으로 이동하고 publish.
     await gotoSlide(t.pageA, 3)
-    // H1: data-slide와 화면 텍스트가 같은 샘플에서 함께 유지돼야 한다 (한 번의 update로 게시).
-    const sampleOne = async (): Promise<{ slide: string | null; text: string }> => {
+    // data-slide만 단언한다(위치 글자는 화면에 표시하지 않는다).
+    const sampleOne = async (): Promise<string | null> => {
       const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
-      const slide = await row.getAttribute('data-slide').catch(() => null)
-      const text = (await row.innerText().catch(() => '')) ?? ''
-      return { slide, text }
+      return row.getAttribute('data-slide').catch(() => null)
     }
     await expect(async () => {
-      const s = await sampleOne()
-      expect(s.slide).toBe('3')
-      expect(s.text).toContain('슬라이드 3')
+      expect(await sampleOne()).toBe('3')
     }).toPass({ timeout: 15000 })
     // X2: 슬라이드 이동은 viewer를 다시 마운트시키지 않는다.
     // (setSlideIdx는 setViewerRef의 마운트 시점에만 호출된다)
@@ -750,16 +746,14 @@ test.describe('pptx collab (desktop)', () => {
     await expect(async () => {
       expect((await readDebug(t.pageA)).mountCount).toBeGreaterThan(mountAfterMove)
     }).toPass({ timeout: 15000 })
-    const samples: { slide: string | null; text: string }[] = []
+    const samples: (string | null)[] = []
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
       samples.push(await sampleOne())
       await t.pageB.waitForTimeout(200)
     }
     expect(samples.length).toBeGreaterThanOrEqual(60)
-    expect(samples.filter((s) => s.slide !== '3')).toEqual([])
-    // H1: 글자도 흔들리면 안 된다 (where가 한 update로 갔는지).
-    expect(samples.filter((s) => !s.text.includes('슬라이드 3'))).toEqual([])
+    expect(samples.filter((s) => s !== '3')).toEqual([])
     void testName
     await closeTwo(t)
   })
@@ -793,7 +787,7 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
       await t.pageB.waitForTimeout(200)
     }
     expect(samples.length).toBeGreaterThanOrEqual(30)
-    // 기존 200ms 샘플 검사는 화면 텍스트 확인용으로 유지한다.
+    // 기존 200ms 샘플 검사는 data-slide 확인용으로 유지한다.
     expect(samples.filter((s) => s !== '3')).toEqual([])
     // Z3(1) 공허함 방지: throttle 4배로도 parse가 게이트 300ms 창 안에 끝나면
     // 이 테스트는 아무것도 검증하지 못한다(E16b 교훈). 먼저 창을 실제로 넘었는지 본다.
@@ -821,22 +815,15 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
     await openFile(t.pageA, f.name, 'edit')
     await openFile(t.pageB, f.name, 'view')
     const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
-    const sample = async (): Promise<{ slide: string | null; text: string }> => ({
-      slide: await row.getAttribute('data-slide').catch(() => null),
-      text: (await row.innerText().catch(() => '')) ?? '',
-    })
+    const sample = async (): Promise<string | null> => row.getAttribute('data-slide').catch(() => null)
     await gotoSlide(t.pageA, 3)
     await expect(async () => {
-      const s = await sample()
-      expect(s.slide).toBe('3')
-      expect(s.text).toContain('슬라이드 3')
+      expect(await sample()).toBe('3')
     }).toPass({ timeout: 15000 })
     // W1: 1번으로 돌아가면 1이 게시돼야 한다 (수정 전 i>=1 조건으로는 게시되지 않았다).
     await gotoSlide(t.pageA, 1)
     await expect(async () => {
-      const s = await sample()
-      expect(s.slide).toBe('1')
-      expect(s.text).toContain('슬라이드 1')
+      expect(await sample()).toBe('1')
     }).toPass({ timeout: 5000 })
     // 15초간 유지 (lib 10초 주기 재게시를 포함).
     const samples: (string | null)[] = []
