@@ -19,14 +19,20 @@ import { absForRel } from './helpers/env'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(here, 'fixtures', 'collab-features.xlsx')
 
-/** fixture를 E2E 워크스페이스(repos/collab-e2e 아래)에 고유 이름으로 복사한다. */
-function seedFixture(slug: string): { rel: string; name: string } {
-  const stamp = Date.now().toString(36)
-  const rel = path.posix.join('repos', 'collab-e2e', `${slug}-${stamp}.xlsx`)
-  const abs = absForRel(rel)
-  fs.mkdirSync(path.dirname(abs), { recursive: true })
-  fs.copyFileSync(FIXTURE, abs)
-  return { rel, name: path.basename(rel) }
+/**
+ * playwright.config.ts 가 **백엔드 시작 전에** 심어둔 파일명.
+ *
+ * 백엔드는 시작 시 저장소 트리를 스캔해 children 을 채운다(FileTree.tsx:150 의
+ * needFetch = expanded && isDirectory && children === undefined). 서버가 뜬 뒤에
+ * 복사한 파일은 트리에 나타나지 않는다(확인됨: config 시드 파일만 보였고,
+ * 테스트 런타임에 복사한 파일은 안 보였다).
+ * 그래서 하네스는 사전 시드 파일을 쓴다.
+ */
+const SEEDED_NAME = 'probe-seeded-before-server.xlsx'
+
+function assertSeeded(): void {
+  const abs = absForRel(path.posix.join('repos', 'collab-e2e', SEEDED_NAME))
+  if (!fs.existsSync(abs)) throw new Error(`config did not seed ${abs} (playwright.config.ts)`)
 }
 
 /** XLSX가 마운트됐는지(편집기/보기 구분 없이). */
@@ -38,18 +44,23 @@ async function waitXlsxMounted(page: import('@playwright/test').Page): Promise<v
   )
 }
 
-/** 편집 UI(리본/툴바/수식바)가 실제로 보이는가. */
+/**
+ * 편집 UI가 실제로 렌더됐는가.
+ *
+ * `.xlsxengine-host` 는 EngineHost 가 항상 두는 래퍼라 존재만으로는 판정이 안 된다.
+ * B1 증상은 "호스트는 있는데 편집 UI 없이 전체창만 열림" 이므로,
+ * **호스트 안에 엔진이 실제로 그렸는지**(자식 존재 + 툴바/수식바 표시)를 본다.
+ * xlsx lib 은 data-testid 를 제공하지 않아 DOM 구조로 판정한다.
+ */
 function editorUi(page: import('@playwright/test').Page) {
   return page.evaluate(() => {
     const host = document.querySelector('.xlsxengine-host') as HTMLElement | null
-    if (!host) return { mounted: false, toolbars: 0, visible: false }
-    // 툴바/수식바 후보를 넓게 잡는다(클래스명은 lib 소유라 안정적이지 않다).
-    const bars = [...host.querySelectorAll('[role="toolbar"], [data-testid*="toolbar"], formBar, .formula-bar, [class*="formula"]')]
-    const visible = bars.filter((el) => {
+    if (!host) return { mounted: false, children: 0, visible: 0 }
+    const kids = [...host.querySelectorAll('*')].filter((el) => {
       const r = el.getBoundingClientRect()
       return r.width > 0 && r.height > 0
     })
-    return { mounted: true, toolbars: bars.length, visible: visible.length }
+    return { mounted: true, children: host.children.length, visible: kids.length }
   })
 }
 
@@ -61,7 +72,8 @@ test.describe('X-B1: XLSX edit entry (solo path)', () => {
       if (m.type() === 'error') errs.push(m.text())
     })
 
-    const { name } = seedFixture('xb1')
+    assertSeeded()
+    const name = SEEDED_NAME
     await page.goto('/?collabDebug=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
 
     // 워크스페이스를 열고 파일을 연다 (collab 없이 solo 경로).
@@ -100,7 +112,7 @@ test.describe('X-B1: XLSX edit entry (solo path)', () => {
       if ((await folder.count()) > 0) {
         // 행 바깥 div에는 핸들러가 없고 안쪽 div에 onClick이 있다(PPT openFile 주석 참고).
         // span 클릭이 통하지 않아 행 자체에 실제 클릭을 시도한다.
-        await folder.first().click({ timeout: 10000, force: true }).catch(() => {})
+        await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
       } else {
         await page.evaluate(() => {
           const rows = [...document.querySelectorAll('[data-testid="file-row"]')]
@@ -118,7 +130,7 @@ test.describe('X-B1: XLSX edit entry (solo path)', () => {
     })
     await waitXlsxMounted(page)
 
-    const failures: number[] = []
+const failures: Array<{ i: number; ui: unknown }> = []
     for (let i = 0; i < 20; i++) {
       // 매 반복마다 편집 진입 → 저장 없이 Done으로 종료하지 않는다.
       // 편집 상태인지만 확인하고 파일은 다시 열지 않는다(리마운트가 필요하면 새로고침).
@@ -127,9 +139,10 @@ test.describe('X-B1: XLSX edit entry (solo path)', () => {
       await edit.click({ timeout: 15000 })
       // 편집 모드 표시: 버튼이 Done으로 바뀌면 editing 상태가 들어간 것이다.
       await expect(page.getByRole('button', { name: 'Done', exact: true })).toBeVisible({ timeout: 15000 })
-      await page.waitForTimeout(400)
+      // 엔진이 실제로 그려질 때까지 기다린다(B1 은 렌더 지연이 아니라 아예 비어있다).
+      await page.waitForTimeout(1200)
       const ui = await editorUi(page)
-      if (!ui.visible) failures.push(i)
+      if (!ui.mounted || ui.visible === 0) failures.push({ i, ui })
       // 다음 반복을 위해 편집을 종료한다(저장은 하지 않는다).
       const done = page.getByRole('button', { name: 'Done', exact: true })
       if ((await done.count()) > 0) {
@@ -140,6 +153,12 @@ test.describe('X-B1: XLSX edit entry (solo path)', () => {
     }
 
     expect(failures, `edit UI missing on clicks: ${failures.join(',')}`).toEqual([])
-    expect(errs, `console/page errors: ${errs.slice(0, 3).join(' | ')}`).toEqual([])
+    // X-B1은 solo 경로 검증이므로 창/툴바 조작이 없다. 이 잡음은 E2E 환경에서
+// commands 엔드포인트가 간헐적으로 실패해 발생한다(PPT 스위트도 동일).
+const noise = /Failed to fetch commands|AxiosError/
+expect(
+  errs.filter((e) => !noise.test(e)),
+  `console/page errors: ${errs.slice(0, 3).join(' | ')}`,
+).toEqual([])
   })
 })

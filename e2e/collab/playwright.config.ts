@@ -8,9 +8,16 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..')
 // 테스트마다 새로 만드는 격리 워크스페이스 (spec의 WORKSPACE_PATH).
 export const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collabe2e-'))
-// 백엔드는 시작 시 저장소 목록을 읽는다. spec은 그 뒤에 파일을 심으므로,
-// 테스트가 심을 폴더를 서버 뜨기 전에 만들어 둔다.
-fs.mkdirSync(path.join(wsDir, 'repos', 'collab-e2e'), { recursive: true })
+// 백엔드는 시작 시 저장소 트리를 스캔해 children 을 채운다(FileTree.tsx:150).
+// children 이 [] 로 스캔된 폴더는 needFetch=false 이므로 이후에 파일을 심어도
+// 절대 다시 조회되지 않는다. 그래서 **서버가 뜨기 전에** 파일을 심어야 한다.
+// 이 probe 파일로 트리가 실제로 자식 행을 그리는지 확인할 수 있다.
+const probeDir = path.join(wsDir, 'repos', 'collab-e2e')
+fs.mkdirSync(probeDir, { recursive: true })
+const probeFixture = path.join(here, 'fixtures', 'collab-features.xlsx')
+if (fs.existsSync(probeFixture)) {
+  fs.copyFileSync(probeFixture, path.join(probeDir, 'probe-seeded-before-server.xlsx'))
+}
 process.env.COLLAB_E2E_WS = wsDir
 
 const BACKEND_PORT = 5011
