@@ -88,11 +88,9 @@ function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
   useReleaseCacheOnHidden()
-  // M4 진단(측정 전용, dev만): 콘솔에서 __memProbe()로 heap·쿼리캐시·모듈Map·WS 수를 본다.
+  // M5: ?memDebug=1 로 켠다(기본 off). prod exe에서도 동작한다.
   useEffect(() => {
-    installMemProbe((fn) => {
-      ;(window as unknown as Record<string, unknown>).__memProbe = fn
-    })
+    installMemProbe()
   }, [])
   // 레거시 localStorage 알림 설정을 백단으로 1회 이전
   useNotifyMigration()

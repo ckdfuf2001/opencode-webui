@@ -31,6 +31,26 @@ if (typeof window !== 'undefined') {
   ;(window as unknown as Record<string, unknown>).__openSockets = () => openSockets.size
 }
 
+/** M5 진단(측정 전용): 열린 EventSource 추적. SSE 가 남아 있는지 콘솔로 확인한다. */
+const openEventSources = new Set<EventSource>()
+
+export function trackEventSource(es: EventSource | null | undefined, add: boolean): void {
+  if (typeof window === 'undefined' || !es) return
+  if (add) {
+    openEventSources.add(es)
+    const drop = (): void => {
+      openEventSources.delete(es)
+    }
+    es.addEventListener('error', drop, { once: true })
+  } else {
+    openEventSources.delete(es)
+  }
+}
+
+if (typeof window !== 'undefined') {
+  ;(window as unknown as Record<string, unknown>).__openEventSources = () => openEventSources.size
+}
+
 export type YCollabStatus = 'connecting' | 'connected' | 'disconnected' | 'error'
 
 export interface YCollabUser {

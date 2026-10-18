@@ -14,6 +14,7 @@ import { clearSessionNotifyData } from "@/lib/notifications"
 import { listSessionStatuses } from "@/api/session-status"
 import { stripMemoryRecall } from "@/lib/stripRecall"
 import { API_BASE_URL } from "@/config"
+import { trackEventSource } from "@/lib/ycollab"
 
 
 type SendPromptRequest = NonNullable<
@@ -2037,8 +2038,10 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
       };
       if (sseOn) {
       try {
-        es = new EventSource(esUrl);
-        activeSSEMap.set(sessionID, es);
+es = new EventSource(esUrl);
+      activeSSEMap.set(sessionID, es);
+      // M5 진단(측정 전용): 열린 SSE 수를 콘솔에서 본다.
+      trackEventSource(es, true);
         es.onmessage = sseHandle;
         ["message.part.updated","message.updated","message.removed","session.idle"].forEach((tt) => { try { es!.addEventListener(tt, sseHandle as EventListener); } catch {} });
       } catch {}
@@ -2514,6 +2517,7 @@ export const useEphemeralSessionSSE = (
     return () => {
       closed = true;
       try { es?.close(); } catch {}
+      try { trackEventSource(es, false); } catch {}
     };
   }, [enabled, opcodeUrl, sessionID, directory, client, queryClient]);
 };
@@ -2527,8 +2531,20 @@ export function useReleaseCacheOnHidden(): void {
     const onVis = () => {
       if (document.hidden) {
         t = setTimeout(() => {
-          qc.removeQueries({ queryKey: ['opencode', 'messages'] })
-          qc.removeQueries({ queryKey: ['opencode', 'last-message'] })
+          // M5/P2: type:'inactive' 로 제한한다. active 쿼리를 지우면 화면(observer)이
+          // 캐시에서 빠진 쿼리를 계속 붙잡게 되어 오히려 새 페치를 유발한다.
+          // (SessionDetail.tsx:213 이 이미 같은 방식을 쓴다)
+          const drop = (queryKey: readonly unknown[]): void => {
+            qc.removeQueries({ queryKey: queryKey as unknown as string[], type: 'inactive' } as never)
+          }
+          // 실제 키는 둘이다:
+          //   L2182 ['opencode','messages', opcodeUrl, sessionID, directory]  ← 활성 메시지 목록
+          //   L907  ['opencode','message-list', sessionID, limit, offset, order] ← 페이지별 조회
+          // 이전 코드는 messages 와 last-message 만 지워 message-list 를 남겼다.
+          // message-list 는 offset 마다 항목이 생기므로 가장 자르기 쉽다.
+          drop(['opencode', 'messages'])
+          drop(['opencode', 'message-list'])
+          drop(['opencode', 'last-message'])
         }, 30_000)
       } else if (t) { clearTimeout(t); t = null }
     }
