@@ -24,7 +24,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
 import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
 import { createSlideGate } from '@/lib/slideLocationGate'
-import { acquireCollabSession, collabSessionCount, releaseCollabSession } from '@/lib/collabSessionRegistry'
+import { acquireCollabSession, collabSessionCount, dropCollabSession, releaseCollabSession } from '@/lib/collabSessionRegistry'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
 ensurePptxImagesSyncable()
@@ -672,7 +672,14 @@ writeBackHaltedRef.current = false
     return () => {
       dead = true
       const c = collabRef.current
-      if (!c) return
+      // M2-1: c가 null이어도 release는 반드시 한다. collabRef.current는 **렌더 시점**(L194)에
+      // 채워지므로, acquire(L624) 직후 렌더 커밋 전에 언마운트되면 c는 null이고 이전 코드의
+      // `if (!c) return` 가 release를 통째로 건너뛰었다. 그 결과 registry에 refs=1이 남고
+      // 세션·WebSocket·재연결 타이머가 영구히 살아 있었다.
+      if (!c) {
+        releaseCollabSession(savePath, (s) => s.destroy())
+        return
+      }
       // 나갈 때: owner면 마지막 flush 후 세션 파괴 (서버가 남은 쪽으로 자동 승계).
       // ref는 체인이 끝날 때까지 유지한다 (persistBytes가 ref를 읽기 때문).
       void (async () => {
@@ -868,6 +875,11 @@ const [renaming, setRenaming] = useState(false)
         writeBackHaltedRef.current = false
         lossPendingRef.current = null
         setImageLoss(null)
+        // M2-2: 4001로 방이 해체됐으므로 이 세션은 더 이상 유효하지 않다.
+        // 이전에는 여기서 release하지 않아 registry에 항목이 남았고, reloadKey로 재진입할 때
+        // acquire가 죽은 세션을 재사용(refs=2)했다. 언마운트 시 release가 1회만 돌아
+        // 세션이 영구 생존했다. 항목을 즉시 버려야 한다.
+        if (savePath) dropCollabSession(savePath, session)
         collabRef.current = null
         setCollab(null)
         setMetaOwner(null)
