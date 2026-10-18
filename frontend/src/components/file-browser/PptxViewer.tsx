@@ -24,7 +24,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
 import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
 import { createSlideGate } from '@/lib/slideLocationGate'
-import { acquireCollabSession, collabSessionCount, dropCollabSession, releaseCollabSession } from '@/lib/collabSessionRegistry'
+import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
 ensurePptxImagesSyncable()
@@ -574,6 +574,10 @@ const syncSessionMode = useCallback(() => {
   useEffect(() => {
     if (!savePath) return
     let dead = false
+    // M3/N1: release는 토큰(lease) 기준이다. collabRef를 경로로 삼지 않는다.
+    // collabRef.current는 렌더 시점(L194)에 채워지므로 acquire 직후 언마운트하면 null이고,
+    // 이전처럼 경로로 release하면 **acquire하지 않은 뷰어가 남의 refs를 깎을 수 있다.**
+    let lease: ReturnType<typeof acquireCollabSession> | null = null
     const user = collabUserRef.current
     if (!user) {
       // 자동 참여: 기본 이름 발급 → 저장 → effect 재실행에서 참가한다.
@@ -621,7 +625,7 @@ const syncSessionMode = useCallback(() => {
         const freshEditing = editingRef.current
         sessionModeRef.current = freshEditing ? 'edit' : 'view'
         // 2-2: 탭당 파일당 세션 1개 (인라인/전체화면 공유).
-        const { session, reused } = acquireCollabSession(
+        const acquired = acquireCollabSession(
           savePath,
           () =>
             new YCollabSession(
@@ -635,6 +639,9 @@ const syncSessionMode = useCallback(() => {
             created.connect()
           },
         )
+        // M3/N1: cleanup이 쓸 토큰을 effect 지역에 보관한다.
+        lease = acquired
+        const { session, reused } = acquired
         // 공유 세션이면 신원/모드만 갱신한다 (연결·리스너 중복 없음).
         if (reused) {
           session.setUser({ name: userNow.name, color: userNow.color })
@@ -672,12 +679,14 @@ writeBackHaltedRef.current = false
     return () => {
       dead = true
       const c = collabRef.current
-      // M2-1: c가 null이어도 release는 반드시 한다. collabRef.current는 **렌더 시점**(L194)에
-      // 채워지므로, acquire(L624) 직후 렌더 커밋 전에 언마운트되면 c는 null이고 이전 코드의
-      // `if (!c) return` 가 release를 통째로 건너뛰었다. 그 결과 registry에 refs=1이 남고
-      // 세션·WebSocket·재연결 타이머가 영구히 살아 있었다.
+      // M3/N1: 해제는 **내 토큰**으로만 한다.
+      // - acquire를 마치지 못한 마운트는 lease가 null이라 아무것도 하지 않는다.
+      // - drop 후 같은 경로에 새 세션이 있어도 내 lease는 옛 entry만 잡고 있으므로 무효가 된다.
+      // 이전처럼 savePath로 release하면 acquire하지 않은 뷰어가 남의 refs를 깎는다.
+      if (!lease) return
+      const held = lease
       if (!c) {
-        releaseCollabSession(savePath, (s) => s.destroy())
+        held.release()
         return
       }
       // 나갈 때: owner면 마지막 flush 후 세션 파괴 (서버가 남은 쪽으로 자동 승계).
@@ -692,7 +701,7 @@ writeBackHaltedRef.current = false
           // 무시
         } finally {
           // 마지막 참조가 아니면 세션은 살려두고 이 뷰어의 상태만 정리한다 (2-2).
-          releaseCollabSession(savePath, (s) => s.destroy())
+          held.release()
           aiBlockRef.current = null
           setAiBlocked(false)
           ownerIdRef.current = null
