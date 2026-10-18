@@ -19,6 +19,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // 프론트 모듈 회귀 테스트(실제 구현을 그대로 검증).
+    include: ['test/**/*.{test,spec}.ts', '../frontend/test/**/*.{test,spec}.ts'],
     // BrightVPN 실행 중 loopback이 간헐 차단되어 재시도 백오프가 길어진다.
     // 실전형 통합 테스트가 5s 기본값에 걸리지 않게 상향한다.
     testTimeout: 30000,

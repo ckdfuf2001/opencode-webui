@@ -23,6 +23,7 @@ import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
 import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
+import { createSlideGate } from '@/lib/slideLocationGate'
 import { acquireCollabSession, collabSessionCount, releaseCollabSession } from '@/lib/collabSessionRegistry'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
@@ -619,11 +620,8 @@ const syncSessionMode = useCallback(() => {
 writeBackHaltedRef.current = false
         lossPendingRef.current = null
         slidePublishedRef.current = false
-        // W1: 세션이 바뀌면 예약된 0 게시를 버린다(옛 세션 좌표를 새 세션에 싣지 않는다).
-        if (slideZeroTimer.current) {
-          clearTimeout(slideZeroTimer.current)
-          slideZeroTimer.current = null
-        }
+        // W1-b: 세션이 바뀌면 예약된 0 게시를 버린다(옛 세션 좌표를 새 세션에 싣지 않는다).
+        slideGateRef.current?.dispose()
         setImageLoss(null)
         setCollab({
           session,
@@ -1343,22 +1341,34 @@ const [renaming, setRenaming] = useState(false)
 const peersRef = useRef<Peer[]>([])
   peersRef.current = peers
 
-  /** W1: 리렌더성 0을 예약했다가 취소하는 타이머. 세션 변경/언마운트 시 정리. */
-  const slideZeroTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    return () => {
-      if (slideZeroTimer.current) {
-        clearTimeout(slideZeroTimer.current)
-        slideZeroTimer.current = null
-      }
-    }
-  }, [savePath])
-
   /** 위치 게시 1회 (H1). slide와 where를 한 awareness update로 낸다. */
   const publishSlideLocation = useCallback((index0: number) => {
     const n = index0 + 1
     collabRef.current?.session.setLocation({ slide: n, where: formatWhere('pptx', n) })
   }, [])
+
+/**
+ * W1 게이트: curSlideRef를 즉시 갱신하고(ref/state/slideIdx), 0 게시만 300ms 늦춘다.
+ * (로직은 frontend/src/lib/slideLocationGate.ts — 단위 테스트가 같은 모듈을 쓴다.)
+ */
+  const slideGateRef = useRef<ReturnType<typeof createSlideGate> | null>(null)
+  if (!slideGateRef.current) {
+    slideGateRef.current = createSlideGate({
+      getCurrent: () => curSlideRef.current,
+      applyLocal: (i) => {
+        // W1-a: 렌더 타이밍에 의존하지 않게 ref를 먼저 갱신한다.
+        curSlideRef.current = i
+        setCurSlide(i)
+        // W1-d: lib은 마운트 직후 initialSlide로 되돌아온다(PowerPointViewer initialSlide={slideIdx}).
+        // 여기서 slideIdx를 함께 갱신해 리마운트가 사용자 위치를 1번으로 되돌리지 않게 한다.
+        setSlideIdx(i)
+      },
+      publish: (i) => publishSlideLocation(i),
+    })
+  }
+  useEffect(() => {
+    return () => slideGateRef.current?.dispose()
+  }, [savePath])
 
   // 팔로우: 선택한 사람의 슬라이드로 계속 따라간다 (선택한 경우에만 이동).
   const [followId, setFollowId] = useState<string | null>(null)
@@ -1879,30 +1889,8 @@ const peersRef = useRef<Peer[]>([])
                   theme={viewerTheme}
                   initialSlide={slideIdx}
 onActiveSlideChange={(i: number) => {
-                    // W1: i는 0부터 시작한다. 0을 전부 버리면 사용자가 1번으로 갈 때 게시되지 않는다.
-                    // lib은 파일 로드/마운트 직후 resolveInitialSlideIndex(initialSlide 없으면 0)
-                    // 로 setActiveSlideIndex를 호출한다(chunk-552NAFTD.js:4621 + VIEWER_ROOT_OPTION_DEFAULTS
-                    // .initialSlide=0) 그리고 [activeSlideIndex] deps effect로 0을 1회 내보낸다(:11259-11263).
-                    // 그래서 "튀는 0"과 "사용자가 실제로 이동한 0"을 구분한다:
-                    //  1) 1 이상은 즉시 게시
-                    //  2) 0은 300ms 뒤 예약 — 그 사이 다른 값이 오면 취소
-                    //  3) 예약 실행 시 콜백 값이 아니라 viewer 현재 상태(curSlideRef)를 본다
-                    if (i >= 1) {
-                      if (slideZeroTimer.current) {
-                        clearTimeout(slideZeroTimer.current)
-                        slideZeroTimer.current = null
-                      }
-                      setCurSlide(i)
-                      publishSlideLocation(i)
-                      return
-                    }
-                    // i === 0 (또는 음수): 리렌더성 튐일 수 있어 예약한다.
-                    if (slideZeroTimer.current) clearTimeout(slideZeroTimer.current)
-                    slideZeroTimer.current = setTimeout(() => {
-                      slideZeroTimer.current = null
-                      const cur = curSlideRef.current
-                      if (cur === 0) publishSlideLocation(0)
-                    }, 300)
+                    // W1: 게이트 모듈이 cur 반영(즉시)과 게시(0은 300ms 지연)를 함께 처리한다.
+                    slideGateRef.current?.onIndex(i)
                   }}
                   onContentChange={() => void onViewerContentChange()}
                   collaboration={collaboration}
