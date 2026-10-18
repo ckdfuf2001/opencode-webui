@@ -587,6 +587,10 @@ function formatServerError(error: unknown): string {
 }
 
 export const useOpenCodeClient = (opcodeUrl: string | null | undefined, directory?: string) => {
+  // M4: 모듈 Map 크기 진단 훅(측정 전용). 앱 마운트 시 1회 설치한다.
+  useEffect(() => {
+    installModuleMapSizes();
+  }, []);
   return useMemo(
     () => (opcodeUrl ? new OpenCodeClient(opcodeUrl, directory) : null),
     [opcodeUrl, directory],
@@ -724,6 +728,36 @@ export function dropBackfilledId(sessionID: string, messageId: string): void {
 }
 export function clearBackfilledIds(sessionID: string): void {
   backfilledIds.delete(sessionID);
+}
+
+/**
+ * M4 진단(측정 전용, 상태 변경 없음): 모듈 레벨 Map 크기를 노출한다.
+ *
+ * lastFastPullAt / lastReasoningPullAt 은 delete 경로가 없고 backfilledIds 는
+ * 세션당 Set<messageId> 라 메시지 수만큼 늘어납니다. retainers 가 가리키기 전까지는
+ * 손대지 않고, 콘솔에서 이것만 확인합니다:
+ *   window.__moduleMapSizes()
+ */
+export function installModuleMapSizes(): void {
+  if (typeof window === 'undefined') return;
+  (window as unknown as Record<string, unknown>).__moduleMapSizes = () => ({
+    recentlyAborted: recentlyAborted.size,
+    cancelledUntilNextSend: cancelledUntilNextSend.size,
+    pendingOptimistic: pendingOptimistic.size,
+    activeSendControllers: activeSendControllers.size,
+    activeSSEMap: activeSSEMap.size,
+    lastFastPullAt: lastFastPullAt.size,
+    lastReasoningPullAt: lastReasoningPullAt.size,
+    recentlyTruncated: recentlyTruncated.size,
+    recentTotals: recentTotals.size,
+    backfilledIds: backfilledIds.size,
+    // Set 크기의 합: 메시지 수에 비례해 커지는 항목의 실제 비용을 보려면.
+    backfilledIdItems: [...backfilledIds.values()].reduce((n, s) => n + s.size, 0),
+    pinnedAnchors: pinnedAnchors.size,
+    pinnedAnchorItems: [...pinnedAnchors.values()].reduce((n, s) => n + s.size, 0),
+    pinReloadFailures: pinReloadFailures.size,
+    pinReloadLastRun: pinReloadLastRun.size,
+  });
 }
 
 /**

@@ -5,6 +5,32 @@ import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import type { CollaborationConfig } from 'pptx-react-viewer'
 
+/**
+ * M4 진단(측정 전용): 열린 WebSocket 추적.
+ *
+ * 소켓이 스스로 close/error 이벤트를 내므로 거기서 빼면 정확하다.
+ * 닫히지 않은 소켓이 남는지 콘솔에서 window.__openSockets()로 확인한다.
+ */
+const openSockets = new Set<WebSocket>()
+
+export function trackSocket(ws: WebSocket, add: boolean): void {
+  if (typeof window === 'undefined') return
+  if (add) {
+    openSockets.add(ws)
+    const drop = (): void => {
+      openSockets.delete(ws)
+    }
+    ws.addEventListener('close', drop, { once: true })
+    ws.addEventListener('error', drop, { once: true })
+  } else {
+    openSockets.delete(ws)
+  }
+}
+
+if (typeof window !== 'undefined') {
+  ;(window as unknown as Record<string, unknown>).__openSockets = () => openSockets.size
+}
+
 export type YCollabStatus = 'connecting' | 'connected' | 'disconnected' | 'error'
 
 export interface YCollabUser {
@@ -227,6 +253,9 @@ export class YCollabSession {
   private openSocket(): void {
     if (this.disposed) return
     const ws = new WebSocket(this.url)
+    // M4 진단(측정 전용): 열린 WS 수를 콘솔에서 확인할 수 있게 한다.
+    // window.__openSockets() 로 닫히지 않은 소켓이 남았는지 바로 보인다.
+    trackSocket(ws, true)
     ws.binaryType = 'arraybuffer'
     this.ws = ws
     // connect 블랙홀(loopback SYN 무응답) 대비: onopen 없이 5초가 가면

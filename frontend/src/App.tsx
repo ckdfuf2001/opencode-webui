@@ -12,6 +12,7 @@ import { useTheme } from './hooks/useTheme'
 import { useSettings } from './hooks/useSettings'
 import { useNotifyMigration } from './hooks/useNotifyOverrides'
 import { useReleaseCacheOnHidden } from './hooks/useOpenCode'
+import { installMemProbe } from './lib/memProbe'
 import { isPushSupported, ensurePushPermission, sendPushNotification } from './lib/notifications'
 import { useState, useEffect } from 'react'
 import { Button } from './components/ui/button'
@@ -78,11 +79,21 @@ const queryClient = new QueryClient({
     },
   },
 })
+// M4 진단(측정 전용): memProbe 가 queryCache 크기를 읽을 수 있게 한다.
+if (typeof window !== 'undefined') {
+  ;(window as unknown as Record<string, unknown>).__queryClient = queryClient
+}
 
 function AppContent() {
   const { isOpen, close } = useSettingsDialog()
   useTheme()
   useReleaseCacheOnHidden()
+  // M4 진단(측정 전용, dev만): 콘솔에서 __memProbe()로 heap·쿼리캐시·모듈Map·WS 수를 본다.
+  useEffect(() => {
+    installMemProbe((fn) => {
+      ;(window as unknown as Record<string, unknown>).__memProbe = fn
+    })
+  }, [])
   // 레거시 localStorage 알림 설정을 백단으로 1회 이전
   useNotifyMigration()
   useEffect(() => { logBuildInfo() }, [])
