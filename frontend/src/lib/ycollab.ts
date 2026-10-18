@@ -74,6 +74,23 @@ export interface CollabActivity {
 /** app.device — usePeers의 모바일/데스크톱 구분용. */
 export type YCollabDevice = 'mobile' | 'desktop'
 
+/**
+ * A1′: lib provider가 transport에 붙는 핸들러 (ooxml-core collab/provider.d.ts:8).
+ * 우리가 직접 구현하지 않고, asTransport()가 provider에 넘겨준다.
+ */
+export interface TransportHandlers {
+  /** 채널 사용 가능 (자동 재연결 뒤에도 다시 온다). */
+  open: () => void
+  /** 채널 종료. transport가 자체 재연결을 결정한다. */
+  close: (reason?: string) => void
+  /** 바이트 메시지 도착. */
+  message: (data: Uint8Array) => void
+  /** 치명적이지 않은 실패. */
+  error: (error: Error) => void
+  /** mesh 전용. */
+  peer?: () => void
+}
+
 function toBytes(data: unknown): Uint8Array | null {
   if (data instanceof Uint8Array) return data
   if (data instanceof ArrayBuffer) return new Uint8Array(data)
@@ -92,8 +109,13 @@ function toBytes(data: unknown): Uint8Array | null {
  * - 재연결해도 같은 Y.Doc을 쓴다 (리마운트·재생성 금지).
  */
 export class YCollabSession {
-  readonly doc = new Y.Doc()
-  readonly awareness = new awarenessProtocol.Awareness(this.doc)
+  /**
+   * A1′: own = 이 세션이 doc/awareness를 소유하고 직접 sync한다 (PPT 기존 경로).
+   * transport = lib의 provider가 doc/awareness를 소유하고, 이 세션은 바이트 파이프만 된다.
+   */
+  readonly mode: 'own' | 'transport'
+  readonly doc: Y.Doc
+  readonly awareness: awarenessProtocol.Awareness
   status: YCollabStatus = 'connecting'
   synced = false
   /** 서버 lastHash/세션에서 갱신하는 known 해시 (resume·저장에 사용). */
@@ -132,26 +154,42 @@ export class YCollabSession {
   private lastSlide: number | null = null
   /** own 모드의 현재 모드 (republishApp 복원용). transport에서는 lib이 mode를 대신 갖는다. */
   private ownMode: YCollabMode = 'edit'
+  /** A1′ transport 모드: lib provider가 붙는 채널 핸들러. */
+  private transportHandlers: TransportHandlers | null = null
+  /** open()을 이미 불렀는지 (재연결마다 다시 불러야 provider가 재동기화한다). */
+  private transportOpenNotified = false
+  /** provider가 disconnect()를 불렀는지. 그 뒤로는 자동 재연결하지 않는다. */
+  private disconnectRequested = false
 
-  constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode; userId?: string; device?: YCollabDevice }) {
+  constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode | 'transport'; userId?: string; device?: YCollabDevice; doc?: Y.Doc; awareness?: awarenessProtocol.Awareness }) {
     this.url = url
+    this.mode = opts?.mode === 'transport' ? 'transport' : 'own'
+    this.doc = opts?.doc ?? new Y.Doc()
+    // A1′ C7: transport 모드에서는 lib이 만든 awareness를 그대로 쓴다.
+    // 새로 만들면 ycs.awareness !== session.awareness가 되어 소유권이 갈린다.
+    this.awareness = opts?.awareness ?? new awarenessProtocol.Awareness(this.doc)
     this.userId = opts?.userId ?? this.doc.clientID
-    const mode = opts?.mode ?? 'edit'
+    const mode: YCollabMode = opts?.mode === 'transport' ? 'edit' : opts?.mode ?? 'edit'
     this.user = user
     // 서버가 읽는 app 필드(id/name/color/mode)를 처음부터 publish한다.
     // setLocalState(전체 교체)는 lib의 PRESENCE_FIELD를 지우므로 항상 field 단위로 쓴다.
     // 표시의 단일 출처는 app.* 이며 최상위 userName/userColor는 쓰지 않는다 (v0.13에 제거).
-    this.awareness.setLocalStateField('app', {
-      id: this.userId,
-      name: user.name,
-      color: user.color,
-      mode,
-      device: opts?.device ?? 'desktop',
-    } as YCollabAppState)
-    // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아납니다.
-    this.doc.on('update', this.onDocUpdate)
+    // transport 모드에서는 lib이 awareness를 소유하므로 app를 건드리지 않는다.
+    if (this.mode === 'own') {
+      this.awareness.setLocalStateField('app', {
+        id: this.userId,
+        name: user.name,
+        color: user.color,
+        mode,
+        device: opts?.device ?? 'desktop',
+      } as YCollabAppState)
+      // 리스너는 여기서 1회만. connect()/reconnect()에서는 소켓만 갈아납니다.
+      // transport 모드에서는 provider가 같은 wire를 쓰므로 이 송신기를 등록하면 중복 전송된다.
+      this.doc.on('update', this.onDocUpdate)
+      this.awareness.on('update', this.onAwarenessUpdate)
+    }
+    // 작성자 집계는 양 모드에서 필요하다(transport에서 provider가 doc을 갱신하므로).
     this.doc.on('update', this.onDocActivity)
-    this.awareness.on('update', this.onAwarenessUpdate)
   }
 
   get clientId(): number {
@@ -222,6 +260,13 @@ export class YCollabSession {
 
     ws.onopen = () => {
       this.retry = 0
+      if (this.mode === 'transport') {
+        // A1′: syncStep1·awareness 초기 publish는 provider가 보낸다(이중 전송 금지).
+        // 채널이 열렸다는 사실만 알린다.
+        this.transportOpenNotified = true
+        this.transportHandlers?.open()
+        return
+      }
       // 서버 상태를 요청한다 (늦게 온 쪽이 기존 내용을 받는 유일한 경로).
       const s = encoding.createEncoder()
       encoding.writeVarUint(s, 0)
@@ -244,6 +289,16 @@ export class YCollabSession {
       this.lastRxAt = Date.now()
       const d = decoding.createDecoder(data)
       const type = decoding.readVarUint(d)
+      if (this.mode === 'transport') {
+        // A1′: y-protocol 바이트는 손대지 않고 provider에 그대로 넘긴다
+        // (0=sync, 1=awareness, 3=queryAwareness). 전용 타입만 여기서 처리한다.
+        if (type === 99 || type === 100 || type === 101) {
+          this.handleOwnMessage(type, d)
+        } else {
+          this.transportHandlers?.message(data)
+        }
+        return
+      }
       if (type === 0) {
         const e = encoding.createEncoder()
         encoding.writeVarUint(e, 0)
@@ -273,21 +328,7 @@ export class YCollabSession {
       } else if (type === 1) {
         awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(d), this)
       } else if (type === 100) {
-        // 서버 meta push (owner/lastHash/epoch/externalChanged/aiBlockedAt).
-        try {
-          const raw = decoding.readVarUint8Array(d)
-          const meta = JSON.parse(new TextDecoder().decode(raw)) as YCollabMeta
-          this.lastMeta = meta
-          this.metaListeners.forEach((l) => {
-            try {
-              l(meta)
-            } catch {
-              // 무시
-            }
-          })
-        } catch {
-          // 무시 (구서버 호환)
-        }
+        this.handleOwnMessage(type, d)
       }
     }
     ws.onclose = (evt) => {
@@ -296,6 +337,15 @@ export class YCollabSession {
       if (this.disposed) return
       const e = evt as CloseEvent
       const code = (e as { code?: number }).code
+      // A1′: provider가 이 채널 종료를 보고한다(재연결은 provider가 결정한다).
+      this.transportHandlers?.close(e.reason || `close:${code}`)
+      this.transportOpenNotified = false
+      if (this.disconnectRequested) {
+        // provider가 disconnect()를 명시적으로 호출했다. 자동 재연결 금지.
+        this.disconnectRequested = false
+        this.setStatus('disconnected')
+        return
+      }
       if (code === ROOM_RESET_CLOSE_CODE) {
         // Q1: owner가 방을 해체했다. 재연결/재시도하지 않는다.
         // resume 없이 새 방에 다시 들어가야 첫 입장자가 host로 파일 기준 재시드한다.
@@ -329,7 +379,29 @@ export class YCollabSession {
     }
   }
 
+  /** 전용 타입(99/100/101) 처리부. own·transport 공통. */
+  private handleOwnMessage(type: number, d: decoding.Decoder): void {
+    if (type === 100) {
+      // 서버 meta push (owner/lastHash/epoch/externalChanged/aiBlockedAt).
+      try {
+        const raw = decoding.readVarUint8Array(d)
+        const meta = JSON.parse(new TextDecoder().decode(raw)) as YCollabMeta
+        this.lastMeta = meta
+        this.metaListeners.forEach((l) => {
+          try {
+            l(meta)
+          } catch {
+            // 무시
+          }
+        })
+      } catch {
+        // 무시 (구서버 호환)
+      }
+    }
+  }
+
   private scheduleReconnect(): void {
+    // A1′: transport 모드에서 provider가 disconnect()하지 않은 재연결은 허용한다.
     if (this.disposed || this.reconnectTimer) return
     // 0.5 → 1 → 2 → … → 최대 10초 + jitter.
     const delay = Math.min(500 * 2 ** this.retry, 10000) + Math.random() * 300
@@ -615,6 +687,66 @@ export class YCollabSession {
     this.setLocation({ slide: n })
   }
 
+  /**
+   * A1′: lib의 transportProvider({ transport })에 넘길 바이트 파이프.
+   *
+   * 계약(provider.d.ts:24-30):
+   * - connect(handlers)로 채널이 열렸음을 알린다(소켓 open 시 open()).
+   * - 받은 바이트는 **전용 타입(99/100/101)을 뺀 나머지**를 그대로 handlers.message에 넘긴다.
+   *   (0=sync, 1=awareness, 3=queryAwareness — relay 와이어와 동일)
+   * - send는 provider→서버 방향. open 전에는 조용히 버린다(다음 open에 재동기화된다).
+   * - disconnect()는 재연결을 모두 멈춘다.
+   */
+  asTransport(): {
+    connect: (handlers: TransportHandlers) => void
+    send: (data: Uint8Array) => void
+    disconnect: () => void
+  } {
+    return {
+      connect: (handlers) => {
+        this.transportHandlers = handlers
+        // 소켓이 이미 열려 있으면 즉시 알린다 (connect 지연 호출 대응).
+        // transportOpenNotified로 중복 open()을 막는다 — provider는 open마다 재동기화한다.
+        if (this.ws && this.ws.readyState === WebSocket.OPEN && !this.transportOpenNotified) {
+          this.transportOpenNotified = true
+          handlers.open()
+        }
+      },
+      send: (data) => {
+        if (!this.transportHandlers) return
+        this.send(data)
+      },
+      disconnect: () => {
+        this.transportHandlers = null
+        this.transportOpenNotified = false
+        this.disconnectRequested = true
+        try {
+          this.ws?.close()
+        } catch {
+          // 무시
+        }
+        this.ws = null
+      },
+    }
+  }
+
+  /** P2: provider의 synced 이벤트를 이 세션 상태에 양방향으로 미러한다. */
+  mirrorSynced(synced: boolean): void {
+    if (this.synced === synced) return
+    this.synced = synced
+    if (synced) {
+      this.retry = 0
+      this.setStatus('connected')
+    }
+    this.emit()
+  }
+
+  /** P2: provider의 status 이벤트를 이 세션 상태에 미러한다. */
+  mirrorStatus(status: YCollabStatus): void {
+    if (this.status === status) return
+    this.setStatus(status)
+  }
+
   /** viewer에 빌려줄 externalSession 객체. */
   toExternal(): {
     doc: Y.Doc
@@ -655,10 +787,18 @@ export class YCollabSession {
       // 무시
     }
     try {
+      this.doc.off('update', this.onDocActivity)
+    } catch {
+      // 무시
+    }
+    try {
       this.awareness.off('update', this.onAwarenessUpdate)
     } catch {
       // 무시
     }
+    // A1′: transport 핸들러를 먼저 떼고 소켓을 닫는다 (provider가 close를 보고하고 멈춘다).
+    this.transportHandlers = null
+    this.transportOpenNotified = false
     try {
       this.ws?.close()
     } catch {
@@ -668,10 +808,21 @@ export class YCollabSession {
     this.metaListeners.clear()
     this.activityListeners.clear()
     this.lastEditAt.clear()
-    try {
-      this.doc.destroy()
-    } catch {
-      // 무시
+    if (this.mode === 'own') {
+      // own은 우리가 소유하므로 끝까지 정리한다.
+      try {
+        this.doc.destroy()
+      } catch {
+        // 무시
+      }
+    } else {
+      // A1′ transport: doc/awareness는 lib session 소유다. 파괴하지 않고
+      // 우리가 붙인 리스너만 뗀다(위에서 off 완료).
+      try {
+        this.awareness.off('update', this.onAwarenessUpdate)
+      } catch {
+        // 무시
+      }
     }
     this.listeners.clear()
   }
