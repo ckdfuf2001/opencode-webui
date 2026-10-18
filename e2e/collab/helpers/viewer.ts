@@ -94,6 +94,9 @@ export function watchErrors(page: Page) {
 
 export interface CollabDebug {
   mountCount: number
+  curSlide?: number
+  /** 화면 슬라이드 이력 (1-based). E20s가 "슬라이드 1" 통과 여부를 본다. */
+  curSlideHistory?: number[]
   role: 'owner' | 'collaborator' | 'viewer' | null
   synced: boolean
   ownerClientId: number | null

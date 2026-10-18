@@ -71,9 +71,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const setViewerRef = useCallback(
     (h: PowerPointViewerHandle | null) => {
       viewerRef.current = h
-      // X2: viewer가 새로 마운트될 때만 initialSlide(=slideIdx)를 현재 위치로 고정한다.
-      // lib은 파일 로드 완료 시 이 값을 한 번만 읽는다(리마운트 아님).
-      if (h) setSlideIdx(curSlideRef.current)
+      // Y2: 새 viewer가 마운트되면 parse 전 lib이 0을 내보내므로 게이트를 잠근다.
+      // lib의 onSlideCountChange(count > 0)로 다시 arm한다.
+      if (h) slideGateRef.current?.disarm()
     },
     [],
   )
@@ -131,7 +131,15 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [imageLoss, setImageLoss] = useState<ImageLossDetail | null>(null)
   // V3: reset 확인 대기 중인 참가자 수 (0이면 확인창 없음).
   const [resetConfirmCount, setResetConfirmCount] = useState<number | null>(null)
-  const [curSlide, setCurSlide] = useState(0)
+  const [curSlide, setCurSlideRaw] = useState(0)
+  // E20s: 화면 슬라이드 이력을 1-based로 기록해 "슬라이드 1"을 거쳤는지 판정한다.
+  const curSlideHistoryRef = useRef<number[]>([])
+  const setCurSlide = useCallback((n: number) => {
+    const h = curSlideHistoryRef.current
+    h.push(n + 1)
+    if (h.length > 200) h.shift()
+    setCurSlideRaw(n)
+  }, [])
   // ref는 게이트(applyLocal)가 **먼저** 쓰고, 그 다음 state가 따라온다.
   // 136행의 렌더 후 동기화는 "state에서 오는 다른 경로"(팔로우·썸네일 클릭 등)의
   // 유일한 반영 지점이라 유지한다. 게이트가 ref를 직접 쓰는 것과 충돌하지 않는다.
@@ -212,6 +220,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       }
       w.__collabDebug = {
         mountCount: (w.__collabDebug?.mountCount as number | undefined) ?? 0,
+        curSlide,
+        curSlideHistory: [...curSlideHistoryRef.current],
         role: c?.role ?? null,
         synced: c?.session.synced ?? false,
         ownerClientId: ownerIdRef.current,
@@ -976,7 +986,7 @@ const [renaming, setRenaming] = useState(false)
       return null
     })
     setCollabNotice(null)
-  }, [data])
+  }, [data, setCurSlide])
   useEffect(() => {
     let dead = false
     void loadPptxComments(content).then((cs) => {
@@ -1399,7 +1409,7 @@ const peersRef = useRef<Peer[]>([])
     } catch {
       // 무시 (fallback: initialSlide는 다음 마운트에 반영)
     }
-  }, [followId, followed?.slide])
+  }, [followId, followed?.slide, setCurSlide])
 
   // P0-3: 입장/퇴장/모드전환은 트레이싱 모드에서만 (평소엔 상단 바가 알린다).
   const peerToastAt = useRef<Map<string, number>>(new Map())
@@ -1454,6 +1464,15 @@ const peersRef = useRef<Peer[]>([])
   // viewer key가 바뀌면 리마운트되므로 key 문자열을 deps로 둔다.
   // S4: slideIdx를 key에서 뺀다 — 이동은 lib goTo API로 한다 (리마운트 금지).
   const viewerKey = `${editing ? 'edit' : 'view'}#${reloadKey}#${collabGated && collab ? collab.roomId : 'solo'}`
+  // Y2: slideIdx(=lib의 initialSlide)는 key가 바뀌는 렌더에서만 갱신한다.
+  // edit↔view 전환·reloadKey bump·4001 재생성(모두 viewerKey에 포함)이 key를 바꾸며,
+  // `editing`은 외부 prop이라 "바꾸기 직전"에 실행할 코드를 소유할 수 없다.
+  // React의 "props 변경 시 state 보정" 패턴으로, 자식 렌더 **이전**에 값을 고정한다.
+  const [prevViewerKey, setPrevViewerKey] = useState(viewerKey)
+  if (prevViewerKey !== viewerKey) {
+    setPrevViewerKey(viewerKey)
+    setSlideIdx(curSlideRef.current)
+  }
   useEffect(() => {
     if (!collabDebug) return
     try {
@@ -1899,8 +1918,15 @@ const peersRef = useRef<Peer[]>([])
                   showToolbar={editing || narrowViewport}
                   theme={viewerTheme}
                   initialSlide={slideIdx}
-onActiveSlideChange={(i: number) => {
+                  // Y2: arm 신호. deps가 [slides.length]라 parse 전 0으로도 호출되므로
+                  // count > 0일 때만 "덱이 다 파싱됐다"고 본다
+                  // (chunk-552NAFTD.js:11284-11286).
+                  onSlideCountChange={(count: number) => {
+                    if (count > 0) slideGateRef.current?.arm()
+                  }}
+                  onActiveSlideChange={(i: number) => {
                     // W1: 게이트 모듈이 cur 반영(즉시)과 게시(0은 300ms 지연)를 함께 처리한다.
+                    // Y2: arm 전에는 이 호출이 전부 무시된다.
                     slideGateRef.current?.onIndex(i)
                   }}
                   onContentChange={() => void onViewerContentChange()}

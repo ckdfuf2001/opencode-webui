@@ -14,7 +14,7 @@ describe('slideLocationGate (W1)', () => {
     vi.useRealTimers()
   })
 
-  const harness = () => {
+  const harness = ({ armed = true }: { armed?: boolean } = {}) => {
     const published: number[] = []
     const applied: number[] = []
     let cur = 0
@@ -24,8 +24,10 @@ describe('slideLocationGate (W1)', () => {
         cur = i
         applied.push(i)
       },
+      // Y1: publish가 세션 없음(=no-op)이어도 applyLocal은 반드시 호출돼야 한다.
       publish: (i) => published.push(i),
     })
+    if (armed) gate.arm()
     return { gate, published, applied, getCur: () => cur }
   }
 
@@ -93,5 +95,73 @@ describe('slideLocationGate (W1)', () => {
     expect(h.applied).toEqual([0, 0])
     vi.advanceTimersByTime(300)
     expect(h.published).toEqual([0])
+  })
+
+  // Y1: 게이트는 세션 유무와 무관하게 살아 있어야 한다. publish가 no-op이어도
+  // 화면 상태는 즉시 갱신되어야 한다 (혼자 편집할 때 썸네일이 멈추면 안 된다).
+  it('Y1: applyLocal runs even when publishing is a no-op (no session)', () => {
+    const applied: number[] = []
+    let cur = 0
+    const gate = createSlideGate({
+      getCurrent: () => cur,
+      applyLocal: (i) => {
+        cur = i
+        applied.push(i)
+      },
+      publish: () => {
+        /* 세션 없음 = no-op */
+      },
+    })
+    gate.arm()
+    gate.onIndex(2)
+    gate.onIndex(0)
+    expect(applied).toEqual([2, 0])
+    expect(cur).toBe(0)
+    vi.advanceTimersByTime(300)
+  })
+
+  // Y2: parse 전 lib이 내보내는 0(마운트 직후 activeSlideIndex 초기값)은 무시한다.
+  it('Y2: a pre-parse 0 is ignored entirely (no local, no publish)', () => {
+    const h = harness({ armed: false })
+    h.gate.onIndex(0)
+    expect(h.applied).toEqual([])
+    expect(h.published).toEqual([])
+    expect(h.gate.pending()).toBe(false)
+    vi.advanceTimersByTime(1000)
+    expect(h.published).toEqual([])
+  })
+
+  it('Y2: after arm the normal W1 rules resume', () => {
+    const h = harness({ armed: false })
+    h.gate.onIndex(2)
+    h.gate.arm()
+    h.gate.onIndex(2)
+    expect(h.applied).toEqual([2])
+    expect(h.published).toEqual([2])
+  })
+
+  // Y2: 리마운트 = disarm + 다시 arm. 그 사이 0이 와도 위치가 0으로 돌아가지 않는다.
+  it('Y2: disarm → spurious 0 → re-arm keeps the position', () => {
+    const h = harness()
+    h.gate.onIndex(2) // 슬라이드 3
+    h.gate.disarm() // 리마운트
+    h.gate.onIndex(0) // parse 전 초기값
+    expect(h.getCur()).toBe(2)
+    expect(h.published).toEqual([2])
+    h.gate.arm()
+    h.gate.onIndex(2) // parse 후 실제 인덱스
+    expect(h.getCur()).toBe(2)
+    expect(h.published).toEqual([2, 2])
+  })
+
+  it('Y2: disarm cancels a pending zero publish', () => {
+    const h = harness()
+    h.gate.onIndex(2)
+    h.gate.onIndex(0)
+    expect(h.gate.pending()).toBe(true)
+    h.gate.disarm()
+    expect(h.gate.pending()).toBe(false)
+    vi.advanceTimersByTime(1000)
+    expect(h.published).toEqual([2])
   })
 })

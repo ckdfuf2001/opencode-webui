@@ -764,6 +764,40 @@ test.describe('pptx collab (desktop)', () => {
     await closeTwo(t)
   })
 
+  // Y2 slow-parse 변형: CPU를 4배 느리게 만들어 parse가 게이트 300ms보다 오래 걸리게 한다.
+  // 수정 전에는 리마운트 직후 lib의 activeSlideIndex 초기값 0이 curSlide를 0으로 되돌리고,
+  // 예약된 0 게시가 통과해 B 화면이 "슬라이드 1"로 깜빡인다.
+  test('E20s: slow parse on remount keeps slide 3 (Y2)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e20s', 0)
+    const t = await twoPages(browser)
+    const testName = `E20s[${testInfo.repeatEachIndex}]`
+    const cdpA = await t.pageA.context().newCDPSession(t.pageA)
+    await cdpA.send('Emulation.setCPUThrottlingRate', { rate: 4 })
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'view')
+    const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+    const sampleB = async (): Promise<string | null> => row.getAttribute('data-slide').catch(() => null)
+    await gotoSlide(t.pageA, 3)
+    await expect(async () => {
+      expect(await sampleB()).toBe('3')
+    }).toPass({ timeout: 20000 })
+    // 리마운트를 일으킨다 (editing이 viewKey를 바꾼다).
+    await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 20000 })
+    const samples: (string | null)[] = []
+    const deadline = Date.now() + 15000
+    while (Date.now() < deadline) {
+      samples.push(await sampleB())
+      await t.pageB.waitForTimeout(200)
+    }
+    expect(samples.length).toBeGreaterThanOrEqual(30)
+    expect(samples.filter((s) => s !== '3')).toEqual([])
+    // A도 리마운트 직후 "슬라이드 1"을 거치지 않아야 한다.
+    const hist = (await readDebug(t.pageA)).curSlideHistory ?? []
+    expect(hist).not.toContain(1)
+    void testName
+    await closeTwo(t)
+  })
+
   test('E19b: moving back to slide 1 publishes (W1 regression)', async ({ browser }, testInfo) => {
     const f = await freshFile('e19b', 0)
     const t = await twoPages(browser)

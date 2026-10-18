@@ -13,6 +13,14 @@
  *  - awareness 게시만 늦춘다: 1 이상은 즉시, 0은 delayMs 뒤에 실행 시점의
  *    cur를 다시 확인해 결정한다(튀는 0이면 보류, 실제 이동이면 게시).
  *  - 예약은 하나뿐이며, 새 예약 전에 항상 취소한다.
+ *
+ * 규칙(Y2): arm 전에는 아무 인덱스도 받지 않는다.
+ *  - activeSlideIndex의 useState 초기값은 0이다(chunk-552NAFTD.js:4104)이고
+ *    [activeSlideIndex, onActiveSlideChange] deps effect(:11259)는 parse 전에
+ *    mount와 동시에 0을 내보낸다. arm 전에 반영하면 parse가 300ms보다 오래 걸릴
+ *    때 위치가 0으로 되돌아가 상대 화면에 "슬라이드 1"로 깜빡인다.
+ *  - arm 신호는 onSlideCountChange(count > 0)이 유일하게 trustworthy하다
+ *    (deps가 [slides.length]이므로 parse 전 0으로도 호출된다).
  */
 export interface SlideGateOptions {
   /** 실행 시점의 실제 슬라이드 인덱스(0-based)를 읽는다. */
@@ -28,6 +36,14 @@ export interface SlideGateOptions {
 export interface SlideGate {
   /** lib의 onActiveSlideChange에서 0-based 인덱스를 그대로 받는다. */
   onIndex: (index0: number) => void
+  /**
+   * parse 완료를 알렸을 때 호출. arm 전에는 들어오는 인덱스를 전부 무시한다.
+   * (lib은 parse 전에 activeSlideIndex 초기값 0을 내보낸다 — chunk-552NAFTD.js:4104 + :11259)
+   */
+  arm: () => void
+  /** viewer가 새로 마운트될 때 호출. 다음 arm까지 모든 입력을 무시한다. */
+  disarm: () => void
+  armed: () => boolean
   /** 언마운트·세션 교체 시 호출. */
   dispose: () => void
   /** 예약 중인지 (테스트/디버그용). */
@@ -37,6 +53,9 @@ export interface SlideGate {
 export function createSlideGate(opts: SlideGateOptions): SlideGate {
   const delayMs = opts.delayMs ?? 300
   let timer: ReturnType<typeof setTimeout> | null = null
+  // 기본값 false: 새 게이트는 "덱이 아직 파싱되지 않은" 상태에서 시작한다.
+  // 파싱 전 lib이 내보내는 0을 사용자의 이동으로 오인하지 않으�� 위한 안전 기본값.
+  let armed = false
   const cancel = (): void => {
     if (timer !== null) {
       clearTimeout(timer)
@@ -45,6 +64,8 @@ export function createSlideGate(opts: SlideGateOptions): SlideGate {
   }
   return {
     onIndex(index0: number): void {
+      // Y2: arm 전 인덱스는 로컬 반영도 게시도 하지 않는다.
+      if (!armed) return
       const i = Number.isFinite(index0) ? Math.max(0, Math.floor(index0)) : 0
       // W1-a: 로컬 상태는 조건 없이 즉시 반영한다.
       opts.applyLocal?.(i)
@@ -62,6 +83,14 @@ export function createSlideGate(opts: SlideGateOptions): SlideGate {
         if (opts.getCurrent() === 0) opts.publish(0)
       }, delayMs)
     },
+    arm(): void {
+      armed = true
+    },
+    disarm(): void {
+      armed = false
+      cancel()
+    },
+    armed: () => armed,
     dispose: cancel,
     pending: () => timer !== null,
   }
