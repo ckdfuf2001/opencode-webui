@@ -71,6 +71,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const setViewerRef = useCallback(
     (h: PowerPointViewerHandle | null) => {
       viewerRef.current = h
+      // X2: viewer가 새로 마운트될 때만 initialSlide(=slideIdx)를 현재 위치로 고정한다.
+      // lib은 파일 로드 완료 시 이 값을 한 번만 읽는다(리마운트 아님).
+      if (h) setSlideIdx(curSlideRef.current)
     },
     [],
   )
@@ -129,6 +132,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // V3: reset 확인 대기 중인 참가자 수 (0이면 확인창 없음).
   const [resetConfirmCount, setResetConfirmCount] = useState<number | null>(null)
   const [curSlide, setCurSlide] = useState(0)
+  // ref는 게이트(applyLocal)가 **먼저** 쓰고, 그 다음 state가 따라온다.
+  // 136행의 렌더 후 동기화는 "state에서 오는 다른 경로"(팔로우·썸네일 클릭 등)의
+  // 유일한 반영 지점이라 유지한다. 게이트가 ref를 직접 쓰는 것과 충돌하지 않는다.
   const curSlideRef = useRef(0)
   curSlideRef.current = curSlide
   // R4: sync 후 슬라이드 게시를 1회만 시도하기 위한 플래그 (세션마다 초기화).
@@ -817,12 +823,11 @@ const [renaming, setRenaming] = useState(false)
       reconcileCollab()
       // R4: sync 직후(재연결 포함) 현재 슬라이드를 1회 게시한다.
       // 이동 전까지 app.slide가 없으면 상대는 lib fallback(=항상 1)을 본다.
-      if (snap.synced && !slidePublishedRef.current) {
+  if (snap.synced && !slidePublishedRef.current) {
         slidePublishedRef.current = true
-        session.setLocation({
-          slide: curSlideRef.current + 1,
-          where: `슬라이드 ${curSlideRef.current + 1}`,
-        })
+        // H3-2: 새 세션의 첫 위치는 옛 ref가 아니라 viewer 현재 슬라이드로 1회 게시.
+        // +1 변환과 표기 문자열은 publishSlideLocation 한 곳에만 있다 (X2 확인).
+        publishSlideLocationRef.current?.(curSlideRef.current)
       }
       if (snap.status === 'disconnected' && toastedStatus.current !== 'disconnected') {
         toastedStatus.current = 'disconnected'
@@ -1344,11 +1349,16 @@ const peersRef = useRef<Peer[]>([])
   /** 위치 게시 1회 (H1). slide와 where를 한 awareness update로 낸다. */
   const publishSlideLocation = useCallback((index0: number) => {
     const n = index0 + 1
+    // 호출 시점에 collabRef를 읽어 오래된 세션을 붙잡지 않는다.
     collabRef.current?.session.setLocation({ slide: n, where: formatWhere('pptx', n) })
   }, [])
+  // 세션 구독 콜백이 선언보다 앞서 만들어지므로 ref로 먼저 참조한다 (X2 확인).
+  const publishSlideLocationRef = useRef<((index0: number) => void) | null>(null)
+  publishSlideLocationRef.current = publishSlideLocation
 
 /**
- * W1 게이트: curSlideRef를 즉시 갱신하고(ref/state/slideIdx), 0 게시만 300ms 늦춘다.
+ * W1 게이트: curSlideRef와 state를 즉시 갱신하고, 0 게시만 300ms 늦춘다.
+ * slideIdx(initialSlide)는 여기서 건드리지 않는다 — setViewerRef가 마운트 시에만 갱신한다.
  * (로직은 frontend/src/lib/slideLocationGate.ts — 단위 테스트가 같은 모듈을 쓴다.)
  */
   const slideGateRef = useRef<ReturnType<typeof createSlideGate> | null>(null)
@@ -1357,11 +1367,12 @@ const peersRef = useRef<Peer[]>([])
       getCurrent: () => curSlideRef.current,
       applyLocal: (i) => {
         // W1-a: 렌더 타이밍에 의존하지 않게 ref를 먼저 갱신한다.
+        // X2: setSlideIdx는 여기서 부르지 않는다. initialSlide prop은 lib이 파일 로드
+        // 완료 시에만 읽고(chunk-552NAFTD.js:4468 ref 덮어쓰기 → :4622 resolveInitialSlideIndex)
+        // deps에도 없어 기능 문제는 없지만, 이동마다 prop이 바뀌면 불필요한 리렌더가 생긴다.
+        // 리마운트 직전에만 갱신한다 (viewerKey 변경 지점의 useEffect).
         curSlideRef.current = i
         setCurSlide(i)
-        // W1-d: lib은 마운트 직후 initialSlide로 되돌아온다(PowerPointViewer initialSlide={slideIdx}).
-        // 여기서 slideIdx를 함께 갱신해 리마운트가 사용자 위치를 1번으로 되돌리지 않게 한다.
-        setSlideIdx(i)
       },
       publish: (i) => publishSlideLocation(i),
     })

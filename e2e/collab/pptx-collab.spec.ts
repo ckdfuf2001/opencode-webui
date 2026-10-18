@@ -733,9 +733,23 @@ test.describe('pptx collab (desktop)', () => {
       expect(s.slide).toBe('3')
       expect(s.text).toContain('슬라이드 3')
     }).toPass({ timeout: 15000 })
+    // X2: 슬라이드 이동은 viewer를 다시 마운트시키지 않는다.
+    // (setSlideIdx는 setViewerRef의 마운트 시점에만 호출된다)
+    const mountAfterMove = (await readDebug(t.pageA)).mountCount
+    await gotoSlide(t.pageA, 2)
+    await gotoSlide(t.pageA, 3)
+    await expect(async () => {
+      const s = await sampleOne()
+      expect(s.slide).toBe('3')
+    }).toPass({ timeout: 15000 })
+    expect((await readDebug(t.pageA)).mountCount).toBe(mountAfterMove)
     // A가 view로 전환(리마운트 지점) → 상대 화면에서 15초간 계속 3이어야 한다.
     // DocumentPreview의 편집 종료 버튼 라벨이 Done이다 (helpers/viewer.ts의 Edit와 짝).
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 15000 })
+    // X2: 이 지점만 리마운트다. 마운트 시 slideIdx가 현재 위치로 고정되므로 3이 복원된다.
+    await expect(async () => {
+      expect((await readDebug(t.pageA)).mountCount).toBeGreaterThan(mountAfterMove)
+    }).toPass({ timeout: 15000 })
     const samples: { slide: string | null; text: string }[] = []
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
