@@ -8,7 +8,9 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..')
 // 테스트마다 새로 만드는 격리 워크스페이스 (spec의 WORKSPACE_PATH).
 export const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collabe2e-'))
-fs.mkdirSync(path.join(wsDir, 'repos'), { recursive: true })
+// 백엔드는 시작 시 저장소 목록을 읽는다. spec은 그 뒤에 파일을 심으므로,
+// 테스트가 심을 폴더를 서버 뜨기 전에 만들어 둔다.
+fs.mkdirSync(path.join(wsDir, 'repos', 'collab-e2e'), { recursive: true })
 process.env.COLLAB_E2E_WS = wsDir
 
 const BACKEND_PORT = 5011
@@ -18,7 +20,7 @@ const OPENCODE_PORT = 5564
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'pptx-collab.spec.ts',
+  testMatch: ['pptx-collab.spec.ts', 'xlsx-solo.spec.ts'],
   retries: 0,
   workers: 1,
   // E5가 30초 입력 + 저장 대기를 하므로 여유를 둔다.
@@ -33,9 +35,12 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${FRONTEND_PORT}`,
     trace: 'retain-on-failure',
+    video: 'off',
     screenshot: 'only-on-failure',
     actionTimeout: 10000,
   },
+  // 규칙 0: 테스트가 만든 임시 WORKSPACE는 종료 시 지운다 (성공 산출물도 남기지 않는다).
+  globalTeardown: './helpers/teardown.ts',
   webServer: [
     {
       command:

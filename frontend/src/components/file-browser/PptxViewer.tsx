@@ -516,11 +516,17 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         })
         .then(() => {
           showToast.success('저장했습니다')
-          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
+          // B1(b): 파일 식별자를 함께 보낸다. 없으면 다른 뷰어의 저장 완료에
+          // 이 문서의 편집이 종료된다 (DocumentPreview.tsx:452).
+          window.dispatchEvent(
+            new CustomEvent('officeSaveDone', { detail: { ok: true, path: savePath } }),
+          )
         })
         .catch((e) => {
           showToast.error(e instanceof Error ? e.message : '저장 실패')
-          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false } }))
+          window.dispatchEvent(
+            new CustomEvent('officeSaveDone', { detail: { ok: false, path: savePath } }),
+          )
         })
         .finally(() => setSaving(false))
     }

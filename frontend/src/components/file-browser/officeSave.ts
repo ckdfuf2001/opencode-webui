@@ -23,6 +23,16 @@ type SaveHandle = {
 } | null
 
 /**
+ * 파일별 저장 완료 신호. B1(b): 이게 없으면 수신자는 "어느 파일의 저장 완료인지"를
+ * 알 수 없어, 다른 뷰어의 저장 완료에 편집이 종료된다(B1: XLSX 편집 중 PPT 저장이
+ * XLSX 편집을 죽였다). 구버전 응답(path 없음)은 호출자가 골라 쓸 수 있게 통과시킨다.
+ */
+export interface OfficeSaveDoneDetail {
+  ok: boolean
+  path?: string
+}
+
+/**
  * 뷰어 툴바 저장 가로채기 + 상단 저장 버튼 공용.
  * handle이 없거나 저장 중이면 false.
  * onSaved는 저장된 바이트 후처리용 (모델 기준 상태 갱신 등).
@@ -49,11 +59,15 @@ export function useOfficeSave(
       }
       void queryClient.invalidateQueries({ queryKey: ['files'] })
       showToast.success('저장했습니다')
-      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true } }))
+      window.dispatchEvent(
+        new CustomEvent<OfficeSaveDoneDetail>('officeSaveDone', { detail: { ok: true, path: serverPath } }),
+      )
       return true
     } catch (e) {
       showToast.error(e instanceof Error ? e.message : '저장 실패')
-      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false } }))
+      window.dispatchEvent(
+        new CustomEvent<OfficeSaveDoneDetail>('officeSaveDone', { detail: { ok: false, path: serverPath } }),
+      )
       return false
     } finally {
       setSaving(false)

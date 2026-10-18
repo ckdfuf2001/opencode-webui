@@ -449,15 +449,20 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     return () => window.removeEventListener('fileFullscreenChange', onFs)
   }, [])
   // 저장 성공하면 편집을 끝내고 전체화면에서 복귀한다 (채팅 자리로).
+  // B1(b): 이 이벤트는 window 전역이고 파일 식별자가 없다. 다른 뷰어(예: PptxViewer.tsx:519)
+  // 도 같은 이벤트를 쏘므로, XLSX 편집 중 PPT 저장이 끝나면 편집이 죽었다.
+  // path 없는 응답은 "우리 호출의 응답"일 수 없으므로 무시한다.
   useEffect(() => {
     const onDone = (e: Event) => {
-      if (!(e as CustomEvent<{ ok?: boolean }>).detail?.ok) return
+      const d = (e as CustomEvent<{ ok?: boolean; path?: string }>).detail
+      if (!d?.ok) return
+      if (!d.path || d.path !== file.path) return
       setEditing(false)
       window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
     }
     window.addEventListener('officeSaveDone', onDone as EventListener)
     return () => window.removeEventListener('officeSaveDone', onDone as EventListener)
-  }, [])
+  }, [file.path])
   // P1-6: 편집 종료는 flush가 끝날 때까지 기다린다. 실패하면 편집 유지(유실 방지).
   const requestOfficeSave = useCallback((): Promise<boolean> => {
     return new Promise((resolve) => {
@@ -1098,13 +1103,16 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     el.addEventListener('file-command', onFileCommand)
     return () => el.removeEventListener('file-command', onFileCommand)
   }, [save, editing])
+  // B1(b): officeSaveRequest는 window 전역이다. 편집이 아닐 때 듣으면 편집 진입 전이나
+  // 보기 화면에서 떠오른 저장이 XLSX 편집 세션과 엮인다. 편집 중에만 등록한다.
   useEffect(() => {
+    if (!editing) return
     const onSave = () => {
       void save()
     }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [save])
+  }, [save, editing])
 
   // 조건부 early-return보다 뒤에 hook이 오면 렌더마다 hook 개수가 달라져
   // React #300("fewer hooks than expected")으로 터진다. error 분기는 모든
@@ -1627,13 +1635,16 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     el.addEventListener('file-command', onFileCommand)
     return () => el.removeEventListener('file-command', onFileCommand)
   }, [save, editing])
+  // B1(b): officeSaveRequest는 window 전역이다. 편집이 아닐 때 듣으면 편집 진입 전이나
+  // 보기 화면에서 떠오른 저장이 XLSX 편집 세션과 엮인다. 편집 중에만 등록한다.
   useEffect(() => {
+    if (!editing) return
     const onSave = () => {
       void save()
     }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [save])
+  }, [save, editing])
   // 상단 코멘트 버튼: 우측 목록 패널을 여닫는다.
   useEffect(() => {
     const onToggle = () => {
