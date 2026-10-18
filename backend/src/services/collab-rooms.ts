@@ -788,6 +788,18 @@ export async function applySave(
   return run
 }
 
+/**
+ * H2: app.where는 클라이언트가 임의로 넣는 문자열이라 그대로 신뢰하지 않는다.
+ * 문자열이 아니면 버리고, 제어문자를 제거하고 64자로 자른다.
+ */
+function sanitizeWhere(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[ -]/g, '').trim()
+  if (!cleaned) return undefined
+  return cleaned.slice(0, 64)
+}
+
 /** awareness에서 참가자 목록을 읽는다 (서버는 읽기만, publish 금지). */
 export function roomParticipants(room: CollabRoom): CollabParticipant[] {
   const out: CollabParticipant[] = []
@@ -809,7 +821,9 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
         mode: app.mode === 'view' ? 'view' : 'edit',
         slide: appSlide,
         // 공통 위치 표기(app.where)를 그대로 전달한다 (클라 표시 단일 출처).
-        where: typeof app.where === 'string' && app.where ? app.where : undefined,
+        // H2: 클라이언트가 임의로 넣는 문자열이므로 64자로 자르고 제어문자를 뺀다.
+        // 조건에 안 맞으면 undefined로 두어 표시되지 않게 한다.
+        where: sanitizeWhere(app.where),
         owner: room.ownerIds.has(cid),
       })
     }

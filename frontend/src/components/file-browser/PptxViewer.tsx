@@ -816,7 +816,10 @@ const [renaming, setRenaming] = useState(false)
       // 이동 전까지 app.slide가 없으면 상대는 lib fallback(=항상 1)을 본다.
       if (snap.synced && !slidePublishedRef.current) {
         slidePublishedRef.current = true
-        session.setSlide(curSlideRef.current + 1)
+        session.setLocation({
+          slide: curSlideRef.current + 1,
+          where: `슬라이드 ${curSlideRef.current + 1}`,
+        })
       }
       if (snap.status === 'disconnected' && toastedStatus.current !== 'disconnected') {
         toastedStatus.current = 'disconnected'
@@ -1667,8 +1670,11 @@ const [renaming, setRenaming] = useState(false)
                         {p.name}
                         {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
                         {p.device === 'mobile' ? '📱' : ''}
-                        {/* 표시 위치는 app.where 단일 출처 (data-slide는 E1/E19 계약이라 유지). */}
-                        {p.where ? ` · ${p.where}` : ''}
+                        {/* 표시 위치 규칙: where 우선, 없으면 slide에서 ("슬라이드 N"), 둘 다 없으면 생략.
+                        구버전 클라이언트는 where를 게시하지 않으므로 slide fallback이 필요하다.
+                        텍스트 노드로만 렌더한다(HTML 삽입 없음). */}
+                        {p.where ?? (typeof p.slide === 'number' ? `슬라이드 ${p.slide}` : '')}
+                        {p.where || typeof p.slide === 'number' ? ' · ' : ''}
                         {status ? ` · ${status}` : ''}
                       </span>
                     </button>
@@ -1856,9 +1862,11 @@ onActiveSlideChange={(i: number) => {
                     // lib presence는 activeSlideIndex가 0 고정이라 우리가 awareness에 싣는다.
                     // (R4: slideIdx는 건드리지 않는다 — initialSlide가 바뀌면 lib이 재이동할 수 있다.)
                     if (i >= 1) {
-                      collabRef.current?.session.setSlide(i + 1)
-                      // 공통 위치 표기(app.where). 상단 바·탐색기는 이 값만 쓴다.
-                      collabRef.current?.session.setWhere(`슬라이드 ${i + 1}`)
+                      // H1: slide와 where를 한 번의 update로 게시한다.
+                      collabRef.current?.session.setLocation({
+                        slide: i + 1,
+                        where: `슬라이드 ${i + 1}`,
+                      })
                     }
                   }}
                   onContentChange={() => void onViewerContentChange()}

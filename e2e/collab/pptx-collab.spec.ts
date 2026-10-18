@@ -698,6 +698,9 @@ test.describe('pptx collab (desktop)', () => {
     expect(samples.length).toBeGreaterThanOrEqual(60)
     const wrong = samples.filter((s) => s !== '3')
     expect(wrong).toEqual([])
+    // H1: 화면 글자도 같은 샘플에서 '슬라이드 3'을 유지 (where가 한 update로 나갔는지).
+    const textRow = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+    await expect(textRow).toContainText('슬라이드 3')
     // A가 움직이지 않아도 원격 편집 반영 중에는 값이 유지되어야 한다.
     await editShapeText(t.pageA, shapesA, 'Body 3', 'still on slide 3')
     await t.pageB.waitForTimeout(3000)
@@ -718,25 +721,31 @@ test.describe('pptx collab (desktop)', () => {
     await openFile(t.pageB, f.name, 'view')
     // A가 슬라이드 3으로 이동하고 publish.
     await gotoSlide(t.pageA, 3)
-    const slideOfAda = async (): Promise<string | null> =>
-      t.pageB
-        .locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
-        .getAttribute('data-slide')
-        .catch(() => null)
+    // H1: data-slide와 화면 텍스트가 같은 샘플에서 함께 유지돼야 한다 (한 번의 update로 게시).
+    const sampleOne = async (): Promise<{ slide: string | null; text: string }> => {
+      const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+      const slide = await row.getAttribute('data-slide').catch(() => null)
+      const text = (await row.innerText().catch(() => '')) ?? ''
+      return { slide, text }
+    }
     await expect(async () => {
-      expect(await slideOfAda()).toBe('3')
+      const s = await sampleOne()
+      expect(s.slide).toBe('3')
+      expect(s.text).toContain('슬라이드 3')
     }).toPass({ timeout: 15000 })
     // A가 view로 전환(리마운트 지점) → 상대 화면에서 15초간 계속 3이어야 한다.
     // DocumentPreview의 편집 종료 버튼 라벨이 Done이다 (helpers/viewer.ts의 Edit와 짝).
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 15000 })
-    const samples: (string | null)[] = []
+    const samples: { slide: string | null; text: string }[] = []
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
-      samples.push(await slideOfAda())
+      samples.push(await sampleOne())
       await t.pageB.waitForTimeout(200)
     }
     expect(samples.length).toBeGreaterThanOrEqual(60)
-    expect(samples.filter((s) => s !== '3')).toEqual([])
+    expect(samples.filter((s) => s.slide !== '3')).toEqual([])
+    // H1: 글자도 흔들리면 안 된다 (where가 한 update로 갔는지).
+    expect(samples.filter((s) => !s.text.includes('슬라이드 3'))).toEqual([])
     void testName
     await closeTwo(t)
   })

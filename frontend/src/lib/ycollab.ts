@@ -21,6 +21,10 @@ export interface YCollabAppState {
   color: string
   mode: YCollabMode
   device?: YCollabDevice
+  /** PPT 전용(슬라이드 번호). E1/E19 계약이라 유지. */
+  slide?: number
+  /** 공통 위치 표기: "슬라이드 3" / "Sheet1!B3" / "3쪽". 표시 단일 출처. */
+  where?: string
 }
 
 export interface YCollabSessionResult {
@@ -530,17 +534,11 @@ export class YCollabSession {
     const st = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
     const app = (st.app ?? {}) as Record<string, unknown>
     if (Object.keys(app).length > 0) {
-      // 값이 그대로면 재게시하지 않는다 (같은 값을 다시 보내면 상대 lastActiveAt이
-      // 갱신되어 '가장 최근 상태 하나' 대표 선택이 흔들린다).
-      let same = true
-      for (const [k, v] of Object.entries(this.lastApp)) {
-        if (app[k] !== v) {
-          same = false
-          break
-        }
-      }
-      const keysNow = Object.keys(app)
-      if (same && keysNow.length === Object.keys(this.lastApp).length) return
+      // H3: 비교는 name/color/mode/slide/where 필드 단위로.
+      // mode가 바뀌었는데 스킵하면 상대 화면에 '편집 중'이 계속 남는다.
+      const fields: (keyof YCollabAppState)[] = ['name', 'color', 'mode', 'slide', 'where']
+      const same = fields.every((k) => app[k as string] === this.lastApp[k as string])
+      if (same) return
     }
     // G4: app가 통째로 사라졌으면 신원뿐 아니라 마지막 위치(slide/where)도 되살린다.
     const restored = {
@@ -565,32 +563,39 @@ export class YCollabSession {
     this.ownMode = mode
   }
 
-  /** 위치 문자열(공통 app.where). 예: "슬라이드 3", "Sheet1!B3", "3쪽". */
-  setWhere(where: string): void {
-    const w = where.trim()
-    if (!w || this.lastWhere === w) return
-    this.lastWhere = w
+  /**
+ * 위치 게시 1회 업데이트 (H1).
+ * slide와 where를 따로 두면 awareness update가 2번 나가서 상대 화면에
+ * "slide=3, where=슬라이드 1" 같은 중간 상태가 잠깐 보인다. 항상 한 번에 낸다.
+ * 300ms debounce는 호출부에서 걸고, 값이 그대로면 아무것도 보내지 않는다.
+ */
+  setLocation(loc: { slide?: number | null; where?: string | null }): void {
+    const slide =
+      typeof loc.slide === 'number' && Number.isFinite(loc.slide) ? Math.max(1, Math.floor(loc.slide)) : null
+    const where = typeof loc.where === 'string' ? loc.where.trim() : ''
+    if (slide != null && this.lastSlide === slide && (!where || this.lastWhere === where)) return
+    if (slide == null && !where) return
     const prevApp = (((this.awareness.getLocalState() ?? {}) as Record<string, unknown>).app ??
       {}) as Record<string, unknown>
-    this.lastApp = { ...prevApp, where: w }
-    this.awareness.setLocalStateField('app', this.lastApp)
+    const next: Record<string, unknown> = { ...prevApp, id: this.userId }
+    if (slide != null) next.slide = slide
+    else delete next.slide
+    if (where) next.where = where
+    else delete next.where
+    this.lastSlide = slide
+    this.lastWhere = where || null
+    this.lastApp = next
+    this.awareness.setLocalStateField('app', next)
   }
 
-  /**
-   * 현재 슬라이드 게시 (1부터).
-   * lib presence의 activeSlideIndex는 생성 시 0으로 고정되고 갱신되지 않으므로
-   * (chunk-552NAFTD.js createPresencePublisher) 우리 awareness app.slide를 쓴다.
-   * setMode/setUser처럼 필드 병합으로 갱신한다.
-   */
+  /** 위치 문자열만 (Sheet1!B3, 3쪽 등). */
+  setWhere(where: string): void {
+    this.setLocation({ where })
+  }
+
+  /** 슬라이드만 (PPT). where는 호출부가 함께 준다. */
   setSlide(n: number): void {
-    if (!Number.isFinite(n)) return
-    const slide = Math.max(1, Math.floor(n))
-    const prevApp = (((this.awareness.getLocalState() ?? {}) as Record<string, unknown>).app ??
-      {}) as Record<string, unknown>
-    if (prevApp.slide === slide) return
-    this.lastSlide = slide
-    this.lastApp = { ...prevApp, id: this.userId, slide }
-    this.awareness.setLocalStateField('app', this.lastApp)
+    this.setLocation({ slide: n })
   }
 
   /** viewer에 빌려줄 externalSession 객체. */
