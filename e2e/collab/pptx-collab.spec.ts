@@ -775,12 +775,15 @@ test.describe('pptx collab (desktop)', () => {
     await cdpA.send('Emulation.setCPUThrottlingRate', { rate: 4 })
     await openFile(t.pageA, f.name, 'edit')
     await openFile(t.pageB, f.name, 'view')
-    const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
     const sampleB = async (): Promise<string | null> => row.getAttribute('data-slide').catch(() => null)
     await gotoSlide(t.pageA, 3)
     await expect(async () => {
       expect(await sampleB()).toBe('3')
     }).toPass({ timeout: 20000 })
+    // Z3(2) 전환 "이전" 이력 길이를 기록해 전환 이후 구간만 판정한다.
+    // (초기 열람 때 슬라이드 1이 한 번 나오는 것은 정상이다)
+    const histBefore = (await readDebug(t.pageB)).peerSlideHistory?.['u-ada']?.length ?? 0
     // 리마운트를 일으킨다 (editing이 viewKey를 바꾼다).
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 20000 })
     const samples: (string | null)[] = []
@@ -790,10 +793,23 @@ test.describe('pptx collab (desktop)', () => {
       await t.pageB.waitForTimeout(200)
     }
     expect(samples.length).toBeGreaterThanOrEqual(30)
+    // 기존 200ms 샘플 검사는 화면 텍스트 확인용으로 유지한다.
     expect(samples.filter((s) => s !== '3')).toEqual([])
+    // Z3(1) 공허함 방지: throttle 4배로도 parse가 게이트 300ms 창 안에 끝나면
+    // 이 테스트는 아무것도 검증하지 못한다(E16b 교훈). 먼저 창을 실제로 넘었는지 본다.
+    const dbgA = await readDebug(t.pageA)
+    const armDelay = dbgA.armDelayMs
+    expect(armDelay, 'armDelayMs is required by E20s').not.toBeNull()
+    expect(armDelay ?? 0, `E20s is vacuous unless parse exceeds 300ms (got ${armDelay}ms)`).toBeGreaterThan(300)
+    // Z3(2) 이벤트 기준 이력: edit→view 전환 이후 구간에 1이 없고 마지막이 3이다.
+    // 200ms 샘플이 놓칠 짧은 깜빡임도 이력에는 남는다. 상대가 보는 값이므로 B에서 읽는다.
+    const hist = (await readDebug(t.pageB)).peerSlideHistory?.['u-ada'] ?? []
+    const after = hist.slice(histBefore)
+    expect(after.length, 'peer slide history must record a post-switch event').toBeGreaterThan(0)
+    expect(after).not.toContain(1)
+    expect(after[after.length - 1]).toBe(3)
     // A도 리마운트 직후 "슬라이드 1"을 거치지 않아야 한다.
-    const hist = (await readDebug(t.pageA)).curSlideHistory ?? []
-    expect(hist).not.toContain(1)
+    expect(dbgA.curSlideHistory ?? []).not.toContain(1)
     void testName
     await closeTwo(t)
   })

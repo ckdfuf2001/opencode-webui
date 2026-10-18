@@ -73,7 +73,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       viewerRef.current = h
       // Y2: 새 viewer가 마운트되면 parse 전 lib이 0을 내보내므로 게이트를 잠근다.
       // lib의 onSlideCountChange(count > 0)로 다시 arm한다.
-      if (h) slideGateRef.current?.disarm()
+      if (h) {
+        slideGateRef.current?.disarm()
+        armedAtRef.current = performance.now()
+      }
     },
     [],
   )
@@ -222,6 +225,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         mountCount: (w.__collabDebug?.mountCount as number | undefined) ?? 0,
         curSlide,
         curSlideHistory: [...curSlideHistoryRef.current],
+        // Z3: 상대 슬라이드 이력(1-based, -1 = 값 없음)과 arm 소요 시간.
+        peerSlideHistory: peerSlideHistoryRef.current,
+        armDelayMs: armDelayRef.current,
         role: c?.role ?? null,
         synced: c?.session.synced ?? false,
         ownerClientId: ownerIdRef.current,
@@ -1355,6 +1361,19 @@ const [renaming, setRenaming] = useState(false)
   })
 const peersRef = useRef<Peer[]>([])
   peersRef.current = peers
+  // Z3: 상대 슬라이드 이력 — awareness로 받은 값이 **변경될 때마다** 기록한다.
+  // 200ms 샘플링은 그보다 짧은 깜빡임을 놓치므로 이벤트 기준으로 본다.
+  const peerSlideHistoryRef = useRef<Record<string, number[]>>({})
+  const peerSlideLastRef = useRef<Record<string, number | null>>({})
+  for (const p of peers) {
+    const last = peerSlideLastRef.current[p.id] ?? null
+    if ((p.slide ?? null) !== last) {
+      peerSlideLastRef.current[p.id] = p.slide ?? null
+      const h = peerSlideHistoryRef.current[p.id] ?? (peerSlideHistoryRef.current[p.id] = [])
+      h.push(p.slide ?? -1)
+      if (h.length > 100) h.shift()
+    }
+  }
 
   /** 위치 게시 1회 (H1). slide와 where를 한 awareness update로 낸다. */
   const publishSlideLocation = useCallback((index0: number) => {
@@ -1387,6 +1406,18 @@ const peersRef = useRef<Peer[]>([])
       publish: (i) => publishSlideLocation(i),
     })
   }
+  // Z1: 안정적 identity. lib effect의 deps에 들어 있으므로(L11263) 렌더마다 바뀌면
+  // 매 렌더마다 activeSlideIndex가 재방출된다 (W1-b가 그 튐을 상쇄한다).
+  // Z3: 마운트(=disarm)부터 arm까지 걸린 시간. slow-parse 테스트가
+  // "실제로 300ms를 넘겼는지"(=게이트 300ms 창이 의미 있었는지)를 확인한다.
+  const armedAtRef = useRef<number | null>(null)
+  const armDelayRef = useRef<number | null>(null)
+  const handleActiveSlideChange = useCallback((i: number) => {
+    // W1: 게이트 모듈이 cur 반영(즉시)과 게시(0은 300ms 지연)를 함께 처리한다.
+    // Y2: arm 전에는 이 호출이 전부 무시된다.
+    slideGateRef.current?.onIndex(i)
+  }, [])
+
   useEffect(() => {
     return () => slideGateRef.current?.dispose()
   }, [savePath])
@@ -1465,9 +1496,13 @@ const peersRef = useRef<Peer[]>([])
   // S4: slideIdx를 key에서 뺀다 — 이동은 lib goTo API로 한다 (리마운트 금지).
   const viewerKey = `${editing ? 'edit' : 'view'}#${reloadKey}#${collabGated && collab ? collab.roomId : 'solo'}`
   // Y2: slideIdx(=lib의 initialSlide)는 key가 바뀌는 렌더에서만 갱신한다.
-  // edit↔view 전환·reloadKey bump·4001 재생성(모두 viewerKey에 포함)이 key를 바꾸며,
+  // edit↔view 전환·reloadKey bump·4001 재생성이 모두 viewerKey에 포함되어 있고,
   // `editing`은 외부 prop이라 "바꾸기 직전"에 실행할 코드를 소유할 수 없다.
   // React의 "props 변경 시 state 보정" 패턴으로, 자식 렌더 **이전**에 값을 고정한다.
+  // render 중 ref 읽기는 React가 권장하지 않지만, 여기서는 커밋 이전 값이 필요한 유일한
+  // 지점이고 부작용이 없다(읽기 전용). 다른 곳에서는 쓰지 않는다.
+  // 무한 루프가 나지 않는 이유: key에 slideIdx가 없다(S4=97db6e9가 제거). 이 블록은
+  // viewerKey가 바뀔 때만 실행되고, 실행 후 prevViewerKey가 즉시 일치한다.
   const [prevViewerKey, setPrevViewerKey] = useState(viewerKey)
   if (prevViewerKey !== viewerKey) {
     setPrevViewerKey(viewerKey)
@@ -1922,13 +1957,24 @@ const peersRef = useRef<Peer[]>([])
                   // count > 0일 때만 "덱이 다 파싱됐다"고 본다
                   // (chunk-552NAFTD.js:11284-11286).
                   onSlideCountChange={(count: number) => {
-                    if (count > 0) slideGateRef.current?.arm()
+                    if (count <= 0) return // Z1: 슬라이드가 0장이 되어도 disarm하지 않는다.
+                    const gate = slideGateRef.current
+                    if (gate && !gate.armed()) {
+                      // Z3: 첫 arm에서만 소요 시간을 잰다 (이후 arm은 재해석이 아니다).
+                      if (armedAtRef.current !== null) {
+                        armDelayRef.current = Math.round(performance.now() - armedAtRef.current)
+                      }
+                    }
+                    gate?.arm()
+                    // Z1: parse 커밋에서 lib effect 순서는 onActiveSlideChange(L11259)가
+                    // onSlideCountChange(L11284)보다 **먼저**다. 즉 진짜 초기 index는
+                    // disarm 상태로 지나간다. arm 직후 lib의 실제 index를 한 번 동기화한다.
+                    // handle.getActiveSlideIndex()(L11136)는 clamp가 반영된 값이다.
+                    const idx = (viewerRef.current as { getActiveSlideIndex?: () => number } | null)
+                      ?.getActiveSlideIndex?.()
+                    if (typeof idx === 'number' && idx !== curSlideRef.current) gate?.onIndex(idx)
                   }}
-                  onActiveSlideChange={(i: number) => {
-                    // W1: 게이트 모듈이 cur 반영(즉시)과 게시(0은 300ms 지연)를 함께 처리한다.
-                    // Y2: arm 전에는 이 호출이 전부 무시된다.
-                    slideGateRef.current?.onIndex(i)
-                  }}
+                  onActiveSlideChange={handleActiveSlideChange}
                   onContentChange={() => void onViewerContentChange()}
                   collaboration={collaboration}
                   // 2-1: lib 내장 presence 아바타/공유 버튼을 끈다 (우리 상단 바 하나만 남긴다).

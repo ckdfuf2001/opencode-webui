@@ -97,6 +97,10 @@ export interface CollabDebug {
   curSlide?: number
   /** 화면 슬라이드 이력 (1-based). E20s가 "슬라이드 1" 통과 여부를 본다. */
   curSlideHistory?: number[]
+  /** 상대 슬라이드 이력 (1-based, -1 = 값 없음). awareness 이벤트 기준. */
+  peerSlideHistory?: Record<string, number[]>
+  /** 마운트(=disarm)부터 첫 arm까지 ms. E20s가 300ms 창을 실제로 넘었는지 확인한다. */
+  armDelayMs?: number | null
   role: 'owner' | 'collaborator' | 'viewer' | null
   synced: boolean
   ownerClientId: number | null
