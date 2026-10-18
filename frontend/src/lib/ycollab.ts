@@ -105,6 +105,12 @@ export class YCollabSession {
   readonly url: string
   /** 최근 게시한 신원 (setUser이 app를 다시 채울 때 쓴다). */
   private user!: YCollabUser
+  /** G4: republishApp이 되살릴 마지막 app 값/위치. */
+  private lastApp: Record<string, unknown> = {}
+  private lastWhere: string | null = null
+  private lastSlide: number | null = null
+  /** own 모드의 현재 모드 (republishApp 복원용). transport에서는 lib이 mode를 대신 갖는다. */
+  private ownMode: YCollabMode = 'edit'
 
   constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode; userId?: string; device?: YCollabDevice }) {
     this.url = url
@@ -523,29 +529,51 @@ export class YCollabSession {
   republishApp(): void {
     const st = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
     const app = (st.app ?? {}) as Record<string, unknown>
-    if (Object.keys(app).length === 0) {
-      // app가 통째로 사라졌다면 지금 신원으로 다시 만든다.
-      this.awareness.setLocalStateField('app', {
-        id: this.userId,
-        name: this.user.name,
-        color: this.user.color,
-        mode: app.mode === 'view' ? 'view' : 'edit',
-      } as YCollabAppState)
-      return
+    if (Object.keys(app).length > 0) {
+      // 값이 그대로면 재게시하지 않는다 (같은 값을 다시 보내면 상대 lastActiveAt이
+      // 갱신되어 '가장 최근 상태 하나' 대표 선택이 흔들린다).
+      let same = true
+      for (const [k, v] of Object.entries(this.lastApp)) {
+        if (app[k] !== v) {
+          same = false
+          break
+        }
+      }
+      const keysNow = Object.keys(app)
+      if (same && keysNow.length === Object.keys(this.lastApp).length) return
     }
-    this.awareness.setLocalStateField('app', { ...app })
+    // G4: app가 통째로 사라졌으면 신원뿐 아니라 마지막 위치(slide/where)도 되살린다.
+    const restored = {
+      id: this.userId,
+      name: this.user.name,
+      color: this.user.color,
+      mode: (app.mode as YCollabMode | undefined) ?? this.ownMode,
+      ...(this.lastWhere ? { where: this.lastWhere } : {}),
+      ...(this.lastSlide != null ? { slide: this.lastSlide } : {}),
+      ...app,
+    } as YCollabAppState
+    this.lastApp = restored as unknown as Record<string, unknown>
+    this.awareness.setLocalStateField('app', restored)
   }
 
   /** view/edit 전환. app.mode 갱신이 서버 owner 재선출을 유발한다. */
   setMode(mode: YCollabMode): void {
     const prev = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
     const prevApp = (prev.app ?? {}) as Record<string, unknown>
-    this.awareness.setLocalStateField('app', {
-      ...prevApp,
-      id: this.userId,
-      mode,
-    })
-    // setLocalStateField는 awareness update를 일으켜 onAwarenessUpdate가 publish한다.
+    this.lastApp = { ...prevApp, id: this.userId, mode }
+    this.awareness.setLocalStateField('app', this.lastApp)
+    this.ownMode = mode
+  }
+
+  /** 위치 문자열(공통 app.where). 예: "슬라이드 3", "Sheet1!B3", "3쪽". */
+  setWhere(where: string): void {
+    const w = where.trim()
+    if (!w || this.lastWhere === w) return
+    this.lastWhere = w
+    const prevApp = (((this.awareness.getLocalState() ?? {}) as Record<string, unknown>).app ??
+      {}) as Record<string, unknown>
+    this.lastApp = { ...prevApp, where: w }
+    this.awareness.setLocalStateField('app', this.lastApp)
   }
 
   /**
@@ -557,14 +585,12 @@ export class YCollabSession {
   setSlide(n: number): void {
     if (!Number.isFinite(n)) return
     const slide = Math.max(1, Math.floor(n))
-    const prev = (this.awareness.getLocalState() ?? {}) as Record<string, unknown>
-    const prevApp = (prev.app ?? {}) as Record<string, unknown>
+    const prevApp = (((this.awareness.getLocalState() ?? {}) as Record<string, unknown>).app ??
+      {}) as Record<string, unknown>
     if (prevApp.slide === slide) return
-    this.awareness.setLocalStateField('app', {
-      ...prevApp,
-      id: this.userId,
-      slide,
-    })
+    this.lastSlide = slide
+    this.lastApp = { ...prevApp, id: this.userId, slide }
+    this.awareness.setLocalStateField('app', this.lastApp)
   }
 
   /** viewer에 빌려줄 externalSession 객체. */

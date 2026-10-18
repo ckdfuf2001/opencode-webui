@@ -11,7 +11,9 @@ export interface Peer {
   color: string
   mode: 'view' | 'edit'
   /** 1부터 시작 (lib presence activeSlideIndex + 1). */
-  slide?: number
+slide?: number
+  /** 공통 위치 표기 (app.where): "슬라이드 3" / "Sheet1!B3" / "3쪽". 표시 단일 출처. */
+  where?: string
   selectedId?: string
   selectedLabel?: string
   isOwner: boolean
@@ -106,11 +108,15 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
     // 출처를 섞지 않으므로 mode·owner·slide가 서로 다른 탭에서 오는 일이 없다.
     const byId = new Map<string, Peer & { tabCount: number; freshest: number }>()
     for (const [cid, st] of states) {
-      const app = (st?.app ?? null) as { id?: unknown; name?: unknown; color?: unknown; mode?: unknown; device?: unknown; slide?: unknown } | null
+      const app = (st?.app ?? null) as { id?: unknown; name?: unknown; color?: unknown; mode?: unknown; device?: unknown; slide?: unknown; where?: unknown } | null
       const lib = readLibPresence(st)
       const id = String((app && typeof app.id !== 'undefined' ? app.id : cid) ?? cid)
-      const name = String((app && app.name) ?? lib?.name ?? `user-${cid}`)
-      const color = String((app && app.color) ?? lib?.color ?? '#6366f1')
+      // 하위호환: 구 클라이언트(구 exe 캐시)는 최상위 userName/userColor만 게시했다.
+      // TODO(v0.13): app.* 단일화 완료 후 이 fallback을 제거한다.
+      const legacyName = st?.userName
+      const legacyColor = st?.userColor
+      const name = String((app && app.name) ?? (typeof legacyName === 'string' ? legacyName : undefined) ?? lib?.name ?? `user-${cid}`)
+      const color = String((app && app.color) ?? (typeof legacyColor === 'string' ? legacyColor : undefined) ?? lib?.color ?? '#6366f1')
       const mode = app && app.mode === 'view' ? 'view' : 'edit'
       const device: YCollabDevice = app && app.device === 'mobile' ? 'mobile' : 'desktop'
       const lastEditAt = session.lastEditAt.get(cid)
@@ -119,6 +125,7 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
       // lib presence의 activeSlideIndex는 0 고정 + 10초 재게시라 항상 1번이다.
       // 그래서 fallback으로 쓰지 않는다. app.slide가 없으면 표시를 생략한다.
       const appSlide = typeof app?.slide === 'number' && app.slide >= 1 ? app.slide : undefined
+      const appWhere = typeof app?.where === 'string' && app.where ? app.where : undefined
       const freshest = appSlide != null ? 2 : lastActiveAt != null ? 1 : 0
       const prev = byId.get(id)
       if (prev) {
@@ -131,8 +138,9 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
             id,
             name,
             color,
-            mode,
+mode,
             slide: appSlide,
+            where: appWhere,
             selectedId,
             selectedLabel: undefined,
             isOwner: isOwnerNow,
@@ -161,6 +169,7 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
         color,
         mode,
         slide: appSlide,
+        where: appWhere,
         selectedId,
         selectedLabel: undefined,
         isOwner: o.ownerClientId != null && o.ownerClientId === cid,
@@ -199,7 +208,7 @@ function samePeers(a: Peer[], b: Peer[], now: number): boolean {
     const y = b[i]!
     if (
       x.clientId !== y.clientId || x.id !== y.id || x.name !== y.name || x.color !== y.color ||
-      x.mode !== y.mode || x.slide !== y.slide || x.selectedId !== y.selectedId ||
+      x.mode !== y.mode || x.slide !== y.slide || x.where !== y.where || x.selectedId !== y.selectedId ||
       x.selectedLabel !== y.selectedLabel || x.isOwner !== y.isOwner || x.isSelf !== y.isSelf ||
       x.device !== y.device || x.tabCount !== y.tabCount || x.lastEditAt !== y.lastEditAt ||
       peerActivity(x, now) !== peerActivity(y, now)

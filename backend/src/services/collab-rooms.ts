@@ -88,7 +88,9 @@ export interface CollabParticipant {
   name: string
   color: string
   mode: 'view' | 'edit'
-  slide?: number
+slide?: number
+  /** 공통 위치 표기(app.where): "슬라이드 3" / "Sheet1!B3" / "3쪽". */
+  where?: string
   /** 서버 owner 집합에 awareness clientId가 들어있는가. */
   owner: boolean
 }
@@ -791,7 +793,7 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
   const out: CollabParticipant[] = []
   try {
     const states = room.awareness.getStates() as Map<number, {
-      app?: { id?: string; name?: string; color?: string; mode?: string; slide?: number }
+      app?: { id?: string; name?: string; color?: string; mode?: string; slide?: number; where?: string }
       userName?: string
     }>
     for (const [cid, st] of states) {
@@ -806,6 +808,8 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
         color: String(app.color ?? '#6366f1'),
         mode: app.mode === 'view' ? 'view' : 'edit',
         slide: appSlide,
+        // 공통 위치 표기(app.where)를 그대로 전달한다 (클라 표시 단일 출처).
+        where: typeof app.where === 'string' && app.where ? app.where : undefined,
         owner: room.ownerIds.has(cid),
       })
     }

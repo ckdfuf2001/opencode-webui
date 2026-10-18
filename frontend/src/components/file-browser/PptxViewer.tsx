@@ -1663,10 +1663,12 @@ const [renaming, setRenaming] = useState(false)
                         className={`inline-block w-2 h-2 rounded-full${act === 'editing' ? ' animate-pulse' : ''}`}
                         style={act === 'editing' ? { backgroundColor: p.color } : { border: `1.5px solid ${p.color}` }}
                       />
-                      <span>
+<span>
                         {p.name}
                         {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
                         {p.device === 'mobile' ? '📱' : ''}
+                        {/* 표시 위치는 app.where 단일 출처 (data-slide는 E1/E19 계약이라 유지). */}
+                        {p.where ? ` · ${p.where}` : ''}
                         {status ? ` · ${status}` : ''}
                       </span>
                     </button>
@@ -1853,7 +1855,11 @@ onActiveSlideChange={(i: number) => {
                     if (i >= 0) setCurSlide(i)
                     // lib presence는 activeSlideIndex가 0 고정이라 우리가 awareness에 싣는다.
                     // (R4: slideIdx는 건드리지 않는다 — initialSlide가 바뀌면 lib이 재이동할 수 있다.)
-                    if (i >= 1) collabRef.current?.session.setSlide(i + 1)
+                    if (i >= 1) {
+                      collabRef.current?.session.setSlide(i + 1)
+                      // 공통 위치 표기(app.where). 상단 바·탐색기는 이 값만 쓴다.
+                      collabRef.current?.session.setWhere(`슬라이드 ${i + 1}`)
+                    }
                   }}
                   onContentChange={() => void onViewerContentChange()}
                   collaboration={collaboration}

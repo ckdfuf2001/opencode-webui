@@ -15,6 +15,7 @@ export interface CollabParticipant {
   color: string
   mode: 'view' | 'edit'
   slide?: number
+  where?: string
   owner: boolean
 }
 
