@@ -11,13 +11,15 @@ export const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collabe2e-'))
 // 백엔드는 시작 시 저장소 트리를 스캔해 children 을 채운다(FileTree.tsx:150).
 // children 이 [] 로 스캔된 폴더는 needFetch=false 이므로 이후에 파일을 심어도
 // 절대 다시 조회되지 않는다. 그래서 **서버가 뜨기 전에** 파일을 심어야 한다.
-// 이 probe 파일로 트리가 실제로 자식 행을 그리는지 확인할 수 있다.
+// xlsx(X-B1)와 pptx(M6) 양쪽 스펙이 이 파일을 쓴다.
 const probeDir = path.join(wsDir, 'repos', 'collab-e2e')
 fs.mkdirSync(probeDir, { recursive: true })
-const probeFixture = path.join(here, 'fixtures', 'collab-features.xlsx')
-if (fs.existsSync(probeFixture)) {
-  fs.copyFileSync(probeFixture, path.join(probeDir, 'probe-seeded-before-server.xlsx'))
+const seedFile = (fixture: string, as: string): void => {
+  const src = path.join(here, 'fixtures', fixture)
+  if (fs.existsSync(src)) fs.copyFileSync(src, path.join(probeDir, as))
 }
+seedFile('collab-features.xlsx', 'probe-seeded-before-server.xlsx')
+seedFile('collab-3slides.pptx', 'probe-seeded-before-server.pptx')
 process.env.COLLAB_E2E_WS = wsDir
 
 const BACKEND_PORT = 5011
@@ -27,7 +29,7 @@ const OPENCODE_PORT = 5564
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['pptx-collab.spec.ts', 'xlsx-solo.spec.ts'],
+  testMatch: ['pptx-collab.spec.ts', 'xlsx-solo.spec.ts', 'viewer-unmount.spec.ts'],
   retries: 0,
   workers: 1,
   // E5가 30초 입력 + 저장 대기를 하므로 여유를 둔다.

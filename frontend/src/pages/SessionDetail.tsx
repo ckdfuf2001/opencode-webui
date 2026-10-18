@@ -1894,9 +1894,15 @@ if (results.length > 0) {
         )}
       </div>
 
-      <FileBrowserSheet
-        isOpen={fileBrowserFullscreenOpen}
-        onClose={() => setFileBrowserFullscreenOpen(false)}
+<FileBrowserSheet
+          isOpen={fileBrowserFullscreenOpen}
+          // M6: 닫을 때 기억한 파일 경로를 함께 지운다. 남기면 시트를 다시 열 때
+          // initialSelectedFile 로 뷰어가 곧바로 재마운트되어 Y.Doc·이미지가 매번 새로 생긴다.
+          onClose={() => {
+            setFileBrowserFullscreenOpen(false)
+            setSelectedFilePath(undefined)
+            setExplorerSelectedPath(undefined)
+          }}
         basePath={repo?.workspaceRel}
         repoName={repo?.repoUrl?.split("/").pop()?.replace(".git", "") || repo?.workspaceRel || "Repository"}
         initialSelectedFile={explorerSelectedPath ?? selectedFilePath}

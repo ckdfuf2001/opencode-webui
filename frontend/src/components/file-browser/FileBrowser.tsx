@@ -7,7 +7,7 @@ import { MobileFilePreviewModal } from './MobileFilePreviewModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { FolderOpen, Upload, RefreshCw, ArrowUpDown, Check } from 'lucide-react'
+import { FolderOpen, Upload, RefreshCw, ArrowUpDown, Check, X } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -792,7 +792,22 @@ useEffect(() => {
           
           {/* Desktop only: Preview panel */}
           {!isMobile && (
-          <div className="flex-1 overflow-y-auto min-h-0 h-full">
+          <div className="flex-1 overflow-y-auto min-h-0 h-full relative">
+            {/* M6: 미리보기 닫기. 데스크톱에는 이 수단이 아예 없어 selectedFile 이
+                영영 비워지지 않았다 → 문서 뷰어(Y.Doc·data: 이미지·lib 렌더 루프)가
+                화면에서 사라져도 계속 살아 있었다. "닫기"는 언마운트여야 한다. */}
+            {selectedFile && !selectedFile.isDirectory && (
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label="Close preview"
+                title="미리보기 닫기"
+                onClick={() => setSelectedFile(null)}
+                className="absolute right-2 top-2 z-10 h-7 w-7 bg-background/90"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            )}
             {selectedFile && !selectedFile.isDirectory ? (
               <FilePreview file={selectedFile} expandActions={expandPreviewActions} />
             ) : fileLoading ? (
