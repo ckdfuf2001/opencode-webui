@@ -749,6 +749,68 @@ test.describe('pptx collab (desktop)', () => {
     void testName
     await closeTwo(t)
   })
+
+  test('E19b: moving back to slide 1 publishes (W1 regression)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e19b', 0)
+    const t = await twoPages(browser)
+    const testName = `E19b[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'view')
+    const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+    const sample = async (): Promise<{ slide: string | null; text: string }> => ({
+      slide: await row.getAttribute('data-slide').catch(() => null),
+      text: (await row.innerText().catch(() => '')) ?? '',
+    })
+    await gotoSlide(t.pageA, 3)
+    await expect(async () => {
+      const s = await sample()
+      expect(s.slide).toBe('3')
+      expect(s.text).toContain('슬라이드 3')
+    }).toPass({ timeout: 15000 })
+    // W1: 1번으로 돌아가면 1이 게시돼야 한다 (수정 전 i>=1 조건으로는 게시되지 않았다).
+    await gotoSlide(t.pageA, 1)
+    await expect(async () => {
+      const s = await sample()
+      expect(s.slide).toBe('1')
+      expect(s.text).toContain('슬라이드 1')
+    }).toPass({ timeout: 5000 })
+    // 15초간 유지 (lib 10초 주기 재게시를 포함).
+    const samples: (string | null)[] = []
+    const deadline = Date.now() + 15000
+    while (Date.now() < deadline) {
+      samples.push((await sample()).slide)
+      await t.pageB.waitForTimeout(200)
+    }
+    expect(samples.length).toBeGreaterThanOrEqual(60)
+    expect(samples.filter((s) => s !== '1')).toEqual([])
+    void testName
+    await closeTwo(t)
+  })
+
+  test('E19c: rapid moves settle on the final slide (W1 debounce)', async ({ browser }, testInfo) => {
+    const f = await freshFile('e19c', 0)
+    const t = await twoPages(browser)
+    const testName = `E19c[${testInfo.repeatEachIndex}]`
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'view')
+    const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
+    // 1 → 3 → 1 → 2 를 150ms 간격으로 (마지막 2만 확정돼야 한다).
+    for (const n of [1, 3, 1, 2]) {
+      await gotoSlide(t.pageA, n)
+      await t.pageA.waitForTimeout(150)
+    }
+    await t.pageA.waitForTimeout(1000)
+    expect(await row.getAttribute('data-slide')).toBe('2')
+    const deadline = Date.now() + 5000
+    const samples: (string | null)[] = []
+    while (Date.now() < deadline) {
+      samples.push(await row.getAttribute('data-slide').catch(() => null))
+      await t.pageB.waitForTimeout(200)
+    }
+    expect(samples.filter((s) => s !== '2')).toEqual([])
+    void testName
+    await closeTwo(t)
+  })
 })
 
 test.describe('pptx collab (mobile 390x844)', () => {

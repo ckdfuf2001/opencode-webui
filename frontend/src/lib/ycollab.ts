@@ -27,6 +27,23 @@ export interface YCollabAppState {
   where?: string
 }
 
+/**
+ * app.where 표기 문자열 단일 출처 (XLSX/DOCX도 같은 패턴을 쓴다).
+ * - pptx: "슬라이드 3"
+ * - xlsx: "Sheet1!B3"
+ * - docx: "3쪽"
+ */
+export function formatWhere(kind: 'pptx' | 'xlsx' | 'docx', value: string | number): string {
+  switch (kind) {
+    case 'pptx':
+      return `슬라이드 ${value}`
+    case 'docx':
+      return `${value}쪽`
+    case 'xlsx':
+      return String(value)
+  }
+}
+
 export interface YCollabSessionResult {
   roomId: string
   role: 'host' | 'guest' | 'resume'

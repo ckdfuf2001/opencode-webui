@@ -16,7 +16,7 @@ const PowerPointViewer = lazyWithRetry(() =>
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
 import { collabApi, collabServerUrl, type ImageLossDetail } from '@/api/collab'
-import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE } from '@/lib/ycollab'
+import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE, formatWhere } from '@/lib/ycollab'
 import { useCollabUser } from '@/lib/collabUser'
 import { activityLabel, peerActivity, usePeers, type Peer } from '@/lib/usePeers'
 import { useMobile } from '@/hooks/useMobile'
@@ -619,6 +619,11 @@ const syncSessionMode = useCallback(() => {
 writeBackHaltedRef.current = false
         lossPendingRef.current = null
         slidePublishedRef.current = false
+        // W1: 세션이 바뀌면 예약된 0 게시를 버린다(옛 세션 좌표를 새 세션에 싣지 않는다).
+        if (slideZeroTimer.current) {
+          clearTimeout(slideZeroTimer.current)
+          slideZeroTimer.current = null
+        }
         setImageLoss(null)
         setCollab({
           session,
@@ -1335,8 +1340,25 @@ const [renaming, setRenaming] = useState(false)
     selfUserId: collab?.userId ?? '',
     getSelectedLabel: (id) => getSelectedLabel(id),
   })
-  const peersRef = useRef<Peer[]>([])
+const peersRef = useRef<Peer[]>([])
   peersRef.current = peers
+
+  /** W1: 리렌더성 0을 예약했다가 취소하는 타이머. 세션 변경/언마운트 시 정리. */
+  const slideZeroTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (slideZeroTimer.current) {
+        clearTimeout(slideZeroTimer.current)
+        slideZeroTimer.current = null
+      }
+    }
+  }, [savePath])
+
+  /** 위치 게시 1회 (H1). slide와 where를 한 awareness update로 낸다. */
+  const publishSlideLocation = useCallback((index0: number) => {
+    const n = index0 + 1
+    collabRef.current?.session.setLocation({ slide: n, where: formatWhere('pptx', n) })
+  }, [])
 
   // 팔로우: 선택한 사람의 슬라이드로 계속 따라간다 (선택한 경우에만 이동).
   const [followId, setFollowId] = useState<string | null>(null)
@@ -1857,17 +1879,30 @@ const [renaming, setRenaming] = useState(false)
                   theme={viewerTheme}
                   initialSlide={slideIdx}
 onActiveSlideChange={(i: number) => {
-                    // V5(d): 리렌더·원격 update로 0이 튀는 호출은 게시하지 않는다.
-                    if (i >= 0) setCurSlide(i)
-                    // lib presence는 activeSlideIndex가 0 고정이라 우리가 awareness에 싣는다.
-                    // (R4: slideIdx는 건드리지 않는다 — initialSlide가 바뀌면 lib이 재이동할 수 있다.)
+                    // W1: i는 0부터 시작한다. 0을 전부 버리면 사용자가 1번으로 갈 때 게시되지 않는다.
+                    // lib은 파일 로드/마운트 직후 resolveInitialSlideIndex(initialSlide 없으면 0)
+                    // 로 setActiveSlideIndex를 호출한다(chunk-552NAFTD.js:4621 + VIEWER_ROOT_OPTION_DEFAULTS
+                    // .initialSlide=0) 그리고 [activeSlideIndex] deps effect로 0을 1회 내보낸다(:11259-11263).
+                    // 그래서 "튀는 0"과 "사용자가 실제로 이동한 0"을 구분한다:
+                    //  1) 1 이상은 즉시 게시
+                    //  2) 0은 300ms 뒤 예약 — 그 사이 다른 값이 오면 취소
+                    //  3) 예약 실행 시 콜백 값이 아니라 viewer 현재 상태(curSlideRef)를 본다
                     if (i >= 1) {
-                      // H1: slide와 where를 한 번의 update로 게시한다.
-                      collabRef.current?.session.setLocation({
-                        slide: i + 1,
-                        where: `슬라이드 ${i + 1}`,
-                      })
+                      if (slideZeroTimer.current) {
+                        clearTimeout(slideZeroTimer.current)
+                        slideZeroTimer.current = null
+                      }
+                      setCurSlide(i)
+                      publishSlideLocation(i)
+                      return
                     }
+                    // i === 0 (또는 음수): 리렌더성 튐일 수 있어 예약한다.
+                    if (slideZeroTimer.current) clearTimeout(slideZeroTimer.current)
+                    slideZeroTimer.current = setTimeout(() => {
+                      slideZeroTimer.current = null
+                      const cur = curSlideRef.current
+                      if (cur === 0) publishSlideLocation(0)
+                    }, 300)
                   }}
                   onContentChange={() => void onViewerContentChange()}
                   collaboration={collaboration}
