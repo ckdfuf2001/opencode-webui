@@ -16,6 +16,14 @@ import { listSessionStatuses } from "@/api/session-status"
 import { stripMemoryRecall } from "@/lib/stripRecall"
 import { API_BASE_URL } from "@/config"
 import { trackEventSource } from "@/lib/ycollab"
+import { sessionStatusRefetchInterval } from "@/lib/sessionStatusPolling"
+import {
+  textPartsLength,
+  toolOutputLength,
+  reasoningPartsLength,
+  isCompleted,
+  sameMessageList,
+} from "@/lib/messageListEquality"
 
 
 type SendPromptRequest = NonNullable<
@@ -89,79 +97,6 @@ export function abortSpecificSend(
     try { es.close(); } catch {}
     if (activeSSEMap.get(sessionID) === es) activeSSEMap.delete(sessionID)
   }
-}
-
-/** 거�? 문자??join ?�이 길이�??�산 ???�링마다 MB�?join ?�당 방�?.
- *  join('').length === �?길이???�이므�?길이 비교 ?�정 결과???�일?�다. */
-function textPartsLength(parts: MessageWithParts["parts"]): number {
-  let n = 0
-  for (const p of parts) {
-    if ((p as { type?: string }).type !== "text") continue
-    n += ((p as { text?: string }).text ?? "").length
-  }
-  return n
-}
-
-function toolOutputLength(parts: MessageWithParts["parts"]): number {
-  let n = 0
-  for (const p of parts) {
-    if ((p as { type?: string }).type !== "tool") continue
-    const st = (p as { state?: { output?: string; metadata?: { output?: string } } }).state
-    n += (st?.output ?? st?.metadata?.output ?? "").length
-  }
-  return n
-}
-
-function reasoningPartsLength(parts: MessageWithParts["parts"]): number {
-  let n = 0
-  for (const p of parts) {
-    if ((p as { type?: string }).type !== "reasoning") continue
-    n += ((p as { text?: string }).text ?? "").length
-  }
-  return n
-}
-
-function runningToolCount(parts: MessageWithParts["parts"]): number {
-  let n = 0
-  for (const p of parts) {
-    if ((p as { type?: string }).type !== "tool") continue
-    if ((p as { state?: { status?: string } }).state?.status === "running") n++
-  }
-  return n
-}
-
-function isCompleted(info: MessageWithParts["info"]): boolean {
-  return Boolean((info.time as { completed?: number } | undefined)?.completed)
-}
-
-/**
- * 단일 메시지 지문 비교 — 종류별 분리 비교한다. 한 메시지 안에서 text 합산과
- * tool 합산을 뭉개면 상쇄 오판이 난다 (running 120k→완료 20k 캡 축소 vs 텍스트
- * 증가). running 툴 수도 센다 — 길이가 안 변는 running→completed 전이 대응.
- */
-function sameMessageContent(a: MessageWithParts, b: MessageWithParts): boolean {
-  if (a.parts.length !== b.parts.length) return false
-  if (textPartsLength(a.parts) !== textPartsLength(b.parts)) return false
-  if (toolOutputLength(a.parts) !== toolOutputLength(b.parts)) return false
-  if (reasoningPartsLength(a.parts) !== reasoningPartsLength(b.parts)) return false
-  if (runningToolCount(a.parts) !== runningToolCount(b.parts)) return false
-  return isCompleted(a.info) === isCompleted(b.info)
-}
-
-/**
- * 메시지 목록 지문 비교 — join 없이 길이 합산만으로 판정한다.
- * 내용이 동일하면 캐시 참조를 그대로 반환해 매 폴링마다 새 배열이 생기는
- * 할당 압력을 막는다 (structuralSharing만으로는 하위 useMemo가 다 깨진다).
- */
-function sameMessageList(a: MessageListResponse, b: MessageListResponse): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    const ma = a[i]!
-    const mb = b[i]!
-    if (ma.info.id !== mb.info.id) return false
-    if (!sameMessageContent(ma, mb)) return false
-  }
-  return true
 }
 
 /**
@@ -2127,10 +2062,9 @@ export const useSessionStatusMap = (opts?: { poll?: boolean }) => {
     queryKey: ["session-status-db"],
     queryFn: listSessionStatuses,
     refetchInterval: poll
-      ? (query) => {
-          const rows = (query.state.data ?? []) as Array<{ status?: string }>
-          return rows.some((r) => r?.status === "busy") ? 1200 : 5000
-        }
+      ? (query) => sessionStatusRefetchInterval(
+          (query.state.data ?? []) as Array<{ status?: string }>,
+        )
       : false,
     staleTime: 800,
     refetchOnWindowFocus: false,

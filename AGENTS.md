@@ -238,9 +238,12 @@
 - 단위+프론트 테스트: `pnpm -C backend test -- run` — 프론트 테스트도 이 경로로 돈다
   (`backend/vitest.config.ts`의 `include`가 `../frontend/test/**`를 포함).
   `pnpm -C frontend test` 스크립트는 **존재하지 않는다**.
-  기준선: **430 passed / 2 failed suites** (`config-migration.test.ts`,
+  기준선: **469 passed / 2 failed suites** (`config-migration.test.ts`,
   `repo-tracking.test.ts` — 둘 다 `bun:sqlite` 부재라는 기존 환경 실패).
+  프론트 테스트는 `../frontend/test` 7파일 61건.
   이 2개 외 실패가 생기면 회귀다.
+- 메모리 규칙: `pnpm check:memory` (scripts/check-memory-rules.mjs) — 폴링·interval·EventSource
+  추가 시 실패한다. `pnpm test`가 이 검사를 먼저 돌린다. 허용 목록은 scripts/memory-allowlist.json.
 - 타입: `pnpm -C frontend exec tsc -b` (별도 스크립트 없음). 기준선: **에러 0**.
 - 린트: `pnpm -C frontend exec eslint .`. 기준선: **330 problems (272 errors, 58 warnings)** —
   `no-explicit-any`·`no-empty` 중심의 기존 누적값. 새 문제를 늘리지 않는 것이 목표.

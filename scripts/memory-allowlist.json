@@ -1,0 +1,152 @@
+{
+  "$comment": "메모리 규칙 자동 검사 허용 목록 (scripts/check-memory-rules.mjs). 새 폴링/interval을 추가할 때 여기에 entry를 추가하되, reason에 docs/decisions.md D29 근거와 측정값을 반드시 남긴다.",
+  "refetchInterval": [
+    {
+      "file": "frontend/src/api/git.ts",
+      "value": "^10000",
+      "reason": "git 상태 조회. 10초. D29 단일 폴러 대상 아님(키가 다르다)."
+    },
+    {
+      "file": "frontend/src/hooks/useChatQueue.ts",
+      "value": "pollDisabled\\(\\)",
+      "reason": "채팅 큐 폴링. D29에 의해 ?poll=0 으로 정지 가능. 측정: 큐 idle 시 0회."
+    },
+    {
+      "file": "frontend/src/hooks/useCommandRuns.ts",
+      "value": "^enabled \\? 5_000 : false",
+      "reason": "커맨드 실행 목록. 컴포넌트 1곳 전용 키."
+    },
+    {
+      "file": "frontend/src/hooks/useCommandRuns.ts",
+      "value": "^enabled && !!sessionId \\? 5_000 : false",
+      "reason": "커맨드 실행 목록(세션 상세). 컴포넌트 1곳 전용 키."
+    },
+    {
+      "file": "frontend/src/hooks/useOpenCode.ts",
+      "value": "opts\\?\\.poll === false \\? false : 2000",
+      "reason": "useSessions(세션 목록). M8 4절 대상."
+    },
+    {
+      "file": "frontend/src/hooks/useOpenCode.ts",
+      "value": "opts\\?\\.poll === false \\? false : 5000",
+      "reason": "세션 상세 폴링. M8 4절 대상."
+    },
+    {
+      "file": "frontend/src/hooks/useOpenCode.ts",
+      "value": "^\\(query\\) =>",
+      "reason": "useMessages 목록 폴링(busy 500ms~1500ms / idle 10000ms). M8 4절에서 SSE 중 정지 예정."
+    },
+    {
+      "file": "frontend/src/hooks/useOpenCode.ts",
+      "value": "^mergePartial \\? 380 : 2000",
+      "reason": "usePollLastMessage. mergePartial = sseOn 이라 SSE on에서 380ms로 빨라진다. D36 위반 소지 — 4b-2에서 뒤집을 것."
+    },
+    {
+      "file": "frontend/src/hooks/useOpenCode.ts",
+      "value": "^poll$",
+      "reason": "useSessionStatusMap. busy 1200ms / idle 5000ms. 유일한 폴링 주체(Pollers.tsx)."
+    },
+    {
+      "file": "frontend/src/hooks/useOpencodeHealth.ts",
+      "value": "^poll \\? 3000 : false",
+      "reason": "백엔드 헬스. 유일한 폴링 주체(Pollers.tsx)."
+    }
+  ],
+  "setInterval": [
+    {
+      "file": "frontend/src/components/command/CommandsPanel.tsx",
+      "value": "^\\(\\) =>",
+      "reason": "커맨드 패널 표시 갱신. 패널이 열려 있을 때만."
+    },
+    {
+      "file": "frontend/src/components/file-browser/collabRoomsFeed.ts",
+      "value": "^\\(\\) =>",
+      "reason": "룸 목록 피드. 열려 있을 때만."
+    },
+    {
+      "file": "frontend/src/components/file-browser/DocumentPreview.tsx",
+      "value": "setSecs",
+      "reason": "미리보기 경과 시간 표시(1초). 표시에만 사용."
+    },
+    {
+      "file": "frontend/src/components/file-browser/FileTree.tsx",
+      "value": "^\\(\\) =>",
+      "reason": "파일 트리 갱신. 트리가 열려 있을 때만."
+    },
+    {
+      "file": "frontend/src/components/file-browser/PptxViewer.tsx",
+      "value": "setNow\\(Date\\.now\\(\\)\\), ms",
+      "reason": "NowProvider(1초/5초). 시각을 그리는 칩 하위에만 공급(D35)."
+    },
+    {
+      "file": "frontend/src/components/file-browser/PptxViewer.tsx",
+      "value": "^poll, 5000",
+      "reason": "P1-2 lock 상태 폴링(5초)."
+    },
+    {
+      "file": "frontend/src/components/message/MessageThread.tsx",
+      "value": "^runBashWatchdog, 20_000",
+      "reason": "bash 워치독(20초)."
+    },
+    {
+      "file": "frontend/src/components/session/OutputPreview.tsx",
+      "value": "^load, 2000",
+      "reason": "출력 미리보기 갱신(2초)."
+    },
+    {
+      "file": "frontend/src/hooks/useCommands.ts",
+      "value": "^\\(\\) =>",
+      "reason": "커맨드 목록 폴링."
+    },
+    {
+      "file": "frontend/src/hooks/useOpenCode.ts",
+      "value": "^tick, 5000",
+      "reason": "세션 상태 보조 갱신(5초)."
+    },
+    {
+      "file": "frontend/src/hooks/usePermissionRequests.ts",
+      "value": "^load, 2000",
+      "reason": "권한 요청 폴링(2초). M8 4b-2 5번에서 busy면 2000ms/idle 정지로 바꿀 것."
+    },
+    {
+      "file": "frontend/src/hooks/useQuestionRequests.ts",
+      "value": "^load, 2000",
+      "reason": "질문 요청 폴링(2초). M8 4b-2 5번에서 busy면 2000ms/idle 정지로 바꿀 것."
+    },
+    {
+      "file": "frontend/src/lib/memCounters.ts",
+      "value": "^\\(\\) =>",
+      "reason": "계측 카운터 수집용. ?memDebug=1 일 때만."
+    },
+    {
+      "file": "frontend/src/lib/usePeers.ts",
+      "value": "setTick",
+      "reason": "참가자 상대시각 tick. 기본 off(?peersTick=1000 에서만). D35."
+    },
+    {
+      "file": "frontend/src/pages/SessionDetail.tsx",
+      "value": "^\\(\\) =>",
+      "reason": "세션 상세 표시 갱신."
+    }
+  ],
+  "streamCapConstants": [
+    {
+      "file": "frontend/src/hooks/useOpenCode.ts",
+      "reason": "현재 위치. D28 적용 때 상수 파일(frontend/src/lib/streamOutputCaps.ts)로 분리하고 여기를 비운다."
+    }
+  ],
+  "singlePoller": {
+    "file": "frontend/src/components/Pollers.tsx",
+    "hooks": ["useSessionStatusMap", "useOpencodeHealth"],
+    "reason": "D29: 같은 query key의 refetchInterval은 최상위 1곳뿐. 나머지는 캐시만 읽는다."
+  },
+  "rules": {
+    "refetchInterval": "error",
+    "setInterval": "error",
+    "setLocalState": "error",
+    "releaseCollabSession": "error",
+    "singlePoller": "error",
+    "sessionEventSource": "warn",
+    "streamCapConstants": "warn"
+  }
+}

@@ -45,9 +45,10 @@ c638efa · e0a901d · 71bb069 · 342035c · 28bf811 · bc80ca1 · 8607716 · b07
 ## 기준선 (2026-10-19 실측 — 이전 문서의 "22/22, lint 9"는 오기였음)
 | 항목 | 명령 | 실측값 |
 |---|---|---|
-| 단위+프론트 | `pnpm -C backend test -- run` | **430 passed**, 2 failed suites |
+| 단위+프론트 | `pnpm -C backend test -- run` | **469 passed**, 2 failed suites |
 | 타입 | `pnpm -C frontend exec tsc -b` | **에러 0** (exit 0) |
-| 린트 | `pnpm -C frontend lint` | **330 problems (272 errors, 58 warnings)** |
+| 린트 | `pnpm -C frontend exec eslint .` | **330 problems (272 errors, 58 warnings)** |
+| 메모리 규칙 | `pnpm check:memory` | **오류 0, 경고 1** (D36 EventSource 2곳 — 4b-P0 대상) |
 
 - 실패하는 2개는 `backend/test/services/config-migration.test.ts`,
   `backend/test/services/repo-tracking.test.ts` — 둘 다 `bun:sqlite` 미설치 탓이다.
