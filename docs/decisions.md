@@ -41,6 +41,28 @@
 - D24 입장/퇴장 토스트는 trace 모드에서만. 연결됨 배지는 에러일 때만 표시.
 - D25 이름: 서버 `/suggest-name`(user1, user2…)으로 발급. 'You' 기본값 금지.
   코멘트는 작성자 이름 필수.
+- D26 원격 마우스 커서는 게시·표시하지 않음. 참가자 바, 도형 선택 외곽선, 슬라이드 위치만 유지.
+  awareness 송신은 최대 4회/초. 이유: 마우스 이동마다 상태 전체를 JSON으로 송수신하고 리렌더하는 할당 부담, 기능 가치 낮음. (M7)
+
+  근거 (lib 4.33.0 / ooxml-ui 1.8.0):
+  - `chunk-552NAFTD.js:12570-12590` — pointermove마다 `broadcastPresence({cursorX, cursorY, activeSlideIndex})`.
+  - `BROADCAST_THROTTLE_MS = 50` (`chunk-MCHPNO42.mjs:31551`) → 초당 20회 갱신.
+  - 갱신 1회마다 상태 전체를 JSON 직렬화해 송신하고, 수신 측에서는 awareness
+    'change'+'update' 두 이벤트마다 projector를 돌려(`chunk-552NAFTD.js:388-402`) React 리렌더가 뛴다.
+  - 끄는 옵션이 없다: `CollaborationConfig`(`ooxml-ui/dist/pptx/types.d.ts:181-237`)과
+    `ViewerDialogId`(`customization-types.d.ts:166`)에 커서 토글이 없다.
+    → lib 패치 없이 **전송 계층**에서 제거한다.
+  - 구현: `frontend/src/lib/collabPresenceFilter.ts`. y-protocols의
+    `modifyAwarenessUpdate`(awareness.js:219)로 송수신 양쪽에서 좌표를 뺀다.
+    로컬 state는 건드리지 않는다(C5의 setLocalState 금지 유지).
+    커서만 바뀐 갱신은 생략하고 나머지는 초당 4회 + trailing.
+  - `presence` 전체를 지우면 안 된다 — 원격 선택 외곽선(E3)이
+    `selectedElementId`에 의존한다(`chunk-552NAFTD.js:12628`).
+  - 수신에서 좌표를 빼면 `clampCursorPosition(undefined) = 0`이라 좌상단에 유령 커서가
+    생긴다(`chunk-MCHPNO42.mjs:31626`). 표시 차단은
+    `[data-testid='remote-user-cursors'] { display: none }`로 한다.
+  - 보존 확인: `app.{id,name,color,mode}`, `presence.{userName,userColor,role,
+    activeSlideIndex,selectedElementId}`는 그대로 전송된다.
 
 ## 세션·메모리
 - D30 탭당 파일당 세션 1개(registry). release는 acquire가 준 lease 토큰으로만(1회성, entry 소유 확인).

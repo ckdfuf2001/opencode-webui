@@ -370,3 +370,12 @@ body {
   padding: calc(var(--spacing) * 4);
 }
 
+/* D26: 원격 마우스 커서를 표시하지 않는다.
+   전송 단계에서 cursorX/cursorY를 제거하지만(ooxml-ui clampCursorPosition는
+   값이 없으면 0을 돌려준다 — chunk-MCHPNO42.mjs:31626) lib은 그래도 사용자를
+   목록에 남겨 좌상단에 커서를 그린다. 참가자 바·원격 선택 외곽선은 별도 요소라
+   영향받지 않는다. */
+[data-testid='remote-user-cursors'] {
+  display: none !important;
+}
+

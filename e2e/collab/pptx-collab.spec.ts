@@ -157,8 +157,51 @@ test.describe('pptx collab (desktop)', () => {
     await closeTwo(t)
   })
 
-  test('E3: remote selection', async ({ browser }, testInfo) => {
-    const f = await freshFile('e3', 0)
+  test('E21b: remote mouse cursor is not published or shown (D26)', async ({ browser }) => {
+    const f = await freshFile('e21b', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'edit')
+
+    // 두 탭이 서로를 owner가 아닌 상태로 수렴할 때까지 기다린다.
+    await expect(async () => {
+      const dB = await readDebug(t.pageB)
+      expect(dB.ownerClientId).not.toBeNull()
+      expect(dB.ownerClientId).not.toBe(dB.clientId)
+    }).toPass({ timeout: 25000 })
+    // A가 캔버스 위를 마우스로 크게 움직인다 (pointermove storm).
+    const box = await t.pageA.getByTestId('pptx-viewer-root').boundingBox()
+    expect(box).not.toBeNull()
+    const txBefore = (await readDebug(t.pageA)).awarenessTx ?? 0
+    for (let i = 0; i < 40; i++) {
+      await t.pageA.mouse.move(
+        box!.x + 40 + (i % 12) * 30,
+        box!.y + 40 + Math.floor(i / 12) * 25,
+        { steps: 3 },
+      )
+    }
+    await t.pageA.waitForTimeout(2000)
+
+    // 1) 표시: 원격 커서 요소가 하나도 없어야 한다.
+    await expect(t.pageB.locator('[data-pptx-remote-cursor]')).toHaveCount(0)
+    await expect(t.pageB.locator('[data-testid="remote-user-cursors"]')).toBeHidden()
+
+    // 2) 게시: 마우스를 움직여도 awareness 송신이 초당 4회 상한을 넘기지 않는다.
+    //    40회 이동(각각 3 step)이 그대로 갔다면 수백 번이 된다.
+    const txAfter = (await readDebug(t.pageA)).awarenessTx ?? 0
+    expect(txAfter - txBefore).toBeLessThanOrEqual(12)
+
+    // 3) 회귀: 원격 선택 외곽선은 여전히 간다 (presence의 나머지는 살아 있어야 한다).
+    await gotoSlide(t.pageA, 2)
+    await gotoSlide(t.pageB, 2)
+    await selectShape(t.pageA, shapesA, 'Body 2')
+    await expect(t.pageB.locator(REMOTE_SELECTION_SELECTOR)).toBeVisible({ timeout: 8000 })
+
+    await closeTwo(t)
+  })
+
+  test('E3: remote selection', async ({ browser }, testInfo) => {    const f = await freshFile('e3', 0)
     const t = await twoPages(browser)
     const shapesA = new ShapeLocator(t.pageA)
     await openFile(t.pageA, f.name, 'edit')

@@ -4,6 +4,13 @@ import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import type { CollaborationConfig } from 'pptx-react-viewer'
+import { stripCursorFields, onlyPresenceNoiseChanged, createAwarenessThrottle, PRESENCE_STALE_S } from './collabPresenceFilter'
+
+/** D26: awareness 송신은 초당 이 횟수로 제한한다 (마지막 값은 trailing로 보장). */
+const AWARENESS_MAX_TX_PER_SEC = 4
+const AWARENESS_MIN_INTERVAL_MS = Math.floor(1000 / AWARENESS_MAX_TX_PER_SEC)
+/** D26: 이 간격(초) 이상 아무것도 안 보냈다면 노이즈 갱신이라도 보내 신선도를 유지한다. */
+const AWARENESS_KEEPALIVE_MS = PRESENCE_STALE_S * 1000
 
 /**
  * M4 진단(측정 전용): 열린 WebSocket 추적.
@@ -206,6 +213,14 @@ export class YCollabSession {
   private transportOpenNotified = false
   /** provider가 disconnect()를 불렀는지. 그 뒤로는 자동 재연결하지 않는다. */
   private disconnectRequested = false
+  /** D26: awareness 송신 제한 (초당 4회). */
+  private readonly awarenessThrottle = createAwarenessThrottle(AWARENESS_MAX_TX_PER_SEC)
+  /** D26: 제한에 걸린 마지막 갱신의 trailing 타이머. */
+  private awarenessTrailingTimer: ReturnType<typeof setTimeout> | null = null
+  /** D26: 마지막으로 실제로 보낸 로컬 state (커서 제외 비교 기준). */
+  private lastSentAwarenessState: unknown = null
+  /** D26: 마지막 실제 송신 시각 (신선도 keepalive 판정). */
+  private lastSentAwarenessAt = 0
   /** M7 측정용: awareness 송·수신 누적 카운터. */
   private awarenessTxCount = 0
   private awarenessRxCount = 0
@@ -325,14 +340,9 @@ export class YCollabSession {
       syncProtocol.writeSyncStep1(s, this.doc)
       this.send(encoding.toUint8Array(s))
       // awareness 초기 publish (서버가 clientID를 알아야 owner 판정이 된다).
-      const a = encoding.createEncoder()
-      encoding.writeVarUint(a, 1)
-      encoding.writeVarUint8Array(
-        a,
-        awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.awareness.clientID]),
-      )
-      const ab = encoding.toUint8Array(a)
-      this.send(ab)
+      this.lastSentAwarenessState = this.awareness.getLocalState()
+      this.lastSentAwarenessAt = Date.now()
+      this.sendAwareness([this.awareness.clientID])
     }
     ws.onmessage = (evt) => {
       const data = toBytes((evt as MessageEvent).data)
@@ -369,17 +379,19 @@ export class YCollabSession {
           this.setStatus('connected')
           // open 직후 awareness가 서버에 닿지 않은 경우 대비: sync 확정 시점에
           // 스냅샷을 한 번 더 보낸다. 같은 clock이면 서버가 무시하므로 冪等하다.
-          const au = encoding.createEncoder()
-          encoding.writeVarUint(au, 1)
-          encoding.writeVarUint8Array(
-            au,
-            awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.awareness.clientID]),
-          )
-          this.send(encoding.toUint8Array(au))
+          this.sendAwareness([this.awareness.clientID])
         }
       } else if (type === 1) {
+        // D26: 구버전 클라이언트가 보낸 커서 좌표는 수신 단계에서 버린다.
+        // 그래야 projector 출력이 안정돼 리렌더가 멈춘다
+        // (ooxml-ui createPresenceProjector는 목록이 같으면 changed=false).
+        const raw = decoding.readVarUint8Array(d)
         this.awarenessRxCount += 1
-        awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(d), this)
+        awarenessProtocol.applyAwarenessUpdate(
+          this.awareness,
+          awarenessProtocol.modifyAwarenessUpdate(raw, stripCursorFields),
+          this,
+        )
       } else if (type === 100) {
         this.handleOwnMessage(type, d)
       }
@@ -572,11 +584,56 @@ export class YCollabSession {
     origin: unknown,
   ): void => {
     if (origin === this) return
+    // D26: 마우스만 움직이면 보낼 이유가 없다. 갱신 1회마다 상태 전체를
+    // JSON으로 직렬화해 나가므로 초당 20회( BROADCAST_THROTTLE_MS=50 )
+    // 크기의 할당이 반복된다. 좌표와 lastUpdated만 바뀐 갱신은 여기서 끝낸다.
+    // 단, 신선도(STALE_PRESENCE_MS=30s)를 잃지 않게 keepalive 간격은 무조건 보낸다.
+    const localState = this.awareness.getLocalState()
+    const fresh = Date.now() - this.lastSentAwarenessAt < AWARENESS_KEEPALIVE_MS
+    if (fresh && onlyPresenceNoiseChanged(this.lastSentAwarenessState, localState)) return
+    const clients = [...added, ...updated, ...removed]
+    if (clients.length === 0) return
+    if (!this.awarenessThrottle.request()) {
+      this.scheduleAwarenessTrailing(clients)
+      return
+    }
+    this.lastSentAwarenessState = localState
+    this.lastSentAwarenessAt = Date.now()
+    this.sendAwareness(clients)
+  }
+
+  /** D26: 제한에 걸린 갱신을 나중에 한 번만 보낸다. 마지막 값이 우선이다. */
+  private scheduleAwarenessTrailing(clients: number[]): void {
+    if (this.awarenessTrailingTimer) return
+    this.awarenessTrailingTimer = setTimeout(() => {
+      this.awarenessTrailingTimer = null
+      const localState = this.awareness.getLocalState()
+      const fresh = Date.now() - this.lastSentAwarenessAt < AWARENESS_KEEPALIVE_MS
+      if (fresh && onlyPresenceNoiseChanged(this.lastSentAwarenessState, localState)) return
+      if (!this.awarenessThrottle.request()) {
+        this.scheduleAwarenessTrailing(clients)
+        return
+      }
+      this.lastSentAwarenessState = localState
+      this.lastSentAwarenessAt = Date.now()
+      this.sendAwareness(clients)
+    }, AWARENESS_MIN_INTERVAL_MS)
+  }
+
+  /**
+   * D26: awareness를 보내되 커서 좌표는 뺀다.
+   * 로컬 state는 건드리지 않는다 — modifyAwarenessUpdate는 바이트만 고친다
+   * (AGENTS.md C5의 setLocalState 금지도 그대로 지킨다).
+   */
+  private sendAwareness(clients: number[]): void {
     const e = encoding.createEncoder()
     encoding.writeVarUint(e, 1)
     encoding.writeVarUint8Array(
       e,
-      awarenessProtocol.encodeAwarenessUpdate(this.awareness, [...added, ...updated, ...removed]),
+      awarenessProtocol.modifyAwarenessUpdate(
+        awarenessProtocol.encodeAwarenessUpdate(this.awareness, clients),
+        stripCursorFields,
+      ),
     )
     this.send(encoding.toUint8Array(e))
     this.awarenessTxCount += 1
@@ -834,6 +891,10 @@ export class YCollabSession {
     if (this.connectTimer) {
       clearTimeout(this.connectTimer)
       this.connectTimer = null
+    }
+    if (this.awarenessTrailingTimer) {
+      clearTimeout(this.awarenessTrailingTimer)
+      this.awarenessTrailingTimer = null
     }
     try {
       this.doc.off('update', this.onDocUpdate)

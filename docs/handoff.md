@@ -64,21 +64,60 @@ c638efa · e0a901d · 71bb069 · 342035c · 28bf811 · bc80ca1 · 8607716 · b07
    ⚠ E21 E2E(`e2e/collab/pptx-collab.spec.ts`)는 추가했지만 **이 PC에서 실행 확인하지 못했다** —
    아래 "E2E 하네스 장애" 참조.
 
-2. **M6 보완** — `e2e/collab/viewer-unmount.spec.ts:135`의 소켓 단언이
+2. **M7 — PPT 열어 둔 상태 메모리 증가 + 원격 마우스 커서 제거** (P0, PPT freeze exception: 메모리)
+   커서 제거는 **착수 완료(D26)**, 원인 측정은 **아직** — 커서를 끄는 것과
+   "계속 늘어나는 원인"은 별개다. 커서를 꺼도 S0(혼자)에서 늘면 뷰어 자체 문제다.
+
+   **용어 정정**: 마우스/선택 presence는 SSE가 아니라 **collab WebSocket awareness(type 1)**다.
+   SSE 설정과 무관. 보고에서 "SSE"로 쓰지 말 것.
+
+   측정은 각 조건 10분, 1분 간격 `__memFloor()` + GC 버튼 후 heap 기록:
+
+   | ID | 조건 |
+   |---|---|
+   | S0 | solo 보기(공동편집 끔: `?collab=0` 플래그 신설 필요, 기본 on) |
+   | S1 | 공동편집 on, 혼자 |
+   | S2 | 상대 1명 접속, 둘 다 가만히 |
+   | S3 | 상대가 마우스만 계속 움직임 |
+   | S4 | 상대가 텍스트 편집 1분 간격 |
+   | S5 | 내가 owner로 편집(write-back 발생) |
+
+   판정: S0부터 증가 → lib 렌더러/래퍼(공동편집 무관). S3에서만 → awareness 경로.
+   S4/S5에서만 → Y.Doc 업데이트·undo 히스토리·write-back 직렬화.
+   증가 조건마다 heap snapshot 2장(0분/10분) Comparison 상위 10 + Retainers 첨부.
+
+   측정 도구는 커서 제거 커밋에 함께 들어갔다: `__collabDebug.awarenessTx/awarenessRx`
+   누적 카운터. S3에서 상대가 마우스를 움직여도 내 `awarenessRx`가 거의 늘지 않아야 한다.
+   **`?collab=0` 플래그는 아직 없다 — S0 측정에 필요해 먼저 만드는 게 좋다.**
+
+   열린 상태 증가 후보(근거 줄 번호가 지목하는 것만 고친다 — 추측 수정 금지):
+   1. lib undo/redo 스택: 원격 업데이트·write-back이 히스토리에 쌓이는지, 상한 있는지.
+   2. onContentChange마다 getContent() 전체 직렬화 잔존 여부. write-back은 debounce 경로에서만 직렬화.
+   3. write-back 바이트 보관처. sha256Hex의 `new Uint8Array` 복사 제거(subarray/원본 버퍼).
+   4. `ensurePptxImagesSyncable()`이 모듈 최상위에서 항상 적용 → solo/보기 전용에선
+      불필요한 base64(+33%). 공동편집 세션일 때만 적용 가능한지 lib 근거로 확인할 것.
+   5. Y.Doc `gc` 설정 확인, 이미지 이동·편집 시 update 바이트 크기 기록(W3).
+   6. lib 10초 presence 재게시(`chunk-552NAFTD.js:408-423`)가 수신 측 전체 리렌더를 유발하는지.
+   7. `DocumentPreview.tsx` 1초 interval이 저장 대기 표시 중에만 도는지.
+
+   완료 기준: S0~S5 표 첨부, 전 조건 10분 GC 바닥선 증가 ≤ 5MB, 초기 피크 ≤ 500MB,
+   커서 제거 테스트 + PPT E2E 전체 회귀(chromium + msedge, `--repeat-each=3`).
+
+3. **M6 보완** — `e2e/collab/viewer-unmount.spec.ts:135`의 소켓 단언이
    `toBeLessThanOrEqual(1)`이라 느슨하다(닫은 뒤 0이어야 함).
    M6c(시트/다이얼로그 닫기), xlsx/docx 닫기 각 1회 추가.
    사용자 확인: 닫은 뒤 viewer-root 0, sockets 0, GC 후 5분 heap 증가 < 5MB.
-   열어 둔 채로도 계속 늘면 M7(lib 내부)로 분리하고 heap snapshot retainers 첨부.
+   열어 둔 채로도 계속 늘면 M7의 lib 내부 항목(M7)으로 분리하고 heap snapshot retainers 첨부.
 
-3. **B1** — X-B1(xlsx Edit 20회, 편집 UI 표시 실패 0) 실행 결과 보고. b07b49b 하네스 기준.
+4. **B1** — X-B1(xlsx Edit 20회, 편집 UI 표시 실패 0) 실행 결과 보고. b07b49b 하네스 기준.
    2026-10-19 chromium 기준 **1 passed (1.5m)** 로 재현 확인했다. msedge는 미확인.
 
-4. **XLSX 공동편집** — X0a~X0f(라운드트립, 탭 2개, 30초 무쓰기, room_reset, owner meta 1초) → X1~X9.
+5. **XLSX 공동편집** — X0a~X0f(라운드트립, 탭 2개, 30초 무쓰기, room_reset, owner meta 1초) → X1~X9.
    설계 기록은 `docs/collab-xlsx-docx.md`에 신설(아직 없음).
 
-5. **DOCX** — D1~D9 (XLSX 완료 후).
+6. **DOCX** — D1~D9 (XLSX 완료 후).
 
-6. **태그** — 검증 묶음 통과 후 버전 bump + exe 빌드.
+7. **태그** — 검증 묶음 통과 후 버전 bump + exe 빌드.
 
 ## E2E 하네스 장애 (2026-10-19 실측) — PPT 스펙 전체가 이 환경에서 실행 불가
 
