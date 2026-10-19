@@ -645,6 +645,16 @@ export async function currentDiskHash(roomId: string): Promise<string | null> {
 /**
  * zip 바이트에서 이미지 파트 수와 slide rel의 image 관계 수를 센다.
  * 이미지 손실 가드(4-0)와 계측에 쓴다. 읽기 실패면 null(판정하지 않음).
+ *
+ * M9/6절 수정: media 계수를 "정규식 문자열 탐색" 에서 "ZIP 로컬 파일 헤더 파싱" 으로
+ * 바꾼다. 예전 로직은 로컬 헤더와 중앙 디렉터리 양쪽에서 같은 이름을 두 번 세고,
+ * 이름 길이 검사(`> 'ppt/media/'.length`)는 정규식이 NUL 직전까지 greedily 매칭해서
+ * 'ppt/media/' 디렉터리 엔트리까지 media 로 세었다.
+ *   실제 이미지 3장짜리 fixture → 예전 계수 8, 새 계수 3
+ * 앱이 저장한 바이트(ZIP 디렉터리 엔트리 없음) → 예전 계수 6, 새 계수 3
+ * → "8 -> 6" 이라는 손실로 오탐해 **이미지가 있는 덱은 저장이 아예 막혔다.**
+ * (E2: live text reflection + disk 실패의 근본 원인. 데이터 손실은 없었고,
+ *  가드가 막아서 디스크 파일은 그대로였다.)
  */
 export function countPptxImages(
   bytes: Uint8Array,
@@ -655,19 +665,38 @@ export function countPptxImages(
       bytes.byteOffset,
       bytes.byteLength,
     ) as Buffer
-    // 로컬 헤더 탐색(중앙 디렉터리 파싱 불필요, 메모리 최소).
-    const text = buf.toString('latin1')
+    const LOCAL_HEADER_SIG = Buffer.from([0x50, 0x4b, 0x03, 0x04])
     let media = 0
     let refs = 0
-    // 파트 이름은 ZIP 로컬 헤더에서 'PK\x03\x04' 뒤 길이 필드 이후에 온다.
-    const re = /ppt\/media\/[^\x00]*?(?=\x00)/g
-    let m: RegExpExecArray | null
-    while ((m = re.exec(text)) !== null) {
-      if (m[0].length > 'ppt/media/'.length) media += 1
-      if (refs > 4000) break
+    // ZIP 로컬 파일 헤더(PK\x03\x04)를 훑어 파일 이름을 한 번씩만 센다.
+    for (let p = 0; p + 30 <= buf.length; ) {
+      if (buf.readUInt32LE(p) !== 0x04034b50) {
+        p += 1
+        continue
+      }
+      const nameLen = buf.readUInt16LE(p + 26)
+      const extraLen = buf.readUInt16LE(p + 28)
+      const compSize = buf.readUInt32LE(p + 18)
+      const name = buf.subarray(p + 30, p + 30 + nameLen).toString('latin1')
+      // 디렉터리 엔트리는 이름이 '/' 로 끝난다 → 이미지가 아니다.
+      if (name.startsWith('ppt/media/') && !name.endsWith('/')) media += 1
+      const headerEnd = p + 30 + nameLen + extraLen
+      // 압축 크기를 알면 데이터까지 건너뛴다(데이터 안의 바이트열 오인 방지).
+      // 데이터 디스크립터(flag bit 3)라 로컬 헤더의 크기가 0 이면
+      // 다음 로컬 헤더 시그니처를 찾아서 간다.
+      if (compSize > 0) {
+        p = headerEnd + compSize
+      } else {
+        const next = buf.indexOf(LOCAL_HEADER_SIG, headerEnd)
+        if (next < 0) break
+        p = next
+      }
     }
     // image 관계 수: TargetMode 없는 image 관계 Target 개수.
+    // (rel 파일은 deflate 로 압축돼 있어 원문 바이트로는 보이지 않는다 → 대개 0)
+    const text = buf.toString('latin1')
     const reRef = /relationships\/image"[^>]*Target="/g
+    let m: RegExpExecArray | null
     while ((m = reRef.exec(text)) !== null) {
       refs += 1
       if (refs > 4000) break
