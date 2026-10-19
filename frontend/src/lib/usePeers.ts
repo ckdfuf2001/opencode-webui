@@ -81,10 +81,49 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
     const bump = (): void => setVersion((v) => v + 1)
     const offAwareness = (() => {
       try {
-        session.awareness.on('change', bump)
+        // M7: 우리 자신의 awareness 변경으로는 참가자 목록이 바뀌지 않는다.
+        // lib은 10초마다 자기 presence를 재게시해서 lastUpdated만 바꾼다
+        // (chunk-552NAFTD.js:408-423). 그때마다 bump하면 PptxViewer가 통째로
+        // 리렌더되고, lib 뷰어(24슬라이드)가 다시 그려져 렌더러 네이티브 메모리가
+        // 쌓인다(JS heap은 평탄, renderer private는 상승 — 실측).
+        // → 원격 변경은 항상 bump. 자기 변경은 '목록에 표시되는 필드'가 바뀔 때만 bump.
+        const self = session.awareness.clientID
+        const selfSig = (): string => {
+          const st = session.awareness.getLocalState() as Record<string, unknown> | null
+          if (!st) return ''
+          const app = (st.app ?? {}) as Record<string, unknown>
+          const lib = readLibPresence(st)
+          return JSON.stringify([
+            app.id, app.name, app.color, app.mode, app.device, app.slide, app.where,
+            st.userName, st.userColor,
+            lib?.name, lib?.color, lib?.role, lib?.slide, lib?.selectedId,
+          ])
+        }
+        let lastSelfSig = selfSig()
+        const onChange = ({
+          added,
+          updated,
+          removed,
+        }: {
+          added: number[]
+          updated: number[]
+          removed: number[]
+        }): void => {
+          const remoteTouched = [...added, ...updated, ...removed].some((c) => c !== self)
+          if (remoteTouched) {
+            bump()
+            return
+          }
+          const sig = selfSig()
+          if (sig !== lastSelfSig) {
+            lastSelfSig = sig
+            bump()
+          }
+        }
+        session.awareness.on('change', onChange)
         return () => {
           try {
-            session.awareness.off('change', bump)
+            session.awareness.off('change', onChange)
           } catch {
             // 무시
           }

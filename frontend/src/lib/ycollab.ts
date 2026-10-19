@@ -224,6 +224,8 @@ export class YCollabSession {
   /** M7 측정용: awareness 송·수신 누적 카운터. */
   private awarenessTxCount = 0
   private awarenessRxCount = 0
+  /** M7 측정용: Y.Doc 업데이트 횟수 (리렌더 유발 경로 확인용). */
+  private docUpdateCount = 0
 
   constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode | 'transport'; userId?: string; device?: YCollabDevice; doc?: Y.Doc; awareness?: awarenessProtocol.Awareness }) {
     this.url = url
@@ -561,6 +563,7 @@ export class YCollabSession {
     }
     const now = Date.now()
     for (const w of writers) this.lastEditAt.set(w, now)
+    this.docUpdateCount += 1
     const activity: CollabActivity = { at: now, writers }
     this.activityListeners.forEach((l) => {
       try {
@@ -642,6 +645,11 @@ export class YCollabSession {
   /** M7 측정용 카운터. */
   get awarenessStats(): { tx: number; rx: number } {
     return { tx: this.awarenessTxCount, rx: this.awarenessRxCount }
+  }
+
+  /** M7 측정용 카운터. */
+  get docUpdateStats(): { updates: number; writers: number } {
+    return { updates: this.docUpdateCount, writers: this.lastEditAt.size }
   }
 
   private send(data: Uint8Array): void {

@@ -220,6 +220,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   }, [])
   const saveCountRef = useRef(0)
   const save409Ref = useRef(0)
+  // M7 측정: 이 컴포넌트의 리렌더 횟수. 어떤 상태가 리렌더를 유발하는지
+  // 특정하기 위한 계측이다(측정 후 제거 예정).
+  const renderCountRef = useRef(0)
+  renderCountRef.current += 1
   const updateDebug = useCallback(() => {
     if (!collabDebug) return
     try {
@@ -252,6 +256,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         sessionCount: collabSessionCount(),
         // M7 측정(S0): ?collab=0 이면 세션이 없어야 한다.
         collabDisabled,
+        // M7 측정: PptxViewer 리렌더 횟수.
+        renderCount: renderCountRef.current,
+        // M7 측정: Y.Doc 업데이트 횟수. 리렌더 유발 경로 판별용.
+        docUpdates: c?.session.docUpdateStats.updates ?? 0,
+        docWriters: c?.session.docUpdateStats.writers ?? 0,
         // M7 측정: awareness 송·수신 누적. S3(상대 마우스 이동)에서
         // tx가 늘어나지 않으면 커서가 wire에서 제거된 것이다.
         awarenessTx: c?.session.awarenessStats.tx ?? 0,
