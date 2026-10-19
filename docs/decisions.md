@@ -110,8 +110,9 @@
   - 금지: 같은 query key에 `refetchInterval`을 새로 추가하지 않는다. 허용 목록에 넣으려면
     D29 근거와 측정값이 필요하다(`pnpm check:memory`가 걸러낸다).
   - 관련 커밋: 8683102
-  - 회귀 검사: 3-1(`refetchInterval` 허용 목록), 3-2(`memoryPolling.test.ts` — 주기 1200/5000,
-    캐시 전용 observer는 타이머를 만들지 않음), 3-3(E2E 유휴 interval run/s)
+  - 회귀 검사: 3-1(`refetchInterval` 허용 목록 + **같은 query key 중복 검사**), 3-2(`memoryPolling.test.ts` —
+    주기 1200/5000, 캐시 전용 observer는 타이머를 만들지 않음 / `memoryObserver.test.ts` —
+    queryCache 기준 폴링 observer 1개 + 앱 소스가 조건부 폴링을 유지하는지), 3-3(E2E 유휴 interval run/s)
 
 - D30 탭당 파일당 세션 1개(registry). release는 acquire가 준 lease 토큰으로만(1회성, entry 소유 확인).
   path 기반 release API는 삭제. (8604b47, 28bf811)

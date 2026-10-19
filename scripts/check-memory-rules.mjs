@@ -82,6 +82,7 @@ const files = walk(SRC).map((f) => ({
 const errors = []
 const warnings = []
 const notes = []
+const pollingSites = []
 
 function report(list, sev, dno, msg) {
   list.push({ sev, dno, msg })
@@ -107,22 +108,84 @@ function allowed(list, file, value) {
   return (list ?? []).find((e) => e.file === file && new RegExp(e.value).test(value))
 }
 
+/**
+ * 폴링 지점의 query key 를 찾는다 (같은 useQuery({...}) 안에서 refetchInterval 위에 있는
+ * queryKey). D29 "같은 key 에 타이머 1곳" 을 확인하기 위해 쓴다.
+ */
+function nearestQueryKey(file, line) {
+  const f = files.find((x) => x.rel === file)
+  if (!f) return '(알 수 없음)'
+  for (let i = line - 2; i >= 0 && i >= line - 200; i--) {
+    const l = f.lines[i]
+    if (!l) continue
+    // 다른 useQuery 블록을 넘어가면 같은 쿼리가 아니다
+    if (/useQuery\s*\(/.test(l)) break
+    let m = l.match(/queryKey\s*:\s*(\[[^\]]*\])/)
+    if (m) return m[1].replace(/\s+/g, '')
+    m = l.match(/queryKey\s*:\s*([A-Za-z0-9_.]+\([^)]*\))/)
+    if (m) return m[1].replace(/\s+/g, '')
+    m = l.match(/queryKey\s*:\s*([A-Za-z0-9_]+)/)
+    if (m) return m[1]
+  }
+  return '(알 수 없음)'
+}
+
 // ── 1) refetchInterval (D29) ───────────────────────────────────────────────
 {
   const hits = findAll(/\brefetchInterval\s*:\s*([^,]*)/)
-  let checked = 0
+  let allowedCount = 0
+  let denied = 0
+  const sites = []
   for (const h of hits) {
     const value = h.match[1].trim()
     if (value === 'false') continue // "캐시만 읽는다"는 언제나 허용 (D29)
-    checked++
-    if (!allowed(allow.refetchInterval, h.file, value)) {
+    const key = nearestQueryKey(h.file, h.line)
+    const entry = allowed(allow.refetchInterval, h.file, value)
+    if (entry) allowedCount++
+    else {
+      denied++
       report(errors, 'error', 'D29',
-        `refetchInterval 허용 목록에 없음: ${h.file}:${h.line} — "${value}"\n` +
+        `refetchInterval 허용 목록에 없음: ${h.file}:${h.line} — "${value}" (key=${key})\n` +
         `      → D29 위반: 같은 query key의 refetchInterval은 Pollers.tsx(단일 폴러)에서만 허용한다.\n` +
         `      → 허용 목록에 추가하려면 docs/decisions.md D29에 근거와 측정값을 적고 scripts/memory-allowlist.json에 entry를 추가한다.`)
     }
+    sites.push({ file: h.file, line: h.line, value, key, reason: entry?.reason })
   }
-  notes.push(`D29 refetchInterval 검사: ${checked}건(허용 목록 외) / 전체 ${hits.length}건`)
+  notes.push(`D29 refetchInterval: 허용 ${allowedCount} / 미허용 ${denied} / 전체 ${allowedCount + denied}`)
+
+  // 같은 query key에 refetchInterval 이 2곳 이상이면 D29 위반 (폴러 1곳 원칙)
+  const byKey = new Map()
+  for (const s of sites) {
+    if (!s.key || s.key === '(알 수 없음)') continue
+    if (!byKey.has(s.key)) byKey.set(s.key, [])
+    byKey.get(s.key).push(s)
+  }
+  let dupCount = 0
+  for (const [key, list] of byKey) {
+    if (list.length > 1) {
+      dupCount++
+      report(errors, 'error', 'D29',
+        `같은 query key 에 refetchInterval 이 ${list.length}곳입니다: key=${key}\n` +
+        `      → D29 위반: ${list.map((x) => `${x.file}:${x.line}`).join(', ')}\n` +
+        `      → 같은 key 의 타이머는 최상위 1곳만 둔다(나머지는 refetchInterval: false).`)
+    }
+  }
+  notes.push(`D29 같은 key 중복: ${dupCount}건 (폴링 지점 ${byKey.size}개 key)`)
+
+  // 허용 목록 항목마다 근거(reason)가 있어야 한다
+  for (const [kind, list] of Object.entries({ refetchInterval: allow.refetchInterval, setInterval: allow.setInterval })) {
+    for (const e of list ?? []) {
+      if (!e.reason || !String(e.reason).trim()) {
+        report(errors, 'error', 'D29',
+          `허용 목록 항목에 근거(reason)가 없습니다: ${kind} → ${e.file} (${e.value ?? ''})\n` +
+          `      → D29: 허용하려면 docs/decisions.md D29 근거와 측정값을 reason 에 적는다.`)
+      }
+    }
+  }
+  notes.push(`D29 허용 목록 근거 확인: refetchInterval ${allow.refetchInterval?.length ?? 0}건 / setInterval ${allow.setInterval?.length ?? 0}건`)
+
+  // 폴링 지점 목록 (근거와 함께)
+  for (const s of sites) pollingSites.push(s)
 }
 
 // ── 2) setInterval (D29/D35) ──────────────────────────────────────────────
@@ -217,6 +280,13 @@ function allowed(list, file, value) {
 const label = (s) => (s === 'error' ? '✖ 오류' : '▲ 경고')
 console.log('메모리 규칙 검사 (D26~D36) — scripts/check-memory-rules.mjs\n')
 for (const n of notes) console.log(`  · ${n}`)
+if (pollingSites.length) {
+  console.log('')
+  console.log('  폴링 지점 목록 (D29: key 당 1곳이어야 함):')
+  for (const s of pollingSites) {
+    console.log(`    · ${s.file}:${s.line}  key=${s.key}  값=${s.value}${s.reason ? `  — ${s.reason}` : ''}`)
+  }
+}
 if (errors.length || warnings.length) {
   console.log('')
   for (const e of errors) console.log(`${label(e.sev)} [${e.dno}] ${e.msg}\n`)

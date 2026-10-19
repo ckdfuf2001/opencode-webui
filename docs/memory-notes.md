@@ -172,6 +172,7 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 | 닫은 뒤 | 열기 직전 대비 +30MB 이내(GC 후), viewer-root 0, `__openSockets()` 0 | prod 실측 +50MB(50회 이동), 조건별 확인 필요 |
 | 절대 크기(dev) | 앱만 189.8 / 덱 열기 직후 1369.6 / 편집 20초 후 2705.9MB | 미해결 |
 | 절대 크기(prod) | 앱만 ~120 / 덱 열기 직후 ~538 / 편집 20초 후 ~660MB | 2절 실측(§13) |
+| 뷰 모드 JS heap floor | 47MB 덱 prod 뷰 모드에서 **435MB**(앱만 10MB) | **v0.13 "절대 크기 분해"** 항목 |
 | 이미지 캐시·GPU 메모리 | Chrome 작업관리자 기준. CDP로는 **읽을 수 없다** | 미해결(수동 기록 필요) |
 
 ### 12-1. 1절 30분 고원 (prod dist, 47MB 덱, 뷰 모드, `collab=0&poll=0`, 10초 프로브, 벽시계)
@@ -220,8 +221,12 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 
 - 4b-0 결과: SSE on 380ms 폴링(P0), 델타 중복 append(정합성 P0), cap 규칙 3개, 델타당 할당 5개.
 - 절대 크기 분해: 이미지 디코드, data: 문자열 사본, 편집 이중 마운트.
-- prod 뷰 모드 네이티브 +1.9MB/분(§12-1).
+- **prod 뷰 모드 네이티브 +1.9MB/분**(§12-1): 8시간이면 약 900MB. 고원 미도달이므로 종결 불가.
+  1b(N-a 앱만 / N-b 47MB 덱 / N-c 75B PNG 덱)로 PPT 탓인지 앱 탓인지 귀속 중.
+- **뷰 모드 JS heap floor 435MB**(47MB 덱, prod): JS 쪽은 평탄하지만 덱 1장이 힙을 425MB 잡는다.
+  v0.13 "절대 크기 분해" 항목으로 기록.
 - Chrome 작업관리자 열(Memory footprint/Image cache/GPU memory)은 CDP로 읽을 수 없어 **수동 기록 필요**.
+  가능하면 `chrome://tracing` memory-infra 덤프(0분/30분)로 malloc·partition_alloc·blink_gc·cc 중 증가분 확인.
 - E2E 하네스 복구: `e2e/collab/helpers/viewer.ts:150,:186`이 알림·배너에 가로막힘(기존부터 실패).
 
 

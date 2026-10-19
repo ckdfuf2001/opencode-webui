@@ -264,6 +264,8 @@
 
 - 폴링·interval·EventSource를 새로 추가하면 `pnpm check:memory`가 실패한다. 허용 목록에 넣으려면
   `docs/decisions.md`의 D29 근거와 측정값이 필요하다.
+- 검사 출력은 `허용 N / 미허용 M / 전체 T` 형식이고, **같은 query key에 폴링이 2곳** 있어도 실패한다.
+  허용 목록 항목에는 근거(reason)가 반드시 있어야 한다.
 - 뷰어는 닫을 때 언마운트한다(D32). 세션 해제는 lease 토큰으로만 한다(D30·D31).
 - 메모리 측정은 `docs/memory-notes.md`의 규칙(10초 프로브, 벽시계, GC 후 JS heap 병기)만 따른다.
 - 성능·메모리 변경 보고에는 전/후 표(interval run/s, MB/s, JS heap floor)를 반드시 넣는다.
