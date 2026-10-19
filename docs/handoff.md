@@ -13,10 +13,16 @@
 | M8-0 (문서·기준선) | 완료 | 7b45d1f, f466c97 |
 | M8-1 30분 고원 | 완료(결론: JS heap 평탄, 네이티브 +1.9MB/분 계속 상승) | memory-notes §12-1 |
 | M8-2 prod 절대 크기 | 완료(prod 덱 1장 +416MB, 10분 고원 도달) | memory-notes §12-2 |
-| M8-6 E2E 하네스 복구 | 진행 | helpers/viewer.ts:150,:186 |
+| M9-0 보완(검사 문구·queryCache 테스트) | 완료 | 009db23 |
+| M9-6 E2E 하네스 복구 | **완료(8/10 통과)** — E2만 앱 이슈로 잔존 | 1c862bd, 9f86d17 |
+| M9-1b 네이티브 귀속 | 진행(N-a 완료, N-b/N-c 진행) | memory-notes §14 |
 | M8-4b 채팅 폴링·SSE | 진행 (4b-0 조사 완료) | memory-notes §14 |
 | M8-3 절대 크기 분해 | 보류 | prod에서도 덱 1장이 416MB, 목표 150MB |
 | M8-5 정리 | 보류 | memCounters observer 정지·NowProvider 1Hz 확인 |
+
+**E2E 하네스 복구로 드러난 앱 이슈(v0.13 이월)**: owner write-back 직후 "external change detected" →
+방 재설정 → owner 상실 → 편집이 디스크에 반영되지 않음(E2). PPT 동결 영역이라 이번 커밋에서 제외.
+→ memory-notes §14-1 (V1).
 
 **다음 순서**: 1절(완료) → 2절(완료) → 6절(E2E 하네스) → 4b-P0(스트림 1개화) → 4b-1(S-a~C-b 측정) →
 4b-2(1 폴링주기 → 2 fastPull 정지 → 5 permission/question 폴링 → 3 코얼레싱 → 4 꼬리창) → 3절 → 5절.

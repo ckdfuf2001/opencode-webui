@@ -227,6 +227,29 @@ __openEventSources()  // 닫히지 않은 EventSource 수
   v0.13 "절대 크기 분해" 항목으로 기록.
 - Chrome 작업관리자 열(Memory footprint/Image cache/GPU memory)은 CDP로 읽을 수 없어 **수동 기록 필요**.
   가능하면 `chrome://tracing` memory-infra 덤프(0분/30분)로 malloc·partition_alloc·blink_gc·cc 중 증가분 확인.
-- E2E 하네스 복구: `e2e/collab/helpers/viewer.ts:150,:186`이 알림·배너에 가로막힘(기존부터 실패).
+
+### 14-1. v0.13 이월 항목 (M9-6절에서 남은 앱 이슈)
+
+| # | 내용 | 근거 | 상태 |
+|---|---|---|---|
+| V1 | **owner write-back 후 세션 재설정 → owner 상실 → 편집이 디스크에 안 반영**<br>E2(live text reflection + disk) 실패. 편집 직후 mount 6→7(리마운트), `role`이 owner→viewer, `owner`가 null이 되어 write-back이 일어나지 않는다. 백엔드 로그에 "external change detected (not from owner save)" → 방 재설정("owner elected" 재발생). | e2e/collab/pptx-collab.spec.ts:141, 백엔드 로그 | PPT 동결( viewer) 영역이라 이번에 고치지 않음 |
+| V2 | 뷰 모드 네이티브 +1.9MB/분 (§12-1). JS heap은 평탄(435MB 고정) | 1b 측정 | 1b 결과로 귀속 확정 |
+| V3 | 이미지 손실 가드 계수 오탐 — **수정 완료(9f86d17)**. 정규식 탐색이 로컬 헤더와 중앙 디렉터리를 모두 세고 'ppt/media/' 디렉터리 엔트리까지 세어 실제 3장짜리 덱을 8장으로 셌다. 앱 저장 바이트(디렉터리 엔트리 없음)는 6장으로 세어져 "8→6 = 손실"로 오탐 → **이미지가 있는 덱의 저장이 전부 막혔다.** ZIP 엔트리 기준으로 세도록 고쳤고 회귀 테스트를 추가했다. | backend/test/services/collab-image-count.test.ts | **해결됨** |
+
+### 14-2. E2E 하네스 복구 기록 (M9-6절)
+
+하네스만 고쳐서는 통과가 안 됐다. 원인은 3개가 겹쳐 있었다.
+
+1. **격리 워크스페이스가 둘** — playwright 설정은 메인 프로세스(웹서버용)와 테스트 워커에서 각각 평가된다.
+   `mkdtempSync` 를 매번 부르면 워크스페이스가 2개 생겨, 워커가 만든 fresh 파일이 백엔드에 안 보였다.
+   → `COLLAB_E2E_WS` 로 공유(설정은 1곳만 수정).
+2. **폴더 펼치기가 토글** — 헬퍼가 폴더 이름 span 을 클릭하는 방식은 expanded 반전이라 반복 클릭하면
+   다시 접혔다(8회 클릭 → 최종 접힘). → `Expand` 버튼(토글 아님) 사용 + 이미 펼쳐졌으면 no-op.
+3. **알림 배너가 클릭을 가로챔** — `PushPrompt`(알림 허용 배너, `fixed top-0 z-[100] bg-amber-500`)가
+   상단바의 "Workspace" 버튼을 덮었다. → 앱 플래그 `?e2e=1` / `VITE_E2E=1` 로 배너·토스트를 끈다.
+   (E2E webServer 는 vite 를 `VITE_E2E=1` 로 띄운다 → 스펙이 어떤 URL 로 가더라도 적용.)
+4. 선택적 fetch 실패(명령 목록)의 `console.error` 가 E2E 의 엄격한 콘솔 검사를 죽였다
+   (환경: opencode 서버 인스턴스 로드 타임아웃). → `?e2e=1` 일 때만 `console.warn` 으로 낮춘다.
+
 
 
