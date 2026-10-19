@@ -241,6 +241,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         imageSync: c ? countPptxDocImages(c.session.doc as unknown as Parameters<typeof countPptxDocImages>[0]) : null,
         // 2-2: 탭당 세션 수 (E17: 1이어야 한다).
         sessionCount: collabSessionCount(),
+        // M7 측정: awareness 송·수신 누적. S3(상대 마우스 이동)에서
+        // tx가 늘어나지 않으면 커서가 wire에서 제거된 것이다.
+        awarenessTx: c?.session.awarenessStats.tx ?? 0,
+        awarenessRx: c?.session.awarenessStats.rx ?? 0,
       }
     } catch {
       // 무시

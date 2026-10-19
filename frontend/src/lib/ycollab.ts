@@ -206,6 +206,9 @@ export class YCollabSession {
   private transportOpenNotified = false
   /** provider가 disconnect()를 불렀는지. 그 뒤로는 자동 재연결하지 않는다. */
   private disconnectRequested = false
+  /** M7 측정용: awareness 송·수신 누적 카운터. */
+  private awarenessTxCount = 0
+  private awarenessRxCount = 0
 
   constructor(url: string, user: YCollabUser, opts?: { mode?: YCollabMode | 'transport'; userId?: string; device?: YCollabDevice; doc?: Y.Doc; awareness?: awarenessProtocol.Awareness }) {
     this.url = url
@@ -375,6 +378,7 @@ export class YCollabSession {
           this.send(encoding.toUint8Array(au))
         }
       } else if (type === 1) {
+        this.awarenessRxCount += 1
         awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(d), this)
       } else if (type === 100) {
         this.handleOwnMessage(type, d)
@@ -575,6 +579,12 @@ export class YCollabSession {
       awarenessProtocol.encodeAwarenessUpdate(this.awareness, [...added, ...updated, ...removed]),
     )
     this.send(encoding.toUint8Array(e))
+    this.awarenessTxCount += 1
+  }
+
+  /** M7 측정용 카운터. */
+  get awarenessStats(): { tx: number; rx: number } {
+    return { tx: this.awarenessTxCount, rx: this.awarenessRxCount }
   }
 
   private send(data: Uint8Array): void {

@@ -112,6 +112,9 @@ export interface CollabDebug {
   localMode?: string | null
   imageSync?: { pictures: number; withData: number; blobOnly: number } | null
   sessionCount?: number
+  /** M7/D26: awareness 누적 송·수신. 커서가 wire에서 빠졌는지 판정한다. */
+  awarenessTx?: number
+  awarenessRx?: number
   clientLogs?: string[]
 }
 
