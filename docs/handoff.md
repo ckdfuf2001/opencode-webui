@@ -38,24 +38,31 @@ c638efa · e0a901d · 71bb069 · 342035c · 28bf811 · bc80ca1 · 8607716 · b07
 ## 진행 순서
 
 1. **B3 (P0, PPT freeze exception)** — 공동편집 중 owner가 아닌 사람이 수동 저장하면
-   "Save failed — staying in edit mode" 후 성공 토스트가 뜬다.
+   "Save failed — staying in edit mode" 후 성공 토스트가 뜬다. **→ 수정 완료 (커밋 아래 참조)**
 
    재현: 상대(owner)가 편집 종료하는 순간 내가 저장.
 
    원인 (코드 확인됨):
-   - `frontend/src/components/file-browser/PptxViewer.tsx:335` — `persistBytes`가 owner 여부를
+   - `frontend/src/components/file-browser/PptxViewer.tsx` — `persistBytes`가 owner 여부를
      클라이언트에서 미리 보지 않고 곧바로 `collabApi.save(...)`를 호출한다.
    - 서버가 non-owner를 `denied`로 돌려보내 `res.ok === false`.
    - `PptxViewer.tsx:377` — `if (!quiet) showToast.error(res.message ?? 'Save failed')` 로
      "Save failed" 토스트가 뜬다.
    - `PptxViewer.tsx:512-513` — 저장 리스너가 `if (!ok) throw new Error('Save rejected')`.
+     수동 저장은 `quiet: true`로 들어오므로 377의 토스트는 막히고 이 경로로만 번진다.
    - `PptxViewer.tsx:528` — catch가 `officeSaveDone { ok: false }`를 뿌려
-     DocumentPreview가 "staying in edit mode"을 표시한다.
+     `DocumentPreview.tsx:500`의 'Save failed — staying in edit mode'이 표시된다.
 
-   수정: owner가 아니고 synced면 API 호출 없이 성공 처리("자동 저장됩니다"). owner가 아직
-   null(승계 중)이면 type 100 meta를 최대 3초 대기 후 재판정. owner인데 denied면 meta 1회 대기 후
-   1회만 재시도. 수동 저장 1회 = 토스트 1개. 테스트 E21(수정 전 실패 확인).
-   ※ 기존 B2("저장되지 않았다" 경고)는 이 증상으로 보고 B3에 통합.
+   수정: `decideSaveIntent`(신규 `frontend/src/lib/collabSaveIntent.ts`)로 저장 전에 판정한다.
+   owner 미확정은 meta를 최대 3초 대기해 재판정하고, owner가 아니면 API를 부르지 않고
+   위임 성공으로 처리한다(토스트 1개). owner인데 denied면 meta 1회 대기 후 1회만 재시도한다.
+
+   검증: `frontend/test/collabSaveIntent.test.ts` 5케이스.
+   수정 전 게이트(항상 persist)로 돌리면 **3 failed / 2 passed**로 실패함을 확인했다.
+   수정 후 **5 passed**. 전체 단위 435 passed(기준선 430 + 5), tsc 에러 0, lint 330 유지.
+
+   ⚠ E21 E2E(`e2e/collab/pptx-collab.spec.ts`)는 추가했지만 **이 PC에서 실행 확인하지 못했다** —
+   아래 "E2E 하네스 장애" 참조.
 
 2. **M6 보완** — `e2e/collab/viewer-unmount.spec.ts:135`의 소켓 단언이
    `toBeLessThanOrEqual(1)`이라 느슨하다(닫은 뒤 0이어야 함).
@@ -64,6 +71,7 @@ c638efa · e0a901d · 71bb069 · 342035c · 28bf811 · bc80ca1 · 8607716 · b07
    열어 둔 채로도 계속 늘면 M7(lib 내부)로 분리하고 heap snapshot retainers 첨부.
 
 3. **B1** — X-B1(xlsx Edit 20회, 편집 UI 표시 실패 0) 실행 결과 보고. b07b49b 하네스 기준.
+   2026-10-19 chromium 기준 **1 passed (1.5m)** 로 재현 확인했다. msedge는 미확인.
 
 4. **XLSX 공동편집** — X0a~X0f(라운드트립, 탭 2개, 30초 무쓰기, room_reset, owner meta 1초) → X1~X9.
    설계 기록은 `docs/collab-xlsx-docx.md`에 신설(아직 없음).
@@ -71,6 +79,32 @@ c638efa · e0a901d · 71bb069 · 342035c · 28bf811 · bc80ca1 · 8607716 · b07
 5. **DOCX** — D1~D9 (XLSX 완료 후).
 
 6. **태그** — 검증 묶음 통과 후 버전 bump + exe 빌드.
+
+## E2E 하네스 장애 (2026-10-19 실측) — PPT 스펙 전체가 이 환경에서 실행 불가
+
+`e2e/collab/pptx-collab.spec.ts`의 **모든 테스트**가 `openFile`에서 실패한다.
+E21만의 문제가 아니다. 근거:
+
+- `E1: participants` (수정 전 코드 그대로) → `locator.click: Timeout`으로 실패.
+- `X-B1` (xlsx-solo) → **1 passed (1.5m)**.
+
+차이는 fixture 생성 시점이다. `playwright.config.ts:12-16`이 이미 경고하고 있는 그대로다.
+
+> 백엔드는 시작 시 저장소 트리를 스캔해 children 을 채운다. children 이 `[]` 로 스캔된 폴더는
+> needFetch=false 이므로 이후에 파일을 심어도 절대 다시 조회되지 않는다.
+
+- X-B1은 서버 뜨기 **전에** 심은 `probe-seeded-before-server.xlsx`를 연다 → 통과.
+- `pptx-collab.spec.ts`의 `freshFile()`은 **테스트 실행 중**에 파일을 만든다
+  (`helpers/env.ts:11-14` → `repos/collab-e2e/<slug>-<stamp>-<i>.pptx`) → 트리에 안 뜬다.
+
+추가로 이 PC의 저장소 경로에 공백이 있어(`C:\Users\oh\Documents\Default Project\...`)
+`bun run test:e2e:collab` 스크립트가 깨진다:
+`'C:\Users\oh\Documents\Default' is not recognized as an internal or external command`.
+`npx playwright test -c e2e/collab/playwright.config.ts`로 직접 호출해야 한다.
+
+→ E2E는 공백 없는 경로의 PC에서 돌리거나, `freshFile`을 서버 기동 전 시딩으로 바꾸고
+   재실행해야 한다. 그전까지 E2E 통과로 보고하지 말 것.
+
 
 ## 정리 대상 (작음, 별도 커밋)
 - `frontend/src/api/collab.ts:191-192`의 `resetRoom` 제거. `/api/collab/reset-room` 라우트는

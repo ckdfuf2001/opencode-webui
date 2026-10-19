@@ -862,6 +862,45 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
     void testName
     await closeTwo(t)
   })
+
+  test('E21: non-owner manual save is delegated, not a failure (B3)', async ({ browser }) => {
+    const f = await freshFile('e21', 0)
+    const t = await twoPages(browser)
+    // 둘 다 편집 모드로 연다. 먼저 연 쪽(A)이 owner가 된다.
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'edit')
+
+    // 두 탭 모두 "나 = owner 아님"으로 수렴할 때까지 기다린다.
+    await expect(async () => {
+      const dB = await readDebug(t.pageB)
+      expect(dB.ownerClientId).not.toBeNull()
+      expect(dB.ownerClientId).not.toBe(dB.clientId)
+      expect(dB.synced).toBe(true)
+    }).toPass({ timeout: 25000 })
+
+    // B는 owner가 아니다 (data-owner=false가 실제 판정의 근거다).
+    await expect(t.pageB.locator('[data-testid="collab-peer"][data-self="true"][data-owner="false"]')).toHaveCount(1, {
+      timeout: 15000,
+    })
+
+    const savesBefore = (await readDebug(t.pageB)).saveCount
+    await t.pageB.getByTitle('Overwrite current file').click()
+
+    // 조건부 통과 금지 — 위임 성공 토스트가 반드시 떠야 한다.
+    await expect(t.pageB.locator('[data-sonner-toast]').filter({ hasText: '자동 저장됩니다' })).toHaveCount(1, {
+      timeout: 20000,
+    })
+    // 실패 형태는 하나도 없어야 한다.
+    await expect(t.pageB.locator('[data-sonner-toast]').filter({ hasText: 'Save rejected' })).toHaveCount(0)
+    await expect(t.pageB.locator('[data-sonner-toast]').filter({ hasText: 'Save failed' })).toHaveCount(0)
+    await expect(t.pageB.locator('[data-sonner-toast]').filter({ hasText: 'not owner' })).toHaveCount(0)
+    // 수동 저장 1회 = 토스트 1개.
+    await expect(t.pageB.locator('[data-sonner-toast]')).toHaveCount(1)
+    // 저장 API를 부르지 않았음이 saveCount로 남는다 (denied 응답 자체가 없다).
+    expect((await readDebug(t.pageB)).saveCount).toBe(savesBefore)
+
+    await closeTwo(t)
+  })
 })
 
 test.describe('pptx collab (mobile 390x844)', () => {

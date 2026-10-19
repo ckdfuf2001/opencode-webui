@@ -24,6 +24,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
 import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
 import { createSlideGate } from '@/lib/slideLocationGate'
+import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
@@ -270,6 +271,27 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
     return !!c && ownerIdRef.current != null && ownerIdRef.current === c.session.clientId
   }, [])
 
+  // B3: 'owner 미확정'과 '남이 owner'를 구분한다. 둘을 합치면 승계 직후의 저장이 오판된다.
+  const ownerStateOf = useCallback((c: { session: YCollabSession } | null): OwnerState => {
+    if (!c || ownerIdRef.current == null) return 'unknown'
+    return ownerIdRef.current === c.session.clientId ? 'self' : 'other'
+  }, [])
+
+  // B3: 선출이 끝날 때까지 meta를 기다린다. ownerClientId는 onMeta로만 채워지고
+  // (아래 onMeta 핸들러) 폴링 경로와 겹쳐 최대 5초 걸릴 수 있다.
+  const waitOwnerId = useCallback(async (timeoutMs: number): Promise<boolean> => {
+    if (ownerIdRef.current != null) return true
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50))
+      if (ownerIdRef.current != null) return true
+    }
+    return false
+  }, [])
+
+  // B3: 위임 저장은 호출자가 고른 문구로 토스트를 한 번만 띄운다(수동 저장 1회 = 토스트 1개).
+  const delegatedSaveRef = useRef(false)
+
   const reconcileCollab = useCallback(() => {
     const c = collabRef.current
     if (!c) return
@@ -332,7 +354,29 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         logClient('write_back_halted_skip')
         return false
       }
-      const res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
+      // B3: owner가 아닌 사람은 저장을 위임한다. 서버는 owner만 쓰기 때문에
+      // (D05) 여기서 곧바로 API를 부르면 denied → 'Save rejected'로 번져
+      // "Save failed — staying in edit mode"이 떴다.
+      const intent = decideSaveIntent({ owner: ownerStateOf(c), synced: c.session.synced })
+      if (intent.kind === 'await-meta' && intent.reason === 'owner-unknown') {
+        await waitOwnerId(3000)
+      }
+      if (decideSaveIntent({ owner: ownerStateOf(c), synced: c.session.synced }).kind === 'delegated') {
+        // latestSavedRef는 "디스크에 쓰인 바이트"이므로 건드리지 않는다.
+        // 내가 쓴 게 아니라 owner가 쓴다. 여기서 갱신하면 세션 종료 때
+        // setSavedBytes가 저장 안 된 바이트를 저장된 것으로 되돌린다.
+        delegatedSaveRef.current = true
+        if (!auto) setCollabNotice(null)
+        return true
+      }
+      let res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
+      // B3: 내가 owner인데 denied면 meta가 늦은 것일 수 있다(선출 직후). 1회만 기다려 재시도한다.
+      if (!res.ok && res.reason === 'denied' && !auto && ownerStateOf(c) === 'self') {
+        await waitOwnerId(1000)
+        if (ownerStateOf(c) === 'self') {
+          res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
+        }
+      }
       // E2E 디버그: 저장 결과 기록 (200/409 추적용).
       saveCountRef.current += 1
       if (res.ok) {
@@ -392,7 +436,7 @@ if (!writeBackHaltedRef.current) {
     }
     latestSavedRef.current = new Uint8Array(bytes)
     return true
-  }, [fileName, savePath, updateDebug])
+  }, [fileName, savePath, updateDebug, ownerStateOf, waitOwnerId])
   const persistBytesRef = useRef(persistBytes)
   persistBytesRef.current = persistBytes
 
@@ -503,6 +547,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       if (saving) return
       const h = viewerRef.current
       if (!h || !savePath) return
+      delegatedSaveRef.current = false
       setSaving(true)
       void h
         .getContent()
@@ -515,7 +560,11 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
           setComments(cs)
         })
         .then(() => {
-          showToast.success('저장했습니다')
+          // B3: owner가 아닌 사람의 저장은 위임이다. "저장했습니다"라고 하면
+          // 디스크에 쓴 사람이 나인 것처럼 보인다. 토스트는 수동 저장 1회 = 1개.
+          const delegated = delegatedSaveRef.current
+          delegatedSaveRef.current = false
+          showToast.success(delegated ? '자동 저장됩니다 — owner가 디스크에 씁니다' : '저장했습니다')
           // B1(b): 파일 식별자를 함께 보낸다. 없으면 다른 뷰어의 저장 완료에
           // 이 문서의 편집이 종료된다 (DocumentPreview.tsx:452).
           window.dispatchEvent(
@@ -523,6 +572,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
           )
         })
         .catch((e) => {
+          delegatedSaveRef.current = false
           showToast.error(e instanceof Error ? e.message : '저장 실패')
           window.dispatchEvent(
             new CustomEvent('officeSaveDone', { detail: { ok: false, path: savePath } }),
