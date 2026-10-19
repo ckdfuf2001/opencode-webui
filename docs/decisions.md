@@ -43,6 +43,13 @@
   코멘트는 작성자 이름 필수.
 - D26 원격 마우스 커서는 게시·표시하지 않음. 참가자 바, 도형 선택 외곽선, 슬라이드 위치만 유지.
   awareness 송신은 최대 4회/초. 이유: 마우스 이동마다 상태 전체를 JSON으로 송수신하고 리렌더하는 할당 부담, 기능 가치 낮음. (M7)
+- D27 문서 뷰어의 네이티브 리소스(canvas, 디코드 이미지, ImageBitmap)는 원칙적으로 재사용(풀/LRU)한다.
+  단, 순서가 있다: **먼저 유휴 상태의 다시 그리기 자체를 0회로 만든다.** 실제로 버려지는 객체가 측정될 때만 풀링한다.
+  React가 소유한 DOM은 풀링하지 않고 key 안정화·prop 참조 고정으로 리마운트를 막는다.
+  이유: 이 네이티브 메모리는 JS heap 밖이라 V8 GC가 늦게 돌고 레이아웃 객체가 고원까지 쌓인다.
+  M7-2 실측 결과 canvas/OffscreenCanvas/getContext/size 재설정/img.src 대입/data URL/ImageBitmap/blob URL
+  생성은 편집 3분간 **전부 0회**였다. 원인은 유휴 재렌더 2종(슬라이드 점 paint 자기 루프, usePeers 1Hz tick)이었다.
+  → 풀링 대상 0건. 풀링보다 먼저 "다시 그리기 0회"가 정답이었다. (M7-2)
 
   근거 (lib 4.33.0 / ooxml-ui 1.8.0):
   - `chunk-552NAFTD.js:12570-12590` — pointermove마다 `broadcastPresence({cursorX, cursorY, activeSlideIndex})`.

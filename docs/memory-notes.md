@@ -93,3 +93,32 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 
 - 미완: 소켓 단언이 `viewer-unmount.spec.ts:135`에서 `toBeLessThanOrEqual(1)`이라 느슨하다.
   닫은 뒤에는 0이어야 하므로 0으로 강화할 것. 시트/다이얼로그(M6c)·xlsx·docx 닫기 케이스도 없음.
+
+## 8. 측정 왜곡 2건 (M7-2 / M7-4)
+
+### 8-1. 1초 CDP 폴링은 renderer를 +0.45MB/s 쓴다
+- 프로브가 Performance.getMetrics + page.evaluate 를 1초마다 호출하면, 콜라��� 자체가
+  renderer private를 초당 0.45MB씩 올린다.
+- 증명: ?collab=0 뷰 모드에서 레이아웃 0회·렌��� 0회인데도 2분간 +54MB가 났다.
+  같은 조건에서 폴링 주기를 10초(PROBE_INTERVAL_MS=10000)로 바꾸니 **-0.3MB(평탄)**.
+- 규칙: renderer private를 볼 때는 PROBE_INTERVAL_MS=10000 이상을 쓴다.
+  1초 주기 수치는 프로브 오염값이다.
+
+### 8-2. window.gc()로 renderer private는 판정하지 않는다
+- window.gc()는 JS heap만 회수한다. renderer private는 할당기가 페이지를 붙잡고 있어
+  바로 내려가지 않는다.
+- 잘못된 판정: M7-4 E-d에서 "GC 후 15MB만 내려감 → retainer"로 읽었으나 이 지표는
+  판정 근거가 되지 못한다. UI의 GC 버튼은 최소값까지 떨어지게 만들기 때문에
+  그쪽 지표가 유효하다.
+- 규칙: 판정은 (1) GC 후 JS heap 값과 (2) 장시간(30분) 고원 도달 여부로 한다.
+
+## 9. M7-2/M7-4 결론 (증가율 트랙 종료)
+
+| 조건 (dev 5173, headed, 47MB 덱, 편집 3분, 10초 프로브) | MB/s |
+|---|---|
+| 수정 전 (T1a) | +0.93 |
+| 슬라이드 점 paint 멱등화 + usePeers tick 제거 (43232e2, 199bc09) | +0.42 |
+| 단일 세션 상태 폴러 (8683102) | +0.26 |
+
+- 잔여 +0.13MB/s(뷰 모드 공통 바닥)는 heap snapshot 대상이 아니다. 고원 확인만 한다.
+- 레이아웃 8.6/s → 0/s, DOM mutation 73~147/s → 0/s, PptxViewer 렌더 2.6/s → 0/s.

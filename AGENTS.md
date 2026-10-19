@@ -35,6 +35,11 @@
 - Radix UI + Tailwind CSS, React Hook Form + Zod
 - React Query for state management
 - ESLint TypeScript rules enforced
+- **Lint 기준 명령 (고정)**: `pnpm -C frontend exec eslint src/components/file-browser/PptxViewer.tsx`
+  → 현재 **9 problems (1 error, 8 warnings)**. 이 9가 PptxViewer 기준선이다.
+  참고로 `pnpm -C frontend exec eslint .` 는 **330 problems**이고, 루트의 `pnpm exec eslint .` 는
+  flat config 마이그레이션 오류로 카운트가 나오지 않는다. 범위가 다르므로 숫자를 섞지 말 것.
+  (M8-0에서 정정. 이전 보고의 "330"은 frontend 전체 스코프, 이전 기준선 "9"는 파일 스코프였다.)
 - Use React hooks properly, no direct state mutations
 
 ### General
