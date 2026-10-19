@@ -72,6 +72,13 @@ export interface CollabRoom {
   watchTimer: ReturnType<typeof setTimeout> | null
   /** 마지막으로 우리가 저장한(또는 room 생성 시 읽은) 해시. */
   lastHash: string
+  /**
+   * M10/D37: 자기 저장을 해시로 식별하기 위한 대기 해시 목록.
+   * applySave 는 rename **전에** 새 해시를 여기에 넣고, rename 이 끝나면 lastHash 를
+   * 갱신하면서 여기서 제거한다. watcher 가 이 목록에 있는 해시를 보면 자기 저장으로 보고 무시한다.
+   * (시간 창 방식은 금지 — 파일 내용으로만 판단한다.)
+   */
+  pendingHashes: string[]
   externalChanged: boolean
   /** 4-0 가드용: 마지막으로 계측한 디스크 이미지 수 (undefined=미계측). */
   lastImageCounts: { media: number; refs: number } | null | undefined
@@ -98,6 +105,19 @@ slide?: number
 export const rooms = new Map<string, CollabRoom>()
 /** path(abs 정규화) -> roomId. 같은 파일을 두 room이 열지 않게 한다. */
 const pathIndex = new Map<string, string>()
+/**
+ * M10/D37: 방 생성 중복 방지(경합).
+ *
+ * 같은 파일에 대한 세션 POST 가 동시에 오면 방이 둘 만들어졌다. rooms 맵에는 나중 것이
+ * 남고 앞의 방은 고아가 되는데, **고아 방의 watcher 도 살아 있다.** 그 watcher 는
+ * 자기 방의 lastHash(오래된 해시)와 디스크를 비교하므로, 다른 방이 방금 쓴 파일을
+ * "외부 변경"으로 오인한다 → externalChanged → 클라이언트 재접속 시도 → 409 →
+ * owner 상실 → 편집이 디스크에 반영되지 않음(V1).
+ *
+ * 그래서 방 생성은 path 단위로 직렬화한다. 두 번째 호출은 생성을 기다렸다가
+ * 이미 만들어진 방에 참가(guest)한다.
+ */
+const creatingRooms = new Map<string, Promise<CollabRoom>>()
 
 export const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 export const MAX_SAVE_BYTES = 50 * 1024 * 1024
@@ -272,6 +292,14 @@ function reevaluateOwner(room: CollabRoom): void {
   }
   // owner가 실제로 바뀌었을 때만 푸시한다 (view-only room 스팸 방지).
   if (room.ownerConn !== current) broadcastMeta(room)
+  // M10/D37: owner 가 사라지는 경로는 conn close 와 TTL 뿐이어야 한다.
+  // 살아 있는 edit conn 이 있는데 owner 가 없으면 예기치 않은 경로다 (V1 의 owner=null).
+  if (!room.ownerConn && room.conns.size > 0) {
+    const hasEditConn = [...room.conns.keys()].some((ws) => connMode(room, ws) !== 'view')
+    if (hasEditConn) {
+      logger.error(`Collab room ${room.id}: owner_cleared_unexpected (live edit conns=${room.conns.size})`)
+    }
+  }
 }
 
 /** AI 편집 409 시 기록 (V7 칩용). */
@@ -302,6 +330,7 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     watcher: null,
     watchTimer: null,
     lastHash: seedHash,
+    pendingHashes: [],
     externalChanged: false,
     lastImageCounts: undefined,
     saveChain: Promise.resolve(),
@@ -340,37 +369,64 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
   return room
 }
 
+/**
+ * M10/D37: 자기 저장은 해시로 식별한다.
+ *
+ * 예외 판정: watcher 가 파일을 읽어 room.lastHash 와 비교 → 다르면 "외부 변경"으로 단정.
+ * 문제: rename 직후 watcher 콜백이(lastHash 갱신 전) 실행되면 **우리가 방금 쓴 파일을
+ * 외부 변경으로 오인**했다. 그 오인 → externalChanged → 배너 → 클라이언트 세션 재설정 →
+ * owner 상실 → 편집이 디스크에 반영되지 않음(V1).
+ *
+ * 지금 판정:
+ * 1) 이벤트 파일명이 대상 경로(temp 포함)와 다르면 무시. temp 파일은 무시한다.
+ * 2) 짧게 디바운스한 뒤 **최종 경로에서만** 해시를 계산한다.
+ * 3) 해시가 room.lastHash 또는 room.pendingHashes 에 있으면 자기 저장 → 무시.
+ * 4) 읽기 실패/크기 0 이면 판정을 보류하고 재시도한다(잠깐의 쓰기 중간 상태 오인 방지).
+ */
 function startWatch(room: CollabRoom): void {
   if (room.watcher) return
   try {
     const dir = path.dirname(room.path)
     const base = path.basename(room.path)
     room.watcher = fsWatch(dir, (event, filename) => {
-      const hit = typeof filename === 'string'
-        ? filename === base
-        : filename != null && filename.toString() === base
-      if (!hit) return
+      const name = typeof filename === 'string' ? filename : filename?.toString() ?? ''
+      // temp 파일(무시): writeFileContent 의 `${path}.tmp-${pid}-${ts}`.
+      if (name.includes('.tmp-')) return
+      if (name !== base) return
       if (room.watchTimer) clearTimeout(room.watchTimer)
       room.watchTimer = setTimeout(() => {
+        room.watchTimer = null
         void (async () => {
           // 저장 중에 뜬 이벤트는 무시한다 (S6C).
           if (room.saving) return
-          try {
-            const h = await hashFile(room.path)
-            // 우리 저장 직후 해시와 같으면 무시한다.
-            if (h !== room.lastHash && !room.externalChanged) {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            let h: string | null = null
+            try {
+              const stat = await fs.stat(room.path)
+              // 쓰기 중간(크기 0)이면 판정을 보류하고 재시도한다.
+              if (stat.size > 0) h = await hashFile(room.path)
+            } catch {
+              h = null
+            }
+            if (!h) {
+              if (attempt < 2) {
+                await new Promise((r) => setTimeout(r, 150))
+                continue
+              }
+              // 계속 읽을 수 없다면 보류만 한다(외부 변경으로 단정하지 않는다).
+              return
+            }
+            // 자기 저장: 마지막 해시 또는 저장 대기 중인 해시.
+            if (h === room.lastHash || room.pendingHashes.includes(h)) return
+            if (!room.externalChanged) {
               logger.warn(`Collab room ${room.id}: external change detected (not from owner save)`)
               room.externalChanged = true
               broadcastMeta(room)
             }
-          } catch {
-            if (!room.externalChanged) {
-              room.externalChanged = true
-              broadcastMeta(room)
-            }
+            return
           }
         })()
-      }, 400)
+      }, 200)
     })
     room.watcher.on('error', () => {
       try { room.watcher?.close() } catch { /* 무시 */ }
@@ -439,32 +495,47 @@ export async function createSession(
   const existing = rooms.get(id)
 
   if (!existing) {
-    if (resumeEpoch) {
-      let disk: string | null = null
+    // M10/D37: 동시 세션 POST 경합 — 이미 생성이 진행 중이면 기다렸다가 참가한다.
+    const creating = creatingRooms.get(id)
+    if (creating) {
       try {
-        disk = await hashFile(abs)
+        const room = await creating
+        return { roomId: id, role: 'guest', epoch: room.epoch, lastHash: room.lastHash, path: abs }
+      } catch {
+        // 생성이 실패하면 아래 경로에서 다시 시도한다.
+      }
+    }
+    const creatingPromise = (async (): Promise<CollabRoom> => {
+      let fileHash: string
+      try {
+        fileHash = await hashFile(abs)
       } catch {
         throw { message: 'File not readable', statusCode: 404 }
       }
-      if (disk !== opts?.knownHash) {
-        throw { message: 'File changed while away (no auto-merge)', statusCode: 409, code: 'external_change', currentHash: disk }
+      if (resumeEpoch) {
+        // 이전 epoch 로 복귀: 디스크가 바뀌었으면 외부 변경으로 거부한다.
+        if (fileHash !== opts?.knownHash) {
+          throw { message: 'File changed while away (no auto-merge)', statusCode: 409, code: 'external_change', currentHash: fileHash }
+        }
+        const room = createRoom(id, abs, fileHash)
+        room.epoch = resumeEpoch
+        startWatch(room)
+        logger.info(`Collab room ${id} re-created on resume (epoch kept)`)
+        return room
       }
-      const room = createRoom(id, abs, disk)
-      room.epoch = resumeEpoch
+      const room = createRoom(id, abs, fileHash)
       startWatch(room)
-      logger.info(`Collab room ${id} re-created on resume (epoch kept)`)
-      return { roomId: id, role: 'resume', epoch: resumeEpoch, lastHash: disk, path: abs }
-    }
-    let fileHash: string
+      logger.info(`Collab room ${id} created for ${abs}`)
+      return room
+    })()
+    creatingRooms.set(id, creatingPromise)
     try {
-      fileHash = await hashFile(abs)
-    } catch {
-      throw { message: 'File not readable', statusCode: 404 }
+      const room = await creatingPromise
+      const role = resumeEpoch ? 'resume' : 'host'
+      return { roomId: id, role, epoch: room.epoch, lastHash: room.lastHash, path: abs }
+    } finally {
+      if (creatingRooms.get(id) === creatingPromise) creatingRooms.delete(id)
     }
-    const room = createRoom(id, abs, fileHash)
-    startWatch(room)
-    logger.info(`Collab room ${id} created for ${abs}`)
-    return { roomId: id, role: 'host', epoch: room.epoch, lastHash: fileHash, path: abs }
   }
 
   if (!resumeEpoch) {
@@ -797,13 +868,19 @@ export async function applySave(
       }
     }
     room.saving = true
+    const newHash = hashBytes(bytes)
+    // M10/D37: rename **전에** 해시를 대기 목록에 넣는다.
+    // watcher 가 rename 이벤트를 받아도 이 해시로 자기 저장임을 확인할 수 있다.
+    room.pendingHashes.push(newHash)
+    if (room.pendingHashes.length > 3) room.pendingHashes.shift()
     try {
       await writeFileContent(room.path, Buffer.from(bytes))
     } finally {
       room.saving = false
     }
-    const newHash = hashBytes(bytes)
     room.lastHash = newHash
+    // rename 이 끝났고 lastHash 가 갱신되었으므로 대기 해시는 제거한다.
+    room.pendingHashes = room.pendingHashes.filter((h) => h !== newHash)
     room.externalChanged = false
     if (/\.pptx$/i.test(room.path)) room.lastImageCounts = countPptxImages(bytes)
     broadcastMeta(room)

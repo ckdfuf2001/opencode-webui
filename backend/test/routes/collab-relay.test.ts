@@ -537,7 +537,135 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     await fs.writeFile(path.join(tmp, 'repos', 'aaa', 'shared.txt'), 'seed')
   })
 
-  it('T7: save before seed -> not_seeded', async () => {
+  it('T2f: owner self-save is not an external change (watcher fires right after applySave)', async () => {
+  // M10/V1: owner 가 applySave 로 저장한 직후 실제 fs watcher 이벤트가 울린다.
+  // 그 이벤트는 "자기 저장" 이므로 externalChanged 가 되어서는 안 된다.
+  // 지연을 0~50ms 변주시켜 rename 직후 watcher 콜백이 어떤 타이밍에 오든 잡는다.
+  for (const delayMs of [0, 10, 50]) {
+    const rel = `repos/aaa/selfsave-${delayMs}.txt`
+    await fs.writeFile(path.join(tmp, rel), 'seed')
+    const s = await postSession(baseUrl, { path: rel })
+    const roomId = s.json.roomId as string
+    const epoch = s.json.epoch as string
+    const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+    a.connect()
+    await waitFor(() => a.synced, 'A synced')
+    a.doc.getText('t').insert(0, 'x')
+    await waitFor(() => {
+      const room = rooms.rooms.get(roomId)
+      return !!room && room.ownerIds.has(a.clientId)
+    }, 'A is owner')
+
+    const bytes = new TextEncoder().encode(`self-save-${delayMs}`)
+    const save = await testFetch(`${baseUrl}/api/collab/save`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-collab-room': roomId,
+        'x-collab-client': String(a.clientId),
+      },
+      body: bytes as unknown as BodyInit,
+    })
+    expect(save.status).toBe(200)
+
+    // watcher 가 rename 이벤트를 즉시 받도록 같은 경로를 다시 건드린다.
+    await fs.writeFile(path.join(tmp, rel), `self-save-${delayMs}`)
+    await new Promise((r) => setTimeout(r, delayMs))
+    // watcher debounce(400ms) + 판정 시간만큼 기다린다.
+    await new Promise((r) => setTimeout(r, 900))
+
+    const room = rooms.rooms.get(roomId)
+    expect(room, `room must survive (delay=${delayMs})`).toBeTruthy()
+    expect(room!.externalChanged, `self save must not look external (delay=${delayMs})`).toBe(false)
+    expect(room!.ownerIds.has(a.clientId), `owner must survive (delay=${delayMs})`).toBe(true)
+    expect(room!.epoch, `epoch must not change (delay=${delayMs})`).toBe(epoch)
+    expect(a.synced, `connection must survive (delay=${delayMs})`).toBe(true)
+    a.destroy()
+  }
+})
+
+it('T2g: real external change flags the room but keeps room/owner/epoch', async () => {
+  const rel = 'repos/aaa/external-change.txt'
+  await fs.writeFile(path.join(tmp, rel), 'seed')
+  const s = await postSession(baseUrl, { path: rel })
+  const roomId = s.json.roomId as string
+  const epoch = s.json.epoch as string
+  const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+  a.connect()
+  await waitFor(() => a.synced, 'A synced')
+  a.doc.getText('t').insert(0, 'x')
+  await waitFor(() => {
+    const room = rooms.rooms.get(roomId)
+    return !!room && room.ownerIds.has(a.clientId)
+  }, 'A is owner')
+
+  // 백엔드 밖에서 파일을 덮어쓴다 (진짜 외부 변경).
+  await fs.writeFile(path.join(tmp, rel), 'outside-wrote-this')
+  await waitFor(() => rooms.rooms.get(roomId)?.externalChanged === true, 'externalChanged flagged')
+
+  const room = rooms.rooms.get(roomId)
+  expect(room, 'room must not be reset by an external change').toBeTruthy()
+  expect(room!.epoch, 'epoch must not change').toBe(epoch)
+  expect(room!.ownerIds.has(a.clientId), 'owner must be kept').toBe(true)
+
+  // lock 응답에 외부 변경이 반영된다.
+  const lock = (await (await testFetch(`${baseUrl}/api/collab/lock?path=${rel}`)).json()) as {
+    owner?: number[]
+    externalChanged?: boolean
+  }
+  expect(lock.externalChanged).toBe(true)
+  expect(lock.owner?.includes(a.clientId)).toBe(true)
+
+  // 이후 owner 의 저장은 막힌다 (자동 병합 없음).
+  const save = await testFetch(`${baseUrl}/api/collab/save`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'x-collab-room': roomId,
+      'x-collab-client': String(a.clientId),
+    },
+    body: new TextEncoder().encode('after-external') as unknown as BodyInit,
+  })
+  expect(save.status).toBe(409)
+  const body = (await save.json()) as { code?: string }
+  expect(['conflict', 'external_change']).toContain(body.code)
+  a.destroy()
+})
+
+it('T2h: concurrent session POSTs for the same file create only one room', async () => {
+  // M10/V1: StrictMode(dev) 등���서 같은 파일��� 세션 POST 가 동시에 나간다.
+  // 방 생성에 경합 가드가 없으면 **방이 2개** 만들어지고, rooms 맵에는 나중 것만 남는다.
+  // 앞의 방은 고아가 되��� 그 watcher 도 살아 있어, 다른 방이 방금 쓴 파일을
+  // "외부 변경"으로 오인한다 → externalChanged → 클라이언트 재접속 → owner 상실 →
+  // 편집이 디스크에 반영되지 않��(E2 실패의 근본 원인).
+  const rel = 'repos/aaa/race.txt'
+  await fs.writeFile(path.join(tmp, rel), 'seed')
+  const [r1, r2] = await Promise.all([
+    postSession(baseUrl, { path: rel }),
+    postSession(baseUrl, { path: rel }),
+  ])
+  expect(r1.status).toBe(200)
+  expect(r2.status).toBe(200)
+  // 같은 방이어야 한다.
+  expect(r2.json.roomId).toBe(r1.json.roomId)
+  // 두 번째는 그 방에 **참가**(guest)해야 한다. host 라면 방을 또 만든 것이다.
+  expect(r2.json.role).toBe('guest')
+  // 방은 1개뿐.
+  const room = rooms.rooms.get(r1.json.roomId as string)
+  expect(room).toBeTruthy()
+  expect(room!.path.endsWith('race.txt')).toBe(true)
+  // owner 는 나중에 접속한 conn 이 아니라 최초 conn 이 elected 된다.
+  const a = track(new YCollabSession(`${wsBase}/api/collab/${r1.json.roomId}`, { name: 'a', color: '#e11d48' }))
+  a.connect()
+  await waitFor(() => a.synced, 'A synced')
+  await waitFor(() => {
+    const r = rooms.rooms.get(r1.json.roomId as string)
+    return !!r && r.ownerIds.has(a.clientId)
+  }, 'A is owner')
+  a.destroy()
+})
+
+it('T7: save before seed -> not_seeded', async () => {
     const s = await postSession(baseUrl, { path: 'repos/aaa/shared.txt' })
     // WS도 붙이고 awareness까지 갔지만 doc update는 없음.
     const c = track(new YCollabSession(`${wsBase}/api/collab/${s.json.roomId}`, { name: 'c', color: '#059669' }))
