@@ -72,6 +72,11 @@ export function createFileRoutes(database: Database) {
           headers: {
             'Content-Type': result.mimeType || 'application/octet-stream',
             'Content-Length': result.size.toString(),
+            // M11: 파일 본문은 캐시하지 않는다.
+            // 저장 직후 뷰어가 리마운트되면 브라우저가 **저장 이전 바이트**(캐시)를 다시 쓰면
+            // 구 내용이 자동 저장으로 디스크를 덮어써 편집이 조용히 사라진다(E2/E2b 실패 원인).
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'Pragma': 'no-cache',
           }
         })
       }
@@ -88,7 +93,11 @@ export function createFileRoutes(database: Database) {
         })
       }
       
-      return c.json(result)
+      return c.json(result, 200, {
+        // M11: 파일 본문 JSON 도 캐시하지 않는다(저장 직후 재조회가 구 내용을 받지 않게).
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        Pragma: 'no-cache',
+      })
     } catch (error: any) {
       logger.error('Failed to get file:', error)
       return c.json({ error: error.message || 'Failed to get file' }, error.statusCode || 500)
