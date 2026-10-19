@@ -51,6 +51,18 @@ interface UsePeersOpts {
   getSelectedLabel?: (selectedId: string, slide?: number) => string | undefined
 }
 
+/** M7 측정용: 1초 tick 주기(ms). ?peersTick=0 이면 끈다. 기본 1000. */
+function readPeersTickMs(): number {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('peersTick')
+    if (raw === null) return 1000
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : 0
+  } catch {
+    return 1000
+  }
+}
+
 /**
  * 로컬 awareness에서 직접 읽는 참가자 목록 (서버 poll 불필요).
  * - awareness change + meta(owner) + activity + 1초 tick으로 갱신한다.
@@ -84,13 +96,20 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
     const offActivity = session.onActivity(() => bump())
     const offMeta = session.onMeta(() => bump())
     const offSub = session.subscribe(() => bump())
-    const timer = setInterval(() => setTick((t) => t + 1), 1000)
+    // M7 측정: 1초 tick은 "N초 전 편집" 같은 상대 시간 표시를 갱신한다.
+    // 이 tick이 호출되는 컴포넌트를 통째로 리렌더시키므로, 리렌더 비용을
+    // 측정할 때 끌 수 있어야 한다. ?peersTick=0 → 비활성(기본 1000ms).
+    let timer: ReturnType<typeof setInterval> | null = null
+    const tickMs = readPeersTickMs()
+    if (tickMs > 0) {
+      timer = setInterval(() => setTick((t) => t + 1), tickMs)
+    }
     return () => {
       offAwareness()
       offActivity()
       offMeta()
       offSub()
-      clearInterval(timer)
+      if (timer) clearInterval(timer)
     }
   }, [session])
 
