@@ -35,11 +35,12 @@
 - Radix UI + Tailwind CSS, React Hook Form + Zod
 - React Query for state management
 - ESLint TypeScript rules enforced
-- **Lint 기준 명령 (고정)**: `pnpm -C frontend exec eslint src/components/file-browser/PptxViewer.tsx`
-  → 현재 **9 problems (1 error, 8 warnings)**. 이 9가 PptxViewer 기준선이다.
-  참고로 `pnpm -C frontend exec eslint .` 는 **330 problems**이고, 루트의 `pnpm exec eslint .` 는
-  flat config 마이그레이션 오류로 카운트가 나오지 않는다. 범위가 다르므로 숫자를 섞지 말 것.
-  (M8-0에서 정정. 이전 보고의 "330"은 frontend 전체 스코프, 이전 기준선 "9"는 파일 스코프였다.)
+- **Lint 기준 명령 (고정)**: `pnpm -C frontend exec eslint .` → 현재 **330 problems (272 errors, 58 warnings)**.
+  이 값을 늘리지 않는 것이 목표이며, "신규 0" 판정은 **이 명령 하나**로만 한다.
+  보조(PPT 동결 파일만): `pnpm -C frontend exec eslint src/components/file-browser/PptxViewer.tsx`
+  → **9 problems (1 error, 8 warnings)**. 두 숫자는 범위가 달라 섞지 말 것.
+  루트의 `pnpm exec eslint .` 는 flat config 마이그레이션 오류로 카운트가 나오지 않는다.
+  (M8-0에서 정정. 이전 보고의 "9"는 파일 스코프, "330"은 frontend 전체 스코프였다.)
 - Use React hooks properly, no direct state mutations
 
 ### General
@@ -241,8 +242,9 @@
   `repo-tracking.test.ts` — 둘 다 `bun:sqlite` 부재라는 기존 환경 실패).
   이 2개 외 실패가 생기면 회귀다.
 - 타입: `pnpm -C frontend exec tsc -b` (별도 스크립트 없음). 기준선: **에러 0**.
-- 린트: `pnpm -C frontend lint`. 기준선: **330 problems (272 errors, 58 warnings)** —
+- 린트: `pnpm -C frontend exec eslint .`. 기준선: **330 problems (272 errors, 58 warnings)** —
   `no-explicit-any`·`no-empty` 중심의 기존 누적값. 새 문제를 늘리지 않는 것이 목표.
+  (PPT 파일만 볼 때는 `pnpm -C frontend exec eslint src/components/file-browser/PptxViewer.tsx` = 9 problems.)
 - E2E: `bun run test:e2e:collab --repeat-each=3` (chromium + msedge, workers 1, retries 0).
   VPN 끄고 실행. 실패 시 `test-results/`의 trace.zip 첨부.
 - Playwright: trace 'retain-on-failure', video 'off', screenshot 'only-on-failure'.
@@ -254,4 +256,13 @@
 
 - heapMB(performance.memory) 단독 판정 금지. GC 버튼 직후 값 또는 `__memFloor()` 바닥선으로만.
 - 상세: `docs/memory-notes.md`
+
+### C8. 메모리 규칙 (M8)
+
+- 폴링·interval·EventSource를 새로 추가하면 `pnpm check:memory`가 실패한다. 허용 목록에 넣으려면
+  `docs/decisions.md`의 D29 근거와 측정값이 필요하다.
+- 뷰어는 닫을 때 언마운트한다(D32). 세션 해제는 lease 토큰으로만 한다(D30·D31).
+- 메모리 측정은 `docs/memory-notes.md`의 규칙(10초 프로브, 벽시계, GC 후 JS heap 병기)만 따른다.
+- 성능·메모리 변경 보고에는 전/후 표(interval run/s, MB/s, JS heap floor)를 반드시 넣는다.
+- 린트 기준: `pnpm -C frontend exec eslint .` = 330 problems(신규 0). 상세는 C6절.
 

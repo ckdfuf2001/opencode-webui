@@ -41,19 +41,15 @@
 - D24 입장/퇴장 토스트는 trace 모드에서만. 연결됨 배지는 에러일 때만 표시.
 - D25 이름: 서버 `/suggest-name`(user1, user2…)으로 발급. 'You' 기본값 금지.
   코멘트는 작성자 이름 필수.
-- D26 원격 마우스 커서는 게시·표시하지 않음. 참가자 바, 도형 선택 외곽선, 슬라이드 위치만 유지.
-  awareness 송신은 최대 4회/초. 이유: 마우스 이동마다 상태 전체를 JSON으로 송수신하고 리렌더하는 할당 부담, 기능 가치 낮음. (M7)
-- D27 문서 뷰어의 네이티브 리소스(canvas, 디코드 이미지, ImageBitmap)는 원칙적으로 재사용(풀/LRU)한다.
-  단, 순서가 있다: **먼저 유휴 상태의 다시 그리기 자체를 0회로 만든다.** 실제로 버려지는 객체가 측정될 때만 풀링한다.
-  React가 소유한 DOM은 풀링하지 않고 key 안정화·prop 참조 고정으로 리마운트를 막는다.
-  이유: 이 네이티브 메모리는 JS heap 밖이라 V8 GC가 늦게 돌고 레이아웃 객체가 고원까지 쌓인다.
-  M7-2 실측 결과 canvas/OffscreenCanvas/getContext/size 재설정/img.src 대입/data URL/ImageBitmap/blob URL
-  생성은 편집 3분간 **전부 0회**였다. 원인은 유휴 재렌더 2종(슬라이드 점 paint 자기 루프, usePeers 1Hz tick)이었다.
-  → 풀링 대상 0건. 풀링보다 먼저 "다시 그리기 0회"가 정답이었다. (M7-2)
-- D28 스트림 출력 상한을 하나로 통일한다: **실행 중 출력은 꼬리 20k자, 끝난 출력은 앞 20k자.**
-  전체 출력은 턴이 끝난 뒤 fetch로 받는다. 이유: 코얼레싱을 해도 화면에 그릴 때 합치는 비용이
-  상한 크기에 비례하므로 꼬리를 120k로 두면 델타마다(또는 100ms마다) 240KB 문자열을 복사한다.
-  주석("꼬리 120k")과 코드(120k 초과 시 20k만 유지)가 어긋나 있던 것을 이 기준으로 맞춘다. (M8)
+- D26 원격 마우스 커서 제거
+  - 결정: 원격 마우스 커서는 게시·표시하지 않는다. 참가자 바, 도형 선택 외곽선, 슬라이드 위치만 유지한다.
+    presence(awareness)는 SSE가 아니라 collab WebSocket으로 오간다. awareness 송신은 최대 4회/초.
+  - 이유(측정 근거): 마우스 이동마다 상태 전체를 JSON 직렬화해 송신하고, 수신 측 projector가
+    매번 React 리렌더를 유발한다. lib에 커서 토글 옵션이 없어 전송 계층에서 제거했다.
+  - 금지: 커서 좌표를 awareness에 다시 게시하지 않는다. presence 전체를 지우지 않는다
+    (원격 선택 외곽선이 `selectedElementId`에 의존).
+  - 관련 커밋: 1d9a710, fbf12c4
+  - 회귀 검사: 3-1(신규 presence 필터 금지 — 미활성), 3-2(`collabPresenceFilter.test.ts` 21건)
 
   근거 (lib 4.33.0 / ooxml-ui 1.8.0):
   - `chunk-552NAFTD.js:12570-12590` — pointermove마다 `broadcastPresence({cursorX, cursorY, activeSlideIndex})`.
@@ -75,15 +71,102 @@
   - 보존 확인: `app.{id,name,color,mode}`, `presence.{userName,userColor,role,
     activeSlideIndex,selectedElementId}`는 그대로 전송된다.
 
+- D27 재사용(풀) 원칙
+  - 결정: 문서 뷰어의 네이티브 리소스(canvas, 디코드 이미지, ImageBitmap)는 원칙적으로 재사용(풀/LRU)한다.
+    단, 순서가 있다: **먼저 유휴 상태의 "다시 그리기 자체"를 0회로 만든다.** 실제로 버려지는 객체가
+    측정될 때만 풀링한다. React가 소유한 DOM은 풀링하지 않고 key 안정화·prop 참조 고정으로 리마운트를 막는다.
+  - 이유(측정 근거): 이 네이티브 메모리는 JS heap 밖이라 V8 GC가 늦게 돌고 레이아웃 객체가 고원까지 쌓인다.
+    M7-2 실측에서 canvas/OffscreenCanvas/getContext/size 재설정/img.src 대입/data URL/ImageBitmap/blob URL
+    생성은 편집 3분간 **전부 0회**였다. 원인은 유휴 재렌더 2종(슬라이드 점 paint 자기 루프, usePeers 1Hz tick)이었다.
+    → 풀링 대상 0건. 풀링보다 먼저 "다시 그리기 0회"가 정답이었다. (M7-2)
+  - 금지: 추측으로 풀링을 먼저 넣지 않는다(측정 → 원인 → 수정). React 소유 DOM을 풀링하지 않는다.
+  - 관련 커밋: 43232e2, 199bc09
+  - 회귀 검사: 3-2(`memoryRender.test.ts` — 유휴 리렌더 0회 단언), 3-3(E2E 유휴 렌더 카운터)
+
+- D28 스트림 출력 상한 통일 (결정됨, 4b-2에서 적용)
+  - 결정: **실행 중 출력은 꼬리 20k자, 끝난 출력은 앞 20k자.** 전체 출력은 턴이 끝난 뒤 fetch로 받는다.
+    상수는 1곳에만 둔다.
+  - 이유(측정 근거): 코얼레싱을 해도 화면에 그릴 때 합치는 비용이 상한 크기에 비례하므로 꼬리를 120k로
+    두면 델타마다(또는 100ms마다) 240KB 문자열을 복사한다. 현재는 주석("꼬리 120k")과
+    코드(120k 초과 시 20k만 유지)가 어긋나고, 규칙이 3개(120k head / 120k→20k tail / 20k head)로 갈렸다.
+  - 금지: 스트림 출력 상한 숫자를 상수 파일 밖에 두지 않는다(3-1은 현재 경고, 4b-2 적용 후 error로 전환).
+  - 관련 커밋: f466c97(문서), 4b-2에서 코드 적용
+  - 회귀 검사: 3-1(상한 상수 위치 — 현재 경고), 3-2(4b-2에서 추가)
+
 ## 세션·메모리
+
+> 번호 매핑(M8 인계안 → 실제 파일). 인계안 D26/D27/D28은 그대로 D26/D27/D28.
+> 인계안 D29 → D29(빈 번호). 인계안 D30(유휴 렌더 0회) → **D35**(기존 D30은 "세션 해제 = lease"로 별개).
+> 인계안 D31(뷰어 닫기 = 언마운트) → **기존 D32**(내용 동일). 인계안 D32(collab 세션 수명) → **기존 D30+D31**(내용 동일).
+> 인계안 D33(SSE 안전망) → **D36**(기존 D33은 octet-stream 저장).
+
+- D29 폴링은 앱당 1개 + 상황별 주기
+  - 결정: 같은 query key에서 `refetchInterval`을 가진 observer는 **최상위 1곳뿐**이다
+    (`frontend/src/components/Pollers.tsx`). 나머지는 `refetchInterval: false`로 캐시만 읽는다.
+    세션 상태는 busy면 1200ms, idle이면 5000ms, 숨김 탭에서는 정지한다.
+  - 이유(측정 근거): 이전에는 상태를 쓰는 컴포넌트 9개가 각자 1.2초 타이머를 가져
+    유휴 상태에서도 초당 수 번 폴링이 돌았다. observer 9개 × 1.2s = interval 실행 7.9/s,
+    PPT 편집 모드 증가율이 +0.42 → +0.26MB/s로 내려갔다(M7-4 E-a vs E-g 실측).
+  - 금지: 같은 query key에 `refetchInterval`을 새로 추가하지 않는다. 허용 목록에 넣으려면
+    D29 근거와 측정값이 필요하다(`pnpm check:memory`가 걸러낸다).
+  - 관련 커밋: 8683102
+  - 회귀 검사: 3-1(`refetchInterval` 허용 목록), 3-2(`memoryPolling.test.ts` — 주기 1200/5000,
+    캐시 전용 observer는 타이머를 만들지 않음), 3-3(E2E 유휴 interval run/s)
+
 - D30 탭당 파일당 세션 1개(registry). release는 acquire가 준 lease 토큰으로만(1회성, entry 소유 확인).
   path 기반 release API는 삭제. (8604b47, 28bf811)
+  - 결정: collab 세션은 registry가 소유하고, 해제는 lease 토큰으로만 한다.
+  - 이유(측정 근거): path 기반 release + "누가 null이어도 해제" 조합은 다른 뷰어가 쓴 세션을 죽였다.
+  - 금지: path 기반 release API를 다시 만들지 않는다.
+  - 관련 커밋: 342035c, 28bf811
+  - 회귀 검사: 3-1(`releaseCollabSession` export 금지), 3-2(`collabSessionRegistry.test.ts` 6건)
+
 - D31 4001 reset은 dropCollabSession 필수. drop 시 같은 세션을 쓰던 다른 보유자에게 통지. (342035c, 28bf811)
+  - 결정: 4001 reset은 `dropCollabSession`으로만 처리한다.
+  - 이유(측정 근거): reset을 drop 없이 처리하면 화면과 서버 상태가 어긋나 조용한 유실이 생긴다.
+  - 금지: 4001을 "재연결"로 대체하지 않는다.
+  - 관련 커밋: 342035c, 28bf811
+  - 회귀 검사: 3-2(`collabSessionRegistry.test.ts`)
+
 - D32 뷰어 닫기 = 언마운트. 숨겨서 유지 금지. (d95f8e7)
+  - 결정: 뷰어는 닫을 때 언마운트한다(`isOpen && <Viewer/>`). 숨김(display:none, visibility)으로 닫지 않는다.
+    `FileBrowserSheet` 닫기는 경로 선택 UI만 닫는 것이고, 인라인 미리보기는
+    "미리보기 닫기"(`explorerSelectedPath` 비움)로만 해제된다. **이것은 의도된 설계다.**
+  - 이유(측정 근거): 닫은 뒤에도 뷰어 루프·presence 10초 재게시·Y.Doc(data: 이미지)이 살아 있어
+    메모리가 반환되지 않았다. 언마운트로 소거시킨다.
+  - 금지: 닫은 뷰어를 display:none으로 숨겨 두지 않는다. 시트 닫기와 파일 닫기를 같은 것으로 취급하지 않는다.
+  - 관련 커밋: d95f8e7
+  - 회귀 검사: 3-3(`viewer-unmount.spec.ts` — 닫은 뒤 viewer-root 0, `__openSockets()` 0)
+
 - D33 저장은 octet-stream 바이너리로 보내고 base64는 만들지 않음.
   같은 바이트는 재전송 생략(sha256, room 20개 상한). (0.12.64)
 - D34 React Query 전역 gcTime 10초. 숨김 탭 30초 후 messages/message-list/last-message 캐시를
   type:'inactive'로 정리. (8607716)
+
+- D35 유휴 상태 렌더 0회
+  - 결정: 데이터가 바뀌지 않으면 렌더하지 않는다. 1Hz 시각 tick은 시각을 표시하는 컴포넌트
+    하위에만 공급한다(`NowCtx`/`NowProvider`). paint는 멱등으로 하고, 강제 리플로우
+    (offsetWidth 등 읽기 후 쓰기)는 금지한다.
+  - 이유(측정 groundwork): M7-2 실측에서 슬라이드 점 paint 자기 루프와 usePeers 1Hz tick이
+    유휴 재렌더의 원인이었다. 레이아웃 8.6/s → 0/s, DOM mutation 73~147/s → 0/s, PptxViewer 렌더 2.6/s → 0/s.
+  - 금지: 유휴 상태에서 setState를 호출하는 tick을 새로 넣지 않는다. 1Hz tick을 트리 전체에 공급하지 않는다.
+  - 관련 커밋: 43232e2, 199bc09
+  - 회귀 검사: 3-1(`setInterval` 허용 목록), 3-2(`memoryRender.test.ts` — 같은 데이터면 렌더 증가 0),
+    3-3(E2E 유휴 렌더 카운터)
+
+- D36 SSE 정상일 때 폴링은 안전망만 (결정됨, 4b-2에서 적용)
+  - 결정: SSE on에서 폴링이 더 빨라지는 구조(`usePollLastMessage` 380ms)는 금지한다.
+    SSE off이면서 busy일 때만 2000ms로 돌고, idle이면 정지하며 busy→idle 전환 시 최종 1회 fetch한다.
+    세션당 EventSource는 1개다(전송용과 ephemeral이 공용 레지스트리 1개를 공유).
+    델타는 100ms 코얼레싱으로 처리한다. SSE 정상 중에는 60개 전체 invalidate를 하지 않는다.
+  - 이유(측정 groundwork): 4b-0 코드 조사에서 SSE on이 오히려 폴링을 5배 빠르게 만든 것을 확인했다
+    (`useOpenCode.ts:1396` — `mergePartial ? 380 : 2000`, `mergePartial = sseOn`).
+    델타 1개당 setQueryData 1회 + 할당 5개 + 누적 문자열 전체 복사가 붙는다.
+    `part.delta`는 무조건 append이므로 스트림이 2개면 텍스트가 중복될 수 있다(정합성 버그).
+  - 금지: SSE on에서 폴링 주기를 380ms로 두지 않는다. 세션당 EventSource를 2개 열지 않는다.
+  - 관련 커밋: 4b-P0 / 4b-2에서 적용
+  - 회귀 검사: 3-1(`new EventSource` 1곳 허용 — 현재 경고, 4b-P0 후 error), 3-2(중복 델타 1벌 테스트),
+    3-3(E2E 세션당 소켓 1개)
 
 ## XLSX/DOCX (A1′)
 - D40 YCollabSession mode: 'own'(PPT, 기존 경로 그대로)과 'transport'(XLSX/DOCX, lib provider가 doc/awareness 소유).

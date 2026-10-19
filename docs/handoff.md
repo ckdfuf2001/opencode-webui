@@ -1,5 +1,28 @@
 # Handoff — 2026-10-19 기준
 
+## 메모리 트랙 상태 (M2~M8, 2026-10-19)
+
+| 구간 | 상태 | 근거 |
+|---|---|---|
+| M2 (뷰어 닫기=언마운트) | 완료 | d95f8e7, D32 |
+| M3/R1~R3 (세션 registry·lease) | 완료 | 342035c, 28bf811, D30·D31 |
+| M4/M5 (원격 커서 제거) | 완료 | 1d9a710, D26 |
+| M6 (PPT 동결 기준선) | 완료 | c638efa, D14 |
+| M7 유휴 렌더 0회 | 완료 | 43232e2, 199bc09, D35 |
+| M7 폴링 단일화 | 완료 | 8683102, D29 |
+| M8-0 (문서·기준선) | 완료 | 7b45d1f, f466c97 |
+| M8-1 30분 고원 | 완료(결론: JS heap 평탄, 네이티브 +1.9MB/분 계속 상승) | memory-notes §12-1 |
+| M8-2 prod 절대 크기 | 완료(prod 덱 1장 +416MB, 10분 고원 도달) | memory-notes §12-2 |
+| M8-6 E2E 하네스 복구 | 진행 | helpers/viewer.ts:150,:186 |
+| M8-4b 채팅 폴링·SSE | 진행 (4b-0 조사 완료) | memory-notes §14 |
+| M8-3 절대 크기 분해 | 보류 | prod에서도 덱 1장이 416MB, 목표 150MB |
+| M8-5 정리 | 보류 | memCounters observer 정지·NowProvider 1Hz 확인 |
+
+**다음 순서**: 1절(완료) → 2절(완료) → 6절(E2E 하네스) → 4b-P0(스트림 1개화) → 4b-1(S-a~C-b 측정) →
+4b-2(1 폴링주기 → 2 fastPull 정지 → 5 permission/question 폴링 → 3 코얼레싱 → 4 꼬리창) → 3절 → 5절.
+
+**자동 검사**: `pnpm check:memory` (scripts/check-memory-rules.mjs). 폴링·interval·EventSource 추가 시 실패한다.
+
 ## 원격 상태 (2026-10-19 로컬에서 실측)
 - `git ls-remote origin main release-0.12` → 양쪽 모두 `d95f8e7be37eeb67bbff4fa62a887ca2308166c9`.
   `fix(viewer): unmount the document viewer on close (M6)`.
