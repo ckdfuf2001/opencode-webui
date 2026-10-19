@@ -637,47 +637,57 @@ if (!writeBackHaltedRef.current) {
   const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
   offerMineDownloadRef.current = offerMineDownload
   const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /**
-   * M14: **커밋 반영 대기**(고정 sleep 아님 — 상태 변화 감지).
+/** 바이트 배열 동등 비교(커밋 반영 판정용). */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+/**
+ * M15: **커밋 반영 대기 — lib 모델(getContent) 기준.**
    *
-   * 도형 편집 커밋(Escape) 직후 lib 의 DOM 반영은 ~100ms 지연된다(2절 실측:
-   * 커밋 +0ms 에는 편집 상태, +300ms 에 커밋 반영).
-   * 이 대기를 거치지 않고 직렬화하면 커밋 **이전** 내용이 저장된다(조용한 유실).
+   * 앞선 구현(DOM 텍스트 안정 판정)은 두 가지 결함이 있었다.
+   * ① `document.querySelectorAll('textarea…')` 가 **앱 전체**를 봐서 채팅 입력칸 때문에
+   *    항상 "편집 중"으로 판정 → 매번 1초 타임아웃 = 금지된 고정 sleep 과 같다.
+   * ② DOM 이 안정 ≠ lib 모델(D38-1)의 반영. 저장 바이트는 getContent() 즉 모델에서 나온다.
    *
-   * 판정: 편집 입력칸(textarea/contenteditable)이 사라졌고, DOM 텍스트가 2회 연속 동일(안정)하면
-   * 커밋 반영 완료로 본다. 최대 1초.
+   * 지금: (a) 편집 입력칸 여부는 **뷰어 root 안으로 한정**하고,
+   *      (b) 진짜 판정은 **모델이 커밋 전과 달라졌는지**(getContent 비교)로 한다.
+   *      (b) 는 저장 바이트와 같은 소스라可靠하다.
+   * 타임아웃이면 저장은 하지 않고 편집 모드를 유지 + 배너(조용한 유실 경로 금지).
    */
-  const waitCommitApplied = useCallback(async (): Promise<void> => {
-    const deadline = Date.now() + 1000
-    let last = ''
-    let stable = 0
-    for (;;) {
-      const st = (() => {
-        try {
-          const editing =
-            document.querySelectorAll('textarea, [contenteditable="true"]').length > 0
-          const text = [...document.querySelectorAll('[data-element-id]')]
-            .map((e) => (e.textContent || '').trim())
-            .join('|')
-          return { editing, text }
-        } catch {
-          return { editing: false, text: '' }
+  const waitCommitApplied = useCallback(
+    async (
+      h: { getContent: () => Promise<ArrayBuffer | Uint8Array> },
+      before: Uint8Array,
+    ): Promise<boolean> => {
+      const deadline = Date.now() + 1000
+      for (;;) {
+        const editingInViewer = (() => {
+          try {
+            const root = viewerRootRef.current
+            if (!root) return false
+            return root.querySelectorAll('textarea, [contenteditable="true"]').length > 0
+          } catch {
+            return false
+          }
+        })()
+        const now = new Uint8Array(await h.getContent())
+        // 모델이 커밋 전과 다르고(반영됨) 편집 입력칸이 사라졌다면 반영 완료.
+        if (!editingInViewer && now.length > 0 && !bytesEqual(now, before)) {
+          tl('flush.commit_applied', { bytes: now.length, waited: true })
+          return true
         }
-      })()
-      if (!st.editing && st.text !== '' && st.text === last) {
-        stable += 1
-        if (stable >= 2) return
-      } else {
-        stable = 0
+        if (Date.now() > deadline) {
+          tl('flush.commit_wait_timeout', { bytes: now.length })
+          return false
+        }
+        await new Promise((r) => setTimeout(r, 50))
       }
-      last = st.text
-      if (Date.now() > deadline) {
-        tl('flush.commit_wait_timeout')
-        return
-      }
-      await new Promise((r) => setTimeout(r, 50))
-    }
-  }, [])
+    },
+    [],
+  )
   // R5: 빈 스냅샷 재시도 타이머는 파일 전환/언마운트 때 반드시 해제한다.
   // (해제 안 하면 다른 파일로 옮긴 뒤 그 파일 내용을 저장할 수 있다.)
   useEffect(() => {
@@ -752,19 +762,23 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       if (!h || !savePath) return
       delegatedSaveRef.current = false
       setSaving(true)
-      void waitCommitApplied()
-        .then(async () => {
-          // M14: 커밋 반영을 기다린 뒤에 직렬화한다.
-          // 도형 편집 커밋(Escape) 직후 lib 의 DOM 반영은 ~100ms 지연된다(2절 실측).
-          // 기다리지 않으면 커밋 이전 내용이 저장된다.
-          const bytes = await h.getContent()
-          // 수동 저장 경로라 배너/토스트를 막지 않는다 (R3).
-          const fresh = new Uint8Array(bytes)
-          const ok = await persistBytes(fresh, { quiet: true, auto: false })
-          if (!ok) throw new Error('Save rejected')
-          const cs = await loadPptxComments(fresh)
-          setComments(cs)
-        })
+      void (async () => {
+        // M15: 커밋 반영을 **모델 기준**으로 기다린 뒤 직렬화한다.
+        const before = new Uint8Array(await h.getContent())
+        const applied = await waitCommitApplied(h, before)
+        if (!applied) {
+          // 타임아웃: 저장은 하지 않는다(구 내용 덮어쓰기 방지).
+          // 편집 모드를 유지하고 배너/토스트로 알린다(조용한 유실 금지).
+          throw new Error('Save skipped — commit not applied yet')
+        }
+        const bytes = await h.getContent()
+        // 수동 저장 경로라 배너/토스트를 막지 않는다 (R3).
+        const fresh = new Uint8Array(bytes)
+        const ok = await persistBytes(fresh, { quiet: true, auto: false })
+        if (!ok) throw new Error('Save rejected')
+        const cs = await loadPptxComments(fresh)
+        setComments(cs)
+      })()
         .then(() => {
           // B3: owner가 아닌 사람의 저장은 위임이다. "저장했습니다"라고 하면
           // 디스크에 쓴 사람이 나인 것처럼 보인다. 토스트는 수동 저장 1회 = 1개.
