@@ -33,6 +33,8 @@ export function tl(evt: string, data?: Record<string, unknown>): void {
     if (!s) return
     s.list.push({ t: Math.round(performance.now()), evt, ...(data ?? {}) })
     if (s.list.length > MAX) s.list.splice(0, s.list.length - MAX)
+    // E2E trace 에서도 읽을 수 있게 콘솔에도 남긴다(debug 모드 전용).
+    console.debug('[collab-tl]', JSON.stringify(s.list[s.list.length - 1]))
   } catch {
     // 계측 실패가 앱을 막지 않게 한다.
   }
