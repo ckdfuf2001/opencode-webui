@@ -157,6 +157,23 @@ test.describe('pptx collab (desktop)', () => {
     await closeTwo(t)
   })
 
+  test('E2c: owner in view mode + other editor -> edit reaches disk', async ({ browser }, testInfo) => {
+    // M14: P0 의심 — owner 가 보기 모드면 아무도 저장하지 않는 구조인가?
+    // A(먼저 접속, 보기) + B(편집) → B 의 편집이 8초 안에 디스크에 반영되어야 한다.
+    const f = await freshFile('e2c', 0)
+    const t = await twoPages(browser)
+    const shapesB = new ShapeLocator(t.pageB)
+    await openFile(t.pageA, f.name, 'view')
+    await gotoSlide(t.pageA, 2)
+    await openFile(t.pageB, f.name, 'edit')
+    await gotoSlide(t.pageB, 2)
+    await editShapeText(t.pageB, shapesB, 'Body 2', 'Hello from Ada')
+    const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'Hello from Ada', 8000)
+    expect(deck.slideCount).toBe(3)
+    void testInfo
+    await closeTwo(t)
+  })
+
   test('E2b: leaving edit mode keeps A edit on disk (no stale overwrite)', async ({ browser }, testInfo) => {
     // M11: A 가 편집해 저장한 뒤, 편집 모드를 끝내면(리마운트) 리마운트된 뷰어가
     // 파일(구 내용) 기준으로 다시 만들어진다. 그 구 내용이 자동 저장으로 디스크를

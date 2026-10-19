@@ -192,28 +192,34 @@
   - 관련 커밋: 705e63c (backend), T2f/T2g/T2h (backend/test/routes/collab-relay.test.ts)
   - 회귀 검사: 3-2(relay T2f 자기저장=외부변경 아님 / T2g 외부변경=방·owner 유지 / T2h 동시 세션 POST=방 1개)
 
-- D38 저장 바이트의 출처와 편집 종료 순서 (M12, 2026-10-20)
+- D38 저장 바이트의 출처와 편집 종료 순서 (M12/M14, 2026-10-20)
   - 결정(1): **저장 바이트는 Y.Doc 가 아니라 lib 뷰어의 직렬화 결과(getContent)다.**
     `PptxViewer.handleWriteBack(bytes)`(`frontend/src/components/file-browser/PptxViewer.tsx:554`)는
     lib 의 `onWriteBack` 이 넘긴 바이트를 그대로 `persistBytes` 로 보낸다.
-    M12 실측: 편집("Hello from Ada")이 **Y.Doc 에는 반영**(다른 참가자 화면에 보임)했는데,
-    저장 직후 디스크 파일의 `a:t` 는 여전히 `Hello` 였다 → **직렬화는 A 자신의 뷰어 DOM 기준**이며,
-    그 DOM 이 커밋 후 갱신되지 않았다(리렌더 지연/누락).
-  - 결정(2): **편집 모드 종료 순서는 flush(await) → 리마운트(viewerKey 변경)** 이다(P1-6).
-    flush 가 실패하면 편집 모드를 유지하고 배너를 띄운다.
-    리마운트 이후의 flush(`save.skip empty_bytes`)가 없어야 한다.
-    마지막 editor 가 나면서 owner 가 null 이 되는 것은 설계대로지만, 그 전에 flush 가 끝나 있어야 한다.
+  - 결정(1-정정, M14 실험): "커밋 후 A 의 뷰어 DOM 이 갱신되지 않아 구 내용이 직렬화된다"는
+    **해소되었다**(실험: 커밋 +0.4초에 DOM 은 커밋 반영). 실제 원인은
+    **커밋 직후 lib 의 write-back 이 호출되지 않는다**(타임라인에 `writeback.enter` 없음) +
+    편집 모드 종료로 인한 **리마운트가 그 미처리 write-back 을 유실**시키는 것이다.
+    ⇒ "lib 내부 문제"가 아니라 **앱이 리마운트를 너무 일찍 한다**는 문제다.
+  - 결정(2): **편집 모드 종료는 flush(저장) await → viewerKey 변경(리마운트) 순서**다.
+    flush 는 커밋 반영을 기다린 뒤(getContent) 저장하고, 실패하면 편집 모드를 유지하고 배너를 띄운다.
+    (P1-6 "편집 종료는 flush 가 끝날 때까지 기다린다" 의 Escape 경로 적용.)
   - 결정(3): **저장 직전까지 "직전 성공 저장 이후 리마운트" 상태를 기록**하고,
     owner 인데 3초 이상 저장 요청이 없으면 `writeback_stalled` 로 경고한다(조용한 유실 탐지).
-  - 이유(측정 근거): M12 1절 — E2 디스크 반영 실패. 판정표는 "14.7초부터 없음"(저장 바이트에 편집 미포함)이었다.
-    파일 diff: 원본/저장직후/종료시점 모두 `a:t` = `Hello`, `<a:t>` run 1개, 도형명 `Body 2` 유지.
-    `helpers/disk.ts` 의 `textOf` 는 이름(cNvPr/@name) 기준이고 모든 `<a:t>` 를 이어 붙여 비교하므로
-    판독 문제도 아니다(`helpers/disk.ts:79`, `:83-93`, `:99`).
-  - 금지: 시간 창으로 자기 저장을 판별하지 않는다(기존 D37). 리마운트 전에 flush 하지 않는다.
-    저장 바이트를 Y.Doc 기준으로 임의 직렬화하지 않는다(lib 소유 영역).
-  - 관련 커밋: 705e63c(백엔드 경합·해시 식별), ee12673(타임라인 계측), b78a2ff→되돌림(증거 없는 플러시),
-    06ca84c(no-store, **원인 아님** — 파일 본문 캐시가 아니었음. 무해하므로 유지하되 "원인 아님"으로 기록)
-  - 회귀 검사: 3-2(E2b — 편집 모드 종료 후 디스크에 편집이 남는지), 3-3(E2/E2b/E4 디스크 반영 계열)
+  - 이유(측정 근거): M14 실험.
+    - 커밋 방식 3종 비교: **Escape=유실**(리마운트), 바깥 클릭=반영(2.5초 뒤 write-back), 다른 도형 클릭=반영.
+      → 피해는 "Escape 로 끝낼 때"로 좁혀진다.
+    - 커밋 반영 지연 ≈ 100ms(커밋 +0ms 에는 편집 상태, +300ms 에 반영) → flush 는 이 대기를 해야 한다.
+    - P0 시나리오(A 먼저 접속·보기 / B 편집): **A 는 owner 가 아니었고(역할 viewer), B(편집)가 owner** 였다.
+      서버 owner 규칙에 "편집 모드" 조건은 없으나, **owner 가 보기 모드일 때 아무도 저장하지 않는
+      구조는 이 시나리오에서 재현되지 않았다**(단, B=owner 의 커밋이 같은 결함으로 유실됨).
+  - 금지: **리마운트(언마운트) 이후의 flush**(M13 0-2). Y.Doc 을 앱에서 직접 직렬화.
+    고정 sleep(커밋 반영 대기 대신). 시간 창 추측. lib 내부 write-back 스케줄에 의존한 암묵적 저장.
+    (PptxViewer 안에서 `fileFullscreenChange` 를 듣는 방식은 금지 — `setEditing(false)` 와 경합해
+     리마운트와 race happened. 종료 직렬화는 `setEditing` 을 가진 쪽(DocumentPreview) 한 곳에서만.)
+  - 관련 커밋: 705e63c(백엔드 경합·해시 식별), ee12673(타임라인 계측), 06ca84c(no-store, **원인 아님** —
+    파일 본문 캐시가 아니었다. 무해하므로 유지하되 "원인 아님"으로 기록), M14 종료 직렬화 커밋
+  - 회귀 검사: 3-2(E2b — 편집 모드 종료 후 디스크에 편집이 남는지), 3-3(E2/E2b/E2c/E4 디스크 반영 계열)
 
 ## XLSX/DOCX (A1′)
 - D40 YCollabSession mode: 'own'(PPT, 기존 경로 그대로)과 'transport'(XLSX/DOCX, lib provider가 doc/awareness 소유).

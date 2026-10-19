@@ -441,13 +441,8 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
     bustViewerChunks()
     setViewerRetry((v) => v + 1)
   }
-  useEffect(() => {
-    const onFs = (e: Event) => {
-      if (!(e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen) setEditing(false)
-    }
-    window.addEventListener('fileFullscreenChange', onFs)
-    return () => window.removeEventListener('fileFullscreenChange', onFs)
-  }, [])
+  // (M14) fileFullscreenChange(도형 편집 종료) 처리는 endEditing 정의 뒤에 둔다
+  // (endEditing 을 deps 로 참조하므로 TDZ 를 피해야 한다).
   // 저장 성공하면 편집을 끝내고 전체화면에서 복귀한다 (채팅 자리로).
   // B1(b): 이 이벤트는 window 전역이고 파일 식별자가 없다. 다른 뷰어(예: PptxViewer.tsx:519)
   // 도 같은 이벤트를 쏘므로, XLSX 편집 중 PPT 저장이 끝나면 편집이 죽었다.
@@ -503,6 +498,18 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
       setEndingEdit(false)
     }
   }, [editing, endingEdit, requestOfficeSave])
+  // M14: Escape(도형 편집 종료)로 앱 편집 모드가 끝날 때, **flush(저장)를 await 한 뒤** 종료한다.
+  // 바로 setEditing(false) 하면 뷰어 리마운트(편집 모드 종료 → viewerKey 변경) 사이에
+  // lib 의 미처리 write-back 이 유실된다 → 커밋이 디스크에 반영되지 않는다(조용한 유실).
+  // (P1-6 "편집 종료는 flush 가 끝날 때까지 기다린다" 를 Escape 경로에도 적용.)
+  useEffect(() => {
+    const onFs = (e: Event) => {
+      if ((e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen) return
+      void endEditing()
+    }
+    window.addEventListener('fileFullscreenChange', onFs)
+    return () => window.removeEventListener('fileFullscreenChange', onFs)
+  }, [endEditing])
   const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && kind !== 'visio' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 

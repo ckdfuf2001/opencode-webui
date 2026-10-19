@@ -637,6 +637,47 @@ if (!writeBackHaltedRef.current) {
   const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
   offerMineDownloadRef.current = offerMineDownload
   const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * M14: **커밋 반영 대기**(고정 sleep 아님 — 상태 변화 감지).
+   *
+   * 도형 편집 커밋(Escape) 직후 lib 의 DOM 반영은 ~100ms 지연된다(2절 실측:
+   * 커밋 +0ms 에는 편집 상태, +300ms 에 커밋 반영).
+   * 이 대기를 거치지 않고 직렬화하면 커밋 **이전** 내용이 저장된다(조용한 유실).
+   *
+   * 판정: 편집 입력칸(textarea/contenteditable)이 사라졌고, DOM 텍스트가 2회 연속 동일(안정)하면
+   * 커밋 반영 완료로 본다. 최대 1초.
+   */
+  const waitCommitApplied = useCallback(async (): Promise<void> => {
+    const deadline = Date.now() + 1000
+    let last = ''
+    let stable = 0
+    for (;;) {
+      const st = (() => {
+        try {
+          const editing =
+            document.querySelectorAll('textarea, [contenteditable="true"]').length > 0
+          const text = [...document.querySelectorAll('[data-element-id]')]
+            .map((e) => (e.textContent || '').trim())
+            .join('|')
+          return { editing, text }
+        } catch {
+          return { editing: false, text: '' }
+        }
+      })()
+      if (!st.editing && st.text !== '' && st.text === last) {
+        stable += 1
+        if (stable >= 2) return
+      } else {
+        stable = 0
+      }
+      last = st.text
+      if (Date.now() > deadline) {
+        tl('flush.commit_wait_timeout')
+        return
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }, [])
   // R5: 빈 스냅샷 재시도 타이머는 파일 전환/언마운트 때 반드시 해제한다.
   // (해제 안 하면 다른 파일로 옮긴 뒤 그 파일 내용을 저장할 수 있다.)
   useEffect(() => {
@@ -711,9 +752,12 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       if (!h || !savePath) return
       delegatedSaveRef.current = false
       setSaving(true)
-      void h
-        .getContent()
-        .then(async (bytes) => {
+      void waitCommitApplied()
+        .then(async () => {
+          // M14: 커밋 반영을 기다린 뒤에 직렬화한다.
+          // 도형 편집 커밋(Escape) 직후 lib 의 DOM 반영은 ~100ms 지연된다(2절 실측).
+          // 기다리지 않으면 커밋 이전 내용이 저장된다.
+          const bytes = await h.getContent()
           // 수동 저장 경로라 배너/토스트를 막지 않는다 (R3).
           const fresh = new Uint8Array(bytes)
           const ok = await persistBytes(fresh, { quiet: true, auto: false })
