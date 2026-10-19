@@ -13,6 +13,7 @@ import { useSettings } from './hooks/useSettings'
 import { useNotifyMigration } from './hooks/useNotifyOverrides'
 import { useReleaseCacheOnHidden } from './hooks/useOpenCode'
 import { installMemProbe } from './lib/memProbe'
+import { installMemCounters } from './lib/memCounters'
 import { isPushSupported, ensurePushPermission, sendPushNotification } from './lib/notifications'
 import { useState, useEffect } from 'react'
 import { Button } from './components/ui/button'
@@ -91,6 +92,8 @@ function AppContent() {
   // M5: ?memDebug=1 로 켠다(기본 off). prod exe에서도 동작한다.
   useEffect(() => {
     installMemProbe()
+    // M7-2: 생성 카운터(캔버스·이미지·DOM 변경). ?memDebug=1 일 때만.
+    installMemCounters()
   }, [])
   // 레거시 localStorage 알림 설정을 백단으로 1회 이전
   useNotifyMigration()
