@@ -1704,37 +1704,66 @@ const peersRef = useRef<Peer[]>([])
           const m = (btn.getAttribute('aria-label') || '').match(/Go to slide (\d+)/)
           if (!m) return
           const list = bySlide.get(Number(m[1])) ?? []
-          btn.querySelectorAll('[data-collab-slide-dot]').forEach((d) => d.remove())
-          if (list.length === 0) return
+          // M7-2: paint는 멱등이어야 한다.
+          // 예전 구현은 점 span을 매번 지우고 새로 만들었다. 그 결과
+          // (1) 아래 MutationObserver가 우리가 만든 변경을 다시 잡아 300ms마다
+          //     paint가 반복되는 자기 루프가 되고,
+          // (2) getComputedStyle이 강제 리플로우를 걸어 24장짜리 SVG 트리가
+          //     초당 수 번 레이아웃되며 그 레이아웃 객체가 GC를 기다리며
+          //     렌더러 private 메모리가 sawtooth로 증가했다(작업관리자 +10MB/초).
+          // 이제 필요한 점만 만들고, 값이 달라졌을 때만 속성을 쓴다.
           const html = btn as HTMLElement
-          try {
-            if (window.getComputedStyle(html).position === 'static') html.style.position = 'relative'
-          } catch {
-            // 무시
-          }
-          list.slice(0, 3).forEach((p, i) => {
-            const dot = document.createElement('span')
-            dot.setAttribute('data-collab-slide-dot', p.id)
-            dot.title = p.name
+          const want = list.slice(0, 3)
+          const wantIds = new Set(want.map((p) => p.id))
+          const existing = new Map<string, HTMLElement>()
+          btn.querySelectorAll('[data-collab-slide-dot]').forEach((d) => {
+            const el = d as HTMLElement
+            const key = el.getAttribute('data-collab-slide-dot') ?? ''
+            if (key === 'more') return
+            existing.set(key, el)
+          })
+          existing.forEach((el, id) => {
+            if (!wantIds.has(id)) el.remove()
+          })
+          btn.querySelectorAll('[data-collab-slide-dot="more"]').forEach((d) => {
+            if (list.length <= 3) d.remove()
+          })
+          if (list.length === 0) return
+          // 강제 리플로우를 피한다. 우리가 직접 relative로 맞추므로 인라인 스타일만 보면 된다.
+          if (html.style.position !== 'relative') html.style.position = 'relative'
+          want.forEach((p, i) => {
             const recent = p.lastEditAt != null && Date.now() - p.lastEditAt < 3000
-            dot.className = recent ? 'animate-pulse' : ''
-            dot.setAttribute(
-              'style',
+            const style =
               `display:inline-block;width:8px;height:8px;border-radius:9999px;background:${p.color};` +
-                `position:absolute;right:${2 + i * 10}px;top:2px;border:1px solid #fff;z-index:5;` +
-                (recent ? `box-shadow:0 0 0 2px ${p.color}55;` : ''),
-            )
-            html.appendChild(dot)
+              `position:absolute;right:${2 + i * 10}px;top:2px;border:1px solid #fff;z-index:5;` +
+              (recent ? `box-shadow:0 0 0 2px ${p.color}55;` : '')
+            const cls = recent ? 'animate-pulse' : ''
+            const dot = existing.get(p.id)
+            if (dot) {
+              if (dot.getAttribute('style') !== style) dot.setAttribute('style', style)
+              if (dot.className !== cls) dot.className = cls
+              if (dot.title !== p.name) dot.title = p.name
+              return
+            }
+            const el = document.createElement('span')
+            el.setAttribute('data-collab-slide-dot', p.id)
+            el.title = p.name
+            el.className = cls
+            el.setAttribute('style', style)
+            html.appendChild(el)
           })
           if (list.length > 3) {
-            const more = document.createElement('span')
-            more.setAttribute('data-collab-slide-dot', 'more')
-            more.textContent = `+${list.length - 3}`
-            more.setAttribute(
-              'style',
-              'position:absolute;right:2px;top:12px;font-size:9px;line-height:1;z-index:5;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 3px;',
-            )
-            html.appendChild(more)
+            const moreStyle =
+              'position:absolute;right:2px;top:12px;font-size:9px;line-height:1;z-index:5;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 3px;'
+            const text = `+${list.length - 3}`
+            let more = btn.querySelector('[data-collab-slide-dot="more"]') as HTMLElement | null
+            if (!more) {
+              more = document.createElement('span')
+              more.setAttribute('data-collab-slide-dot', 'more')
+              more.setAttribute('style', moreStyle)
+              html.appendChild(more)
+            }
+            if (more.textContent !== text) more.textContent = text
           }
         })
       } catch {
