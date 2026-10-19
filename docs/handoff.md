@@ -25,7 +25,47 @@
    구조는 이 시나리오에서 재현되지 않았다**. (B=owner 의 커밋이 같은 결함으로 유실됨은 동일.)
 5. 1절 판정표 2행("14.7초에 있음 + 종료 시점에 없음")은 **기각**(14.7초 파일에 이미 편집 없음).
 
-#### 적용한 수정 (M14 3절 A안)
+#### M15 진행 (2026-10-20)
+
+**1절 2인 E2b 진단(E2b spec 그대로 + `[collab-tl]` 콘솔 수집) — A 타임라인 원문 요약**
+
+```
+12723 viewerKey.change view → edit          (편집 진입)
+13577 meta owner=A
+17795 writeback.enter {isOwner:true, bytes:8145}
+17912 save.response {ok:true, bytes:8145}   ← 커밋 write-back 저장 성공
+18449 flush.commit_applied {bytes:8140}     ← 모델 기준 대기 성공(타임아웃 아님)
+18591 save.response {ok:true, bytes:8140}   ← flush 저장이 커밋 write-back 과 다른 바이트
+18632 viewerKey.change edit → view (리마운트)
+18681 save.skip empty_bytes
+18991 meta owner=null
+```
+
+**판정**: M15 0절 결함 1·2가 확인됨 — 이전 구현은 `flush.commit_wait_timeout`이 매번 발생해
+**1초 고정 sleep 효과**로 동작했고(=1인 "성공"은 가짜였음), DOM 안정 ≠ 모델 반영.
+모델 기준 교체 후 `flush.commit_applied`로 타임아웃 없이 판정되나, **저장 바이트가 커밋 write-back 과
+다르다(8140 vs 8145)** — "모델이 달라졌다"는 변화가 커밋인지 직렬화 시점 메타데이터 차이인지
+구분되지 않는다. ⇒ **텍스트 기준 판정(또는 lib 커밋 API) 필요 — 다음 세션 시작점.**
+
+**3절 대응표 (커밋 분리)**
+
+| 지시 | 커밋 | 상태 |
+|---|---|---|
+| ① 계측 | ee12673 (M11) + M15 ②의 `flush.commit_*` 로그 | 완료 |
+| ② 대기 판정 교체 | `ff7536b` (모델 기준) | 완료(텍스트 기준은 미완) |
+| ③ 이벤트 범위 한정 | `835f2c1` (FilePreview가 path 전달 + DocumentPreview가 경로 비교) | 완료 |
+| ④ spec | `9dc299d` (E2c 신설 + E2b 타임라인 수집) | 완료 |
+| ⑤ docs | 이 커밋 | 완료 |
+| a55fbfc 커밋 분리 위반 | 되돌리지 않음(force push 금지). docs/spec/prod 혼재 사실만 기록 | 대응 완료 |
+
+**미해결(다음 세션 시작점)**
+1. flush 저장 바이트가 커밋 write-back 과 다름 → **커밋 반영 판정을 텍스트 기준으로**(2절) 또는
+   lib dist grep으로 커밋/flush/blur API 존재 확인(2절 우선순위 1).
+2. 2인 E2b 여전히 실패(디스크 반영 안 됨).
+3. E2d(PPT/XLSX 동시 편집 — B1(b) 재발 검사) 미작성.
+4. lib 이 제공하는 커밋 신호가 있으면 그걸로 대기를 대체(C안).
+
+
 - `DocumentPreview`: `fileFullscreenChange`(Escape) → 기존 `endEditing()`(=flush await → 종료)로 통일.
   PptxViewer 리스너 방식은 금지(경합).
 - `PptxViewer`: flush 전에 **커밋 반영 대기**(편집 입력칸 소멸 + DOM 텍스트 2회 연속 안정, 최대 1초) → getContent → 저장.
