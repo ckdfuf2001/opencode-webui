@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X, Eye } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -42,10 +42,92 @@ void pptxI18n.use(initReactI18next).init({
 })
 
 const SPINNER = (
-  <div className="flex items-center justify-center py-12">
-    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+  <div className="flex items-center justify-center py-12 text-muted-foreground">
+    <Loader2 className="w-5 h-5 animate-spin" />
   </div>
 )
+
+/**
+ * M7-2: 1초마다 갱신되는 시각 컨텍스트.
+ *
+ * "N초 전 편집" 같은 상대 시간과 data-activity가 매초 바뀌어야 하는데,
+ * 그 갱신을 PptxViewer가 감으면 덱 트리 전체가 리렌더된다(24장 SVG → 레이아웃
+ * 객체가 GC를 기다리며 렌더러 메모리 증가). 그래서 시각을 컨텍스트로 내보내고
+ * **그 값을 쓰는 칩 컴포넌트만** 다시 그리게 한다.
+ */
+const NowCtx = createContext(0)
+
+function NowProvider({ children }: { children: ReactNode }): ReactNode {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  return <NowCtx.Provider value={now}>{children}</NowCtx.Provider>
+}
+
+/**
+ * M7-2: 참가자 칩. 시각만 컨텍스트로 받아 자기 자신만 다시 그린다.
+ * (PptxViewer가 매초 리렌더되면 덱 트리 전체가 리렌더된다)
+ */
+function CollabPeerChip({ p, following, onFollow }: { p: Peer; following: boolean; onFollow: () => void }): ReactNode {
+  const now = useContext(NowCtx)
+  const act = peerActivity(p, now)
+  const status = act === 'idle' ? '' : activityLabel(p, now)
+  return (
+    <button
+      type="button"
+      data-testid="collab-peer"
+      data-peer-id={p.id}
+      data-mode={p.mode}
+      {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
+      data-owner={p.isOwner ? 'true' : 'false'}
+      data-self="false"
+      data-activity={act}
+      data-following={following ? 'true' : 'false'}
+      {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
+      title={following ? `${p.name} 팔로우 중 (클릭하면 해제)` : `${p.name} 팔로우`}
+      aria-pressed={following}
+      onClick={onFollow}
+      className={`inline-flex items-center gap-1 shrink-0 hover:text-foreground${
+        following ? ' underline decoration-dotted underline-offset-2' : ''
+      }`}
+    >
+      <span
+        className={`inline-block w-2 h-2 rounded-full${act === 'editing' ? ' animate-pulse' : ''}`}
+        style={act === 'editing' ? { backgroundColor: p.color } : { border: `1.5px solid ${p.color}` }}
+      />
+      <span>
+        {p.name}
+        {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
+        {p.device === 'mobile' ? '📱' : ''}
+        {/* 위치 글자는 화면에 띄우지 않는다. 위치 표시는 lib 자체 표시
+        (좌측 썸네일 하이라이트) 하나만 남긴다.
+        app.slide / data-slide는 그대로 유지 — 보이지 않지만 테스트가 읽는다. */}
+        {status ? ` · ${status}` : ''}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * M7-2: 자기 상태 마커(숨김, 진단/테스트용). data-activity가 실시간이어야 해서
+ * 시각 컨텍스트만 구독한다.
+ */
+function CollabSelfMarker({ peer }: { peer: Peer }): ReactNode {
+  const now = useContext(NowCtx)
+  return (
+    <span
+      data-testid="collab-peer"
+      data-peer-id={peer.id}
+      data-mode={peer.mode}
+      data-owner={peer.isOwner ? 'true' : 'false'}
+      data-self="true"
+      data-activity={peerActivity(peer, now)}
+      className="hidden"
+    />
+  )
+}
 
 function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
@@ -1704,15 +1786,15 @@ const peersRef = useRef<Peer[]>([])
           const m = (btn.getAttribute('aria-label') || '').match(/Go to slide (\d+)/)
           if (!m) return
           const list = bySlide.get(Number(m[1])) ?? []
+          const html = btn as HTMLElement
           // M7-2: paint는 멱등이어야 한다.
           // 예전 구현은 점 span을 매번 지우고 새로 만들었다. 그 결과
           // (1) 아래 MutationObserver가 우리가 만든 변경을 다시 잡아 300ms마다
           //     paint가 반복되는 자기 루프가 되고,
           // (2) getComputedStyle이 강제 리플로우를 걸어 24장짜리 SVG 트리가
-          //     초당 수 번 레이아웃되며 그 레이아웃 객체가 GC를 기다리며
+          //     초당 여러 번 레이아웃되며, 그 레이아웃 객체가 GC를 기다리며
           //     렌더러 private 메모리가 sawtooth로 증가했다(작업관리자 +10MB/초).
-          // 이제 필요한 점만 만들고, 값이 달라졌을 때만 속성을 쓴다.
-          const html = btn as HTMLElement
+          // 이제 필요한 점만 만들고, 바뀌었을 때만 속성을 쓴다.
           const want = list.slice(0, 3)
           const wantIds = new Set(want.map((p) => p.id))
           const existing = new Map<string, HTMLElement>()
@@ -1729,7 +1811,8 @@ const peersRef = useRef<Peer[]>([])
             if (list.length <= 3) d.remove()
           })
           if (list.length === 0) return
-          // 강제 리플로우를 피한다. 우리가 직접 relative로 맞추므로 인라인 스타일만 보면 된다.
+          // 강제 리플로우를 피한다. getComputedStyle은 레이아웃을 강제한다.
+          // 우리가 직접 relative로 맞추므로 인라인 스타일만 보면 된다.
           if (html.style.position !== 'relative') html.style.position = 'relative'
           want.forEach((p, i) => {
             const recent = p.lastEditAt != null && Date.now() - p.lastEditAt < 3000
@@ -1846,67 +1929,39 @@ const peersRef = useRef<Peer[]>([])
       )}
       {collab && (
         <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
+          {/* M7-2: 시각 갱신은 이 아래로만 전파한다. 칩만 다시 그려지고
+              PptxViewer(덱 트리)는 다시 그려지지 않는다. */}
+          <NowProvider>
           {(['view', 'edit'] as const).map((mode, gi) => {
             const group = peers.filter((p) => p.mode === mode && !p.isSelf)
             return (
               <span key={mode} className="inline-flex items-center gap-1 shrink-0">
                 {gi > 0 && <span className="mx-1">·</span>}
                 <span className="font-medium">{mode === 'view' ? 'viewer' : 'editor'} -</span>
-                {group.map((p) => {
-                  const act = peerActivity(p, Date.now())
-                  const status = act === 'idle' ? '' : activityLabel(p, Date.now())
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      data-testid="collab-peer"
-                      data-peer-id={p.id}
-                      data-mode={p.mode}
-                      {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
-                      data-owner={p.isOwner ? 'true' : 'false'}
-                      data-self="false"
-                      data-activity={act}
-                      data-following={followId === p.id ? 'true' : 'false'}
-                      {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
-                      title={followId === p.id ? `${p.name} 팔로우 중 (클릭하면 해제)` : `${p.name} 팔로우`}
-                      aria-pressed={followId === p.id}
-                      onClick={() => {
-                        // 팔로우 토글: 선택한 사람만 계속 따라간다. 해제하면 그만 따른다.
-                        if (followId === p.id) {
-                          setFollowId(null)
-                          return
+                {group.map((p) => (
+                  <CollabPeerChip
+                    key={p.id}
+                    p={p}
+                    following={followId === p.id}
+                    onFollow={() => {
+                      // 팔로우 토글: 선택한 사람만 계속 따라간다. 해제하면 그만 따른다.
+                      if (followId === p.id) {
+                        setFollowId(null)
+                        return
+                      }
+                      setFollowId(p.id)
+                      if (typeof p.slide === 'number' && p.slide >= 1) {
+                        setSlideIdx(p.slide - 1)
+                        setCurSlide(p.slide - 1)
+                        try {
+                          viewerRef.current?.goTo?.(p.slide - 1)
+                        } catch {
+                          // 무시 (fallback: initialSlide는 다음 마운트에 반영).
                         }
-                        setFollowId(p.id)
-                        if (typeof p.slide === 'number' && p.slide >= 1) {
-                          setSlideIdx(p.slide - 1)
-                          setCurSlide(p.slide - 1)
-                          try {
-                            viewerRef.current?.goTo?.(p.slide - 1)
-                          } catch {
-                            // 무시 (fallback: initialSlide는 다음 마운트에 반영).
-                          }
-                        }
-                      }}
-                      className={`inline-flex items-center gap-1 shrink-0 hover:text-foreground${
-                        followId === p.id ? ' underline decoration-dotted underline-offset-2' : ''
-                      }`}
-                    >
-                      <span
-                        className={`inline-block w-2 h-2 rounded-full${act === 'editing' ? ' animate-pulse' : ''}`}
-                        style={act === 'editing' ? { backgroundColor: p.color } : { border: `1.5px solid ${p.color}` }}
-                      />
-<span>
-                        {p.name}
-                        {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
-                        {p.device === 'mobile' ? '📱' : ''}
-                        {/* 위치 글자는 화면에 띄우지 않는다. 위치 표시는 lib 자체 표시
-                        (좌측 썸네일 하이라이트) 하나만 남긴다.
-                        app.slide / data-slide는 그대로 유지 — 보이지 않지만 테스트가 읽는다. */}
-                        {status ? ` · ${status}` : ''}
-                      </span>
-                    </button>
-                  )
-                })}
+                      }
+                    }}
+                  />
+                ))}
               </span>
             )
           })}
@@ -1977,18 +2032,11 @@ const peersRef = useRef<Peer[]>([])
                     </button>
                   </span>
                 )}
-                <span
-                  data-testid="collab-peer"
-                  data-peer-id={self.id}
-                  data-mode={self.mode}
-                  data-owner={self.isOwner ? 'true' : 'false'}
-                  data-self="true"
-                  data-activity={peerActivity(self, Date.now())}
-                  className="hidden"
-                />
+                <CollabSelfMarker peer={self} />
               </span>
             )
           })()}
+          </NowProvider>
         </div>
       )}
       {collab && sameShapePeers.length > 0 && (

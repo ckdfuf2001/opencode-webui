@@ -51,15 +51,24 @@ interface UsePeersOpts {
   getSelectedLabel?: (selectedId: string, slide?: number) => string | undefined
 }
 
-/** M7 측정용: 1초 tick 주기(ms). ?peersTick=0 이면 끈다. 기본 1000. */
+/**
+ * M7-2: 1초 tick 주기(ms). 0이면 꺼짐(기본).
+ *
+ * 이 tick은 "N초 전 편집" 같은 상대 시간을 갱신하기 위한 것이었는데,
+ * 호출되는 컴포넌트(PptxViewer) 전체를 매초 리렌더했다. 그 결과 24장짜리
+ * SVG 덱이 매초 다시 그려지고, 레이아웃 객체가 GC를 기다리며 렌더러 private
+ * 메모리가 sawtooth로 증가했다(작업관리자 기준 +10MB/초).
+ * 상대 시간 표시는 NowProvider 컨텍스트(칩 컴포넌트만 갱신)로 옮겼다.
+ * → 기본 off. A/B용으로 되돌리려면 ?peersTick=1000.
+ */
 function readPeersTickMs(): number {
   try {
     const raw = new URLSearchParams(window.location.search).get('peersTick')
-    if (raw === null) return 1000
+    if (raw === null) return 0
     const n = Number(raw)
     return Number.isFinite(n) && n > 0 ? n : 0
   } catch {
-    return 1000
+    return 0
   }
 }
 
@@ -135,9 +144,8 @@ export function usePeers(session: YCollabSession | null, opts: UsePeersOpts): Pe
     const offActivity = session.onActivity(() => bump())
     const offMeta = session.onMeta(() => bump())
     const offSub = session.subscribe(() => bump())
-    // M7 측정: 1초 tick은 "N초 전 편집" 같은 상대 시간 표시를 갱신한다.
-    // 이 tick이 호출되는 컴포넌트를 통째로 리렌더시키므로, 리렌더 비용을
-    // 측정할 때 끌 수 있어야 한다. ?peersTick=0 → 비활성(기본 1000ms).
+    // M7-2: 1초 tick은 기본 off다(기본 on이었다). 상대 시간 표시는
+    // NowProvider 컨텍스트가 따로 갱신한다. A/B로 되돌리려면 ?peersTick=1000.
     let timer: ReturnType<typeof setInterval> | null = null
     const tickMs = readPeersTickMs()
     if (tickMs > 0) {
