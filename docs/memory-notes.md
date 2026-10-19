@@ -77,3 +77,19 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 - backfill 때마다 증가하고, 명시적 drop(`dropBackfilledId`) 또는 세션 정리(`clearBackfilledIds`)에서만 줄어든다.
 - `lastFastPullAt` / `lastReasoningPullAt` 은 delete 경로가 없다. 단 `Map<sessionID, number>` 라 방문 세션 수만큼만 자란다.
 - retainers 가 이쪽을 지목하기 전까지는 손대지 않는다.
+
+## 7. 뷰어 닫기 = 언마운트 (M6)
+
+- 사용자 실측: PPT 닫은 뒤에도 `[data-testid=pptx-viewer-root]`가 1개 남아 있었다.
+  → lib 렌더 루프 + presence 10초 재게시 + Y.Doc(data: 이미지)이 계속 살아 있었음.
+  "숨김 탭에서는 안 늘고 보일 때만 는다"도 이것으로 설명됨(rAF/타이머는 화면이 보일 때만 돎).
+- 수정: `d95f8e7`. 회귀 테스트 `e2e/collab/viewer-unmount.spec.ts`.
+- 판정 명령(`?memDebug=1`):
+
+  ```
+  document.querySelectorAll('[data-testid=pptx-viewer-root]').length  // 닫은 뒤 0
+  __openSockets()                                                      // 닫은 뒤 0
+  ```
+
+- 미완: 소켓 단언이 `viewer-unmount.spec.ts:135`에서 `toBeLessThanOrEqual(1)`이라 느슨하다.
+  닫은 뒤에는 0이어야 하므로 0으로 강화할 것. 시트/다이얼로그(M6c)·xlsx·docx 닫기 케이스도 없음.

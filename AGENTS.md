@@ -1,5 +1,9 @@
 # OpenCode WebUI - Agent Guidelines
 
+공동편집(collab) 작업 시작 시 읽는 순서:
+이 파일 → `docs/handoff.md` → `docs/decisions.md` → 해당 영역 문서
+(`docs/collab-e2e.md`, `docs/memory-notes.md`, `docs/architecture.md`).
+
 ## Commands
 
 - `npm run dev` - Start both backend (5001) and frontend (5173)
@@ -173,3 +177,76 @@
 - ask/팝업류: living-list 폴링으로 형태 확보 후 판정.
 - 팝업이 뜨면 바로 누르지 말고 보고 — 승인 주체(백엔드/사용자)부터 가른다.
 - 고착류(UI 멈춤): 건드리지 말고 보고 — 세션 상태·큐·마지막 메시지 플래그를 그 순간에 읽는다.
+
+## 공동편집 개발 규칙 (0.12.x)
+
+### C1. 브랜치·푸시·버전
+
+- 작업 브랜치: `release-0.12`. 푸시는 항상 `release-0.12`와 `main` 둘 다.
+- 푸시 후 `git ls-remote origin main release-0.12` 출력으로 두 해시 일치 확인 후 보고.
+- 태그/버전 bump는 브라우저 검증(E2E + 사용자 수동 확인) 후에만.
+- 커밋은 작업 단위(가이드 항목 ID)로 분리. 메시지에 ID 포함: `fix(collab): ... (B3)`.
+
+### C2. 보고 규칙
+
+- 보고는 명령 출력과 근거 줄 번호(`파일:줄`)로만. 추정은 "(추정)"으로 명시.
+- "이미 처리됨"이면 근거 코드 줄 번호 첨부.
+- 이전 보고가 틀렸으면 먼저 정정하고 진행.
+- 네트워크 실패(git fetch/push)는 출력 그대로 기재. 성공처럼 쓰지 않는다.
+- 브라우저 조작이 필요한 검증은 "사용자 확인 필요"로 분리하고 절차를 적는다.
+
+### C3. 수정 원칙
+
+- 측정·근거 먼저, 수정은 근거가 지목한 곳만. 추측 수정 금지.
+- 버그 수정에는 회귀 테스트를 붙인다. 수정 전 코드에서 실패하는 것을 확인한다
+  (stash → 실행 → 실패 출력 첨부 → 복구).
+- lib(node_modules) 직접 패치 금지. 필요하면 patch-package + 근거 주석.
+  globalThis 덮어쓰기 금지.
+- lib 동작에 의존하는 코드에는 lib 근거 줄(`chunk-xxx.js:줄`) 주석을 단다.
+- 문자열 상수 복붙 금지. lib이 export하는 상수를 import한다(YDOC_SLIDES_KEY, SHEETS 등).
+
+### C4. 동결 구역
+
+- PPT 동결(c638efa 이후): `PptxViewer.tsx`, `slideLocationGate.ts`, PPT 전용 E2E는 수정 금지.
+  예외: 데이터 손실, 메모리 누수, 저장 실패 표시 오류(B3). 예외 적용 시 커밋 메시지에
+  `PPT freeze exception` 명시.
+- 공통 코드(`ycollab.ts`, `collab-rooms.ts`, `collabSessionRegistry.ts`) 변경 시
+  PPT E2E 전체 회귀 필수.
+
+### C5. 공동편집 불변 규칙 (상세: docs/decisions.md)
+
+- 디스크 파일이 원본. 서버는 Yjs 상태를 영구 저장하지 않는다.
+- 디스크 저장은 owner 1명만, 서버가 강제한다.
+- 외부 변경은 자동 병합하지 않고 배너만 띄운다.
+- 저장 실패 시 토스트 + "내 사본 다운로드". 조용한 유실 금지.
+- BroadcastChannel을 transport로 쓰지 않는다.
+- awareness는 `setLocalStateField('app', ...)`로만 쓴다. `setLocalState()` 금지.
+- 세션 해제는 lease 토큰으로만. path 기반 release 금지.
+- 뷰어 "닫기" = 언마운트. 숨겨서 유지 금지.
+
+### C6. 테스트·환경 (2026-10-19 실측 기준선)
+
+- **이 환경은 `NODE_ENV=production`으로 설정돼 있다.** `pnpm install` 전에
+  `$env:NODE_ENV='development'`로 바꿔야 devDependencies가 설치된다.
+  그러지 않으면 vitest/typescript 등 dev 도구가 조용히 빠져 테스트가 "not found"로 죽는다.
+- 단위+프론트 테스트: `pnpm -C backend test -- run` — 프론트 테스트도 이 경로로 돈다
+  (`backend/vitest.config.ts`의 `include`가 `../frontend/test/**`를 포함).
+  `pnpm -C frontend test` 스크립트는 **존재하지 않는다**.
+  기준선: **430 passed / 2 failed suites** (`config-migration.test.ts`,
+  `repo-tracking.test.ts` — 둘 다 `bun:sqlite` 부재라는 기존 환경 실패).
+  이 2개 외 실패가 생기면 회귀다.
+- 타입: `pnpm -C frontend exec tsc -b` (별도 스크립트 없음). 기준선: **에러 0**.
+- 린트: `pnpm -C frontend lint`. 기준선: **330 problems (272 errors, 58 warnings)** —
+  `no-explicit-any`·`no-empty` 중심의 기존 누적값. 새 문제를 늘리지 않는 것이 목표.
+- E2E: `bun run test:e2e:collab --repeat-each=3` (chromium + msedge, workers 1, retries 0).
+  VPN 끄고 실행. 실패 시 `test-results/`의 trace.zip 첨부.
+- Playwright: trace 'retain-on-failure', video 'off', screenshot 'only-on-failure'.
+- 디스크: 파일 삭제 금지(`release/`, `node_modules`, `.git` 손대지 않음). 테스트 전 여유 공간 확인.
+- 디버그 훅: `?collabDebug=1` → `window.__collabDebug`, `?memDebug=1` → `__memProbe`/`__memFloor`/
+  `__openSockets`/`__openEventSources`/`__moduleMapSizes`. 제거 금지(회귀 시 재사용).
+
+### C7. 메모리 판정
+
+- heapMB(performance.memory) 단독 판정 금지. GC 버튼 직후 값 또는 `__memFloor()` 바닥선으로만.
+- 상세: `docs/memory-notes.md`
+
