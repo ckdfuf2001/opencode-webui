@@ -10,6 +10,7 @@ import type {
 import type { paths } from "../api/opencode-types";
 import { showToast } from "@/lib/toast"
 import { markSessionIdle } from "./useSessionActivity"
+import { pollDisabled } from "@/lib/pollSwitch"
 import { clearSessionNotifyData } from "@/lib/notifications"
 import { listSessionStatuses } from "@/api/session-status"
 import { stripMemoryRecall } from "@/lib/stripRecall"
@@ -2109,11 +2110,28 @@ es = new EventSource(esUrl);
   });
 };
 
-export const useSessionStatusMap = () => {
+/**
+ * 세션 상태 조회.
+ *
+ * M7-4 (d) 단일 폴러: 폴링은 App의 <SessionStatusPoller> 하나만 한다.
+ * 나머지 호출부는 같은 query key의 캐시만 읽는다(기본 refetchInterval 없음).
+ * 이전에는 이 훅을 쓰는 컴포넌트 9개가 각자 1.2초 타이머를 가졌고,
+ * 유휴 상태에서도 초당 수 번 폴링 + 구독 갱신이 돌았다.
+ *
+ * 주기는 함수형으로 정한다: 실행 중(busy) 세션이 있으면 1200ms(표시 지연 유지),
+ * 전부 idle이면 5000ms로 늘린다.
+ */
+export const useSessionStatusMap = (opts?: { poll?: boolean }) => {
+  const poll = opts?.poll === true && !pollDisabled()
   return useQuery({
     queryKey: ["session-status-db"],
     queryFn: listSessionStatuses,
-    refetchInterval: 1200,
+    refetchInterval: poll
+      ? (query) => {
+          const rows = (query.state.data ?? []) as Array<{ status?: string }>
+          return rows.some((r) => r?.status === "busy") ? 1200 : 5000
+        }
+      : false,
     staleTime: 800,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,

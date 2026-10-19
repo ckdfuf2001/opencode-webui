@@ -14,6 +14,7 @@ import { useNotifyMigration } from './hooks/useNotifyOverrides'
 import { useReleaseCacheOnHidden } from './hooks/useOpenCode'
 import { installMemProbe } from './lib/memProbe'
 import { installMemCounters } from './lib/memCounters'
+import { Pollers } from './components/Pollers'
 import { isPushSupported, ensurePushPermission, sendPushNotification } from './lib/notifications'
 import { useState, useEffect } from 'react'
 import { Button } from './components/ui/button'
@@ -127,6 +128,8 @@ function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => 
   return (
     <>
       <PushPrompt />
+      {/* M7-4 (d): 세션 상태/헬스 폴링은 이 한 곳에서만 한다. */}
+      <Pollers />
       <div className="pointer-events-none fixed bottom-1 right-2 z-[5] text-[10px] text-muted-foreground/50 select-none" title="build">
         {BUILD_LABEL}
       </div>

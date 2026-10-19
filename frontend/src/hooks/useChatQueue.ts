@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { enqueueQueuedChat, enqueueResend, listQueuedChats, moveQueuedChat, removeQueuedChat, retryQueuedChat, setQueuePaused, updateQueuedChatsModel, type EnqueueChatOptions } from '@/api/chat-queue'
 import { showToast } from '@/lib/toast'
+import { pollDisabled } from '@/lib/pollSwitch'
 
 export const chatQueueKeys = {
   all: ['chat-queue'] as const,
@@ -40,7 +41,11 @@ export function useQueuedChats(sessionID?: string | null) {
       })
     },
     enabled: !!sessionID,
-    refetchInterval: 2000,
+    // M7-4 (d): 큐가 비면 폴링하지 않는다(유휴 폴링 제거).
+    // 항목이 생기면 2초 간격으로 따라가다 다시 비면 멈춘다.
+    refetchInterval: pollDisabled()
+      ? false
+      : (query) => ((query.state.data ?? []) as unknown[]).length > 0 ? 2000 : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,

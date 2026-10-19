@@ -57,12 +57,15 @@ const SPINNER = (
  */
 const NowCtx = createContext(0)
 
-function NowProvider({ children }: { children: ReactNode }): ReactNode {
+function NowProvider({ children, active = false }: { children: ReactNode; active?: boolean }): ReactNode {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000)
+    // 아무도 편집 중이 아니면 상대 시간 표시가 바뀔 일이 없으므로 느리게 돌린다.
+    // (유휴 상태 interval 실행 횟수를 M7-4 기준으로 낮추기 위함)
+    const ms = active ? 1000 : 5000
+    const t = setInterval(() => setNow(Date.now()), ms)
     return () => clearInterval(t)
-  }, [])
+  }, [active])
   return <NowCtx.Provider value={now}>{children}</NowCtx.Provider>
 }
 
@@ -1930,8 +1933,11 @@ const peersRef = useRef<Peer[]>([])
       {collab && (
         <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
           {/* M7-2: 시각 갱신은 이 아래로만 전파한다. 칩만 다시 그려지고
-              PptxViewer(덱 트리)는 다시 그려지지 않는다. */}
-          <NowProvider>
+              PptxViewer(덱 트리)는 다시 그려지지 않는다.
+              M7-4: 아무도 편집 중이 아니면 5초 주기로 느슨하게 돌린다. */}
+          <NowProvider
+            active={peers.some((p) => !p.isSelf && p.lastEditAt != null && Date.now() - p.lastEditAt < 10_000)}
+          >
           {(['view', 'edit'] as const).map((mode, gi) => {
             const group = peers.filter((p) => p.mode === mode && !p.isSelf)
             return (

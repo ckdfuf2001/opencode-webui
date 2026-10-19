@@ -1,7 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { API_BASE_URL } from '@/config'
+import { pollDisabled } from '@/lib/pollSwitch'
 
-export function useOpencodeHealth() {
+/**
+ * 백엔드헬스 조회.
+ *
+ * M7-4 (d) 단일 폴러: 폴링은 App의 <HealthPoller> 하나만 한다.
+ * 나머지 호출부는 캐시만 읽는다(기본 폴링 없음).
+ * 연결 표시(초록/주황)는 이 값 하나로 판단하므로 폴러 1개면 충분하다.
+ */
+export function useOpencodeHealth(opts?: { poll?: boolean }) {
+  const poll = opts?.poll === true && !pollDisabled()
   return useQuery({
     queryKey: ['opencode-health'],
     queryFn: async () => {
@@ -10,7 +19,7 @@ export function useOpencodeHealth() {
       const data = await res.json() as { opencode: string; status: string }
       return data.opencode === 'healthy' && data.status !== 'unhealthy'
     },
-    refetchInterval: 3000,
+    refetchInterval: poll ? 3000 : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,

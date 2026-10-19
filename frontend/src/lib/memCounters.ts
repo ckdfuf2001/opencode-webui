@@ -169,6 +169,8 @@ function observeRoot(root: Element): void {
 
 function attachObserverWhenReady(): void {
   if (attachTimer) return
+  // M7-4: 500ms 주기는 유휴 상태에서 초당 2회 실행되며, 그 자체가 측정 대상
+  // (interval 실행/s)을 오염시켰다. 5초로 완화해도 "루트 부착" 감지 목적은 충분하다.
   attachTimer = setInterval(() => {
     const root = document.querySelector('[data-testid="pptx-viewer-root"]')
     if (root) observeRoot(root)
@@ -177,7 +179,7 @@ function attachObserverWhenReady(): void {
       observer = null
       observedRoot = null
     }
-  }, 500)
+  }, 5000)
 }
 
 function patchCanvas(): void {
