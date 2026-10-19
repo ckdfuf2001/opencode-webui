@@ -192,6 +192,29 @@
   - 관련 커밋: 705e63c (backend), T2f/T2g/T2h (backend/test/routes/collab-relay.test.ts)
   - 회귀 검사: 3-2(relay T2f 자기저장=외부변경 아님 / T2g 외부변경=방·owner 유지 / T2h 동시 세션 POST=방 1개)
 
+- D38 저장 바이트의 출처와 편집 종료 순서 (M12, 2026-10-20)
+  - 결정(1): **저장 바이트는 Y.Doc 가 아니라 lib 뷰어의 직렬화 결과(getContent)다.**
+    `PptxViewer.handleWriteBack(bytes)`(`frontend/src/components/file-browser/PptxViewer.tsx:554`)는
+    lib 의 `onWriteBack` 이 넘긴 바이트를 그대로 `persistBytes` 로 보낸다.
+    M12 실측: 편집("Hello from Ada")이 **Y.Doc 에는 반영**(다른 참가자 화면에 보임)했는데,
+    저장 직후 디스크 파일의 `a:t` 는 여전히 `Hello` 였다 → **직렬화는 A 자신의 뷰어 DOM 기준**이며,
+    그 DOM 이 커밋 후 갱신되지 않았다(리렌더 지연/누락).
+  - 결정(2): **편집 모드 종료 순서는 flush(await) → 리마운트(viewerKey 변경)** 이다(P1-6).
+    flush 가 실패하면 편집 모드를 유지하고 배너를 띄운다.
+    리마운트 이후의 flush(`save.skip empty_bytes`)가 없어야 한다.
+    마지막 editor 가 나면서 owner 가 null 이 되는 것은 설계대로지만, 그 전에 flush 가 끝나 있어야 한다.
+  - 결정(3): **저장 직전까지 "직전 성공 저장 이후 리마운트" 상태를 기록**하고,
+    owner 인데 3초 이상 저장 요청이 없으면 `writeback_stalled` 로 경고한다(조용한 유실 탐지).
+  - 이유(측정 근거): M12 1절 — E2 디스크 반영 실패. 판정표는 "14.7초부터 없음"(저장 바이트에 편집 미포함)이었다.
+    파일 diff: 원본/저장직후/종료시점 모두 `a:t` = `Hello`, `<a:t>` run 1개, 도형명 `Body 2` 유지.
+    `helpers/disk.ts` 의 `textOf` 는 이름(cNvPr/@name) 기준이고 모든 `<a:t>` 를 이어 붙여 비교하므로
+    판독 문제도 아니다(`helpers/disk.ts:79`, `:83-93`, `:99`).
+  - 금지: 시간 창으로 자기 저장을 판별하지 않는다(기존 D37). 리마운트 전에 flush 하지 않는다.
+    저장 바이트를 Y.Doc 기준으로 임의 직렬화하지 않는다(lib 소유 영역).
+  - 관련 커밋: 705e63c(백엔드 경합·해시 식별), ee12673(타임라인 계측), b78a2ff→되돌림(증거 없는 플러시),
+    06ca84c(no-store, **원인 아님** — 파일 본문 캐시가 아니었음. 무해하므로 유지하되 "원인 아님"으로 기록)
+  - 회귀 검사: 3-2(E2b — 편집 모드 종료 후 디스크에 편집이 남는지), 3-3(E2/E2b/E4 디스크 반영 계열)
+
 ## XLSX/DOCX (A1′)
 - D40 YCollabSession mode: 'own'(PPT, 기존 경로 그대로)과 'transport'(XLSX/DOCX, lib provider가 doc/awareness 소유).
   transport 모드에서는 호스트 소유 doc을 destroy하지 않음. (e0a901d)

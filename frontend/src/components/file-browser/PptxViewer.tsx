@@ -637,36 +637,6 @@ if (!writeBackHaltedRef.current) {
   const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
   offerMineDownloadRef.current = offerMineDownload
   const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /**
-   * M11: 도형 편집(풀스크린) 종료 때 **저장 플러시**.
-   *
-   * Escape 로 도형 편집을 끝내면 앱의 편집 모드도 끝난다(DocumentPreview 의
-   * fileFullscreenChange → setEditing(false)) → viewerKey 가 바뀌어 **뷰어가 리마운트**된다.
-   * 리마운트된 뷰어는 파일(구 내용) 기준으로 다시 만들어지므로, 종료 전에 저장하지 않으면
-   * 편집이 사라진다(구 내용이 자동 저장으로 디스크를 덮어씀 = 조용한 유실).
-   *
-   * 그래서 종료 이벤트를 받는 즉시 현재 내용을 1회 저장한다.
-   * (P1-6 "편집 종료는 flush 가 끝날 때까지 기다린다" 와 같은 취지.)
-   */
-  useEffect(() => {
-    const onFs = (e: Event): void => {
-      const d = (e as CustomEvent<{ isFullscreen?: boolean }>).detail
-      if (d?.isFullscreen) return
-      const h = viewerRef.current
-      if (!h) return
-      tl('flush.on_fullscreen_exit')
-      void h
-        .getContent()
-        .then((b) => {
-          const bytes = new Uint8Array(b)
-          if (bytes.length === 0) return null
-          return persistBytesRef.current(bytes, { quiet: true, auto: true })
-        })
-        .catch(() => {})
-    }
-    window.addEventListener('fileFullscreenChange', onFs)
-    return () => window.removeEventListener('fileFullscreenChange', onFs)
-  }, [])
   // R5: 빈 스냅샷 재시도 타이머는 파일 전환/언마운트 때 반드시 해제한다.
   // (해제 안 하면 다른 파일로 옮긴 뒤 그 파일 내용을 저장할 수 있다.)
   useEffect(() => {

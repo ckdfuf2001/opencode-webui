@@ -879,6 +879,10 @@ export async function applySave(
       room.saving = false
     }
     room.lastHash = newHash
+    // M12 계측: 저장 실물 기록(바이트 수/해시/시각).
+    logger.info(
+      `Collab room ${roomId}: applySave ok bytes=${bytes.length} newHash=${newHash.slice(0, 12)} at=${Date.now()}`,
+    )
     // rename 이 끝났고 lastHash 가 갱신되었으므로 대기 해시는 제거한다.
     room.pendingHashes = room.pendingHashes.filter((h) => h !== newHash)
     room.externalChanged = false

@@ -98,7 +98,7 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)]!
 }
 
-test.describe.configure({ mode: 'serial' })
+  test.describe.configure({ mode: 'default' })
 
 test.describe('pptx collab (desktop)', () => {
   test('E1: participants (editor + viewer)', async ({ browser }, testInfo) => {
