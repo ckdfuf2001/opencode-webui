@@ -50,6 +50,10 @@
   M7-2 실측 결과 canvas/OffscreenCanvas/getContext/size 재설정/img.src 대입/data URL/ImageBitmap/blob URL
   생성은 편집 3분간 **전부 0회**였다. 원인은 유휴 재렌더 2종(슬라이드 점 paint 자기 루프, usePeers 1Hz tick)이었다.
   → 풀링 대상 0건. 풀링보다 먼저 "다시 그리기 0회"가 정답이었다. (M7-2)
+- D28 스트림 출력 상한을 하나로 통일한다: **실행 중 출력은 꼬리 20k자, 끝난 출력은 앞 20k자.**
+  전체 출력은 턴이 끝난 뒤 fetch로 받는다. 이유: 코얼레싱을 해도 화면에 그릴 때 합치는 비용이
+  상한 크기에 비례하므로 꼬리를 120k로 두면 델타마다(또는 100ms마다) 240KB 문자열을 복사한다.
+  주석("꼬리 120k")과 코드(120k 초과 시 20k만 유지)가 어긋나 있던 것을 이 기준으로 맞춘다. (M8)
 
   근거 (lib 4.33.0 / ooxml-ui 1.8.0):
   - `chunk-552NAFTD.js:12570-12590` — pointermove마다 `broadcastPresence({cursorX, cursorY, activeSlideIndex})`.
