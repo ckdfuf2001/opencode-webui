@@ -209,6 +209,15 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   }, [])
   const ownerIdRef = useRef<number | null>(null)
   const lastSaveRef = useRef<{ at: number; status: number } | null>(null)
+  // M7 측정(S0): ?collab=0 이면 공동편집 세션 자체를 만들지 않는다. 기본은 on.
+  // S0(뷰어 자체)과 S1(공동편집 경로)을 갈라서 재는 조건.
+  const collabDisabled = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('collab') === '0'
+    } catch {
+      return false
+    }
+  }, [])
   const saveCountRef = useRef(0)
   const save409Ref = useRef(0)
   const updateDebug = useCallback(() => {
@@ -241,6 +250,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         imageSync: c ? countPptxDocImages(c.session.doc as unknown as Parameters<typeof countPptxDocImages>[0]) : null,
         // 2-2: 탭당 세션 수 (E17: 1이어야 한다).
         sessionCount: collabSessionCount(),
+        // M7 측정(S0): ?collab=0 이면 세션이 없어야 한다.
+        collabDisabled,
         // M7 측정: awareness 송·수신 누적. S3(상대 마우스 이동)에서
         // tx가 늘어나지 않으면 커서가 wire에서 제거된 것이다.
         awarenessTx: c?.session.awarenessStats.tx ?? 0,
@@ -627,6 +638,8 @@ const syncSessionMode = useCallback(() => {
   // 신원이 없으면 서버 발급 기본 이름으로 즉시 만들어서 참가한다 (모달 없음).
   useEffect(() => {
     if (!savePath) return
+    // M7 측정(S0): 공동편집을 끄면 세션·WS·awareness가 아예 없다.
+    if (collabDisabled) return
     let dead = false
     // M3/N1: release는 토큰(lease) 기준이다. collabRef를 경로로 삼지 않는다.
     // collabRef.current는 렌더 시점(L194)에 채워지므로 acquire 직후 언마운트하면 null이고,
@@ -777,7 +790,7 @@ writeBackHaltedRef.current = false
       })()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savePath, collabUser, renameSessionKey])
+  }, [savePath, collabUser, renameSessionKey, collabDisabled])
 
   // 이름 변경 (우측 내 칩에서 편집). 저장하면 전 viewer에 전파되고,
   // lib presence 라벨도 바꾸기 위해 viewer를 리마운트한다 (같은 doc 유지).
