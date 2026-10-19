@@ -169,6 +169,29 @@
   - 회귀 검사: 3-1(`new EventSource` 1곳 허용 — 현재 경고, 4b-P0 후 error), 3-2(중복 델타 1벌 테스트),
     3-3(E2E 세션당 소켓 1개)
 
+- D37 자기 저장은 해시로 식별한다 (M10, 2026-10-20)
+  - 결정: 자기 저장은 **내용(해시)** 으로 식별한다. 시간 창 방식은 금지한다.
+    `applySave` 는 rename **전에** 새 해시를 `room.pendingHashes`(최근 3개)에 넣고,
+    rename 이 끝나면 `room.lastHash` 를 갱신하면서 pending 에서 제거한다.
+    watcher 는 디스크 해시가 `lastHash` 또는 `pendingHashes` 에 있으면 자기 저장으로 보고 무시한다.
+    watcher 는 temp 파일명(`.tmp-*`)을 무시하고, 짧게 디바운스한 뒤 **최종 경로에서만** 해시를 계산하며,
+    읽기 실패/크기 0 이면 판정을 보류하고 재시도한다.
+  - 진짜 외부 변경의 대응: `externalChanged` 플래그와 lock/meta 통지만 한다.
+    **방, owner, epoch는 유지한다.** 방 재설정은 owner 의 명시적 "파일 기준으로 다시 열기"(type 101 → 4001)로만 한다.
+    owner 가 사라지는 경로는 conn close 와 TTL 뿐이어야 하며, 살아 있는 edit conn 이 있는데 owner 가 없으면
+    `owner_cleared_unexpected` 오류 로그를 남긴다.
+  - 이유(측정 근거): V1(E2 실패)의 근본 원인은 **동시 세션 POST 경합**이었다.
+    `createSession` 에 경합 가드가 없으면 같은 파일에 방이 2개 만들어지고, rooms 맵에는 나중 것만 남아
+    앞의 방은 고아가 된다. **고아 방의 watcher 도 살아 있어** 자기 방의 오래된 lastHash 와 디스크를 비교하면서
+    다른 방이 방금 쓴 파일을 "외부 변경"으로 오인했다 → externalChanged → 클라이언트 재접속 → 409 →
+    owner 상실 → 편집이 디스크에 반영되지 않음.
+    증거: 백엔드 로그에 같은 room id 로 "created"가 1ms 간격 2회, 그 406ms 뒤 "external change detected".
+    (`main.tsx` 의 `<StrictMode>` 가 dev에서 세션 POST 를 2회 호출해 이 경합을 드러낸다.)
+  - 금지: 시간 창(저장 후 N초 내의 watcher 이벤트는 무시)으로 자기 저장을 판별하지 않는다.
+    방 생성에 경합 가드를 두지 않는다. 외부 변경으로 방/owner/epoch를 없애지 않는다.
+  - 관련 커밋: 705e63c (backend), T2f/T2g/T2h (backend/test/routes/collab-relay.test.ts)
+  - 회귀 검사: 3-2(relay T2f 자기저장=외부변경 아님 / T2g 외부변경=방·owner 유지 / T2h 동시 세션 POST=방 1개)
+
 ## XLSX/DOCX (A1′)
 - D40 YCollabSession mode: 'own'(PPT, 기존 경로 그대로)과 'transport'(XLSX/DOCX, lib provider가 doc/awareness 소유).
   transport 모드에서는 호스트 소유 doc을 destroy하지 않음. (e0a901d)

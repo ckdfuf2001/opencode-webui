@@ -249,7 +249,7 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 
 | # | 내용 | 근거 | 상태 |
 |---|---|---|---|
-| V1 | **owner write-back 후 세션 재설정 → owner 상실 → 편집이 디스크에 안 반영**<br>E2(live text reflection + disk) 실패. 편집 직후 mount 6→7(리마운트), `role`이 owner→viewer, `owner`가 null이 되어 write-back이 일어나지 않는다. 백엔드 로그에 "external change detected (not from owner save)" → 방 재설정("owner elected" 재발생). | e2e/collab/pptx-collab.spec.ts:141, 백엔드 로그 | PPT 동결( viewer) 영역이라 이번에 고치지 않음 |
+| V1 | **owner write-back 후 세션 재설정 → owner 상실 → 편집이 디스크에 안 반영**<br>E2(live text reflection + disk) 실패. | e2e/collab/pptx-collab.spec.ts:141 | **원인 규명 + 백엔드 수정 완료(705e63c)**. 근본 원인 = 동시 세션 POST 경합으로 **방이 2개** 만들어짐 → 고아 방의 watcher가 다른 방의 저장을 "외부 변경"으로 오인 → externalChanged → 재접속 → owner 상실.<br>**잔여**: 편집 후에도 write-back이 호출되지 않음(클라이언트 saveCount 불변). lib 의 write-back 트리거( Frosted viewer 인스턴스/role) 경로 — **PptxViewer.tsx 동결 영역**. 근거 없이 손대지 않고 v0.13 으로 이월. |
 | V2 | 뷰 모드 네이티브 +1.04MB/분 (§12-1). **덱이 있을 때만** 발생(앱만 +0.007, 8.8KB 덱 −0.01MB/분) → 덱 크기 비례. JS heap floor도 덱에 비례(10→41→436MB) | 1b 측정 | 1b로 귀속 확정. v0.13 "절대 크기 분해"와 함께 |
 | V3 | 이미지 손실 가드 계수 오탐 — **수정 완료(9f86d17)**. 정규식 탐색이 로컬 헤더와 중앙 디렉터리를 모두 세고 'ppt/media/' 디렉터리 엔트리까지 세어 실제 3장짜리 덱을 8장으로 셌다. 앱 저장 바이트(디렉터리 엔트리 없음)는 6장으로 세어져 "8→6 = 손실"로 오탐 → **이미지가 있는 덱의 저장이 전부 막혔다.** ZIP 엔트리 기준으로 세도록 고쳤고 회귀 테스트를 추가했다. | backend/test/services/collab-image-count.test.ts | **해결됨** |
 
