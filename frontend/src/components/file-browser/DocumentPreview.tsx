@@ -498,18 +498,23 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
       setEndingEdit(false)
     }
   }, [editing, endingEdit, requestOfficeSave])
-  // M14: Escape(도형 편집 종료)로 앱 편집 모드가 끝날 때, **flush(저장)를 await 한 뒤** 종료한다.
+  // M15: Escape(도형 편집 종료)로 앱 편집 모드가 끝날 때, **flush(저장)를 await 한 뒤** 종료한다.
   // 바로 setEditing(false) 하면 뷰어 리마운트(편집 모드 종료 → viewerKey 변경) 사이에
   // lib 의 미처리 write-back 이 유실된다 → 커밋이 디스크에 반영되지 않는다(조용한 유실).
   // (P1-6 "편집 종료는 flush 가 끝날 때까지 기다린다" 를 Escape 경로에도 적용.)
   useEffect(() => {
     const onFs = (e: Event) => {
-      if ((e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen) return
+      const d = (e as CustomEvent<{ isFullscreen?: boolean; path?: string }>).detail
+      if (d?.isFullscreen) return
+      // M15(3절): 자기 파일의 이벤트만 처리한다(전역 이벤트이므로 경로 비교가 필수).
+      if (!d?.path || d.path !== file.path) return
+      // 편집 중이 아니면 무시, 종료 중이면 재진입 방지.
+      if (!editing || endingEdit) return
       void endEditing()
     }
     window.addEventListener('fileFullscreenChange', onFs)
     return () => window.removeEventListener('fileFullscreenChange', onFs)
-  }, [endEditing])
+  }, [endEditing, editing, endingEdit, file.path])
   const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && kind !== 'visio' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 

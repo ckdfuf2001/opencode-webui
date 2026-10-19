@@ -158,22 +158,24 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const toggleFullscreen = () => {
     const next = !isFullscreen
     setIsFullscreen(next)
-    window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: next } }))
+    // M15: 파일 식별자를 함께 보낸다(전역 이벤트이므로 경로가 없으면
+    // 다른 파일의 DocumentPreview 가 함께 종료될 수 있다 — B1(b) 재발 방지).
+    window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: next, path: file.path } }))
   }
 
   const exitFullscreen = useCallback(() => {
     if (isFullscreen) {
       setIsFullscreen(false)
-      window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: false } }))
+      window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: false, path: file.path } }))
     }
-  }, [isFullscreen])
+  }, [isFullscreen, file.path])
 
   useEffect(() => {
     const onRequest = (e: Event) => {
       const want = (e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen
       if (want && !isFullscreen) {
         setIsFullscreen(true)
-        window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: true } }))
+        window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: true, path: file.path } }))
       } else if (want === false && isFullscreen) {
         exitFullscreen()
       }
