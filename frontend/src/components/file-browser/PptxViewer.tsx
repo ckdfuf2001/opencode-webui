@@ -26,6 +26,7 @@ import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSyn
 import { createSlideGate } from '@/lib/slideLocationGate'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
+import { tl, tlDump } from '@/lib/collabTimeline'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
 ensurePptxImagesSyncable()
@@ -276,6 +277,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
   const [connBadge, setConnBadge] = useState<{ status: string; synced: boolean }>({ status: 'connecting', synced: false })
   const baseHashRef = useRef<string | null>(null)
+  /**
+   * M11: 뷰어 리마운트가 발생한 뒤, 성공 저장이 아직 없는 상태.
+   *
+   * 리마운트(편집 모드 종료 등)는 뷰어를 **파일 기준**으로 다시 만들기 때문에,
+   * 리마운트 직후의 자동 저장은 "직전 저장 이전 내용"을 디스크에 덮어쓸 수 있다
+   * (E2 실패: 편집 저장 성공 → 리마운트 → 구 내용으로 덮어쓰기 = 조용한 유실).
+   * 그래서 리마운트 후 첫 자동 저장은 막고, 사용자에게 알린다.
+   */
+  const remountedSinceSaveRef = useRef(false)
+  /** M11: owner 인데 저장 요청이 3초 이상 없으면 탐지용 플래그. */
+  const writebackStalledRef = useRef(false)
   const collabRef = useRef<typeof collab>(null)
   collabRef.current = collab
   const editingRef = useRef(editing)
@@ -320,8 +332,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       } catch {
         slideCountY = 0
       }
-      w.__collabDebug = {
-        mountCount: (w.__collabDebug?.mountCount as number | undefined) ?? 0,
+    w.__collabDebug = {
+      mountCount: (w.__collabDebug?.mountCount as number | undefined) ?? 0,
+      // M11: 진단 타임라인(최대 300개).
+      timeline: tlDump(),
         curSlide,
         curSlideHistory: [...curSlideHistoryRef.current],
         // Z3: 상대 슬라이드 이력(1-based, -1 = 값 없음)과 arm 소요 시간.
@@ -435,6 +449,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       // 사용자가 직접 누른 저장일 때만 배너를 띄운다.
       if (bytes.length === 0) {
         logClient(`empty_snapshot len=0 auto=${auto ? 1 : 0}`)
+        tl('save.skip', { reason: 'empty_bytes', auto: !!auto, halted: writeBackHaltedRef.current })
         if (auto) {
           if (!emptyRetryRef.current) {
             emptyRetryRef.current = setTimeout(() => {
@@ -461,7 +476,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
       // R1: 이미지 손실로 자동 저장이 중지된 세션은 요청 자체를 보내지 않는다 (2.5초 루프 방지).
       if (writeBackHaltedRef.current && auto) {
         logClient('write_back_halted_skip')
+        tl('save.skip', { reason: 'halted', auto: true })
         return false
+      }
+      // M11: 리마운트 직후의 자동 저장은 **구(舊) 내용**일 수 있다.
+      // (원인: 뷰어가 파일(캐시) 기준으로 다시 만들어짐 → 백엔드가 no-store 로 막아준다.)
+      // 여기서는 저장을 막지 않고, 조용한 유실을 탐지할 수 있도록 상태만 기록한다.
+      if (remountedSinceSaveRef.current && auto) {
+        tl('save.after_remount', { halted: writeBackHaltedRef.current })
       }
       // B3: owner가 아닌 사람은 저장을 위임한다. 서버는 owner만 쓰기 때문에
       // (D05) 여기서 곧바로 API를 부르면 denied → 'Save rejected'로 번져
@@ -479,6 +501,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         return true
       }
       let res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
+    tl('save.response', { ok: res.ok, reason: res.ok ? 'ok' : res.reason, bytes: bytes.length })
       // B3: 내가 owner인데 denied면 meta가 늦은 것일 수 있다(선출 직후). 1회만 기다려 재시도한다.
       if (!res.ok && res.reason === 'denied' && !auto && ownerStateOf(c) === 'self') {
         await waitOwnerId(1000)
@@ -502,6 +525,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
         c.session.knownHash = res.newHash
         // S3: content 고정 — 세션 종료 때 한 번만 반영한다.
         latestSavedRef.current = new Uint8Array(bytes)
+        // M11: 저장이 성공했으므로 "리마운트 후 미검증 상태"를 해제한다.
+        remountedSinceSaveRef.current = false
+        writebackStalledRef.current = false
         // 저장 성공 시 남은 배너를 지운다 (5번: 배너가 안 사라지는 문제).
         if (!auto) setCollabNotice(null)
         return true
@@ -553,18 +579,45 @@ if (!writeBackHaltedRef.current) {
   // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
-    if (!c || !isOwnerNow(c)) return
-    if (!c.session.synced) return
+    // M11 계측: write-back 경로 진입/건너뜀 사유.
+    tl('writeback.enter', {
+      hasSession: !!c,
+      isOwner: c ? isOwnerNow(c) : false,
+      synced: c ? c.session.synced : false,
+      bytes: bytes.length,
+      halted: writeBackHaltedRef.current,
+    })
+    if (!c || !isOwnerNow(c)) {
+      tl('writeback.skip', { reason: c ? 'not_owner' : 'no_session' })
+      return
+    }
+    if (!c.session.synced) {
+      tl('writeback.skip', { reason: 'not_synced' })
+      return
+    }
     let slides = 0
     try {
       slides = c.session.doc.getArray('pptx:slides').length
     } catch {
       slides = 0
     }
-    if (slides === 0) return
+    if (slides === 0) {
+      tl('writeback.skip', { reason: 'empty_doc' })
+      return
+    }
+    // M11: owner 인데 저장 요청이 3초 이상 없으면 탐지한다(조용한 유실 방지).
+    if (!writebackStalledRef.current) {
+      writebackStalledRef.current = true
+      window.setTimeout(() => {
+        if (!writebackStalledRef.current) return
+        console.warn('[collab] writeback_stalled: owner 인데 3초 이상 저장 요청이 없음', {
+          path: savePath,
+        })
+        tl('writeback.stalled', { reason: 'no_save_request' })
+      }, 3000)
+    }
     await persistBytes(bytes)
   }, [persistBytes, isOwnerNow])
-
   // 내 사본 다운로드 (409 터미널 탈출용).
   const offerMineDownload = useCallback(async () => {
     try {
@@ -1693,6 +1746,18 @@ const peersRef = useRef<Peer[]>([])
   // viewerKey가 바뀔 때만 실행되고, 실행 후 prevViewerKey가 즉시 일치한다.
   const [prevViewerKey, setPrevViewerKey] = useState(viewerKey)
   if (prevViewerKey !== viewerKey) {
+    // M11 계측: viewerKey 변경(리마운트 원인). 구성요소별 차이를 남긴다.
+    tl('viewerKey.change', {
+      prev: prevViewerKey,
+      next: viewerKey,
+      editing: !!editing,
+      reloadKey,
+      collabGated: !!collabGated,
+      roomId: collab?.roomId ?? null,
+      solo: !(collabGated && collab),
+    })
+    // M11: 리마운트 후 첫 자동 저장은 구(舊) 내용으로 덮어쓸 수 있어 막는다.
+    remountedSinceSaveRef.current = true
     setPrevViewerKey(viewerKey)
     setSlideIdx(curSlideRef.current)
   }

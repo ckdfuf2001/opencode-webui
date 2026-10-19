@@ -3,6 +3,7 @@ import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
+import { tl } from './collabTimeline'
 import type { CollaborationConfig } from 'pptx-react-viewer'
 import { stripCursorFields, onlyPresenceNoiseChanged, createAwarenessThrottle, PRESENCE_STALE_S } from './collabPresenceFilter'
 
@@ -329,6 +330,8 @@ export class YCollabSession {
 
     ws.onopen = () => {
       this.retry = 0
+      // M11 계측: WS 접속.
+      tl('ws.open', { clientId: this.clientId, mode: this.mode })
       if (this.mode === 'transport') {
         // A1′: syncStep1·awareness 초기 publish는 provider가 보낸다(이중 전송 금지).
         // 채널이 열렸다는 사실만 알린다.
@@ -401,6 +404,8 @@ export class YCollabSession {
     ws.onclose = (evt) => {
       if (this.ws !== ws) return
       this.ws = null
+      // M11 계측: WS 종료(코드/사유).
+      tl('ws.close', { clientId: this.clientId, code: (evt as { code?: number }).code ?? null, reason: (evt as { reason?: string }).reason ?? null })
       if (this.disposed) return
       const e = evt as CloseEvent
       const code = (e as { code?: number }).code
@@ -452,8 +457,16 @@ export class YCollabSession {
       // 서버 meta push (owner/lastHash/epoch/externalChanged/aiBlockedAt).
       try {
         const raw = decoding.readVarUint8Array(d)
-        const meta = JSON.parse(new TextDecoder().decode(raw)) as YCollabMeta
-        this.lastMeta = meta
+      const meta = JSON.parse(new TextDecoder().decode(raw)) as YCollabMeta
+      this.lastMeta = meta
+      // M11 계측: meta 수신(내 clientId 와 owner 비교 포함).
+      tl('meta', {
+        ownerClientId: meta.ownerClientId,
+        clientId: this.clientId,
+        isOwnerByMeta: meta.ownerClientId === this.clientId,
+        externalChanged: meta.externalChanged,
+        epoch: meta.epoch,
+      })
         this.metaListeners.forEach((l) => {
           try {
             l(meta)

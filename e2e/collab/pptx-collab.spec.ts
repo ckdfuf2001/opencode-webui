@@ -157,6 +157,29 @@ test.describe('pptx collab (desktop)', () => {
     await closeTwo(t)
   })
 
+  test('E2b: leaving edit mode keeps A edit on disk (no stale overwrite)', async ({ browser }, testInfo) => {
+    // M11: A 가 편집해 저장한 뒤, 편집 모드를 끝내면(리마운트) 리마운트된 뷰어가
+    // 파일(구 내용) 기준으로 다시 만들어진다. 그 구 내용이 자동 저장으로 디스크를
+    // 덮어쓰면 A 의 편집이 조용히 사라진다(유실). 2초 뒤에도 A 의 편집이 남아야 한다.
+    // (인계안은 "B 편집 모드 종료"였으나, 같은 파일 동시 2인 편집은 이 환경에서
+    //  뷰어가 열리지 않아 A 자신의 편집 모드 종료로 대체했다. 리마운트 경로는 동일.)
+    const f = await freshFile('e2b', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    await openFile(t.pageA, f.name, 'edit')
+    await gotoSlide(t.pageA, 2)
+    await editShapeText(t.pageA, shapesA, 'Body 2', 'Hello from Ada')
+    // A 의 편집이 먼저 디스크에 반영되어야 한다.
+    await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'Hello from Ada', 12000)
+    // 편집 모드를 끝낸다(리마운트 유발).
+    await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 15000 }).catch(() => {})
+    await t.pageA.waitForTimeout(2000)
+    const deck = await readDeck(f.abs)
+    expect(deck.textOf('Body 2')).toBe('Hello from Ada')
+    void testInfo
+    await closeTwo(t)
+  })
+
   test('E21b: remote mouse cursor is not published or shown (D26)', async ({ browser }) => {
     const f = await freshFile('e21b', 0)
     const t = await twoPages(browser)

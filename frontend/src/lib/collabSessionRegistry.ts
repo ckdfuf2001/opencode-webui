@@ -1,4 +1,5 @@
 import type { YCollabSession } from './ycollab'
+import { tl, tlStack } from './collabTimeline'
 
 /**
  * 2-2: 탭당 파일당 세션 1개.
@@ -51,6 +52,8 @@ export function acquireCollabSession(
   const session = entry.session
   const reused = Boolean(existing)
   let released = false
+  // M11 계측: 세션 획득/참조 증가.
+  tl('session.acquire', { path, reused, refs: entry.refs, clientId: session.clientId, stack: tlStack(3) })
 
   return {
     session,
@@ -67,6 +70,8 @@ export function acquireCollabSession(
       // 1회성. StrictMode 이중 cleanup이나 중복 호출에 안전하다.
       if (released) return
       released = true
+      // M11 계측: 해제.
+      tl('session.release', { path, refs: entry.refs, clientId: session.clientId, stack: tlStack(3) })
       // drop 이후 같은 경로에 새 세션이 들어와 있을 수 있다. 그 entry를 건드리면 안 된다.
       if (registry.get(path) !== entry) return
       if (entry.refs > 1) {
@@ -77,6 +82,7 @@ export function acquireCollabSession(
       registry.delete(path)
       entry.dead = true
       entry.notifyReset.clear()
+      tl('session.destroy', { path, reason: 'release', clientId: session.clientId })
       session.destroy()
     },
   }
@@ -93,6 +99,8 @@ export function acquireCollabSession(
 export function dropCollabSession(path: string, session: YCollabSession): void {
   const entry = registry.get(path)
   if (!entry || entry.session !== session) return
+  // M11 계측: 명시적 drop(4001 등).
+  tl('session.drop', { path, clientId: session.clientId, stack: tlStack(3) })
   registry.delete(path)
   entry.dead = true
   const listeners = [...entry.notifyReset]
