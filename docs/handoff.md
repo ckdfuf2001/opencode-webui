@@ -35,7 +35,69 @@ c638efa · e0a901d · 71bb069 · 342035c · 28bf811 · bc80ca1 · 8607716 · b07
 - 이 PC의 `NODE_ENV=production` 때문에 `pnpm install`이 devDependencies를 건너뛴다.
   `$env:NODE_ENV='development'`로 설정하고 설치해야 vitest/tsc가 생긴다.
 
-## 진행 순서
+## M7 측정 보완 (S1 진행 중 메모)
+
+**S1 1분 데이터 정상**(heap 77→68, dom 평탄, aTx 10초 keepalive만). 10분 완료 후 표 보고는 그대로.
+**단, S1 결과로 M7 종결 금지** — 아래 보완 후 S0~S5 재측정.
+
+### 0. 원격 확인
+
+```
+$ git ls-remote origin main release-0.12
+1d9a7109d3c2c7cc8f7413872f01418c7d313304	refs/heads/main
+1d9a7109d3c2c7cc8f7413872f01418c7d313304	refs/heads/release-0.12
+```
+
+GitHub 커밋 목록 최상단이 `d95f8e7`로 보인 것은 **페이지 캐시**다. 원격에는 `1d9a710`이 있다.
+(두 해시 일치 = 푸시 성공)
+
+### 1. 지표 추가 (프로세스 메모리)
+
+probe 로그 한 줄에 다음을 추가한다(CDP + Windows):
+
+- `Performance.getMetrics`: JSHeapUsedSize, JSHeapTotalSize, Nodes, LayoutCount, RecalcStyleCount
+- `Memory.getDOMCounters`: documents, nodes, jsEventListeners
+- 렌더러/GPU 프로세스 메모리: CDP `SystemInfo.getProcessInfo`로 PID를 얻고
+  `Get-Process -Id <pid> | select WorkingSet64, PrivateMemorySize64`
+
+**CDP 함정 두 가지(확인함):**
+1. 응답이 배열이 아니라 **`{ processInfo: [...] }`** 다. 배열로 가정하면 조용히 빈 결과가 된다.
+2. 타입명은 **`"GPU"`(대문자)**, `"browser"`, `"renderer"`, `"network.mojom.NetworkService"` 다.
+   소문자 정규화 없이 `proc.gpu`를 찾으면 undefined가 된다.
+3. `SystemInfo.enable`은 존재하지 않는다(호출 시 Protocol error). `getProcessInfo`만 쓰면 된다.
+
+판정 기준: GC 후 JS floor **와** 렌더러 PrivateMemory 둘 다 10분 증가 ≤ 5MB / ≤ 30MB.
+사용자는 작업관리자 기준으로 보고 있음 — **렌더러 PrivateMemory가 이에 대응**한다.
+
+### 2. 측정 조건 보완
+
+- **덱**: `e2e/collab/fixtures/make_big.ts`(신규)로 큰 덱을 만든다.
+  슬라이드 24장, 이미지 12장(각 1200x900 RGBA), 파일 47.1MB, 디코드 RGBA 49.4MB.
+  노이즈 픽셀로 만들어 PNG 압축이 되지 않게 했다(단색이면 deflate가 99% 줄여
+  파일 크기만 줄어든다). **커밋하지 않는다**(수십 MB) — 임시 경로에 생성.
+  기존 `collab-3slides.pptx`(8x8 단색 PNG 3장, 75B)로는 이미지 경로 판정이 불가능하다.
+- **빌드**: prod exe(또는 `vite build` + preview)로 S0~S5 수행. dev(5183) 결과는 참고용 표기.
+- **headed chromium + GPU 활성**: 헤드리스는 GPU/이미지 디코드 경로가 다르다.
+- **S2~S5**는 두 번째 브라우저 컨텍스트(상대)로 자동 조작:
+  S3 마우스 이동 100ms 간격, S4 텍스트 편집 1분 간격, S5 내가 owner로 편집.
+
+### 3. 결과 표 형식
+
+| 조건 | 덱 | 빌드 | JS floor 0→10m | Renderer Private 0→10m | GPU 0→10m | nodes | aTx/aRx per min |
+|---|---|---|---|---|---|---|---|
+
+처음으로 기준을 넘는 조건이 범인 범위(M7 가이드 1절 판정표 그대로).
+넘는 조건은 heap snapshot 2장 + Comparison 상위 10 + Retainers.
+**JS가 평탄한데 Private만 오르면** chrome://tracing memory-infra 1회
+(image_cache, gpu, partition_alloc 비중).
+
+### 4. 실행 방식
+
+Start-Process 파이프 문제 해결(스크립트 내부 로그 기록) 승인 — 이후 장시간 측정은 모두 이 방식.
+`Start-Process`에 `-RedirectStandardOutput`를 주면 파이프가 열린 채로 남아
+호출이 60초를 붙잡는다. **스크립트 안에서 파일로 직접 기록**하고 리다이렉트 없이 띄운다.
+
+
 
 1. **B3 (P0, PPT freeze exception)** — 공동편집 중 owner가 아닌 사람이 수동 저장하면
    "Save failed — staying in edit mode" 후 성공 토스트가 뜬다. **→ 수정 완료 (커밋 아래 참조)**
