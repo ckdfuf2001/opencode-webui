@@ -1,5 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { useMemo } from 'react'
+import { isE2EFlag } from './lib/e2eFlag'
 import { Toaster } from 'sonner'
 import { Repos } from './pages/Repos'
 import { RepoDetail } from './pages/RepoDetail'
@@ -125,9 +127,13 @@ function AppContent() {
 function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => void }) {
   const location = useLocation()
   const isExpose = location.pathname === '/expose'
+  // M9/6절: E2E 하네스 복구용 앱 플래그.
+  // 토스트/오버레이(알림·배너)가 클릭을 가로채면 Playwright 액션이 타임아웃한다.
+  // ?e2e=1 일 때만 표시 요소를 끈다(프로덕션 동작은 그대로).
+  const isE2E = useMemo(() => isE2EFlag(), [location.search])
   return (
     <>
-      <PushPrompt />
+      {!isE2E && <PushPrompt />}
       {/* M7-4 (d): 세션 상태/헬스 폴링은 이 한 곳에서만 한다. */}
       <Pollers />
       <div className="pointer-events-none fixed bottom-1 right-2 z-[5] text-[10px] text-muted-foreground/50 select-none" title="build">
@@ -142,14 +148,16 @@ function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => 
         <Route path="/session/:sessionId" element={<SessionDetail />} />
       </Routes>
       <SettingsDialog open={isOpen} onOpenChange={close} />
-      {!isExpose && <FavoriteSessionsPanel />}
-      {!isExpose && <HtmlViewerMenu />}
-      <Toaster
-        position="bottom-right"
-        expand={false}
-        richColors
-        closeButton
-      />
+      {!isExpose && !isE2E && <FavoriteSessionsPanel />}
+      {!isExpose && !isE2E && <HtmlViewerMenu />}
+      {!isE2E && (
+        <Toaster
+          position="bottom-right"
+          expand={false}
+          richColors
+          closeButton
+        />
+      )}
     </>
   )
 }

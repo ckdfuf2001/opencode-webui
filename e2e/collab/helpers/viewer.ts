@@ -126,7 +126,8 @@ export async function readDebug(page: Page): Promise<CollabDebug> {
 export async function gotoApp(page: Page): Promise<void> {
   for (let i = 0; i < 8; i++) {
     try {
-      await page.goto('/?collabDebug=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
+      // M9/6절: ?e2e=1 로 토스트·오버레이를 끈다(클릭 가로채기 방지).
+      await page.goto('/?collabDebug=1&e2e=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
       return
     } catch {
       await page.waitForTimeout(2000)
@@ -157,33 +158,55 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
     }
     if (i === 4) throw new Error('workspace sheet has no rows after retries')
   }
-  // 폴더 펼치기: data-path 접미사로 행을 찾고 이름 span을 실제 클릭한다
-  // (행 바깥 div에는 핸들러가 없고 안쪽 div에 onClick이 있어서 dispatch 대상 주의).
+  // 폴더 펼치기 (M9/6절 하네스 복구).
+  // 이전 구현은 폴더 '이름 span'을 클릭했는데 그 클릭은 토글(expanded 반전)이라
+  // 반복 클릭하면 다시 접혔다. 게다가 이름 span 을 8번 누른 뒤에는 폴더가 닫힌
+  // 상태로 남고(짝수 회 토글) 파일 행이 끝내 안 보여 :186 에서 타임아웃했다.
+  // 지금은 'Expand' 버튼(토글 아님)을 쓰고, 이미 펼쳐졌으면 아무것도 하지 않는다.
   for (let i = 0; i < 8; i++) {
     const has = await page.evaluate(
       (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => ((r.textContent || '').includes(n))),
       fileName,
     )
     if (has) break
-    const folder = page.locator(`[data-testid="file-row"][data-path$="${seg}"]`)
-    if ((await folder.count()) > 0) {
-      await folder.locator('span', { hasText: seg }).first().click({ timeout: 10000 })
-    } else {
-      // 폴더 행 자체가 아직 없으면 dispatch 폴백으로 펼치기를 시도한다.
-      await page.evaluate((s) => {
-        const rows = [...document.querySelectorAll('[data-testid="file-row"]')]
-        const target =
-          rows.find((r) => (r.getAttribute('data-path') || '').replace(/\\/g, '/').endsWith(s)) ||
-          rows.find((r) => !(r.getAttribute('data-path') || '').includes('.'))
-        const inner = target?.querySelector('div.flex-1') ?? target?.querySelector('div')
-        inner?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      }, seg)
+    const expanded = await page.evaluate((s) => {
+      const norm = (p: string) => p.replace(/\\/g, '/')
+      const rows = [...document.querySelectorAll('[data-testid="file-row"]')] as HTMLElement[]
+      const segN = norm(s)
+      const folder = rows.find((r) => norm(r.getAttribute('data-path') || '') === segN || norm(r.getAttribute('data-path') || '').endsWith('/' + segN))
+      if (!folder) return 'no-folder'
+      // 이미 펼쳐졌으면 자식 행이 있다
+      const child = rows.some((r) => {
+        const p = norm(r.getAttribute('data-path') || '')
+        return p !== segN && p.startsWith(segN + '/')
+      })
+      if (child) return 'already-expanded'
+      // Expand 버튼 클릭(토글 아님). 없으면 이름 div 폴백.
+      const btn = folder.querySelector('button[title="Expand"]') as HTMLElement | null
+      const target = btn ?? (folder.querySelector('div.flex-1') as HTMLElement | null) ?? folder
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      return 'clicked'
+    }, seg)
+    if (expanded === 'no-folder') {
+      await page.waitForTimeout(1500)
+      continue
     }
-    await page.waitForTimeout(2500)
+    await page.waitForTimeout(1500)
   }
   for (let i = 0; i < 4; i++) {
     const row = page.locator(`[data-testid="file-row"][data-path$="${fileName}"]`)
-    await row.locator('span', { hasText: fileName }).first().click({ timeout: 15000 })
+    if ((await row.count()) === 0) {
+      // 마지막 시도: 폴더를 접었다 펼친다(자식이 늦게 오는 경우 대비)
+      await page.evaluate((s) => {
+        const norm = (p: string) => p.replace(/\\/g, '/')
+        const rows = [...document.querySelectorAll('[data-testid="file-row"]')] as HTMLElement[]
+        const folder = rows.find((r) => norm(r.getAttribute('data-path') || '').endsWith(s))
+        const btn = folder?.querySelector('button[title="Collapse"],button[title="Expand"]') as HTMLElement | null
+        btn?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      }, seg)
+      await page.waitForTimeout(1500)
+    }
+    await row.locator('span', { hasText: fileName }).first().click({ timeout: 15000 }).catch(() => {})
     try {
       await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 20000 })
       const failed = await page.getByText('Cannot preview this document').count()
