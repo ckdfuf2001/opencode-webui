@@ -194,6 +194,23 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 - GPU private 201.4 → 192.2MB(감소) → GPU 메모리가 아니다. renderer native(이미지 캐시/컴포지터) 쪽.
 - 미해결: **prod 뷰 모드에서 네이티브가 +1.9MB/분** 계속 늘어난다. 3절(절대 크기 분해) 대상.
 
+### 12-1. 1절 30분 고원 + 1b 네이티브 귀속 (prod dist, 47MB 덱, 뷰 모드, `collab=0&poll=0`, 10초 프로브, 벽시계)
+
+| 조건 | renderer private | JS floor | 30분 변화 | MB/분 | LayoutCount |
+|---|---|---|---|---|---|
+| N-a 앱만(뷰어 없음) | 107.4 → 119.8MB | 10MB | +12.4MB | +0.007 | 0 |
+| N-c 작은 덱(8.8KB, 75B PNG 3장) | 167.8 → 164.9MB | 41MB | −2.9MB | −0.01 | 0 |
+| N-b 47MB 덱 (1절 재현) | 849.5 → 880.5MB | 436MB | +31.0MB | **+1.04** | 0 |
+| (1절 원본 측정) | 726.7 → 760.1MB | 435MB | +33.4MB | +1.11 | 0 |
+
+- **판정: 네이티브 상승은 "덱이 있을 때"만 난다.** 앱만(+0.007MB/분)과 작은 덱(−0.01MB/분)은 평탄.
+  47MB 덱에서만 +1.04MB/분 → **덱 크기(디코드된 이미지/파싱 결과)에 비례하는 네이티브 메모리.**
+  8시간이면 약 500MB — 고원 미도달이라 종결할 수 없다(v0.13 V2).
+- JS heap floor도 덱에 비례: 앱만 10MB → 8.8KB 덱 41MB → 47MB 덱 436MB.
+  (47MB 덱 하나가 힙 426MB를 잡는다 → v0.13 "절대 크기 분해" 대상)
+- 60초 프로브 대조군(1절): 10초 프로브와 기울기 동일(+1.85 vs +1.9MB/분) → 프로브 오염 아님.
+- GPU private는 감소(201 → 192MB) → GPU 메모리가 아니다. renderer native(컴포지터/디코드 이미지) 쪽.
+
 ### 12-2. 2절 prod 절대 크기 (prod dist + 프록시, exe 빌드 스크립트 부재)
 
 | 시점 | prod | dev | 차이 |
@@ -222,7 +239,7 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 - 4b-0 결과: SSE on 380ms 폴링(P0), 델타 중복 append(정합성 P0), cap 규칙 3개, 델타당 할당 5개.
 - 절대 크기 분해: 이미지 디코드, data: 문자열 사본, 편집 이중 마운트.
 - **prod 뷰 모드 네이티브 +1.9MB/분**(§12-1): 8시간이면 약 900MB. 고원 미도달이므로 종결 불가.
-  1b(N-a 앱만 / N-b 47MB 덱 / N-c 75B PNG 덱)로 PPT 탓인지 앱 탓인지 귀속 중.
+  1b(N-a 앱만 / N-b 47MB 덱 / N-c 75B PNG 덱)로 PPT 탓인지 앱 탓인지 귀속 중. → **§12-1 참조(완료)**
 - **뷰 모드 JS heap floor 435MB**(47MB 덱, prod): JS 쪽은 평탄하지만 덱 1장이 힙을 425MB 잡는다.
   v0.13 "절대 크기 분해" 항목으로 기록.
 - Chrome 작업관리자 열(Memory footprint/Image cache/GPU memory)은 CDP로 읽을 수 없어 **수동 기록 필요**.
@@ -233,7 +250,7 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 | # | 내용 | 근거 | 상태 |
 |---|---|---|---|
 | V1 | **owner write-back 후 세션 재설정 → owner 상실 → 편집이 디스크에 안 반영**<br>E2(live text reflection + disk) 실패. 편집 직후 mount 6→7(리마운트), `role`이 owner→viewer, `owner`가 null이 되어 write-back이 일어나지 않는다. 백엔드 로그에 "external change detected (not from owner save)" → 방 재설정("owner elected" 재발생). | e2e/collab/pptx-collab.spec.ts:141, 백엔드 로그 | PPT 동결( viewer) 영역이라 이번에 고치지 않음 |
-| V2 | 뷰 모드 네이티브 +1.9MB/분 (§12-1). JS heap은 평탄(435MB 고정) | 1b 측정 | 1b 결과로 귀속 확정 |
+| V2 | 뷰 모드 네이티브 +1.04MB/분 (§12-1). **덱이 있을 때만** 발생(앱만 +0.007, 8.8KB 덱 −0.01MB/분) → 덱 크기 비례. JS heap floor도 덱에 비례(10→41→436MB) | 1b 측정 | 1b로 귀속 확정. v0.13 "절대 크기 분해"와 함께 |
 | V3 | 이미지 손실 가드 계수 오탐 — **수정 완료(9f86d17)**. 정규식 탐색이 로컬 헤더와 중앙 디렉터리를 모두 세고 'ppt/media/' 디렉터리 엔트리까지 세어 실제 3장짜리 덱을 8장으로 셌다. 앱 저장 바이트(디렉터리 엔트리 없음)는 6장으로 세어져 "8→6 = 손실"로 오탐 → **이미지가 있는 덱의 저장이 전부 막혔다.** ZIP 엔트리 기준으로 세도록 고쳤고 회귀 테스트를 추가했다. | backend/test/services/collab-image-count.test.ts | **해결됨** |
 
 ### 14-2. E2E 하네스 복구 기록 (M9-6절)
