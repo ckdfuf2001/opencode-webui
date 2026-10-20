@@ -121,18 +121,33 @@
 - `node_modules/.pnpm` 에 `ooxml-ui@1.8.0_patch_hash=…` 사본이 **여러 개**(오래된 해시 포함) 공존한다.
   `pnpm install --force` 로 새 해시가 생기지만 프론트 링크가 갱신되지 않는 경우가 있었다.
 
+**M20 결과 — lib 로그 미수집의 원인 확정**
+
+| 조사 | 결과 |
+|---|---|
+| 1-1 사본 전수 | `ooxml-ui` **6벌**(5 patched 해시 + 1 원본), `pptx-react-viewer` **4벌**(1 patched(`ffxbnvob…`) + 3 옛). `useCollaborationWriteBack` 훅은 pptx-react-viewer 사본에만 존재(hook=2), 스케줄러는 ooxml-ui 쪽(scheduler=2). |
+| 1-3 런타임 표식 | `globalThis.__ooxmlPatches` = **null** ⇒ **런타임에 패치가 로드되지 않았다**. E2E 시작 조건으로 단언 추가(실패 시 즉시 중단). |
+| 1-2 앱의 import 출처 | `.vite/deps/pptx-react-viewer.js` 는 `chunk-KR2P4QND.js`(ooxml-ui 쪽)에서 심벌을 가져온다. **뷰어 훅이 실제로 들어있는 코드는 ooxml-ui/pptx 쪽**이고, **`pptx-react-viewer/dist/chunk-552NAFTD.js` 는 앱이 로드하지 않는다**. Vite 사전 번들에서도 `chunk-KR2P4QND.js` 에만 표식이 있고 `pptx-react-viewer.js` 에는 없다. |
+| 1-4 Vite 캐시 | `frontend/node_modules/.vite` 삭제 후에도 표식 없음 ⇒ (가)Vite 캐시 아님. |
+
+⇒ **M16~M19 의 lib 패치(cleanup flush)는 전부 무효였다.** 리뷰 예상 (나)"다른 사본"이 맞다.
+⇒ **다음 세션 1순위**: `ooxml-ui/pptx` 안의 실제 뷰어 훅 파일을 찾아 **그 파일에** cleanup 패치를 적용하고,
+   1-3 표식 단언이 통과할 때까지 반복. 그 뒤에야 M19 1절(저장 경로 증명)·2절(예약 없는 flush)·3절(앱 await) 진행.
+
 **남은 과제(다음 세션)**
-1. **런타임 ooxml-ui 경로 확정** — `frontend/node_modules/ooxml-ui` 링크 복구(pnpm 설치 문제), 그 다음
-   **설치본 dist 에 `M19` 표식과 `wb.flush.*` 로그가 있는지 단언 테스트** 추가. 그 뒤 ① 재실행으로
-   저장 경로(flush vs debounce) 확정.
-2. **2-3 pendingSave**(경로별 promise 1개, 바이트 미보관) + **endEditing await**(상한 3초) — 미구현.
-3. **2-4 registry destroy 지연**(refs=0 이어도 pendingSave 있으면 3초) + `handleWriteBack` 이 flush 시작
-   시점 세션 캡처 + `collab:writeback-failed` 전역 이벤트로 뷰어 없이도 토스트/내 사본 다운로드 — 미구현.
-4. **E2f/E2g/E2h 신설**, scheduler/hook 단위 테스트 7종, **E4 실측표**(서버 owner vs 화면 data-owner) + 표시 경로.
-5. **D40 → D41**(XLSX 절에 D40이 이미 있어 번호 중복) — 반영함. `as unknown as CollaborationConfig` →
-   module augmentation, PptxViewer 들여쓰기 노이즈 정리, 패치 키 버전 고정(`pptx-react-viewer@4.33.0`) +
-   캐럿 제거 + prod exe 번들 grep.
-6. E2d, E2e(D39), `fileFullscreenChange` grep, 인코딩 게이트 범위(origin/main...HEAD + staged + untracked).
+1. **패치 대상 파일 확정** — `ooxml-ui/pptx` 의 `useCollaborationWriteBack` 구현 파일 찾기
+   (`.vite/deps/chunk-KR2P4QND.js` 가 참조하는 원본 경로 추적), 그 파일에 M20 패치 적용 + 표식 단언 통과.
+2. **M20 2절** — 예약이 없으면 flush 가 조용히 끝나는 구멍(커밋이 아직 Y.Doc 에 안 들어간 Escape 경로).
+   lib 모델의 "미동기 편집" 상태를 dist 에서 찾아 파일:줄로, 없으면 즉시 실행.
+   첫 update 가 아니라 **update 가 멈췄을 때** 실행(여러 transaction 대응). 상한 2초 초과 시 저장 말고 실패 처리.
+3. **M20 3절(2-3/2-4)** — registry destroy 지연(3초) + 경로별 pendingSave promise + endEditing await +
+   `collab:writeback-failed` 전역 이벤트(토스트·내 사본 다운로드) + 4001 시 `abortFlush` 직접 호출.
+4. **E2f/E2g/E2h 신설**(T1a), scheduler/hook 단위 테스트, **E4 실측표**(서버 owner vs 화면 data-owner) + 표시 경로.
+5. **패치 고정(이번에 반드시)** — `patchedDependencies` 키 `pptx-react-viewer@4.33.0`, 캐럿 제거,
+   **빌드 표식 검사**(`pnpm build:frontend` 후 `frontend/dist/assets` 에 `__ooxmlPatches` grep, 없으면 EXIT=1) + `pnpm test` 연결,
+   `.pnpm` 옛 패치 사본 정리(`pnpm store prune` + 재설치).
+6. D38 갱신(패치 대상 파일 확정 후), 인코딩 게이트 범위(origin/main...HEAD + staged + untracked),
+   E2d, E2e(D39), `fileFullscreenChange` grep.
 7. E2/E2b/E2c/E4/E2d~E2h × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀, throttle 4× E2b 5회.
 
 **M15 추가 발견 (lib dist 확인)**

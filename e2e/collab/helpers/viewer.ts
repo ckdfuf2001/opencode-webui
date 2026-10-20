@@ -126,15 +126,28 @@ export async function readDebug(page: Page): Promise<CollabDebug> {
 export async function gotoApp(page: Page): Promise<void> {
   for (let i = 0; i < 8; i++) {
     try {
-      // M9/6절: ?e2e=1 로 토스트·오버레이를 끈다(클릭 가로채기 방지).
+      // M14/M15: collabDebug=1 로 실행하며(타임라인 계측), E2E 시작 조건으로
+      // M20: lib 패치 런타임 표식 확인 — 패치가 실제로 로드되지 않았으면
+      // 저장 경로 계측이 전부 무의미해지므로 즉시 실패시킨다.
       await page.goto('/?collabDebug=1&e2e=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
+      const patches = await page.evaluate(
+        () => (globalThis as unknown as { __ooxmlPatches?: Record<string, string> }).__ooxmlPatches ?? null,
+      )
+      if (!patches || patches.ui !== 'M20' || patches.viewer !== 'M20') {
+        throw new Error(
+          `lib patch not loaded (expected ui/viewer=M20, got ${JSON.stringify(patches)}) — ` +
+            `pnpm install 로 패치를 적용하고 frontend/node_modules/.vite 캐시를 지운 뒤 다시 실행할 것.`,
+        )
+      }
       return
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('lib patch not loaded')) throw e
       await page.waitForTimeout(2000)
     }
   }
   throw new Error('goto failed')
 }
+
 
 /** 탐색기에서 파일을 열고 (편집 모드 전환 선택) 연결될 때까지 기다린다. */
 export async function openFile(page: Page, fileName: string, mode: 'view' | 'edit', opts?: { folderSeg?: string }): Promise<void> {

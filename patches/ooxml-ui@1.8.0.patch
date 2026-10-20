@@ -1,8 +1,17 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..d5f0837efdaabb4b28fda318500fa2929013522d 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..ff10c557448f9e3edd61c04a2117134f45119736 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
 +++ b/dist/pptx/chunk-MCHPNO42.mjs
-@@ -33004,6 +33004,8 @@ function createWriteBackScheduler(deps) {
+@@ -62,6 +62,8 @@ import { formatAutoNumber } from 'ooxml-core/pptx/editor/render/bullet-autonum';
+ export { TEXT_AUTONUMBER_SCHEMES, alphaLabel, formatAutoNumber, romanNumeral } from 'ooxml-core/pptx/editor/render/bullet-autonum';
+ import { buildThemeColorGrid } from 'ooxml-core/pptx/editor/render/text-theme';
+ export { THEME_COLOR_LABELS, THEME_COLOR_TINT_ROWS, buildThemeColorGrid, resolveThemeFont, shadeColor, themeColorLabel, themeColorSchemeToSwatches, tintColor } from 'ooxml-core/pptx/editor/render/text-theme';
++// M20: 런타임 표식 — 이 패치가 실제로 로드됐는지 E2E 시작 조건으로 단언한다.
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, ui: "M20" };
+ import { LOCAL_SYNC_ORIGIN } from 'ooxml-core/pptx/editor/render/collaboration-reconcile';
+ export { LOCAL_SYNC_ORIGIN, reconcileElementTextBody, reconcileElementYMap, reconcileSlideYMap, reconcileSlidesInYDoc } from 'ooxml-core/pptx/editor/render/collaboration-reconcile';
+ import { observeYDocSlides, readSlidesFromYDoc, YDOC_SLIDES_KEY, COMPLEX_ELEMENT_FIELDS } from 'ooxml-core/pptx/editor/render/collaboration-sync';
+@@ -33004,6 +33006,8 @@ function createWriteBackScheduler(deps) {
    let timer = null;
    let generation = 0;
    let unsubscribe = null;
@@ -11,7 +20,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..d5f0837efdaabb4b28fda318500fa292
    function cancel() {
      generation++;
      unsubscribe?.();
-@@ -33012,6 +33014,7 @@ function createWriteBackScheduler(deps) {
+@@ -33012,6 +33016,7 @@ function createWriteBackScheduler(deps) {
        clearTimeout(timer);
        timer = null;
      }
@@ -19,7 +28,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..d5f0837efdaabb4b28fda318500fa292
    }
    function schedule(config) {
      const isReady = () => config.externalSession?.getSnapshot().synced ?? true;
-@@ -33036,6 +33039,8 @@ function createWriteBackScheduler(deps) {
+@@ -33036,6 +33041,8 @@ function createWriteBackScheduler(deps) {
        unsubscribe = detach;
      }
      const debounceMs = config.writeBackDebounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -28,7 +37,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..d5f0837efdaabb4b28fda318500fa292
      timer = setTimeout(async () => {
        timer = null;
        const ydoc = deps.getYDoc();
-@@ -33075,7 +33080,123 @@ function createWriteBackScheduler(deps) {
+@@ -33075,7 +33082,123 @@ function createWriteBackScheduler(deps) {
        }
      }, debounceMs);
    }

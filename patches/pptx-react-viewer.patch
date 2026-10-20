@@ -1,8 +1,14 @@
 diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
-index 258156da202883c57418626396f0218efa46152c..bbcbc0635bb13fb56dde17ca8d4470ebacedf229 100644
+index 258156da202883c57418626396f0218efa46152c..78d167e81ac2e5560dd5524cda1604f75a4e0147 100644
 --- a/dist/chunk-552NAFTD.js
 +++ b/dist/chunk-552NAFTD.js
-@@ -11434,10 +11434,36 @@ function useCollaborationWriteBack(input) {
+@@ -1,3 +1,5 @@
++// M20: 런타임 표식 — 이 패치가 실제로 로드됐는지 E2E 시작 조건으로 단언한다.
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, viewer: "M20" };
+ 'use strict';
+ 
+ var chunkSQUVXHAE_js = require('./chunk-SQUVXHAE.js');
+@@ -11434,10 +11436,36 @@ function useCollaborationWriteBack(input) {
      [latest]
    );
    const hasWriteBack = Boolean(input.config?.onWriteBack);
