@@ -239,6 +239,27 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 > M12/M14 실험 결과(공동편집 데이터 유실 건)는 **docs/handoff.md** 의 "M12/M14 진행 위치" 절로 옮겼다.
 > 여기서는 링크만 둔다: `docs/handoff.md` → "M14 실험 결과(데이터 유실)".
 
+### 14-0. lib 의 모델→Y.Doc 반영 순서 (M21 2절 근거, `chunk-DD3ARHEW.mjs`)
+
+```
+publish.current = (nextSlides) => {
+  const serialized = JSON.stringify(slides);
+  queueMicrotask(() => {
+    if (!active || !canWrite() || token !== revision || slides === superseded
+        || loadVersion !== lastLoad.current || serialized === lastSynced) return;   // ← 반영이 막히면 미동기 편집이 남는다
+    reconcileSlidesInYDoc(slides, doc, factories);   // ← 모델 → Y.Doc 반영
+    lastSynced = serialized;
+    scheduleWriteBack();                            // ← write-back 예약
+  });
+};
+```
+
+⇒ **반영은 마이크로태스크 경계를 넘겨야 일어난다.** 그리고 **언마운트(편집 종료) 시점에는
+lib 컴포넌트가 죽어 publish 자체가 실행되지 않으므로, 그 순간 커밋된 편집은 Y.Doc 에 반영되지 않는다.**
+⇒ flush 가 "2초 안에 로컬 update 없음"으로 스킵되는 이유가 이것이다(실측 `wb.flush.skip{deadline}`).
+⇒ 해법(M20 2절): flush 안에서 **동기화를 1회 직접 실행**(lib 내부 `reconcileSlidesInYDoc` 호출)한 뒤 직렬화,
+또는 앱 측에서 언마운트 전에 `getContent()` 로 저장(2-3/2-4). 둘 다 다음 세션 과제.
+
 
 - 4b-0 결과: SSE on 380ms 폴링(P0), 델타 중복 append(정합성 P0), cap 규칙 3개, 델타당 할당 5개.
 - 절대 크기 분해: 이미지 디코드, data: 문자열 사본, 편집 이중 마운트.

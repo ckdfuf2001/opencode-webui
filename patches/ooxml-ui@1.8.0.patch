@@ -1,5 +1,5 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..1d69fb743600b9cf7d74b352835c5fa838755b3b 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..a17a7368d2cc3ee47c786be03075692bf9290486 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
 +++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -111,6 +111,8 @@ import { ifDefined } from 'lit/directives/if-defined.js';
@@ -37,7 +37,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..1d69fb743600b9cf7d74b352835c5fa8
      timer = setTimeout(async () => {
        timer = null;
        const ydoc = deps.getYDoc();
-@@ -33075,7 +33082,137 @@ function createWriteBackScheduler(deps) {
+@@ -33075,7 +33082,145 @@ function createWriteBackScheduler(deps) {
        }
      }, debounceMs);
    }
@@ -149,7 +149,15 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..1d69fb743600b9cf7d74b352835c5fa8
 +      } catch {
 +      }
 +      if (state.deadlineTimer) clearTimeout(state.deadlineTimer);
-+      void run();
++      // M21: **1틱(매크로태스크) 뒤에 실행**한다.
++      // 근거: lib 의 모델→Y.Doc 반영(`reconcileSlidesInYDoc`)은 `publish.current` 안의
++      // queueMicrotask 에서 일어나고 그 다음에 scheduleWriteBack() 이 호출된다
++      // (pptx-react-viewer ESM `chunk-DD3ARHEW.mjs` 의 useExternalDocumentSync).
++      // 즉 마이크로태스크 경계를 넘으면 커밋이 Y.Doc 에 반영된 상태가 된다.
++      // 언마운트 cleanup 이 그 마이크로태스크보다 먼저 실행될 수 있으므로 한 틱 기다린다.
++      setTimeout(() => {
++        void run();
++      }, 0);
 +    };
 +    // 로컬 편집이 Y.Doc 에 반영된 뒤에 실행한다(시간 추측 금지).
 +    state.onLocalUpdate = (_update, origin) => {
