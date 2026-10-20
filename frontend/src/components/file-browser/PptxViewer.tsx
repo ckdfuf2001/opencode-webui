@@ -27,6 +27,7 @@ import { createSlideGate } from '@/lib/slideLocationGate'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
+import { setCommitAnchor, getCommitAnchor } from '@/lib/commitAnchor'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
 ensurePptxImagesSyncable()
@@ -579,6 +580,10 @@ if (!writeBackHaltedRef.current) {
   // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
+    // M15: 커밋 반영 판정 앵커로 보관한다(lib 이 전달한 바이트 = 커밋 반영된 모델의 직렬화 결과).
+    // 인스턴스별 ref 가 아니라 경로별 모듈 싱글턴 — write-back 을 낸 인스턴스와 flush 를 하는
+    // 인스턴스가 다를 수 있다(인라인 미리보기/전체화면 시트). 실측에서 ref 로 두면 anchor=null 이었다.
+    setCommitAnchor(savePath, bytes)
     // M11 계측: write-back 경로 진입/건너뜀 사유.
     tl('writeback.enter', {
       hasSession: !!c,
@@ -653,16 +658,20 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
    * ② DOM 이 안정 ≠ lib 모델(D38-1)의 반영. 저장 바이트는 getContent() 즉 모델에서 나온다.
    *
    * 지금: (a) 편집 입력칸 여부는 **뷰어 root 안으로 한정**하고,
-   *      (b) 진짜 판정은 **모델이 커밋 전과 달라졌는지**(getContent 비교)로 한다.
-   *      (b) 는 저장 바이트와 같은 소스라可靠하다.
+   *      (b) 진짜 판정은 **커밋 write-back 바이트(앵커)와 모델이 같은지**로 한다.
+   *      앵커 = lib 이 커밋 write-back 으로 넘긴 바이트 = 커밋이 반영된 모델의 직렬화 결과.
+   *      (직전 스냅샷과 "달라졌다"는 비교는 unreliable: 직렬화 시점마다 바이트가 달라진다.
+   *       실측 8145 → 8140.)
    * 타임아웃이면 저장은 하지 않고 편집 모드를 유지 + 배너(조용한 유실 경로 금지).
    */
   const waitCommitApplied = useCallback(
     async (
       h: { getContent: () => Promise<ArrayBuffer | Uint8Array> },
       before: Uint8Array,
+      path: string | undefined,
     ): Promise<boolean> => {
       const deadline = Date.now() + 1000
+      const anchor = getCommitAnchor(path)
       for (;;) {
         const editingInViewer = (() => {
           try {
@@ -674,13 +683,16 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
           }
         })()
         const now = new Uint8Array(await h.getContent())
-        // 모델이 커밋 전과 다르고(반영됨) 편집 입력칸이 사라졌다면 반영 완료.
-        if (!editingInViewer && now.length > 0 && !bytesEqual(now, before)) {
-          tl('flush.commit_applied', { bytes: now.length, waited: true })
+        // 앵커가 있으면 "앵커와 동일" = 커밋 반영, 없으면 "직전과 다름"으로 판정.
+        const applied = anchor
+          ? bytesEqual(now, anchor)
+          : now.length > 0 && !bytesEqual(now, before)
+        if (!editingInViewer && applied) {
+          tl('flush.commit_applied', { bytes: now.length, anchor: anchor ? anchor.length : null })
           return true
         }
         if (Date.now() > deadline) {
-          tl('flush.commit_wait_timeout', { bytes: now.length })
+          tl('flush.commit_wait_timeout', { bytes: now.length, anchor: anchor ? anchor.length : null })
           return false
         }
         await new Promise((r) => setTimeout(r, 50))
@@ -765,7 +777,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       void (async () => {
         // M15: 커밋 반영을 **모델 기준**으로 기다린 뒤 직렬화한다.
         const before = new Uint8Array(await h.getContent())
-        const applied = await waitCommitApplied(h, before)
+        const applied = await waitCommitApplied(h, before, savePath)
         if (!applied) {
           // 타임아웃: 저장은 하지 않는다(구 내용 덮어쓰기 방지).
           // 편집 모드를 유지하고 배너/토스트로 알린다(조용한 유실 금지).

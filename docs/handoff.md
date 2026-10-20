@@ -58,12 +58,31 @@
 | ⑤ docs | 이 커밋 | 완료 |
 | a55fbfc 커밋 분리 위반 | 되돌리지 않음(force push 금지). docs/spec/prod 혼재 사실만 기록 | 대응 완료 |
 
-**미해결(다음 세션 시작점)**
-1. flush 저장 바이트가 커밋 write-back 과 다름 → **커밋 반영 판정을 텍스트 기준으로**(2절) 또는
-   lib dist grep으로 커밋/flush/blur API 존재 확인(2절 우선순위 1).
-2. 2인 E2b 여전히 실패(디스크 반영 안 됨).
-3. E2d(PPT/XLSX 동시 편집 — B1(b) 재발 검사) 미작성.
-4. lib 이 제공하는 커밋 신호가 있으면 그걸로 대기를 대체(C안).
+**M15 추가 발견 (lib dist 확인)**
+- lib `chunk-552NAFTD.js:11423` `useCollaborationWriteBack`: write-back 은 `scheduler.schedule()` 로 예약되고
+  **role==="owner" 일 때만** 전달된다(:11451). 예약은 `useEffect(() => () => scheduler.cancel(), [.., input.config?.role, ..])`(:11437-11440)
+  → **role/doc 이 바뀌면 예약이 취소**된다.
+- 앵커(커밋 write-back 바이트)는 **경로별 모듈 싱글턴**(`frontend/src/lib/commitAnchor.ts`)으로 둔다 —
+  per-instance ref 로 두면 write-back 인스턴스와 flush 인스턴스가 달라 앵커가 null 이었다(실측).
+
+**M15 검증 결과**
+| 대상 | 결과 |
+|---|---|
+| E2b 단독(chromium) | **통과** |
+| E2b+E2+E2c+E4 묶음 | 4 passed / 4 failed — **플레키** |
+
+- E2b: 단독 통과, 묶음 실패 → waitForDisk 는 통과하는데 **'Done' 클릭 후 리마운트 구 내용 write-back 이 편집을 덮어씀**.
+- 플러시 대기: 앵커(8140/8144)와 모델(8138/8145) 이 매번 달라 **타임아웃이 반복**된다(직렬화 바이트가 시점마다 다름).
+  타임아웃 시 **저장을 건너뛰는** 안전장치 덕분에 유실은 막혔다(그 뒤의 write-back 이 커밋 내용을 저장).
+
+**다음 세션 시작점(구체적)**
+1. **직렬화 바이트 비교는 unreliable** → 앵커 비교를 **텍스트 기준**으로(저장 바이트에서 도형 텍스트 추출).
+   lib 에 텍스트/소스 접근이 있는지 dist grep 필요(`getSourceBytes`/`getSaveOptions` 흔적).
+2. **리마운트 후 구 내용 write-back 차단** — 직전 성공 저장(newHash) 이후 리마운트가 있었으면,
+   리마운트 직후 첫 auto 저장은 직전 저장과 동일할 때만 허용(또는 직전 저장 해시와 비교).
+3. **E2b 플레키 원인** — 단독 통과/묶음 실패. 직전 테스트가 남긴 상태(백엔드 방/owner, 파일 캐시) 확인.
+4. E2d(PPT/XLSX 동시 편집 — B1(b) 재발 검사) 미작성.
+5. 정상 실행에서 `flush.commit_wait_timeout` **0회**여야 함(2절 조건) — 현재 2회.
 
 
 - `DocumentPreview`: `fileFullscreenChange`(Escape) → 기존 `endEditing()`(=flush await → 종료)로 통일.
