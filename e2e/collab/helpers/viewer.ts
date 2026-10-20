@@ -126,26 +126,40 @@ export async function readDebug(page: Page): Promise<CollabDebug> {
 export async function gotoApp(page: Page): Promise<void> {
   for (let i = 0; i < 8; i++) {
     try {
-      // M14/M15: collabDebug=1 로 실행하며(타임라인 계측), E2E 시작 조건으로
-      // M20: lib 패치 런타임 표식 확인 — 패치가 실제로 로드되지 않았으면
-      // 저장 경로 계측이 전부 무의미해지므로 즉시 실패시킨다.
+      // M14/M15: collabDebug=1 로 실행하며(타임라인 계측).
+      // M21: 표식 단언은 **파일을 열은 뒤**에 한다 — lib 은 동적 import 라서
+      // 파일을 열기 전에는 모듈이 평가되지 않아 표식이 null 이 정상이다.
       await page.goto('/?collabDebug=1&e2e=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
-      const patches = await page.evaluate(
-        () => (globalThis as unknown as { __ooxmlPatches?: Record<string, string> }).__ooxmlPatches ?? null,
-      )
-      if (!patches || patches.ui !== 'M20' || patches.viewer !== 'M20') {
-        throw new Error(
-          `lib patch not loaded (expected ui/viewer=M20, got ${JSON.stringify(patches)}) — ` +
-            `pnpm install 로 패치를 적용하고 frontend/node_modules/.vite 캐시를 지운 뒤 다시 실행할 것.`,
-        )
-      }
       return
-    } catch (e) {
-      if (e instanceof Error && e.message.includes('lib patch not loaded')) throw e
+    } catch {
       await page.waitForTimeout(2000)
     }
   }
   throw new Error('goto failed')
+}
+
+/**
+ * M21: 런타임 표식 단언 — lib 패치가 실제로 로드됐는지 확인한다.
+ * 파일(뷰어)을 연 뒤에 호출할 것.
+ */
+export async function assertLibPatchesLoaded(page: Page): Promise<void> {
+  const patches = await page.evaluate(
+    () => (globalThis as unknown as { __ooxmlPatches?: Record<string, string> }).__ooxmlPatches ?? null,
+  )
+  if (!patches || patches.ui !== 'M21' || patches.viewer !== 'M21') {
+    throw new Error(
+      `lib patch not loaded (expected ui/viewer=M21, got ${JSON.stringify(patches)}) — ` +
+        `pnpm install 로 패치를 적용하고 frontend/node_modules/.vite 캐시를 지운 뒤 다시 실행할 것.`,
+    )
+  }
+  const deps = await page.evaluate(() =>
+    performance
+      .getEntriesByType('resource')
+      .map((e) => e.name)
+      .filter((n) => n.includes('/.vite/deps/'))
+      .slice(0, 12),
+  )
+  console.log(`[lib-patches] ${JSON.stringify(patches)} vite-deps=${JSON.stringify(deps)}`)
 }
 
 
@@ -224,6 +238,8 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
       await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 20000 })
       const failed = await page.getByText('Cannot preview this document').count()
       if (failed > 0) throw new Error('preview failed')
+      // M21: 뷰어((lib)가 로드된 뒤에야 런타임 표식을 단언한다.
+      await assertLibPatchesLoaded(page)
       break
     } catch {
       await page.waitForTimeout(3000)

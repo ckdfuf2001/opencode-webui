@@ -134,21 +134,46 @@
 ⇒ **다음 세션 1순위**: `ooxml-ui/pptx` 안의 실제 뷰어 훅 파일을 찾아 **그 파일에** cleanup 패치를 적용하고,
    1-3 표식 단언이 통과할 때까지 반복. 그 뒤에야 M19 1절(저장 경로 증명)·2절(예약 없는 flush)·3절(앱 await) 진행.
 
+**M21 결과 — lib 패치 대상 파일 확정(큰 진전)**
+
+| 조사 | 결과 |
+|---|---|
+| 1-2 exports | `pptx-react-viewer`: `import` → **`dist/index.mjs`**, `require` → `dist/index.js` (CJS). **Vite(브라우저 ESM)는 `.mjs` 빌드를 쓴다.** |
+| 1-4 훅 위치 | ESM: **`dist/chunk-DD3ARHEW.mjs:11418`** / CJS: `dist/chunk-552NAFTD.js:11425` ⇒ **훅 패치는 CJS에 붙어 있었고(무효), ESM이 실제 로드 파일.** |
+| 1-5 sourcemap | `.vite/deps/chunk-KR2P4QND.js.map` sources → `ooxml-ui@1.8.0_patch_hash=uqul4e7…/dist/pptx/chunk-A63ASSCH.mjs` 등 ⇒ **스케줄러는 ooxml-ui 쪽이므로 그 패치는 유효** (리뷰 4번과 일치). |
+| 1-1 표식 단언 | **ui/viewer 둘 다 `M21`** ⇒ 판정표 3행 "패치 유효". (확인 시점은 파일을 연 뒤로 이동 — 동적 import라 그 전엔 null 이 정상.) |
+| 1-5 저장 경로 | E2/E2b 의 저장은 `save.response` 2회, flush 는 **`wb.flush.skip {reason:"deadline"}`** ⇒ 저장은 **lib debounce 경로**. flush 는 2초 내 로컬 update 가 없어 **저장하지 않았다**(구 내용 덮어쓰기 방지). |
+
+**이번에 고친 것**
+1. **ESM 훅 파일에 M19 훅 패치 적용**(`chunk-DD3ARHEW.mjs`) — 언마운트 flush + `unmountingRef` + 최신 `flushOnUnmount`.
+2. **표식 위치 수정**(결함 3): CJS 는 `'use strict'` 뒤, ooxml-ui 는 마지막 import 뒤. 표식값 `M21` 통일.
+3. **fire() own 버그 수정**: `fire()` 가 `abortFlush()`(flushState=null)를 먼저 호출해 `run()` 의 `isCurrent()` 가 항상 false → **저장이 항상 skip(not_current)** 이던 것. 리스너/타이머만 정리하도록 변경.
+4. **deadline 경로에서 저장 금지**(M20 2절): 2초 내 로컬 update 가 없으면 **저장하지 않고** `wb.flush.skip {reason:"deadline"}` + 경고 로그. (실측: deadline 에서 실행하면 커밋 반영 전 Y.Doc 을 저장해 **구 내용으로 덮어씀** = 조용한 유실. E2b 가 이걸로 깨지는 것을 확인하고 바로잡음.)
+5. E2E: E2/E2b 2건 통과, flush 로그 수집 확인.
+
+**M16~M19 재검토표**
+
+| 관찰 | 의존 대상 | 당시 로드 여부 | 판정 |
+|---|---|---|---|
+| M16 "즉시 실행 시 8141B(커밋 전)" | 스케줄러 | 유효(ESM) | **재측정 필요**(flush가 실제로 저장하는 경우) |
+| M17 조건 기반 flush(로컬 update 뒤 실행) | 스케줄러 | 유효 | **재측정 필요**(update 멈춤 시점) |
+| M18/M19 언마운트 flush · 4001 보호 | **훅(CJS에 붙음)** | **무효** | **M21에서 ESM에 재적용 → 이번에 로그 확인됨** |
+| E2b 통과 | 훅(무효) | — | **lib debounce 경로로 통과**(flush 아님) |
+| "M16~M19 전부 무효" | — | — | **과잉 결론 — 스케줄러 패치는 유효. 훅 패치만 무효였음.** |
+
 **남은 과제(다음 세션)**
-1. **패치 대상 파일 확정** — `ooxml-ui/pptx` 의 `useCollaborationWriteBack` 구현 파일 찾기
-   (`.vite/deps/chunk-KR2P4QND.js` 가 참조하는 원본 경로 추적), 그 파일에 M20 패치 적용 + 표식 단언 통과.
-2. **M20 2절** — 예약이 없으면 flush 가 조용히 끝나는 구멍(커밋이 아직 Y.Doc 에 안 들어간 Escape 경로).
-   lib 모델의 "미동기 편집" 상태를 dist 에서 찾아 파일:줄로, 없으면 즉시 실행.
-   첫 update 가 아니라 **update 가 멈췄을 때** 실행(여러 transaction 대응). 상한 2초 초과 시 저장 말고 실패 처리.
-3. **M20 3절(2-3/2-4)** — registry destroy 지연(3초) + 경로별 pendingSave promise + endEditing await +
-   `collab:writeback-failed` 전역 이벤트(토스트·내 사본 다운로드) + 4001 시 `abortFlush` 직접 호출.
-4. **E2f/E2g/E2h 신설**(T1a), scheduler/hook 단위 테스트, **E4 실측표**(서버 owner vs 화면 data-owner) + 표시 경로.
-5. **패치 고정(이번에 반드시)** — `patchedDependencies` 키 `pptx-react-viewer@4.33.0`, 캐럿 제거,
-   **빌드 표식 검사**(`pnpm build:frontend` 후 `frontend/dist/assets` 에 `__ooxmlPatches` grep, 없으면 EXIT=1) + `pnpm test` 연결,
-   `.pnpm` 옛 패치 사본 정리(`pnpm store prune` + 재설치).
-6. D38 갱신(패치 대상 파일 확정 후), 인코딩 게이트 범위(origin/main...HEAD + staged + untracked),
-   E2d, E2e(D39), `fileFullscreenChange` grep.
-7. E2/E2b/E2c/E4/E2d~E2h × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀, throttle 4× E2b 5회.
+1. **M20 2절 나머지** — "미동기 편집" 판정( lib 모델에 있지만 Y.Doc 에 안 보낸 편집) 을 dist 에서 찾아 파일:줄로,
+   없으면 즉시 실행. 그리고 **update 가 멈췄을 때** 실행(여러 transaction 대응) + 상한 초과 시 실패 처리(현재 deadline 스킵 ✓).
+2. **M20 3절(2-3/2-4)** — 경로별 pendingSave promise(바이트 미보관) + endEditing await(3초) +
+   registry destroy 3초 유예 + `collab:writeback-failed` 전역 이벤트(토스트·내 사본 다운로드) +
+   4001 시 `abortFlush` 직접 호출.
+3. **E2f/E2g/E2h 신설**(T1a) + scheduler/hook 단위 테스트 + E4 실측표(서버 owner vs 화면 data-owner).
+4. **5절 고정** — `patchedDependencies` 키 버전 고정(`pptx-react-viewer@4.33.0`): pnpm 이 루트 의존성에서
+   키를 찾지 못해 실패했다(프론트 의존이라 루트에 없음). ⇒ frontend 의 specifier 고정("4.33.0", 캐럿 제거 ✓) +
+   루트 devDependencies 에 동일 버전 추가(사본 1개 증가) 또는 pnpm-workspace.yaml 의 patchedDependencies 사용 검토.
+   **빌드 표식 검사**(prod exe 번들 grep) 스크립트 추가.
+5. E2d, E2e(D39), `fileFullscreenChange` grep, 인코딩 게이트 범위(origin/main...HEAD + staged + untracked).
+6. E2/E2b/E2c/E4/E2d~E2h × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀, throttle 4× E2b 5회.
 
 **M15 추가 발견 (lib dist 확인)**
 - lib `chunk-552NAFTD.js:11423` `useCollaborationWriteBack`: write-back 은 `scheduler.schedule()` 로 예약되고

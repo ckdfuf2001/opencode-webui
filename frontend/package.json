@@ -41,7 +41,7 @@
     "lucide-react": "^0.546.0",
     "ooxml-core": "^1.8.0",
     "pdfjs-dist": "^6.2.108",
-    "pptx-react-viewer": "^4.33.0",
+    "pptx-react-viewer": "4.33.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-hook-form": "^7.65.0",

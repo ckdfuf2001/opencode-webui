@@ -269,6 +269,19 @@
   - 관련 커밋: 705e63c(경합), ae29f89/이 커밋(패치), E4 표시는 v0.13.
   - 회귀 검사: 3-2(relay T2i — owner 가 아닌 conn 의 저장이 409), 3-3(E4 owner 표시)
 
+- D42 lib 패치 적용 판정 기준 (M21, 2026-10-20)
+  - 결정: **lib 패치는 "런타임 표식 단언" + "빌드 산출물 grep" 이 둘 다 통과해야 적용으로 간주한다.**
+    dist 파일을 수정했다는 사실만으로는 판정하지 않는다.
+  - 이유: M16~M20 동안 **훅 패치가 CJS 빌드(`dist/chunk-552NAFTD.js`)에 붙어 있고,
+    브라우저가 로드하는 ESM 빌드(`dist/chunk-DD3ARHEW.mjs`)에는 없었다.**
+    ⇒ 그 기간의 lib 로그 미수집·flush 미동작은 "패치 미적용" 때문이었고,
+    "패치를 적용했다"는 주장으로는 판정이 안 된다.
+    표식은 `globalThis.__ooxmlPatches = { ui|viewer: "M21" }` 처럼 모듈 최상단에 두되
+    `'use strict'` directive 와 import 문 **뒤**에 둔다(directive 앞에 넣으면 파일이 sloppy 모드가 된다).
+  - 관련 커밋: 34bc932(표식 도입), M21(ESM 빌드 적용 + fire() 버그 수정 + deadline 저장 금지)
+  - 회귀 검사: 3-3(E2E 시작 조건 `assertLibPatchesLoaded` — ui/viewer=M21 아니면 즉시 실패),
+    3-2(빌드 산출물 grep 검사)
+
 ## XLSX/DOCX (A1′)
 - D40 YCollabSession mode: 'own'(PPT, 기존 경로 그대로)과 'transport'(XLSX/DOCX, lib provider가 doc/awareness 소유).
   transport 모드에서는 호스트 소유 doc을 destroy하지 않음. (e0a901d)
