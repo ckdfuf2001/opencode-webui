@@ -97,9 +97,9 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 ## 8. 측정 왜곡 2건 (M7-2 / M7-4)
 
 ### 8-1. 1초 CDP 폴링은 renderer를 +0.45MB/s 쓴다
-- 프로브가 Performance.getMetrics + page.evaluate 를 1초마다 호출하면, 콜라��� 자체가
+- 프로브가 Performance.getMetrics + page.evaluate 를 1초마다 호출하면, 콜백 자체가
   renderer private를 초당 0.45MB씩 올린다.
-- 증명: ?collab=0 뷰 모드에서 레이아웃 0회·렌��� 0회인데도 2분간 +54MB가 났다.
+- 증명: ?collab=0 뷰 모드에서 레이아웃 0회·렌더 0회인데도 2분간 +54MB가 났다.
   같은 조건에서 폴링 주기를 10초(PROBE_INTERVAL_MS=10000)로 바꾸니 **-0.3MB(평탄)**.
 - 규칙: renderer private를 볼 때는 PROBE_INTERVAL_MS=10000 이상을 쓴다.
   1초 주기 수치는 프로브 오염값이다.
