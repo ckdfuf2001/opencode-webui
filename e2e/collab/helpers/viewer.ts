@@ -139,6 +139,21 @@ export async function gotoApp(page: Page): Promise<void> {
 }
 
 /**
+ * M22: 인라인 미리보기 닫기(=언마운트).
+ * FileBrowser 의 "미리보기 닫기"(aria-label="Close preview")를 눌러
+ * explorerSelectedPath 를 비운다(시트 닫기와는 다르다).
+ */
+export async function closePreview(page: Page): Promise<void> {
+  const btn = page.locator('[aria-label="Close preview"]')
+  if (await btn.count()) {
+    await btn.first().click({ timeout: 10000 })
+  } else {
+    await page.keyboard.press('Escape')
+  }
+  await page.waitForTimeout(500)
+}
+
+/**
  * M21: 런타임 표식 단언 — lib 패치가 실제로 로드됐는지 확인한다.
  * 파일(뷰어)을 연 뒤에 호출할 것.
  */
@@ -146,9 +161,9 @@ export async function assertLibPatchesLoaded(page: Page): Promise<void> {
   const patches = await page.evaluate(
     () => (globalThis as unknown as { __ooxmlPatches?: Record<string, string> }).__ooxmlPatches ?? null,
   )
-  if (!patches || patches.ui !== 'M21' || patches.viewer !== 'M21') {
+  if (!patches || patches.ui !== 'M21' || patches.viewer !== 'M21-esm') {
     throw new Error(
-      `lib patch not loaded (expected ui/viewer=M21, got ${JSON.stringify(patches)}) — ` +
+      `lib patch not loaded (expected ui=M21, viewer=M21-esm, got ${JSON.stringify(patches)}) — ` +
         `pnpm install 로 패치를 적용하고 frontend/node_modules/.vite 캐시를 지운 뒤 다시 실행할 것.`,
     )
   }

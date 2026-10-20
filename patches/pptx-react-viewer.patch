@@ -1,12 +1,12 @@
 diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
-index 258156da202883c57418626396f0218efa46152c..93656bc667d3fc496f996492f1d4cb44e80c7b40 100644
+index 258156da202883c57418626396f0218efa46152c..64f11788c4872891dc3242ea41d6a55c06ce2a17 100644
 --- a/dist/chunk-552NAFTD.js
 +++ b/dist/chunk-552NAFTD.js
 @@ -1,4 +1,7 @@
  'use strict';
 +// M20/M21: 런타임 표식 — 이 패치가 실제로 로드됐는지 E2E 시작 조건으로 단언한다.
 +// ('use strict' 뒤에 둔다 — directive 앞에 넣으면 파일 전체가 sloppy 모드가 된다.)
-+globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, viewer: "M21" };
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, viewer: "M21-cjs" };
  
  var chunkSQUVXHAE_js = require('./chunk-SQUVXHAE.js');
  var pptx = require('ooxml-ui/pptx');
@@ -52,7 +52,7 @@ index 258156da202883c57418626396f0218efa46152c..93656bc667d3fc496f996492f1d4cb44
      const { config, doc } = latest.current;
      if (config) {
 diff --git a/dist/chunk-DD3ARHEW.mjs b/dist/chunk-DD3ARHEW.mjs
-index c12482e205e1d4c860869c25a3760cf7733d01c7..7bd37762a5f8e0b2e8d26bad11ec8a049e69403c 100644
+index c12482e205e1d4c860869c25a3760cf7733d01c7..deecc432662697d7df4a87815969a65ff2ebef51 100644
 --- a/dist/chunk-DD3ARHEW.mjs
 +++ b/dist/chunk-DD3ARHEW.mjs
 @@ -7,6 +7,8 @@ import { translationsEn } from 'ooxml-ui/pptx/i18n';
@@ -60,7 +60,7 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..7bd37762a5f8e0b2e8d26bad11ec8a04
  import { flushSync } from 'react-dom';
  import { LuRotateCw } from 'react-icons/lu';
 +// M21: 런타임 표식 — 이 패치가 실제로 로드됐는지 E2E 시작 조건으로 단언한다.
-+globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, viewer: "M21" };
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, viewer: "M21-esm" };
  
  function useVirtualizedSlides({
    totalItems,
@@ -94,3 +94,28 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..7bd37762a5f8e0b2e8d26bad11ec8a04
      [scheduler, input.doc, input.config?.role, hasWriteBack, input.config?.externalSession]
    );
    return useCallback(() => {
+@@ -11504,10 +11526,15 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
+         const { loadVersion = 0 } = latest.current;
+         const serialized = JSON.stringify(slides);
+         const token = revision;
++        // M22 계측: publish 호출 자체가 있었는지, microtask 가드에서 왜 막혔는지.
++        console.debug('[collab-tl]', JSON.stringify({ evt: 'pub.call', len: serialized.length, sameAsLastSynced: serialized === lastSynced }));
+         queueMicrotask(() => {
+           if (!active || !controller.current?.canWrite() || token !== revision || slides === superseded || loadVersion !== lastLoad.current || serialized === lastSynced) {
++            const reason = !active ? 'inactive' : !controller.current?.canWrite() ? 'cannot_write' : token !== revision ? 'revision' : slides === superseded ? 'superseded' : loadVersion !== lastLoad.current ? 'load_version' : 'unchanged';
++            console.debug('[collab-tl]', JSON.stringify({ evt: 'pub.skip', reason }));
+             return;
+           }
++          console.debug('[collab-tl]', JSON.stringify({ evt: 'pub.reconcile', len: serialized.length }));
+           reconcileSlidesInYDoc(slides, doc, factories);
+           lastSynced = serialized;
+           scheduleWriteBack();
+@@ -11538,6 +11565,8 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
+       }
+     })();
+     return () => {
++      // M22 계측: 언마운트 cleanup 시각(active=false 지점).
++      console.debug('[collab-tl]', JSON.stringify({ evt: 'sync.cleanup' }));
+       active = false;
+       revision++;
+       controller.current?.();

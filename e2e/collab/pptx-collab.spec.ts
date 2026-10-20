@@ -13,6 +13,7 @@ import {
   openFile,
   gotoSlide,
   editShapeText,
+  closePreview,
   selectShape,
   peer,
   measure,
@@ -170,6 +171,43 @@ test.describe('pptx collab (desktop)', () => {
     await editShapeText(t.pageB, shapesB, 'Body 2', 'Hello from Ada')
     const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'Hello from Ada', 8000)
     expect(deck.slideCount).toBe(3)
+    void testInfo
+    await closeTwo(t)
+  })
+
+  test('E2f: close preview right after edit -> edit reaches disk', async ({ browser }, testInfo) => {
+    // M22: owner 가 편집 직후 미리보기를 닫으면(언마운트) 커밋이 Y.Doc 에 반영되기 전에
+    // 뷰어가 죽어 편집이 디스크에 안 갈 수 있다(조용한 유실). 닫은 뒤 8초 안에 반영돼야 한다.
+    const f = await freshFile('e2f', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    await openFile(t.pageA, f.name, 'edit')
+    await gotoSlide(t.pageA, 2)
+    await editShapeText(t.pageA, shapesA, 'Body 2', 'Hello from Ada')
+    // 100ms 안에 미리보기를 닫는다 (미리보기 닫기 = 인라인 패널의 "미리보기 닫기").
+    await t.pageA.waitForTimeout(100)
+    await closePreview(t.pageA)
+    await t.pageA.waitForTimeout(8000)
+    const deck = await readDeck(f.abs)
+    expect(deck.textOf('Body 2')).toBe('Hello from Ada')
+    void testInfo
+    await closeTwo(t)
+  })
+
+  test('E2g: non-owner editor Escape -> owner writes it to disk', async ({ browser }, testInfo) => {
+    // M22: owner 가 아닌 편집자가 Escape 로 끝내면 owner 쪽 디스크에 반영돼야 한다.
+    const f = await freshFile('e2g', 0)
+    const t = await twoPages(browser)
+    const shapesB = new ShapeLocator(t.pageB)
+    await openFile(t.pageA, f.name, 'edit') // A가 owner
+    await openFile(t.pageB, f.name, 'edit')
+    await gotoSlide(t.pageA, 2)
+    await gotoSlide(t.pageB, 2)
+    await editShapeText(t.pageB, shapesB, 'Body 2', 'Hello from Grace')
+    await t.pageB.keyboard.press('Escape')
+    await t.pageB.waitForTimeout(8000)
+    const deck = await readDeck(f.abs)
+    expect(deck.textOf('Body 2')).toBe('Hello from Grace')
     void testInfo
     await closeTwo(t)
   })

@@ -13,8 +13,7 @@
  *
  * 프로덕션 동작은 바뀌지 않는다(플래그가 없으면 원래대로).
  */
-export function isE2EFlag(): boolean {
-  try {
+export function isE2EFlag(): boolean {  try {
     if (new URLSearchParams(window.location.search).get('e2e') === '1') return true
   } catch {
     // window 가 없으면 env 만 확인한다.

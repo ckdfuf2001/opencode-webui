@@ -239,7 +239,7 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 > M12/M14 실험 결과(공동편집 데이터 유실 건)는 **docs/handoff.md** 의 "M12/M14 진행 위치" 절로 옮겼다.
 > 여기서는 링크만 둔다: `docs/handoff.md` → "M14 실험 결과(데이터 유실)".
 
-### 14-0. lib 의 모델→Y.Doc 반영 순서 (M21 2절 근거, `chunk-DD3ARHEW.mjs`)
+### 14-0. lib 의 모델→Y.Doc 반영 순서와 publish 가드 (M21/M22, `chunk-DD3ARHEW.mjs`)
 
 ```
 publish.current = (nextSlides) => {
@@ -259,6 +259,28 @@ lib 컴포넌트가 죽어 publish 자체가 실행되지 않으므로, 그 순�
 ⇒ flush 가 "2초 안에 로컬 update 없음"으로 스킵되는 이유가 이것이다(실측 `wb.flush.skip{deadline}`).
 ⇒ 해법(M20 2절): flush 안에서 **동기화를 1회 직접 실행**(lib 내부 `reconcileSlidesInYDoc` 호출)한 뒤 직렬화,
 또는 앱 측에서 언마운트 전에 `getContent()` 로 저장(2-3/2-4). 둘 다 다음 세션 과제.
+
+**M22 1-2 실측(게이트 계측 포함) 판정표**
+
+| 관측 | 의미 |
+|---|---|
+| `pub.call {len:10682, sameAsLastSynced:false}` → `pub.reconcile` | 정상 반영 |
+| `pub.call {len:10860, sameAsLastSynced:false}` → **`pub.skip{reason:"superseded"}`** | ★ 커밋이 구 슬라이드 상태와 비교돼 반영 막힘 |
+| `pub.call {sameAsLastSynced:true}` → `pub.skip{reason:"unchanged"}` | 변화 없음 |
+| `pub.call` → `pub.skip{reason:"cannot_write"}` | 취소/비소유자 상태 |
+| `sync.cleanup` | 언마운트(cleanup) 시각 |
+
+⇒ 판정은 **(나) microtask 가드에서 return**(특히 `superseded`).
+⇒ **flush 실행 규칙(실측 기준 — M22 0절-3 중 "예약 있음 → 즉시 실행" 만 기각)**
+- 로컬 update 감지 → **즉시 실행**(Y.Doc 반영 확인됨)
+- 2초 내 update 없음 → **저장하지 않음**(예약이 있어도 Y.Doc 이 커밋 반영 전일 수 있음 → 실행하면
+  구 내용 덮어쓰기. E2/E2b 2건 실패로 실증) + `wb.flush.skip{deadline}` + (앱 알림은 미구현)
+- 예약 없음 → `wb.flush.skip{nothing_pending}` (조용히 OK)
+
+**M22 실측 결과**: E2f(편집 직후 미리보기 닫기)·E2g(비소유자 Escape)·E2b·E2 **4건 통과**
+⇒ 리뷰가 가정한 "즉시 닫기/비소유자 유실"은 현재 재현되지 않는다.
+⇒ 해법 2번(앱이 getContent 로 저장)은 owner 만 가능하므로(비소유자는 409 not_owner) **기각**,
+   대안은 "닫기 전에 동기화 후 저장" — lib 훅에 `syncNow()` 노출이 필요하다(다음 세션).
 
 
 - 4b-0 결과: SSE on 380ms 폴링(P0), 델타 중복 append(정합성 P0), cap 규칙 3개, 델타당 할당 5개.
