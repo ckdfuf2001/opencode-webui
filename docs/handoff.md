@@ -104,20 +104,36 @@
 ⇒ effect 두 개로 복구(위 ②). 4001 리셋은 리마운트 경로라 "언마운트 전용" 만으로는 막히지 않아,
 **앱이 lib 에 알려 주는 구조**(`flushOnUnmount`)로 해결.
 
+**M19 결과**
+
+| 항목 | 결과 |
+|---|---|
+| ① 실제 저장 경로 증명 | **미완**. lib 계측(`wb.flush.start/run/skip/deadline`, `wb.flush.unmount`)을 패치에 넣고 E2b를 1회 돌렸으나 **lib 로그가 하나도 수집되지 않았다**. 앱 로그(`[collab-tl]` 이벤트)는 정상 수집됨. ⇒ (가) lib 의 `console.debug` 가 이 환경에서 안 잡힘, (b) flush cleanup 이 호출되지 않음 — **둘 중 어느 것인지 미확정**. E2b 통과 시점의 저장은 `save.response`(Escape 후 2.5초) 로 보이며 **lib debounce 경로일 가능성이 높다**(flush 아님). |
+| ② flush 무효화 수정 | 패치에 반영: flush 가 **자체 토큰** 사용(scheduler generation 분리) → `cancel()` 에 무효화되지 않음. lib cleanup 2개: (1) 언마운트 전용(`unmountingRef=true` 후 `flush({allow})`), (2) 문서/role/세션 교체 시 cancel(언마운트가 아닐 때만). `flushOnUnmount` 은 **최신 config** 에서 읽음. `abortFlush()` 추가. skip 사유 로깅(조용한 반환 제거). |
+| ③/④ | **미구현** (2-3 pendingSave/2-4 registry destroy 지연/Done 경로 2초 측정). |
+| 테스트 | E2b 1회 통과. E2/E2c 는 이번 세션에서 재실행 못 함(컨텍스트 소진). |
+| 기준선 | relay 17/17, 478 passed, tsc 0, check:memory 0, check:encoding 0 |
+
+**M19에서 발견한 새 사실(중요)**
+- `frontend/node_modules` 에 **`ooxml-ui` 링크가 없다**(ooxml-core 만 있음). `pptx-react-viewer` 의 의존성인데
+  pnpm 설치가 불완전하거나 링크가 다른 위치로 resolving 된다 ⇒ **런타임이 어느 ooxml-ui 사본을 쓰는지 확정되지 않는다.**
+  이것이 lib 로그가 안 잡히는 유력한 원인이며, 리뷰 5절(패치 고정)의 실체다.
+- `node_modules/.pnpm` 에 `ooxml-ui@1.8.0_patch_hash=…` 사본이 **여러 개**(오래된 해시 포함) 공존한다.
+  `pnpm install --force` 로 새 해시가 생기지만 프론트 링크가 갱신되지 않는 경우가 있었다.
+
 **남은 과제(다음 세션)**
-1. **2-3 앱이 flush 완료를 await** (경로별 pendingSave promise 1개, 바이트 미보관) — **미구현**.
-   현재 Done/Escape 는 즉시 끝나고 저장은 백그라운드 ⇒ 실패 시 배너를 띄울 지점이 없다.
-2. **2-4 미리보기 닫기(언마운트) 경로** — registry release 가 refs=0 이어도 pendingSave 가 있으면 destroy 지연(상한 3초),
-   `handleWriteBack` 은 flush 시작 시점 세션을 캡처. **미구현** ⇒ "편집 직후 미리보기를 바로 닫으면" 유실 위험 잔존.
-3. **E2f**(편집 → Escape → 100ms 안에 미리보기 닫기 → 8초 내 디스크 반영), **E2g**(4001 직후 디스크가 리셋 전과 같음),
-   **E2h**(owner→guest 강등 → 남은 예약 0건) 신설 — **미작성**.
-4. **2절 검증 미완**: role/doc 교체 시 cancel 이 실제로 동작하는지, 4001 경로가 flush 안 되는지
-   (E2g/E2h 로 확인 필요).
-5. **E4 owner 표시 버그** — meta 의 ownerClientId 와 presence 매칭 경로 파일:줄 확인(1절 표 (가)).
-6. scheduler 단위 테스트 7종, 패치 버전 고정(`patchedDependencies` 키에 버전, 캐럿 제거, 설치본 M17 표식 단언,
-   prod exe 번들 grep), E2d, E2e(D39), `fileFullscreenChange` grep.
-7. **인코딩 게이트 범위**: "최근 3커밋" → `git diff --name-only origin/main...HEAD` + staged + untracked 로 변경.
-8. E2/E2b/E2c/E4/E2d~E2h × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀.
+1. **런타임 ooxml-ui 경로 확정** — `frontend/node_modules/ooxml-ui` 링크 복구(pnpm 설치 문제), 그 다음
+   **설치본 dist 에 `M19` 표식과 `wb.flush.*` 로그가 있는지 단언 테스트** 추가. 그 뒤 ① 재실행으로
+   저장 경로(flush vs debounce) 확정.
+2. **2-3 pendingSave**(경로별 promise 1개, 바이트 미보관) + **endEditing await**(상한 3초) — 미구현.
+3. **2-4 registry destroy 지연**(refs=0 이어도 pendingSave 있으면 3초) + `handleWriteBack` 이 flush 시작
+   시점 세션 캡처 + `collab:writeback-failed` 전역 이벤트로 뷰어 없이도 토스트/내 사본 다운로드 — 미구현.
+4. **E2f/E2g/E2h 신설**, scheduler/hook 단위 테스트 7종, **E4 실측표**(서버 owner vs 화면 data-owner) + 표시 경로.
+5. **D40 → D41**(XLSX 절에 D40이 이미 있어 번호 중복) — 반영함. `as unknown as CollaborationConfig` →
+   module augmentation, PptxViewer 들여쓰기 노이즈 정리, 패치 키 버전 고정(`pptx-react-viewer@4.33.0`) +
+   캐럿 제거 + prod exe 번들 grep.
+6. E2d, E2e(D39), `fileFullscreenChange` grep, 인코딩 게이트 범위(origin/main...HEAD + staged + untracked).
+7. E2/E2b/E2c/E4/E2d~E2h × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀, throttle 4× E2b 5회.
 
 **M15 추가 발견 (lib dist 확인)**
 - lib `chunk-552NAFTD.js:11423` `useCollaborationWriteBack`: write-back 은 `scheduler.schedule()` 로 예약되고

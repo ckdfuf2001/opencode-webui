@@ -1,8 +1,8 @@
 diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
-index 258156da202883c57418626396f0218efa46152c..01de12bde66f0f312115969738730587d03094c6 100644
+index 258156da202883c57418626396f0218efa46152c..bbcbc0635bb13fb56dde17ca8d4470ebacedf229 100644
 --- a/dist/chunk-552NAFTD.js
 +++ b/dist/chunk-552NAFTD.js
-@@ -11434,10 +11434,27 @@ function useCollaborationWriteBack(input) {
+@@ -11434,10 +11434,36 @@ function useCollaborationWriteBack(input) {
      [latest]
    );
    const hasWriteBack = Boolean(input.config?.onWriteBack);
@@ -14,10 +14,17 @@ index 258156da202883c57418626396f0218efa46152c..01de12bde66f0f312115969738730587
 +    // 언마운트 시 cleanup 은 선언 순서대로 실행되므로, 이 effect가 flush 를 실행한 뒤
 +    // (2) 의 cancel 이 돌아온다(예약이 이미 없어 cancel 은 noop).
 +    // 앱이 config.flushOnUnmount=false 로 알린 경우(4001 리셋 등)는 스케줄러가 cancel 한다.
++    // M19: (1) 언마운트 전용 — flush 를 건다. flushOnUnmount 은 **최신 config** 에서 읽는다
++    // (예약 당시 값은 리셋 전에 예약된 write-back 이라 항상 true 라 잘못 판정된다).
++    // unmountingRef 로 (2) 의 cancel 을 막아 flush 가 같은 tick 에 무효화되지 않게 한다.
++    const unmountingRef = React17.useRef(false);
 +    React17.useEffect(
 +      () => () => {
++        unmountingRef.current = true;
++        const allow = latest.current.config?.flushOnUnmount !== false;
++        console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.unmount', allow }));
 +        if (typeof scheduler.flush === "function") {
-+          scheduler.flush();
++          scheduler.flush({ allow });
 +        } else {
 +          scheduler.cancel();
 +        }
@@ -28,7 +35,9 @@ index 258156da202883c57418626396f0218efa46152c..01de12bde66f0f312115969738730587
 +    // (언마운트 시에도 cancel 이 돌아오지만, 위 (1) 이 이미 flush 를 실행했거나
 +    //  flushOnUnmount=false 로 cancel 대상이므로 문제는 없다.)
 +    React17.useEffect(
-+      () => () => scheduler.cancel(),
++      () => () => {
++        if (!unmountingRef.current) scheduler.cancel();
++      },
 +      [scheduler, input.doc, input.config?.role, hasWriteBack, input.config?.externalSession]
 +    );
    return React17.useCallback(() => {

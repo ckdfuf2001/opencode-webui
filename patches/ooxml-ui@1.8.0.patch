@@ -1,5 +1,5 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..63f4484a8037ca003d651b6a9618858dabd36615 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..d5f0837efdaabb4b28fda318500fa2929013522d 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
 +++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -33004,6 +33004,8 @@ function createWriteBackScheduler(deps) {
@@ -28,7 +28,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..63f4484a8037ca003d651b6a9618858d
      timer = setTimeout(async () => {
        timer = null;
        const ydoc = deps.getYDoc();
-@@ -33075,7 +33080,93 @@ function createWriteBackScheduler(deps) {
+@@ -33075,7 +33080,123 @@ function createWriteBackScheduler(deps) {
        }
      }, debounceMs);
    }
@@ -38,88 +38,118 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..63f4484a8037ca003d651b6a9618858d
 +  //  - 300ms 고정 지연도 근거가 없다(느린 PC/CPU throttle 에서도 구 내용을 저장할 수 있음).
 +  //  ⇒ **로컬 편집이 Y.Doc 에 반영된(update 이벤트) 뒤**에 실행한다.
 +  //    로컬 update 가 오지 않으면 상한(2초) 뒤 실행하고, 실패는 조용히 삼키지 않는다.
-+  function flush() {
++  // M19: flush 는 scheduler 의 generation 과 **분리된 자체 토큰**을 쓴다.
++  // cancel() 은 generation 만 올리므로 flush 를 죽이지 않는다(언마운트 시 저장 보존).
++  // 명시적 중단이 필요할 때만 abortFlush() 를 쓴다.
++  let flushState = null;
++  function abortFlush() {
++    if (!flushState) return;
++    const s = flushState;
++    flushState = null;
++    try {
++      s.ydoc?.off("update", s.onLocalUpdate);
++    } catch {
++    }
++    if (s.deadlineTimer) clearTimeout(s.deadlineTimer);
++  }
++  function flush(options) {
 +    if (timer === null || !pendingConfig) return;
-+    // M17: owner 인 경우에만 실행한다(비 owner 의 예약은 취소 대상).
-+    // M18: 앱이 "이번 언마운트가 리셋(4001)이 아니다" 를 명시적으로 알려줄 때만 실행한다.
-+    // 리셋이면 버린 방의 내용이 새 세션으로 저장돼 리셋이 무효가 된다.
-+    if (pendingConfig.role !== "owner" || pendingConfig.flushOnUnmount === false) {
++    const config = pendingConfig;
++    // M19: allow 은 **최신 값**(앱이 언마운트 시점에 넘긴다). 예약 당시 값은 쓰지 않는다.
++    const allow = options?.allow !== false;
++    console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.start', allow, role: config.role, hasPending: !!pendingConfig }));
++    if (config.role !== "owner" || !allow) {
 +      cancel();
 +      return;
 +    }
 +    clearTimeout(timer);
-+    const config = pendingConfig;
-+    const token = generation;
++    timer = null;
++    const ydoc = deps.getYDoc();
 +    const isReady = () => config.externalSession?.getSnapshot().synced ?? true;
++    const state = { ydoc, config, deadlineTimer: null, onLocalUpdate: null };
++    flushState = state;
++    // M19: 자체 토큰 기준 — cancel() 의 generation++ 로 무효화되지 않는다.
++    const isCurrent = () => flushState === state && isReady() && deps.getYDoc() === ydoc;
++    const skip = (reason) => {
++      console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason }));
++    };
 +    const run = async () => {
-+      timer = null;
-+      const ydoc = deps.getYDoc();
-+      const isCurrent = () => token === generation && isReady() && deps.getYDoc() === ydoc;
 +      try {
-+        if (!ydoc || !config.onWriteBack || !isReady()) {
++        if (!ydoc) {
++          skip('no_ydoc');
++          return;
++        }
++        if (!config.onWriteBack) {
++          skip('no_onwriteback');
++          return;
++        }
++        if (!isReady()) {
++          skip('not_ready');
++          return;
++        }
++        if (!isCurrent()) {
++          skip('not_current');
 +          return;
 +        }
 +        if (deps.serialize) {
 +          const bytes2 = await deps.serialize(isCurrent);
 +          if (bytes2 && isCurrent()) {
++            console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.run', bytes: bytes2.length }));
 +            await config.onWriteBack(bytes2);
++          } else {
++            skip('not_current');
 +          }
 +          return;
 +        }
 +        const sourceBytes = deps.getSourceBytes?.();
 +        if (!sourceBytes) {
++          skip('no_source');
 +          return;
 +        }
 +        const handler = new PptxHandler();
 +        await handler.load(sourceBytes.buffer);
 +        if (!isCurrent()) {
++          skip('not_current');
 +          return;
 +        }
 +        const slides = readSlidesFromYDoc(ydoc);
 +        const merged = deps.mergeTemplateElements ? deps.mergeTemplateElements(slides, deps.getTemplateElements?.() ?? {}) : slides;
 +        const bytes = await handler.save(merged, deps.getSaveOptions?.());
 +        if (isCurrent()) {
++          console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.run', bytes: bytes.length }));
 +          await config.onWriteBack(bytes);
++        } else {
++          skip('not_current');
 +        }
 +      } catch (err) {
 +        // M17: 실패를 조용히 삼키지 않는다(조용한 유실 금지).
 +        console.error("[collab] write-back flush failed", err);
++        console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason: 'error' }));
 +      } finally {
-+        if (token === generation) {
-+          unsubscribe?.();
-+          unsubscribe = null;
-+        }
-+        if (pendingConfig === config) pendingConfig = null;
++        abortFlush();
 +      }
 +    };
-+    // 로컬 편집이 Y.Doc 에 반영된 뒤에 실행한다(시간 추측 금지).
-+    const ydoc = deps.getYDoc();
-+    let fired = false;
 +    const fire = () => {
-+      if (fired) return;
-+      fired = true;
-+      try {
-+        ydoc?.off("update", onLocalUpdate);
-+      } catch {
-+      }
-+      clearTimeout(deadlineTimer);
++      if (flushState !== state) return;
++      abortFlush();
 +      void run();
 +    };
-+    const onLocalUpdate = (_update, origin) => {
-+      // 로컬 편집(LOCAL_SYNC_ORIGIN)이 Y.Doc 에 반영된 시점.
++    // 로컬 편집이 Y.Doc 에 반영된 뒤에 실행한다(시간 추측 금지).
++    state.onLocalUpdate = (_update, origin) => {
 +      if (origin === LOCAL_SYNC_ORIGIN) fire();
 +    };
 +    try {
-+      ydoc?.on("update", onLocalUpdate);
++      ydoc?.on("update", state.onLocalUpdate);
 +    } catch {
 +    }
 +    // 상한: 2초 안에 로컬 update 가 없으면 그대로 실행한다(그리고 상한임을 로그로 남긴다).
-+    const deadlineTimer = setTimeout(() => {
++    state.deadlineTimer = setTimeout(() => {
 +      console.warn("[collab] write-back flush deadline reached (no local Y.Doc update within 2000ms)");
++      console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.deadline' }));
 +      fire();
 +    }, 2000);
 +  }
-+  return { schedule, cancel, flush };
++  return { schedule, cancel, flush, abortFlush };
  }
  var POSITION_THRESHOLD = 2;
  var SIZE_THRESHOLD = 2;

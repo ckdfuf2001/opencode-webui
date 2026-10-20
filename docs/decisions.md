@@ -221,6 +221,15 @@
       앱이 `flushOnUnmount !== false` 로 명시한 경우(기본 true).
       4001 리셋처럼 "이번 언마운트가 리셋" 인 경우는 **앱이 `flushOnUnmount=false` 로 알린다**
       (`PptxViewer` 의 `onReset` → `resetInFlightRef` → config). 리셋이면 예약은 취소된다.
+    - **flush 는 scheduler 의 generation 과 분리된 자체 토큰**을 쓴다(M19).
+      cancel() 은 generation 만 올리므로 **flush 를 무효화하지 않는다**(언마운트 시 저장 보존).
+      명시적 중단이 필요할 때만 `abortFlush()` 를 쓴다(리셋 전용).
+    - **언마운트 판정**: lib 안의 `unmountingRef` 로 구분한다.
+      (1) 언마운트 전용 effect 가 cleanup 에서 `unmountingRef=true` → `flush({ allow })`.
+      (2) 원래 cancel effect 는 `unmountingRef` 가 false 일 때만 cancel → 문서/role/세션 교체 시 취소.
+    - **`flushOnUnmount` 은 최신 값**으로 읽는다(예약 당시 config 는 항상 true 라 잘못 판정된다).
+      lib 의 cleanup 이 `latest.current.config?.flushOnUnmount` 를 읽어 `flush({ allow })` 로 전달.
+    - **조용한 반환 금지**: skip 사유(not_ready/not_current/no_ydoc/no_source/error)를 로그로 남긴다.
     - **실행 시점은 시간 추측이 아니라 조건**: 로컬 편집이 Y.Doc 에 반영된 `update`
       (origin=`LOCAL_SYNC_ORIGIN`) **뒤**에 실행. 오지 않으면 상한 2초 뒤 실행하고 로그로 남긴다.
     - **실패를 조용히 삼키지 않는다**: 직렬화/저장 실패는 `console.error("[collab] write-back flush failed")`.
@@ -248,7 +257,7 @@
     파일 본문 캐시가 아니었다. 무해하므로 유지하되 "원인 아님"으로 기록), M16 패치(① lib cancel→flush)
   - 회귀 검사: 3-2(E2b — 편집 모드 종료 후 디스크에 편집이 남는지), 3-3(E2/E2b/E2c/E4 디스크 반영 계열)
 
-- D40 owner 규칙 (M18, 2026-10-20)
+- D41 owner 규칙 (M18/M19, 2026-10-20)
   - 결정: **저장은 owner 만** 한다. 서버 `checkSave`(`backend/src/services/collab-rooms.ts:691`)가
     `isCurrentOwner` 로 막고, 아니면 409 `not_owner` 로 거절한다. (M18 1절에서 owner 가드가
     붕괴되지 않았음을 확인 — relay 경로 + 코드 확인.)
