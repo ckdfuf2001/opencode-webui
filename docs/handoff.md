@@ -58,6 +58,32 @@
 | ⑤ docs | 이 커밋 | 완료 |
 | a55fbfc 커밋 분리 위반 | 되돌리지 않음(force push 금지). docs/spec/prod 혼재 사실만 기록 | 대응 완료 |
 
+**M16 결과 (앵커 폐기 → lib 패치로 해결)**
+
+| 항목 | 결과 |
+|---|---|
+| lib 조사 | `chunk-552NAFTD.js:11437-11440` cleanup 이 `scheduler.cancel()` → **리마운트/role 변경 때 예약된 write-back 이 버려짐**(=유실 원인 확정). `:11451` 은 owner 일 때만 전달. 스케줄러는 `ooxml-ui/dist/pptx/chunk-MCHPNO42.mjs:33003`. 바이트 출처는 `deps.serialize`/`getSourceBytes` → **DOM 불필요**. |
+| 패치 | `ooxml-ui` 에 `flush()` 추가(예약 유지 + **300ms 지연 실행**), `pptx-react-viewer` cleanup 을 **이전 role 이 owner 일 때만 flush** 로 교체. `pnpm patch` 로 영속화(`package.json` 의 `patchedDependencies`). |
+| 앵커 폐기 | `commitAnchor.ts`·`waitCommitApplied`·`bytesEqual`·getContent 루프 **전부 삭제**. 수동 저장 경로는 `getContent` 1회로 복원. |
+| 테스트 | **E2 통과, E2b 통과, E2c 통과**(chromium·msedge). **E4 실패**(2건) — 동시 편집 시나리오, 남은 과제 |
+| 기준선 | relay 17/17, 478 passed, tsc 0, check:memory 오류 0 |
+
+**M15 → M16 앵커 폐기 사유(재발 방지)**
+- 앵커는 "마지막으로 실행된 write-back" ⇒ Escape 시점의 커밋 write-back(예약 상태)과 다르다.
+- 바이트가 같아지면 오히려 구 내용을 "반영 완료"로 오판한다.
+- 직렬화 시점마다 바이트가 달라(8145→8140) **정상 저장까지 전부 타임아웃**된다.
+- 앵커 Map 은 경로마다 파일 전체 사본을 영구 보관했다(메모리 규칙 위반, 47MB 덱이면 47MB 누적).
+⇒ 앵커/바이트 비교 방식은 사용하지 않는다.
+
+**남은 과제(다음 세션)**
+1. **E4**(동시 편집) 실패 — 2인 동시 편집에서 write-back 경합 가능. E2와 동일 계열로 패치 효과 확인 필요.
+2. **리마운트 후 구 내용 덮어쓰기**(M16 3절) — Done 이후 저장 바이트의 `textOf('Body 2')` 확인 후
+   `lastSavedRef` 를 **viewerKey 변경 지점에서만** `content` 로 넘기는 수정(D39).
+3. **E2d**(PPT/XLSX 동시 편집 — B1(b) 재발 검사) 미작성.
+4. `fileFullscreenChange` 발송처 전수 grep(경로 없이 쏘는 곳이 있으면 그 이벤트는 이제 무시된다).
+5. **인코딩 검사**(U+FFFD/깨진 한글) 자동 게이트 추가 — PowerShell 사고 재발 방지.
+6. E2/E2b/E2c/E4/E2d × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀 확인.
+
 **M15 추가 발견 (lib dist 확인)**
 - lib `chunk-552NAFTD.js:11423` `useCollaborationWriteBack`: write-back 은 `scheduler.schedule()` 로 예약되고
   **role==="owner" 일 때만** 전달된다(:11451). 예약은 `useEffect(() => () => scheduler.cancel(), [.., input.config?.role, ..])`(:11437-11440)

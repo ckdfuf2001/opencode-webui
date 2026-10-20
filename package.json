@@ -41,5 +41,11 @@
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "dotenv": "^17.2.3"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "ooxml-ui@1.8.0": "patches/ooxml-ui@1.8.0.patch",
+      "pptx-react-viewer": "patches/pptx-react-viewer.patch"
+    }
   }
 }

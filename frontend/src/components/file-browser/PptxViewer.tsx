@@ -27,7 +27,6 @@ import { createSlideGate } from '@/lib/slideLocationGate'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
-import { setCommitAnchor, getCommitAnchor } from '@/lib/commitAnchor'
 
 // lib이 그림을 blob: URL로 만들면 Y.Doc 동기화 때 죽는다. data: URL로 고정.
 ensurePptxImagesSyncable()
@@ -580,10 +579,6 @@ if (!writeBackHaltedRef.current) {
   // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
-    // M15: 커밋 반영 판정 앵커로 보관한다(lib 이 전달한 바이트 = 커밋 반영된 모델의 직렬화 결과).
-    // 인스턴스별 ref 가 아니라 경로별 모듈 싱글턴 — write-back 을 낸 인스턴스와 flush 를 하는
-    // 인스턴스가 다를 수 있다(인라인 미리보기/전체화면 시트). 실측에서 ref 로 두면 anchor=null 이었다.
-    setCommitAnchor(savePath, bytes)
     // M11 계측: write-back 경로 진입/건너뜀 사유.
     tl('writeback.enter', {
       hasSession: !!c,
@@ -642,64 +637,14 @@ if (!writeBackHaltedRef.current) {
   const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
   offerMineDownloadRef.current = offerMineDownload
   const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-/** 바이트 배열 동등 비교(커밋 반영 판정용). */
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
-  return true
-}
-
 /**
- * M15: **커밋 반영 대기 — lib 모델(getContent) 기준.**
-   *
-   * 앞선 구현(DOM 텍스트 안정 판정)은 두 가지 결함이 있었다.
-   * ① `document.querySelectorAll('textarea…')` 가 **앱 전체**를 봐서 채팅 입력칸 때문에
-   *    항상 "편집 중"으로 판정 → 매번 1초 타임아웃 = 금지된 고정 sleep 과 같다.
-   * ② DOM 이 안정 ≠ lib 모델(D38-1)의 반영. 저장 바이트는 getContent() 즉 모델에서 나온다.
-   *
-   * 지금: (a) 편집 입력칸 여부는 **뷰어 root 안으로 한정**하고,
-   *      (b) 진짜 판정은 **커밋 write-back 바이트(앵커)와 모델이 같은지**로 한다.
-   *      앵커 = lib 이 커밋 write-back 으로 넘긴 바이트 = 커밋이 반영된 모델의 직렬화 결과.
-   *      (직전 스냅샷과 "달라졌다"는 비교는 unreliable: 직렬화 시점마다 바이트가 달라진다.
-   *       실측 8145 → 8140.)
-   * 타임아웃이면 저장은 하지 않고 편집 모드를 유지 + 배너(조용한 유실 경로 금지).
-   */
-  const waitCommitApplied = useCallback(
-    async (
-      h: { getContent: () => Promise<ArrayBuffer | Uint8Array> },
-      before: Uint8Array,
-      path: string | undefined,
-    ): Promise<boolean> => {
-      const deadline = Date.now() + 1000
-      const anchor = getCommitAnchor(path)
-      for (;;) {
-        const editingInViewer = (() => {
-          try {
-            const root = viewerRootRef.current
-            if (!root) return false
-            return root.querySelectorAll('textarea, [contenteditable="true"]').length > 0
-          } catch {
-            return false
-          }
-        })()
-        const now = new Uint8Array(await h.getContent())
-        // 앵커가 있으면 "앵커와 동일" = 커밋 반영, 없으면 "직전과 다름"으로 판정.
-        const applied = anchor
-          ? bytesEqual(now, anchor)
-          : now.length > 0 && !bytesEqual(now, before)
-        if (!editingInViewer && applied) {
-          tl('flush.commit_applied', { bytes: now.length, anchor: anchor ? anchor.length : null })
-          return true
-        }
-        if (Date.now() > deadline) {
-          tl('flush.commit_wait_timeout', { bytes: now.length, anchor: anchor ? anchor.length : null })
-          return false
-        }
-        await new Promise((r) => setTimeout(r, 50))
-      }
-    },
-    [],
-  )
+ * M16: **커밋 반영 대기는 삭제.** 앵커(바이트 비교)는 원리상 틀렸다 —
+ * 앵커는 "마지막으로 실행된 write-back" 이므로 Escape 시점의 커밋 write-back(아직 예약 상태)과
+ * 다르다. 바이트가 같아지는 순간은 오히려 구 내용을 "반영 완료"로 오판한다.
+ * lib 이 리마운트/role 변경 cleanup 에서 예약을 cancel() 하는 문제는
+ * **패치로 해결**한다(ooxml-ui / pptx-react-viewer: cancel → flush).
+ * ⇒ 앱은 "lib 이 넘긴 저장의 응답"을 await 하면 된다.
+ */
   // R5: 빈 스냅샷 재시도 타이머는 파일 전환/언마운트 때 반드시 해제한다.
   // (해제 안 하면 다른 파일로 옮긴 뒤 그 파일 내용을 저장할 수 있다.)
   useEffect(() => {
@@ -775,14 +720,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       delegatedSaveRef.current = false
       setSaving(true)
       void (async () => {
-        // M15: 커밋 반영을 **모델 기준**으로 기다린 뒤 직렬화한다.
-        const before = new Uint8Array(await h.getContent())
-        const applied = await waitCommitApplied(h, before, savePath)
-        if (!applied) {
-          // 타임아웃: 저장은 하지 않는다(구 내용 덮어쓰기 방지).
-          // 편집 모드를 유지하고 배너/토스트로 알린다(조용한 유실 금지).
-          throw new Error('Save skipped — commit not applied yet')
-        }
+        // M16: 수동 저장 경로는 대기 없이 getContent 1회로 직렬화한다.
         const bytes = await h.getContent()
         // 수동 저장 경로라 배너/토스트를 막지 않는다 (R3).
         const fresh = new Uint8Array(bytes)

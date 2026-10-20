@@ -204,12 +204,20 @@
   - 결정(2): **편집 모드 종료는 flush(저장) await → viewerKey 변경(리마운트) 순서**다.
     flush 는 커밋 반영을 기다린 뒤(getContent) 저장하고, 실패하면 편집 모드를 유지하고 배너를 띄운다.
     (P1-6 "편집 종료는 flush 가 끝날 때까지 기다린다" 의 Escape 경로 적용.)
-  - 결정(2-대기, M15): **커밋 반영 대기는 lib 모델(getContent) 기준**이다.
-    DOM 텍스트 안정 판정·앱 전체 DOM 스캔은 금지한다(채팅 입력칸 때문에 항상 "편집 중"으로
-    판정되어 1초 고정 sleep과 같아진다 = M15 결함 1). 뷰어 root 안으로 한정하고,
-    모델이 커밋 전과 달라졌는지로 판정한다(저장 바이트와 같은 소스).
-    **단, "달라졌다"는 변화가 커밋인지 직렬화 시점 메타데이터 차이인지 구분되지 않는다** →
-    텍스트 기준 판정 또는 lib 커밋 API 확인이 다음 단계다.
+  - 결정(2-대기, M16): **커밋 반영 대기는 하지 않는다.** 앵커(바이트 비교)는 원리상 틀렸다 —
+    앵커는 "마지막으로 실행된 write-back" 이므로 Escape 시점의 커밋 write-back(아직 예약 상태)과 다르다.
+    바이트가 같아지는 순간은 오히려 구 내용을 "반영 완료"로 오판한다(실측 8145→8140).
+    또 직렬화 시점마다 바이트가 달라 **정상 저장을 전부 막을 수 있다**(M15 결함 4).
+    ⇒ **취소 대신 실행**으로 해결한다: lib 이 리마운트/role 변경 cleanup 에서 예약한 write-back 을
+    `cancel()` 으로 버리는 것을 패치로 막는다.
+  - 결정(2-취소, M16): **lib 패치로 write-back 예약을 취소하지 않는다.**
+    `ooxml-ui/dist/pptx/chunk-MCHPNO42.mjs` 의 `createWriteBackScheduler` 에 `flush()` 를 추가하고,
+    `pptx-react-viewer/dist/chunk-552NAFTD.js` 의 cleanup(`useCollaborationWriteBack` 주변)에서
+    `scheduler.cancel()` 대신 **이전 role 이 owner 였을 때만** `scheduler.flush()` 를 부른다.
+    단, **즉시 실행하면 커밋이 Y.Doc 에 반영되기 전에 직렬화**되어 구 내용을 저장한다(실측 8141 = 커밋 전).
+    ⇒ flush 는 **300ms 지연 실행**한다(취소만 하지 않고 실행 시점을 커밋 반영 뒤로 미룸).
+    근거: `chunk-552NAFTD.js:11437-11440`(cancel), `:11451`(owner 일 때만 전달),
+    `chunk-MCHPNO42.mjs:33003`(스케줄러), 바이트 출처는 `deps.serialize`/`getSourceBytes`(DOM 불필요).
   - 결정(2-범위, M15): `fileFullscreenChange`(전역 이벤트)는 **파일 식별자를 포함**해 전달하고,
     수신자는 **자기 파일만** 처리한다. `editing` 이 아니거나 `endingEdit` 중이면 무시한다.
     (B1(b): 한 뷰어의 Escape가 다른 파일의 편집까지 종료시키지 않게 한다.)
@@ -224,10 +232,11 @@
       구조는 이 시나리오에서 재현되지 않았다**(단, B=owner 의 커밋이 같은 결함으로 유실됨).
   - 금지: **리마운트(언마운트) 이후의 flush**(M13 0-2). Y.Doc 을 앱에서 직접 직렬화.
     고정 sleep(커밋 반영 대기 대신). 시간 창 추측. lib 내부 write-back 스케줄에 의존한 암묵적 저장.
+    **바이트 비교로 커밋 반영을 판정하는 것**(앵커 방식 — 원리상 틀리고 정상 저장까지 막는다).
     (PptxViewer 안에서 `fileFullscreenChange` 를 듣는 방식은 금지 — `setEditing(false)` 와 경합해
      리마운트와 race happened. 종료 직렬화는 `setEditing` 을 가진 쪽(DocumentPreview) 한 곳에서만.)
   - 관련 커밋: 705e63c(백엔드 경합·해시 식별), ee12673(타임라인 계측), 06ca84c(no-store, **원인 아님** —
-    파일 본문 캐시가 아니었다. 무해하므로 유지하되 "원인 아님"으로 기록), M14 종료 직렬화 커밋
+    파일 본문 캐시가 아니었다. 무해하므로 유지하되 "원인 아님"으로 기록), M16 패치(① lib cancel→flush)
   - 회귀 검사: 3-2(E2b — 편집 모드 종료 후 디스크에 편집이 남는지), 3-3(E2/E2b/E2c/E4 디스크 반영 계열)
 
 ## XLSX/DOCX (A1′)

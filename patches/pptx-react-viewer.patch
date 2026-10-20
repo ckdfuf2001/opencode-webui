@@ -1,0 +1,27 @@
+diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
+index 258156da202883c57418626396f0218efa46152c..3e77b874c9851bbccc1303c8f61121bece732af0 100644
+--- a/dist/chunk-552NAFTD.js
++++ b/dist/chunk-552NAFTD.js
+@@ -11434,10 +11434,18 @@ function useCollaborationWriteBack(input) {
+     [latest]
+   );
+   const hasWriteBack = Boolean(input.config?.onWriteBack);
+-  React17.useEffect(
+-    () => () => scheduler.cancel(),
+-    [scheduler, input.doc, input.config?.role, hasWriteBack, input.config?.externalSession]
+-  );
++    React17.useEffect(
++      () => () => {
++        // M16: 리마운트/role 변경 cleanup 에서 저장 예약을 **취소**하면 커밋이 디스크에 반영되지 않는다
++        // (조용한 유실). 이전 role 이 owner 였을 때만 **즉시 실행**(flush)한다.
++        if (input.config?.role === "owner" && typeof scheduler.flush === "function") {
++          scheduler.flush();
++        } else {
++          scheduler.cancel();
++        }
++      },
++      [scheduler, input.doc, input.config?.role, hasWriteBack, input.config?.externalSession]
++    );
+   return React17.useCallback(() => {
+     const { config, doc } = latest.current;
+     if (config) {
