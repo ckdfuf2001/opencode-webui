@@ -1,5 +1,5 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..4d6b091d239c44294742e6d7816e7df707be1845 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..1eac31b8069200a7c1dbf7fcfd52a5bd31b99666 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
 +++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -111,6 +111,8 @@ import { ifDefined } from 'lit/directives/if-defined.js';
@@ -37,7 +37,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..4d6b091d239c44294742e6d7816e7df7
      timer = setTimeout(async () => {
        timer = null;
        const ydoc = deps.getYDoc();
-@@ -33075,7 +33082,168 @@ function createWriteBackScheduler(deps) {
+@@ -33075,7 +33082,59 @@ function createWriteBackScheduler(deps) {
        }
      }, debounceMs);
    }
@@ -62,146 +62,37 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..4d6b091d239c44294742e6d7816e7df7
 +    if (s.deadlineTimer) clearTimeout(s.deadlineTimer);
 +  }
 +  function flush(options) {
-+    // M22 0절-3 규칙 분할:
-+    //  - 예약 있음(timer≠null) → Y.Doc 반영 완료의 증거(scheduleWriteBack 은 reconcile 다음에 호출된다)
-+    //    → 즉시 실행.
-+    //  - 예약 없음 + 미동기 편집 없음 → 조용히 끝내도 됨(skip{nothing_pending}).
-+    //  - 예약 없음 + 미동기 편집 있음 + 상한 초과 → 실패로 알림(조용한 유실 금지).
++    // M23 규칙 (실측 기준):
++    //  - 예약 없음(pendingConfig 없음) → 저장할 커밋이 없음 → 조용히 종료.
++    //  - 예약 있음 → **예약을 취소하지 않는다.** 취소하면 lib 의 디바운스 저장이 사라져
++    //    (그 뒤 flush 도 업데이트 없이 스킵) 저장이 아예 일어나지 않는다.
++    //    예약이 있으면 lib 타이머가 실행한다. 그 시점의 Y.Doc 은 reconcile 반영 상태다.
++    //  - allow=false(4001 리셋) → 예약을 취소한다(버린 방의 내용을 새 세션에 쓰지 않는다).
 +    if (!pendingConfig) {
 +      console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason: 'nothing_pending' }));
 +      return;
 +    }
 +    const config = pendingConfig;
 +    const hadSchedule = timer !== null;
-+    // M19: allow 은 **최신 값**(앱이 언마운트 시점에 넘긴다). 예약 당시 값은 쓰지 않는다.
 +    const allow = options?.allow !== false;
 +    console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.start', allow, role: config.role, hadSchedule }));
 +    if (config.role !== "owner" || !allow) {
 +      cancel();
 +      return;
 +    }
-+    if (!hadSchedule) {
-+      // 예약이 없으면 "Y.Doc 에 반영된 커밋" 이 없다. 그러나 마이크로태스크 경계를 넘으면
-+      // publish 의 queueMicrotask 가 돌아가 reconcile → scheduleWriteBack 로 예약이 생긴다.
-+      // (M22 2절 ①②: 커밋 유도 → 동기화 → 그 다음 저장)
-+      setTimeout(() => {
-+        if (timer !== null) {
-+          flush(options);
-+          return;
-+        }
-+        console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason: 'nothing_pending' }));
-+      }, 0);
++    if (hadSchedule) {
++      console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.keep_schedule' }));
 +      return;
 +    }
-+    clearTimeout(timer);
-+    timer = null;
-+    const ydoc = deps.getYDoc();
-+    const isReady = () => config.externalSession?.getSnapshot().synced ?? true;
-+    const state = { ydoc, config, deadlineTimer: null, onLocalUpdate: null };
-+    flushState = state;
-+    // M19: 자체 토큰 기준 — cancel() 의 generation++ 로 무효화되지 않는다.
-+    const isCurrent = () => flushState === state && isReady() && deps.getYDoc() === ydoc;
-+    const skip = (reason) => {
-+      console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason }));
-+    };
-+    const run = async () => {
-+      try {
-+        if (!ydoc) {
-+          skip('no_ydoc');
-+          return;
-+        }
-+        if (!config.onWriteBack) {
-+          skip('no_onwriteback');
-+          return;
-+        }
-+        if (!isReady()) {
-+          skip('not_ready');
-+          return;
-+        }
-+        if (!isCurrent()) {
-+          skip('not_current');
-+          return;
-+        }
-+        if (deps.serialize) {
-+          const bytes2 = await deps.serialize(isCurrent);
-+          if (bytes2 && isCurrent()) {
-+            console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.run', bytes: bytes2.length }));
-+            await config.onWriteBack(bytes2);
-+          } else {
-+            skip('not_current');
-+          }
-+          return;
-+        }
-+        const sourceBytes = deps.getSourceBytes?.();
-+        if (!sourceBytes) {
-+          skip('no_source');
-+          return;
-+        }
-+        const handler = new PptxHandler();
-+        await handler.load(sourceBytes.buffer);
-+        if (!isCurrent()) {
-+          skip('not_current');
-+          return;
-+        }
-+        const slides = readSlidesFromYDoc(ydoc);
-+        const merged = deps.mergeTemplateElements ? deps.mergeTemplateElements(slides, deps.getTemplateElements?.() ?? {}) : slides;
-+        const bytes = await handler.save(merged, deps.getSaveOptions?.());
-+        if (isCurrent()) {
-+          console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.run', bytes: bytes.length }));
-+          await config.onWriteBack(bytes);
-+        } else {
-+          skip('not_current');
-+        }
-+      } catch (err) {
-+        // M17: 실패를 조용히 삼키지 않는다(조용한 유실 금지).
-+        console.error("[collab] write-back flush failed", err);
-+        console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason: 'error' }));
-+      } finally {
-+        abortFlush();
++    // 예약이 없다 → 마이크로태스크 경계를 넘으면 publish 의 queueMicrotask 가 돌아가
++    // reconcile → scheduleWriteBack 로 예약이 생긴다. 그때 저장한다.
++    setTimeout(() => {
++      if (timer !== null) {
++        console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.keep_schedule' }));
++        return;
 +      }
-+    };
-+    const fire = () => {
-+      if (fired) return;
-+      fired = true;
-+      // M21: 여기서 flushState 를 비우면 안 된다 — run() 안의 isCurrent() 가
-+      // `flushState === state` 로 확인하므로, 먼저 비우면 **저장이 항상 skip(not_current)** 된다.
-+      // 리스너/타이머만 정리하고 상태는 run() 의 finally 에서 해제한다.
-+      try {
-+        ydoc?.off("update", state.onLocalUpdate);
-+      } catch {
-+      }
-+      if (state.deadlineTimer) clearTimeout(state.deadlineTimer);
-+      // M21: **1틱(매크로태스크) 뒤에 실행**한다.
-+      // 근거: lib 의 모델→Y.Doc 반영(`reconcileSlidesInYDoc`)은 `publish.current` 안의
-+      // queueMicrotask 에서 일어나고 그 다음에 scheduleWriteBack() 이 호출된다
-+      // (pptx-react-viewer ESM `chunk-DD3ARHEW.mjs` 의 useExternalDocumentSync).
-+      // 즉 마이크로태스크 경계를 넘으면 커밋이 Y.Doc 에 반영된 상태가 된다.
-+      // 언마운트 cleanup 이 그 마이크로태스크보다 먼저 실행될 수 있으므로 한 틱 기다린다.
-+      setTimeout(() => {
-+        void run();
-+      }, 0);
-+    };
-+    // 로컬 편집이 Y.Doc 에 반영된 뒤에 실행한다(시간 추측 금지).
-+    state.onLocalUpdate = (_update, origin) => {
-+      if (origin === LOCAL_SYNC_ORIGIN) fire();
-+    };
-+    try {
-+      ydoc?.on("update", state.onLocalUpdate);
-+    } catch {
-+    }
-+    // 상한: 2초 안에 로컬 update 가 없으면 **저장하지 않는다**.
-+    // 실측(M22): 예약이 있어도 Y.Doc 이 커밋 반영 전일 수 있다
-+    // (publish 가 `superseded` 로 막힌 커밋) → 여기서 실행하면 **구 내용으로 덮어쓴다**
-+    // (E2/E2b 2건 실패로 실증). 따라서 저장을 보류하고 실패로 남긴다(조용한 유실 금지 → 앱 알림).
-+    state.deadlineTimer = setTimeout(() => {
-+      console.warn("[collab] write-back flush deadline reached (no local Y.Doc update within 2000ms) — not saved");
-+      console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason: 'deadline' }));
-+      try {
-+        ydoc?.off("update", state.onLocalUpdate);
-+      } catch {
-+      }
-+      if (flushState === state) flushState = null;
-+    }, 2000);
++      console.debug('[collab-tl]', JSON.stringify({ evt: 'wb.flush.skip', reason: 'nothing_pending' }));
++    }, 0);
 +  }
 +  return { schedule, cancel, flush, abortFlush };
  }

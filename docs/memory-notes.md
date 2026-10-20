@@ -277,10 +277,19 @@ lib 컴포넌트가 죽어 publish 자체가 실행되지 않으므로, 그 순�
   구 내용 덮어쓰기. E2/E2b 2건 실패로 실증) + `wb.flush.skip{deadline}` + (앱 알림은 미구현)
 - 예약 없음 → `wb.flush.skip{nothing_pending}` (조용히 OK)
 
-**M22 실측 결과**: E2f(편집 직후 미리보기 닫기)·E2g(비소유자 Escape)·E2b·E2 **4건 통과**
-⇒ 리뷰가 가정한 "즉시 닫기/비소유자 유실"은 현재 재현되지 않는다.
-⇒ 해법 2번(앱이 getContent 로 저장)은 owner 만 가능하므로(비소유자는 409 not_owner) **기각**,
-   대안은 "닫기 전에 동기화 후 저장" — lib 훅에 `syncNow()` 노출이 필요하다(다음 세션).
+**M23 1-2 실측 + 수정 결과**
+
+| 항목 | 결과 |
+|---|---|
+| `superseded` 대입/해제 | 대입 3곳: `:11502`(adopt), `:11636`(원격 sync), `:11667`(Y.Doc 방 로드) / 해제 `:11619` |
+| 가드 | **참조 비교** `slides === superseded` → 로컬 커밋이 in-place mutate면 참조가 그대로여서 **커밋 전체가 스킵**됨 |
+| **수정(2-A)** | 가드를 **직전 serialized 비교**로 변경 → `pub.call{len:10860, sameAsLastSynced:false}` → **`pub.reconcile{len:10860}`** (이전엔 `skip{superseded}`) ⇒ 커밋 반영 성공 |
+| **flush 수정** | flush 가 `clearTimeout(timer)` 로 **lib 의 디바운스 예약을 취소**해 저장이 사라지던 것을 수정 → `wb.flush.keep_schedule` (예약 유지). 실측 근거: `flush.start{hadSchedule:true}` → `skip{nothing_pending}` → `skip{deadline}` (저장 없음) |
+| 남은 실패 | E2/E2b/E2f/E2g 8건 중 **4건 통과 / 4건 실패** — 커밋은 reconcile 되지만 **저장이 여전히 안 되는 경로**가 남음(원인 미규명) |
+
+⇒ 판정: 막힌 커밋은 **나중에 reconcile 됨**(일시적 차단)이나, 종료 시점의 저장이 여전히 성사되지 않는
+   경로가 남았다. 다음 세션 1순위: 저장 주체 추적(`applySave` 로그에 conn/바이트/`textOf` 포함,
+   0절-2 표) — 저장 주체가 2개(lib debounce vs 앱/flush)라는 가설을 데이터로 확정.
 
 
 - 4b-0 결과: SSE on 380ms 폴링(P0), 델타 중복 append(정합성 P0), cap 규칙 3개, 델타당 할당 5개.
