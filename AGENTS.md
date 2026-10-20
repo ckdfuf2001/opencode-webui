@@ -157,7 +157,9 @@
 
 ### 3. 절대 금칙
 
-- PowerShell `Get-Content`/`Set-Content`로 파일 편집 금지 (한글 파괴 전적). `edit`/`write` 도구만 사용.
+- **PowerShell `Get-Content`/`Set-Content`/`Out-File`로 소스 파일을 쓰지 말 것 (한글 파괴 전적, M15/M16에서 2회 재발).**
+  파일 수정은 `edit`/`write` 도구로만 한다. 읽기만 할 때도 `Get-Content -Encoding UTF8` 를 명시한다.
+  `pnpm check:encoding` 이 U+FFFD·BOM·한글 위치의 연속 `?`·한자 혼입을 잡는다(변경 파일 대상, EXIT=1).
 - 실행 중 서버 kill, 실행 중 exe 덮어쓰기 금지.
 - 합의 없는 히스토리 rewrite 금지 (force-push는 명시 지시 때만).
 - 파괴적 부팅 동작 금지: DB-workspace 매칭 안 되면 삭제 대신 로그만.

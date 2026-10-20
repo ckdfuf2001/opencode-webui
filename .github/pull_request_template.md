@@ -8,6 +8,7 @@
 
 - [ ] 새 폴링 / interval / EventSource 없음 (또는 허용 목록 추가 + D29 근거와 측정값 기재)
 - [ ] `pnpm check:memory` 통과
+- [ ] `pnpm check:encoding` 통과 (한글 손상·BOM·재인코딩 흔적 없음)
 - [ ] `pnpm -C backend test -- run` 통과 (기존 `bun:sqlite` 2파일 실패 외 실패 없음)
 - [ ] `pnpm -C frontend exec tsc -b` 에러 0
 - [ ] 린트 기준선(`pnpm -C frontend exec eslint .` = 330 problems) 신규 0
