@@ -210,17 +210,20 @@
     또 직렬화 시점마다 바이트가 달라 **정상 저장을 전부 막을 수 있다**(M15 결함 4).
     ⇒ **취소 대신 실행**으로 해결한다: lib 이 리마운트/role 변경 cleanup 에서 예약한 write-back 을
     `cancel()` 으로 버리는 것을 패치로 막는다.
-  - 결정(2-취소, M17): **lib 패치로 write-back 예약을 취소하지 않는다.**
+  - 결정(2-취소, M18): **lib 패치로 write-back 예약을 취소하지 않는다.**
     `ooxml-ui/dist/pptx/chunk-MCHPNO42.mjs` 의 `createWriteBackScheduler` 에 `flush()` 를 추가하고,
-    `pptx-react-viewer/dist/chunk-552NAFTD.js` 의 cleanup에서 `scheduler.cancel()` 대신 `flush()` 를 부른다.
-    - **실행 시점은 시간 추측이 아니라 조건**이다: **로컬 편집이 Y.Doc 에 반영된
-      (`update` 이벤트, origin=`LOCAL_SYNC_ORIGIN`) 뒤**에 실행한다. 로컬 update 가 오지 않으면
-      상한(2초) 뒤 실행하고 그 사실을 로그로 남긴다. (300ms 고정 지연은 근거가 없어 폐기.)
-    - **실패를 조용히 삼키지 않는다**: 직렬화/저장 실패는 `console.error` 로 남긴다.
-    - **세션 교체 시에는 flush 하지 않는다**: lib 쪽 cleanup 을 **언마운트 전용**(deps `[scheduler]` 만)으로
-      분리해 role/doc/externalSession 변경 시에는 기존 `cancel()` 이 유지되게 한다.
-      (4001 리셋 직후 버린 방의 내용이 새 세션으로 저장되면 리셋이 무효가 된다.)
-    - owner 여부는 **스케줄러가** 판정한다(`pendingConfig.role === 'owner'`).
+    `pptx-react-viewer/dist/chunk-552NAFTD.js` 에 effect **두 개**를 둔다.
+    - **(1) 언마운트 전용 effect**(`deps: [scheduler]`): cleanup 이 `flush()` 를 호출한다.
+      언마운트 시 cleanup 은 선언 순서대로 실행되므로 (1) 이 먼저 flush 하고 (2) 의 cancel 은 예약이 없어 noop.
+    - **(2) 원래 cancel effect 를 되살린다**(`deps: [scheduler, doc, role, hasWriteBack, externalSession]`):
+      문서/role/외부 세션이 **바뀌면** 예약은 취소된다(강등·세션 교체 시 남은 예약 실행 금지).
+    - **flush 실행 조건**: owner 인 경우(`pendingConfig.role === 'owner'`) **그리고**
+      앱이 `flushOnUnmount !== false` 로 명시한 경우(기본 true).
+      4001 리셋처럼 "이번 언마운트가 리셋" 인 경우는 **앱이 `flushOnUnmount=false` 로 알린다**
+      (`PptxViewer` 의 `onReset` → `resetInFlightRef` → config). 리셋이면 예약은 취소된다.
+    - **실행 시점은 시간 추측이 아니라 조건**: 로컬 편집이 Y.Doc 에 반영된 `update`
+      (origin=`LOCAL_SYNC_ORIGIN`) **뒤**에 실행. 오지 않으면 상한 2초 뒤 실행하고 로그로 남긴다.
+    - **실패를 조용히 삼키지 않는다**: 직렬화/저장 실패는 `console.error("[collab] write-back flush failed")`.
     근거: `chunk-552NAFTD.js:11437-11440`(cancel), `:11451`(owner 일 때만 전달),
     `chunk-MCHPNO42.mjs:33003`(스케줄러), `LOCAL_SYNC_ORIGIN`(`chunk-MCHPNO42.mjs:65`),
     바이트 출처는 `deps.serialize`/`getSourceBytes`(DOM 불필요).
@@ -244,6 +247,18 @@
   - 관련 커밋: 705e63c(백엔드 경합·해시 식별), ee12673(타임라인 계측), 06ca84c(no-store, **원인 아님** —
     파일 본문 캐시가 아니었다. 무해하므로 유지하되 "원인 아님"으로 기록), M16 패치(① lib cancel→flush)
   - 회귀 검사: 3-2(E2b — 편집 모드 종료 후 디스크에 편집이 남는지), 3-3(E2/E2b/E2c/E4 디스크 반영 계열)
+
+- D40 owner 규칙 (M18, 2026-10-20)
+  - 결정: **저장은 owner 만** 한다. 서버 `checkSave`(`backend/src/services/collab-rooms.ts:691`)가
+    `isCurrentOwner` 로 막고, 아니면 409 `not_owner` 로 거절한다. (M18 1절에서 owner 가드가
+    붕괴되지 않았음을 확인 — relay 경로 + 코드 확인.)
+  - owner 선출: `reevaluateOwner` — edit 모드 conn 중 가장 먼저 들어온 conn. **view 모드 conn 은 owner 가 될 수 없다**
+    (`connMode` 가 'view' 면 건너뛴다). owner 가 없으면 저장 자체가 막힌다.
+  - 근거/주의: 이 규칙은 decisions 에 기록되어 있지 않아 코드에서만 존재했다(리뷰 지적).
+    E4(2인 동시 편집)에서 **서버 owner 는 존재하는데 화면 `data-owner="true"` 가 0개**로 표시됐다
+    ⇒ 저장 가드는 정상, **표시 경로(peer 칩의 owner 매칭) 문제**로 판정(1절 표의 (가)).
+  - 관련 커밋: 705e63c(경합), ae29f89/이 커밋(패치), E4 표시는 v0.13.
+  - 회귀 검사: 3-2(relay T2i — owner 가 아닌 conn 의 저장이 409), 3-3(E4 owner 표시)
 
 ## XLSX/DOCX (A1′)
 - D40 YCollabSession mode: 'own'(PPT, 기존 경로 그대로)과 'transport'(XLSX/DOCX, lib provider가 doc/awareness 소유).

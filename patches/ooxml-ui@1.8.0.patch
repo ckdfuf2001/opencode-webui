@@ -1,5 +1,5 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..88d1c2203e83006676eb788ba5c1876a13ecc012 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..63f4484a8037ca003d651b6a9618858dabd36615 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
 +++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -33004,6 +33004,8 @@ function createWriteBackScheduler(deps) {
@@ -28,7 +28,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..88d1c2203e83006676eb788ba5c1876a
      timer = setTimeout(async () => {
        timer = null;
        const ydoc = deps.getYDoc();
-@@ -33075,7 +33080,91 @@ function createWriteBackScheduler(deps) {
+@@ -33075,7 +33080,93 @@ function createWriteBackScheduler(deps) {
        }
      }, debounceMs);
    }
@@ -41,7 +41,9 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..88d1c2203e83006676eb788ba5c1876a
 +  function flush() {
 +    if (timer === null || !pendingConfig) return;
 +    // M17: owner 인 경우에만 실행한다(비 owner 의 예약은 취소 대상).
-+    if (pendingConfig.role !== "owner") {
++    // M18: 앱이 "이번 언마운트가 리셋(4001)이 아니다" 를 명시적으로 알려줄 때만 실행한다.
++    // 리셋이면 버린 방의 내용이 새 세션으로 저장돼 리셋이 무효가 된다.
++    if (pendingConfig.role !== "owner" || pendingConfig.flushOnUnmount === false) {
 +      cancel();
 +      return;
 +    }

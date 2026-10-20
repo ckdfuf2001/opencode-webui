@@ -1007,6 +1007,13 @@ export function buildCollaborationConfig(
     isDecrypted: boolean
     writeBackDebounceMs: number
     onWriteBack: (bytes: Uint8Array) => void
+    /**
+     * M18: 언마운트(편집 종료) 때 **예약된 write-back 을 실행**할지.
+     * 4001 리셋처럼 "이번 언마운트가 리셋" 인 경우에는 false 로 둔다
+     * (버린 방의 내용이 새 세션으로 저장되면 리셋이 무효가 된다).
+     * lib 은 이 값이 false 면 예약을 취소한다.
+     */
+    flushOnUnmount?: boolean
   },
 ): CollaborationConfig | undefined {
   if (!state || opts.isDecrypted) return undefined
@@ -1021,8 +1028,10 @@ export function buildCollaborationConfig(
     role: state.role,
     sessionIntent: state.intent,
     writeBackDebounceMs: opts.writeBackDebounceMs,
+    // M18: lib 은 이 값이 false 면 언마운트 때 예약을 취소한다(4001 리셋 보호).
+    flushOnUnmount: opts.flushOnUnmount !== false,
     onWriteBack: (bytes: Uint8Array) => {
       opts.onWriteBack(bytes)
     },
-  }
+  } as unknown as CollaborationConfig
 }

@@ -278,6 +278,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const [connBadge, setConnBadge] = useState<{ status: string; synced: boolean }>({ status: 'connecting', synced: false })
   const baseHashRef = useRef<string | null>(null)
   /**
+   * M18: 4001 리셋이 진행 중인지. 리셋으로 언마운트될 때는 예약된 write-back 을 실행하지 않는다
+   * (버린 방의 내용이 새 세션으로 저장되면 리셋이 무효가 된다).
+   */
+  const resetInFlightRef = useRef(false)
+  /**
    * M11: 뷰어 리마운트가 발생한 뒤, 성공 저장이 아직 없는 상태.
    *
    * 리마운트(편집 모드 종료 등)는 뷰어를 **파일 기준**으로 다시 만들기 때문에,
@@ -847,19 +852,21 @@ const syncSessionMode = useCallback(() => {
         const freshEditing = editingRef.current
         sessionModeRef.current = freshEditing ? 'edit' : 'view'
         // 2-2: 탭당 파일당 세션 1개 (인라인/전체화면 공유).
-        const acquired = acquireCollabSession(
-          savePath,
-          () =>
-            new YCollabSession(
-              `${collabServerUrl()}/${info.roomId}`,
-              { name: userNow.name, color: userNow.color },
-              { mode: freshEditing ? 'edit' : 'view', userId: userNow.id, device: narrowViewport ? 'mobile' : 'desktop' },
-            ),
-          (created) => {
-            created.knownHash = info.lastHash
-            wireSessionRecovery(created)
-            created.connect()
-          },
+      const acquired = acquireCollabSession(
+        savePath,
+        () =>
+          new YCollabSession(
+            `${collabServerUrl()}/${info.roomId}`,
+            { name: userNow.name, color: userNow.color },
+            { mode: freshEditing ? 'edit' : 'view', userId: userNow.id, device: narrowViewport ? 'mobile' : 'desktop' },
+          ),
+        (created) => {
+          created.knownHash = info.lastHash
+          // M18: 새 세션이므로 리셋 플래그를 해제한다(기본값 = 언마운트 시 flush 허용).
+          resetInFlightRef.current = false
+          wireSessionRecovery(created)
+          created.connect()
+        },
         )
         // M3/N1: cleanup이 쓸 토큰을 effect 지역에 보관한다.
         lease = acquired
@@ -1103,6 +1110,8 @@ const [renaming, setRenaming] = useState(false)
     session.onReset(() => {
       logClient('room_reset_reload')
       if (collabRef.current?.session === session) {
+        // M18: 리셋으로 언마운트되므로 예약된 write-back 을 실행하지 않는다.
+        resetInFlightRef.current = true
         writeBackHaltedRef.current = false
         lossPendingRef.current = null
         setImageLoss(null)
@@ -1501,16 +1510,19 @@ const [renaming, setRenaming] = useState(false)
   const collaboration = useMemo(
     () =>
       collabUser
-        ? buildCollaborationConfig(collabGated ? collab : null, {
-            editing,
-            viewing: !editing,
-            user: { name: collabUser.name, color: collabUser.color },
-            isDecrypted,
-            writeBackDebounceMs: 2500,
-            onWriteBack: (bytes: Uint8Array) => {
-              void handleWriteBack(bytes)
-            },
-          })
+      ? buildCollaborationConfig(collabGated ? collab : null, {
+          editing,
+          viewing: !editing,
+          user: { name: collabUser.name, color: collabUser.color },
+          isDecrypted,
+          writeBackDebounceMs: 2500,
+          // M18: 4001 리셋으로 언마운트될 때는 예약된 write-back 을 실행하지 않는다
+          // (버린 방의 내용이 새 세션으로 저장되면 리셋이 무효가 된다).
+          flushOnUnmount: !resetInFlightRef.current,
+          onWriteBack: (bytes: Uint8Array) => {
+            void handleWriteBack(bytes)
+          },
+        })
         : undefined,
     [collabGated, collab, editing, collabUser, isDecrypted, handleWriteBack],
   )

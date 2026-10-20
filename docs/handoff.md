@@ -89,18 +89,35 @@
 - ⇒ **2인 동시 편집에서 owner 표시가 아예 없음** — 서버 owner 선출(첫 conn=owner)과 connMode 규칙 문제이며
   flush 패치와는 **별개**의 앱 이슈. → 다음 세션 과제(2인 owner 선출).
 
+**M18 결과**
+
+| 항목 | 결과 |
+|---|---|
+| ① E4 원인 확정 | **owner 가드 붕괴 아님**. 서버 `checkSave`(`collab-rooms.ts:691`)가 `isCurrentOwner` 로 409 `not_owner` 를 막는다. E4 에서 편집 반영은 통과(=저장은 됐음) → **서버 owner 는 존재했고 화면 `data-owner="true"` 표시만 0개** ⇒ 1절 표의 **(가) UI 표시 버그**. (E4 는 2인 모두 편집 모드 → "view 는 owner 불가" 설명은 성립 안 함.) |
+| ② 세션 교체/언마운트 구분 | lib effect **두 개**: (1) 언마운트 전용(`deps:[scheduler]`) → `flush()`, (2) **원래 cancel effect 되살림**(`deps:[scheduler,doc,role,hasWriteBack,externalSession]`) → 문서/role/세션 교체 시 cancel. owner 여부는 스케줄러가(`pendingConfig.role`). **4001 리셋은 앱이 `flushOnUnmount=false` 로 알림**(PptxViewer `onReset` → `resetInFlightRef` → config) → 리셋이면 예약 취소. |
+| ③ flush 실행 조건 | 로컬 Y.Doc update(origin=`LOCAL_SYNC_ORIGIN`) 뒤 실행, 없으면 상한 2초 + 로그. (300ms 고정 지연 폐기) |
+| 테스트 | **E2·E2b·E2c 6건 통과**(chromium·msedge). E4 실패 2건은 ①의 UI 표시 문제. |
+| 기준선 | relay 17/17, 478 passed, tsc 0, check:memory 0, check:encoding 0 |
+
+**M18 에서 바로잡은 것(자기 보고서 오류)**: 앞 보고서에서 "role/doc 교체 시 기존 cancel() 유지"라고 적었으나
+**실제로는 원래 effect 를 대체해버려 cancel 이 사라졌다**(M18 리뷰 지적이 정확함).
+⇒ effect 두 개로 복구(위 ②). 4001 리셋은 리마운트 경로라 "언마운트 전용" 만으로는 막히지 않아,
+**앱이 lib 에 알려 주는 구조**(`flushOnUnmount`)로 해결.
+
 **남은 과제(다음 세션)**
-1. **E4**(2인 동시 편집 owner 선출) — 위 판정 참고.
-2. **2-3 앱이 flush 완료를 await**(경로별 pendingSave promise 1개, 바이트 미보관). `endEditing` 이 저장 결과를
-   기다린 뒤 종료(실패 시 편집 유지 + 배너). **미구현** — 현재 Done/Escape 는 즉시 끝나고 저장은 백그라운드.
-3. **2-4 미리보기 닫기(언마운트) 경로** — registry release 가 refs=0 이어도 pendingSave 가 있으면 destroy 지연(상한 3초).
-   `handleWriteBack` 은 `collabRef.current` 대신 flush 시작 시점 세션을 캡처. **미구현** — 닫기 직후 유실 위험 잔존.
-4. **E2f**(편집 후 즉시 미리보기 닫기 → 8초 내 디스크 반영), **E2g**(4001 리셋 직후 디스크 내용 유지) 신설.
-5. **scheduler 단위 테스트**(schedule→flush 1회, flush 후 cancel 0회, 예약 없을 때 noop, flush 중 새 schedule).
-6. **패치 고정**: `patchedDependencies` 키에 버전 포함(`pptx-react-viewer@4.33.0`), 두 패키지 버전 캐럿 제거,
-   설치본 dist 에 패치 표식(M16/M17) 존재 단언 테스트, prod exe 번들 grep.
-7. **E2d**(PPT+XLSX 동시 편집), `fileFullscreenChange` 발송처 전수 grep, E2e(D39).
-8. E2/E2b/E2c/E4/E2d/E2e/E2f/E2g × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀.
+1. **2-3 앱이 flush 완료를 await** (경로별 pendingSave promise 1개, 바이트 미보관) — **미구현**.
+   현재 Done/Escape 는 즉시 끝나고 저장은 백그라운드 ⇒ 실패 시 배너를 띄울 지점이 없다.
+2. **2-4 미리보기 닫기(언마운트) 경로** — registry release 가 refs=0 이어도 pendingSave 가 있으면 destroy 지연(상한 3초),
+   `handleWriteBack` 은 flush 시작 시점 세션을 캡처. **미구현** ⇒ "편집 직후 미리보기를 바로 닫으면" 유실 위험 잔존.
+3. **E2f**(편집 → Escape → 100ms 안에 미리보기 닫기 → 8초 내 디스크 반영), **E2g**(4001 직후 디스크가 리셋 전과 같음),
+   **E2h**(owner→guest 강등 → 남은 예약 0건) 신설 — **미작성**.
+4. **2절 검증 미완**: role/doc 교체 시 cancel 이 실제로 동작하는지, 4001 경로가 flush 안 되는지
+   (E2g/E2h 로 확인 필요).
+5. **E4 owner 표시 버그** — meta 의 ownerClientId 와 presence 매칭 경로 파일:줄 확인(1절 표 (가)).
+6. scheduler 단위 테스트 7종, 패치 버전 고정(`patchedDependencies` 키에 버전, 캐럿 제거, 설치본 M17 표식 단언,
+   prod exe 번들 grep), E2d, E2e(D39), `fileFullscreenChange` grep.
+7. **인코딩 게이트 범위**: "최근 3커밋" → `git diff --name-only origin/main...HEAD` + staged + untracked 로 변경.
+8. E2/E2b/E2c/E4/E2d~E2h × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀.
 
 **M15 추가 발견 (lib dist 확인)**
 - lib `chunk-552NAFTD.js:11423` `useCollaborationWriteBack`: write-back 은 `scheduler.schedule()` 로 예약되고
