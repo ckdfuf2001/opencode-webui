@@ -75,14 +75,32 @@
 - 앵커 Map 은 경로마다 파일 전체 사본을 영구 보관했다(메모리 규칙 위반, 47MB 덱이면 47MB 누적).
 ⇒ 앵커/바이트 비교 방식은 사용하지 않는다.
 
+**M17 결과**
+
+| 항목 | 결과 |
+|---|---|
+| ① 인코딩 게이트 | `scripts/check-encoding.mjs` 추가(U+FFFD·BOM·한글 위치 연속 `?`·한자 혼입 경고). `pnpm check:encoding`, `pnpm test` 선행, PR 템플릿 체크박스, AGENTS.md 금지 규칙 보강. 의도적 위반 1줄 → **EXIT=1** 확인, 정상 → 0. |
+| ② flush 안전성 | 300ms 고정 지연 → **조건 기반**(로컬 편집이 Y.Doc 에 반영된 `update`(origin=`LOCAL_SYNC_ORIGIN`) 뒤 실행, 없으면 상한 2초 + 로그). `catch{}` → `console.error` 로 실패 노출. lib cleanup 을 **언마운트 전용**으로 분리(세션/role/doc 교체 시엔 cancel 유지 = 4001 리셋 무효화 방지). owner 판정은 스케줄러가(`pendingConfig.role`). |
+| 테스트 | **E2·E2b·E2c 통과**(chromium·msedge), **E4 실패** 2건. |
+| 기준선 | relay 17/17, 478 passed, tsc 0, check:memory 0, check:encoding 0 |
+
+**E4 실패 원인 확정(3절 판정표 적용)**: 단언 `[data-testid="collab-peer"][data-owner="true"]` 개수가 **0**(기대 1).
+- 저장 0건 아님(편집 반영 단언은 통과), 마지막 저장 내용 문제 아님.
+- ⇒ **2인 동시 편집에서 owner 표시가 아예 없음** — 서버 owner 선출(첫 conn=owner)과 connMode 규칙 문제이며
+  flush 패치와는 **별개**의 앱 이슈. → 다음 세션 과제(2인 owner 선출).
+
 **남은 과제(다음 세션)**
-1. **E4**(동시 편집) 실패 — 2인 동시 편집에서 write-back 경합 가능. E2와 동일 계열로 패치 효과 확인 필요.
-2. **리마운트 후 구 내용 덮어쓰기**(M16 3절) — Done 이후 저장 바이트의 `textOf('Body 2')` 확인 후
-   `lastSavedRef` 를 **viewerKey 변경 지점에서만** `content` 로 넘기는 수정(D39).
-3. **E2d**(PPT/XLSX 동시 편집 — B1(b) 재발 검사) 미작성.
-4. `fileFullscreenChange` 발송처 전수 grep(경로 없이 쏘는 곳이 있으면 그 이벤트는 이제 무시된다).
-5. **인코딩 검사**(U+FFFD/깨진 한글) 자동 게이트 추가 — PowerShell 사고 재발 방지.
-6. E2/E2b/E2c/E4/E2d × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀 확인.
+1. **E4**(2인 동시 편집 owner 선출) — 위 판정 참고.
+2. **2-3 앱이 flush 완료를 await**(경로별 pendingSave promise 1개, 바이트 미보관). `endEditing` 이 저장 결과를
+   기다린 뒤 종료(실패 시 편집 유지 + 배너). **미구현** — 현재 Done/Escape 는 즉시 끝나고 저장은 백그라운드.
+3. **2-4 미리보기 닫기(언마운트) 경로** — registry release 가 refs=0 이어도 pendingSave 가 있으면 destroy 지연(상한 3초).
+   `handleWriteBack` 은 `collabRef.current` 대신 flush 시작 시점 세션을 캡처. **미구현** — 닫기 직후 유실 위험 잔존.
+4. **E2f**(편집 후 즉시 미리보기 닫기 → 8초 내 디스크 반영), **E2g**(4001 리셋 직후 디스크 내용 유지) 신설.
+5. **scheduler 단위 테스트**(schedule→flush 1회, flush 후 cancel 0회, 예약 없을 때 noop, flush 중 새 schedule).
+6. **패치 고정**: `patchedDependencies` 키에 버전 포함(`pptx-react-viewer@4.33.0`), 두 패키지 버전 캐럿 제거,
+   설치본 dist 에 패치 표식(M16/M17) 존재 단언 테스트, prod exe 번들 grep.
+7. **E2d**(PPT+XLSX 동시 편집), `fileFullscreenChange` 발송처 전수 grep, E2e(D39).
+8. E2/E2b/E2c/E4/E2d/E2e/E2f/E2g × chromium·msedge `--repeat-each=3` + E19/E19b/E20 무회귀.
 
 **M15 추가 발견 (lib dist 확인)**
 - lib `chunk-552NAFTD.js:11423` `useCollaborationWriteBack`: write-back 은 `scheduler.schedule()` 로 예약되고

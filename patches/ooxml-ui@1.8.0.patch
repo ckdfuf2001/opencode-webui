@@ -1,5 +1,5 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..ac1fa72769f84e572940d19ce180c918ca18f839 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..88d1c2203e83006676eb788ba5c1876a13ecc012 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
 +++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -33004,6 +33004,8 @@ function createWriteBackScheduler(deps) {
@@ -28,16 +28,23 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..ac1fa72769f84e572940d19ce180c918
      timer = setTimeout(async () => {
        timer = null;
        const ydoc = deps.getYDoc();
-@@ -33075,7 +33080,57 @@ function createWriteBackScheduler(deps) {
+@@ -33075,7 +33080,91 @@ function createWriteBackScheduler(deps) {
        }
      }, debounceMs);
    }
 -  return { schedule, cancel };
-+  // M16: 취소를 "예약 유지 + 지연 실행"으로 바꾼다.
-+  //  - 즉시 실행하면 커밋 반영 전에 직렬화되어 구 내용을 저장한다(실측 8141 = 커밋 전).
-+  //  - 그래서 살짝(기본 300ms) 뒤에 실행한다. 커밋 반영 후의 모델을 저장한다.
++  // M17: 취소를 "실행"으로 바꾸되, **시간 추측이 아니라 조건**으로 실행한다.
++  //  - 즉시 실행하면 커밋이 Y.Doc 에 반영되기 전에 직렬화되어 구 내용을 저장한다(실측 8141 = 커밋 전).
++  //  - 300ms 고정 지연도 근거가 없다(느린 PC/CPU throttle 에서도 구 내용을 저장할 수 있음).
++  //  ⇒ **로컬 편집이 Y.Doc 에 반영된(update 이벤트) 뒤**에 실행한다.
++  //    로컬 update 가 오지 않으면 상한(2초) 뒤 실행하고, 실패는 조용히 삼키지 않는다.
 +  function flush() {
 +    if (timer === null || !pendingConfig) return;
++    // M17: owner 인 경우에만 실행한다(비 owner 의 예약은 취소 대상).
++    if (pendingConfig.role !== "owner") {
++      cancel();
++      return;
++    }
 +    clearTimeout(timer);
 +    const config = pendingConfig;
 +    const token = generation;
@@ -72,7 +79,9 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..ac1fa72769f84e572940d19ce180c918
 +        if (isCurrent()) {
 +          await config.onWriteBack(bytes);
 +        }
-+      } catch {
++      } catch (err) {
++        // M17: 실패를 조용히 삼키지 않는다(조용한 유실 금지).
++        console.error("[collab] write-back flush failed", err);
 +      } finally {
 +        if (token === generation) {
 +          unsubscribe?.();
@@ -81,7 +90,32 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..ac1fa72769f84e572940d19ce180c918
 +        if (pendingConfig === config) pendingConfig = null;
 +      }
 +    };
-+    timer = setTimeout(run, 300);
++    // 로컬 편집이 Y.Doc 에 반영된 뒤에 실행한다(시간 추측 금지).
++    const ydoc = deps.getYDoc();
++    let fired = false;
++    const fire = () => {
++      if (fired) return;
++      fired = true;
++      try {
++        ydoc?.off("update", onLocalUpdate);
++      } catch {
++      }
++      clearTimeout(deadlineTimer);
++      void run();
++    };
++    const onLocalUpdate = (_update, origin) => {
++      // 로컬 편집(LOCAL_SYNC_ORIGIN)이 Y.Doc 에 반영된 시점.
++      if (origin === LOCAL_SYNC_ORIGIN) fire();
++    };
++    try {
++      ydoc?.on("update", onLocalUpdate);
++    } catch {
++    }
++    // 상한: 2초 안에 로컬 update 가 없으면 그대로 실행한다(그리고 상한임을 로그로 남긴다).
++    const deadlineTimer = setTimeout(() => {
++      console.warn("[collab] write-back flush deadline reached (no local Y.Doc update within 2000ms)");
++      fire();
++    }, 2000);
 +  }
 +  return { schedule, cancel, flush };
  }

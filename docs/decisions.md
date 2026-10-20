@@ -210,14 +210,20 @@
     또 직렬화 시점마다 바이트가 달라 **정상 저장을 전부 막을 수 있다**(M15 결함 4).
     ⇒ **취소 대신 실행**으로 해결한다: lib 이 리마운트/role 변경 cleanup 에서 예약한 write-back 을
     `cancel()` 으로 버리는 것을 패치로 막는다.
-  - 결정(2-취소, M16): **lib 패치로 write-back 예약을 취소하지 않는다.**
+  - 결정(2-취소, M17): **lib 패치로 write-back 예약을 취소하지 않는다.**
     `ooxml-ui/dist/pptx/chunk-MCHPNO42.mjs` 의 `createWriteBackScheduler` 에 `flush()` 를 추가하고,
-    `pptx-react-viewer/dist/chunk-552NAFTD.js` 의 cleanup(`useCollaborationWriteBack` 주변)에서
-    `scheduler.cancel()` 대신 **이전 role 이 owner 였을 때만** `scheduler.flush()` 를 부른다.
-    단, **즉시 실행하면 커밋이 Y.Doc 에 반영되기 전에 직렬화**되어 구 내용을 저장한다(실측 8141 = 커밋 전).
-    ⇒ flush 는 **300ms 지연 실행**한다(취소만 하지 않고 실행 시점을 커밋 반영 뒤로 미룸).
+    `pptx-react-viewer/dist/chunk-552NAFTD.js` 의 cleanup에서 `scheduler.cancel()` 대신 `flush()` 를 부른다.
+    - **실행 시점은 시간 추측이 아니라 조건**이다: **로컬 편집이 Y.Doc 에 반영된
+      (`update` 이벤트, origin=`LOCAL_SYNC_ORIGIN`) 뒤**에 실행한다. 로컬 update 가 오지 않으면
+      상한(2초) 뒤 실행하고 그 사실을 로그로 남긴다. (300ms 고정 지연은 근거가 없어 폐기.)
+    - **실패를 조용히 삼키지 않는다**: 직렬화/저장 실패는 `console.error` 로 남긴다.
+    - **세션 교체 시에는 flush 하지 않는다**: lib 쪽 cleanup 을 **언마운트 전용**(deps `[scheduler]` 만)으로
+      분리해 role/doc/externalSession 변경 시에는 기존 `cancel()` 이 유지되게 한다.
+      (4001 리셋 직후 버린 방의 내용이 새 세션으로 저장되면 리셋이 무효가 된다.)
+    - owner 여부는 **스케줄러가** 판정한다(`pendingConfig.role === 'owner'`).
     근거: `chunk-552NAFTD.js:11437-11440`(cancel), `:11451`(owner 일 때만 전달),
-    `chunk-MCHPNO42.mjs:33003`(스케줄러), 바이트 출처는 `deps.serialize`/`getSourceBytes`(DOM 불필요).
+    `chunk-MCHPNO42.mjs:33003`(스케줄러), `LOCAL_SYNC_ORIGIN`(`chunk-MCHPNO42.mjs:65`),
+    바이트 출처는 `deps.serialize`/`getSourceBytes`(DOM 불필요).
   - 결정(2-범위, M15): `fileFullscreenChange`(전역 이벤트)는 **파일 식별자를 포함**해 전달하고,
     수신자는 **자기 파일만** 처리한다. `editing` 이 아니거나 `endingEdit` 중이면 무시한다.
     (B1(b): 한 뷰어의 Escape가 다른 파일의 편집까지 종료시키지 않게 한다.)
