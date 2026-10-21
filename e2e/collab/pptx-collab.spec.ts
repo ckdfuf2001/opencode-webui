@@ -164,7 +164,7 @@ test.describe('pptx collab (desktop)', () => {
     }
     await openFile(t.pageA, f.name, 'edit')
     await gotoSlide(t.pageA, 2)
-    await editShapeText(t.pageA, shapesA, 'Body 2', 'First edit')
+    await editShapeText(t.pageA, shapesA, 'Body 2', 'First edit', { commit: 'outside' })
     // 1차 반영 확인
     try {
       await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'First edit', 8000)
@@ -174,7 +174,7 @@ test.describe('pptx collab (desktop)', () => {
     }
     // 2차 편집 → 즉시 닫기(지연 0ms)
     await gotoSlide(t.pageA, 3)
-    await editShapeText(t.pageA, shapesA, 'Body 3', 'Late edit')
+    await editShapeText(t.pageA, shapesA, 'Body 3', 'Late edit', { commit: 'outside' })
     await closePreview(t.pageA)
     // 8초 안에 디스크 반영
     let deck: Awaited<ReturnType<typeof waitForDisk>>

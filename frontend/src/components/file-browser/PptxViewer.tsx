@@ -657,59 +657,9 @@ if (!writeBackHaltedRef.current) {
     },
     [],
   )
-  // M34: "닫기 전에 먼저 저장" 가드.
-  // 미리보기 닫기 버튼(aria-label="Close preview") 클릭을 가로채서,
-  // 1) 현재 모델을 직렬화하고 2) serializer 로 저장하고 3) 결과를 await(상한 3초)한 뒤
-  // 4) 실제로 닫는다. 실패('failed'/타임아웃)면 닫지 않고 편집 모드를 유지한다(조용한 유실 금지).
-  const closingRef = useRef(false)
-  const flushBeforeCloseRef = useRef<(() => Promise<'saved' | 'skipped' | 'failed'>) | null>(null)
-  flushBeforeCloseRef.current = async () => {
-    const h = viewerRef.current
-    const c = collabRef.current ?? lastCollabRef.current
-    if (!h || !c) return 'skipped'
-    let bytes: Uint8Array
-    try {
-      bytes = new Uint8Array(await h.getContent())
-    } catch {
-      return 'skipped'
-    }
-    if (bytes.length === 0) return 'skipped'
-    const p = saveSerializerRef.current!.request(bytes, {
-      session: { path: savePath, epoch: c.epoch, roomId: c.roomId },
-    })
-    const res = await Promise.race([
-      p,
-      new Promise<'failed'>((r) => setTimeout(() => r('failed'), 3000)),
-    ])
-    if (res === 'failed') {
-      showToast.error('저장 실패 — 편집 모드를 유지합니다 (내 사본을 내려받으세요)')
-    }
-    return res
-  }
-  useEffect(() => {
-    const onClick = (ev: MouseEvent) => {
-      const el = (ev.target as HTMLElement | null)?.closest?.(
-        '[aria-label="Close preview"]',
-      ) as HTMLElement | null
-      if (!el) return
-      if (closingRef.current) return
-      const flush = flushBeforeCloseRef.current
-      if (!flush) return
-      ev.preventDefault()
-      ev.stopPropagation()
-      void (async () => {
-        const res = await flush()
-        if (res === 'failed') return
-        closingRef.current = true
-        el.click()
-        setTimeout(() => {
-          closingRef.current = false
-        }, 200)
-      })()
-    }
-    document.addEventListener('click', onClick, true)
-    return () => document.removeEventListener('click', onClick, true)
-  }, [])
+  // M34 가드는 v0.13 로 되돌렸다(비소유자/보기 모드에서 닫기 차단 회귀).
+  // 닫기 경로(E2f-strict)가 실제로 실패할 때 endEditing 경로로 다시 만든다.
+
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     // M31 1-a: 언마운트 후에는 화면 상태(collab)가 null 이지만 세션은 유예 동안 살아 있다.
     // collabRef 만 보면 hasSession=false 가 되어 flush 가 버려진다 → 마지막 세션을 fallback 으로 쓴다.

@@ -291,7 +291,13 @@ export async function selectShape(page: Page, shapes: ShapeLocator, shapeName: s
 }
 
 /** 도형 더블클릭 → 전체선택 → 입력 → Escape. 실제 키보드로 입력한다. */
-export async function editShapeText(page: Page, shapes: ShapeLocator, shapeName: string, text: string): Promise<void> {
+export async function editShapeText(
+  page: Page,
+  shapes: ShapeLocator,
+  shapeName: string,
+  text: string,
+  opts?: { commit?: 'escape' | 'outside' },
+): Promise<void> {
   const id = await shapes.idFor(shapeName)
   await page.evaluate((eid) => {
     const el = document.querySelector(`[data-element-id="${CSS.escape(eid)}"]`)
@@ -304,6 +310,19 @@ export async function editShapeText(page: Page, shapes: ShapeLocator, shapeName:
   )
   await page.keyboard.press('ControlOrMeta+a')
   await page.keyboard.type(text)
-  await page.keyboard.press('Escape')
+  if (opts?.commit === 'outside') {
+    // M36 ①: Escape 는 편집 모드 종료(endEditing → 리마운트)를 유발한다(M14).
+    // 그래서 **같은 페이지에서 두 번째 편집**을 하려면 바깥 클릭으로 커밋해야 한다.
+    // (뷰포트 좌표 클릭은 닫기 버튼을 누를 수 있으므로 뷰어 루트의 좌상단 빈 영역을 클릭한다)
+    const root = page.locator('[data-testid="pptx-viewer-root"]')
+    if (await root.count()) {
+      await root.click({ position: { x: 4, y: 4 } })
+    } else {
+      const vp = page.viewportSize()
+      await page.mouse.click(2, Math.max(2, (vp?.height ?? 600) - 2))
+    }
+  } else {
+    await page.keyboard.press('Escape')
+  }
   await page.waitForTimeout(800)
 }
