@@ -52,7 +52,7 @@ index 258156da202883c57418626396f0218efa46152c..64f11788c4872891dc3242ea41d6a55c
      const { config, doc } = latest.current;
      if (config) {
 diff --git a/dist/chunk-DD3ARHEW.mjs b/dist/chunk-DD3ARHEW.mjs
-index c12482e205e1d4c860869c25a3760cf7733d01c7..859b221db6d9e1855ebf8cff32d980ab9d126dc1 100644
+index c12482e205e1d4c860869c25a3760cf7733d01c7..4bd752a92fa4ca1915f24ca7a6c989bbaf22228a 100644
 --- a/dist/chunk-DD3ARHEW.mjs
 +++ b/dist/chunk-DD3ARHEW.mjs
 @@ -7,6 +7,8 @@ import { translationsEn } from 'ooxml-ui/pptx/i18n';
@@ -100,23 +100,25 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..859b221db6d9e1855ebf8cff32d980ab
      let superseded = null;
 +    // M23: superseded 는 **직전 동기화 상태의 serialized** 로 비교한다.
 +    // 예전 코드처럼 `slides === superseded` (참조 비교) 로 갔으면, 로컬 커밋이
-    +    // slides 배열을 in-place 로 바꾸는 경우(참조가 그대로) 가드에 걸려
++    // slides 배열을 in-place 로 바꾸는 경우(참조가 그대로) 가드��� 걸려
 +    // reconcile 이 통째로 건너뛰어진다 → 커밋이 Y.Doc 에 반영되지 않음(유실).
 +    // 실측: pub.call{len:10860, sameAsLastSynced:false} → pub.skip{reason:"superseded"}.
 +    let supersededSerialized = "";
      const initialLoad = latest.current.loadVersion ?? 0;
      const gate = createSyncGate(() => {
      });
-@@ -11478,6 +11506,8 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
+@@ -11478,6 +11506,10 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
        revision++;
        lastSynced = JSON.stringify(slides);
        superseded = latest.current.slides;
-+      supersededSerialized = lastSynced;
++      // M24: **옛 로컬 상태**(setSlides 전 값)의 serialized 를 기록한다.
++      // 새로 받은 상태를 기록하면 "원격 편집이 되돌려지는 것"을 막지 못한다.
++      supersededSerialized = JSON.stringify(latest.current.slides);
 +      console.debug('[collab-tl]', JSON.stringify({ evt: 'pub.superseded.set', source: 'adopt', len: supersededSerialized.length }));
        latest.current.setSlides(slides);
        scheduleWriteBack();
      };
-@@ -11504,10 +11534,16 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
+@@ -11504,12 +11536,20 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
          const { loadVersion = 0 } = latest.current;
          const serialized = JSON.stringify(slides);
          const token = revision;
@@ -133,8 +135,12 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..859b221db6d9e1855ebf8cff32d980ab
 +          console.debug('[collab-tl]', JSON.stringify({ evt: 'pub.reconcile', len: serialized.length }));
            reconcileSlidesInYDoc(slides, doc, factories);
            lastSynced = serialized;
++          // M24: 반영에 성공했으면 stale 표식을 해제한다(영구히 남으면 나중에 같은 상태가 막힌다).
++          supersededSerialized = "";
            scheduleWriteBack();
-@@ -11538,6 +11574,8 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
+         });
+       };
+@@ -11538,6 +11578,8 @@ function useExternalDocumentSync(input, scheduleWriteBack) {
        }
      })();
      return () => {
@@ -143,7 +149,16 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..859b221db6d9e1855ebf8cff32d980ab
        active = false;
        revision++;
        controller.current?.();
-@@ -11588,6 +11626,8 @@ function useYjsDocumentSync(input) {
+@@ -11578,6 +11620,8 @@ function useYjsDocumentSync(input) {
+   useExternalDocumentSync(input, scheduleWriteBack);
+   const lastSynced = useRef("");
+   const superseded = useRef(null);
++  // M24: 옛 로컬 상태의 serialized (stale 차단용). setSlides **전** 값.
++  const supersededSerialized = useRef("");
+   const latestSlides = useRef(slides);
+   latestSlides.current = slides;
+   const lastLoad = useRef(loadVersion);
+@@ -11588,6 +11632,8 @@ function useYjsDocumentSync(input) {
      }
      lastSynced.current = "";
      superseded.current = null;
@@ -152,7 +167,7 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..859b221db6d9e1855ebf8cff32d980ab
      revision.current++;
    }, [doc, external]);
    useEffect(() => {
-@@ -11605,6 +11645,8 @@ function useYjsDocumentSync(input) {
+@@ -11605,6 +11651,8 @@ function useYjsDocumentSync(input) {
        }
        lastSynced.current = serialized;
        superseded.current = latestSlides.current;
@@ -161,7 +176,7 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..859b221db6d9e1855ebf8cff32d980ab
        revision.current++;
        setSlides(remote);
      };
-@@ -11636,6 +11678,8 @@ function useYjsDocumentSync(input) {
+@@ -11636,6 +11684,8 @@ function useYjsDocumentSync(input) {
      if (shouldRoomSlidesReplaceLoad(loadOrigin, room.length)) {
        lastSynced.current = JSON.stringify(room);
        superseded.current = latestSlides.current;

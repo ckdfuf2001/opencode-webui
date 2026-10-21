@@ -291,6 +291,26 @@
 - D43 lib의 createDepartureChannel(BroadcastChannel)은 pagehide 시 로컬 awareness만 정리하고
   transport가 아니므로 허용(D01 원칙 위반 아님).
 
+## 메모리 규칙 보정 (M24, 2026-10-20) — D38 관련 정정
+
+- **superseded 판정 정정**: lib 의 publish 가드 `slides === superseded` 는 **참조 비교**라
+  로컬 커밋이 slides 배열을 in-place 로 바꾸면(참조가 그대로) 커밋 전체가 reconcile 에서 건너뛰어진다.
+  ⇒ **직전 상태의 serialized 비교**로 바꾼다(옛 로컬 상태 기준). 대입은 setSlides **전** 값,
+  해제는 reconcile 성공 시와 reset 시.
+  (계측 근거: `pub.call{len:10860, sameAsLastSynced:false}` → `pub.skip{superseded}` → 수정 후 `pub.reconcile`.)
+- **flush 규칙 정정(M24, 실측 기준)**: 예약 있음 → **타이머를 앞당겨 즉시 실행**(예약=reconcile 반영 증거).
+  예약 없음 → 1틱 대기 후 예약이 생겼으면 즉시 실행, 아니면 `nothing_pending`. allow=false(4001) → 예약 취소.
+- **금지 추가**: **flush 가 lib 의 디바운스 예약을 clearTimeout 으로 지우는 것**(예약이 사라져 저장이
+  아예 일어나지 않음 — 반드시 유지하거나 즉시 실행한다).
+- **M22 반례 철회**: "예약 있음 → 즉시 실행은 E2/E2b 실패로 기각"은 **철회**한다.
+  그때 실패는 clearTimeout 회귀(flush 가 예약을 지움) 때문이었고, 수정 후
+  E2/E2b/E2f/E2g 8건이 모두 통과했다.
+- **패치 관리**: `patches/*.patch` 는 **직접 편집 금지**(hunk 헤더 불일치로 설치가 실패한다).
+  `pnpm patch <pkg>` → 파일 수정 → `pnpm patch-commit` 으로만 재생성한다.
+  (M24: 손으로 편집한 패치가 `hunk header integrity check failed` 로 설치를 막은 것을 확인.)
+- **테스트 결과(2026-10-20)**: E2 · E2b · E2f · E2g × chromium × repeat-each=2 = **8건 통과**.
+  flush 로그: `wb.flush.start{hadSchedule:true}` → `wb.flush.run{bytes:8144/8145}` (직접 저장).
+
 ## 미결정 (사용자 판단 대기)
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
 - Q02 v0.13에서 이미지를 part 참조로 전환할지(Y.Doc 크기·전송량 문제, W3 측정 선행).
