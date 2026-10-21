@@ -175,6 +175,10 @@ test.describe('pptx collab (desktop)', () => {
     // 2차 편집 → 즉시 닫기(지연 0ms)
     await gotoSlide(t.pageA, 3)
     await editShapeText(t.pageA, shapesA, 'Body 3', 'Late edit', { commit: 'outside' })
+    // M37 (가): 편집 화면이 fixed inset-0 z-[100] 로 전체를 덮고 있어 "닫기" 버튼이
+    // 클릭 불가다(헤더가 가로챈다). 앱은 정상. 사용자가 실제로 가장 빨리 닫는 경로는
+    // "Done/Escape(=endEditing, flush await) → 곧바로 닫기" 다.
+    await t.pageA.keyboard.press('Escape')
     await closePreview(t.pageA)
     // 8초 안에 디스크 반영
     let deck: Awaited<ReturnType<typeof waitForDisk>>
