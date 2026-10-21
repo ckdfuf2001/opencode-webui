@@ -869,10 +869,6 @@ export async function applySave(
     }
     room.saving = true
     const newHash = hashBytes(bytes)
-    // M24 2절 계측: 저장 주체 특정용 로그(시각/conn clientId/바이트/해시).
-    logger.warn(
-      `applySave ok b=${bytes.length} cid=${opts?.clientId ?? '?'} h=${newHash.slice(0, 8)}`,
-    )
     // M10/D37: rename **전에** 해시를 대기 목록에 넣는다.
     // watcher 가 rename 이벤트를 받아도 이 해시로 자기 저장임을 확인할 수 있다.
     room.pendingHashes.push(newHash)
@@ -883,6 +879,12 @@ export async function applySave(
       room.saving = false
     }
     room.lastHash = newHash
+    // M25 5번: 계측은 **저장 성공 후**에 찍는다(실패해도 "ok" 가 남으면 안 된다).
+    // 레벨: warn — 이 로그는 E2E 저장경로 표를 만드는 계측용이며, 테스트 환경의 기본
+    // 로그 레벨(warn 이상)에서만 보인다(info 로 낮추면 Playwright webServer 출력에 안 나온다).
+    logger.warn(
+      `[applySave] room=${roomId.slice(0, 8)} b=${bytes.length} cid=${opts?.clientId ?? '?'} h=${newHash.slice(0, 8)} at=${Date.now()}`,
+    )
     // M12 계측: 저장 실물 기록(바이트 수/해시/시각).
     logger.info(
       `Collab room ${roomId}: applySave ok bytes=${bytes.length} newHash=${newHash.slice(0, 12)} at=${Date.now()}`,

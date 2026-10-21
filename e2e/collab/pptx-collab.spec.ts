@@ -139,6 +139,32 @@ test.describe('pptx collab (desktop)', () => {
     void testName
   })
 
+  test('E2r: remote edit is not reverted by a local edit right after adopt', async ({ browser }, testInfo) => {
+    // M25: superseded 가드를 "직전 상태" 기준으로 바꾼 뒤 생길 수 있는 회귀 —
+    // 원격 편집(B)이 adopt 된 직후 로컬 편집(A)이 원격 편집을 되돌리면 데이터 유실이다.
+    const f = await freshFile('e2r', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    const shapesB = new ShapeLocator(t.pageB)
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'edit')
+    await gotoSlide(t.pageA, 2)
+    await gotoSlide(t.pageB, 2)
+    // B가 슬라이드 2의 Body 2 를 수정한다(원격 편집).
+    await editShapeText(t.pageB, shapesB, 'Body 2', 'From Grace')
+    // A가 adopt 직후 **다른 슬라이드**(3)의 Body 3 를 편집한다(로컬 편집).
+    await gotoSlide(t.pageA, 3)
+    await editShapeText(t.pageA, shapesA, 'Body 3', 'From Ada')
+    await t.pageA.waitForTimeout(3000)
+    // B의 화면에 'From Grace' 가 유지되어야 한다(되돌림 금지).
+    await expect(t.pageB.locator('[data-testid="pptx-viewer-root"]')).toContainText('From Grace', { timeout: 5000 })
+    // 디스크에도 둘 다 반영되어야 한다.
+    const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'From Grace', 8000)
+    expect(deck.textOf('Body 3')).toBe('From Ada')
+    void testInfo
+    await closeTwo(t)
+  })
+
   test('E2: live text reflection + disk', async ({ browser }, testInfo) => {
     // M24 2절: 저장 주체(flush/debounce/앱) 표를 만들기 위해 타임라인을 수집한다.
     const tl: string[] = []
@@ -159,6 +185,11 @@ test.describe('pptx collab (desktop)', () => {
     expect(ms).toBeLessThan(3000)
     const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'Hello from Ada', 8000)
     expect(deck.slideCount).toBe(3)
+    // M25 2절: 저장 직후 디스크 내용을 읽어 표에 쓸 값을 남긴다.
+    const after = await readDeck(f.abs)
+    console.log(
+      `=== E2 saved-content === body2="${after.textOf('Body 2') ?? ''}" body3="${after.textOf('Body 3') ?? ''}" at=${Date.now()}`,
+    )
     console.log('=== E2 timeline ===\n' + tl.join('\n'))
     await closeTwo(t)
   })
