@@ -100,7 +100,7 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..859b221db6d9e1855ebf8cff32d980ab
      let superseded = null;
 +    // M23: superseded 는 **직전 동기화 상태의 serialized** 로 비교한다.
 +    // 예전 코드처럼 `slides === superseded` (참조 비교) 로 갔으면, 로컬 커밋이
-+    // slides 배열을 in-place 로 바꾸는 경우(참조가 그대로) 가드��� 걸려
+    +    // slides 배열을 in-place 로 바꾸는 경우(참조가 그대로) 가드에 걸려
 +    // reconcile 이 통째로 건너뛰어진다 → 커밋이 Y.Doc 에 반영되지 않음(유실).
 +    // 실측: pub.call{len:10860, sameAsLastSynced:false} → pub.skip{reason:"superseded"}.
 +    let supersededSerialized = "";
