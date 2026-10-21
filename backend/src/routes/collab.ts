@@ -105,7 +105,7 @@ app.post('/save', async (c) => {
     }
     const check = checkSave(roomId, clientId, bytes.length)
     if (!check.ok) return c.json({ error: check.error, code: check.code }, check.status || 409)
-    const applied = await applySave(roomId, bytes, { allowImageLoss: forceImageLoss === '1' })
+    const applied = await applySave(roomId, bytes, { allowImageLoss: forceImageLoss === '1', clientId })
     if ('conflict' in applied) {
       return c.json(
         {

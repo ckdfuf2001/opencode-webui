@@ -239,7 +239,26 @@ __openEventSources()  // 닫히지 않은 EventSource 수
 > M12/M14 실험 결과(공동편집 데이터 유실 건)는 **docs/handoff.md** 의 "M12/M14 진행 위치" 절로 옮겼다.
 > 여기서는 링크만 둔다: `docs/handoff.md` → "M14 실험 결과(데이터 유실)".
 
-### 14-0. lib 의 모델→Y.Doc 반영 순서와 publish 가드 (M21/M22, `chunk-DD3ARHEW.mjs`)
+### 14-1. M24 저장 경로 표 (2절 요청분)
+
+E2 1회 실행(2026-10-21, chromium, 47MB 덱 2인, prod 빌드). 백엔드 `applySave ok b=<바이트> cid=<conn clientId> h=<해시>`
+계측 + 앱 타임라인(`[collab-tl]`) 동시 수집.
+
+| 시각(상대) | 이벤트 | 판정 |
+|---|---|---|
+| t0 | `applySave ok` #1 | 시드 저장(편집 전) |
+| t0+ | `pub.call{len:10682}` → `pub.reconcile` | 편집 커밋이 Y.Doc 에 반영 ✓(superseded 가드 수정 후) |
+| t0+ | `pub.call{len:10700}` → `pub.skip{reason:"superseded"}` | 원격 반영 후 옛 상태 재게시 차단(의도된 stale 방지) |
+| t0+ | `wb.flush.start{hadSchedule:true}` → `wb.flush.run{bytes:8144/8145}` | **flush 경로로 커밋 내용이 저장됨** |
+| t0+ | `sync.cleanup` | 언마운트(리마운트) |
+| t0+ | `applySave ok` #2/#3 | 저장 반영(flush 경로와 동일 바이트) |
+
+⇒ **저장 주체는 1개**로 정리되었다: 커밋이 Y.Doc 에 반영된 뒤 **flush 가 즉시 실행**해 저장한다
+   (lib debounce 2.5초 경로가 아니라). `wb.flush.skip{nothing_pending}` 은 예약이 없을 때의 정상 종료.
+⇒ 남은 위험(0절-4-(가)): 언마운트 뒤 세션이 먼저 destroy 되면 flush 가 `not_ready`/`not_current` 로
+   스킵될 수 있다 → registry destroy 3초 유예(2-4)와 `onWriteBackError` 알림(2-3)이 필요하다.
+
+
 
 ```
 publish.current = (nextSlides) => {

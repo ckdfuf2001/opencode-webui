@@ -140,8 +140,12 @@ test.describe('pptx collab (desktop)', () => {
   })
 
   test('E2: live text reflection + disk', async ({ browser }, testInfo) => {
+    // M24 2절: 저장 주체(flush/debounce/앱) 표를 만들기 위해 타임라인을 수집한다.
+    const tl: string[] = []
     const f = await freshFile('e2', 0)
     const t = await twoPages(browser)
+    t.pageA.on('console', (m) => { const x = m.text(); if (x.includes('[collab-tl]')) tl.push(x) })
+    t.pageB.on('console', (m) => { const x = m.text(); if (x.includes('[collab-tl]')) tl.push(x) })
     const shapesA = new ShapeLocator(t.pageA)
     await openFile(t.pageA, f.name, 'edit')
     await gotoSlide(t.pageA, 2)
@@ -155,6 +159,7 @@ test.describe('pptx collab (desktop)', () => {
     expect(ms).toBeLessThan(3000)
     const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'Hello from Ada', 8000)
     expect(deck.slideCount).toBe(3)
+    console.log('=== E2 timeline ===\n' + tl.join('\n'))
     await closeTwo(t)
   })
 

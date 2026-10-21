@@ -834,7 +834,7 @@ export function resetRoomFromDisk(
 export async function applySave(
   roomId: string,
   bytes: Uint8Array,
-  opts?: { allowImageLoss?: boolean },
+  opts?: { allowImageLoss?: boolean; clientId?: number },
 ): Promise<
   | { newHash: string }
   | { conflict: true; currentHash: string | null }
@@ -869,6 +869,10 @@ export async function applySave(
     }
     room.saving = true
     const newHash = hashBytes(bytes)
+    // M24 2절 계측: 저장 주체 특정용 로그(시각/conn clientId/바이트/해시).
+    logger.warn(
+      `applySave ok b=${bytes.length} cid=${opts?.clientId ?? '?'} h=${newHash.slice(0, 8)}`,
+    )
     // M10/D37: rename **전에** 해시를 대기 목록에 넣는다.
     // watcher 가 rename 이벤트를 받아도 이 해시로 자기 저장임을 확인할 수 있다.
     room.pendingHashes.push(newHash)
