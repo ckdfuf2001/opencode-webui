@@ -583,23 +583,47 @@ if (!writeBackHaltedRef.current) {
 
   // owner write-back (lib이 변경 debounce 후 호출). 서버 owner일 때만 저장한다.
   // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
-  // M26 3-1 / M27 1-1: 저장 직렬화 모듈(in-flight 1개 + latest-wins, P0-1/P0-3 반영).
+  // M28 1-1′: 세션/owner 확인은 **ref 로 읽는다**(첫 렌더 클로저 고착 방지, P0-3).
+  const isOwnerNowRef = useRef(isOwnerNow)
+  isOwnerNowRef.current = isOwnerNow
+  const tlRef = useRef(tl)
+  tlRef.current = tl
+  const savePathRef = useRef(savePath)
+  savePathRef.current = savePath
+  // M28 1-1′: 저장 직렬화 모듈(in-flight 1개 + latest-wins, P0-1/P0-2/P0-3/P0-4 반영).
   const saveSerializerRef = useRef<SaveSerializer<Uint8Array> | null>(null)
   if (!saveSerializerRef.current) {
     saveSerializerRef.current = createSaveSerializer<Uint8Array>({
       save: async (bytes) => {
-        // persistBytes 는 **boolean 반환형**(throw 하지 않음): true=성공, false=실패,
-        // undefined=저장 대상 없음(empty_bytes 등 정상 skip). 실패만 실패로 본다.
+        // persistBytes 는 **boolean 반환형**(throw 하지 않음).
+        //  M28: skip(빈 바이트/세션 없음) / denied(409) / network(상태 0) 를 구분한다.
+        //  skip 은 재시도 금지(같은 바이트로 다시 보내도 결과가 같다).
+        if (bytes.length === 0) return { skipped: 'empty_bytes' as const }
+        if (!collabRef.current) return { skipped: 'nothing_to_save' as const }
         const r = await persistBytesRef.current(bytes)
-        return r === true
+        if (r === true) return { ok: true as const }
+        const status = lastSaveRef.current?.status
+        if (status === 409) return { ok: false as const, reason: 'denied', retryable: false }
+        if (status === 0) return { ok: false as const, reason: 'network', retryable: true }
+        return { ok: false as const, reason: 'save_failed', retryable: false }
       },
       canSave: () => {
         const c = collabRef.current
-        return !!c && isOwnerNow(c) && c.session.synced
+        return !!c && isOwnerNowRef.current(c) && c.session.synced
       },
-      onEvent: (e) => tl(e.evt, e as unknown as Record<string, unknown>),
+      getSession: () => {
+        const c = collabRef.current as unknown as {
+          epoch?: string
+          session?: { epoch?: string }
+        } | null
+        return { path: savePathRef.current, epoch: c?.epoch ?? c?.session?.epoch }
+      },
+      onEvent: (e) => tlRef.current(e.evt, e as unknown as Record<string, unknown>),
+      retry: { attempts: 2, delayMs: 500 },
     })
   }
+  // M28 P1-6: 언마운트 시 재시도 타이머/잔여 요청 정리(D27/메모리 규칙).
+  useEffect(() => () => saveSerializerRef.current?.dispose(), [])
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
     // M11 계측: write-back 경로 진입/건너뜀 사유.
@@ -646,8 +670,16 @@ if (!writeBackHaltedRef.current) {
     // 진행 중 저장이 있으면 **최신 바이트만** 보관했다가 끝난 뒤 1회 더 저장한다(중간 요청은 합쳐짐).
     // owner/synced 는 **저장 직전에 다시** 확인한다(P0-3: 대기열의 저장이 owner 교대 뒤 나가면
     // 409 를 받고 조용히 유실된다. 새 owner 가 같은 Y.Doc 상태를 저장하므로 유실이 아니다).
-    return saveSerializerRef.current!.request(bytes)
-  }, [persistBytes, isOwnerNow])
+    // M28 P0-2: 요청 시점의 세션(경로/epoch)을 함께 묶어 둔다. 저장 직전에 현재 값과 비교해
+    // 다르면(파일 변경/4001 리셋) 그 바이트는 내보내지 않는다(D41: 세션 교체 시 flush 금지).
+    const c0 = collabRef.current as unknown as {
+      epoch?: string
+      session?: { epoch?: string }
+    } | null
+    return saveSerializerRef.current!.request(bytes, {
+      session: { path: savePath, epoch: c0?.epoch ?? c0?.session?.epoch },
+    })
+  }, [persistBytes, isOwnerNow, savePath])
   // 내 사본 다운로드 (409 터미널 탈출용).
   const offerMineDownload = useCallback(async () => {
     try {
