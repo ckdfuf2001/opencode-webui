@@ -150,11 +150,28 @@ test.describe('pptx collab (desktop)', () => {
       const x = m.text()
       if (x.includes('[collab-tl]')) lines.push(x)
     })
+    // M35 ① 진단: 실패 지점이 1차/2차 어디인지 확정하기 위해 디스크 실제 텍스트를 남긴다.
+    const dumpDisk = async (label: string) => {
+      try {
+        const d = await readDeck(f.abs)
+        console.log(
+          `E2FS-DISK ${label} body2="${d.textOf('Body 2') ?? ''}" body3="${d.textOf('Body 3') ?? ''}"`,
+        )
+      } catch (err) {
+        console.log(`E2FS-DISK ${label} read-failed ${String(err)}`)
+      }
+      console.log('E2FS-TL\n' + lines.join('\n'))
+    }
     await openFile(t.pageA, f.name, 'edit')
     await gotoSlide(t.pageA, 2)
     await editShapeText(t.pageA, shapesA, 'Body 2', 'First edit')
     // 1차 반영 확인
-    await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'First edit', 8000)
+    try {
+      await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'First edit', 8000)
+    } catch (e) {
+      await dumpDisk('1st')
+      throw e
+    }
     // 2차 편집 → 즉시 닫기(지연 0ms)
     await gotoSlide(t.pageA, 3)
     await editShapeText(t.pageA, shapesA, 'Body 3', 'Late edit')
@@ -165,7 +182,7 @@ test.describe('pptx collab (desktop)', () => {
       deck = await waitForDisk(f.abs, (d) => d.textOf('Body 3') === 'Late edit', 8000)
     } catch (e) {
       // M33 ① 판정용 출력: 실패 시 closePreview 이후 타임라인을 그대로 남긴다.
-      console.log('E2FS-TL\n' + lines.join('\n'))
+      await dumpDisk('2nd')
       throw e
     }
     expect(deck.textOf('Body 2')).toBe('First edit')
