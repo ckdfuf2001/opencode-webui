@@ -160,7 +160,14 @@ test.describe('pptx collab (desktop)', () => {
     await editShapeText(t.pageA, shapesA, 'Body 3', 'Late edit')
     await closePreview(t.pageA)
     // 8초 안에 디스크 반영
-    const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 3') === 'Late edit', 8000)
+    let deck: Awaited<ReturnType<typeof waitForDisk>>
+    try {
+      deck = await waitForDisk(f.abs, (d) => d.textOf('Body 3') === 'Late edit', 8000)
+    } catch (e) {
+      // M33 ① 판정용 출력: 실패 시 closePreview 이후 타임라인을 그대로 남긴다.
+      console.log('E2FS-TL\n' + lines.join('\n'))
+      throw e
+    }
     expect(deck.textOf('Body 2')).toBe('First edit')
     // M32 P0-1: 마지막 저장이 A(this client) 의 것인지 확인한다.
     const start = lines.filter((l) => l.includes('"evt":"save.start"')).pop() ?? ''

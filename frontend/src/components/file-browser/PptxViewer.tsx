@@ -635,7 +635,8 @@ if (!writeBackHaltedRef.current) {
       getSession: () => {
         // M29 P0-3: epoch 는 **타입이 있는 필드**(PptxViewer.tsx:261 collab.epoch,
         // ycollab.ts:104 YCollabSessionResult.epoch / :117 YCollabMeta.epoch)에서 읽는다.
-        const c = collabRef.current
+        // M33 A: 언마운트 후 collabRef 가 null 이어도 마지막 세션으로 판정한다.
+        const c = collabRef.current ?? lastCollabRef.current
         return { path: savePathRef.current, epoch: c?.epoch, roomId: c?.roomId }
       },
       onEvent: (e) =>
@@ -681,7 +682,12 @@ if (!writeBackHaltedRef.current) {
     // 이때는 meta 가 갱신되지 않아 isOwnerNow 가 false 다 → 스냅샷으로 저장 시도를 허용한다.
     // 마운트 중 owner 상실은 위에서 스냅샷을 비우므로 재시도가 일어나지 않는다.
     // 최종 판단은 서버 checkSave(409)에 맡긴다.
-    const ownerBySnapshot = lastOwnerRef.current === c
+    // M33 B: 객체 동일성 대신 키(roomId/epoch)로 비교한다.
+    // setCollab({...}) 로 meta/role 이 갱신되면 객체가 바뀌어도 "같은 소유자 세션"으로 남는다.
+    const ownerBySnapshot =
+      lastOwnerRef.current !== null &&
+      lastOwnerRef.current.roomId === c.roomId &&
+      lastOwnerRef.current.epoch === c.epoch
     if (!isOwnerNow(c) && !ownerBySnapshot) {
       tl('writeback.skip', { reason: 'not_owner' })
       return
@@ -720,7 +726,9 @@ if (!writeBackHaltedRef.current) {
     // 409 를 받고 조용히 유실된다. 새 owner 가 같은 Y.Doc 상태를 저장하므로 유실이 아니다).
     // M28 P0-2: 요청 시점의 세션(경로/epoch)을 함께 묶어 둔다. 저장 직전에 현재 값과 비교해
     // 다르면(파일 변경/4001 리셋) 그 바이트는 내보내지 않는다(D41: 세션 교체 시 flush 금지).
-    const c0 = collabRef.current
+    // M33 A: 언마운트 후에도 collabRef 가 null 이어도 마지막 세션으로 epoch/roomId 를 붙인다.
+    // (epoch 이 없으면 serializer 의 fail-closed 규칙에 걸려 저장이 조용히 버려진다.)
+    const c0 = collabRef.current ?? lastCollabRef.current
     return saveSerializerRef.current!.request(bytes, {
       session: { path: savePath, epoch: c0?.epoch, roomId: c0?.roomId },
     })
