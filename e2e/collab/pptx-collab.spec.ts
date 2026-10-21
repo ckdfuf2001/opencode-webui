@@ -214,8 +214,18 @@ test.describe('pptx collab (desktop)', () => {
   test('E2f: close preview right after edit -> edit reaches disk', async ({ browser }, testInfo) => {
     // M22: owner 가 편집 직후 미리보기를 닫으면(언마운트) 커밋이 Y.Doc 에 반영되기 전에
     // 뷰어가 죽어 편집이 디스크에 안 갈 수 있다(조용한 유실). 닫은 뒤 8초 안에 반영돼야 한다.
-    const f = await freshFile('e2f', 0)
-    const t = await twoPages(browser)
+const f = await freshFile('e2f', 0)
+const t = await twoPages(browser)
+    // M30 P0-1 증명: 언마운트 flush → writeback.enter → save.start → save.done 의 순서와
+    // 서버 [applySave] b= 가 같은 바이트인지 확인한다.
+    t.pageA.on('console', (m) => {
+      const x = m.text()
+      if (x.includes('[collab-tl]')) console.log('E2F-TL ' + x)
+    })
+    t.pageB.on('console', (m) => {
+      const x = m.text()
+      if (x.includes('[collab-tl]')) console.log('E2F-TL ' + x)
+    })
     const shapesA = new ShapeLocator(t.pageA)
     await openFile(t.pageA, f.name, 'edit')
     await gotoSlide(t.pageA, 2)
