@@ -582,6 +582,10 @@ if (!writeBackHaltedRef.current) {
 
   // owner write-back (lib이 변경 debounce 후 호출). 서버 owner일 때만 저장한다.
   // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
+  // M26 3-1: 저장 직렬화 상태(in-flight 1개 + latest-wins).
+  const saveInFlightRef = useRef<Promise<void> | null>(null)
+  const pendingSaveRef = useRef<Uint8Array | null>(null)
+  const saveSeqRef = useRef(0)
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     const c = collabRef.current
     // M11 계측: write-back 경로 진입/건너뜀 사유.
@@ -621,7 +625,38 @@ if (!writeBackHaltedRef.current) {
         tl('writeback.stalled', { reason: 'no_save_request' })
       }, 3000)
     }
-    await persistBytes(bytes)
+    // M26 3-1: 저장은 **in-flight 1개 + latest-wins**.
+    // lib 이 flush(즉시)와 debounce(2.5초) 두 경로로 저장 요청을 보낼 수 있고, 각각 await 로
+    // 진행된다. 동시에 나가면 "먼저 시작한 저장이 나중에 끝나" 디스크 최종본이 옛 내용이 되는
+    // 역전이 생긴다(큰 덱은 serialize 에 수백 ms~수 초 걸린다).
+    // 진행 중 저장이 있으면 **최신 바이트만** 보관했다가 끝난 뒤 1회 더 저장한다(중간 요청은 합쳐짐).
+    const seq = ++saveSeqRef.current
+    pendingSaveRef.current = bytes
+    if (saveInFlightRef.current) {
+      tl('writeback.queued', { seq, bytes: bytes.length })
+      return saveInFlightRef.current
+    }
+    const chain = (async () => {
+      for (;;) {
+        const b = pendingSaveRef.current
+        if (!b) break
+        pendingSaveRef.current = null
+        const s = ++saveSeqRef.current
+        tl('save.start', { seq: s, bytes: b.length })
+        try {
+          await persistBytes(b)
+          tl('save.done', { seq: s, bytes: b.length })
+        } catch (e) {
+          // M26 3-3: 실패는 조용히 삼키지 않는다(무음 유실 금지).
+          tl('save.error', { seq: s, bytes: b.length, reason: String((e as Error)?.message ?? e) })
+          throw e
+        }
+      }
+    })().finally(() => {
+      saveInFlightRef.current = null
+    })
+    saveInFlightRef.current = chain
+    return chain
   }, [persistBytes, isOwnerNow])
   // 내 사본 다운로드 (409 터미널 탈출용).
   const offerMineDownload = useCallback(async () => {
