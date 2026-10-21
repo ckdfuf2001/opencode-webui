@@ -296,6 +296,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   const writebackStalledRef = useRef(false)
   const collabRef = useRef<typeof collab>(null)
   collabRef.current = collab
+  // M31 1-a: 언마운트 때 setCollab(null) 로 화면 상태만 비워도, write-back 판정에 쓰는
+  // 세션 정보(세션/roomId/epoch)는 남겨 둔다. 유예(3초) 안에 도착하는 flush 를 받쳐야 한다.
+  const lastCollabRef = useRef<typeof collab>(null)
+  if (collab) lastCollabRef.current = collab
+  // M31 1-b: 마지막으로 **소유자였던** 세션. 언마운트(유예) 중에는 meta 갱신이 끊겨
+  // isOwnerNow 가 false 가 될 수 있다 → 최종 판단은 서버 checkSave(409)에 맡긴다.
+  const lastOwnerRef = useRef<typeof collab>(null)
   const editingRef = useRef(editing)
   editingRef.current = editing
   // 세션 awareness mode의 진실 통로. role은 reconcile이 바꿀 수 있어서
@@ -629,7 +636,9 @@ if (!writeBackHaltedRef.current) {
   // M28 P1-6: 언마운트 시 재시도 타이머/잔여 요청 정리(D27/메모리 규칙).
   useEffect(() => () => saveSerializerRef.current?.dispose(), [])
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
-    const c = collabRef.current
+    // M31 1-a: 언마운트 후에는 화면 상태(collab)가 null 이지만 세션은 유예 동안 살아 있다.
+    // collabRef 만 보면 hasSession=false 가 되어 flush 가 버려진다 → 마지막 세션을 fallback 으로 쓴다.
+    const c = collabRef.current ?? lastCollabRef.current
     // M11 계측: write-back 경로 진입/건너뜀 사유.
     tl('writeback.enter', {
       hasSession: !!c,
@@ -638,8 +647,15 @@ if (!writeBackHaltedRef.current) {
       bytes: bytes.length,
       halted: writeBackHaltedRef.current,
     })
-    if (!c || !isOwnerNow(c)) {
-      tl('writeback.skip', { reason: c ? 'not_owner' : 'no_session' })
+    if (!c) {
+      tl('writeback.skip', { reason: 'no_session' })
+      return
+    }
+    // M31 1-b: owner 여부는 **요청 시점 스냅샷**으로 고정한다(루프에서 "세션이 바뀌었는가"만 본다).
+    // 서버 checkSave 가 최종 판정(409 not_owner)하므로, 클라이언트 판정이 false 여도 저장은 시도한다.
+    if (isOwnerNow(c)) lastOwnerRef.current = c
+    if (!isOwnerNow(c) && !lastOwnerRef.current) {
+      tl('writeback.skip', { reason: 'not_owner' })
       return
     }
     if (!c.session.synced) {

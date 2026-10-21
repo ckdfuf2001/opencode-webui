@@ -35,10 +35,16 @@ export interface CollabSessionLease {
   release: () => void
 }
 
+const graceState = new WeakMap<
+  RegistryEntry,
+  { timer: ReturnType<typeof setTimeout> | null; idle: (() => Promise<boolean>) | null }
+>()
+
 export function acquireCollabSession(
   path: string,
   make: () => YCollabSession,
   onCreate: (session: YCollabSession) => void,
+  opts?: { idle?: () => Promise<boolean>; graceMs?: number },
 ): CollabSessionLease {
   const existing = registry.get(path)
   const entry = existing ?? (() => {
@@ -48,6 +54,13 @@ export function acquireCollabSession(
     onCreate(session)
     return e
   })()
+  // M31 1-a: 유예(grace) 중에 같은 path 로 다시 acquire 하면 타이머를 취소하고 세션을 재사용한다.
+  const gs = graceState.get(entry)
+  if (gs?.timer) {
+    clearTimeout(gs.timer)
+    gs.timer = null
+    tl('session.grace_cancel', { path, clientId: entry.session.clientId })
+  }
   entry.refs += 1
   const session = entry.session
   const reused = Boolean(existing)
@@ -79,11 +92,34 @@ export function acquireCollabSession(
         return
       }
       entry.refs = 0
-      registry.delete(path)
-      entry.dead = true
-      entry.notifyReset.clear()
-      tl('session.destroy', { path, reason: 'release', clientId: session.clientId })
-      session.destroy()
+      // M31 1-a: 즉시 destroy 하지 않는다.
+      // 언마운트 뒤 도착하는 lib flush(deadline 2초)를 받쳐야 하므로 유예(기본 3초)를 둔다.
+      // 유예가 lib flush 상한(2초)보다 길어야 "아직 오지 않은 flush" 를 받을 수 있다(D45).
+      // 같은 path/epoch 재acquire 시 위에서 타이머가 취소된다.
+      // 4001 리셋은 dropCollabSession 이며 **유예 없이 즉시** destroy 한다(D41).
+      const graceMs = opts?.graceMs ?? 3000
+      const state = graceState.get(entry) ?? { timer: null, idle: opts?.idle ?? null }
+      if (opts?.idle) state.idle = opts.idle
+      graceState.set(entry, state)
+      if (state.timer) clearTimeout(state.timer)
+      state.timer = setTimeout(() => {
+        state.timer = null
+        void (async () => {
+          // 유예 만료: 저장이 유휴가 될 때까지 기다린 뒤 파괴한다(최대 3초).
+          for (let i = 0; i < 30; i++) {
+            const busy = await state.idle?.()
+            if (busy !== true) break
+            await new Promise((r) => setTimeout(r, 100))
+          }
+          if (registry.get(path) !== entry) return
+          if (entry.refs > 0) return
+          registry.delete(path)
+          entry.dead = true
+          entry.notifyReset.clear()
+          tl('session.destroy', { path, reason: 'grace_expired', clientId: session.clientId })
+          session.destroy()
+        })()
+      }, graceMs)
     },
   }
 }

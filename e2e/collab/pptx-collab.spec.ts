@@ -218,7 +218,7 @@ const f = await freshFile('e2f', 0)
 const t = await twoPages(browser)
     // M30 P0-1 증명: 언마운트 flush → writeback.enter → save.start → save.done 의 순서와
     // 서버 [applySave] b= 가 같은 바이트인지 확인한다.
-    t.pageA.on('console', (m) => {
+      t.pageA.on('console', (m) => {
       const x = m.text()
       if (x.includes('[collab-tl]')) console.log('E2F-TL ' + x)
     })
