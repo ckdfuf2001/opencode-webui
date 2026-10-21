@@ -9,7 +9,7 @@ patchedDependencies:
     hash: 34radqt73gqaqek7xotr2y2erm
     path: patches/ooxml-ui@1.8.0.patch
   pptx-react-viewer:
-    hash: zekfpisj3wspyhl42o5bcc24xi
+    hash: dx6swsg2kiehyglpcsst5aa364
     path: patches/pptx-react-viewer.patch
 
 importers:
@@ -185,7 +185,7 @@ importers:
         version: 6.2.108
       pptx-react-viewer:
         specifier: 4.33.0
-        version: 4.33.0(patch_hash=zekfpisj3wspyhl42o5bcc24xi)(fast-xml-parser@5.11.2)(framer-motion@14.1.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(i18next@26.4.3(typescript@5.9.3))(jspdf@4.2.1)(jszip@3.10.1)(lucide-react@0.546.0(react@19.2.0))(react-dom@19.2.0(react@19.2.0))(react-i18next@17.0.16(i18next@26.4.3(typescript@5.9.3))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3))(react-icons@5.7.0(react@19.2.0))(react@19.2.0)(yjs@13.6.33)
+        version: 4.33.0(patch_hash=dx6swsg2kiehyglpcsst5aa364)(fast-xml-parser@5.11.2)(framer-motion@14.1.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(i18next@26.4.3(typescript@5.9.3))(jspdf@4.2.1)(jszip@3.10.1)(lucide-react@0.546.0(react@19.2.0))(react-dom@19.2.0(react@19.2.0))(react-i18next@17.0.16(i18next@26.4.3(typescript@5.9.3))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3))(react-icons@5.7.0(react@19.2.0))(react@19.2.0)(yjs@13.6.33)
       react:
         specifier: ^19.1.1
         version: 19.2.0
@@ -6091,7 +6091,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  pptx-react-viewer@4.33.0(patch_hash=zekfpisj3wspyhl42o5bcc24xi)(fast-xml-parser@5.11.2)(framer-motion@14.1.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(i18next@26.4.3(typescript@5.9.3))(jspdf@4.2.1)(jszip@3.10.1)(lucide-react@0.546.0(react@19.2.0))(react-dom@19.2.0(react@19.2.0))(react-i18next@17.0.16(i18next@26.4.3(typescript@5.9.3))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3))(react-icons@5.7.0(react@19.2.0))(react@19.2.0)(yjs@13.6.33):
+  pptx-react-viewer@4.33.0(patch_hash=dx6swsg2kiehyglpcsst5aa364)(fast-xml-parser@5.11.2)(framer-motion@14.1.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(i18next@26.4.3(typescript@5.9.3))(jspdf@4.2.1)(jszip@3.10.1)(lucide-react@0.546.0(react@19.2.0))(react-dom@19.2.0(react@19.2.0))(react-i18next@17.0.16(i18next@26.4.3(typescript@5.9.3))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3))(react-icons@5.7.0(react@19.2.0))(react@19.2.0)(yjs@13.6.33):
     dependencies:
       clsx: 2.1.1
       dompurify: 3.4.16

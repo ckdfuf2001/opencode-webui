@@ -52,7 +52,7 @@ index 258156da202883c57418626396f0218efa46152c..64f11788c4872891dc3242ea41d6a55c
      const { config, doc } = latest.current;
      if (config) {
 diff --git a/dist/chunk-DD3ARHEW.mjs b/dist/chunk-DD3ARHEW.mjs
-index c12482e205e1d4c860869c25a3760cf7733d01c7..4bd752a92fa4ca1915f24ca7a6c989bbaf22228a 100644
+index c12482e205e1d4c860869c25a3760cf7733d01c7..13cb41959ae6692c5a7ebdd7a8d351c2ea0ed5f8 100644
 --- a/dist/chunk-DD3ARHEW.mjs
 +++ b/dist/chunk-DD3ARHEW.mjs
 @@ -7,6 +7,8 @@ import { translationsEn } from 'ooxml-ui/pptx/i18n';
@@ -100,7 +100,7 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..4bd752a92fa4ca1915f24ca7a6c989bb
      let superseded = null;
 +    // M23: superseded 는 **직전 동기화 상태의 serialized** 로 비교한다.
 +    // 예전 코드처럼 `slides === superseded` (참조 비교) 로 갔으면, 로컬 커밋이
-+    // slides 배열을 in-place 로 바꾸는 경우(참조가 그대로) 가드��� 걸려
++    // slides 배열을 in-place 로 바꾸는 경우(참조가 그대로) 가드에 걸려
 +    // reconcile 이 통째로 건너뛰어진다 → 커밋이 Y.Doc 에 반영되지 않음(유실).
 +    // 실측: pub.call{len:10860, sameAsLastSynced:false} → pub.skip{reason:"superseded"}.
 +    let supersededSerialized = "";
