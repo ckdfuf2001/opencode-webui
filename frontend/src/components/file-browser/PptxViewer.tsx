@@ -303,6 +303,15 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail }
   // M31 1-b: 마지막으로 **소유자였던** 세션. 언마운트(유예) 중에는 meta 갱신이 끊겨
   // isOwnerNow 가 false 가 될 수 있다 → 최종 판단은 서버 checkSave(409)에 맡긴다.
   const lastOwnerRef = useRef<typeof collab>(null)
+  // M32 P0-2: 언마운트 중에만 스냅샷(owner/세션)을 신뢰한다. 마운트된 채 owner 를 잃으면
+  // 저장 시도 자체를 하지 않는다(409 반복 = 배너 반복 방지).
+  const unmountingRef = useRef(false)
+  // M32 P0-2: 파일이 바뀌면 옛 세션 스냅샷을 버린다(옛 파일 바이트가 새 경로로 나가지 않게).
+  useEffect(() => {
+    lastCollabRef.current = null
+    lastOwnerRef.current = null
+    unmountingRef.current = false
+  }, [savePath])
   const editingRef = useRef(editing)
   editingRef.current = editing
   // 세션 awareness mode의 진실 통로. role은 reconcile이 바꿀 수 있어서
@@ -629,12 +638,24 @@ if (!writeBackHaltedRef.current) {
         const c = collabRef.current
         return { path: savePathRef.current, epoch: c?.epoch, roomId: c?.roomId }
       },
-      onEvent: (e) => tlRef.current(e.evt, e as unknown as Record<string, unknown>),
+      onEvent: (e) =>
+        tlRef.current(e.evt, {
+          ...(e as unknown as Record<string, unknown>),
+          // M32 P0-1: 어느 클라이언트가 저장했는지 추적(서버 로그의 cid 와 대조).
+          cid: collabRef.current?.session?.clientId ?? lastCollabRef.current?.session?.clientId,
+        }),
       retry: { attempts: 2, delayMs: 500 },
     })
   }
   // M28 P1-6: 언마운트 시 재시도 타이머/잔여 요청 정리(D27/메모리 규칙).
-  useEffect(() => () => saveSerializerRef.current?.dispose(), [])
+  // M32 P0-2: 언마운트 표시 → 이때만 owner/세션 스냅샷을 신뢰한다.
+  useEffect(
+    () => () => {
+      unmountingRef.current = true
+      saveSerializerRef.current?.dispose()
+    },
+    [],
+  )
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
     // M31 1-a: 언마운트 후에는 화면 상태(collab)가 null 이지만 세션은 유예 동안 살아 있다.
     // collabRef 만 보면 hasSession=false 가 되어 flush 가 버려진다 → 마지막 세션을 fallback 으로 쓴다.
@@ -654,7 +675,14 @@ if (!writeBackHaltedRef.current) {
     // M31 1-b: owner 여부는 **요청 시점 스냅샷**으로 고정한다(루프에서 "세션이 바뀌었는가"만 본다).
     // 서버 checkSave 가 최종 판정(409 not_owner)하므로, 클라이언트 판정이 false 여도 저장은 시도한다.
     if (isOwnerNow(c)) lastOwnerRef.current = c
-    if (!isOwnerNow(c) && !lastOwnerRef.current) {
+    else if (!unmountingRef.current) lastOwnerRef.current = null
+    // M32 P0-2: owner 판정은 **마지막 소유자 세션 스냅샷**으로 고정한다.
+    // 언마운트 flush 는 cleanup 보다 먼저 도착할 수 있어(cleanup 후 ref 로는 판정 불가),
+    // 이때는 meta 가 갱신되지 않아 isOwnerNow 가 false 다 → 스냅샷으로 저장 시도를 허용한다.
+    // 마운트 중 owner 상실은 위에서 스냅샷을 비우므로 재시도가 일어나지 않는다.
+    // 최종 판단은 서버 checkSave(409)에 맡긴다.
+    const ownerBySnapshot = lastOwnerRef.current === c
+    if (!isOwnerNow(c) && !ownerBySnapshot) {
       tl('writeback.skip', { reason: 'not_owner' })
       return
     }

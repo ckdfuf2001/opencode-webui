@@ -139,7 +139,89 @@ test.describe('pptx collab (desktop)', () => {
     void testName
   })
 
-  test('E2r: remote edit is not reverted by a local edit right after adopt', async ({ browser }, testInfo) => {
+  test('E2f-strict: 2차 편집 직후 닫아도 8초 안에 디스크 반영', async ({ browser }) => {
+    // M32: 1차 편집이 디스크에 반영된 걸 확인한 **다음에** 2차 편집을 하고 곧바로 닫는다.
+    // 고정 대기를 쓰지 않는다(미리보기 닫기 → 언마운트 flush 경로 검증).
+    const f = await freshFile('e2fs', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    const lines: string[] = []
+    t.pageA.on('console', (m) => {
+      const x = m.text()
+      if (x.includes('[collab-tl]')) lines.push(x)
+    })
+    await openFile(t.pageA, f.name, 'edit')
+    await gotoSlide(t.pageA, 2)
+    await editShapeText(t.pageA, shapesA, 'Body 2', 'First edit')
+    // 1차 반영 확인
+    await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'First edit', 8000)
+    // 2차 편집 → 즉시 닫기(지연 0ms)
+    await gotoSlide(t.pageA, 3)
+    await editShapeText(t.pageA, shapesA, 'Body 3', 'Late edit')
+    await closePreview(t.pageA)
+    // 8초 안에 디스크 반영
+    const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 3') === 'Late edit', 8000)
+    expect(deck.textOf('Body 2')).toBe('First edit')
+    // M32 P0-1: 마지막 저장이 A(this client) 의 것인지 확인한다.
+    const start = lines.filter((l) => l.includes('"evt":"save.start"')).pop() ?? ''
+    const meta = lines.filter((l) => l.includes('"evt":"meta"')).pop() ?? ''
+    const startCid = /"cid":(\d+)/.exec(start)?.[1]
+    const metaCid = /"clientId":(\d+)/.exec(meta)?.[1]
+    expect(startCid).toBeTruthy()
+    expect(startCid).toBe(metaCid)
+    await closeTwo(t)
+  })
+
+  test('E2r: 원격 편집과 adopt 직후의 로컬 편집이 서로를 되돌리지 않는다', async ({ browser }) => {
+    // M32: 위험한 순간(adopt 직후 수십 ms)을 노린다 → 콘솔 이벤트를 **먼저** 대기한다.
+    const f = await freshFile('e2r', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    const shapesB = new ShapeLocator(t.pageB)
+    await openFile(t.pageA, f.name, 'edit')
+    await openFile(t.pageB, f.name, 'edit')
+    await gotoSlide(t.pageA, 2)
+    await gotoSlide(t.pageB, 2)
+    const adopted = t.pageA.waitForEvent('console', {
+      predicate: (m) => m.text().includes('pub.superseded.set'),
+      timeout: 20000,
+    })
+    // B가 원격 편집 → A가 adopt 수신 즉시 다른 도형 편집
+    await editShapeText(t.pageB, shapesB, 'Body 2', 'From Grace')
+    await adopted
+    await gotoSlide(t.pageA, 3)
+    await editShapeText(t.pageA, shapesA, 'Body 3', 'From Ada')
+    // 디스크에 두 값 모두
+    const deck = await waitForDisk(
+      f.abs,
+      (d) => d.textOf('Body 2') === 'From Grace' && d.textOf('Body 3') === 'From Ada',
+      15000,
+    )
+    expect(deck.textOf('Body 2')).toBe('From Grace')
+    expect(deck.textOf('Body 3')).toBe('From Ada')
+    // B 화면에서 'From Grace' 가 15초 동안 한 번도 사라지지 않아야 한다(고정 대기 없이).
+    let vanished = false
+    const deadline = Date.now() + 15000
+    await expect
+      .poll(
+        async () => {
+          const txt = await t.pageB.locator('[data-testid="pptx-viewer-root"]').innerText()
+          if (!txt.includes('From Grace')) {
+            vanished = true
+            return 'missing'
+          }
+          return Date.now() < deadline ? 'pending' : 'ok'
+        },
+        { timeout: 30000, intervals: [200] },
+      )
+      .toBe('ok')
+    expect(vanished).toBe(false)
+    await closeTwo(t)
+  })
+
+  test.skip('E2r-legacy: superseded 되돌림(구버전 — 고정 대기 사용, M32에서 대체됨)', async ({
+    browser,
+  }) => {
     // M25: superseded 가드를 "직전 상태" 기준으로 바꾼 뒤 생길 수 있는 회귀 —
     // 원격 편집(B)이 adopt 된 직후 로컬 편집(A)이 원격 편집을 되돌리면 데이터 유실이다.
     const f = await freshFile('e2r', 0)
@@ -161,7 +243,6 @@ test.describe('pptx collab (desktop)', () => {
     // 디스크에도 둘 다 반영되어야 한다.
     const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'From Grace', 8000)
     expect(deck.textOf('Body 3')).toBe('From Ada')
-    void testInfo
     await closeTwo(t)
   })
 
