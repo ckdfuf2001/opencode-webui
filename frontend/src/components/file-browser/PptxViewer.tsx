@@ -600,11 +600,16 @@ if (!writeBackHaltedRef.current) {
         //  skip 은 재시도 금지(같은 바이트로 다시 보내도 결과가 같다).
         if (bytes.length === 0) return { skipped: 'empty_bytes' as const }
         if (!collabRef.current) return { skipped: 'nothing_to_save' as const }
+        const beforeAt = lastSaveRef.current?.at
         const r = await persistBytesRef.current(bytes)
         if (r === true) return { ok: true as const }
-        const status = lastSaveRef.current?.status
-        if (status === 409) return { ok: false as const, reason: 'denied', retryable: false }
-        if (status === 0) return { ok: false as const, reason: 'network', retryable: true }
+        // M29 P0-1: 분류는 **이 호출의 응답** 기준이다(직전 저장 상태로 추측하지 않는다).
+        //  응답이 갱신되지 않았으면 persistBytes 안쪽의 skip 이다(정상 종료 → 재시도 없음).
+        const after = lastSaveRef.current
+        if (!after || after.at === beforeAt) return { skipped: 'internal_skip' as const }
+        if (after.status === 409) return { ok: false as const, reason: 'denied', retryable: false }
+        if (after.status === 0) return { ok: false as const, reason: 'network', retryable: true }
+        if (after.status >= 500) return { ok: false as const, reason: 'server', retryable: true }
         return { ok: false as const, reason: 'save_failed', retryable: false }
       },
       canSave: () => {
@@ -612,11 +617,10 @@ if (!writeBackHaltedRef.current) {
         return !!c && isOwnerNowRef.current(c) && c.session.synced
       },
       getSession: () => {
-        const c = collabRef.current as unknown as {
-          epoch?: string
-          session?: { epoch?: string }
-        } | null
-        return { path: savePathRef.current, epoch: c?.epoch ?? c?.session?.epoch }
+        // M29 P0-3: epoch 는 **타입이 있는 필드**(PptxViewer.tsx:261 collab.epoch,
+        // ycollab.ts:104 YCollabSessionResult.epoch / :117 YCollabMeta.epoch)에서 읽는다.
+        const c = collabRef.current
+        return { path: savePathRef.current, epoch: c?.epoch, roomId: c?.roomId }
       },
       onEvent: (e) => tlRef.current(e.evt, e as unknown as Record<string, unknown>),
       retry: { attempts: 2, delayMs: 500 },
@@ -672,12 +676,9 @@ if (!writeBackHaltedRef.current) {
     // 409 를 받고 조용히 유실된다. 새 owner 가 같은 Y.Doc 상태를 저장하므로 유실이 아니다).
     // M28 P0-2: 요청 시점의 세션(경로/epoch)을 함께 묶어 둔다. 저장 직전에 현재 값과 비교해
     // 다르면(파일 변경/4001 리셋) 그 바이트는 내보내지 않는다(D41: 세션 교체 시 flush 금지).
-    const c0 = collabRef.current as unknown as {
-      epoch?: string
-      session?: { epoch?: string }
-    } | null
+    const c0 = collabRef.current
     return saveSerializerRef.current!.request(bytes, {
-      session: { path: savePath, epoch: c0?.epoch ?? c0?.session?.epoch },
+      session: { path: savePath, epoch: c0?.epoch, roomId: c0?.roomId },
     })
   }, [persistBytes, isOwnerNow, savePath])
   // 내 사본 다운로드 (409 터미널 탈출용).
