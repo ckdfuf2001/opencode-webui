@@ -487,3 +487,13 @@ E21만의 문제가 아니다. 근거:
 - P2-4 base64 경로 잔재 정리
 - `/handoff` 410 스텁 처리(Q01)
 - backfilledIds 상한(retainers가 지목할 때만)
+
+## PPT 저장 트랙 종료 (v0.12.70, 기준 커밋 f129575)
+- 종료 테스트 5개(E2·E2b·E2f-strict·E2g·E2r)가 chromium 15/15 + msedge 15/15 = **30 passed (14.7m)**.
+- 기준 커밋 `f129575` (main = release-0.12 동일 해시). 태그 `v0.12.70`.
+- 판정 (가): 편집 화면이 `fixed inset-0 z-[100]` 로 전체를 덮어 닫기 버튼이 클릭 불가 → 앱은 정상.
+  사용자가 실제로 가장 빨리 닫는 경로는 "Done/Escape(`endEditing`) → 곧바로 닫기" 이며 E2f-strict 가 검증한다.
+- **언마운트 flush 경로(M31 grace 포함)는 미검증 안전망** — 사용자가 닿을 수 없는 경로이며 검증 대상이 아니다.
+- M34 닫기 가드는 M36 에서 revert(비소유자가 미리보기를 닫지 못하는 실사용 회귀).
+- 후속 트랙: XLSX(X0a~) — 종료 테스트를 먼저 정의하고, PPT에서 겪은 함정(CJS/ESM 이중화 D42,
+  scheduler `cancel`, superseded 참조 비교)을 XLSX dist 에서 줄 번호와 함께 조사한다.

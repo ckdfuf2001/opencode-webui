@@ -311,6 +311,15 @@
 - **테스트 결과(2026-10-20)**: E2 · E2b · E2f · E2g × chromium × repeat-each=2 = **8건 통과**.
   flush 로그: `wb.flush.start{hadSchedule:true}` → `wb.flush.run{bytes:8144/8145}` (직접 저장).
 
+## D45 편집 화면은 전체를 덮는다 / 닫기 가드는 넣지 않는다 (2026-10-22)
+- 편집 화면은 `fixed inset-0 z-[100] bg-background flex flex-col` 로 뷰포트를 전부 덮고, 그 헤더가
+  `aria-label="Close preview"` 버튼을 가로챈다(Playwright call log: `subtree intercepts pointer events`).
+  `document.fullscreenElement` 는 `null`. ⇒ **편집 중 이탈 경로는 Done/Escape(`endEditing`)뿐**이다.
+- 닫기 가드는 넣지 않는다. M34 의 document capture 클릭 가로채기는 비소유자/보기 모드에서
+  미리보기를 닫지 못하게 하는 실사용 회귀였다 ⇒ M36 에서 revert.
+- E2f-strict 는 "편집 → Done/Escape(`endEditing` 이 flush 를 await) → 곧바로 닫기" 를 검증한다.
+  M31 grace 를 포함한 **언마운트 flush 경로는 미검증 안전망**으로 남는다(사용자가 닿을 수 없는 경로).
+
 ## 미결정 (사용자 판단 대기)
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
 - Q02 v0.13에서 이미지를 part 참조로 전환할지(Y.Doc 크기·전송량 문제, W3 측정 선행).
