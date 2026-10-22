@@ -497,3 +497,61 @@ E21만의 문제가 아니다. 근거:
 - M34 닫기 가드는 M36 에서 revert(비소유자가 미리보기를 닫지 못하는 실사용 회귀).
 - 후속 트랙: XLSX(X0a~) — 종료 테스트를 먼저 정의하고, PPT에서 겪은 함정(CJS/ESM 이중화 D42,
   scheduler `cancel`, superseded 참조 비교)을 XLSX dist 에서 줄 번호와 함께 조사한다.
+
+## 백엔드 대기 트랙 (B0, 2026-10-22, 커밋 611857a·4070622)
+
+사용자 지적: "opencode 단에서는 정상 종료했는데, 우리 백단은 계속 대기한다. 서버에서 타이머가 있어야 한다."
+
+### 실측 근거 (사용 중 exe 백엔드 로그, `GET /api/system/logs`)
+```
+11:11:25 [warn] Queued chat flush errored for session ses_e9cc3e126ffextfB3DMMGLw3Jx: {}
+11:16:38 [warn] Queued chat for session ses_e9cc3e126ffextfB3DMMGLw3Jx stuck in sending for 10min (still busy).
+11:30:57 [info] Confirmed queued chat delivered to session ses_ee4721a3dffey6wY8ulCCen1I7 (idle observed)
+```
+- 큐 발송이 "sending" 에 10분 고착 → 600초(`SEND_HEADERS_TIMEOUT_MS`)까지 백단이 대기.
+- 원인 로그가 `{}` 라 **타임아웃인지 단절인지 구분 불가**(AbortError/TimeoutError 는 DOMException).
+
+### B0-1 (611857a) — 에러 원인 노출
+- 근본: `logger` 의 링 버퍼 직렬화가 Error 를 `JSON.stringify` → DOMException 은 `{}`.
+- 수정: `backend/src/utils/error-detail.ts` 추가 + `logger.serializeArg` 가 Error 를 name/message/code/cause 로 펼친다
+  (백엔드 100여 개 `logger.warn(msg, error)` 호출부가 한 번에 정상화). 큐 발송 로그에 경과시간 추가.
+- 회귀 테스트: `backend/test/utils/logger.test.ts`(4) + `error-detail.test.ts`(8).
+  수정 전 실패 원문: `expected 'Queued chat flush errored for session ...' not to contain '{}'`.
+
+### B0-2 (4070622) — 턴 종료 확인 시 업스트림 요청 중단
+- 수정: 세션 상태 폴러(1초 주기)가 이미 관측하는 busy/idle 을 재사용(새 폴링 없음).
+  발송 이후 "busy 관측 → idle 관측"이 확인되면(턴 종료) 붙어 있는 /message 요청을 abort → 대기가 즉시 끝난다.
+- 안전장치: ① busy 를 한 번도 관측하지 못한 세션은 끊지 않는다(오발 방지)
+  ② 발송 중에는 큐 항목을 제거하지 않는다(발송 실패 시 메시지 유실 방지)
+  ③ 우리가 끊은 요청은 오류가 아니라 정상 종료로 기록.
+- 회귀 테스트: `backend/test/services/chat-queue-turn-end.test.ts`(2).
+  수정 전 실패 원문: `expected false to be true` (업스트림 미중단).
+
+### 남은 백로그 (B0 후속)
+- **직접전송 경로(proxy)**: `backend/src/services/proxy.ts:378-380` 는 업스트림 fetch 에
+  `AbortSignal.timeout(600_000)` 만 걸고 클라이언트 단절을 전파하지 않는다. 전파하면
+  **탭을 닫거나 페이지를 옮길 때 진행 중이던 턴이 죽는다**(opencode 는 클라이언트
+  단절을 받으면 턴을 정리) → 채택하지 않음. 대신 턴 종료 감지로 한정(큐 경로만 적용됨).
+- 프록시 경로도 턴 종료 감지를 적용할지는 v0.13 backlog (현재는 opencode 응답이 오면 끝난다).
+- `recordTransientTimeout` 은 계속 queued 유지 + 자동 재시도(무한 루프 가능) — 의도된 설계(문서 참고).
+
+### 환경 주의 (이 저장소에서 신규 파일 추가 방법)
+- `opencode-webui` 의 repo-tracking 기능이 `.git/info/exclude` 에 `/*` + `!/.opencode` + `!/scripts` 를
+  관리한다(backend/src/services/repo-tracking.ts:23). ⇒ **신규 파일은 `git add -f` 로 추가해야 한다**
+  (추적 중인 파일은 영향 없음).
+
+### 기준선 갱신 (2026-10-22 실측)
+| 항목 | 명령 | 실측값 |
+|---|---|---|
+| 단위+프론트 | `pnpm -C backend test -- run` | **49 passed / 3 failed suite** (52 파일) |
+| 타입 | `pnpm -C frontend exec tsc -b` | 에러 0 |
+| 린트 | `pnpm -C frontend exec eslint .` | **333 problems (272 errors, 61 warnings)** |
+| 메모리 규칙 | `pnpm check:memory` | 오류 0 |
+| 인코딩 | `pnpm check:encoding` | 오류 0 |
+
+- 실패 3개: `backend/test/services/config-migration.test.ts`, `backend/test/services/repo-tracking.test.ts`
+  (둘 다 `bun:sqlite` 미설치) + **`frontend/test/collabSessionRegistry.test.ts` (5건)**.
+- collabSessionRegistry 실패는 **M31(2641090)의 3초 유예**와 테스트의 동기 기대값 불일치다
+  (테스트는 release 직후 즉시 destroy 를 가정: `frontend/test/collabSessionRegistry.test.ts:25,40,60,72,91`
+  vs `frontend/src/lib/collabSessionRegistry.ts:95-122`). v0.12.70 기준선 문서(469 passed/2 failed)는
+  M31 이전 측정치다 ⇒ **기준선 문서 갱신 필요(백로그)**.

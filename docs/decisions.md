@@ -311,6 +311,22 @@
 - **테스트 결과(2026-10-20)**: E2 · E2b · E2f · E2g × chromium × repeat-each=2 = **8건 통과**.
   flush 로그: `wb.flush.start{hadSchedule:true}` → `wb.flush.run{bytes:8144/8145}` (직접 저장).
 
+## D46 백엔드는 스스로 대기를 끝낸다 (B0, 2026-10-22)
+- 결정(1): **에러 로그는 원인이 보여야 한다.** 링 버퍼(`GET /api/system/logs`)가 Error 를
+  `JSON.stringify` 하면 AbortError/TimeoutError(DOMException)가 `{}` 로 찍혀 "타임아웃인지
+  단절인지" 구분할 수 없다(무음 실패). ⇒ Error 는 name/message/code/cause 로 펼친다
+  (`backend/src/utils/error-detail.ts` + `logger.serializeArg`).
+- 결정(2): **턴 종료는 서버가 스스로 감지한다.** opencode 가 턴을 끝냈는데 응답만 오지 않으면
+  백단은 600초(`SEND_HEADERS_TIMEOUT_MS`)까지 기다린다. ⇒ 세션 상태 폴러가 이미 관측하는
+  busy/idle 을 재사용해 "발송 이후 busy 관측 → idle 관측"이 확인되면 붙어 있는 요청을 abort 한다.
+- 안전장치: ① busy 를 한 번도 관측하지 못하면 끊지 않는다(오발 방지) ② 발송 중에는 큐 항목을
+  제거하지 않는다(발송 실패 시 메시지 유실 방지) ③ 우리가 끊은 요청은 정상 종료로 기록한다.
+- 금지: **클라이언트 단절을 업스트림 fetch 에 전파하지 않는다**(탭을 닫거나 페이지를 옮길 때
+  진행 중이던 턴이 죽는다 — 실사용 회귀). 백단 대기는 서버 측 감지로 끝낸다.
+- 관련 커밋: 611857a(B0-1 원인 노출), 4070622(B0-2 턴 종료 감지)
+- 회귀 검사: 3-2(`backend/test/utils/logger.test.ts`, `error-detail.test.ts`,
+  `backend/test/services/chat-queue-turn-end.test.ts` — 수정 전 실패 확인)
+
 ## D45 편집 화면은 전체를 덮는다 / 닫기 가드는 넣지 않는다 (2026-10-22)
 - 편집 화면은 `fixed inset-0 z-[100] bg-background flex flex-col` 로 뷰포트를 전부 덮고, 그 헤더가
   `aria-label="Close preview"` 버튼을 가로챈다(Playwright call log: `subtree intercepts pointer events`).
