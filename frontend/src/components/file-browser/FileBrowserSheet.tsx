@@ -96,6 +96,8 @@ export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose
                 variant="ghost"
                 size="icon"
                 onClick={onClose}
+                aria-label="Close explorer"
+                title="탐색기 닫기"
                 className="text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-200"
               >
                 <X className="w-5 h-5" />

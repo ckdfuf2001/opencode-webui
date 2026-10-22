@@ -52,6 +52,8 @@ export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSe
             variant="ghost"
             size="icon"
             onClick={onClose}
+            aria-label="Close explorer"
+            title="탐색기 접기"
             className="text-muted-foreground hover:text-foreground hover:bg-muted shrink-0"
           >
             <X className="w-4 h-4" />
