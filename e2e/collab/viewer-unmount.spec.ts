@@ -122,6 +122,13 @@ test.describe('M6: viewer unmounts on close', () => {
     }
 
     for (let i = 0; i < 10; i++) {
+      // U1: 닫기 = 탐색기 접기이므로, 다음 주기를 위해 탐색기를 다시 연다.
+      if ((await page.locator('[data-testid="file-row"]').count()) === 0) {
+        await page.getByTitle('Workspace').click({ timeout: 20000 }).catch(() => {})
+        await page.waitForFunction(() => document.querySelectorAll('[data-testid="file-row"]').length > 0, null, {
+          timeout: 15000,
+        })
+      }
       const fileRow = page.locator(`[data-testid="file-row"][data-path$="${PPTX}"]`).locator('span', { hasText: PPTX }).first()
       await fileRow.click({ timeout: 20000 })
       await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
