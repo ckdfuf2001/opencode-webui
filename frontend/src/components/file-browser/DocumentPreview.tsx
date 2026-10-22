@@ -426,7 +426,7 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
   )
 }
 
-export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refreshKey?: number }) {
+export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { file: FileInfo; refreshKey?: number; onEditingChange?: (editing: boolean) => void }) {
   const kind = detectDocKind(file.name)
   // office 문서(docx/xlsx/pptx)는 바로 보기 우선 — PDF 변환 없이 바로 본다.
   // PDF가 필요하면 토글로 서버 변환을 켠다.
@@ -437,6 +437,12 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
   const [viewerRetry, setViewerRetry] = useState(0)
   const [endingEdit, setEndingEdit] = useState(false)
   useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
+  // U3: 편집 상태를 상위(FilePreview)에 알린다 — 편집 화면에서는 앱 헤더를
+  // 숨기고 에디터가 컨테이너 전체를 채우게 한다.
+  useEffect(() => {
+    onEditingChange?.(editing)
+  }, [editing, onEditingChange])
+  useEffect(() => () => onEditingChange?.(false), [onEditingChange])
   const retryViewer = () => {
     bustViewerChunks()
     setViewerRetry((v) => v + 1)
@@ -592,8 +598,11 @@ export function DocumentPreview({ file, refreshKey = 0 }: { file: FileInfo; refr
 
   return (
     <div className="h-full flex flex-col min-h-0 min-w-0 overflow-hidden">
-      {isOfficeNative && (
-        <div className="flex items-center gap-2 px-3 py-1 border-b border-border bg-background flex-shrink-0">
+      {isOfficeNative && !editing && (
+        <div
+          className="flex items-center gap-2 px-3 py-1 border-b border-border bg-background flex-shrink-0"
+          data-testid="preview-doc-header"
+        >
           <div className="flex items-center rounded-md bg-muted p-0.5">
             <button
               type="button"

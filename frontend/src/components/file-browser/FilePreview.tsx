@@ -39,6 +39,10 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const [lineWrap, setLineWrap] = useState(true)
   const [refreshKey, setRefreshKey] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // U3: 문서(office) 편집 중에는 앱 헤더(파일명/액션 바)와 문서 헤더를 숨겨
+  // 에디터가 컨테이너 전체를 채우게 한다. 텍스트 편집(viewMode==='edit')은
+  // 헤더에 저장/취소 버튼이 필요하므로 그대로 둔다.
+  const [docEditing, setDocEditing] = useState(false)
   const virtualizedRef = useRef<VirtualizedTextViewHandle>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   
@@ -221,7 +225,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     if (docKind) {
       return (
         <Suspense fallback={<div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Loading viewer…</div>}>
-          <DocumentPreview file={file} refreshKey={refreshKey} />
+          <DocumentPreview file={file} refreshKey={refreshKey} onEditingChange={setDocEditing} />
         </Suspense>
       )
     }
@@ -333,6 +337,8 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
 
   const showSaveButton = viewMode === 'edit'
   const showCancelButton = viewMode === 'edit'
+  // U3: office 편집 중이면 헤더를 숨긴다(에디터가 전체를 채운다).
+  const headerHidden = hideHeader || docEditing
 
   const headerActions: Array<{
     key: string
@@ -422,10 +428,18 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const showAllActions = isFullscreen || expandActions
 
   return (
-    <div className={`${isFullscreen ? 'fixed inset-0 z-[100] bg-background flex flex-col' : 'h-full flex flex-col bg-background'}`} style={isFullscreen ? GPU_ACCELERATED_STYLE : undefined} onContextMenu={(e) => { if (isFullscreen) e.stopPropagation() }}>
-      {!hideHeader && (
+    <div
+      className={`${isFullscreen ? 'fixed inset-0 z-[100] bg-background flex flex-col' : 'h-full flex flex-col bg-background'}`}
+      style={isFullscreen ? GPU_ACCELERATED_STYLE : undefined}
+      data-testid={isFullscreen ? 'preview-fullscreen-root' : 'preview-container'}
+      onContextMenu={(e) => { if (isFullscreen) e.stopPropagation() }}
+    >
+      {!headerHidden && (
         <>
-          <div className={`flex items-start gap-2 px-3 py-2 border-b border-border flex-shrink-0 overflow-hidden ${isMobileModal ? 'pt-3' : ''}`}>
+          <div
+            className={`flex items-start gap-2 px-3 py-2 border-b border-border flex-shrink-0 overflow-hidden ${isMobileModal ? 'pt-3' : ''}`}
+            data-testid="preview-file-header"
+          >
             <div className="flex-1 min-w-0 overflow-hidden">
               <h3 className="text-foreground text-sm font-medium break-all leading-tight">
                 {file.name}
