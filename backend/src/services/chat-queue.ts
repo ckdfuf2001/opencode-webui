@@ -104,6 +104,24 @@ function abortInFlight(sessionID: string): void {
   try { ac.abort() } catch {}
   inFlightControllers.delete(sessionID)
 }
+// 턴 종료(idle 관측)로 우리가 직접 끊은 세션 — 오류가 아니라 정상 종료다.
+const idleReleasedSessions = new Set<string>()
+// 발송 이후 "세션이 busy 였음"을 확인한 시각. idle 로 판단해 요청을 끊을 때의
+// 안전장치로 쓴다(발송 직후 opencode 가 아직 busy 로 안 올라온 시점의 오발 방지).
+const busyObservedAt = new Map<string, number>()
+/**
+ * 턴이 끝났는데 업스트림 응답이 안 온 경우, 붙어 있는 요청을 끊는다.
+ *
+ * 문제: opencode 는 턴이 끝나면 응답을 돌려주지만, 회선이 끊기거나 응답이
+ * 유실되면 백단은 최대 600초(SEND_HEADERS_TIMEOUT_MS) 동안 계속 대기한다.
+ * ⇒ 서버가 스스로 "턴 종료"를 감지해 대기를 끝낸다.
+ */
+function releaseInFlightOnIdle(sessionID: string): void {
+  const ac = inFlightControllers.get(sessionID)
+  if (!ac) return
+  idleReleasedSessions.add(sessionID)
+  try { ac.abort() } catch {}
+}
 const QUOTA_BODY_PATTERNS = [
   'insufficient_quota',
   'insufficient balance',
@@ -405,7 +423,6 @@ export function clearSendingOnAbort(sessionID: string): void {
  * status poller retries once the session goes idle.
  */
 async function dispatchHead(base: string, sessionID: string): Promise<void> {
-  if (inFlight.has(sessionID)) return
   if ((failedUntil.get(sessionID) ?? 0) > Date.now()) return
   const queue = queues.get(sessionID)
   if (!queue || queue.length === 0) return
@@ -420,8 +437,10 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   }
   if (next.status === 'sending') {
     // 전송은 됐는데 응답 미확인 상태. 세션이 idle이면 턴이 끝난 것으로 보고 제거(확정).
+    // (발송 중이어도 이 분기에 들어온다 — 턴 종료 감지로 붙어 있는 요청을 끊어야 해서)
     if (await isSessionBusy(sessionID)) {
       lastBusyAt.set(sessionID, Date.now())
+      busyObservedAt.set(sessionID, Date.now())
       // 장시간 sending 고착(nw오류·장시간 턴) 경고 — 자동 제거는 중복 전송 위험이 있어 안 한다.
       const since = next.sendingSince ?? 0
       if (since && Date.now() - since > SENDING_STUCK_WARN_MS) {
@@ -429,6 +448,18 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         // warn 스팸 방지: 다음 warn은 한 쿨다운 뒤에
         next.sendingSince = Date.now()
       }
+      return
+    }
+    // idle = 턴 종료 확인.
+    const dispatchedAt = next.sendingSince ?? 0
+    if (inFlight.has(sessionID)) {
+      // 발송 중 — 턴 종료가 확인됐다면(발송 이후 busy 관측 후 idle) 붙어 있는
+      // 요청을 끊는다(백단이 최대 600초 계속 대기하는 문제).
+      // (busy 를 한 번도 못 봤으면 끊지 않는다 — 오발 방지)
+      if ((busyObservedAt.get(sessionID) ?? 0) >= dispatchedAt) {
+        releaseInFlightOnIdle(sessionID)
+      }
+      // 확정은 아래 'idle 관찰' 경로가 맡는다 — 지금 제거하면 발송 실패 시 유실된다.
       return
     }
     queue.splice(0, 1)
@@ -502,6 +533,8 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   // 실패(연결 에러·거부)는 queued로 되돌리고 backoff.
   next.status = 'sending'
   next.sendingSince = Date.now()
+  // 이번 발송의 busy 관측 기록을 초기화한다 (이전 턴 관측을 재사용하지 않는다).
+  busyObservedAt.delete(sessionID)
 
   inFlight.add(sessionID)
   logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
@@ -547,6 +580,15 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         failedUntil.delete(sessionID)
         return
       }
+      // 우리가 "턴 종료 확인"으로 직접 끊은 요청 — 오류가 아니라 정상 종료다.
+      if (idleReleasedSessions.delete(sessionID)) {
+        failedUntil.delete(sessionID)
+        logger.info(
+          `Queued chat for session ${sessionID} upstream released after turn end (idle observed) ` +
+          `after ${Math.round((Date.now() - dispatchStartedAt) / 1000)}s (${formatErrorDetail(error)})`,
+        )
+        return
+      }
       logger.warn(
         `Queued chat flush errored for session ${sessionID}: ${formatErrorDetail(error, Date.now() - dispatchStartedAt)}`,
       )
@@ -581,6 +623,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
     .finally(() => {
       inFlight.delete(sessionID)
       inFlightControllers.delete(sessionID)
+      idleReleasedSessions.delete(sessionID)
     })
 }
 
@@ -853,6 +896,8 @@ export function flushReadyQueues(busySessions: Set<string>): void {
     if (pausedSessions.has(sessionID)) continue
     if (busySessions.has(sessionID)) {
       lastBusyAt.set(sessionID, Date.now())
+      // 폴러가 "이 세션은 턴 진행 중"이라고 본 순간 → 턴 종료 감지의 기준점.
+      if (inFlight.has(sessionID)) busyObservedAt.set(sessionID, Date.now())
       continue
     }
     void dispatchHead(base, sessionID)
