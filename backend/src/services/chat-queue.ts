@@ -10,6 +10,7 @@ import { getSessionStatusRow, setSessionCancelled, markSessionStatusIdle } from 
 import { resolveLiveDirectory, resolveRepoId } from './command-runs'
 import { buildRecall, readRecallPrefs } from './recall'
 import { logger } from '../utils/logger'
+import { formatErrorDetail } from '../utils/error-detail'
 
 let queueDb: Database | null = null
 export function setChatQueueDb(db: Database): void {
@@ -505,6 +506,7 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
   inFlight.add(sessionID)
   logger.info(`Dispatching queued chat to session ${sessionID}; ${listQueuedChats(sessionID).length} remaining`)
 
+  const dispatchStartedAt = Date.now()
   void dispatchQueuedChat(base, sessionID, next)
     .then((result) => {
       // 중단 직후 도착한 결과는 무시한다 — 취소된 슬롯에 실패 accounting/backoff를
@@ -545,7 +547,9 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
         failedUntil.delete(sessionID)
         return
       }
-      logger.warn(`Queued chat flush errored for session ${sessionID}:`, error)
+      logger.warn(
+        `Queued chat flush errored for session ${sessionID}: ${formatErrorDetail(error, Date.now() - dispatchStartedAt)}`,
+      )
       // OpenCode는 턴이 끝나야 응답 헤더를 보낼 수 있어 타임아웃은 거의 확실히
       // 전달됐다는 뜻이다. sending 유지 → idle 관찰 시 제거(확정). 타임아웃은 실패로 세지 않는다.
       const name = (error as { name?: string })?.name
@@ -562,6 +566,10 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       }
       if (name === 'TimeoutError' || name === 'AbortError') {
         failedUntil.set(sessionID, Date.now() + FLUSH_RETRY_BACKOFF_MS)
+        logger.warn(
+          `Queued chat for session ${sessionID} send aborted/timeout after ${Math.round((Date.now() - dispatchStartedAt) / 1000)}s ` +
+          `(${formatErrorDetail(error)}) — item stays 'sending' until idle is observed`,
+        )
         return
       }
       // 그 외 전송 오류(HTTP 응답 없이 fetch가 죽은 경우 — 5분 턴 중 서버측

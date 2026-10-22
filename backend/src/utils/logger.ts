@@ -1,4 +1,5 @@
 import { ENV } from '@opencode-webui/shared'
+import { describeError } from './error-detail'
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug'
 
@@ -11,8 +12,22 @@ export interface BufferedLogLine {
 const RING_MAX = 500
 const ring: BufferedLogLine[] = []
 
+/**
+ * 링 버퍼(GET /api/system/logs)에 남는 인자 문자열.
+ *
+ * Error 를 그대로 JSON.stringify 하면 DOMException(AbortError/TimeoutError) 처럼
+ * 열거 가능한 프로퍼티가 없어 "{}" 로 찍히고 원인이 사라진다(무음 실패).
+ * → Error 는 이름·메시지·코드·cause 로 펼친다.
+ */
 function serializeArg(arg: unknown): string {
   if (typeof arg === 'string') return arg.slice(0, 500)
+  if (arg instanceof Error) {
+    const d = describeError(arg)
+    const parts = [`name=${d.name}`, `message="${d.message.slice(0, 300)}"`]
+    if (d.code) parts.push(`code=${d.code}`)
+    if (d.cause) parts.push(`cause={${d.cause}}`)
+    return parts.join(' ')
+  }
   try {
     const s = JSON.stringify(arg)
     return (s ?? '').slice(0, 500)
