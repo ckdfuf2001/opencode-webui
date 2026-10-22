@@ -11,7 +11,7 @@ import { closePreview } from './helpers/viewer'
  * [data-testid=pptx-viewer-root] 가 계속 1개, __openSockets() 도 1로 남았다.
  * 데스크톱 미리보기에는 닫기 수단이 아예 없고(FileBrowser.tsx 의 setSelectedFile(null)
  * 은 폴더 클릭/삭제/오류 때만 불렸다), 전체화면 시트는 닫을 때 기억한 파일 경로를
- * 남겨 재오�� 때 뷰어를 즉시 재마운트했다.
+ * 남겨 다시 열 때 뷰어를 즉시 재마운트했다.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url))
