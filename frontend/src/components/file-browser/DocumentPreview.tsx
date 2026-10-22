@@ -524,6 +524,38 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
   const converted = useConvertedPdf(file.path, refreshKey, kind !== 'msg' && kind !== 'visio' && (!isOfficeNative || pdfMode))
   const extracted = useExtractedText(file.path, refreshKey, kind === 'msg')
 
+  // U2: Done/Save/Comments 를 뷰어 타이틀바 우측(기능 search 오른쪽, actions 슬롯)에 둔다.
+  // PPT 만 lib 타이틀바 슬롯(titleBarSlot → actions)을 노출한다 — XLSX/DOCX 는 헤더를 유지한다.
+  const pptxEditorActions = kind === 'pptx' ? (
+    <div data-testid="preview-editor-actions" className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => { void endEditing() }}
+        disabled={endingEdit}
+        className="h-6 text-xs px-2 rounded bg-background text-foreground shadow-sm font-medium disabled:opacity-50"
+        title="편집 종료 (저장 후 원래 화면으로)"
+      >
+        Done
+      </button>
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent('officeSaveRequest'))}
+        className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
+        title="즉시 저장"
+      >
+        Save
+      </button>
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent('pptxCommentsRequest'))}
+        className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
+        title="코멘트 보기"
+      >
+        Comments
+      </button>
+    </div>
+  ) : null
+
   const hasClientFallback = kind ? CONVERTABLE_CLIENT_KINDS.has(kind) : false
   const { data: raw, status: rawStatus, error: rawError } = useRawFile(
     file.path,
@@ -560,7 +592,15 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
       }
       return (
         <ViewerLoadBoundary key={bkey} onRetry={retryViewer} onPdf={() => setPdfMode(true)}>
-          <PptxViewer key={file.path} data={raw} fileName={file.name} editing={editing} savePath={file.path} onFail={() => setPdfMode(true)} />
+          <PptxViewer
+            key={file.path}
+            data={raw}
+            fileName={file.name}
+            editing={editing}
+            savePath={file.path}
+            titleBarSlot={editing ? pptxEditorActions : undefined}
+            onFail={() => setPdfMode(true)}
+          />
         </ViewerLoadBoundary>
       )
     }
@@ -598,7 +638,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
 
   return (
     <div className="h-full flex flex-col min-h-0 min-w-0 overflow-hidden">
-      {isOfficeNative && !editing && (
+      {isOfficeNative && !(editing && kind === 'pptx') && (
         <div
           className="flex items-center gap-2 px-3 py-1 border-b border-border bg-background flex-shrink-0"
           data-testid="preview-doc-header"

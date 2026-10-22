@@ -1,5 +1,5 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..0fcc57b921ce4f50ccc9d71956554fee9ddeb17b 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fec588d9ed 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
 +++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -111,6 +111,8 @@ import { ifDefined } from 'lit/directives/if-defined.js';
@@ -152,3 +152,12 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..0fcc57b921ce4f50ccc9d71956554fee
  }
  var POSITION_THRESHOLD = 2;
  var SIZE_THRESHOLD = 2;
+@@ -73851,7 +73964,7 @@ function officeTitleBarState(state, placement) {
+     fileName: state.fileName || t(TITLE_BAR_DEFAULT_FILE_KEY),
+     status: state.editing ? t(state.autosave.statusKey) : void 0,
+     tone: state.autosave.enabled ? state.autosave.tone : "idle",
+-    autosave: state.editing ? {
++    autosave: state.editing && available ? {
+       enabled: state.autosave.enabled,
+       available,
+       label: t("pptx.titleBar.autoSave"),

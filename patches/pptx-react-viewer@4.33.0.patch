@@ -1,5 +1,5 @@
 diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
-index 258156da202883c57418626396f0218efa46152c..64f11788c4872891dc3242ea41d6a55c06ce2a17 100644
+index 258156da202883c57418626396f0218efa46152c..c9e43fbfa89798ec28e9d2d5e392815a0b2e66f0 100644
 --- a/dist/chunk-552NAFTD.js
 +++ b/dist/chunk-552NAFTD.js
 @@ -1,4 +1,7 @@
@@ -52,7 +52,7 @@ index 258156da202883c57418626396f0218efa46152c..64f11788c4872891dc3242ea41d6a55c
      const { config, doc } = latest.current;
      if (config) {
 diff --git a/dist/chunk-DD3ARHEW.mjs b/dist/chunk-DD3ARHEW.mjs
-index c12482e205e1d4c860869c25a3760cf7733d01c7..13cb41959ae6692c5a7ebdd7a8d351c2ea0ed5f8 100644
+index c12482e205e1d4c860869c25a3760cf7733d01c7..5279e06baa943df2e0537de6db68e0facdde4534 100644
 --- a/dist/chunk-DD3ARHEW.mjs
 +++ b/dist/chunk-DD3ARHEW.mjs
 @@ -7,6 +7,8 @@ import { translationsEn } from 'ooxml-ui/pptx/i18n';
@@ -185,3 +185,93 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..13cb41959ae6692c5a7ebdd7a8d351c2
        revision.current++;
        setSlides(room);
      }
+diff --git a/dist/chunk-LOBNIIFQ.mjs b/dist/chunk-LOBNIIFQ.mjs
+index 31708d4afc70b678dd4e9aef7ab83f8fb3817bf0..9ed1735252188f3d28e65d50b21b4697af15dd43 100644
+--- a/dist/chunk-LOBNIIFQ.mjs
++++ b/dist/chunk-LOBNIIFQ.mjs
+@@ -29242,6 +29242,7 @@ function TitleBar(p) {
+       onCommandSearch: p.onCommandSearch,
+       onToggleFindReplace: p.onToggleFindReplace,
+       children: [
++        p.titleBarSlot ? /* @__PURE__ */ jsx("div", { slot: "actions", style: { display: "contents" }, children: p.titleBarSlot }) : null,
+         p.collaborationSlot ? /* @__PURE__ */ jsx("div", { slot: "collaboration", style: { display: "contents" }, children: p.collaborationSlot }) : null,
+         p.accountSlot ? /* @__PURE__ */ jsx("div", { slot: "account", style: { display: "contents" }, children: p.accountSlot }) : null
+       ]
+@@ -29295,7 +29296,8 @@ function ViewerToolbarSection(props) {
+     onEnableEditing,
+     onSetSnapToGrid,
+     onSetSnapToShape,
+-    onSetShowGuides
++    onSetShowGuides,
++    titleBarSlot
+   } = props;
+   const { t } = useTranslation();
+   const customization = useViewerCustomizationContext();
+@@ -29550,6 +29552,7 @@ function ViewerToolbarSection(props) {
+         mode,
+         canEdit,
+         fileName,
++        titleBarSlot,
+         isDirty: s.isDirty,
+         autosaveStatus,
+         autosaveEnabled,
+@@ -34470,6 +34473,7 @@ var PowerPointViewer = forwardRef(
+       fonts = [],
+       filePath,
+       fileName,
++      titleBarSlot,
+       canEdit: hostCanEdit = false,
+       autosave: hostAutosave,
+       autosaveIntervalMs: hostAutosaveIntervalMs,
+@@ -35227,11 +35231,12 @@ ${url}`)
+               className: "h-full w-full flex flex-col overflow-hidden outline-none",
+               children: loading ? /* @__PURE__ */ jsx(LoadingState, {}) : error ? /* @__PURE__ */ jsx(ErrorState, { error }) : /* @__PURE__ */ jsx(ThemeColorMapProvider, { value: themeColorMapValue, children: /* @__PURE__ */ jsxs(RecentColorsProvider, { value: recentColorsValue, children: [
+                 mode !== "present" && rootOptions.showToolbar && /* @__PURE__ */ jsx(
+-                  ViewerToolbarSection,
+-                  {
+-                    mode,
+-                    canEdit,
+-                    state,
++              ViewerToolbarSection,
++              {
++                mode,
++                canEdit,
++                titleBarSlot,
++                state,
+                     selectedElement,
+                     activeSlide,
+                     activeSlideIndex,
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index c27441f32cee48e6e32aa566ab9edd9b21804824..1809f52e675dcad7775ba3d862be0256b5bea9cd 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -150,6 +150,12 @@ interface PowerPointViewerProps extends ViewportFitOptions {
+    * bar (e.g. "quarterly-review.pptx"). Falls back to a generic label.
+    */
+   fileName?: string;
++  /**
++   * Host content projected into the title bar's `actions` slot — it is
++   * rendered immediately to the right of the command search box.
++   * The slot is provided by ooxml-ui's `office-ui-title-bar`.
++   */
++  titleBarSlot?: React$1.ReactNode;
+   /** Callback when content has unsaved changes */
+   onDirtyChange?: (isDirty: boolean) => void;
+   onContentChange?: (content: Uint8Array) => void;
+diff --git a/dist/viewer/index.d.ts b/dist/viewer/index.d.ts
+index 5c532a8274346567f961066eb4818ec207e6f2c2..5c4b213d3c895c6131b0ce5622f9069320515bd8 100644
+--- a/dist/viewer/index.d.ts
++++ b/dist/viewer/index.d.ts
+@@ -328,6 +328,12 @@ interface PowerPointViewerProps extends ViewportFitOptions {
+    * bar (e.g. "quarterly-review.pptx"). Falls back to a generic label.
+    */
+   fileName?: string;
++  /**
++   * Host content projected into the title bar's `actions` slot — it is
++   * rendered immediately to the right of the command search box.
++   * The slot is provided by ooxml-ui's `office-ui-title-bar`.
++   */
++  titleBarSlot?: React__default.ReactNode;
+   /** Callback when content has unsaved changes */
+   onDirtyChange?: (isDirty: boolean) => void;
+   onContentChange?: (content: Uint8Array) => void;

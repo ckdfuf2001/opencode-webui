@@ -144,7 +144,7 @@ interface PowerPointViewerHandle {
   setActiveSlideIndex?: (index: number) => void
 }
 
-export default function PptxViewer({ data, fileName, editing, savePath, onFail }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void }) {
+export default function PptxViewer({ data, fileName, editing, savePath, onFail, titleBarSlot }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void; titleBarSlot?: ReactNode }) {
   // lib는 768px 미만에서 썸네일 패널을 숨기고 모바일 바/시트로 바꾼다.
   // 보기 모드에서도 좁은 화면에선 모바일 바를 켜야 슬라이드 시트에 닿는다.
   // (데스크톱은 editing 그대로라 변화 없음)
@@ -2333,6 +2333,11 @@ const peersRef = useRef<Peer[]>([])
                   fileName={fileName}
                   canEdit={editing}
                   showToolbar={editing || narrowViewport}
+                  // U2: 앱이 관리하는 저장(소유자 write-back)만 남긴다 — lib 타이틀바의
+                  // AutoSave 표시/토글은 제거(ooxml-ui 패치: 호스트가 끄면 표시 안 함).
+                  autosave={false}
+                  // U2: Done/Save/Comments 를 기능 search 오른쪽(actions 슬롯)에 투영한다.
+                  titleBarSlot={titleBarSlot}
                   theme={viewerTheme}
                   initialSlide={slideIdx}
                   // Y2: arm 신호. deps가 [slides.length]라 parse 전 0으로도 호출되므로

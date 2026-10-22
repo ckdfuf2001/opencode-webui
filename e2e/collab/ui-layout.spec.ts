@@ -150,8 +150,8 @@ test.describe('UI 개편 (U1~U3)', () => {
     expect(layout.labels).toContain('Done')
     expect(layout.labels).toContain('Save')
     expect(layout.labels.some((l) => l.includes('Comment'))).toBe(true)
-    // lib 타이틀바의 슬롯(slot="after-search")에 투영되어 있다.
-    expect(layout.inShadowSlot).toBe('after-search')
+    // lib 타이틀바의 슬롯(slot="actions", 기능 search 우측)에 투영되어 있다.
+    expect(layout.inShadowSlot).toBe('actions')
     // 기능 search 의 오른쪽에 있다.
     expect(layout.searchRect).not.toBeNull()
     expect(layout.actionsRect).not.toBeNull()
