@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { absForRel } from './helpers/env'
+import { closePreview } from './helpers/viewer'
 
 /**
  * M6: 문서 뷰어는 "닫기"에서 언마운트되어야 한다.
@@ -90,8 +91,8 @@ test.describe('M6: viewer unmounts on close', () => {
     await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
     expect((await viewerRoots(page)).pptx).toBe(1)
 
-    // 닫기.
-    await page.getByRole('button', { name: 'Close preview' }).click({ timeout: 15000 })
+    // 닫기: U1부터 닫는 경로는 "탐색기 축소" 하나다(Close preview 버튼 제거).
+    await closePreview(page)
 
     // M6의 계약: 1초 안에 언마운트되어야 한다.
     await expect
@@ -124,7 +125,7 @@ test.describe('M6: viewer unmounts on close', () => {
       const fileRow = page.locator(`[data-testid="file-row"][data-path$="${PPTX}"]`).locator('span', { hasText: PPTX }).first()
       await fileRow.click({ timeout: 20000 })
       await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
-      await page.getByRole('button', { name: 'Close preview' }).click({ timeout: 15000 })
+      await closePreview(page)
       await expect
         .poll(async () => (await viewerRoots(page)).pptx, { timeout: 5000, intervals: [200] })
         .toBe(0)

@@ -139,40 +139,19 @@ export async function gotoApp(page: Page): Promise<void> {
 }
 
 /**
- * M22: 인라인 미리보기 닫기(=언마운트).
- * FileBrowser 의 "미리보기 닫기"(aria-label="Close preview")를 눌러
- * explorerSelectedPath 를 비운다(시트 닫기와는 다르다).
+ * U1: 미리보기 닫기 경로는 "탐색기 축소" 하나로 통일한다.
+ *
+ * 이전: FileBrowser 의 `aria-label="Close preview"` 버튼(absolute right-2 top-2 z-10).
+ * 지금: 그 버튼은 제거됐고(다른 버튼과 겹치는 원인), 닫는 경로는 탐색기를
+ * 축소하는 것 하나다(인라인 패널/시트 모두). 편집 중이면 앱이 endEditing 을
+ * 먼저 끝낸 뒤 언마운트한다(백엔드/프론트 공통 경로).
  */
 export async function closePreview(page: Page): Promise<void> {
-  const btn = page.locator('[aria-label="Close preview"]')
+  const btn = page.locator('[aria-label="Close explorer"]')
   if (await btn.count()) {
-    // M37 ① 측정: 닫기 버튼이 왜 클릭 불가한지(전체화면/오버레이/레이어)를 확인한다.
-    const info = await page.evaluate(() => {
-      const b = document.querySelector('[aria-label="Close preview"]') as HTMLElement | null
-      const fs = document.fullscreenElement as HTMLElement | null
-      const r = b?.getBoundingClientRect()
-      const cx = r ? r.left + r.width / 2 : 0
-      const cy = r ? r.top + r.height / 2 : 0
-      const at = document.elementFromPoint(cx, cy) as HTMLElement | null
-      const desc = (e: HTMLElement | null) =>
-        e
-          ? {
-              tag: e.tagName,
-              testid: e.getAttribute('data-testid'),
-              label: e.getAttribute('aria-label'),
-              cls: String(e.className).slice(0, 120),
-            }
-          : null
-      return {
-        btnRect: r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null,
-        btn: desc(b),
-        fullscreen: desc(fs),
-        atPoint: desc(at),
-      }
-    })
-    console.log('CLOSE-MEASURE ' + JSON.stringify(info))
     await btn.first().click({ timeout: 10000 })
   } else {
+    // 탐색기 축소 수단이 아직 없으면 Escape 로 시트를 닫는다.
     await page.keyboard.press('Escape')
   }
   await page.waitForTimeout(500)
