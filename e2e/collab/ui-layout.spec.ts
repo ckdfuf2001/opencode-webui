@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { openFile, closePreview } from './helpers/viewer'
+import { gotoApp, openFile, closePreview } from './helpers/viewer'
 
 /**
  * UI 개편 트랙(U1~U3) 수용 기준 테스트.
@@ -64,6 +64,7 @@ async function cornerProbe(page: Page) {
 
 test.describe('UI 개편 (U1~U3)', () => {
   test('U1: Close preview 버튼이 없고 탐색기 축소로 미리보기가 언마운트된다', async ({ page }) => {
+    await gotoApp(page)
     await openFile(page, PPTX, 'view')
     await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
 
@@ -78,6 +79,7 @@ test.describe('UI 개편 (U1~U3)', () => {
   })
 
   test('U3: 편집 모드는 전체화면 — 탐색기/파일 행/앱 헤더가 보이지 않는다', async ({ page }) => {
+    await gotoApp(page)
     await openFile(page, PPTX, 'view')
     await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
     await page.getByRole('button', { name: 'Edit' }).click({ timeout: 20000 })
@@ -106,6 +108,7 @@ test.describe('UI 개편 (U1~U3)', () => {
   })
 
   test('U2: 편집 모드에서 Done/Save/Comments 가 기능 search 오른쪽에 있다', async ({ page }) => {
+    await gotoApp(page)
     await openFile(page, PPTX, 'view')
     await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
     await page.getByRole('button', { name: 'Edit' }).click({ timeout: 20000 })
