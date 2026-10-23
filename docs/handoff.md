@@ -555,3 +555,27 @@ E21만의 문제가 아니다. 근거:
   (테스트는 release 직후 즉시 destroy 를 가정: `frontend/test/collabSessionRegistry.test.ts:25,40,60,72,91`
   vs `frontend/src/lib/collabSessionRegistry.ts:95-122`). v0.12.70 기준선 문서(469 passed/2 failed)는
   M31 이전 측정치다 ⇒ **기준선 문서 갱신 필요(백로그)**.
+
+## UI 개편 트랙 U1~U3 (2026-10-22 완료)
+
+- U1 (8519875): 데스크톱 `Close preview` 버튼 제거. 닫기 = 탐색기 접기(패널 언마운트 →
+  미리보기/뷰어/소켓 정리). `FileBrowserSheet`/`SessionFilePanel` X 버튼에
+  `aria-label="Close explorer"` 추가. `e2e/collab/helpers/viewer.ts` 의 `closePreview` 가 이 경로를 쓴다.
+- U2 (7e737da): 편집 모드 액션(Done/Save/Comments)을 **PPT 타이틀바의 기존 `actions` 슬롯**
+  (기능 search 오른쪽, `.end` 영역)에 투영. lib 패치 2개:
+  - `pptx-react-viewer`: `titleBarSlot` prop → `TitleBar` children → `<div slot="actions">`.
+    루트 `dist/index.d.ts` 와 `dist/viewer/index.d.ts` 둘 다 타입 추가(둘 다 자체 사본을 가진다).
+  - `ooxml-ui`: `autosave.available === false` 면 AutoSave 표시를 숨긴다.
+  - **교훈**: PPT 는 베이스 `office-ui-title-bar`(chunk-O7APCA5N)가 아니라
+    `chunk-MCHPNO42.mjs` 의 자체 사본 + `PptxTitleBar` 를 쓴다. 베이스에 슬롯을 추가해도
+    PPT 에는 반영되지 않는다(디버그로 확인). 기존 `actions` 슬롯을 쓰면 슬롯 패치가 필요 없다.
+- U3 (c13b912): 편집 모드 전체화면 + 헤더 숨김. 단, XLSX/DOCX 는 타이틀바 슬롯이 없어
+  `DocumentPreview` 헤더를 유지한다(PPT 만 헤더 숨김) — v0.13 에서 xlsx/docx 슬롯 지원 검토.
+- 검증(2026-10-22): `ui-layout.spec.ts` U1/U2/U3 통과, 회귀 E2/E2b/E2f-strict/E2g/E2r/M6a/M6b/X-B1
+  통과, `tsc -b` 0, `check:encoding` 0, `check:memory` 0, 프로덕션 빌드에
+  `__ooxmlPatches`(ui=M21, viewer=M21-esm) 포함 확인.
+- 전수 `pptx-collab.spec.ts` 실행 시 19건 실패(E3 라벨, E21b 원격 커서, E4/E5/E7...).
+  U1~U3 변경 경로(타이틀바/미리보기 닫기)와 무관한 **기존 실패로 추정** — 착수 전 기준선이
+  부분 스위트만 측정되어 있었다. 다음 세션에서 66edec6 이전 커밋으로 대조 필요.
+- M6b 는 U1 로 탐색기가 닫히므로, 반복 주기마다 `Workspace` 로 탐색기를 다시 열도록 수정(20281bf).
+

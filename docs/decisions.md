@@ -336,6 +336,19 @@
 - E2f-strict 는 "편집 → Done/Escape(`endEditing` 이 flush 를 await) → 곧바로 닫기" 를 검증한다.
   M31 grace 를 포함한 **언마운트 flush 경로는 미검증 안전망**으로 남는다(사용자가 닿을 수 없는 경로).
 
+## D47 미리보기 닫기 = 탐색기 접기, 편집 액션 = 타이틀바 슬롯 (U1~U3, 2026-10-22)
+- 결정(1): **미리보기를 닫는 별도 버튼을 두지 않는다.** 닫기는 탐색기 접기 하나로 일원화한다
+  (패널이 언마운트되면 뷰어·Y.Doc·소켓이 함께 정리된다). D45 의 "편집 헤더가 Close preview 를
+  가로챈다" 관찰은 이 결정으로 사라졌다 — 편집 중 이탈은 여전히 Done/Escape(`endEditing`)뿐이다.
+- 결정(2): **편집 액션은 PPT 타이틀바의 기존 `actions` 슬롯**에 둔다(기능 search 오른쪽 `.end`).
+  lib 에 슬롯을 새로 만들지 않는다. PPT 는 `chunk-MCHPNO42.mjs` 의 자체 `PptxTitleBar` 를 쓰므로
+  베이스 `office-ui-title-bar`(chunk-O7APCA5N)에 슬롯을 추가해도 PPT 에는 반영되지 않는다.
+- 결정(3): **AutoSave 표시는 호스트가 끌 수 있어야 한다** — `autosave.available === false` 면
+  라벨/스위치를 숨긴다(앱이 저장을 소유하므로 lib 의 토글은 오해를 만든다).
+- 결정(4): XLSX/DOCX 는 아직 타이틀바 슬롯이 없으므로 `DocumentPreview` 헤더를 유지한다.
+  PPT 만 편집 중 헤더를 숨긴다. xlsx/docx 슬롯 지원은 v0.13 검토 항목.
+- 관련 커밋: 8519875(U1), 7e737da(U2), c13b912(U3), 20281bf(M6b 테스트 보정)
+
 ## 미결정 (사용자 판단 대기)
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
 - Q02 v0.13에서 이미지를 part 참조로 전환할지(Y.Doc 크기·전송량 문제, W3 측정 선행).
