@@ -1,6 +1,6 @@
 {
   "name": "opencode-webui",
-  "version": "0.12.70",
+  "version": "0.12.71",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.0",
