@@ -115,6 +115,15 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/**
+ * 바이트 해시(서버의 hashFile/hashBytes 와 같은 알고리즘).
+ * XLSX 는 "방에 먼저 들어온 쪽의 문서가 방의 기준"이라, 방이 디스크와 어긋난 상태로
+ * 남으면 **오래된 내용**이 디스크를 덮어쓸 수 있다 ⇒ 붙기 전에 비교한다.
+ */
+export async function hashBytesHex(bytes: Uint8Array): Promise<string> {
+  return sha256Hex(bytes)
+}
+
 /** room별 마지막 전송 해시 (재전송 생략용, 최대 20개). */
 const lastSentByRoom = new Map<string, { hash: string; newHash: string }>()
 

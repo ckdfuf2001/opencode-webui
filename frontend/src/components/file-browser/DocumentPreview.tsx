@@ -28,6 +28,7 @@ import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
+import { collabApi, collabServerUrl, hashBytesHex } from '@/api/collab'
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser } from '@/lib/collabUser'
@@ -1491,6 +1492,52 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
   const { save } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
+  // X1a: XLSX 동시편집. 편집 중이면 방을 만들고 lib(oesx-ui xlsx)에 넘긴다.
+  // lib 이 방의 워크북을 소유한다(먼저 들어온 쪽의 문서가 방의 기준이 된다).
+  // v1 범위: 편집 모드만 참가(보기 모드는 solo), 저장은 기존 /api/files 경로.
+  const [collab, setCollab] = useState<{ roomId: string; serverUrl: string; user: { name: string; color: string } } | null>(null)
+  const [collabError, setCollabError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!editing) {
+      setCollab(null)
+      return
+    }
+    let dead = false
+    void (async () => {
+      try {
+        const info = await collabApi.session(path)
+        if (dead) return
+        // 방이 디스크와 어긋나 있으면 붙지 않는다.
+        // lib 은 "방에 먼저 들어온 문서"가 방의 기준이라, 낡은 방에 붙으면
+        // 디스크의 새 파일이 예전 내용으로 덮어써진다(자료 유실).
+        try {
+          const current = await hashBytesHex(content)
+          if (info.lastHash && current !== info.lastHash) {
+            setCollab(null)
+            setCollabError('stale room (file changed on disk)')
+            return
+          }
+        } catch {
+          /* 해시 실패면 붙인다(서버가 마지막 낙오를 막는다). */
+        }
+        const me = readCollabUser()
+        setCollab({
+          roomId: info.roomId,
+          serverUrl: collabServerUrl(),
+          user: { name: me?.name?.trim() || 'user', color: me?.color || '#2563eb' },
+        })
+        setCollabError(null)
+      } catch (e) {
+        if (dead) return
+        // 방을 못 만들어도 solo 편집은 계속된다.
+        setCollab(null)
+        setCollabError(e instanceof Error ? e.message : 'collab session failed')
+      }
+    })()
+    return () => {
+      dead = true
+    }
+  }, [editing, path, content])
   const [comments, setComments] = useState<XlsxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -1520,6 +1567,13 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   const mutateXlsxComments = async (
     op: (base: Uint8Array) => Promise<Uint8Array>,
   ): Promise<boolean> => {
+    // X1a 함정: 코멘트는 파일 바이트를 직접 고쳐 쓰는 방식이라, 방(위 협업 문서)과
+    // 어긋난다(저장 후 뷰어를 다시 마운트하면 방의 내용이 이긴다 → 코멘트가 사라진다).
+    // 동시편집 중에는 막는다(조용한 유실 대신 명확한 안내).
+    if (collab) {
+      showToast.info('동시편집 중에는 코멘트 저장을 할 수 없습니다')
+      return false
+    }
     try {
       let base = content
       if (editing) {
@@ -1745,9 +1799,15 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
             showToolbar={editing}
             showFormulaBar={editing}
             theme={appTheme}
+            collaboration={collab ?? undefined}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}
           />
+          {editing && collabError && (
+            <div className="absolute left-2 top-2 z-10 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300">
+              동시편집 연결 실패 — 단독 편집으로 진행합니다
+            </div>
+          )}
           </Suspense>
         </div>
         {showComments && (
