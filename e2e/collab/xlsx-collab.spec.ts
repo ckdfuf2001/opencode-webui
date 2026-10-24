@@ -534,18 +534,12 @@ test.describe('X0a: XLSX 동시편집', () => {
       const edit = t.pageB.getByRole('button', { name: 'Edit', exact: true })
       await edit.waitFor({ timeout: 20000 })
       await edit.click({ timeout: 20000 })
-      await tryCellEdit(t.pageB, 'B3', stampB)
+      // X1d(P0): 편집 진입 직후엔 **연결 중 배너**가 보여야 한다(입력 차단 상태).
+      // webui-pre(9bc434e) 에는 이 배너가 없어 이 단계에서 실패한다(수정 효과 증명).
+      await expect(t.pageB.getByTestId('xlsx-collab-connecting')).toBeVisible({ timeout: 10000 })
+      const typed = await tryCellEdit(t.pageB, 'B3', stampB)
 
-      // 연결 판정이 끝난다(방 참가 또는 배너).
-      await expect
-        .poll(
-          async () => (await collabState(t.pageB)).active || (await t.pageB.locator('[data-testid="xlsx-collab-banner"]').count()) > 0,
-          { timeout: 30000, intervals: [500] },
-        )
-        .toBe(true)
-      // 연결 동안 입력이 막혔다면, 판정 후 다시 편집한다.
-      // X0a-9: 방 문서가 실제 적용(synced)된 뒤 B3 내용을 다시 확인한다 —
-      // 편집 차단(readOnly) 또는 내용 유지 중 하나인지 판정이 여기서 확정된다.
+      // 연결 판정이 끝나고 방 문서가 적용된다(synced).
       await expect
         .poll(
           async () => {
@@ -555,21 +549,12 @@ test.describe('X0a: XLSX 동시편집', () => {
           { timeout: 30000, intervals: [500] },
         )
         .toBe('ok')
-      // 판정이 끝난 뒤 B3 내용이 살아 있는지 확인한다: 없으면(차단 또는 유실) 재입력하고
-      // 저장이 디스크에 감(적용됨)을 반복 폴링으로 수렴 확인한다. 수식 바 read-back 은 신뢰하지 않는다.
+      // X1d(P0): 반복 재입력 루프는 없다. 요구는 "입력이 막히거나(차단), 살아 있거나" 둘 중 하나다.
+      //  - 막혔다면(tryCellEdit=false) 판정 뒤 **1회**만 재입력한다.
+      //  - 입력이 통과했다면(tryCellEdit=true) 유실되면 안 되므로 추가 입력 없이 저장한다.
+      if (!typed) await setCellByFormulaBar(t.pageB, 'B3', stampB)
       await clickAppSave(t.pageB)
-      await expect
-        .poll(
-          async () => {
-            if (await workbookContains(f.abs, stampB)) return stampB
-            await setCellByFormulaBar(t.pageB, 'B3', stampB)
-            await clickAppSave(t.pageB)
-            return ''
-          },
-          { timeout: 60000, intervals: [800] },
-        )
-        .toBe(stampB)
-      // B 의 입력은 살아 있어야 한다(A 의 입력가 치환되면 안 된다).
+      // 저장된 디스크에 B 의 입력이 실제 존재해야 한다(A 의 입력이 치환되면 안 된다).
       await expect
         .poll(async () => (await workbookContains(f.abs, stampB)) ? stampB : '', { timeout: 25000, intervals: [500] })
         .toBe(stampB)
@@ -577,5 +562,32 @@ test.describe('X0a: XLSX 동시편집', () => {
       await t.ctxA.close()
       await t.ctxB.close()
     }
+  })
+
+  test('X0a-10: 동시편집 연결 대기 상한 — WebSocket 이 막히면 단독 편집으로 넘어간다', async ({ page }) => {
+    const f = freshXlsx('x0a10', 0)
+    const stamp = `X10${Date.now().toString(36)}`
+    // X1d(P0): /api/collab WebSocket 을 막는다(VPN/프록시 차단 환경 재현).
+    // session(HTTP) 은 통과하므로 방 판정은 "joining" 에 멈춘다 → 15초 상한 → 단독 전환.
+    await page.routeWebSocket(/\/api\/collab/, (ws) => {
+      // 서버에 연결하지 않는다(조용한 차단).
+      ws.close()
+    })
+    await gotoApp(page)
+    await openXlsxFileOnly(page, f.name)
+    const edit = page.getByRole('button', { name: 'Edit', exact: true })
+    await edit.waitFor({ timeout: 20000 })
+    await edit.click({ timeout: 20000 })
+    // 연결 대기 배너가 먼저 보인다.
+    await expect(page.getByTestId('xlsx-collab-connecting')).toBeVisible({ timeout: 10000 })
+    // 15초 상한: '연결 시간 초과' 배너로 넘어가고 대기 배너는 사라진다.
+    await expect(page.getByTestId('xlsx-collab-banner')).toContainText('시간 초과', { timeout: 30000 })
+    await expect(page.getByTestId('xlsx-collab-connecting')).toHaveCount(0)
+    // 단독 편집으로 저장한다(X1c 잠금이 그대로 적용된다).
+    await setCellByFormulaBar(page, 'B2', stamp)
+    await clickAppSave(page)
+    await expect
+      .poll(async () => (await workbookContains(f.abs, stamp)) ? stamp : '', { timeout: 25000, intervals: [500] })
+      .toBe(stamp)
   })
 })

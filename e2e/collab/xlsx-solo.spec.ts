@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { absForRel } from './helpers/env'
+import JSZip from 'jszip'
 
 /**
  * X-B1: Chrome에서 XLSX Edit을 누르면 편집 UI 없이 전체창만 열리는 버그.
@@ -156,9 +157,147 @@ const failures: Array<{ i: number; ui: unknown }> = []
     // X-B1은 solo 경로 검증이므로 창/툴바 조작이 없다. 이 잡음은 E2E 환경에서
 // commands 엔드포인트가 간헐적으로 실패해 발생한다(PPT 스위트도 동일).
 const noise = /Failed to fetch commands|AxiosError/
-expect(
-  errs.filter((e) => !noise.test(e)),
-  `console/page errors: ${errs.slice(0, 3).join(' | ')}`,
-).toEqual([])
+    expect(
+      errs.filter((e) => !noise.test(e)),
+      `console/page errors: ${errs.slice(0, 3).join(' | ')}`,
+    ).toEqual([])
+  })
+})
+
+/**
+ * X-B2(X1d): 다른 뷰어(DOCX)도 공용 저장 훅을 쓴다 — `requireIfMatch` 옵션을 넘기지
+ * 않는 호출자는 If-Match 없이 기존대로 저장해야 하고, 디스크에 반영된다.
+ * 회귀 배경: X1c 의 throw 가 hooks 유무와 무관하게 걸려 DOCX 저장이 막혔다.
+ */
+const DOCX_MARK = `XB2${Date.now().toString(36)}`
+
+/** 최소 docx(zip) 를 만든다: Content_Types + rels + document + styles. */
+async function makeMinimalDocx(abs: string): Promise<void> {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`,
+  )
+  zip.file(
+    '_rels/.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`,
+  )
+  zip.file(
+    'word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`,
+  )
+  zip.file(
+    'word/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style>
+</w:styles>`,
+  )
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body><w:p><w:r><w:t xml:space="preserve">Seed heading for ${DOCX_MARK}</w:t></w:r></w:p><w:sectPr/></w:body>
+</w:document>`,
+  )
+  fs.mkdirSync(path.dirname(abs), { recursive: true })
+  fs.writeFileSync(abs, await zip.generateAsync({ type: 'nodebuffer' }))
+}
+
+test.describe('X-B2: DOCX edit entry (other-office save path)', () => {
+  test('X-B2: DOCX edit → save writes to disk', async ({ page }) => {
+    const errs: string[] = []
+    page.on('pageerror', (e) => errs.push(String(e)))
+    page.on('console', (m) => {
+      if (m.type() === 'error') errs.push(m.text())
+    })
+    const name = `b2-${Date.now().toString(36)}.docx`
+    const abs = absForRel(path.posix.join('repos', 'collab-e2e', name))
+    await makeMinimalDocx(abs)
+
+    await page.goto('/?collabDebug=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    for (let i = 0; i < 6; i++) {
+      try {
+        await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
+        break
+      } catch {
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+      }
+    }
+    for (let i = 0; i < 5; i++) {
+      await page.getByTitle('Workspace').click({ timeout: 20000 })
+      try {
+        await page.waitForFunction(
+          () => document.querySelectorAll('[data-testid="file-row"]').length > 0,
+          null,
+          { timeout: 10000 },
+        )
+        break
+      } catch {
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(2000)
+      }
+      if (i === 4) throw new Error('workspace sheet has no rows after retries')
+    }
+    for (let i = 0; i < 8; i++) {
+      const has = await page.evaluate(
+        (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
+        name,
+      )
+      if (has) break
+      const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
+      if ((await folder.count()) > 0) {
+        await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
+      }
+      await page.waitForTimeout(2500)
+    }
+    await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({
+      timeout: 20000,
+    })
+    // 편집 진입 → DOCX 편집기 마운트
+    const edit = page.getByRole('button', { name: 'Edit', exact: true })
+    await edit.waitFor({ timeout: 20000 })
+    await edit.click({ timeout: 20000 })
+    await page.waitForSelector('docx-editor', { timeout: 30000 })
+    // ProseMirror 본문에 타이핑한다(기존 문단 끝에 마커 추가).
+    const pm = page.locator('docx-editor [contenteditable="true"]').first()
+    await pm.waitFor({ timeout: 30000 })
+    await pm.click({ timeout: 15000 })
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type(DOCX_MARK)
+    // 앱 상단 Save → 디스크 반영 확인.
+    const save = page.locator('[data-testid="preview-doc-header"]').getByRole('button', { name: 'Save', exact: true })
+    await save.waitFor({ timeout: 20000 })
+    await save.click({ timeout: 20000 })
+    await expect
+      .poll(
+        async () => {
+          if (!fs.existsSync(abs)) return ''
+          const buf = fs.readFileSync(abs)
+          const zip = await JSZip.loadAsync(buf)
+          const doc = await zip.file('word/document.xml')?.async('string')
+          return doc?.includes(DOCX_MARK) ? DOCX_MARK : ''
+        },
+        { timeout: 25000, intervals: [500] },
+      )
+      .toBe(DOCX_MARK)
+
+    const noise = /Failed to fetch commands|AxiosError/
+    expect(
+      errs.filter((e) => !noise.test(e)),
+      `console/page errors: ${errs.slice(0, 3).join(' | ')}`,
+    ).toEqual([])
   })
 })
