@@ -3,6 +3,7 @@ import * as fileService from '../services/files'
 import { SettingsService } from '../services/settings'
 import type { Database } from 'bun:sqlite'
 import { logger } from '../utils/logger'
+import { createHash } from 'node:crypto'
 
 export function createFileRoutes(database: Database) {
   const app = new Hono()
@@ -68,10 +69,14 @@ export function createFileRoutes(database: Database) {
       
       if (raw && !result.isDirectory) {
         const content = await fileService.getRawFileContent(userPath)
+        // X1c(P0): 단독 저장(덮어쓰기)의 잠금용 ETag. 클라이언트는 이 값을 If-Match 로
+        // 되돌려 보낸다 → 디스크가 그 사이에 바뀌었으면 서버가 409 로 거부한다.
+        const etag = `"${createHash('sha256').update(content).digest('hex')}"`
         return new Response(content, {
           headers: {
             'Content-Type': result.mimeType || 'application/octet-stream',
             'Content-Length': result.size.toString(),
+            ETag: etag,
             // M11: 파일 본문은 캐시하지 않는다.
             // 저장 직후 뷰어가 리마운트되면 브라우저가 **저장 이전 바이트**(캐시)를 다시 쓰면
             // 구 내용이 자동 저장으로 디스크를 덮어써 편집이 조용히 사라진다(E2/E2b 실패 원인).
@@ -107,6 +112,27 @@ export function createFileRoutes(database: Database) {
   app.post('/*', async (c) => {
     try {
       const path = decodePath(c)
+      // X1c(P0): 단독 저장의 잠금. 클라이언트가 보낸 If-Match 가 지금 디스크와 다르면
+      // 409 로 거부한다(폰 http 처럼 해시를 못 계산하는 환경에서도 안전하다).
+      // If-Match 가 없으면 덮어쓴다(기존 경로 — PPT 등 방을 거치지 않는 다른 클라이언트).
+      const ifMatch = c.req.header('If-Match')
+      if (ifMatch && ifMatch !== '*') {
+        const stat = await fileService.getFileStat(path)
+        if (stat.exists && !stat.isDirectory) {
+          const content = await fileService.getRawFileContent(path)
+          const etag = `"${createHash('sha256').update(content).digest('hex')}"`
+          if (etag !== ifMatch) {
+            return c.json(
+              {
+                error: 'File changed on disk since it was loaded (download your copy)',
+                code: 'conflict_external',
+                currentHash: etag.replace(/"/g, ''),
+              },
+              409,
+            )
+          }
+        }
+      }
       const body = await c.req.parseBody()
 
       const file = body.file as File

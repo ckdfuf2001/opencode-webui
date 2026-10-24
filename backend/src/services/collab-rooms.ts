@@ -523,11 +523,15 @@ async function staleRoomCheck(
   knownHash?: string,
 ): Promise<{ stale: true; code: 'stale_room' | 'stale_client'; currentHash: string | null } | null> {
   let disk: string | null = null
+  let failed = false
   try {
     disk = await hashFile(abs)
   } catch {
-    return null
+    // X1c: strict 모드는 판정할 수 없으면 stale 로 처리한다(fail-closed).
+    // XLSX 는 "방에 먼저 들어온 문서"가 방의 기준이라, 확인 없이 붙으면 덮어쓸 위험이 크다.
+    failed = true
   }
+  if (failed) return { stale: true, code: 'stale_room', currentHash: null }
   if (knownHash && disk && knownHash !== disk) {
     return { stale: true, code: 'stale_client', currentHash: disk }
   }
@@ -928,6 +932,11 @@ export async function applySave(
 > {
   const room = rooms.get(roomId)
   if (!room) throw { message: 'No such room', statusCode: 404 }
+  // X1c: xlsx 방에서는 baseHash 가 **필수**다. 없으면 잠금이 아예 건너뛰어져
+  // 옛 바이트가 늦게 도착해 저장을 덮어쓸 수 있다(P0-3).
+  if (opts?.kind === 'xlsx' && !opts?.baseHash) {
+    throw { message: 'Missing base hash (optimistic lock required)', statusCode: 400, code: 'missing_base_hash' }
+  }
   const run = room.saveChain.then(async () => {
     const disk = await currentDiskHash(roomId)
     // X1b(P0-3/P0-4): 낙관적 잠금(**XLSX 경로만**).
