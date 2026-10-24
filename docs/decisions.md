@@ -348,6 +348,23 @@
 - 결정(4): XLSX/DOCX 는 아직 타이틀바 슬롯이 없으므로 `DocumentPreview` 헤더를 유지한다.
   PPT 만 편집 중 헤더를 숨긴다. xlsx/docx 슬롯 지원은 v0.13 검토 항목.
 - 관련 커밋: 8519875(U1), 7e737da(U2), c13b912(U3), 20281bf(M6b 테스트 보정)
+- **패치 범위 확장(D42 기록)**: `actions` 슬롯은 ooxml-ui 에 원래 있었지만, 그 슬롯에 앱 내용을
+  넣으려고 pptx-react-viewer 패치에 ① `titleBarSlot` prop ② `<div slot="actions">` 투영
+  ③ 타입 선언 2곳(`dist/index.d.ts`, `dist/viewer/index.d.ts`)을 추가했고, ooxml-ui 패치에는
+  ④ `autosave.available === false` 일 때 AutoSave 를 숨기는 hunk 를 추가했다. 즉 **lib 패치 2개가
+  늘었다**(새 슬롯 정의가 아니라 호스트 주입 통로 추가).
+- **패치 키 버전 고정**: `pnpm.patchedDependencies` 키를 `pptx-react-viewer@4.33.0` 으로 바꿨다.
+  버전 키는 루트 의존성을 요구하지 않으므로 루트 devDependencies 의 `pptx-react-viewer` 를 제거했다
+  (lockfile 에 jszip 3.10.1/3.10.2 두 스냅샷이 생기던 원인). clean install 후에도 런타임 표식
+  `ui=M21`, `viewer=M21-esm` 과 `slot: "actions"` 가 설치본에 존재함을 확인했다.
+- **Save 경로 확인**: Save 버튼 → `officeSaveRequest` → `PptxViewer.onSave` → `h.getContent()`
+  → `persistBytes` → `saveSerializer.request`(`PptxViewer.tsx:735`). M32 의 serializer 우회 경로가 아니다.
+- **기준선 대조(2026-10-22)**: `v0.12.70` worktree 와 HEAD 에서 동일 명령
+  (`pptx-collab.spec.ts`, chromium, workers=1)으로 전수 실행. 양쪽 모두 **17 failed / 17 passed /
+  1 skipped / did-not-run 0**, 실패 테스트 이름 집합이 **완전히 동일**(E3, E4, E7, E8, E9, E12, E15,
+  E16b, E18, E19b, E20, E20s, E21, E21b, E11m/E1m·E2m·E3m). ⇒ HEAD-only 회귀 0건.
+  전수 실행에서만 보였던 E5 는 재실행에서 통과(플레이크). 17건은 기존 실패로 백로그 처리한다.
+
 
 ## 미결정 (사용자 판단 대기)
 - Q01 /handoff 410 스텁을 완전히 삭제할지.

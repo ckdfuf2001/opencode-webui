@@ -577,5 +577,18 @@ E21만의 문제가 아니다. 근거:
 - 전수 `pptx-collab.spec.ts` 실행 시 19건 실패(E3 라벨, E21b 원격 커서, E4/E5/E7...).
   U1~U3 변경 경로(타이틀바/미리보기 닫기)와 무관한 **기존 실패로 추정** — 착수 전 기준선이
   부분 스위트만 측정되어 있었다. 다음 세션에서 66edec6 이전 커밋으로 대조 필요.
+- **기준선 대조 완료(2026-10-22)**: `git worktree` 로 `v0.12.70` 을 만들고 양쪽에서 동일 명령
+  (`pptx-collab.spec.ts`, chromium, workers=1) 실행.
+  | 실행 | failed | passed | skipped | did-not-run |
+  |---|---|---|---|---|
+  | v0.12.70 (base) | 17 | 17 | 1 | 0 |
+  | HEAD | 17 | 17 | 1 | 0 |
+  실패 이름 집합 동일(E3/E4/E7/E8/E9/E12/E15/E16b/E18/E19b/E20/E20s/E21/E21b + 모바일 3건)
+  ⇒ **HEAD-only 회귀 0건**. 전수 실행에서만 보이던 E5 는 재실행 시 통과(플레이크).
+  기존 17건은 이번 범위에서 고치지 않고 백로그로 둔다.
+- 루트 devDependency `pptx-react-viewer` 제거(버전 키 패치에는 불필요). clean install 후
+  lockfile 스냅샷 1개, 설치본 `slot: "actions"`/`M21-esm`/autosave hunk 확인, U1~U3 재통과.
+- Save 버튼 경로: `officeSaveRequest → PptxViewer.onSave → getContent → persistBytes →
+  saveSerializer.request`(PptxViewer.tsx:735) — serializer 우회 아님.
 - M6b 는 U1 로 탐색기가 닫히므로, 반복 주기마다 `Workspace` 로 탐색기를 다시 열도록 수정(20281bf).
 
