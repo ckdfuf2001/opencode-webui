@@ -187,6 +187,71 @@ async function clickDone(page: Page): Promise<void> {
   await done.click({ timeout: 20000 })
 }
 
+/** X0a-9: 편집 모드 도입 직후의 즉시 입력 시도. 편집이 막혀 있어도 실패하지 않는다. */
+async function tryCellEdit(page: Page, ref: string, value: string): Promise<boolean> {
+  await page.evaluate((r) => {
+    const el = document.querySelector('xlsx-editor') as unknown as { select?: (ref: string) => void; focusGrid?: () => void } | null
+    el?.select?.(r)
+    el?.focusGrid?.()
+  }, ref)
+  const bar = page.locator('xlsx-editor [part~="formula-bar"] input').last()
+  const found = await bar.waitFor({ timeout: 5000 }).then(() => true).catch(() => false)
+  if (!found) return false
+  const filled = await bar
+    .click({ timeout: 5000 })
+    .then(() => bar.fill(value, { timeout: 5000 }))
+    .then(() => bar.press('Enter'))
+    .then(() => true)
+    .catch(() => false)
+  return filled
+}
+
+/** X0a-9: 편집 모드까지만 가지 않고 파일까지만 연다. */
+async function openXlsxFileOnly(page: Page, name: string): Promise<void> {
+  for (let i = 0; i < 6; i++) {
+    try {
+      await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
+      break
+    } catch {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+    }
+  }
+  for (let i = 0; i < 5; i++) {
+    await page.getByTitle('Workspace').click({ timeout: 20000 })
+    const opened = await expect
+      .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 8000, intervals: [200] })
+      .toBeGreaterThan(0)
+      .then(() => true)
+      .catch(() => false)
+    if (opened) break
+    await page.keyboard.press('Escape')
+  }
+  for (let i = 0; i < 8; i++) {
+    const has = await page.evaluate(
+      (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
+      name,
+    )
+    if (has) break
+    const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
+    if ((await folder.count()) > 0) {
+      await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
+    }
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
+            name,
+          ),
+        { timeout: 8000, intervals: [300] },
+      )
+      .toBe(true)
+      .catch(() => {})
+  }
+  await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
+  await page.waitForSelector('.xlsxengine-host', { timeout: 30000 })
+}
+
 test.describe('X0a: XLSX 동시편집', () => {
   test('X0a-1: 두 편집자가 같은 방에 들어가 서로가 보인다', async ({ browser }) => {
     const t = await twoPages(browser)
@@ -392,6 +457,93 @@ test.describe('X0a: XLSX 동시편집', () => {
       await clickDone(t.pageA)
       // 편집 종료 → 편집기가 언마운트 → lib 소켓이 닫힌다(방이 사라진다).
       await expect.poll(roomPresent, { timeout: 20000, intervals: [500] }).toBe(false)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('X0a-8: 단독 저장도 잠긴다 — 방에서 저장한 내용을 덮어쓰지 않는다', async ({ browser }) => {
+    const t = await twoPages(browser)
+    const f = freshXlsx('x0a8', 0)
+    const stampA = `X8A${Date.now().toString(36)}`
+    const stampC = `X8C${Date.now().toString(36)}`
+    try {
+      // A·B 가 방에 참가한다.
+      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageB, f.name)
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+
+      // A 가 편집·저장 → 디스크는 A 의 내용.
+      await setCellByFormulaBar(t.pageA, 'B2', stampA)
+      await clickAppSave(t.pageA)
+      await expect
+        .poll(async () => (await workbookContains(f.abs, stampA)) ? stampA : '', { timeout: 25000, intervals: [500] })
+        .toBe(stampA)
+
+      // C 는 단독(해시를 못 계산하는 환경 — 폰 http 접속과 같다).
+      const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+      await seedUser(ctxC, { id: 'u-c8', name: 'Cathy', color: '#d97706' })
+      await ctxC.addInitScript(() => {
+        try {
+          Object.defineProperty(window, 'crypto', { value: { getRandomValues: () => new Uint8Array(8) }, configurable: true })
+        } catch {
+          /* 무시 */
+        }
+      })
+      const pageC = await ctxC.newPage()
+      await gotoApp(pageC)
+      await openXlsxEditing(pageC, f.name)
+      // C 는 방에 못 붙는다(단독).
+      await expect.poll(async () => (await collabState(pageC)).active, { timeout: 20000, intervals: [500] }).toBe(false)
+
+      // C 가 저장 → 낡은 내용으로 덮어쓰면 안 된다(409 + 배너 + 다운로드).
+      await setCellByFormulaBar(pageC, 'B2', stampC)
+      await clickAppSave(pageC)
+      await expect(pageC.locator('[data-testid="xlsx-collab-banner"]')).toBeVisible({ timeout: 20000 })
+      await expect(pageC.locator('[data-testid="xlsx-collab-download"]')).toBeVisible({ timeout: 15000 })
+      // 디스크는 A 의 내용 그대로(외부 덮어쓰기 금지).
+      expect(await workbookContains(f.abs, stampA), 'A의 저장이 디스크에 남아 있어야 한다').toBe(true)
+      expect(await workbookContains(f.abs, stampC), '단독 저장이 디스크를 덮으면 안 된다').toBe(false)
+      await ctxC.close()
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('X0a-9: 방 연결이 끝날 때까지 편집을 막는다 (먼저 입력한 내용의 유실 방지)', async ({ browser }) => {
+    const t = await twoPages(browser)
+    const f = freshXlsx('x0a9', 0)
+    const stampA = `X9A${Date.now().toString(36)}`
+    const stampB = `X9B${Date.now().toString(36)}`
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await setCellByFormulaBar(t.pageA, 'B2', stampA)
+
+      // B 는 편집에 들어가 **바로** 수식 바에 입력한다(연결 판정 전).
+      await openXlsxFileOnly(t.pageB, f.name)
+      const edit = t.pageB.getByRole('button', { name: 'Edit', exact: true })
+      await edit.waitFor({ timeout: 20000 })
+      await edit.click({ timeout: 20000 })
+      const typed = await tryCellEdit(t.pageB, 'B3', stampB)
+
+      // 연결 판정이 끝난다(방 참가 또는 배너).
+      await expect
+        .poll(
+          async () => (await collabState(t.pageB)).active || (await t.pageB.locator('[data-testid="xlsx-collab-banner"]').count()) > 0,
+          { timeout: 30000, intervals: [500] },
+        )
+        .toBe(true)
+      // 연결 동안 입력이 막혔다면, 판정 후 다시 편집한다.
+      if (!typed) await setCellByFormulaBar(t.pageB, 'B3', stampB)
+      await clickAppSave(t.pageB)
+      // B 의 입력은 살아 있어야 한다(A 의 입력가 치환되면 안 된다).
+      await expect
+        .poll(async () => (await workbookContains(f.abs, stampB)) ? stampB : '', { timeout: 25000, intervals: [500] })
+        .toBe(stampB)
     } finally {
       await t.ctxA.close()
       await t.ctxB.close()
