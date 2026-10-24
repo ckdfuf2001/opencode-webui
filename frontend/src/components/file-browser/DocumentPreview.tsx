@@ -515,16 +515,19 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
     setEndingEdit(true)
     try {
       // X1c(P0-2): 실패 바이트 보관 중이면 Ok 확인을 묻는다 — 그냥 닫으면 편집이 사라진다.
+      // X1d(P0): 확인(OK)을 누르면 **닫는다** — 저장이 실패해도 확인했다는 뜻은 닫겠다는 뜻.
+      // 거부(취소)만 편집 화면에 남는다.
       const outcome = await requestOfficeSave()
+      let confirmedDiscard = false
       if (!outcome.ok && outcome.hasFailedCopy) {
-        const go = window.confirm(
+        confirmedDiscard = window.confirm(
           '저장하지 않은 변경이 있습니다(디스크가 바뀌어 저장이 막혔습니다).\n' +
           '내 사본을 내려받았나요? 확인(OK)하면 편집 화면을 닫습니다.',
         )
-        if (!go) return
       }
-      if (outcome.ok) {
+      if (outcome.ok || confirmedDiscard) {
         setEditing(false)
+        if (confirmedDiscard) showToast.info('확인을 눌렀으므로 편집 화면을 닫습니다(사본은 닫기 전에 내려받으세요)')
         window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
         after?.()
       } else {
@@ -1536,6 +1539,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
     // X1c(P0): 단독 저장도 잠근다(디스크가 원본). 파일을 **읽은 시점**의 ETag,
     // 단독 저장 성공마다 갱신한다.
     ifMatch: etag,
+    requireIfMatch: true,
     onError: (_conflict, e) => {
       // X1c(P0-2): 모든 저장 실패에 내 사본 다운로드를 제공한다(토스트만으로는 조용한 유실이다).
       void storeFailedBytes(e)
@@ -1556,13 +1560,34 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
      */
     joined: boolean
   } | null>(null)
-  const [collabNotice, setCollabNotice] = useState<{ kind: 'stale' | 'nohash' | 'error' | 'external'; text: string } | null>(null)
+  // X1d: notice 종류에 'timeout'(연결 대기 상한)을 추가한다.
+  const [collabNotice, setCollabNotice] = useState<{ kind: 'stale' | 'nohash' | 'error' | 'external' | 'timeout'; text: string } | null>(null)
   const [conflictBytes, setConflictBytes] = useState<Uint8Array | null>(null)
   /**
-   * X1c(P1): 방 참가 판정(collab 또는 notice)이 끝날 때까지 편집기를 마운트하지 않는다.
-   * 마운트 뒤 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 그 사이 입력이 사라질 수 있다.
+   * X1c(P1): 방 참가 판정(collab 또는 notice)이 끝날 때까지 편집기를 readOnly로 막는다.
+   * 마운트 시 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 먼저 입력이 사라질 수 있다.
+   *
+   * X1d(P0): 연결 대기에는 상한이 있다(15초). lib 가 `active` 를 알려줘야 readOnly 가
+   * 풀리므로, VPN/프록시 등으로 WebSocket 이 막긴 환경에서는 영원히 막힌다. 초과하면
+   * 단독 편집으로 넘어가며 배너("연결 시간 초과")를 띄운다 — 단독 전환이라 X1c 의
+   * If-Match 잠금이 그대로 적용되어 안전하다.
    */
   const connecting = editing && !collabNotice && !(collab?.joined)
+  /**
+   * X1d(P0): 연결 대기 상한(15초). 초과하면 단독 편집으로 전환한다 — 영원히 readOnly 로
+   * 남는 상태(WebSocket 차단 환경)를 막는다. notice('timeout') 가 뜨면 readOnly 가 풀린다.
+   */
+  useEffect(() => {
+    if (!connecting) return
+    const t = setTimeout(() => {
+      setCollab(null)
+      setCollabNotice({
+        kind: 'timeout',
+        text: '동시편집 연결 시간 초과 — 단독 편집으로 진행합니다. 저장이 막히면 배너로 알려 줍니다',
+      })
+    }, 15000)
+    return () => clearTimeout(t)
+  }, [connecting])
   const collabRef = useRef(collab)
   collabRef.current = collab
   const contentRef = useRef(content)
@@ -1999,8 +2024,12 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
             theme={appTheme}
             collaboration={collabOptions}
             onCollaborationChange={(state) => {
-              // X1c(P1): 방에 실제로 붙었을 때(문서 적용 완료)만 편집기를 연다.
-              if (state.active) setCollab((prev) => (prev ? { ...prev, joined: true } : prev))
+              // X1c(P1): 방에 실제로 붙었을 때(연결 + 첫 교환 완료)만 잠금을 푼다.
+              // X1d: `active` 는 공유가 시작됐다는 뜻일 뿐 소켓이 열렸다는 뜻이 아니다
+              // (routeWebSocket 차단 테스트 X0a-10 에서 조기 해제가 잡혔다). status 가
+              // 'connected' 이고 `synced`(첫 교환 완료)일 때만 푼다.
+              if (state.active && state.status === 'connected' && state.synced)
+                setCollab((prev) => (prev ? { ...prev, joined: true } : prev))
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}

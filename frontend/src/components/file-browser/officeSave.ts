@@ -76,15 +76,20 @@ export interface OfficeSaveDoneDetail {
  * handle이 없거나 저장 중이면 false.
  * onSaved는 저장된 바이트 후처리용 (모델 기준 상태 갱신 등).
  * onError는 409(외부 변경) 같은 충돌을 상위에서 배너·다운로드로 다룰 수 있게 준다.
- * X1c(P0): 잠금에 쓸 If-Match 는 **파일을 읽은 시점**의 ETag 이다(저장 직전에 다시 읽으면 안 된다).
- * 를 hooks.ifMatch 로 준다. ETag 를 아직 못 받았으면(로딩 중) 저장을 막는다(아직 파일이 없다).
+ * X1d(P0): `requireIfMatch` 를 넘긴 호출자만 If-Match 가 필수다(X1c 의 단독 저장 잠금,
+ * XlsxViewer). 다른 뷰어(DOCX 등)는 ifMatch 없어도 저장한다 — 서버도 If-Match 가
+ * 없으면 기존대로 덮어쓴다. throw 는 ifMatch 를 요구한 쪽에만 적용한다.
  */
 export function useOfficeSave(
   serverPath: string,
   fileName: string,
   handle: SaveHandle,
   onSaved?: (bytes: Uint8Array, etag?: string) => void,
-  hooks?: { ifMatch?: string | null; onError?: (conflict: OfficeSaveConflict | null, e: unknown) => void },
+  hooks?: {
+    ifMatch?: string | null
+    requireIfMatch?: boolean
+    onError?: (conflict: OfficeSaveConflict | null, e: unknown) => void
+  },
 ) {
   const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
@@ -92,8 +97,9 @@ export function useOfficeSave(
     if (!handle || saving) return false
     setSaving(true)
     try {
-      // X1c: 파일을 읽은 시점의 ETag 가 없으면 파일이 아직 없다는 뜻이다 → 저장하지 않는다.
-      if (!hooks?.ifMatch) throw new Error('File not loaded yet')
+      // X1d: requireIfMatch 옵션을 넘긴 호출자에만 적용한다. ETag 가 아직 없으면
+      // 저장해도 잠금을 걸 수 없으므로 저장 자체를 막는다(조용한 덮어쓰기 방지).
+      if (hooks?.requireIfMatch && !hooks?.ifMatch) throw new Error('File not loaded yet')
       const blob = await handle.save()
       const ok = await saveOfficeBytes(serverPath, fileName, blob, { ifMatch: hooks?.ifMatch })
       handle.markClean()
