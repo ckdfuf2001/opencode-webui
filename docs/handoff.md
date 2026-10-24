@@ -668,5 +668,22 @@ E21만의 문제가 아니다. 근거:
 | X0a-9 반복 | `--repeat-each=3` chromium | 3 passed (409 `conflict_room` → 재직렬화 재시도 200 확인) |
 | X-B1 | chromium + msedge | 2 passed |
 
+### X1d 실행 결과 (2026-10-25)
+
+- 커밋: `e402d29`(테스트: X0a-9 차단 확인형, X0a-10 WS 차단 상한, X-B2 DOCX 저장) →
+  `e497aa0`(수정: requireIfMatch 범위, 연결 대기 상한 15초, Done 확인 닫힘) → 문서.
+- **X0a-9 수정 효과 증명**: 고친 테스트를 webui-pre(`9bc434e`)에서 실행 → 실패 원문:
+  `Error: expect(locator).toBeVisible() failed / Locator: getByTestId('xlsx-collab-connecting') /
+  Error: element(s) not found` @ xlsx-collab.spec.ts:539.
+- **lib 발견(X1d)**: `active` 는 공유 시작의 뜻일 뿐 소켓이 열렸다는 뜻이 아니다.
+  잠금 해제 조건을 `active && status==='connected' && synced` 로 강화(X0a-10 에서 검증됐다).
+
+| 항목 | 명령 | 결과 |
+|---|---|---|
+| X0a + X-B1/X-B2 반복 | `--repeat-each=3` chromium | **42 passed** (14 tests × 3) |
+| X0a + X-B1/X-B2 반복 | `--repeat-each=3` msedge | **42 passed** |
+| 회귀(U/M/E 트랙) | U1~U3, M6a/M6b, E2·E2b·E2f-strict·E2g·E2r (chromium) | **10 passed** — X-B1·X-B2 는 위 반복 42건에 포함 |
+| 타입/메모리/인코딩/린트 | backend tsc, frontend tsc, check:memory, check:encoding, eslint | 0 / 0 / 0(경고1 기준선) / 0 / 333 기준선 |
+
 
 
