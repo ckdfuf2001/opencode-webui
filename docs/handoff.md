@@ -651,5 +651,22 @@ E21만의 문제가 아니다. 근거:
 - E2 는 한 번 3.2초(기준 3초)로 실패했다가 재실행에서 통과했다. 같은 시점에 사용자 앱이
   돌고 있어 CPU 가 몰렸던 것으로, `9bc434e` 워크트리 대조에서도 통과했다 ⇒ 코드 회귀 아님.
 
+### X1c 후속 결과 (2026-10-25)
+
+- 커밋: `31ca9d4`(테스트: X0a-8 단독 저장 잠금, X0a-9 연결 전 차단) → `14c81c2`(백엔드:
+  ETag/If-Match, xlsx `baseHash` 필수 400, strict stale fail-closed) → `b1230ec`(프론트:
+  `connecting` 차단, 모든 실패 다운로드+Done 확인) → `7cd9b56`(ETag 동기화+따옴표 정규화,
+  X0a-9 수렴형 검증) → 문서.
+- **X-B1 회귀 원인**: POST `/api/files` 의 If-Match 비교가 따옴표 감싼 ETag(`"..."`) vs 클라이언트
+  값(따옴표 없음)의 형식 불일치였다. 서버가 양쪽 따옴표를 벗기고 비교하도록 정규화로 해결.
+- **X0a-9 결정화**: 판정(`active&&synced`) 뒤 저장→디스크 확인, 없으면 재입력+재저장을
+  반복 폴링으로 수렴시킨다(수식 바 read-back 은 레이스 때문에 신뢰하지 않음).
+
+| 항목 | 명령 | 결과 |
+|---|---|---|
+| X0a 전체 반복 | `--repeat-each=3` chromium + msedge | **33 passed × 2** |
+| X0a-9 반복 | `--repeat-each=3` chromium | 3 passed (409 `conflict_room` → 재직렬화 재시도 200 확인) |
+| X-B1 | chromium + msedge | 2 passed |
+
 
 
