@@ -82,7 +82,7 @@ export interface CollabRoom {
   /**
    * X1b: 이 방이 **직접 저장한** 해시 목록(최근 N개).
    * XLSX 저장 판정용이다: 디스크 해시가 이 목록에 있으면 "이 방의 참가자가 먼저 저장한 것"으로
-   * 보고 클라이언트에 다시 직렬화·재시도를指示한다. 목록에 없으면 외부 변경(AI 편집·보기 모드
+   * 보고 클라이언트에 다시 직렬화·재시도를 지시한다. 목록에 없으면 외부 변경(AI 편집·보기 모드
    * 코멘트)이다 → 덮어쓰지 않고 배너·다운로드로 알린다.
    */
   recentSaveHashes: string[]
@@ -930,32 +930,41 @@ export async function applySave(
   if (!room) throw { message: 'No such room', statusCode: 404 }
   const run = room.saveChain.then(async () => {
     const disk = await currentDiskHash(roomId)
-    // X1b(P0-3/P0-4): 낙관적 잠금.
+    // X1b(P0-3/P0-4): 낙관적 잠금(**XLSX 경로만**).
+    // PPT 경로는 기존 판정(디스크 vs room.lastHash → conflict)을 그대로 쓴다.
     // 1) baseHash 가 방의 현재 해시와 다르면 → 방이 앞서갔다(다른 참가자가 먼저 저장).
     //    클라이언트는 방 상태를 다시 직렬화해 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
     // 2) 디스크가 방의 해시와 다르면 → 외부 변경(AI 편집·보기 모드 코멘트).
     //    재시도하지 않는다(덮어쓰면 조용한 유실이 된다).
-    if (opts?.baseHash && opts.baseHash !== room.lastHash) {
-      logger.warn(
-        `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
-      )
-      const r: { conflict: true; currentHash: string | null; code: 'conflict_room' } = {
-        conflict: true,
-        currentHash: room.lastHash,
-        code: 'conflict_room',
+    if (opts?.kind === 'xlsx') {
+      if (opts?.baseHash && opts.baseHash !== room.lastHash) {
+        logger.warn(
+          `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
+        )
+        const r: { conflict: true; currentHash: string | null; code: 'conflict_room' } = {
+          conflict: true,
+          currentHash: room.lastHash,
+          code: 'conflict_room',
+        }
+        return r
       }
-      return r
+      if (disk !== room.lastHash) {
+        const known = room.recentSaveHashes.includes(disk ?? '')
+        room.externalChanged = true
+        broadcastMeta(room)
+        const r: { conflict: true; currentHash: string | null; code: 'conflict_room' | 'conflict_external' } = {
+          conflict: true,
+          currentHash: disk,
+          code: known ? 'conflict_room' : 'conflict_external',
+        }
+        logger.warn(`Collab room ${room.id}: save conflict (${r.code}) disk=${String(disk).slice(0, 8)} room=${room.lastHash.slice(0, 8)}`)
+        return r
+      }
     }
     if (disk !== room.lastHash) {
-      const known = room.recentSaveHashes.includes(disk ?? '')
       room.externalChanged = true
       broadcastMeta(room)
-      const r: { conflict: true; currentHash: string | null; code: 'conflict_room' | 'conflict_external' } = {
-        conflict: true,
-        currentHash: disk,
-        code: known ? 'conflict_room' : 'conflict_external',
-      }
-      logger.warn(`Collab room ${room.id}: save conflict (${r.code}) disk=${String(disk).slice(0, 8)} room=${room.lastHash.slice(0, 8)}`)
+      const r: { conflict: true; currentHash: string | null } = { conflict: true, currentHash: disk }
       return r
     }
     // 4-0 가드: pptx 저장에서 이미지(파트·관계)가 줄었으면 막는다.
