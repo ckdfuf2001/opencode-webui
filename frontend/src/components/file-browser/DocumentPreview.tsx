@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { ViewerLoadBoundary } from './ViewerBoundaries'
 import { lazyWithRetry } from './lazyRetry'
@@ -39,6 +40,12 @@ type ExtractedMsg = {
 }
 
 const CONVERTABLE_CLIENT_KINDS = new Set<DocKind>(['pdf', 'docx', 'xlsx', 'pptx'])
+
+/**
+ * X1b: XLSX 저장은 lib(ooxml-ui xlsx)가 방을 소유하므로 owner clientId 가 없다.
+ * 서버는 xlsx 방에서 owner 검사를 건너뛰고 낙관적 잠금으로만 판정한다 ⇒ 값은 자리표시자.
+ */
+const XLSX_SAVE_CLIENT_ID = 0
 
 const SPINNER = (
   <div className="flex items-center justify-center py-12">
@@ -456,9 +463,13 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
   // path 없는 응답은 "우리 호출의 응답"일 수 없으므로 무시한다.
   useEffect(() => {
     const onDone = (e: Event) => {
-      const d = (e as CustomEvent<{ ok?: boolean; path?: string }>).detail
+      const d = (e as CustomEvent<{ ok?: boolean; path?: string; keepEditing?: boolean }>).detail
       if (!d?.ok) return
       if (!d.path || d.path !== file.path) return
+      // X1b: XLSX 저장은 편집을 유지한다(Save ≠ Done). 저장으로 편집이 끝나면
+      // lib 이 소유한 방 세션까지 내려가 presence 가 사라진다.
+      // "Done" 은 endEditing 이 별도로 편집을 끝낸다.
+      if (d.keepEditing) return
       setEditing(false)
       window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
     }
@@ -707,8 +718,11 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
                 <button
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('xlsxCommentsToggle'))}
-                  className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-                  title="Show comments"
+                  // X1b(P1-2): 편집 모드는 항상 방에 참가한다 → 코멘트 저장은 방과 어긋나
+                  // 조용히 사라진다. 편집 중에는 처음부터 비활성화하고 이유를 알려준다.
+                  disabled={editing}
+                  className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:hover:text-muted-foreground"
+                  title={editing ? '편집을 종료한 뒤 코멘트를 사용할 수 있습니다' : 'Show comments'}
                 >
                   Comments
                 </button>
@@ -1478,6 +1492,7 @@ function XlsxIconBtn({
 
 function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
   const appTheme = useTheme()
+  const queryClient = useQueryClient()
   const [error, setError] = useState<string | null>(null)
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
@@ -1491,53 +1506,88 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     getSelection?: () => string
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
-  const { save } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
-  // X1a: XLSX 동시편집. 편집 중이면 방을 만들고 lib(oesx-ui xlsx)에 넘긴다.
-  // lib 이 방의 워크북을 소유한다(먼저 들어온 쪽의 문서가 방의 기준이 된다).
-  // v1 범위: 편집 모드만 참가(보기 모드는 solo), 저장은 기존 /api/files 경로.
-  const [collab, setCollab] = useState<{ roomId: string; serverUrl: string; user: { name: string; color: string } } | null>(null)
-  const [collabError, setCollabError] = useState<string | null>(null)
+  const { save: saveSolo } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
+  // X1b: XLSX 동시편집. 편집 중이면 방에 참가하고, 저장은 **방을 아는 경로**로 한다.
+  //  - lib(ooxml-ui xlsx)이 방(Yjs)·presence·문서 공유를 소유한다. 앱은 배선만 한다.
+  //  - 저장은 `/api/collab/save`(낙관적 잠금) 로 통일한다: 방의 해시가 갱신되고,
+  //    외부 변경(AI 편집·보기 모드 코멘트)으로는 덮어쓰지 않는다.
+  const [collab, setCollab] = useState<{
+    roomId: string
+    baseHash: string
+    serverUrl: string
+    user: { name: string; color: string }
+  } | null>(null)
+  const [collabNotice, setCollabNotice] = useState<{ kind: 'stale' | 'nohash' | 'error' | 'external'; text: string } | null>(null)
+  const [conflictBytes, setConflictBytes] = useState<Uint8Array | null>(null)
+  const collabRef = useRef(collab)
+  collabRef.current = collab
+  const contentRef = useRef(content)
+  contentRef.current = content
+  const xlsxHandleRef = useRef(xlsxHandle)
+  xlsxHandleRef.current = xlsxHandle
   useEffect(() => {
     if (!editing) {
       setCollab(null)
+      setCollabNotice(null)
+      setConflictBytes(null)
       return
     }
     let dead = false
     void (async () => {
+      // 1) 해시를 계산한다. 못 하면 **fail-closed**: 방에 붙지 않는다.
+      //    (http://IP 로 접속하면 crypto.subtle 이 없다 → 낡은 방 차단이 사라지므로 붙으면 안 된다)
+      let knownHash: string
       try {
-        const info = await collabApi.session(path)
+        knownHash = await hashBytesHex(contentRef.current)
+      } catch {
+        if (!dead) {
+          setCollab(null)
+          setCollabNotice({
+            kind: 'nohash',
+            text: '이 환경에서는 동시편집을 쓸 수 없습니다 (https 또는 localhost 필요) — 단독 편집으로 진행합니다',
+          })
+        }
+        return
+      }
+      try {
+        // 2) 서버가 staleness 를 판정한다(P0-2). stale 이면 붙지 않는다.
+        const info = await collabApi.session(path, { knownHash, strict: true })
         if (dead) return
-        // 방이 디스크와 어긋나 있으면 붙지 않는다.
-        // lib 은 "방에 먼저 들어온 문서"가 방의 기준이라, 낡은 방에 붙으면
-        // 디스크의 새 파일이 예전 내용으로 덮어써진다(자료 유실).
-        try {
-          const current = await hashBytesHex(content)
-          if (info.lastHash && current !== info.lastHash) {
-            setCollab(null)
-            setCollabError('stale room (file changed on disk)')
-            return
-          }
-        } catch {
-          /* 해시 실패면 붙인다(서버가 마지막 낙오를 막는다). */
+        if (info.stale) {
+          setCollab(null)
+          setCollabNotice({
+            kind: 'stale',
+            text: '파일이 변경되어 공유 상태가 낡았습니다 — 단독 편집으로 진행합니다',
+          })
+          return
         }
         const me = readCollabUser()
         setCollab({
           roomId: info.roomId,
+          baseHash: info.lastHash,
           serverUrl: collabServerUrl(),
           user: { name: me?.name?.trim() || 'user', color: me?.color || '#2563eb' },
         })
-        setCollabError(null)
+        setCollabNotice(null)
+        setConflictBytes(null)
       } catch (e) {
         if (dead) return
         // 방을 못 만들어도 solo 편집은 계속된다.
         setCollab(null)
-        setCollabError(e instanceof Error ? e.message : 'collab session failed')
+        setCollabNotice({
+          kind: 'error',
+          text: `동시편집 연결 실패 — 단독 편집으로 진행합니다${
+            e instanceof Error ? ` (${e.message})` : ''
+          }`,
+        })
       }
     })()
     return () => {
       dead = true
     }
-  }, [editing, path, content])
+    // content 는 deps 에 넣지 않는다(저장 후 raw 재수신으로 방에서 떨어지면 안 된다).
+    // 현재 바이트는 ref 로 읽는다.
+  }, [editing, path])
   const [comments, setComments] = useState<XlsxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -1736,6 +1786,62 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     }
   }, [content])
 
+  // collaboration 옵션은 **항상 같은 객체**를 넘긴다(매 렌더 새 객체면 lib 가 방을 다시 연다).
+  const collabOptions = useMemo(
+    () => (collab ? { roomId: collab.roomId, serverUrl: collab.serverUrl, user: collab.user } : undefined),
+    [collab],
+  )
+
+  // X1b: 방을 아는 저장. `/api/collab/save` 로 통일한다.
+  //  - 낙관적 잠금(base hash): 옛 바이트가 늦게 도착하면 base 가 맞지 않아 거부된다.
+  //  - conflict_room(다른 참가자가 먼저 저장) → 방 상태를 다시 직렬화해 1회 재시도.
+  //  - conflict_external(외부 변경) → 재시도 금지. 배너 + 내 사본 다운로드.
+  const saveViaRoom = useCallback(async (): Promise<boolean> => {
+    const room = collabRef.current
+    const handle = xlsxHandleRef.current
+    if (!room || !handle?.saveBytes) return false
+    try {
+      let bytes = new Uint8Array(await handle.saveBytes())
+      let res = await collabApi.save(room.roomId, XLSX_SAVE_CLIENT_ID, bytes, room.baseHash)
+      if (!res.ok && res.reason === 'conflict_room') {
+        // 방 상태를 다시 직렬화해서 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
+        bytes = new Uint8Array(await handle.saveBytes())
+        res = await collabApi.save(room.roomId, XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
+      }
+      if (!res.ok) {
+        if (res.reason === 'conflict_external') {
+          setConflictBytes(bytes)
+          setCollabNotice({
+            kind: 'external',
+            text: '파일이 동시편집 밖에서 변경되어 저장을 막았습니다 — 내 사본을 내려받아 확인하세요',
+          })
+          showToast.error('파일이 외부에서 변경되어 저장을 막았습니다')
+          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path } }))
+          return false
+        }
+        showToast.error(res.message ?? '저장 실패')
+        window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path } }))
+        return false
+      }
+      room.baseHash = res.newHash
+      void queryClient.invalidateQueries({ queryKey: ['files'] })
+      showToast.success('저장했습니다')
+      // X1b: keepEditing — Save 는 편집을 유지한다(Done 만 편집을 끝낸다).
+      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true } }))
+      return true
+    } catch (e) {
+      showToast.error(e instanceof Error ? e.message : '저장 실패')
+      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path } }))
+      return false
+    }
+  }, [path, queryClient])
+
+  // 방에 붙었으면 방 경로, 아니면 단독 경로(/api/files)로 저장한다.
+  const save = useCallback(async (): Promise<boolean> => {
+    if (collabRef.current) return saveViaRoom()
+    return saveSolo()
+  }, [saveViaRoom, saveSolo])
+
   // 뷰어 툴바 저장 가로채기 (기본 다운로드를 막고 제자리 저장) + 상단 저장 버튼.
   useEffect(() => {
     const el = listenRef.current
@@ -1791,7 +1897,9 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
           <SpreadsheetEditor
-            key={editing ? `edit-${reloadKey}` : `view-${reloadKey}`}
+            // X1b: 편집 종료(Done)로는 편집기를 내린다 → lib 이 소유한 방 세션도 끝나고
+            // 소켓이 내려간다(X-M6). 저장은 편집을 유지하므로 키가 바뀌지 않는다.
+            key={`xlsx-${reloadKey}-${editing ? 'edit' : 'view'}`}
             ref={setXlsxHandle}
             bytes={content}
             fileName={fileName}
@@ -1799,13 +1907,36 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
             showToolbar={editing}
             showFormulaBar={editing}
             theme={appTheme}
-            collaboration={collab ?? undefined}
+            collaboration={collabOptions}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}
           />
-          {editing && collabError && (
-            <div className="absolute left-2 top-2 z-10 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300">
-              동시편집 연결 실패 — 단독 편집으로 진행합니다
+          {editing && collabNotice && (
+            <div
+              data-testid="xlsx-collab-banner"
+              className="absolute left-2 right-2 top-2 z-20 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground shadow-sm"
+            >
+              <span className="flex-1">{collabNotice.text}</span>
+              {conflictBytes && (
+                <button
+                  type="button"
+                  data-testid="xlsx-collab-download"
+                  onClick={() => {
+                    const blob = new Blob([conflictBytes as unknown as BlobPart], {
+                      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = fileName ?? 'workbook.xlsx'
+                    a.click()
+                    setTimeout(() => URL.revokeObjectURL(url), 1000)
+                  }}
+                  className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted"
+                >
+                  내 사본 다운로드
+                </button>
+              )}
             </div>
           )}
           </Suspense>

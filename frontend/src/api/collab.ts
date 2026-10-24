@@ -7,6 +7,14 @@ export interface CollabSessionInfo {
   epoch: string
   lastHash: string
   path: string
+  /**
+   * X1b(P0-2): 서버 판정 결과. stale 이면 방에 붙지 않는다(fail-closed).
+   * `stale_room` = 디스크가 방의 마지막 저장과 다르다(외부 변경이 방 뒤에 있었음).
+   * `stale_client` = 클라이언트가 가진 바이트의 해시가 디스크와 다르다.
+   */
+  stale?: boolean
+  code?: 'stale_room' | 'stale_client'
+  currentHash?: string | null
 }
 
 export interface CollabParticipant {
@@ -45,7 +53,14 @@ export interface ImageLossDetail {
 
 export type CollabSaveResult =
   | { ok: true; newHash: string }
-  | { ok: false; reason: 'conflict' | 'denied' | 'not_seeded' | 'image_loss' | 'error'; currentHash?: string | null; code?: string; message?: string; detail?: ImageLossDetail }
+  | {
+      ok: false
+      reason: 'conflict' | 'conflict_room' | 'conflict_external' | 'denied' | 'not_seeded' | 'image_loss' | 'error'
+      currentHash?: string | null
+      code?: string
+      message?: string
+      detail?: ImageLossDetail
+    }
 
 /** ws(s)://<origin>/api/collab — 폰·PC 모두 같은 origin으로 붙는다. */
 export function collabServerUrl(): string {
@@ -100,8 +115,12 @@ async function postSaveBinary(
         detail: d && typeof d.before === 'object' && typeof d.after === 'object' ? d : undefined,
       }
     }
-    if (body?.code === 'conflict' || body?.currentHash !== undefined) {
-      return { ok: false, reason: 'conflict', currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
+    if (body?.code === 'conflict_room' || body?.code === 'conflict_external' || body?.code === 'conflict' || body?.currentHash !== undefined) {
+      // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능),
+      //        conflict_external = 외부 변경(재시도 금지, 배너·다운로드로 알린다).
+      const reason =
+        body?.code === 'conflict_room' ? 'conflict_room' : body?.code === 'conflict_external' ? 'conflict_external' : 'conflict'
+      return { ok: false, reason, currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
     }
     return { ok: false, reason: 'denied', code: body?.code, message: body?.error }
   }
@@ -130,7 +149,7 @@ const lastSentByRoom = new Map<string, { hash: string; newHash: string }>()
 export const collabApi = {
   session: async (
     path: string,
-    resume?: { resumeEpoch?: string; knownHash?: string | null; clientId?: number },
+    resume?: { resumeEpoch?: string; knownHash?: string | null; clientId?: number; strict?: boolean },
   ): Promise<CollabSessionInfo> => {
     try {
       // loopback SYN 블랙홀 대비: 무한 대기를 막는다 (실패하면 solo 폴백).
@@ -139,6 +158,8 @@ export const collabApi = {
         resumeEpoch: resume?.resumeEpoch,
         knownHash: resume?.knownHash ?? undefined,
         clientId: resume?.clientId,
+        // X1b(P0-2): 서버가 staleness 를 판정한다.
+        strict: resume?.strict,
       }, { timeout: 15000 })
       return data
     } catch (error) {
