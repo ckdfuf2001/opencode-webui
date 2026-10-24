@@ -592,3 +592,28 @@ E21만의 문제가 아니다. 근거:
   saveSerializer.request`(PptxViewer.tsx:735) — serializer 우회 아님.
 - M6b 는 U1 로 탐색기가 닫히므로, 반복 주기마다 `Workspace` 로 탐색기를 다시 열도록 수정(20281bf).
 
+## XLSX 동시편집 트랙 X0a/X1a (2026-10-24)
+
+- **아키텍처 차이**: PPT 는 앱이 방(Y.Doc/awareness/owner)을 직접 운영한다. XLSX 는
+  ooxml-ui 의 xlsx 편집기가 방을 자체 관리한다(`collaboration` 옵션). 앱은
+  `collabApi.session(path)` 로 방을 만들고 `{ roomId, serverUrl: collabServerUrl(), user }` 를 넘긴다.
+  백엔드 `/api/collab/:room` 은 y-websocket 호환이고 방마다 `Y.Doc` 을 서버가 들고 있다 ⇒
+  나중에 들어온 사람도 방의 문서를 통째로 받는다.
+- **구현(553fcbe)**: `DocumentPreview.tsx` 의 `XlsxViewer` 가 편집 모드에서만 방에 참가.
+  presence 는 lib 타이틀바(`xve-title-people`)가 자체 표시한다. 저장은 기존 `/api/files` 경로.
+- **수용 기준(`e2e/collab/xlsx-collab.spec.ts`)**
+  - X0a-1 두 편집자가 같은 방에 들어가고 서로가 보인다 ✓
+  - X0a-2 A 의 편집이 B 에 반영되고 B 저장으로 디스크에 남는다 ✓
+    (XLSX 그리드는 canvas 렌더라 셀 텍스트를 DOM 으로 못 읽는다 → 저장된 zip 을 풀어 XML 로 확인)
+  - X0a-3 디스크와 어긋난 방에는 붙지 않는다 ✓
+- **함정(조사 결과)**
+  - 방의 문서가 "먼저 들어온 쪽" 기준 ⇒ 낡은 방에 붙으면 디스크의 새 파일이 예전 내용으로 덮어써진다
+    → 해시 비교로 차단(위 X0a-3).
+  - 코멘트 저장은 파일 바이트를 직접 고쳐 쓰고 뷰어를 재마운트 → 방이 살아 있으면 방의 내용이 이겨
+    코멘트가 조용히 사라진다 ⇒ 동시편집 중에는 차단하고 안내.
+  - 보기 모드는 아직 참가하지 않는다(v1 범위). 저장에 소유자/위임 규칙이 없다.
+  - 외부 파일 변경(AI 편집)이 편집 중인 뷰어에 반영되지 않는다. 방 리셋(4001) 처리도 없다.
+    백로그: v0.13.
+- **회귀**: xlsx-solo(X-B1), ui-layout(U1~U3), viewer-unmount(M6a/M6b) 통과.
+
+
