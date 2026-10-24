@@ -79,6 +79,19 @@ export interface CollabRoom {
    * (시간 창 방식은 금지 — 파일 내용으로만 판단한다.)
    */
   pendingHashes: string[]
+  /**
+   * X1b: 이 방이 **직접 저장한** 해시 목록(최근 N개).
+   * XLSX 저장 판정용이다: 디스크 해시가 이 목록에 있으면 "이 방의 참가자가 먼저 저장한 것"으로
+   * 보고 클라이언트에 다시 직렬화·재시도를指示한다. 목록에 없으면 외부 변경(AI 편집·보기 모드
+   * 코멘트)이다 → 덮어쓰지 않고 배너·다운로드로 알린다.
+   */
+  recentSaveHashes: string[]
+  /**
+   * X1b: 방의 문서 종류. XLSX 는 앱(YCollabSession)이 아니라 lib(ooxml-ui xlsx)가 방을 소유한다.
+   * lib 클라이언트는 type 100 room meta 를 모른다 ⇒ xlsx 방은 meta 방송을 하지 않는다
+   * (외부 변경은 저장 시 409 로 판정한다).
+   */
+  kind: 'pptx' | 'xlsx' | 'other'
   externalChanged: boolean
   /** 4-0 가드용: 마지막으로 계측한 디스크 이미지 수 (undefined=미계측). */
   lastImageCounts: { media: number; refs: number } | null | undefined
@@ -103,6 +116,13 @@ slide?: number
 }
 
 export const rooms = new Map<string, CollabRoom>()
+
+/** X1b: 파일 종류별로 방의 동작이 다르다(pptx = 앱 프로토콜, xlsx = lib 프로토콜). */
+export function roomKindFor(absPath: string): 'pptx' | 'xlsx' | 'other' {
+  if (/\.xlsx$/i.test(absPath)) return 'xlsx'
+  if (/\.pptx$/i.test(absPath)) return 'pptx'
+  return 'other'
+}
 /** path(abs 정규화) -> roomId. 같은 파일을 두 room이 열지 않게 한다. */
 const pathIndex = new Map<string, string>()
 /**
@@ -254,6 +274,10 @@ function encodeMeta(room: CollabRoom): Uint8Array {
 
 function broadcastMeta(room: CollabRoom): void {
   if (room.conns.size === 0) return
+  // X1b(P0-1(다)): XLSX 방의 소켓은 lib(ooxml-ui xlsx) 클라이언트다.
+  // 이 클라이언트는 type 100 room meta 를 모른다 ⇒ 보내지 않는다.
+  // XLSX 의 외부 변경은 **저장 시 서버 판정(409 conflict_external)** 으로 알린다.
+  if (room.kind === 'xlsx') return
   broadcast(room, encodeMeta(room))
 }
 
@@ -331,6 +355,8 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     watchTimer: null,
     lastHash: seedHash,
     pendingHashes: [],
+    recentSaveHashes: [],
+    kind: roomKindFor(absPath),
     externalChanged: false,
     lastImageCounts: undefined,
     saveChain: Promise.resolve(),
@@ -463,6 +489,14 @@ export interface SessionResult {
   epoch: string
   lastHash: string
   path: string
+  /**
+   * X1b(P0-2): 방이 낡았다는 서버 판정 결과(있으면 클라이언트는 방에 붙지 않는다).
+   * `stale_room` = 디스크가 방의 마지막 저장과 다르다(외부 변경이 방 뒤에 있었음).
+   * `stale_client` = 클라이언트가 가진 바이트의 해시가 디스크와 다르다.
+   */
+  stale?: boolean
+  code?: 'stale_room' | 'stale_client'
+  currentHash?: string | null
 }
 
 export interface ResumeOptions {
@@ -470,6 +504,37 @@ export interface ResumeOptions {
   knownHash?: string
   /** 재접속 클라이언트의 Y clientID (owner 복원 판단용). */
   clientId?: number
+  /**
+   * X1b(P0-2): 서버가 staleness 를 판정한다(XLSX 용).
+   * 해시를 모르는 클라이언트는 fail-closed 로 붙지 않아야 하므로, 클라이언트 해시도 같이 준다.
+   */
+  strict?: boolean
+}
+
+/**
+ * X1b(P0-2): 서버 측 stale 판정.
+ * - 방이 있고 디스크 해시 != room.lastHash → 방이 낡았다(stale_room).
+ * - knownHash(클라이언트가 가진 바이트 해시)가 디스크와 다르면 → stale_client.
+ * 해시를 못 읽으면 판정 불가 → stale 아님(계속 진행한다).
+ */
+async function staleRoomCheck(
+  abs: string,
+  room: CollabRoom | undefined,
+  knownHash?: string,
+): Promise<{ stale: true; code: 'stale_room' | 'stale_client'; currentHash: string | null } | null> {
+  let disk: string | null = null
+  try {
+    disk = await hashFile(abs)
+  } catch {
+    return null
+  }
+  if (knownHash && disk && knownHash !== disk) {
+    return { stale: true, code: 'stale_client', currentHash: disk }
+  }
+  if (room && disk && room.lastHash && disk !== room.lastHash) {
+    return { stale: true, code: 'stale_room', currentHash: disk }
+  }
+  return null
 }
 
 /**
@@ -493,6 +558,15 @@ export async function createSession(
   const id = roomIdForAbs(abs)
   const resumeEpoch = opts?.resumeEpoch
   const existing = rooms.get(id)
+
+  // X1b(P0-2): strict 세션은 **서버가** staleness 를 판정한다.
+  // XLSX(lib 방)는 "방에 먼저 들어온 문서"가 방의 기준이라, 디스크와 어긋난 방에 붙으면
+  // 낡은 내용이 디스크를 덮어쓴다. 클라이언트가 해시를 못 계산하는 환경(http://IP)에서는
+  // 이 판정마저 못 하므로, 클라이언트는 해시 계산 실패 시 fail-closed 로 붙지 않는다.
+  if (opts?.strict) {
+    const stale = await staleRoomCheck(abs, existing, opts?.knownHash)
+    if (stale) return { roomId: id, role: 'guest', epoch: existing?.epoch ?? '', lastHash: existing?.lastHash ?? '', path: abs, ...stale }
+  }
 
   if (!existing) {
     // M10/D37: 동시 세션 POST 경합 — 이미 생성이 진행 중이면 기다렸다가 참가한다.
@@ -688,14 +762,23 @@ function isCurrentOwner(room: CollabRoom, clientId: number): boolean {
   return !!info && info.clientIds.has(clientId)
 }
 
-export function checkSave(roomId: string, clientId: number, byteLength: number): SaveCheck {
+export function checkSave(
+  roomId: string,
+  clientId: number,
+  byteLength: number,
+  opts?: { kind?: 'pptx' | 'xlsx' | 'other' },
+): SaveCheck {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, status: 404, error: 'No such room', code: 'no_room' }
-  if (!room.seeded) {
-    return { ok: false, status: 409, error: 'Room has no synced content yet', code: 'not_seeded' }
-  }
-  if (!isCurrentOwner(room, clientId)) {
-    return { ok: false, status: 409, error: 'Only the current owner can save', code: 'not_owner' }
+  // X1b: XLSX 방은 lib(ooxml-ui)가 소유한다 → owner/seeded 개념이 없다.
+  // 저장은 낙관적 잠금(base hash) 으로만 판정한다.
+  if (opts?.kind !== 'xlsx') {
+    if (!room.seeded) {
+      return { ok: false, status: 409, error: 'Room has no synced content yet', code: 'not_seeded' }
+    }
+    if (!isCurrentOwner(room, clientId)) {
+      return { ok: false, status: 409, error: 'Only the current owner can save', code: 'not_owner' }
+    }
   }
   if (byteLength > MAX_SAVE_BYTES) {
     return { ok: false, status: 413, error: 'File too large', code: 'too_large' }
@@ -830,24 +913,49 @@ export function resetRoomFromDisk(
  * 진단용으로만 받는다). 디스크가 lastHash와 다르면 409 conflict (자동 병합 없음).
  * room 단위 체인으로 직렬화한다 (S6C).
  * 이미지 손실이 감지되면 저장하지 않고 409 image_loss로 거절한다 (4-0 가드).
+ *
+ * X1b: `baseHash` 를 주면 **낙관적 잠금**으로 판정한다(PPT 경로와 동일하게 lastHash 기준).
+ * XLSX(lib 방) 경로는 owner 개념이 없으므로 checkSave 의 owner/seeded 검사를 건너뛴다.
  */
 export async function applySave(
   roomId: string,
   bytes: Uint8Array,
-  opts?: { allowImageLoss?: boolean; clientId?: number },
+  opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: 'pptx' | 'xlsx' | 'other' },
 ): Promise<
   | { newHash: string }
-  | { conflict: true; currentHash: string | null }
+  | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' }
   | { imageLoss: true; before: { media: number; refs: number }; after: { media: number; refs: number } }
 > {
   const room = rooms.get(roomId)
   if (!room) throw { message: 'No such room', statusCode: 404 }
   const run = room.saveChain.then(async () => {
     const disk = await currentDiskHash(roomId)
+    // X1b(P0-3/P0-4): 낙관적 잠금.
+    // 1) baseHash 가 방의 현재 해시와 다르면 → 방이 앞서갔다(다른 참가자가 먼저 저장).
+    //    클라이언트는 방 상태를 다시 직렬화해 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
+    // 2) 디스크가 방의 해시와 다르면 → 외부 변경(AI 편집·보기 모드 코멘트).
+    //    재시도하지 않는다(덮어쓰면 조용한 유실이 된다).
+    if (opts?.baseHash && opts.baseHash !== room.lastHash) {
+      logger.warn(
+        `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
+      )
+      const r: { conflict: true; currentHash: string | null; code: 'conflict_room' } = {
+        conflict: true,
+        currentHash: room.lastHash,
+        code: 'conflict_room',
+      }
+      return r
+    }
     if (disk !== room.lastHash) {
+      const known = room.recentSaveHashes.includes(disk ?? '')
       room.externalChanged = true
       broadcastMeta(room)
-      const r: { conflict: true; currentHash: string | null } = { conflict: true, currentHash: disk }
+      const r: { conflict: true; currentHash: string | null; code: 'conflict_room' | 'conflict_external' } = {
+        conflict: true,
+        currentHash: disk,
+        code: known ? 'conflict_room' : 'conflict_external',
+      }
+      logger.warn(`Collab room ${room.id}: save conflict (${r.code}) disk=${String(disk).slice(0, 8)} room=${room.lastHash.slice(0, 8)}`)
       return r
     }
     // 4-0 가드: pptx 저장에서 이미지(파트·관계)가 줄었으면 막는다.
@@ -891,6 +999,10 @@ export async function applySave(
     )
     // rename 이 끝났고 lastHash 가 갱신되었으므로 대기 해시는 제거한다.
     room.pendingHashes = room.pendingHashes.filter((h) => h !== newHash)
+    // X1b: 이 방이 직접 저장한 해시를 기억한다(최근 5개).
+    // "디스크 해시가 이 목록에 있음" = 이 방의 참가자가 먼저 저장한 것 → conflict_room.
+    room.recentSaveHashes.push(newHash)
+    if (room.recentSaveHashes.length > 5) room.recentSaveHashes.shift()
     room.externalChanged = false
     if (/\.pptx$/i.test(room.path)) room.lastImageCounts = countPptxImages(bytes)
     broadcastMeta(room)

@@ -23,6 +23,12 @@ const SessionSchema = z.object({
   resumeEpoch: z.string().min(1).optional(),
   knownHash: z.string().min(1).optional(),
   clientId: z.number().int().optional(),
+  /**
+   * X1b(P0-2): 서버가 staleness 를 판정한다.
+   * XLSX(lib 방)는 "방에 먼저 들어온 문서"가 방의 기준이라, 디스크와 어긋난 방에 붙으면
+   * 낡은 내용이 디스크를 덮어쓴다 ⇒ 서버가 미리 판정해 알려준다.
+   */
+  strict: z.boolean().optional(),
 })
 
 const SaveSchema = z.object({
@@ -70,6 +76,7 @@ app.post('/session', async (c) => {
       resumeEpoch: body.resumeEpoch,
       knownHash: body.knownHash,
       clientId: body.clientId,
+      strict: body.strict,
     })
     return c.json(result)
   } catch (error) {
@@ -82,6 +89,7 @@ app.post('/save', async (c) => {
     let roomId: string
     let clientId: number
     let bytes: Uint8Array
+    let baseHash: string | undefined
     const contentType = c.req.header('content-type') ?? ''
     const forceImageLoss = c.req.header('x-collab-allow-image-loss') ?? ''
     if (contentType.includes('application/octet-stream')) {
@@ -91,6 +99,7 @@ app.post('/save', async (c) => {
       if (!roomId || !Number.isInteger(clientId)) {
         return c.json({ error: 'Missing room/client headers' }, 400)
       }
+      baseHash = c.req.header('x-collab-base-hash') || undefined
       bytes = new Uint8Array(await c.req.arrayBuffer())
     } else {
       // TODO(v0.13): JSON+base64 경로를 삭제한다.
@@ -102,15 +111,32 @@ app.post('/save', async (c) => {
       }
       roomId = body.roomId
       clientId = body.clientId
+      baseHash = body.baseHash
     }
-    const check = checkSave(roomId, clientId, bytes.length)
+    // X1b: 방 종류는 **서버가 방에서 안다**(클라이언트를 믿지 않는다).
+    // xlsx 방은 lib 가 소유한다 → owner/seeded 검사 없이 낙관적 잠금으로만 판정한다.
+    const kind = rooms.get(roomId)?.kind ?? 'other'
+    const check = checkSave(roomId, clientId, bytes.length, { kind })
     if (!check.ok) return c.json({ error: check.error, code: check.code }, check.status || 409)
-    const applied = await applySave(roomId, bytes, { allowImageLoss: forceImageLoss === '1', clientId })
+    const applied = await applySave(roomId, bytes, {
+      allowImageLoss: forceImageLoss === '1',
+      clientId,
+      baseHash,
+      kind,
+    })
     if ('conflict' in applied) {
+      // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능).
+      //          conflict_external = 외부 변경(재시도 금지, 배너·다운로드로 알린다).
+      const code = applied.code ?? 'conflict'
       return c.json(
         {
-          error: 'File changed on disk since last save (no auto-merge)',
-          code: 'conflict',
+          error:
+            code === 'conflict_room'
+              ? 'Another participant saved first (re-serialize and retry)'
+              : code === 'conflict_external'
+                ? 'File changed outside this session (no auto-merge)'
+                : 'File changed on disk since last save (no auto-merge)',
+          code,
           currentHash: applied.currentHash,
         },
         409,
