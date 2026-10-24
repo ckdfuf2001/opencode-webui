@@ -9,8 +9,13 @@ export function workspaceDir(): string {
 
 /** 테스트마다 새 이름의 복사본을 쓴다 (room 재사용 금지). */
 export function uniqueRel(testSlug: string, index: number): string {
+  return uniqueRelWithExt(testSlug, index, '.pptx')
+}
+
+/** 확장자를 지정한 복사본 경로 (XLSX 등 다른 종류용). */
+export function uniqueRelWithExt(testSlug: string, index: number, ext: string): string {
   const stamp = Date.now().toString(36)
-  return path.posix.join('repos', 'collab-e2e', `${testSlug}-${stamp}-${index}.pptx`)
+  return path.posix.join('repos', 'collab-e2e', `${testSlug}-${stamp}-${index}${ext}`)
 }
 
 export function absForRel(rel: string): string {
