@@ -67,6 +67,9 @@ function useRawFile(path: string, enabled = true) {
   const [data, setData] = useState<ArrayBuffer | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
   const [error, setError] = useState('')
+  // X1c(P0): 파일을 **읽은 시점**의 디스크 해시(ETag). 단독 저장의 If-Match 에 쓴다.
+  // 저장 직전에 다시 읽으면 잠금이 무의미해진다(그 사이 변경을 못 본다).
+  const [etag, setEtag] = useState<string | null>(null)
 
   useEffect(() => {
     if (!enabled) {
@@ -87,6 +90,7 @@ function useRawFile(path: string, enabled = true) {
         if (!cancelled) {
           setData(buf)
           setStatus('ready')
+          setEtag(res.headers.get('etag'))
         }
       } catch (e) {
         const status = (e as { status?: number })?.status
@@ -106,10 +110,11 @@ function useRawFile(path: string, enabled = true) {
       cancelled = true
       setData(null)
       setStatus('idle')
+      setEtag(null)
     }
   }, [path, enabled])
 
-  return { data, status, error }
+  return { data, status, error, etag }
 }
 
 /** 변환 서비스 부팅 대기 예산 — doc-converter cold start가 20~90초 걸린다. */
@@ -477,26 +482,31 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
     return () => window.removeEventListener('officeSaveDone', onDone as EventListener)
   }, [file.path])
   // P1-6: 편집 종료는 flush가 끝날 때까지 기다린다. 실패하면 편집 유지(유실 방지).
-  const requestOfficeSave = useCallback((): Promise<boolean> => {
-    return new Promise((resolve) => {
-      let done = false
-      const timer = setTimeout(() => {
-        if (done) return
-        done = true
-        window.removeEventListener('officeSaveDone', onDone)
-        resolve(false)
-      }, 10000)
-      const onDone = (e: Event) => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        window.removeEventListener('officeSaveDone', onDone as EventListener)
-        resolve(!!(e as CustomEvent<{ ok?: boolean }>).detail?.ok)
-      }
-      window.addEventListener('officeSaveDone', onDone as EventListener)
-      window.dispatchEvent(new CustomEvent('officeSaveRequest'))
-    })
-  }, [])
+  /** X1c: { ok, hasFailedCopy } 를 돌려준다 — 실패 바이트 보관 중이면 Done 앞에 확인을 묻는다. */
+  const requestOfficeSave = useCallback(
+    (): Promise<{ ok: boolean; hasFailedCopy: boolean }> => {
+      return new Promise((resolve) => {
+        let done = false
+        const timer = setTimeout(() => {
+          if (done) return
+          done = true
+          window.removeEventListener('officeSaveDone', onDone)
+          resolve({ ok: false, hasFailedCopy: false })
+        }, 10000)
+        const onDone = (e: Event) => {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          window.removeEventListener('officeSaveDone', onDone as EventListener)
+          const d = (e as CustomEvent<{ ok?: boolean; hasFailedCopy?: boolean }>).detail
+          resolve({ ok: !!d?.ok, hasFailedCopy: !!d?.hasFailedCopy })
+        }
+        window.addEventListener('officeSaveDone', onDone as EventListener)
+        window.dispatchEvent(new CustomEvent('officeSaveRequest'))
+      })
+    },
+    [],
+  )
   const endEditing = useCallback(async (after?: () => void) => {
     if (!editing || endingEdit) {
       after?.()
@@ -504,8 +514,16 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
     }
     setEndingEdit(true)
     try {
-      const ok = await requestOfficeSave()
-      if (ok) {
+      // X1c(P0-2): 실패 바이트 보관 중이면 Ok 확인을 묻는다 — 그냥 닫으면 편집이 사라진다.
+      const outcome = await requestOfficeSave()
+      if (!outcome.ok && outcome.hasFailedCopy) {
+        const go = window.confirm(
+          '저장하지 않은 변경이 있습니다(디스크가 바뀌어 저장이 막혔습니다).\n' +
+          '내 사본을 내려받았나요? 확인(OK)하면 편집 화면을 닫습니다.',
+        )
+        if (!go) return
+      }
+      if (outcome.ok) {
         setEditing(false)
         window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
         after?.()
@@ -569,7 +587,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
   ) : null
 
   const hasClientFallback = kind ? CONVERTABLE_CLIENT_KINDS.has(kind) : false
-  const { data: raw, status: rawStatus, error: rawError } = useRawFile(
+  const { data: raw, status: rawStatus, error: rawError, etag: rawEtag } = useRawFile(
     file.path,
     isOfficeNative ? !pdfMode : isViewerOnly || (hasClientFallback && converted.status !== 'ready'),
   )
@@ -591,7 +609,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
       if (kind === 'xlsx') {
         return (
           <ViewerLoadBoundary key={bkey} onRetry={retryViewer}>
-            <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
+            <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} etag={rawEtag} />
           </ViewerLoadBoundary>
         )
       }
@@ -1490,7 +1508,7 @@ function XlsxIconBtn({
   )
 }
 
-function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
+function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null }) {
   const appTheme = useTheme()
   const queryClient = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -1506,7 +1524,19 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
     getSelection?: () => string
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
-  const { save: saveSolo } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle)
+  // X1c(P1): 방 참가 판정이 끝날 때까지 편집기를 마운트하지 않는다.
+  // 멀리 마운트 뒤 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 그 사이 입력이
+  // 사라질 수 있다 → 연결 중에는 편집을 막고 자리만 표시한다.
+  const [connecting, setConnecting] = useState(false)
+  const { save: saveSoloBase } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle, undefined, {
+    // X1c(P0): 단독 저장도 잠근다(디스크가 원본). 파일을 **읽은 시점**의 ETag 로
+    // If-Match 하고, 저장 사이에 디스크가 바뀌었으면 서버가 409 로 거부한다.
+    ifMatch: etag,
+    onError: (_conflict, e) => {
+      // X1c(P0-2): 모든 저장 실패에 내 사본 다운로드를 제공한다(토스트만으로는 조용한 유실이다).
+      void storeFailedBytes(e)
+    },
+  })
   // X1b: XLSX 동시편집. 편집 중이면 방에 참가하고, 저장은 **방을 아는 경로**로 한다.
   //  - lib(ooxml-ui xlsx)이 방(Yjs)·presence·문서 공유를 소유한다. 앱은 배선만 한다.
   //  - 저장은 `/api/collab/save`(낙관적 잠금) 로 통일한다: 방의 해시가 갱신되고,
@@ -1525,14 +1555,30 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
   contentRef.current = content
   const xlsxHandleRef = useRef(xlsxHandle)
   xlsxHandleRef.current = xlsxHandle
+  /**
+   * X1c(P0-2): 실패한 저장 바이트를 한 개만 보관한다(D27).
+   * 어떤 실패(외부 변경·방 없음·네트워크·413·재시도 실패)든 사용자가 내려받을 수 있어야 한다.
+   */
+  const storeFailedBytes = useCallback(async (e: unknown): Promise<void> => {
+    try {
+      const handle = xlsxHandleRef.current
+      if (!handle?.saveBytes) return
+      setConflictBytes(new Uint8Array(await handle.saveBytes()))
+    } catch {
+      /* 바이트를 못 얻으면 다운로드 제공만 안 된다(토스트로 끝). */
+    }
+    void e
+  }, [])
   useEffect(() => {
     if (!editing) {
       setCollab(null)
       setCollabNotice(null)
       setConflictBytes(null)
+      setConnecting(false)
       return
     }
     let dead = false
+    setConnecting(true)
     void (async () => {
       // 1) 해시를 계산한다. 못 하면 **fail-closed**: 방에 붙지 않는다.
       //    (http://IP 로 접속하면 crypto.subtle 이 없다 → 낡은 방 차단이 사라지므로 붙으면 안 된다)
@@ -1542,6 +1588,7 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
       } catch {
         if (!dead) {
           setCollab(null)
+          setConnecting(false)
           setCollabNotice({
             kind: 'nohash',
             text: '이 환경에서는 동시편집을 쓸 수 없습니다 (https 또는 localhost 필요) — 단독 편집으로 진행합니다',
@@ -1555,6 +1602,7 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
         if (dead) return
         if (info.stale) {
           setCollab(null)
+          setConnecting(false)
           setCollabNotice({
             kind: 'stale',
             text: '파일이 변경되어 공유 상태가 낡았습니다 — 단독 편집으로 진행합니다',
@@ -1570,10 +1618,12 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
         })
         setCollabNotice(null)
         setConflictBytes(null)
+        setConnecting(false)
       } catch (e) {
         if (dead) return
         // 방을 못 만들어도 solo 편집은 계속된다.
         setCollab(null)
+        setConnecting(false)
         setCollabNotice({
           kind: 'error',
           text: `동시편집 연결 실패 — 단독 편집으로 진행합니다${
@@ -1809,18 +1859,23 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
         res = await collabApi.save(room.roomId, XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
       }
       if (!res.ok) {
+        // X1c(P0-2): 모든 저장 실패에 내 사본 다운로드를 제공한다.
+        await storeFailedBytes(null)
         if (res.reason === 'conflict_external') {
-          setConflictBytes(bytes)
           setCollabNotice({
             kind: 'external',
             text: '파일이 동시편집 밖에서 변경되어 저장을 막았습니다 — 내 사본을 내려받아 확인하세요',
           })
           showToast.error('파일이 외부에서 변경되어 저장을 막았습니다')
-          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path } }))
+          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true } }))
           return false
         }
+        setCollabNotice({
+          kind: 'error',
+          text: `저장 실패 — 내 사본을 내려받아 확인하세요 (${res.message ?? res.reason})`,
+        })
         showToast.error(res.message ?? '저장 실패')
-        window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path } }))
+        window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true } }))
         return false
       }
       room.baseHash = res.newHash
@@ -1830,17 +1885,23 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
       window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true } }))
       return true
     } catch (e) {
+      // X1c(P0-2): 예외(네트워크·방 없음)도 내 사본 다운로드를 제공한다.
+      await storeFailedBytes(e)
+      setCollabNotice({
+        kind: 'error',
+        text: `저장 실패 — 내 사본을 내려받아 확인하세요 (${e instanceof Error ? e.message : 'unknown'})`,
+      })
       showToast.error(e instanceof Error ? e.message : '저장 실패')
-      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path } }))
+      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true } }))
       return false
     }
-  }, [path, queryClient])
+  }, [path, queryClient, storeFailedBytes])
 
   // 방에 붙었으면 방 경로, 아니면 단독 경로(/api/files)로 저장한다.
   const save = useCallback(async (): Promise<boolean> => {
     if (collabRef.current) return saveViaRoom()
-    return saveSolo()
-  }, [saveViaRoom, saveSolo])
+    return saveSoloBase()
+  }, [saveViaRoom, saveSoloBase])
 
   // 뷰어 툴바 저장 가로채기 (기본 다운로드를 막고 제자리 저장) + 상단 저장 버튼.
   useEffect(() => {
@@ -1896,6 +1957,14 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
+          {connecting ? (
+            // X1c(P1): 방 참가 판정은 비동기다. 판정 전에 편집기를 열어두면 그 사이 입력이
+            // "방의 문서가 이긴다" 규칙으로 사라질 수 있다 → 판정까지는 편집기를 열지 않는다.
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground gap-2">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              동시편집 연결 중…
+            </div>
+          ) : (
           <SpreadsheetEditor
             // X1b: 편집 종료(Done)로는 편집기를 내린다 → lib 이 소유한 방 세션도 끝나고
             // 소켓이 내려간다(X-M6). 저장은 편집을 유지하므로 키가 바뀌지 않는다.
@@ -1908,13 +1977,19 @@ function XlsxViewer({ data, fileName, editing = false, path }: { data: ArrayBuff
             showFormulaBar={editing}
             theme={appTheme}
             collaboration={collabOptions}
+            onCollaborationChange={(state) => {
+              // X1c(P1): 방에 실제로 붙었을 때(문서 적용 완료)만 편집기를 연다.
+              // 마운트 직후에 열면 그 사이 입력이 "방의 문서가 이긴다" 규칙으로 사라진다.
+              if (state.active) setConnecting(false)
+            }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}
           />
+          )}
           {editing && collabNotice && (
             <div
               data-testid="xlsx-collab-banner"
-              className="absolute left-2 right-2 top-2 z-20 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground shadow-sm"
+              className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground shadow-sm"
             >
               <span className="flex-1">{collabNotice.text}</span>
               {conflictBytes && (
