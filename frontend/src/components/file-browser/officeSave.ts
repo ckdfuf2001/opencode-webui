@@ -17,12 +17,24 @@ export interface OfficeSaveConflict {
   currentHash?: string | null
 }
 
+export interface OfficeSaveOk {
+  name: string
+  path: string
+  size: number
+  mimeType: string
+  /** X1c: 저장 후의 ETag — 다음 If-Match 에 쓴다. */
+  etag?: string
+}
+
+/** 저장 성공의 후처리(새 ETag 갱신용). */
+export type OnSavedOffice = (bytes: Uint8Array, etag?: string) => void
+
 export async function saveOfficeBytes(
   serverPath: string,
   fileName: string,
   blob: Blob,
   opts?: { ifMatch?: string | null },
-): Promise<void> {
+): Promise<OfficeSaveOk | undefined> {
   const fd = new FormData()
   fd.append('file', new File([blob], fileName, { type: blob.type || 'application/octet-stream' }))
   const res = await fetch(`${API_BASE_URL}/api/files/${serverPath}?overwrite=1`, {
@@ -36,6 +48,12 @@ export async function saveOfficeBytes(
     if ((body?.error || body?.code) && res.status === 409) err.conflict = body ?? undefined
     throw err
   }
+  // X1c: 응답의 ETag 헤더(또는 body.etag)를 돌려준다 — 다음 If-Match 에 쓴다.
+  // JSON body 가 없어도(서버가 body 없이 응답) 헤더만으로 갱신되도록 한다.
+  const hdr = res.headers.get('etag')?.replace(/"/g, '') ?? undefined
+  const body = (await res.json().catch(() => null)) as OfficeSaveOk | null
+  if (body) return { ...body, etag: body.etag ?? hdr }
+  return hdr ? { name: fileName, path: serverPath, size: blob.size, mimeType: blob.type, etag: hdr } : undefined
 }
 
 type SaveHandle = {
@@ -65,7 +83,7 @@ export function useOfficeSave(
   serverPath: string,
   fileName: string,
   handle: SaveHandle,
-  onSaved?: (bytes: Uint8Array) => void,
+  onSaved?: (bytes: Uint8Array, etag?: string) => void,
   hooks?: { ifMatch?: string | null; onError?: (conflict: OfficeSaveConflict | null, e: unknown) => void },
 ) {
   const queryClient = useQueryClient()
@@ -77,10 +95,10 @@ export function useOfficeSave(
       // X1c: 파일을 읽은 시점의 ETag 가 없으면 파일이 아직 없다는 뜻이다 → 저장하지 않는다.
       if (!hooks?.ifMatch) throw new Error('File not loaded yet')
       const blob = await handle.save()
-      await saveOfficeBytes(serverPath, fileName, blob, { ifMatch: hooks?.ifMatch })
+      const ok = await saveOfficeBytes(serverPath, fileName, blob, { ifMatch: hooks?.ifMatch })
       handle.markClean()
       try {
-        onSaved?.(new Uint8Array(await blob.arrayBuffer()))
+        onSaved?.(new Uint8Array(await blob.arrayBuffer()), ok?.etag)
       } catch {
         // 후처리 실패는 저장 성공과 무관
       }

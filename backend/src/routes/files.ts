@@ -71,7 +71,8 @@ export function createFileRoutes(database: Database) {
         const content = await fileService.getRawFileContent(userPath)
         // X1c(P0): 단독 저장(덮어쓰기)의 잠금용 ETag. 클라이언트는 이 값을 If-Match 로
         // 되돌려 보낸다 → 디스크가 그 사이에 바뀌었으면 서버가 409 로 거부한다.
-        const etag = `"${createHash('sha256').update(content).digest('hex')}"`
+        // 따옴표 없는 hex 로 통일한다(POST 응답의 body.etag 와 같은 형식).
+        const etag = createHash('sha256').update(content).digest('hex')
         return new Response(content, {
           headers: {
             'Content-Type': result.mimeType || 'application/octet-stream',
@@ -120,13 +121,17 @@ export function createFileRoutes(database: Database) {
         const stat = await fileService.getFileStat(path)
         if (stat.exists && !stat.isDirectory) {
           const content = await fileService.getRawFileContent(path)
-          const etag = `"${createHash('sha256').update(content).digest('hex')}"`
-          if (etag !== ifMatch) {
+          const etag = createHash('sha256').update(content).digest('hex')
+          // X1c: ETag 헤더는 따옴표를 감쌀 수도 있다("") — 제거하고 비교한다(클라이언트는
+          // GET raw 의 ETag 블 혹은 POST 응답의 body.etag(따옴표 없음) 중 아무거나 보낸다).
+          const got = ifMatch.replace(/^"|"$/g, '')
+          if (etag !== got) {
+            logger.warn(`If-Match conflict: got=${got.slice(0, 8)} disk=${etag.slice(0, 8)}`)
             return c.json(
               {
                 error: 'File changed on disk since it was loaded (download your copy)',
                 code: 'conflict_external',
-                currentHash: etag.replace(/"/g, ''),
+                currentHash: etag,
               },
               409,
             )
@@ -152,7 +157,14 @@ export function createFileRoutes(database: Database) {
       const result = await fileService.uploadFile(path, file, blocked, {
         overwrite: c.req.query('overwrite') === '1',
       })
-      return c.json(result)
+      // X1c: 저장 후의 ETag — 다음 단독 저장의 If-Match 에 쓴다(브라우저의 ETag가 디스크와 동기화).
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(result.etag ? { ETag: `"${result.etag}"` } : {}),
+        },
+      })
     } catch (error: any) {
       logger.error('Failed to upload file:', error)
       return c.json({ error: error.message }, error.statusCode || 500)

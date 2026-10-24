@@ -1508,7 +1508,7 @@ function XlsxIconBtn({
   )
 }
 
-function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null }) {
+function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null }) {
   const appTheme = useTheme()
   const queryClient = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -1524,13 +1524,17 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
     getSelection?: () => string
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
-  // X1c(P1): 방 참가 판정이 끝날 때까지 편집기를 마운트하지 않는다.
-  // 멀리 마운트 뒤 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 그 사이 입력이
-  // 사라질 수 있다 → 연결 중에는 편집을 막고 자리만 표시한다.
-  const [connecting, setConnecting] = useState(false)
-  const { save: saveSoloBase } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle, undefined, {
-    // X1c(P0): 단독 저장도 잠근다(디스크가 원본). 파일을 **읽은 시점**의 ETag 로
-    // If-Match 하고, 저장 사이에 디스크가 바뀌었으면 서버가 409 로 거부한다.
+  // X1c(P0): 단독 저장의 잠금 ETag. 파일을 **읽은 시점**의 값부터 시작해,
+  // 단독 저장 성공마다 서버가 돌려준 새 ETag 로 갱신한다(디스크와 동기화 유지).
+  const [etag, setEtag] = useState<string | null>(null)
+  useEffect(() => {
+    setEtag(etagProp ?? null)
+  }, [etagProp])
+  const { save: saveSoloBase } = useOfficeSave(path, fileName ?? 'workbook.xlsx', xlsxHandle, (_bytes, nextEtag) => {
+    if (nextEtag) setEtag(nextEtag)
+  }, {
+    // X1c(P0): 단독 저장도 잠근다(디스크가 원본). 파일을 **읽은 시점**의 ETag,
+    // 단독 저장 성공마다 갱신한다.
     ifMatch: etag,
     onError: (_conflict, e) => {
       // X1c(P0-2): 모든 저장 실패에 내 사본 다운로드를 제공한다(토스트만으로는 조용한 유실이다).
@@ -1546,9 +1550,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
     baseHash: string
     serverUrl: string
     user: { name: string; color: string }
+    /**
+     * X1c(P1): lib 이 방에 붙고 문서를 적용했는가. false 동안은 편집기를 열지 않는다
+     * (마운트 직후의 입력이 "방의 문서가 이긴다" 규칙으로 사라진다).
+     */
+    joined: boolean
   } | null>(null)
   const [collabNotice, setCollabNotice] = useState<{ kind: 'stale' | 'nohash' | 'error' | 'external'; text: string } | null>(null)
   const [conflictBytes, setConflictBytes] = useState<Uint8Array | null>(null)
+  /**
+   * X1c(P1): 방 참가 판정(collab 또는 notice)이 끝날 때까지 편집기를 마운트하지 않는다.
+   * 마운트 뒤 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 그 사이 입력이 사라질 수 있다.
+   */
+  const connecting = editing && !collabNotice && !(collab?.joined)
   const collabRef = useRef(collab)
   collabRef.current = collab
   const contentRef = useRef(content)
@@ -1574,11 +1588,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
       setCollab(null)
       setCollabNotice(null)
       setConflictBytes(null)
-      setConnecting(false)
       return
     }
     let dead = false
-    setConnecting(true)
     void (async () => {
       // 1) 해시를 계산한다. 못 하면 **fail-closed**: 방에 붙지 않는다.
       //    (http://IP 로 접속하면 crypto.subtle 이 없다 → 낡은 방 차단이 사라지므로 붙으면 안 된다)
@@ -1588,7 +1600,6 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
       } catch {
         if (!dead) {
           setCollab(null)
-          setConnecting(false)
           setCollabNotice({
             kind: 'nohash',
             text: '이 환경에서는 동시편집을 쓸 수 없습니다 (https 또는 localhost 필요) — 단독 편집으로 진행합니다',
@@ -1602,7 +1613,6 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
         if (dead) return
         if (info.stale) {
           setCollab(null)
-          setConnecting(false)
           setCollabNotice({
             kind: 'stale',
             text: '파일이 변경되어 공유 상태가 낡았습니다 — 단독 편집으로 진행합니다',
@@ -1610,20 +1620,21 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
           return
         }
         const me = readCollabUser()
+        // X1c(P1): joined=false 로 시작한다 — lib 이 방에 붙고 문서를 적용하면
+        // onCollaborationChange(active) 에서 joined=true 로 열린다.
         setCollab({
           roomId: info.roomId,
           baseHash: info.lastHash,
           serverUrl: collabServerUrl(),
           user: { name: me?.name?.trim() || 'user', color: me?.color || '#2563eb' },
+          joined: false,
         })
         setCollabNotice(null)
         setConflictBytes(null)
-        setConnecting(false)
       } catch (e) {
         if (dead) return
         // 방을 못 만들어도 solo 편집은 계속된다.
         setCollab(null)
-        setConnecting(false)
         setCollabNotice({
           kind: 'error',
           text: `동시편집 연결 실패 — 단독 편집으로 진행합니다${
@@ -1837,9 +1848,12 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
   }, [content])
 
   // collaboration 옵션은 **항상 같은 객체**를 넘긴다(매 렌더 새 객체면 lib 가 방을 다시 연다).
+  // joined 변화는 옵션을 새로 만들면 안 된다 — 그래서 deps 에 joined 를 넣지 않는다.
   const collabOptions = useMemo(
     () => (collab ? { roomId: collab.roomId, serverUrl: collab.serverUrl, user: collab.user } : undefined),
-    [collab],
+    // joined 를 의존성에서 빼는 것은 방을 다시 열지 않기 위한 의도다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- joined 를 넣으면 lib 가 방을 다시 연다(leave/join 순환 → 유실)
+    [collab?.roomId, collab?.serverUrl, collab?.user],
   )
 
   // X1b: 방을 아는 저장. `/api/collab/save` 로 통일한다.
@@ -1879,6 +1893,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
         return false
       }
       room.baseHash = res.newHash
+      // X1c: 방 저장이 디스크를 바꿨으므로 단독 저장의 If-Match(ETag) 도 새 해시로 동기화한다.
+      // 놓치면 뒤에 단독 저장이 낡은 ETag 로 나가 409 를 반복한다.
+      setEtag(res.newHash)
       void queryClient.invalidateQueries({ queryKey: ['files'] })
       showToast.success('저장했습니다')
       // X1b: keepEditing — Save 는 편집을 유지한다(Done 만 편집을 끝낸다).
@@ -1957,14 +1974,17 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
-          {connecting ? (
-            // X1c(P1): 방 참가 판정은 비동기다. 판정 전에 편집기를 열어두면 그 사이 입력이
-            // "방의 문서가 이긴다" 규칙으로 사라질 수 있다 → 판정까지는 편집기를 열지 않는다.
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground gap-2">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              동시편집 연결 중…
+          {connecting && (
+            // X1c(P1): 방 참가 판정이 끝날 때까지 입력을 막는다(연결 배너).
+            // 편집기 자체는 열어야 방 참가(lib)가 시작된다. 입력만 readOnly 로 막는다.
+            <div
+              data-testid="xlsx-collab-connecting"
+              className="absolute left-2 right-2 bottom-2 z-20 flex items-center gap-2 rounded-md border border-border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+              동시편집 연결 중 — 판정이 끝나면 편집이 열립니다
             </div>
-          ) : (
+          )}
           <SpreadsheetEditor
             // X1b: 편집 종료(Done)로는 편집기를 내린다 → lib 이 소유한 방 세션도 끝나고
             // 소켓이 내려간다(X-M6). 저장은 편집을 유지하므로 키가 바뀌지 않는다.
@@ -1972,20 +1992,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag }: { data: Arr
             ref={setXlsxHandle}
             bytes={content}
             fileName={fileName}
-            readOnly={!editing}
+            // X1c(P1): 방 판정이 끝날 때까지 편집을 막는다(먼저 입력한 내용의 유실 방지).
+            readOnly={!editing || connecting}
             showToolbar={editing}
             showFormulaBar={editing}
             theme={appTheme}
             collaboration={collabOptions}
             onCollaborationChange={(state) => {
               // X1c(P1): 방에 실제로 붙었을 때(문서 적용 완료)만 편집기를 연다.
-              // 마운트 직후에 열면 그 사이 입력이 "방의 문서가 이긴다" 규칙으로 사라진다.
-              if (state.active) setConnecting(false)
+              if (state.active) setCollab((prev) => (prev ? { ...prev, joined: true } : prev))
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}
           />
-          )}
           {editing && collabNotice && (
             <div
               data-testid="xlsx-collab-banner"

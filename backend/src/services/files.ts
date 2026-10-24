@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
+import { createHash } from 'node:crypto'
 import { logger } from '../utils/logger'
 
 import { 
@@ -60,6 +61,8 @@ interface FileUploadResult {
   path: string
   size: number
   mimeType: string
+  /** X1c: 덮어쓰기 저장 후의 SHA-256 — 다음 저장의 If-Match(ETag) 에 쓴다. */
+  etag?: string
 }
 
 const TRANSIENT_ERROR_CODES = new Set(['ENOENT', 'EBUSY', 'EPERM', 'EAGAIN', 'EMFILE', 'ENFILE'])
@@ -228,11 +231,14 @@ export async function uploadFile(userPath: string, file: File, blockedExtensions
     await fs.mkdir(path.dirname(validatedPath), { recursive: true })
     await writeFileContent(validatedPath, Buffer.from(buffer))
     const savedName = path.basename(validatedPath)
+    // X1c: 저장 후의 ETag — 다음 저장의 If-Match 에 쓴다(브라우저가 알 것 = 마지막 저장 해시).
+    const etag = createHash('sha256').update(Buffer.from(buffer)).digest('hex')
     return {
       name: savedName,
       path: userPath,
       size: file.size,
       mimeType: file.type || getMimeType(file.name, new Uint8Array()),
+      etag,
     }
   }
   // T15: 저장 파일명 정규화 — 공백·괄호 등은 셸 계열 도구와 따옴표 없는

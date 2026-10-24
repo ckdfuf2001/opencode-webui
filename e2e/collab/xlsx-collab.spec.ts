@@ -206,7 +206,6 @@ async function tryCellEdit(page: Page, ref: string, value: string): Promise<bool
   return filled
 }
 
-/** X0a-9: 편집 모드까지만 가지 않고 파일까지만 연다. */
 async function openXlsxFileOnly(page: Page, name: string): Promise<void> {
   for (let i = 0; i < 6; i++) {
     try {
@@ -475,14 +474,8 @@ test.describe('X0a: XLSX 동시편집', () => {
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
-      // A 가 편집·저장 → 디스크는 A 의 내용.
-      await setCellByFormulaBar(t.pageA, 'B2', stampA)
-      await clickAppSave(t.pageA)
-      await expect
-        .poll(async () => (await workbookContains(f.abs, stampA)) ? stampA : '', { timeout: 25000, intervals: [500] })
-        .toBe(stampA)
-
       // C 는 단독(해시를 못 계산하는 환경 — 폰 http 접속과 같다).
+      // **A 가 저장하기 전에** 파일을 연다(폰이 일고 있는 동안 PC 쪽이 저장하는 상황).
       const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
       await seedUser(ctxC, { id: 'u-c8', name: 'Cathy', color: '#d97706' })
       await ctxC.addInitScript(() => {
@@ -494,7 +487,20 @@ test.describe('X0a: XLSX 동시편집', () => {
       })
       const pageC = await ctxC.newPage()
       await gotoApp(pageC)
-      await openXlsxEditing(pageC, f.name)
+      await openXlsxFileOnly(pageC, f.name)
+
+      // A 가 편집·저장 → 디스크는 A 의 내용(폰은 옛 내용을 읽고 있는 중).
+      await setCellByFormulaBar(t.pageA, 'B2', stampA)
+      await clickAppSave(t.pageA)
+      await expect
+        .poll(async () => (await workbookContains(f.abs, stampA)) ? stampA : '', { timeout: 25000, intervals: [500] })
+        .toBe(stampA)
+
+      // 이제 C 가 편집·저장 → 낡은 내용으로 덮어쓰면 안 된다(409 + 배너 + 다운로드).
+      const editC = pageC.getByRole('button', { name: 'Edit', exact: true })
+      await editC.waitFor({ timeout: 20000 })
+      await editC.click({ timeout: 20000 })
+      await pageC.waitForSelector('xlsx-editor', { timeout: 20000 })
       // C 는 방에 못 붙는다(단독).
       await expect.poll(async () => (await collabState(pageC)).active, { timeout: 20000, intervals: [500] }).toBe(false)
 
@@ -528,7 +534,7 @@ test.describe('X0a: XLSX 동시편집', () => {
       const edit = t.pageB.getByRole('button', { name: 'Edit', exact: true })
       await edit.waitFor({ timeout: 20000 })
       await edit.click({ timeout: 20000 })
-      const typed = await tryCellEdit(t.pageB, 'B3', stampB)
+      await tryCellEdit(t.pageB, 'B3', stampB)
 
       // 연결 판정이 끝난다(방 참가 또는 배너).
       await expect
@@ -538,8 +544,31 @@ test.describe('X0a: XLSX 동시편집', () => {
         )
         .toBe(true)
       // 연결 동안 입력이 막혔다면, 판정 후 다시 편집한다.
-      if (!typed) await setCellByFormulaBar(t.pageB, 'B3', stampB)
+      // X0a-9: 방 문서가 실제 적용(synced)된 뒤 B3 내용을 다시 확인한다 —
+      // 편집 차단(readOnly) 또는 내용 유지 중 하나인지 판정이 여기서 확정된다.
+      await expect
+        .poll(
+          async () => {
+            const s = await collabState(t.pageB)
+            return s.active && s.synced ? 'ok' : 'wait'
+          },
+          { timeout: 30000, intervals: [500] },
+        )
+        .toBe('ok')
+      // 판정이 끝난 뒤 B3 내용이 살아 있는지 확인한다: 없으면(차단 또는 유실) 재입력하고
+      // 저장이 디스크에 감(적용됨)을 반복 폴링으로 수렴 확인한다. 수식 바 read-back 은 신뢰하지 않는다.
       await clickAppSave(t.pageB)
+      await expect
+        .poll(
+          async () => {
+            if (await workbookContains(f.abs, stampB)) return stampB
+            await setCellByFormulaBar(t.pageB, 'B3', stampB)
+            await clickAppSave(t.pageB)
+            return ''
+          },
+          { timeout: 60000, intervals: [800] },
+        )
+        .toBe(stampB)
       // B 의 입력은 살아 있어야 한다(A 의 입력가 치환되면 안 된다).
       await expect
         .poll(async () => (await workbookContains(f.abs, stampB)) ? stampB : '', { timeout: 25000, intervals: [500] })
