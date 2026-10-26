@@ -20,6 +20,8 @@ export interface LibPresence {
   cursorY?: unknown
   selectedElementId?: unknown
   lastUpdated?: unknown
+  /** X2a: 브라우저별 사용자 id(collab-user). lib 기본 presence 에는 없고 앱이 실어 보낸다. */
+  userId?: unknown
 }
 
 export interface ParsedPresence {
@@ -30,6 +32,8 @@ export interface ParsedPresence {
   cursor?: { x: number; y: number }
   selectedId?: string
   updatedAt?: number
+  /** X2a: 없으면 undefined(하위 호환). 있으면 같은 사람의 탭을 하나로 묶는 키. */
+  userId?: string
 }
 
 function asString(v: unknown): string | undefined {
@@ -64,5 +68,6 @@ export function readLibPresence(state: Record<string, unknown> | null | undefine
     cursor: cx !== undefined && cy !== undefined ? { x: cx, y: cy } : undefined,
     selectedId: asString(raw.selectedElementId),
     updatedAt,
+    userId: asString(raw.userId),
   }
 }

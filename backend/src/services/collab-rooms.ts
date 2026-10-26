@@ -113,6 +113,8 @@ slide?: number
   where?: string
   /** 서버 owner 집합에 awareness clientId가 들어있는가. */
   owner: boolean
+  /** X2a: 브라우저별 사용자 id(lib presence 에 실린 경우). 탐색기 중복 제거 키. */
+  userId?: string
 }
 
 export const rooms = new Map<string, CollabRoom>()
@@ -282,16 +284,29 @@ function broadcastMeta(room: CollabRoom): void {
 }
 
 /** conn의 모드. app.mode가 전부 view면 'view', 모르면 edit 취급(하위 호환). */
+/**
+ * X2a: 한 awareness 상태의 역할. PPT 는 app.mode, XLSX(lib)는 presence.role 로 알린다.
+ * 둘 다 없으면 undefined(모름). 판정 자체는 호출자가 한다.
+ */
+function stateMode(st: unknown): 'view' | 'edit' | undefined {
+  const app = (st as { app?: { mode?: unknown } } | undefined)?.app
+  if (app && typeof app === 'object' && typeof app.mode === 'string') {
+    return app.mode === 'view' ? 'view' : 'edit'
+  }
+  const lib = readLibPresence(st as Record<string, unknown> | undefined)
+  if (lib) return lib.role === 'viewer' ? 'view' : 'edit'
+  return undefined
+}
+
 export function connMode(room: CollabRoom, ws: unknown): 'view' | 'edit' {
   const info = room.conns.get(ws)
   if (!info || info.clientIds.size === 0) return 'edit'
   let sawKnown = false
   for (const cid of info.clientIds) {
-    const st = room.awareness.getStates().get(cid) as { app?: { mode?: string } } | undefined
-    const mode = st?.app?.mode
-    if (typeof mode === 'string') {
+    const m = stateMode(room.awareness.getStates().get(cid))
+    if (m !== undefined) {
       sawKnown = true
-      if (mode !== 'view') return 'edit'
+      if (m !== 'view') return 'edit'
     }
   }
   return sawKnown ? 'view' : 'edit'
@@ -299,6 +314,9 @@ export function connMode(room: CollabRoom, ws: unknown): 'view' | 'edit' {
 
 /** owner 재선출: edit 참가자 중 가장 먼저 들어온 conn. 없으면 owner 해제. */
 function reevaluateOwner(room: CollabRoom): void {
+  // X2a: XLSX 방은 owner 개념이 없다(저장은 lib 가 판정, 참가자는 presence 로 센다).
+  // owner 선출·owner_cleared_unexpected 경고를 건너뛴다.
+  if (room.kind === 'xlsx') return
   const current = room.ownerConn
   if (current !== null && current !== undefined && room.conns.has(current) && connMode(room, current) !== 'view') {
     return
@@ -937,6 +955,14 @@ export async function applySave(
   if (opts?.kind === 'xlsx' && !opts?.baseHash) {
     throw { message: 'Missing base hash (optimistic lock required)', statusCode: 400, code: 'missing_base_hash' }
   }
+  // X2a: 보기 모드(lib viewer) 참가자의 저장은 거부한다(D40 과 같은 원칙).
+  // clientId 는 클라이언트가 보고하는 값이라 HTTP 저장의 완전한 보안 경계는 아니다(보고서 참조).
+  if (opts?.kind === 'xlsx' && opts.clientId !== undefined) {
+    const role = readLibPresence(room.awareness.getStates().get(opts.clientId) as Record<string, unknown> | undefined)?.role
+    if (role === 'viewer') {
+      throw { message: 'View-only participant cannot save', statusCode: 403, code: 'view_only' }
+    }
+  }
   const run = room.saveChain.then(async () => {
     const disk = await currentDiskHash(roomId)
     // X1b(P0-3/P0-4): 낙관적 잠금(**XLSX 경로만**).
@@ -1056,7 +1082,20 @@ export function roomParticipants(room: CollabRoom): CollabParticipant[] {
     }>
     for (const [cid, st] of states) {
       const app = st?.app
-      if (!app || typeof app !== 'object') continue
+      if (!app || typeof app !== 'object') {
+        // X2a: XLSX(lib)는 app 대신 presence 키로 알린다. 형식이 틀리면 readLibPresence 가 null.
+        const lib = readLibPresence(st as unknown as Record<string, unknown>)
+        if (!lib) continue
+        out.push({
+          id: lib.userId ?? String(cid),
+          name: lib.name,
+          color: lib.color,
+          mode: lib.role === 'viewer' ? 'view' : 'edit',
+          owner: room.ownerIds.has(cid),
+          userId: lib.userId,
+        })
+        continue
+      }
       // 슬라이드는 app.slide(클라이언트가 게시한 값)만 쓴다.
       // lib presence의 activeSlideIndex는 0 고정 + 10초 재게시라 항상 1번이라 fallback 불가.
       const appSlide = typeof app.slide === 'number' && app.slide >= 1 ? app.slide : undefined
