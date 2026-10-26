@@ -2,7 +2,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
-import { absForRel, uniqueRelWithExt } from './helpers/env'
+import { absForRel, backendBase, uniqueRelWithExt } from './helpers/env'
 import { gotoApp } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
@@ -589,5 +589,31 @@ test.describe('X0a: XLSX 동시편집', () => {
     await expect
       .poll(async () => (await workbookContains(f.abs, stamp)) ? stamp : '', { timeout: 25000, intervals: [500] })
       .toBe(stamp)
+  })
+})
+
+/** X2a: 서버 참가자 목록(rooms API)에서 이 파일의 방만 꺼낸다. */
+async function participantsFor(page: Page, name: string): Promise<Array<{ id: string; name: string; mode: string }>[]> {
+  const res = await page.request.get(`${backendBase()}/api/collab/rooms`)
+  const body = (await res.json()) as { rooms: Array<{ rel: string; participants: Array<{ id: string; name: string; mode: string }> }> }
+  return body.rooms.filter((r) => r.rel.endsWith(name)).map((r) => r.participants)
+}
+
+test.describe('X2a: presence 와 보기 모드', () => {
+  test('X2a-5: XLSX 편집자 1명은 서버 참가자에 1명으로 보인다', async ({ browser }) => {
+    const t = await twoPages(browser)
+    const f = freshXlsx('x2a5', 0)
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect
+        .poll(async () => (await participantsFor(t.pageA, f.name)).map((p) => p.length), { timeout: 20000, intervals: [500] })
+        .toEqual([1])
+      const [only] = await participantsFor(t.pageA, f.name)
+      expect(only?.[0]).toMatchObject({ name: ADA.name, mode: 'edit' })
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
   })
 })
