@@ -281,6 +281,13 @@
   - 관련 커밋: 34bc932(표식 도입), M21(ESM 빌드 적용 + fire() 버그 수정 + deadline 저장 금지)
   - 회귀 검사: 3-3(E2E 시작 조건 `assertLibPatchesLoaded` — ui/viewer=M21 아니면 즉시 실패),
     3-2(빌드 산출물 grep 검사)
+  - X2a 추가 표식 (2026-10-28): `core: "X2a-core-esm"`(ooxml-core `dist/collab/index.mjs`,
+    presence userId 전달+sanitize), `uiXlsx: "X2a-ui"`(ooxml-ui `dist/xlsx.js`,
+    user.id 전달+people userId+타이틀바 userId 묶기). `ui: "M21"`은 유지한다.
+  - X2a 판정 기록: pnpm 9에서는 patchedDependencies를 `package.json`과 lockfile에 기록한다.
+    "lockfile이 적용을 담당한다"는 이전 해석은 철회한다. 전역 pnpm 11.x는 경고를 찍은 뒤
+    `packageManager`(9.15.0)로 위임하므로, 패치 작업은 `npx --yes pnpm@9.15.0`으로 고정 실행한다.
+    설치 전 `$env:NODE_ENV='development'` 필수(production이면 루트 devDependencies가 조용히 빠진다).
 
 ## XLSX/DOCX (A1′)
 - D40 YCollabSession mode: 'own'(PPT, 기존 경로 그대로)과 'transport'(XLSX/DOCX, lib provider가 doc/awareness 소유).
@@ -432,6 +439,19 @@
 - 관련 커밋: 553fcbe(X0a/X1a) · 0aa90fa(X1b 테스트) · bb8942c(X1b 백엔드) · 0db32c9(X1b 프론트)
   · 31ca9d4(X1c 테스트) · 14c81c2(X1c 백엔드) · b1230ec(X1c 프론트) · 7cd9b56(X1c ETag 동기화)
   · e402d29(X1d 테스트) · e497aa0(X1d 수정)
+- **X2a — 서버 participants 는 app/presence 두 키를 읽는다**: XLSX lib 은 `presence` 키로
+  알리므로 기존 `app` 키 판정에서 0명으로 나왔다. `shared` 파서(`readLibPresence`)를 재사용하고,
+  mode 는 `app.mode` 우선, 없으면 `presence.role==='viewer'`→view, 그 외 edit.
+  `connMode`도 같은 판정. xlsx 방은 owner 로직 제외. clientId 가 viewer 인 xlsx 저장은 403 view_only
+  (단 clientId 는 클라이언트 보고값이라 UI 차단과 함께 쓰는 보조 장치).
+- **X2a — 묶기 키는 브라우저별 id다**: `readCollabUser().id`는 `u-<시간><난수>`로 localStorage에
+  저장된다(같은 브라우저 탭은 같은 id, PC·폰은 다른 id). 앱이 이를 `collaboration.user.id`로
+  넘기고, lib 패치가 presence `userId`로 싣고, 서버가 같은 `userId`를 하나로 센다.
+  lib 은 `userId`를 기본 presence 에 싣지 않으므로 공개 API 로는 묶을 수 없어 패치했다.
+- **X2a — viewer 는 방을 seed 하지 않는다**: ooxml-core `dist/collab/index.mjs:440`(`settle`),
+  `:460`(`handleLoad`) 모두 `canWrite()`일 때만 쓰고, viewer 는 `canWrite`가 거짓.
+  관련 커밋: 748b911·d63a501(X2a-① 테스트·수정) · b78a715(합친 mode) · a5cd867·9eed89b(X2a-1 테스트)
+  · 0b0e354(ooxml-core 패치) · 1f330ef(ooxml-ui 패치) · 3c1610d(앱 user.id 전달)
 
 ## 미결정 (사용자 판단 대기)
 - Q01 /handoff 410 스텁을 완전히 삭제할지.

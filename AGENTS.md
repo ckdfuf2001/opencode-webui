@@ -239,6 +239,9 @@
 - **이 환경은 `NODE_ENV=production`으로 설정돼 있다.** `pnpm install` 전에
   `$env:NODE_ENV='development'`로 바꿔야 devDependencies가 설치된다.
   그러지 않으면 vitest/typescript 등 dev 도구가 조용히 빠져 테스트가 "not found"로 죽는다.
+- pnpm은 corepack 고정 버전만 쓴다: `npx --yes pnpm@9.15.0 …` 또는 corepack 셔임.
+  전역 11.x는 경고를 찍은 뒤 위임하는데, 이 상태로 `patch-commit`을 하면 기록 위치가
+  달라질 위험이 있다. pnpm 9의 patchedDependencies 기록 위치는 `package.json`+lockfile이다.
 - 단위+프론트 테스트: `pnpm -C backend test -- run` — 프론트 테스트도 이 경로로 돈다
   (`backend/vitest.config.ts`의 `include`가 `../frontend/test/**`를 포함).
   `pnpm -C frontend test` 스크립트는 **존재하지 않는다**.
