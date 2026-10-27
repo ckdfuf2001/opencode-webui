@@ -29,7 +29,7 @@ import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
-import { collabApi, collabServerUrl, hashBytesHex } from '@/api/collab'
+import { collabApi, collabServerUrl, hashBytesHex, type CollabRoomSummary } from '@/api/collab'
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser } from '@/lib/collabUser'
@@ -449,7 +449,10 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
   const [editing, setEditing] = useState(false)
   const [viewerRetry, setViewerRetry] = useState(0)
   const [endingEdit, setEndingEdit] = useState(false)
+  // X2a-③: XlsxViewer 가 방에 편집자가 있음을 알리면(보기 모드) 코멘트 버튼을 막는다.
+  const [xlsxRoomHasEditors, setXlsxRoomHasEditors] = useState(false)
   useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
+  useEffect(() => { setXlsxRoomHasEditors(false) }, [editing, file.path])
   // U3: 편집 상태를 상위(FilePreview)에 알린다 — 편집 화면에서는 앱 헤더를
   // 숨기고 에디터가 컨테이너 전체를 채우게 한다.
   useEffect(() => {
@@ -612,7 +615,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
       if (kind === 'xlsx') {
         return (
           <ViewerLoadBoundary key={bkey} onRetry={retryViewer}>
-            <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} etag={rawEtag} />
+            <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} etag={rawEtag} onRoomHasEditorsChange={setXlsxRoomHasEditors} />
           </ViewerLoadBoundary>
         )
       }
@@ -741,9 +744,16 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
                   onClick={() => window.dispatchEvent(new CustomEvent('xlsxCommentsToggle'))}
                   // X1b(P1-2): 편집 모드는 항상 방에 참가한다 → 코멘트 저장은 방과 어긋나
                   // 조용히 사라진다. 편집 중에는 처음부터 비활성화하고 이유를 알려준다.
-                  disabled={editing}
+                  // X2a-③: 보기 모드라도 방에 편집자가 있으면 비활성화한다(같은 이유).
+                  disabled={editing || xlsxRoomHasEditors}
                   className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:hover:text-muted-foreground"
-                  title={editing ? '편집을 종료한 뒤 코멘트를 사용할 수 있습니다' : 'Show comments'}
+                  title={
+                    editing
+                      ? '편집을 종료한 뒤 코멘트를 사용할 수 있습니다'
+                      : xlsxRoomHasEditors
+                        ? '편집자가 있어 보는 중에는 코멘트를 쓸 수 없습니다'
+                        : 'Show comments'
+                  }
                 >
                   Comments
                 </button>
@@ -1511,7 +1521,7 @@ function XlsxIconBtn({
   )
 }
 
-function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null }) {
+function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onRoomHasEditorsChange }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null; onRoomHasEditorsChange?: (has: boolean) => void }) {
   const appTheme = useTheme()
   const queryClient = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -1554,6 +1564,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
     baseHash: string
     serverUrl: string
     user: { name: string; color: string; id?: string }
+    /** X2a-③: 참가 역할. 보기 모드도 방에 참가한다(presence만, 문서는 방이 이긴다). */
+    role: 'edit' | 'viewer'
     /**
      * X1c(P1): lib 이 방에 붙고 문서를 적용했는가. false 동안은 편집기를 열지 않는다
      * (마운트 직후의 입력이 "방의 문서가 이긴다" 규칙으로 사라진다).
@@ -1572,24 +1584,42 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
    * 단독 편집으로 넘어가며 배너("연결 시간 초과")를 띄운다 — 단독 전환이라 X1c 의
    * If-Match 잠금이 그대로 적용되어 안전하다.
    */
-  const connecting = editing && !collabNotice && !(collab?.joined)
+  const joining = !collabNotice && !(collab?.joined)
+  const connecting = editing && joining
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+  /** X2a-③: viewer가 방 내용을 따라가도록 에디터를 다시 마운트한 세대. key 에 들어간다. */
+  const [viewerGen, setViewerGen] = useState(0)
+  const selfClientIdRef = useRef<number | null>(null)
+  const hadEditorsRef = useRef(false)
+  const recheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
    * X1d(P0): 연결 대기 상한(15초). 초과하면 단독 편집으로 전환한다 — 영원히 readOnly 로
    * 남는 상태(WebSocket 차단 환경)를 막는다. notice('timeout') 가 뜨면 readOnly 가 풀린다.
+   * X2a-③: 보기 모드도 같은 상한을 쓴다(텍스트만 viewing 용).
    */
   useEffect(() => {
-    if (!connecting) return
+    if (!joining) return
     const t = setTimeout(() => {
       setCollab(null)
-      setCollabNotice({
-        kind: 'timeout',
-        text: '동시편집 연결 시간 초과 — 단독 편집으로 진행합니다. 저장이 막히면 배너로 알려 줍니다',
-      })
+      setCollabNotice(
+        editingRef.current
+          ? {
+              kind: 'timeout',
+              text: '동시편집 연결 시간 초과 — 단독 편집으로 진행합니다. 저장이 막히면 배너로 알려 줍니다',
+            }
+          : {
+              kind: 'timeout',
+              text: '실시간 보기 연결 시간 초과 — 파일만 보여줍니다',
+            },
+      )
     }, 15000)
     return () => clearTimeout(t)
-  }, [connecting])
+  }, [joining])
   const collabRef = useRef(collab)
   collabRef.current = collab
+  const onRoomHasEditorsChangeRef = useRef(onRoomHasEditorsChange)
+  onRoomHasEditorsChangeRef.current = onRoomHasEditorsChange
   const contentRef = useRef(content)
   contentRef.current = content
   const xlsxHandleRef = useRef(xlsxHandle)
@@ -1609,12 +1639,16 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
     void e
   }, [])
   useEffect(() => {
-    if (!editing) {
-      setCollab(null)
-      setCollabNotice(null)
-      setConflictBytes(null)
-      return
+    // X2a-③: 보기 모드도 방에 참가한다(viewer 역할, presence만 공유).
+    // 모드가 바뀌면 viewer 따라가기 상태도 처음부터 다시 본다.
+    hadEditorsRef.current = false
+    onRoomHasEditorsChangeRef.current?.(false)
+    if (recheckTimer.current) {
+      clearTimeout(recheckTimer.current)
+      recheckTimer.current = null
     }
+    setConflictBytes(null)
+    const role = editing ? 'edit' : 'viewer'
     let dead = false
     void (async () => {
       // 1) 해시를 계산한다. 못 하면 **fail-closed**: 방에 붙지 않는다.
@@ -1625,23 +1659,37 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
       } catch {
         if (!dead) {
           setCollab(null)
-          setCollabNotice({
-            kind: 'nohash',
-            text: '이 환경에서는 동시편집을 쓸 수 없습니다 (https 또는 localhost 필요) — 단독 편집으로 진행합니다',
-          })
+          setCollabNotice(
+            editing
+              ? {
+                  kind: 'nohash',
+                  text: '이 환경에서는 동시편집을 쓸 수 없습니다 (https 또는 localhost 필요) — 단독 편집으로 진행합니다',
+                }
+              : {
+                  kind: 'nohash',
+                  text: '이 환경에서는 실시간 보기를 쓸 수 없습니다 (https 또는 localhost 필요) — 파일만 보여줍니다',
+                },
+          )
         }
         return
       }
       try {
-        // 2) 서버가 staleness 를 판정한다(P0-2). stale 이면 붙지 않는다.
+        // 2) 서버가 staleness 를 판정한다(P0-2, viewer도 strict). stale 이면 붙지 않는다.
         const info = await collabApi.session(path, { knownHash, strict: true })
         if (dead) return
         if (info.stale) {
           setCollab(null)
-          setCollabNotice({
-            kind: 'stale',
-            text: '파일이 변경되어 공유 상태가 낡았습니다 — 단독 편집으로 진행합니다',
-          })
+          setCollabNotice(
+            editing
+              ? {
+                  kind: 'stale',
+                  text: '파일이 변경되어 공유 상태가 낡았습니다 — 단독 편집으로 진행합니다',
+                }
+              : {
+                  kind: 'stale',
+                  text: '공유 상태가 낡아 실시간 보기를 시작할 수 없습니다 — 파일만 보여줍니다',
+                },
+          )
           return
         }
         const me = readCollabUser()
@@ -1652,21 +1700,34 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
           baseHash: info.lastHash,
           serverUrl: collabServerUrl(),
           // X2a: 브라우저별 collab-user id를 lib에 넘긴다(presence userId → 서버 묶기 키).
-          user: { name: me?.name?.trim() || 'user', color: me?.color || '#2563eb', id: me?.id },
+          // viewer 는 role:'viewer' 로 참가한다(문서를 seed 하지 않는다).
+          user: {
+            name: me?.name?.trim() || 'user',
+            color: me?.color || '#2563eb',
+            id: me?.id,
+            ...(role === 'viewer' ? { role: 'viewer' as const } : {}),
+          },
+          role,
           joined: false,
         })
         setCollabNotice(null)
-        setConflictBytes(null)
       } catch (e) {
         if (dead) return
-        // 방을 못 만들어도 solo 편집은 계속된다.
+        // 방을 못 만들어도 (solo 편집 / 파일 보기)는 계속된다.
         setCollab(null)
-        setCollabNotice({
-          kind: 'error',
-          text: `동시편집 연결 실패 — 단독 편집으로 진행합니다${
-            e instanceof Error ? ` (${e.message})` : ''
-          }`,
-        })
+        setCollabNotice(
+          editing
+            ? {
+                kind: 'error',
+                text: `동시편집 연결 실패 — 단독 편집으로 진행합니다${
+                  e instanceof Error ? ` (${e.message})` : ''
+                }`,
+              }
+            : {
+                kind: 'error',
+                text: '실시간 보기 연결 실패 — 파일만 보여줍니다',
+              },
+        )
       }
     })()
     return () => {
@@ -1882,21 +1943,55 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
     [collab?.roomId, collab?.serverUrl, collab?.user],
   )
 
+  /**
+   * X2a-③: viewer가 방 내용을 따라간다. collaboration-change 이벤트에서만 rooms() 를
+   * 읽는다(새 폴링/interval 없음). 편집자가 처음 생기고 방에 문서가 올라왔으면
+   * 에디터를 한 번 리마운트한다. 방이 아직 비었으면 1회만 다시 확인한다(단발 타이머).
+   */
+  const refreshViewerRoom = useCallback(async (): Promise<void> => {
+    const roomId = collabRef.current?.roomId
+    if (!roomId || editingRef.current) return
+    let rooms: CollabRoomSummary[]
+    try {
+      rooms = await collabApi.rooms()
+    } catch {
+      return
+    }
+    if (editingRef.current) return
+    const mine = rooms.find((r) => r.roomId === roomId)
+    if (!mine) return
+    const editors = mine.participants.filter((p) => p.mode === 'edit').length
+    onRoomHasEditorsChangeRef.current?.(editors > 0)
+    if (hadEditorsRef.current || editors === 0) return
+    if (mine.seeded) {
+      hadEditorsRef.current = true
+      setViewerGen((g) => g + 1)
+      return
+    }
+    if (!recheckTimer.current) {
+      recheckTimer.current = setTimeout(() => {
+        recheckTimer.current = null
+        if (!editingRef.current) void refreshViewerRoom()
+      }, 3000)
+    }
+  }, [])
+
   // X1b: 방을 아는 저장. `/api/collab/save` 로 통일한다.
-  //  - 낙관적 잠금(base hash): 옛 바이트가 늦게 도착하면 base 가 맞지 않아 거부된다.
-  //  - conflict_room(다른 참가자가 먼저 저장) → 방 상태를 다시 직렬화해 1회 재시도.
-  //  - conflict_external(외부 변경) → 재시도 금지. 배너 + 내 사본 다운로드.
+  //  - 낙관적 잠금(base hash): 방 리스트가 알고 있으면 base 로 보내고 아니면 거부된다.
+  //  - conflict_room(다른 참가자가 먼저 저장) 은 방 상태를 다시 직렬화해 1회 재시도.
+  //  - conflict_external(외부 변경) 은 재시도 금지. 배너 + 내 사본 다운로드로 알린다.
+  //  - X2a-③: lib 세션의 clientId 를 보낸다. viewer 면 서버가 403 view_only 로 거부한다.
   const saveViaRoom = useCallback(async (): Promise<boolean> => {
     const room = collabRef.current
     const handle = xlsxHandleRef.current
     if (!room || !handle?.saveBytes) return false
     try {
       let bytes = new Uint8Array(await handle.saveBytes())
-      let res = await collabApi.save(room.roomId, XLSX_SAVE_CLIENT_ID, bytes, room.baseHash)
+      let res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, room.baseHash)
       if (!res.ok && res.reason === 'conflict_room') {
         // 방 상태를 다시 직렬화해서 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
         bytes = new Uint8Array(await handle.saveBytes())
-        res = await collabApi.save(room.roomId, XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
+        res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
       }
       if (!res.ok) {
         // X1c(P0-2): 모든 저장 실패에 내 사본 다운로드를 제공한다.
@@ -1942,7 +2037,14 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
 
   // 방에 붙었으면 방 경로, 아니면 단독 경로(/api/files)로 저장한다.
   const save = useCallback(async (): Promise<boolean> => {
-    if (collabRef.current) return saveViaRoom()
+    const room = collabRef.current
+    // X2a-③: viewer 는 self clientId 를 알아야 저장할 수 있다. 아직 모르면 막는다
+    // (clientId 없이 저장하면 서버가 못 막는다).
+    if (room?.role === 'viewer' && selfClientIdRef.current == null) {
+      showToast.error('실시간 보기에 연결 중입니다 — 잠시 뒤 다시 저장하세요')
+      return false
+    }
+    if (room) return saveViaRoom()
     return saveSoloBase()
   }, [saveViaRoom, saveSoloBase])
 
@@ -1961,10 +2063,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
     return () => el.removeEventListener('file-command', onFileCommand)
   }, [save, editing])
   // B1(b): officeSaveRequest는 window 전역이다. 편집이 아닐 때 듣으면 편집 진입 전이나
-  // 보기 화면에서 떠오른 저장이 XLSX 편집 세션과 엮인다. 편집 중에만 등록한다.
+  // 보기 화면에서 떠오른 저장이 XLSX 편집 세션과 엮인다.
+  // X2a-③: viewer 로 참가 중에도 듣는다(403 view_only 확인용). 방에 붙지 않았으면 무시한다.
   useEffect(() => {
-    if (!editing) return
     const onSave = () => {
+      if (!editing && collabRef.current?.role !== 'viewer') return
       void save()
     }
     window.addEventListener('officeSaveRequest', onSave)
@@ -2014,7 +2117,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
           <SpreadsheetEditor
             // X1b: 편집 종료(Done)로는 편집기를 내린다 → lib 이 소유한 방 세션도 끝나고
             // 소켓이 내려간다(X-M6). 저장은 편집을 유지하므로 키가 바뀌지 않는다.
-            key={`xlsx-${reloadKey}-${editing ? 'edit' : 'view'}`}
+            // X2a-③: viewer 세대는 방 내용을 따라가기 위한 리마운트에 쓴다.
+            key={`xlsx-${reloadKey}-${editing ? 'edit' : 'view'}-v${viewerGen}`}
             ref={setXlsxHandle}
             bytes={content}
             fileName={fileName}
@@ -2027,14 +2131,28 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
             onCollaborationChange={(state) => {
               // X1c(P1): 방에 실제로 붙었을 때(연결 + 첫 교환 완료)만 잠금을 푼다.
               // X1d: `active` 는 공유가 시작됐다는 뜻일 뿐 소켓이 열렸다는 뜻이 아니다
-              // (routeWebSocket 차단 테스트 X0a-10 에서 조기 해제가 잡혔다). status 가
+              // (routeWebSocket 차단 테스트 X0a-10 에서 조기 해제 발견). status 가
               // 'connected' 이고 `synced`(첫 교환 완료)일 때만 푼다.
               if (state.active && state.status === 'connected' && state.synced)
                 setCollab((prev) => (prev ? { ...prev, joined: true } : prev))
+              // X2a-③: 저장에 쓸 lib clientId 를 기억한다(viewer 403 확인용).
+              const self = state.people.find((p) => p.self)
+              if (self) selfClientIdRef.current = self.clientId
+              // X2a-③: viewer 는 방 참가자 변화를 따라간다(리마운트·코멘트 게이트).
+              if (!editingRef.current) void refreshViewerRoom()
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}
           />
+          {!editing && collabNotice && (
+            // X2a-③: 보기 모드 참가 판정 안내(방에 못 붙으면 파일만 보여준다).
+            <div
+              data-testid="xlsx-viewer-notice"
+              className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-3 rounded-md border border-border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm"
+            >
+              <span className="flex-1">{collabNotice.text}</span>
+            </div>
+          )}
           {editing && collabNotice && (
             <div
               data-testid="xlsx-collab-banner"
