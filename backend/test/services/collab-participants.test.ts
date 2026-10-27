@@ -78,6 +78,18 @@ describe('roomParticipants: app 키와 presence 키', () => {
     expect(roomParticipants(room)).toHaveLength(3)
   })
 
+  it('같은 userId 가 edit 탭과 view 탭으로 공존하면 합친 mode 는 edit', async () => {
+    const s = await createSession(TXT_REL)
+    // view 탭을 먼저 넣어도, edit 탭을 나중에 넣어도 결과는 edit 이어야 한다.
+    attach(s.roomId, sock(), 111, { presence: { userName: 'Ada', userColor: '#f00', role: 'viewer', userId: 'u-ada' } })
+    const room = attach(s.roomId, sock(), 112, {
+      presence: { userName: 'Ada', userColor: '#f00', role: 'collaborator', userId: 'u-ada' },
+    })
+    const ps = roomParticipants(room)
+    expect(ps).toHaveLength(1)
+    expect(ps[0]).toMatchObject({ id: 'u-ada', mode: 'edit' })
+  })
+
   it('role=viewer 면 mode=view', async () => {
     const s = await createSession(TXT_REL)
     const room = attach(s.roomId, sock(), 61, { presence: { userName: 'Bob', userColor: '#999', role: 'viewer' } })
