@@ -1553,7 +1553,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
     roomId: string
     baseHash: string
     serverUrl: string
-    user: { name: string; color: string }
+    user: { name: string; color: string; id?: string }
     /**
      * X1c(P1): lib 이 방에 붙고 문서를 적용했는가. false 동안은 편집기를 열지 않는다
      * (마운트 직후의 입력이 "방의 문서가 이긴다" 규칙으로 사라진다).
@@ -1651,7 +1651,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp }: {
           roomId: info.roomId,
           baseHash: info.lastHash,
           serverUrl: collabServerUrl(),
-          user: { name: me?.name?.trim() || 'user', color: me?.color || '#2563eb' },
+          // X2a: 브라우저별 collab-user id를 lib에 넘긴다(presence userId → 서버 묶기 키).
+          user: { name: me?.name?.trim() || 'user', color: me?.color || '#2563eb', id: me?.id },
           joined: false,
         })
         setCollabNotice(null)
