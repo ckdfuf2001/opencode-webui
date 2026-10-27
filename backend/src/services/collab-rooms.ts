@@ -1208,6 +1208,8 @@ export interface RoomSummary {
   rel: string
   epoch: string
   participants: CollabParticipant[]
+  /** X2a-③: 방에 문서가 올라왔는가. viewer가 리마운트 시점을 정할 때 쓴다. */
+  seeded: boolean
 }
 
 export function listRooms(): RoomSummary[] {
@@ -1221,6 +1223,7 @@ export function listRooms(): RoomSummary[] {
       rel: path.relative(root, room.path).replace(/\\/g, '/'),
       epoch: room.epoch,
       participants: roomParticipants(room),
+      seeded: room.seeded,
     })
   }
   return out

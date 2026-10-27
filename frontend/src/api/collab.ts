@@ -44,6 +44,8 @@ export interface CollabRoomSummary {
   rel: string
   epoch: string
   participants: CollabParticipant[]
+  /** X2a-③: 방에 문서가 올라왔는가(없으면 undefined — 구 서버 호환). */
+  seeded?: boolean
 }
 
 export interface ImageLossDetail {
