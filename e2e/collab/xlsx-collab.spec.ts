@@ -617,3 +617,62 @@ test.describe('X2a: presence 와 보기 모드', () => {
     }
   })
 })
+
+/** X2a-1: 같은 사용자 탭별 소켓 수와 타이틀바 표시를 읽는다(공개 DOM 표면). */
+async function presenceSurface(page: Page): Promise<{ text: string; count: number; names: string[] }> {
+  return page.locator('office-ui-presence').first().evaluate((el) => {
+    const host = el as HTMLElement & { participants?: Array<{ name: string }> }
+    const text = `${host.shadowRoot?.textContent ?? ''} ${host.textContent ?? ''}`.replace(/\s+/g, ' ').trim()
+    const list = Array.isArray(host.participants) ? host.participants : []
+    return { text, count: list.length, names: list.map((p) => p.name) }
+  })
+}
+
+test.describe('X2a-1: 같은 사용자 2탭', () => {
+  test('X2a-1: 같은 사용자 2탭 → 타이틀바 1명 "(탭 2)", 서버 participants 1명, 소켓 탭당 1', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const f = freshXlsx('x2a1', 0)
+    const perPage = new Map<Page, number>()
+    const track = (p: Page): void => {
+      perPage.set(p, 0)
+      p.on('websocket', (ws) => {
+        if (!ws.url().includes('/api/collab')) return
+        perPage.set(p, (perPage.get(p) ?? 0) + 1)
+        ws.on('close', () => perPage.set(p, (perPage.get(p) ?? 0) - 1))
+      })
+    }
+    try {
+      const p1 = await ctx.newPage()
+      track(p1)
+      await gotoApp(p1)
+      await openXlsxEditing(p1, f.name)
+      await expect.poll(async () => (await collabState(p1)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+
+      const p2 = await ctx.newPage()
+      track(p2)
+      await gotoApp(p2)
+      await openXlsxEditing(p2, f.name)
+      await expect.poll(async () => (await collabState(p2)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+
+      // 진단 덤프(단언 아님): 실패 원문에서 DOM 표면을 확인하려고 남긴다.
+      const surface = await presenceSurface(p1)
+      console.log('X2A1_SURFACE ' + JSON.stringify(surface))
+
+      // 소켓은 탭당 1개
+      await expect
+        .poll(async () => [perPage.get(p1), perPage.get(p2)], { timeout: 30000, intervals: [500] })
+        .toEqual([1, 1])
+      // 서버 참가자는 같은 사용자 1명
+      await expect
+        .poll(async () => (await participantsFor(p1, f.name)).map((p) => p.length), { timeout: 20000, intervals: [500] })
+        .toEqual([1])
+      // 타이틀바 표시: 같은 사용자는 한 줄, 이름에 "(탭 2)"(타이틀바가 그리는 participants 속성 기준)
+      await expect
+        .poll(async () => (await presenceSurface(p1)).names, { timeout: 20000, intervals: [500] })
+        .toEqual(['Ada (탭 2)'])
+    } finally {
+      await ctx.close()
+    }
+  })
+})
