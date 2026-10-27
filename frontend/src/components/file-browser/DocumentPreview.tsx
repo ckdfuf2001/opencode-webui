@@ -1606,18 +1606,22 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     // X2a-③ 후속: 모드가 바뀌면(보기→편집) 대기 시간을 처음부터 잰다. 미리보기 단계에서
     // 돌던 타이머가 편집 참가 중에 터지면 notice 가 박혀 배너가 안 보인다(부하 시 관측).
     const t = setTimeout(() => {
+      // X2a-④ 후속: viewer 는 늦게 붙어도 안전하므로(쓰기 없음) 세션을 자르지 않는다.
+      // 안내만 띄우고 참가가 되면 그대로 쓴다. 저속 환경에서 15초를 넘기면 세션을
+      // 잘라버려 이후 저장이 solo 로 빠지는 문제를 막는다(msedge 저부하 관측).
+      // 편집 모드는 solo 전환을 위해 자른다(늦은 참가가 덮어쓸 수 있다).
+      if (!editingRef.current) {
+        setCollabNotice({
+          kind: 'timeout',
+          text: '실시간 보기 연결이 느립니다 — 파일만 보여줍니다',
+        })
+        return
+      }
       setCollab(null)
-      setCollabNotice(
-        editingRef.current
-          ? {
-              kind: 'timeout',
-              text: '동시편집 연결 시간 초과 — 단독 편집으로 진행합니다. 저장이 막히면 배너로 알려 줍니다',
-            }
-          : {
-              kind: 'timeout',
-              text: '실시간 보기 연결 시간 초과 — 파일만 보여줍니다',
-            },
-      )
+      setCollabNotice({
+        kind: 'timeout',
+        text: '동시편집 연결 시간 초과 — 단독 편집으로 진행합니다. 저장이 막히면 배너로 알려 줍니다',
+      })
     }, 15000)
     return () => clearTimeout(t)
   }, [joining, editing])
