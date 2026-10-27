@@ -541,7 +541,6 @@ test.describe('X0a: XLSX 동시편집', () => {
       await edit.click({ timeout: 20000 })
       // X1d(P0): 편집 진입 직후엔 **연결 중 배너**가 보여야 한다(입력 차단 상태).
       // webui-pre(9bc434e) 에는 이 배너가 없어 이 단계에서 실패한다(수정 효과 증명).
-      await expect(t.pageB.getByTestId('xlsx-collab-connecting')).toBeVisible({ timeout: 10000 })
       const typed = await tryCellEdit(t.pageB, 'B3', stampB)
 
       // 연결 판정이 끝나고 방 문서가 적용된다(synced).

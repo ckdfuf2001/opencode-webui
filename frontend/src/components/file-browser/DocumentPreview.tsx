@@ -1585,7 +1585,10 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    * If-Match 잠금이 그대로 적용되어 안전하다.
    */
   const joining = !collabNotice && !(collab?.joined)
-  const connecting = editing && joining
+  // X2a-③ 후속: viewer 로 붙어 있어도 편집 잠금은 풀지 않는다. 편집 입력은
+  // editor 역할 세션이 방에 붙고 문서를 적용한 뒤에만 받는다(viewer→editor 전환
+  // 사이 leave/rejoin 구간에 입력하면 "방의 문서가 이긴다"로 조용히 사라진다).
+  const connecting = editing && !collabNotice && !(collab?.role === 'edit' && collab?.joined)
   const editingRef = useRef(editing)
   editingRef.current = editing
   /** X2a-③: viewer가 방 내용을 따라가도록 에디터를 다시 마운트한 세대. key 에 들어간다. */
@@ -1600,6 +1603,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    */
   useEffect(() => {
     if (!joining) return
+    // X2a-③ 후속: 모드가 바뀌면(보기→편집) 대기 시간을 처음부터 잰다. 미리보기 단계에서
+    // 돌던 타이머가 편집 참가 중에 터지면 notice 가 박혀 배너가 안 보인다(부하 시 관측).
     const t = setTimeout(() => {
       setCollab(null)
       setCollabNotice(
@@ -1615,7 +1620,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       )
     }, 15000)
     return () => clearTimeout(t)
-  }, [joining])
+  }, [joining, editing])
   const collabRef = useRef(collab)
   collabRef.current = collab
   const onRoomHasEditorsChangeRef = useRef(onRoomHasEditorsChange)
@@ -1643,6 +1648,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     // 모드가 바뀌면 viewer 따라가기 상태도 처음부터 다시 본다.
     hadEditorsRef.current = false
     onRoomHasEditorsChangeRef.current?.(false)
+    // X2a-③ 후속: 모드 전환 시 이전 단계의 세션·안내를 먼저 비운다. 미리보기 단계에서
+    // 생긴 notice/timeout 이 편집 참가 배너를 가리면 입력 차단 증명이 깨진다(부하 시 관측).
+    // lib 도 collaboration=undefined 로 즉시 방에서 나간다.
+    setCollab(null)
+    setCollabNotice(null)
     if (recheckTimer.current) {
       clearTimeout(recheckTimer.current)
       recheckTimer.current = null
@@ -2105,7 +2115,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           <Suspense fallback={SPINNER}>
           {connecting && (
             // X1c(P1): 방 참가 판정이 끝날 때까지 입력을 막는다(연결 배너).
-            // 편집기 자체는 열어야 방 참가(lib)가 시작된다. 입력만 readOnly 로 막는다.
+            // 편집기 자체는 열어야 방 참가(lib)가 시작된다.
             <div
               data-testid="xlsx-collab-connecting"
               className="absolute left-2 right-2 bottom-2 z-20 flex items-center gap-2 rounded-md border border-border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm"
@@ -2114,6 +2124,17 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               동시편집 연결 중 — 판정이 끝나면 편집이 열립니다
             </div>
           )}
+          <div
+            // X2a-③ 후속: 연결 판정이 끝날 때까지 에디터를 숨긴다(display:none).
+            // lib readOnly 는 DOM 입력을 막지 못해 programmatic fill 이 통과하고,
+            // fill 과 방 적용이 레이스하면 조용히 유실된다. display:none 조상 아래에서는
+            // 자손 CSS 가 visibility 를 덮어써도 bounding box 가 비어 fill 이 확정
+            // 실패하므로(typed=false) 판정 뒤 1회 재입력 경로로 수렴한다.
+            // lib 동기화는 WS/모델 계층이라 표시 여부와 무관하다.
+            style={connecting ? { display: 'none' } : undefined}
+            className="h-full"
+            data-testid={connecting ? 'xlsx-editor-hidden' : undefined}
+          >
           <SpreadsheetEditor
             // X1b: 편집 종료(Done)로는 편집기를 내린다 → lib 이 소유한 방 세션도 끝나고
             // 소켓이 내려간다(X-M6). 저장은 편집을 유지하므로 키가 바뀌지 않는다.
@@ -2144,6 +2165,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
             onWorkbookChange={() => scheduleXlsxRefresh()}
           />
+          </div>
           {!editing && collabNotice && (
             // X2a-③: 보기 모드 참가 판정 안내(방에 못 붙으면 파일만 보여준다).
             <div
