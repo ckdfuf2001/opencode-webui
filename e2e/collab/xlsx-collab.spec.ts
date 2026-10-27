@@ -438,7 +438,7 @@ test.describe('X0a: XLSX 동시편집', () => {
     }
   })
 
-  test('X-M6: 편집을 끝내면 소켓이 내려간다 (방 참가자 0)', async ({ browser }) => {
+  test('X-M6: 편집을 끝내면 viewer로 전환되고(방 유지), 미리보기를 닫으면 방이 해제된다', async ({ browser }) => {
     const t = await twoPages(browser)
     const f = freshXlsx('xm6', 0)
     try {
@@ -454,7 +454,12 @@ test.describe('X0a: XLSX 동시편집', () => {
       await expect.poll(roomPresent, { timeout: 15000, intervals: [500] }).toBe(true)
 
       await clickDone(t.pageA)
-      // 편집 종료 → 편집기가 언마운트 → lib 소켓이 닫힌다(방이 사라진다).
+      // X2a-③: Done 뒤에는 viewer 로 다시 붙으므로 방이 유지된다(편집 소켓은 내려간다).
+      await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(roomPresent, { timeout: 15000, intervals: [500] }).toBe(true)
+      // 미리보기를 닫으면 viewer 소켓도 닫히고 방이 해제된다.
+      await closeXlsxPreview(t.pageA)
       await expect.poll(roomPresent, { timeout: 20000, intervals: [500] }).toBe(false)
     } finally {
       await t.ctxA.close()
