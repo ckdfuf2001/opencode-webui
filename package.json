@@ -46,7 +46,8 @@
   "pnpm": {
     "patchedDependencies": {
       "ooxml-ui@1.8.0": "patches/ooxml-ui@1.8.0.patch",
-      "pptx-react-viewer@4.33.0": "patches/pptx-react-viewer@4.33.0.patch"
+      "pptx-react-viewer@4.33.0": "patches/pptx-react-viewer@4.33.0.patch",
+      "ooxml-core@1.8.0": "patches/ooxml-core@1.8.0.patch"
     }
   }
 }

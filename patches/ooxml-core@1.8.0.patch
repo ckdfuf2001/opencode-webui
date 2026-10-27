@@ -1,0 +1,41 @@
+diff --git a/dist/collab/index.mjs b/dist/collab/index.mjs
+index 76fc0a566ebad501cb438f643dc2fc1e3de62333..b8c3f53d71ab77a2967749c6e088e5dd97b1efd4 100644
+--- a/dist/collab/index.mjs
++++ b/dist/collab/index.mjs
+@@ -2,6 +2,8 @@ import * as Y from 'yjs';
+ import * as awarenessProtocol from 'y-protocols/awareness';
+ import { Awareness } from 'y-protocols/awareness';
+ import * as decoding from 'lib0/decoding';
++// X2a 패치 표식: 런타임에서 이 파일이 로드됐는지 확인한다(M21 과 같은 방식, ESM 기준).
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, core: "X2a-core-esm" };
+ import * as encoding from 'lib0/encoding';
+ 
+ // collab/assets.ts
+@@ -226,12 +228,17 @@ var PRESENCE_FIELD = "presence";
+ var STALE_PRESENCE_MS = 3e4;
+ var PRESENCE_HEARTBEAT_MS = 1e4;
+ var BROADCAST_THROTTLE_MS = 50;
++// X2a: 브라우저별 사용자 id(collab-user). 원격에서 오는 값이므로 문자열·64자 이하만 통과한다.
++function sanitizeUserId(value) {
++  return typeof value === "string" && value.length > 0 && value.length <= 64 ? value : void 0;
++}
+ function sanitizeIdentity(raw) {
+   return {
+     userName: sanitizeUserName(raw.userName),
+     userColor: sanitizeColor(raw.userColor, DEFAULT_COLOR),
+     userAvatar: sanitizeAvatarUrl(raw.userAvatar),
+-    role: sanitizeRole(raw.role)
++    role: sanitizeRole(raw.role),
++    userId: sanitizeUserId(raw.userId)
+   };
+ }
+ function isPresenceFresh(lastUpdated, now = Date.now(), staleMs = STALE_PRESENCE_MS) {
+@@ -992,6 +999,8 @@ function createCollabSession(options) {
+     userName: sanitizeUserName(options.user.name),
+     userColor: sanitizeColor(options.user.color, assignUserColor(doc.clientID)),
+     userAvatar: options.user.avatar,
++    // X2a: 앱이 넘긴 user.userId 를 presence 에 싣는다(펼침 publisher 가 그대로 옮긴다).
++    userId: sanitizeUserId(options.user.userId),
+     role
+   };
+   const sanitizePayload = options.sanitizePayload ?? (() => ({}));
