@@ -619,12 +619,13 @@ test.describe('X2a: presence 와 보기 모드', () => {
 })
 
 /** X2a-1: 같은 사용자 탭별 소켓 수와 타이틀바 표시를 읽는다(공개 DOM 표면). */
-async function presenceSurface(page: Page): Promise<{ text: string; count: number; names: string[] }> {
+async function presenceSurface(page: Page): Promise<{ text: string; count: number; names: string[]; titles: string[] }> {
   return page.locator('office-ui-presence').first().evaluate((el) => {
     const host = el as HTMLElement & { participants?: Array<{ name: string }> }
     const text = `${host.shadowRoot?.textContent ?? ''} ${host.textContent ?? ''}`.replace(/\s+/g, ' ').trim()
     const list = Array.isArray(host.participants) ? host.participants : []
-    return { text, count: list.length, names: list.map((p) => p.name) }
+    const titles = [...(host.shadowRoot?.querySelectorAll('button') ?? [])].map((b) => b.getAttribute('title') ?? '')
+    return { text, count: list.length, names: list.map((p) => p.name), titles }
   })
 }
 
@@ -658,6 +659,16 @@ test.describe('X2a-1: 같은 사용자 2탭', () => {
           { timeout: 15000, intervals: [300] },
         )
         .toBe('X2a-core-esm')
+      // X2a 패치 표식: ooxml-ui 패치 파일이 실제로 로드됐는지(런타임, M21과 별도 키)
+      await expect
+        .poll(
+          () =>
+            p1.evaluate(
+              () => (globalThis as unknown as { __ooxmlPatches?: { uiXlsx?: string } }).__ooxmlPatches?.uiXlsx ?? null,
+            ),
+          { timeout: 15000, intervals: [300] },
+        )
+        .toBe('X2a-ui')
 
       const p2 = await ctx.newPage()
       track(p2)
@@ -680,6 +691,10 @@ test.describe('X2a-1: 같은 사용자 2탭', () => {
       // 타이틀바 표시: 같은 사용자는 한 줄, 이름에 "(탭 2)"(타이틀바가 그리는 participants 속성 기준)
       await expect
         .poll(async () => (await presenceSurface(p1)).names, { timeout: 20000, intervals: [500] })
+        .toEqual(['Ada (탭 2)'])
+      // 화면에 실제로 그려진 아바타 버튼의 title에도 "(탭 2)"가 들어간다
+      await expect
+        .poll(async () => (await presenceSurface(p1)).titles, { timeout: 20000, intervals: [500] })
         .toEqual(['Ada (탭 2)'])
     } finally {
       await ctx.close()
