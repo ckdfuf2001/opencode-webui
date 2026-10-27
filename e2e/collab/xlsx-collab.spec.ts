@@ -285,6 +285,9 @@ test.describe('X0a: XLSX 동시편집', () => {
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
       await setCellByFormulaBar(t.pageA, 'B2', stamp)
+      // X2a-③ 후속: B 가 A 편집을 보기 전에 저장하면 방 바이트에 스탬프가 없어 디스크에
+      // 남지 않는다(부하 시 관측). 테스트 취지("B 에 반영되고")대로 반영을 먼저 확인한다.
+      await expect.poll(async () => liveBytesContain(t.pageB, stamp), { timeout: 30000, intervals: [500] }).toBe(true)
       await clickAppSave(t.pageB)
 
       await expect
