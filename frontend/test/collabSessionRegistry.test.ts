@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as registryModule from '../src/lib/collabSessionRegistry'
 import { acquireCollabSession, dropCollabSession, collabSessionCount, collabSessionRefs } from '../src/lib/collabSessionRegistry'
 
@@ -15,7 +15,16 @@ const fake = (): Fake => ({ destroyed: 0, destroy() { this.destroyed += 1 } })
 const use = <T>(s: unknown): T => s as T
 
 describe('collabSessionRegistry lease (M3/N1)', () => {
-  it('R1: A releases twice while B holds it — B survives', () => {
+  // M31 1-a/D45: 마지막 release 는 즉시 destroy 하지 않고 grace(기본 3초) 뒤에 한다.
+  // 테스트는 가짜 타이머로 grace 를 넘긴 뒤 destroy 를 확인한다.
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  const settle = () => vi.advanceTimersByTimeAsync(10_000)
+  it('R1: A releases twice while B holds it — B survives', async () => {
     const s = fake()
     const a = acquireCollabSession('r1.pptx', () => use<Fake>(s) as never, () => {})
     const b = acquireCollabSession('r1.pptx', () => fake() as never, () => {})
@@ -25,10 +34,11 @@ describe('collabSessionRegistry lease (M3/N1)', () => {
     expect(s.destroyed).toBe(0)
     expect(collabSessionRefs('r1.pptx')).toBe(1)
     b.release()
+    await settle()
     expect(s.destroyed).toBe(1)
   })
 
-  it('R2: the path-based release API is gone, so a non-acquiring mount cannot disturb the holder', () => {
+  it('R2: the path-based release API is gone, so a non-acquiring mount cannot disturb the holder', async () => {
     const s = fake()
     const holder = acquireCollabSession('r2.pptx', () => use<Fake>(s) as never, () => {})
     // N1 요구사항: 토큰 없이 release할 수 있는 경로 자체를 없앤다.
@@ -40,10 +50,11 @@ describe('collabSessionRegistry lease (M3/N1)', () => {
     expect(s.destroyed).toBe(0)
     expect(collabSessionRefs('r2.pptx')).toBe(1)
     holder.release()
+    await settle()
     expect(s.destroyed).toBe(1)
   })
 
-  it('R3: after drop, an old lease release must not kill the new session', () => {
+  it('R3: after drop, an old lease release must not kill the new session', async () => {
     const dead = fake()
     const fresh = fake()
     const old = acquireCollabSession('r3.pptx', () => use<Fake>(dead) as never, () => {})
@@ -60,21 +71,23 @@ describe('collabSessionRegistry lease (M3/N1)', () => {
     expect(fresh.destroyed).toBe(0)
     expect(collabSessionRefs('r3.pptx')).toBe(refsBefore)
     next.release()
+    await settle()
     expect(fresh.destroyed).toBe(1)
   })
 
-  it('R4: registry empties after 20 acquire/release cycles', () => {
+  it('R4: registry empties after 20 acquire/release cycles', async () => {
     const base = collabSessionCount()
     for (let i = 0; i < 20; i++) {
       const s = fake()
       const lease = acquireCollabSession(`cycle-${i}.pptx`, () => use<Fake>(s) as never, () => {})
       lease.release()
+      await settle()
       expect(s.destroyed).toBe(1)
     }
     expect(collabSessionCount()).toBe(base)
   })
 
-  it('R5: drop notifies every holder of that session exactly once (N2)', () => {
+  it('R5: drop notifies every holder of that session exactly once (N2)', async () => {
     const s = fake()
     const a = acquireCollabSession('r5.pptx', () => use<Fake>(s) as never, () => {})
     const b = acquireCollabSession('r5.pptx', () => fake() as never, () => {})
@@ -88,6 +101,7 @@ describe('collabSessionRegistry lease (M3/N1)', () => {
     // 통지 뒤 release는 조용히 무시된다(이미 제거됨).
     a.release()
     b.release()
+    await settle()
     expect(collabSessionCount()).toBe(0)
   })
 
