@@ -648,6 +648,16 @@ test.describe('X2a-1: 같은 사용자 2탭', () => {
       await gotoApp(p1)
       await openXlsxEditing(p1, f.name)
       await expect.poll(async () => (await collabState(p1)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      // X2a 패치 표식: ooxml-core 패치 파일이 실제로 로드됐는지(런타임)
+      await expect
+        .poll(
+          () =>
+            p1.evaluate(
+              () => (globalThis as unknown as { __ooxmlPatches?: { core?: string } }).__ooxmlPatches?.core ?? null,
+            ),
+          { timeout: 15000, intervals: [300] },
+        )
+        .toBe('X2a-core-esm')
 
       const p2 = await ctx.newPage()
       track(p2)
