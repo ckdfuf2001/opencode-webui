@@ -697,3 +697,29 @@ E21만의 문제가 아니다. 근거:
 - 확인: E5 와 E11m 3건은 **c21c335 에서도 실패**(E5 는 플레이크 성격, E11m 3건은 기준선 포함)(백엔드·shared 파일만 c21c335 로 되돌려 재실행, 4 failed). 따라서 X2a ① 이 늘린 실패는 없다.
 - E2 계열(E2, E2b, E2f-strict, E2g, E2r) 5건은 전부 통과.
 - 한계: 나머지 14건은 c21c335 에서 다시 돌리지 않았다. PPT 경로(app 키, app.mode)는 ① 변경과 분기가 달라서 영향이 없다고 본다.
+
+## X2a-③ 완료 기록 (2026-10-27/28)
+
+- 테스트: `40d2605`(X2a-2,3,4,6,7 + X-M6-ext, red) → 구현 `d4733ee` → `9334d5a`(X-M6 개정)
+  → `907066d`(X0a-9 fill 레이스 수정) → `a24388f`(viewer 타임아웃 keep) → `3e7f87b`(X0a-2 반영 대기).
+- X2a-2 red → green: viewer-first 는 자기 파일을 보여 주고, 편집자 등장 뒤 리마운트로 방 내용을
+  따라간다. 편집값은 디스크와 다르게(X2A2 스탬프) 넣어 구분했다.
+- X-M6 개정 사유: Done 뒤 viewer 로 다시 붙어 방이 유지되므로, 기존 단언(편집 종료 즉시 방 해제)은
+  과도기 0rooms 폴링에 걸려 우연히 통과했다. 개정판은 Done 뒤 viewer 재참가를 확인하고
+  미리보기 닫힘에서 해제를 확인한다. 구 단언은 X-M6-ext(마지막 viewer 퇴장)가 계승한다.
+- X0a-9回归 디버깅 기록: programmatic fill 은 lib readOnly 를 우회한다(typed=true 인데도
+  방 적용에 지워짐). `inert` 오버레이는 fill 을 막지 못했다(관측). `display:none` 래퍼는
+  fill 을 확정 실패시켜(typed=false) 판정 뒤 1회 재입력 경로로 수렴한다. viewer→editor 전환
+  구간도 editor 역할 참가까지 잠그고, 모드 전환 시 세션·안내를 초기화한다.
+- X0a-2 강화: B 저장 전 A 편집 반영을 먼저 확인한다(선천적 저장-반영 레이스).
+- E2 지연 플레이크: 3c8528a 1/4(3621, 3675, 3078, 3174ms) vs HEAD 3/2(3175, 3338ms).
+  양쪽 다 같은 3000ms 단언에서 걸리므로 머신 부하로 기록한다. E5 플레이크와는 분리한다.
+- X0a+X2a ×3: chromium 65/66(X0a-2 r1만 실패 — B 저장 전 A 반영 대기가 없어 부하 시
+  저장-반영 레이스, 테스트를 강화하고 X0a-2 ×3 통과 확인), msedge 66/66.
+  회귀 10건(U1~U3, M6a/M6b, E2·E2b·E2f-strict·E2g·E2r) 전부 통과.
+- 기준선: frontend tsc 0 · backend tsc 47(기존) · eslint 333(272/61) ·
+  check:memory 오류 0/경고 1(D36) · check:encoding 0 ·
+  backend vitest 513/513(실패 파일 2개는 bun:sqlite 기존 항목).
+- clean install(`NODE_ENV=development`, `npx --yes pnpm@9.15.0 install --frozen-lockfile`,
+  EXIT=0): 패치 해시 디렉터리 유지, 표식 4종 런타임 확인(M21·M21-esm은 E2f-strict 의
+  openFile 단언, X2a-core-esm·X2a-ui는 X2a-1 단언).

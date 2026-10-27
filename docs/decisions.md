@@ -281,7 +281,7 @@
   - 관련 커밋: 34bc932(표식 도입), M21(ESM 빌드 적용 + fire() 버그 수정 + deadline 저장 금지)
   - 회귀 검사: 3-3(E2E 시작 조건 `assertLibPatchesLoaded` — ui/viewer=M21 아니면 즉시 실패),
     3-2(빌드 산출물 grep 검사)
-  - X2a 추가 표식 (2026-10-28): `core: "X2a-core-esm"`(ooxml-core `dist/collab/index.mjs`,
+  - X2a 추가 표식 (2026-10-27): `core: "X2a-core-esm"`(ooxml-core `dist/collab/index.mjs`,
     presence userId 전달+sanitize), `uiXlsx: "X2a-ui"`(ooxml-ui `dist/xlsx.js`,
     user.id 전달+people userId+타이틀바 userId 묶기). `ui: "M21"`은 유지한다.
   - X2a 판정 기록: pnpm 9에서는 patchedDependencies를 `package.json`과 lockfile에 기록한다.
@@ -450,8 +450,23 @@
   lib 은 `userId`를 기본 presence 에 싣지 않으므로 공개 API 로는 묶을 수 없어 패치했다.
 - **X2a — viewer 는 방을 seed 하지 않는다**: ooxml-core `dist/collab/index.mjs:440`(`settle`),
   `:460`(`handleLoad`) 모두 `canWrite()`일 때만 쓰고, viewer 는 `canWrite`가 거짓.
+- **X2a-③ — viewer 따라가기는 앱에서 처리한다**(lib 패치 없음). viewer-first 는 빈 방에서
+  자기 파일을 보여 주고, 나중에 들어온 seed 를 따라가지 못한다(xlsx `bindWorkbookSession` 의
+  settle 이 `!settled` 일 때 dirty 를 버린다 — `ooxml-core/dist/xlsx/collab/index.mjs:1115-1147`,
+  특히 `:1140-1143`. `peers` 이벤트도 `waiting` 일 때만 settle 한다(`:1161-1163`).
+  `synced` 는 변경 시에만 재발행이라 seed 도착을 알리지 않는다(`dist/collab/index.mjs:1145-1149`).
+  그래서 공개 이벤트 `collaboration-change` 의 people 에서 편집자 수가 0→1 이상으로 바뀌면
+  viewer 에디터를 한 번 리마운트한다(에디터 `key` 의 viewer 세대 번호).
+  리마운트 때 방이 아직 비어 있을 수 있으므로(편집자 presence 가 seed 보다 먼저 온다),
+  같은 이벤트에서 rooms() 의 `seeded` 를 확인하고, 비었으면 단발 3초 뒤 1회만 다시 확인한다
+  (새 폴링/interval 없음). `unsent` 등 바인딩 플래그는 클로저 지역 변수라 리마운트 때 버려진다.
+  prop 변경 자체는 lib 가 처리한다(`want()` 가 이전 연결을 정리하고 새로 연결 —
+  `ooxml-ui/dist/xlsx.js:15421-15426`, React 래퍼 전달 `index.js:130`).
+  X-M6 기대도 바뀌었다: Done 뒤 viewer 로 다시 붙어 방이 유지되므로, 방 해제는 미리보기 닫힘에서
+  확인한다(X-M6-ext 가 마지막 viewer 퇴장을 확인).
   관련 커밋: 748b911·d63a501(X2a-① 테스트·수정) · b78a715(합친 mode) · a5cd867·9eed89b(X2a-1 테스트)
   · 0b0e354(ooxml-core 패치) · 1f330ef(ooxml-ui 패치) · 3c1610d(앱 user.id 전달)
+  · c0783ad(rooms `seeded`) · 40d2605(X2a-③ 테스트) · d4733ee(X2a-③ 구현) · 9334d5a(X-M6 개정)
 
 ## 미결정 (사용자 판단 대기)
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
