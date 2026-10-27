@@ -691,9 +691,9 @@ E21만의 문제가 아니다. 근거:
 ## pptx-collab 기준선 재확인 (X2a ①, 2026-10-27)
 
 - 명령: 
-px playwright test -c e2e/collab/playwright.config.ts --project=chromium e2e/collab/pptx-collab.spec.ts
-- 결과: **failed 18 / passed 16 / skipped 1** (21.7분). 기록 기준선(v0.12.70·HEAD 17/17/1)과 비교해 실패 1건 차이.
+ `npx playwright test -c e2e/collab/playwright.config.ts --project=chromium e2e/collab/pptx-collab.spec.ts`
+- 결과: **failed 18 / passed 16 / skipped 1** (21.7분). 기준선 대비 차이는 E5 1건(D47 플레이크). E11m 3건은 원래 기준선 17건에 포함.
 - 실패 이름 18건: E21b, E3, E4, E5, E7, E8, E9, E12, E15, E18, E16b, E19b, E20, E20s, E21, E11m/E1m, E11m/E2m, E11m/E3m.
-- 확인: E5 와 E11m 3건은 **c21c335 에서도 동일하게 실패**(백엔드·shared 파일만 c21c335 로 되돌려 재실행, 4 failed). 따라서 X2a ① 이 늘린 실패는 없다.
+- 확인: E5 와 E11m 3건은 **c21c335 에서도 실패**(E5 는 플레이크 성격, E11m 3건은 기준선 포함)(백엔드·shared 파일만 c21c335 로 되돌려 재실행, 4 failed). 따라서 X2a ① 이 늘린 실패는 없다.
 - E2 계열(E2, E2b, E2f-strict, E2g, E2r) 5건은 전부 통과.
 - 한계: 나머지 14건은 c21c335 에서 다시 돌리지 않았다. PPT 경로(app 키, app.mode)는 ① 변경과 분기가 달라서 영향이 없다고 본다.
