@@ -161,3 +161,76 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fe
        enabled: state.autosave.enabled,
        available,
        label: t("pptx.titleBar.autoSave"),
+diff --git a/dist/xlsx.js b/dist/xlsx.js
+index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..bd98f11ee79e5dd442748a06ea061a8a508c3e75 100644
+--- a/dist/xlsx.js
++++ b/dist/xlsx.js
+@@ -943,11 +943,26 @@ function renderShare(page) {
+   page.content.replaceChildren(...children);
+ }
+ function participants(state) {
+-  return state.people.map((person) => ({
+-    id: String(person.clientId),
+-    name: person.name,
+-    color: person.color,
+-    ...person.self ? { self: true } : {}
++  // X2a: 같은 userId(브라우저별 collab-user id)는 하나로 묶어 "이름 (탭 N)"으로 표시한다.
++  // userId가 없으면 clientId 기준(하위 호환). 색은 가장 작은(최초) clientId의 것,
++  // 그룹에 self가 하나라도 있으면 self다. 2탭 이상일 때만 "(탭 N)"을 붙인다.
++  const groups = new Map();
++  for (const person of state.people) {
++    const key = typeof person.userId === "string" && person.userId ? "u:" + person.userId : "c:" + String(person.clientId);
++    let g = groups.get(key);
++    if (!g) {
++      g = { first: person, count: 0, self: false };
++      groups.set(key, g);
++    }
++    g.count += 1;
++    if (person.clientId < g.first.clientId) g.first = person;
++    if (person.self) g.self = true;
++  }
++  return [...groups.values()].map((g) => ({
++    id: String(g.first.clientId),
++    name: g.count > 1 ? `${g.first.name} (탭 ${g.count})` : g.first.name,
++    color: g.first.color,
++    ...g.self ? { self: true } : {}
+   }));
+ }
+ var PAGES = [
+@@ -15314,6 +15329,8 @@ var CalcPreparation = class {
+ };
+ 
+ // src/xlsx/collaboration-session.ts
++// X2a 패치 표식: ui "M21"은 유지하고 XLSX 표식은 별도 키로 둔다(M21 단언 보호).
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, uiXlsx: "X2a-ui" };
+ function createRoomSession(collab, xlsx, options, defaultName) {
+   const roomId = options.roomId ?? "";
+   if (!collab.isValidRoomId(roomId))
+@@ -15339,7 +15356,10 @@ function createRoomSession(collab, xlsx, options, defaultName) {
+     user: {
+       name: user.name || defaultName,
+       ...user.color ? { color: user.color } : {},
+-      ...user.role ? { role: user.role } : {}
++      ...user.role ? { role: user.role } : {},
++      // X2a: 앱이 넘긴 user.id(브라우저별 collab-user id)를 core identity 필드
++      // userId로 옮긴다. core의 펼침 publisher가 presence로 옮기고, 서버는 이를 userId로 읽는다.
++      ...typeof user.id === "string" && user.id ? { userId: user.id } : {}
+     },
+     initialPresence: {},
+     sanitizePayload: xlsx.sanitizeXlsxPresence,
+@@ -15519,12 +15539,15 @@ var XlsxCollaboration = class {
+           clientId: session.clientId,
+           name: session.identity.userName,
+           color: session.identity.userColor,
++          // X2a: 묶기 키. 없으면 clientId 기준(하위 호환).
++          userId: session.identity.userId,
+           self: true
+         },
+         ...session.peers().map((peer) => ({
+           clientId: peer.clientId,
+           name: peer.userName,
+           color: peer.userColor,
++          userId: peer.userId,
+           self: false
+         }))
+       ]
