@@ -12,6 +12,7 @@ import { absToWsPath } from '@opencode-webui/shared/lib/repoPath'
 import { formatChatTime } from '@/lib/chatTime'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { showToast } from '@/lib/toast'
+import { toolPartRenderMode } from '@/lib/toolPartRender'
 
 function getMessageTextContent(msg: MessageWithParts): string {
   return stripMemoryRecall(
@@ -382,17 +383,14 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                       )
                     }
                     return parts.map((part, index) => {
-                      const pType = (part as { type?: string }).type
-                      const tStatus = (part as { state?: { status?: string } }).state?.status
-                      // SSE-off 진행 중: 미완료 툴은 스피너 없이 상태 텍스트만 표시. 완료/실패분은 통째로 표시.
-                      if (!!sseOffStreaming && pType === 'tool' && tStatus !== 'completed' && tStatus !== 'error') {
-                        const tool = (part as { tool?: string }).tool ?? 'tool'
-                        return (
-                          <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`} className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span className="font-mono">{tool}</span>
-                            <span className="opacity-70">{tStatus ?? 'running'}…</span>
-                          </div>
-                        )
+                      // B0-5: SSE off여도 미완료 툴은 full 타일 하나로 통일한다(compact 행 금지).
+                      if ((part as { type?: string }).type === 'tool') {
+                        const mode = toolPartRenderMode({
+                          sseOn,
+                          streaming,
+                          part: part as { type?: string; state?: { status?: string } },
+                        })
+                        if (mode !== 'full') return null
                       }
                       return (
                         <div key={`${msg.info.id}-${(part as { id: string }).id}-${index}`}>
