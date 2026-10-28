@@ -370,6 +370,33 @@
   `messageListEquality.test.ts`, `lastMessageMerge.test.ts`,
   `proxy-turn-end.test.ts`, `reconcile-sweep.test.ts` — 수정 전 실패 확인)
 
+## D46 재재수정 (P0-2 · P1-1~P1-4 · P2, 2026-10-28)
+- P0-1 정정: 정리 타이머의 턴 판정은 **폴러 스냅샷**(`turn-verdict.ts`)으로만 한다.
+  전역 `/session/status` 단독 조회는 레포 세션을 빠뜨려 busy를 idle로 오판한다(실측:
+  전역 `{}` vs 디렉터리 busy). 스냅샷이 없거나 오래됐거나(15초) 해당 디렉터리 조회가
+  실패·미시도면 `unknown`으로 처리하고 정리하지 않는다. 새 opencode 호출은 없다.
+- P0-2 판정: backend tsc 47은 **기존 것**이다. c21c335(2026-10-25)에서 같은 47개가
+  같은 내용으로 나온다(줄번호만 이동). blame상 9~10월 커밋이 원인이라 X1c의
+  "백엔드 tsc 0"은 다른 범위 측정으로 본다. 이번 14개 커밋은 +0.
+- P1-1: 고아 쿼리에 시간 하한을 둔다(`time_updated` BETWEEN now-24h AND now-2m).
+  82일 묵은 잔재는 대상에서 빠진다("손대지 않음"과 일치). part 상태는 라운드당
+  1회 배치 조회로 재사용한다(`getToolPartStatesBatch`, open 200회 → 1회).
+- P1-2: 이미 표시된 고아는 다시 세지 않는다(재표시·`observed_at` 갱신·로그 반복 금지).
+  표시는 opencode에서 끝난 것이 확인될 때만 치우고 `part-mismatch` 경고를 남긴다.
+  7일 prune은 그때 유효해진다.
+- P1-3: proxy abort 전에 3초 유예를 둔다(`PROXY_IDLE_GRACE_MS`, 폴러가 매 틱 통지).
+  응답 헤더 뒤 본문 대기 중 abort 경합을 막는다. 합성 200(`{ok, turnEnd}`)은
+  프론트에서 메시지 형태로 파싱하지 않는다 — `sendPrompt`는 `response.data`를
+  그대로 돌려주고(`opencode.ts:197-200`), `onSuccess`/`onSettled`는 invalidate만
+  한다(`useOpenCode.ts:1984-1986, 2024-2030`). 끝난 턴은 다음 폴링이 읽는다.
+- P1-4: X0a-9 red는 수정 전 커밋(9bc434e)에서 신 단언을 1회 실행해 확보했다.
+  `expect(bannerVisible || !typed).toBe(true)` → `Expected: true / Received: false`
+  (`x0a9-red.spec.ts:115`, 배너 요소 없음 + 입력 차단 없음).
+- P2: merge 가드에 상태 순서를 넣는다(pending < running < completed/error).
+  역행(completed → running)은 교체하지 않는다(늦은 폴링이 화면을 되돌리지 않게).
+  orphan 표시는 `listSessionStatus` 행에만 붙으므로, 30일 정리로 행이 지워진
+  세션의 고아는 표시되지 않는다 — P1-1의 24h 하한으로 사실상 문제가 없어 기록만 한다.
+
 ## D45 편집 화면은 전체를 덮는다 / 닫기 가드는 넣지 않는다 (2026-10-22)
 - 편집 화면은 `fixed inset-0 z-[100] bg-background flex flex-col` 로 뷰포트를 전부 덮고, 그 헤더가
   `aria-label="Close preview"` 버튼을 가로챈다(Playwright call log: `subtree intercepts pointer events`).

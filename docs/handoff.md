@@ -554,7 +554,12 @@ E21만의 문제가 아니다. 근거:
 - B0-6: 1분 sweep 유지. 세션 정리는 idle 2회 연속, part 정리는 running + 세션 idle 2회
   연속에만 orphan 표시(busy는 손대지 않음, abort 없음). opencode 완료 part의 표시는
   즉시 치우고 part-mismatch 경고.
-- 관련 커밋: D46 후속 참조.
+- B0 재수정(P0-2 · P1-1~P1-4 · P2, 2026-10-28): 턴 판정을 폴러 스냅샷으로 교체(전역 단독
+  조회는 레포 busy를 빠뜨려 오판 — 실측 확인). backend tsc 47은 c21c335에서 같은
+  집합으로 확인돼 기존 것으로 판정(X1c의 0은 다른 범위 측정). 고아 쿼리에 24h 하한 +
+  배치 재사용, 표시된 고아 재표시 금지, proxy abort 3초 유예, merge 순서 가드.
+  X0a-9 red는 9bc434e에서 신 단언 실행으로 확보.
+- 관련 커밋: D46 재재수정 참조.
 
 ### 환경 주의 (이 저장소에서 신규 파일 추가 방법)
 - `opencode-webui` 의 repo-tracking 기능이 `.git/info/exclude` 에 `/*` + `!/.opencode` + `!/scripts` 를
