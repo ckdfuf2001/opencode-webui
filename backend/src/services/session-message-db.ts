@@ -246,7 +246,11 @@ function buildPart(r: PartRow): Record<string, unknown> {
   return { ...base, type: 'text', text: `[part omitted: ${r.type ?? 'unknown'} output too large (${r.len} chars) — see full log in session]` }
 }
 
-/** B0-6: opencode에서 running으로 남은 tool part (age 초과만, 최대 200건). */
+/** B0-6: opencode에서 running으로 남은 tool part (age 초과만, 최대 200건).
+ * P1-1: 시간 하한을 걸어 고대 잔재(82일 등)는 대상에서 제외한다.
+ * 기본 상한 24h — "손대지 않음" 원칙과 맞춘다. */
+const RUNNING_PART_MAX_AGE_MS = 24 * 60 * 60_000
+
 export interface RunningToolPart {
   sessionId: string
   messageId: string
@@ -256,11 +260,13 @@ export interface RunningToolPart {
   updatedAt: number
 }
 
-export async function listRunningToolParts(olderThanMs: number): Promise<RunningToolPart[]> {
+export async function listRunningToolParts(olderThanMs: number, maxAgeMs = RUNNING_PART_MAX_AGE_MS): Promise<RunningToolPart[]> {
   const oc = await openOcDb()
   if (!oc) return []
   try {
-    const cutoff = Date.now() - Math.max(0, olderThanMs)
+    const now = Date.now()
+    const cutoffOld = now - Math.max(0, olderThanMs)
+    const cutoffNew = now - Math.max(olderThanMs, maxAgeMs)
     const rows = oc
       .query(
         `SELECT session_id AS sid, message_id AS mid, id AS pid,
@@ -271,10 +277,11 @@ export async function listRunningToolParts(olderThanMs: number): Promise<Running
          WHERE json_extract(data,'$.type') = 'tool'
            AND json_extract(data,'$.state.status') = 'running'
            AND time_updated < ?
+           AND time_updated > ?
          ORDER BY time_updated ASC
          LIMIT 200`,
       )
-      .all(cutoff) as Array<{ sid: string; mid: string; pid: string; tool: string | null; cmd: string | null; tu: number }>
+      .all(cutoffOld, cutoffNew) as Array<{ sid: string; mid: string; pid: string; tool: string | null; cmd: string | null; tu: number }>
     return rows.map((r) => ({
       sessionId: r.sid,
       messageId: r.mid,
@@ -283,6 +290,41 @@ export async function listRunningToolParts(olderThanMs: number): Promise<Running
       command: r.cmd ?? '',
       updatedAt: r.tu,
     }))
+  } finally {
+    oc.close()
+  }
+}
+
+/**
+ * P1-1: 여러 part의 현재 상태를 한 번의 open·쿼리로 읽는다.
+ * sweep이 part마다 openOcDb()를 여는 것(최대 200회)을 없애기 위한 배치 경로.
+ * 행이 없으면 done(끝난 것으로 간주).
+ */
+export async function getToolPartStatesBatch(
+  pairs: Array<{ sessionId: string; partId: string }>,
+): Promise<Map<string, 'running' | 'done'>> {
+  const out = new Map<string, 'running' | 'done'>()
+  if (pairs.length === 0) return out
+  const oc = await openOcDb()
+  if (!oc) return out
+  try {
+    const limited = pairs.slice(0, 250)
+    const conds = limited.map(() => '(session_id = ? AND id = ?)').join(' OR ')
+    const params: string[] = []
+    for (const p of limited) params.push(p.sessionId, p.partId)
+    const rows = oc
+      .query(`SELECT session_id AS sid, id AS pid, json_extract(data,'$.state.status') AS st FROM part WHERE ${conds}`)
+      .all(...params) as Array<{ sid: string; pid: string; st: string | null }>
+    const seen = new Set<string>()
+    for (const r of rows) {
+      seen.add(`${r.sid}:${r.pid}`)
+      out.set(`${r.sid}:${r.pid}`, r.st === 'running' ? 'running' : 'done')
+    }
+    for (const p of limited) {
+      const key = `${p.sessionId}:${p.partId}`
+      if (!seen.has(key)) out.set(key, 'done')
+    }
+    return out
   } finally {
     oc.close()
   }

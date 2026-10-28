@@ -557,7 +557,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     if (turnSid) {
       const { trackProxyDispatch } = await import('./proxy-turn-end')
       turnAc = new AbortController()
-      trackProxyDispatch(turnSid, turnAc)
+      let turnDir: string | undefined
+      try {
+        turnDir = query['directory'] ? decodeURIComponent(query['directory']) : undefined
+      } catch {
+        turnDir = undefined
+      }
+      trackProxyDispatch(turnSid, turnAc, turnDir)
       const maybeAny = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any
       upstreamSignal = typeof maybeAny === 'function' && signal ? maybeAny([signal, turnAc.signal]) : turnAc.signal
     }

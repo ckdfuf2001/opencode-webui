@@ -12,29 +12,54 @@ const controllers = new Map<string, AbortController>()
 const dispatchedAt = new Map<string, number>()
 const busyObservedAt = new Map<string, number>()
 const idleReleased = new Set<string>()
+/** P1-3: idle 1회째 관측 시각 (유예 후에도 idle이어야 끊는다). */
+const idleSince = new Map<string, number>()
+/** P0-1: 폴러 스냅샷 대조용 디렉터리. */
+const trackDirs = new Map<string, string>()
+/** P1-3: abort 유예 (폴러 1초 주기 대비 여유). */
+export const PROXY_IDLE_GRACE_MS = 3_000
 
-export function trackProxyDispatch(sessionID: string, ac: AbortController): void {
+export function trackProxyDispatch(sessionID: string, ac: AbortController, directory?: string): void {
   controllers.set(sessionID, ac)
   dispatchedAt.set(sessionID, Date.now())
+  // 이전 턴 관측이 다음 발송 판단에 섞이지 않게 초기화한다.
+  busyObservedAt.delete(sessionID)
+  idleSince.delete(sessionID)
+  if (directory) trackDirs.set(sessionID, directory)
+  else trackDirs.delete(sessionID)
 }
 
 export function untrackProxyDispatch(sessionID: string): void {
   controllers.delete(sessionID)
   dispatchedAt.delete(sessionID)
+  idleSince.delete(sessionID)
+  trackDirs.delete(sessionID)
 }
 
 export function noteProxyBusy(sessionID: string): void {
-  if (controllers.has(sessionID)) busyObservedAt.set(sessionID, Date.now())
+  if (!controllers.has(sessionID)) return
+  busyObservedAt.set(sessionID, Date.now())
+  // busy가 다시 오면 idle 유예는 처음부터 잰다.
+  idleSince.delete(sessionID)
 }
 
 /**
- * idle 관측. 발송 이후 busy를 본 in-flight가 있으면 끊고 true를 돌려준다.
- * 호출자가 정상 종료 로그를 남긴다.
+ * idle 관측. 발송 이후 busy를 본 in-flight가 있고, 유예(PROXY_IDLE_GRACE_MS)를
+ * 넘겨도 idle이면 끊고 true를 돌려준다. 호출자가 정상 종료 로그를 남긴다.
+ * nowMs는 테스트용(기본 Date.now()).
  */
-export function noteProxyIdle(sessionID: string): boolean {
+export function noteProxyIdle(sessionID: string, nowMs?: number): boolean {
   const ac = controllers.get(sessionID)
   if (!ac) return false
   if ((busyObservedAt.get(sessionID) ?? 0) >= (dispatchedAt.get(sessionID) ?? 0)) {
+    const now = nowMs ?? Date.now()
+    const first = idleSince.get(sessionID)
+    if (first === undefined) {
+      idleSince.set(sessionID, now)
+      return false
+    }
+    if (now - first < PROXY_IDLE_GRACE_MS) return false
+    idleSince.delete(sessionID)
     idleReleased.add(sessionID)
     try {
       ac.abort()
@@ -53,11 +78,11 @@ export function consumeProxyIdleReleased(sessionID: string): boolean {
   return true
 }
 
-/** B0-6: 추적 중인 직접 전송 dispatch 목록 (발송 시각 포함). */
-export function listTrackedDispatches(): Array<{ sessionId: string; since: number }> {
-  const out: Array<{ sessionId: string; since: number }> = []
+/** B0-6: 추적 중인 직접 전송 dispatch 목록 (발송 시각·디렉터리 포함). */
+export function listTrackedDispatches(): Array<{ sessionId: string; since: number; directory?: string }> {
+  const out: Array<{ sessionId: string; since: number; directory?: string }> = []
   for (const [sid, ts] of dispatchedAt) {
-    if (controllers.has(sid)) out.push({ sessionId: sid, since: ts })
+    if (controllers.has(sid)) out.push({ sessionId: sid, since: ts, directory: trackDirs.get(sid) })
   }
   return out
 }
@@ -83,4 +108,6 @@ export function resetProxyTurnEndForTest(): void {
   dispatchedAt.clear()
   busyObservedAt.clear()
   idleReleased.clear()
+  idleSince.clear()
+  trackDirs.clear()
 }
