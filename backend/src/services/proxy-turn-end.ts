@@ -58,17 +58,56 @@ export function noteProxyIdle(sessionID: string, nowMs?: number): boolean {
       idleSince.set(sessionID, now)
       return false
     }
-    if (now - first < PROXY_IDLE_GRACE_MS) return false
-    idleSince.delete(sessionID)
-    idleReleased.add(sessionID)
-    try {
-      ac.abort()
-    } catch {
-      /* 무시 */
-    }
-    return true
+  if (now - first < PROXY_IDLE_GRACE_MS) return false
+  idleSince.delete(sessionID)
+  idleReleased.add(sessionID)
+  try {
+    ac.abort()
+  } catch {
+    /* 무시 */
+  }
+  return true
   }
   return false
+}
+
+type TurnVerdictLike = 'busy' | 'idle' | 'unknown'
+
+/**
+ * P0-1: 매 틱 추적 중인 dispatch를 폴러 스냅샷 판정으로 처리한다.
+ * - busy → noteProxyBusy (유예 리셋).
+ * - idle → noteProxyIdle (유예 뒤 abort, true면 released에 담아 반환).
+ * - unknown → clearProxyIdle (유예 취소, 끊지 않음). 응답 부재를 idle로 보지 않는다.
+ * nowMs는 테스트용(기본 Date.now()).
+ */
+export function pumpTrackedIdle(
+  getVerdict: (sessionId: string, directory?: string) => TurnVerdictLike,
+  nowMs?: number,
+): string[] {
+  const released: string[] = []
+  for (const d of listTrackedDispatches()) {
+    let verdict: TurnVerdictLike
+    try {
+      verdict = getVerdict(d.sessionId, d.directory)
+    } catch {
+      continue
+    }
+    if (verdict === 'busy') {
+      noteProxyBusy(d.sessionId)
+      continue
+    }
+    if (verdict === 'unknown') {
+      clearProxyIdle(d.sessionId)
+      continue
+    }
+    if (noteProxyIdle(d.sessionId, nowMs)) released.push(d.sessionId)
+  }
+  return released
+}
+
+/** P0-1: idle 유예를 취소한다 (판정 unknown/busy 시). */
+export function clearProxyIdle(sessionID: string): void {
+  idleSince.delete(sessionID)
 }
 
 /** 우리가 직접 끊은 요청인지 확인하고 1회성으로 소비한다. */
