@@ -14,7 +14,8 @@ import {
   setSessionCancelled,
   upsertSessionStatus,
 } from '../db/session-status-queries'
-import { noteProxyBusy, noteProxyIdle } from './proxy-turn-end'
+import { noteProxyBusy, noteProxyIdle, listTrackedDispatches } from './proxy-turn-end'
+import { recordTurnSnapshot } from './turn-verdict'
 import { logger } from '../utils/logger'
 const POLL_INTERVAL_MS = 1_000
 const FETCH_TIMEOUT_MS = 2_500
@@ -67,6 +68,8 @@ export function startSessionStatusPoller(db: Database): void {
             // busy를 정리했으므로 이번 틱은 여기서 종료 — 다음 틱에서 idle로 유지
             pruneIdleSessionStatus(db, IDLE_ROW_TTL_MS, now)
             flushReadyQueues(new Set())
+            // P0-1: 서버 다운이면 관측 불가 — 스냅샷은 비워 unknown으로 판정한다.
+            recordTurnSnapshot({ at: now, busy: [], okDirs: [], globalOk: false })
             return
           }
         }
@@ -140,10 +143,24 @@ export function startSessionStatusPoller(db: Database): void {
 
       // 등록되지 않은 디렉터리 세션의 승인 대기/작업 중은 디렉터리별 조회에 안 잡힌다.
       // 전역 조회로 보완하지 않으면 승인 카드가 뜨지 않아 영원히 멈춘 것처럼 보인다.
+      let globalOk = false
       try {
         await mergeGlobalFallback(db, snapshots, touched, busySessionIds, now)
+        globalOk = true
       } catch (error) {
         logger.debug('Global session fallback skipped:', error)
+      }
+      // P0-1: 정리 타이머가 쓰는 턴 판정 스냅샷 (디렉터리별 + 전역 합본).
+      recordTurnSnapshot({ at: now, busy: [...busySessionIds], okDirs: [...snapshots.keys()], globalOk })
+      // B0-3 + P1-3: 추적 중인 직접 전송은 매 틱 idle을 통지한다.
+      // busy 세션은 위에서 noteProxyBusy로 유예를 리셋했으므로, 유예를 넘긴
+      // idle만 여기서 끊긴다. 응답 헤더 뒤 본문 대기 중 abort 경합 방지.
+      for (const d of listTrackedDispatches()) {
+        try {
+          if (noteProxyIdle(d.sessionId)) {
+            logger.info(`[proxy-turn-end] session=${d.sessionId} upstream released after turn end (idle observed)`)
+          }
+        } catch {}
       }
 
       pruneIdleSessionStatus(db, IDLE_ROW_TTL_MS, now)

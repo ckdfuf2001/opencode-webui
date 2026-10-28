@@ -17,6 +17,8 @@ export type SweepKind = 'status' | 'queue' | 'inflight'
 export interface SweepCandidate {
   sessionId: string
   kinds: SweepKind[]
+  /** 폴러 스냅샷 대조용 디렉터리 (없으면 전역 커버리지 규칙). */
+  directory?: string
 }
 
 export type TurnState = 'busy' | 'idle' | 'unknown'
@@ -29,11 +31,13 @@ export interface PartCandidate {
   partId: string
   tool: string
   command: string
+  /** 폴러 스냅샷 대조용 디렉터리 (없으면 전역 커버리지 규칙). */
+  directory?: string
 }
 
 export interface ReconcileDeps {
   listCandidates(): SweepCandidate[]
-  fetchTurnState(sessionId: string): Promise<TurnState>
+  fetchTurnState(sessionId: string, directory?: string): Promise<TurnState>
   markIdle(sessionId: string): void
   abortInFlight(sessionId: string): void
   logInfo(message: string): void
@@ -74,16 +78,17 @@ export function createReconcileSweep(deps: ReconcileDeps, opts: ReconcileOpts = 
     running = true
     // 라운드 내 세션 턴 상태 캐시 — 세션·part 루프가 같은 판정을 공유한다.
     const turnCache = new Map<string, TurnState>()
-    async function turnStateOf(sid: string): Promise<TurnState> {
-      const hit = turnCache.get(sid)
+    async function turnStateOf(sid: string, directory?: string): Promise<TurnState> {
+      const key = directory === undefined ? sid : `${sid} ${directory}`
+      const hit = turnCache.get(key)
       if (hit) return hit
       let st: TurnState = 'unknown'
       try {
-        st = await deps.fetchTurnState(sid)
+        st = await deps.fetchTurnState(sid, directory)
       } catch {
         /* 유지 */
       }
-      turnCache.set(sid, st)
+      turnCache.set(key, st)
       return st
     }
     try {
@@ -99,7 +104,7 @@ export function createReconcileSweep(deps: ReconcileDeps, opts: ReconcileOpts = 
       for (const c of candidates) {
         const sid = c.sessionId
         seen.add(sid)
-        const st = await turnStateOf(sid)
+        const st = await turnStateOf(sid, c.directory)
         if (st === 'busy') {
           observed.delete(sid)
           continue
@@ -146,8 +151,14 @@ export function createReconcileSweep(deps: ReconcileDeps, opts: ReconcileOpts = 
           observedParts.delete(key)
           continue
         }
+        // P1-2: 이미 표시된 고아는 다시 세지 않는다(로그 반복·observed_at 갱신 방지).
+        // 표시는 done 관측 시에만 치운다(위 done 분기).
+        if (deps.isOrphanMarked(p.sessionId, p.partId)) {
+          observedParts.delete(key)
+          continue
+        }
         if (pst !== 'running') continue
-        const tst = await turnStateOf(p.sessionId)
+        const tst = await turnStateOf(p.sessionId, p.directory)
         if (tst === 'busy') {
           observedParts.delete(key)
           continue
