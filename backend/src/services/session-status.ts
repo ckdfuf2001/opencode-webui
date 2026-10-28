@@ -14,6 +14,7 @@ import {
   setSessionCancelled,
   upsertSessionStatus,
 } from '../db/session-status-queries'
+import { noteProxyBusy, noteProxyIdle } from './proxy-turn-end'
 import { logger } from '../utils/logger'
 const POLL_INTERVAL_MS = 1_000
 const FETCH_TIMEOUT_MS = 2_500
@@ -75,9 +76,10 @@ export function startSessionStatusPoller(db: Database): void {
       const busySessionIds = new Set<string>()
       for (const [directory, snapshot] of snapshots) {
         const repoId = resolveRepoId(db, directory)
-        for (const sessionId of snapshot.busySessionIds) {
-          busySessionIds.add(sessionId)
-          upsertSessionStatus(db, {
+      for (const sessionId of snapshot.busySessionIds) {
+        busySessionIds.add(sessionId)
+        noteProxyBusy(sessionId)
+        upsertSessionStatus(db, {
             sessionId,
             directory,
             repoId,
@@ -110,6 +112,12 @@ export function startSessionStatusPoller(db: Database): void {
         if (!snapshot) continue // 조회 실패 디렉터리는 마지막 상태 유지
         if (row.status === 'busy' && !snapshot.busySessionIds.has(row.sessionId)) {
           logger.info(`Session ${row.sessionId} marked idle by status poller`)
+          // B0-3: 직접 전송 in-flight가 busy 관측 뒤 idle을 만나면 끊는다(정상 종료 기록).
+          try {
+            if (noteProxyIdle(row.sessionId)) {
+              logger.info(`[proxy-turn-end] session=${row.sessionId} upstream released after turn end (idle observed)`)
+            }
+          } catch {}
           // busy→idle 전이를 기회로 미뤄둔 인스턴스 reload를 소진한다.
           // (truncate 등이 sibling 스트리밍 중이라 dispose를 미룬 경우)
           void flushPendingInstanceReloads().catch((error) => {
@@ -266,6 +274,7 @@ async function mergeGlobalFallback(
     const directory = rawDir === 'global' ? rawDir : resolveLiveDirectory(db, rawDir, prev?.repoId ?? null)
     const pending = mergedPending.get(sessionId) ?? 0
     const busy = globalBusy.has(sessionId) || pending > 0
+    if (busy) noteProxyBusy(sessionId)
     logger.info(`Session ${sessionId} tracked via global fallback (busy=${busy}, pending=${pending})`)
     upsertSessionStatus(db, {
       sessionId,

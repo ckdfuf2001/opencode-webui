@@ -544,6 +544,24 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     let response: Response | null = null
     let lastError: unknown = null
 
+    // B0-3: 직접 전송 턴의 업스트림 요청을 추적한다. 발송 이후 busy 관측 뒤
+    // idle이 오면 세션 상태 폴러가 이 요청을 끊는다(응답 유실 시 600s 대기 방지).
+    // 클라이언트 단절은 전파하지 않는다(D46) — 폴러 관측으로만 끊는다.
+    const turnPostMatch =
+      isLongRunning && method === 'POST'
+        ? cleanEventPath.match(/^\/session\/([^/]+)\/(message|command|shell|summarize)$/)
+        : null
+    const turnSid = turnPostMatch?.[1]
+    let turnAc: AbortController | null = null
+    let upstreamSignal = signal
+    if (turnSid) {
+      const { trackProxyDispatch } = await import('./proxy-turn-end')
+      turnAc = new AbortController()
+      trackProxyDispatch(turnSid, turnAc)
+      const maybeAny = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+      upstreamSignal = typeof maybeAny === 'function' && signal ? maybeAny([signal, turnAc.signal]) : turnAc.signal
+    }
+
     const connectDeadline = Date.now() + 15_000
     for (let attempt = 1; attempt <= 30; attempt++) {
       try {
@@ -551,7 +569,7 @@ export async function proxyRequest(request: Request, method: string, pathname: s
           method,
           headers,
           body,
-          signal,
+          signal: upstreamSignal,
         })
         break
       } catch (error) {
@@ -886,6 +904,10 @@ export async function proxyRequest(request: Request, method: string, pathname: s
 
     if (!isLongRunning || !response.body) {
       releaseBusy()
+      if (turnSid) {
+        const { untrackProxyDispatch } = await import('./proxy-turn-end')
+        untrackProxyDispatch(turnSid)
+      }
       // S1: 세션 생성 시 소속 레포를 1회 기록한다 (자연 directory 그대로, 강제 없음).
       // 응답 전에 확정한다 — 생성 직후 목록 조회가 바로 붙게.
       // 로컬 sqlite 1회라 지연은 무시 수준이다.
@@ -941,6 +963,13 @@ export async function proxyRequest(request: Request, method: string, pathname: s
         } finally {
           releaseBusy()
           reader.releaseLock()
+          if (turnSid) {
+            const { consumeProxyIdleReleased, untrackProxyDispatch } = await import('./proxy-turn-end')
+            if (consumeProxyIdleReleased(turnSid)) {
+              logger.info(`[proxy-turn-end] session=${turnSid} upstream released after turn end (idle observed)`)
+            }
+            untrackProxyDispatch(turnSid)
+          }
           try {
             const m = cleanEventPath.match(/\/session\/([^/]+)\/message/)
             if (m?.[1]) {
@@ -963,6 +992,24 @@ export async function proxyRequest(request: Request, method: string, pathname: s
     })
   } catch (error) {
     releaseBusy()
+    // B0-3: try 블록 스코프 밖이므로 세션 ID를 다시 구한다.
+    const turnCatchMatch =
+      method === 'POST' ? cleanEventPath.match(/^\/session\/([^/]+)\/(message|command|shell|summarize)$/) : null
+    const turnCatchSid = turnCatchMatch?.[1]
+    if (turnCatchSid) {
+      const { consumeProxyIdleReleased, untrackProxyDispatch } = await import('./proxy-turn-end')
+      untrackProxyDispatch(turnCatchSid)
+      if (consumeProxyIdleReleased(turnCatchSid)) {
+        // B0-3: 턴은 끝났는데 업스트림 응답이 안 와 우리가 끊은 경우.
+        // 오류가 아니라 정상 종료로 기록한다 — 프론트는 settled refetch로
+        // 끝난 턴을 읽는다. 헤더가 아직 안 나갔으므로 합성 200을 돌려준다.
+        logger.info(`[proxy-turn-end] session=${turnCatchSid} upstream released after turn end (idle observed)`)
+        return new Response(JSON.stringify({ ok: true, turnEnd: 'idle-observed', sessionID: turnCatchSid }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+    }
     const err = error as { name?: string; message?: string; cause?: unknown }
     const rawMsg = err?.message || String(error)
     const causeCode = (err?.cause as { code?: string } | undefined)?.code || (error as { code?: string } | undefined)?.code
