@@ -2,8 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createReconcileSweep, type ReconcileDeps } from '../../src/services/reconcile-sweep'
 
 function makeDeps(overrides: Partial<ReconcileDeps> = {}) {
-  const calls = { markIdle: [] as string[], abort: [] as string[], fetches: [] as string[] }
+  const calls = {
+    markIdle: [] as string[],
+    abort: [] as string[],
+    fetches: [] as string[],
+    markOrphan: [] as string[],
+    clearOrphan: [] as string[],
+    warns: [] as string[],
+  }
   let states = new Map<string, 'busy' | 'idle' | 'unknown'>()
+  let runningParts: Array<{ sessionId: string; messageId: string; partId: string; tool: string; command: string }> = []
+  let partStates = new Map<string, 'running' | 'done' | 'unknown'>()
+  let marked = new Set<string>()
   const deps: ReconcileDeps = {
     listCandidates: () => [],
     fetchTurnState: async (sid: string) => {
@@ -17,10 +27,25 @@ function makeDeps(overrides: Partial<ReconcileDeps> = {}) {
       calls.abort.push(sid)
     },
     logInfo: () => {},
+    logWarn: (msg: string) => {
+      calls.warns.push(msg)
+    },
     now: () => Date.now(),
+    listRunningParts: () => runningParts,
+    getPartState: async (_sid: string, pid: string) => partStates.get(pid) ?? 'unknown',
+    isOrphanMarked: (sid: string, pid: string) => marked.has(`${sid}:${pid}`),
+    markOrphan: (p: { sessionId: string; partId: string }) => {
+      calls.markOrphan.push(p.partId)
+      marked.add(`${p.sessionId}:${p.partId}`)
+    },
+    clearOrphan: (sid: string, pid: string) => {
+      calls.clearOrphan.push(pid)
+      marked.delete(`${sid}:${pid}`)
+    },
     ...overrides,
   }
-  return { deps, calls, states }
+  const ctl = { states, setRunningParts: (v: typeof runningParts) => (runningParts = v), setPartStates: (v: typeof partStates) => (partStates = v), marked }
+  return { deps, calls, states, ctl }
 }
 
 beforeEach(() => {
@@ -107,5 +132,58 @@ describe('reconcile sweep (B0-6)', () => {
     vi.advanceTimersByTime(600_000)
     // 정지 뒤에는 돌지 않으므로 정리도 일어나지 않는다.
     expect(calls.markIdle).toEqual([])
+  })
+
+  it('세션 A가 바빠도 B idle이면 B만 정리된다 (세션별 판정)', async () => {
+    const { deps, calls, states } = makeDeps({
+      listCandidates: () => [
+        { sessionId: 'A', kinds: ['status'] },
+        { sessionId: 'B', kinds: ['status', 'queue'] },
+      ],
+    })
+    states.set('A', 'busy')
+    states.set('B', 'idle')
+    const sweep = createReconcileSweep(deps, { confirmCount: 2, minGapMs: 0 })
+    await sweep.runOnce()
+    expect(calls.markIdle).toEqual([])
+    await sweep.runOnce()
+    expect(calls.markIdle).toEqual(['B'])
+  })
+
+  it('running part + 세션 idle 2회 연속이면 orphan으로 표시한다 (abort 없음)', async () => {
+    const { deps, calls, states, ctl } = makeDeps()
+    ctl.setRunningParts([{ sessionId: 'S', messageId: 'm1', partId: 'p1', tool: 'bash', command: 'sleep 30' }])
+    ctl.setPartStates(new Map([['p1', 'running']]))
+    states.set('S', 'idle')
+    const sweep = createReconcileSweep(deps, { confirmCount: 2, minGapMs: 0 })
+    await sweep.runOnce()
+    expect(calls.markOrphan).toEqual([])
+    await sweep.runOnce()
+    expect(calls.markOrphan).toEqual(['p1'])
+    expect(calls.abort).toEqual([])
+  })
+
+  it('세션이 busy면 running part를 건드리지 않는다 (자동 종료 금지)', async () => {
+    const { deps, calls, states, ctl } = makeDeps()
+    ctl.setRunningParts([{ sessionId: 'S', messageId: 'm1', partId: 'p1', tool: 'bash', command: 'sleep 30' }])
+    ctl.setPartStates(new Map([['p1', 'running']]))
+    states.set('S', 'busy')
+    const sweep = createReconcileSweep(deps, { confirmCount: 1, minGapMs: 0 })
+    await sweep.runOnce()
+    await sweep.runOnce()
+    expect(calls.markOrphan).toEqual([])
+    expect(calls.abort).toEqual([])
+    expect(calls.markIdle).toEqual([])
+  })
+
+  it('opencode에서 끝난 part의 orphan 표시는 즉시 치우고 경고한다 (part-mismatch 감시)', async () => {
+    const { deps, calls, ctl } = makeDeps()
+    ctl.setRunningParts([{ sessionId: 'S', messageId: 'm1', partId: 'p1', tool: 'bash', command: 'sleep 30' }])
+    ctl.setPartStates(new Map([['p1', 'done']]))
+    ctl.marked.add('S:p1')
+    const sweep = createReconcileSweep(deps)
+    await sweep.runOnce()
+    expect(calls.clearOrphan).toEqual(['p1'])
+    expect(calls.warns.some((w) => w.includes('part-mismatch'))).toBe(true)
   })
 })
