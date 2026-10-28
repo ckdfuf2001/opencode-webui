@@ -31,7 +31,7 @@ type SendPromptRequest = NonNullable<
   paths["/session/{id}/message"]["post"]["requestBody"]
 >["content"]["application/json"];
 
-/** ?��? abort 직후 ?�링??미처�??�태�??�살??뱃�?가 깜빡?�는 것을 막는 가?? */
+/** 최근 abort 직후 폴링이 미처 상태를 갱신하기 전 되살린 배지가 깜빡이는 것을 막는 가드 */
 const RECENTLY_ABORTED_MS = 12_000;
 const recentlyAborted = new Map<string, number>();
 
@@ -47,7 +47,7 @@ export function isCancelledUntilNextSend(sessionID: string): boolean {
   return cancelledUntilNextSend.has(sessionID);
 }
 
-/** ?�송 중인 ?��? user 메시지. 2s ?�링??캐시�???��?�도 ?��??�다. */
+/** 전송 중인 실제 user 메시지. 2s 폴링이 캐시를 갈아엎어도 유지된다. */
 const pendingOptimistic = new Map<string, MessageWithParts>();
 
 const activeSendControllers = new Map<string, AbortController>();
@@ -270,9 +270,9 @@ export function truncateLargeToolOutputs(messages: MessageListResponse): Message
   return changed ? next as MessageListResponse : messages
 }
 
-/** SSE가 ?�버?�만 ?�는 ??메시지�?가리키�?가�?카드�?만들지 ?�고 목록 refetch�?
- *  ?�당�?�??�용??빨리 가?�온?? reasoning?�??�작 지?�이 ?��?�?300ms,
- *  �??�는 ?�션??800ms ?�로?��?refetch ??���?막는?? */
+/** SSE가 서버에만 있는 동안 메시지별 카드를 만들지 않고 목록 refetch로 충당한다.
+ * 체감상 reasoning은 시작 지연이 커서 300ms,
+ * 나머지는 세션당 800ms 쓰로틀로 refetch 폭주를 막는다. */
 const lastFastPullAt = new Map<string, number>();
 const lastReasoningPullAt = new Map<string, number>();
 function fastPullMessages(
@@ -283,7 +283,7 @@ function fastPullMessages(
   isReasoning: boolean = false,
 ) {
   const now = Date.now();
-  // reasoning SSE??별도 300ms ?�로?�????�작 지??체감???��?�????�주 ?�긴??
+  // reasoning SSE는 별도 300ms 쓰로틀로 시작 지연 체감을 줄인다.
   if (isReasoning) {
     if (now - (lastReasoningPullAt.get(sessionID) ?? 0) < 300) return;
     lastReasoningPullAt.set(sessionID, now);
@@ -294,8 +294,8 @@ function fastPullMessages(
   queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
 }
 
-/** truncate 직후 opencode 메모리�? ??목록???�려�????�어 뷰�? ?��??�는 가??
- *  ?�간???�닌 "?�거??메시지 ID" 기�??�로 걸러 ??메시지??즉시 ?�과?�다. */
+/** truncate 직후 opencode 메모리가 정리되기 전 목록이 먼저 와서 뷰가 어긋나는 것을 막는 가드.
+ * 일정 시간이 아니라 "지워진 메시지 ID" 기준으로 걸러 해당 메시지를 즉시 통과시킨다. */
 const RECENTLY_TRUNCATED_MS = 12_000;
 const recentlyTruncated = new Map<string, { until: number; removedIds: Set<string> }>();
 
@@ -1101,7 +1101,7 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         if (cachedLast.info.id === resultLast.info.id && cachedLast.parts.length > resultLast.parts.length) {
           result = [...result.slice(0, -1), cachedLast];
         } else if (cachedLast.info.id === resultLast.info.id) {
-          // 길이 ?�산?�로�?비교 ??join?�?거�? ?�당?�라 길이 ?�정?�는 ?��? ?�는??
+          // 길이 연산으로만 비교한다. join은 거대해지면 무거우므로 길이가 확정되는 쪽만 본다.
           // reasoning도 비교한다 — SSE로 스트리밍된 추론 텍스트가 DB 빈 텍스트로
           // 덮여 "마지막 reasoning이 완료와 동시에 사라지는" 원인이었다.
           const cTextLen = textPartsLength(cachedLast.parts);
@@ -1159,8 +1159,8 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           if (m.info.id.startsWith("optimistic_sending_")) return false;
           const created = m.info.time?.created ?? 0;
           if (Math.abs(created - optimisticCreated) > 60000) return false;
-          // ?�전 ?�의 user 메시지�??�번 ?�송?�로 ?�인?��? ?�도�??�버 반영 ?�각?�?
-          // optimistic ?�성 ?�각 ?�후?�야 ?�다 (?�록 ?�차 2s ?�용).
+          // 이전 턴의 user 메시지를 이번 전송으로 오인하지 않도록 서버 반영 시각을 본다.
+          // optimistic 생성 시각 이후여야 한다 (기록 오차 2s 허용).
           if (created < optimisticCreated - 2000) return false;
           if (!optimisticSig) return true;
           const text = getSignature(m.parts as unknown as MessageWithParts["parts"]);
@@ -1169,10 +1169,10 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
           return false;
         });
         if (!realUserArrived) {
-          // ?��? ?�송 ?�후???�성???�제 ?�버 메시지가 ?�으�??�이 진행??�?
-          // ?�명/?�각 매칭??빗나가???�린 반영·?�일멘션 변?�·큐 지??발송)
-          // placeholder???�린????붙들�??�으�??�구 ?�류?�고
-          // hasActiveSend?�WORKING까�? 고착?�다. strict > �??�전 ???�인 방�?.
+          // 서버에 아직 반영되지 않은 user 메시지는 sending placeholder로 유지한다.
+          // 서명/시각 매칭이 빗나가면 흐린 반영·파일멘션 변환·큐 지연 발송이 된다.
+          // placeholder가 흐린 화면을 붙들고 있으면 영구 오류가 된다.
+          // hasActiveSend가 WORKING까지 고착된다.
           const oc = optimistic.info.time?.created ?? 0;
           realUserArrived = result.some((m) => {
             if (m.info.id === optimistic.info.id || m.info.id.startsWith("optimistic_")) return false;
@@ -1181,13 +1181,13 @@ export const useMessages = (opcodeUrl: string | null | undefined, sessionID: str
         }
       }
       if (optimistic && !realUserArrived) {
-        // ?�버???�직 반영??user 메시지가 ?�으�?sending placeholder�?refetch
-        // 결과???�시 붙인?? �?refetch(500ms)?�서 ??채팅???�라졌다 ?��??�는
-        // 깜빡???�이 "??채팅(sending) ???�버 반영 ??교체"�??�정?�게 ?��??�다.
-        // ?? ??분이 지?�도 반영?��? ?�으�??�실???�송?�로 보고 중단?�다.
-        // (기존 30s ?�리???�전 ??메시지???�아 건너?????�어 ?�구 ?�류?�다.
-        //  ?�류?�면 hasActiveSend?�WORKING까�? 계속 켜진??)
-        // ?�제 ?�버 메시지가 ?�중???�면 ?�상 ?�더?�다 ??placeholder???�시 UI??�?
+        // 서버에 아직 반영된 user 메시지가 없으면 sending placeholder로 refetch하고
+        // 결과에 다시 붙인다. 다음 refetch(500ms)에서 내 채팅이 사라졌다 보이는
+        // 깜빡임이 "내 채팅(sending) → 서버 반영 후 교체"로 정확하게 보이게 한다.
+        // 일정 분이 지나도 반영되지 않으면 실제 전송 실패로 보고 중단한다.
+        // (기존 30s 타이머로 이전 메시지를 받아 건너뛰면 영구 오류가 된다.
+        // 오류가 나면 hasActiveSend가 WORKING까지 계속 켜진다.)
+        // 실제 서버 메시지가 수신 중이면 정상 흐름으로 둔다. placeholder 표시는 UI에서 유지한다.
         const optimisticCreated = optimistic.info.time?.created ?? 0;
         if (optimisticCreated > 0 && Date.now() - optimisticCreated > 120000) {
           pendingOptimistic.delete(sessionID!);
@@ -1327,9 +1327,9 @@ function reconcileOrphanedStreams(
   isBusy: boolean,
 ): MessageListResponse {
   let changed = false;
-  // 0-part 미완�?assistant(ghost)??busy ?�안 마�?�?것만 ?��???LLM ?�답 ?�역??
-  // 바로 보여준??(?�버???�이 ?�긴 honest ?�호 ??가�?카드가 ?�니??.
-  // idle???�면 ?�거???�류 ?��???막고, 캐시???�는 ?�트??SSE ?��? ?�성?�?merge ?�계?�서 차단?�다.
+  // 0-part 미완성 assistant(ghost)는 busy 동안 마지막 것만 유지한다 (LLM 답변 영역 즉시 표시).
+  // 바로 보여준다 (서버 반영이 늦은 honest 신호 — 가짜 카드가 아니다).
+  // idle 상태면 제거한다. 캐시에 없는 항목은 SSE 이후 merge 과정에서 차단된다.
   const filtered = messages.filter((msg, idx) => {
     const ghost =
       msg.info.sessionID === sessionID &&
@@ -1337,7 +1337,7 @@ function reconcileOrphanedStreams(
       !("completed" in msg.info.time && msg.info.time.completed) &&
       msg.parts.length === 0;
     if (!ghost) return true;
-    // busy ?�안 마�?�?ghost???��? (LLM ?�답 ?�역 즉시 ?�시)
+    // busy 동안 마지막 ghost는 유지한다 (LLM 답변 영역 즉시 표시).
     if (isBusy && idx === messages.length - 1) return true;
     changed = true;
     return false;
@@ -1350,8 +1350,8 @@ function reconcileOrphanedStreams(
     changed = true;
     const parts = msg.parts.map((part) => {
       if (part.type === "tool" && part.state?.status === "running") {
-        // input/command/output?�??��??�고 ?�태�?error�??�집?�다.
-        // ?�째�?갈아?�으�?중단???�의 명령???�면?�서 ?�라진다.
+        // input/command/output은 그대로 두고 상태만 error로 뒤집는다.
+        // 본문을 갈아엎으면 중단된 명령이 화면에서 사라진다.
         return {
           ...part,
           state: { ...part.state, status: "error" as const, error: "Run was interrupted" },
@@ -1793,7 +1793,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
           const mid = (part as { messageID: string }).messageID;
           const idx = old.findIndex((m) => m.info.id === mid);
           if (idx === -1) {
-            // reasoning ?�벤?�는 별도 ?�로?�?300ms)�???빨리 ?�긴?????�작 체감 개선
+            // reasoning 이벤트는 별도 경로로 가져와(300ms) 빨리 반영해 시작 체감을 개선한다.
             const pt = (part as { type?: string }).type
             fastPullMessages(queryClient, opcodeUrl, sessionID, directory, pt === 'reasoning')
             return old
@@ -1950,7 +1950,7 @@ export const useSendPrompt = (opcodeUrl: string | null | undefined, directory?: 
             queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, sessionID, directory) });
             queryClient.invalidateQueries({ queryKey: ["session-status-db"] });
             queryClient.invalidateQueries({ queryKey: ["sessions", opcodeUrl, directory] });
-            // 즉시 Working 마크 ?�제 ??2s ?�링 ?��??�이 캐시?�서 직접 ?�거
+            // 즉시 Working 마크 제거 — 2s 폴링 전이라도 캐시에서 직접 제거한다.
             queryClient.setQueryData(["session-status-db"], (old: unknown) => {
               if (!Array.isArray(old)) return old;
               return (old as Array<{ sessionId: string; status: string }>).filter((s) => s.sessionId !== sid);
@@ -1984,8 +1984,8 @@ es = new EventSource(esUrl);
     onSettled: (_data, _error, variables) => {
       if (activeSendControllers.get(variables.sessionID)) activeSendControllers.delete(variables.sessionID)
       queryClient.invalidateQueries({ queryKey: messagesQueryKey(opcodeUrl, variables.sessionID, directory) })
-      // sending?�??�버???�상 반영?�어 ?�면??뿌려�??�까지 ?��? ??useMessages??realUserArrived?�서 교체
-      // ?�패/?�?�아???�비??30�??�에�?강제 ?�리 (?�무 ?�찍 지?��? ?�음)
+      // sending 중 서버에 정상 반영되어 화면에 뿌려졌다면 그때까지 유지한다. useMessages의 realUserArrived에서 교체한다.
+      // 실패도 중단도 없이 30초가 지나면 강제 정리한다 (너무 일찍 지우지 않는다).
       setTimeout(() => {
         if (!pendingOptimistic.has(variables.sessionID)) return
         const cur = queryClient.getQueryData<MessageListResponse>(messagesQueryKey(opcodeUrl, variables.sessionID, directory))
@@ -2096,12 +2096,12 @@ export const useAbortSession = (opcodeUrl: string | null | undefined, directory?
     },
     onSettled: (_data, _error, sessionID, context) => {
       const ctx = context as { acAtAbort?: AbortController; esAtAbort?: EventSource; pendingAtAbort?: MessageWithParts } | undefined
-      // cancel ?�후 ?�로 ?�작???�송?�?건드리�? ?�는?????�아??것만 ?�리
+      // cancel 직후 새로 시작된 전송은 건드리지 않는다. 취소 당시의 것만 처리한다.
       abortSpecificSend(sessionID, { ac: ctx?.acAtAbort, es: ctx?.esAtAbort })
       if (ctx?.pendingAtAbort && pendingOptimistic.get(sessionID) === ctx.pendingAtAbort) {
         pendingOptimistic.delete(sessionID)
       }
-      // ???�이 ?��? ?�고 ?�으�?메시지 ?�태???????�유 ???�료 마킹 ?�략
+      // 진행 중인 전송이 없으면 남은 메시지를 완료로 마킹한다.
       if (!activeSendControllers.has(sessionID)) {
         markSessionMessagesCompleted(queryClient, opcodeUrl, directory, sessionID);
       }
@@ -2135,11 +2135,11 @@ function markSessionMessagesCompleted(
       continue
     }
     changed = true
-    // �?placeholder(?�트 ?�는 미완�?카드)???�료 처리 ?�???�거?�다.
+    // 빈 placeholder(파트 없는 미완성 카드)는 완료 처리에서 제외한다.
     if (msg.parts.length === 0) continue
     const patchedParts = msg.parts.map((part) => {
       if ((part as { type?: string }).type === 'tool' && (part as { state?: { status?: string } }).state?.status === 'running') {
-        // input/command/output ?��? ???�태�?error�?(?�째�?갈아?�으�?명령???�라진다)
+        // input/command/output은 그대로 두고 상태만 error로 바꾼다 (실제로 갈아엎으면 명령이 사라진다).
         const st = (part as { state?: Record<string, unknown> }).state ?? {}
         return { ...part, state: { ...st, status: 'error' as const, error: 'Run was interrupted' } } as typeof part
       }
@@ -2282,8 +2282,8 @@ export const useEphemeralSessionSSE = (
         if (!old) return old;
         const mid = (part as { messageID: string }).messageID;
         const idx = old.findIndex((m) => m.info.id === mid);
-        // 캐시???�는 message id???�트??추정 role �???카드�?만들지 ?�고,
-        // 목록 refetch�??�당�??�버???�제 메시지�?빨리 가?�온??
+        // 캐시에 없는 message id면 파트로 role을 추정해 카드를 만들지 않고,
+        // 목록 refetch로 해당 서버의 최신 메시지를 빨리 가져온다.
         if (idx === -1) { fastPullMessages(queryClient, opcodeUrl, sessionID, directory); return old; }
         const msg = old[idx]!;
         let pIdx = msg.parts.findIndex((p) => (p as { id: string }).id === (part as { id: string }).id);
