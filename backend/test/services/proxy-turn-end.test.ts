@@ -72,18 +72,34 @@ describe('proxy 직접 전송 — 턴 종료(idle 관측) 시 업스트림 요�
     expect(consumeProxyIdleReleased(sid)).toBe(false)
   })
 
-  it('디렉터리 조회 실패 3틱 동안 abort 0회 (P0-1)', () => {
+  it('idle → unknown 2틱 → idle이면 유예가 다시 시작돼 끊지 않는다 (P1-a)', () => {
     resetProxyTurnEndForTest()
-    const sid = 'ses-proxy-dirfail'
+    const sid = 'ses-proxy-pump-restart'
     const ac = new AbortController()
     trackProxyDispatch(sid, ac, '/repo/a')
     noteProxyBusy(sid)
 
-    // 1틱 idle 후 디렉터리 조회가 3틱 연속 실패(unknown)하면 유예가 리셋되고 끊지 않는다.
-    expect(pumpTrackedIdle(() => 'idle', 1_000_000)).toEqual([])
-    expect(pumpTrackedIdle(() => 'unknown', 1_000_001)).toEqual([])
-    expect(pumpTrackedIdle(() => 'unknown', 1_000_002)).toEqual([])
-    expect(pumpTrackedIdle(() => 'unknown', 1_000_003)).toEqual([])
+    const t0 = 10_000_000
+    const verdicts = ['idle', 'unknown', 'unknown', 'idle'] as const
+    let i = 0
+    const at = [t0, t0 + 1_000, t0 + 2_000, t0 + 3_500]
+    const results = at.map((now) => pumpTrackedIdle(() => verdicts[i++]!, now))
+    expect(results).toEqual([[], [], [], []])
+    expect(ac.signal.aborted).toBe(false)
+    expect(consumeProxyIdleReleased(sid)).toBe(false)
+  })
+
+  it('unknown만 10초 이어져도 끊지 않는다 (P1-a)', () => {
+    resetProxyTurnEndForTest()
+    const sid = 'ses-proxy-unknown-only'
+    const ac = new AbortController()
+    trackProxyDispatch(sid, ac, '/repo/a')
+    noteProxyBusy(sid)
+
+    const t0 = 20_000_000
+    for (let k = 0; k <= 5; k++) {
+      expect(pumpTrackedIdle(() => 'unknown', t0 + k * 2_000)).toEqual([])
+    }
     expect(ac.signal.aborted).toBe(false)
     expect(consumeProxyIdleReleased(sid)).toBe(false)
   })
