@@ -38,12 +38,46 @@ export function reasoningPartsLength(parts: MessageWithParts["parts"]): number {
 }
 
 export function runningToolCount(parts: MessageWithParts["parts"]): number {
-  let n = 0;
+  let n = 0
   for (const p of parts) {
-    if ((p as { type?: string }).type !== "tool") continue;
-    if ((p as { state?: { status?: string } }).state?.status === "running") n++;
+    if ((p as { type?: string }).type !== 'tool') continue
+    if ((p as { state?: { status?: string } }).state?.status === 'running') n++;
   }
-  return n;
+  return n
+}
+
+/**
+ * B0-5 확장: tool part의 상태 서명(순서대로 status join).
+ * running 개수가 같아도 pending↔running, running↔completed 뒤집힘을 잡는다.
+ */
+export function toolStatusSignature(parts: MessageWithParts["parts"]): string {
+  const out: string[] = []
+  for (const p of parts) {
+    if ((p as { type?: string }).type !== 'tool') continue
+    out.push((p as { state?: { status?: string } }).state?.status ?? '')
+  }
+  return out.join(',')
+}
+
+/** B0-5 확장: tool part의 time.end 서명 (끝난 시각이 다르면 다르다). */
+export function toolTimeEndSignature(parts: MessageWithParts["parts"]): string {
+  const out: string[] = []
+  for (const p of parts) {
+    if ((p as { type?: string }).type !== 'tool') continue
+    const end = (p as { state?: { time?: { end?: number } } }).state?.time?.end
+    out.push(typeof end === 'number' ? String(end) : '')
+  }
+  return out.join(',')
+}
+
+/** B0-5 확장: tool part의 input 유무 서명 (input이 뒤늦게 붙으면 다르다). */
+export function toolInputPresence(parts: MessageWithParts["parts"]): string {
+  const out: string[] = []
+  for (const p of parts) {
+    if ((p as { type?: string }).type !== 'tool') continue
+    out.push((p as { state?: { input?: unknown } }).state?.input != null ? '1' : '0')
+  }
+  return out.join(',')
 }
 
 export function isCompleted(info: MessageWithParts["info"]): boolean {
@@ -62,6 +96,10 @@ export function sameMessageContent(a: MessageWithParts, b: MessageWithParts): bo
   if (toolOutputLength(a.parts) !== toolOutputLength(b.parts)) return false;
   if (reasoningPartsLength(a.parts) !== reasoningPartsLength(b.parts)) return false;
   if (runningToolCount(a.parts) !== runningToolCount(b.parts)) return false;
+  // B0-5 확장: 개수·길이가 같아도 상태·종료시각·input 유무가 다르면 다르다.
+  if (toolStatusSignature(a.parts) !== toolStatusSignature(b.parts)) return false;
+  if (toolTimeEndSignature(a.parts) !== toolTimeEndSignature(b.parts)) return false;
+  if (toolInputPresence(a.parts) !== toolInputPresence(b.parts)) return false;
   return isCompleted(a.info) === isCompleted(b.info);
 }
 

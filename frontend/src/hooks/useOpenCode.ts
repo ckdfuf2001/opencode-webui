@@ -24,6 +24,7 @@ import {
   isCompleted,
   sameMessageList,
 } from "@/lib/messageListEquality"
+import { shouldReplaceLastMessage } from "@/lib/lastMessageMerge"
 
 
 type SendPromptRequest = NonNullable<
@@ -1301,24 +1302,9 @@ export const usePollLastMessage = (
           if (!old || old.length === 0) return merged
           const curLast = old[old.length - 1]
           if (curLast.info.id !== last.info.id) return old
-          const curCompleted = 'completed' in (curLast.info.time as Record<string, unknown>) && Boolean((curLast.info.time as { completed?: number }).completed)
-          const nextCompleted = 'completed' in (capped.info.time as Record<string, unknown>) && Boolean((capped.info as { time: { completed?: number } }).time.completed)
-          // SSE가 ?�서 ?��? ?�으�??�링 결과가 ??��?��? ?�도�?보존 ???�전?�는 ?�일 ?�스?�일 ?�만 ?��???SSE 증분???�아갔다
-          // 길이가 ?�르�?join ?�이 ?�정 (?�트리밍 �?99%????경로), 같을 ?�만 ?�용 ?�등 ?�인
-          const curTextLen = textPartsLength(curLast.parts)
-          const nextTextLen = textPartsLength(capped.parts as MessageWithParts["parts"])
-          const curToolLen = toolOutputLength(curLast.parts)
-          const nextToolLen = toolOutputLength(capped.parts as MessageWithParts["parts"])
-          if (curLast.parts.length === capped.parts.length && curCompleted === nextCompleted && curTextLen === nextTextLen && curToolLen === nextToolLen) {
-            const curText = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
-            const nextText = (capped.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'text').map((p: unknown) => (p as { text: string }).text ?? '').join('')
-            const curTool = curLast.parts.filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
-            const nextTool = (capped.parts as unknown[]).filter((p: unknown) => (p as { type: string }).type === 'tool').map((p: unknown) => ((p as unknown as { state?: { output?: string; metadata?: { output?: string } } }).state?.output ?? (p as unknown as { state?: { metadata?: { output?: string } } }).state?.metadata?.output ?? '')).join('')
-            if (curText === nextText && curTool === nextTool) return old
-          }
-          // SSE가 ??길면 ?�버 ?�답??lagging ????��?��? ?�는??
-          if (curTextLen > nextTextLen || curToolLen > nextToolLen) return old
-          // ?�버가 ??길거???�료 ?�태가 바뀌었???�만 교체
+          // B0-5 확장: 병합 판정은 lastMessageMerge 하나로 통일한다.
+          // 길이·문자열이 같아도 part 상태 뒤집힘(running→completed)이면 교체한다.
+          if (!shouldReplaceLastMessage(curLast as never, capped as never)) return old
           return [...old.slice(0, -1), capped]
         })
         return capped

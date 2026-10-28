@@ -1,4 +1,10 @@
-import { textPartsLength, toolOutputLength } from './messageListEquality'
+import {
+  textPartsLength,
+  toolInputPresence,
+  toolOutputLength,
+  toolStatusSignature,
+  toolTimeEndSignature,
+} from './messageListEquality'
 
 interface PartLike {
   type?: string
@@ -22,9 +28,10 @@ function isCompleted(info: MsgLike['info']): boolean {
 }
 
 /**
- * B0-5 확장: usePollLastMessage 병합 가드(useOpenCode.ts)의 현재 동작을 옮긴 판정 함수.
- * 길이·완료·문자열이 같으면 캐시를 유지한다 — part 상태 뒤집힘도 "같음"으로
- * 걸러져 running 타일이 남는다(수정 전 동작, 테스트 red).
+ * B0-5 확장: usePollLastMessage 병합 가드(useOpenCode.ts)의 판정 함수.
+ * 길이·완료가 같아도 part 상태·종료시각·input 유무가 다르면 교체한다.
+ * 상태 뒤집힘(running→completed)이 같은 출력에 묻혀 "변경 없음"으로
+ * 걸러지던 누락을 막는다. 캐시가 앞설 때(lagging)는 유지한다(D35).
  */
 export function shouldReplaceLastMessage(curLast: MsgLike, capped: MsgLike): boolean {
   const curCompleted = isCompleted(curLast.info)
@@ -39,6 +46,10 @@ export function shouldReplaceLastMessage(curLast: MsgLike, capped: MsgLike): boo
     curTextLen === nextTextLen &&
     curToolLen === nextToolLen
   ) {
+    // B0-5 확장: 문자열이 같아도 상태가 뒤집혔으면 교체한다.
+    if (toolStatusSignature(curLast.parts as never) !== toolStatusSignature(capped.parts as never)) return true
+    if (toolTimeEndSignature(curLast.parts as never) !== toolTimeEndSignature(capped.parts as never)) return true
+    if (toolInputPresence(curLast.parts as never) !== toolInputPresence(capped.parts as never)) return true
     const curText = curLast.parts
       .filter((p) => p.type === 'text')
       .map((p) => p.text ?? '')
