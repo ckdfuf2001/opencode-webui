@@ -528,12 +528,33 @@ E21만의 문제가 아니다. 근거:
   수정 전 실패 원문: `expected false to be true` (업스트림 미중단).
 
 ### 남은 백로그 (B0 후속)
-- **직접전송 경로(proxy)**: `backend/src/services/proxy.ts:378-380` 는 업스트림 fetch 에
+- **직접전송 경로(proxy)**: `backend/src/services/proxy.ts` 는 업스트림 fetch 에
   `AbortSignal.timeout(600_000)` 만 걸고 클라이언트 단절을 전파하지 않는다. 전파하면
   **탭을 닫거나 페이지를 옮길 때 진행 중이던 턴이 죽는다**(opencode 는 클라이언트
-  단절을 받으면 턴을 정리) → 채택하지 않음. 대신 턴 종료 감지로 한정(큐 경로만 적용됨).
-- 프록시 경로도 턴 종료 감지를 적용할지는 v0.13 backlog (현재는 opencode 응답이 오면 끝난다).
+  단절을 받으면 턴을 정리) → 채택하지 않음. 대신 턴 종료 감지로 한정.
+  - B0-3(2026-10-28): 큐와 같은 규칙을 proxy 경로에도 적용했다. 발송 이후 busy 관측 →
+    idle 관측이면 붙어 있는 업스트림 요청을 abort 하고, 우리가 끊은 경우는 정상 종료로
+    기록한다(헤더 미발송이면 합성 200). busy 미관측이면 끊지 않는다.
 - `recordTransientTimeout` 은 계속 queued 유지 + 자동 재시도(무한 루프 가능) — 의도된 설계(문서 참고).
+
+### B0 후속 트랙 결과 (B0-3 · B0-5 · B0-6, 2026-10-28)
+- 1절 원인 확인:
+  - SSE off bash 타일 미표시 = 렌더 분기 문제(나). 폴링 응답은 모드와 무관하게 동일하고
+    (`useMessages` SSE 분기 없음), running part의 `input.command`는 opencode DB에 있다.
+    (가)는 64KB 초과 capped 경로에서 `input`이 빠지는 잠재 결함으로 확인 → B0-5에서 보존.
+    (다)는 기각 — `sameMessageContent`가 running 개수를 비교하므로 pending→running 전이는
+    검출된다. 진짜 누락 지점은 last-message 병합 가드(같은 출력에 상태 뒤집힘이 묻히면 유지).
+    증거: 실DB running part 원문(`state.input.command` 포함), `/session/status` busy 원문,
+    우리 recent·DB 대조(3원문 일치 — 턴 진행 중이라 모두 running/busy).
+  - 실행 중 잔류: 우리 DB busy는 1초 폴러가 정정(잔류 안 함). 큐 sending·in-flight는
+    인메모리(재시작 소멸). proxy in-flight는 600초까지 잔류 가능 → B0-3 대상.
+    opencode 자체 part는 수십 건 고착 확인(최대 82일, 손대지 않음) → B0-6 표시로 처리.
+- B0-5: SSE off 미완료 툴 full 타일 통일 + capped input 보존(32KB) + equality 상태서명 +
+  merge 가드 교체. 타일은 명령어 표시, 고아는 "종료됨 · 응답 없음".
+- B0-6: 1분 sweep 유지. 세션 정리는 idle 2회 연속, part 정리는 running + 세션 idle 2회
+  연속에만 orphan 표시(busy는 손대지 않음, abort 없음). opencode 완료 part의 표시는
+  즉시 치우고 part-mismatch 경고.
+- 관련 커밋: D46 후속 참조.
 
 ### 환경 주의 (이 저장소에서 신규 파일 추가 방법)
 - `opencode-webui` 의 repo-tracking 기능이 `.git/info/exclude` 에 `/*` + `!/.opencode` + `!/scripts` 를

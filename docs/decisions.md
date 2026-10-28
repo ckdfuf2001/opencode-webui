@@ -334,6 +334,42 @@
 - 회귀 검사: 3-2(`backend/test/utils/logger.test.ts`, `error-detail.test.ts`,
   `backend/test/services/chat-queue-turn-end.test.ts` — 수정 전 실패 확인)
 
+## D46 후속 (B0-3 · B0-5 · B0-6, 2026-10-28)
+- 결정(3, B0-3): **직접 전송(proxy) 경로에도 턴 종료 감지를 적용한다.**
+  큐 경로와 같은 규칙이다. POST `/session/:id/(message|command|shell|summarize)` 발송을
+  세션별 AbortController로 추적하고(`proxy-turn-end.ts`), 상태 폴러가 "발송 이후 busy
+  관측 → idle 관측"을 확인하면 붙어 있는 업스트림 요청을 끊는다. 발송 전에 헤더가
+  나가지 않은 상태면 합성 200(`{ok, turnEnd:'idle-observed'}`)을 돌려준다.
+  프론트는 settled refetch로 끝난 턴을 읽는다.
+- 결정(4, B0-5): **SSE가 꺼져 있어도 bash 타일은 같은 컴포넌트·같은 모양이다.**
+  원인 확정: 폴링 응답은 모드와 무관하게 동일하고(`useMessages`는 SSE 분기가 없다),
+  input도 opencode DB에 있다. 안 보인 것은 렌더 분기였다(`MessageThread`가 미완료 툴을
+  compact 행으로 그렸다). ⇒ compact 분기 제거, 같은 `ToolCallPart`로 통일한다.
+  64KB 초과 capped 경로에서 떨어지던 `state.input`은 32KB 상한으로 보존한다(제목 폴백 유지).
+  비교 함수에는 tool part의 `state.status`·`time.end`·`input` 유무를 넣는다. 특히
+  last-message 병합 가드는 같은 출력에 상태 뒤집힘(running→completed)이 묻히면
+  "변경 없음"으로 버리던 것을 교체로 바꾼다(`lastMessageMerge.ts` 추출).
+- 결정(5, B0-6): **1분 reconcile sweep은 안전망으로만 남긴다.**
+  전역 `setInterval(60s)` 하나(unref, 재진입 가드, D29 등록). 후보가 0이면 opencode를
+  호출하지 않는다. 판정은 세션별·part별로 한다.
+  세션 정리(DB busy 행, sending 큐, in-flight)는 idle 2회 연속(60초 간격) 관측 뒤에만 하고,
+  큐 항목은 지우지 않고 기존 idle 확정 경로에 맡긴다.
+  part 정리는 opencode에서 running으로 남은 tool part만 본다(2분 초과).
+  세션이 busy면 건드리지 않는다. opencode idle 2회 연속이면 우리 DB에 고아 표시를 남기고
+  `[reconcile] part-orphan`을 기록한다. opencode에서 끝난 part의 표시는 즉시 치우고
+  `[reconcile] part-mismatch` 경고를 남긴다(버그 감시용).
+  프론트는 기존 상태 폴러 값(`orphanParts`)만 읽어 타일에 "종료됨 · 응답 없음"을 표시한다.
+  새 폴링은 만들지 않는다.
+- 금지: **자동 abort 금지, opencode 데이터 쓰기 금지, 1회 관측으로 정리 금지.**
+  클라이언트 단절 전파 금지(D46 유지). 세션 busy 중 running part는 구분 불가이므로
+  경과 시간과 "중단" 버튼만 표시하고 손대지 않는다.
+- 관련 커밋: b6a98c4·116a35a(B0-5 렌더·타일) · e552661·9106618(B0-5 capped input)
+  · bad3218·d541473·3f03d4e(B0-5 확장 equality·merge가드·인코딩 복원)
+  · c51b2c4·09870f9(B0-3) · 63e843f·1c60984·290ee88(B0-6)
+- 회귀 검사: 3-2(`toolPartRender.test.ts`, `session-message-part.test.ts`,
+  `messageListEquality.test.ts`, `lastMessageMerge.test.ts`,
+  `proxy-turn-end.test.ts`, `reconcile-sweep.test.ts` — 수정 전 실패 확인)
+
 ## D45 편집 화면은 전체를 덮는다 / 닫기 가드는 넣지 않는다 (2026-10-22)
 - 편집 화면은 `fixed inset-0 z-[100] bg-background flex flex-col` 로 뷰포트를 전부 덮고, 그 헤더가
   `aria-label="Close preview"` 버튼을 가로챈다(Playwright call log: `subtree intercepts pointer events`).

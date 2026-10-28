@@ -361,5 +361,14 @@ lib 컴포넌트가 죽어 publish 자체가 실행되지 않으므로, 그 순�
 4. 선택적 fetch 실패(명령 목록)의 `console.error` 가 E2E 의 엄격한 콘솔 검사를 죽였다
    (환경: opencode 서버 인스턴스 로드 타임아웃). → `?e2e=1` 일 때만 `console.warn` 으로 낮춘다.
 
+## 15. 백엔드 1분 타이머 (B0-6)
+- `reconcile-sweep.ts` 의 전역 `setInterval(60s)` 하나가 전부다. 세션별 타이머 없음,
+  `unref()` + 서버 종료 시 정리, 재진입 가드, 후보 0이면 opencode 미호출.
+- `pnpm check:memory` 는 `frontend/src` 만 스캔하므로 백엔드 타이머는 걸리지 않는다.
+  그래도 D29 근거로 `scripts/memory-allowlist.json` 의 `setInterval` 목록에
+  reason과 함께 등록한다(같은 파일이 근거 목록 역할도 한다).
+- 프론트에 새 폴링을 만들지 않는다 — 기존 세션 상태 폴러(D29 단일 폴러)가
+  `orphanParts` 를 함께 받아 갱신한다.
+
 
 
