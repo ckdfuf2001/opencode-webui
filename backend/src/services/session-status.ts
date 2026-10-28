@@ -68,8 +68,8 @@ export function startSessionStatusPoller(db: Database): void {
             // busy를 정리했으므로 이번 틱은 여기서 종료 — 다음 틱에서 idle로 유지
             pruneIdleSessionStatus(db, IDLE_ROW_TTL_MS, now)
             flushReadyQueues(new Set())
-        // P0-1: 서버 다운이면 관측 불가 — 스냅샷은 비워 unknown으로 판정한다.
-        recordTurnSnapshot({ at: now, busy: [], okDirs: [] })
+            // P0-1: 서버 다운이면 관측 불가 — 스냅샷은 비워 unknown으로 판정한다.
+            recordTurnSnapshot({ at: now, busy: [], okDirs: [] })
             return
           }
         }

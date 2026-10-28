@@ -58,15 +58,15 @@ export function noteProxyIdle(sessionID: string, nowMs?: number): boolean {
       idleSince.set(sessionID, now)
       return false
     }
-  if (now - first < PROXY_IDLE_GRACE_MS) return false
-  idleSince.delete(sessionID)
-  idleReleased.add(sessionID)
-  try {
-    ac.abort()
-  } catch {
-    /* 무시 */
-  }
-  return true
+    if (now - first < PROXY_IDLE_GRACE_MS) return false
+    idleSince.delete(sessionID)
+    idleReleased.add(sessionID)
+    try {
+      ac.abort()
+    } catch {
+      /* 무시 */
+    }
+    return true
   }
   return false
 }
