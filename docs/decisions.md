@@ -392,6 +392,14 @@
 - P1-4: X0a-9 red는 수정 전 커밋(9bc434e)에서 신 단언을 1회 실행해 확보했다.
   `expect(bannerVisible || !typed).toBe(true)` → `Expected: true / Received: false`
   (`x0a9-red.spec.ts:115`, 배너 요소 없음 + 입력 차단 없음).
+- P1-a red는 동작으로 확보했다: pump의 unknown 분기를 무력화하면 신 테스트 2건이
+  실패한다(`expected [[],[],[],[sid]] to deeply equal [[],[],[],[]]`,
+  `expected ['ses-proxy-unknown-only'] to deeply equal []`). 유예 재시작이 없으면
+  3.5초 idle에 끊는다.
+- P1-b 판단: `directory === 'global'`인 세션도 `unknown`으로 둔다(okDirs-'global'
+  방식은 채택하지 않음). 전역 조회가 레포 busy를 빠뜨리는 것이 실측됐으므로,
+  전역 부재를 idle 근거로 쓸 수 없다. 전역 세션은 B0-3/B0-6 대상에서 제외되고
+  600초 timeout에 의존한다.
 - P2: merge 가드에 상태 순서를 넣는다(pending < running < completed/error).
   역행(completed → running)은 교체하지 않는다(늦은 폴링이 화면을 되돌리지 않게).
   orphan 표시는 `listSessionStatus` 행에만 붙으므로, 30일 정리로 행이 지워진

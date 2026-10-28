@@ -558,6 +558,9 @@ E21만의 문제가 아니다. 근거:
   조회는 레포 busy를 빠뜨려 오판 — 실측 확인). backend tsc 47은 c21c335에서 같은
   집합으로 확인돼 기존 것으로 판정(X1c의 0은 다른 범위 측정). 고아 쿼리에 24h 하한 +
   배치 재사용, 표시된 고아 재표시 금지, proxy abort 3초 유예, merge 순서 가드.
+  매 틱은 pumpTrackedIdle 하나로 처리(busy→noteProxyBusy, idle→유예 뒤 abort,
+  unknown→유예 취소). directory 미상·'global'은 unknown(전역 세션은 600초 timeout 의존).
+  P1-a red는 unknown 분기 무력화로 동작 확인(유예 미재시작 시 3.5초 idle에 중단됨).
   X0a-9 red는 9bc434e에서 신 단언 실행으로 확보.
 - 관련 커밋: D46 재재수정 참조.
 
