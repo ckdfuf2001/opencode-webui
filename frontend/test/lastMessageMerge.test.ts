@@ -21,4 +21,10 @@ describe('lastMessageMerge (B0-5 확장)', () => {
       shouldReplaceLastMessage(msg('m1', part('running', 'long-output')) as never, msg('m1', part('running', 'out')) as never),
     ).toBe(false)
   })
+  it('역행(completed → running)은 교체하지 않는다 (P2 상태 역행 방지)', () => {
+    expect(shouldReplaceLastMessage(msg('m1', part('completed')) as never, msg('m1', part('running')) as never)).toBe(false)
+  })
+  it('순방향(pending → running)은 교체한다', () => {
+    expect(shouldReplaceLastMessage(msg('m1', part('pending')) as never, msg('m1', part('running')) as never)).toBe(true)
+  })
 })

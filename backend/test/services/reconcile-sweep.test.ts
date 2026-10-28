@@ -9,6 +9,7 @@ function makeDeps(overrides: Partial<ReconcileDeps> = {}) {
     markOrphan: [] as string[],
     clearOrphan: [] as string[],
     warns: [] as string[],
+    infos: [] as string[],
   }
   let states = new Map<string, 'busy' | 'idle' | 'unknown'>()
   let runningParts: Array<{ sessionId: string; messageId: string; partId: string; tool: string; command: string }> = []
@@ -26,7 +27,9 @@ function makeDeps(overrides: Partial<ReconcileDeps> = {}) {
     abortInFlight: (sid: string) => {
       calls.abort.push(sid)
     },
-    logInfo: () => {},
+    logInfo: (msg: string) => {
+      calls.infos.push(msg)
+    },
     logWarn: (msg: string) => {
       calls.warns.push(msg)
     },
@@ -185,5 +188,31 @@ describe('reconcile sweep (B0-6)', () => {
     await sweep.runOnce()
     expect(calls.clearOrphan).toEqual(['p1'])
     expect(calls.warns.some((w) => w.includes('part-mismatch'))).toBe(true)
+  })
+
+  it('세션 상태를 모르면(unknown) 3회가 돌아도 정리하지 않는다 (P0-1)', async () => {
+    const { deps, calls, states } = makeDeps({
+      listCandidates: () => [{ sessionId: 'U', kinds: ['status'] }],
+    })
+    states.set('U', 'unknown')
+    const sweep = createReconcileSweep(deps)
+    await sweep.runOnce()
+    await sweep.runOnce()
+    await sweep.runOnce()
+    expect(calls.markIdle).toEqual([])
+    expect(calls.abort).toEqual([])
+  })
+
+  it('이미 표시된 고아는 다시 표시·로그하지 않는다 (P1-2, 3라운드 1회)', async () => {
+    const { deps, calls, states, ctl } = makeDeps()
+    ctl.setRunningParts([{ sessionId: 'S', messageId: 'm1', partId: 'p1', tool: 'bash', command: 'sleep 30' }])
+    ctl.setPartStates(new Map([['p1', 'running']]))
+    states.set('S', 'idle')
+    const sweep = createReconcileSweep(deps, { confirmCount: 1, minGapMs: 0 })
+    await sweep.runOnce()
+    await sweep.runOnce()
+    await sweep.runOnce()
+    expect(calls.markOrphan).toEqual(['p1'])
+    expect(calls.infos.filter((m) => m.includes('part-orphan')).length).toBe(1)
   })
 })

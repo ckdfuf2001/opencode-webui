@@ -5,10 +5,11 @@ import {
   noteProxyIdle,
   resetProxyTurnEndForTest,
   trackProxyDispatch,
+  untrackProxyDispatch,
 } from '../../src/services/proxy-turn-end'
 
 describe('proxy 직접 전송 — 턴 종료(idle 관측) 시 업스트림 요청을 끊는다 (B0-3)', () => {
-  it('발송 뒤 busy를 관측하고 idle이 오면 진행 중 요청을 중단한다', () => {
+  it('발송 뒤 busy를 관측하고 idle이 유예 뒤에도 계속되면 요청을 중단한다', () => {
     resetProxyTurnEndForTest()
     const sid = 'ses-proxy-turnend-1'
     const ac = new AbortController()
@@ -19,8 +20,11 @@ describe('proxy 직접 전송 — 턴 종료(idle 관측) 시 업스트림 요�
     noteProxyBusy(sid)
     expect(ac.signal.aborted).toBe(false)
 
-    // 턴 종료(idle) — 붙어 있는 업스트림 요청을 끊는다.
-    expect(noteProxyIdle(sid)).toBe(true)
+    // 턴 종료(idle) 1회째는 유예한다(P1-3 경합 방지).
+    expect(noteProxyIdle(sid, 5_000_000)).toBe(false)
+    expect(ac.signal.aborted).toBe(false)
+    // 유예(3초) 뒤에도 idle이면 붙어 있는 업스트림 요청을 끊는다.
+    expect(noteProxyIdle(sid, 5_000_000 + 3_000)).toBe(true)
     expect(ac.signal.aborted).toBe(true)
     // 우리가 직접 끊은 경우는 정상 종료로 기록된다.
     expect(consumeProxyIdleReleased(sid)).toBe(true)
@@ -34,6 +38,35 @@ describe('proxy 직접 전송 — 턴 종료(idle 관측) 시 업스트림 요�
     trackProxyDispatch(sid, ac)
 
     expect(noteProxyIdle(sid)).toBe(false)
+    expect(ac.signal.aborted).toBe(false)
+    expect(consumeProxyIdleReleased(sid)).toBe(false)
+  })
+
+  it('idle 1회는 유예한다 — 3초 뒤에도 idle이면 끊는다 (P1-3 경합 방지)', () => {
+    resetProxyTurnEndForTest()
+    const sid = 'ses-proxy-turnend-3'
+    const ac = new AbortController()
+    trackProxyDispatch(sid, ac)
+    noteProxyBusy(sid)
+
+    expect(noteProxyIdle(sid, 1_000_000)).toBe(false)
+    expect(ac.signal.aborted).toBe(false)
+    expect(noteProxyIdle(sid, 1_000_000 + 3_000)).toBe(true)
+    expect(ac.signal.aborted).toBe(true)
+  })
+
+  it('idle 관측 직후 본문이 도착하면 끊지 않는다 (P1-3)', () => {
+    resetProxyTurnEndForTest()
+    const sid = 'ses-proxy-turnend-4'
+    const ac = new AbortController()
+    trackProxyDispatch(sid, ac)
+    noteProxyBusy(sid)
+
+    // 1회 idle: 유예 (끊지 않음). 그 사이 응답이 와서 dispatch가 끝난다.
+    expect(noteProxyIdle(sid, 2_000_000)).toBe(false)
+    untrackProxyDispatch(sid)
+    // 다음 idle 관측: 붙어 있는 요청이 없으므로 끊을 게 없다.
+    expect(noteProxyIdle(sid, 2_000_000 + 10_000)).toBe(false)
     expect(ac.signal.aborted).toBe(false)
     expect(consumeProxyIdleReleased(sid)).toBe(false)
   })
