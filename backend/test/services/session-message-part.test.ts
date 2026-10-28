@@ -11,6 +11,7 @@ function row(overrides = {}) {
     outhead: 'line1\nline2',
     metahead: null,
     inputjson: null,
+    len: 70000,
     ...overrides,
   }
 }

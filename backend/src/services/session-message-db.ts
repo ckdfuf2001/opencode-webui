@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { getOpenCodeDbPath } from './opencode-db'
 import { logger } from '../utils/logger'
+import { buildCappedToolState } from './session-message-part'
 
 /**
  * opencode SQLite를 직접 읽는 세션 메시지 접근 계층.
@@ -167,6 +168,7 @@ interface PartRow {
   outhead: string | null
   metahead: string | null
   hasout: number
+  inputjson: string | null
 }
 
 /** 지정된 메시지들의 part를 읽는다. 큰 part는 SQL head 추출로 JS 파싱을 피한다. */
@@ -187,9 +189,11 @@ function readCappedParts(oc: Database, messageIds: string[]): Map<string, Array<
               json_extract(data,'$.state.status') AS status,
               json_extract(data,'$.state.title') AS title,
               json_extract(data,'$.state.time') AS statetime,
-              substr(json_extract(data,'$.state.output'),1,${HEAD_KEEP}) AS outhead,
-               substr(json_extract(data,'$.state.metadata.output'),1,${HEAD_KEEP}) AS metahead,
-               CASE WHEN json_extract(data,'$.state.output') IS NOT NULL THEN 1 ELSE 0 END AS hasout
+               substr(json_extract(data,'$.state.output'),1,${HEAD_KEEP}) AS outhead,
+                substr(json_extract(data,'$.state.metadata.output'),1,${HEAD_KEEP}) AS metahead,
+                CASE WHEN json_extract(data,'$.state.output') IS NOT NULL THEN 1 ELSE 0 END AS hasout,
+               -- B0-5: 타일 명령어 표시용 state.input (32KB 초과면 생략, 제목 폴백).
+               substr(json_extract(data,'$.state.input'),1,32769) AS inputjson
        FROM part WHERE message_id IN (SELECT value FROM json_each(?))
        ORDER BY time_created, rowid`,
     )
@@ -231,11 +235,8 @@ function buildPart(r: PartRow): Record<string, unknown> {
     return out
   }
   if (r.type === 'tool') {
-    const state: Record<string, unknown> = { status: r.status ?? 'completed' }
-    if (r.title) state.title = r.title
-    if (r.timejson) state.time = safeParse(r.statetime)
-    if (r.hasout) state.output = `${r.outhead ?? ''}${notice}`
-    else state.metadata = { output: `${r.metahead ?? ''}${notice}` }
+    // B0-5: capped 경로에서도 input을 보존한다(타일 명령어 표시용, 32KB 상한).
+    const state = buildCappedToolState(r)
     const part: Record<string, unknown> = { ...base, type: 'tool', state }
     if (r.tool) part.tool = r.tool
     if (r.callID) part.callID = r.callID
