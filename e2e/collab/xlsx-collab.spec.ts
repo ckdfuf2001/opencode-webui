@@ -544,7 +544,15 @@ test.describe('X0a: XLSX 동시편집', () => {
       await edit.click({ timeout: 20000 })
       // X1d(P0): 편집 진입 직후엔 **연결 중 배너**가 보여야 한다(입력 차단 상태).
       // webui-pre(9bc434e) 에는 이 배너가 없어 이 단계에서 실패한다(수정 효과 증명).
+      // X2a-③ 후속(display:none 가드): 부하가 낮으면 배너가 빨리 사라질 수 있어,
+      // "배너가 보이거나, 아니면 입력이 차단된 상태(typed=false)" 중 하나를 만족해야 한다.
+      const bannerVisible = await t.pageB
+        .getByTestId('xlsx-collab-connecting')
+        .waitFor({ timeout: 10000 })
+        .then(() => true)
+        .catch(() => false)
       const typed = await tryCellEdit(t.pageB, 'B3', stampB)
+      expect(bannerVisible || !typed, 'connecting 중에는 배너가 보이거나 입력이 막혀야 한다').toBe(true)
 
       // 연결 판정이 끝나고 방 문서가 적용된다(synced).
       await expect
