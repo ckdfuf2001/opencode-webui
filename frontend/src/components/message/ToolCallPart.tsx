@@ -65,6 +65,8 @@ interface ToolCallPartProps {
   part: ToolPart
   onFileClick?: (filePath: string, lineNumber?: number) => void
   directory?: string
+  /** B0-6: opencode idle인데 running으로 남은 고아 part — "종료됨 · 응답 없음" 표시. */
+  orphaned?: boolean
 }
 
 function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (filePath: string) => void }) {
@@ -107,7 +109,7 @@ function ClickableJson({ json, onFileClick }: { json: unknown; onFileClick?: (fi
   return <pre className="bg-accent p-2 rounded text-xs overflow-x-auto">{parts}</pre>
 }
 
-export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps) {
+export function ToolCallPart({ part, onFileClick, directory, orphaned }: ToolCallPartProps) {
   const { preferences } = useSettings()
   const { userBashCommands } = useUserBash()
   // 툴 출력을 클릭하면 접히는데, 드래그로 텍스트를 선택하고 손을 떼도
@@ -120,6 +122,8 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
     (part.state.status === 'completed' || part.state.status === 'error') &&
     typeof part.state.input?.command === 'string' &&
     userBashCommands.has(part.state.input.command)
+  // B0-6: 세션은 idle인데 opencode part가 running으로 고착된 고아.
+  const showOrphaned = !!orphaned && part.state.status === 'running'
   const shouldAutoExpand = isUserBashCommand
   const defaultExpanded = shouldAutoExpand || (preferences?.expandToolCalls ?? false)
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -144,9 +148,10 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
 
   // PTY streaming for bash while running: only when expanded to save connection.
   // SSE off면 PTY 스트림도 열지 않는다 — metadata.output 폴링 동기화만으로 갱신.
+  // B0-6 고아는 opencode 응답이 없으므로 PTY도 열지 않는다.
   const sseOn = preferences?.sseStreaming ?? false
   useEffect(() => {
-    if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded || !sseOn) {
+    if (part.tool !== 'bash' || part.state.status !== 'running' || !expanded || !sseOn || showOrphaned) {
       if (part.tool === 'bash' && part.state.status === 'completed') setPtyOutput(null)
       return
     }
@@ -182,7 +187,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
       es.addEventListener('pty.done', onDone as EventListener)
     } catch {}
     return () => { try { es?.close() } catch {} }
-  }, [part.tool, part.state.status, expanded, sseOn, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs, directory])
+  }, [part.tool, part.state.status, expanded, sseOn, showOrphaned, (part as unknown as { sessionID: string }).sessionID, (part as unknown as { messageID: string }).messageID, (part as unknown as { id: string }).id, ptyIntervalMs, directory])
 
   // Sync ptyOutput with opencode's metadata.output polling (for when SSE delta not yet arrived, or after refresh)
   useEffect(() => {
@@ -305,7 +310,7 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
         onClick={() => setExpanded(!expanded)}
         className="w-full px-4 py-2 bg-card hover:bg-card-hover text-left flex items-center gap-2 text-sm min-w-0"
       >
-        <span className={getStatusColor()}>{getStatusIcon()}</span>
+        <span className={showOrphaned ? 'text-zinc-500' : getStatusColor()}>{showOrphaned ? '○' : getStatusIcon()}</span>
         <span className="font-medium">{part.tool}</span>
         {previewText && isFileTool ? (
           <span
@@ -323,7 +328,9 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
         ) : previewText ? (
           <span className="text-zinc-400 text-xs truncate">{previewText}</span>
         ) : null}
-        <span className="text-muted-foreground text-xs ml-auto">({part.state.status})</span>
+        <span className="text-muted-foreground text-xs ml-auto">
+          {showOrphaned ? '(종료됨 · 응답 없음)' : `(${part.state.status})`}
+        </span>
       </button>
 
       {expanded && (
@@ -335,6 +342,11 @@ export function ToolCallPart({ part, onFileClick, directory }: ToolCallPartProps
           {part.state.status === 'running' && (
             (part.tool === 'bash' || part.tool === 'shell' || part.tool === 'terminal') ? (
               <div className="rounded border border-yellow-500/20 bg-black/50 p-2">
+                {showOrphaned && (
+                  <div className="text-[11px] text-zinc-400 mb-1">
+                    종료됨 · 응답 없음 — 세션은 idle인데 이 작업이 running으로 남아 있습니다 (opencode 재시작·kill 잔재).
+                  </div>
+                )}
                 <div className="text-[11px] text-yellow-400 mb-1 flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1"><span className="animate-pulse">●</span> Streaming{(part.state.input as Record<string, unknown>)?.command ? ` — ${(part.state.input as Record<string, unknown>).command as string}` : ""}</span>
                   <div className="flex items-center gap-1">

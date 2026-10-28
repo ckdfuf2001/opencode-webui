@@ -10,6 +10,8 @@ export interface SessionStatusEntry {
   pendingPermissions: number
   isCancelled?: boolean
   updatedAt: number
+  /** B0-6: opencode idle인데 running으로 남은 고아 part id 목록. */
+  orphanParts?: string[]
 }
 
 export async function listSessionStatuses(): Promise<SessionStatusEntry[]> {

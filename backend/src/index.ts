@@ -41,6 +41,7 @@ import { getEmbeddedAsset, hasEmbeddedAssets } from './services/embedded-fronten
 import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionStatusPoller, stopSessionStatusPoller } from './services/session-status'
+import { startReconcileSweep, stopReconcileSweep } from './services/reconcile-wire'
 import { startPermissionAutoApprover, stopPermissionAutoApprover } from './services/permission-auto-approver'
 import { startGitCommitIndexer, stopGitCommitIndexer } from './services/git-indexer'
 import { migrateCommandRunsToFiles } from './services/command-run-migration'
@@ -476,6 +477,7 @@ const shutdown = async (signal: string) => {
   if (agentBrowserWarmupInterval) clearInterval(agentBrowserWarmupInterval)
   if (scheduleRunner) clearInterval(scheduleRunner)
   stopSessionStatusPoller()
+  stopReconcileSweep()
   stopAutomationWatcher()
   stopPermissionAutoApprover()
   stopGitCommitIndexer()
@@ -606,6 +608,9 @@ logger.info('Schedule runner started')
 
 startSessionStatusPoller(db)
 logger.info('Session status poller started')
+
+startReconcileSweep(db)
+logger.info('Reconcile sweep started')
 
 // 문서 변환기 백그라운드 예열 — 첫 미리보기 1분 대기를 없앤다 (부팅은 막지 않는다).
 try {

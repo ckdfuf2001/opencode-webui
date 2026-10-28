@@ -127,3 +127,62 @@ export function pruneIdleSessionStatus(db: Database, olderThanMs: number, now: n
   db.prepare("DELETE FROM session_status WHERE status = 'idle' AND updated_at < ?")
     .run(now - olderThanMs)
 }
+
+export interface PartOrphan {
+  sessionId: string
+  messageId: string
+  partId: string
+  tool: string
+  command: string
+  observedAt: number
+}
+
+/**
+ * B0-6: opencode idle인데 part가 running으로 남은 고아 표시.
+ * opencode 데이터가 아니라 우리 DB에만 적는다.
+ */
+export function markPartOrphan(db: Database, orphan: Omit<PartOrphan, 'observedAt'> & { observedAt?: number }): void {
+  db.prepare(
+    `INSERT INTO reconcile_orphans (session_id, message_id, part_id, tool, command, observed_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(session_id, part_id) DO UPDATE SET observed_at = excluded.observed_at`,
+  ).run(orphan.sessionId, orphan.messageId, orphan.partId, orphan.tool, orphan.command, orphan.observedAt ?? Date.now())
+}
+
+export function clearPartOrphan(db: Database, sessionId: string, partId: string): void {
+  db.prepare('DELETE FROM reconcile_orphans WHERE session_id = ? AND part_id = ?').run(sessionId, partId)
+}
+
+export function isPartOrphanMarked(db: Database, sessionId: string, partId: string): boolean {
+  const row = db.prepare('SELECT session_id FROM reconcile_orphans WHERE session_id = ? AND part_id = ?')
+    .get(sessionId, partId) as { session_id?: string } | undefined
+  return !!row
+}
+
+/** 세션별 orphan part id 목록 (GET /api/session-status 응답에 동봉). */
+export function listPartOrphansBySession(db: Database): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  try {
+    const rows = db.prepare('SELECT session_id, part_id FROM reconcile_orphans').all() as Array<{
+      session_id: string
+      part_id: string
+    }>
+    for (const r of rows) {
+      const list = out.get(r.session_id) ?? []
+      list.push(r.part_id)
+      out.set(r.session_id, list)
+    }
+  } catch {
+    /* 테이블 미생성 DB(구버전)에서는 빈 목록 */
+  }
+  return out
+}
+
+/** 오래된 orphan 표시 정리(7일). */
+export function prunePartOrphans(db: Database, olderThanMs: number, now: number): void {
+  try {
+    db.prepare('DELETE FROM reconcile_orphans WHERE observed_at < ?').run(now - olderThanMs)
+  } catch {
+    /* 테이블 미생성 DB(구버전)에서는 무시 */
+  }
+}

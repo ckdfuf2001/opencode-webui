@@ -214,6 +214,17 @@ export function initializeDatabase(dbPath: string = './data/opencode.db'): Datab
       next INTEGER NOT NULL DEFAULT 1
     );
     INSERT OR IGNORE INTO collab_name_seq (id, next) VALUES (1, 1);
+
+    -- B0-6: opencode idle인데 part가 running으로 남은 고아 표시 (우리 DB에만 기록).
+    CREATE TABLE IF NOT EXISTS reconcile_orphans (
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      part_id TEXT NOT NULL,
+      tool TEXT NOT NULL DEFAULT '',
+      command TEXT NOT NULL DEFAULT '',
+      observed_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, part_id)
+    );
    
    `)
   

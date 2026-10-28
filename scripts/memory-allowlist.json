@@ -54,6 +54,11 @@
   ],
   "setInterval": [
     {
+      "file": "backend/src/services/reconcile-sweep.ts",
+      "value": "^\\(\\) =>",
+      "reason": "B0-6 1분 reconcile sweep(전역 1개, unref, D46). 세션별 타이머 없음. 후보 0이면 opencode 미호출."
+    },
+    {
       "file": "frontend/src/components/command/CommandsPanel.tsx",
       "value": "^\\(\\) =>",
       "reason": "커맨드 패널 표시 갱신. 패널이 열려 있을 때만."

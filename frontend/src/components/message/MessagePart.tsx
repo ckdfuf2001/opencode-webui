@@ -30,6 +30,8 @@ interface MessagePartProps {
   invocation?: { name: string; runId: string; args: string | null }
   /** 칩 클릭 → 커맨드 히스토리 창 열기 */
   onCommandClick?: () => void
+  /** B0-6: opencode idle인데 running으로 남은 고아 part. */
+  orphaned?: boolean
 }
 
 function getCopyableContent(part: Part, allParts?: Part[]): string {
@@ -249,7 +251,7 @@ function FileMention({  part,
 
 
 
-export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, repoRoot, messageStreaming, invocation, onCommandClick }: MessagePartProps) {
+export const MessagePart = memo(function MessagePart({ part, role, allParts, partIndex, onFileClick, messageTextContent, directory, repoRoot, messageStreaming, invocation, onCommandClick, orphaned }: MessagePartProps) {
   const { preferences } = useSettings()
   const showReasoning = preferences?.showReasoning ?? true
   const copyableContent = getCopyableContent(part, allParts)
@@ -316,7 +318,7 @@ export const MessagePart = memo(function MessagePart({ part, role, allParts, par
     case 'patch':
       return <PatchPart part={part} />
     case 'tool':
-      return <ToolCallPart part={part} onFileClick={onFileClick} directory={directory} />
+      return <ToolCallPart part={part} onFileClick={onFileClick} directory={directory} orphaned={orphaned} />
     case 'reasoning': {
       // 암호문(security) reasoning은 절대 그리지 않는다 — 평문 없이 암호 블록만 있어
       // 패널·펄스가 떠도 내용이 영원히 안 찬다. 백엔드 security 플래그 또는 인라인 메타로 판별.

@@ -246,6 +246,66 @@ function buildPart(r: PartRow): Record<string, unknown> {
   return { ...base, type: 'text', text: `[part omitted: ${r.type ?? 'unknown'} output too large (${r.len} chars) — see full log in session]` }
 }
 
+/** B0-6: opencode에서 running으로 남은 tool part (age 초과만, 최대 200건). */
+export interface RunningToolPart {
+  sessionId: string
+  messageId: string
+  partId: string
+  tool: string
+  command: string
+  updatedAt: number
+}
+
+export async function listRunningToolParts(olderThanMs: number): Promise<RunningToolPart[]> {
+  const oc = await openOcDb()
+  if (!oc) return []
+  try {
+    const cutoff = Date.now() - Math.max(0, olderThanMs)
+    const rows = oc
+      .query(
+        `SELECT session_id AS sid, message_id AS mid, id AS pid,
+                json_extract(data,'$.tool') AS tool,
+                substr(json_extract(data,'$.state.input.command'),1,200) AS cmd,
+                time_updated AS tu
+         FROM part
+         WHERE json_extract(data,'$.type') = 'tool'
+           AND json_extract(data,'$.state.status') = 'running'
+           AND time_updated < ?
+         ORDER BY time_updated ASC
+         LIMIT 200`,
+      )
+      .all(cutoff) as Array<{ sid: string; mid: string; pid: string; tool: string | null; cmd: string | null; tu: number }>
+    return rows.map((r) => ({
+      sessionId: r.sid,
+      messageId: r.mid,
+      partId: r.pid,
+      tool: r.tool ?? 'tool',
+      command: r.cmd ?? '',
+      updatedAt: r.tu,
+    }))
+  } finally {
+    oc.close()
+  }
+}
+
+/** B0-6: 특정 part의 opencode 기준 상태. 행이 없으면 done(끝난 것으로 간주). */
+export async function getToolPartState(
+  sessionId: string,
+  partId: string,
+): Promise<'running' | 'done' | 'unknown'> {
+  const oc = await openOcDb()
+  if (!oc) return 'unknown'
+  try {
+    const row = oc
+      .query(`SELECT json_extract(data,'$.state.status') AS st FROM part WHERE session_id = ? AND id = ?`)
+      .get(sessionId, partId) as { st: string | null } | undefined
+    if (!row) return 'done'
+    return row.st === 'running' ? 'running' : 'done'
+  } finally {
+    oc.close()
+  }
+}
+
 /** 폴링용 최근 N개 전체 메시지 (parts 포함, cap 적용). 응답 순서: 시간 오름차순. */
 export async function recentSessionMessages(
   sessionId: string,

@@ -53,6 +53,31 @@ export function consumeProxyIdleReleased(sessionID: string): boolean {
   return true
 }
 
+/** B0-6: 추적 중인 직접 전송 dispatch 목록 (발송 시각 포함). */
+export function listTrackedDispatches(): Array<{ sessionId: string; since: number }> {
+  const out: Array<{ sessionId: string; since: number }> = []
+  for (const [sid, ts] of dispatchedAt) {
+    if (controllers.has(sid)) out.push({ sessionId: sid, since: ts })
+  }
+  return out
+}
+
+/**
+ * B0-6 sweep용 abort — 정상 종료로 기록한다(프록시 catch/finally가 소비해
+ * 오류가 아니라 정상 종료 로그를 남긴다). 추적은 유지해 settle 시 정리한다.
+ */
+export function sweepAbortTracked(sessionID: string): boolean {
+  const ac = controllers.get(sessionID)
+  if (!ac) return false
+  idleReleased.add(sessionID)
+  try {
+    ac.abort()
+  } catch {
+    /* 무시 */
+  }
+  return true
+}
+
 export function resetProxyTurnEndForTest(): void {
   controllers.clear()
   dispatchedAt.clear()

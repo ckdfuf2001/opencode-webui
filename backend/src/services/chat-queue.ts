@@ -202,6 +202,41 @@ export function listQueuedChats(sessionID: string): QueuedChat[] {
   return queues.get(sessionID) ?? []
 }
 
+/**
+ * B0-6: 임계값을 넘게 sending에 머문 큐 헤드 목록 (재시작 시 소멸 — 인메모리).
+ * 항목을 지우지 않는다 — idle 확정은 기존 경로(dispatchHead)가 처리한다.
+ */
+export function listStaleSending(thresholdMs: number): Array<{ sessionId: string; since: number }> {
+  const now = Date.now()
+  const out: Array<{ sessionId: string; since: number }> = []
+  for (const [sid, queue] of queues) {
+    const head = queue[0]
+    if (head?.status === 'sending' && head.sendingSince && now - head.sendingSince >= thresholdMs) {
+      out.push({ sessionId: sid, since: head.sendingSince })
+    }
+  }
+  return out
+}
+
+/** B0-6: 임계값을 넘긴 큐 경로 in-flight (발송 시각은 sendingSince). */
+export function listStaleQueueInFlight(thresholdMs: number): Array<{ sessionId: string; since: number }> {
+  const now = Date.now()
+  const out: Array<{ sessionId: string; since: number }> = []
+  for (const sid of inFlight) {
+    const since = queues.get(sid)?.[0]?.sendingSince ?? 0
+    if (since && now - since >= thresholdMs) out.push({ sessionId: sid, since })
+  }
+  return out
+}
+
+/**
+ * B0-6 sweep용 — 컨트롤러만 끊고 큐 항목은 남긴다.
+ * 항목 제거·확정은 기존 idle 관찰 경로가 맡는다(유실 방지).
+ */
+export function abortQueueInFlight(sessionId: string): void {
+  abortInFlight(sessionId)
+}
+
 export function enqueueQueuedChat(sessionID: string, text: string, directory?: string, opts?: EnqueueOptions): QueuedChat[] {
   const kind = opts?.kind ?? 'chat'
   let trimmed: string

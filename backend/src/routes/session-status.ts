@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { Database } from 'bun:sqlite'
-import { listSessionStatus, setSessionCancelled, clearSessionCancelled } from '../db/session-status-queries'
+import { listPartOrphansBySession, listSessionStatus, setSessionCancelled, clearSessionCancelled } from '../db/session-status-queries'
 import { logger } from '../utils/logger'
 
 export function createSessionStatusRoutes(db: Database) {
@@ -8,9 +8,16 @@ export function createSessionStatusRoutes(db: Database) {
 
   // GET /api/session-status — 전체 세션 상태(busy/idle + 승인 대기 수).
   // 프론트 리스트/헤더가 이 값을 폴링해 상태를 그린다.
+  // B0-6: orphan part id 목록을 세션별로 동봉한다(새 폴링 없이 기존 키로 전달).
   app.get('/', (c) => {
     try {
-      return c.json(listSessionStatus(db))
+      const orphans = listPartOrphansBySession(db)
+      return c.json(
+        listSessionStatus(db).map((row) => ({
+          ...row,
+          orphanParts: orphans.get(row.sessionId) ?? [],
+        })),
+      )
     } catch (error) {
       logger.error('Failed to list session status:', error)
       return c.json({ error: 'Failed to list session status' }, 500)

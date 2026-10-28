@@ -695,6 +695,11 @@ export function SessionDetail() {
     failureCount: statusFails,
   });
   const dbBusy = !!sessionId && dbStatuses?.some((s) => s.sessionId === sessionId && s.status === "busy") === true;
+  // B0-6: opencode idle인데 running으로 남은 고아 part id (기존 상태 폴러 값만 읽는다, 새 폴링 없음).
+  const orphanPartIds = useMemo(
+    () => dbStatuses?.find((s) => s.sessionId === sessionId)?.orphanParts ?? [],
+    [dbStatuses, sessionId],
+  );
   // 세션 리스트 배지와 동일한 기준: 이 세션 또는 하위 세션이 busy 면 Working.
   const descendantBusy = !!sessionId && dbStatuses?.some(
     (s) => s.status === "busy" && descendantIDs.includes(s.sessionId),
@@ -1772,6 +1777,7 @@ if (results.length > 0) {
                 invocations={invocationByMessage}
                 onOpenCommandHistory={() => setCommandsOpen(true)}
                 actionsDisabled={false}
+                orphanPartIds={orphanPartIds}
               />
               </ErrorBoundary>
             )}
