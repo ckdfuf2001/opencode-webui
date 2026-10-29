@@ -1,4 +1,4 @@
-import { Suspense, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X, Eye } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -19,7 +19,8 @@ import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, 
 import { collabApi, collabServerUrl, type ImageLossDetail } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE, formatWhere } from '@/lib/ycollab'
 import { useCollabUser } from '@/lib/collabUser'
-import { activityLabel, peerActivity, usePeers, type Peer } from '@/lib/usePeers'
+import { usePeers, type Peer } from '@/lib/usePeers'
+import { CollabPeerChip, CollabPresenceShell, CollabSelfMarker, NowProvider } from '@/components/collab/CollabPresence'
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
@@ -48,91 +49,6 @@ const SPINNER = (
     <Loader2 className="w-5 h-5 animate-spin" />
   </div>
 )
-
-/**
- * M7-2: 1초마다 갱신되는 시각 컨텍스트.
- *
- * "N초 전 편집" 같은 상대 시간과 data-activity가 매초 바뀌어야 하는데,
- * 그 갱신을 PptxViewer가 감으면 덱 트리 전체가 리렌더된다(24장 SVG → 레이아웃
- * 객체가 GC를 기다리며 렌더러 메모리 증가). 그래서 시각을 컨텍스트로 내보내고
- * **그 값을 쓰는 칩 컴포넌트만** 다시 그리게 한다.
- */
-const NowCtx = createContext(0)
-
-function NowProvider({ children, active = false }: { children: ReactNode; active?: boolean }): ReactNode {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    // 아무도 편집 중이 아니면 상대 시간 표시가 바뀔 일이 없으므로 느리게 돌린다.
-    // (유휴 상태 interval 실행 횟수를 M7-4 기준으로 낮추기 위함)
-    const ms = active ? 1000 : 5000
-    const t = setInterval(() => setNow(Date.now()), ms)
-    return () => clearInterval(t)
-  }, [active])
-  return <NowCtx.Provider value={now}>{children}</NowCtx.Provider>
-}
-
-/**
- * M7-2: 참가자 칩. 시각만 컨텍스트로 받아 자기 자신만 다시 그린다.
- * (PptxViewer가 매초 리렌더되면 덱 트리 전체가 리렌더된다)
- */
-function CollabPeerChip({ p, following, onFollow }: { p: Peer; following: boolean; onFollow: () => void }): ReactNode {
-  const now = useContext(NowCtx)
-  const act = peerActivity(p, now)
-  const status = act === 'idle' ? '' : activityLabel(p, now)
-  return (
-    <button
-      type="button"
-      data-testid="collab-peer"
-      data-peer-id={p.id}
-      data-mode={p.mode}
-      {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
-      data-owner={p.isOwner ? 'true' : 'false'}
-      data-self="false"
-      data-activity={act}
-      data-following={following ? 'true' : 'false'}
-      {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
-      title={following ? `${p.name} 팔로우 중 (클릭하면 해제)` : `${p.name} 팔로우`}
-      aria-pressed={following}
-      onClick={onFollow}
-      className={`inline-flex items-center gap-1 shrink-0 hover:text-foreground${
-        following ? ' underline decoration-dotted underline-offset-2' : ''
-      }`}
-    >
-      <span
-        className={`inline-block w-2 h-2 rounded-full${act === 'editing' ? ' animate-pulse' : ''}`}
-        style={act === 'editing' ? { backgroundColor: p.color } : { border: `1.5px solid ${p.color}` }}
-      />
-      <span>
-        {p.name}
-        {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
-        {p.device === 'mobile' ? '📱' : ''}
-        {/* 위치 글자는 화면에 띄우지 않는다. 위치 표시는 lib 자체 표시
-        (좌측 썸네일 하이라이트) 하나만 남긴다.
-        app.slide / data-slide는 그대로 유지 — 보이지 않지만 테스트가 읽는다. */}
-        {status ? ` · ${status}` : ''}
-      </span>
-    </button>
-  )
-}
-
-/**
- * M7-2: 자기 상태 마커(숨김, 진단/테스트용). data-activity가 실시간이어야 해서
- * 시각 컨텍스트만 구독한다.
- */
-function CollabSelfMarker({ peer }: { peer: Peer }): ReactNode {
-  const now = useContext(NowCtx)
-  return (
-    <span
-      data-testid="collab-peer"
-      data-peer-id={peer.id}
-      data-mode={peer.mode}
-      data-owner={peer.isOwner ? 'true' : 'false'}
-      data-self="true"
-      data-activity={peerActivity(peer, now)}
-      className="hidden"
-    />
-  )
-}
 
 function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
@@ -2129,6 +2045,7 @@ const peersRef = useRef<Peer[]>([])
         />
       )}
       {collab && (
+        <CollabPresenceShell>
         <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
           {/* M7-2: 시각 갱신은 이 아래로만 전파한다. 칩만 다시 그려지고
               PptxViewer(덱 트리)는 다시 그려지지 않는다.
@@ -2242,6 +2159,7 @@ const peersRef = useRef<Peer[]>([])
           })()}
           </NowProvider>
         </div>
+        </CollabPresenceShell>
       )}
       {collab && sameShapePeers.length > 0 && (
         <div className="px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
