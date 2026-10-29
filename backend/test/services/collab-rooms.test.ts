@@ -100,6 +100,42 @@ describe('session', () => {
       createSession(NOTE_REL, { resumeEpoch: 'deadbeef', knownHash: s1.lastHash }),
     ).rejects.toMatchObject({ statusCode: 409, code: 'epoch_mismatch' })
   })
+
+  it('stale_room + empty orphan room -> server resets and joins as host (C2-b)', async () => {
+    const s1 = await createSession(NOTE_REL)
+    // 붙었다 나간 고아 (everConnected=true, conns=0).
+    const w = sock()
+    addConn(s1.roomId, w)
+    removeConn(s1.roomId, w)
+    // 디스크가 외부에서 바뀌었다 (방 lastHash와 어긋남).
+    await fs.writeFile(path.join(tmp, NOTE_REL), 'outsider-c2b')
+    const disk = await fs.readFile(path.join(tmp, NOTE_REL))
+    const knownHash = hashBytes(new Uint8Array(disk))
+    const s2 = await createSession(NOTE_REL, { strict: true, knownHash })
+    expect(s2.stale).not.toBe(true)
+    expect(s2.role).toBe('host')
+    expect(s2.lastHash).toBe(knownHash)
+  })
+
+  it('stale_room + live room stays stale (C2-b)', async () => {
+    const s1 = await createSession(NOTE_REL)
+    const w = sock()
+    addConn(s1.roomId, w)
+    await fs.writeFile(path.join(tmp, NOTE_REL), 'outsider-c2b-live')
+    const disk = await fs.readFile(path.join(tmp, NOTE_REL))
+    const knownHash = hashBytes(new Uint8Array(disk))
+    const s2 = await createSession(NOTE_REL, { strict: true, knownHash })
+    expect(s2.stale).toBe(true)
+    expect(s2.code).toBe('stale_room')
+  })
+
+  it('stale_client when knownHash differs from disk (C2-b)', async () => {
+    const s1 = await createSession(NOTE_REL)
+    expect(s1.stale).toBeFalsy()
+    const s2 = await createSession(NOTE_REL, { strict: true, knownHash: '0'.repeat(64) })
+    expect(s2.stale).toBe(true)
+    expect(s2.code).toBe('stale_client')
+  })
 })
 
 describe('resume table', () => {
