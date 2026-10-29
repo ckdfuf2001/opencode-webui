@@ -47,6 +47,9 @@ const CONVERTABLE_CLIENT_KINDS = new Set<DocKind>(['pdf', 'docx', 'xlsx', 'pptx'
  */
 const XLSX_SAVE_CLIENT_ID = 0
 
+/** C2-c: 자동 저장 디바운스. 편집이 멈추면 owner만 저장한다. */
+const AUTOSAVE_DEBOUNCE_MS = 2500
+
 /**
  * C1: lib collaborationState.people 항목 (패치된 ooxml-ui가 role+sheet+range를 싣는다).
  * PPT의 usePeers와 같은 마크업으로 아래 presence 바에 그린다.
@@ -1638,6 +1641,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const etagRetryRef = useRef(false)
   /** C2-b: stale_client 재수신 1회 플래그. */
   const staleRetryRef = useRef(false)
+  /** C2-c: 자동 저장 디바운스 타이머 + 중복 실행 가드. */
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autosaveInFlightRef = useRef(false)
   const joinAgainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onReloadFileRef = useRef(onRequestReload)
   onReloadFileRef.current = onRequestReload
@@ -1928,6 +1934,10 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         clearTimeout(joinAgainTimerRef.current)
         joinAgainTimerRef.current = null
       }
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
     }
     // etagProp(바이트와 같은 응답의 ETag)이 바뀌면 재참가한다.
     // content 자체는 deps에 넣지 않는다(저장 후 raw 재수신으로 방에서 떨어지면 안 된다).
@@ -2177,7 +2187,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   //  - conflict_room(다른 참가자가 먼저 저장) 은 방 상태를 다시 직렬화해 1회 재시도.
   //  - conflict_external(외부 변경) 은 재시도 금지. 배너 + 내 사본 다운로드로 알린다.
   //  - X2a-③: lib 세션의 clientId 를 보낸다. viewer 면 서버가 403 view_only 로 거부한다.
-  const saveViaRoom = useCallback(async (): Promise<boolean> => {
+  /**
+   * C2-c: quiet=true면 성공 토스트를 띄우지 않는다(자동 저장용).
+   * 실패 경로(토스트+배너+내 사본 다운로드)는 그대로 둔다.
+   */
+  const saveViaRoom = useCallback(async (quiet = false): Promise<boolean> => {
     const room = collabRef.current
     const handle = xlsxHandleRef.current
     if (!room || !handle?.saveBytes) return false
@@ -2214,7 +2228,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       // 놓치면 뒤에 단독 저장이 낡은 ETag 로 나가 409 를 반복한다.
       setEtag(res.newHash)
       void queryClient.invalidateQueries({ queryKey: ['files'] })
-      showToast.success('저장했습니다')
+      if (!quiet) showToast.success('저장했습니다')
       // X1b: keepEditing — Save 는 편집을 유지한다(Done 만 편집을 끝낸다).
       window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true } }))
       return true
@@ -2231,7 +2245,46 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     }
   }, [path, queryClient, storeFailedBytes])
 
-  // 방에 붙었으면 방 경로, 아니면 단독 경로(/api/files)로 저장한다.
+  /**
+   * C2-c: 편집이 멈추면 owner만 자동 저장한다.
+   * - owner 판정은 방 참가자 목록(서버 선출)에서 읽는다. 이벤트 기반이라 별도 폴링 없음.
+   * - owner를 모르면(조회 실패·미선출) baseHash 잠금에 맡기고 저장한다(멱등).
+   * - viewer·미참가·탭 숨김 상태에서는 저장하지 않는다.
+   */
+  const scheduleAutosave = useCallback(() => {
+    if (!editingRef.current) return
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null
+      void (async () => {
+        try {
+          if (document.hidden) return
+          const c = collabRef.current
+          if (!c || !c.joined || c.role !== 'edit' || !editingRef.current) return
+          if (autosaveInFlightRef.current) return
+          let skip = false
+          try {
+            const rooms = await collabApi.rooms()
+            const mine = rooms.find((r) => r.roomId === c.roomId)?.participants.find((x) => x.id === c.user.id)
+            if (mine) skip = mine.owner !== true
+            else skip = (rooms.find((r) => r.roomId === c.roomId)?.participants.some((x) => x.owner === true)) === true
+          } catch {
+            // 조회 실패는 잠금에 맡긴다.
+          }
+          if (skip) return
+          autosaveInFlightRef.current = true
+          try {
+            await saveViaRoom(true)
+          } finally {
+            autosaveInFlightRef.current = false
+          }
+        } catch {
+          // 다음 편집 때 다시 예약된다.
+        }
+      })()
+    }, AUTOSAVE_DEBOUNCE_MS)
+  }, [saveViaRoom])
+  // 방에 붙었으면 방 경로, 단독이면 단독 경로(/api/files)로 저장한다.
   const save = useCallback(async (): Promise<boolean> => {
     const room = collabRef.current
     // X2a-③: viewer 는 self clientId 를 알아야 저장할 수 있다. 아직 모르면 막는다
@@ -2457,7 +2510,10 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               if (!editingRef.current) void refreshViewerRoom()
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
-            onWorkbookChange={() => scheduleXlsxRefresh()}
+            onWorkbookChange={() => {
+              scheduleXlsxRefresh()
+              if (editingRef.current) scheduleAutosave()
+            }}
           />
           </div>
           {!editing && collabNotice && (
