@@ -7,7 +7,7 @@ import { showToast } from '@/lib/toast'
  *
  *  X1c(P0): `ifMatch` (파일을 읽은 시점의 ETag) 를 주면 잠근다.
  *  POST 에 If-Match 로 되돌려 보낸다 → 디스크가 그 사이에 바뀌었으면 서버가 409.
- *  crypto.subtle 이 없는 환경(폰 http)에서도 안전하다(서버가 해시를 계산한다).
+ *  보안 컨텍스트 전용 API가 없는 환경(폰 http)에서도 안전하다(서버가 해시를 계산한다).
  *  PPT 는 서버 판정(collab/save)을 거친 뒤에 이 함수를 쓰므로 ifMatch 를 주지 않는다.
  */
 export interface OfficeSaveConflict {

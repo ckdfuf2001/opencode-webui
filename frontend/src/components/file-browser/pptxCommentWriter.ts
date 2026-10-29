@@ -26,7 +26,7 @@ const esc = (s: string) =>
 
 /**
  * OOXML GUID `{8-4-4-4-12}` (대문자).
- * crypto.randomUUID()는 secure context 전용이라 http에서는 undefined다.
+ * 내장 UUID API는 secure context 전용이라 http에서는 undefined다.
  * getRandomValues는 비보안 컨텍스트에서도 동작하므로 UUIDv4를 직접 만든다.
  */
 const guid = (): string => {

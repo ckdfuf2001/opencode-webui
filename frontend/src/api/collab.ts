@@ -129,24 +129,6 @@ async function postSaveBinary(
   return { ok: false, reason: 'error', message: body?.error ?? `Save failed (${res.status})` }
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  // 복사본으로 해시한다 (원본 버퍼 풀을 건드리지 않고 ArrayBuffer를 보장).
-  const copy = new Uint8Array(bytes)
-  const d = await crypto.subtle.digest('SHA-256', copy.buffer as ArrayBuffer)
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-/**
- * 바이트 해시(서버의 hashFile/hashBytes 와 같은 알고리즘).
- * XLSX 는 "방에 먼저 들어온 쪽의 문서가 방의 기준"이라, 방이 디스크와 어긋난 상태로
- * 남으면 **오래된 내용**이 디스크를 덮어쓸 수 있다 ⇒ 붙기 전에 비교한다.
- */
-export async function hashBytesHex(bytes: Uint8Array): Promise<string> {
-  return sha256Hex(bytes)
-}
-
-/** room별 마지막 전송 해시 (재전송 생략용, 최대 20개). */
-const lastSentByRoom = new Map<string, { hash: string; newHash: string }>()
 
 export const collabApi = {
   session: async (
@@ -180,28 +162,10 @@ export const collabApi = {
     baseHash?: string | null,
     allowImageLoss = false,
   ): Promise<CollabSaveResult> => {
-    // M1: 같은 바이트를 또 보내지 않는다 (sha256 비교, 서버와 같은 알고리즘).
-    // crypto.subtle이 없으면(비보안 컨텍스트) 생략 없이 바로 보낸다.
+    // C2-a: 같은 바이트 재전송 생략(M1)은 보안 컨텍스트 전용 API에 의존하므로 삭제한다.
+    // 서버 저장은 멱등(같은 바이트 → 같은 newHash)이라 생략 없이 바로 보낸다.
     try {
-      let hash: string | null = null
-      try {
-        hash = await sha256Hex(bytes)
-      } catch {
-        hash = null
-      }
-      if (hash) {
-        const prev = lastSentByRoom.get(roomId)
-        if (prev && prev.hash === hash) return { ok: true, newHash: prev.newHash }
-      }
-      const res = await postSaveBinary(roomId, clientId, bytes, baseHash, allowImageLoss)
-      if (res.ok && hash) {
-        lastSentByRoom.set(roomId, { hash, newHash: res.newHash })
-        if (lastSentByRoom.size > 20) {
-          const oldest = lastSentByRoom.keys().next()
-          if (!oldest.done) lastSentByRoom.delete(oldest.value)
-        }
-      }
-      return res
+      return await postSaveBinary(roomId, clientId, bytes, baseHash, allowImageLoss)
     } catch (error) {
       return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Save failed' }
     }

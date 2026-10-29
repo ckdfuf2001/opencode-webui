@@ -29,7 +29,7 @@ import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
-import { collabApi, collabServerUrl, hashBytesHex, type CollabRoomSummary } from '@/api/collab'
+import { collabApi, collabServerUrl, type CollabRoomSummary } from '@/api/collab'
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser } from '@/lib/collabUser'
@@ -96,7 +96,7 @@ function ErrorNote({ msg }: { msg: string }) {
   )
 }
 
-function useRawFile(path: string, enabled = true) {
+function useRawFile(path: string, enabled = true, reloadKey = 0) {
   const [data, setData] = useState<ArrayBuffer | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
   const [error, setError] = useState('')
@@ -145,7 +145,7 @@ function useRawFile(path: string, enabled = true) {
       setStatus('idle')
       setEtag(null)
     }
-  }, [path, enabled])
+  }, [path, enabled, reloadKey])
 
   return { data, status, error, etag }
 }
@@ -626,9 +626,12 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
   ) : null
 
   const hasClientFallback = kind ? CONVERTABLE_CLIENT_KINDS.has(kind) : false
+  /** C2-a: ETag 누락 시 같은 파일을 다시 받기 위한 재수신 트리거. */
+  const [fileReloadKey, setFileReloadKey] = useState(0)
   const { data: raw, status: rawStatus, error: rawError, etag: rawEtag } = useRawFile(
     file.path,
     isOfficeNative ? !pdfMode : isViewerOnly || (hasClientFallback && converted.status !== 'ready'),
+    fileReloadKey,
   )
 
   if (!kind) return null
@@ -648,7 +651,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
       if (kind === 'xlsx') {
         return (
           <ViewerLoadBoundary key={bkey} onRetry={retryViewer}>
-            <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} etag={rawEtag} onRoomHasEditorsChange={setXlsxRoomHasEditors} />
+            <XlsxViewer data={raw} fileName={file.name} editing={editing} path={file.path} etag={rawEtag} onRoomHasEditorsChange={setXlsxRoomHasEditors} onRequestReload={() => setFileReloadKey((k) => k + 1)} />
           </ViewerLoadBoundary>
         )
       }
@@ -1554,7 +1557,7 @@ function XlsxIconBtn({
   )
 }
 
-function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onRoomHasEditorsChange }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null; onRoomHasEditorsChange?: (has: boolean) => void }) {
+function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onRoomHasEditorsChange, onRequestReload }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null; onRoomHasEditorsChange?: (has: boolean) => void; onRequestReload?: () => void }) {
   const appTheme = useTheme()
   const queryClient = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -1608,7 +1611,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     joined: boolean
   } | null>(null)
   // X1d: notice 종류에 'timeout'(연결 대기 상한)을 추가한다.
-  const [collabNotice, setCollabNotice] = useState<{ kind: 'stale' | 'nohash' | 'error' | 'external' | 'timeout'; text: string } | null>(null)
+  const [collabNotice, setCollabNotice] = useState<{ kind: 'stale' | 'noetag' | 'error' | 'external' | 'timeout'; text: string } | null>(null)
   const [conflictBytes, setConflictBytes] = useState<Uint8Array | null>(null)
   /**
    * X1c(P1): 방 참가 판정(collab 또는 notice)이 끝날 때까지 편집기를 readOnly로 막는다.
@@ -1628,6 +1631,15 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   editingRef.current = editing
   /** X2a-③: viewer가 방 내용을 따라가도록 에디터를 다시 마운트한 세대. key 에 들어간다. */
   const [viewerGen, setViewerGen] = useState(0)
+  /** C2-a: "다시 연결" 재시도 트리거. */
+  const [joinKey, setJoinKey] = useState(0)
+  /** C2-a: ETag를 끝내 못 받으면 보기 전용으로 둔다(단독 편집 금지). */
+  const [forceViewOnly, setForceViewOnly] = useState(false)
+  /** C2-a: ETag 누락 시 부모 재수신 1회 + 재시도 타이머. */
+  const etagRetryRef = useRef(false)
+  const joinAgainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const onReloadFileRef = useRef(onRequestReload)
+  onReloadFileRef.current = onRequestReload
   const selfClientIdRef = useRef<number | null>(null)
   const [xlsxPeople, setXlsxPeople] = useState<XlsxPresencePerson[]>([])
   /** C1: 따라가는 상대 clientId. setActiveSheet로만 이동한다(select 금지). */
@@ -1669,8 +1681,6 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   collabRef.current = collab
   const onRoomHasEditorsChangeRef = useRef(onRoomHasEditorsChange)
   onRoomHasEditorsChangeRef.current = onRoomHasEditorsChange
-  const contentRef = useRef(content)
-  contentRef.current = content
   const xlsxHandleRef = useRef(xlsxHandle)
   xlsxHandleRef.current = xlsxHandle
   /**
@@ -1727,6 +1737,14 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     }
     void e
   }, [])
+  /** C2-a: ETag 재수신 + 방 재참가. */
+  const reconnectCollab = useCallback(() => {
+    etagRetryRef.current = false
+    setForceViewOnly(false)
+    setCollabNotice(null)
+    onReloadFileRef.current?.()
+    setJoinKey((k) => k + 1)
+  }, [])
   useEffect(() => {
     // X2a-③: 보기 모드도 방에 참가한다(viewer 역할, presence만 공유).
     // 모드가 바뀌면 viewer 따라가기 상태도 처음부터 다시 본다.
@@ -1745,28 +1763,33 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     const role = editing ? 'edit' : 'viewer'
     let dead = false
     void (async () => {
-      // 1) 해시를 계산한다. 못 하면 **fail-closed**: 방에 붙지 않는다.
-      //    (http://IP 로 접속하면 crypto.subtle 이 없다 → 낡은 방 차단이 사라지므로 붙으면 안 된다)
-      let knownHash: string
-      try {
-        knownHash = await hashBytesHex(contentRef.current)
-      } catch {
-        if (!dead) {
+      // C2-a: knownHash는 서버가 준 ETag(바이트와 같은 응답). subtle 계산 없음.
+      // 따옴표가 감싸여 오면 벗긴다(If-Match 비교와 같은 규칙).
+      const rawTag = (etagProp ?? '').replace(/^"|"$/g, '')
+      if (!rawTag) {
+        // ETag가 없으면 파일을 한 번 다시 받는다. 그래도 없으면 보기 전용으로 두고
+        // "다시 연결" 버튼을 띄운다(단독 편집으로 넘어가지 않는다).
+        if (!etagRetryRef.current) {
+          etagRetryRef.current = true
+          onReloadFileRef.current?.()
+          // etag prop이 바뀌면 effect가 다시 돈다. 바뀌지 않아도 타이머가 한 번 더 돌린다.
+          joinAgainTimerRef.current = setTimeout(() => {
+            joinAgainTimerRef.current = null
+            setJoinKey((k) => k + 1)
+          }, 4000)
+        } else if (!dead) {
           setCollab(null)
-          setCollabNotice(
-            editing
-              ? {
-                  kind: 'nohash',
-                  text: '이 환경에서는 동시편집을 쓸 수 없습니다 (https 또는 localhost 필요) — 단독 편집으로 진행합니다',
-                }
-              : {
-                  kind: 'nohash',
-                  text: '이 환경에서는 실시간 보기를 쓸 수 없습니다 (https 또는 localhost 필요) — 파일만 보여줍니다',
-                },
-          )
+          setForceViewOnly(true)
+          setCollabNotice({
+            kind: 'noetag',
+            text: editing
+              ? '파일 정보를 확인하지 못했습니다 — 보기 전용으로 둡니다. 다시 연결하면 동시편집에 참가합니다'
+              : '파일 정보를 확인하지 못했습니다 — 파일만 보여줍니다. 다시 연결해 보세요',
+          })
         }
         return
       }
+      const knownHash = rawTag
       try {
         // 2) 서버가 staleness 를 판정한다(P0-2, viewer도 strict). stale 이면 붙지 않는다.
         const info = await collabApi.session(path, { knownHash, strict: true })
@@ -1827,10 +1850,14 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     })()
     return () => {
       dead = true
+      if (joinAgainTimerRef.current) {
+        clearTimeout(joinAgainTimerRef.current)
+        joinAgainTimerRef.current = null
+      }
     }
-    // content 는 deps 에 넣지 않는다(저장 후 raw 재수신으로 방에서 떨어지면 안 된다).
-    // 현재 바이트는 ref 로 읽는다.
-  }, [editing, path])
+    // etagProp(바이트와 같은 응답의 ETag)이 바뀌면 재참가한다.
+    // content 자체는 deps에 넣지 않는다(저장 후 raw 재수신으로 방에서 떨어지면 안 된다).
+  }, [editing, path, joinKey, etagProp])
   const [comments, setComments] = useState<XlsxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -2325,7 +2352,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             bytes={content}
             fileName={fileName}
             // X1c(P1): 방 판정이 끝날 때까지 편집을 막는다(먼저 입력한 내용의 유실 방지).
-            readOnly={!editing || connecting}
+            readOnly={!editing || connecting || forceViewOnly}
             showToolbar={editing}
             showFormulaBar={editing}
             theme={appTheme}
@@ -2366,6 +2393,16 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-3 rounded-md border border-border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm"
             >
               <span className="flex-1">{collabNotice.text}</span>
+              {collabNotice.kind === 'noetag' && (
+                <button
+                  type="button"
+                  data-testid="xlsx-reconnect"
+                  onClick={() => reconnectCollab()}
+                  className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted"
+                >
+                  다시 연결
+                </button>
+              )}
             </div>
           )}
           {editing && collabNotice && (
@@ -2374,6 +2411,16 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground shadow-sm"
             >
               <span className="flex-1">{collabNotice.text}</span>
+              {collabNotice.kind === 'noetag' && (
+                <button
+                  type="button"
+                  data-testid="xlsx-reconnect"
+                  onClick={() => reconnectCollab()}
+                  className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted"
+                >
+                  다시 연결
+                </button>
+              )}
               {conflictBytes && (
                 <button
                   type="button"
