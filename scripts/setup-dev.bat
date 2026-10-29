@@ -47,7 +47,7 @@ if defined PNPM_VER (
   echo   [+] pnpm is installed: %PNPM_VER%
   if not "%PNPM_VER:~0,2%"=="9." echo   [.] WARNING: repo requires pnpm 9.x - install step uses npx-pinned 9.15.0.
 ) else (
-  echo   [.] pnpm not found - install step uses npx-pinned 9.15.0 (no global install needed).
+  echo   [.] pnpm not found - install step uses npx-pinned 9.15.0, no global install needed.
 )
 
 REM OpenCode (optional)
@@ -160,7 +160,7 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 if not exist "frontend\node_modules\yjs\package.json" (
-  echo   [x] install incomplete: frontend\node_modules\yjs is missing (dev run will fail to resolve yjs).
+  echo   [x] install incomplete: frontend\node_modules\yjs is missing - dev run will fail to resolve yjs.
   echo       Re-run this script. If it persists, delete node_modules and frontend\node_modules, then re-run.
   exit /b 1
 )
