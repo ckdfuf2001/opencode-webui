@@ -299,7 +299,7 @@ test.describe('X0a: XLSX 동시편집', () => {
     }
   })
 
-  test('X0a-3: 디스크와 어긋난 방에는 붙지 않는다 (배너를 띄운다)', async ({ browser }) => {
+  test('X0a-3: 디스크와 어긋난 방에는 방 내용으로 참가하고 외부 배너를 띄운다 (C2-b)', async ({ browser }) => {
     const t = await twoPages(browser)
     const f = freshXlsx('x0a3', 0)
     try {
@@ -314,12 +314,13 @@ test.describe('X0a: XLSX 동시편집', () => {
       zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="900"><c r="A900" t="inlineStr"><is><t>ZZZ</t></is></c></row></sheetData>'))
       fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
 
-      // B 는 디스크의 새 파일을 읽는다. 방은 옛 해시라 붙으면 안 된다.
+      // B 는 디스크의 새 파일을 읽는다. 방(A 있음)은 옛 해시라 strict로는 막힌다.
+      // C2-b: 편집자가 있는 방은 strict 없이 참가해 방 내용을 따라가고 외부 배너를 띄운다.
       await t.pageB.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
       await openXlsxEditing(t.pageB, f.name)
-      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 20000, intervals: [500] }).toBe(false)
-      // 사용자에게 배너로 알려야 한다(조용히 solo 로 떨어지지 않는다).
-      await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toBeVisible({ timeout: 15000 })
+      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toContainText('외부', { timeout: 15000 })
+      await expect(t.pageB.getByText('단독')).toHaveCount(0)
     } finally {
       await t.ctxA.close()
       await t.ctxB.close()
@@ -580,11 +581,11 @@ test.describe('X0a: XLSX 동시편집', () => {
     }
   })
 
-  test('X0a-10: 동시편집 연결 대기 상한 — WebSocket 이 막히면 단독 편집으로 넘어간다', async ({ page }) => {
+  test('X0a-10: 연결 대기 상한 — WebSocket 이 막히면 보기 전용 + 다시 연결 (C2-b)', async ({ page }) => {
     const f = freshXlsx('x0a10', 0)
-    const stamp = `X10${Date.now().toString(36)}`
     // X1d(P0): /api/collab WebSocket 을 막는다(VPN/프록시 차단 환경 재현).
-    // session(HTTP) 은 통과하므로 방 판정은 "joining" 에 멈춘다 → 15초 상한 → 단독 전환.
+    // session(HTTP) 은 통과하므로 방 판정은 "joining" 에 멈춘다 → 15초 상한 → 보기 전용.
+    // C2-b: 서버가 살아 있는데 단독 편집으로 넘어가면 방과 갈라진다. 보기 전용으로 둔다.
     await page.routeWebSocket(/\/api\/collab/, (ws) => {
       // 서버에 연결하지 않는다(조용한 차단).
       ws.close()
@@ -596,15 +597,13 @@ test.describe('X0a: XLSX 동시편집', () => {
     await edit.click({ timeout: 20000 })
     // 연결 대기 배너가 먼저 보인다.
     await expect(page.getByTestId('xlsx-collab-connecting')).toBeVisible({ timeout: 10000 })
-    // 15초 상한: '연결 시간 초과' 배너로 넘어가고 대기 배너는 사라진다.
+    // 15초 상한: '연결 시간 초과' 배너 + 다시 연결 버튼. 대기 배너는 사라진다.
     await expect(page.getByTestId('xlsx-collab-banner')).toContainText('시간 초과', { timeout: 30000 })
     await expect(page.getByTestId('xlsx-collab-connecting')).toHaveCount(0)
-    // 단독 편집으로 저장한다(X1c 잠금이 그대로 적용된다).
-    await setCellByFormulaBar(page, 'B2', stamp)
-    await clickAppSave(page)
-    await expect
-      .poll(async () => (await workbookContains(f.abs, stamp)) ? stamp : '', { timeout: 25000, intervals: [500] })
-      .toBe(stamp)
+    await expect(page.getByTestId('xlsx-reconnect')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('xlsx-collab-banner')).not.toContainText('단독')
+    // 방에 붙지 못했다.
+    await expect.poll(async () => (await collabState(page)).active, { timeout: 5000, intervals: [500] }).toBe(false)
   })
 })
 

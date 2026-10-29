@@ -153,6 +153,16 @@ async function liveBytesContain(page: Page, needle: string): Promise<boolean> {
   return false
 }
 
+async function closeXlsxPreview(page: Page): Promise<void> {
+  const btn = page.locator('[aria-label="Close explorer"]')
+  if (await btn.count()) {
+    await btn.first().click({ timeout: 10000 })
+  } else {
+    await page.keyboard.press('Escape')
+  }
+  await expect.poll(async () => page.locator('.xlsxengine-host').count(), { timeout: 10000, intervals: [300] }).toBe(0)
+}
+
 test.describe('C2-a: non-secure context 참가', () => {
   test('C2-a: subtle 없이 2명이 같은 방에 참가하고 nohash 배너가 0회다', async ({ browser }) => {
     const t = await twoPagesNoSubtle(browser)
@@ -261,6 +271,95 @@ test.describe('C2-a: non-secure context 참가', () => {
       // 차단은 stale 판정이어야지 nohash 폴백이 아니다 (subtle 없이도 stale이 동작한다).
       await expect(t.pageB.getByText('https 또는 localhost')).toHaveCount(0)
       await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toContainText('낡았')
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+})
+
+test.describe('C2-b: stale 자동 복구', () => {
+  test('C2-b-1: stale_client는 다시 받아서 재참가한다', async ({ browser }) => {
+    const t = await twoPagesNoSubtle(browser)
+    const f = freshXlsx('c2b1', 0)
+    // session POST를 붙잡아 둔다. join effect가 멈춘 동안 디스크를 바꾼다.
+    let releaseSession!: () => void
+    const gate = new Promise<void>((r) => {
+      releaseSession = r
+    })
+    let sessionArrived = false
+    await t.pageA.route('**/api/collab/session', async (route) => {
+      sessionArrived = true
+      await gate
+      await route.continue()
+    })
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await expect.poll(() => sessionArrived, { timeout: 20000, intervals: [300] }).toBe(true)
+      // 디스크를 외부에서 바꾼다(유효한 xlsx 유지).
+      const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
+      const sheetName = Object.keys(zip.files).find((n) => n.startsWith('xl/worksheets/') && n.endsWith('.xml'))
+      expect(sheetName, 'worksheet entry missing').toBeTruthy()
+      const sheetXml = await zip.files[sheetName!].async('string')
+      zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="902"><c r="A902" t="inlineStr"><is><t>C2B1</t></is></c></row></sheetData>'))
+      fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
+      releaseSession()
+      // 낡은 ETag로는 stale_client → 자동 재수신 뒤 참가한다.
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      // 다시 받은 파일(외부 변경분)이 보인다.
+      await expect.poll(async () => liveBytesContain(t.pageA, 'C2B1'), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect(t.pageA.getByText('낡았')).toHaveCount(0)
+      await expect(t.pageA.getByText('단독')).toHaveCount(0)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C2-b-2: stale_room인데 편집자가 있으면 방에 참가하고 외부 배너가 뜬다', async ({ browser }) => {
+    const t = await twoPagesNoSubtle(browser)
+    const f = freshXlsx('c2b2', 0)
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      // 디스크를 외부에서 바꾼다.
+      const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
+      const sheetName = Object.keys(zip.files).find((n) => n.startsWith('xl/worksheets/') && n.endsWith('.xml'))
+      expect(sheetName, 'worksheet entry missing').toBeTruthy()
+      const sheetXml = await zip.files[sheetName!].async('string')
+      zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="903"><c r="A903" t="inlineStr"><is><t>C2B2</t></is></c></row></sheetData>'))
+      fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
+      // B는 새 디스크를 읽는다. 방(A 있음)은 옛 해시 → 방 내용으로 참가 + 외부 배너.
+      await openXlsxEditing(t.pageB, f.name)
+      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toContainText('외부', { timeout: 15000 })
+      await expect(t.pageB.getByText('단독')).toHaveCount(0)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C2-b-3: stale_room인데 방이 비어 있으면 서버가 리셋하고 참가한다', async ({ browser }) => {
+    const t = await twoPagesNoSubtle(browser)
+    const f = freshXlsx('c2b3', 0)
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      // A가 미리보기를 닫는다 (방은 TTL 30초 동안 비어 있다).
+      await closeXlsxPreview(t.pageA)
+      // 디스크를 외부에서 바꾼다.
+      const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
+      const sheetName = Object.keys(zip.files).find((n) => n.startsWith('xl/worksheets/') && n.endsWith('.xml'))
+      expect(sheetName, 'worksheet entry missing').toBeTruthy()
+      const sheetXml = await zip.files[sheetName!].async('string')
+      zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="904"><c r="A904" t="inlineStr"><is><t>C2B3</t></is></c></row></sheetData>'))
+      fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
+      // B는 빈 방을 서버가 리셋한 뒤 host로 참가한다. 배너 없이 열린다.
+      await openXlsxEditing(t.pageB, f.name)
+      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toHaveCount(0)
+      await expect(t.pageB.getByText('단독')).toHaveCount(0)
     } finally {
       await t.ctxA.close()
       await t.ctxB.close()
