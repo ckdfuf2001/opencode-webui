@@ -277,31 +277,8 @@ test.describe('C2-a: non-secure context 참가', () => {
     }
   })
 
-  test('C2-a-3: 디스크가 바뀐 뒤 ETag가 낡은 쪽은 차단된다 (X0a-3 유지)', async ({ browser }) => {
-    const t = await twoPagesNoSubtle(browser)
-    const f = freshXlsx('c2a3', 0)
-    try {
-      await openXlsxEditing(t.pageA, f.name)
-      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
-      // 디스크의 파일을 다른 내용으로 바꾼다(유효한 xlsx 로 유지).
-      const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
-      const sheetName = Object.keys(zip.files).find((n) => n.startsWith('xl/worksheets/') && n.endsWith('.xml'))
-      expect(sheetName, 'worksheet entry missing').toBeTruthy()
-      const sheetXml = await zip.files[sheetName!].async('string')
-      zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="901"><c r="A901" t="inlineStr"><is><t>C2A3</t></is></c></row></sheetData>'))
-      fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
-      // B는 디스크의 새 파일을 읽는다. 방은 옛 해시라 붙으면 안 된다(C2-b에서 자동 복구).
-      await openXlsxEditing(t.pageB, f.name)
-      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 20000, intervals: [500] }).toBe(false)
-      await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toBeVisible({ timeout: 15000 })
-      // 차단은 stale 판정이어야지 nohash 폴백이 아니다 (subtle 없이도 stale이 동작한다).
-      await expect(t.pageB.getByText('https 또는 localhost')).toHaveCount(0)
-      await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toContainText('낡았')
-    } finally {
-      await t.ctxA.close()
-      await t.ctxB.close()
-    }
-  })
+  // C2-a-3 삭제 (C2-b로 대체): stale 차단은 C2-b-2(편집자 있음→참가+배너)와
+  // C2-b-3(빈 방→서버 리셋 후 참가)이 계승한다. X0a-3(일반 환경)도 C2-b 규칙으로 개정했다.
 })
 
 test.describe('C2-c: owner 자동 저장', () => {
