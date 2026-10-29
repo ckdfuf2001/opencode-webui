@@ -814,11 +814,11 @@ test.describe('X2a: viewer 참가', () => {
       const sheetXml = await zip.files[sheetName!].async('string')
       zip.file(sheetName!, sheetXml.replace('</sheetData>', `<row r="902"><c r="A902" t="inlineStr"><is><t>${external}</t></is></c></row></sheetData>`))
       fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
-      // B 가 "보기"로 연다 → stale 이라 참가하지 않는다.
+      // B 가 "보기"로 연다 → C2-b: 편집자가 있는 stale 방에는 참가하고 외부 배너를 띄운다.
       await openXlsxFileOnly(t.pageB, f.name)
       await t.pageB.waitForSelector('xlsx-editor', { timeout: 20000 })
-      await expect(t.pageB.locator('[data-testid="xlsx-viewer-notice"]')).toBeVisible({ timeout: 25000 })
-      expect(await collabState(t.pageB)).toMatchObject({ active: false })
+      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect(t.pageB.locator('[data-testid="xlsx-viewer-notice"]')).toContainText('외부', { timeout: 15000 })
       // 파일은 보인다.
       await expect.poll(async () => liveHasCell(t.pageB), { timeout: 20000, intervals: [500] }).toBe(true)
     } finally {
