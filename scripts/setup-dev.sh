@@ -27,12 +27,12 @@ else
   exit 1
 fi
 
-# pnpm
+# pnpm 9.15.0 (repo packageManager pin; other majors change patch-hash layout).
+# The install step below is npx-pinned, so a global pnpm is not required.
 if command -v pnpm >/dev/null 2>&1; then
-  echo "  [+] pnpm is installed"
+  echo "  [+] pnpm is installed: $(pnpm --version 2>/dev/null || echo unknown)"
 else
-  echo "  [x] pnpm is NOT installed. Install it with: npm install -g pnpm"
-  exit 1
+  echo "  [.] pnpm not found - install step uses npx-pinned 9.15.0."
 fi
 
 # OpenCode (optional; start without a connection if not installed)
@@ -101,8 +101,14 @@ else
 fi
 
 echo
-echo "[3/7] Installing dependencies (pnpm install)..."
-pnpm install
+echo "[3/7] Installing dependencies (pnpm 9.15.0 --frozen-lockfile, NODE_ENV=development)..."
+export NODE_ENV=development
+npx --yes pnpm@9.15.0 install --frozen-lockfile
+if [ ! -f "frontend/node_modules/yjs/package.json" ]; then
+  echo "  [x] install incomplete: frontend/node_modules/yjs is missing (dev run will fail to resolve yjs)."
+  exit 1
+fi
+echo "  [+] dependencies installed (yjs present)"
 
 echo
 echo "[4/7] Installing Python conversion dependencies..."

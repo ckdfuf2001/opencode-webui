@@ -39,14 +39,15 @@ if %errorlevel%==0 (
   echo       Only required for dev:bun fallback. Install from https://bun.sh if needed.
 )
 
-REM pnpm
-where pnpm >nul 2>nul
-if %errorlevel%==0 (
-  echo   [+] pnpm is installed
+REM pnpm 9.15.0 (repo packageManager pin; other majors change patch-hash layout).
+REM The install step below is npx-pinned, so a global pnpm is not required.
+set "PNPM_VER="
+for /f "tokens=*" %%v in ('pnpm --version 2^>nul') do set "PNPM_VER=%%v"
+if defined PNPM_VER (
+  echo   [+] pnpm is installed: %PNPM_VER%
+  if not "%PNPM_VER:~0,2%"=="9." echo   [.] WARNING: repo requires pnpm 9.x - install step uses npx-pinned 9.15.0.
 ) else (
-  echo   [x] pnpm is NOT installed.
-  echo       Install it with: npm install -g pnpm
-  exit /b 1
+  echo   [.] pnpm not found - install step uses npx-pinned 9.15.0 (no global install needed).
 )
 
 REM OpenCode (optional)
@@ -151,12 +152,19 @@ echo   [.] Domain guide not found (docs\agent-domain-guide.md) - continuing.
 :global_agent_done
 
 echo.
-echo [3/7] Installing dependencies (pnpm install)...
-call pnpm install
+echo [3/7] Installing dependencies (pnpm 9.15.0 --frozen-lockfile, NODE_ENV=development)...
+set "NODE_ENV=development"
+call npx --yes pnpm@9.15.0 install --frozen-lockfile
 if %errorlevel% neq 0 (
   echo   [x] pnpm install failed.
   exit /b 1
 )
+if not exist "frontend\node_modules\yjs\package.json" (
+  echo   [x] install incomplete: frontend\node_modules\yjs is missing (dev run will fail to resolve yjs).
+  echo       Re-run this script. If it persists, delete node_modules and frontend\node_modules, then re-run.
+  exit /b 1
+)
+echo   [+] dependencies installed (yjs present)
 
 echo.
 echo [4/7] Installing Python conversion dependencies...
