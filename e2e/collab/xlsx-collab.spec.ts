@@ -409,13 +409,14 @@ test.describe('X0a: XLSX 동시편집', () => {
     }
   })
 
-  test('X0a-7: 해시를 계산할 수 없으면(fail-closed) 방에 붙지 않는다', async ({ browser }) => {
+  test('X0a-7: subtle 없이도(ETag) 방에 붙는다 (C2-a, fail-closed 폐지)', async ({ browser }) => {
     const t = await twoPages(browser, { noSubtle: true })
     const f = freshXlsx('x0a7', 0)
     try {
       await openXlsxEditing(t.pageA, f.name)
-      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 20000, intervals: [500] }).toBe(false)
-      await expect(t.pageA.locator('[data-testid="xlsx-collab-banner"]')).toBeVisible({ timeout: 15000 })
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      // nohash 폴백은 삭제됐다. https 문구가 뜨면 안 된다.
+      await expect(t.pageA.getByText('https 또는 localhost')).toHaveCount(0)
     } finally {
       await t.ctxA.close()
       await t.ctxB.close()
