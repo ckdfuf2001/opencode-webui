@@ -1618,9 +1618,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    * 마운트 시 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 먼저 입력이 사라질 수 있다.
    *
    * X1d(P0): 연결 대기에는 상한이 있다(15초). lib 가 `active` 를 알려줘야 readOnly 가
-   * 풀리므로, VPN/프록시 등으로 WebSocket 이 막긴 환경에서는 영원히 막힌다. 초과하면
-   * 단독 편집으로 넘어가며 배너("연결 시간 초과")를 띄운다 — 단독 전환이라 X1c 의
-   * If-Match 잠금이 그대로 적용되어 안전하다.
+   * 풀리므로, VPN/프록시 등으로 WebSocket 이 막힌 환경에서는 영원히 막힌다. 초과하면
+   * 보기 전용으로 두고 배너("연결 시간 초과") + "다시 연결"을 띄운다(C2-b).
    */
   const joining = !collabNotice && !(collab?.joined)
   // X2a-③ 후속: viewer 로 붙어 있어도 편집 잠금은 풀지 않는다. 편집 입력은
@@ -1637,6 +1636,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const [forceViewOnly, setForceViewOnly] = useState(false)
   /** C2-a: ETag 누락 시 부모 재수신 1회 + 재시도 타이머. */
   const etagRetryRef = useRef(false)
+  /** C2-b: stale_client 재수신 1회 플래그. */
+  const staleRetryRef = useRef(false)
   const joinAgainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onReloadFileRef = useRef(onRequestReload)
   onReloadFileRef.current = onRequestReload
@@ -1649,8 +1650,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const hadEditorsRef = useRef(false)
   const recheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
-   * X1d(P0): 연결 대기 상한(15초). 초과하면 단독 편집으로 전환한다 — 영원히 readOnly 로
-   * 남는 상태(WebSocket 차단 환경)를 막는다. notice('timeout') 가 뜨면 readOnly 가 풀린다.
+   * X1d(P0): 연결 대기 상한(15초). 초과하면 보기 전용 + "다시 연결"(C2-b).
+   * 서버가 살아 있는데 단독 편집으로 넘어가면 방과 갈라지므로 금지한다.
    * X2a-③: 보기 모드도 같은 상한을 쓴다(텍스트만 viewing 용).
    */
   useEffect(() => {
@@ -1670,9 +1671,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         return
       }
       setCollab(null)
+      // C2-b: 상한을 넘기면 보기 전용으로 둔다(서버가 살아 있는데 단독 편집하면 방과 갈라진다).
+      setForceViewOnly(true)
       setCollabNotice({
         kind: 'timeout',
-        text: '동시편집 연결 시간 초과 — 단독 편집으로 진행합니다. 저장이 막히면 배너로 알려 줍니다',
+        text: '동시편집 연결 시간 초과 — 보기 전용으로 둡니다. 다시 연결해 보세요',
       })
     }, 15000)
     return () => clearTimeout(t)
@@ -1740,6 +1743,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   /** C2-a: ETag 재수신 + 방 재참가. */
   const reconnectCollab = useCallback(() => {
     etagRetryRef.current = false
+    staleRetryRef.current = false
     setForceViewOnly(false)
     setCollabNotice(null)
     onReloadFileRef.current?.()
@@ -1769,6 +1773,10 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       if (!rawTag) {
         // ETag가 없으면 파일을 한 번 다시 받는다. 그래도 없으면 보기 전용으로 두고
         // "다시 연결" 버튼을 띄운다(단독 편집으로 넘어가지 않는다).
+        // 다른 join 시도가 복구 중이면(타이머 대기) 조용히 둔다. 재시도 rerun이 판정한다.
+        if (joinAgainTimerRef.current) {
+          return
+        }
         if (!etagRetryRef.current) {
           etagRetryRef.current = true
           onReloadFileRef.current?.()
@@ -1791,27 +1799,75 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       }
       const knownHash = rawTag
       try {
-        // 2) 서버가 staleness 를 판정한다(P0-2, viewer도 strict). stale 이면 붙지 않는다.
+        // 2) 서버가 staleness 를 판정한다(P0-2, viewer도 strict).
         const info = await collabApi.session(path, { knownHash, strict: true })
         if (dead) return
         if (info.stale) {
+          // C2-b: stale_client는 파일을 다시 받아서 1회 재참가한다.
+          // 다른 join 시도가 복구 중이면(타이머 대기) 조용히 둔다. 재시도 rerun이 판정한다.
+          if (joinAgainTimerRef.current) {
+            return
+          }
+          if (info.code === 'stale_client' && !staleRetryRef.current) {
+            staleRetryRef.current = true
+            onReloadFileRef.current?.()
+            // etag prop이 바뀌면 effect가 다시 돈다. 바뀌지 않아도 타이머가 한 번 더 돌린다.
+            joinAgainTimerRef.current = setTimeout(() => {
+              joinAgainTimerRef.current = null
+              setJoinKey((k) => k + 1)
+            }, 4000)
+            return
+          }
+          // C2-b: stale_room인데 방이 살아 있으면 strict 없이 참가해 방 내용을 따라간다.
+          // (빈 방은 서버가 디스크 기준으로 리셋했으므로 stale이 오지 않는다.)
+          if (info.code === 'stale_room') {
+            try {
+              const info2 = await collabApi.session(path)
+              if (dead) return
+              if (!info2.stale) {
+                const me = readCollabUser()
+                setForceViewOnly(false)
+                setCollab({
+                  roomId: info2.roomId,
+                  baseHash: info2.lastHash,
+                  serverUrl: collabServerUrl(),
+                  user: {
+                    name: me?.name?.trim() || 'user',
+                    color: me?.color || '#2563eb',
+                    id: me?.id,
+                    role: role === 'viewer' ? ('viewer' as const) : ('collaborator' as const),
+                  },
+                  role,
+                  joined: false,
+                })
+                setCollabNotice({
+                  kind: 'external',
+                  text: editing
+                    ? '외부에서 변경된 내용이 공유 방에 있습니다 — 방 내용을 따라갑니다'
+                    : '외부에서 변경된 내용이 있어 방 내용을 따라갑니다',
+                })
+                return
+              }
+            } catch {
+              // 아래 폴백으로 떨어진다.
+            }
+          }
+          if (dead) return
+          // 복구 불가: 보기 전용으로 두고 "다시 연결" 버튼을 띄운다.
           setCollab(null)
-          setCollabNotice(
-            editing
-              ? {
-                  kind: 'stale',
-                  text: '파일이 변경되어 공유 상태가 낡았습니다 — 단독 편집으로 진행합니다',
-                }
-              : {
-                  kind: 'stale',
-                  text: '공유 상태가 낡아 실시간 보기를 시작할 수 없습니다 — 파일만 보여줍니다',
-                },
-          )
+          setForceViewOnly(true)
+          setCollabNotice({
+            kind: 'stale',
+            text: editing
+              ? '공유 상태가 낡았습니다 — 다시 연결하면 복구를 시도합니다'
+              : '공유 상태가 낡아 실시간 보기를 시작할 수 없습니다',
+          })
           return
         }
         const me = readCollabUser()
         // X1c(P1): joined=false 로 시작한다 — lib 이 방에 붙고 문서를 적용하면
         // onCollaborationChange(active) 에서 joined=true 로 열린다.
+        setForceViewOnly(false)
         setCollab({
           roomId: info.roomId,
           baseHash: info.lastHash,
@@ -1831,19 +1887,37 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         setCollabNotice(null)
       } catch (e) {
         if (dead) return
-        // 방을 못 만들어도 (solo 편집 / 파일 보기)는 계속된다.
         setCollab(null)
+        // C2-b: 서버 자체에 닿지 못한 경우(응답 없음)에만 단독 편집을 허용한다(If-Match 잠금 유지).
+        // 서버가 응답한 실패는 보기 전용으로 둔다.
+        const axiosErr = e as { isAxiosError?: boolean; response?: unknown } | null
+        const offline = !!axiosErr && axiosErr.isAxiosError === true && axiosErr.response == null
+        if (offline) {
+          setCollabNotice(
+            editing
+              ? {
+                  kind: 'error',
+                  text: '서버에 연결할 수 없습니다 — 오프라인으로 편집합니다. 연결되면 다시 연결하세요',
+                }
+              : {
+                  kind: 'error',
+                  text: '서버에 연결할 수 없습니다 — 파일만 보여줍니다',
+                },
+          )
+          return
+        }
+        setForceViewOnly(true)
         setCollabNotice(
           editing
             ? {
                 kind: 'error',
-                text: `동시편집 연결 실패 — 단독 편집으로 진행합니다${
+                text: `동시편집 연결에 실패했습니다 — 보기 전용으로 둡니다${
                   e instanceof Error ? ` (${e.message})` : ''
                 }`,
               }
             : {
                 kind: 'error',
-                text: '실시간 보기 연결 실패 — 파일만 보여줍니다',
+                text: '실시간 보기 연결에 실패했습니다 — 파일만 보여줍니다',
               },
         )
       }
@@ -2393,7 +2467,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-3 rounded-md border border-border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm"
             >
               <span className="flex-1">{collabNotice.text}</span>
-              {collabNotice.kind === 'noetag' && (
+              {[('noetag' as const), ('stale' as const), ('timeout' as const), ('error' as const)].includes(
+                collabNotice.kind as 'noetag' | 'stale' | 'timeout' | 'error',
+              ) && (
                 <button
                   type="button"
                   data-testid="xlsx-reconnect"
@@ -2411,7 +2487,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground shadow-sm"
             >
               <span className="flex-1">{collabNotice.text}</span>
-              {collabNotice.kind === 'noetag' && (
+              {[('noetag' as const), ('stale' as const), ('timeout' as const), ('error' as const)].includes(
+                collabNotice.kind as 'noetag' | 'stale' | 'timeout' | 'error',
+              ) && (
                 <button
                   type="button"
                   data-testid="xlsx-reconnect"

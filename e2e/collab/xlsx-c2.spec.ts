@@ -153,6 +153,13 @@ async function liveBytesContain(page: Page, needle: string): Promise<boolean> {
   return false
 }
 
+/** 편집 종료(Done). */
+async function clickDone(page: Page): Promise<void> {
+  const done = page.getByRole('button', { name: 'Done', exact: true })
+  await done.waitFor({ timeout: 20000 })
+  await done.click({ timeout: 20000 })
+}
+
 async function closeXlsxPreview(page: Page): Promise<void> {
   const btn = page.locator('[aria-label="Close explorer"]')
   if (await btn.count()) {
@@ -282,29 +289,36 @@ test.describe('C2-b: stale 자동 복구', () => {
   test('C2-b-1: stale_client는 다시 받아서 재참가한다', async ({ browser }) => {
     const t = await twoPagesNoSubtle(browser)
     const f = freshXlsx('c2b1', 0)
-    // session POST를 붙잡아 둔다. join effect가 멈춘 동안 디스크를 바꾼다.
-    let releaseSession!: () => void
-    const gate = new Promise<void>((r) => {
-      releaseSession = r
-    })
-    let sessionArrived = false
+    // 첫 session POST가 오면 그 자리에서 디스크를 바꾼다(1초 이내, axios 15초 상한 이내).
+    // loaded ETag(E1) vs disk(E2) → stale_client → 자동 재수신 → 재참가.
+    let patched = false
     await t.pageA.route('**/api/collab/session', async (route) => {
-      sessionArrived = true
-      await gate
+      if (!patched) {
+        patched = true
+        const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
+        const sheetName = Object.keys(zip.files).find((n) => n.startsWith('xl/worksheets/') && n.endsWith('.xml'))
+        expect(sheetName, 'worksheet entry missing').toBeTruthy()
+        const sheetXml = await zip.files[sheetName!].async('string')
+        zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="902"><c r="A902" t="inlineStr"><is><t>C2B1</t></is></c></row></sheetData>'))
+        fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
+      }
       await route.continue()
     })
     try {
       await openXlsxEditing(t.pageA, f.name)
-      await expect.poll(() => sessionArrived, { timeout: 20000, intervals: [300] }).toBe(true)
-      // 디스크를 외부에서 바꾼다(유효한 xlsx 유지).
-      const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
-      const sheetName = Object.keys(zip.files).find((n) => n.startsWith('xl/worksheets/') && n.endsWith('.xml'))
-      expect(sheetName, 'worksheet entry missing').toBeTruthy()
-      const sheetXml = await zip.files[sheetName!].async('string')
-      zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="902"><c r="A902" t="inlineStr"><is><t>C2B1</t></is></c></row></sheetData>'))
-      fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
-      releaseSession()
       // 낡은 ETag로는 stale_client → 자동 재수신 뒤 참가한다.
+      // 진단 덤프(단언 아님): 재참가 경로의 배너 원문을 확인하려고 남긴다.
+      await expect
+        .poll(
+          async () =>
+            ((await collabState(t.pageA)).active ? 'active' : '') +
+            ((await t.pageA.locator('[data-testid="xlsx-collab-banner"]').count()) > 0 ? 'banner' : ''),
+          { timeout: 25000, intervals: [500] },
+        )
+        .not.toBe('')
+      const diagBanner = await t.pageA.locator('[data-testid="xlsx-collab-banner"]').first().textContent().catch(() => null)
+      const diagNotice = await t.pageA.locator('[data-testid="xlsx-viewer-notice"]').first().textContent().catch(() => null)
+      console.log('C2B1_DIAG ' + JSON.stringify({ banner: diagBanner, notice: diagNotice }))
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       // 다시 받은 파일(외부 변경분)이 보인다.
       await expect.poll(async () => liveBytesContain(t.pageA, 'C2B1'), { timeout: 30000, intervals: [500] }).toBe(true)
@@ -346,7 +360,9 @@ test.describe('C2-b: stale 자동 복구', () => {
     try {
       await openXlsxEditing(t.pageA, f.name)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
-      // A가 미리보기를 닫는다 (방은 TTL 30초 동안 비어 있다).
+      // A가 편집을 끝내고(→viewer 재참가) 미리보기를 닫는다 (방은 TTL 30초 동안 비어 있다).
+      await clickDone(t.pageA)
+      await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
       await closeXlsxPreview(t.pageA)
       // 디스크를 외부에서 바꾼다.
       const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
