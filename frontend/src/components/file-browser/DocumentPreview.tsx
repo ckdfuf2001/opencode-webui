@@ -47,6 +47,39 @@ const CONVERTABLE_CLIENT_KINDS = new Set<DocKind>(['pdf', 'docx', 'xlsx', 'pptx'
  */
 const XLSX_SAVE_CLIENT_ID = 0
 
+/**
+ * C1: lib collaborationState.people 항목 (패치된 ooxml-ui가 role+sheet+range를 싣는다).
+ * PPT의 usePeers와 같은 마크업으로 아래 presence 바에 그린다.
+ */
+interface XlsxPresencePerson {
+  clientId: number
+  name: string
+  color: string
+  self: boolean
+  userId?: string
+  role?: string
+  sheet?: string
+  range?: string
+  sheetIndex?: number
+}
+
+/** C1: people 비교. heartbeat 재게시(10초)로 내용이 같아도 새 배열이 오므로 필드 단위로 본다. */
+function sameXlsxPeople(a: XlsxPresencePerson[], b: XlsxPresencePerson[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!
+    const y = b[i]!
+    if (
+      x.clientId !== y.clientId || x.name !== y.name || x.color !== y.color ||
+      x.self !== y.self || x.userId !== y.userId || x.role !== y.role ||
+      x.sheet !== y.sheet || x.range !== y.range || x.sheetIndex !== y.sheetIndex
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 const SPINNER = (
   <div className="flex items-center justify-center py-12">
     <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
@@ -1535,6 +1568,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     select?: (ref: string) => void
     setActiveSheet?: (index: number) => void
     getSelection?: () => string
+    /** C1: 참가자 표시용 신원 갱신 (빈 이름이면 false). */
+    updateCollabIdentity?: (patch: { name?: string; color?: string }) => boolean
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
   // X1c(P0): 단독 저장의 잠금 ETag. 파일을 **읽은 시점**의 값부터 시작해,
@@ -1563,7 +1598,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     roomId: string
     baseHash: string
     serverUrl: string
-    user: { name: string; color: string; id?: string }
+    user: { name: string; color: string; id?: string; role?: 'collaborator' | 'viewer' }
     /** X2a-③: 참가 역할. 보기 모드도 방에 참가한다(presence만, 문서는 방이 이긴다). */
     role: 'edit' | 'viewer'
     /**
@@ -1594,6 +1629,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   /** X2a-③: viewer가 방 내용을 따라가도록 에디터를 다시 마운트한 세대. key 에 들어간다. */
   const [viewerGen, setViewerGen] = useState(0)
   const selfClientIdRef = useRef<number | null>(null)
+  const [xlsxPeople, setXlsxPeople] = useState<XlsxPresencePerson[]>([])
+  /** C1: 따라가는 상대 clientId. setActiveSheet로만 이동한다(select 금지). */
+  const [xlsxFollowId, setXlsxFollowId] = useState<number | null>(null)
+  /** C1: 팔로우 이동(프로그램 이동) 중에는 이동 콜백을 제외한다. */
+  const followNavigatingRef = useRef(false)
   const hadEditorsRef = useRef(false)
   const recheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
@@ -1633,6 +1673,46 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   contentRef.current = content
   const xlsxHandleRef = useRef(xlsxHandle)
   xlsxHandleRef.current = xlsxHandle
+  /**
+   * C1: 다른 뷰어(같은 탭의 PPT 바 등)에서 신원을 바꾸면 lib 세션 신원도 갱신한다.
+   * updateCollabIdentity는 identity 원본을 고치고 presence로 즉시 알린다(빈 이름 저장 금지).
+   */
+  useEffect(() => {
+    const onUserChanged = (): void => {
+      try {
+        const me = readCollabUser()
+        if (!me) return
+        xlsxHandleRef.current?.updateCollabIdentity?.({ name: me.name, color: me.color })
+      } catch {
+        /* 무시 */
+      }
+    }
+    window.addEventListener('collab-user-changed', onUserChanged)
+    return () => window.removeEventListener('collab-user-changed', onUserChanged)
+  }, [])
+  /**
+   * C1: 팔로우 — 따라가는 상대의 시트로 이동한다.
+   * - select()는 쓰지 않는다(내 선택을 바꾸면 상대 화면에 내 커서가 튀고 루프가 된다).
+   * - setActiveSheet로 시트만 옮긴다. 상대 범위는 lib 원격 선택 표시가 그린다.
+   * - 프로그램 이동 중(followNavigatingRef)에는 이동 콜백을 제외한다.
+   */
+  const followSheetIndex = xlsxFollowId == null
+    ? undefined
+    : xlsxPeople.find((p) => p.clientId === xlsxFollowId && !p.self)?.sheetIndex
+  useEffect(() => {
+    if (xlsxFollowId == null || typeof followSheetIndex !== 'number') return
+    if (followNavigatingRef.current) return
+    followNavigatingRef.current = true
+    try {
+      xlsxHandleRef.current?.setActiveSheet?.(followSheetIndex)
+    } catch {
+      /* 무시 */
+    }
+    const t = setTimeout(() => {
+      followNavigatingRef.current = false
+    }, 500)
+    return () => clearTimeout(t)
+  }, [xlsxFollowId, followSheetIndex])
   /**
    * X1c(P0-2): 실패한 저장 바이트를 한 개만 보관한다(D27).
    * 어떤 실패(외부 변경·방 없음·네트워크·413·재시도 실패)든 사용자가 내려받을 수 있어야 한다.
@@ -1715,11 +1795,12 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           serverUrl: collabServerUrl(),
           // X2a: 브라우저별 collab-user id를 lib에 넘긴다(presence userId → 서버 묶기 키).
           // viewer 는 role:'viewer' 로 참가한다(문서를 seed 하지 않는다).
+          // C1: 편집자는 role:'collaborator' 를 명시한다(people 표시·lib 쓰기 판정의 근거).
           user: {
             name: me?.name?.trim() || 'user',
             color: me?.color || '#2563eb',
             id: me?.id,
-            ...(role === 'viewer' ? { role: 'viewer' as const } : {}),
+            role: role === 'viewer' ? ('viewer' as const) : ('collaborator' as const),
           },
           role,
           joined: false,
@@ -2128,6 +2209,102 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               동시편집 연결 중 — 판정이 끝나면 편집이 열립니다
             </div>
           )}
+          {collab && xlsxPeople.length > 0 && (
+            // C1: 통합 presence 바. PPT의 CollabPresence와 같은 testid·마크업이다.
+            // 팔로우 이동은 setActiveSheet로만 한다(select()로 내 선택을 바꾸지 않는다).
+            <div data-testid="collab-presence">
+              <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
+                {(['view', 'edit'] as const).map((mode, gi) => {
+                  const group = xlsxPeople.filter(
+                    (p) => !p.self && (p.role === 'viewer' ? 'view' : 'edit') === mode,
+                  )
+                  return (
+                    <span key={mode} className="inline-flex items-center gap-1 shrink-0">
+                      {gi > 0 && <span className="mx-1">·</span>}
+                      <span className="font-medium">{mode === 'view' ? 'viewer' : 'editor'} -</span>
+                      {group.map((p) => {
+                        const following = xlsxFollowId === p.clientId
+                        const where = typeof p.sheetIndex === 'number' && typeof p.range === 'string'
+                          ? `시트 ${p.sheetIndex + 1} · ${p.range}`
+                          : undefined
+                        return (
+                          <button
+                            key={p.clientId}
+                            type="button"
+                            data-testid="collab-peer"
+                            data-peer-id={String(p.clientId)}
+                            data-mode={mode}
+                            {...(typeof p.sheetIndex === 'number' ? { 'data-sheet-index': p.sheetIndex } : {})}
+                            {...(typeof p.range === 'string' ? { 'data-range': p.range } : {})}
+                            data-self="false"
+                            data-following={following ? 'true' : 'false'}
+                            title={following ? `${p.name} 팔로우 중 (클릭하면 해제)` : `${p.name} 팔로우`}
+                            aria-pressed={following}
+                            onClick={() => setXlsxFollowId((prev) => (prev === p.clientId ? null : p.clientId))}
+                            className={`inline-flex items-center gap-1 shrink-0 hover:text-foreground${
+                              following ? ' underline decoration-dotted underline-offset-2' : ''
+                            }`}
+                          >
+                            <span
+                              className="inline-block w-2 h-2 rounded-full"
+                              style={{ border: `1.5px solid ${p.color}` }}
+                            />
+                            <span>
+                              {p.name}
+                              {where ? ` · ${where}` : ''}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </span>
+                  )
+                })}
+                {(() => {
+                  const followed = xlsxFollowId == null
+                    ? undefined
+                    : xlsxPeople.find((p) => p.clientId === xlsxFollowId)
+                  if (!followed) return null
+                  return (
+                    <span
+                      data-testid="collab-following"
+                      className="inline-flex items-center gap-1 shrink-0 text-foreground"
+                    >
+                      <span className="truncate max-w-[120px]">{followed.name}</span>
+                      <button
+                        type="button"
+                        data-testid="collab-follow-stop"
+                        title="팔로우 해제"
+                        onClick={() => setXlsxFollowId(null)}
+                        className="underline underline-offset-2 hover:text-muted-foreground"
+                      >
+                        해제
+                      </button>
+                    </span>
+                  )
+                })()}
+                {(() => {
+                  const me = xlsxPeople.find((p) => p.self)
+                  if (!me) return null
+                  return (
+                    <span className="inline-flex items-center gap-1 shrink-0 ml-auto">
+                      <span
+                        className="inline-block w-2 h-2 rounded-full"
+                        style={{ backgroundColor: me.color }}
+                      />
+                      <span
+                        data-testid="collab-peer"
+                        data-peer-id={String(me.clientId)}
+                        data-mode={me.role === 'viewer' ? 'view' : 'edit'}
+                        data-self="true"
+                        className="hidden"
+                      />
+                      나: {me.name}
+                    </span>
+                  )
+                })()}
+              </div>
+            </div>
+          )}
           <div
             // X2a-③ 후속: 연결 판정이 끝날 때까지 에디터를 숨긴다(display:none).
             // lib readOnly 는 DOM 입력을 막지 못해 programmatic fill 이 통과하고,
@@ -2163,6 +2340,18 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               // X2a-③: 저장에 쓸 lib clientId 를 기억한다(viewer 403 확인용).
               const self = state.people.find((p) => p.self)
               if (self) selfClientIdRef.current = self.clientId
+              // C1: presence 바 표시용. 바뀌었을 때만 갱신한다(heartbeat 재게시 리렌더 방지).
+              setXlsxPeople((prev) => {
+                const next = (state.people ?? []) as XlsxPresencePerson[]
+                if (sameXlsxPeople(prev, next)) return prev
+                return next
+              })
+              // C1: 따라가던 상대가 나가면 팔로우를 해제한다.
+              setXlsxFollowId((prev) => {
+                if (prev == null) return prev
+                const still = (state.people ?? []).some((p) => !p.self && p.clientId === prev)
+                return still ? prev : null
+              })
               // X2a-③: viewer 는 방 참가자 변화를 따라간다(리마운트·코멘트 게이트).
               if (!editingRef.current) void refreshViewerRoom()
             }}
