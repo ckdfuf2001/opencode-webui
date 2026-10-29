@@ -148,27 +148,31 @@ export function CollabPresenceBar({ peers, defaultOpen = false, followId = null,
 
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      const el = e.target as HTMLElement | null
-      if (el?.closest?.('[data-testid="collab-popover"], [data-testid="collab-avatars"]')) return
-      setOpen(false)
-    }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setOpen(false)
     }
-    document.addEventListener('mousedown', onDown)
+    // keydown(Esc)은 버블 단계에서 듣는다. 이름 입력칸의 Esc가 stopPropagation으로
+    // 팝오버 닫기를 막을 수 있게 하기 위해서다.
+    // 바깥 클릭은 아래 투명 오버레이가 받는다 (lib 그리드가 DOM 이벤트를 가로채도 닫힌다).
     document.addEventListener('keydown', onKey)
     return () => {
-      document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open ])
+  }, [open])
 
   return (
     <div data-testid="collab-presence-bar" className="relative flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
       <NowProvider active={false}>
         <PresenceAvatars peers={shown} extra={extra} open={open} onToggle={() => setOpen((v) => !v)} />
       </NowProvider>
+      {open && (
+        <div
+          data-testid="collab-popover-backdrop"
+          aria-hidden="true"
+          onClick={() => setOpen(false)}
+          className="fixed inset-0 z-40 cursor-default"
+        />
+      )}
       {open && (
         <div
           data-testid="collab-popover"
