@@ -1,4 +1,5 @@
 import JSZip from 'jszip'
+import { guid } from '@/lib/ooxmlGuid'
 import { XMLParser } from 'fast-xml-parser'
 
 /**
@@ -24,18 +25,6 @@ const parser = new XMLParser({
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-/**
- * OOXML GUID `{8-4-4-4-12}` (대문자).
- * 내장 UUID API는 secure context 전용이라 http에서는 undefined다.
- * getRandomValues는 비보안 컨텍스트에서도 동작하므로 UUIDv4를 직접 만든다.
- */
-const guid = (): string => {
-  const h = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) =>
-    x.toString(16).padStart(2, '0'),
-  ).join('')
-  const v = `${h.slice(0, 12)}4${h.slice(13, 16)}${'89ab'[h.charCodeAt(16) % 4]}${h.slice(17)}`
-  return `{${v.slice(0, 8)}-${v.slice(8, 12)}-${v.slice(12, 16)}-${v.slice(16, 20)}-${v.slice(20)}}`.toUpperCase()
-}
 
 const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const P188_NS = 'http://schemas.microsoft.com/office/powerpoint/2018/8/main'
