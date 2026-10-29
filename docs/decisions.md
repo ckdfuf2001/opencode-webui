@@ -539,6 +539,35 @@
   · 0b0e354(ooxml-core 패치) · 1f330ef(ooxml-ui 패치) · 3c1610d(앱 user.id 전달)
   · c0783ad(rooms `seeded`) · 40d2605(X2a-③ 테스트) · d4733ee(X2a-③ 구현) · 9334d5a(X-M6 개정)
 
+## D49 접속자 표시는 하나로 통일한다 (C1, 2026-10-29)
+- **단일 출처**: `frontend/src/components/collab/CollabPresence.tsx`가 참가자 표시의
+  단일 출처다. PPT(`PptxViewer`)는 기존 칩(NowProvider·chip·self marker)을 그대로 옮겨
+  쓰고, 바깥에 `collab-presence` 셸을 둔다(기존 `collab-presence-bar`는 E11m 회귀 때문에
+  안쪽에 유지). XLSX(`DocumentPreview`)는 같은 testid·마크로 바를 그린다.
+- **금지**: 팔로우 이동에 `select()`를 쓰지 않는다(내 선택을 바꾸면 상대 화면에 내 커서가
+  튀고 루프가 된다). XLSX는 `setActiveSheet`로 시트만 옮긴다. 상대 범위는 lib 원격
+  선택 표시가 그린다. 프로그램 이동 중에는 `followNavigatingRef`로 이동 콜백을 제외한다.
+- **people이 운반한다**: 패치된 ooxml-ui `state().people` 항목은
+  `role`+`sheet`(공유 키)+`range`(A1)+`sheetIndex`(로컬 해석)를 싣는다.
+  `role`은 lib `CollaborationRole` 그대로(앱이 edit→`collaborator`, view→`viewer`로 넘긴다).
+  서버 저장 판정(`collab-rooms.ts` 403 view_only)은 role이 있을 때도 그대로 동작한다.
+- **신원 갱신은 원본을 고친다**: `updateCollabIdentity({name,color})`는
+  `session.identity` 원본을 고치고 `updatePresence`로 즉시 알린다(스로틀 적용).
+  빈 이름은 저장하지 않고 `false`를 돌려준다. 앱은 `collab-user-changed`를 들으면
+  lib 세션에 반영한다(리마운트 없음).
+- **seeder 공백**(실측): 참가 직후 게시는 shared.sheets가 준비되기 전이라 sheetKey가
+  풀리지 않아 조용히 버려진다. seeder는 synced 때도 아직 비어 있다(ready/settle 뒤에
+  채워진다). ⇒ `peers`·`synced`·`ready` 때 현재 선택을 다시 게시한다.
+  `publish`는 값이 같으면 no-op이라 반복해도 브로드캐스트가 나가지 않는다.
+  근거: P-2 red→green (seeder self에 sheet 없음 → peers+ready 재게시 후 `zyolen-0/A1/0` 확인).
+- **패치 범위**: ooxml-ui `dist/xlsx.js` 1파일 5 hunk(표식·재게시·updateCollabIdentity·
+  state·element). d.ts는 손대지 않는다(앱은 구조적 타입으로 읽는다).
+- 관련 커밋: 6405a89(C1 red P-1~P-4) · 1d27f6c(공유 컴포넌트+PPT) ·
+  2f2e0f0(people·updateCollabIdentity) · 53e81ec(peers·ready 재게시) ·
+  cffb58d(XLSX 바·follow·identity sync) · cc9443a(allowlist 경로)
+- **베이스라인**: 모바일 E11m/E1m·E2m·E3m 3건 실패는 v0.12.70 대조 때와 같은 기존 실패다.
+  이번 실패 지점은 `gotoSlide` 썸네일 버튼 타임아웃으로 presence 래핑과 무관하다.
+
 ## 미결정 (사용자 판단 대기)
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
 - Q02 v0.13에서 이미지를 part 참조로 전환할지(Y.Doc 크기·전송량 문제, W3 측정 선행).

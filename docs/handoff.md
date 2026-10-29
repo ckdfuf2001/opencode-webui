@@ -752,3 +752,17 @@ E21만의 문제가 아니다. 근거:
 - clean install(`NODE_ENV=development`, `npx --yes pnpm@9.15.0 install --frozen-lockfile`,
   EXIT=0): 패치 해시 디렉터리 유지, 표식 4종 런타임 확인(M21·M21-esm은 E2f-strict 의
   openFile 단언, X2a-core-esm·X2a-ui는 X2a-1 단언).
+
+## C1 접속자 표시 통일 (2026-10-29, release-0.12)
+
+- red: e2e/collab/presence.spec.ts P-1~P-4 (testMatch 등록). P-1/P-4 red 원문 확보
+  (collab-presence 없음 / 표식 null), P-2/P-3은 구조상 red(people에 role 없음·바 없음).
+- 구현: 1d27f6c(공유 CollabPresence + PPT 셸) · 2f2e0f0(patch people·updateCollabIdentity)
+  · 53e81ec(peers·ready 재게시, seeder 공백) · cffb58d(XLSX 바·follow·identity sync)
+  · cc9443a(allowlist 경로). ooxml-ui dist/xlsx.js 5 hunk, 단일 복사본 기준
+  ooxml-ui@1.8.0_patch_hash=oztj7diw66m2zwxeaqluw57q7y_three@0.186.1.
+- green: presence.spec.ts 4 passed (chromium, 44.2s). 회귀 X2a-1·X2a-5 2 passed,
+  PPT E1(desktop) 1 passed. 모바일 E11m 3건 실패는 베이스라인 기존 실패와 동일
+  (gotoSlide 썸네일 타임아웃, presence와 무관).
+- 게이트: frontend tsc 0, check:memory 오류 0/경고 1(D36), check:encoding 0(경고 1 기존).
+- 결정: D49. v0.13 이월 없음(남은 것은 태그 전 사용자 수동 체크 ①-⑤).
