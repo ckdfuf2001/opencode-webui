@@ -133,6 +133,20 @@ async function setCellByFormulaBar(page: Page, ref: string, value: string): Prom
     .toBe(true)
 }
 
+/** 저장된 xlsx(zip) 안의 XML 어디에든 문자열이 들어 있는가. */
+async function workbookContains(absPath: string, needle: string): Promise<boolean> {
+  if (!fs.existsSync(absPath)) return false
+  const buf = fs.readFileSync(absPath)
+  const zip = await JSZip.loadAsync(buf)
+  for (const name of Object.keys(zip.files)) {
+    const entry = zip.files[name]
+    if (entry.dir || !name.endsWith('.xml')) continue
+    const xml = await entry.async('string')
+    if (xml.includes(needle)) return true
+  }
+  return false
+}
+
 /** viewer 화면 내용은 공개 element 메서드 saveBytes() + zip XML 로 읽는다. */
 async function liveBytesContain(page: Page, needle: string): Promise<boolean> {
   const b64 = await page.evaluate(async () => {
@@ -278,6 +292,51 @@ test.describe('C2-a: non-secure context 참가', () => {
       // 차단은 stale 판정이어야지 nohash 폴백이 아니다 (subtle 없이도 stale이 동작한다).
       await expect(t.pageB.getByText('https 또는 localhost')).toHaveCount(0)
       await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toContainText('낡았')
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+})
+
+test.describe('C2-c: owner 자동 저장', () => {
+  test('C2-c: 두 편집자가 있어도 한 번에 한 명만 저장하고, owner가 나가면 위임된다', async ({ browser }) => {
+    const t = await twoPagesNoSubtle(browser)
+    const f = freshXlsx('c2c', 0)
+    const stampA = `C2CA${Date.now().toString(36)}`
+    const stampB = `C2CB${Date.now().toString(36)}`
+    const stampC = `C2CC${Date.now().toString(36)}`
+    let postA = 0
+    let postB = 0
+    t.pageA.on('request', (r) => {
+      if (r.url().includes('/api/collab/save') && r.method() === 'POST') postA += 1
+    })
+    t.pageB.on('request', (r) => {
+      if (r.url().includes('/api/collab/save') && r.method() === 'POST') postB += 1
+    })
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageB, f.name)
+      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      // 둘 다 편집한다 (수동 Save는 누르지 않는다).
+      await setCellByFormulaBar(t.pageA, 'B2', stampA)
+      await setCellByFormulaBar(t.pageB, 'C2', stampB)
+      // owner 한 명의 자동 저장으로 둘 다 디스크에 남는다. POST는 1건이다.
+      await expect
+        .poll(async () => ((await workbookContains(f.abs, stampA)) && (await workbookContains(f.abs, stampB)) ? 'both' : ''), { timeout: 40000, intervals: [500] })
+        .toBe('both')
+      expect(postA + postB).toBe(1)
+      expect(postB).toBe(0)
+      // A가 나가면 B에게 위임된다. B가 편집하면 B가 저장한다.
+      await clickDone(t.pageA)
+      await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
+      await closeXlsxPreview(t.pageA)
+      await setCellByFormulaBar(t.pageB, 'D2', stampC)
+      await expect
+        .poll(async () => ((await workbookContains(f.abs, stampC)) ? stampC : ''), { timeout: 40000, intervals: [500] })
+        .toBe(stampC)
+      expect(postB).toBeGreaterThanOrEqual(1)
     } finally {
       await t.ctxA.close()
       await t.ctxB.close()
