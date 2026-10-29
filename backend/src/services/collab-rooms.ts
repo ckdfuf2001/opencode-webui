@@ -314,9 +314,9 @@ export function connMode(room: CollabRoom, ws: unknown): 'view' | 'edit' {
 
 /** owner 재선출: edit 참가자 중 가장 먼저 들어온 conn. 없으면 owner 해제. */
 function reevaluateOwner(room: CollabRoom): void {
-  // X2a: XLSX 방은 owner 개념이 없다(저장은 lib 가 판정, 참가자는 presence 로 센다).
-  // owner 선출·owner_cleared_unexpected 경고를 건너뛴다.
-  if (room.kind === 'xlsx') return
+  // C2-c: XLSX 방도 owner를 선출한다(자동 저장 1명 규칙). lib 클라이언트에는
+  // type 100 meta를 보내지 않으므로(broadcastMeta가 xlsx를 건너뜀) 와이어는 안전하다.
+  // 저장은 그대로 낙관적 잠금으로 판정한다(checkSave가 xlsx를 건너뜀).
   const current = room.ownerConn
   if (current !== null && current !== undefined && room.conns.has(current) && connMode(room, current) !== 'view') {
     return
