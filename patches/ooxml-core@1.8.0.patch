@@ -1,7 +1,7 @@
 diff --git a/dist/collab/index.mjs b/dist/collab/index.mjs
-index 76fc0a566ebad501cb438f643dc2fc1e3de62333..b8c3f53d71ab77a2967749c6e088e5dd97b1efd4 100644
+index 76fc0a566ebad501cb438f643dc2fc1e3de62333..ba69dc5f6717fa3669e3dbc7f1fb26d8f54a858c 100644
 --- a/dist/collab/index.mjs
-+++ b/dist/collab/index.mjs
++++ b/dist/collab/index.mjs	
 @@ -2,6 +2,8 @@ import * as Y from 'yjs';
  import * as awarenessProtocol from 'y-protocols/awareness';
  import { Awareness } from 'y-protocols/awareness';
@@ -39,3 +39,41 @@ index 76fc0a566ebad501cb438f643dc2fc1e3de62333..b8c3f53d71ab77a2967749c6e088e5dd
      role
    };
    const sanitizePayload = options.sanitizePayload ?? (() => ({}));
+diff --git a/dist/xlsx/index.mjs b/dist/xlsx/index.mjs
+index 1b6af21ebef2ad49ca1a9daf5b5a358cd0583b47..6aa99c4335fb646616da5accab63e153853f65d3 100644
+--- a/dist/xlsx/index.mjs
++++ b/dist/xlsx/index.mjs	
+@@ -1,5 +1,7 @@
+ import { XMLSerializer, DOMParser } from '@xmldom/xmldom';
+ import JSZip from 'jszip';
++// C3-img 표식: 런타임에서 이 파일(xlsx 세션)이 로드됐는지 확인한다.
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, coreXlsx: "C3-guard" };
+ 
+ // xlsx/model.ts
+ var ERROR_CODES = [
+@@ -32309,7 +32311,16 @@ function createEditSession(workbook, options = {}) {
+     }
+     current.step.entries.length = from;
+   };
++  // C3-img: 동시편집 중 방에 실리지 않는 편집은 적용 전에 막는다(조용한 유실 방지).
++  // 앱이 globalThis.__ooxmlEditGuard = (label, kind) => boolean 으로 알린다.
++  // false면 막고 예외를 던진다: run2의 catch가 롤백하고, 히스토리에 남지 않으며,
++  // workbook-change도 안 나가서 자동 저장 예약도 걸리지 않는다.
++  const __xlsxGuardCheck = (label2, kind) => {
++    const g = globalThis.__ooxmlEditGuard;
++    if (g && g(label2, kind) === false) throw new Error('동시편집 중에는 이 편집을 지원하지 않습니다');
++  };
+   const run2 = (label2, kind, scopes, fn, info = {}) => {
++    __xlsxGuardCheck(label2, kind);
+     const outer = !open;
+     const current = open ?? begin(label2, kind, info);
+     if (!outer) {
+@@ -32364,6 +32375,8 @@ function createEditSession(workbook, options = {}) {
+   };
+   const replay = (kind) => {
+     if (open) throw new Error(`Cannot ${kind} inside a batch`);
++    const pending = kind === "undo" ? history.done.at(-1) : history.undone.at(-1);
++    if (pending) __xlsxGuardCheck(pending.label, kind);
+     const step2 = kind === "undo" ? history.undo(workbook) : history.redo(workbook);
+     if (!step2) return false;
+     recalc(step2, kind);
