@@ -476,60 +476,47 @@ test.describe('X0a: XLSX 동시편집', () => {
     }
   })
 
-  test('X0a-8: 단독 저장도 잠긴다 — 방에서 저장한 내용을 덮어쓰지 않는다', async ({ browser }) => {
-    const t = await twoPages(browser)
+  test('X0a-8: 단독 저장도 잠긴다 — 낡은 If-Match는 409로 거부된다 (C2-b)', async ({ page }) => {
+    // C2-b: stale 클라이언트는 재수신 뒤 방에 참가하므로, "방에 못 붙는 단독" 경로는 없어졌다.
+    // 단독 저장(If-Match) 자체의 잠금은 그대로 둔다: 낡은 바이트로 덮어쓰면 409다.
     const f = freshXlsx('x0a8', 0)
     const stampA = `X8A${Date.now().toString(36)}`
-    const stampC = `X8C${Date.now().toString(36)}`
     try {
-      // A·B 가 방에 참가한다.
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
-      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
-      await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
-
-      // C 는 단독(해시를 못 계산하는 환경 — 폰 http 접속과 같다).
-      // **A 가 저장하기 전에** 파일을 연다(폰이 일고 있는 동안 PC 쪽이 저장하는 상황).
-      const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
-      await seedUser(ctxC, { id: 'u-c8', name: 'Cathy', color: '#d97706' })
-      await ctxC.addInitScript(() => {
-        try {
-          Object.defineProperty(window, 'crypto', { value: { getRandomValues: () => new Uint8Array(8) }, configurable: true })
-        } catch {
-          /* 무시 */
-        }
-      })
-      const pageC = await ctxC.newPage()
-      await gotoApp(pageC)
-      await openXlsxFileOnly(pageC, f.name)
-
-      // A 가 편집·저장 → 디스크는 A 의 내용(폰은 옛 내용을 읽고 있는 중).
-      await setCellByFormulaBar(t.pageA, 'B2', stampA)
-      await clickAppSave(t.pageA)
+      await gotoApp(page)
+      // A 가 열기 전에 바이트+ETag를 미리 읽어둔다(옛 사본).
+      const stale = await page.evaluate(async (args: { base: string; rel: string }) => {
+        const res = await fetch(`/api/files/${args.rel}?raw=true`)
+        const buf = new Uint8Array(await res.arrayBuffer())
+        let bin = ''
+        for (let i = 0; i < buf.length; i += 8192) bin += String.fromCharCode(...buf.subarray(i, i + 8192))
+        return { status: res.status, b64: btoa(bin), etag: res.headers.get('etag') }
+      }, { base: backendBase(), rel: f.rel.replace(/^repos\//, '') })
+      expect(stale.etag, 'raw 응답에 ETag가 있어야 한다').not.toBeNull()
+      // A 가 편집·저장 → 디스크는 A 의 내용.
+      await openXlsxEditing(page, f.name)
+      await expect.poll(async () => (await collabState(page)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      await setCellByFormulaBar(page, 'B2', stampA)
+      await clickAppSave(page)
       await expect
-        .poll(async () => (await workbookContains(f.abs, stampA)) ? stampA : '', { timeout: 25000, intervals: [500] })
+        .poll(async () => ((await workbookContains(f.abs, stampA)) ? stampA : ''), { timeout: 25000, intervals: [500] })
         .toBe(stampA)
-
-      // 이제 C 가 편집·저장 → 낡은 내용으로 덮어쓰면 안 된다(409 + 배너 + 다운로드).
-      const editC = pageC.getByRole('button', { name: 'Edit', exact: true })
-      await editC.waitFor({ timeout: 20000 })
-      await editC.click({ timeout: 20000 })
-      await pageC.waitForSelector('xlsx-editor', { timeout: 20000 })
-      // C 는 방에 못 붙는다(단독).
-      await expect.poll(async () => (await collabState(pageC)).active, { timeout: 20000, intervals: [500] }).toBe(false)
-
-      // C 가 저장 → 낡은 내용으로 덮어쓰면 안 된다(409 + 배너 + 다운로드).
-      await setCellByFormulaBar(pageC, 'B2', stampC)
-      await clickAppSave(pageC)
-      await expect(pageC.locator('[data-testid="xlsx-collab-banner"]')).toBeVisible({ timeout: 20000 })
-      await expect(pageC.locator('[data-testid="xlsx-collab-download"]')).toBeVisible({ timeout: 15000 })
-      // 디스크는 A 의 내용 그대로(외부 덮어쓰기 금지).
+      // 옛 바이트를 옛 ETag(If-Match)로 저장 → 409 conflict_external, 디스크 유지.
+      const res = await page.evaluate(async (args: { base: string; rel: string; b64: string; etag: string }) => {
+        const bin = atob(args.b64)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        const r = await fetch(`/api/files/${args.rel}?overwrite=1`, {
+          method: 'POST',
+          headers: { 'If-Match': args.etag },
+          body: bytes as unknown as BodyInit,
+        })
+        return { status: r.status, body: (await r.json().catch(() => null)) as { code?: string } | null }
+      }, { base: backendBase(), rel: f.rel.replace(/^repos\//, ''), b64: stale.b64, etag: stale.etag! })
+      expect(res.status).toBe(409)
+      expect(res.body?.code).toBe('conflict_external')
       expect(await workbookContains(f.abs, stampA), 'A의 저장이 디스크에 남아 있어야 한다').toBe(true)
-      expect(await workbookContains(f.abs, stampC), '단독 저장이 디스크를 덮으면 안 된다').toBe(false)
-      await ctxC.close()
     } finally {
-      await t.ctxA.close()
-      await t.ctxB.close()
+      await closeXlsxPreview(page).catch(() => {})
     }
   })
 
