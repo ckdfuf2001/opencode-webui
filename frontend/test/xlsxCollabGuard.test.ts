@@ -79,16 +79,15 @@ describe('xlsxCollabGuard', () => {
 
 describe('xlsxCollabGuard labels exist in ooxml-core dist', () => {
   // lib을 올리면 라벨이 바뀔 수 있다. 조용히 뚫리는 대신 여기서 깨진다.
+  // lockfile에 고정된 해시가 실제 설치본이다(오래된 해시 디렉터리는 잔재일 수 있다).
   const dist = (() => {
     const root = path.resolve(__dirname, '..', '..', 'node_modules', '.pnpm')
-    const dirs = fs.readdirSync(root).filter((d) => d.startsWith('ooxml-core@'))
-    expect(dirs.length).toBeGreaterThan(0)
-    // 단일 복사본 기준: ooxml-core dist/xlsx/index.mjs 하나만 본다.
-    const cands = dirs
-      .map((d) => path.join(root, d, 'node_modules', 'ooxml-core', 'dist', 'xlsx', 'index.mjs'))
-      .filter((p) => fs.existsSync(p))
-    expect(cands.length).toBe(1)
-    return fs.readFileSync(cands[0]!, 'utf8')
+    const lock = fs.readFileSync(path.resolve(__dirname, '..', '..', 'pnpm-lock.yaml'), 'utf8')
+    const hash = /ooxml-core@1\.8\.0:\n    hash: (\w+)/.exec(lock)?.[1]
+    expect(hash, 'pnpm-lock에 ooxml-core 패치 해시가 있어야 한다').toBeTruthy()
+    const p = path.join(root, `ooxml-core@1.8.0_patch_hash=${hash}`, 'node_modules', 'ooxml-core', 'dist', 'xlsx', 'index.mjs')
+    expect(fs.existsSync(p), `설치본이 있어야 한다: ${p}`).toBe(true)
+    return fs.readFileSync(p, 'utf8')
   })()
 
   test('차단 라벨이 dist에 그대로 있다', () => {
