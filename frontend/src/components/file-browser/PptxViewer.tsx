@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X, Eye } from 'lucide-react'
+import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
@@ -20,7 +20,7 @@ import { collabApi, collabServerUrl, type ImageLossDetail } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE, formatWhere } from '@/lib/ycollab'
 import { useCollabUser } from '@/lib/collabUser'
 import { usePeers, type Peer } from '@/lib/usePeers'
-import { CollabPeerChip, CollabPresenceShell, CollabSelfMarker, NowProvider } from '@/components/collab/CollabPresence'
+import { CollabPresenceBar, CollabPresenceShell, peerToView } from '@/components/collab/CollabPresence'
 import { useMobile } from '@/hooks/useMobile'
 import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
@@ -983,32 +983,6 @@ writeBackHaltedRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savePath, collabUser, renameSessionKey, collabDisabled])
 
-  // 이름 변경 (우측 내 칩에서 편집). 저장하면 전 viewer에 전파되고,
-  // lib presence 라벨도 바꾸기 위해 viewer를 리마운트한다 (같은 doc 유지).
-const [renaming, setRenaming] = useState(false)
-  const [renameInput, setRenameInput] = useState('')
-  const submitRename = useCallback(() => {
-    const name = renameInput.trim()
-    if (!name) {
-      setRenaming(false)
-      return
-    }
-    const prev = collabUserRef.current
-    if (prev) {
-      saveCollabUser({ ...prev, name })
-      const c = collabRef.current
-      if (c) {
-        try {
-          c.session.setUser({ name, color: prev.color })
-        } catch {
-          // 무시
-        }
-      }
-    }
-    setRenaming(false)
-    setReloadKey((v) => v + 1)
-  }, [renameInput, saveCollabUser])
-
   // E10: 서버 aiBlockedAt이 새로 찍히면 칩을 래치한다. 같은 값이면 유지.
   // 표시는 래치 시점 기준 30초 (page.clock으로 앞당길 수 있다).
   const trackAiBlocked = useCallback((blockedAt: number | null) => {
@@ -1712,26 +1686,6 @@ const peersRef = useRef<Peer[]>([])
     return () => slideGateRef.current?.dispose()
   }, [savePath])
 
-  // 팔로우: 선택한 사람의 슬라이드로 계속 따라간다 (선택한 경우에만 이동).
-  const [followId, setFollowId] = useState<string | null>(null)
-  const followed = followId ? peers.find((p) => p.id === followId) ?? null : null
-  useEffect(() => {
-    // 대상이 나가거나 슬라이드 정보가 없으면 추적을 멈춘다.
-    if (followId && !peers.some((p) => p.id === followId)) setFollowId(null)
-  }, [peers, followId])
-  useEffect(() => {
-    const s = followed?.slide
-    if (!followId || typeof s !== 'number' || s < 1) return
-    if (slideIdx === s - 1) return
-    setSlideIdx(s - 1)
-    setCurSlide(s - 1)
-    try {
-      viewerRef.current?.goTo?.(s - 1)
-    } catch {
-      // 무시 (fallback: initialSlide는 다음 마운트에 반영)
-    }
-  }, [followId, followed?.slide, setCurSlide])
-
   // P0-3: 입장/퇴장/모드전환은 트레이싱 모드에서만 (평소엔 상단 바가 알린다).
   const peerToastAt = useRef<Map<string, number>>(new Map())
   const prevPeersRef = useRef<Map<string, string>>(new Map())
@@ -2046,119 +2000,7 @@ const peersRef = useRef<Peer[]>([])
       )}
       {collab && (
         <CollabPresenceShell>
-        <div data-testid="collab-presence-bar" className="flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground overflow-x-auto">
-          {/* M7-2: 시각 갱신은 이 아래로만 전파한다. 칩만 다시 그려지고
-              PptxViewer(덱 트리)는 다시 그려지지 않는다.
-              M7-4: 아무도 편집 중이 아니면 5초 주기로 느슨하게 돌린다. */}
-          <NowProvider
-            active={peers.some((p) => !p.isSelf && p.lastEditAt != null && Date.now() - p.lastEditAt < 10_000)}
-          >
-          {(['view', 'edit'] as const).map((mode, gi) => {
-            const group = peers.filter((p) => p.mode === mode && !p.isSelf)
-            return (
-              <span key={mode} className="inline-flex items-center gap-1 shrink-0">
-                {gi > 0 && <span className="mx-1">·</span>}
-                <span className="font-medium">{mode === 'view' ? 'viewer' : 'editor'} -</span>
-                {group.map((p) => (
-                  <CollabPeerChip
-                    key={p.id}
-                    p={p}
-                    following={followId === p.id}
-                    onFollow={() => {
-                      // 팔로우 토글: 선택한 사람만 계속 따라간다. 해제하면 그만 따른다.
-                      if (followId === p.id) {
-                        setFollowId(null)
-                        return
-                      }
-                      setFollowId(p.id)
-                      if (typeof p.slide === 'number' && p.slide >= 1) {
-                        setSlideIdx(p.slide - 1)
-                        setCurSlide(p.slide - 1)
-                        try {
-                          viewerRef.current?.goTo?.(p.slide - 1)
-                        } catch {
-                          // 무시 (fallback: initialSlide는 다음 마운트에 반영).
-                        }
-                      }
-                    }}
-                  />
-                ))}
-              </span>
-            )
-          })}
-          {followed && (
-            <span
-              data-testid="collab-following"
-              className="inline-flex items-center gap-1 shrink-0 text-foreground"
-            >
-              <Eye className="w-3 h-3" />
-              <span className="truncate max-w-[120px]">{followed.name}</span>
-              <button
-                type="button"
-                data-testid="collab-follow-stop"
-                title="팔로우 해제"
-                onClick={() => setFollowId(null)}
-                className="underline underline-offset-2 hover:text-muted-foreground"
-              >
-                해제
-              </button>
-            </span>
-          )}
-          {(() => {
-            const self = peers.find((p) => p.isSelf)
-            if (!self) return null
-            return (
-              <span className="inline-flex items-center gap-1 shrink-0 ml-auto">
-                <span
-                  className="inline-block w-2 h-2 rounded-full"
-                  style={{ backgroundColor: self.color }}
-                />
-                {renaming ? (
-                  <span className="inline-flex items-center gap-1">
-                    <input
-                      value={renameInput}
-                      autoFocus
-                      data-testid="collab-rename-input"
-                      onChange={(e) => setRenameInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') submitRename()
-                        if (e.key === 'Escape') setRenaming(false)
-                      }}
-                      placeholder="Name"
-                      className="h-6 w-28 rounded border border-input bg-background px-2 text-[11px] outline-none"
-                    />
-                    <button
-                      type="button"
-                      data-testid="collab-rename-submit"
-                      onClick={submitRename}
-                      className="underline underline-offset-2 hover:text-foreground"
-                    >
-                      저장
-                    </button>
-                  </span>
-                ) : (
-                  <span>
-                    나: {self.name}{' '}
-                    <button
-                      type="button"
-                      data-testid="collab-rename-edit"
-                      title="이름 변경"
-                      onClick={() => {
-                        setRenameInput(self.name)
-                        setRenaming(true)
-                      }}
-                      className="inline-flex items-center hover:text-foreground"
-                    >
-                      <Pencil className="w-3 h-3" />
-                    </button>
-                  </span>
-                )}
-                <CollabSelfMarker peer={self} />
-              </span>
-            )
-          })()}
-          </NowProvider>
-        </div>
+          <CollabPresenceBar peers={peers.map(peerToView)} />
         </CollabPresenceShell>
       )}
       {collab && sameShapePeers.length > 0 && (

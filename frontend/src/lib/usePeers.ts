@@ -27,7 +27,7 @@ slide?: number
 export type PeerActivity = 'editing' | 'selected' | 'recent' | 'idle'
 
 /** 상태 우선순위: 편집 중(3초) > 도형 선택 > n초 전 편집(30초) > idle. */
-export function peerActivity(p: Peer, now: number): PeerActivity {
+export function peerActivity(p: Pick<Peer, 'lastEditAt' | 'selectedId'>, now: number): PeerActivity {
   if (p.lastEditAt != null && now - p.lastEditAt < 3000) return 'editing'
   if (p.selectedId) return 'selected'
   if (p.lastEditAt != null && now - p.lastEditAt < 30000) return 'recent'

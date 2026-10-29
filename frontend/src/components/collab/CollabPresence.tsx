@@ -1,14 +1,56 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import { activityLabel, peerActivity, type Peer } from '@/lib/usePeers'
+import { peerActivity, type Peer } from '@/lib/usePeers'
 
 /**
  * C1: 접속자 표시 통일 (PPT/XLSX 공용).
- *
- * - 이 파일이 참가자 표시의 단일 출처다. PPT(PptxViewer)와 XLSX(DocumentPreview)가
- *   같은 마크업·같은 testid(`collab-presence`, `collab-peer`)로 그린다.
- * - 시각 갱신은 NowProvider 컨텍스트로만 전파한다. 칩만 다시 그려지고
- *   뷰어(덱 트리·그리드)는 다시 그려지지 않는다 (M7-2).
+ * C3: 아바타 줄 + 팝오버. 클릭은 팝오버를 열고, 따라가기·이름 변경은 팝오버 안에서 한다.
+ * - 아바타에는 data-* 식별자(data-peer-id/mode/owner/self/slide...)를 둔다.
+ *   E21(data-owner), E3(data-slide, data-peer-id) 회귀는 아바타에서 계속 만족한다.
+ * - 팝오버는 열려 있을 때만 DOM에 둔다(data-testid="collab-popover").
  */
+
+export interface PresencePeerView {
+  id: string
+  name: string
+  color: string
+  mode: 'view' | 'edit'
+  isSelf: boolean
+  isOwner: boolean
+  tabCount: number
+  device?: 'mobile' | 'desktop'
+  slide?: number
+  sheetIndex?: number
+  range?: string
+  selectedLabel?: string
+  lastEditAt?: number
+  selectedId?: string
+}
+
+export function peerToView(p: Peer): PresencePeerView {
+  return {
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    mode: p.mode,
+    isSelf: p.isSelf,
+    isOwner: p.isOwner,
+    tabCount: p.tabCount,
+    device: p.device,
+    slide: p.slide,
+    selectedLabel: p.selectedLabel,
+    lastEditAt: p.lastEditAt,
+    selectedId: p.selectedId,
+  }
+}
+
+/** 이니셜 (아바타 원 안에). 이름 앞 2글자까지. */
+export function peerInitials(name: string): string {
+  const t = name.trim()
+  if (!t) return '?'
+  const parts = t.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return ((parts[0]![0] ?? '') + (parts[1]![0] ?? '')).toUpperCase()
+  return t.slice(0, 2).toUpperCase()
+}
 
 /**
  * M7-2: 1초마다 갱신되는 시각 컨텍스트.
@@ -16,7 +58,7 @@ import { activityLabel, peerActivity, type Peer } from '@/lib/usePeers'
  * "N초 전 편집" 같은 상대 시간과 data-activity가 매초 바뀌어야 하는데,
  * 그 갱신을 뷰어가 감으면 덱 트리 전체가 리렌더된다(24슬라이드 SVG → 레이아웃
  * 객체가 GC를 기다리며 렌더러 메모리 증가). 그래서 시각을 컨텍스트로 내보내고
- * **그 값을 쓰는 칩 컴포넌트만** 다시 그리게 한다.
+ * **그 값을 쓰는 아바타만** 다시 그리게 한다.
  */
 const NowCtx = createContext(0)
 
@@ -32,73 +74,148 @@ export function NowProvider({ children, active = false }: { children: ReactNode;
   return <NowCtx.Provider value={now}>{children}</NowCtx.Provider>
 }
 
-/**
- * M7-2: 참가자 칩. 시각만 컨텍스트로 받아 자기 자신만 다시 그린다.
- * (뷰어가 매초 리렌더되면 덱 트리 전체가 리렌더된다)
- */
-export function CollabPeerChip({ p, following, onFollow }: { p: Peer; following: boolean; onFollow: () => void }): ReactNode {
-  const now = useContext(NowCtx)
-  const act = peerActivity(p, now)
-  const status = act === 'idle' ? '' : activityLabel(p, now)
-  return (
-    <button
-      type="button"
-      data-testid="collab-peer"
-      data-peer-id={p.id}
-      data-mode={p.mode}
-      {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
-      data-owner={p.isOwner ? 'true' : 'false'}
-      data-self="false"
-      data-activity={act}
-      data-following={following ? 'true' : 'false'}
-      {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
-      title={following ? `${p.name} 팔로우 중 (클릭하면 해제)` : `${p.name} 팔로우`}
-      aria-pressed={following}
-      onClick={onFollow}
-      className={`inline-flex items-center gap-1 shrink-0 hover:text-foreground${
-        following ? ' underline decoration-dotted underline-offset-2' : ''
-      }`}
-    >
-      <span
-        className={`inline-block w-2 h-2 rounded-full${act === 'editing' ? ' animate-pulse' : ''}`}
-        style={act === 'editing' ? { backgroundColor: p.color } : { border: `1.5px solid ${p.color}` }}
-      />
-      <span>
-        {p.name}
-        {p.tabCount > 1 ? ` (${p.tabCount}탭)` : ''}
-        {p.device === 'mobile' ? '📱' : ''}
-        {/* 위치 글자는 화면에 띄우지 않는다. 위치 표시는 lib 자체 표시
-        (좌측 썸네일 하이라이트) 하나만 남긴다.
-        app.slide / data-slide는 그대로 유지 — 보이지 않지만 테스트가 읽는다. */}
-        {status ? ` · ${status}` : ''}
-      </span>
-    </button>
-  )
-}
+const MAX_AVATARS = 6
 
-/**
- * M7-2: 자기 상태 마커(숨김, 진단/테스트용). data-activity가 실시간이어야 해서
- * 시각 컨텍스트만 구독한다.
- */
-export function CollabSelfMarker({ peer }: { peer: Peer }): ReactNode {
-  const now = useContext(NowCtx)
+function AvatarDot({ p, active }: { p: PresencePeerView; active: boolean }): ReactNode {
+  const editing = active
   return (
     <span
-      data-testid="collab-peer"
-      data-peer-id={peer.id}
-      data-mode={peer.mode}
-      data-owner={peer.isOwner ? 'true' : 'false'}
-      data-self="true"
-      data-activity={peerActivity(peer, now)}
-      className="hidden"
-    />
+      className={`inline-flex items-center justify-center rounded-full text-[10px] font-semibold shrink-0 w-6 h-6${
+        editing ? ' animate-pulse' : ''
+      }`}
+      style={
+        editing
+          ? { backgroundColor: p.color, color: '#fff' }
+          : { border: `1.5px solid ${p.color}`, color: p.color, backgroundColor: 'transparent' }
+      }
+      aria-hidden="true"
+    >
+      {peerInitials(p.name)}
+    </span>
   )
 }
 
 /**
  * C1: 통합 presence 컨테이너. testid `collab-presence`가 C1의 존재 단언이다.
- * 기존 `collab-presence-bar`(E11m 회귀)는 안쪽에 그대로 둔다.
  */
 export function CollabPresenceShell({ children }: { children: ReactNode }): ReactNode {
   return <div data-testid="collab-presence">{children}</div>
+}
+
+export interface CollabPresenceBarProps {
+  peers: PresencePeerView[];
+  /** C3: 아바타 클릭은 팝오버를 열고 닫는다 (따라가기는 팝오버 안에서). */
+  defaultOpen?: boolean
+}
+
+/**
+ * C3: 아바타 줄 + 팝오버. 상단에는 아바타만 남는다 (viewer/editor 숫자·"나" 표기 없음).
+ * - data-owner는 아바타에 둔다 (E21이 DOM에서 바로 읽는다).
+ * - 팝오버는 열려 있을 때만 DOM에 만든다.
+ */
+export function CollabPresenceBar({ peers, defaultOpen = false }: CollabPresenceBarProps): ReactNode {
+  const [open, setOpen] = useState(defaultOpen)
+  const shown = peers.slice(0, MAX_AVATARS)
+  const extra = peers.length - shown.length
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      const el = e.target as HTMLElement | null
+      if (el?.closest?.('[data-testid="collab-popover"], [data-testid="collab-avatars"]')) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open ])
+
+  return (
+    <div data-testid="collab-presence-bar" className="relative flex items-center gap-2 px-3 py-1 border-b border-border text-[11px] text-muted-foreground">
+      <NowProvider active={false}>
+        <PresenceAvatars peers={shown} extra={extra} open={open} onToggle={() => setOpen((v) => !v)} />
+      </NowProvider>
+      {open && (
+        <div
+          data-testid="collab-popover"
+          role="list"
+          aria-label="참가자 목록"
+          className="absolute left-2 top-full z-50 mt-1 min-w-56 max-w-72 rounded-md border border-border bg-background shadow-lg"
+        >
+          {peers.map((p) => (
+            <div
+              key={p.id}
+              role="listitem"
+              data-testid="collab-presence-row"
+              data-peer-id={p.id}
+              data-self={p.isSelf ? 'true' : 'false'}
+              className="flex items-center gap-2 px-3 py-1.5 text-xs"
+            >
+              <AvatarDot p={p} active={false} />
+              <span data-testid="collab-peer-name" className="truncate flex-1">
+                {p.name}
+                {p.tabCount > 1 ? ` · 탭 ${p.tabCount}` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PresenceAvatars({
+  peers,
+  extra,
+  open,
+  onToggle,
+}: {
+  peers: PresencePeerView[]
+  extra: number
+  open: boolean
+  onToggle: () => void
+}): ReactNode {
+  const now = useContext(NowCtx)
+  return (
+    <button
+      type="button"
+      data-testid="collab-avatars"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-label={`참가자 ${peers.length + Math.max(0, extra)}명`}
+      title="참가자 목록"
+      className="inline-flex items-center -space-x-1 shrink-0 hover:opacity-90"
+    >
+      {peers.map((p) => (
+        <span
+          key={p.id}
+          data-testid="collab-peer"
+          data-peer-id={p.id}
+          data-mode={p.mode}
+          {...(typeof p.slide === 'number' ? { 'data-slide': p.slide } : {})}
+          {...(typeof p.sheetIndex === 'number' ? { 'data-sheet-index': p.sheetIndex } : {})}
+          {...(typeof p.range === 'string' ? { 'data-range': p.range } : {})}
+          data-owner={p.isOwner ? 'true' : 'false'}
+          data-self={p.isSelf ? 'true' : 'false'}
+          data-activity={peerActivity(p, now)}
+          {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
+          title={p.name}
+          className="inline-block rounded-full ring-2 ring-background"
+        >
+          <AvatarDot p={p} active={peerActivity(p, now) === 'editing'} />
+        </span>
+      ))}
+      {extra > 0 && (
+        <span className="inline-flex items-center justify-center rounded-full text-[10px] font-semibold w-6 h-6 shrink-0 bg-muted text-muted-foreground ring-2 ring-background">
+          +{extra}
+        </span>
+      )}
+    </button>
+  )
 }
