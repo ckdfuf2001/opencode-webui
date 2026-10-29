@@ -40,7 +40,7 @@ const OPENCODE_PORT = 5564
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['pptx-collab.spec.ts', 'xlsx-solo.spec.ts', 'xlsx-collab.spec.ts', 'viewer-unmount.spec.ts', 'ui-layout.spec.ts', 'presence.spec.ts'],
+  testMatch: ['pptx-collab.spec.ts', 'xlsx-solo.spec.ts', 'xlsx-collab.spec.ts', 'viewer-unmount.spec.ts', 'ui-layout.spec.ts', 'presence.spec.ts', 'xlsx-c2.spec.ts'],
   retries: 0,
   workers: 1,
   // E5가 30초 입력 + 저장 대기를 하므로 여유를 둔다.
