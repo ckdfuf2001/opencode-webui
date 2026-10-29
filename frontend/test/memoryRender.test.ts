@@ -87,8 +87,12 @@ describe('D35 1Hz tick 은 시각을 그리는 하위에만 공급한다', () =>
     expect(src).toMatch(/readPeersTickMs\(\)/)
   })
 
-  it('PptxViewer 의 NowProvider 는 1초/5초 주기만 쓴다', () => {
-    const src = fs.readFileSync(path.join(SRC, 'components', 'file-browser', 'PptxViewer.tsx'), 'utf8')
+  it('NowProvider 는 1초/5초 주기만 쓴다 (C1: 공용 CollabPresence로 이동)', () => {
+    const src = fs.readFileSync(path.join(SRC, 'components', 'collab', 'CollabPresence.tsx'), 'utf8')
     expect(src).toMatch(/const ms = active \? 1000 : 5000/)
+    // PptxViewer는 공용 컴포넌트를 가져다 쓴다(중복 정의 금지).
+    const viewer = fs.readFileSync(path.join(SRC, 'components', 'file-browser', 'PptxViewer.tsx'), 'utf8')
+    expect(viewer).toMatch(/from '@\/components\/collab\/CollabPresence'/)
+    expect(viewer).not.toMatch(/const ms = active \? 1000 : 5000/)
   })
 })
