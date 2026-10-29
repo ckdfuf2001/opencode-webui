@@ -888,7 +888,8 @@ const t = await twoPages(browser)
     // B 화면에서 A는 1명이어야 한다 (같은 탭에서 세션이 2개 생기면 2명으로 보인다).
     const selfOnB = t.pageB.locator('[data-testid="collab-peer"][data-self="true"]')
     await expect(selfOnB).toHaveCount(1, { timeout: 15000 })
-    // 이름 변경 → 같은 세션이어야 한다.
+    // 이름 변경 → 같은 세션이어야 한다 (C3: 팝오버 안에서).
+    await t.pageA.getByTestId('collab-avatars').click()
     await t.pageA.getByTestId('collab-rename-edit').click()
     await t.pageA.getByTestId('collab-rename-input').fill('renamed-ada')
     await t.pageA.getByTestId('collab-rename-submit').click()
