@@ -460,10 +460,37 @@
   - **정정**: 이전 문장의 "두 편집자가 저장해도 각자 병합된 방 상태를 쓰므로 실질적으로 같은 내용"은
     **틀렸다**. A 가 t1 에 직렬화한 바이트가 B 의 t2 바이트보다 늦게 도착하면 옛 내용이 이긴다
     (PPT 의 M26~M37 in-flight 역전과 같다). base hash 낙관적 잠금이 이 경합을 막는다.
-- **낡은 방 차단은 서버가 판정한다(X1b 정정)**: 클라이언트 해시 비교는 `crypto.subtle` 을 쓴다.
-  `http://IP:포트` 로 접속하면 보안 컨텍스트가 아니라 **항상 실패** → fail-closed 로 붙지 않는다.
-  그래도 서버가 최종 판정한다: `session(strict)` 가 디스크 해시·`room.lastHash`·`knownHash` 를 비교해
-  `stale_room`/`stale_client` 코드를 돌려준다. **클라이언트는 해시를 못 계산하면 방에 붙지 않는다.**
+- **낡은 방 차단은 서버가 판정한다(X1b 정정, C2-a 개정)**: 예전에는 클라이언트 해시 비교에
+  `crypto.subtle` 을 썼다. `http://IP:포트` 로 접속하면 보안 컨텍스트가 아니라 **항상 실패** →
+  fail-closed 로 붙지 않았다. C2-a부터 knownHash는 **서버가 준 ETag(바이트와 같은 응답)** 다.
+  서버 ETag = `sha256 hex` 로 클라이언트 해시와 동알고리즘이고, `Cache-Control: no-store` 라
+  304가 없으므로 매번 읽힌다(e2e C2-a-304가 200+ETag를 단언한다). `hashBytesHex`·`sha256Hex`·
+  M1 재전송 생략을 삭제했고, 프론트에 `crypto.subtle`·`crypto.randomUUID` 를 쓰는 곳은 0곳이다
+  (`getRandomValues` 기반 UUIDv4를 `frontend/src/lib/ooxmlGuid.ts` 로 합쳤다).
+  `session(strict)` 가 디스크 해시·`room.lastHash`·`knownHash` 를 비교해
+  `stale_room`/`stale_client` 코드를 돌려주는 것은 그대로다.
+- **단독 편집 폴백 없음(C2-b)**: "단독 편집으로 진행합니다" 문구는 저장소 전체에서 0곳이다.
+  ETag를 못 받으면 파일을 한 번 다시 받고(`onRequestReload`), 그래도 없으면 보기 전용 +
+  "다시 연결" 버튼이다. 연결 상한(15초)을 넘겨도 보기 전용 + "다시 연결"이다.
+  서버에 닿지 못한 경우(응답 없음)에만 단독 편집을 허용하고, 이때도 If-Match 잠금은 유지한다.
+- **stale 자동 복구(C2-b)**:
+  - `stale_client` 는 파일을 다시 받아서 1회 재참가한다(같은 응답의 ETag로 knownHash를 갱신).
+    재시도 중 겹친 join 시도는 조용히 둔다(재시도 rerun이 판정한다).
+  - `stale_room` 인데 방이 비어 있으면(붙었다 나간 고아, TTL 30초 안) 서버가 디스크 기준으로
+    리셋하고 host로 만든다. 방 내용은 낡았고 남은 사람이 없으므로 디스크가 최신이다
+    (`createSession` strict 분기, `rooms.get(id) === 기존` 가드 — 재생성 경합 방지).
+    한 번도 붙지 않은 방(host 오는 중)은 건드리지 않는다.
+  - `stale_room` 인데 편집자가 있으면 strict 없이 참가해 방 내용을 따라가고 외부 배너를 띄운다.
+    방 내용이 디스크보다 최신일 수도 있으나, 참가자 전원이 같은 방을 보는 쪽을 택한다.
+    복구 불가(재시도 후에도 stale)면 보기 전용 + "다시 연결"이다.
+- **XLSX owner 자동 저장(C2-c)**: `reevaluateOwner` 의 xlsx skip 을 지웠다. 방 참가자 중
+  edit 모드가 가장 먼저 들어온 conn 이 owner 다. `broadcastMeta` 는 xlsx 를 건너뛰므로
+  (type 100 을 lib 이 모른다) 와이어는 그대로고, `checkSave` 도 xlsx 를 건너뛰므로
+  저장은 그대로 낙관적 잠금으로 판정한다. owner 판정은 서버 `rooms()` 참가자 목록의
+  `owner` 플래그로 읽는다. 편집이 멈추면 2.5초 디번스로 owner만 `/api/collab/save` 로
+  저장한다(keepEditing 유지, 성공 토스트 생략, 실패는 토스트+배너+내 사본). 폴링은 없고,
+  workbook 변경 이벤트 때만 예약한다. Save 버튼은 "지금 저장"으로 남는다.
+  owner가 나가면 서버가 남은 편집자에게 위임하고, 다음 자동 저장이 그를 따라간다.
 - **저장은 편집을 유지한다(X1b)**: 저장은 편집 모드를 끝내지 않는다(`keepEditing`).
   XLSX 는 lib 이 방 세션을 소유하므로 편집기가 내려가면 방에서 나가고 presence 가 사라진다.
   "Done" 만 편집기를 내리므로 그때 방 세션·소켓도 끝난다(X-M6).

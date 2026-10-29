@@ -487,6 +487,7 @@ E21만의 문제가 아니다. 근거:
 - P2-4 base64 경로 잔재 정리
 - `/handoff` 410 스텁 처리(Q01)
 - backfilledIds 상한(retainers가 지목할 때만)
+- `ooxml-core` 서버측 편집 API와 MCP를 조사한다. 쓰기는 `/api/collab/save`를 거치거나, 방이 열려 있으면 막는다. D48 외부 변경 동기화와 연결.
 
 ## PPT 저장 트랙 종료 (v0.12.70, 기준 커밋 f129575)
 - 종료 테스트 5개(E2·E2b·E2f-strict·E2g·E2r)가 chromium 15/15 + msedge 15/15 = **30 passed (14.7m)**.
@@ -766,3 +767,34 @@ E21만의 문제가 아니다. 근거:
   (gotoSlide 썸네일 타임아웃, presence와 무관).
 - 게이트: frontend tsc 0, check:memory 오류 0/경고 1(D36), check:encoding 0(경고 1 기존).
 - 결정: D49. v0.13 이월 없음(남은 것은 태그 전 사용자 수동 체크 ①-⑤).
+
+## C2 엑셀 자동 복구 + 자동 저장 (2026-10-29, release-0.12)
+
+- 0절: nohash 배너는 `hashBytesHex(crypto.subtle)` 실패 경로(`DocumentPreview.tsx:1752`,
+  `collab.ts:135`)가 맞다. 같은 응답의 ETag로 대체 가능(`useRawFile`이 바이트와 함께 보관,
+  서버 ETag = sha256 hex, `Cache-Control: no-store`라 304 없음). PPT 폰 http는 편집 가능하나
+  코멘트 `guid()`의 `crypto.randomUUID`가 터졌다 → `ooxmlGuid.ts`로 교체(선행 수정 dbc7ff3).
+  `XlsxViewer.tsx`는 별도 파일이 아니라 `DocumentPreview.tsx` 안 컴포넌트다.
+- C2-a: knownHash = 서버 ETag. `hashBytesHex`·`sha256Hex`·M1 dedup 삭제, nohash 분기 삭제,
+  프론트 `crypto.subtle`·`randomUUID` 0곳. ETag 누락 → 재수신 1회 → 보기 전용 + "다시 연결".
+  red: C2-a nohash 배너 + active false → green 4 passed (join·ETag 200·전파·stale 차단).
+- C2-b: stale_client는 재수신 1회 후 재참가. stale_room + 빈 고아 방은 서버가 디스크 기준
+  리셋 후 host로 만든다(`createSession` strict 분기, `everConnected` + rooms 동일성 가드).
+  stale_room + 편집자 있음은 strict 없이 참가하고 외부 배너를 띄운다. 복구 불가면 보기 전용.
+  "단독 편집으로 진행합니다" 문구 0곳(주석 제외). 타임아웃·서버 오류도 보기 전용 + 다시 연결.
+  서버 응답 없는 경우(오프라인)에만 If-Match 잠금 유지로 단독 편집 허용.
+  red: C2-b-1/2/3 → green. X0a-3(참가+외부 배너)·X0a-7(ETag 참가)·X0a-10(보기 전용+재연결)·
+  X2a-3(참가+외부 배너)으로 개정. X0a-8은 solo 잠금 직접 검증(If-Match 409)으로 개정.
+  앱→서버 절대경로 fetch는 CORS로 ETag가 가려지므로 e2e에서도 상대경로를 쓴다.
+- C2-c: `reevaluateOwner`의 xlsx skip 해제(서버). `broadcastMeta`·`checkSave`는 xlsx를
+  그대로 건너뛰어 와이어·저장 판정은 그대로다. owner만 2.5초 디번스로 자동 저장(keepEditing,
+  성공 토스트 생략, 실패는 토스트+배너+내 사본). 폴링 없음(변경 이벤트 때만 예약).
+  owner가 나가면 서버가 위임하고 다음 자동 저장이 따른다. red: POST 1건 → green.
+  noSubtle 스텁이 getRandomValues를 0으로 막아 Yjs clientID가 전부 0이 되어 awareness가
+  충돌했다 → 스텁을 subtle/randomUUID 제거 + 진짜 난수로 고쳤다.
+- 회귀: xlsx-collab 전수 20 passed · xlsx-c2 + presence 11 passed · X-B1/X-B2 · M6a/b ·
+  U1~U3 · PPT E2 5종 passed. backend 560 passed/0 failed(sqlite 2 스위트 기존).
+  frontend tsc 0, check:memory 0/경고1, check:encoding 0, eslint 333(272/61).
+- 기준선 대비 변동: `memoryRender.test.ts`가 C1 이동(NowProvider→CollabPresence)을 따라감.
+  `memory-allowlist.json` 동일 사유 1행 경로 변경(cc9443a).
+- 결정: D48 보완. v0.13 백로그에 서버측 편집 API/MCP 조사 1줄 추가.
