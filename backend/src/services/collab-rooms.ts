@@ -579,15 +579,30 @@ export async function createSession(
   if (!abs) throw { message: 'File not found', statusCode: 404 }
   const id = roomIdForAbs(abs)
   const resumeEpoch = opts?.resumeEpoch
-  const existing = rooms.get(id)
+  let existing = rooms.get(id)
 
   // X1b(P0-2): strict 세션은 **서버가** staleness 를 판정한다.
   // XLSX(lib 방)는 "방에 먼저 들어온 문서"가 방의 기준이라, 디스크와 어긋난 방에 붙으면
-  // 낡은 내용이 디스크를 덮어쓴다. 클라이언트가 해시를 못 계산하는 환경(http://IP)에서는
-  // 이 판정마저 못 하므로, 클라이언트는 해시 계산 실패 시 fail-closed 로 붙지 않는다.
+  // 낡은 내용이 디스크를 덮어쓴다.
+  // C2-a: knownHash는 클라이언트가 준 서버 ETag다(subtle 계산 없음).
   if (opts?.strict) {
     const stale = await staleRoomCheck(abs, existing, opts?.knownHash)
-    if (stale) return { roomId: id, role: 'guest', epoch: existing?.epoch ?? '', lastHash: existing?.lastHash ?? '', path: abs, ...stale }
+    if (stale) {
+      // C2-b: 빈 방의 stale_room은 서버가 디스크 기준으로 리셋한다.
+      // conns==0 && everConnected(붙었다 나간 고아 방)만 해당한다.
+      // 한 번도 붙지 않은 방은 host가 오는 중일 수 있어 건드리지 않는다.
+      // stale 방을 버려도 안전한 이유: 방에 남은 사람이 없고, 방 내용은
+      // 마지막 저장(디스크)과 어긋난 상태이므로 디스크가 최신이다.
+      const orphan = existing
+      const emptyStaleRoom =
+        stale.code === 'stale_room' && !!orphan && orphan.conns.size === 0 && orphan.everConnected
+      if (!emptyStaleRoom) {
+        return { roomId: id, role: 'guest', epoch: existing?.epoch ?? '', lastHash: existing?.lastHash ?? '', path: abs, ...stale }
+      }
+      // 같은 id로 새 방이 생겼으면(경합) 건드리지 않는다.
+      if (orphan && rooms.get(id) === orphan) disposeRoom(orphan)
+      existing = undefined
+    }
   }
 
   if (!existing) {
