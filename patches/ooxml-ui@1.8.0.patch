@@ -162,7 +162,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fe
        available,
        label: t("pptx.titleBar.autoSave"),
 diff --git a/dist/xlsx.js b/dist/xlsx.js
-index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..ac6d93432f836fefcd44675f349d4dc3301789b1 100644
+index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..e3141a4be71fbdb8051c77fb3d0850bf46a19ad1 100644
 --- a/dist/xlsx.js
 +++ b/dist/xlsx.js	
 @@ -943,11 +943,26 @@ function renderShare(page) {
@@ -219,26 +219,30 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..ac6d93432f836fefcd44675f349d4dc3
      },
      initialPresence: {},
      sanitizePayload: xlsx.sanitizeXlsxPresence,
-@@ -15368,6 +15389,19 @@ function presenceRange(selection) {
-     end: selection.active
-   };
- }
-+function selfPresence(active2) {
-+  try {
-+    const states = active2.session.awareness?.getStates?.();
-+    const pres = states?.get?.(active2.session.clientId)?.presence;
-+    if (!pres || typeof pres.sheet !== "string" || typeof pres.range !== "string") return {};
-+    const out = { sheet: pres.sheet, range: pres.range };
-+    const idx = active2.binding.sheetIndex(pres.sheet);
-+    if (idx !== void 0) out.sheetIndex = idx;
-+    return out;
-+  } catch {
-+    return {};
-+  }
-+}
- var XlsxCollaboration = class {
-   constructor(host, load = loadRuntime) {
-     this.host = host;
+@@ -15448,8 +15469,21 @@ var XlsxCollaboration = class {
+     const publish = (selection) => binding.setSelection(selection.sheet, presenceRange(selection));
+     active2.stop.push(
+       this.host.selection.onChange(publish),
+-      session.on("peers", () => this.#changed()),
+-      session.on("synced", () => this.#changed()),
++      // C1: 현재 선택을 다시 게시한다. 참가 직후의 게시는 shared.sheets가
++      // 준비되기 전이라 sheetKey가 풀리지 않아 조용히 버려진다.
++      // seeder는 synced 때 아직 비어 있으므로 ready·peers 때 다시 시도한다.
++      // publish는 값이 같으면 no-op이라 반복해도 브로드캐스트가 나가지 않는다.
++      session.on("peers", () => {
++        publish(this.host.selection.get());
++        this.#changed();
++      }),
++      session.on("synced", () => {
++        publish(this.host.selection.get());
++        this.#changed();
++      }),
++      session.on("ready", () => {
++        publish(this.host.selection.get());
++      }),
+       session.on("status", (status) => this.#status(status)),
+       session.on("error", (error) => this.host.error(error)),
+       edit.onChange((change) => {
 @@ -15505,6 +15539,22 @@ var XlsxCollaboration = class {
        this.#listeners.delete(listener);
      };
@@ -262,7 +266,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..ac6d93432f836fefcd44675f349d4dc3
    state() {
      const active2 = this.#active;
      if (!active2) return OFF_STATE;
-@@ -15519,13 +15569,25 @@ var XlsxCollaboration = class {
+@@ -15519,13 +15569,37 @@ var XlsxCollaboration = class {
            clientId: session.clientId,
            name: session.identity.userName,
            color: session.identity.userColor,
@@ -273,7 +277,19 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..ac6d93432f836fefcd44675f349d4dc3
 +          role: session.role,
 +          self: true,
 +          // C1: 내 시트·범위. binding이 local awareness에 게시한 값을 그대로 싣는다.
-+          ...selfPresence(active2)
++          ...(() => {
++            try {
++              const states = active2.session.awareness?.getStates?.();
++              const pres = states?.get?.(active2.session.clientId)?.presence;
++              if (!pres || typeof pres.sheet !== "string" || typeof pres.range !== "string") return {};
++              const out = { sheet: pres.sheet, range: pres.range };
++              const idx = active2.binding.sheetIndex(pres.sheet);
++              if (idx !== void 0) out.sheetIndex = idx;
++              return out;
++            } catch {
++              return {};
++            }
++          })()
          },
          ...session.peers().map((peer) => ({
            clientId: peer.clientId,
@@ -290,7 +306,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..ac6d93432f836fefcd44675f349d4dc3
          }))
        ]
      };
-@@ -15918,6 +15980,10 @@ var XlsxEditorApi = class extends HTMLElementBase {
+@@ -15918,6 +15992,10 @@ var XlsxEditorApi = class extends HTMLElementBase {
    setActiveSheet(index) {
      this.core.setActiveSheet(index);
    }
