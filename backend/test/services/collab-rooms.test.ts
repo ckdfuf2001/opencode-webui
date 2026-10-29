@@ -342,6 +342,46 @@ describe('view-mode rules (V5)', () => {
     expect(info.active).toBe(true)
   })
 
+  it('xlsx room elects owner among editors and delegates on leave (C2-c)', async () => {
+    const { roomId } = await createSession(NOTE_REL)
+    const room = rooms.get(roomId)!
+    room.kind = 'xlsx'
+    // 실제 awareness 경로로 presence를 심는다(직접 states.set은 clock 구조를 깨뜨린다).
+    const awarenessProtocol = await import('y-protocols/awareness')
+    const Y = await import('yjs')
+    const mkPeer = (name: string, userId: string) => {
+      const doc = new Y.Doc()
+      const aw = new awarenessProtocol.Awareness(doc)
+      aw.setLocalState({ presence: { userName: name, userColor: '#000', role: 'collaborator', userId } })
+      return { doc, aw }
+    }
+    const apply = (p: { doc: InstanceType<typeof Y.Doc>; aw: InstanceType<typeof awarenessProtocol.Awareness> }) => {
+      awarenessProtocol.applyAwarenessUpdate(
+        room.awareness,
+        awarenessProtocol.encodeAwarenessUpdate(p.aw, [p.doc.clientID]),
+        'test',
+      )
+    }
+    const a = sock()
+    const b = sock()
+    addConn(roomId, a)
+    addConn(roomId, b)
+    const pa = mkPeer('A', 'u-a')
+    const pb = mkPeer('B', 'u-b')
+    room.conns.get(a)!.clientIds.add(pa.doc.clientID)
+    room.conns.get(b)!.clientIds.add(pb.doc.clientID)
+    apply(pa)
+    apply(pb)
+    expect(room.ownerConn).toBe(a)
+    const owners = (await lockInfo(NOTE_REL)).participants!.filter((p) => p.owner).map((p) => p.id)
+    expect(owners).toEqual(['u-a'])
+    // owner가 나가면 남은 편집자에게 위임된다.
+    removeConn(roomId, a)
+    expect(room.ownerConn).toBe(b)
+    const owners2 = (await lockInfo(NOTE_REL)).participants!.filter((p) => p.owner).map((p) => p.id)
+    expect(owners2).toEqual(['u-b'])
+  })
+
   it('participants list reads awareness app fields (read-only)', async () => {
     const { roomId } = await createSession(NOTE_REL)
     addConn(roomId, sock())
