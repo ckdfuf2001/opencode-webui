@@ -26,6 +26,18 @@ export interface PresencePeerView {
   selectedId?: string
 }
 
+/**
+ * "(Me)"는 표시 전용 접미사. 저장값(localStorage)·presence·서버에는 붙이지 않는다.
+ * i18n을 붙일 때 여기만 바꾼다.
+ */
+export const SELF_SUFFIX = ' (Me)';
+
+/** 표시용 이름. 내 행에만 "(Me)"를 붙인다. */
+export function displayName(p: Pick<PresencePeerView, 'name' | 'isSelf' | 'tabCount'>): string {
+  const base = `${p.name}${p.isSelf ? SELF_SUFFIX : ''}`;
+  return p.tabCount > 1 ? `${base} · 탭 ${p.tabCount}` : base;
+}
+
 export function peerToView(p: Peer): PresencePeerView {
   return {
     id: p.id,
@@ -158,10 +170,8 @@ export function CollabPresenceBar({ peers, defaultOpen = false }: CollabPresence
               className="flex items-center gap-2 px-3 py-1.5 text-xs"
             >
               <AvatarDot p={p} active={false} />
-              <span data-testid="collab-peer-name" className="truncate flex-1">
-                {p.name}
-                {p.tabCount > 1 ? ` · 탭 ${p.tabCount}` : ''}
-              </span>
+              <span data-testid="collab-peer-name" className="truncate flex-1">{displayName(p)}</span>
+              <span data-testid="collab-peer-mode" className="shrink-0 text-muted-foreground">{p.mode === 'view' ? '보기' : '편집'}</span>
             </div>
           ))}
         </div>
@@ -205,7 +215,7 @@ function PresenceAvatars({
           data-self={p.isSelf ? 'true' : 'false'}
           data-activity={peerActivity(p, now)}
           {...(p.selectedLabel ? { 'data-selected-label': p.selectedLabel } : {})}
-          title={p.name}
+          title={displayName(p)}
           className="inline-block rounded-full ring-2 ring-background"
         >
           <AvatarDot p={p} active={peerActivity(p, now) === 'editing'} />
