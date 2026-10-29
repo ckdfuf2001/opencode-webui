@@ -27,10 +27,15 @@ async function twoPagesNoSubtle(browser: Browser): Promise<Two> {
   const mk = async (user: { id: string; name: string; color: string }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, user)
-    // P0-2 재현: http://IP 접속 상당. subtle/randomUUID 없이 getRandomValues만 둔다.
+    // http://IP 접속 상당: subtle/randomUUID만 제거하고 getRandomValues는 진짜로 둔다.
+    // 0으로 막으면 Yjs clientID가 전부 0이 되어 awareness가 충돌한다.
     await ctx.addInitScript(() => {
       try {
-        Object.defineProperty(window, 'crypto', { value: { getRandomValues: () => new Uint8Array(8) }, configurable: true })
+        const realGRV = window.crypto.getRandomValues.bind(window.crypto)
+        Object.defineProperty(window, 'crypto', {
+          value: { getRandomValues: (arr: Uint8Array) => realGRV(arr as unknown as Uint8Array), subtle: undefined, randomUUID: undefined },
+          configurable: true,
+        })
       } catch {
         /* 무시 */
       }
@@ -322,12 +327,12 @@ test.describe('C2-c: owner 자동 저장', () => {
       // 둘 다 편집한다 (수동 Save는 누르지 않는다).
       await setCellByFormulaBar(t.pageA, 'B2', stampA)
       await setCellByFormulaBar(t.pageB, 'C2', stampB)
-      // owner 한 명의 자동 저장으로 둘 다 디스크에 남는다. POST는 1건이다.
+      // B(비owner)는 저장하지 않는다. A는 합쳐진 최신 상태를 저장하므로 1건 이상일 수 있다.
       await expect
         .poll(async () => ((await workbookContains(f.abs, stampA)) && (await workbookContains(f.abs, stampB)) ? 'both' : ''), { timeout: 40000, intervals: [500] })
         .toBe('both')
-      expect(postA + postB).toBe(1)
       expect(postB).toBe(0)
+      expect(postA).toBeGreaterThanOrEqual(1)
       // A가 나가면 B에게 위임된다. B가 편집하면 B가 저장한다.
       await clickDone(t.pageA)
       await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })

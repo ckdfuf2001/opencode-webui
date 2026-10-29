@@ -47,11 +47,15 @@ async function twoPages(browser: Browser, opts?: { noSubtle?: boolean }): Promis
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, user)
     if (opts?.noSubtle) {
-      // P0-2: http://IP 로 접속하면 crypto.subtle 이 없다(보안 컨텍스트 아님).
-      // 그 환경에서 방에 붙으면 낡은 방 차단이 사라진다 → fail-closed 여부를 본다.
+      // http://IP 접속 상당: subtle/randomUUID만 제거하고 getRandomValues는 진짜로 둔다.
+      // 0으로 막으면 Yjs clientID가 전부 0이 되어 awareness가 충돌한다.
       await ctx.addInitScript(() => {
         try {
-          Object.defineProperty(window, 'crypto', { value: { getRandomValues: () => new Uint8Array(8) }, configurable: true })
+          const realGRV = window.crypto.getRandomValues.bind(window.crypto)
+          Object.defineProperty(window, 'crypto', {
+            value: { getRandomValues: (arr: Uint8Array) => realGRV(arr as unknown as Uint8Array), subtle: undefined, randomUUID: undefined },
+            configurable: true,
+          })
         } catch {
           /* 무시 */
         }
