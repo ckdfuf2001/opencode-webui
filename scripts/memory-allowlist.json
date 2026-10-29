@@ -79,9 +79,9 @@
       "reason": "파일 트리 갱신. 트리가 열려 있을 때만."
     },
     {
-      "file": "frontend/src/components/file-browser/PptxViewer.tsx",
+      "file": "frontend/src/components/collab/CollabPresence.tsx",
       "value": "setNow\\(Date\\.now\\(\\)\\), ms",
-      "reason": "NowProvider(1초/5초). 시각을 그리는 칩 하위에만 공급(D35)."
+      "reason": "NowProvider(1초/5초). 시각을 그리는 칩 하위에만 공급(D35). C1에서 PptxViewer에서 공용 컴포넌트로 이동(동작 동일)."
     },
     {
       "file": "frontend/src/components/file-browser/PptxViewer.tsx",
