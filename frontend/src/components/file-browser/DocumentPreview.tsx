@@ -33,6 +33,7 @@ import { collabApi, collabServerUrl, type CollabRoomSummary } from '@/api/collab
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser } from '@/lib/collabUser'
+import { isBlockedXlsxEdit, shouldFlushOnPeerArrive } from '@/lib/xlsxCollabGuard'
 import { CollabPresenceBar, CollabPresenceShell, type PresencePeerView } from '@/components/collab/CollabPresence'
 
 type ExtractedMsg = {
@@ -1590,6 +1591,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     select?: (ref: string) => void
     setActiveSheet?: (index: number) => void
     getSelection?: () => string
+    /** C3: 범위로 스크롤만 한다(선택은 바꾸지 않는다). lib 패치. */
+    reveal?: (ref: string) => void
     /** C1: 참가자 표시용 신원 갱신 (빈 이름이면 false). */
     updateCollabIdentity?: (patch: { name?: string; color?: string }) => boolean
   } | null>(null)
@@ -1660,11 +1663,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   /** C2-c: 자동 저장 디바운스 타이머 + 중복 실행 가드. */
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autosaveInFlightRef = useRef(false)
+  /** C3: 자동 저장 예약 중 플래그 (1→2 만났을 때 즉시 저장 판단용). */
+  const autosavePendingRef = useRef(false)
+  /** C3: 가드 토스트 마지막 표시 시각 (2초 내 중복 방지). */
+  const lockToastAtRef = useRef(0)
   const joinAgainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onReloadFileRef = useRef(onRequestReload)
   onReloadFileRef.current = onRequestReload
   const selfClientIdRef = useRef<number | null>(null)
   const [xlsxPeople, setXlsxPeople] = useState<XlsxPresencePerson[]>([])
+  /** C3: 동시편집 잠금. 방에 붙어 있고 나 포함 2명 이상이면 켠다(탭·viewer 포함). */
+  const collabLocked = !!collab?.joined && xlsxPeople.length >= 2
+  const collabLockedRef = useRef(collabLocked)
+  collabLockedRef.current = collabLocked
   /** C1: 따라가는 상대 clientId. setActiveSheet로만 이동한다(select 금지). */
   const [xlsxFollowId, setXlsxFollowId] = useState<number | null>(null)
   /** C1: 팔로우 이동(프로그램 이동) 중에는 이동 콜백을 제외한다. */
@@ -1725,29 +1736,37 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     window.addEventListener('collab-user-changed', onUserChanged)
     return () => window.removeEventListener('collab-user-changed', onUserChanged)
   }, [])
-  /**
-   * C1: 팔로우 — 따라가는 상대의 시트로 이동한다.
+  /** C3: 팔로우 — 따라가는 상대의 시트로 이동하고 범위로 스크롤한다.
    * - select()는 쓰지 않는다(내 선택을 바꾸면 상대 화면에 내 커서가 튀고 루프가 된다).
-   * - setActiveSheet로 시트만 옮긴다. 상대 범위는 lib 원격 선택 표시가 그린다.
+   * - setActiveSheet로 시트를 옮기고 reveal()로 스크롤만 한다.
    * - 프로그램 이동 중(followNavigatingRef)에는 이동 콜백을 제외한다.
    */
-  const followSheetIndex = xlsxFollowId == null
+  const followTarget = xlsxFollowId == null
     ? undefined
-    : xlsxPeople.find((p) => p.clientId === xlsxFollowId && !p.self)?.sheetIndex
+    : (() => {
+        const peer = xlsxPeople.find((p) => p.clientId === xlsxFollowId && !p.self)
+        if (!peer || typeof peer.sheetIndex !== 'number') return undefined
+        return { sheetIndex: peer.sheetIndex, range: typeof peer.range === 'string' ? peer.range : undefined }
+      })()
+  const followSheetIndex = followTarget?.sheetIndex
+  const followRange = followTarget?.range
   useEffect(() => {
     if (xlsxFollowId == null || typeof followSheetIndex !== 'number') return
     if (followNavigatingRef.current) return
     followNavigatingRef.current = true
     try {
       xlsxHandleRef.current?.setActiveSheet?.(followSheetIndex)
+      if (followRange) xlsxHandleRef.current?.reveal?.(followRange)
     } catch {
       /* 무시 */
     }
+    ;(window as unknown as { __c3FollowNav?: number }).__c3FollowNav =
+      ((window as unknown as { __c3FollowNav?: number }).__c3FollowNav ?? 0) + 1
     const t = setTimeout(() => {
       followNavigatingRef.current = false
     }, 500)
     return () => clearTimeout(t)
-  }, [xlsxFollowId, followSheetIndex])
+  }, [xlsxFollowId, followSheetIndex, followRange])
   /**
    * X1c(P0-2): 실패한 저장 바이트를 한 개만 보관한다(D27).
    * 어떤 실패(외부 변경·방 없음·네트워크·413·재시도 실패)든 사용자가 내려받을 수 있어야 한다.
@@ -1989,8 +2008,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   ): Promise<boolean> => {
     // X1a 함정: 코멘트는 파일 바이트를 직접 고쳐 쓰는 방식이라, 방(위 협업 문서)과
     // 어긋난다(저장 후 뷰어를 다시 마운트하면 방의 내용이 이긴다 → 코멘트가 사라진다).
-    // 동시편집 중에는 막는다(조용한 유실 대신 명확한 안내).
-    if (collab) {
+    // C3: 편집 잠금과 같은 조건(참가 중 2명 이상)에서만 막는다. 혼자면 허용한다.
+    if (collabLockedRef.current) {
       showToast.info('동시편집 중에는 코멘트 저장을 할 수 없습니다')
       return false
     }
@@ -2267,11 +2286,76 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    * - owner를 모르면(조회 실패·미선출) baseHash 잠금에 맡기고 저장한다(멱등).
    * - viewer·미참가·탭 숨김 상태에서는 저장하지 않는다.
    */
+  /**
+   * C3: lib 편집 가드를 등록/해제한다. 편집기 마운트 상태와 무관하게,
+   * 방 참가 + 2명 이상일 때만 켠다. 언마운트·나가기·혼자 남으면 끈다.
+   */
+  useEffect(() => {
+    const g = globalThis as unknown as Record<string, unknown>
+    if (collab?.joined && xlsxPeople.length >= 2) {
+      g.__ooxmlEditGuard = (label: string, kind: string): boolean => {
+        if (!isBlockedXlsxEdit(kind, label)) return true
+        const now = Date.now()
+        if (now - lockToastAtRef.current > 2000) {
+          lockToastAtRef.current = now
+          try {
+            showToast.warning('동시편집 중에는 이 편집을 지원하지 않습니다')
+          } catch {
+            /* 무시 */
+          }
+        }
+        return false
+      }
+    } else {
+      delete g.__ooxmlEditGuard
+    }
+    return () => {
+      delete (globalThis as unknown as Record<string, unknown>).__ooxmlEditGuard
+    }
+  }, [collab?.joined, xlsxPeople])
+
+  /**
+   * C3: 1→2 참가 시 owner면 즉시 저장한다 (디바운스 건너뜀).
+   * 혼자 편집하다 상대가 들어오면, 예약된 자동 저장을 기다리지 않고 방 상태를 확정한다.
+   * 뒤늦게 들어온 참가자는 stale_client 재수신으로 최신 바이트를 받는다.
+   */
+  const prevPeopleCountRef = useRef(0)
+  useEffect(() => {
+    const prev = prevPeopleCountRef.current
+    prevPeopleCountRef.current = xlsxPeople.length
+    if (!(prev <= 1 && xlsxPeople.length >= 2)) return
+    if (!collab?.joined || collab.role !== 'edit' || !editingRef.current) return
+    if (!autosavePendingRef.current || autosaveInFlightRef.current) return
+    void (async () => {
+      try {
+        const rooms = await collabApi.rooms()
+        const me = collabRef.current ? rooms.find((r) => r.roomId === collabRef.current!.roomId)?.participants.find((x) => x.id === collabRef.current!.user.id) : undefined
+        if (!shouldFlushOnPeerArrive({ hasPendingAutosave: true, isOwner: me?.owner, joined: true })) return
+        if (autosaveTimerRef.current) {
+          clearTimeout(autosaveTimerRef.current)
+          autosaveTimerRef.current = null
+        }
+        autosavePendingRef.current = false
+        autosaveInFlightRef.current = true
+        try {
+          await saveViaRoom(true)
+        } finally {
+          autosaveInFlightRef.current = false
+        }
+      } catch {
+        /* 실패하면 예약된 자동 저장이 처리한다 */
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [xlsxPeople, collab?.joined])
+
   const scheduleAutosave = useCallback(() => {
     if (!editingRef.current) return
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    autosavePendingRef.current = true
     autosaveTimerRef.current = setTimeout(() => {
       autosaveTimerRef.current = null
+      autosavePendingRef.current = false
       void (async () => {
         try {
           if (document.hidden) return
@@ -2302,6 +2386,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   }, [saveViaRoom])
   // 방에 붙었으면 방 경로, 단독이면 단독 경로(/api/files)로 저장한다.
   const save = useCallback(async (): Promise<boolean> => {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
+    }
+    autosavePendingRef.current = false
     const room = collabRef.current
     // X2a-③: viewer 는 self clientId 를 알아야 저장할 수 있다. 아직 모르면 막는다
     // (clientId 없이 저장하면 서버가 못 막는다).
@@ -2382,9 +2471,24 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           {collab && xlsxPeople.length > 0 && (
             // C3: 공용 presence 바 (PPT와 같은 마크업·testid).
             <CollabPresenceShell>
-              <CollabPresenceBar peers={xlsxPeople.map(xlsxPersonToView)} />
+              <CollabPresenceBar
+                peers={xlsxPeople.map(xlsxPersonToView)}
+                followId={xlsxFollowId}
+                onFollowToggle={(id) => setXlsxFollowId((prev) => (prev === Number(id) ? null : Number(id)))}
+                onRename={(name) => {
+                  try {
+                    xlsxHandleRef.current?.updateCollabIdentity?.({ name })
+                  } catch {
+                    /* 무시 */
+                  }
+                }}
+              />
             </CollabPresenceShell>
-          )}          <div
+          )}
+          <div
+            onPointerDown={() => { if (!followNavigatingRef.current) setXlsxFollowId(null) }}
+            onWheel={() => { if (!followNavigatingRef.current) setXlsxFollowId(null) }}
+            onKeyDown={() => { if (!followNavigatingRef.current) setXlsxFollowId(null) }}
             // X2a-③ 후속: 연결 판정이 끝날 때까지 에디터를 숨긴다(display:none).
             // lib readOnly 는 DOM 입력을 막지 못해 programmatic fill 이 통과하고,
             // fill 과 방 적용이 레이스하면 조용히 유실된다. display:none 조상 아래에서는

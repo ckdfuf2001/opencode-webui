@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { Pencil } from 'lucide-react'
 import { peerActivity, type Peer } from '@/lib/usePeers'
 
 /**
@@ -117,7 +118,13 @@ export function CollabPresenceShell({ children }: { children: ReactNode }): Reac
 export interface CollabPresenceBarProps {
   peers: PresencePeerView[];
   /** C3: 아바타 클릭은 팝오버를 열고 닫는다 (따라가기는 팝오버 안에서). */
-  defaultOpen?: boolean
+  defaultOpen?: boolean;
+  /** 따라가기 중인 참가자 id (없으면 null). */
+  followId?: string | number | null;
+  /** 팝오버의 따라가기 버튼 토글. */
+  onFollowToggle?: (id: string) => void;
+  /** 팝오버의 내 이름 저장 (빈 값은 호출되지 않는다). */
+  onRename?: (name: string) => void;
 }
 
 /**
@@ -125,10 +132,19 @@ export interface CollabPresenceBarProps {
  * - data-owner는 아바타에 둔다 (E21이 DOM에서 바로 읽는다).
  * - 팝오버는 열려 있을 때만 DOM에 만든다.
  */
-export function CollabPresenceBar({ peers, defaultOpen = false }: CollabPresenceBarProps): ReactNode {
+export function CollabPresenceBar({ peers, defaultOpen = false, followId = null, onFollowToggle, onRename }: CollabPresenceBarProps): ReactNode {
   const [open, setOpen] = useState(defaultOpen)
+  const [renaming, setRenaming] = useState(false)
+  const [renameInput, setRenameInput] = useState('')
   const shown = peers.slice(0, MAX_AVATARS)
   const extra = peers.length - shown.length
+  const self = peers.find((p) => p.isSelf) ?? null
+  const submitRename = (): void => {
+    const name = renameInput.trim()
+    if (!name) return
+    onRename?.(name)
+    setRenaming(false)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -160,20 +176,85 @@ export function CollabPresenceBar({ peers, defaultOpen = false }: CollabPresence
           aria-label="참가자 목록"
           className="absolute left-2 top-full z-50 mt-1 min-w-56 max-w-72 rounded-md border border-border bg-background shadow-lg"
         >
-          {peers.map((p) => (
+          {self && (
             <div
-              key={p.id}
+              key={self.id}
               role="listitem"
               data-testid="collab-presence-row"
-              data-peer-id={p.id}
-              data-self={p.isSelf ? 'true' : 'false'}
-              className="flex items-center gap-2 px-3 py-1.5 text-xs"
+              data-peer-id={self.id}
+              data-self="true"
+              className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border"
             >
-              <AvatarDot p={p} active={false} />
-              <span data-testid="collab-peer-name" className="truncate flex-1">{displayName(p)}</span>
-              <span data-testid="collab-peer-mode" className="shrink-0 text-muted-foreground">{p.mode === 'view' ? '보기' : '편집'}</span>
+              <AvatarDot p={self} active={false} />
+              {renaming ? (
+                <>
+                <input
+                  data-testid="collab-rename-input"
+                  className="h-6 min-w-0 flex-1 rounded border border-input bg-background px-2 text-xs outline-none"
+                  value={renameInput}
+                  autoFocus
+                  maxLength={64}
+                  onChange={(e) => setRenameInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitRename()
+                    if (e.key === 'Escape') { e.stopPropagation(); setRenaming(false) }
+                  }}
+                />
+                <button
+                  type="button"
+                  data-testid="collab-rename-submit"
+                  disabled={renameInput.trim().length === 0}
+                  onClick={() => submitRename()}
+                  className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted disabled:opacity-40"
+                >
+                  저장
+                </button>
+                </>
+              ) : (
+                <>
+                  <span data-testid="collab-peer-name" className="truncate flex-1">{displayName(self)}</span>
+                  <span data-testid="collab-peer-mode" className="shrink-0 text-muted-foreground">{self.mode === 'view' ? '보기' : '편집'}</span>
+                  <button
+                    type="button"
+                    data-testid="collab-rename-edit"
+                    title="이름 변경"
+                    onClick={() => { setRenameInput(self.name); setRenaming(true) }}
+                    className="shrink-0 rounded p-1 hover:bg-muted"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                </>
+              )}
             </div>
-          ))}
+          )}
+          {peers.filter((p) => !p.isSelf).map((p) => {
+            const following = followId != null && String(followId) === p.id
+            return (
+              <div
+                key={p.id}
+                role="listitem"
+                data-testid="collab-presence-row"
+                data-peer-id={p.id}
+                data-self="false"
+                data-following={following ? 'true' : 'false'}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs"
+              >
+                <AvatarDot p={p} active={false} />
+                <span data-testid="collab-peer-name" className="truncate flex-1">{displayName(p)}</span>
+                <span data-testid="collab-peer-mode" className="shrink-0 text-muted-foreground">{p.mode === 'view' ? '보기' : '편집'}</span>
+                <button
+                  type="button"
+                  data-testid="collab-follow"
+                  aria-pressed={following}
+                  title={following ? `${p.name} 팔로우 중 (클릭하면 해제)` : `${p.name} 팔로우`}
+                  onClick={() => onFollowToggle?.(p.id)}
+                  className={`h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted${following ? ' underline decoration-dotted underline-offset-2' : ''}`}
+                >
+                  {following ? '해제' : '따라가기'}
+                </button>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

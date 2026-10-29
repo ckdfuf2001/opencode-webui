@@ -1625,6 +1625,54 @@ writeBackHaltedRef.current = false
   })
 const peersRef = useRef<Peer[]>([])
   peersRef.current = peers
+
+  /** C3: 팝오버 따라가기. 프로그래밍 이동 중에는 followNavigatingRef로 걸러 직접 조작으로 보지 않는다. */
+  const [followId, setFollowId] = useState<string | null>(null)
+  const followNavigatingRef = useRef(false)
+  const followed = followId ? peers.find((p) => p.id === followId) ?? null : null
+  useEffect(() => {
+    // 대상이 나가면 추적을 멈춘다.
+    if (followId && !peers.some((p) => p.id === followId)) setFollowId(null)
+  }, [peers, followId])
+  useEffect(() => {
+    const s = followed?.slide
+    if (!followId || typeof s !== 'number' || s < 1) return
+    if (followNavigatingRef.current) return
+    if (slideIdx === s - 1) return
+    followNavigatingRef.current = true
+    setSlideIdx(s - 1)
+    setCurSlide(s - 1)
+    try {
+      viewerRef.current?.goTo?.(s - 1)
+    } catch {
+      // 무시 (fallback: initialSlide는 다음 마운트에 반영)
+    }
+    ;(window as unknown as { __c3FollowNav?: number }).__c3FollowNav =
+      ((window as unknown as { __c3FollowNav?: number }).__c3FollowNav ?? 0) + 1
+    const timer = setTimeout(() => {
+      followNavigatingRef.current = false
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [followId, followed?.slide, setCurSlide])
+
+  /** C3: 팝오버 이름 변경. lib presence 라벨도 바꾸기 위해 viewer를 리마운트한다 (같은 doc 유지). */
+  const submitRename = useCallback((name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const prev = collabUserRef.current
+    if (prev) {
+      saveCollabUser({ ...prev, name: trimmed })
+      const c = collabRef.current
+      if (c) {
+        try {
+          c.session.setUser({ name: trimmed, color: prev.color })
+        } catch {
+          // 무시
+        }
+      }
+    }
+    setReloadKey((v) => v + 1)
+  }, [saveCollabUser])
   // Z3: 상대 슬라이드 이력 — awareness로 받은 값이 **변경될 때마다** 기록한다.
   // 200ms 샘플링은 그보다 짧은 깜빡임을 놓치므로 이벤트 기준으로 본다.
   const peerSlideHistoryRef = useRef<Record<string, number[]>>({})
@@ -2000,7 +2048,12 @@ const peersRef = useRef<Peer[]>([])
       )}
       {collab && (
         <CollabPresenceShell>
-          <CollabPresenceBar peers={peers.map(peerToView)} />
+          <CollabPresenceBar
+            peers={peers.map(peerToView)}
+            followId={followId}
+            onFollowToggle={(id) => setFollowId((prev) => (prev === id ? null : id))}
+            onRename={submitRename}
+          />
         </CollabPresenceShell>
       )}
       {collab && sameShapePeers.length > 0 && (
@@ -2081,7 +2134,12 @@ const peersRef = useRef<Peer[]>([])
           </button>
         </div>
       )}
-      <div className="flex h-full min-h-0">
+      <div
+        className="flex h-full min-h-0"
+        onPointerDown={() => { if (!followNavigatingRef.current) setFollowId(null) }}
+        onWheel={() => { if (!followNavigatingRef.current) setFollowId(null) }}
+        onKeyDown={() => { if (!followNavigatingRef.current) setFollowId(null) }}
+      >
         <div className="flex-1 min-w-0 h-full">
           <PptxViewerBoundary onFail={onFail}>
             <Suspense fallback={SPINNER}>
