@@ -1,8 +1,8 @@
-import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { test, expect, type Browser, type BrowserContext, type ConsoleMessage, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
-import { absForRel, uniqueRel, uniqueRelWithExt } from './helpers/env'
+import { absForRel, backendBase, uniqueRel, uniqueRelWithExt } from './helpers/env'
 import { gotoApp, openFile, gotoSlide, peer } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
@@ -183,6 +183,46 @@ async function xlsxImageAnchor(page: Page): Promise<{ sheet: number; index: numb
   })
 }
 
+/**
+ * C4: 이미지 찾고·옮기기를 한 evaluate에서 원자적으로 수행한다.
+ * 읽기/쓰기를 나누면 lib 재동기화 순간에 모델이 갈아끼워져
+ * index가 가리키는 그림이 사라지는 레이스가 있다. row가 기대값과 다르면
+ * (이미 옮겨졌거나 모델이 비어 있으면) 건드리지 않고 보고만 한다.
+ */
+async function xlsxNudgeImage(page: Page, fromRow: number, dRow: number): Promise<{ moved: boolean; row: number; error?: string }> {
+  return page.evaluate(
+    ([fr, d]) => {
+      try {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: {
+            workbook?: { sheets?: Array<{ drawings?: Array<{ kind?: string; anchor?: { from?: { row?: number } } }> }> }
+            session?: { setDrawingAnchor?: (sheet: number, index: number, anchor: unknown) => void }
+          }
+        } | null
+        const sheets = el?.core?.workbook?.sheets ?? []
+        for (let s = 0; s < sheets.length; s++) {
+          const drawings = sheets[s]?.drawings ?? []
+          for (let i = 0; i < drawings.length; i++) {
+            if (drawings[i]?.kind !== 'image') continue
+            const r = drawings[i]?.anchor?.from?.row
+            if (typeof r !== 'number') return { moved: false as const, row: -1 }
+            if (r !== fr) return { moved: false as const, row: r }
+            const anchor = drawings[i]?.anchor
+            if (!anchor) return { moved: false as const, row: r }
+            const next = JSON.parse(JSON.stringify(anchor)) as { from: { row: number } }
+            next.from.row = r + d
+            el?.core?.session?.setDrawingAnchor?.(s, i, next)
+            return { moved: true as const, row: r + d }
+          }
+        }
+        return { moved: false as const, row: -1 }
+      } catch (e) {
+        return { moved: false as const, row: -1, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
+    [fromRow, dRow] as const,
+  )
+}
 /**
  * C3: lib core에 직접 닿는다 (그리드 UI와 같은 ctx.run 경로를 탄다).
  * 가드가 막으면 lib이 throw하므로 여기서 받아낸다 (거부+토스트+롤백이 정상 동작이다).
@@ -884,6 +924,565 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     } finally {
       await t.ctxA.close()
       await t.ctxB.close()
+    }
+  })
+})
+
+/**
+ * C4: 시트 개체 잠금·이동 (서버 표 + 락).
+ * - red: 개체 op 가드 우회 경로가 없고, 서버 라운드트립이 없으면 아래가 전부 실패한다.
+ *   (구 가드는 Move/Delete 를 전부 막아 move POST 0건·B 미반영·undo 미전파가 된다.)
+ */
+async function apiPost(p: string, body: unknown): Promise<{ status: number; json: unknown }> {
+  const r = await fetch(`${backendBase()}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  return { status: r.status, json: (await r.json().catch(() => null)) as unknown }
+}
+
+async function apiGet(p: string): Promise<{ status: number; json: any }> {
+  const r = await fetch(`${backendBase()}${p}`)
+  return { status: r.status, json: (await r.json().catch(() => null)) as any }
+}
+
+function countRequests(page: Page, method: string, substr: string): { n: () => number } {
+  let n = 0
+  const h = (r: { url: () => string; method: () => string }) => {
+    if (r.method() === method && r.url().includes(substr)) n += 1
+  }
+  page.on('request', h as never)
+  return { n: () => n }
+}
+
+async function xlsxDeleteDrawing(page: Page, sheet: number, index: number): Promise<{ ok: boolean; error?: string }> {
+  return page.evaluate(
+    ([s, i]) => {
+      try {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: { session?: { deleteDrawing?: (sheet: number, index: number) => unknown } }
+        } | null
+        el?.core?.session?.deleteDrawing?.(s, i)
+        return { ok: true as const }
+      } catch (e) {
+        return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
+    [sheet, index] as const,
+  )
+}
+
+async function xlsxSetCell(page: Page, sheet: number, row: number, col: number, text: string): Promise<unknown> {
+  return page.evaluate(
+    ([s, r, c, t]) => {
+      const el = document.querySelector('xlsx-editor') as unknown as {
+        core?: { session?: { setCellInput?: (sheet: number, row: number, col: number, text: string) => unknown } }
+      } | null
+      return el?.core?.session?.setCellInput?.(s, r, c, t) ?? null
+    },
+    [sheet, row, col, text] as const,
+  )
+}
+
+async function xlsxUndo(page: Page): Promise<{ ok: boolean; error?: string }> {
+  return page.evaluate(() => {
+    try {
+      const el = document.querySelector('xlsx-editor') as unknown as {
+        core?: { session?: { undo?: () => unknown } }
+      } | null
+      el?.core?.session?.undo?.()
+      return { ok: true as const }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+}
+
+async function xlsxCellValue(page: Page, sheet: number, row: number, col: number): Promise<unknown> {
+  return page.evaluate(
+    ([s, r, c]) => {
+      const el = document.querySelector('xlsx-editor') as unknown as {
+        core?: { workbook?: { sheets?: Array<{ rows?: Map<number, Map<number, { value?: unknown }>> }> } }
+      } | null
+      return el?.core?.workbook?.sheets?.[s]?.rows?.get(r)?.get(c)?.value ?? null
+    },
+    [sheet, row, col] as const,
+  )
+}
+
+async function openXlsxEditingRetry(page: Page, name: string): Promise<void> {
+  // C4: dev 프록시 간헐 실패(vite http proxy error)로 미리보기가 안 붙으면
+  // 한 번만 새로고침 후 재시도한다 (C3 기존 헬퍼는 손대지 않는다).
+  try {
+    await openXlsxEditing(page, name)
+    return
+  } catch {
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+    await openXlsxEditing(page, name)
+  }
+}
+
+async function xlsxDrawingsDebug(page: Page): Promise<Array<{ kind: unknown; ck: unknown; row: unknown }>> {
+  return page.evaluate(() => {
+    const el = document.querySelector('xlsx-editor') as unknown as {
+      core?: { workbook?: { sheets?: Array<{ drawings?: Array<{ kind?: unknown; __ck?: unknown; anchor?: { from?: { row?: unknown } } }> }> } }
+    } | null
+    const out: Array<{ kind: unknown; ck: unknown; row: unknown }> = []
+    for (const s of el?.core?.workbook?.sheets ?? []) {
+      for (const d of s?.drawings ?? []) out.push({ kind: d?.kind, ck: (d as { __ck?: unknown })?.__ck ?? null, row: d?.anchor?.from?.row ?? null })
+    }
+    return out
+  })
+}
+
+/** 앱 콘솔에서 특정 문구를 기다린다 (mismatch 확정 같은 내부 상태 관측용). */
+function waitConsole(page: Page, needle: string, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      page.off('console', h)
+      reject(new Error(`console never saw within ${timeoutMs}ms: ${needle}`))
+    }, timeoutMs)
+    const h = (m: ConsoleMessage) => {
+      try {
+        if (m.text().includes(needle)) {
+          clearTimeout(timer)
+          page.off('console', h)
+          resolve()
+        }
+      } catch {
+        /* 무시 */
+      }
+    }
+    page.on('console', h)
+  })
+}
+
+/** 이미지 drawings의 __ck (서버 키). kind 어휘와 무관하게 이미지를 직접 찾는다. */
+async function xlsxImageCk(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const el = document.querySelector('xlsx-editor') as unknown as {
+      core?: { workbook?: { sheets?: Array<{ drawings?: Array<{ kind?: unknown; __ck?: unknown }> }> } }
+    } | null
+    for (const s of el?.core?.workbook?.sheets ?? []) {
+      for (const d of s?.drawings ?? []) {
+        if (d?.kind === 'image' && typeof d.__ck === 'string') return d.__ck as string
+      }
+    }
+    return null
+  })
+}
+
+/** 개체 DOM에 진짜 pointerdown을 날린다 (앱의 캡처 리스너 → activeKey + 락 요청). */
+async function xlsxPointerDownObject(page: Page, index: number): Promise<boolean> {
+  return page.evaluate(
+    (i) => {
+      try {
+        const el = document.querySelector('xlsx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+        const root = el?.shadowRoot ?? document
+        const target = root.querySelector(`.xg-obj[data-index="${i}"]`)
+        if (!target) return false
+        target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }))
+        return true
+      } catch {
+        return false
+      }
+    },
+    index as const,
+  )
+}
+
+/** rooms 목록에서 rel로 roomId를 찾는다 (읽기 전용, 방 생성 없음). */
+async function roomIdByRel(rel: string): Promise<string> {
+  const r = await apiGet('/api/collab/rooms')
+  expect(r.status).toBe(200)
+  const list = (r.json as { rooms?: Array<{ roomId?: unknown; rel?: unknown; path?: unknown }> }).rooms ?? []
+  const leaf = rel.split('/').pop()
+  const hit = list.find((x) => x.rel === rel || (typeof x.path === 'string' && x.path.replace(/\\/g, '/').endsWith(`/${leaf}`)))
+  expect(hit?.roomId, `room for ${rel} should exist`).toBeTruthy()
+  return hit?.roomId as string
+}
+
+test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
+  test('C4-mismatch: 순서가 어긋나면 개체 op 전부 막고 move 요청 0건', async ({ browser }) => {
+    const f = freshXlsx('c4mis', 0)
+    // 방을 먼저 열고 서버에 잘못된 순서를 심는다 (첫 기록자 승리).
+    // 해시는 session 응답의 lastHash를 그대로 쓴다 (앱의 baseHash와 동일 보장).
+    const sess = await apiPost('/api/collab/session', { path: f.abs })
+    expect(sess.status).toBe(200)
+    const sessBody = sess.json as { roomId?: unknown; lastHash?: unknown }
+    const roomId = sessBody.roomId
+    const lastHash = sessBody.lastHash
+    expect(typeof roomId === 'string' && roomId, 'session returns roomId').toBeTruthy()
+    expect(typeof lastHash === 'string' && lastHash, 'session returns lastHash').toBeTruthy()
+    const poison = await apiPost(`/api/collab/${roomId}/objects/register`, {
+      hash: lastHash,
+      // 개수 자체가 어긋나게 2건을 심는다 (kind 어휘와 무관하게 확정 mismatch).
+      items: [
+        { sheet: 0, kind: 'chart' },
+        { sheet: 0, kind: 'chart' },
+      ],
+    })
+    expect(poison.status).toBe(200)
+    const t = await twoPages(browser)
+    // 앱은 GET으로 독순서를 읽고 어긋나면 등록 POST 없이 mismatch 확정한다.
+    const getObjects = countRequests(t.pageA, 'GET', '/objects')
+    const movePosts = countRequests(t.pageA, 'POST', '/move')
+    // mismatch 확정(console.warn)을 먼저 기다린다 (등록 재시도 레이스 제거).
+    const mismatchSeen = waitConsole(t.pageA, 'order mismatch', 25000)
+    try {
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(() => Promise.resolve(getObjects.n()), { timeout: 15000, intervals: [500] }).toBeGreaterThanOrEqual(1)
+      await mismatchSeen
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      // 가드가 막으므로 이동 시도는 거부된다.
+      const moved = await xlsxMoveImage(t.pageA, before!.sheet, before!.index, before!.row + 4)
+      expect(moved.ok, `mismatch move should be blocked (got: ${moved.ok ? 'ok' : moved.error})`).toBe(false)
+      // 모델 교체 순간 빈 읽기를 흡수하려고 poll로 확인한다.
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageA))?.row, { timeout: 10000, intervals: [500] })
+        .toBe(before!.row)
+      // move 요청은 한 건도 나가지 않는다 (서버 truth와 무관하게 클라이언트가 막는다).
+      await expect.poll(() => Promise.resolve(movePosts.n()), { timeout: 5000, intervals: [250] }).toBe(0)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C4-move: A가 이미지를 옮기면 B에 반영되고 서버 anchor가 바뀐다', async ({ browser }) => {
+    const f = freshXlsx('c4move', 0)
+    const t = await twoPages(browser)
+    const movePostsA = countRequests(t.pageA, 'POST', '/move')
+    const movePostsB = countRequests(t.pageB, 'POST', '/move')
+    try {
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      // 양쪽 등록·태그 완료 대기 (서버 순서 확정 후 __ck 부착).
+      await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect.poll(async () => xlsxImageCk(t.pageB), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      const key = await xlsxImageCk(t.pageA)
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      // 원자 nudge를 poll한다 (lib 재동기화 순간 모델 교체 레이스 흡수).
+      await expect
+        .poll(async () => xlsxNudgeImage(t.pageA, before!.row, 4), { timeout: 20000, intervals: [500] })
+        .toMatchObject({ moved: true })
+      expect((await xlsxImageAnchor(t.pageA))?.row).toBe(before!.row + 4)
+      // 서버로 move가 전송된다 (디바운스 500ms + 체인).
+      await expect.poll(() => Promise.resolve(movePostsA.n()), { timeout: 15000, intervals: [500] }).toBeGreaterThanOrEqual(1)
+      // 서버 truth 먼저: 같은 방 GET으로 anchor 확인 (성공 여부와 B 반영을 분리한다).
+      const roomId = await roomIdByRel(f.rel)
+      await expect
+        .poll(async () => {
+          const st = await apiGet(`/api/collab/${roomId}/objects`)
+          if (st.status !== 200) return -2
+          const objs = (st.json as { objects?: Array<{ key?: unknown; anchor?: { from?: { row?: unknown } } }> }).objects ?? []
+          return objs.find((o) => o.key === key)?.anchor?.from?.row ?? -1
+        }, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row + 4)
+      // B에 반영된다 (WS 102 → in-place anchor 교체).
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageB))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row + 4)
+      // 메아리 없음: B는 받아서 적용만 하고 절대 다시 보내지 않는다.
+      expect(movePostsB.n(), 'B must not echo object moves').toBe(0)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C4-lock: 남이 잡은 개체는 거부·토스트·원복되고, 풀면 성공한다', async ({ browser }) => {
+    const f = freshXlsx('c4lock', 0)
+    const t = await twoPages(browser)
+    const movePostsA = countRequests(t.pageA, 'POST', '/move')
+    try {
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect.poll(async () => xlsxImageCk(t.pageB), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      // 홀더 이름 토스트를 위해 presence 동기화를 기다린다 (XLSX peer id는 숫자 clientId).
+      await expect
+        .poll(async () => t.pageA.getByTestId('collab-peer').count(), { timeout: 15000, intervals: [500] })
+        .toBe(2)
+      const key = await xlsxImageCk(t.pageA)
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      const roomId = await roomIdByRel(f.rel)
+      // B가 개체를 직접 눌러 락을 잡는다 (진짜 pointerdown 경로: activeKey + 락 요청).
+      await expect
+        .poll(async () => xlsxPointerDownObject(t.pageB, before!.index), { timeout: 15000, intervals: [500] })
+        .toBe(true)
+      await expect
+        .poll(async () => {
+          const st = await apiGet(`/api/collab/${roomId}/objects`)
+          if (st.status !== 200) return 0
+          const objs = (st.json as { objects?: Array<{ key?: unknown; lock?: { clientId?: unknown } | null }> }).objects ?? []
+          const got = objs.find((o) => o.key === key)?.lock?.clientId
+          return typeof got === 'number' ? got : 0
+        }, { timeout: 15000, intervals: [500] })
+        .toBeGreaterThan(0)
+      // A는 로컬로 옮겨지지만 서버 409 → 토스트 + 원복된다.
+      const target = before!.row + 4
+      const serverAnchorOf = async (): Promise<unknown> => {
+        const st = await apiGet(`/api/collab/${roomId}/objects`)
+        const objs = (st.json as { objects?: Array<{ key?: unknown; anchor?: unknown }> }).objects ?? []
+        return objs.find((o) => o.key === key)?.anchor ?? null
+      }
+      const serverBefore = JSON.stringify(await serverAnchorOf())
+      const tried = await xlsxNudgeImage(t.pageA, before!.row, 4)
+      expect(tried.moved, `local move should apply (got ${JSON.stringify(tried)})`).toBe(true)
+      await expect.poll(() => Promise.resolve(movePostsA.n()), { timeout: 15000, intervals: [500] }).toBeGreaterThanOrEqual(1)
+      await expect(t.pageA.getByText('Grace가 편집 중입니다')).toHaveCount(1, { timeout: 10000 })
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageA))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row)
+      // 서버 anchor는 그대로다 (등록 직후 null일 수도 있다).
+      expect(JSON.stringify(await serverAnchorOf())).toBe(serverBefore)
+      // B가 풀면 A가 옮겨진다 (서버가 준 lockId로 해제).
+      const stAfter = await apiGet(`/api/collab/${roomId}/objects`)
+      const objsAfter = (stAfter.json as { objects?: Array<{ key?: unknown; lock?: { lockId?: unknown } | null }> }).objects ?? []
+      const lockId = objsAfter.find((o) => o.key === key)?.lock?.lockId
+      expect(typeof lockId === 'string' && lockId).toBeTruthy()
+      const unlock = await (async () => {
+        const r = await fetch(`${backendBase()}/api/collab/${roomId}/objects/${key}/lock`, {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ lockId }),
+        })
+        return { status: r.status, json: (await r.json().catch(() => null)) as unknown }
+      })()
+      expect(unlock.status).toBe(200)
+      await expect
+        .poll(async () => xlsxNudgeImage(t.pageA, before!.row, 4), { timeout: 20000, intervals: [500] })
+        .toMatchObject({ moved: true })
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageB))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(target)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C4-delete: A가 이미지를 지우면 B에 반영되고 서버가 deleted를 기록', async ({ browser }) => {
+    const f = freshXlsx('c4del', 0)
+    const t = await twoPages(browser)
+    try {
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect.poll(async () => xlsxImageCk(t.pageB), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      const key = await xlsxImageCk(t.pageA)
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      const del = await xlsxDeleteDrawing(t.pageA, before!.sheet, before!.index)
+      expect(del.ok, `delete should pass (got: ${del.ok ? 'ok' : del.error})`).toBe(true)
+      await expect.poll(async () => xlsxImageAnchor(t.pageA), { timeout: 10000, intervals: [500] }).toBeNull()
+      // 서버 truth: deleted 플래그.
+      const roomId = await roomIdByRel(f.rel)
+      await expect
+        .poll(async () => {
+          const st = await apiGet(`/api/collab/${roomId}/objects`)
+          if (st.status !== 200) return 'no-room'
+          const objs = (st.json as { objects?: Array<{ key?: unknown; deleted?: unknown }> }).objects ?? []
+          return objs.find((o) => o.key === key)?.deleted ?? 'no-key'
+        }, { timeout: 15000, intervals: [500] })
+        .toBe(true)
+      // B에 반영된다.
+      await expect.poll(async () => xlsxImageAnchor(t.pageB), { timeout: 15000, intervals: [500] }).toBeNull()
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C4-move-undo: 이동 undo가 전파되고 메아리가 없다', async ({ browser }) => {
+    const f = freshXlsx('c4undo', 0)
+    const t = await twoPages(browser)
+    const movePostsA = countRequests(t.pageA, 'POST', '/move')
+    const movePostsB = countRequests(t.pageB, 'POST', '/move')
+    try {
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect.poll(async () => xlsxImageCk(t.pageB), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      const key = await xlsxImageCk(t.pageA)
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      const target = before!.row + 4
+      await expect
+        .poll(async () => xlsxNudgeImage(t.pageA, before!.row, 4), { timeout: 20000, intervals: [500] })
+        .toMatchObject({ moved: true })
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageB))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(target)
+      // A가 undo하면 이동이 되돌아가고 B·서버에 전파된다 (undo도 그냥 이동).
+      const undone = await xlsxUndo(t.pageA)
+      expect(undone.ok, `undo should pass (got: ${undone.ok ? 'ok' : undone.error})`).toBe(true)
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageA))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row)
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageB))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row)
+      const roomId = await roomIdByRel(f.rel)
+      await expect
+        .poll(async () => {
+          const st = await apiGet(`/api/collab/${roomId}/objects`)
+          if (st.status !== 200) return -2
+          const objs = (st.json as { objects?: Array<{ key?: unknown; anchor?: { from?: { row?: unknown } } }> }).objects ?? []
+          return objs.find((o) => o.key === key)?.anchor?.from?.row ?? -1
+        }, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row)
+      // 이동 1 + undo 1 = A 2건, B는 0건 (메아리 없음).
+      expect(movePostsA.n()).toBeGreaterThanOrEqual(2)
+      expect(movePostsB.n(), 'B must not echo object moves').toBe(0)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C4-delete-undo-blocked: 삭제 undo는 막히고 삭제가 유지된다', async ({ browser }) => {
+    const f = freshXlsx('c4delu', 0)
+    const t = await twoPages(browser)
+    try {
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect.poll(async () => xlsxImageCk(t.pageB), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      const del = await xlsxDeleteDrawing(t.pageA, before!.sheet, before!.index)
+      expect(del.ok, `delete should pass (got: ${del.ok ? 'ok' : del.error})`).toBe(true)
+      await expect.poll(async () => xlsxImageAnchor(t.pageA), { timeout: 10000, intervals: [500] }).toBeNull()
+      // 삭제 undo는 가드가 막는다 (서버 부활 API 없이 되살리면 발산).
+      const undone = await xlsxUndo(t.pageA)
+      expect(undone.ok, 'delete undo should be blocked').toBe(false)
+      await expect(t.pageA.getByText(LOCK_TOAST)).toHaveCount(1, { timeout: 8000 })
+      await expect.poll(async () => xlsxImageAnchor(t.pageA), { timeout: 10000, intervals: [500] }).toBeNull()
+      await expect.poll(async () => xlsxImageAnchor(t.pageB), { timeout: 10000, intervals: [500] }).toBeNull()
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C4-late-join: 늦게 들어와도 서버 진실을 따라잡는다', async ({ browser }) => {
+    const f = freshXlsx('c4late', 0)
+    const t = await twoPages(browser)
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    try {
+      await seedUser(ctxC, { id: 'u-ivan', name: 'Ivan', color: '#9333ea' })
+      const pageC = await ctxC.newPage()
+      await gotoApp(pageC)
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      const target = before!.row + 4
+      await expect
+        .poll(async () => xlsxNudgeImage(t.pageA, before!.row, 4), { timeout: 20000, intervals: [500] })
+        .toMatchObject({ moved: true })
+      const key = await xlsxImageCk(t.pageA)
+      const roomId = await roomIdByRel(f.rel)
+      await expect
+        .poll(async () => {
+          const st = await apiGet(`/api/collab/${roomId}/objects`)
+          if (st.status !== 200) return -2
+          const objs = (st.json as { objects?: Array<{ key?: unknown; anchor?: { from?: { row?: unknown } } }> }).objects ?? []
+          return objs.find((o) => o.key === key)?.anchor?.from?.row ?? -1
+        }, { timeout: 15000, intervals: [500] })
+        .toBe(target)
+      // C가 늦게 들어온다: 디스크·참가 시점과 무관하게 서버 진실로 수렴한다.
+      await openXlsxEditingRetry(pageC, f.name)
+      await expect.poll(async () => xlsxActive(pageC), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect
+        .poll(async () => (await xlsxImageAnchor(pageC))?.row, { timeout: 20000, intervals: [500] })
+        .toBe(target)
+      // 같은 순서 → 같은 키를 공유한다.
+      await expect.poll(async () => xlsxImageCk(pageC), { timeout: 20000, intervals: [500] }).toBe(key)
+    } finally {
+      await ctxC.close().catch(() => {})
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C4-leave-release: 탭을 닫으면 락이 풀려 상대가 옮길 수 있다', async ({ browser }) => {
+    const f = freshXlsx('c4leave', 0)
+    const t = await twoPages(browser)
+    const movePostsA = countRequests(t.pageA, 'POST', '/move')
+    try {
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect.poll(async () => xlsxImageCk(t.pageB), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect
+        .poll(async () => t.pageA.getByTestId('collab-peer').count(), { timeout: 15000, intervals: [500] })
+        .toBe(2)
+      const key = await xlsxImageCk(t.pageA)
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      const target = before!.row + 4
+      const roomId = await roomIdByRel(f.rel)
+      // B가 개체를 직접 눌러 락을 잡는다 (진짜 pointerdown 경로).
+      await expect
+        .poll(async () => xlsxPointerDownObject(t.pageB, before!.index), { timeout: 15000, intervals: [500] })
+        .toBe(true)
+      await expect
+        .poll(async () => {
+          const st = await apiGet(`/api/collab/${roomId}/objects`)
+          if (st.status !== 200) return 0
+          const objs = (st.json as { objects?: Array<{ key?: unknown; lock?: { clientId?: unknown } | null }> }).objects ?? []
+          const got = objs.find((o) => o.key === key)?.lock?.clientId
+          return typeof got === 'number' ? got : 0
+        }, { timeout: 15000, intervals: [500] })
+        .toBeGreaterThan(0)
+      // 먼저 경합을 확정한다 (B가 잡은 동안 A는 409 + 토스트 + 원복).
+      const tried = await xlsxNudgeImage(t.pageA, before!.row, target - before!.row)
+      expect(tried.moved, `local move should apply (got ${JSON.stringify(tried)})`).toBe(true)
+      await expect.poll(() => Promise.resolve(movePostsA.n()), { timeout: 15000, intervals: [500] }).toBeGreaterThanOrEqual(1)
+      await expect(t.pageA.getByText('Grace가 편집 중입니다')).toHaveCount(1, { timeout: 10000 })
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageA))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row)
+      // B가 탭을 닫으면 awareness 소멸 → B의 락이 풀린다.
+      await t.ctxB.close()
+      // A는 풀린 뒤에 옮겨진다 (스스로 재시도).
+      await expect
+        .poll(
+          async () => {
+            const cur = await xlsxImageAnchor(t.pageA)
+            if (cur && cur.row !== target) await xlsxNudgeImage(t.pageA, cur.row, target - cur.row)
+            const st = await apiGet(`/api/collab/${roomId}/objects`)
+            if (st.status !== 200) return -2
+            const objs = (st.json as { objects?: Array<{ key?: unknown; anchor?: { from?: { row?: unknown } } }> }).objects ?? []
+            return objs.find((o) => o.key === key)?.anchor?.from?.row ?? -1
+          },
+          { timeout: 30000, intervals: [1000] },
+        )
+        .toBe(target)
+    } finally {
+      await t.ctxB.close().catch(() => {})
+      await t.ctxA.close()
     }
   })
 })
