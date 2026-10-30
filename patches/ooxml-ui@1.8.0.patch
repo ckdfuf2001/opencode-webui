@@ -197,6 +197,15 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
    }));
  }
  var PAGES = [
+@@ -14930,7 +14945,8 @@ const refresh = () => {
+   const refresh = () => {
+     const sharing = handlers.collaboration?.();
+-    people.hidden = !sharing?.active;
++    // C4-3: 앱 상단 CollabPresenceBar가 유일 표시다. lib 타이틀바 presence를 항상 숨긴다.
++    people.hidden = true;
+     const next = sharing?.active ? participants(sharing) : [];
+     if (JSON.stringify(next) !== JSON.stringify(people.participants)) people.participants = next;
+     render3();
 @@ -15314,6 +15329,9 @@ var CalcPreparation = class {
  };
  
@@ -257,9 +266,15 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
 +    const next = {};
 +    if (typeof patch?.name === "string" && patch.name.trim()) next.userName = patch.name.trim().slice(0, 64);
 +    if (typeof patch?.color === "string" && patch.color) next.userColor = patch.color;
-+    if (Object.keys(next).length === 0) return false;
++    // C4-3: 이미지 선택 시 내 셀 표시를 지운다. range/sheet를 null로 게시하면
++    // 상대 화면에서 내 원격 박스가 사라진다(다음 self selection 변경 때 lib이 다시 게시).
++    const clear = {};
++    if (patch && Object.hasOwn(patch, "range")) clear.range = typeof patch.range === "string" ? patch.range : void 0;
++    if (patch && Object.hasOwn(patch, "sheet")) clear.sheet = typeof patch.sheet === "string" ? patch.sheet : void 0;
++    const hasClear = Object.keys(clear).length > 0;
++    if (Object.keys(next).length === 0 && !hasClear) return false;
 +    Object.assign(active2.session.identity, next);
-+    active2.session.updatePresence(next);
++    active2.session.updatePresence({ ...next, ...clear });
 +    this.#changed();
 +    return true;
 +  }
