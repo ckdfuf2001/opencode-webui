@@ -1752,6 +1752,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   }, [joining, editing])
   const collabRef = useRef(collab)
   collabRef.current = collab
+  /** C4: lib 연결 상태 (offline이면 개체 op를 막는다 — 락 강제 불가이므로 fail-closed). */
+  const connOnlineRef = useRef(true)
   const onRoomHasEditorsChangeRef = useRef(onRoomHasEditorsChange)
   onRoomHasEditorsChangeRef.current = onRoomHasEditorsChange
   const xlsxHandleRef = useRef(xlsxHandle)
@@ -2849,6 +2851,13 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       g.__ooxmlEditGuard = (label: string, kind: string): boolean => {
         // C4: 서버 거부 후 되돌리기용 undo/redo는 항상 허용한다 (사용자 경로 아님).
         if (objUndoRevertRef.current && (kind === 'undo' || kind === 'redo') && (label === 'Move object' || label === 'Delete object')) return true
+        let browserOnline = true
+        try {
+          // setOffline 같은 브라우저 단절은 즉시 반영된다 (lib 상태보다 빠르다).
+          browserOnline = window.navigator.onLine !== false
+        } catch {
+          browserOnline = true
+        }
         let ctx: ObjectGuardCtx = NO_OBJECT_GUARD
         if (label === 'Move object' || label === 'Delete object') {
           const foreign = new Set<string>()
@@ -2856,7 +2865,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           for (const [k, v] of objTableRef.current) {
             if (v.lock && v.lock.clientId !== me) foreign.add(k)
           }
-          ctx = { embLocked, mismatch: objMismatchRef.current, activeKey: objActiveKeyRef.current, foreignKeys: foreign }
+          ctx = { embLocked, mismatch: objMismatchRef.current, activeKey: objActiveKeyRef.current, foreignKeys: foreign, online: connOnlineRef.current && browserOnline }
         }
         if (!isBlockedXlsxEdit(kind, label, ctx)) return true
         const now = Date.now()
@@ -3280,6 +3289,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               // 'connected' 이고 `synced`(첫 교환 완료)일 때만 푼다.
               if (state.active && state.status === 'connected' && state.synced)
                 setCollab((prev) => (prev ? { ...prev, joined: true } : prev))
+              // C4: 소켓 상태를 기억한다. 끊기면 개체 op를 막는다(서버 강제 불가).
+              connOnlineRef.current = state.status === 'connected'
               // X2a-③: 저장에 쓸 lib clientId 를 기억한다(viewer 403 확인용).
               const self = state.people.find((p) => p.self)
               if (self) selfClientIdRef.current = self.clientId

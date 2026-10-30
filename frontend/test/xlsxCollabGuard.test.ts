@@ -106,6 +106,16 @@ describe('xlsxCollabGuard', () => {
     expect(isBlockedXlsxEdit('annotations', 'Move object', base)).toBe(false)
   })
 
+  test('개체 op: 오프라인이면 서버 강제가 안 되니 전부 막는다', () => {
+    const off: ObjectGuardCtx = { ...NO_OBJECT_GUARD, online: false }
+    expect(decideObjectOp('annotations', 'Move object', off)).toBe('offline')
+    expect(decideObjectOp('undo', 'Move object', off)).toBe('offline')
+    expect(decideObjectOp('undo', 'Delete object', off)).toBe('offline')
+    expect(isBlockedXlsxEdit('annotations', 'Move object', off)).toBe(true)
+    expect(isBlockedXlsxEdit('annotations', 'Delete object', off)).toBe(true)
+    expect(isBlockedXlsxEdit('undo', 'Move object', off)).toBe(true)
+  })
+
   test('surgical oleObj가 있으면 EMB로 판정한다', () => {
     expect(hasEmbObject(undefined)).toBe(false)
     expect(hasEmbObject([])).toBe(false)

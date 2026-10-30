@@ -79,19 +79,22 @@ export interface ObjectGuardCtx {
   activeKey: string | null
   /** 다른 사람이 잡은 락의 키 집합 (로컬 개체 표 기준). */
   foreignKeys: ReadonlySet<string>
+  /** lib 소켓 연결 여부. 끊기면 서버 강제가 안 되니 전체 개체 op 잠금. */
+  online: boolean
 }
 
 /** 'pass'면 통과, 아니면 거부 사유. */
-export type ObjectGuardVerdict = 'pass' | 'emb' | 'mismatch' | 'foreign'
+export type ObjectGuardVerdict = 'pass' | 'emb' | 'mismatch' | 'foreign' | 'offline'
 
 export function decideObjectOp(_kind: string, _label: string, ctx: ObjectGuardCtx): ObjectGuardVerdict {
+  if (!ctx.online) return 'offline'
   if (ctx.embLocked) return 'emb'
   if (ctx.mismatch) return 'mismatch'
   if (ctx.activeKey !== null && ctx.foreignKeys.has(ctx.activeKey)) return 'foreign'
   return 'pass'
 }
 
-export const NO_OBJECT_GUARD: ObjectGuardCtx = { embLocked: false, mismatch: false, activeKey: null, foreignKeys: new Set() }
+export const NO_OBJECT_GUARD: ObjectGuardCtx = { embLocked: false, mismatch: false, activeKey: null, foreignKeys: new Set(), online: true }
 
 /** C4: surgical oleObj(EMB)가 drawings에 있으면 true. 실물 EMB는 모델에 안 들어온다. */
 export function hasEmbObject(drawings: ReadonlyArray<{ sourceXml?: string } | null | undefined> | undefined): boolean {
