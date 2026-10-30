@@ -4,13 +4,19 @@ import { z } from 'zod'
 import { createNodeWebSocket } from '@hono/node-ws'
 import { issueCollabName } from '../db/collab-name-queries'
 import {
+  acquireObjectLock,
   addConn,
   applySave,
   checkSave,
   createSession,
+  deleteObject,
+  getRoomObjects,
   isValidRoomId,
   listRooms,
   lockInfo,
+  moveObject,
+  registerRoomObjects,
+  releaseObjectLock,
   removeConn,
   rooms,
   wsMessage,
@@ -175,6 +181,112 @@ app.get('/lock', async (c) => {
 
 app.get('/rooms', async (c) => {
   return c.json({ rooms: listRooms() })
+})
+
+// ---------------------------------------------------------------------------
+// C4: 시트 개체 lock/move/delete (키 발급·순서 대조 포함).
+// ---------------------------------------------------------------------------
+
+const ObjectsKeyParam = z.object({ room: z.string().min(1).max(128), key: z.string().min(1).max(64) })
+
+const ObjectsRegisterSchema = z.object({
+  hash: z.string().min(1).max(128),
+  items: z.array(z.object({ sheet: z.number().int().min(0).max(1024), kind: z.string().min(1).max(80) })).max(500),
+})
+
+const ObjectsLockSchema = z.object({ clientId: z.number().int() })
+
+const ObjectsUnlockSchema = z.object({ lockId: z.string().min(1).max(128) })
+
+const ObjectsMoveSchema = z.object({
+  clientId: z.number().int(),
+  // anchor는 서버가 파싱하지 않는다. unknown(JSON) 그대로 저장·방송한다.
+  anchor: z.unknown(),
+  baseVersion: z.number().int().min(0),
+  lockId: z.string().min(1).max(128).optional(),
+})
+
+const ObjectsDeleteSchema = z.object({
+  clientId: z.number().int(),
+  baseVersion: z.number().int().min(0),
+  lockId: z.string().min(1).max(128).optional(),
+})
+
+function objErr(c: { json: (o: unknown, s?: number) => Response }, r: { code?: string } & Record<string, unknown>): Response {
+  const code = r.code ?? 'error'
+  const status = code === 'no_room' || code === 'gone' ? 404 : 409
+  return c.json({ error: code, ...r }, status)
+}
+
+app.get('/:room/objects', async (c) => {
+  const { room } = ObjectsKeyParam.extend({ key: z.string().optional() }).parse({ room: c.req.param('room') })
+  if (!isValidRoomId(room) || !rooms.has(room)) return c.json({ error: 'No such room', code: 'no_room' }, 404)
+  return c.json(getRoomObjects(room))
+})
+
+app.post('/:room/objects/register', async (c) => {
+  try {
+    const room = c.req.param('room')
+    if (!isValidRoomId(room) || !rooms.has(room)) return c.json({ error: 'No such room', code: 'no_room' }, 404)
+    const body = ObjectsRegisterSchema.parse(await c.req.json())
+    const r = registerRoomObjects(room, body.hash, body.items)
+    if (!r.ok) return objErr(c, r)
+    return c.json(r)
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.post('/:room/objects/:key/lock', async (c) => {
+  try {
+    const { room, key } = ObjectsKeyParam.parse({ room: c.req.param('room'), key: c.req.param('key') })
+    if (!isValidRoomId(room)) return c.json({ error: 'No such room', code: 'no_room' }, 404)
+    const body = ObjectsLockSchema.parse(await c.req.json())
+    const r = acquireObjectLock(room, key, body.clientId)
+    if (!r.ok) return objErr(c, r)
+    return c.json(r)
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.delete('/:room/objects/:key/lock', async (c) => {
+  try {
+    const { room, key } = ObjectsKeyParam.parse({ room: c.req.param('room'), key: c.req.param('key') })
+    if (!isValidRoomId(room)) return c.json({ error: 'No such room', code: 'no_room' }, 404)
+    const body = ObjectsUnlockSchema.parse(await c.req.json())
+    const r = releaseObjectLock(room, key, body.lockId)
+    if (!r.ok) return objErr(c, r)
+    return c.json(r)
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.post('/:room/objects/:key/move', async (c) => {
+  try {
+    const { room, key } = ObjectsKeyParam.parse({ room: c.req.param('room'), key: c.req.param('key') })
+    if (!isValidRoomId(room)) return c.json({ error: 'No such room', code: 'no_room' }, 404)
+    const body = ObjectsMoveSchema.parse(await c.req.json())
+    const r = moveObject(room, key, body.clientId, body.anchor, body.baseVersion, body.lockId)
+    if (!r.ok) return objErr(c, r)
+    return c.json(r)
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.post('/:room/objects/:key/delete', async (c) => {
+  try {
+    const { room, key } = ObjectsKeyParam.parse({ room: c.req.param('room'), key: c.req.param('key') })
+    if (!isValidRoomId(room)) return c.json({ error: 'No such room', code: 'no_room' }, 404)
+    const body = ObjectsDeleteSchema.parse(await c.req.json())
+    const r = deleteObject(room, key, body.clientId, body.baseVersion, body.lockId)
+    if (!r.ok) return objErr(c, r)
+    return c.json(r)
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
 })
 
 app.post('/suggest-name', async (c) => {

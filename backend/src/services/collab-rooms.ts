@@ -47,6 +47,46 @@ interface ConnInfo {
 /** 무수신 conn 정리 임계값 (D). 테스트는 sweepDeadConns를 직접 호출한다. */
 export const DEAD_CONN_MS = 120_000
 
+/**
+ * C4: 시트 위 개체(이미지·도형·차트·EMB) 1개의 서버 측 상태.
+ * 키는 서버가 발급한다(`o1`, `o2`, …). image/chart는 lib에 안정 식별자가 없어
+ * cNvPr id를 쓰지 않는다(저장할 때마다 다시 매겨진다 — 0절 실측).
+ */
+export interface RoomObjectEntry {
+  key: string
+  /** 0-based 시트 인덱스. */
+  sheet: number
+  /** 클라이언트 모델 kind + 설명 (예: `image`, `chart`, `unsupported:shape`, `unsupported:object`). */
+  kind: string
+  /** 마지막으로 알려진 anchor (서버는 파싱하지 않고 그대로 들고 있는다). */
+  anchor: unknown
+  deleted: boolean
+  /** 마지막 변경이 반영된 방 개체 버전. */
+  version: number
+  lock: { clientId: number; lockId: string; expiresAt: number } | null
+}
+
+/** C4: 방 단위 개체 표. 방 객체에 들고 있어 reset/dispose 때 함께 사라진다. */
+export interface RoomObjects {
+  byKey: Map<string, RoomObjectEntry>
+  /** 파일 해시 → 시트별 살아 있는 키 순서 (`{ [sheet: string]: string[] }`). */
+  orderByHash: Map<string, Record<string, string[]>>
+  /** 개체 변경 카운터. move/delete 성공 때마다 +1, baseVersion 판정 기준. */
+  version: number
+  /** 키 발급 카운터. */
+  seq: number
+}
+
+export function newRoomObjects(): RoomObjects {
+  return { byKey: new Map(), orderByHash: new Map(), version: 0, seq: 0 }
+}
+
+/** C4: 개체 브로드캐스트 WS 메시지 타입 (99 keepalive·100 meta·101 reset 다음). */
+export const MSG_ROOM_OBJECTS = 102
+
+/** C4: 개체 락 임대 (ms). 만료는 다음 접근 때 정리한다. */
+export const OBJECT_LOCK_TTL_MS = 10_000
+
 export interface CollabRoom {
   id: string
   /** 정규화된 절대경로. */
@@ -101,6 +141,8 @@ export interface CollabRoom {
   saving: boolean
   /** AI 편집이 409로 막힌 마지막 시각 (V7 칩용). */
   aiBlockedAt: number | null
+  /** C4: 시트 개체(이미지·도형·차트·EMB) 표. 방과 함께 생기고 방과 함께 사라진다. */
+  objects: RoomObjects
 }
 
 export interface CollabParticipant {
@@ -380,6 +422,7 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     saveChain: Promise.resolve(),
     saving: false,
     aiBlockedAt: null,
+    objects: newRoomObjects(),
   }
   awareness.on('update', (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
@@ -400,6 +443,9 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     } else if (connMode(room, room.ownerConn) === 'view') {
       reevaluateOwner(room)
     }
+    // C4: awareness가 사라진 클라이언트의 개체 락은 즉시 푼다 (WS close 때도
+    // dropConnFromRoom → removeAwarenessStates 를 거쳐 여기로 온다).
+    if (removed.length > 0) releaseObjectLocks(room, removed)
     broadcast(room, encodeAwareness([...added, ...updated, ...removed], room.awareness))
   })
   doc.on('update', (update: Uint8Array, origin: unknown) => {
@@ -1250,4 +1296,344 @@ export function resetCollabForTests(): void {
   rooms.clear()
   pathIndex.clear()
   roomTtlMs = 30_000
+}
+
+// ---------------------------------------------------------------------------
+// C4: 시트 개체(그림·도형·차트·EMB) 표·락·이동/삭제
+//
+// 원칙:
+// - 키는 서버가 발급한다(`o1`, `o2`, …). image/chart는 lib에 안정 식별자가 없어
+//   cNvPr id를 쓰지 않는다(저장할 때마다 다시 매겨진다 — 0절 실측).
+// - 해시별 시트 순서를 기록한다. 같은 해시는 같은 바이트이므로 순서가 같아야 한다.
+//   다르면 키를 붙이지 않고 fail-closed(그 세션의 개체 op 전부 잠금).
+// - 락은 10초 임대, move와 같은 lockId로 갱신된다. WS close·awareness 소멸 시 즉시 해제.
+// - 변경은 방 전체에 type 102 WS 메시지로 알린다 (lib은 모르는 타입을 무시한다).
+// - 방 리셋·해제는 room 객체와 함께 표를 버린다 (별도 정리 불필요).
+// ---------------------------------------------------------------------------
+
+export interface RoomObjectSnapshot {
+  key: string
+  sheet: number
+  kind: string
+  anchor: unknown
+  deleted: boolean
+  version: number
+  lock: { clientId: number; lockId: string; expiresAt: number } | null
+}
+
+export interface RoomObjectsState {
+  version: number
+  order: Record<string, string[]> | null
+  objects: RoomObjectSnapshot[]
+}
+
+/** EMB 계열: 이동·삭제 모두 잠금 (1단계). */
+function isEmbKind(kind: string): boolean {
+  return kind === 'unsupported:object'
+}
+
+function snapshotEntry(e: RoomObjectEntry): RoomObjectSnapshot {
+  return {
+    key: e.key,
+    sheet: e.sheet,
+    kind: e.kind,
+    anchor: e.anchor,
+    deleted: e.deleted,
+    version: e.version,
+    lock: e.lock ? { ...e.lock } : null,
+  }
+}
+
+/** 만료된 락을 정리한다. true면 바뀐 것이 있다. */
+export function sweepObjectLocks(room: CollabRoom, now: number = Date.now()): boolean {
+  let changed = false
+  for (const e of room.objects.byKey.values()) {
+    if (e.lock && e.lock.expiresAt <= now) {
+      e.lock = null
+      changed = true
+    }
+  }
+  return changed
+}
+
+function broadcastObjects(room: CollabRoom): void {
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, MSG_ROOM_OBJECTS)
+  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify(getRoomObjects(room))))
+  broadcast(room, encoding.toUint8Array(e))
+}
+
+/** 방 개체 전체 상태 (GET / session 응답용). */
+export function getRoomObjects(roomId: string): (RoomObjectsState & { roomId: string }) | { error: string; code: string } {
+  const room = rooms.get(roomId)
+  if (!room) return { error: 'No such room', code: 'no_room' }
+  sweepObjectLocks(room)
+  return {
+    roomId,
+    version: room.objects.version,
+    order: room.objects.orderByHash.get(room.lastHash) ?? null,
+    objects: [...room.objects.byKey.values()].map(snapshotEntry),
+  }
+}
+
+function sameOrder(a: Array<{ sheet: number; kind: string }>, b: Array<{ sheet: number; kind: string }>): boolean {
+  if (a.length !== b.length) return false
+  return a.every((x, i) => x.sheet === b[i]?.sheet && x.kind === b[i]?.kind)
+}
+
+/**
+ * 개체 등록. 첫 등록자가 시트별 순서대로 kinds를 보내면 서버가 키를 발급한다.
+ * 이미 아는 해시면 순서·개수를 대조하고, 다르면 키 없이 거부한다 (fail-closed).
+ */
+export function registerRoomObjects(
+  roomId: string,
+  hash: string,
+  items: Array<{ sheet: number; kind: string }>,
+):
+  | { ok: true; keys: string[]; version: number; objects: RoomObjectSnapshot[]; order: Record<string, string[]> }
+  | { ok: false; code: 'no_room' | 'order_mismatch'; version?: number; objects?: RoomObjectSnapshot[]; expected?: Record<string, string[]> } {
+  const room = rooms.get(roomId)
+  if (!room) return { ok: false, code: 'no_room' }
+  if (typeof hash !== 'string' || !hash || !Array.isArray(items) || items.length === 0 || items.length > 500) {
+    return { ok: false, code: 'order_mismatch' }
+  }
+  for (const it of items) {
+    if (!it || !Number.isInteger(it.sheet) || it.sheet < 0 || typeof it.kind !== 'string' || !it.kind || it.kind.length > 80) {
+      return { ok: false, code: 'order_mismatch' }
+    }
+  }
+  const clean = items.map((it) => ({ sheet: it.sheet as number, kind: it.kind as string }))
+  const existing = room.objects.orderByHash.get(hash)
+  if (existing) {
+    const flat: Array<{ sheet: number; kind: string }> = []
+    for (const sheet of Object.keys(existing).map(Number).sort((a, b) => a - b)) {
+      const keys = existing[String(sheet)] ?? []
+      for (const k of keys) {
+        const e = room.objects.byKey.get(k)
+        flat.push({ sheet, kind: e?.kind ?? '' })
+      }
+    }
+    if (!sameOrder(flat, clean)) {
+      logger.warn(`Collab room ${roomId}: object order mismatch for hash ${hash.slice(0, 12)} (fail-closed)`)
+      return { ok: false, code: 'order_mismatch', version: room.objects.version, objects: [...room.objects.byKey.values()].map(snapshotEntry), expected: existing }
+    }
+    const keys: string[] = []
+    for (const sheet of Object.keys(existing).map(Number).sort((a, b) => a - b)) keys.push(...(existing[String(sheet)] ?? []))
+    return { ok: true, keys, version: room.objects.version, objects: [...room.objects.byKey.values()].map(snapshotEntry), order: existing }
+  }
+  const keys: string[] = []
+  const order: Record<string, string[]> = {}
+  for (const it of clean) {
+    const key = `o${++room.objects.seq}`
+    keys.push(key)
+    const sk = String(it.sheet)
+    if (!order[sk]) order[sk] = []
+    order[sk].push(key)
+    room.objects.byKey.set(key, {
+      key,
+      sheet: it.sheet,
+      kind: it.kind,
+      anchor: null,
+      deleted: false,
+      version: room.objects.version,
+      lock: null,
+    })
+  }
+  room.objects.orderByHash.set(hash, order)
+  broadcastObjects(room)
+  return { ok: true, keys, version: room.objects.version, objects: [...room.objects.byKey.values()].map(snapshotEntry), order }
+}
+
+function liveLock(e: RoomObjectEntry, now: number): boolean {
+  return !!e.lock && e.lock.expiresAt > now
+}
+
+/**
+ * 개체 락 요청. 같은 홀더의 재요청은 갱신(같은 lockId 반환)한다.
+ */
+export function acquireObjectLock(
+  roomId: string,
+  key: string,
+  clientId: number,
+  now: number = Date.now(),
+  ttlMs: number = OBJECT_LOCK_TTL_MS,
+): { ok: true; lockId: string; expiresAt: number; version: number } | { ok: false; code: string; holder?: number; version?: number } {
+  const room = rooms.get(roomId)
+  if (!room) return { ok: false, code: 'no_room' }
+  const e = room.objects.byKey.get(key)
+  if (!e || e.deleted) return { ok: false, code: 'gone' }
+  if (!Number.isInteger(clientId)) return { ok: false, code: 'bad_client' }
+  if (sweepObjectLocks(room, now)) broadcastObjects(room)
+  if (e.lock && liveLock(e, now)) {
+    if (e.lock.clientId === clientId) {
+      e.lock.expiresAt = now + ttlMs
+      broadcastObjects(room)
+      return { ok: true, lockId: e.lock.lockId, expiresAt: e.lock.expiresAt, version: room.objects.version }
+    }
+    return { ok: false, code: 'locked', holder: e.lock.clientId, version: room.objects.version }
+  }
+  const lockId = randomUUID()
+  e.lock = { clientId, lockId, expiresAt: now + ttlMs }
+  broadcastObjects(room)
+  return { ok: true, lockId, expiresAt: e.lock.expiresAt, version: room.objects.version }
+}
+
+/** 개체 락 해제. 정확히 같은 lockId일 때만 푼다. */
+export function releaseObjectLock(
+  roomId: string,
+  key: string,
+  lockId: string,
+): { ok: true } | { ok: false; code: string } {
+  const room = rooms.get(roomId)
+  if (!room) return { ok: false, code: 'no_room' }
+  const e = room.objects.byKey.get(key)
+  if (!e) return { ok: false, code: 'gone' }
+  if (!e.lock) return { ok: true }
+  if (e.lock.lockId !== lockId) return { ok: false, code: 'not_holder' }
+  e.lock = null
+  broadcastObjects(room)
+  return { ok: true }
+}
+
+/**
+ * 주어진 awareness clientId들을 홀더로 하는 락을 모두 푼다.
+ * WS close(→removeAwarenessStates→'update' removed)와 순수 awareness 소멸 모두
+ * createRoom 의 awareness 'update' 핸들러를 거쳐 여기로 온다.
+ */
+export function releaseObjectLocks(room: CollabRoom, clientIds: number[]): boolean {
+  let changed = false
+  const gone = new Set(clientIds)
+  for (const e of room.objects.byKey.values()) {
+    if (e.lock && gone.has(e.lock.clientId)) {
+      e.lock = null
+      changed = true
+    }
+  }
+  if (changed) {
+    logger.info(`Collab room ${room.id}: object locks released on disconnect (${clientIds.length} cids)`)
+    broadcastObjects(room)
+  }
+  return changed
+}
+
+function checkObjectVersion(
+  room: CollabRoom,
+  baseVersion: unknown,
+): { ok: true } | { ok: false; code: 'version_mismatch'; version: number; objects: RoomObjectSnapshot[] } {
+  if (baseVersion !== room.objects.version) {
+    return {
+      ok: false,
+      code: 'version_mismatch',
+      version: room.objects.version,
+      objects: [...room.objects.byKey.values()].map(snapshotEntry),
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * move/delete 공통 판정. lockId가 있으면 검증·갱신하고, 없으면
+ * 다른 홀더가 없을 때 호출자에게 즉시 락을 건다(grant-on-write).
+ */
+function checkObjectWrite(
+  room: CollabRoom,
+  e: RoomObjectEntry,
+  clientId: number,
+  lockId: string | undefined,
+  now: number,
+):
+  | { ok: true }
+  | { ok: false; code: 'locked' | 'not_holder'; holder?: number; version: number; objects: RoomObjectSnapshot[] } {
+  sweepObjectLocks(room, now)
+  const stale = (code: 'locked' | 'not_holder', holder?: number) => ({
+    ok: false as const,
+    code,
+    holder,
+    version: room.objects.version,
+    objects: [...room.objects.byKey.values()].map(snapshotEntry),
+  })
+  if (e.lock && liveLock(e, now)) {
+    if (lockId !== undefined) {
+      if (e.lock.lockId !== lockId || e.lock.clientId !== clientId) return stale('not_holder', e.lock.clientId)
+      e.lock.expiresAt = now + OBJECT_LOCK_TTL_MS
+      return { ok: true }
+    }
+    if (e.lock.clientId === clientId) {
+      e.lock.expiresAt = now + OBJECT_LOCK_TTL_MS
+      return { ok: true }
+    }
+    return stale('locked', e.lock.clientId)
+  }
+  if (lockId !== undefined) return stale('not_holder')
+  // grant-on-write: 다른 홀더가 없으면 호출자에게 즉시 락을 건다.
+  e.lock = { clientId, lockId: randomUUID(), expiresAt: now + OBJECT_LOCK_TTL_MS }
+  return { ok: true }
+}
+
+function applyObjectChange(
+  roomId: string,
+  key: string,
+  clientId: number,
+  baseVersion: unknown,
+  lockId: string | undefined,
+  apply: (e: RoomObjectEntry) => void,
+  now: number = Date.now(),
+):
+  | { ok: true; version: number }
+  | { ok: false; code: string; holder?: number; version?: number; objects?: RoomObjectSnapshot[] } {
+  const room = rooms.get(roomId)
+  if (!room) return { ok: false, code: 'no_room' }
+  const e = room.objects.byKey.get(key)
+  if (!e) return { ok: false, code: 'gone' }
+  if (e.deleted && apply !== deleteApply) return { ok: false, code: 'deleted' }
+  if (!Number.isInteger(clientId)) return { ok: false, code: 'bad_client' }
+  // C4 1단계: EMB(surgical oleObj)는 이동·삭제 모두 잠금. 혼자 편집할 때도 막는다.
+  if (isEmbKind(e.kind)) return { ok: false, code: 'emb_locked', version: room.objects.version }
+  const vc = checkObjectVersion(room, baseVersion)
+  if (!vc.ok) return vc
+  const wc = checkObjectWrite(room, e, clientId, lockId, now)
+  if (!wc.ok) return wc
+  apply(e)
+  room.objects.version += 1
+  e.version = room.objects.version
+  broadcastObjects(room)
+  return { ok: true, version: room.objects.version }
+}
+
+const deleteApply = (e: RoomObjectEntry): void => {
+  e.deleted = true
+}
+
+/** 개체 이동. anchor는 서버가 파싱하지 않고 그대로 저장·방송한다. */
+export function moveObject(
+  roomId: string,
+  key: string,
+  clientId: number,
+  anchor: unknown,
+  baseVersion: unknown,
+  lockId?: string,
+  now: number = Date.now(),
+):
+  | { ok: true; version: number }
+  | { ok: false; code: string; holder?: number; version?: number; objects?: RoomObjectSnapshot[] } {
+  if (anchor === undefined || anchor === null || typeof anchor !== 'object') {
+    return { ok: false, code: 'bad_anchor' }
+  }
+  return applyObjectChange(roomId, key, clientId, baseVersion, lockId, (e) => {
+    e.anchor = anchor
+  }, now)
+}
+
+/** 개체 삭제. */
+export function deleteObject(
+  roomId: string,
+  key: string,
+  clientId: number,
+  baseVersion: unknown,
+  lockId?: string,
+  now: number = Date.now(),
+):
+  | { ok: true; version: number }
+  | { ok: false; code: string; holder?: number; version?: number; objects?: RoomObjectSnapshot[] } {
+  return applyObjectChange(roomId, key, clientId, baseVersion, lockId, deleteApply, now)
 }
