@@ -798,3 +798,39 @@ E21만의 문제가 아니다. 근거:
 - 기준선 대비 변동: `memoryRender.test.ts`가 C1 이동(NowProvider→CollabPresence)을 따라감.
   `memory-allowlist.json` 동일 사유 1행 경로 변경(cc9443a).
 - 결정: D48 보완. v0.13 백로그에 서버측 편집 API/MCP 조사 1줄 추가.
+
+## C3 접속자 표시 완성 — 팝오버·"(Me)"·따라가기·이미지 잠금 (2026-10-30, release-0.12)
+
+- red: e2e/collab/c3.spec.ts P-5~P-9 + C3-img-1/2 + C3-flush/undo/release (500256d).
+- P-6 이름 변경: PPT는 `saveCollabUser`+`session.setUser` 후 `setReloadKey` 리마운트라
+  팝오버가 닫힌다 → 제출 시 명시적으로 닫고(`setOpen(false)`) 다시 열어 `(Me)`를 확인한다.
+  XLSX는 `xlsxHandle`이 React 래퍼 ref(`O()`)라 `updateCollabIdentity`/`reveal`이 없어
+  조용히 스킵됐다 → element(`xlsx-editor`, 패치된 메서드 보유)로 위임 보정한다
+  (인라인 ref 콜백은 detach/attach 무한 루프를 일으키므로 effect에서 1회만 보정).
+  seedUser는 `addInitScript`가 매 내비게이션 덮어써서 reload 유지 단언이 깨졌으므로
+  키가 없을 때만 심는다.
+- P-7 따라가기: (1) XLSX `reveal` 미동작의 진짜 원인은 위 핸들 문제였다(같은 수정으로 해결).
+  (2) 연속 이동 유실: 500ms `followNavigatingRef` 창 안에 들어온 이동이 버려지므로
+  목표로 중복을 가린다(`lastFollowNavRef`) + 리마운트 시 핸들 기준으로 재탐색한다.
+  (3) PPT 자가 리마운트(2회/초 ref 재생성)가 slide-1 게시 300ms 타이머를 계속 취소했다 →
+  게이트 disarm을 viewerKey 변경 때만 한다(ref 콜백 disarm 삭제). W1/E19b green 유지.
+  (4) lib 자동따라가기(`useBroadcastFollower`, viewer가 owner를 추적)가 앱 unfollow를
+  무력화했다(P-7b B가 3으로 끌려감) → `patches/pptx-react-viewer@4.33.0.patch`에
+  `paused: true`(C3 주석)로 끈다. XLSX lib에는 해당 기능 없음 확인.
+  (5) Esc가 팝오버→모달→편집종료까지 전파돼 B가 편집에서 나갔다(P-7d B 이탈) →
+  window 캡처에서 선점 차단한다(입력칸 Esc은 제외). 바깥 클릭은 따라가기 해제다
+  (`onDismiss`, P-7b). 썸네일 내비게이션(aside)은 따라가기를 유지한다 (P-7c 상호 팔로우).
+- C3-img/flush/undo/release: 가드 throw는 설계(롤백·히스토리 미기록)대로라 테스트가
+  받아낸다(`xlsxMoveImage`가 `{ok, error}` 반환). E2E에는 Toaster를 숨김 마운트하므로 토스트 횟수로
+  가드 에러 문구·롤백 상태·토스트 횟수로 단언한다. 저장 디스크 단언은 네임스페이스 접두사를 걷어낸 뒤
+  바꿨다(lib 저장본은 `<xdr:row>`, 픽스처 원본은 `<row>`).
+  C3-release는 모달 대신 reload로 나간다(데스크톱 모달 닫기 미지원 + `catch` 삼킴 방지).
+- green: c3.spec.ts 16/16 chromium + 16/16 msedge. P-5/P-6/P-9 포함.
+  회귀(격리 실행): presence 4/4 · xlsx-collab 20 · xlsx-c2 7 · ui-layout+viewer-unmount+
+  xlsx-solo 7 · pptx E17/E19b · backend guard 단위 9 · frontend tsc 0 ·
+  check:memory 0/경고1(D36) · check:encoding 0 · eslint my-file 변동 0
+  (전체 337=272+61+4는 베이스라인 drift, my-file 동일 9err/10warn).
+- 전체 스위트(180테스트)는 샌드박스 백엔드 불안정(빈 워크스페이스·TimeoutError)으로
+  완주 불가. E8를 변경 없이(스태시) 돌려도 동일하게 실패함을 확인 → 환경 문제.
+  C3·presence·xlsx 계열 격리 실행은 전부 green이라 제품 회귀는 아니다.
+- 결정: D48·D49 보완으로 처리(D50 미생성). v0.13 이월 없음(C3 완료). 남은 것은 태그 전 사용자 수동 체크.

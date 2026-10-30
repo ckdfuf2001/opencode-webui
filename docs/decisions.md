@@ -435,6 +435,13 @@
   버전 키는 루트 의존성을 요구하지 않으므로 루트 devDependencies 의 `pptx-react-viewer` 를 제거했다
   (lockfile 에 jszip 3.10.1/3.10.2 두 스냅샷이 생기던 원인). clean install 후에도 런타임 표식
   `ui=M21`, `viewer=M21-esm` 과 `slot: "actions"` 가 설치본에 존재함을 확인했다.
+- **패치 범위 추가(C3 follow, P-7b)**: 같은 `patches/pptx-react-viewer@4.33.0.patch`에
+  `dist/chunk-LOBNIIFQ.mjs` + `dist/chunk-JL7A7NDD.js` 2 hunk를 추가했다.
+  lib의 broadcast auto-follow(`useBroadcastFollower`가 viewer를 owner에게 자동 추적)가
+  앱 unfollow와 무관하게 움직여 B를 끌고 가므로 `paused: true`로 끈다(앱이
+  CollabPresenceBar로 follow를 전담한다; XLSX lib에는 해당 기능이 없다). 런타임 표식
+  `viewerBroadcastFollow: "off"`를 같은 hunk에 두었다(ESM/CJS 양쪽). E2E 게이트
+  `assertLibPatchesLoaded`가 이 표식까지 단언한다.
 - **Save 경로 확인**: Save 버튼 → `officeSaveRequest` → `PptxViewer.onSave` → `h.getContent()`
   → `persistBytes` → `saveSerializer.request`(`PptxViewer.tsx:735`). M32 의 serializer 우회 경로가 아니다.
 - **기준선 대조(2026-10-22)**: `v0.12.70` worktree 와 HEAD 에서 동일 명령
@@ -566,6 +573,17 @@
   · 0b0e354(ooxml-core 패치) · 1f330ef(ooxml-ui 패치) · 3c1610d(앱 user.id 전달)
   · c0783ad(rooms `seeded`) · 40d2605(X2a-③ 테스트) · d4733ee(X2a-③ 구현) · 9334d5a(X-M6 개정)
 
+- **D48 보완 (C3)**: 동기화 범위·잠금 판정표는 `frontend/src/lib/xlsxCollabGuard.ts`가
+  유일한 출처다. kind `annotations`는 전부 막고, format/structure/sheets는 unsynced
+  라벨만 막는다(그 외·`view`·`batch`·undo/redo 중 셀 편집은 통과).
+  잠금은 `collab?.joined && xlsxPeople.length >= 2`일 때만 켜진다(혼자면 항상 허용 —
+  C3-release). 보기류 조작(필터·고정·줌)은 deny 목록에 없어 막히지 않으며, 같은 save
+  경로로 디스크에 반영된다(C3-img-2·flush의 zip 단언 + saveBytes 직렬화 프로브로 확인;
+  전용 freeze/filter/zoom e2e는 없고 unit 허용 목록으로 갈음한다).
+  1→2 전이는 owner만 즉시 저장한다(`shouldFlushOnPeerArrive`, 2.5s 디바운스 건너뜀).
+  XLSX 핸들은 React 래퍼 ref(`O()`)가 구 API 부분집합이라 `reveal`/`updateCollabIdentity`가
+  없으므로, 패치된 `xlsx-editor` element에 있으면 effect에서 1회만 위임으로 채운다
+  (인라인 ref 콜백은 detach/attach 무한 루프를 일으킨다).
 ## D49 접속자 표시는 하나로 통일한다 (C1, 2026-10-29)
 - **단일 출처**: `frontend/src/components/collab/CollabPresence.tsx`가 참가자 표시의
   단일 출처다. PPT(`PptxViewer`)는 기존 칩(NowProvider·chip·self marker)을 그대로 옮겨
@@ -595,6 +613,24 @@
 - **베이스라인**: 모바일 E11m/E1m·E2m·E3m 3건 실패는 v0.12.70 대조 때와 같은 기존 실패다.
   이번 실패 지점은 `gotoSlide` 썸네일 버튼 타임아웃으로 presence 래핑과 무관하다.
 
+- **D49 보완 (C3)**: unfollow 조건은 캔버스 직접 조작(pointerdown/wheel/key,
+  팝오버 바깥 클릭)뿐이다. 썸네일 내비게이션(aside)·툴바·팝오버 같은 UI 크롬 조작은
+  따라가기를 유지한다(상호 팔로우 P-7c 성립 조건). 연속 이동 보장은 목표로 중복을
+  가린다(PPT/XLSX 모두 lastNav key; 리마운트 뒤엔 핸들 기준으로 재탐색).
+  게이트 disarm은 진짜 리마운트(viewerKey 변경) 때만 한다(lib 핸들 객체는 부모 리렌더마다
+  새로 생길 수 있어 ref 콜백에서 잠그면 slide 1 게시 300ms 타이머가 매번 취소된다 —
+  P-7a 3→1 유실). arm은 onSlideCountChange 그대로라 W1/E20s 방어는 유지된다.
+  Esc는 window 캡처에서 선점 차단한다(입력칸 제외). FileBrowser 모달 닫힘·전체화면
+  종료 → endEditing 전파를 막아 따라가기 중 편집 모드가 풀리는 일을 없앤다(P-7d).
+  팝오버는 제출·바깥 클릭·Esc·재클릭에 닫히고 열려 있을 때만 DOM에 둔다.
+  이름 변경은 제출 시 닫고 다시 열어 "(Me)"를 확인한다.
+- **v0.13 백로그(성능, C3 측정)**: PPT 뷰어가 유휴 상태에서도 약 5회/초 리렌더하고
+  lib 핸들이 매번 새로 생겨 ref 콜백이 ~3회/초 재발화한다(10초 관측: render 48회·
+  refires 33회, `PptxViewer.tsx` setViewerRef). 원인은 미확정(usePeers bump 후보:
+  `frontend/src/lib/usePeers.ts` awareness change + onMeta/subscribe). v0.13에서
+  렌더 원인 프로파일링 후 D29 허용 목록 여부를 판단한다. Esc 리스너는 팝오버가
+  열릴 때만 붙고 닫히면 0개가 됨을 CDP getEventListeners로 확인했다.
 ## 미결정 (사용자 판단 대기)
+
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
 - Q02 v0.13에서 이미지를 part 참조로 전환할지(Y.Doc 크기·전송량 문제, W3 측정 선행).
