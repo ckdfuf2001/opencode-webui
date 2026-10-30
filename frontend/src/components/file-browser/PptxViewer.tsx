@@ -75,12 +75,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const setViewerRef = useCallback(
     (h: PowerPointViewerHandle | null) => {
       viewerRef.current = h
-      // Y2: 새 viewer가 마운트되면 parse 전 lib이 0을 내보내므로 게이트를 잠근다.
-      // lib의 onSlideCountChange(count > 0)로 다시 arm한다.
-      if (h) {
-        slideGateRef.current?.disarm()
-        armedAtRef.current = performance.now()
-      }
     },
     [],
   )
@@ -1626,9 +1620,21 @@ writeBackHaltedRef.current = false
 const peersRef = useRef<Peer[]>([])
   peersRef.current = peers
 
+  /**
+   * C3: 따라가기 해제 조건. 캔버스 직접 조작(팬·선택·스크롤·키보드 편집)만 해제한다.
+   * 썸네일 내비게이션(aside)·툴바·팝오버 같은 UI 크롬 조작은 유지한다 (P-7c 상호 팔로우).
+   */
+  const isFollowUiTarget = (t: unknown): boolean => {
+    const el = t as HTMLElement | null
+    if (!el || typeof el.closest !== 'function') return false
+    return !!el.closest('aside, [role="navigation"], [role="toolbar"], [data-testid="collab-popover"], [data-testid="collab-avatars"]')
+  }
   /** C3: 팝오버 따라가기. 프로그래밍 이동 중에는 followNavigatingRef로 걸러 직접 조작으로 보지 않는다. */
   const [followId, setFollowId] = useState<string | null>(null)
   const followNavigatingRef = useRef(false)
+  // C3: 마지막으로 따라간 목표. 500ms 창 안에 들어온 연속 이동이
+  // followNavigatingRef 조기 반환에 삼켜져 유실되므로 목표로 중복을 가린다.
+  const lastFollowNavRef = useRef<string | null>(null)
   const followed = followId ? peers.find((p) => p.id === followId) ?? null : null
   useEffect(() => {
     // 대상이 나가면 추적을 멈춘다.
@@ -1636,9 +1642,14 @@ const peersRef = useRef<Peer[]>([])
   }, [peers, followId])
   useEffect(() => {
     const s = followed?.slide
-    if (!followId || typeof s !== 'number' || s < 1) return
-    if (followNavigatingRef.current) return
+    if (!followId || typeof s !== 'number' || s < 1) {
+      if (!followId) lastFollowNavRef.current = null
+      return
+    }
     if (slideIdx === s - 1) return
+    const key = `${followId}|${s}`
+    if (lastFollowNavRef.current === key) return
+    lastFollowNavRef.current = key
     followNavigatingRef.current = true
     setSlideIdx(s - 1)
     setCurSlide(s - 1)
@@ -1809,6 +1820,12 @@ const peersRef = useRef<Peer[]>([])
     })
     // M11: 리마운트 후 첫 자동 저장은 구(舊) 내용으로 덮어쓸 수 있어 막는다.
     remountedSinceSaveRef.current = true
+    // Y2: 진짜 리마운트(viewerKey 변경) 때만 게이트를 잠근다. lib 핸들 객체는
+    // 부모 리렌더마다 새로 생길 수 있어 ref 콜백에서 잠그면 0 게시 타이머가
+    // 매번 취소되어 1번 슬라이드 이동이 절대 게시되지 않는다.
+    // lib의 onSlideCountChange(count > 0)로 다시 arm한다.
+    slideGateRef.current?.disarm()
+    armedAtRef.current = performance.now()
     setPrevViewerKey(viewerKey)
     setSlideIdx(curSlideRef.current)
   }
@@ -2053,6 +2070,8 @@ const peersRef = useRef<Peer[]>([])
             followId={followId}
             onFollowToggle={(id) => setFollowId((prev) => (prev === id ? null : id))}
             onRename={submitRename}
+            // C3: 바깥 클릭은 캔버스 직접 조작 의사로 보고 따라가기를 푼다 (P-7b).
+            onDismiss={() => setFollowId(null)}
           />
         </CollabPresenceShell>
       )}
@@ -2136,9 +2155,9 @@ const peersRef = useRef<Peer[]>([])
       )}
       <div
         className="flex h-full min-h-0"
-        onPointerDown={() => { if (!followNavigatingRef.current) setFollowId(null) }}
-        onWheel={() => { if (!followNavigatingRef.current) setFollowId(null) }}
-        onKeyDown={() => { if (!followNavigatingRef.current) setFollowId(null) }}
+        onPointerDown={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setFollowId(null) }}
+        onWheel={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setFollowId(null) }}
+        onKeyDown={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setFollowId(null) }}
       >
         <div className="flex-1 min-w-0 h-full">
           <PptxViewerBoundary onFail={onFail}>

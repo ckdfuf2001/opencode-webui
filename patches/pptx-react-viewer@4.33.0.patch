@@ -1,7 +1,7 @@
 diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
 index 258156da202883c57418626396f0218efa46152c..c9e43fbfa89798ec28e9d2d5e392815a0b2e66f0 100644
 --- a/dist/chunk-552NAFTD.js
-+++ b/dist/chunk-552NAFTD.js
++++ b/dist/chunk-552NAFTD.js	
 @@ -1,4 +1,7 @@
  'use strict';
 +// M20/M21: 런타임 표식 — 이 패치가 실제로 로드됐는지 E2E 시작 조건으로 단언한다.
@@ -54,7 +54,7 @@ index 258156da202883c57418626396f0218efa46152c..c9e43fbfa89798ec28e9d2d5e392815a
 diff --git a/dist/chunk-DD3ARHEW.mjs b/dist/chunk-DD3ARHEW.mjs
 index c12482e205e1d4c860869c25a3760cf7733d01c7..5279e06baa943df2e0537de6db68e0facdde4534 100644
 --- a/dist/chunk-DD3ARHEW.mjs
-+++ b/dist/chunk-DD3ARHEW.mjs
++++ b/dist/chunk-DD3ARHEW.mjs	
 @@ -7,6 +7,8 @@ import { translationsEn } from 'ooxml-ui/pptx/i18n';
  import { useTranslation } from 'react-i18next';
  import { flushSync } from 'react-dom';
@@ -185,10 +185,27 @@ index c12482e205e1d4c860869c25a3760cf7733d01c7..5279e06baa943df2e0537de6db68e0fa
        revision.current++;
        setSlides(room);
      }
+diff --git a/dist/chunk-JL7A7NDD.js b/dist/chunk-JL7A7NDD.js
+index 66e13102728d29f719238ae94955cbb37d4fc89d..0b5cfefe0022a5a80a5759d906dfe4bd0e4aa9a8 100644
+--- a/dist/chunk-JL7A7NDD.js
++++ b/dist/chunk-JL7A7NDD.js	
+@@ -35723,8 +35723,11 @@ function CollaborationFollowLayer({
+     activeSlideIndex,
+     setActiveSlideIndex,
+     slideCount,
+-    paused: followedClientId !== null
++    paused: true /* C3: app drives follow (CollabPresenceBar); lib broadcast auto-follow would drag viewers to the owner even after app-level unfollow (P-7b) */
+   });
++// C3: broadcast auto-follow is OFF (app drives follow). Runtime marker for E2E verification.
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, viewerBroadcastFollow: "off" };
++
+   if (!collab) {
+     return null;
+   }
 diff --git a/dist/chunk-LOBNIIFQ.mjs b/dist/chunk-LOBNIIFQ.mjs
-index 31708d4afc70b678dd4e9aef7ab83f8fb3817bf0..9ed1735252188f3d28e65d50b21b4697af15dd43 100644
+index 31708d4afc70b678dd4e9aef7ab83f8fb3817bf0..8150a9f5a8ff572a99a73807c9b2e7aa92bd7b50 100644
 --- a/dist/chunk-LOBNIIFQ.mjs
-+++ b/dist/chunk-LOBNIIFQ.mjs
++++ b/dist/chunk-LOBNIIFQ.mjs	
 @@ -29242,6 +29242,7 @@ function TitleBar(p) {
        onCommandSearch: p.onCommandSearch,
        onToggleFindReplace: p.onToggleFindReplace,
@@ -241,10 +258,23 @@ index 31708d4afc70b678dd4e9aef7ab83f8fb3817bf0..9ed1735252188f3d28e65d50b21b4697
                      selectedElement,
                      activeSlide,
                      activeSlideIndex,
+@@ -35718,8 +35723,11 @@ function CollaborationFollowLayer({
+     activeSlideIndex,
+     setActiveSlideIndex,
+     slideCount,
+-    paused: followedClientId !== null
++    paused: true /* C3: app drives follow (CollabPresenceBar); lib broadcast auto-follow would drag viewers to the owner even after app-level unfollow (P-7b) */
+   });
++// C3: broadcast auto-follow is OFF (app drives follow). Runtime marker for E2E verification.
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, viewerBroadcastFollow: "off" };
++
+   if (!collab) {
+     return null;
+   }
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index c27441f32cee48e6e32aa566ab9edd9b21804824..1809f52e675dcad7775ba3d862be0256b5bea9cd 100644
+index c27441f32cee48e6e32aa566ab9edd9b21804824..351a5976c78dfb382d45b14412089901da2b920e 100644
 --- a/dist/index.d.ts
-+++ b/dist/index.d.ts
++++ b/dist/index.d.ts	
 @@ -150,6 +150,12 @@ interface PowerPointViewerProps extends ViewportFitOptions {
     * bar (e.g. "quarterly-review.pptx"). Falls back to a generic label.
     */
@@ -259,9 +289,9 @@ index c27441f32cee48e6e32aa566ab9edd9b21804824..1809f52e675dcad7775ba3d862be0256
    onDirtyChange?: (isDirty: boolean) => void;
    onContentChange?: (content: Uint8Array) => void;
 diff --git a/dist/viewer/index.d.ts b/dist/viewer/index.d.ts
-index 5c532a8274346567f961066eb4818ec207e6f2c2..5c4b213d3c895c6131b0ce5622f9069320515bd8 100644
+index 5c532a8274346567f961066eb4818ec207e6f2c2..ab6c45fcc2ad08a0676bee1913529bac4341f95f 100644
 --- a/dist/viewer/index.d.ts
-+++ b/dist/viewer/index.d.ts
++++ b/dist/viewer/index.d.ts	
 @@ -328,6 +328,12 @@ interface PowerPointViewerProps extends ViewportFitOptions {
     * bar (e.g. "quarterly-review.pptx"). Falls back to a generic label.
     */

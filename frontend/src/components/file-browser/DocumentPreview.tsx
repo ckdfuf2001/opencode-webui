@@ -1678,6 +1678,15 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   collabLockedRef.current = collabLocked
   /** C1: 따라가는 상대 clientId. setActiveSheet로만 이동한다(select 금지). */
   const [xlsxFollowId, setXlsxFollowId] = useState<number | null>(null)
+  /**
+   * C3: 따라가기 해제 조건. 시트 직접 조작만 해제한다.
+   * 시트 탭·툴바·팝오버 같은 UI 크롬 조작은 유지한다 (P-7c 상호 팔로우).
+   */
+  const isFollowUiTarget = (t: unknown): boolean => {
+    const el = t as HTMLElement | null
+    if (!el || typeof el.closest !== 'function') return false
+    return !!el.closest('aside, [role="navigation"], [role="toolbar"], [data-testid="collab-popover"], [data-testid="collab-avatars"]')
+  }
   /** C1: 팔로우 이동(프로그램 이동) 중에는 이동 콜백을 제외한다. */
   const followNavigatingRef = useRef(false)
   const hadEditorsRef = useRef(false)
@@ -1720,6 +1729,35 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const xlsxHandleRef = useRef(xlsxHandle)
   xlsxHandleRef.current = xlsxHandle
   /**
+   * C3: React 래퍼 ref(O())는 구 API 부분집합이라 reveal/updateCollabIdentity가 없다
+   * (?. 로 조용히 스킵되어 이름 변경·따라가기 스크롤이 먹통이었다).
+   * element(패치된 xlsx-editor)에 있으면 위임으로 채운다. 인라인 ref 콜백은 매 렌더
+   * detach/attach를 유발하므로 effect에서 1회만 보정한다.
+   */
+  useEffect(() => {
+    if (!xlsxHandle) return
+    try {
+      const el = (xlsxHandle as unknown as { element?: unknown }).element as
+        | {
+            reveal?: (ref: string) => void
+            updateCollabIdentity?: (p: { name?: string; color?: string }) => boolean
+          }
+        | undefined
+      if (!el) return
+      const rec = xlsxHandle as unknown as Record<string, unknown>
+      if (typeof rec.reveal !== 'function' && typeof el.reveal === 'function') {
+        const fn = el.reveal.bind(el)
+        rec.reveal = (ref: string) => fn(ref)
+      }
+      if (typeof rec.updateCollabIdentity !== 'function' && typeof el.updateCollabIdentity === 'function') {
+        const fn = el.updateCollabIdentity.bind(el)
+        rec.updateCollabIdentity = (p: { name?: string; color?: string }) => fn(p)
+      }
+    } catch {
+      /* 무시 */
+    }
+  }, [xlsxHandle])
+  /**
    * C1: 다른 뷰어(같은 탭의 PPT 바 등)에서 신원을 바꾸면 lib 세션 신원도 갱신한다.
    * updateCollabIdentity는 identity 원본을 고치고 presence로 즉시 알린다(빈 이름 저장 금지).
    */
@@ -1750,9 +1788,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       })()
   const followSheetIndex = followTarget?.sheetIndex
   const followRange = followTarget?.range
+  // C3: 마지막으로 따라간 목표. 500ms 창 안에 들어온 연속 이동이
+  // followNavigatingRef 조기 반환에 삼켜져 유실되므로 목표로 중복을 가린다.
+  // 핸들이 바뀌면(리마운트) 같은 목표라도 다시 따라간다(스크롤이 초기화되므로).
+  const lastXlsxFollowNavRef = useRef<{ handle: unknown; key: string | null }>({ handle: null, key: null })
   useEffect(() => {
-    if (xlsxFollowId == null || typeof followSheetIndex !== 'number') return
-    if (followNavigatingRef.current) return
+    if (xlsxFollowId == null || typeof followSheetIndex !== 'number') {
+      if (xlsxFollowId == null) lastXlsxFollowNavRef.current = { handle: lastXlsxFollowNavRef.current.handle, key: null }
+      return
+    }
+    const key = `${xlsxFollowId}|${followSheetIndex}|${followRange ?? ''}`
+    const last = lastXlsxFollowNavRef.current
+    if (last.handle === xlsxHandleRef.current && last.key === key) return
+    lastXlsxFollowNavRef.current = { handle: xlsxHandleRef.current, key }
     followNavigatingRef.current = true
     try {
       xlsxHandleRef.current?.setActiveSheet?.(followSheetIndex)
@@ -1766,7 +1814,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       followNavigatingRef.current = false
     }, 500)
     return () => clearTimeout(t)
-  }, [xlsxFollowId, followSheetIndex, followRange])
+  }, [xlsxFollowId, followSheetIndex, followRange, xlsxHandle])
   /**
    * X1c(P0-2): 실패한 저장 바이트를 한 개만 보관한다(D27).
    * 어떤 실패(외부 변경·방 없음·네트워크·413·재시도 실패)든 사용자가 내려받을 수 있어야 한다.
@@ -2482,13 +2530,15 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
                     /* 무시 */
                   }
                 }}
+                // C3: 바깥 클릭은 시트 직접 조작 의사로 보고 따라가기를 푼다 (P-7b).
+                onDismiss={() => setXlsxFollowId(null)}
               />
             </CollabPresenceShell>
           )}
           <div
-            onPointerDown={() => { if (!followNavigatingRef.current) setXlsxFollowId(null) }}
-            onWheel={() => { if (!followNavigatingRef.current) setXlsxFollowId(null) }}
-            onKeyDown={() => { if (!followNavigatingRef.current) setXlsxFollowId(null) }}
+            onPointerDown={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setXlsxFollowId(null) }}
+            onWheel={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setXlsxFollowId(null) }}
+            onKeyDown={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setXlsxFollowId(null) }}
             // X2a-③ 후속: 연결 판정이 끝날 때까지 에디터를 숨긴다(display:none).
             // lib readOnly 는 DOM 입력을 막지 못해 programmatic fill 이 통과하고,
             // fill 과 방 적용이 레이스하면 조용히 유실된다. display:none 조상 아래에서는

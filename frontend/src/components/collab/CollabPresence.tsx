@@ -125,6 +125,8 @@ export interface CollabPresenceBarProps {
   onFollowToggle?: (id: string) => void;
   /** 팝오버의 내 이름 저장 (빈 값은 호출되지 않는다). */
   onRename?: (name: string) => void;
+  /** 바깥 클릭으로 팝오버가 닫힐 때 (캔버스를 직접 조작하려는 의도로 보고 따라가기를 푼다). */
+  onDismiss?: () => void;
 }
 
 /**
@@ -132,7 +134,7 @@ export interface CollabPresenceBarProps {
  * - data-owner는 아바타에 둔다 (E21이 DOM에서 바로 읽는다).
  * - 팝오버는 열려 있을 때만 DOM에 만든다.
  */
-export function CollabPresenceBar({ peers, defaultOpen = false, followId = null, onFollowToggle, onRename }: CollabPresenceBarProps): ReactNode {
+export function CollabPresenceBar({ peers, defaultOpen = false, followId = null, onFollowToggle, onRename, onDismiss }: CollabPresenceBarProps): ReactNode {
   const [open, setOpen] = useState(defaultOpen)
   const [renaming, setRenaming] = useState(false)
   const [renameInput, setRenameInput] = useState('')
@@ -143,20 +145,28 @@ export function CollabPresenceBar({ peers, defaultOpen = false, followId = null,
     const name = renameInput.trim()
     if (!name) return
     onRename?.(name)
+    // 이름 변경은 확정 동작이므로 팝오버를 닫는다 (세션 재참가로 바가 바뀌어도 상태가 꼬이지 않는다).
     setRenaming(false)
+    setOpen(false)
   }
 
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // window 캡처에서 먼저 받아 document 버블/캡처의 모달 닫기(FileBrowser,
+      // FilePreview 전체화면 종료 → endEditing → 편집 모드 종료)까지 전파되지
+      // 않게 한다. Esc 1번 = 팝오버만 닫는다.
+      e.stopPropagation()
+      // 이름 입력칸의 Esc(편집 취소)는 입력칸이 처리하므로 팝오버는 열어 둔다.
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return
+      setOpen(false)
     }
-    // keydown(Esc)은 버블 단계에서 듣는다. 이름 입력칸의 Esc가 stopPropagation으로
-    // 팝오버 닫기를 막을 수 있게 하기 위해서다.
     // 바깥 클릭은 아래 투명 오버레이가 받는다 (lib 그리드가 DOM 이벤트를 가로채도 닫힌다).
-    document.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     return () => {
-      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
     }
   }, [open])
 
@@ -169,7 +179,7 @@ export function CollabPresenceBar({ peers, defaultOpen = false, followId = null,
         <div
           data-testid="collab-popover-backdrop"
           aria-hidden="true"
-          onClick={() => setOpen(false)}
+          onClick={() => { setOpen(false); onDismiss?.() }}
           className="fixed inset-0 z-40 cursor-default"
         />
       )}
@@ -285,7 +295,9 @@ function PresenceAvatars({
       aria-expanded={open}
       aria-label={`참가자 ${peers.length + Math.max(0, extra)}명`}
       title="참가자 목록"
-      className="inline-flex items-center -space-x-1 shrink-0 hover:opacity-90"
+      // C3: 팝오버가 열리면 백드롭(fixed z-40)이 바 전체를 덮는다. 토글 버튼을
+      // 위로 올리지 않으면 재클릭 닫기가 백드롭에 가로막혀 먹통이 된다.
+      className={`inline-flex items-center -space-x-1 shrink-0 hover:opacity-90${open ? ' relative z-50' : ''}`}
     >
       {peers.map((p) => (
         <span
