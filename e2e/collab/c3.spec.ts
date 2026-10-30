@@ -827,6 +827,41 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     }
   })
 
+  test('C3-reconnect: WS가 끊겼다 돌아와도 잠금이 풀리지 않는다', async ({ browser }) => {
+    const errors: string[] = []
+    const t = await twoPages(browser)
+    const f = freshXlsx('c3recon', 0)
+    t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      const before = await xlsxImageAnchor(t.pageA)
+      expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
+      // 둘이 접속한 상태에서 A의 WS를 끊는다.
+      await t.pageA.context().setOffline(true)
+      await t.pageA.waitForTimeout(3000)
+      // 재연결 창: 온라인으로 돌리고 동기화 구간에서 이미지 이동을 반복 시도한다.
+      // 전부 막혀야 한다(잠금이 한 번이라도 풀리면 이동이 성공한다).
+      await t.pageA.context().setOffline(false)
+      for (let i = 0; i < 12; i++) {
+        const moved = await xlsxMoveImage(t.pageA, before!.sheet, before!.index, before!.row + 4)
+        expect(moved.ok, `reconnect move ${i} should be blocked (got: ${moved.ok ? 'ok' : moved.error})`).toBe(false)
+        await t.pageA.waitForTimeout(500)
+      }
+      const toasts = await t.pageA.getByText(LOCK_TOAST).count()
+      expect(toasts).toBeGreaterThanOrEqual(1)
+      // 그림이 그대로다.
+      expect((await xlsxImageAnchor(t.pageA))?.row).toBe(before!.row)
+      expect(errors.join('\n')).not.toMatch(/collab-lock/i)
+    } finally {
+      await t.pageA.context().setOffline(false).catch(() => {})
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
   test('C3-release: 모두 나가고 혼자 다시 들어오면 이미지 이동이 허용된다', async ({ browser }) => {
     const t = await twoPages(browser)
     const f = freshXlsx('c3rel', 0)
