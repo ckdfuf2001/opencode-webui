@@ -1624,6 +1624,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const [collab, setCollab] = useState<{
     roomId: string
     baseHash: string
+    /** C4: 방 재생성(orphan dispose)을 감지한다 — epoch이 바뀌면 개체 표를 다시 등록한다. */
+    epoch: string
     serverUrl: string
     user: { name: string; color: string; id?: string; role?: 'collaborator' | 'viewer' }
     /** X2a-③: 참가 역할. 보기 모드도 방에 참가한다(presence만, 문서는 방이 이긴다). */
@@ -1949,6 +1951,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
                 setCollab({
                   roomId: info2.roomId,
                   baseHash: info2.lastHash,
+                  epoch: info2.epoch ?? '',
                   serverUrl: collabServerUrl(),
                   user: {
                     name: me?.name?.trim() || 'user',
@@ -1990,6 +1993,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         setCollab({
           roomId: info.roomId,
           baseHash: info.lastHash,
+          epoch: info.epoch ?? '',
           serverUrl: collabServerUrl(),
           // X2a: 브라우저별 collab-user id를 lib에 넘긴다(presence userId → 서버 묶기 키).
           // viewer 는 role:'viewer' 로 참가한다(문서를 seed 하지 않는다).
@@ -2573,7 +2577,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     const roomId = room?.roomId
     if (!room || !hash || !roomId || !editingRef.current) return false
     // C4: 같은 키로 완료된 등록은 건너뛴다 (재연결·dep 변화 때 중복 방지).
-    const regKey = `${path}|${roomId}|${hash}|v${viewerGen}`
+    // epoch이 바뀌면(방 재생성) 새 방이므로 다시 등록한다.
+    const regKey = `${path}|${roomId}|${room.epoch}|${hash}|v${viewerGen}`
     if (objRegisteredRef.current === regKey) return true
     try {
       const st = await collabApi.objects.get(roomId)
@@ -2786,11 +2791,15 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const objFlushChanged = useCallback(
     (roomId: string, clientId: number): void => {
       const keys = new Set<string>()
+      let untagged = 0
       try {
         const sheets = objEditorCore()?.workbook?.sheets ?? []
         sheets.forEach((s) => {
           if (!Array.isArray(s?.drawings)) return
           const ds = s.drawings as Array<DrawingLike & { __ck?: string }>
+          for (const d of ds) {
+            if (d && typeof d === 'object' && typeof (d as { __ck?: unknown }).__ck !== 'string') untagged += 1
+          }
           for (const c of diffObjects(
             ds,
             objLastSentRef.current,
@@ -2806,8 +2815,13 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       } catch {
         return
       }
-      for (const [key, prev] of objLastSentRef.current) {
-        if (!prev.deleted && !keys.has(key)) keys.add(key)
+      // C4: 태그 없는 그림이 있으면 리마운트 직후(새 모델)일 수 있다.
+      // 이때 lastSent 기준으로 삭제를 단정하면 전체 오삭제 POST 폭주이므로,
+      // 재등록·재태그될 때까지 삭제 판정만 보류한다 (이동은 태그 기반으로 보낸다).
+      if (untagged === 0) {
+        for (const [key, prev] of objLastSentRef.current) {
+          if (!prev.deleted && !keys.has(key)) keys.add(key)
+        }
       }
       if (keys.size === 0) return
       for (const key of keys) {
@@ -2985,12 +2999,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   }
 
   const objRegisteredRef = useRef('')
+  /** C4: 마지막으로 등록·태그한 에디터 핸들. 리마운트(새 모델·태그 소실)하면 다시 등록한다. */
+  const objHandleRef = useRef<unknown>(null)
   useEffect(() => {
     if (!editing || !collab?.joined || !xlsxHandle) return
+    if (objHandleRef.current !== xlsxHandle) {
+      objHandleRef.current = xlsxHandle
+      objRegisteredRef.current = ''
+    }
     void objRegister()
     // xlsxPeople.length: 마운트 직후 모델 미로딩으로 등록이 미뤄졌을 때
     // presence 도착이 재시도 기회가 된다 (키 미소비 + 이 dep).
-  }, [editing, collab?.joined, collab?.roomId, collab?.baseHash, xlsxHandle, path, etag, viewerGen, objRegister, xlsxPeople.length])
+    // collab?.epoch: 방 재생성(orphan dispose) 후에는 표가 비어서 다시 등록한다.
+  }, [editing, collab?.joined, collab?.roomId, collab?.epoch, collab?.baseHash, xlsxHandle, path, etag, viewerGen, objRegister, xlsxPeople.length])
 
   /** C4: pointerdown 대상에서 개체 키를 찾는다 (shadow DOM 안 .xg-obj[data-index]). */
   const objKeyFromTarget = useCallback((t: unknown): string | null => {
