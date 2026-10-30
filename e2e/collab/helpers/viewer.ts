@@ -165,9 +165,9 @@ export async function assertLibPatchesLoaded(page: Page): Promise<void> {
   const patches = await page.evaluate(
     () => (globalThis as unknown as { __ooxmlPatches?: Record<string, string> }).__ooxmlPatches ?? null,
   )
-  if (!patches || patches.ui !== 'M21' || patches.viewer !== 'M21-esm') {
+  if (!patches || patches.ui !== 'M21' || patches.viewer !== 'M21-esm' || patches.viewerBroadcastFollow !== 'off') {
     throw new Error(
-      `lib patch not loaded (expected ui=M21, viewer=M21-esm, got ${JSON.stringify(patches)}) — ` +
+      `lib patch not loaded (expected ui=M21, viewer=M21-esm, viewerBroadcastFollow=off, got ${JSON.stringify(patches)}) — ` +
         `pnpm install 로 패치를 적용하고 frontend/node_modules/.vite 캐시를 지운 뒤 다시 실행할 것.`,
     )
   }

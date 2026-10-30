@@ -893,9 +893,10 @@ const t = await twoPages(browser)
     await t.pageA.getByTestId('collab-rename-edit').click()
     await t.pageA.getByTestId('collab-rename-input').fill('renamed-ada')
     await t.pageA.getByTestId('collab-rename-submit').click()
-    await expect(t.pageB.getByTestId('collab-peer').filter({ hasText: 'renamed-ada' })).toHaveCount(1, {
-      timeout: 15000,
-    })
+    // 아바타는 이니셜만 보여주므로 팝오버 행 이름으로 확인한다.
+    await t.pageB.getByTestId('collab-avatars').click()
+    const bRow = t.pageB.getByTestId('collab-presence-row').filter({ hasText: 'renamed-ada' }).getByTestId('collab-peer-name')
+    await expect(bRow).toHaveText('renamed-ada', { timeout: 15000 })
     // 세션 수는 탭당 1.
     const d = await readDebug(t.pageA)
     expect(d.sessionCount).toBe(1)
