@@ -684,6 +684,150 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     }
   })
 
+  test('C3-undo-comment: 잠금 중 comment undo는 거부되고 토스트 1회', async ({ browser }) => {
+    const errors: string[] = []
+    const t = await twoPages(browser)
+    const f = freshXlsx('c3undoc', 0)
+    t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA)).toBe(true)
+      // 혼자 코멘트 추가 (허용). P0-1 확인용: B 참가 후 undo가 막히는지 본다.
+      const beforeCount = await t.pageA.evaluate(() => {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: { workbook?: { sheets?: Array<{ comments?: unknown[] }> } }
+        } | null
+        return (el?.core?.workbook?.sheets?.[0]?.comments as unknown[] | undefined)?.length ?? -1
+      })
+      const added = await t.pageA.evaluate(() => {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: {
+            workbook?: { sheets?: Array<{ comments?: unknown[] }> }
+            session?: {
+              setComment?: (s: number, at: { row: number; col: number }, text: string, author: string) => unknown
+              canUndo?: () => boolean
+              undoLabel?: () => string | undefined
+            }
+          }
+        } | null
+        el?.core?.session?.setComment?.(0, { row: 0, col: 0 }, 'c3-red-probe', 'Ada')
+        return {
+          comments: (el?.core?.workbook?.sheets?.[0]?.comments as unknown[] | undefined)?.length ?? -1,
+          canUndo: el?.core?.session?.canUndo?.() ?? null,
+          label: el?.core?.session?.undoLabel?.() ?? null,
+        }
+      })
+      expect(added).toEqual({ comments: beforeCount + 1, canUndo: true, label: 'New comment' })
+      await openXlsxEditing(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      const undone = await t.pageA.evaluate(() => {
+        try {
+          const el = document.querySelector('xlsx-editor') as unknown as {
+            core?: { session?: { undo?: () => unknown } }
+          } | null
+          el?.core?.session?.undo?.()
+          return { ok: true as const }
+        } catch (e) {
+          return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+        }
+      })
+      expect(undone.ok, `comment undo should be blocked (got: ${undone.ok ? 'ok' : undone.error})`).toBe(false)
+      await expect(t.pageA.getByText(LOCK_TOAST)).toHaveCount(1, { timeout: 8000 })
+      const kept = await t.pageA.evaluate(() => {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: {
+            workbook?: { sheets?: Array<{ comments?: unknown[] }> }
+            session?: { canUndo?: () => boolean; undoLabel?: () => string | undefined }
+          }
+        } | null
+        return {
+          comments: (el?.core?.workbook?.sheets?.[0]?.comments as unknown[] | undefined)?.length ?? -1,
+          canUndo: el?.core?.session?.canUndo?.() ?? null,
+          label: el?.core?.session?.undoLabel?.() ?? null,
+        }
+      })
+      expect(kept).toEqual({ comments: beforeCount + 1, canUndo: true, label: 'New comment' })
+      expect(errors.join('\n')).not.toMatch(/collab-lock/i)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
+  test('C3-redo-comment: 잠금 중 comment redo는 거부되고 토스트 1회', async ({ browser }) => {
+    const errors: string[] = []
+    const t = await twoPages(browser)
+    const f = freshXlsx('c3redoc', 0)
+    t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
+    try {
+      await openXlsxEditing(t.pageA, f.name)
+      await expect.poll(async () => xlsxActive(t.pageA)).toBe(true)
+      // 혼자 추가 후 혼자 undo (허용) → redo 스택에 'New comment'가 남는다.
+      const beforeCount = await t.pageA.evaluate(() => {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: { workbook?: { sheets?: Array<{ comments?: unknown[] }> } }
+        } | null
+        return (el?.core?.workbook?.sheets?.[0]?.comments as unknown[] | undefined)?.length ?? -1
+      })
+      const setup = await t.pageA.evaluate(() => {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: {
+            workbook?: { sheets?: Array<{ comments?: unknown[] }> }
+            session?: {
+              setComment?: (s: number, at: { row: number; col: number }, text: string, author: string) => unknown
+              undo?: () => unknown
+              canUndo?: () => boolean
+              canRedo?: () => boolean
+              redoLabel?: () => string | undefined
+            }
+          }
+        } | null
+        el?.core?.session?.setComment?.(0, { row: 1, col: 1 }, 'c3-red-probe', 'Ada')
+        el?.core?.session?.undo?.()
+        return {
+          comments: (el?.core?.workbook?.sheets?.[0]?.comments as unknown[] | undefined)?.length ?? -1,
+          canUndo: el?.core?.session?.canUndo?.() ?? null,
+          canRedo: el?.core?.session?.canRedo?.() ?? null,
+          label: el?.core?.session?.redoLabel?.() ?? null,
+        }
+      })
+      expect(setup).toEqual({ comments: beforeCount, canUndo: false, canRedo: true, label: 'New comment' })
+      await openXlsxEditing(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      const redone = await t.pageA.evaluate(() => {
+        try {
+          const el = document.querySelector('xlsx-editor') as unknown as {
+            core?: { session?: { redo?: () => unknown } }
+          } | null
+          el?.core?.session?.redo?.()
+          return { ok: true as const }
+        } catch (e) {
+          return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+        }
+      })
+      expect(redone.ok, `comment redo should be blocked (got: ${redone.ok ? 'ok' : redone.error})`).toBe(false)
+      await expect(t.pageA.getByText(LOCK_TOAST)).toHaveCount(1, { timeout: 8000 })
+      const kept = await t.pageA.evaluate(() => {
+        const el = document.querySelector('xlsx-editor') as unknown as {
+          core?: {
+            workbook?: { sheets?: Array<{ comments?: unknown[] }> }
+            session?: { canRedo?: () => boolean; redoLabel?: () => string | undefined }
+          }
+        } | null
+        return {
+          comments: (el?.core?.workbook?.sheets?.[0]?.comments as unknown[] | undefined)?.length ?? -1,
+          canRedo: el?.core?.session?.canRedo?.() ?? null,
+          label: el?.core?.session?.redoLabel?.() ?? null,
+        }
+      })
+      expect(kept).toEqual({ comments: beforeCount, canRedo: true, label: 'New comment' })
+      expect(errors.join('\n')).not.toMatch(/collab-lock/i)
+    } finally {
+      await t.ctxA.close()
+      await t.ctxB.close()
+    }
+  })
+
   test('C3-release: 모두 나가고 혼자 다시 들어오면 이미지 이동이 허용된다', async ({ browser }) => {
     const t = await twoPages(browser)
     const f = freshXlsx('c3rel', 0)
