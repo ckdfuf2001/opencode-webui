@@ -38,6 +38,54 @@ export interface CollabLockInfo {
   aiBlockedAt?: number | null
 }
 
+export interface CollabObjectSnapshot {
+  key: string
+  sheet: number
+  kind: string
+  anchor: unknown
+  deleted: boolean
+  version: number
+  lock: { clientId: number; lockId: string; expiresAt: number } | null
+}
+
+export interface CollabObjectsState {
+  version: number
+  order: Record<string, string[]> | null
+  objects: CollabObjectSnapshot[]
+}
+
+export type CollabObjectsResult =
+  | { ok: true; version: number; keys?: string[]; order?: Record<string, string[]> | null; objects?: CollabObjectSnapshot[]; lockId?: string; expiresAt?: number; holder?: number }
+  | { ok: false; code: string; holder?: number; version?: number; objects?: CollabObjectSnapshot[]; expected?: unknown; error?: string }
+
+async function objectsPost<T>(roomId: string, suffix: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}/api/collab/${encodeURIComponent(roomId)}/objects${suffix}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = (await res.json().catch(() => null)) as Record<string, unknown> | null
+  if (res.ok) return { ok: true, ...(data ?? {}) } as T
+  return { ok: false, code: typeof data?.code === 'string' ? data.code : `http_${res.status}`, ...(data ?? {}) } as T
+}
+
+async function objectsDelete<T>(roomId: string, suffix: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}/api/collab/${encodeURIComponent(roomId)}/objects${suffix}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = (await res.json().catch(() => null)) as Record<string, unknown> | null
+  if (res.ok) return { ok: true, ...(data ?? {}) } as T
+  return { ok: false, code: typeof data?.code === 'string' ? data.code : `http_${res.status}`, ...(data ?? {}) } as T
+}
+
+async function objectsGet(roomId: string): Promise<CollabObjectsState & { roomId: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/collab/${encodeURIComponent(roomId)}/objects`)
+  if (!res.ok) throw new Error(`objects get failed: ${res.status}`)
+  return (await res.json()) as CollabObjectsState & { roomId: string }
+}
+
 export interface CollabRoomSummary {
   roomId: string
   path: string
@@ -187,6 +235,21 @@ export const collabApi = {
   resetRoom: async (roomId: string, clientId: number): Promise<{ epoch: string; lastHash: string }> => {
     const { data } = await axios.post(`${API_BASE_URL}/api/collab/reset-room`, { roomId, clientId })
     return data
+  },
+
+  /** C4: 시트 개체 표/락/이동/삭제. */
+  objects: {
+    get: (roomId: string) => objectsGet(roomId),
+    register: (roomId: string, hash: string, items: Array<{ sheet: number; kind: string }>) =>
+      objectsPost<CollabObjectsResult>(roomId, '/register', { hash, items }),
+    lock: (roomId: string, key: string, clientId: number) =>
+      objectsPost<CollabObjectsResult>(roomId, `/${encodeURIComponent(key)}/lock`, { clientId }),
+    unlock: (roomId: string, key: string, lockId: string) =>
+      objectsDelete<CollabObjectsResult>(roomId, `/${encodeURIComponent(key)}/lock`, { lockId }),
+    move: (roomId: string, key: string, clientId: number, anchor: unknown, baseVersion: number, lockId?: string) =>
+      objectsPost<CollabObjectsResult>(roomId, `/${encodeURIComponent(key)}/move`, { clientId, anchor, baseVersion, ...(lockId ? { lockId } : {}) }),
+    del: (roomId: string, key: string, clientId: number, baseVersion: number, lockId?: string) =>
+      objectsPost<CollabObjectsResult>(roomId, `/${encodeURIComponent(key)}/delete`, { clientId, baseVersion, ...(lockId ? { lockId } : {}) }),
   },
 
   rooms: async (): Promise<CollabRoomSummary[]> => {

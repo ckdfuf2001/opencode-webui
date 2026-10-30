@@ -33,7 +33,8 @@ import { collabApi, collabServerUrl, type CollabRoomSummary } from '@/api/collab
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser } from '@/lib/collabUser'
-import { isBlockedXlsxEdit, shouldFlushOnPeerArrive } from '@/lib/xlsxCollabGuard'
+import { hasEmbObject, isBlockedXlsxEdit, NO_OBJECT_GUARD, shouldFlushOnPeerArrive, type ObjectGuardCtx } from '@/lib/xlsxCollabGuard'
+import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectsStateMsg } from '@/lib/xlsxObjects'
 import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/CollabPresence'
 import type { PresencePeerView } from '@/components/collab/collabPresenceView'
 
@@ -1668,11 +1669,35 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const autosavePendingRef = useRef(false)
   /** C3: 가드 토스트 마지막 표시 시각 (2초 내 중복 방지). */
   const lockToastAtRef = useRef(0)
+  /**
+   * C4: 시트 개체 표(서버가 진실). people과 무관하게 방 단위로 유지한다.
+   * key -> {sheet, kind, anchor, deleted, version, lock}.
+   */
+  const objTableRef = useRef(new Map<string, { sheet: number; kind: string; anchor: unknown; deleted: boolean; version: number; lock: { clientId: number; lockId: string; expiresAt: number } | null }>())
+  const objVersionRef = useRef(0)
+  /** C4: 키 대응 실패 시 그 세션의 개체 op를 전부 막는다 (fail-closed). */
+  const objMismatchRef = useRef(false)
+  /** C4: pointerdown으로 잡은 개체 키 (가드 activeKey 판정용). */
+  const objActiveKeyRef = useRef<string | null>(null)
+  /** C4: 마지막으로 서버에 보낸(또는 서버에서 받은) 상태. 메아리 방지 기준점. */
+  const objLastSentRef = useRef(new Map<string, { anchor: string; deleted: boolean }>())
+  /** C4: 원격 적용 중에는 스냅샷 송신을 건너뛴다. */
+  const applyingRemoteRef = useRef(false)
+  /** C4: 개체 토스트 마지막 표시 시각 (서버 409용, 2초 내 중복 방지). */
+  const objToastAtRef = useRef(0)
+  /** C4: 개체 변경 수신기 (서버 브로드캐스트 type 102). */
+  const objOnMessageRef = useRef<((msg: ObjectsStateMsg) => void) | null>(null)
+  /** C4: 탭 transport (재)연결 때마다 놓친 브로드캐스트를 GET으로 따라잡는다. */
+  const objConnectRef = useRef<(() => void) | null>(null)
+  /** C4: 현재 보고 있는 시트 (sheet-change 이벤트로 추적). */
+  const objActiveSheetRef = useRef(0)
   const joinAgainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onReloadFileRef = useRef(onRequestReload)
   onReloadFileRef.current = onRequestReload
   const selfClientIdRef = useRef<number | null>(null)
   const [xlsxPeople, setXlsxPeople] = useState<XlsxPresencePerson[]>([])
+  const xlsxPeopleRef = useRef<XlsxPresencePerson[]>([])
+  xlsxPeopleRef.current = xlsxPeople
   /** C3: 동시편집 잠금. 방에 붙어 있고 나 포함 2명 이상이면 켠다(탭·viewer 포함). */
   const collabLocked = !!collab?.joined && xlsxPeople.length >= 2
   const collabLockedRef = useRef(collabLocked)
@@ -2226,12 +2251,25 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
 
   // collaboration 옵션은 **항상 같은 객체**를 넘긴다(매 렌더 새 객체면 lib 가 방을 다시 연다).
   // joined 변화는 옵션을 새로 만들면 안 된다 — 그래서 deps 에 joined 를 넣지 않는다.
-  const collabOptions = useMemo(
-    () => (collab ? { roomId: collab.roomId, serverUrl: collab.serverUrl, user: collab.user } : undefined),
+  const collabOptions = useMemo(() => {
+    if (!collab) return undefined
+    return {
+      roomId: collab.roomId,
+      serverUrl: collab.serverUrl,
+      user: collab.user,
+      // C4: 개체 브로드캐스트(type 102) 수신용 탭 transport. lib가 모르는 타입은
+      // 여기서 소비하고, 나머지는 그대로 lib에 넘긴다 (lib 패치 없음).
+      // (재)연결 때마다 GET으로 놓친 브로드캐스트를 따라잡는다.
+      provider: createObjectTapProvider(
+        collab.serverUrl,
+        collab.roomId,
+        (msg) => objOnMessageRef.current?.(msg),
+        () => objConnectRef.current?.(),
+      ),
+    }
     // joined 를 의존성에서 빼는 것은 방을 다시 열지 않기 위한 의도다.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- joined 를 넣으면 lib 가 방을 다시 연다(leave/join 순환 → 유실)
-    [collab?.roomId, collab?.serverUrl, collab?.user],
-  )
+  }, [collab?.roomId, collab?.serverUrl, collab?.user])
 
   /**
    * X2a-③: viewer가 방 내용을 따라간다. collaboration-change 이벤트에서만 rooms() 를
@@ -2336,14 +2374,382 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    * - viewer·미참가·탭 숨김 상태에서는 저장하지 않는다.
    */
   /**
+   * C4: 시트 개체 표 동기화 (서버가 진실).
+   * - 방에 붙으면 서버 개체 표를 받아 와(__ck 태그) 스냅샷 기준점을 잡는다.
+   * - 로컬 workbook-change(원격 적용 제외)에서 anchor/삭제 diff를 서버에 보낸다.
+   * - 서버 브로드캐스트(type 102)는 applyExternal로 적용한다(undo 기록 없음).
+   */
+  type ObjCore = {
+    workbook?: { sheets?: Array<{ drawings?: Array<DrawingLike & { __ck?: string }> }> }
+    session?: {
+      applyExternal?: (apply: () => { kind?: string; label?: string; structural?: boolean; sheet?: number } | void) => unknown
+    }
+  }
+  const objEditorCore = useCallback((): ObjCore | null => {
+    try {
+      const el = (xlsxHandleRef.current as unknown as { element?: unknown } | null)?.element as { core?: unknown } | undefined
+      const core = el?.core as ObjCore | undefined
+      return core && typeof core === 'object' ? core : null
+    } catch {
+      return null
+    }
+  }, [])
+  const objAllKeyed = useCallback((): Array<{ key: string; sheet: number; index: number; d: DrawingLike & { __ck?: string } }> => {
+    const out: Array<{ key: string; sheet: number; index: number; d: DrawingLike & { __ck?: string } }> = []
+    try {
+      const sheets = objEditorCore()?.workbook?.sheets ?? []
+      sheets.forEach((s, si) => {
+        if (Array.isArray(s?.drawings)) {
+          s.drawings.forEach((d, i) => {
+            const dd = d as DrawingLike & { __ck?: string }
+            if (dd && typeof dd.__ck === 'string') out.push({ key: dd.__ck, sheet: si, index: i, d: dd })
+          })
+        }
+      })
+    } catch {
+      /* 무시 */
+    }
+    return out
+  }, [objEditorCore])
+  const objKindItems = useCallback((): Array<{ sheet: number; kind: string }> => {
+    const out: Array<{ sheet: number; kind: string }> = []
+    try {
+      const sheets = objEditorCore()?.workbook?.sheets ?? []
+      sheets.forEach((s, si) => {
+        if (Array.isArray(s?.drawings)) {
+          for (const d of s.drawings) out.push({ sheet: si, kind: describeDrawingKind(d as DrawingLike) })
+        }
+      })
+    } catch {
+      /* 무시 */
+    }
+    return out
+  }, [objEditorCore])
+  /** surgical oleObj(EMB)가 있으면 전체 개체 op를 막는다 (혼자 편집 포함). */
+  const objHasEmb = useCallback((): boolean => {
+    try {
+      const sheets = objEditorCore()?.workbook?.sheets ?? []
+      return sheets.some(
+        (s) => Array.isArray(s?.drawings) && (s.drawings as DrawingLike[]).some((d) => hasEmbObject([d as { sourceXml?: string }])),
+      )
+    } catch {
+      return false
+    }
+  }, [objEditorCore])
+  const objToast = useCallback(
+    (text: string): void => {
+      const now = Date.now()
+      if (now - objToastAtRef.current < 2000) return
+      objToastAtRef.current = now
+      try {
+        showToast.warning(text)
+      } catch {
+        /* 무시 */
+      }
+    },
+    [],
+  )
+  const objHolderName = useCallback(
+    (clientId: number): string => {
+      const p = xlsxPeopleRef.current.find((x) => x.clientId === clientId)
+      return p?.name || '상대방'
+    },
+    [],
+  )
+  const objSnapshotAll = useCallback((): void => {
+    objLastSentRef.current.clear()
+    for (const { key, d } of objAllKeyed()) {
+      objLastSentRef.current.set(key, { anchor: anchorKey(d.anchor), deleted: false })
+    }
+  }, [objAllKeyed])
+  const objApplyServerState = useCallback(async (roomId: string): Promise<void> => {
+    try {
+      const st = await collabApi.objects.get(roomId)
+      applyingRemoteRef.current = true
+      try {
+        for (const o of st.objects) {
+          const prev = objTableRef.current.get(o.key)
+          objTableRef.current.set(o.key, {
+            sheet: o.sheet,
+            kind: o.kind,
+            anchor: o.anchor,
+            deleted: o.deleted,
+            version: o.version,
+            lock: o.lock,
+          })
+          if (!prev) continue
+        }
+        objVersionRef.current = st.version
+        const core = objEditorCore()
+        const session = core?.session
+        const wb = core?.workbook
+        if (!wb || !session?.applyExternal) {
+          objSnapshotAll()
+          return
+        }
+        let changed = false
+        const apply = (): { kind: string; label: string } | void => {
+          for (const o of st.objects) {
+            const sheets = wb.sheets ?? []
+            let target: { anchor: unknown } | null = null
+            for (const s of sheets) {
+              if (target || !Array.isArray(s?.drawings)) continue
+              const found = (s.drawings as Array<DrawingLike & { __ck?: string }>).find(
+                (d) => d && (d as { __ck?: string }).__ck === o.key,
+              ) as (DrawingLike & { anchor?: unknown }) | undefined
+              if (found) target = found as { anchor: unknown }
+            }
+            if (!target && !o.deleted) continue
+            if (o.deleted) {
+              if (target) {
+                for (const s of sheets) {
+                  if (!Array.isArray(s?.drawings)) continue
+                  const i = (s.drawings as Array<unknown>).indexOf(target as unknown)
+                  if (i >= 0) {
+                    ;(s.drawings as Array<unknown>).splice(i, 1)
+                    changed = true
+                    break
+                  }
+                }
+              }
+              continue
+            }
+            // C4: 서버 anchor가 null이면 "아직 모름"(등록 직후)이라 적용할 정보가
+            // 없다. 로컬 실측을 null로 덮으면 이후 diff·이동이 깨지므로 건너뛴다.
+            if (o.anchor == null) continue
+            if (target && anchorKey((target as { anchor?: unknown }).anchor) !== anchorKey(o.anchor)) {
+              ;(target as { anchor?: unknown }).anchor = JSON.parse(JSON.stringify(o.anchor ?? null)) as unknown
+              changed = true
+            }
+          }
+          if (!changed) return undefined
+          return { kind: 'remote-draw', label: 'Remote object change' }
+        }
+        session.applyExternal(apply)
+        objSnapshotAll()
+      } finally {
+        applyingRemoteRef.current = false
+      }
+    } catch {
+      /* 조용히 실패 (다음 변경·수신 때 따라잡는다) */
+    }
+  }, [objEditorCore, objSnapshotAll])
+  /** C4: 서버 순서를 로컬 drawings에 붙인다 (__ck 태그). 어긋나면 false. */
+  const objTagWithOrder = useCallback(
+    (order: Record<string, string[]> | null, objects: Array<{ key: string; sheet: number; kind: string; deleted: boolean }>): boolean => {
+      if (!order) return false
+      try {
+        const sheets = objEditorCore()?.workbook?.sheets ?? []
+        const flat: Array<{ sheet: number; kind: string; index: number }> = []
+        sheets.forEach((s, si) => {
+          if (!Array.isArray(s?.drawings)) return
+          ;(s.drawings as Array<DrawingLike>).forEach((d, i) => {
+            flat.push({ sheet: si, kind: describeDrawingKind(d), index: i })
+          })
+        })
+        const byKey = new Map(objects.map((o) => [o.key, { sheet: o.sheet, kind: o.kind, deleted: o.deleted }] as const))
+        const m = assignObjectKeys(order, byKey, flat)
+        if (!m) return false
+        for (const [li, key] of m) {
+          const f = flat[li]
+          if (!f) continue
+          const d = (sheets[f.sheet]?.drawings as Array<DrawingLike & { __ck?: string }> | undefined)?.[f.index]
+          if (d && typeof d === 'object') d.__ck = key
+        }
+        return true
+      } catch {
+        return false
+      }
+    },
+    [objEditorCore],
+  )
+  const objRegister = useCallback(async (): Promise<void> => {
+    const room = collabRef.current
+    const hash = room?.baseHash
+    if (!room || !hash || !room.roomId || !editingRef.current) return
+    try {
+      const st = await collabApi.objects.get(room.roomId)
+      objVersionRef.current = st.version
+      for (const o of st.objects) {
+        objTableRef.current.set(o.key, { sheet: o.sheet, kind: o.kind, anchor: o.anchor, deleted: o.deleted, version: o.version, lock: o.lock })
+      }
+      const items = objKindItems()
+      if (st.order) {
+        // 대조: 같은 해시 순서와 로컬이 같은지 (시트·종류별 개수, 삭제분 제외).
+        if (!objTagWithOrder(st.order, st.objects)) {
+          objMismatchRef.current = true
+          try {
+            console.warn('[c4] objects order mismatch; object ops locked for this session')
+          } catch {
+            /* 무시 */
+          }
+          return
+        }
+        objSnapshotAll()
+        return
+      }
+      if (items.length === 0) return
+      const r = await collabApi.objects.register(room.roomId, hash, items)
+      if (!r.ok) {
+        if (r.code === 'order_mismatch') {
+          objMismatchRef.current = true
+          try {
+            console.warn('[c4] objects register mismatch; object ops locked for this session')
+          } catch {
+            /* 무시 */
+          }
+        }
+        return
+      }
+      if (r.objects) {
+        for (const o of r.objects) {
+          objTableRef.current.set(o.key, { sheet: o.sheet, kind: o.kind, anchor: o.anchor, deleted: o.deleted, version: o.version, lock: o.lock })
+        }
+      }
+      if (typeof r.version === 'number') objVersionRef.current = r.version
+      if (r.order && r.objects) {
+        if (!objTagWithOrder(r.order, r.objects)) {
+          objMismatchRef.current = true
+        }
+        objSnapshotAll()
+      }
+    } catch {
+      /* 조용히 실패 (다음 기회에 재시도) */
+    }
+  }, [objSnapshotAll, objKindItems, objTagWithOrder])
+  const objChainRef = useRef(Promise.resolve())
+  /** C4: 한 개체의 최신 상태를 서버와 맞춘다 (체인 안에서 호출, 실행 시점 재확인). */
+  const objFlushKey = useCallback(
+    async (roomId: string, clientId: number, key: string): Promise<void> => {
+      if (applyingRemoteRef.current || objMismatchRef.current) return
+      try {
+        // 최신 상태 다시 읽기.
+        let found: { anchor: unknown } | null = null
+        let foundDeleted = true
+        try {
+          const sheets = objEditorCore()?.workbook?.sheets ?? []
+          outer: for (const s of sheets) {
+            if (!Array.isArray(s?.drawings)) continue
+            for (const d of s.drawings as Array<DrawingLike & { __ck?: string }>) {
+              if (d && typeof d === 'object' && (d as { __ck?: unknown }).__ck === key) {
+                found = { anchor: (d as { anchor?: unknown }).anchor }
+                foundDeleted = false
+                break outer
+              }
+            }
+          }
+        } catch {
+          return
+        }
+        const prev = objLastSentRef.current.get(key)
+        const anchorStr = found && !foundDeleted ? anchorKey(found.anchor) : ''
+        const changed = !prev || prev.deleted !== foundDeleted || (!foundDeleted && prev.anchor !== anchorStr)
+        if (!changed) return
+        const r =
+          found && !foundDeleted
+            ? await collabApi.objects.move(roomId, key, clientId, found.anchor, objVersionRef.current)
+            : await collabApi.objects.del(roomId, key, clientId, objVersionRef.current)
+        if (!r.ok) {
+          await objApplyServerState(roomId)
+          if (r.code === 'locked' || r.code === 'not_holder') {
+            const h = typeof (r as { holder?: unknown }).holder === 'number' ? (r as { holder: number }).holder : null
+            objToast(`${h != null ? objHolderName(h) : '상대방'}가 편집 중입니다`)
+          } else if (r.code === 'version_mismatch' || r.code === 'emb_locked' || r.code === 'deleted') {
+            objToast('동시편집 중에는 이 편집을 지원하지 않습니다')
+          }
+          return
+        }
+        if (typeof r.version === 'number') objVersionRef.current = r.version
+        if (found && !foundDeleted) objLastSentRef.current.set(key, { anchor: anchorStr, deleted: false })
+        else objLastSentRef.current.set(key, { anchor: '', deleted: true })
+      } catch {
+        /* 네트워크 실패: 다음 change에서 재시도 */
+      }
+    },
+    [objEditorCore, objApplyServerState, objHolderName, objToast],
+  )
+  const objSendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** C4: 바뀐 개체를 모아 체인에 건다. 실행 시점에 최신 상태를 다시 읽는다. */
+  const objFlushChanged = useCallback(
+    (roomId: string, clientId: number): void => {
+      const keys = new Set<string>()
+      try {
+        const sheets = objEditorCore()?.workbook?.sheets ?? []
+        sheets.forEach((s) => {
+          if (!Array.isArray(s?.drawings)) return
+          const ds = s.drawings as Array<DrawingLike & { __ck?: string }>
+          for (const c of diffObjects(
+            ds,
+            objLastSentRef.current,
+            (i) => {
+              const k = ds[i]?.__ck
+              return typeof k === 'string' ? k : null
+            },
+            keys,
+          )) {
+            if (c.type === 'move') keys.add(c.key)
+          }
+        })
+      } catch {
+        return
+      }
+      for (const [key, prev] of objLastSentRef.current) {
+        if (!prev.deleted && !keys.has(key)) keys.add(key)
+      }
+      if (keys.size === 0) return
+      for (const key of keys) {
+        objChainRef.current = objChainRef.current
+          .then(async () => {
+            await objFlushKey(roomId, clientId, key)
+          })
+          .catch(() => {
+            /* 무시 */
+          })
+      }
+    },
+    [objEditorCore, objFlushKey],
+  )
+  const objSendSweep = useCallback((): void => {
+    // C4: trailing debounce — Yjs 직접 반영과 서버 브로드캐스트가 뒤섞여
+    // 도착해도 조용해진 뒤 한 번만 판단한다 (메아리 방지).
+    if (!editingRef.current || applyingRemoteRef.current || objMismatchRef.current) return
+    if (!collabRef.current || selfClientIdRef.current == null) return
+    if (objSendTimerRef.current) clearTimeout(objSendTimerRef.current)
+    objSendTimerRef.current = setTimeout(() => {
+      objSendTimerRef.current = null
+      const room = collabRef.current
+      const clientId = selfClientIdRef.current
+      if (!room || clientId == null || !editingRef.current || applyingRemoteRef.current || objMismatchRef.current) return
+      void objFlushChanged(room.roomId, clientId)
+    }, 500)
+  }, [objFlushChanged])
+  /**
    * C3: lib 편집 가드를 등록/해제한다. 편집기 마운트 상태와 무관하게,
    * 방 참가 + 2명 이상일 때만 켠다. 언마운트·나가기·혼자 남으면 끈다.
+   * C4: 개체 op(Move/Delete)는 개체 표 + 락으로 판정한다(서버가 최종 판정).
+   * solo + EMB(surgical oleObj)가 있으면 혼자라도 가드를 건다.
    */
   useEffect(() => {
     const g = globalThis as unknown as Record<string, unknown>
-    if (collab?.joined && xlsxPeople.length >= 2) {
+    // C4: solo + EMB(surgical oleObj)면 혼자라도 가드를 건다 (이동·삭제 전부 잠금).
+    let embLocked = false
+    try {
+      if (collab?.joined && xlsxHandle) embLocked = objHasEmb()
+    } catch {
+      embLocked = false
+    }
+    if (collab?.joined && (xlsxPeople.length >= 2 || embLocked)) {
       g.__ooxmlEditGuard = (label: string, kind: string): boolean => {
-        if (!isBlockedXlsxEdit(kind, label)) return true
+        let ctx: ObjectGuardCtx = NO_OBJECT_GUARD
+        if (label === 'Move object' || label === 'Delete object') {
+          const foreign = new Set<string>()
+          const me = selfClientIdRef.current
+          for (const [k, v] of objTableRef.current) {
+            if (v.lock && v.lock.clientId !== me) foreign.add(k)
+          }
+          ctx = { embLocked, mismatch: objMismatchRef.current, activeKey: objActiveKeyRef.current, foreignKeys: foreign }
+        }
+        if (!isBlockedXlsxEdit(kind, label, ctx)) return true
         const now = Date.now()
         if (now - lockToastAtRef.current > 2000) {
           lockToastAtRef.current = now
@@ -2361,7 +2767,197 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     return () => {
       delete (globalThis as unknown as Record<string, unknown>).__ooxmlEditGuard
     }
-  }, [collab?.joined, xlsxPeople])
+    // joined/인원/핸들/EMB 판정 변화 때 재평가한다.
+  }, [collab?.joined, xlsxPeople, xlsxHandle, objHasEmb])
+
+  /** C4: 개체 변경 수신기 (서버 브로드캐스트 type 102). */
+  const objOnMessage = useCallback(
+    (msg: ObjectsStateMsg) => {
+      if (!editingRef.current) return
+      // C4: 에러형(유령) 브로드캐스트면 표를 건드리지 않고 GET으로 따라잡는다.
+      if (!Array.isArray(msg.objects)) {
+        const roomId = collabRef.current?.roomId
+        if (roomId) void objApplyServerState(roomId)
+        return
+      }
+      void (async () => {
+        try {
+          for (const o of msg.objects ?? []) {
+            objTableRef.current.set(o.key, {
+              sheet: o.sheet,
+              kind: o.kind,
+              anchor: o.anchor,
+              deleted: o.deleted,
+              version: o.version,
+              lock: o.lock,
+            })
+          }
+          if (typeof msg.version === 'number') objVersionRef.current = msg.version
+          const core = objEditorCore()
+          const session = core?.session
+          const wb = core?.workbook
+          if (!wb || !session?.applyExternal) return
+          applyingRemoteRef.current = true
+          try {
+            let changed = false
+            const apply = (): { kind: string; label: string } | void => {
+              for (const o of msg.objects ?? []) {
+                const sheets = wb.sheets ?? []
+                let target: { anchor?: unknown } | null = null
+                let targetSheet = -1
+                let targetIndex = -1
+                for (let si = 0; si < sheets.length && !target; si++) {
+                  const s = sheets[si]
+                  if (!Array.isArray(s?.drawings)) continue
+                  const i = (s.drawings as Array<{ __ck?: string }>).findIndex((d) => d && (d as { __ck?: string }).__ck === o.key)
+                  if (i >= 0) {
+                    target = (s.drawings as Array<{ anchor?: unknown }>)[i] as { anchor?: unknown }
+                    targetSheet = si
+                    targetIndex = i
+                  }
+                }
+                if (o.deleted) {
+                  if (target && targetSheet >= 0) {
+                    const ds = sheets[targetSheet]?.drawings as unknown[] | undefined
+                    if (Array.isArray(ds)) ds.splice(targetIndex, 1)
+                    changed = true
+                  }
+                  continue
+                }
+                // C4: 서버 anchor가 null이면 "아직 모름"(등록 직후)이라 적용할 정보가
+                // 없다. 로컬 실측을 null로 덮으면 이후 diff·이동이 깨지므로 건너뛴다.
+                if (o.anchor == null) continue
+                if (target && anchorKey((target as { anchor?: unknown }).anchor) !== anchorKey(o.anchor)) {
+                  ;(target as { anchor?: unknown }).anchor = JSON.parse(JSON.stringify(o.anchor ?? null)) as unknown
+                  changed = true
+                }
+              }
+              if (!changed) return undefined
+              return { kind: 'remote-draw', label: 'Remote object change' }
+            }
+            session.applyExternal(apply)
+            objSnapshotAll()
+          } finally {
+            applyingRemoteRef.current = false
+          }
+        } catch {
+          /* 무시 */
+        }
+      })()
+    },
+    [objApplyServerState, objEditorCore, objSnapshotAll],
+  )
+  objOnMessageRef.current = objOnMessage
+  // C4: 탭 transport (재)연결 때마다 GET으로 따라잡는다. 초기 연결 때는
+  // 등록 효과와 순서가 뒤바뀌어도 안전하다 (미태그 상태면 표만 채우고 끝난다).
+  objConnectRef.current = () => {
+    if (!editingRef.current || !collabRef.current?.joined) return
+    const roomId = collabRef.current.roomId
+    if (!roomId) return
+    void objApplyServerState(roomId)
+  }
+
+  const objRegisteredRef = useRef('')
+  useEffect(() => {
+    if (!editing || !collab?.joined || !xlsxHandle) return
+    const key = `${path}|${collab.roomId}|${collab.baseHash}|v${viewerGen}`
+    if (objRegisteredRef.current === key) return
+    objRegisteredRef.current = key
+    void objRegister()
+  }, [editing, collab?.joined, collab?.roomId, collab?.baseHash, xlsxHandle, path, etag, viewerGen, objRegister])
+
+  /** C4: pointerdown 대상에서 개체 키를 찾는다 (shadow DOM 안 .xg-obj[data-index]). */
+  const objKeyFromTarget = useCallback((t: unknown): string | null => {
+    try {
+      const node = (t as { closest?: (sel: string) => Element | null } | null)?.closest?.('.xg-obj') as
+        | HTMLElement
+        | null
+        | undefined
+      if (!node) return null
+      const idx = Number((node as unknown as { dataset?: { index?: string } }).dataset?.index)
+      if (!Number.isInteger(idx)) return null
+      const ds = objEditorCore()?.workbook?.sheets?.[objActiveSheetRef.current]?.drawings
+      if (!Array.isArray(ds)) return null
+      const d = ds[idx] as (DrawingLike & { __ck?: string }) | undefined
+      return d && typeof d.__ck === 'string' ? d.__ck : null
+    } catch {
+      return null
+    }
+  }, [objEditorCore])
+  /** C4: 개체 락 요청 (fire-and-forget, 409면 토스트). */
+  const objRequestLock = useCallback(
+    (key: string): void => {
+      try {
+        const entry = objTableRef.current.get(key)
+        const me = selfClientIdRef.current
+        if (entry?.lock && entry.lock.clientId !== me) {
+          objToast(`${objHolderName(entry.lock.clientId)}가 편집 중입니다`)
+          return
+        }
+        const room = collabRef.current
+        if (!room || me == null) return
+        void collabApi.objects
+          .lock(room.roomId, key, me)
+          .then((r) => {
+            if (!r.ok && r.code === 'locked') {
+              const h = typeof (r as { holder?: unknown }).holder === 'number' ? (r as { holder: number }).holder : null
+              objToast(`${h != null ? objHolderName(h) : '상대방'}가 편집 중입니다`)
+            }
+          })
+          .catch(() => {
+            /* 무시 */
+          })
+      } catch {
+        /* 무시 */
+      }
+    },
+    [objHolderName, objToast],
+  )
+
+  /** C4: sheet-change 추적 + 개체 pointerdown (shadow DOM 안이라 네이티브 캡처). */
+  useEffect(() => {
+    let el: Element | null = null
+    try {
+      const h = xlsxHandleRef.current as unknown as { element?: unknown } | null
+      const cand = h?.element
+      el = cand instanceof Element ? cand : document.querySelector('xlsx-editor')
+    } catch {
+      el = null
+    }
+    if (!el) return
+    const onSheet = (ev: Event): void => {
+      const idx = (ev as CustomEvent<{ index?: unknown }>).detail?.index
+      if (typeof idx === 'number') objActiveSheetRef.current = idx
+    }
+    el.addEventListener('sheet-change', onSheet as EventListener)
+    const root: Element | ShadowRoot = (el as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot ?? el
+    const onDown = (ev: Event): void => {
+      objActiveKeyRef.current = null
+      if (!editingRef.current || !collabRef.current?.joined) return
+      const key = objKeyFromTarget((ev as { target?: unknown }).target)
+      if (!key) return
+      objActiveKeyRef.current = key
+      objRequestLock(key)
+    }
+    const onUp = (): void => {
+      objActiveKeyRef.current = null
+    }
+    root.addEventListener('pointerdown', onDown as EventListener, true)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      try {
+        el?.removeEventListener('sheet-change', onSheet as EventListener)
+      } catch {
+        /* 무시 */
+      }
+      try {
+        root.removeEventListener('pointerdown', onDown as EventListener, true)
+      } catch {
+        /* 무시 */
+      }
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [xlsxHandle, editing, objKeyFromTarget, objRequestLock])
 
   /**
    * C3: 1→2 참가 시 owner면 즉시 저장한다 (디바운스 건너뜀).
@@ -2590,10 +3186,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               if (!editingRef.current) void refreshViewerRoom()
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
-            onWorkbookChange={() => {
-              scheduleXlsxRefresh()
-              if (editingRef.current) scheduleAutosave()
-            }}
+    onWorkbookChange={() => {
+      scheduleXlsxRefresh()
+      if (editingRef.current) scheduleAutosave()
+      objSendSweep()
+    }}
           />
           </div>
           {!editing && collabNotice && (

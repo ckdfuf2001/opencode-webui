@@ -61,8 +61,54 @@ const STRUCTURE_DENY = new Set<string>(XLSX_UNSYNCED_STRUCTURE_LABELS)
 const SHEETS_DENY = new Set<string>(XLSX_UNSYNCED_SHEETS_LABELS)
 const ANNOTATION_LABELS = new Set<string>(XLSX_UNSYNCED_ANNOTATION_LABELS)
 
+/**
+ * C4: 개체 op 라벨. 서버 개체 표 + 락으로 판정하므로 가드에서는 통과시키고
+ * (거부 사유: embLocked solo 포함 / mismatch fail-closed / activeKey가 남의 락),
+ * 서버 409가 최종 판정이다.
+ */
+export const XLSX_OBJECT_LABELS: readonly string[] = ['Move object', 'Delete object'] as const
+const OBJECT_LABELS = new Set<string>(XLSX_OBJECT_LABELS)
+
+/** C4: 개체 op 가드 판정 입력. */
+export interface ObjectGuardCtx {
+  /** 시트에 surgical oleObj(EMB)가 있으면 전체 개체 op 잠금 (solo 포함). */
+  embLocked: boolean
+  /** 키 대응 실패 시 전체 개체 op 잠금 (fail-closed). */
+  mismatch: boolean
+  /** pointerdown으로 잡은 개체 키 (없으면 undo·키보드·프로그래밍 경로). */
+  activeKey: string | null
+  /** 다른 사람이 잡은 락의 키 집합 (로컬 개체 표 기준). */
+  foreignKeys: ReadonlySet<string>
+}
+
+/** 'pass'면 통과, 아니면 거부 사유. */
+export type ObjectGuardVerdict = 'pass' | 'emb' | 'mismatch' | 'foreign'
+
+export function decideObjectOp(_kind: string, _label: string, ctx: ObjectGuardCtx): ObjectGuardVerdict {
+  if (ctx.embLocked) return 'emb'
+  if (ctx.mismatch) return 'mismatch'
+  if (ctx.activeKey !== null && ctx.foreignKeys.has(ctx.activeKey)) return 'foreign'
+  return 'pass'
+}
+
+export const NO_OBJECT_GUARD: ObjectGuardCtx = { embLocked: false, mismatch: false, activeKey: null, foreignKeys: new Set() }
+
+/** C4: surgical oleObj(EMB)가 drawings에 있으면 true. 실물 EMB는 모델에 안 들어온다. */
+export function hasEmbObject(drawings: ReadonlyArray<{ sourceXml?: string } | null | undefined> | undefined): boolean {
+  if (!drawings) return false
+  return drawings.some((d) => typeof d?.sourceXml === 'string' && d.sourceXml.includes('oleObj'))
+}
+
 /** true면 막는다. undo/redo는 되돌리는 op 기준으로 판정한다(우회 방지). */
-export function isBlockedXlsxEdit(kind: string, label: string): boolean {
+export function isBlockedXlsxEdit(kind: string, label: string, objCtx?: ObjectGuardCtx): boolean {
+  // C4: 개체 이동·삭제는 개체 표 + 락으로 판정한다 (서버가 최종 판정).
+  // undo/redo 로 되돌리는 경우도 같은 경로로 간다(서버 enforce).
+  // 단, 삭제의 undo/redo는 막는다: 서버 부활 API 없이 되살리면 표·상대가
+  // 어긋나 조용히 발산한다 (fail-closed). 이동의 undo/redo는 그냥 이동이다.
+  if (OBJECT_LABELS.has(label) && (kind === 'annotations' || kind === 'undo' || kind === 'redo')) {
+    if ((kind === 'undo' || kind === 'redo') && label === 'Delete object') return true
+    return decideObjectOp(kind, label, objCtx ?? NO_OBJECT_GUARD) !== 'pass'
+  }
   if (kind === 'annotations') return true
   if (kind === 'format' && FORMAT_DENY.has(label)) return true
   if (kind === 'structure' && STRUCTURE_DENY.has(label)) return true

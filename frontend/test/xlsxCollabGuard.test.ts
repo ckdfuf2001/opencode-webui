@@ -2,21 +2,30 @@ import { describe, expect, test } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  decideObjectOp,
+  hasEmbObject,
   isBlockedXlsxEdit,
+  NO_OBJECT_GUARD,
   XLSX_UNSYNCED_FORMAT_LABELS,
   XLSX_UNSYNCED_STRUCTURE_LABELS,
   XLSX_UNSYNCED_SHEETS_LABELS,
   XLSX_UNSYNCED_ANNOTATION_LABELS,
+  type ObjectGuardCtx,
 } from '../src/lib/xlsxCollabGuard'
 
 /**
  * C3: 동시편집 중 방에 실리지 않는 편집을 막는다.
  * - kind annotations 전체 차단, format/structure/sheets는 unsynced 라벨만 차단.
  * - 라벨은 ooxml-core 내부 상수 그대로라, lib이 바뀌면 아래 dist grep 테스트가 깨진다.
+ * C4: Move/Delete object는 개체 표 + 락으로 판정한다 (서버가 최종 판정).
+ * - undo/redo 로 되돌리는 경우도 같은 경로 (서버 enforce, 메아리·우회 방지).
  */
+const PASS_CTX: ObjectGuardCtx = { ...NO_OBJECT_GUARD }
+
 describe('xlsxCollabGuard', () => {
-  test('annotations는 전부 막는다', () => {
-    expect(isBlockedXlsxEdit('annotations', 'Move object')).toBe(true)
+  test('annotations는 개체 이동·삭제 외 전부 막는다', () => {
+    expect(isBlockedXlsxEdit('annotations', 'Move object', PASS_CTX)).toBe(false)
+    expect(isBlockedXlsxEdit('annotations', 'Delete object', PASS_CTX)).toBe(false)
     expect(isBlockedXlsxEdit('annotations', 'Insert picture')).toBe(true)
     expect(isBlockedXlsxEdit('annotations', 'Delete comment')).toBe(true)
     expect(isBlockedXlsxEdit('annotations', 'Insert hyperlink')).toBe(true)
@@ -58,8 +67,13 @@ describe('xlsxCollabGuard', () => {
   })
 
   test('undo/redo는 되돌리는 op 기준으로 막는다 (우회 방지)', () => {
-    // 혼자 옮긴 이미지를 상대 참가 뒤 undo하면 방에 없는 변경이 부활한다. 막는다.
-    expect(isBlockedXlsxEdit('undo', 'Move object')).toBe(true)
+    // 개체 이동의 undo/redo는 그냥 이동이라 서버가 판정한다 (메아리 전파 경로).
+    expect(isBlockedXlsxEdit('undo', 'Move object', PASS_CTX)).toBe(false)
+    expect(isBlockedXlsxEdit('redo', 'Move object', PASS_CTX)).toBe(false)
+    expect(isBlockedXlsxEdit('undo', 'Move object', { ...PASS_CTX, mismatch: true })).toBe(true)
+    // C4: 삭제의 undo/redo는 막는다 (서버 부활 API 없이 되살리면 발산한다).
+    expect(isBlockedXlsxEdit('undo', 'Delete object', PASS_CTX)).toBe(true)
+    expect(isBlockedXlsxEdit('redo', 'Delete object', PASS_CTX)).toBe(true)
     expect(isBlockedXlsxEdit('redo', 'Insert picture')).toBe(true)
     expect(isBlockedXlsxEdit('undo', 'Delete comment')).toBe(true)
     expect(isBlockedXlsxEdit('undo', 'Conditional formatting')).toBe(true)
@@ -69,6 +83,34 @@ describe('xlsxCollabGuard', () => {
     expect(isBlockedXlsxEdit('undo', 'Typing in A1')).toBe(false)
     expect(isBlockedXlsxEdit('undo', 'Paste')).toBe(false)
     expect(isBlockedXlsxEdit('redo', 'Format cells')).toBe(false)
+  })
+
+  test('개체 op: emb/mismatch/남의 락이면 막는다', () => {
+    const base: ObjectGuardCtx = { ...NO_OBJECT_GUARD }
+    expect(decideObjectOp('annotations', 'Move object', base)).toBe('pass')
+    expect(decideObjectOp('undo', 'Move object', base)).toBe('pass')
+    expect(decideObjectOp('annotations', 'Move object', { ...base, embLocked: true })).toBe('emb')
+    expect(decideObjectOp('annotations', 'Delete object', { ...base, embLocked: true })).toBe('emb')
+    expect(decideObjectOp('annotations', 'Move object', { ...base, mismatch: true })).toBe('mismatch')
+    expect(
+      decideObjectOp('annotations', 'Move object', { ...base, activeKey: 'o1', foreignKeys: new Set(['o1']) }),
+    ).toBe('foreign')
+    expect(
+      decideObjectOp('annotations', 'Delete object', { ...base, activeKey: 'o2', foreignKeys: new Set(['o1']) }),
+    ).toBe('pass')
+    expect(isBlockedXlsxEdit('annotations', 'Move object', { ...base, embLocked: true })).toBe(true)
+    expect(isBlockedXlsxEdit('annotations', 'Delete object', { ...base, mismatch: true })).toBe(true)
+    expect(
+      isBlockedXlsxEdit('annotations', 'Move object', { ...base, activeKey: 'o1', foreignKeys: new Set(['o1']) }),
+    ).toBe(true)
+    expect(isBlockedXlsxEdit('annotations', 'Move object', base)).toBe(false)
+  })
+
+  test('surgical oleObj가 있으면 EMB로 판정한다', () => {
+    expect(hasEmbObject(undefined)).toBe(false)
+    expect(hasEmbObject([])).toBe(false)
+    expect(hasEmbObject([{ sourceXml: '<xdr:twoCellAnchor><xdr:oleObj spid="x"/>' }])).toBe(true)
+    expect(hasEmbObject([{ sourceXml: '<xdr:pic><xdr:cNvPr id="1"/></xdr:pic>' }])).toBe(false)
   })
 
   test('알 수 없는 kind/label은 막지 않는다 (fail-open)', () => {
