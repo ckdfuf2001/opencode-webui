@@ -657,8 +657,21 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
       // E2E에는 Toaster가 없으므로 토스트 대신 롤백(그림 그대로)으로 거부됐음을 확인한다.
       await openXlsxEditing(t.pageB, f.name)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
-      await t.pageA.locator('xlsx-editor').click({ timeout: 10000 }).catch(() => {})
-      await t.pageA.keyboard.press('Control+z')
+      // C3: keyboard Ctrl+Z never reaches the lib grid here (probe 2026-10-30:
+      // canUndo stays true, no guard, no toast), so call session.undo() —
+      // the same replay funnel the hotkey would use.
+      const undone = await t.pageA.evaluate(() => {
+        try {
+          const el = document.querySelector('xlsx-editor') as unknown as {
+            core?: { session?: { undo?: () => unknown } }
+          } | null
+          el?.core?.session?.undo?.()
+          return { ok: true as const }
+        } catch (e) {
+          return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+        }
+      })
+      expect(undone.ok, `undo should be blocked (got: ${undone.ok ? 'ok' : undone.error})`).toBe(false)
       // C3: undo guard shows a toast (hidden Toaster) — exactly 1.
       await expect(t.pageA.getByText(LOCK_TOAST)).toHaveCount(1, { timeout: 8000 })
       await expect
