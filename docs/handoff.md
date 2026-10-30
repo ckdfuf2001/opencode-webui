@@ -860,3 +860,16 @@ E21만의 문제가 아니다. 근거:
 - 판정 원문: E6 run-1 `expect(d.lastSave?.status).toBe(200) / Received: undefined`
   (pptx-collab.spec.ts:581). D26(E21b)은 run-1·run-2·단독 실행 모두 `toHaveCount(0)` 실패로
   기준선과 동일하므로, 이전 "순서 의존 플레이크"·"vite 캐시 탓" 판정은 철회한다.
+
+## C4-2 1단계 완료 (2026-10-31, release-0.12)
+- 범위: D50. image/chart/sp/smartArt 이동·삭제 허용 + 락, EMB는 C5.
+- e2e c3.spec.ts C4 8종(mismatch/move/lock/delete/move-undo/delete-undo-blocked/late-join/leave-release):
+  chromium 8/8, msedge 8/8. C3-img-1/undo/reconnect는 C4 의미로 재작성
+  (차단→동기화·전파·오프라인차단+복귀수렴). c3.spec 전체 chromium·msedge 각 27/27.
+- 단위: collab-objects 18 + xlsxCollabGuard 13 + xlsxObjects 10 = 41 passed.
+- backend 전체: 62 파일 passed, 2 파일 실패는 bun:sqlite 기존 항목
+  (config-migration·repo-tracking). frontend tsc 0, 변경 파일 eslint 0.
+- 남은 한계(1단계): solo 구조변경 후 합류 시 키 재발급 발산,
+  오프라인 중 로컬 변경의 재접속 재전송 없음(차단으로 fail-closed),
+  삭제-409 복구는 스택 꼭대기가 Delete일 때만, 고아 키 잔류(무해).
+- 다음: exe 0.12.74 빌드·PC2 수동확인·태그. EMB 정규화는 C5.
