@@ -150,14 +150,15 @@ function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => 
       <SettingsDialog open={isOpen} onOpenChange={close} />
       {!isExpose && !isE2E && <FavoriteSessionsPanel />}
       {!isExpose && !isE2E && <HtmlViewerMenu />}
-      {!isE2E && (
-        <Toaster
-          position="bottom-right"
-          expand={false}
-          richColors
-          closeButton
-        />
-      )}
+      {/* C3: E2E에서도 Toaster DOM은 유지해 토스트 횟수를 단언한다. E2E에서는
+          보이지 않게(클릭 가로챔 없음)만 한다. */}
+      <Toaster
+        position="bottom-right"
+        expand={false}
+        richColors
+        closeButton
+        toastOptions={isE2E ? { style: { display: 'none', pointerEvents: 'none' } } : undefined}
+      />
     </>
   )
 }
