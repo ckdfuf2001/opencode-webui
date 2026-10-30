@@ -766,7 +766,7 @@ E21만의 문제가 아니다. 근거:
   PPT E1(desktop) 1 passed. 모바일 E11m 3건 실패는 베이스라인 기존 실패와 동일
   (gotoSlide 썸네일 타임아웃, presence와 무관).
 - 게이트: frontend tsc 0, check:memory 오류 0/경고 1(D36), check:encoding 0(경고 1 기존).
-- 결정: D49. v0.13 이월 없음(남은 것은 태그 전 사용자 수동 체크 ①-⑤).
+- 결정: D49. C1 범위 이월 없음(v0.13 백로그 기존 항목은 유지). 남은 것은 태그 전 사용자 수동 체크 ①-⑤.
 
 ## C2 엑셀 자동 복구 + 자동 저장 (2026-10-29, release-0.12)
 
@@ -821,16 +821,17 @@ E21만의 문제가 아니다. 근거:
   window 캡처에서 선점 차단한다(입력칸 Esc은 제외). 바깥 클릭은 따라가기 해제다
   (`onDismiss`, P-7b). 썸네일 내비게이션(aside)은 따라가기를 유지한다 (P-7c 상호 팔로우).
 - C3-img/flush/undo/release: 가드 throw는 설계(롤백·히스토리 미기록)대로라 테스트가
-  받아낸다(`xlsxMoveImage`가 `{ok, error}` 반환). E2E에는 Toaster를 숨김 마운트하므로 토스트 횟수로
-  가드 에러 문구·롤백 상태·토스트 횟수로 단언한다. 저장 디스크 단언은 네임스페이스 접두사를 걷어낸 뒤
+  받아낸다(`xlsxMoveImage`가 `{ok, error}` 반환). E2E에도 Toaster를 숨김 마운트하므로(App.tsx),
+  가드 에러 문구·롤백 상태·토스트 1회로 단언한다. 저장 디스크 단언은 네임스페이스 접두사를 걷어낸 뒤
   바꿨다(lib 저장본은 `<xdr:row>`, 픽스처 원본은 `<row>`).
   C3-release는 모달 대신 reload로 나간다(데스크톱 모달 닫기 미지원 + `catch` 삼킴 방지).
 - green: c3.spec.ts 16/16 chromium + 16/16 msedge. P-5/P-6/P-9 포함.
   회귀(격리 실행): presence 4/4 · xlsx-collab 20 · xlsx-c2 7 · ui-layout+viewer-unmount+
   xlsx-solo 7 · pptx E17/E19b · backend guard 단위 9 · frontend tsc 0 ·
-  check:memory 0/경고1(D36) · check:encoding 0 · eslint my-file 변동 0
-  (전체 337=272+61+4는 베이스라인 drift, my-file 동일 9err/10warn).
-- 전체 스위트(180테스트)는 샌드박스 백엔드 불안정(빈 워크스페이스·TimeoutError)으로
-  완주 불가. E8를 변경 없이(스태시) 돌려도 동일하게 실패함을 확인 → 환경 문제.
-  C3·presence·xlsx 계열 격리 실행은 전부 green이라 제품 회귀는 아니다.
-- 결정: D48·D49 보완으로 처리(D50 미생성). v0.13 이월 없음(C3 완료). 남은 것은 태그 전 사용자 수동 체크.
+  check:memory 0/경고1(D36) · check:encoding 0 · eslint 333(272/61, 기준선과 동일).
+  (전수 337=276+61은 C3-line 회귀 4건이었음: CollabPresence react-refresh 3 +
+  guard dist-path 테스트 regex 1. `5794f27`에서 수정 후 333으로 복귀).
+- E8은 10-27 전수 기준선 실패 18건에 포함된 기존 실패다(위 트리아지 표 v0.13행).
+  변경 없이(스태시) 돌려도 동일하게 실패하므로 C3 회귀는 아니다.
+  전체 스위트 전수 대조 결과는 아래 P0-3 회귀표에 있다.
+- 결정: D48·D49 보완으로 처리(D50 미생성). C3 범위 이월 없음(v0.13 백로그는 D49 등 기존 항목 유지). 남은 것은 태그 전 사용자 수동 체크.

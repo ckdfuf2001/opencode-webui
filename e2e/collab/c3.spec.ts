@@ -548,7 +548,7 @@ test.describe('C3-img: 동시편집 중 이미지 편집 잠금', () => {
       expect(xlsxPatches.uiXlsx).toBe('X2a-ui')
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
       // B가 이미지를 옮기려 한다 → 거부된다 (가드가 throw, 앱이 토스트).
-      // E2E에는 Toaster가 없으므로 토스트 DOM 대신 가드 에러 메시지로 거부 경로를 확인한다.
+      // E2E에도 Toaster는 숨김 마운트되므로 토스트 DOM(LOCK_TOAST 1회)으로 거부 경로를 확인한다.
       const moved = await xlsxMoveImage(t.pageB, before!.sheet, before!.index, before!.row + 4)
       expect(moved.ok, `move should be blocked (got: ${moved.error ?? 'ok'})`).toBe(false)
       // C3: guard shows a toast (Toaster is mounted hidden in E2E) — exactly 1.
@@ -653,8 +653,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
       await xlsxMoveImage(t.pageA, before!.sheet, before!.index, before!.row + 4)
       expect((await xlsxImageAnchor(t.pageA))?.row).toBe(before!.row + 4)
-      // B가 들어오면 잠금이 켜진다. A가 Ctrl+Z를 눌러도 되돌릴 수 없다.
-      // E2E에는 Toaster가 없으므로 토스트 대신 롤백(그림 그대로)으로 거부됐음을 확인한다.
+      // B가 들어오면 잠금이 켜진다. undo도 가드에 막힌다(토스트 1회 + 그림 그대로).
       await openXlsxEditing(t.pageB, f.name)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       // C3: keyboard Ctrl+Z never reaches the lib grid here (probe 2026-10-30:

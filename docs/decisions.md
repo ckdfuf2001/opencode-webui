@@ -577,9 +577,16 @@
   유일한 출처다. kind `annotations`는 전부 막고, format/structure/sheets는 unsynced
   라벨만 막는다(그 외·`view`·`batch`·undo/redo 중 셀 편집은 통과).
   잠금은 `collab?.joined && xlsxPeople.length >= 2`일 때만 켜진다(혼자면 항상 허용 —
-  C3-release). 보기류 조작(필터·고정·줌)은 deny 목록에 없어 막히지 않으며, 같은 save
-  경로로 디스크에 반영된다(C3-img-2·flush의 zip 단언 + saveBytes 직렬화 프로브로 확인;
-  전용 freeze/filter/zoom e2e는 없고 unit 허용 목록으로 갈음한다).
+  C3-release). 방에 실리지 않는 부분(보기·서식 일부)은 저장한 owner의 로컬 상태가
+  이긴다(같은 save 경로로 디스크에 그대로 반영, 상대 화면은 방 동기화분만 받는다).
+  보기류 실측: 픽스처 `collab-features.xlsx`의 `xl/tables/table1.xml` `<autoFilter>` 1건과
+  `sheet1·2.xml` `<pane>` 각 1건이 UI owner 저장본(`c3img2`, 2026-10-30 e2e 산출물) zip에
+  그대로 있다. 숨김 행/열은 픽스처에 없어 미확인이다. 전용 freeze/filter/zoom e2e는 없다.
+  gap(v0.13): 붙여넣기 부가 요소(programmatic fill은 lib readOnly를 우회한다, X2a-③ 관측),
+  `Clear formats` 부수효과, batch `Clear Comments and Notes`(ooxml-core
+  `dist/xlsx/ui/index.mjs` clear 메뉴 batch, 설치본 30060행대)의 undo — 바깥 라벨이 차단
+  목록에 없어 잠금 중 undo가 통과한다(실행 시점 차단은 됨; 다른 batch 호출점은
+  format/view/cells만 담아 해당 없음). 이번에는 고치지 않는다.
   1→2 전이는 owner만 즉시 저장한다(`shouldFlushOnPeerArrive`, 2.5s 디바운스 건너뜀).
   XLSX 핸들은 React 래퍼 ref(`O()`)가 구 API 부분집합이라 `reveal`/`updateCollabIdentity`가
   없으므로, 패치된 `xlsx-editor` element에 있으면 effect에서 1회만 위임으로 채운다
