@@ -98,10 +98,12 @@ describe('collab objects: lock contention', () => {
   it('same holder renews with same lockId', async () => {
     const roomId = await freshRoom()
     registerRoomObjects(roomId, 'hash1', ITEMS)
-    const a = acquireObjectLock(roomId, 'o1', 11, 1000)
+    // NOTE: acquire 내부 broadcast가 getRoomObjects sweep(실시간)을 타므로
+    // 가짜 과거 시각을 쓰면 즉시 만료된다. 실측 시각으로 검증한다.
+    const a = acquireObjectLock(roomId, 'o1', 11)
     expect(a.ok).toBe(true)
     if (!a.ok) return
-    const a2 = acquireObjectLock(roomId, 'o1', 11, 2000)
+    const a2 = acquireObjectLock(roomId, 'o1', 11)
     expect(a2).toMatchObject({ ok: true, lockId: a.lockId })
   })
 
@@ -136,11 +138,14 @@ describe('collab objects: lock contention', () => {
 
 describe('collab objects: lease + disconnect', () => {
   it('lease expires after ttl', async () => {
+    const { OBJECT_LOCK_TTL_MS } = await import('../../src/services/collab-rooms')
     const roomId = await freshRoom()
     registerRoomObjects(roomId, 'hash1', ITEMS)
-    const a = acquireObjectLock(roomId, 'o1', 11, 1000)
+    // NOTE: broadcast 안의 sweep이 실시간이라 가짜 과거 시각은 즉시 만료된다.
+    const now = Date.now()
+    const a = acquireObjectLock(roomId, 'o1', 11, now)
     expect(a.ok).toBe(true)
-    const b = acquireObjectLock(roomId, 'o1', 22, 1000 + 10_001)
+    const b = acquireObjectLock(roomId, 'o1', 22, now + OBJECT_LOCK_TTL_MS + 1)
     expect(b.ok).toBe(true)
   })
 
@@ -212,6 +217,18 @@ describe('collab objects: reset + EMB guard', () => {
     if (!d.ok) expect(d.code).toBe('emb_locked')
   })
 
+  it('register after delete matches live kinds only', async () => {
+    const roomId = await freshRoom()
+    const r1 = registerRoomObjects(roomId, 'hash1', ITEMS)
+    expect(r1.ok).toBe(true)
+    // o1 삭제 후 같은 해시로 다시 등록하면 살아 있는 것만 대조한다.
+    const del = deleteObject(roomId, 'o1', 11, 0)
+    expect(del.ok).toBe(true)
+    const r2 = registerRoomObjects(roomId, 'hash1', [{ sheet: 0, kind: 'unsupported:shape' }])
+    expect(r2).toMatchObject({ ok: true })
+    if (r2.ok) expect(r2.keys).toEqual(['o2'])
+  })
+
   it('GET returns version + order + objects', async () => {
     const s = await createSession(NOTE_REL)
     const roomId = s.roomId
@@ -222,5 +239,44 @@ describe('collab objects: reset + EMB guard', () => {
       expect(g.objects).toHaveLength(2)
       expect(g.order).toEqual({ '0': ['o1', 'o2'] })
     }
+  })
+})
+
+describe('collab objects: join sync + stale guard', () => {
+  it('addConn pushes current objects state to the joining socket', async () => {
+    const roomId = await freshRoom()
+    registerRoomObjects(roomId, 'hash1', ITEMS)
+    const frames: Uint8Array[] = []
+    addConn(roomId, { send: (d: Uint8Array) => { frames.push(d) } })
+    const objs = frames.filter((f) => f[0] === 102)
+    expect(objs).toHaveLength(1)
+    const d = decoding.createDecoder(objs[0].subarray(1))
+    const raw = decoding.readVarUint8Array(d)
+    const body = JSON.parse(new TextDecoder().decode(raw)) as { version?: unknown; objects?: Array<{ key?: unknown }> }
+    expect(body.version).toBe(0)
+    expect((body.objects ?? []).map((o) => o.key)).toEqual(['o1', 'o2'])
+  })
+
+  it('broadcast on a disposed room sends nothing (no ghost error-102)', async () => {
+    const { releaseObjectLocks } = await import('../../src/services/collab-rooms')
+    const s1 = await createSession(NOTE_REL)
+    const r1 = rooms.get(s1.roomId)
+    expect(r1).toBeTruthy()
+    const frames: Uint8Array[] = []
+    const w = { send: (d: Uint8Array) => { frames.push(d) } }
+    addConn(s1.roomId, w)
+    registerRoomObjects(s1.roomId, 'hash1', ITEMS)
+    const locked = acquireObjectLock(s1.roomId, 'o1', 11)
+    expect(locked.ok).toBe(true)
+    frames.length = 0
+    removeConn(s1.roomId, w)
+    // 고아 재생성 → r1은 stale 참조가 된다.
+    const s2 = await createSession(NOTE_REL)
+    expect(s2.epoch).not.toBe(s1.epoch)
+    expect(rooms.get(s1.roomId)).not.toBe(r1)
+    // stale 방의 락 해제(트리거 발화) → 브로드캐스트 스킵, 유령 프레임 0건.
+    const changed = releaseObjectLocks(r1!, [11])
+    expect(changed).toBe(true)
+    expect(frames).toHaveLength(0)
   })
 })

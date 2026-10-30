@@ -271,6 +271,10 @@ function sendTo(room: CollabRoom, ws: unknown, data: Uint8Array): void {
 }
 
 function broadcast(room: CollabRoom, data: Uint8Array): void {
+  // C4: 폐기된 방 참조로는 보내지 않는다. dispose 후 남은 stale conns에
+  // getRoomObjects error({"error":"No such room"})가 102로 감싸져 나가
+  // 클라이언트 개체 표를 깨뜨리는 유령 프레임을 막는다.
+  if (rooms.get(room.id) !== room) return
   for (const ws of [...room.conns.keys()]) sendTo(room, ws, data)
 }
 
@@ -760,6 +764,14 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
   if (states.length > 0) {
     try {
       sock.send(encodeAwareness(states, room.awareness))
+    } catch { /* 무시 */ }
+  }
+  // C4: 새로 붙은 conn에 현재 개체 표를 직접 보낸다 (그 사이 브로드캐스트를
+  // 놓친 탭도 (재)연결 즉시 따라잡는다 — Yjs sync-step1과 같은 역할).
+  // lib은 모르는 타입(102)이라 무시하고, 탭이 가로채 적용한다.
+  if (room.objects.byKey.size > 0) {
+    try {
+      sock.send(encodeObjects(room))
     } catch { /* 무시 */ }
   }
   return room
@@ -1357,10 +1369,15 @@ export function sweepObjectLocks(room: CollabRoom, now: number = Date.now()): bo
 }
 
 function broadcastObjects(room: CollabRoom): void {
+  broadcast(room, encodeObjects(room))
+}
+
+/** 102 페이로드 인코딩 (addConn 즉시 전송과 브로드캐스트가 공유한다). */
+function encodeObjects(room: CollabRoom): Uint8Array {
   const e = encoding.createEncoder()
   encoding.writeVarUint(e, MSG_ROOM_OBJECTS)
-  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify(getRoomObjects(room))))
-  broadcast(room, encoding.toUint8Array(e))
+  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify(getRoomObjects(room.id))))
+  return encoding.toUint8Array(e)
 }
 
 /** 방 개체 전체 상태 (GET / session 응답용). */
@@ -1376,13 +1393,8 @@ export function getRoomObjects(roomId: string): (RoomObjectsState & { roomId: st
   }
 }
 
-function sameOrder(a: Array<{ sheet: number; kind: string }>, b: Array<{ sheet: number; kind: string }>): boolean {
-  if (a.length !== b.length) return false
-  return a.every((x, i) => x.sheet === b[i]?.sheet && x.kind === b[i]?.kind)
-}
-
 /**
- * 개체 등록. 첫 등록자가 시트별 순서대로 kinds를 보내면 서버가 키를 발급한다.
+ * 개체 등록. 첫 등록자가 시트별 kinds를 보내면 서버가 키를 발급한다.
  * 이미 아는 해시면 순서·개수를 대조하고, 다르면 키 없이 거부한다 (fail-closed).
  */
 export function registerRoomObjects(
@@ -1394,7 +1406,7 @@ export function registerRoomObjects(
   | { ok: false; code: 'no_room' | 'order_mismatch'; version?: number; objects?: RoomObjectSnapshot[]; expected?: Record<string, string[]> } {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, code: 'no_room' }
-  if (typeof hash !== 'string' || !hash || !Array.isArray(items) || items.length === 0 || items.length > 500) {
+  if (typeof hash !== 'string' || !hash || !Array.isArray(items) || items.length > 500) {
     return { ok: false, code: 'order_mismatch' }
   }
   for (const it of items) {
@@ -1402,28 +1414,46 @@ export function registerRoomObjects(
       return { ok: false, code: 'order_mismatch' }
     }
   }
-  const clean = items.map((it) => ({ sheet: it.sheet as number, kind: it.kind as string }))
+  const keyOf = (sheet: number, kind: string): string => `${sheet}::${kind}`
   const existing = room.objects.orderByHash.get(hash)
   if (existing) {
-    const flat: Array<{ sheet: number; kind: string }> = []
-    for (const sheet of Object.keys(existing).map(Number).sort((a, b) => a - b)) {
-      const keys = existing[String(sheet)] ?? []
-      for (const k of keys) {
+    const liveCounts = new Map<string, number>()
+    const liveOrder: Record<string, string[]> = {}
+    for (const sk of Object.keys(existing)) {
+      liveOrder[sk] = []
+      for (const k of existing[sk] ?? []) {
         const e = room.objects.byKey.get(k)
-        flat.push({ sheet, kind: e?.kind ?? '' })
+        if (!e || e.deleted) continue
+        liveOrder[sk].push(k)
+        const kk = keyOf(e.sheet, e.kind)
+        liveCounts.set(kk, (liveCounts.get(kk) ?? 0) + 1)
       }
     }
-    if (!sameOrder(flat, clean)) {
-      logger.warn(`Collab room ${roomId}: object order mismatch for hash ${hash.slice(0, 12)} (fail-closed)`)
+    const gotCounts = new Map<string, number>()
+    for (const it of items) {
+      const kk = keyOf(it.sheet, it.kind)
+      gotCounts.set(kk, (gotCounts.get(kk) ?? 0) + 1)
+    }
+    let okOrder = gotCounts.size === liveCounts.size
+    if (okOrder) {
+      for (const [k, n] of gotCounts) {
+        if (liveCounts.get(k) !== n) {
+          okOrder = false
+          break
+        }
+      }
+    }
+    if (!okOrder) {
+      logger.warn(`Collab room ${roomId}: objects order mismatch for hash ${hash.slice(0, 12)} (fail-closed)`)
       return { ok: false, code: 'order_mismatch', version: room.objects.version, objects: [...room.objects.byKey.values()].map(snapshotEntry), expected: existing }
     }
     const keys: string[] = []
-    for (const sheet of Object.keys(existing).map(Number).sort((a, b) => a - b)) keys.push(...(existing[String(sheet)] ?? []))
+    for (const sk of Object.keys(liveOrder).sort((a, b) => Number(a) - Number(b))) keys.push(...(liveOrder[sk] ?? []))
     return { ok: true, keys, version: room.objects.version, objects: [...room.objects.byKey.values()].map(snapshotEntry), order: existing }
   }
   const keys: string[] = []
   const order: Record<string, string[]> = {}
-  for (const it of clean) {
+  for (const it of items) {
     const key = `o${++room.objects.seq}`
     keys.push(key)
     const sk = String(it.sheet)
