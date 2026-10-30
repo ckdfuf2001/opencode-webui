@@ -835,3 +835,28 @@ E21만의 문제가 아니다. 근거:
   변경 없이(스태시) 돌려도 동일하게 실패하므로 C3 회귀는 아니다.
   전체 스위트 전수 대조 결과는 아래 P0-3 회귀표에 있다.
 - 결정: D48·D49 보완으로 처리(D50 미생성). C3 범위 이월 없음(v0.13 백로그는 D49 등 기존 항목 유지). 남은 것은 태그 전 사용자 수동 체크.
+
+## P0-3 회귀표 (2026-10-30, HEAD `6717e22`)
+
+- 공통 명령(PowerShell 5.1): `$env:NODE_ENV='development'` 후
+  `npx --yes pnpm@9.15.0 exec playwright test --config e2e/collab/playwright.config.ts <파일…> --project=chromium --reporter=line`
+- c3.spec.ts 18 tests(P-5~P-9 + img/flush/undo/release + comment undo/redo): **18 passed**.
+- 격리: presence 4 + xlsx-collab 20(X2a-1~7 포함) + xlsx-c2 7 + xlsx-solo 2(X-B1·X-B2) +
+  viewer-unmount 2 + ui-layout 3 = **38 passed**.
+- pptx-collab 전수(35 tests) run-2: **16 failed / 1 skipped(E2r-legacy, test.skip) / 18 passed**.
+  실패 16건: E21b, E3, E4, E7, E8, E9, E12, E15, E18, E16b, E20, E20s, E21,
+  E11m/E1m, E11m/E2m, E11m/E3m.
+  10-27 기준선 18건과 대조: E5·E19b 2건 해소(이제 통과), **신규 실패 0건**.
+  run-1(18 failed)과의 차이 2건: E1(아바타 이니셜 단언 stale → `6717e22`에서 E17과 같은
+  팝오버 행 단언으로 수정, run-2 통과), E6(전수에서만 `lastSave` 미기록 실패 →
+  run-2 + 단독 실행 통과, 부하 타이밍 플레이크).
+- E2 5종(E2, E2b, E2f-strict, E2g, E2r): run-1·run-2 모두 통과. PptxViewer 게이트 변경 영향 없음.
+  (`paused:true`는 lib broadcast 자동따라가기만 끈다. E 계열에서 follow UI를 쓰는 테스트는
+  없고, e2e grep상 follow 사용은 c3.spec뿐이다.)
+- X2a 7종: xlsx-collab 내 전부 통과. X-B1·X-B2: 통과. E21·E11m 3종: 기준선 실패와 동일.
+- backend vitest: **570 tests passed**, 파일 60/62(실패 2종 `config-migration`·`repo-tracking`은
+  `bun:sqlite` 기존 항목).
+- frontend eslint 333(272/61, 기준선과 동일, P0-2) · frontend tsc 0.
+- 판정 원문: E6 run-1 `expect(d.lastSave?.status).toBe(200) / Received: undefined`
+  (pptx-collab.spec.ts:581). D26(E21b)은 run-1·run-2·단독 실행 모두 `toHaveCount(0)` 실패로
+  기준선과 동일하므로, 이전 "순서 의존 플레이크"·"vite 캐시 탓" 판정은 철회한다.
