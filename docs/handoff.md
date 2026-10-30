@@ -873,3 +873,10 @@ E21만의 문제가 아니다. 근거:
   오프라인 중 로컬 변경의 재접속 재전송 없음(차단으로 fail-closed),
   삭제-409 복구는 스택 꼭대기가 Delete일 때만, 고아 키 잔류(무해).
 - 다음: exe 0.12.74 빌드·PC2 수동확인·태그. EMB 정규화는 C5.
+## C4-2 회귀 + X-B1 수정 (2026-10-31)
+- X-B1 20회 Edit/Done에서 objects/o1·o2/delete 404 2건: 리마운트(새 모델·태그 소실) +
+  방 재생성 후 재등록을 건너뛰어 유령 삭제 POST가 나갔다. 수정: epoch을 regKey에 포함
+  (방 재생성 감지), 핸들 교체 시 재등록, 태그 없는 모델에서는 삭제 판정 보류.
+- 회귀: xlsx-collab 20 + c2 7 + solo 2 = 29/29 chromium. pptx 전수 16 failed / 18 passed로
+  기준선과 동일(신규 0). backend 62파일 + bun:sqlite 2 기존. frontend tsc 0.
+- 다음: exe 0.12.74 빌드·PC2 수동확인·태그.
