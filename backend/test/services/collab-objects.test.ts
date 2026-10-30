@@ -75,6 +75,19 @@ describe('collab objects: register', () => {
     expect(bad2.ok).toBe(false)
   })
 
+  it('same order under a new hash reuses keys (lib reserialization churn)', async () => {
+    const roomId = await freshRoom()
+    const r1 = registerRoomObjects(roomId, 'hash1', ITEMS)
+    expect(r1.ok).toBe(true)
+    if (!r1.ok) return
+    // 바이트만 달라진 같은 순서 (lib 저장 후 해시 변경) → 같은 키를 재사용한다.
+    // 해시마다 키를 새로 발급하면 참가자끼리 키가 어긋나 잠금·이동이 빗나간다.
+    const r2 = registerRoomObjects(roomId, 'hash2', ITEMS)
+    expect(r2).toMatchObject({ ok: true, keys: ['o1', 'o2'] })
+    if (!r2.ok) return
+    expect(r2.keys).toEqual(r1.keys)
+  })
+
   it('unknown room -> no_room', () => {
     const r = registerRoomObjects('f_nope', 'h', ITEMS)
     expect(r).toMatchObject({ ok: false, code: 'no_room' })

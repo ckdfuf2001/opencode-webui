@@ -1415,9 +1415,41 @@ export function registerRoomObjects(
     }
   }
   const keyOf = (sheet: number, kind: string): string => `${sheet}::${kind}`
-  const existing = room.objects.orderByHash.get(hash)
-  if (existing) {
+  const sigOfCounts = (m: ReadonlyMap<string, number>): string =>
+    JSON.stringify([...m.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+  const liveCountsOf = (ord: Record<string, string[]>): Map<string, number> => {
     const liveCounts = new Map<string, number>()
+    for (const sk of Object.keys(ord)) {
+      for (const k of ord[sk] ?? []) {
+        const e = room.objects.byKey.get(k)
+        if (!e || e.deleted) continue
+        const kk = keyOf(e.sheet, e.kind)
+        liveCounts.set(kk, (liveCounts.get(kk) ?? 0) + 1)
+      }
+    }
+    return liveCounts
+  }
+  const gotCounts = new Map<string, number>()
+  for (const it of items) {
+    const kk = keyOf(it.sheet, it.kind)
+    gotCounts.set(kk, (gotCounts.get(kk) ?? 0) + 1)
+  }
+  let existing = room.objects.orderByHash.get(hash)
+  if (!existing) {
+    // C4: 같은 순서(signature)면 해시가 달라도 같은 키를 재사용한다.
+    // lib 직렬화물은 바이트만 달라지고 개체 순서는 그대로라서, 해시마다
+    // 키를 새로 발급하면 참가자끼리 키가 어긋나 잠금·이동이 빗나간다.
+    const gotSig = sigOfCounts(gotCounts)
+    for (const ord of room.objects.orderByHash.values()) {
+      if (sigOfCounts(liveCountsOf(ord)) === gotSig) {
+        existing = ord
+        room.objects.orderByHash.set(hash, ord)
+        break
+      }
+    }
+  }
+  if (existing) {
+    const liveCounts = liveCountsOf(existing)
     const liveOrder: Record<string, string[]> = {}
     for (const sk of Object.keys(existing)) {
       liveOrder[sk] = []
@@ -1425,14 +1457,7 @@ export function registerRoomObjects(
         const e = room.objects.byKey.get(k)
         if (!e || e.deleted) continue
         liveOrder[sk].push(k)
-        const kk = keyOf(e.sheet, e.kind)
-        liveCounts.set(kk, (liveCounts.get(kk) ?? 0) + 1)
       }
-    }
-    const gotCounts = new Map<string, number>()
-    for (const it of items) {
-      const kk = keyOf(it.sheet, it.kind)
-      gotCounts.set(kk, (gotCounts.get(kk) ?? 0) + 1)
     }
     let okOrder = gotCounts.size === liveCounts.size
     if (okOrder) {
