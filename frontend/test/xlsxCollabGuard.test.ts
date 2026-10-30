@@ -83,7 +83,7 @@ describe('xlsxCollabGuard labels exist in ooxml-core dist', () => {
   const dist = (() => {
     const root = path.resolve(__dirname, '..', '..', 'node_modules', '.pnpm')
     const lock = fs.readFileSync(path.resolve(__dirname, '..', '..', 'pnpm-lock.yaml'), 'utf8')
-    const hash = /ooxml-core@1\.8\.0:\n    hash: (\w+)/.exec(lock)?.[1]
+    const hash = /ooxml-core@1\.8\.0:\n\s+hash: (\w+)/.exec(lock)?.[1]
     expect(hash, 'pnpm-lock에 ooxml-core 패치 해시가 있어야 한다').toBeTruthy()
     const p = path.join(root, `ooxml-core@1.8.0_patch_hash=${hash}`, 'node_modules', 'ooxml-core', 'dist', 'xlsx', 'index.mjs')
     expect(fs.existsSync(p), `설치본이 있어야 한다: ${p}`).toBe(true)

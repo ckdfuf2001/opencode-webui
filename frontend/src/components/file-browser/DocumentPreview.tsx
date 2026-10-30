@@ -34,7 +34,8 @@ import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser } from '@/lib/collabUser'
 import { isBlockedXlsxEdit, shouldFlushOnPeerArrive } from '@/lib/xlsxCollabGuard'
-import { CollabPresenceBar, CollabPresenceShell, type PresencePeerView } from '@/components/collab/CollabPresence'
+import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/CollabPresence'
+import type { PresencePeerView } from '@/components/collab/collabPresenceView'
 
 type ExtractedMsg = {
   html?: string

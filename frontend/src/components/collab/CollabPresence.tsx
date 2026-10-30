@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Pencil } from 'lucide-react'
-import { peerActivity, type Peer } from '@/lib/usePeers'
+import { peerActivity } from '@/lib/usePeers'
+import type { PresencePeerView } from './collabPresenceView'
+import { displayName, peerInitials } from './collabPresenceView'
 
 /**
  * C1: 접속자 표시 통일 (PPT/XLSX 공용).
@@ -8,62 +10,9 @@ import { peerActivity, type Peer } from '@/lib/usePeers'
  * - 아바타에는 data-* 식별자(data-peer-id/mode/owner/self/slide...)를 둔다.
  *   E21(data-owner), E3(data-slide, data-peer-id) 회귀는 아바타에서 계속 만족한다.
  * - 팝오버는 열려 있을 때만 DOM에 둔다(data-testid="collab-popover").
+ * 표시용 변환(displayName/peerToView/peerInitials)은 ./collabPresenceView에 있다
+ * (react-refresh only-export-components 규칙: 이 파일은 컴포넌트만 둔다).
  */
-
-export interface PresencePeerView {
-  id: string
-  name: string
-  color: string
-  mode: 'view' | 'edit'
-  isSelf: boolean
-  isOwner: boolean
-  tabCount: number
-  device?: 'mobile' | 'desktop'
-  slide?: number
-  sheetIndex?: number
-  range?: string
-  selectedLabel?: string
-  lastEditAt?: number
-  selectedId?: string
-}
-
-/**
- * "(Me)"는 표시 전용 접미사. 저장값(localStorage)·presence·서버에는 붙이지 않는다.
- * i18n을 붙일 때 여기만 바꾼다.
- */
-export const SELF_SUFFIX = ' (Me)';
-
-/** 표시용 이름. 내 행에만 "(Me)"를 붙인다. */
-export function displayName(p: Pick<PresencePeerView, 'name' | 'isSelf' | 'tabCount'>): string {
-  const base = `${p.name}${p.isSelf ? SELF_SUFFIX : ''}`;
-  return p.tabCount > 1 ? `${base} · 탭 ${p.tabCount}` : base;
-}
-
-export function peerToView(p: Peer): PresencePeerView {
-  return {
-    id: p.id,
-    name: p.name,
-    color: p.color,
-    mode: p.mode,
-    isSelf: p.isSelf,
-    isOwner: p.isOwner,
-    tabCount: p.tabCount,
-    device: p.device,
-    slide: p.slide,
-    selectedLabel: p.selectedLabel,
-    lastEditAt: p.lastEditAt,
-    selectedId: p.selectedId,
-  }
-}
-
-/** 이니셜 (아바타 원 안에). 이름 앞 2글자까지. */
-export function peerInitials(name: string): string {
-  const t = name.trim()
-  if (!t) return '?'
-  const parts = t.split(/\s+/).filter(Boolean)
-  if (parts.length >= 2) return ((parts[0]![0] ?? '') + (parts[1]![0] ?? '')).toUpperCase()
-  return t.slice(0, 2).toUpperCase()
-}
 
 /**
  * M7-2: 1초마다 갱신되는 시각 컨텍스트.
