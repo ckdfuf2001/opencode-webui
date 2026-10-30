@@ -569,14 +569,14 @@ test.describe('C3 P-9: 상단 표기 정리', () => {
 })
 
 test.describe('C3-img: 동시편집 중 이미지 편집 잠금', () => {
-  test('C3-img-1: 둘이 있을 때 B가 이미지를 옮기면 거부되고 토스트가 뜬다', async ({ browser }) => {
+  test('C3-img-1: 둘이 있을 때 B가 이미지를 옮기면 A에 동기화된다 (C4 허용)', async ({ browser }) => {
     const errors: string[] = []
     const t = await twoPages(browser)
     const f = freshXlsx('c3img1', 0)
     t.pageB.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -587,19 +587,17 @@ test.describe('C3-img: 동시편집 중 이미지 편집 잠금', () => {
       expect(xlsxPatches.coreXlsx).toBe('C3-guard')
       expect(xlsxPatches.uiXlsx).toBe('X2a-ui')
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
-      // B가 이미지를 옮기려 한다 → 거부된다 (가드가 throw, 앱이 토스트).
-      // E2E에도 Toaster는 숨김 마운트되므로 토스트 DOM(LOCK_TOAST 1회)으로 거부 경로를 확인한다.
-      const moved = await xlsxMoveImage(t.pageB, before!.sheet, before!.index, before!.row + 4)
-      expect(moved.ok, `move should be blocked (got: ${moved.error ?? 'ok'})`).toBe(false)
-      // C3: guard shows a toast (Toaster is mounted hidden in E2E) — exactly 1.
-      await expect(t.pageB.getByText(LOCK_TOAST)).toHaveCount(1, { timeout: 8000 })
-      expect(moved.error ?? '').toContain('동시편집 중에는 이 편집을 지원하지 않습니다')
-      // B 화면의 그림은 그대로다.
-      const after = await xlsxImageAnchor(t.pageB)
-      expect(after?.row).toBe(before!.row)
-      // B가 지금 저장해도 디스크 drawings는 그대로다.
-      await clickAppSave(t.pageB)
-      await expect.poll(async () => workbookContains(f.abs, `<row>${before!.row}</row>`), { timeout: 10000, intervals: [500] }).toBe(true)
+      // C4: 개체 이동은 서버 표 + 락으로 동기화된다 (차단 대신 허용).
+      // B가 이미지를 옮기면 A에 반영되고, 저장하면 디스크에 남는다.
+      await expect.poll(async () => xlsxImageCk(t.pageB), { timeout: 20000, intervals: [500] }).not.toBeNull()
+      await expect
+        .poll(async () => xlsxNudgeImage(t.pageB, before!.row, 4), { timeout: 20000, intervals: [500] })
+        .toMatchObject({ moved: true })
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageA))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row + 4)
+      await clickAppSave(t.pageA)
+      await expect.poll(async () => workbookContains(f.abs, `<row>${before!.row + 4}</row>`), { timeout: 10000, intervals: [500] }).toBe(true)
       expect(errors.join('\n')).not.toMatch(/collab-lock/i)
     } finally {
       await t.ctxA.close()
@@ -681,41 +679,32 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     }
   })
 
-  test('C3-undo: 잠금 중 undo는 거부되고 그림이 그대로다', async ({ browser }) => {
+  test('C3-undo: 이동 undo는 전파되고 양쪽이 원래대로 돌아간다 (C4 허용)', async ({ browser }) => {
     const errors: string[] = []
     const t = await twoPages(browser)
     const f = freshXlsx('c3undo', 0)
     t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageA, f.name)
       await expect.poll(async () => xlsxActive(t.pageA)).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
-      await xlsxMoveImage(t.pageA, before!.sheet, before!.index, before!.row + 4)
-      expect((await xlsxImageAnchor(t.pageA))?.row).toBe(before!.row + 4)
-      // B가 들어오면 잠금이 켜진다. undo도 가드에 막힌다(토스트 1회 + 그림 그대로).
-      await openXlsxEditing(t.pageB, f.name)
-      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
-      // C3: keyboard Ctrl+Z never reaches the lib grid here (probe 2026-10-30:
-      // canUndo stays true, no guard, no toast), so call session.undo() —
-      // the same replay funnel the hotkey would use.
-      const undone = await t.pageA.evaluate(() => {
-        try {
-          const el = document.querySelector('xlsx-editor') as unknown as {
-            core?: { session?: { undo?: () => unknown } }
-          } | null
-          el?.core?.session?.undo?.()
-          return { ok: true as const }
-        } catch (e) {
-          return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-        }
-      })
-      expect(undone.ok, `undo should be blocked (got: ${undone.ok ? 'ok' : undone.error})`).toBe(false)
-      // C3: undo guard shows a toast (hidden Toaster) — exactly 1.
-      await expect(t.pageA.getByText(LOCK_TOAST)).toHaveCount(1, { timeout: 8000 })
       await expect
-        .poll(async () => (await xlsxImageAnchor(t.pageA))?.row, { timeout: 8000, intervals: [500] })
-        .toBe(before!.row + 4)
+        .poll(async () => xlsxNudgeImage(t.pageA, before!.row, 4), { timeout: 20000, intervals: [500] })
+        .toMatchObject({ moved: true })
+      expect((await xlsxImageAnchor(t.pageA))?.row).toBe(before!.row + 4)
+      // B가 들어온 뒤 undo하면 이동이 되돌아가고 B·서버에 전파된다.
+      await openXlsxEditingRetry(t.pageB, f.name)
+      await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
+      // C4: 이동 undo는 그냥 이동이라 통과한다 (삭제 undo만 막는다).
+      const undone = await xlsxUndo(t.pageA)
+      expect(undone.ok, `undo should pass (got: ${undone.ok ? 'ok' : undone.error})`).toBe(true)
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageA))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row)
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageB))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row)
       expect(errors.join('\n')).not.toMatch(/collab-lock/i)
     } finally {
       await t.ctxA.close()
@@ -867,33 +856,38 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     }
   })
 
-  test('C3-reconnect: WS가 끊겼다 돌아와도 잠금이 풀리지 않는다', async ({ browser }) => {
+  test('C3-reconnect: 끊긴 동안 이동이 막히고 돌아오면 동기화된다', async ({ browser }) => {
     const errors: string[] = []
     const t = await twoPages(browser)
     const f = freshXlsx('c3recon', 0)
     t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageB, f.name)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
-      // 둘이 접속한 상태에서 A의 WS를 끊는다.
+      // 둘이 접속한 상태에서 A의 WS를 끊는다. 끊긴 동안은 서버 강제가 안 되니
+      // 로컬에서 전부 막힌다 (C4 fail-closed; 조용히 발산하지 않는다).
       await t.pageA.context().setOffline(true)
-      await t.pageA.waitForTimeout(3000)
-      // 재연결 창: 온라인으로 돌리고 동기화 구간에서 이미지 이동을 반복 시도한다.
-      // 전부 막혀야 한다(잠금이 한 번이라도 풀리면 이동이 성공한다).
-      await t.pageA.context().setOffline(false)
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 6; i++) {
         const moved = await xlsxMoveImage(t.pageA, before!.sheet, before!.index, before!.row + 4)
-        expect(moved.ok, `reconnect move ${i} should be blocked (got: ${moved.ok ? 'ok' : moved.error})`).toBe(false)
+        expect(moved.ok, `offline move ${i} should be blocked (got: ${moved.ok ? 'ok' : moved.error})`).toBe(false)
         await t.pageA.waitForTimeout(500)
       }
       const toasts = await t.pageA.getByText(LOCK_TOAST).count()
       expect(toasts).toBeGreaterThanOrEqual(1)
       // 그림이 그대로다.
       expect((await xlsxImageAnchor(t.pageA))?.row).toBe(before!.row)
+      // 온라인으로 돌리면 재연결되고, 이동이 성공해 B에 동기화된다.
+      await t.pageA.context().setOffline(false)
+      await expect
+        .poll(async () => xlsxNudgeImage(t.pageA, before!.row, 4), { timeout: 30000, intervals: [1000] })
+        .toMatchObject({ moved: true })
+      await expect
+        .poll(async () => (await xlsxImageAnchor(t.pageB))?.row, { timeout: 15000, intervals: [500] })
+        .toBe(before!.row + 4)
       expect(errors.join('\n')).not.toMatch(/collab-lock/i)
     } finally {
       await t.pageA.context().setOffline(false).catch(() => {})
