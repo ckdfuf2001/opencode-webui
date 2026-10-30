@@ -1689,6 +1689,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const objOnMessageRef = useRef<((msg: ObjectsStateMsg) => void) | null>(null)
   /** C4: 탭 transport (재)연결 때마다 놓친 브로드캐스트를 GET으로 따라잡는다. */
   const objConnectRef = useRef<(() => void) | null>(null)
+  /** C4: 서버 거부 후 되돌리기용 undo/redo는 가드를 우회한다 (사용자 경로 아님). */
+  const objUndoRevertRef = useRef(false)
   /** C4: 현재 보고 있는 시트 (sheet-change 이벤트로 추적). */
   const objActiveSheetRef = useRef(0)
   const joinAgainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -2563,17 +2565,24 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     },
     [objEditorCore],
   )
-  const objRegister = useCallback(async (): Promise<void> => {
+  const objRegister = useCallback(async (): Promise<boolean> => {
     const room = collabRef.current
     const hash = room?.baseHash
-    if (!room || !hash || !room.roomId || !editingRef.current) return
+    const roomId = room?.roomId
+    if (!room || !hash || !roomId || !editingRef.current) return false
+    // C4: 같은 키로 완료된 등록은 건너뛴다 (재연결·dep 변화 때 중복 방지).
+    const regKey = `${path}|${roomId}|${hash}|v${viewerGen}`
+    if (objRegisteredRef.current === regKey) return true
     try {
-      const st = await collabApi.objects.get(room.roomId)
+      const st = await collabApi.objects.get(roomId)
       objVersionRef.current = st.version
       for (const o of st.objects) {
         objTableRef.current.set(o.key, { sheet: o.sheet, kind: o.kind, anchor: o.anchor, deleted: o.deleted, version: o.version, lock: o.lock })
       }
       const items = objKindItems()
+      // C4: 모델이 아직 안 올라왔으면 키를 소비하지 말고 다음 기회에
+      // (join 직후 마운트 레이스에서 영구 미등록이 되던 구멍).
+      if (items.length === 0) return false
       if (st.order) {
         // 대조: 같은 해시 순서와 로컬이 같은지 (시트·종류별 개수, 삭제분 제외).
         if (!objTagWithOrder(st.order, st.objects)) {
@@ -2583,13 +2592,13 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           } catch {
             /* 무시 */
           }
-          return
+        } else {
+          objSnapshotAll()
         }
-        objSnapshotAll()
-        return
+        objRegisteredRef.current = regKey
+        return true
       }
-      if (items.length === 0) return
-      const r = await collabApi.objects.register(room.roomId, hash, items)
+      const r = await collabApi.objects.register(roomId, hash, items)
       if (!r.ok) {
         if (r.code === 'order_mismatch') {
           objMismatchRef.current = true
@@ -2598,8 +2607,10 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           } catch {
             /* 무시 */
           }
+          objRegisteredRef.current = regKey
+          return true
         }
-        return
+        return false
       }
       if (r.objects) {
         for (const o of r.objects) {
@@ -2613,11 +2624,104 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         }
         objSnapshotAll()
       }
+      objRegisteredRef.current = regKey
+      return true
     } catch {
       /* 조용히 실패 (다음 기회에 재시도) */
+      return false
     }
-  }, [objSnapshotAll, objKindItems, objTagWithOrder])
+  }, [objSnapshotAll, objKindItems, objTagWithOrder, path, viewerGen])
   const objChainRef = useRef(Promise.resolve())
+  /**
+   * C4: 서버에 거부된 로컬 변경을 기준점(lastSent)으로 되돌린다.
+   * - 이동 거부: 모델 anchor를 lastSent로 덮어쓴다 (서버 anchor가 null이면
+   *   따라잡기가 스킵되어 유령 상태가 남으므로, 되돌리기가 없으면 안 된다).
+   * - 삭제 거부: 지워진 그림은 anchor로 복원할 수 없어 undo로 되살린다.
+   *   undo 스택 꼭대기가 삭제가 아니면(그 사이 사용자 편집) 건드리지 않는다.
+   *   되돌리기 undo는 가드 우회 플래그로 허용한다 (사용자 경로 아님).
+   */
+  const objRevertKeyToLastSent = useCallback(
+    (key: string): void => {
+      try {
+        const prev = objLastSentRef.current.get(key)
+        if (!prev || prev.deleted) return
+        const core = objEditorCore()
+        const session = core?.session as
+          | {
+              applyExternal?: (apply: () => { kind?: string; label?: string } | void) => unknown
+              undo?: () => unknown
+              undoLabel?: () => string | undefined
+            }
+          | undefined
+        const wb = core?.workbook
+        if (!wb || !session) return
+        let modelHas = false
+        try {
+          const sheets = wb.sheets ?? []
+          outer: for (const s of sheets) {
+            if (!Array.isArray(s?.drawings)) continue
+            for (const d of s.drawings as Array<{ __ck?: unknown }>) {
+              if (d && typeof d === 'object' && (d as { __ck?: unknown }).__ck === key) {
+                modelHas = true
+                break outer
+              }
+            }
+          }
+        } catch {
+          return
+        }
+        applyingRemoteRef.current = true
+        try {
+          if (modelHas) {
+            let want: unknown = null
+            try {
+              want = JSON.parse(prev.anchor) as unknown
+            } catch {
+              return
+            }
+            if (want == null) return
+            let changed = false
+            const apply = (): { kind: string; label: string } | void => {
+              const sheets = wb.sheets ?? []
+              for (const s of sheets) {
+                if (!Array.isArray(s?.drawings)) continue
+                for (const d of s.drawings as Array<{ __ck?: unknown; anchor?: unknown }>) {
+                  if (!d || typeof d !== 'object' || (d as { __ck?: unknown }).__ck !== key) continue
+                  if (anchorKey((d as { anchor?: unknown }).anchor) !== anchorKey(want)) {
+                    ;(d as { anchor?: unknown }).anchor = JSON.parse(JSON.stringify(want)) as unknown
+                    changed = true
+                  }
+                }
+              }
+              if (!changed) return undefined
+              return { kind: 'remote-draw', label: 'Remote object change' }
+            }
+            session.applyExternal?.(apply)
+          } else {
+            // 삭제 거부: 스택 꼭대기가 삭제일 때만 undo로 되살린다.
+            let label: string | undefined
+            try {
+              label = session.undoLabel?.()
+            } catch {
+              label = undefined
+            }
+            if (label !== 'Delete object') return
+            objUndoRevertRef.current = true
+            try {
+              session.undo?.()
+            } finally {
+              objUndoRevertRef.current = false
+            }
+          }
+        } finally {
+          applyingRemoteRef.current = false
+        }
+      } catch {
+        /* 되돌리기 실패는 조용히 무시 (다음 따라잡기가 수습한다) */
+      }
+    },
+    [objEditorCore],
+  )
   /** C4: 한 개체의 최신 상태를 서버와 맞춘다 (체인 안에서 호출, 실행 시점 재확인). */
   const objFlushKey = useCallback(
     async (roomId: string, clientId: number, key: string): Promise<void> => {
@@ -2650,6 +2754,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             ? await collabApi.objects.move(roomId, key, clientId, found.anchor, objVersionRef.current)
             : await collabApi.objects.del(roomId, key, clientId, objVersionRef.current)
         if (!r.ok) {
+          // 거부된 로컬 변경을 기준점으로 되돌린 뒤 서버 표를 따라잡는다.
+          // 서버 anchor가 null이면 따라잡기가 스킵되므로 되돌리기가 필수다.
+          objRevertKeyToLastSent(key)
           await objApplyServerState(roomId)
           if (r.code === 'locked' || r.code === 'not_holder') {
             const h = typeof (r as { holder?: unknown }).holder === 'number' ? (r as { holder: number }).holder : null
@@ -2666,7 +2773,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         /* 네트워크 실패: 다음 change에서 재시도 */
       }
     },
-    [objEditorCore, objApplyServerState, objHolderName, objToast],
+    [objEditorCore, objApplyServerState, objHolderName, objToast, objRevertKeyToLastSent],
   )
   const objSendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** C4: 바뀐 개체를 모아 체인에 건다. 실행 시점에 최신 상태를 다시 읽는다. */
@@ -2740,6 +2847,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     }
     if (collab?.joined && (xlsxPeople.length >= 2 || embLocked)) {
       g.__ooxmlEditGuard = (label: string, kind: string): boolean => {
+        // C4: 서버 거부 후 되돌리기용 undo/redo는 항상 허용한다 (사용자 경로 아님).
+        if (objUndoRevertRef.current && (kind === 'undo' || kind === 'redo') && (label === 'Move object' || label === 'Delete object')) return true
         let ctx: ObjectGuardCtx = NO_OBJECT_GUARD
         if (label === 'Move object' || label === 'Delete object') {
           const foreign = new Set<string>()
@@ -2850,21 +2959,25 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   objOnMessageRef.current = objOnMessage
   // C4: 탭 transport (재)연결 때마다 GET으로 따라잡는다. 초기 연결 때는
   // 등록 효과와 순서가 뒤바뀌어도 안전하다 (미태그 상태면 표만 채우고 끝난다).
+  // (재)연결은 마운트보다 늦어 모델이 올라와 있을 확률이 높아 등록 재시도
+  // 기회로도 쓴다 (미로딩이면 키를 소비하지 않아 다음에 다시 한다).
   objConnectRef.current = () => {
     if (!editingRef.current || !collabRef.current?.joined) return
-    const roomId = collabRef.current.roomId
-    if (!roomId) return
-    void objApplyServerState(roomId)
+    const room = collabRef.current
+    if (!room?.roomId) return
+    void objRegister().finally(() => {
+      if (!editingRef.current || collabRef.current?.roomId !== room.roomId) return
+      void objApplyServerState(room.roomId)
+    })
   }
 
   const objRegisteredRef = useRef('')
   useEffect(() => {
     if (!editing || !collab?.joined || !xlsxHandle) return
-    const key = `${path}|${collab.roomId}|${collab.baseHash}|v${viewerGen}`
-    if (objRegisteredRef.current === key) return
-    objRegisteredRef.current = key
     void objRegister()
-  }, [editing, collab?.joined, collab?.roomId, collab?.baseHash, xlsxHandle, path, etag, viewerGen, objRegister])
+    // xlsxPeople.length: 마운트 직후 모델 미로딩으로 등록이 미뤄졌을 때
+    // presence 도착이 재시도 기회가 된다 (키 미소비 + 이 dep).
+  }, [editing, collab?.joined, collab?.roomId, collab?.baseHash, xlsxHandle, path, etag, viewerGen, objRegister, xlsxPeople.length])
 
   /** C4: pointerdown 대상에서 개체 키를 찾는다 (shadow DOM 안 .xg-obj[data-index]). */
   const objKeyFromTarget = useCallback((t: unknown): string | null => {
