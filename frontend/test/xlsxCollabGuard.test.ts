@@ -101,4 +101,42 @@ describe('xlsxCollabGuard labels exist in ooxml-core dist', () => {
   test('choke point(run2)가 dist에 있다', () => {
     expect(dist.includes('const run2 = (label2, kind')).toBe(true)
   })
+
+  test('차단 라벨은 동기화되는 kind와 짝을 이루지 않는다 (lib 업그레이드 감시)', () => {
+    // dist의 ctx.run(label식, kind, …) 호출에서 라벨별 kind를 수집한다.
+    // 리터럴 "L", "K"와 삼항 꼬리 "L",\n"K"를 모두 잡는다.
+    // 같은 라벨이 cells 같은 동기화 kind로도 쓰이면 여기서 깨진다.
+    const kindsForLabel = (label: string): Set<string> => {
+      const kinds = new Set<string>()
+      const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      for (const m of dist.matchAll(new RegExp(`"${esc}"\\s*,\\s*"([a-z]+)"`, 'g'))) kinds.add(m[1])
+      // 삼항 라벨("New comment" 등): "L" : … , "K"
+      for (const m of dist.matchAll(new RegExp(`"${esc}"\\s*:[^;]{0,300}?,\\s*"([a-z]+)"`, 'g'))) kinds.add(m[1])
+      return kinds
+    }
+    // clearRange는 라벨이 변수(CLEAR_LABELS[what])라 위에서 안 잡힌다. 별도로 고정한다.
+    const VARIABLE_LABELS = new Set(['Clear comments', 'Clear hyperlinks'])
+    const cases: Array<[readonly string[], string]> = [
+      [XLSX_UNSYNCED_FORMAT_LABELS, 'format'],
+      [XLSX_UNSYNCED_STRUCTURE_LABELS, 'structure'],
+      [XLSX_UNSYNCED_SHEETS_LABELS, 'sheets'],
+      [XLSX_UNSYNCED_ANNOTATION_LABELS, 'annotations'],
+    ]
+    for (const [labels, kind] of cases) {
+      for (const label of labels) {
+        if (VARIABLE_LABELS.has(label)) continue
+        const kinds = kindsForLabel(label)
+        expect(kinds.size, `"${label}": dist run 호출에서 kind를 찾지 못함`).toBeGreaterThan(0)
+        for (const k of kinds) {
+          expect(k, `"${label}" kind`).toBe(kind)
+        }
+      }
+    }
+    // clearRange kind 매핑: comments/hyperlinks → annotations (변수 라벨이라 직접 고정)
+    expect(dist.includes('CLEAR_LABELS[what],'), 'clearRange 라벨이 변수여야 한다').toBe(true)
+    expect(
+      dist.includes('what === "formats" ? "format" : what === "contents" || what === "all" ? "cells" : "annotations"'),
+      'clearRange kind 매핑이 바뀌면 안 된다',
+    ).toBe(true)
+  })
 })
