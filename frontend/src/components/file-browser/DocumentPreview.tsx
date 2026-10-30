@@ -2598,6 +2598,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           objSnapshotAll()
         }
         objRegisteredRef.current = regKey
+        // C4: 태그 직후 서버 표를 모델에 적용한다. 입장 시 브로드캐스트가
+        // 태그보다 먼저 도착하면 적용이 스킵되어 영원히 구모델에 머무른다.
+        await objApplyServerState(roomId)
         return true
       }
       const r = await collabApi.objects.register(roomId, hash, items)
@@ -2627,12 +2630,13 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         objSnapshotAll()
       }
       objRegisteredRef.current = regKey
+      await objApplyServerState(roomId)
       return true
     } catch {
       /* 조용히 실패 (다음 기회에 재시도) */
       return false
     }
-  }, [objSnapshotAll, objKindItems, objTagWithOrder, path, viewerGen])
+  }, [objApplyServerState, objSnapshotAll, objKindItems, objTagWithOrder, path, viewerGen])
   const objChainRef = useRef(Promise.resolve())
   /**
    * C4: 서버에 거부된 로컬 변경을 기준점(lastSent)으로 되돌린다.
