@@ -116,7 +116,10 @@ test.describe('pptx collab (desktop)', () => {
     // B 화면: Ada가 edit/slide2/owner로 보인다.
     const ada = peer(t.pageB, 'u-ada')
     await expect(ada).toBeVisible({ timeout: 10000 })
-    await expect(ada).toContainText('Ada')
+    // 아바타는 이니셜만 보여주므로 팝오버 행 이름으로 확인한다 (E17과 동일).
+    await t.pageB.getByTestId('collab-avatars').click({ timeout: 10000 })
+    const adaRowName = t.pageB.getByTestId('collab-presence-row').filter({ hasText: 'Ada' }).getByTestId('collab-peer-name')
+    await expect(adaRowName).toHaveText('Ada', { timeout: 15000 })
     await expect(ada).toHaveAttribute('data-mode', 'edit')
     await expect(ada).toHaveAttribute('data-slide', '2')
     await expect(ada).toHaveAttribute('data-owner', 'true')
