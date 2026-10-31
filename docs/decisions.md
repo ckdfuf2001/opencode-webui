@@ -670,6 +670,15 @@
   e85e1c6(클라이언트 표·가드·락 배선) · a1cc8e2(해시 달라도 같은 순서면 같은 키) ·
   480c13b(거부 되돌리기+등록 재시도) · 03552ca(오프라인 fail-closed) ·
   3566261(등록 태그 직후 수렴) · c43f34a·4920976(e2e).
+## D51 개체 선택 표시는 에코와 진짜 변경을 구분한다 (C4-3, 2026-10-31)
+- lib `selection-change`는 개체 클릭에도 발화한다. detail이 클릭 전 선택과 같으면
+  에코이므로 무시한다 (스냅샷 `getSelection()` == `detail.ref` 비교).
+  에코에 락 해제를 걸면 POST→GET→DELETE race로 락이 즉시 풀린다.
+- presence clear(`range/sheet` null)는 lib `peers`·`synced` 재게시가 되돌리므로,
+  clear 당시 선택과 같은 publish는 skip한다 (`hideCell`). 다음 진짜 선택 변경 때
+  resume + 재게시한다 (릴리스 후 박스 복귀는 릴리스를 유발한 선택 변경이 담당).
+- 관할 커밋: e021ec8(F1) · b747941(F3) · 8c4218d(F4) · 78327fa(F2 patch) ·
+  8be63ec(F4-follow 테스트 폴링) · d3cc70b(red 선행).
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.

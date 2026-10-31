@@ -880,3 +880,41 @@ E21만의 문제가 아니다. 근거:
 - 회귀: xlsx-collab 20 + c2 7 + solo 2 = 29/29 chromium. pptx 전수 16 failed / 18 passed로
   기준선과 동일(신규 0). backend 62파일 + bun:sqlite 2 기존. frontend tsc 0.
 - 다음: exe 0.12.74 빌드·PC2 수동확인·태그.
+
+## C4-3 0절 (2026-10-31, 기준 release-0.12 = 612610d)
+- F1 측정(e2e 2탭): join/이동/Done/재진입/40s 전 시점에서 lib people 항상 2명(본인+상대, userId 포함), 서버 participants userId 기준 2명, 앱 아바타 2개. 중복 재현 안 됨. WS는 탭당 1개씩 순차 재연결(동시 중복 소켓 없음). 단, 재연결 churn 큼(탭당 생애 6~7회 connect, 매번 새 yjs clientId).
+- F1 결론: (가) 기각. (다) 확정 — 앱 presence 바가 lib people을 userId 묶음 없이 1:1 렌더. lib 타이틀바 패치와 서버는 이미 userId 기준 묶음. churn + 30s stale 창 + 서버 120s sweep 구간 과도 중복이 그대로 표시된다. 수정: 앱도 userId 기준 묶음(없으면 clientId).
+- F2: lib 타이틀바 사용자 표시 = office-ui-presence.xve-title-people, people.hidden = !sharing.active. 설치본 dist에 숨김 없음 확인, 패치에도 hunk 없음(빠진 것). 1 hunk 추가 예정. PPT는 hiddenDialogs share 로 이미 숨김.
+- F3: lib 공개 선택 이벤트는 selection-change CustomEvent 하나뿐(bubbles+composed). 개체 선택/해제 이벤트 없음 → 앱 pointerdown + selection-change + Escape + Done/언마운트 조합, 폴링 없음. 셀 잔상: updateCollabIdentity 확장(range/sheet passthrough, C1 패치 동일 함수 1 hunk) — resolveSelections가 sheet/range 없는 peer를 스킵하므로 원격 박스가 사라지고 다음 셀 변경 때 lib이 다시 게시. A측 필터 기각.
+- F3 해제 트리거: 다른 셀 클릭, Escape, 다른 개체 선택(이전 락 먼저 해제), 삭제 완료, Done, 언마운트, WS 끊김(서버 removeConn→releaseObjectLocks 확인, 앱 조치 불필요). 현재 앱 unlock 호출 0곳 확인.
+- F4: 오버레이 위치는 .xg-obj[data-index] DOM rect, key 연결은 기존 __ck 대응 재사용. quadrants별 중복 가능 → 보이는 노드마다 그림. 갱신은 scroll 캡처 + ResizeObserver + MutationObserver(rAF) + 표 변경/원격 적용 후, 폴링 없음. lib 원격 박스(.xg-remote, 테두리 2px + 이름표)와 같은 스타일, testid=xlsx-object-remote-sel + data-key.
+
+## C4-3 구현 (2026-10-31, chromium 10/10)
+- F1 (e021ec8): 앱 presence 바를 userId 기준 묶음 (`groupXlsxPeopleForView`, 없으면
+  clientId). follow id도 묶음 id (`u:`/`c:`). F1-dup/F1-two pass.
+- F2 (78327fa, patch+lockfile): lib 타이틀바 presence `people.hidden = true` 1 hunk.
+  구 patch 파일은 hunk header가 깨져 있어 fresh install 불가 상태였음
+  (`pnpm patch` integrity check 실패) → header 재계산 후에도 start 불일치로 실패 →
+  patch 파일 걷어내고 pristine 추출 → 설치본(v1) 복사 → v2 적용 → `patch-commit`으로
+  재생성. 이제 `pnpm patch` 검증 통과. pnpm-lock hash 갱신.
+  주의: install은 반드시 `NODE_ENV=development` (production이면 devDeps skip되어
+  vite/playwright/typescript 누락).
+- F3 (b747941): 해제 트리거 = 다른 셀 클릭·Escape·다른 개체·삭제 완료·Done·언마운트.
+  셀 잔상 = `updateCollabIdentity({sheet:null,range:null})` (C1 패치 함수 확장).
+  근본원인 1: lib이 개체 pointerdown에도 클릭 전과 같은 선택으로 selection-change
+  에코를 쏨 → 막 잡은 락을 즉시 풂 (POST→GET→DELETE race, F3-unlock flake).
+  수정: pointerdown 때 `getSelection()` 스냅샷(`objGrabSelRef`)을 찍고 detail이
+  같으면 에코로 무시, 다르면 해제.
+- F3 잔상 심화: clear가 `session.on("peers")` 재게시로 즉시 되돌려짐
+  (B 자신의 people이 D5로 복귀, A 박스 4개 유지). 수정: patch v2 `hideCell`
+  (clear 당시 선택과 같은 publish는 skip, 다음 진짜 변경 때 resume+게시).
+  F3-ghost/esc/unlock pass. F3-unlock의 D5 재선택이 resume 경로가 되어 박스 복귀도 pass.
+- F4 (8c4218d): `.xg-obj[data-index]` rect → 오버레이
+  (`data-testid=xlsx-object-remote-sel`, `data-key`, lib .xg-remote와 같은 2px+이름표).
+  갱신 = scroll 캡처 + ResizeObserver + MutationObserver(rAF) + 표 변경·원격 적용 후.
+  남 개체 드래그는 `decideObjectOp` foreign 가드 + 홀더 토스트 1회(dedupe).
+  F4-follow는 테스트 레이스 수정 (8be63ec: y값 자체를 poll).
+- 검증: c4-3 10/10 chromium (F1 2 + F2 1 + F3 3 + F4 4). tsc 0.
+  eslint 동일 파일 5 errors+1 warning은 수정 전후 동일 베이스라인(신규 0).
+  backend 62 pass + config-migration/repo-tracking 2 fail(기존, collab 무관).
+  C4-move/move-undo 기존 green 유지.
