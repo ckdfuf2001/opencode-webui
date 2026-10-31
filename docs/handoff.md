@@ -918,3 +918,39 @@ E21만의 문제가 아니다. 근거:
   eslint 동일 파일 5 errors+1 warning은 수정 전후 동일 베이스라인(신규 0).
   backend 62 pass + config-migration/repo-tracking 2 fail(기존, collab 무관).
   C4-move/move-undo 기존 green 유지.
+
+## C4-4 측정 (2026-10-31, 기준 3778669, RepoDetail 패널+시트 실측)
+- 방법: RepoDetail(`/repos/:id`)에서 Files 패널로 파일 열기(viewer 마운트 1) →
+  패널 Maximize2로 FileBrowserSheet 열기 → 같은 파일 열기(마운트 2) → 시트 닫기.
+  편집기 수·people(clientId/userId/role)·서버 participants·앱 아바타 기록.
+- XLSX 미리보기만: editors 1, lib people [{cid, uid:u-ada, self, viewer}],
+  서버 participants 1 (id:u-ada, view), 바 1개·아바타 1개.
+- XLSX 패널+시트: editors 2, 각 people에 {self cid, other cid} 2명 (userId 동일 u-ada).
+  서버 participants 1 (userId dedupe, D50 2-2 규칙). 바 2개·각 바 아바타 1개 (F1 묶음).
+  WS는 lib 인스턴스당 1개라 2개 (아래 기본안 검토 참조).
+- XLSX 시트 닫기: editors 1, participants 1, 유령 없음.
+- PPT 미리보기만: viewers 1, 바 1개·아바타 1개, participants 1.
+- PPT 패널+시트: viewers 2, collabSessionRegistry가 같은 savePath 세션을 공유하므로
+  yjs clientId 1개 → 바 2개·각 바 아바타 1개, participants 1.
+- PPT 시트 닫기: viewers 1, participants 1, 유령 없음.
+- 가설 판정: (가) 마운트 2회는 사실(XLSX 2세션, PPT 1세션 공유).
+  (나) 기각 — 양쪽 userId 동일(u-ada). (다) 해소됨 — XLSX F1 묶음 + PPT usePeers
+  app.id 묶음 + 서버 userId dedupe로 표시 1명. 0.12.74에서 2명으로 보이던 것은
+  F1 이전 XLSX 미묶음 표시가 원인 (F1은 0.12.75에 포함, 당시 원격 미반영).
+- 서버 owner: conn 기준 첫 edit conn 1개 유지 (같은 사람 owner 2명 없음).
+
+## C4-4 구현 (2026-10-31)
+- G1: 코드 변경 없음 (표시·서버·owner 모두 이미 1명). 세션 공유 기본안은 검토 후
+  보류 — 같은 Y.Doc를 두 에디터가 공유하면 peers 에코 재게시로 presence가
+  A1/D5로 핑퐁한다 (C4-3 hideCell 분석과 같은 구조). lib 변경 없이는 막을 수 없고,
+  5-hunk 예산 내 안전 구현이 불가. WS 2개 유지만 남으며, 기능상 무해함을 e2e로 잠금.
+- G2: 앱 presence를 lib 타이틀바 actions 슬롯으로 이동 (lib 패치 없음).
+  - XLSX/DOCX: useTitlebarSlot 훅 — shadow DOM의 office-ui-title-bar를 찾아
+    `<div slot="actions" style="display:contents">`를 붙이고 createPortal로 렌더.
+    MutationObserver로 타이틀바 재생성 추적 (폴링 없음).
+  - PPT: 기존 titleBarSlot prop 사용 (편집 모드에만 타이틀바 존재).
+    보기 모드에는 타이틀바가 없어 헤더 presence를 유지한다 (편집 시 타이틀바로
+    이동하므로 화면에는 항상 한 곳만 보임).
+  - 헤더 CollabPresenceShell 제거 (XLSX), DOCX는 빈 shell만 (참가자 0명 → 표시 없음).
+- G2-rename: 타이틀바 팝오버에서 변경 → 상대 화면 반영 확인.
+- 관할 커밋: test(c4-4) red 선행 (G2 5종 실패 원문 포함) · feat(c4-4) G2.

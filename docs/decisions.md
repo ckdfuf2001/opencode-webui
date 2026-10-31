@@ -679,6 +679,16 @@
   resume + 재게시한다 (릴리스 후 박스 복귀는 릴리스를 유발한 선택 변경이 담당).
 - 관할 커밋: e021ec8(F1) · b747941(F3) · 8c4218d(F4) · 78327fa(F2 patch) ·
   8be63ec(F4-follow 테스트 폴링) · d3cc70b(red 선행).
+## D52 사용자 표시는 타이틀바 actions 슬롯 한 곳 (C4-4 G2, 2026-10-31)
+- C4-3 F2(타이틀바 숨김) 결정을 번복한다: lib 자체 표시는 계속 숨기고, 앱의
+  CollabPresence(아바타·팝오버·이름 변경·따라가기·"(Me)")를 lib 타이틀바
+  actions 슬롯(검색창 오른쪽)에 둔다. PPT는 titleBarSlot prop,
+  XLSX/DOCX는 shadow DOM 타이틀바에 div[slot=actions] + createPortal.
+  lib 패치 없이 앱 코드로만 구현한다.
+- 예외: PPT 보기 모드에는 lib 타이틀바가 없어 헤더 presence를 유지한다.
+  편집 모드에서는 타이틀바만 보인다 (화면에 항상 한 곳).
+- 세션 공유(XLSX 기본안)는 보류: 공유 Y.Doc에서 두 에디터의 selection 게시가
+  peers 에코로 핑퐁한다. 표시·서버·owner가 이미 1명으로 수렴하므로 WS 2개만 남는다.
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
