@@ -36,6 +36,19 @@ async function mkRepo(localPath: string): Promise<void> {
 }
 
 async function openViaWorkspace(page: Page, name: string, seg: string): Promise<void> {
+  // XLSX 편집 뒤에는 수식 입력줄에 포커스가 남아 전역 Esc(App.tsx)가 씹히고
+  // 탐색기 시트가 열린 채 남는다 — Workspace 버튼이 가려지므로 먼저 접는다.
+  for (let i = 0; i < 2; i++) {
+    const closer = page.locator('[aria-label="Close explorer"]')
+    try {
+      if (await closer.first().isVisible({ timeout: 2000 })) {
+        await closer.first().click({ timeout: 5000 })
+        await page.waitForTimeout(1000)
+      } else break
+    } catch {
+      break
+    }
+  }
   for (let i = 0; i < 6; i++) {
     try {
       await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
@@ -54,20 +67,42 @@ async function openViaWorkspace(page: Page, name: string, seg: string): Promise<
       await page.waitForTimeout(2000)
     }
   }
+  // data-path는 선행 슬래시 없는 상대경로("c51save", "c51save/embed-pdf.xlsx")다.
+  // seg 폴더로 정확히 들어가고, 같은 이름 파일이 여러 레포에 있어도 seg 안의 행만 고른다.
   for (let i = 0; i < 8; i++) {
     const has = await page.evaluate(
-      ([n]) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n as string)), [name])
+      ([n, s]) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => {
+        const p = (r.getAttribute('data-path') || '').replace(/\\/g, '/')
+        return p === `${s}/${n}` || p.endsWith(`/${s}/${n}`)
+      }), [name, seg])
     if (has) break
     await page.evaluate((s) => {
       const rows = [...document.querySelectorAll('[data-testid="file-row"]')]
-      const folder = rows.find((r) => (r.getAttribute('data-path') || '').replace(/\\/g, '/').endsWith('/' + (s as string)))
+      const folder = rows.find((r) => {
+        const p = (r.getAttribute('data-path') || '').replace(/\\/g, '/')
+        return p === (s as string) || p.endsWith('/' + (s as string))
+      })
         ?? rows.find((r) => !(r.getAttribute('data-path') || '').includes('.'))
       const inner = folder?.querySelector('div.flex-1') ?? folder?.querySelector('div')
       inner?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     }, seg)
     await page.waitForTimeout(2000)
   }
-  await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
+  // seg 폴더 안의 정확한 행을 골라 실제 클릭한다
+  // (CSS 속성 선택자는 백슬래시 경로에 약하므로 evaluate로 표시한다).
+  const marked = await page.evaluate(([n, s]) => {
+    const rows = [...document.querySelectorAll('[data-testid="file-row"]')]
+    rows.forEach((e) => e.removeAttribute('data-c51-target'))
+    const row = rows.find((r) => {
+      const p = (r.getAttribute('data-path') || '').replace(/\\/g, '/')
+      return p === `${s}/${n}` || p.endsWith(`/${s}/${n}`)
+    })
+    if (!row) return false
+    row.setAttribute('data-c51-target', '1')
+    return true
+  }, [name, seg])
+  expect(marked, `row found ${seg}/${name}`).toBe(true)
+  await page.locator('[data-c51-target="1"]').locator('span', { hasText: name }).first().click({ timeout: 20000 })
   await page.waitForSelector(HOSTS[name], { timeout: 60000 })
   await page.waitForTimeout(4000)
 }
@@ -162,39 +197,56 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
           }, 'B2')
           const bar = page.locator('xlsx-editor [part~="formula-bar"] input').last()
           await bar.waitFor({ timeout: 15000 })
-          await bar.click({ timeout: 15000 })
-          await bar.fill(stamp)
-          await bar.press('Enter')
+          // Enter가 에디터 초기화 레이스로 씹히면 값이 입력줄에만 남아 저장이 안 된다.
+          // 같은 스탬프 재입력은 멱등이므로 커밋+저장을 최대 3회 재시도한다.
+          const xlsxSave = page.locator('[data-testid="preview-doc-header"]').getByRole('button', { name: 'Save', exact: true })
           const abs = path.join(workspaceDir(), 'repos', 'c51save', name)
-          let saved = false
-          for (let i = 0; i < 24; i++) {
-            await page.waitForTimeout(5000)
-            if (!fs.existsSync(abs)) continue
+          const fileHasStamp = async (): Promise<boolean> => {
             try {
+              if (!fs.existsSync(abs)) return false
               const b = fs.readFileSync(abs)
               const z = await JSZip.loadAsync(b)
               for (const n of Object.keys(z.files)) {
                 if (!n.endsWith('.xml')) continue
-                if ((await z.files[n]!.async('string')).includes(stamp)) { saved = true; break }
+                if ((await z.files[n]!.async('string')).includes(stamp)) return true
               }
             } catch { /* mid-write */ }
-            if (saved) break
+            return false
+          }
+          let saved = false
+          for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+            await page.evaluate((r) => {
+              const el = document.querySelector('xlsx-editor') as unknown as { select?: (ref: string) => void; focusGrid?: () => void } | null
+              el?.select?.(r)
+              el?.focusGrid?.()
+            }, 'B2')
+            await bar.click({ timeout: 15000 })
+            await bar.fill(stamp)
+            await bar.press('Enter')
+            await page.waitForTimeout(2000)
+            // 명시 저장 1회 (자동 저장은 백업).
+            if ((await xlsxSave.count()) > 0) await xlsxSave.first().click({ timeout: 20000 }).catch(() => {})
+            for (let i = 0; i < 6 && !saved; i++) {
+              await page.waitForTimeout(5000)
+              saved = await fileHasStamp()
+            }
           }
           expect(saved, `${name} autosaved`).toBe(true)
         } else {
-          // DOCX: 편집 진입 후 타이핑하고 Done (실제 serialize 경로를 탄다).
+          // DOCX: 편집 진입 후 타이핑하고 저장 (xlsx-solo proven pattern:
+          // contenteditable 직접 클릭 + Control+End + 헤더 Save + Done).
           const edit = page.getByRole('button', { name: 'Edit', exact: true })
           if ((await edit.count()) > 0) {
             await edit.first().click({ timeout: 20000 }).catch(() => {})
-            await page.waitForTimeout(3000)
             const stamp = `C51D${Date.now().toString(36)}`
-            await page.mouse.click(500, 350)
-            await page.waitForTimeout(1000)
+            const pm = page.locator('docx-editor [contenteditable="true"]').first()
+            await pm.waitFor({ timeout: 30000 })
+            await pm.click({ timeout: 15000 })
+            await page.keyboard.press('Control+End')
             await page.keyboard.type(stamp, { delay: 30 }).catch(() => {})
             await page.waitForTimeout(2000)
-            const done = page.getByRole('button', { name: 'Done', exact: true })
-            if ((await done.count()) > 0) await done.first().click({ timeout: 20000 }).catch(() => {})
-            await page.waitForTimeout(5000)
+            const saveBtn = page.locator('[data-testid="preview-doc-header"]').getByRole('button', { name: 'Save', exact: true })
+            if ((await saveBtn.count()) > 0) await saveBtn.first().click({ timeout: 20000 }).catch(() => {})
             const abs = path.join(workspaceDir(), 'repos', 'c51save', name)
             let saved = false
             for (let i = 0; i < 12; i++) {
@@ -208,6 +260,9 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
               await page.waitForTimeout(5000)
             }
             expect(saved, `${name} docx saved`).toBe(true)
+            const done = page.getByRole('button', { name: 'Done', exact: true })
+            if ((await done.count()) > 0) await done.first().click({ timeout: 20000 }).catch(() => {})
+            await page.waitForTimeout(3000)
           }
         }
         const buf = await backendBytes('c51save', name)
