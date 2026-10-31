@@ -73,6 +73,33 @@ function xlsxPersonToView(p: XlsxPresencePerson): PresencePeerView {
   }
 }
 
+/**
+ * C4-3: 같은 userId는 하나로 묶는다 (lib 타이틀바 participants 패치·서버
+ * roomParticipants와 같은 규칙: userId 기준, 없으면 clientId 기준).
+ * 재연결 churn·half-open으로 같은 사용자가 잠시 여러 항목으로 보여도
+ * 아바타는 1개로 유지된다. id는 "u:<userId>" 또는 "c:<clientId>".
+ */
+function groupXlsxPeopleForView(list: XlsxPresencePerson[]): PresencePeerView[] {
+  const groups = new Map<string, XlsxPresencePerson[]>()
+  for (const p of list) {
+    const key = typeof p.userId === 'string' && p.userId ? `u:${p.userId}` : `c:${p.clientId}`
+    const g = groups.get(key)
+    if (g) g.push(p)
+    else groups.set(key, [p])
+  }
+  const out: PresencePeerView[] = []
+  for (const [key, members] of groups) {
+    const sorted = [...members].sort((a, b) => a.clientId - b.clientId)
+    const first = sorted[0]!
+    const view = xlsxPersonToView(first)
+    view.id = key
+    view.tabCount = members.length
+    view.isSelf = members.some((m) => m.self)
+    out.push(view)
+  }
+  return out
+}
+
 interface XlsxPresencePerson {
   clientId: number
   name: string
@@ -1706,8 +1733,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const collabLocked = !!collab?.joined && xlsxPeople.length >= 2
   const collabLockedRef = useRef(collabLocked)
   collabLockedRef.current = collabLocked
-  /** C1: 따라가는 상대 clientId. setActiveSheet로만 이동한다(select 금지). */
-  const [xlsxFollowId, setXlsxFollowId] = useState<number | null>(null)
+  /** C4-3: 따라가는 상대 묶음 id("u:…"/"c:…"). setActiveSheet로만 이동한다(select 금지). */
+  const [xlsxFollowId, setXlsxFollowId] = useState<string | null>(null)
   /**
    * C3: 따라가기 해제 조건. 시트 직접 조작만 해제한다.
    * 시트 탭·툴바·팝오버 같은 UI 크롬 조작은 유지한다 (P-7c 상호 팔로우).
@@ -1810,13 +1837,24 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    * - select()는 쓰지 않는다(내 선택을 바꾸면 상대 화면에 내 커서가 튀고 루프가 된다).
    * - setActiveSheet로 시트를 옮기고 reveal()로 스크롤만 한다.
    * - 프로그램 이동 중(followNavigatingRef)에는 이동 콜백을 제외한다.
+   * - C4-3: 묶음 id("u:…"/"c:…")로 따라간다. 같은 userId 탭이 여러 개면
+   *   시트 정보가 있는 탭을 우선 따라간다.
    */
   const followTarget = xlsxFollowId == null
     ? undefined
     : (() => {
-        const peer = xlsxPeople.find((p) => p.clientId === xlsxFollowId && !p.self)
-        if (!peer || typeof peer.sheetIndex !== 'number') return undefined
-        return { sheetIndex: peer.sheetIndex, range: typeof peer.range === 'string' ? peer.range : undefined }
+        // C4-3: 묶음 id("u:…"/"c:…")로 찾는다. 시트 정보가 있는 탭을 우선 따라간다.
+        const sibs = xlsxPeople.filter((p) => {
+          if (p.self) return false
+          const k = typeof p.userId === 'string' && p.userId ? `u:${p.userId}` : `c:${p.clientId}`
+          return k === xlsxFollowId
+        })
+        const withSheet = sibs.find((p) => typeof p.sheetIndex === 'number') ?? sibs[0]
+        if (!withSheet || typeof withSheet.sheetIndex !== 'number') return undefined
+        return {
+          sheetIndex: withSheet.sheetIndex,
+          range: typeof withSheet.range === 'string' ? withSheet.range : undefined,
+        }
       })()
   const followSheetIndex = followTarget?.sheetIndex
   const followRange = followTarget?.range
@@ -3264,9 +3302,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             // C3: 공용 presence 바 (PPT와 같은 마크업·testid).
             <CollabPresenceShell>
               <CollabPresenceBar
-                peers={xlsxPeople.map(xlsxPersonToView)}
+                peers={groupXlsxPeopleForView(xlsxPeople)}
                 followId={xlsxFollowId}
-                onFollowToggle={(id) => setXlsxFollowId((prev) => (prev === Number(id) ? null : Number(id)))}
+                onFollowToggle={(id) => setXlsxFollowId((prev) => (prev === id ? null : id))}
                 onRename={(name) => {
                   try {
                     xlsxHandleRef.current?.updateCollabIdentity?.({ name })
