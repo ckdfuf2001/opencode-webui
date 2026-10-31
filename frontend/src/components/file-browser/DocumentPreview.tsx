@@ -37,6 +37,8 @@ import { hasEmbObject, isBlockedXlsxEdit, decideObjectOp, NO_OBJECT_GUARD, shoul
 import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectsStateMsg } from '@/lib/xlsxObjects'
 import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/CollabPresence'
 import type { PresencePeerView } from '@/components/collab/collabPresenceView'
+import { createPortal } from 'react-dom'
+import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 
 type ExtractedMsg = {
   html?: string
@@ -1027,6 +1029,19 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const [laidOut, setLaidOut] = useState(0)
   const laidOutRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // G2: lib 타이틀바 actions 슬롯에 presence를 꽂는다 (portal). DOCX는
+  // 동시편집이 없어 항상 빈 목록 — 표시는 없고 testid 자리만 유지한다.
+  const docxTitleSlot = useTitlebarSlot(
+    () => {
+      try {
+        return wrapRef.current?.querySelector('docx-editor') ?? null
+      } catch {
+        return null
+      }
+    },
+    'office-ui-title-bar',
+    `${editing ? 'edit' : 'view'}:${handle ? 'ready' : 'loading'}`,
+  )
   const relayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 사용자가 직접 건드린 뒤에는 우리 relayout이 stale 바이트로 되돌리면 안 된다.
   // lib 모델이 주인이므로 dirty 동안은 배치 건너뛰기.
@@ -1334,6 +1349,14 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
             />
           </Suspense>
         </div>
+        {docxTitleSlot != null &&
+          createPortal(
+            // G2: DOCX는 동시편집이 없어 항상 빈 목록 — 표시는 없고 testid 자리만 유지.
+            <CollabPresenceShell>
+              <></>
+            </CollabPresenceShell>,
+            docxTitleSlot,
+          )}
         {showComments && (
           <div data-docx-comments className="w-72 shrink-0 border-l border-border bg-background flex flex-col min-h-0">
             <div className="px-3 py-2 border-b border-border text-xs font-medium flex-shrink-0 flex items-center gap-1">
@@ -1794,6 +1817,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   onRoomHasEditorsChangeRef.current = onRoomHasEditorsChange
   const xlsxHandleRef = useRef(xlsxHandle)
   xlsxHandleRef.current = xlsxHandle
+  // G2: lib 타이틀바 actions 슬롯에 presence를 꽂는다 (portal).
+  const xlsxTitleSlot = useTitlebarSlot(
+    () => {
+      try {
+        const el = (xlsxHandleRef.current as unknown as { element?: unknown } | null)?.element
+        return el instanceof Element ? el : null
+      } catch {
+        return null
+      }
+    },
+    'office-ui-title-bar',
+    xlsxHandle,
+  )
   /**
    * C3: React 래퍼 ref(O())는 구 API 부분집합이라 reveal/updateCollabIdentity가 없다
    * (?. 로 조용히 스킵되어 이름 변경·따라가기 스크롤이 먹통이었다).
@@ -3608,25 +3644,27 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               동시편집 연결 중 — 판정이 끝나면 편집이 열립니다
             </div>
           )}
-          {collab && xlsxPeople.length > 0 && (
-            // C3: 공용 presence 바 (PPT와 같은 마크업·testid).
-            <CollabPresenceShell>
-              <CollabPresenceBar
-                peers={groupXlsxPeopleForView(xlsxPeople)}
-                followId={xlsxFollowId}
-                onFollowToggle={(id) => setXlsxFollowId((prev) => (prev === id ? null : id))}
-                onRename={(name) => {
-                  try {
-                    xlsxHandleRef.current?.updateCollabIdentity?.({ name })
-                  } catch {
-                    /* 무시 */
-                  }
-                }}
-                // C3: 바깥 클릭은 시트 직접 조작 의사로 보고 따라가기를 푼다 (P-7b).
-                onDismiss={() => setXlsxFollowId(null)}
-              />
-            </CollabPresenceShell>
-          )}
+          {collab && xlsxPeople.length > 0 && xlsxTitleSlot != null &&
+            createPortal(
+              // G2: 사용자 표시는 lib 타이틀바 actions 슬롯 한 곳에만 둔다.
+              <CollabPresenceShell>
+                <CollabPresenceBar
+                  peers={groupXlsxPeopleForView(xlsxPeople)}
+                  followId={xlsxFollowId}
+                  onFollowToggle={(id) => setXlsxFollowId((prev) => (prev === id ? null : id))}
+                  onRename={(name) => {
+                    try {
+                      xlsxHandleRef.current?.updateCollabIdentity?.({ name })
+                    } catch {
+                      /* 무시 */
+                    }
+                  }}
+                  // C3: 바깥 클릭은 시트 직접 조작 의사로 보고 따라가기를 푼다 (P-7b).
+                  onDismiss={() => setXlsxFollowId(null)}
+                />
+              </CollabPresenceShell>,
+              xlsxTitleSlot,
+            )}
           {/* C4-3 원격 개체 오버레이의 기준 박스 (absolute inset-0). */}
           <div
             onPointerDown={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setXlsxFollowId(null) }}

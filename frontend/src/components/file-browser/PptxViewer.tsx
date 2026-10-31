@@ -2064,14 +2064,15 @@ const peersRef = useRef<Peer[]>([])
           className="hidden"
         />
       )}
-      {collab && (
+      {/* G2: 보기 모드에는 lib 타이틀바가 없어 헤더에 표시한다. 편집 모드에서는
+          타이틀바 슬롯에만 둔다 (화면에 사용자 표시는 항상 한 곳). */}
+      {collab && !editing && (
         <CollabPresenceShell>
           <CollabPresenceBar
             peers={peers.map(peerToView)}
             followId={followId}
             onFollowToggle={(id) => setFollowId((prev) => (prev === id ? null : id))}
             onRename={submitRename}
-            // C3: 바깥 클릭은 캔버스 직접 조작 의사로 보고 따라가기를 푼다 (P-7b).
             onDismiss={() => setFollowId(null)}
           />
         </CollabPresenceShell>
@@ -2175,7 +2176,25 @@ const peersRef = useRef<Peer[]>([])
                   // AutoSave 표시/토글은 제거(ooxml-ui 패치: 호스트가 끄면 표시 안 함).
                   autosave={false}
                   // U2: Done/Save/Comments 를 기능 search 오른쪽(actions 슬롯)에 투영한다.
-                  titleBarSlot={titleBarSlot}
+                  titleBarSlot={
+                    collab || titleBarSlot ? (
+                      <>
+                        {collab && (
+                          <CollabPresenceShell>
+                            <CollabPresenceBar
+                              peers={peers.map(peerToView)}
+                              followId={followId}
+                              onFollowToggle={(id) => setFollowId((prev) => (prev === id ? null : id))}
+                              onRename={submitRename}
+                              // C3: 바깥 클릭은 캔버스 직접 조작 의사로 보고 따라가기를 푼다 (P-7b).
+                              onDismiss={() => setFollowId(null)}
+                            />
+                          </CollabPresenceShell>
+                        )}
+                        {titleBarSlot}
+                      </>
+                    ) : undefined
+                  }
                   theme={viewerTheme}
                   initialSlide={slideIdx}
                   // Y2: arm 신호. deps가 [slides.length]라 parse 전 0으로도 호출되므로
