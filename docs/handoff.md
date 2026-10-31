@@ -970,3 +970,17 @@ E21만의 문제가 아니다. 근거:
   coreXlsx "C3-guard" · hideCell/hasClear/people.hidden · viewer M21-cjs +
   viewerBroadcastFollow off. `pnpm patch ooxml-ui@1.8.0` 적용 검증 통과.
 - exe 0.12.76 빌드 완료 (release/opencode-webui.exe). v0.12.76 태그 보류(수동확인 후).
+
+## C4-5 같은 userId 원격 셀 숨김 (2026-11-01)
+- 현상: 미리보기+큰 화면(같은 탭, 같은 userId, 다른 yjs clientId)에서 각 화면이
+  상대 화면의 셀 선택을 원격 박스로 그려 "내 커서가 2개"로 보인다.
+  측정: panel(viewer, A1)+sheet(editor, D5) → panel에 sheet D5 박스 4개(quadrants),
+  sheet에 panel A1 박스 4개, 서버 participants는 userId dedupe로 1명.
+- 수정: XlsxViewer가 lib `.xg-remote` 중 userId가 자신과 같고 self가 아닌 것은
+  `display:none`으로 숨긴다 (노드 삭제 아님, lib 렌더와 무충돌, 해제 시 원복).
+  트리거 = presence 변경 effect + shadow DOM MutationObserver (폴링 없음).
+  남의 셀은 그대로 보인다. PPT/DOCX는 범위 밖.
+- red: c4-5 G1-cell-dup (Expected 0, Received 4) → fix 후 green.
+- 회귀: c3/c4/c4-3/c4-4 chromium+msedge 전부 green (C3-flush·P-5a·C4-mismatch flake는
+  단독 재실행 green), xlsx 계열 38/38, pptx 기준선 동일(16 fail 목록 일치),
+  backend 62+2 기존, tsc 0, eslint 333(272e+61w).
