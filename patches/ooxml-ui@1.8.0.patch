@@ -162,7 +162,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fe
        available,
        label: t("pptx.titleBar.autoSave"),
 diff --git a/dist/xlsx.js b/dist/xlsx.js
-index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..d3ac58258edb3e847636d277c88ee2a36c0c1043 100644
+index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..da529eeecb9ae02a89aec8c2ed25ead14f0a5d9f 100644
 --- a/dist/xlsx.js
 +++ b/dist/xlsx.js
 @@ -943,11 +943,26 @@ function renderShare(page) {
@@ -229,13 +229,15 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..d3ac58258edb3e847636d277c88ee2a3
      },
      initialPresence: {},
      sanitizePayload: xlsx.sanitizeXlsxPresence,
-@@ -15445,11 +15467,32 @@ var XlsxCollaboration = class {
+@@ -15445,11 +15467,34 @@ var XlsxCollaboration = class {
      this.#active = active2;
      this.#lost = false;
      this.#connected = session.status === "connected";
 -    const publish = (selection) => binding.setSelection(selection.sheet, presenceRange(selection));
 +    // C4-3: cell echo guard - skip republish while it matches the cleared selection.
++    // C4-6 H3: viewers never publish selections (only editors' cells are shown).
 +    const publish = (selection) => {
++      if (session.role === "viewer") return;
 +      try {
 +        const hid = active2.hideCell;
 +        if (hid && selection.sheet === hid.sheet && selectionRef(selection) === hid.ref) return;
@@ -265,7 +267,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..d3ac58258edb3e847636d277c88ee2a3
        session.on("status", (status) => this.#status(status)),
        session.on("error", (error) => this.host.error(error)),
        edit.onChange((change) => {
-@@ -15505,6 +15548,38 @@ var XlsxCollaboration = class {
+@@ -15505,6 +15550,38 @@ var XlsxCollaboration = class {
        this.#listeners.delete(listener);
      };
    }
@@ -304,7 +306,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..d3ac58258edb3e847636d277c88ee2a3
    state() {
      const active2 = this.#active;
      if (!active2) return OFF_STATE;
-@@ -15519,13 +15594,37 @@ var XlsxCollaboration = class {
+@@ -15519,13 +15596,37 @@ var XlsxCollaboration = class {
            clientId: session.clientId,
            name: session.identity.userName,
            color: session.identity.userColor,
@@ -344,7 +346,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..d3ac58258edb3e847636d277c88ee2a3
          }))
        ]
      };
-@@ -15918,6 +16017,18 @@ var XlsxEditorApi = class extends HTMLElementBase {
+@@ -15918,6 +16019,18 @@ var XlsxEditorApi = class extends HTMLElementBase {
    setActiveSheet(index) {
      this.core.setActiveSheet(index);
    }
