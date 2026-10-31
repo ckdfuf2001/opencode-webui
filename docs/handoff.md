@@ -1026,3 +1026,23 @@ E21만의 문제가 아니다. 근거:
   코드 회귀 아님. 근거: 실패 지점이 FilePreview 미마운트 경로(workspace 행 목록),
   H2/H3 활성 조건(2 surface·viewer 게시)과 무관.
 - exe 0.12.77 빌드 예정. v0.12.77 태그 보류(수동확인 후).
+
+## C5-1 기존 OLE 첨부 보기·저장 (2026-11-01)
+- 범위: 기존 첨부 보기+다운로드(신규 삽입은 C5-2). 3종(xlsx/pptx/docx)x2종(pdf/CFBoleObject, docx/package).
+- O4 `frontend/src/lib/oleExtract.ts`: CFB 리더+Ole10Native 파서+살균+상한 (874f8d2, 단위 7종).
+- lib 노출 (41d7880, chore): core xlsx `parseDrawing` AlternateContent unwrap+`oleShapeId`,
+  core docx `w:object`→run.object+`createRun` 유지, ui docx.js `ole` atom+`data-docx-ole`,
+  표식 `uiXlsxOle`/`uiDocxOle`="C5-1".
+- lib 저장 수정 (f715c41, fix): `runIsSafe`가 단일 `w:object` 런 허용,
+  `appendInlineNode` 병합 가드에 `!previous.object`(뒤 텍스트가 ole 런에 합쳐져
+  유실되던 버그). docx/load 5 hunk, docx/ui 3 hunk.
+- 앱 오버레이 (8643142, feat): `OleAttachmentOverlay.tsx`+`oleAttachments.ts`.
+  embeddings/ 스캔 → 아이콘 1개 + dblclick 다운로드(CFB면 Ole10Native 풀기).
+  XLSX 이동·삭제 가드 토스트 1회, PPTX lib compat 토스트 파일당 1회 정리.
+- spec 보정 (3dba991, test): 시트 잔류 정리, DOCX proven 패턴, XLSX 명시 Save+커밋 재시도,
+  seg 스코프 탐색(동명 파일 레포 간 혼선 수정).
+- 검증: c5-1 4/4 chromium + 4/4 msedge. 회귀 xlsx-solo 2/2(X-B1/X-B2),
+  backend 608 pass + 2 파일 fail(bun:sqlite 환경, 기존), tsc 0,
+  eslint 신규파일 0, memory/encoding clean.
+- 관문 G(사용자 PC): xlsx(docx첨부 2종)+pptx(docx첨부)+docx(xlsx첨부), 제네릭 PNG,
+  영문 progId, Excel/PPT/Word 열기·더블클릭·재저장 — 미착수.

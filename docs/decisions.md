@@ -704,6 +704,18 @@
 - panel/시트 selection은 양방향 공유(기존 설계)라 서로 다른 파일 고정은 불가 —
   테스트 전제로 삼지 않는다.
 - 관할: H1(1e91e11)·revert C4-5(fd8615b)·H2(e03cf67)·H3(57ae135).
+## D55 기존 OLE 첨부는 앱 오버레이로 보고 lib 저장을 고친다 (C5-1, 2026-11-01)
+- 결정: 기존 임베딩은 lib 렌더를 그대로 두고 앱 오버레이(`ole-icon` 1개)로
+  보고 다운로드한다 (package 그대로, oleObject는 CFB→Ole10Native 풀기,
+  `application/octet-stream` 고정). XLSX 이동·삭제는 읽기전용 가드 토스트 1회.
+- lib 저장은 fail-closed 2곳을 패치한다: (1) `runIsSafe`가 단일 `w:object` 런 허용
+  (원본 노드 재사용이라 바이트 보존), (2) `appendInlineNode` 병합 가드에
+  `!previous.object`(뒤에 타이핑한 텍스트가 ole 런에 합쳐져 조용히 유실되던 버그).
+- spec 탐색은 seg 스코프로 고정한다: data-path는 선행 슬래시 없는 상대경로라
+  `endsWith('/seg')`가 항상 빗나가 첫 폴더(c51dl)로 들어가 다른 레포 파일을
+  열고 저장하던 문제. 동일 파일명 행은 `seg/name` 정규화 매칭 + 마킹 후 클릭.
+- 관할: test red(0263dff) → oleExtract(874f8d2) → chore 패치(41d7880) →
+  fix lib(f715c41) → feat 오버레이(8643142) → fix nits(c583ff3) → test 보정(3dba991).
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
