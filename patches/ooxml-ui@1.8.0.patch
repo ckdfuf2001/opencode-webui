@@ -1,7 +1,7 @@
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
 index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fec588d9ed 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
-+++ b/dist/pptx/chunk-MCHPNO42.mjs	
++++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -111,6 +111,8 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  import { repeat } from 'lit/directives/repeat.js';
  import { unsafeStatic, html as html$1 } from 'lit/static-html.js';
@@ -162,9 +162,9 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fe
        available,
        label: t("pptx.titleBar.autoSave"),
 diff --git a/dist/xlsx.js b/dist/xlsx.js
-index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d8100c7b341 100644
+index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..d3ac58258edb3e847636d277c88ee2a36c0c1043 100644
 --- a/dist/xlsx.js
-+++ b/dist/xlsx.js	
++++ b/dist/xlsx.js
 @@ -943,11 +943,26 @@ function renderShare(page) {
    page.content.replaceChildren(...children);
  }
@@ -197,7 +197,8 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
    }));
  }
  var PAGES = [
-@@ -14930,7 +14945,8 @@ const refresh = () => {
+@@ -14929,7 +14944,8 @@ function createTitleBar(ctx, handlers) {
+   };
    const refresh = () => {
      const sharing = handlers.collaboration?.();
 -    people.hidden = !sharing?.active;
@@ -206,7 +207,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
      const next = sharing?.active ? participants(sharing) : [];
      if (JSON.stringify(next) !== JSON.stringify(people.participants)) people.participants = next;
      render3();
-@@ -15314,6 +15329,9 @@ var CalcPreparation = class {
+@@ -15314,6 +15330,9 @@ var CalcPreparation = class {
  };
  
  // src/xlsx/collaboration-session.ts
@@ -216,7 +217,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
  function createRoomSession(collab, xlsx, options, defaultName) {
    const roomId = options.roomId ?? "";
    if (!collab.isValidRoomId(roomId))
-@@ -15339,7 +15357,10 @@ function createRoomSession(collab, xlsx, options, defaultName) {
+@@ -15339,7 +15358,10 @@ function createRoomSession(collab, xlsx, options, defaultName) {
      user: {
        name: user.name || defaultName,
        ...user.color ? { color: user.color } : {},
@@ -228,8 +229,20 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
      },
      initialPresence: {},
      sanitizePayload: xlsx.sanitizeXlsxPresence,
-@@ -15448,8 +15469,21 @@ var XlsxCollaboration = class {
-     const publish = (selection) => binding.setSelection(selection.sheet, presenceRange(selection));
+@@ -15445,11 +15467,32 @@ var XlsxCollaboration = class {
+     this.#active = active2;
+     this.#lost = false;
+     this.#connected = session.status === "connected";
+-    const publish = (selection) => binding.setSelection(selection.sheet, presenceRange(selection));
++    // C4-3: cell echo guard - skip republish while it matches the cleared selection.
++    const publish = (selection) => {
++      try {
++        const hid = active2.hideCell;
++        if (hid && selection.sheet === hid.sheet && selectionRef(selection) === hid.ref) return;
++      } catch { /* fall through and publish */ }
++      active2.hideCell = null;
++      binding.setSelection(selection.sheet, presenceRange(selection));
++    };
      active2.stop.push(
        this.host.selection.onChange(publish),
 -      session.on("peers", () => this.#changed()),
@@ -252,7 +265,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
        session.on("status", (status) => this.#status(status)),
        session.on("error", (error) => this.host.error(error)),
        edit.onChange((change) => {
-@@ -15505,6 +15539,22 @@ var XlsxCollaboration = class {
+@@ -15505,6 +15548,38 @@ var XlsxCollaboration = class {
        this.#listeners.delete(listener);
      };
    }
@@ -273,6 +286,16 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
 +    if (patch && Object.hasOwn(patch, "sheet")) clear.sheet = typeof patch.sheet === "string" ? patch.sheet : void 0;
 +    const hasClear = Object.keys(clear).length > 0;
 +    if (Object.keys(next).length === 0 && !hasClear) return false;
++    if (hasClear) {
++      if (clear.range === void 0 && clear.sheet === void 0) {
++        try {
++          const curSel = this.host.selection.get();
++          active2.hideCell = { sheet: curSel.sheet, ref: selectionRef(curSel) };
++        } catch { active2.hideCell = null; }
++      } else {
++        active2.hideCell = null;
++      }
++    }
 +    Object.assign(active2.session.identity, next);
 +    active2.session.updatePresence({ ...next, ...clear });
 +    this.#changed();
@@ -281,7 +304,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
    state() {
      const active2 = this.#active;
      if (!active2) return OFF_STATE;
-@@ -15519,13 +15569,37 @@ var XlsxCollaboration = class {
+@@ -15519,13 +15594,37 @@ var XlsxCollaboration = class {
            clientId: session.clientId,
            name: session.identity.userName,
            color: session.identity.userColor,
@@ -321,7 +344,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..04ca29b2d831ae75272952494bc86d81
          }))
        ]
      };
-@@ -15918,6 +15992,18 @@ var XlsxEditorApi = class extends HTMLElementBase {
+@@ -15918,6 +16017,18 @@ var XlsxEditorApi = class extends HTMLElementBase {
    setActiveSheet(index) {
      this.core.setActiveSheet(index);
    }

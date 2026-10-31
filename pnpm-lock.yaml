@@ -9,7 +9,7 @@ patchedDependencies:
     hash: dcws5rc5wjxwrvxjsgxgjjhopa
     path: patches/ooxml-core@1.8.0.patch
   ooxml-ui@1.8.0:
-    hash: o3dorgvk6lbo2ehalmdwwtcz6e
+    hash: ifsonkkctxdtakntpqaup3tdey
     path: patches/ooxml-ui@1.8.0.patch
   pptx-react-viewer@4.33.0:
     hash: awhwytire7kzviqsvl3mbokqui
@@ -3586,7 +3586,7 @@ snapshots:
     dependencies:
       '@christophervr/xlsx-core': 0.2.10
       ooxml-core: 1.8.0(patch_hash=dcws5rc5wjxwrvxjsgxgjjhopa)
-      ooxml-ui: 1.8.0(patch_hash=o3dorgvk6lbo2ehalmdwwtcz6e)(three@0.186.1)
+      ooxml-ui: 1.8.0(patch_hash=ifsonkkctxdtakntpqaup3tdey)(three@0.186.1)
       react: 19.2.0
     transitivePeerDependencies:
       - '@napi-rs/canvas'
@@ -4922,7 +4922,7 @@ snapshots:
     dependencies:
       docx-core: 0.1.13
       ooxml-core: 1.8.0(patch_hash=dcws5rc5wjxwrvxjsgxgjjhopa)
-      ooxml-ui: 1.8.0(patch_hash=o3dorgvk6lbo2ehalmdwwtcz6e)(three@0.186.1)
+      ooxml-ui: 1.8.0(patch_hash=ifsonkkctxdtakntpqaup3tdey)(three@0.186.1)
       react: 19.2.0
     transitivePeerDependencies:
       - '@napi-rs/canvas'
@@ -5974,7 +5974,7 @@ snapshots:
       y-protocols: 1.0.7(yjs@13.6.33)
       yjs: 13.6.33
 
-  ooxml-ui@1.8.0(patch_hash=o3dorgvk6lbo2ehalmdwwtcz6e)(three@0.186.1):
+  ooxml-ui@1.8.0(patch_hash=ifsonkkctxdtakntpqaup3tdey)(three@0.186.1):
     dependencies:
       dompurify: 3.4.16
       emf-converter: 4.11.2
@@ -6106,7 +6106,7 @@ snapshots:
       jszip: 3.10.1
       lucide-react: 0.546.0(react@19.2.0)
       ooxml-core: 1.8.0(patch_hash=dcws5rc5wjxwrvxjsgxgjjhopa)
-      ooxml-ui: 1.8.0(patch_hash=o3dorgvk6lbo2ehalmdwwtcz6e)(three@0.186.1)
+      ooxml-ui: 1.8.0(patch_hash=ifsonkkctxdtakntpqaup3tdey)(three@0.186.1)
       opentype.js: 2.0.0
       react: 19.2.0
       react-dom: 19.2.0(react@19.2.0)
@@ -6671,7 +6671,7 @@ snapshots:
     dependencies:
       emf-converter: 4.11.2
       ooxml-core: 1.8.0(patch_hash=dcws5rc5wjxwrvxjsgxgjjhopa)
-      ooxml-ui: 1.8.0(patch_hash=o3dorgvk6lbo2ehalmdwwtcz6e)(three@0.186.1)
+      ooxml-ui: 1.8.0(patch_hash=ifsonkkctxdtakntpqaup3tdey)(three@0.186.1)
       react: 19.2.0
       visio-core: 0.4.1
     transitivePeerDependencies:
