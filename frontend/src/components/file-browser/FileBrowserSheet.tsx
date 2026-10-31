@@ -110,6 +110,7 @@ export const FileBrowserSheet = memo(function FileBrowserSheet({ isOpen, onClose
           <FileBrowser 
             basePath={normalizedBasePath}
             embedded={true}
+            previewSurface="sheet"
             initialSelectedFile={initialSelectedFile}
             onDirectoryLoad={handleDirectoryLoad}
             onMentionFile={onMentionFile}

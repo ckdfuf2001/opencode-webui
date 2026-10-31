@@ -24,6 +24,7 @@ import { normalizeTreePath } from '@/lib/tree-path'
 import { downloadSingleFile, downloadFolderAsZip } from '@/lib/fileDownload'
 import { showToast } from '@/lib/toast'
 import { useChatAttached } from '@/stores/chatAttachedStore'
+import type { OpenFileSurface } from './openFileRegistry'
 
 const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
 
@@ -156,6 +157,8 @@ interface FileBrowserProps {
   onMentionFile?: (file: FileInfo) => void
   /** 전체화면 시트에서 열릴 때 미리보기 액션을 펼침 상태로 */
   expandPreviewActions?: boolean
+  /** C4-6 H2: 이 브라우저의 미리보기가 어느 화면인지. embedded(시트)=sheet. */
+  previewSurface?: OpenFileSurface
 }
 
 function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: FileSort) => void }) {
@@ -184,7 +187,10 @@ function FileSortSelect({ value, onChange }: { value: FileSort; onChange: (v: Fi
   )
 }
 
-export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad, onMentionFile, expandPreviewActions = false }: FileBrowserProps) {
+export function FileBrowser({ basePath = '', onFileSelect, embedded = false, initialSelectedFile, onDirectoryLoad, onMentionFile, expandPreviewActions = false, previewSurface }: FileBrowserProps) {
+  // C4-6 H2: surface는 호출자가 지정한다. embedded는 크롬 제거용이라
+  // 화면 구분이 아니다 — 기본값은 패널, 시트는 FileBrowserSheet가 명시한다.
+  const surface: OpenFileSurface = previewSurface ?? 'panel'
   const [currentPath, setCurrentPath] = useState(basePath)
   const queryClient = useQueryClient()
   const { data: files, isLoading: queryLoading, error: filesQueryError } = useQuery<FileInfo, Error>({
@@ -796,7 +802,7 @@ useEffect(() => {
             {/* U1: 미리보기 닫기는 탐색기 축소로 일원화한다 — 별도 "Close preview"
                 버튼을 없앤다. 축소 시 미리보기가 언마운트되어 뷰어 자원도 정리된다. */}
             {selectedFile && !selectedFile.isDirectory ? (
-              <FilePreview file={selectedFile} expandActions={expandPreviewActions} />
+              <FilePreview file={selectedFile} expandActions={expandPreviewActions} surface={surface} />
             ) : fileLoading ? (
               <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
                 <RefreshCw className="w-4 h-4 animate-spin" />
@@ -930,7 +936,7 @@ useEffect(() => {
           {!isMobile && (
             <div className="flex-1 overflow-y-auto min-h-0 ">
               {selectedFile && !selectedFile.isDirectory ? (
-                <FilePreview file={selectedFile} />
+                <FilePreview file={selectedFile} surface={surface} />
               ) : (
                 <div className="flex items-center justify-center h-64 text-muted-foreground">
                   Select a file to preview

@@ -13,6 +13,7 @@ const DocumentPreview = lazyWithRetry(() =>
 import { detectDocKind } from './docKind'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
+import { useShadowedFile, type OpenFileSurface } from './openFileRegistry'
 
 
 const API_BASE = API_BASE_URL
@@ -28,9 +29,11 @@ interface FilePreviewProps {
   initialLineNumber?: number
   /** 탐색기 전체화면 시트 등 넓을 때 헤더 액션을 펼침 */
   expandActions?: boolean
+  /** C4-6 H2: 어느 화면인지. 시트가 같은 파일을 열면 패널은 비운다. */
+  surface?: OpenFileSurface
 }
 
-export const FilePreview = memo(function FilePreview({ file, hideHeader = false, isMobileModal = false, onCloseModal, onFileSaved, initialLineNumber, expandActions = false }: FilePreviewProps) {
+export const FilePreview = memo(function FilePreview({ file, hideHeader = false, isMobileModal = false, onCloseModal, onFileSaved, initialLineNumber, expandActions = false, surface = 'panel' }: FilePreviewProps) {
   const [viewMode, setViewMode] = useState<'preview' | 'edit'>('preview')
   const [editContent, setEditContent] = useState('')
   const [isSaving, setIsSaving] = useState(false)
@@ -43,6 +46,9 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   // 에디터가 컨테이너 전체를 채우게 한다. 텍스트 편집(viewMode==='edit')은
   // 헤더에 저장/취소 버튼이 필요하므로 그대로 둔다.
   const [docEditing, setDocEditing] = useState(false)
+  // C4-6 H2: 다른 화면이 같은 파일을 편집 중이거나 큰 화면에 띄웠으면
+  // 이쪽은 에디터를 마운트하지 않고 안내만 둔다 (탭당 편집기 하나).
+  const shadowedBy = useShadowedFile(surface, file?.path ?? null, docEditing)
   const virtualizedRef = useRef<VirtualizedTextViewHandle>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   
@@ -429,6 +435,29 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   ]
   const visibleActions = headerActions.filter((a) => a.show)
   const showAllActions = isFullscreen || expandActions
+
+  // C4-6 H2: 같은 파일을 다른 화면(큰 화면/편집 중)이 쓰고 있으면
+  // 여기서는 에디터를 마운트하지 않고 안내만 둔다 (탭당 편집기 하나).
+  // office 문서가 아닐 때는 기존 동작을 유지한다 (collab 없음).
+  if (shadowedBy && docKind) {
+    return (
+      <div className="h-full flex flex-col bg-background" data-testid="preview-shadowed" data-shadow-reason={shadowedBy}>
+        <div className="flex items-start gap-2 px-3 py-2 border-b border-border flex-shrink-0 overflow-hidden">
+          <div className="flex-1 min-w-0 overflow-hidden">
+            <h3 className="text-foreground text-sm font-medium break-all leading-tight">
+              {file.name}
+            </h3>
+            <div className="text-xs text-muted-foreground mt-1">
+              {shadowedBy === 'edit' ? '다른 화면에서 편집 중' : '큰 화면에서 열려 있음'}
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground p-4 text-center">
+          {shadowedBy === 'edit' ? '다른 화면에서 이 파일을 편집하고 있습니다' : '이 파일은 큰 화면에서 열려 있습니다'}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div

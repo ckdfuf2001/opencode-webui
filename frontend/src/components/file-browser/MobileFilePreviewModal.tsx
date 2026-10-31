@@ -53,6 +53,7 @@ export const MobileFilePreviewModal = memo(function MobileFilePreviewModal({
           hideHeader={!showFilePreviewHeader}
           isMobileModal={showFilePreviewHeader}
           onCloseModal={handleClose}
+          surface="sheet"
         />
       </div>
     </div>

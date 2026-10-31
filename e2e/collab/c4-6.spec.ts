@@ -46,14 +46,23 @@ async function openInPanel(page: Page, repoId: number, name: string, hostSelecto
   expect(opened, `panel preview for ${name} should mount`).toBe(true)
 }
 
-async function openInSheet(page: Page, name: string, hostSelector: string, hostCount: number): Promise<void> {
+async function openInSheet(page: Page, name: string, _hostSelector: string, _hostCount: number): Promise<void> {
   const sheet = page.locator('div.fixed.inset-0.z-50')
   await page.getByTitle('Open fullscreen', { exact: true }).first().click({ timeout: 20000 })
   await sheet.locator('[data-testid="file-row"]').first().waitFor({ timeout: 90000 })
   let opened = false
   for (let attempt = 0; attempt < 3 && !opened; attempt++) {
     await sheet.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 }).catch(() => {})
-    opened = await page.waitForFunction((exp) => document.querySelectorAll('.xlsxengine-host, [data-testid="pptx-viewer-root"]').length >= exp, hostCount, { timeout: 30000 }).then(() => true).catch(() => false)
+    // C4-6 H2: 시트가 같은 파일을 열면 패널이 플레이스홀더로 양보하므로
+    // hosts>=2가 안정 상태가 아니다. 시트에 호스트가 뜨거나 양보가 끝났으면 성공.
+    opened = await page.waitForFunction(() => {
+      const sheetEl = document.querySelector('div.fixed.inset-0.z-50')
+      const sheetHosts = sheetEl ? sheetEl.querySelectorAll('.xlsxengine-host, [data-testid="pptx-viewer-root"]').length : 0
+      if (sheetHosts >= 1) return true
+      const shadowed = document.querySelectorAll('[data-testid="preview-shadowed"]').length
+      const hosts = document.querySelectorAll('.xlsxengine-host, [data-testid="pptx-viewer-root"]').length
+      return shadowed >= 1 && hosts >= 1
+    }, null, { timeout: 30000 }).then(() => true).catch(() => false)
   }
   expect(opened, `sheet preview for ${name} should mount`).toBe(true)
   await page.waitForTimeout(3000)

@@ -65,6 +65,7 @@ export function SessionFilePanel({ basePath = '', repoName: _repoName, initialSe
         <FileBrowser
           basePath={basePath || '.'}
           embedded
+          previewSurface="panel"
           initialSelectedFile={selectedFilePath ?? initialSelectedFile}
           onDirectoryLoad={handleDirectoryLoad}
           onMentionFile={onMentionFile}
