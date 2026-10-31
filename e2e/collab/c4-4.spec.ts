@@ -7,7 +7,8 @@ import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
  * C4-4 red 선행.
- * G1: 미리보기(패널)+큰 화면(시트) 동시 마운트 — 같은 userId는 1명으로 보여야 한다.
+ * G1 (C4-6 H2로 대체): 같은 파일을 패널+시트에 열면 시트만 마운트되고
+ * 패널은 플레이스홀더로 양보한다. 같은 userId는 1명으로 보여야 한다.
  * G2: 사용자 표시(CollabPresence)는 lib 타이틀바 actions 슬롯(검색창 오른쪽) 한 곳에만.
  *     위쪽(앱 헤더)의 collab-presence는 제거한다. lib 자체 표시는 계속 숨김.
  */
@@ -58,13 +59,22 @@ async function openInPanel(page: Page, repoId: number, name: string, hostSelecto
   expect(opened, `panel preview for ${name} should mount`).toBe(true)
 }
 
-/** 시트(FileBrowserSheet) 안에서 같은 파일 열기 (viewer 마운트 2). */
+/** 시트(FileBrowserSheet) 안에서 같은 파일 열기 (C4-6 H2: 패널은 양보하고 시트만 마운트). */
 async function openInSheet(page: Page, name: string, hostSelector: string, hostCount: number): Promise<void> {
   const sheet = page.locator('div.fixed.inset-0.z-50')
   await page.getByTitle('Open fullscreen', { exact: true }).first().click({ timeout: 20000 })
   await sheet.locator('[data-testid="file-row"]').first().waitFor({ timeout: 90000 })
   await sheet.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
-  await page.waitForFunction((exp) => document.querySelectorAll('.xlsxengine-host, [data-testid="pptx-viewer-root"]').length >= exp, hostCount, { timeout: 30000 }).catch(() => {})
+  // C4-6 H2: 시트가 같은 파일을 열면 패널이 플레이스홀더로 양보하므로
+  // hosts>=2가 안정 상태가 아니다. 시트에 호스트가 뜨거나 양보가 끝났으면 성공.
+  await page.waitForFunction(() => {
+    const sheetEl = document.querySelector('div.fixed.inset-0.z-50')
+    const sheetHosts = sheetEl ? sheetEl.querySelectorAll('.xlsxengine-host, [data-testid="pptx-viewer-root"]').length : 0
+    if (sheetHosts >= 1) return true
+    const shadowed = document.querySelectorAll('[data-testid="preview-shadowed"]').length
+    const hosts = document.querySelectorAll('.xlsxengine-host, [data-testid="pptx-viewer-root"]').length
+    return shadowed >= 1 && hosts >= 1
+  }, null, { timeout: 30000 }).catch(() => {})
   await page.waitForTimeout(6000)
 }
 
@@ -96,7 +106,7 @@ async function avatarsPerBar(page: Page): Promise<number[]> {
 }
 
 test.describe('C4-4 G1: 미리보기+큰 화면 중복 접속', () => {
-  test('G1-panel-sheet-xlsx: 같은 파일 2마운트도 바별 아바타 1개·참가자 1명', async ({ browser }) => {
+  test('G1-panel-sheet-xlsx: 같은 파일은 시트만 마운트, 아바타 1개·참가자 1명', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -107,28 +117,32 @@ test.describe('C4-4 G1: 미리보기+큰 화면 중복 접속', () => {
       // presence는 collab 참가+타이틀바 슬롯 장착 뒤에 나타나므로 폴링한다.
       await expect.poll(async () => avatarsPerBar(page), { timeout: 30000, intervals: [500] }).toEqual([1])
       await openInSheet(page, 'm.xlsx', '.xlsxengine-host', 2)
-      // 바 2개(패널+시트), 각 바 아바타 1개.
-      expect(await avatarsPerBar(page)).toEqual([1, 1])
-      // 팝오버에 연결 수 표시 (탭 2). 시트 바가 맨 위이므로 last 사용.
+      // C4-6 H2: 패널은 플레이스홀더로 양보하고 시트만 마운트된다.
+      await expect(page.getByTestId('preview-shadowed').first()).toBeVisible({ timeout: 15000 })
+      expect(await page.locator('xlsx-editor').count()).toBe(1)
+      // 바 1개(시트), 아바타 1개.
+      expect(await avatarsPerBar(page)).toEqual([1])
+      // 팝오버에 단일 항목만 있고 탭 표시 없음 (마운트 1).
       await page.getByTestId('collab-avatars').last().click({ timeout: 10000 })
       await expect(page.getByTestId('collab-popover').last()).toBeVisible({ timeout: 10000 })
-      await expect(page.getByTestId('collab-popover').last()).toContainText('탭 2', { timeout: 10000 })
+      await expect(page.getByTestId('collab-popover').last()).not.toContainText('탭 2', { timeout: 10000 })
       await page.keyboard.press('Escape')
       // 서버 참가자는 같은 userId 1명.
       const room = await roomByLeaf('m.xlsx')
       const parts = (room.participants ?? []) as Array<{ userId?: unknown }>
       expect(parts.length).toBe(1)
       expect(parts[0]?.userId).toBeTruthy()
-      // 시트 닫기 → 1마운트로 복귀, 유령 없음.
+      // 시트 닫기 → 패널 뷰어 복귀, 유령 없음.
       await closeSheet(page)
       await expect.poll(async () => page.locator('.xlsxengine-host').count(), { timeout: 20000, intervals: [500] }).toBe(1)
+      await expect(page.getByTestId('preview-shadowed')).toHaveCount(0, { timeout: 10000 })
       expect(await avatarsPerBar(page)).toEqual([1])
     } finally {
       await ctx.close().catch(() => {})
     }
   })
 
-  test('G1-panel-sheet-pptx: 같은 파일 2마운트도 바별 아바타 1개·참가자 1명', async ({ browser }) => {
+  test('G1-panel-sheet-pptx: 같은 파일은 시트만 마운트, 아바타 1개·참가자 1명', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -138,8 +152,11 @@ test.describe('C4-4 G1: 미리보기+큰 화면 중복 접속', () => {
       await openInPanel(page, repoId, 's.pptx', '[data-testid="pptx-viewer-root"]')
       await expect.poll(async () => avatarsPerBar(page), { timeout: 30000, intervals: [500] }).toEqual([1])
       await openInSheet(page, 's.pptx', '[data-testid="pptx-viewer-root"]', 2)
-      expect(await avatarsPerBar(page)).toEqual([1, 1])
-      // PPT는 탭 안 세션 공유라 tabCount=1 — 팝오버에 단일 항목만 있고 탭 표시 없음.
+      // C4-6 H2: 패널은 플레이스홀더로 양보하고 시트만 마운트된다.
+      await expect(page.getByTestId('preview-shadowed').first()).toBeVisible({ timeout: 15000 })
+      expect(await page.locator('[data-testid="pptx-viewer-root"]').count()).toBe(1)
+      expect(await avatarsPerBar(page)).toEqual([1])
+      // PPT는 단일 마운트라 팝오버에 단일 항목만 있고 탭 표시 없음.
       await page.getByTestId('collab-avatars').last().click({ timeout: 10000 })
       await expect(page.getByTestId('collab-popover').last()).toBeVisible({ timeout: 10000 })
       await expect(page.getByTestId('collab-popover').last()).not.toContainText('탭 2', { timeout: 10000 })
@@ -149,6 +166,7 @@ test.describe('C4-4 G1: 미리보기+큰 화면 중복 접속', () => {
       expect(parts.length).toBe(1)
       await closeSheet(page)
       await expect.poll(async () => page.locator('[data-testid="pptx-viewer-root"]').count(), { timeout: 20000, intervals: [500] }).toBe(1)
+      await expect(page.getByTestId('preview-shadowed')).toHaveCount(0, { timeout: 10000 })
       expect(await avatarsPerBar(page)).toEqual([1])
     } finally {
       await ctx.close().catch(() => {})
