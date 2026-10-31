@@ -182,14 +182,32 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
           }
           expect(saved, `${name} autosaved`).toBe(true)
         } else {
-          // DOCX: 편집 진입 후 Done (viewer 저장이 없어도 세션 유지를 확인한다).
+          // DOCX: 편집 진입 후 타이핑하고 Done (실제 serialize 경로를 탄다).
           const edit = page.getByRole('button', { name: 'Edit', exact: true })
           if ((await edit.count()) > 0) {
             await edit.first().click({ timeout: 20000 }).catch(() => {})
             await page.waitForTimeout(3000)
+            const stamp = `C51D${Date.now().toString(36)}`
+            await page.mouse.click(500, 350)
+            await page.waitForTimeout(1000)
+            await page.keyboard.type(stamp, { delay: 30 }).catch(() => {})
+            await page.waitForTimeout(2000)
             const done = page.getByRole('button', { name: 'Done', exact: true })
             if ((await done.count()) > 0) await done.first().click({ timeout: 20000 }).catch(() => {})
-            await page.waitForTimeout(3000)
+            await page.waitForTimeout(5000)
+            const abs = path.join(workspaceDir(), 'repos', 'c51save', name)
+            let saved = false
+            for (let i = 0; i < 12; i++) {
+              if (!fs.existsSync(abs)) { await page.waitForTimeout(5000); continue }
+              try {
+                const b = fs.readFileSync(abs)
+                const z = await JSZip.loadAsync(b)
+                const doc = await z.files['word/document.xml']!.async('string')
+                if (doc.includes(stamp)) { saved = true; break }
+              } catch { /* mid-write */ }
+              await page.waitForTimeout(5000)
+            }
+            expect(saved, `${name} docx saved`).toBe(true)
           }
         }
         const buf = await backendBytes('c51save', name)
