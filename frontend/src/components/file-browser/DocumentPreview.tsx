@@ -3649,6 +3649,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               // G2: 사용자 표시는 lib 타이틀바 actions 슬롯 한 곳에만 둔다.
               <CollabPresenceShell>
                 <CollabPresenceBar
+                  dropAlign="right"
                   peers={groupXlsxPeopleForView(xlsxPeople)}
                   followId={xlsxFollowId}
                   onFollowToggle={(id) => setXlsxFollowId((prev) => (prev === id ? null : id))}

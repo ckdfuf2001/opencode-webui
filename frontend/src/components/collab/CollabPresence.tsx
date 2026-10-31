@@ -76,6 +76,8 @@ export interface CollabPresenceBarProps {
   onRename?: (name: string) => void;
   /** 바깥 클릭으로 팝오버가 닫힐 때 (캔버스를 직접 조작하려는 의도로 보고 따라가기를 푼다). */
   onDismiss?: () => void;
+  /** G2: popover direction. Use 'right' in the titlebar actions slot. */
+  dropAlign?: 'left' | 'right';
 }
 
 /**
@@ -83,7 +85,7 @@ export interface CollabPresenceBarProps {
  * - data-owner는 아바타에 둔다 (E21이 DOM에서 바로 읽는다).
  * - 팝오버는 열려 있을 때만 DOM에 만든다.
  */
-export function CollabPresenceBar({ peers, defaultOpen = false, followId = null, onFollowToggle, onRename, onDismiss }: CollabPresenceBarProps): ReactNode {
+export function CollabPresenceBar({ peers, defaultOpen = false, followId = null, onFollowToggle, onRename, onDismiss, dropAlign = 'left' }: CollabPresenceBarProps): ReactNode {
   const [open, setOpen] = useState(defaultOpen)
   const [renaming, setRenaming] = useState(false)
   const [renameInput, setRenameInput] = useState('')
@@ -137,7 +139,7 @@ export function CollabPresenceBar({ peers, defaultOpen = false, followId = null,
           data-testid="collab-popover"
           role="list"
           aria-label="참가자 목록"
-          className="absolute left-2 top-full z-50 mt-1 min-w-56 max-w-72 rounded-md border border-border bg-background shadow-lg"
+          className={`absolute ${dropAlign === 'right' ? 'right-0' : 'left-2'} top-full z-50 mt-1 min-w-56 max-w-72 rounded-md border border-border bg-background shadow-lg`}
         >
           {self && (
             <div

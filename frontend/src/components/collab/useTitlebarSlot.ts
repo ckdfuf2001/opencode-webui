@@ -70,6 +70,54 @@ export function useTitlebarSlot(
       }
     }
 
+    const ensureShadowStyles = (root: ShadowRoot): void => {
+      // G2: shadow DOM은 문서의 Tailwind를 못 보므로 앱 스타일시트를 복제한다.
+      // (portal presence의 레이아웃·색·position이 깨지지 않게.)
+      // lib 자체 스타일은 그대로 두고, 복제본은 뒤에 붙인다.
+      try {
+        if (root.querySelector('style[data-app-clone]')) return
+        const parts: string[] = []
+        for (const sheet of Array.from(document.styleSheets)) {
+          try {
+            const rules = sheet.cssRules
+            if (!rules) continue
+            const texts: string[] = []
+            for (let i = 0; i < rules.length; i++) {
+              try {
+                texts.push(rules[i]!.cssText)
+              } catch {
+                /* 개별 규칙 실패는 건너뛴다 */
+              }
+            }
+            if (texts.length > 0) parts.push(texts.join('\n'))
+          } catch {
+            /* cross-origin 시트는 건너뛴다 */
+          }
+        }
+        if (parts.length === 0) return
+        const st = document.createElement('style')
+        st.setAttribute('data-app-clone', '1')
+        st.textContent = parts.join('\n')
+        root.prepend(st)
+      } catch {
+        /* 무시 */
+      }
+    }
+    const ensureShadowStylesNow = (): void => {
+      try {
+        let host: Element | null = null
+        try {
+          host = getHostRef.current()
+        } catch {
+          host = null
+        }
+        const root = (host as unknown as { shadowRoot?: ShadowRoot | null } | null)?.shadowRoot ?? null
+        if (root) ensureShadowStyles(root)
+      } catch {
+        /* 무시 */
+      }
+    }
+    ensureShadowStylesNow()
     ensure()
     // 타이틀바가 늦게 생기거나 다시 만들어지면 따라간다.
     try {
@@ -116,7 +164,6 @@ export function useTitlebarSlot(
       wrap = null
       setSlot(null)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- resetKey로만 재실행한다.
   }, [titlebarSelector, resetKey])
 
   return slot

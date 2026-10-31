@@ -2181,7 +2181,7 @@ const peersRef = useRef<Peer[]>([])
                       <>
                         {collab && (
                           <CollabPresenceShell>
-                            <CollabPresenceBar
+                            <CollabPresenceBar dropAlign="right"
                               peers={peers.map(peerToView)}
                               followId={followId}
                               onFollowToggle={(id) => setFollowId((prev) => (prev === id ? null : id))}
