@@ -567,13 +567,17 @@ test.describe('C4-3 F4: 남이 잡은 이미지 테두리+이름표', () => {
         [before!.sheet, before!.index, before!.row + 8] as const,
       )
       expect(moved).toBe(true)
-      // 테두리가 새 위치로 따라간다 (y가 아래로 이동).
+      // 테두리가 새 위치로 따라간다 (y가 아래로 이동). 이동 브로드캐스트·리렌더가
+      // 수백 ms 걸리므로 y값 자체를 폴링한다 (즉시 1회 샘플링은 레이스).
       await expect
         .poll(async () => boxOf('[data-testid="xlsx-object-remote-sel"]'), { timeout: 15000, intervals: [500] })
         .not.toBeNull()
-      const after = await boxOf('[data-testid="xlsx-object-remote-sel"]')
-      expect(after).not.toBeNull()
-      expect(after!.y).toBeGreaterThan(first!.y + 10)
+      await expect
+        .poll(async () => {
+          const b = await boxOf('[data-testid="xlsx-object-remote-sel"]')
+          return b ? b.y : -1
+        }, { timeout: 15000, intervals: [500] })
+        .toBeGreaterThan(first!.y + 10)
     } finally {
       await t.ctxB.close().catch(() => {})
       await t.ctxA.close().catch(() => {})
