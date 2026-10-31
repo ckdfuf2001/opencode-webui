@@ -1,7 +1,7 @@
 diff --git a/dist/collab/index.mjs b/dist/collab/index.mjs
 index 76fc0a566ebad501cb438f643dc2fc1e3de62333..ba69dc5f6717fa3669e3dbc7f1fb26d8f54a858c 100644
 --- a/dist/collab/index.mjs
-+++ b/dist/collab/index.mjs	
++++ b/dist/collab/index.mjs
 @@ -2,6 +2,8 @@ import * as Y from 'yjs';
  import * as awarenessProtocol from 'y-protocols/awareness';
  import { Awareness } from 'y-protocols/awareness';
@@ -40,9 +40,9 @@ index 76fc0a566ebad501cb438f643dc2fc1e3de62333..ba69dc5f6717fa3669e3dbc7f1fb26d8
    };
    const sanitizePayload = options.sanitizePayload ?? (() => ({}));
 diff --git a/dist/docx/load/index.mjs b/dist/docx/load/index.mjs
-index 0ba765a8a705e43693834c9f001afbe2fdacf51d..b34ff81af36c6135079b7efd1e1b56ef01ceb8cc 100644
+index 0ba765a8a705e43693834c9f001afbe2fdacf51d..98e6e3d198922dd26e5907b81cd32ea5c9e3ae19 100644
 --- a/dist/docx/load/index.mjs
-+++ b/dist/docx/load/index.mjs	
++++ b/dist/docx/load/index.mjs
 @@ -8620,6 +8620,23 @@ function parsePlacement(anchor) {
    if (offsetV && /^-?\d+$/.test(offsetV)) placement.offsetYPx = emuToPx(offsetV);
    return placement;
@@ -78,7 +78,16 @@ index 0ba765a8a705e43693834c9f001afbe2fdacf51d..b34ff81af36c6135079b7efd1e1b56ef
    for (const child4 of Array.from(node.childNodes))
      if (child4.nodeType !== 1 || child4.localName !== "rPr") node.removeChild(child4);
    if (run.break) {
-@@ -11872,6 +11893,7 @@ function runContent(node) {
+@@ -9268,6 +9289,8 @@ function runIsSafe(run) {
+     return true;
+   if (only && named2(only, "fldChar") && !only.childNodes.length)
+     return ["begin", "separate", "end"].includes(getW(only, "fldCharType") ?? "");
++  // C5-1: single w:object (OLE) run — createRun reuses the original node, so bytes are preserved.
++  if (only && named2(only, "object")) return true;
+   if (content.length && content.every((element) => named2(element, "instrText"))) return true;
+   const kinds = /* @__PURE__ */ new Set();
+   for (const element of content) {
+@@ -11872,6 +11895,7 @@ function runContent(node) {
  function findDrawing(content) {
    for (const child4 of content) {
      if (named2(child4, "drawing") || named2(child4, "pict")) return child4;
@@ -86,7 +95,7 @@ index 0ba765a8a705e43693834c9f001afbe2fdacf51d..b34ff81af36c6135079b7efd1e1b56ef
      if (child4.localName !== "AlternateContent") continue;
      const choice = Array.from(child4.childNodes).filter(isElement).find((node) => node.localName === "Choice");
      const found = choice && findDrawing(Array.from(choice.childNodes).filter(isElement));
-@@ -11884,9 +11906,11 @@ function parseRun2(node, revision) {
+@@ -11884,9 +11908,11 @@ function parseRun2(node, revision) {
    const content = runContent(node);
    const drawing = findDrawing(content);
    if (drawing && activeContext) {
@@ -100,9 +109,9 @@ index 0ba765a8a705e43693834c9f001afbe2fdacf51d..b34ff81af36c6135079b7efd1e1b56ef
      };
      if (props && runPropertiesHaveUnknownContent(props))
 diff --git a/dist/docx/ui/index.mjs b/dist/docx/ui/index.mjs
-index 5fa6938fcadc4d4d8ac01aaa80b999b6ae4228f4..52d283fb6e6015943d1134fe70c3e804ca9e25df 100644
+index 5fa6938fcadc4d4d8ac01aaa80b999b6ae4228f4..5fc6a0bac46efeb482dc8841aacdafc45ebbd373 100644
 --- a/dist/docx/ui/index.mjs
-+++ b/dist/docx/ui/index.mjs	
++++ b/dist/docx/ui/index.mjs
 @@ -6698,6 +6698,19 @@ function runToInlineNodes(run, schema, noteNumber) {
        )
      ];
@@ -145,10 +154,20 @@ index 5fa6938fcadc4d4d8ac01aaa80b999b6ae4228f4..52d283fb6e6015943d1134fe70c3e804
    if (!child.isText && child.type.name !== "hardBreak") return;
    const run = { text: child.isText ? child.text || "" : "\n" };
    const link = linkFromMarks(child);
+@@ -6813,7 +6841,8 @@ function appendInlineNode(runs, child) {
+   const sameComments = JSON.stringify(previous?.commentIds) === JSON.stringify(run.commentIds);
+   const sameLink2 = JSON.stringify(previous?.link ?? null) === JSON.stringify(run.link ?? null);
+   const sameExtra = JSON.stringify(previous && extraRunProperties(previous)) === JSON.stringify(extraRunProperties(run));
+-  if (previous && !previous.break && !previous.image && !previous.equation && !previous.noteReference && !previous.fieldChar && previous.fieldCode === void 0 && JSON.stringify(previous.field) === JSON.stringify(run.field) && sameRevision && sameComments && sameExtra && sameLink2 && fields.every((field) => previous[field] === run[field]))
++  // C5-1: ole runs reuse the original w:object node on save — never merge text into them.
++  if (previous && !previous.break && !previous.image && !previous.equation && !previous.object && !previous.noteReference && !previous.fieldChar && previous.fieldCode === void 0 && JSON.stringify(previous.field) === JSON.stringify(run.field) && sameRevision && sameComments && sameExtra && sameLink2 && fields.every((field) => previous[field] === run[field]))
+     previous.text += run.text;
+   else runs.push(run);
+ }
 diff --git a/dist/xlsx/index.mjs b/dist/xlsx/index.mjs
 index 1b6af21ebef2ad49ca1a9daf5b5a358cd0583b47..059e2771a81fc365c515321a303decb15681aa64 100644
 --- a/dist/xlsx/index.mjs
-+++ b/dist/xlsx/index.mjs	
++++ b/dist/xlsx/index.mjs
 @@ -1,5 +1,7 @@
  import { XMLSerializer, DOMParser } from '@xmldom/xmldom';
  import JSZip from 'jszip';
@@ -186,7 +205,7 @@ index 1b6af21ebef2ad49ca1a9daf5b5a358cd0583b47..059e2771a81fc365c515321a303decb1
 diff --git a/dist/xlsx/load/index.mjs b/dist/xlsx/load/index.mjs
 index d95be8848eb262cb1688f360bed2539c4d48c015..58a8a8b25f0f49f8533a5a50850a2930602c4622 100644
 --- a/dist/xlsx/load/index.mjs
-+++ b/dist/xlsx/load/index.mjs	
++++ b/dist/xlsx/load/index.mjs
 @@ -10062,19 +10062,30 @@ function parseDrawing(source2, partName, warn) {
    const rels = source2.rels(partName);
    const out = [];
