@@ -33,7 +33,7 @@ import { collabApi, collabServerUrl, type CollabRoomSummary } from '@/api/collab
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser } from '@/lib/collabUser'
-import { hasEmbObject, isBlockedXlsxEdit, NO_OBJECT_GUARD, shouldFlushOnPeerArrive, type ObjectGuardCtx } from '@/lib/xlsxCollabGuard'
+import { hasEmbObject, isBlockedXlsxEdit, decideObjectOp, NO_OBJECT_GUARD, shouldFlushOnPeerArrive, type ObjectGuardCtx } from '@/lib/xlsxCollabGuard'
 import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectsStateMsg } from '@/lib/xlsxObjects'
 import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/CollabPresence'
 import type { PresencePeerView } from '@/components/collab/collabPresenceView'
@@ -1698,8 +1698,6 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const autosaveInFlightRef = useRef(false)
   /** C3: 자동 저장 예약 중 플래그 (1→2 만났을 때 즉시 저장 판단용). */
   const autosavePendingRef = useRef(false)
-  /** C3: 가드 토스트 마지막 표시 시각 (2초 내 중복 방지). */
-  const lockToastAtRef = useRef(0)
   /**
    * C4: 시트 개체 표(서버가 진실). people과 무관하게 방 단위로 유지한다.
    * key -> {sheet, kind, anchor, deleted, version, lock}.
@@ -3010,14 +3008,14 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           ctx = { embLocked, mismatch: objMismatchRef.current, activeKey: objActiveKeyRef.current, foreignKeys: foreign, online: connOnlineRef.current && browserOnline }
         }
         if (!isBlockedXlsxEdit(kind, label, ctx)) return true
-        const now = Date.now()
-        if (now - lockToastAtRef.current > 2000) {
-          lockToastAtRef.current = now
-          try {
-            showToast.warning('동시편집 중에는 이 편집을 지원하지 않습니다')
-          } catch {
-            /* 무시 */
-          }
+        // C4-3: 남이 잡은 개체면 홀더 이름 토스트 (드래그 1회에 1번; objToast가 문구별 2초 dedupe).
+        // 그 외 차단(오프라인·mismatch·EMB·버전 등)은 일반 잠금 토스트.
+        if (decideObjectOp(kind, label, ctx) === 'foreign' && objActiveKeyRef.current) {
+          const entry = objTableRef.current.get(objActiveKeyRef.current)
+          const holder = entry?.lock && entry.lock.clientId !== selfClientIdRef.current ? entry.lock.clientId : null
+          objToast(`${holder != null ? objHolderName(holder) : '상대방'}가 편집 중입니다`)
+        } else {
+          objToast('동시편집 중에는 이 편집을 지원하지 않습니다')
         }
         return false
       }
@@ -3028,7 +3026,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       delete (globalThis as unknown as Record<string, unknown>).__ooxmlEditGuard
     }
     // joined/인원/핸들/EMB 판정 변화 때 재평가한다.
-  }, [collab?.joined, xlsxPeople, xlsxHandle, objHasEmb])
+  }, [collab?.joined, xlsxPeople, xlsxHandle, objHasEmb, objHolderName, objToast])
 
   /** C4: 개체 변경 수신기 (서버 브로드캐스트 type 102). */
   const objOnMessage = useCallback(
@@ -3052,6 +3050,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               lock: o.lock,
             })
           }
+          touchObjRemote()
           if (typeof msg.version === 'number') objVersionRef.current = msg.version
           const core = objEditorCore()
           const session = core?.session
@@ -3105,9 +3104,154 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         }
       })()
     },
-    [objApplyServerState, objEditorCore, objSnapshotAll],
+    [objApplyServerState, objEditorCore, objSnapshotAll, touchObjRemote],
   )
   objOnMessageRef.current = objOnMessage
+  /** C4-3: 남이 잡은 개체 오버레이 (테두리+이름표) 목록. 배치 좌표는 아래 레이어 기준 px. */
+  const [objRemoteSels, setObjRemoteSels] = useState<Array<{ id: string; key: string; name: string; color: string; left: number; top: number; width: number; height: number }>>([])
+  const objOverlayLayerRef = useRef<HTMLDivElement | null>(null)
+  const objLayoutRafRef = useRef(0)
+  /**
+   * C4-3: 서버 표의 남 잠금을 DOM 위치로 바꾼다.
+   * - 키→모델 drawings __ck→data-index→.xg-obj 노드 순으로 찾는다.
+   * - 보이는 노드마다 오버레이를 둔다 (고정 행/열 quadrants 중복 대응).
+   * - 스크롤·줌·원격 이동은 호출 측(이벤트·옵저버·따라잡기)이 다시 부른다. 폴링 없음.
+   */
+  const layoutObjOverlays = useCallback((): void => {
+    try {
+      const layer = objOverlayLayerRef.current
+      if (!layer) return
+      const layerBox = layer.getBoundingClientRect()
+      if (layerBox.width <= 0 || layerBox.height <= 0) {
+        setObjRemoteSels((prev) => (prev.length === 0 ? prev : []))
+        return
+      }
+      let host: Element | null = null
+      try {
+        const h = xlsxHandleRef.current as unknown as { element?: unknown } | null
+        const cand = h?.element
+        host = cand instanceof Element ? cand : document.querySelector('xlsx-editor')
+      } catch {
+        host = null
+      }
+      if (!host) return
+      const root: Element | ShadowRoot = (host as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot ?? host
+      const me = selfClientIdRef.current
+      const activeSheet = objActiveSheetRef.current
+      const indexByKey = new Map<string, number>()
+      try {
+        const drawings = objEditorCore()?.workbook?.sheets?.[activeSheet]?.drawings
+        if (Array.isArray(drawings)) {
+          drawings.forEach((d, i) => {
+            const k = (d as { __ck?: unknown } | null)?.__ck
+            if (d && typeof k === 'string') indexByKey.set(k, i)
+          })
+        }
+      } catch {
+        /* 무시 */
+      }
+      const out: Array<{ id: string; key: string; name: string; color: string; left: number; top: number; width: number; height: number }> = []
+      const seen = new Set<string>()
+      for (const [key, entry] of objTableRef.current) {
+        if (!entry.lock || entry.lock.clientId === me || entry.deleted) continue
+        if (entry.sheet !== activeSheet) continue
+        if (seen.has(key)) continue
+        const idx = indexByKey.get(key)
+        if (idx == null) continue
+        const nodes = root.querySelectorAll(`.xg-obj[data-index="${idx}"]`)
+        const person = xlsxPeopleRef.current.find((x) => x.clientId === entry.lock!.clientId)
+        const name = person?.name || '상대방'
+        const color = person?.color || '#9aa0a6'
+        for (const n of Array.from(nodes)) {
+          const r = (n as HTMLElement).getBoundingClientRect()
+          if (r.width <= 0 || r.height <= 0) continue
+          seen.add(key)
+          out.push({
+            id: `${key}#${idx}`,
+            key,
+            name,
+            color,
+            left: Math.round(r.left - layerBox.left),
+            top: Math.round(r.top - layerBox.top),
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+          })
+          break
+        }
+      }
+      setObjRemoteSels((prev) => (JSON.stringify(prev) === JSON.stringify(out) ? prev : out))
+    } catch {
+      /* 무시 */
+    }
+  }, [objEditorCore])
+  /** C4-3: 오버레이 재배치 요청 (rAF 1회로 합친다). */
+  const scheduleObjLayout = useCallback((): void => {
+    try {
+      if (objLayoutRafRef.current) return
+      objLayoutRafRef.current = requestAnimationFrame(() => {
+        objLayoutRafRef.current = 0
+        layoutObjOverlays()
+      })
+    } catch {
+      /* 무시 */
+    }
+  }, [layoutObjOverlays])
+  // C4-3: 락 표 변경·리마운트 때마다 오버레이를 다시 배치한다.
+  useEffect(() => {
+    layoutObjOverlays()
+  }, [layoutObjOverlays, objRemoteRev, xlsxHandle, viewerGen, editing])
+  // C4-3: 스크롤·줌·리사이즈·lib 리페인트 때는 옵저버로 따라간다 (폴링 없음).
+  useEffect(() => {
+    let host: Element | null = null
+    try {
+      const h = xlsxHandleRef.current as unknown as { element?: unknown } | null
+      const cand = h?.element
+      host = cand instanceof Element ? cand : document.querySelector('xlsx-editor')
+    } catch {
+      host = null
+    }
+    if (!host) return
+    const onScroll = (): void => {
+      scheduleObjLayout()
+    }
+    window.addEventListener('scroll', onScroll, true)
+    let ro: ResizeObserver | null = null
+    try {
+      ro = new ResizeObserver(() => scheduleObjLayout())
+      const layer = objOverlayLayerRef.current
+      if (layer) ro.observe(layer)
+      ro.observe(host)
+    } catch {
+      ro = null
+    }
+    let mo: MutationObserver | null = null
+    try {
+      const root: Element | ShadowRoot = (host as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot ?? host
+      mo = new MutationObserver(() => scheduleObjLayout())
+      mo.observe(root as unknown as Node, { childList: true, subtree: true, attributes: true })
+    } catch {
+      mo = null
+    }
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      try {
+        ro?.disconnect()
+      } catch {
+        /* 무시 */
+      }
+      try {
+        mo?.disconnect()
+      } catch {
+        /* 무시 */
+      }
+      try {
+        if (objLayoutRafRef.current) cancelAnimationFrame(objLayoutRafRef.current)
+      } catch {
+        /* 무시 */
+      }
+      objLayoutRafRef.current = 0
+    }
+  }, [xlsxHandle, scheduleObjLayout])
   // C4: 탭 transport (재)연결 때마다 GET으로 따라잡는다. 초기 연결 때는
   // 등록 효과와 순서가 뒤바뀌어도 안전하다 (미태그 상태면 표만 채우고 끝난다).
   // (재)연결은 마운트보다 늦어 모델이 올라와 있을 확률이 높아 등록 재시도
@@ -3131,11 +3275,13 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       objHandleRef.current = xlsxHandle
       objRegisteredRef.current = ''
     }
-    void objRegister()
+    void objRegister().finally(() => {
+      touchObjRemote()
+    })
     // xlsxPeople.length: 마운트 직후 모델 미로딩으로 등록이 미뤄졌을 때
     // presence 도착이 재시도 기회가 된다 (키 미소비 + 이 dep).
     // collab?.epoch: 방 재생성(orphan dispose) 후에는 표가 비어서 다시 등록한다.
-  }, [editing, collab?.joined, collab?.roomId, collab?.epoch, collab?.baseHash, xlsxHandle, path, etag, viewerGen, objRegister, xlsxPeople.length])
+  }, [editing, collab?.joined, collab?.roomId, collab?.epoch, collab?.baseHash, xlsxHandle, path, etag, viewerGen, objRegister, xlsxPeople.length, touchObjRemote])
 
   /** C4: pointerdown 대상에서 개체 키를 찾는다 (shadow DOM 안 .xg-obj[data-index]). */
   const objKeyFromTarget = useCallback((t: unknown): string | null => {
@@ -3481,6 +3627,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
               />
             </CollabPresenceShell>
           )}
+          {/* C4-3 원격 개체 오버레이의 기준 박스 (absolute inset-0). */}
           <div
             onPointerDown={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setXlsxFollowId(null) }}
             onWheel={(e) => { if (!followNavigatingRef.current && !isFollowUiTarget(e.target)) setXlsxFollowId(null) }}
@@ -3492,7 +3639,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             // 실패하므로(typed=false) 판정 뒤 1회 재입력 경로로 수렴한다.
             // lib 동기화는 WS/모델 계층이라 표시 여부와 무관하다.
             style={connecting ? { display: 'none' } : undefined}
-            className="h-full"
+            className="relative h-full"
             data-testid={connecting ? 'xlsx-editor-hidden' : undefined}
           >
           <SpreadsheetEditor
@@ -3527,22 +3674,74 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
                 if (sameXlsxPeople(prev, next)) return prev
                 return next
               })
-              // C1: 따라가던 상대가 나가면 팔로우를 해제한다.
-              setXlsxFollowId((prev) => {
-                if (prev == null) return prev
-                const still = (state.people ?? []).some((p) => !p.self && p.clientId === prev)
-                return still ? prev : null
-              })
+                // C1: 따라가던 상대가 나가면 팔로우를 해제한다 (묶음 기준: 같은 userId 탭이 하나라도 남으면 유지).
+                setXlsxFollowId((prev) => {
+                  if (prev == null) return prev
+                  const still = ((state.people ?? []) as XlsxPresencePerson[]).some((p) => {
+                    if (p.self) return false
+                    const k = typeof p.userId === 'string' && p.userId ? `u:${p.userId}` : `c:${p.clientId}`
+                    return k === prev
+                  })
+                  return still ? prev : null
+                })
               // X2a-③: viewer 는 방 참가자 변화를 따라간다(리마운트·코멘트 게이트).
               if (!editingRef.current) void refreshViewerRoom()
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
-    onWorkbookChange={() => {
-      scheduleXlsxRefresh()
-      if (editingRef.current) scheduleAutosave()
-      objSendSweep()
-    }}
+          onWorkbookChange={() => {
+            scheduleXlsxRefresh()
+            if (editingRef.current) scheduleAutosave()
+            objSendSweep()
+          }}
           />
+          {/* C4-3: 남이 잡은 개체 표시 (테두리+이름표). lib 원격 셀 박스와 같은 스타일.
+              pointer-events:none 이라 편집을 막지 않는다. */}
+          <div
+            ref={objOverlayLayerRef}
+            data-testid="xlsx-object-remote-layer"
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-10 overflow-hidden"
+          >
+              {objRemoteSels.map((o) => (
+                <div
+                  key={o.id}
+                  data-testid="xlsx-object-remote-sel"
+                  data-key={o.key}
+                title={o.name}
+                style={{
+                  position: 'absolute',
+                  left: o.left,
+                  top: o.top,
+                  width: o.width,
+                  height: o.height,
+                  border: `2px solid ${o.color}`,
+                  borderRadius: 2,
+                }}
+              >
+                <span
+                  style={{
+                    position: 'absolute',
+                    left: -2,
+                    top: -19,
+                    height: 16,
+                    lineHeight: '16px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '0 4px',
+                    color: '#fff',
+                    backgroundColor: o.color,
+                    borderRadius: '2px 2px 2px 0',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    maxWidth: 160,
+                  }}
+                >
+                  {o.name}
+                </span>
+              </div>
+            ))}
+          </div>
           </div>
           {!editing && collabNotice && (
             // X2a-③: 보기 모드 참가 판정 안내(방에 못 붙으면 파일만 보여준다).
