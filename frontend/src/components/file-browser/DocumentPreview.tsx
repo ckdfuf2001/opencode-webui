@@ -3232,10 +3232,58 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       /* 무시 */
     }
   }, [layoutObjOverlays])
+  /**
+   * C4-5: 같은 userId 다른 화면(패널+큰 화면)의 원격 셀 박스는 숨긴다.
+   * lib은 clientId 기준으로 그려서 내 다른 탭 셀까지 원격 박스로 보여준다.
+   * 아바타 묶음(F1)과 같은 규칙(userId 일치·self 제외)으로 display만 건드린다
+   * (노드를 지우지 않으므로 lib 렌더와 충돌하지 않고, 되돌리기도 쉽다).
+   * 남의 셀은 그대로 둔다.
+   */
+  const applyRemoteSelVisibility = useCallback((): void => {
+    try {
+      const people = xlsxPeopleRef.current
+      const myUid = people.find((p) => p.self)?.userId
+      if (typeof myUid !== 'string' || !myUid) return
+      const hide = new Set(
+        people.filter((p) => !p.self && p.userId === myUid).map((p) => String(p.clientId)),
+      )
+      let host: Element | null = null
+      try {
+        const h = xlsxHandleRef.current as unknown as { element?: unknown } | null
+        const cand = h?.element
+        host = cand instanceof Element ? cand : document.querySelector('xlsx-editor')
+      } catch {
+        host = null
+      }
+      if (!host) return
+      const root: Element | ShadowRoot = (host as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot ?? host
+      for (const n of Array.from(root.querySelectorAll('.xg-remote'))) {
+        const el = n as HTMLElement & { dataset?: DOMStringMap & { xgSelfHide?: string; xgSelfHidePrev?: string } }
+        const cid = el.dataset?.clientId
+        if (cid == null) continue
+        if (hide.has(String(cid))) {
+          if (el.dataset!.xgSelfHide !== '1') {
+            el.dataset!.xgSelfHide = '1'
+            el.dataset!.xgSelfHidePrev = el.style.display || ''
+            el.style.display = 'none'
+          }
+      } else if (el.dataset!.xgSelfHide === '1') {
+        delete el.dataset!.xgSelfHide
+        const prev = el.dataset!.xgSelfHidePrev
+        delete el.dataset!.xgSelfHidePrev
+        el.style.display = typeof prev === 'string' ? prev : ''
+      }
+      }
+    } catch {
+      /* 무시 */
+    }
+  }, [])
   // C4-3: 락 표 변경·리마운트 때마다 오버레이를 다시 배치한다.
+  // C4-5: 같은 userId 원격 셀 숨김도 함께 갱신한다.
   useEffect(() => {
     layoutObjOverlays()
-  }, [layoutObjOverlays, objRemoteRev, xlsxHandle, viewerGen, editing])
+    applyRemoteSelVisibility()
+  }, [layoutObjOverlays, applyRemoteSelVisibility, objRemoteRev, xlsxHandle, viewerGen, editing])
   // C4-3: 스크롤·줌·리사이즈·lib 리페인트 때는 옵저버로 따라간다 (폴링 없음).
   useEffect(() => {
     let host: Element | null = null
@@ -3263,7 +3311,10 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     let mo: MutationObserver | null = null
     try {
       const root: Element | ShadowRoot = (host as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot ?? host
-      mo = new MutationObserver(() => scheduleObjLayout())
+      mo = new MutationObserver(() => {
+        scheduleObjLayout()
+        applyRemoteSelVisibility()
+      })
       mo.observe(root as unknown as Node, { childList: true, subtree: true, attributes: true })
     } catch {
       mo = null
@@ -3287,7 +3338,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       }
       objLayoutRafRef.current = 0
     }
-  }, [xlsxHandle, scheduleObjLayout])
+  }, [xlsxHandle, scheduleObjLayout, applyRemoteSelVisibility])
   // C4: 탭 transport (재)연결 때마다 GET으로 따라잡는다. 초기 연결 때는
   // 등록 효과와 순서가 뒤바뀌어도 안전하다 (미태그 상태면 표만 채우고 끝난다).
   // (재)연결은 마운트보다 늦어 모델이 올라와 있을 확률이 높아 등록 재시도
