@@ -48,6 +48,7 @@ export function sanitizeOleFileName(raw: string | null | undefined, fallback: st
   const base = (raw ?? '').split(/[\\/]/).pop() ?? ''
   // 제어문자·윈도우 예약 문자 제거, 앞뒤 점/공백 제거, 길이 제한.
   const cleaned = base
+    // eslint-disable-next-line no-control-regex -- 제어문자 살균이 목적이다
     .replace(/[\x00-\x1f\x7f<>:"|?*]/g, '')
     .replace(/^\.+/, '')
     .trim()
@@ -238,7 +239,7 @@ function readCfbStream(file: Uint8Array, wantName: string): CfbStream {
 
 const OLE10_NATIVE_STREAM = '\x01Ole10Native'
 
-function readAnsiZ(view: DataView, file: Uint8Array, off: number): { text: string; next: number } {
+function readAnsiZ(_view: DataView, file: Uint8Array, off: number): { text: string; next: number } {
   let end = off
   while (end < file.length && file[end] !== 0) {
     const c = file[end]!
