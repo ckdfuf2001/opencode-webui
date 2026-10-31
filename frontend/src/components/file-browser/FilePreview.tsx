@@ -195,7 +195,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     }
     window.addEventListener('fileFullscreenRequest', onRequest)
     return () => window.removeEventListener('fileFullscreenRequest', onRequest)
-  }, [isFullscreen, exitFullscreen])
+  }, [isFullscreen, exitFullscreen, file.path])
 
   useEffect(() => {
     if (!isFullscreen) return
