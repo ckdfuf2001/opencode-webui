@@ -954,3 +954,19 @@ E21만의 문제가 아니다. 근거:
   - 헤더 CollabPresenceShell 제거 (XLSX), DOCX는 빈 shell만 (참가자 0명 → 표시 없음).
 - G2-rename: 타이틀바 팝오버에서 변경 → 상대 화면 반영 확인.
 - 관할 커밋: test(c4-4) red 선행 (G2 5종 실패 원문 포함) · feat(c4-4) G2.
+
+## C4-4 검증 (2026-10-31, 최종 트리)
+- red 선행 (chromium): G1-panel-sheet 1건 flake 제외하고 G2 5종 실패 확인
+  (inTitleSlot 0, header에만 presence). G1 4종은 초록(표시·서버·해제 이미 정상).
+- green: c4-4 10/10 chromium + 10/10 msedge.
+- 회귀(최종 트리): c3 27/27 양쪽, c4-3 10/10 양쪽, xlsx-solo/collab/presence/c2 +
+  viewer-unmount + ui-layout 38/38 chromium (X-B1/X-B2, E2 5종 포함),
+  pptx 전수 18 pass + 16 fail(기준선 목록과 동일: E21b,E3,E4,E7,E8,E9,E12,E15,
+  E18,E16b,E20,E20s,E21,E11m/E1m,E11m/E2m,E11m/E3m, 신규 0),
+  backend 62 pass + 2 기존(config-migration, repo-tracking),
+  frontend tsc 0, eslint 333(272e+61w, 베이스라인 동일).
+- clean clone: NODE_ENV=development pnpm install --frozen-lockfile 성공.
+  표식: ui "M21"(pptx chunk) · uiXlsx "X2a-ui"/uiXlsxPresence · X2a-core-esm ·
+  coreXlsx "C3-guard" · hideCell/hasClear/people.hidden · viewer M21-cjs +
+  viewerBroadcastFollow off. `pnpm patch ooxml-ui@1.8.0` 적용 검증 통과.
+- exe 0.12.76 빌드 완료 (release/opencode-webui.exe). v0.12.76 태그 보류(수동확인 후).
