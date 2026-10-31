@@ -27,6 +27,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { pptxThemeColors } from './viewerTheme'
 import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
 import { createSlideGate } from '@/lib/slideLocationGate'
+import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
@@ -1901,6 +1902,35 @@ const peersRef = useRef<Peer[]>([])
     return () => mo.disconnect()
   }, [collab, peers])
 
+  // C5-1: lib compat 토스트는 파일당 1회만 남긴다 (중복 렌더 정리, 폴링 없음).
+  useEffect(() => {
+    const root = viewerRootRef.current
+    if (!root) return
+    const sweep = (node: ParentNode): void => {
+      try {
+        const nodes = node.querySelectorAll(
+          'pptx-ui-compat-toasts, [data-testid*="compat-toast"], [data-testid*="compat_toast"]',
+        )
+        nodes.forEach((el, i) => {
+          if (i > 0) (el as HTMLElement).style.display = 'none'
+        })
+      } catch {
+        /* 무시 */
+      }
+    }
+    sweep(root)
+    const mo = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) {
+          if (n instanceof Element) sweep(n)
+        }
+      }
+      sweep(root)
+    })
+    mo.observe(root, { childList: true, subtree: true })
+    return () => mo.disconnect()
+  }, [fileName])
+
   // P0-3: 슬라이드 점 (썸네일 + 모바일 시트 공용 앵커).
   // lib 근거 (scratch DOM 덤프 2026-10-15):
   //   ASIDE[role=navigation][aria-label=Slides] 하위 BUTTON[aria-label="Go to slide N"].
@@ -2033,6 +2063,8 @@ const peersRef = useRef<Peer[]>([])
       data-testid="pptx-viewer-root"
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
     >
+      {/* C5-1: 기존 OLE 첨부 아이콘 1개 + 더블클릭 다운로드 (lib 렌더는 그대로). */}
+      <OleAttachmentOverlay data={content} />
       {isDecrypted && editing && (
         <div className="px-3 py-1.5 border-b border-border text-[11px] text-muted-foreground">
           Encrypted documents cannot be co-edited — editing solo.

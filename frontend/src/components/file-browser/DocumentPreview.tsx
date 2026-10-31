@@ -39,6 +39,7 @@ import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/Coll
 import type { PresencePeerView } from '@/components/collab/collabPresenceView'
 import { createPortal } from 'react-dom'
 import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
+import OleAttachmentOverlay from './OleAttachmentOverlay'
 
 type ExtractedMsg = {
   html?: string
@@ -1334,7 +1335,8 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   }, [content])
   if (error) return <ErrorNote msg={error} />
   return (
-    <EngineHost className="docxengine-host h-full min-h-[480px]">
+    <EngineHost className="docxengine-host relative h-full min-h-[480px]">
+      <OleAttachmentOverlay data={content} />
       <div className="flex h-full min-h-0">
         <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
@@ -3629,7 +3631,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
 
   if (error) return <ErrorNote msg={error} />
   return (
-    <EngineHost className="xlsxengine-host h-full min-h-[480px]">
+    <EngineHost className="xlsxengine-host relative h-full min-h-[480px]">
+      <OleAttachmentOverlay data={content} guard />
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
