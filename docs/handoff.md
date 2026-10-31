@@ -984,3 +984,45 @@ E21만의 문제가 아니다. 근거:
 - 회귀: c3/c4/c4-3/c4-4 chromium+msedge 전부 green (C3-flush·P-5a·C4-mismatch flake는
   단독 재실행 green), xlsx 계열 38/38, pptx 기준선 동일(16 fail 목록 일치),
   backend 62+2 기존, tsc 0, eslint 333(272e+61w).
+
+## C4-6 0절: 증상1=fileFullscreenRequest 팬아웃, 같은 파일 2에디터 (2026-11-01)
+- 기준 470d53f. panel(viewer)+sheet(viewer) 동시 마운트 → 에디터 2개·세션 2개.
+  viewer `el.select('D5')`는 빈 방에서 미게시, 시드된 방 viewer는 게시하므로 H3 필요.
+- Edit은 `fileFullscreenRequest` 전역 이벤트라 전 FilePreview가 반응 → 증상1.
+  612610d(0.12.74)에도 같은 코드라 신규 회귀 아님 (bisect).
+- panel 닫기 → WS close+room 제거+40s 유령 0 (정상). selection은 양방향 공유
+  (RepoDetail explorerSelectedPath): 시트에서 다른 파일 열면 패널도 따라온다.
+  "패널=a+시트=b"는 수백 ms 안에 붕괴하므로 테스트 전제로 쓸 수 없다 (H1-fanout 참조).
+
+## C4-6 구현 (2026-11-01, H1→revert→H2→H3)
+- H1 (1e91e11): fileFullscreenRequest/Change에 path 동봉, 받는 쪽 path 불일치 무시.
+  F4-follow 정리와 무관. FilePreview effect deps에 file.path 추가 (f8043fa, eslint 333 유지).
+- revert (fd8615b): C4-5 `0e7021b` 되돌리기 (H2 단일 에디터로 대체, c4-5.spec 삭제).
+- H2 (e03cf67): 탭당 같은 파일은 FilePreview 하나만 마운트.
+  `openFileRegistry.ts` (surface panel/sheet 등록, editing 절대 양보, computed shadow).
+  FilePreview에 `surface` prop + `useShadowedFile` + `preview-shadowed` placeholder
+  (office만, 헤더 포함 통째 교체). FileBrowser `previewSurface` prop
+  (SessionFilePanel=panel 명시, FileBrowserSheet=sheet 명시, embedded와 무관 —
+  SessionFilePanel도 embedded라 기본값 유추는 버림). MobileFilePreviewModal=sheet 고정.
+  FilePreviewDialog(diff)는 기본값 panel 유지 (회귀 없음, 개선도 없음).
+- H3 (57ae135): lib 패치 1 hunk — viewer는 selection 미게시
+  (`if (session.role==="viewer") return;`), pnpm patch→patch-commit→install,
+  hash xepimnkaf52ojk5qmfv45l4m7q. 에디터 박스는 viewer에 그대로 보인다.
+- H1-fanout 전제 수정 (e07b136): selection 공유상 패널은 시트를 따라가므로
+  "시트 Edit → Edit한 쪽만 전체화면"으로 재구성 (assert는 그대로).
+- c4-4 G1 재작성 (3e1a387): "2마운트" 전제를 H2 단일 마운트로 교체
+  (placeholder+아바타1+참가자1+닫으면 복귀). openInSheet 헬퍼 H2 인식 (c4-4/c4-6 공통).
+- 관할: test(c4-6) red → H1 → revert → H2 → H3 → test-only 2건 → docs.
+
+## C4-6 검증 (2026-11-01, 최종 트리 f8043fa+3e1a387)
+- c4-6 16/16 chromium+msedge (JSON).
+- c4-4 19/20 + G1-sheet-close-unlock 단독 green (부하 flake).
+- c3 54개 중 C4-mismatch 2 (단독 양쪽 green, 기존 flake).
+  c4-3 20/20. xlsx 6종 76/76. pptx 양쪽 기준선 정확 일치(18+16+skip1).
+  backend 62+2 기존(bun:sqlite 환경). tsc 0, eslint 333, memory 0에러,
+  encoding clean.
+- 주의: 14:55~15:10경 머신 부하로 백엔드 불안정 (Reconnecting, room GET 404,
+  C2-b-3·X-B1 연쇄 실패). 동 코드로 전후 재실행 green — 환경 flake로 판정,
+  코드 회귀 아님. 근거: 실패 지점이 FilePreview 미마운트 경로(workspace 행 목록),
+  H2/H3 활성 조건(2 surface·viewer 게시)과 무관.
+- exe 0.12.77 빌드 예정. v0.12.77 태그 보류(수동확인 후).

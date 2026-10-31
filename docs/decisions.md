@@ -694,6 +694,16 @@
 - lib `.xg-remote`를 userId 기준으로 `display:none` (노드 유지, 해제 시 원복).
   presence·서버 상태는 건드리지 않으므로 다른 사용자에게 영향이 없다.
 - 관할: test(c4-5) red → fix(c4-5).
+## D54 탭당 같은 파일은 편집기 하나로, viewer는 셀을 게시하지 않는다 (C4-6, 2026-11-01)
+- D53(C4-5 DOM 숨김) 결정을 번복한다: 같은 파일 2에디터 자체를 없앤다.
+  FilePreview가 surface(panel/sheet)를 등록하고, 남이 쓰면 placeholder로 양보한다.
+  편집 중 화면은 절대 양보하지 않는다 (데이터 보호). 닫으면 remount로 복귀.
+  C4-4 G1의 "2마운트" 전제도 H2로 대체한다 (같은 파일 2세션 유지는 끝).
+- viewer selection 미게시는 lib 1 hunk (`session.role==="viewer"` 가드)로 막는다.
+  에디터 박스는 viewer에 그대로 보이므로 따라가기·협업 인식은 유지된다.
+- panel/시트 selection은 양방향 공유(기존 설계)라 서로 다른 파일 고정은 불가 —
+  테스트 전제로 삼지 않는다.
+- 관할: H1(1e91e11)·revert C4-5(fd8615b)·H2(e03cf67)·H3(57ae135).
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
