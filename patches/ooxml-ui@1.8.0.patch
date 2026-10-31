@@ -1,7 +1,65 @@
+diff --git a/dist/docx.js b/dist/docx.js
+index d05bac204031a673839c085e6caed39bad7eef16..eba021ee8361a051092ca26e671f2aae61f68d6b 100644
+--- a/dist/docx.js
++++ b/dist/docx.js	
+@@ -15,6 +15,8 @@ export { CollaborationAuthority, CollaborationClient, RIBBON_ACTION_IDS, RIBBON_
+ import { parseOmml, convertOmmlToLatex, convertOmmlToMathMl } from 'ooxml-core/math';
+ import { PluginKey, EditorState, Plugin, NodeSelection, TextSelection, Selection } from 'prosemirror-state';
+ import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
++// C5-1 marker: embedded OLE placeholder node (w:object → span[data-docx-ole]).
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, uiDocxOle: "C5-1" };
+ import { loadDocument } from 'ooxml-core/docx/load';
+ import { closeHistory, undo, redo, history } from 'prosemirror-history';
+ import { layoutDocumentModel, pageNumbers, createFakeMeasurer, ligatureCss, cssFontStack, pageNumberValues, sectionPageCounts, headerFooterForPage, tokenizeRun, paragraphFloats, floatPosition, placeTab, DEFAULT_FONT_SIZE_PT, fieldDisplayText } from 'ooxml-core/docx/layout';
+@@ -4300,6 +4302,44 @@ var schema = new Schema({
+     fieldMarker: fieldMarkerNodeSpec,
+     image: imageNodeSpec,
+     equation: equationNodeSpec,
++    // C5-1: embedded OLE placeholder (read-only; download wired by the app).
++    ole: {
++      group: "inline",
++      inline: true,
++      atom: true,
++      selectable: true,
++      attrs: {
++        oleRelId: { default: "" },
++        progId: { default: "" },
++        widthPx: { default: 96 },
++        heightPx: { default: 96 },
++        format: { default: null }
++      },
++      leafText: () => "",
++      parseDOM: [
++        {
++          tag: "span[data-docx-ole]",
++          getAttrs: (el) => ({
++            oleRelId: el.dataset.oleKey ?? "",
++            progId: el.title ?? "",
++            widthPx: Number(el.dataset.widthPx) || 96,
++            heightPx: Number(el.dataset.heightPx) || 96,
++            format: el.dataset.runProperties ?? null
++          })
++        }
++      ],
++      toDOM: (node) => [
++        "span",
++        {
++          "data-docx-ole": "1",
++          "data-ole-key": node.attrs.oleRelId,
++          class: "dve-ole-placeholder",
++          style: `width:${node.attrs.widthPx}px;height:${node.attrs.heightPx}px`,
++          title: node.attrs.progId || ""
++        },
++        node.attrs.progId || "Embedded object"
++      ]
++    },
+     table: {
+       content: "tableRow+",
+       group: "block",
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
 index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fec588d9ed 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
-+++ b/dist/pptx/chunk-MCHPNO42.mjs
++++ b/dist/pptx/chunk-MCHPNO42.mjs	
 @@ -111,6 +111,8 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  import { repeat } from 'lit/directives/repeat.js';
  import { unsafeStatic, html as html$1 } from 'lit/static-html.js';
@@ -162,9 +220,9 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fe
        available,
        label: t("pptx.titleBar.autoSave"),
 diff --git a/dist/xlsx.js b/dist/xlsx.js
-index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..da529eeecb9ae02a89aec8c2ed25ead14f0a5d9f 100644
+index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..4ff3525d409d5df73ad1d8b82e5269dbf781e0ec 100644
 --- a/dist/xlsx.js
-+++ b/dist/xlsx.js
++++ b/dist/xlsx.js	
 @@ -943,11 +943,26 @@ function renderShare(page) {
    page.content.replaceChildren(...children);
  }
@@ -213,7 +271,7 @@ index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..da529eeecb9ae02a89aec8c2ed25ead1
  // src/xlsx/collaboration-session.ts
 +// X2a 패치 표식: ui "M21"은 유지하고 XLSX 표식은 별도 키로 둔다(M21 단언 보호).
 +// C1(X2a-presence): people에 role+sheet+range, updateCollabIdentity 추가.
-+globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, uiXlsx: "X2a-ui", uiXlsxPresence: "X2a-presence" };
++globalThis.__ooxmlPatches = { ...globalThis.__ooxmlPatches, uiXlsx: "X2a-ui", uiXlsxPresence: "X2a-presence", uiXlsxOle: "C5-1" };
  function createRoomSession(collab, xlsx, options, defaultName) {
    const roomId = options.roomId ?? "";
    if (!collab.isValidRoomId(roomId))

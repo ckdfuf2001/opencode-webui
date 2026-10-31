@@ -39,8 +39,114 @@ index 76fc0a566ebad501cb438f643dc2fc1e3de62333..ba69dc5f6717fa3669e3dbc7f1fb26d8
      role
    };
    const sanitizePayload = options.sanitizePayload ?? (() => ({}));
+diff --git a/dist/docx/load/index.mjs b/dist/docx/load/index.mjs
+index 0ba765a8a705e43693834c9f001afbe2fdacf51d..b34ff81af36c6135079b7efd1e1b56ef01ceb8cc 100644
+--- a/dist/docx/load/index.mjs
++++ b/dist/docx/load/index.mjs	
+@@ -8620,6 +8620,23 @@ function parsePlacement(anchor) {
+   if (offsetV && /^-?\d+$/.test(offsetV)) placement.offsetYPx = emuToPx(offsetV);
+   return placement;
+ }
++// C5-1: w:object (OLE) → run.object. Layout reserves width; UI renders placeholder.
++// Save path reuses the original run node (no image), so bytes are preserved.
++function parseOleObject(node) {
++  const shape = descendantNS(node, VML_NS2, "shape");
++  const style = shape?.getAttribute("style") ?? "";
++  const width = /width:\s*([\d.]+)pt/i.exec(style);
++  const height = /height:\s*([\d.]+)pt/i.exec(style);
++  const ole = descendantNS(node, OFFICE_NS, "OLEObject");
++  const relId = ole && getR(ole, "id") || "";
++  const progId = ole?.getAttribute("ProgID") ?? "";
++  return {
++    oleRelId: relId,
++    progId,
++    widthPx: width ? Math.round(Number(width[1]) * (96 / 72)) : 0,
++    heightPx: height ? Math.round(Number(height[1]) * (96 / 72)) : 0
++  };
++}
+ function parseVmlPicture(node, context) {
+   const imagedata = descendantNS(node, VML_NS2, "imagedata");
+   const shape = descendantNS(node, VML_NS2, "shape");
+@@ -9016,6 +9033,10 @@ function createRun(doc, run, base, old, allocator) {
+   }
+   setRunProperties(doc, node, run, base);
+   if (run.image) return node;
++  if (run.object && !run.image) {
++    // C5-1: OLE runs are read-only; rPr was refreshed above, keep w:object as-is.
++    return node;
++  }
+   for (const child4 of Array.from(node.childNodes))
+     if (child4.nodeType !== 1 || child4.localName !== "rPr") node.removeChild(child4);
+   if (run.break) {
+@@ -11872,6 +11893,7 @@ function runContent(node) {
+ function findDrawing(content) {
+   for (const child4 of content) {
+     if (named2(child4, "drawing") || named2(child4, "pict")) return child4;
++    if (named2(child4, "object")) return child4;
+     if (child4.localName !== "AlternateContent") continue;
+     const choice = Array.from(child4.childNodes).filter(isElement).find((node) => node.localName === "Choice");
+     const found = choice && findDrawing(Array.from(choice.childNodes).filter(isElement));
+@@ -11884,9 +11906,11 @@ function parseRun2(node, revision) {
+   const content = runContent(node);
+   const drawing = findDrawing(content);
+   if (drawing && activeContext) {
++    // C5-1: w:object (OLE) → run.object (placeholder path); image path untouched.
++    const isOle = named2(drawing, "object");
+     const run2 = {
+       text: "",
+-      image: parseDrawing(drawing, activeContext),
++      ...isOle ? { object: parseOleObject(drawing) } : { image: parseDrawing(drawing, activeContext) },
+       ...parseDirectRunProperties(props)
+     };
+     if (props && runPropertiesHaveUnknownContent(props))
+diff --git a/dist/docx/ui/index.mjs b/dist/docx/ui/index.mjs
+index 5fa6938fcadc4d4d8ac01aaa80b999b6ae4228f4..52d283fb6e6015943d1134fe70c3e804ca9e25df 100644
+--- a/dist/docx/ui/index.mjs
++++ b/dist/docx/ui/index.mjs	
+@@ -6698,6 +6698,19 @@ function runToInlineNodes(run, schema, noteNumber) {
+       )
+     ];
+   }
++  if (run.object) {
++    // C5-1: OLE run → "ole" atom node (placeholder path). Download mapping via oleRelId.
++    const { text: _text2, object, ...format2 } = run;
++    return [
++      schema.node("ole", {
++        oleRelId: object.oleRelId ?? "",
++        progId: object.progId ?? "",
++        widthPx: object.widthPx ?? 96,
++        heightPx: object.heightPx ?? 96,
++        format: Object.keys(format2).length ? JSON.stringify(format2) : null
++      })
++    ];
++  }
+   if (!run.text) return [];
+   const marks = marksForRun(run, schema);
+   const { text: _text, ...format } = run;
+@@ -6786,6 +6799,21 @@ function appendInlineNode(runs, child) {
+     applyInlineFormat(runs.at(-1), child);
+     return;
+   }
++  if (child.type.name === "ole") {
++    // C5-1: ole atom round-trips to run.object (same key order as the parser).
++    const run2 = {
++      text: "",
++      object: {
++        oleRelId: String(child.attrs.oleRelId ?? ""),
++        progId: String(child.attrs.progId ?? ""),
++        widthPx: child.attrs.widthPx,
++        heightPx: child.attrs.heightPx
++      }
++    };
++    applyInlineFormat(run2, child);
++    runs.push(run2);
++    return;
++  }
+   if (!child.isText && child.type.name !== "hardBreak") return;
+   const run = { text: child.isText ? child.text || "" : "\n" };
+   const link = linkFromMarks(child);
 diff --git a/dist/xlsx/index.mjs b/dist/xlsx/index.mjs
-index 1b6af21ebef2ad49ca1a9daf5b5a358cd0583b47..6aa99c4335fb646616da5accab63e153853f65d3 100644
+index 1b6af21ebef2ad49ca1a9daf5b5a358cd0583b47..059e2771a81fc365c515321a303decb15681aa64 100644
 --- a/dist/xlsx/index.mjs
 +++ b/dist/xlsx/index.mjs	
 @@ -1,5 +1,7 @@
@@ -77,3 +183,45 @@ index 1b6af21ebef2ad49ca1a9daf5b5a358cd0583b47..6aa99c4335fb646616da5accab63e153
      const step2 = kind === "undo" ? history.undo(workbook) : history.redo(workbook);
      if (!step2) return false;
      recalc(step2, kind);
+diff --git a/dist/xlsx/load/index.mjs b/dist/xlsx/load/index.mjs
+index d95be8848eb262cb1688f360bed2539c4d48c015..58a8a8b25f0f49f8533a5a50850a2930602c4622 100644
+--- a/dist/xlsx/load/index.mjs
++++ b/dist/xlsx/load/index.mjs	
+@@ -10062,19 +10062,30 @@ function parseDrawing(source2, partName, warn) {
+   const rels = source2.rels(partName);
+   const out = [];
+   for (const anchorEl of elements(root)) {
+-    if (!["twoCellAnchor", "oneCellAnchor", "absoluteAnchor"].includes(anchorEl.localName ?? ""))
++    // C5-1: OLE sp anchors live inside mc:AlternateContent>mc:Choice — unwrap
++    // read-only. sourceXml keeps the original wrapper so saves stay byte-identical.
++    let anchorNode = anchorEl;
++    if (anchorNode.localName === "AlternateContent") {
++      const innerChoice = first(anchorNode, "Choice", NS.mc);
++      const inner = innerChoice && elements(innerChoice).find((node) => ["twoCellAnchor", "oneCellAnchor", "absoluteAnchor"].includes(node.localName ?? ""));
++      if (!inner) continue;
++      anchorNode = inner;
++    }
++    if (!["twoCellAnchor", "oneCellAnchor", "absoluteAnchor"].includes(anchorNode.localName ?? ""))
+       continue;
+-    const anchor = readAnchor(anchorEl);
+-    const content2 = elements(anchorEl).find((node) => !ANCHOR_PARTS.has(node.localName ?? ""));
++    const anchor = readAnchor(anchorNode);
++    const content2 = elements(anchorNode).find((node) => !ANCHOR_PARTS.has(node.localName ?? ""));
++    if (!content2) continue;
++    const cNvPr = nonVisual(content2);
++    const name = att(cNvPr, "name");
++    const shapeId = att(cNvPr, "id") ?? void 0;
+     const unsupported = (description) => ({
+       kind: "unsupported",
+       anchor,
+       description,
+-      sourceXml: selfContainedXml(anchorEl)
++      sourceXml: selfContainedXml(anchorEl),
++      ...shapeId ? { oleShapeId: shapeId } : {}
+     });
+-    if (!content2) continue;
+-    const cNvPr = nonVisual(content2);
+-    const name = att(cNvPr, "name");
+     if (content2.localName === "pic") {
+       const blip = first(xdr(content2, "blipFill"), "blip", NS.a);
+       const rel = rels.get(relAttr(blip, "embed") ?? "");
