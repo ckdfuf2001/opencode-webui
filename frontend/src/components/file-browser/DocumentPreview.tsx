@@ -1622,8 +1622,10 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     getSelection?: () => string
     /** C3: 범위로 스크롤만 한다(선택은 바꾸지 않는다). lib 패치. */
     reveal?: (ref: string) => void
-    /** C1: 참가자 표시용 신원 갱신 (빈 이름이면 false). */
-    updateCollabIdentity?: (patch: { name?: string; color?: string }) => boolean
+    /** C1: 참가자 표시용 신원 갱신 (빈 이름이면 false).
+     * C4-3: sheet/range까지 넘기면 presence 셀 표시를 지운다
+     * (이미지 선택 시 내 셀 잔상 제거. lib 패치 updateCollabIdentity 확장). */
+    updateCollabIdentity?: (patch: { name?: string; color?: string; sheet?: string | null; range?: string | null }) => boolean
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
   // X1c(P0): 단독 저장의 잠금 ETag. 파일을 **읽은 시점**의 값부터 시작해,
@@ -1708,12 +1710,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   const objMismatchRef = useRef(false)
   /** C4: pointerdown으로 잡은 개체 키 (가드 activeKey 판정용). */
   const objActiveKeyRef = useRef<string | null>(null)
+  /**
+   * C4-3: 개체 pointerdown 당시 셀 선택 스냅샷. lib은 개체 클릭에도
+   * 클릭 전과 같은 선택으로 selection-change 에코를 쏘는데, 이 에코에
+   * 막 잡은 락을 풀면 안 된다. detail이 스냅샷과 같으면 에코(무시),
+   * 다르면 진짜 셀 이동(락 해제)이다.
+   */
+  const objGrabSelRef = useRef<{ sheet: number; ref: string } | null>(null)
   /** C4: 마지막으로 서버에 보낸(또는 서버에서 받은) 상태. 메아리 방지 기준점. */
   const objLastSentRef = useRef(new Map<string, { anchor: string; deleted: boolean }>())
   /** C4: 원격 적용 중에는 스냅샷 송신을 건너뛴다. */
   const applyingRemoteRef = useRef(false)
-  /** C4: 개체 토스트 마지막 표시 시각 (서버 409용, 2초 내 중복 방지). */
-  const objToastAtRef = useRef(0)
+  /** C4: 개체 토스트 마지막 표시 (문구별 2초 내 중복 방지). */
+  const objToastLastRef = useRef<{ text: string; at: number }>({ text: '', at: 0 })
   /** C4: 개체 변경 수신기 (서버 브로드캐스트 type 102). */
   const objOnMessageRef = useRef<((msg: ObjectsStateMsg) => void) | null>(null)
   /** C4: 탭 transport (재)연결 때마다 놓친 브로드캐스트를 GET으로 따라잡는다. */
@@ -1799,7 +1808,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       const el = (xlsxHandle as unknown as { element?: unknown }).element as
         | {
             reveal?: (ref: string) => void
-            updateCollabIdentity?: (p: { name?: string; color?: string }) => boolean
+            updateCollabIdentity?: (p: { name?: string; color?: string; sheet?: string | null; range?: string | null }) => boolean
           }
         | undefined
       if (!el) return
@@ -1810,7 +1819,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       }
       if (typeof rec.updateCollabIdentity !== 'function' && typeof el.updateCollabIdentity === 'function') {
         const fn = el.updateCollabIdentity.bind(el)
-        rec.updateCollabIdentity = (p: { name?: string; color?: string }) => fn(p)
+        rec.updateCollabIdentity = (p: { name?: string; color?: string; sheet?: string | null; range?: string | null }) => fn(p)
       }
     } catch {
       /* 무시 */
@@ -2484,9 +2493,12 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   }, [objEditorCore])
   const objToast = useCallback(
     (text: string): void => {
+      // C4-3: 같은 문구는 2초 안에 한 번만 (pointerdown 요청 토스트와 가드 토스트가
+      // 같은 409 사유로 겹칠 때 1회로 합친다).
       const now = Date.now()
-      if (now - objToastAtRef.current < 2000) return
-      objToastAtRef.current = now
+      const last = objToastLastRef.current
+      if (last.text === text && now - last.at < 2000) return
+      objToastLastRef.current = { text, at: now }
       try {
         showToast.warning(text)
       } catch {
@@ -2502,6 +2514,73 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     },
     [],
   )
+  /** C4-3: 원격 선택 오버레이 다시 그리기 트리거 (락 표 변경 시 bump). */
+  const [objRemoteRev, setObjRemoteRev] = useState(0)
+  const touchObjRemote = useCallback((): void => {
+    setObjRemoteRev((v) => v + 1)
+  }, [])
+  /**
+   * C4-3: 내가 잡은 락을 푼다 (DELETE /objects/:room/:key/lock).
+   * 테이블에 lockId가 없으면 GET으로 확인한다. 남의 락은 절대 건드리지 않는다.
+   * 조용히 실패한다 (TTL 10초 + WS 끊김 시 서버 해제가 안전망).
+   */
+  const objReleaseLock = useCallback(
+    async (key: string): Promise<boolean> => {
+      try {
+        const room = collabRef.current
+        const me = selfClientIdRef.current
+        if (!room || me == null) return false
+        let lock = objTableRef.current.get(key)?.lock ?? null
+        if (!lock) {
+          try {
+            const st = await collabApi.objects.get(room.roomId)
+            for (const o of st.objects) {
+              objTableRef.current.set(o.key, {
+                sheet: o.sheet,
+                kind: o.kind,
+                anchor: o.anchor,
+                deleted: o.deleted,
+                version: o.version,
+                lock: o.lock,
+              })
+            }
+            lock = st.objects.find((o) => o.key === key)?.lock ?? null
+          } catch {
+            return false
+          }
+        }
+        if (!lock || lock.clientId !== me) return false
+        try {
+          await collabApi.objects.unlock(room.roomId, key, lock.lockId)
+        } catch {
+          return false
+        }
+        const entry = objTableRef.current.get(key)
+        if (entry && entry.lock?.lockId === lock.lockId) {
+          objTableRef.current.set(key, { ...entry, lock: null })
+          touchObjRemote()
+        }
+        return true
+      } catch {
+        return false
+      }
+    },
+    [touchObjRemote],
+  )
+  /** C4-3: 내가 잡은 모든 락을 푼다 (Done·언마운트 시 best-effort). */
+  const objReleaseAllMine = useCallback(async (): Promise<void> => {
+    try {
+      const me = selfClientIdRef.current
+      if (me == null) return
+      const mine: string[] = []
+      for (const [k, e] of objTableRef.current) {
+        if (e.lock && e.lock.clientId === me && !e.deleted) mine.push(k)
+      }
+      await Promise.all(mine.map((k) => objReleaseLock(k).catch(() => false as const)))
+    } catch {
+      /* best-effort */
+    }
+  }, [objReleaseLock])
   const objSnapshotAll = useCallback((): void => {
     objLastSentRef.current.clear()
     for (const { key, d } of objAllKeyed()) {
@@ -2525,6 +2604,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           })
           if (!prev) continue
         }
+        touchObjRemote()
         objVersionRef.current = st.version
         const core = objEditorCore()
         const session = core?.session
@@ -2579,7 +2659,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     } catch {
       /* 조용히 실패 (다음 변경·수신 때 따라잡는다) */
     }
-  }, [objEditorCore, objSnapshotAll])
+    }, [objEditorCore, objSnapshotAll, touchObjRemote])
   /** C4: 서버 순서를 로컬 drawings에 붙인다 (__ck 태그). 어긋나면 false. */
   const objTagWithOrder = useCallback(
     (order: Record<string, string[]> | null, objects: Array<{ key: string; sheet: number; kind: string; deleted: boolean }>): boolean => {
@@ -2816,13 +2896,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           return
         }
         if (typeof r.version === 'number') objVersionRef.current = r.version
-        if (found && !foundDeleted) objLastSentRef.current.set(key, { anchor: anchorStr, deleted: false })
-        else objLastSentRef.current.set(key, { anchor: '', deleted: true })
+        if (found && !foundDeleted) {
+          objLastSentRef.current.set(key, { anchor: anchorStr, deleted: false })
+        } else {
+          objLastSentRef.current.set(key, { anchor: '', deleted: true })
+          // C4-3: 삭제 완료 → 내 락 해제 (서버는 삭제해도 락을 유지하므로 명시 해제).
+          if (objActiveKeyRef.current === key) objActiveKeyRef.current = null
+          void objReleaseLock(key)
+        }
       } catch {
         /* 네트워크 실패: 다음 change에서 재시도 */
       }
     },
-    [objEditorCore, objApplyServerState, objHolderName, objToast, objRevertKeyToLastSent],
+    [objEditorCore, objApplyServerState, objHolderName, objToast, objRevertKeyToLastSent, objReleaseLock],
   )
   const objSendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** C4: 바뀐 개체를 모아 체인에 건다. 실행 시점에 최신 상태를 다시 읽는다. */
@@ -3069,7 +3155,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       return null
     }
   }, [objEditorCore])
-  /** C4: 개체 락 요청 (fire-and-forget, 409면 토스트). */
+  /** C4: 개체 락 요청 (fire-and-forget, 409면 토스트). 성공 시 내 셀 잔상을 지운다. */
   const objRequestLock = useCallback(
     (key: string): void => {
       try {
@@ -3084,9 +3170,19 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         void collabApi.objects
           .lock(room.roomId, key, me)
           .then((r) => {
-            if (!r.ok && r.code === 'locked') {
-              const h = typeof (r as { holder?: unknown }).holder === 'number' ? (r as { holder: number }).holder : null
-              objToast(`${h != null ? objHolderName(h) : '상대방'}가 편집 중입니다`)
+            if (!r.ok) {
+              if (r.code === 'locked') {
+                const h = typeof (r as { holder?: unknown }).holder === 'number' ? (r as { holder: number }).holder : null
+                objToast(`${h != null ? objHolderName(h) : '상대방'}가 편집 중입니다`)
+              }
+              return
+            }
+            // C4-3: 잡는 데 성공하면 상대 화면에서 내 셀 박스가 사라진다.
+            // (다음 셀 선택 변경 때 lib이 다시 게시한다.)
+            try {
+              xlsxHandleRef.current?.updateCollabIdentity?.({ sheet: null, range: null })
+            } catch {
+              /* 무시 */
             }
           })
           .catch(() => {
@@ -3099,7 +3195,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     [objHolderName, objToast],
   )
 
-  /** C4: sheet-change 추적 + 개체 pointerdown (shadow DOM 안이라 네이티브 캡처). */
+  /** C4: sheet-change 추적 + 개체 pointerdown (shadow DOM 안이라 네이티브 캡처) + 셀 선택 변경 추적. */
   useEffect(() => {
     let el: Element | null = null
     try {
@@ -3112,26 +3208,78 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     if (!el) return
     const onSheet = (ev: Event): void => {
       const idx = (ev as CustomEvent<{ index?: unknown }>).detail?.index
-      if (typeof idx === 'number') objActiveSheetRef.current = idx
+      if (typeof idx === 'number') {
+        objActiveSheetRef.current = idx
+        touchObjRemote()
+      }
     }
     el.addEventListener('sheet-change', onSheet as EventListener)
     const root: Element | ShadowRoot = (el as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot ?? el
     const onDown = (ev: Event): void => {
-      objActiveKeyRef.current = null
       if (!editingRef.current || !collabRef.current?.joined) return
       const key = objKeyFromTarget((ev as { target?: unknown }).target)
       if (!key) return
+      // C4-3: 다른 개체를 잡으면 이전 락을 먼저 푼다.
+      const prev = objActiveKeyRef.current
+      if (prev && prev !== key) {
+        objActiveKeyRef.current = null
+        void objReleaseLock(prev)
+      }
       objActiveKeyRef.current = key
+      // C4-3: 클릭 에코 판정용 — lib getSelection()은 selection-change detail.ref와 같은 함수다.
+      try {
+        const g = xlsxHandleRef.current?.getSelection?.()
+        objGrabSelRef.current = typeof g === 'string' && g ? { sheet: objActiveSheetRef.current, ref: g } : null
+      } catch {
+        objGrabSelRef.current = null
+      }
       objRequestLock(key)
     }
-    const onUp = (): void => {
-      objActiveKeyRef.current = null
+    // C4-3: 셀을 클릭하면(선택 변경) 내 개체 선택을 해제하고 락도 푼다.
+    // lib은 개체 클릭에도 클릭 전과 같은 선택으로 selection-change 에코를 쏘므로
+    // detail이 pointerdown 당시 스냅샷과 같으면 에코로 보고 무시한다.
+    // 되돌리기 undo·팔로우 이동 중에는 건드리지 않는다.
+    const onSelChange = (ev: Event): void => {
+      try {
+        if (objUndoRevertRef.current) return
+        if (followNavigatingRef.current) return
+        if (!editingRef.current || !collabRef.current?.joined) return
+        const key = objActiveKeyRef.current
+        if (!key) return
+        const grab = objGrabSelRef.current
+        const d = (ev as CustomEvent<{ sheet?: unknown; ref?: unknown }>).detail
+        if (grab && d && d.sheet === grab.sheet && d.ref === grab.ref) return
+        objGrabSelRef.current = null
+        objActiveKeyRef.current = null
+        void objReleaseLock(key)
+      } catch {
+        /* 무시 */
+      }
     }
+    el.addEventListener('selection-change', onSelChange as EventListener)
     root.addEventListener('pointerdown', onDown as EventListener, true)
-    window.addEventListener('pointerup', onUp)
+    // C4-3: Escape는 개체 선택 해제 + 락 해제 (팝오버는 각자 닫는다).
+    const onKey = (ev: Event): void => {
+      try {
+        if ((ev as KeyboardEvent).key !== 'Escape') return
+        if (!editingRef.current || !collabRef.current?.joined) return
+        const key = objActiveKeyRef.current
+        if (!key) return
+        objActiveKeyRef.current = null
+        void objReleaseLock(key)
+      } catch {
+        /* 무시 */
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
     return () => {
       try {
         el?.removeEventListener('sheet-change', onSheet as EventListener)
+      } catch {
+        /* 무시 */
+      }
+      try {
+        el?.removeEventListener('selection-change', onSelChange as EventListener)
       } catch {
         /* 무시 */
       }
@@ -3140,9 +3288,25 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       } catch {
         /* 무시 */
       }
-      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('keydown', onKey, true)
     }
-  }, [xlsxHandle, editing, objKeyFromTarget, objRequestLock])
+  }, [xlsxHandle, editing, objKeyFromTarget, objRequestLock, objReleaseLock, touchObjRemote])
+
+  /**
+   * C4-3: 편집이 끝나면(Done·파일 전환·언마운트) 내가 잡은 락을 푼다 (best-effort).
+   * 서버도 WS 끊김·TTL로 정리하지만, 명시 해제가 가장 빠르다.
+   */
+  useEffect(() => {
+    if (editing) return
+    void objReleaseAllMine()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing])
+  useEffect(() => {
+    return () => {
+      void objReleaseAllMine()
+    }
+    // objReleaseAllMine은 안정적이라 실질적으로 언마운트 때만 돈다.
+  }, [objReleaseAllMine])
 
   /**
    * C3: 1→2 참가 시 owner면 즉시 저장한다 (디바운스 건너뜀).
