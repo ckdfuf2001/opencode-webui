@@ -563,7 +563,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
       // "Done" 은 endEditing 이 별도로 편집을 끝낸다.
       if (d.keepEditing) return
       setEditing(false)
-      window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
+      window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false, path: file.path } }))
     }
     window.addEventListener('officeSaveDone', onDone as EventListener)
     return () => window.removeEventListener('officeSaveDone', onDone as EventListener)
@@ -615,7 +615,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
       if (outcome.ok || confirmedDiscard) {
         setEditing(false)
         if (confirmedDiscard) showToast.info('확인을 눌렀으므로 편집 화면을 닫습니다(사본은 닫기 전에 내려받으세요)')
-        window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false } }))
+        window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false, path: file.path } }))
         after?.()
       } else {
         showToast.error('Save failed — staying in edit mode')
@@ -796,7 +796,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
                   setEditing(true)
                   // 편집은 전체화면으로 (전 문서 통일), 끝나면 채팅 자리로 복귀.
                   window.dispatchEvent(
-                    new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true } }),
+                    new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: true, path: file.path } }),
                   )
                 }}
                 disabled={endingEdit}

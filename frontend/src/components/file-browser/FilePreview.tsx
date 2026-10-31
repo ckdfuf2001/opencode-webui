@@ -176,7 +176,10 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
 
   useEffect(() => {
     const onRequest = (e: Event) => {
-      const want = (e as CustomEvent<{ isFullscreen?: boolean }>).detail?.isFullscreen
+      // H1: 다른 파일의 전체화면 요청은 무시한다 (전역 이벤트 팬아웃 방지).
+      const detail = (e as CustomEvent<{ isFullscreen?: boolean; path?: string }>).detail
+      if (detail?.path != null && detail.path !== file.path) return
+      const want = detail?.isFullscreen
       if (want && !isFullscreen) {
         setIsFullscreen(true)
         window.dispatchEvent(new CustomEvent('fileFullscreenChange', { detail: { isFullscreen: true, path: file.path } }))
