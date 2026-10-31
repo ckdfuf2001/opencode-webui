@@ -149,7 +149,7 @@ test.describe('C4-6 H1: Edit을 누르면 그 화면이 편집 모드로', () =>
     }
   })
 
-  test('H1-fanout: 다른 파일 시트가 열려 있어도 Edit한 쪽만 전체화면', async ({ browser }) => {
+  test('H1-fanout: 시트에서 Edit해도 Edit한 쪽만 전체화면', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -159,7 +159,9 @@ test.describe('C4-6 H1: Edit을 누르면 그 화면이 편집 모드로', () =>
       { name: 'b.xlsx', fixture: FIXTURE_XLSX },
     ])
     try {
-      // 패널: a.xlsx / 시트: b.xlsx (서로 다른 파일)
+      // 패널/시트는 selection을 공유하므로(기존 설계) 시트에서 b를 열면
+      // 패널도 b로 따라오고 H2에 의해 플레이스홀더가 된다.
+      // 서로 다른 파일을 양쪽에 고정하는 상태는 앱 설계상 만들 수 없다.
       await page.goto(`${FRONT}/repos/${repoId}?collabDebug=1&e2e=1`)
       await page.getByTitle('Files', { exact: true }).click({ timeout: 20000 })
       await page.locator('[data-testid="file-row"]').first().waitFor({ timeout: 90000 })
@@ -170,27 +172,16 @@ test.describe('C4-6 H1: Edit을 누르면 그 화면이 편집 모드로', () =>
       const sheet = page.locator('div.fixed.inset-0.z-50')
       await sheet.locator('[data-testid="file-row"]').first().waitFor({ timeout: 90000 })
       await sheet.locator('[data-testid="file-row"][data-path$="b.xlsx"]').locator('span', { hasText: 'b.xlsx' }).first().click({ timeout: 20000 })
-      await page.waitForFunction(() => document.querySelectorAll('.xlsxengine-host').length >= 2, null, { timeout: 30000 }).catch(() => {})
+      // 패널이 b로 따라오고 플레이스홀더가 된다 (H2).
+      await expect(page.getByTestId('preview-shadowed').first()).toBeVisible({ timeout: 30000 })
       await page.waitForTimeout(3000)
-      // 패널(a.xlsx)에서 Edit → 패널만 전체화면이 된다.
-      // (패널 FilePreview는 시트 밖에 있으므로 div.fixed.inset-0.z-50 안에 있지 않은 쪽)
-      const editIdx = await page.evaluate(() => {
-        const btns = [...document.querySelectorAll('button')].filter((b) => (b.textContent || '').trim() === 'Edit')
-        for (let i = 0; i < btns.length; i++) {
-          let e: Element | null = btns[i] as Element
-          let inSheet = false
-          while (e) { if (e instanceof HTMLElement && e.classList.contains('fixed') && e.classList.contains('inset-0')) { inSheet = true; break } e = e.parentElement }
-          if (!inSheet) return i
-        }
-        return -1
-      })
-      expect(editIdx, 'panel Edit button exists').toBeGreaterThanOrEqual(0)
-      await page.getByRole('button', { name: 'Edit', exact: true }).nth(editIdx).click({ timeout: 20000 })
+      // 시트(b.xlsx)에서 Edit → 시트 쪽만 전체화면이 된다 (H1 path 스코프).
+      await sheet.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
       await page.waitForTimeout(4000)
       const fsCount = await page.locator('[data-testid="preview-fullscreen-root"]').count()
       expect(fsCount, 'only the editing FilePreview goes fullscreen').toBe(1)
-      const fsHasA = await page.locator('[data-testid="preview-fullscreen-root"]').first().getByText('a.xlsx', { exact: false }).count()
-      expect(fsHasA, 'fullscreen shows the edited file').toBeGreaterThan(0)
+      const fsHasB = await page.locator('[data-testid="preview-fullscreen-root"]').first().getByText('b.xlsx', { exact: false }).count()
+      expect(fsHasB, 'fullscreen shows the edited file').toBeGreaterThan(0)
     } finally {
       await ctx.close().catch(() => {})
     }
