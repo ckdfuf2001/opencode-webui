@@ -1095,3 +1095,11 @@ E21만의 문제가 아니다. 근거:
 ## xlsx append xdr 네임스페이스 수정 (2026-11-01)
 - 증상: 편집 모드에서 첨부 후 "Invalid XLSX worksheet XML ... NamespaceError". 편집 저장본(lib 저장본, oleObjects xmlns:x14 형태)에 덧붙일 때 서버 템플릿의 xdr: 접두사가 미선언.
 - 수정: oleObject 엘리먼트 자체에 xmlns:xdr 선언 (자립형). 단위 테스트(append 경로) 추가 — 수정 전 red 확인.
+
+## C5-2 리뷰 보완 (2026-11-02)
+- P2-4/5/6 red 원문 없음 (feat 4f8800c가 test fbbd0d6보다 먼저 커밋됨 — 순서 준수 실패).
+- 대신 feat 되돌림(af10b78 상태 3종 파일) red 원문 확보 — 3종 모두 동일 지점 실패:
+  `TimeoutError: locator.waitFor: Timeout 30000ms exceeded. - waiting for getByRole('tab', { name: '첨부', exact: true }).first() to be visible`
+- 판단1: Insert 탭 그룹 추가 불가. xlsx/docx 렌더러는 기존 패널 불변 + 새 패널만 append, pptx도 별도 탭 버튼 렌더. 탭 방식 유지 (D60 추기).
+- 보완2: 보기 모드 헤더 "문서 첨부" 버튼 삭제 (편집 행위로 통일, solo는 Edit 후 첨부). P2-1/2/3도 탭 경로로 전환.
+- 실물 progId 참고: 한글 Office 원본은 progId="포함된 개체"/"Package" (C5-0 영문 팩트는 서버 신규 조립분에 해당).
