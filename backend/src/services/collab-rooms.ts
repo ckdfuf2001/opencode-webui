@@ -7,8 +7,6 @@ import * as syncProtocol from 'y-protocols/sync'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import { resolveWorkspaceFile, workspaceRootAbs } from './files'
-// V5: 슬라이드는 app.slide만 쓴다 (lib presence fallback 제거). readLibPresence는 미사용.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { readLibPresence } from '@opencode-webui/shared/lib/collab-presence'
 import { writeFileContent } from './file-operations'
 import { logger } from '../utils/logger'

@@ -1069,3 +1069,7 @@ E21만의 문제가 아니다. 근거:
 - assembleXlsxEmbed: drawing/oleObjects/VML 3곳 일치, 앵커는 사용 영역 아래 빈 행, progId 영문, 없으면 drawing/VML 파트 생성. assembleDocxEmbed: 문서 끝 새 문단에 w:object+VML, progId 영문.
 - route에 xlsx/docx 호스트 연결 + sheet 파라미터, pptx와 같은 dirty/viewer/리셋 경로.
 - e2e P2-2 (xlsx+docx, 3곳 일치 확인) + P2-3 (docx+xlsx, ProgID 영문 확인) green. 단위 12/12.
+
+## E7 실패 확인 (2026-11-01)
+- pptx-collab E7이 3회 연속 실패(mountCount 6 vs 7). d2434b9 worktree에서 동일하게 실패하므로 내 변경과 무관한 기존/환경 문제로 판정. E2는 green.
+- backend 전체: 625 pass + 2 fail (bun:sqlite 환경, 기존과 동일 - config-migration, repo-tracking).
