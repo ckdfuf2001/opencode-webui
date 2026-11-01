@@ -252,29 +252,30 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
         .toBe(emb0 + 1)
       // 방 리셋 후 재조회가 끝나면 ole 아이콘이 2개가 된다.
       await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
-      // 본문에 미리보기 그림이 보인다 (pic 앵커 네이티브 렌더).
-      const previewState = await page.evaluate(() => {
-        const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
-          if (depth > 8) return acc
-          for (const el of [...((root as Element).querySelectorAll?.('*') ?? [])]) {
-            acc.push(el)
-            const sr = (el as HTMLElement).shadowRoot
-            if (sr) deep(sr, acc, depth + 1)
+      // 본문에 미리보기 그림이 보인다 (pic 앵커 네이티브 렌더). lib 렌더는 비동기라 폴링한다.
+      const picState = (): Promise<string> =>
+        page.evaluate(() => {
+          const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
+            if (depth > 8) return acc
+            for (const el of [...((root as Element).querySelectorAll?.('*') ?? [])]) {
+              acc.push(el)
+              const sr = (el as HTMLElement).shadowRoot
+              if (sr) deep(sr, acc, depth + 1)
+            }
+            return acc
           }
-          return acc
-        }
-        const host = document.querySelector('.xlsxengine-host')
-        if (!host) return 'no-host'
-        const imgs = deep(host).filter((e) => e.tagName === 'IMG')
-        const alts = imgs.map((e) => e.getAttribute('alt'))
-        if (!alts.includes('embed-docx')) return `alts=${JSON.stringify(alts)}`
-        const vis = imgs.some((e) => {
-          const r = e.getBoundingClientRect()
-          return r.width > 0 && r.height > 0
+          const host = document.querySelector('.xlsxengine-host')
+          if (!host) return 'no-host'
+          const imgs = deep(host).filter((e) => e.tagName === 'IMG')
+          const alts = imgs.map((e) => e.getAttribute('alt'))
+          if (!alts.includes('embed-docx')) return `alts=${JSON.stringify(alts)}`
+          const vis = imgs.some((e) => {
+            const r = e.getBoundingClientRect()
+            return r.width > 0 && r.height > 0
+          })
+          return vis ? 'ok' : 'hidden'
         })
-        return vis ? 'ok' : 'hidden'
-      })
-      expect(previewState, 'body preview image visible').toBe('ok')
+      await expect.poll(picState, { timeout: 20000, intervals: [1000] }).toBe('ok')
       const after = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
       const z1 = await JSZip.loadAsync(after)
       // 3곳 일치: drawing anchor + oleObjects + VML.
@@ -292,6 +293,49 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const dlPath = await dl.path()
       expect(dlPath, 'download path').toBeTruthy()
       expect(fs.readFileSync(dlPath!).equals(attachBuf), 'attached bytes intact').toBe(true)
+      // pic 앵커는 네이티브로 이동+저장된다 (S1 수술 패치 불필요).
+      const anchorOf = async (): Promise<string> => {
+        const b = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
+        const z = await JSZip.loadAsync(b)
+        const names = Object.keys(z.files).filter((n) => n.includes('drawing1.xml') && !n.endsWith('/'))
+        if (names.length === 0) return 'NO-DRAWING'
+        const txt = await z.files[names[0]!]!.async('string')
+        const ms = [...txt.matchAll(/<xdr:from>.*?<\/xdr:to>/gs)].map((m) => m[0])
+        return ms.length > 0 ? ms[ms.length - 1]!.slice(0, 250) : 'NO-ANCHOR'
+      }
+      const anchorBefore = await anchorOf()
+      await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
+      await page.getByRole('button', { name: 'Done', exact: true }).waitFor({ timeout: 30000 })
+      await page.waitForTimeout(2000)
+      const picRect = await page.evaluate(() => {
+        const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
+          if (depth > 8) return acc
+          for (const el of [...((root as Element).querySelectorAll?.('*') ?? [])]) {
+            acc.push(el)
+            const sr = (el as HTMLElement).shadowRoot
+            if (sr) deep(sr, acc, depth + 1)
+          }
+          return acc
+        }
+        const host = document.querySelector('.xlsxengine-host')
+        if (!host) return null
+        for (const el of deep(host)) {
+          if (el.tagName !== 'IMG' || el.getAttribute('alt') !== 'embed-docx') continue
+          const r = el.getBoundingClientRect()
+          if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, w: r.width, h: r.height }
+        }
+        return null
+      })
+      expect(picRect, 'ole pic visible').not.toBeNull()
+      const cx = picRect!.x + picRect!.w / 2
+      const cy = picRect!.y + picRect!.h / 2
+      await page.mouse.move(cx, cy)
+      await page.mouse.down()
+      await page.mouse.move(cx + 120, cy + 90, { steps: 15 })
+      await page.mouse.up()
+      await expect
+        .poll(anchorOf, { timeout: 25000, intervals: [1000] })
+        .not.toBe(anchorBefore)
     } finally {
       await ctx.close().catch(() => {})
     }
