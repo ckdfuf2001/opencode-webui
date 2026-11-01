@@ -128,6 +128,22 @@ async function attachViaButton(page: Page, attachAbs: string): Promise<void> {
   }
 }
 
+/**
+ * C5-2 add-in 탭: 리본 "첨부" 탭 → "문서 첨부" 명령으로 파일을 올린다
+ * (공식 ribbonAddIns — Help 뒤 새 탭, lib 패치 없음).
+ */
+async function attachViaAddInTab(page: Page, attachAbs: string): Promise<void> {
+  await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
+  const tab = page.getByRole('tab', { name: '첨부', exact: true }).first()
+  await tab.waitFor({ timeout: 30000 })
+  await tab.click({ timeout: 15000 })
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser', { timeout: 15000 }),
+    page.getByText('문서 첨부', { exact: true }).first().click({ timeout: 15000 }),
+  ])
+  await chooser.setFiles(attachAbs)
+}
+
 test.describe('C5-2: INSERT 문서 첨부', () => {
   test('P2-1: pptx에 docx 첨부 → 아이콘+다운로드', async ({ browser }) => {    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
@@ -388,6 +404,102 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const dlPath = await dl.path()
       expect(dlPath, 'download path').toBeTruthy()
       expect(fs.readFileSync(dlPath!).equals(attachBuf), 'attached bytes intact').toBe(true)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('P2-4: pptx 첨부 탭 → docx 첨부', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c52pptxtab', ['embed-pdf.pptx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.pptx', 'c52pptxtab')
+      const before = await backendBytes('c52pptxtab', 'embed-pdf.pptx')
+      const z0 = await JSZip.loadAsync(before)
+      const emb0 = Object.keys(z0.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
+      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
+      await expect
+        .poll(
+          async () => {
+            try {
+              const b = await backendBytes('c52pptxtab', 'embed-pdf.pptx')
+              const z = await JSZip.loadAsync(b)
+              return Object.keys(z.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
+            } catch {
+              return -1
+            }
+          },
+          { timeout: 30000, intervals: [1000] },
+        )
+        .toBe(emb0 + 1)
+      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('P2-5: xlsx 첨부 탭 → docx 첨부', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c52xlsxtab', ['embed-pdf.xlsx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c52xlsxtab')
+      const before = await backendBytes('c52xlsxtab', 'embed-pdf.xlsx')
+      const z0 = await JSZip.loadAsync(before)
+      const emb0 = Object.keys(z0.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
+      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
+      await expect
+        .poll(
+          async () => {
+            try {
+              const b = await backendBytes('c52xlsxtab', 'embed-pdf.xlsx')
+              const z = await JSZip.loadAsync(b)
+              return Object.keys(z.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
+            } catch {
+              return -1
+            }
+          },
+          { timeout: 30000, intervals: [1000] },
+        )
+        .toBe(emb0 + 1)
+      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('P2-6: docx 첨부 탭 → xlsx 첨부', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c52docxtab', ['embed-pdf.docx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.docx', 'c52docxtab')
+      const before = await backendBytes('c52docxtab', 'embed-pdf.docx')
+      const z0 = await JSZip.loadAsync(before)
+      const emb0 = Object.keys(z0.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
+      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      await expect
+        .poll(
+          async () => {
+            try {
+              const b = await backendBytes('c52docxtab', 'embed-pdf.docx')
+              const z = await JSZip.loadAsync(b)
+              return Object.keys(z.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
+            } catch {
+              return -1
+            }
+          },
+          { timeout: 30000, intervals: [1000] },
+        )
+        .toBe(emb0 + 1)
+      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
     } finally {
       await ctx.close().catch(() => {})
     }
