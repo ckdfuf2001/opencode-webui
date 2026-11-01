@@ -62,6 +62,7 @@ interface PowerPointViewerHandle {
   getContent: () => Promise<Uint8Array>
   goTo?: (slideIndex: number) => void
   setActiveSlideIndex?: (index: number) => void
+  getActiveSlideIndex?: () => number
 }
 
 export default function PptxViewer({ data, fileName, editing, savePath, onFail, titleBarSlot }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void; titleBarSlot?: ReactNode }) {
