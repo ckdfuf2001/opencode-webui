@@ -1,6 +1,7 @@
 import { API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
 import type { RibbonAddInTab } from 'ooxml-core/ribbon'
+import type { OfficeSaveRequestDetail } from './officeSave'
 
 /**
  * C5-2: INSERT 문서 첨부 — 클라이언트 플로우.
@@ -97,7 +98,9 @@ function waitSaveDone(path: string, timeoutMs = 30000): Promise<boolean> {
       }
     }
     window.addEventListener('officeSaveDone', onDone)
-    window.dispatchEvent(new CustomEvent('officeSaveRequest'))
+    // 임베드용 선저장은 편집 세션을 유지한다 (수동 Save와 달리 편집을 끝내지
+    // 않는다 — 끝나면 세션이 낡은 모델을 들고 있어 첨부 후 화면이 stale해진다).
+    window.dispatchEvent(new CustomEvent<OfficeSaveRequestDetail>('officeSaveRequest', { detail: { keepEditing: true } }))
   })
 }
 

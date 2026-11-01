@@ -69,6 +69,13 @@ type SaveHandle = {
 export interface OfficeSaveDoneDetail {
   ok: boolean
   path?: string
+  /** true면 편집을 유지한다 (XLSX room 저장, C5-2 임베드용 선저장). */
+  keepEditing?: boolean
+}
+
+/** officeSaveRequest 요청. keepEditing이면 완료 신호에도 편집을 유지한다. */
+export interface OfficeSaveRequestDetail {
+  keepEditing?: boolean
 }
 
 /**

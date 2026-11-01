@@ -6,6 +6,7 @@ import { translationsEn } from 'pptx-react-viewer/i18n'
 import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
 import { saveOfficeBytes } from './officeSave'
+import type { OfficeSaveRequestDetail } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { PptxViewerBoundary } from './ViewerBoundaries'
 import { lazyWithRetry } from './lazyRetry'
@@ -782,10 +783,12 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
   // 평가되므로 앞에서 참조하면 TDZ가 난다).
   useEffect(() => {
-    const onSave = () => {
+    const onSave = (e: Event) => {
       if (saving) return
       const h = viewerRef.current
       if (!h || !savePath) return
+      // C5-2: 임베드용 선저장은 편집 세션을 유지한다 (수동 Save는 종료).
+      const keepEditing = (e as CustomEvent<OfficeSaveRequestDetail>).detail?.keepEditing === true
       delegatedSaveRef.current = false
       setSaving(true)
       void (async () => {
@@ -807,7 +810,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
           // B1(b): 파일 식별자를 함께 보낸다. 없으면 다른 뷰어의 저장 완료에
           // 이 문서의 편집이 종료된다 (DocumentPreview.tsx:452).
           window.dispatchEvent(
-            new CustomEvent('officeSaveDone', { detail: { ok: true, path: savePath } }),
+            new CustomEvent('officeSaveDone', { detail: { ok: true, path: savePath, ...(keepEditing ? { keepEditing: true } : {}) } }),
           )
         })
         .catch((e) => {
