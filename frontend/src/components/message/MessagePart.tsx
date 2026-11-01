@@ -2,6 +2,7 @@ import { memo, useState, useEffect, type ReactNode } from 'react'
 import { useDragClickGuard } from '@/lib/useDragClickGuard'
 import type { components } from '@/api/opencode-types'
 import { Copy, Volume2, Square, Loader2, Zap } from 'lucide-react'
+import { API_BASE_URL } from '@/config'
 import { TextPart } from './TextPart'
 import { SkillInvocationBlock } from './SkillInvocationBlock'
 import { parseSkillInvocation } from '@/lib/skillBlock'
@@ -236,6 +237,26 @@ function FileMention({  part,
 
   if (resolvedPath === null) {
     return <TextPart part={part} />
+  }
+
+  // 이미지 멘션은 칩 대신 썸네일로 그린다 (클릭하면 파일 미리보기).
+  const ext = (resolvedPath.split('.').pop() ?? '').toLowerCase()
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif'].includes(ext)) {
+    const fileName = mentionText.split('/').pop() ?? mentionText
+    return (
+      <figure className="my-1 inline-block max-w-xs cursor-pointer" onClick={() => onFileClick?.(resolvedPath ?? mentionText)}>
+        <img
+          src={`${API_BASE_URL}/api/files/${resolvedPath.split('/').map(encodeURIComponent).join('/')}?raw=true`}
+          alt={mentionText}
+          title={mentionText}
+          className="max-h-64 w-auto rounded-md border border-zinc-700 object-contain"
+          loading="lazy"
+        />
+        <figcaption className="mt-0.5 truncate text-[11px] text-zinc-500" title={mentionText}>
+          @{fileName}
+        </figcaption>
+      </figure>
+    )
   }
 
   return (
