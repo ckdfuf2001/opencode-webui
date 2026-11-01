@@ -375,3 +375,147 @@ describe('assembleDocxEmbed', () => {
     ).rejects.toMatchObject({ code: 'bad_host' })
   })
 })
+
+/**
+ * 리뷰 보완: 네임스페이스 선언 행렬.
+ * lib 저장본은 루트 선언을 걷어낼 수 있다 (xlsx: 루트 xmlns:xdr 소실 확인).
+ * 조립 출력물의 엘리먼트/어트리뷰트 이름 접두사는 모두 선언돼 있어야 한다
+ * (DOMParser NamespaceError 방지). 형식 3종 x 입력 3종(Office 원본/관찰된 lib 저장본/서버 조립본 재투입).
+ */
+function undeclaredPrefixes(xml: string): string[] {
+  const body = xml.replace(/<!--[\s\S]*?-->/g, '')
+  const used = new Set<string>()
+  for (const m of body.matchAll(/<(\/?)([A-Za-z_][\w.-]*):/g)) used.add(m[2]!)
+  for (const m of body.matchAll(/[\s{]([A-Za-z_][\w.-]*):[\w.-]+\s*=/g)) used.add(m[1]!)
+  return [...used].filter((p) => p !== 'xml' && p !== 'xmlns' && !body.includes(`xmlns:${p}=`))
+}
+
+function expectPrefixesDeclared(part: string, xml: string): void {
+  expect(undeclaredPrefixes(xml), `${part} undeclared`).toEqual([])
+}
+
+const RNS = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+const XDR_NS = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+
+/** Office 원본 형태 xlsx 호스트: 루트가 xdr 선언, oleObjects는 선언 없이 AlternateContent. */
+async function makeHostXlsxOfficeAttach(): Promise<Uint8Array> {
+  const z = await JSZip.loadAsync(await makeHostXlsx(false))
+  const sheet = (await z.files['xl/worksheets/sheet1.xml']!.async('string'))
+    .replace('<worksheet xmlns=', `<worksheet xmlns:xdr="${XDR_NS}" xmlns=`)
+    .replace(
+      '</worksheet>',
+      `<oleObjects><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="x14"><oleObject progId="Package" dvAspect="DVASPECT_ICON" shapeId="1024" r:id="rId4" ${RNS}><objectPr defaultSize="0" r:id="rId5"><anchor moveWithCells="1"><from><xdr:col>0</xdr:col></from></anchor></objectPr></oleObject></mc:Choice><mc:Fallback><oleObject progId="Package" dvAspect="DVASPECT_ICON" shapeId="1024" r:id="rId4"/></mc:Fallback></mc:AlternateContent></oleObjects></worksheet>`,
+    )
+  z.file('xl/worksheets/sheet1.xml', sheet)
+  return z.generateAsync({ type: 'uint8array' })
+}
+
+/** Office 원본 형태 pptx 호스트: 기존 oleObj+프레임 보유, 루트 p/a/r 선언. */
+async function makeHostPptxOfficeAttach(): Promise<Uint8Array> {
+  const z = await JSZip.loadAsync(await makeHostPptx())
+  const slide = (await z.files['ppt/slides/slide1.xml']!.async('string')).replace(
+    '</p:spTree>',
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="old"/><p:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:v="urn:schemas-microsoft-com:vml" Requires="v"><p:oleObj spid="_x0000_s1026" name="old" showAsIcon="1" r:id="rId2" imgW="100" imgH="100" progId="Package" ${RNS}><p:embed/></p:oleObj></mc:Choice><mc:Fallback><p:oleObj name="old" showAsIcon="1" r:id="rId2" imgW="100" imgH="100" progId="Package"/></mc:Fallback></mc:AlternateContent></a:graphicData></a:graphic></p:graphicFrame></p:spTree>`,
+  )
+  z.file('ppt/slides/slide1.xml', slide)
+  const rels = await z.files['ppt/slides/_rels/slide1.xml.rels']!.async('string')
+  z.file(
+    'ppt/slides/_rels/slide1.xml.rels',
+    rels.replace(
+      '</Relationships>',
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="../embeddings/old.pdf"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/old.png"/></Relationships>',
+    ),
+  )
+  z.file('ppt/embeddings/old.pdf', new Uint8Array([37, 80, 68, 70]))
+  z.file('ppt/media/old.png', genericIconPng())
+  return z.generateAsync({ type: 'uint8array' })
+}
+
+/** Office 원본 형태 docx 호스트: 기존 w:object 보유, 루트 w/r/o 선언. */
+async function makeHostDocxOfficeAttach(): Promise<Uint8Array> {
+  const z = await JSZip.loadAsync(await makeHostDocx())
+  const VO = 'xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"'
+  const doc = (await z.files['word/document.xml']!.async('string'))
+    .replace('<w:document xmlns:w=', `<w:document ${RNS} ${VO} xmlns:w=`)
+    .replace(
+      '</w:body>',
+      `<w:p><w:r><w:object><v:shape id="_x0000_i1025" type="#_x0000_t75" ${VO} o:ole=""><v:imagedata r:id="rId2" o:title="" ${RNS}/></v:shape><o:OLEObject Type="Embed" ProgID="Package" ShapeID="_x0000_i1025" DrawAspect="Icon" ObjectID="1" r:id="rId3" ${VO} ${RNS}></o:OLEObject></w:object></w:r></w:p></w:body>`,
+    )
+  z.file('word/document.xml', doc)
+  return z.generateAsync({ type: 'uint8array' })
+}
+
+describe('assemble prefix matrix (office/lib/refeed)', () => {
+  it('xlsx office 원본 + lib 저장본 + 재투입: sheet/drawing/vml 선언 유효', async () => {
+    const attach = await makeAttachDocx()
+    // 1) Office 원본 형태 (루트 xdr 선언).
+    const office = await makeHostXlsxOfficeAttach()
+    const out1 = await assembleXlsxEmbed(zipLoad, { hostBytes: office, attachBytes: attach, attachName: 'a.docx', attachKind: 'docx' })
+    const z1 = await JSZip.loadAsync(out1)
+    const sheet1 = await z1.files['xl/worksheets/sheet1.xml']!.async('string')
+    expectPrefixesDeclared('xlsx-office sheet', sheet1)
+    // Office 원본은 x14를 Requires 값으로만 참조한다 (이름 선언 없음 — 실물과 동일).
+    for (const p of ['mc', 'r', 'xdr']) expect(sheet1).toContain(`xmlns:${p}=`)
+    // 2) 관찰된 lib 저장본 형태 (루트 xdr 소실, xmlns:x14만).
+    const lib0 = await makeHostXlsx(false)
+    const lz = await JSZip.loadAsync(lib0)
+    const XD = `xmlns:xdr="${XDR_NS}"`
+    const libSheet = (await lz.files['xl/worksheets/sheet1.xml']!.async('string')).replace(
+      '</worksheet>',
+      `<oleObjects xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="x14"><oleObject progId="Package" dvAspect="DVASPECT_ICON" shapeId="1024" r:id="rId4" ${RNS}><objectPr defaultSize="0" r:id="rId5"><anchor moveWithCells="1"><from><xdr:col ${XD}>0</xdr:col></from></anchor></objectPr></oleObject></mc:Choice><mc:Fallback><oleObject progId="Package" dvAspect="DVASPECT_ICON" shapeId="1024" r:id="rId4"/></mc:Fallback></mc:AlternateContent></oleObjects></worksheet>`,
+    )
+    lz.file('xl/worksheets/sheet1.xml', libSheet)
+    const out2 = await assembleXlsxEmbed(zipLoad, { hostBytes: await lz.generateAsync({ type: 'uint8array' }), attachBytes: attach, attachName: 'b.docx', attachKind: 'docx' })
+    const z2 = await JSZip.loadAsync(out2)
+    const sheet2 = await z2.files['xl/worksheets/sheet1.xml']!.async('string')
+    expectPrefixesDeclared('xlsx-lib sheet', sheet2)
+    for (const p of ['mc', 'r', 'xdr', 'x14']) expect(sheet2).toContain(`xmlns:${p}=`)
+    // 3) 서버 조립본 재투입 (2회차 첨부).
+    const out3 = await assembleXlsxEmbed(zipLoad, { hostBytes: out1, attachBytes: attach, attachName: 'c.docx', attachKind: 'docx' })
+    const z3 = await JSZip.loadAsync(out3)
+    for (const [label, files] of [['xlsx-refeed', z3]] as const) {
+      const sheet = await files.files['xl/worksheets/sheet1.xml']!.async('string')
+      expectPrefixesDeclared(`${label} sheet`, sheet)
+      const drawing = await files.files['xl/drawings/drawing1.xml']!.async('string')
+      expectPrefixesDeclared(`${label} drawing`, drawing)
+      const vmlName = Object.keys(files.files).find((n) => n.endsWith('.vml'))
+      expect(vmlName, 'vml exists').toBeTruthy()
+      expectPrefixesDeclared(`${label} vml`, await files.files[vmlName!]!.async('string'))
+    }
+    // drawing/vml도 1·2회차 모두 유효.
+    for (const [label, files] of [['xlsx-office', z1], ['xlsx-lib', z2]] as const) {
+      expectPrefixesDeclared(`${label} drawing`, await files.files['xl/drawings/drawing1.xml']!.async('string'))
+      const vmlName = Object.keys(files.files).find((n) => n.endsWith('.vml'))
+      expectPrefixesDeclared(`${label} vml`, await files.files[vmlName!]!.async('string'))
+    }
+    // v/o는 VML에서 선언.
+    const vml = await z3.files[Object.keys(z3.files).find((n) => n.endsWith('.vml'))!]!.async('string')
+    for (const p of ['v', 'o']) expect(vml).toContain(`xmlns:${p}=`)
+  })
+
+  it('pptx office 원본 + 재투입: slide 선언 유효', async () => {
+    const attach = await makeAttachDocx()
+    const office = await makeHostPptxOfficeAttach()
+    const out1 = await assemblePptxEmbed(zipLoad, { hostBytes: office, attachBytes: attach, attachName: 'a.docx', attachKind: 'docx', slide: 1 })
+    const z1 = await JSZip.loadAsync(out1)
+    const slide1 = await z1.files['ppt/slides/slide1.xml']!.async('string')
+    expectPrefixesDeclared('pptx-office slide', slide1)
+    for (const p of ['p', 'a', 'r', 'mc', 'v']) expect(slide1).toContain(`xmlns:${p}=`)
+    const out2 = await assemblePptxEmbed(zipLoad, { hostBytes: out1, attachBytes: attach, attachName: 'b.docx', attachKind: 'docx', slide: 1 })
+    const slide2 = await (await JSZip.loadAsync(out2)).files['ppt/slides/slide1.xml']!.async('string')
+    expectPrefixesDeclared('pptx-refeed slide', slide2)
+  })
+
+  it('docx office 원본 + 재투입: document 선언 유효', async () => {
+    const attach = await makeAttachDocx()
+    const office = await makeHostDocxOfficeAttach()
+    const out1 = await assembleDocxEmbed(zipLoad, { hostBytes: office, attachBytes: attach, attachName: 'a.xlsx', attachKind: 'xlsx' })
+    const z1 = await JSZip.loadAsync(out1)
+    const doc1 = await z1.files['word/document.xml']!.async('string')
+    expectPrefixesDeclared('docx-office document', doc1)
+    for (const p of ['w', 'r', 'v', 'o']) expect(doc1).toContain(`xmlns:${p}=`)
+    const out2 = await assembleDocxEmbed(zipLoad, { hostBytes: out1, attachBytes: attach, attachName: 'b.xlsx', attachKind: 'xlsx' })
+    const doc2 = await (await JSZip.loadAsync(out2)).files['word/document.xml']!.async('string')
+    expectPrefixesDeclared('docx-refeed document', doc2)
+  })
+})
