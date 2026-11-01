@@ -3765,6 +3765,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
         clientId: selfClientIdRef.current ?? undefined,
         getBaseHash: () => collabRef.current?.baseHash,
         isViewer: room?.role === 'viewer',
+        sheet: objActiveSheetRef.current,
         saveFirst: () => (editingRef.current ? save() : Promise.resolve(true)),
         reload: () => onReloadFileRef.current?.(),
       })

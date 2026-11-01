@@ -290,3 +290,354 @@ export async function assemblePptxEmbed(
   zip.file('[Content_Types].xml', ct)
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 }
+
+export interface XlsxEmbedInput {
+  hostBytes: Uint8Array
+  attachBytes: Uint8Array
+  attachName: string
+  attachKind: EmbedAttachKind
+  /** 0-based 시트 순서 (기본 0). */
+  sheet?: number
+}
+
+const XLSX_NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+const XLSX_NS_XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+const XLSX_NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+const XLSX_PROG_ID: Record<EmbedAttachKind, string | null> = {
+  docx: 'Word.Document.12',
+  xlsx: 'Excel.Sheet.12',
+  pptx: null,
+}
+
+/**
+ * XLSX에 OLE 개체를 넣는다 (drawing + oleObjects + VML 3곳 일치).
+ * - embeddings + 미리보기 PNG + sheet rels (oleObject/image/drawing/vmlDrawing).
+ * - sheet oleObjects (plain form) + drawing twoCellAnchor + VML shape.
+ * - 앵커는 사용 영역 아래(빈 행)에 둔다. 없으면 drawing/VML 파트를 새로 만든다.
+ */
+export async function assembleXlsxEmbed(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  input: XlsxEmbedInput,
+): Promise<Uint8Array> {
+  const sheetIdx = input.sheet ?? 0
+  if (!Number.isInteger(sheetIdx) || sheetIdx < 0 || sheetIdx > 256) embedError('Bad sheet number', 400, 'bad_sheet')
+  let zip: ZipLike
+  try {
+    zip = await zipLoad(input.hostBytes)
+  } catch {
+    embedError('Host is not a valid Office file', 400, 'bad_host')
+  }
+  const readText = async (name: string): Promise<string | null> => {
+    const f = zip!.files[name]
+    if (!f || f.dir) return null
+    try {
+      return (await f.async('string')) as string
+    } catch {
+      return null
+    }
+  }
+  const workbookXml = await readText('xl/workbook.xml')
+  if (!workbookXml || !workbookXml.includes('<workbook')) embedError('Host is not a valid Office file', 400, 'bad_host')
+  // 시트 순서 → sheet 파일.
+  const sheetTags = [...(workbookXml as string).matchAll(/<[\w.-]*:?sheet\b[^>]*>/g)].map((m) => m[0])
+  if (sheetIdx >= sheetTags.length) embedError('Sheet not found in host', 400, 'bad_sheet')
+  const sheetTag = sheetTags[sheetIdx]!
+  const sheetRel = /(?:r:id|id)="([^"]+)"/.exec(sheetTag)?.[1]
+  if (!sheetRel) embedError('Unsupported workbook structure', 400, 'bad_host')
+  const wbRels = (await readText('xl/_rels/workbook.xml.rels')) ?? ''
+  const wbTarget = new Map(
+    [...wbRels.matchAll(/<[\w.-]*:?Relationship\b[^>]*>/g)].map((m) => {
+      const t = m[0]
+      return [/\bId="([^"]+)"/.exec(t)?.[1] ?? '', /\bTarget="([^"]+)"/.exec(t)?.[1] ?? '']
+    }),
+  ).get(sheetRel)
+  if (!wbTarget) embedError('Unsupported workbook structure', 400, 'bad_host')
+  const wbDir = 'xl/workbook.xml'
+  const sheetFile = resolveZipPathTest(wbDir, wbTarget as string)
+  const sheetXml = await readText(sheetFile)
+  if (!sheetXml || !sheetXml.includes('<worksheet')) embedError('Sheet not found in host', 400, 'bad_sheet')
+  let sheet = sheetXml as string
+
+  const safeName = sanitizeEmbedName(input.attachName, input.attachKind)
+  let embName = safeName
+  for (let i = 2; zip!.files[`xl/embeddings/${embName}`]; i++) {
+    embName = safeName.replace(/(\.[A-Za-z0-9]{1,8})$/, `-${i}$1`)
+  }
+  const progId = XLSX_PROG_ID[input.attachKind]
+
+  // 새 shapeId/cNvPr id.
+  let maxShape = 1024
+  for (const m of sheet.matchAll(/shapeId="(\d+)"/g)) maxShape = Math.max(maxShape, Number(m[1]))
+  for (const m of sheet.matchAll(/<xdr:cNvPr[^>]*\bid="(\d+)"/g)) maxShape = Math.max(maxShape, Number(m[1]))
+  const shapeId = maxShape + 1
+  // 앵커 위치: 사용 영역 아래 빈 행 (없으면 고정 위치).
+  let maxRow = 0
+  for (const m of sheet.matchAll(/<row[^>]*\br="(\d+)"/g)) maxRow = Math.max(maxRow, Number(m[1]))
+  const fromRow = maxRow > 0 ? maxRow + 2 : 7
+  const fromCol = 1
+  const toCol = 2
+  const toRow = fromRow + 3
+
+  // 미리보기 PNG (빈 슬롯).
+  let imgN = 1
+  while (zip!.files[`xl/media/image${imgN}.png`] || zip!.files[`xl/media/image${imgN}.emf`]) imgN++
+  const imgName = `image${imgN}.png`
+  zip!.file(`xl/media/${imgName}`, genericIconPng())
+  zip!.file(`xl/embeddings/${embName}`, input.attachBytes)
+
+  // sheet rels.
+  const sheetRelsFile = sheetFile.replace(/\/([^/]+)$/, '/_rels/$1.rels')
+  let sheetRels = (await readText(sheetRelsFile)) ??
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+  const relOfType = (typeSuffix: string): string | null => {
+    const re = new RegExp(`<[\\w.-]*:?Relationship\\b[^>]*Type="[^"]*${typeSuffix}"[^>]*>`, 'g')
+    const tags = [...sheetRels.matchAll(re)].map((m) => m[0])
+    if (tags.length === 0) return null
+    return /Target="([^"]+)"/.exec(tags[0]!)?.[1] ?? null
+  }
+  // drawing 파트 (없으면 생성).
+  let drawingTarget = relOfType('/drawing')
+  let drawingFile: string | null = null
+  let drawingRelId: string | null = null
+  if (drawingTarget) {
+    drawingFile = drawingTarget.startsWith('../') ? `xl/${drawingTarget.slice(3)}` : `xl/worksheets/${drawingTarget}`
+    const m = /Id="([^"]+)"[^>]*Target="[^"]*drawing[^"]*"/.exec(
+      [...sheetRels.matchAll(/<[\w.-]*:?Relationship\b[^>]*Type="[^"]*\/drawing"[^>]*>/g)].map((x) => x[0])[0] ?? '',
+    )
+    drawingRelId = m?.[1] ?? null
+  } else {
+    let dn = 1
+    while (zip!.files[`xl/drawings/drawing${dn}.xml`]) dn++
+    drawingFile = `xl/drawings/drawing${dn}.xml`
+    drawingRelId = nextRelId(sheetRels)
+    sheetRels = addRel(
+      sheetRels,
+      drawingRelId,
+      'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing',
+      `../drawings/drawing${dn}.xml`,
+    )
+    zip!.file(
+      drawingFile,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="${XLSX_NS_XDR}" xmlns:a="${XLSX_NS_A}"></xdr:wsDr>`,
+    )
+  }
+  // VML 파트 (없으면 생성).
+  let vmlTarget = relOfType('vmlDrawing')
+  let vmlFile: string | null = null
+  if (vmlTarget) {
+    vmlFile = vmlTarget.startsWith('../') ? `xl/${vmlTarget.slice(3)}` : `xl/worksheets/${vmlTarget}`
+  } else {
+    let vn = 1
+    while (zip!.files[`xl/drawings/vmlDrawing${vn}.vml`]) vn++
+    vmlFile = `xl/drawings/vmlDrawing${vn}.vml`
+    const vmlRelId = nextRelId(sheetRels)
+    sheetRels = addRel(
+      sheetRels,
+      vmlRelId,
+      'http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing',
+      `../drawings/vmlDrawing${vn}.vml`,
+    )
+    zip!.file(
+      vmlFile,
+      `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"><v:stroke joinstyle="miter"/><v:path o:extrusionok="f" gradientshapeok="t" o:connecttype="rect"/><o:lock v:ext="edit" aspectratio="t"/></v:shapetype></xml>`,
+    )
+  }
+  // oleObject + image rel.
+  const oleRelId = nextRelId(sheetRels)
+  sheetRels = addRel(
+    sheetRels,
+    oleRelId,
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject',
+    `../embeddings/${embName}`,
+  )
+  const imgRelId = nextRelId(sheetRels)
+  sheetRels = addRel(
+    sheetRels,
+    imgRelId,
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',
+    `../media/${imgName}`,
+  )
+  zip!.file(sheetRelsFile, sheetRels)
+
+  // sheet 본문: drawing/legacyDrawing ref + oleObjects (3곳 일치, 순서 유지).
+  const oleName = embName.replace(/\.[A-Za-z0-9]{1,8}$/, '')
+  const progAttr = progId ? ` progId="${progId}"` : ''
+  const oleEl =
+    `<oleObject${progAttr} dvAspect="DVASPECT_ICON" shapeId="${shapeId}" r:id="${oleRelId}"><objectPr defaultSize="0" r:id="${imgRelId}"><anchor moveWithCells="1"><from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>${toCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></objectPr></oleObject>`
+  const RNS = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+  const parts: string[] = []
+  if (drawingRelId && !/<[\w.-]*:?drawing\b[^>]*r:id=/.test(sheet)) parts.push(`<drawing ${RNS} r:id="${drawingRelId}"/>`)
+  const vmlRelMatch = /Id="([^"]+)"[^>]*Target="[^"]*vmlDrawing[^"]*"/.exec(
+    [...sheetRels.matchAll(/<[\w.-]*:?Relationship\b[^>]*Type="[^"]*\/vmlDrawing"[^>]*>/g)].map((x) => x[0])[0] ?? '',
+  )
+  const vmlRelId = vmlRelMatch?.[1]
+  if (vmlRelId && !/legacyDrawing\b[^>]*r:id=/.test(sheet)) parts.push(`<legacyDrawing ${RNS} r:id="${vmlRelId}"/>`)
+  if (sheet.includes('<oleObjects')) {
+    sheet = sheet.replace(/(<oleObjects[^>]*>)([\s\S]*?)(<\/oleObjects>)/, (_, o, b, c) => `${o}${b}${oleEl}${c}`)
+  } else {
+    parts.push(`<oleObjects xmlns:xdr="${XLSX_NS_XDR}">${oleEl}</oleObjects>`)
+  }
+  if (parts.length > 0) {
+    if (!sheet.includes('</worksheet>')) embedError('Unsupported sheet structure', 400, 'bad_host')
+    const closeTag = `</${'worksheet'}>`
+    sheet = sheet.replace(closeTag, `${parts.join('')}${closeTag}`)
+  }
+  zip!.file(sheetFile, sheet)
+
+  // drawing anchor 추가.
+  const drawingXml = (await readText(drawingFile as string)) ?? ''
+  const anchor =
+    `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>${toCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
+    `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${shapeId}" name="${oleName}" hidden="1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr bwMode="auto"><a:xfrm xmlns:a="${XLSX_NS_A}"><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm><a:prstGeom prst="rect" xmlns:a="${XLSX_NS_A}"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>`
+  if (drawingXml.includes('</xdr:wsDr>')) {
+    zip!.file(drawingFile as string, drawingXml.replace('</xdr:wsDr>', `${anchor}</xdr:wsDr>`))
+  } else if (drawingXml.includes('</wsDr>')) {
+    zip!.file(drawingFile as string, drawingXml.replace('</wsDr>', `${anchor}</wsDr>`))
+  } else {
+    embedError('Unsupported drawing structure', 400, 'bad_host')
+  }
+
+  // VML shape 추가.
+  const vml = (await readText(vmlFile as string)) ?? ''
+  if (vml.includes('</xml>')) {
+    const vmlRelsFile = (vmlFile as string).replace(/\/([^/]+)$/, '/_rels/$1.rels')
+    const vmlRels = (await readText(vmlRelsFile)) ??
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+    const vmlImgId = nextRelId(vmlRels)
+    zip!.file(
+      vmlRelsFile,
+      addRel(vmlRels, vmlImgId, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', `../media/${imgName}`),
+    )
+    let maxVml = shapeId
+    const vm = /_x0000_s(\d+)/g
+    let mm: RegExpExecArray | null
+    while ((mm = vm.exec(vml)) !== null) maxVml = Math.max(maxVml, Number(mm[1]))
+    const vShape =
+      `<v:shape id="_x0000_s${maxVml + 1}" type="#_x0000_t75" style='position:absolute;margin-left:60pt;margin-top:${60 + shapeId}pt;width:60pt;height:41pt' filled="t" fillcolor="window [65]" stroked="t" strokecolor="windowText [64]">` +
+      `<v:fill on="f"/><v:stroke on="f"/><v:imagedata o:relid="${vmlImgId}" o:title="" grayscale="f" bilevel="f"/><o:lock v:ext="edit" aspectratio="t" position="f" selection="f" grouping="f"/></v:shape>`
+    zip!.file(vmlFile as string, vml.replace('</xml>', `${vShape}</xml>`))
+  }
+
+  let ct = (await readText('[Content_Types].xml')) ?? ''
+  if (!ct) embedError('Host is not a valid Office file', 400, 'bad_host')
+  ct = ensureContentDefault(ct, 'png', 'image/png')
+  ct = ensureContentDefault(ct, 'vml', 'application/vnd.openxmlformats-officedocument.vmlDrawing')
+  ct = ensureContentOverride(ct, `xl/embeddings/${embName}`, ATTACH_MIME[input.attachKind])
+  if (drawingFile && !ct.includes(drawingFile)) {
+    ct = ensureContentOverride(ct, drawingFile, 'application/vnd.openxmlformats-officedocument.drawing+xml')
+  }
+  zip!.file('[Content_Types].xml', ct)
+  return zip!.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}
+
+function resolveZipPathTest(baseFile: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1)
+  const baseDir = baseFile.includes('/') ? baseFile.slice(0, baseFile.lastIndexOf('/') + 1) : ''
+  const parts: string[] = []
+  for (const seg of `${baseDir}${target}`.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') parts.pop()
+    else parts.push(seg)
+  }
+  return parts.join('/')
+}
+
+export interface DocxEmbedInput {
+  hostBytes: Uint8Array
+  attachBytes: Uint8Array
+  attachName: string
+  attachKind: EmbedAttachKind
+}
+
+const DOCX_PROG_ID: Record<EmbedAttachKind, string | null> = {
+  docx: 'Word.Document.12',
+  xlsx: 'Excel.Sheet.12',
+  pptx: null,
+}
+
+/**
+ * DOCX에 OLE 개체를 넣는다 (문서 끝 새 문단).
+ * - word/embeddings/<name> + 미리보기 PNG + document rels 2개(package/image).
+ * - w:object (VML shape + o:OLEObject) 새 문단 1개.
+ */
+export async function assembleDocxEmbed(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  input: DocxEmbedInput,
+): Promise<Uint8Array> {
+  let zip: ZipLike
+  try {
+    zip = await zipLoad(input.hostBytes)
+  } catch {
+    embedError('Host is not a valid Office file', 400, 'bad_host')
+  }
+  const readText = async (name: string): Promise<string | null> => {
+    const f = zip!.files[name]
+    if (!f || f.dir) return null
+    try {
+      return (await f.async('string')) as string
+    } catch {
+      return null
+    }
+  }
+  const docXml = await readText('word/document.xml')
+  if (!docXml || !docXml.includes('<w:document')) embedError('Host is not a valid Office file', 400, 'bad_host')
+  let doc = docXml as string
+
+  const safeName = sanitizeEmbedName(input.attachName, input.attachKind)
+  let embName = safeName
+  for (let i = 2; zip!.files[`word/embeddings/${embName}`]; i++) {
+    embName = safeName.replace(/(\.[A-Za-z0-9]{1,8})$/, `-${i}$1`)
+  }
+  const progId = DOCX_PROG_ID[input.attachKind]
+  const oleName = embName.replace(/\.[A-Za-z0-9]{1,8}$/, '')
+
+  // 미리보기 PNG (빈 슬롯).
+  let imgN = 1
+  while (zip!.files[`word/media/image${imgN}.png`] || zip!.files[`word/media/image${imgN}.emf`]) imgN++
+  const imgName = `image${imgN}.png`
+  zip!.file(`word/media/${imgName}`, genericIconPng())
+  zip!.file(`word/embeddings/${embName}`, input.attachBytes)
+
+  // document rels.
+  const docRelsFile = 'word/_rels/document.xml.rels'
+  let docRels = (await readText(docRelsFile)) ??
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+  const oleRelId = nextRelId(docRels)
+  docRels = addRel(
+    docRels,
+    oleRelId,
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/package',
+    `embeddings/${embName}`,
+  )
+  const imgRelId = nextRelId(docRels)
+  docRels = addRel(
+    docRels,
+    imgRelId,
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',
+    `media/${imgName}`,
+  )
+  zip!.file(docRelsFile, docRels)
+
+  // shape id.
+  let maxShape = 1024
+  for (const m of doc.matchAll(/_x0000_i(\d+)/g)) maxShape = Math.max(maxShape, Number(m[1]))
+  const shapeId = `_x0000_i${maxShape + 1}`
+  const objectId = `_${Math.floor(Math.random() * 2 ** 31)}`
+  const progAttr = progId ? ` ProgID="${progId}"` : ''
+  const para =
+    `<w:p><w:r><w:object w:dxaOrig="1480" w:dyaOrig="1028"><v:shape id="${shapeId}" type="#_x0000_t75" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:74pt;height:51.35pt" o:ole=""><v:imagedata r:id="${imgRelId}" o:title="" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></v:shape>` +
+    `<o:OLEObject Type="Embed"${progAttr} ShapeID="${shapeId}" DrawAspect="Icon" ObjectID="${objectId}" r:id="${oleRelId}" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><o:FieldCodes>\\s</o:FieldCodes></o:OLEObject></w:object></w:r></w:p>`
+  if (doc.includes('</w:body>')) {
+    doc = doc.replace('</w:body>', `${para}</w:body>`)
+  } else {
+    embedError('Unsupported document structure', 400, 'bad_host')
+  }
+  zip!.file('word/document.xml', doc)
+
+  let ct = (await readText('[Content_Types].xml')) ?? ''
+  if (!ct) embedError('Host is not a valid Office file', 400, 'bad_host')
+  ct = ensureContentDefault(ct, 'png', 'image/png')
+  ct = ensureContentOverride(ct, `word/embeddings/${embName}`, ATTACH_MIME[input.attachKind])
+  zip!.file('[Content_Types].xml', ct)
+  return zip!.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}

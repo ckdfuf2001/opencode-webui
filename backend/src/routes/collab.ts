@@ -31,7 +31,9 @@ import {
   MAX_SAVE_BYTES,
 } from '../services/collab-rooms'
 import {
+  assembleDocxEmbed,
   assemblePptxEmbed,
+  assembleXlsxEmbed,
   assertAttachBytes,
   attachKindOf,
   sanitizeEmbedName,
@@ -321,6 +323,7 @@ app.post('/suggest-name', async (c) => {
 const EmbedSchema = z.object({
   path: z.string().min(1).max(512),
   slide: z.coerce.number().int().min(1).max(999).optional(),
+  sheet: z.coerce.number().int().min(0).max(1024).optional(),
   roomId: z.string().min(1).max(128).optional(),
   clientId: z.coerce.number().int().optional(),
   baseHash: z.string().min(1).max(128).optional(),
@@ -341,6 +344,7 @@ app.post('/embed', async (c) => {
     const q = EmbedSchema.parse({
       path: typeof body.path === 'string' ? body.path : '',
       slide: body.slide !== undefined ? Number(body.slide) : undefined,
+      sheet: body.sheet !== undefined ? Number(body.sheet) : undefined,
       roomId: typeof body.roomId === 'string' ? body.roomId : undefined,
       clientId: body.clientId !== undefined ? Number(body.clientId) : undefined,
       baseHash: typeof body.baseHash === 'string' ? body.baseHash : undefined,
@@ -360,8 +364,9 @@ app.post('/embed', async (c) => {
     const abs = await resolveWorkspaceFile(q.path).catch(() => null)
     if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
     const hostLower = abs.toLowerCase()
-    if (!hostLower.endsWith('.pptx')) {
-      return c.json({ error: 'Only pptx hosts supported yet', code: 'unsupported_host' }, 400)
+    const hostKind = hostLower.endsWith('.pptx') ? 'pptx' : hostLower.endsWith('.xlsx') ? 'xlsx' : hostLower.endsWith('.docx') ? 'docx' : null
+    if (!hostKind) {
+      return c.json({ error: 'Only pptx/xlsx/docx hosts supported', code: 'unsupported_host' }, 400)
     }
     const roomId = q.roomId && isValidRoomId(q.roomId) ? q.roomId : roomIdForAbs(abs)
     const room = rooms.get(roomId)
@@ -381,14 +386,35 @@ app.post('/embed', async (c) => {
     }
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
     let out: Uint8Array
+    let embPart: string
     try {
-      out = await assemblePptxEmbed(zipLoadJSZip, {
-        hostBytes,
-        attachBytes,
-        attachName,
-        attachKind: kind as EmbedAttachKind,
-        slide: q.slide,
-      })
+      if (hostKind === 'pptx') {
+        out = await assemblePptxEmbed(zipLoadJSZip, {
+          hostBytes,
+          attachBytes,
+          attachName,
+          attachKind: kind,
+          slide: q.slide,
+        })
+        embPart = `ppt/embeddings/${attachName}`
+      } else if (hostKind === 'xlsx') {
+        out = await assembleXlsxEmbed(zipLoadJSZip, {
+          hostBytes,
+          attachBytes,
+          attachName,
+          attachKind: kind,
+          sheet: q.sheet,
+        })
+        embPart = `xl/embeddings/${attachName}`
+      } else {
+        out = await assembleDocxEmbed(zipLoadJSZip, {
+          hostBytes,
+          attachBytes,
+          attachName,
+          attachKind: kind,
+        })
+        embPart = `word/embeddings/${attachName}`
+      }
     } catch (e) {
       return errJson(c, e, 500)
     }
@@ -400,7 +426,7 @@ app.post('/embed', async (c) => {
       room.externalChanged = false
       resetRoomByServer(roomId)
     }
-    return c.json({ ok: true, newHash, embeddings: [`ppt/embeddings/${attachName}`] })
+    return c.json({ ok: true, newHash, embeddings: [embPart] })
   } catch (error) {
     return errJson(c, error, 500)
   }

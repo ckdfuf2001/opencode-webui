@@ -725,6 +725,8 @@
 ## D58 C5-2 embed (2026-11-01)
 - 결정: INSERT는 서버 조립 + 방 리셋으로 기존 첨부로 취급한다 (lib 패치 없음). 4001 재입장은 새 바이트를 먼저 받고 한다 (안 그러면 stale 호스트가 방을 오염시킨다).
 - solo viewer 첨부는 허용한다 (편집자 있을 때만 viewer 거부 — 볼 것만 보는 방에 unsaved 상태가 없음). dirty는 disk!=lastHash 또는 baseHash stale이면 409.
+## D59 C5-2 xlsx/docx (2026-11-01)
+- xlsx 앵커 위치는 사용 영역 아래 빈 행(겹침 회피, 이동은 S1 저장으로 조정). VML/drawing 파트가 없으면 생성한다.
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.

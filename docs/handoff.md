@@ -1064,3 +1064,8 @@ E21만의 문제가 아니다. 근거:
 - 서버 조립 backend/src/services/office-embed.ts: pptx/embeddings + 미리보기 PNG(제네릭 아이콘) + slide rels 2개 + graphicFrame + VML(있을 때) + Content_Types. progId 영문 네이티브, pptx 첨부는 package rel.
 - 조립 후 디스크 기록 + 방 있으면 resetRoomByServer (4001 dispose). 클라이언트는 4001 후 새 바이트를 먼저 받고 재입장한다 (stale 호스팅 방지: PptxViewer resetPending + officeResetReload).
 - UI: 헤더 문서 첨부 버튼 + 숨은 input, officeEmbedFile 이벤트로 뷰어가 자기 컨텍스트로 POST. 단위 7/7, e2e P2-1 (pptx+docx 아이콘 2개+다운로드 원본 일치).
+
+## C5-2 XLSX+DOCX (2026-11-01)
+- assembleXlsxEmbed: drawing/oleObjects/VML 3곳 일치, 앵커는 사용 영역 아래 빈 행, progId 영문, 없으면 drawing/VML 파트 생성. assembleDocxEmbed: 문서 끝 새 문단에 w:object+VML, progId 영문.
+- route에 xlsx/docx 호스트 연결 + sheet 파라미터, pptx와 같은 dirty/viewer/리셋 경로.
+- e2e P2-2 (xlsx+docx, 3곳 일치 확인) + P2-3 (docx+xlsx, ProgID 영문 확인) green. 단위 12/12.

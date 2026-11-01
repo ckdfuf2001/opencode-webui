@@ -28,10 +28,10 @@ export interface EmbedCtx {
   clientId?: number
   getBaseHash?: () => string | undefined
   slide?: number
+  /** xlsx 0-based 시트 (기본 0). */
+  sheet?: number
   isViewer?: boolean
-  /** 편집 중이면 저장하고 성공 여부를 돌려준다. */
   saveFirst: () => Promise<boolean>
-  /** 조립 후 호스트 바이트를 다시 받는다. */
   reload: () => void
 }
 
@@ -85,6 +85,7 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
     fd.append('path', ctx.hostPath)
     fd.append('file', file, file.name)
     if (ctx.slide != null) fd.append('slide', String(ctx.slide))
+    if (ctx.sheet != null) fd.append('sheet', String(ctx.sheet))
     if (ctx.roomId) fd.append('roomId', ctx.roomId)
     if (ctx.clientId !== undefined) fd.append('clientId', String(ctx.clientId))
     const baseHash = ctx.getBaseHash?.()

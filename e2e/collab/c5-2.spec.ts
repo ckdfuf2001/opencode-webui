@@ -129,8 +129,7 @@ async function attachViaButton(page: Page, attachAbs: string): Promise<void> {
 }
 
 test.describe('C5-2: INSERT 문서 첨부', () => {
-  test('P2-1: pptx에 docx 첨부 → 아이콘+다운로드', async ({ browser }) => {
-    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+  test('P2-1: pptx에 docx 첨부 → 아이콘+다운로드', async ({ browser }) => {    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
     await gotoApp(page)
@@ -172,6 +171,109 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       expect(/progId="[A-Za-z0-9.]+"/.test(slide), 'progId english').toBe(true)
       // 새로 붙은 첨부를 더블클릭하면 원본 바이트 그대로 내려온다.
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
+      const icons = page.getByTestId('ole-icon')
+      const [dl] = await Promise.all([
+        page.waitForEvent('download', { timeout: 20000 }),
+        icons.nth(1).dblclick({ timeout: 15000 }),
+      ])
+      const dlPath = await dl.path()
+      expect(dlPath, 'download path').toBeTruthy()
+      expect(fs.readFileSync(dlPath!).equals(attachBuf), 'attached bytes intact').toBe(true)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('P2-2: xlsx에 docx 첨부 → 아이콘+다운로드', async ({ browser }) => {    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c52xlsx', ['embed-pdf.xlsx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c52xlsx')
+      const before = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
+      const z0 = await JSZip.loadAsync(before)
+      const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
+      const emb0 = Object.keys(z0.files).filter(embName).length
+      await attachViaButton(page, path.resolve(FIX, 'embed-docx.docx'))
+      // 서버 조립 확인: embeddings가 1개 늘어난다.
+      await expect
+        .poll(
+          async () => {
+            try {
+              const b = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
+              const z = await JSZip.loadAsync(b)
+              return Object.keys(z.files).filter(embName).length
+            } catch {
+              return -1
+            }
+          },
+          { timeout: 30000, intervals: [1000] },
+        )
+        .toBe(emb0 + 1)
+      // 방 리셋 후 재조회가 끝나면 ole 아이콘이 2개가 된다.
+      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      const after = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
+      const z1 = await JSZip.loadAsync(after)
+      // 3곳 일치: drawing anchor + oleObjects + VML.
+      const sheet = await z1.files['xl/worksheets/sheet1.xml']!.async('string')
+      expect(sheet).toContain('<oleObjects')
+      expect(sheet).toContain('progId="Word.Document.12"')
+      expect(Object.keys(z1.files).some((n) => n.includes('vmlDrawing') && !n.endsWith('/'))).toBe(true)
+      // 새로 붙은 첨부를 더블클릭하면 원본 바이트 그대로 내려온다.
+      const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
+      const icons = page.getByTestId('ole-icon')
+      const [dl] = await Promise.all([
+        page.waitForEvent('download', { timeout: 20000 }),
+        icons.nth(1).dblclick({ timeout: 15000 }),
+      ])
+      const dlPath = await dl.path()
+      expect(dlPath, 'download path').toBeTruthy()
+      expect(fs.readFileSync(dlPath!).equals(attachBuf), 'attached bytes intact').toBe(true)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('P2-3: docx에 xlsx 첨부 → 아이콘+다운로드', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c52docx', ['embed-pdf.docx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.docx', 'c52docx')
+      const before = await backendBytes('c52docx', 'embed-pdf.docx')
+      const z0 = await JSZip.loadAsync(before)
+      const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
+      const emb0 = Object.keys(z0.files).filter(embName).length
+      await attachViaButton(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      // 서버 조립 확인: embeddings가 1개 늘어난다.
+      await expect
+        .poll(
+          async () => {
+            try {
+              const b = await backendBytes('c52docx', 'embed-pdf.docx')
+              const z = await JSZip.loadAsync(b)
+              return Object.keys(z.files).filter(embName).length
+            } catch {
+              return -1
+            }
+          },
+          { timeout: 30000, intervals: [1000] },
+        )
+        .toBe(emb0 + 1)
+      // 재조회가 끝나면 ole 아이콘이 2개가 된다.
+      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      const after = await backendBytes('c52docx', 'embed-pdf.docx')
+      const z1 = await JSZip.loadAsync(after)
+      const emb1 = Object.keys(z1.files).filter(embName)
+      expect(emb1.length, 'embeddings +1').toBe(emb0 + 1)
+      // progId 영문 유지.
+      const doc = await z1.files['word/document.xml']!.async('string')
+      expect(/ProgID="[A-Za-z0-9.]+"/.test(doc), 'ProgID english').toBe(true)
+      // 새로 붙은 첨부를 더블클릭하면 원본 바이트 그대로 내려온다.
+      const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
       const icons = page.getByTestId('ole-icon')
       const [dl] = await Promise.all([
         page.waitForEvent('download', { timeout: 20000 }),

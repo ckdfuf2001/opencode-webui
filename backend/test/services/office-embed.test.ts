@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
 import {
+  assembleDocxEmbed,
   assemblePptxEmbed,
+  assembleXlsxEmbed,
   attachKindOf,
   EMBED_MAX_BYTES,
   genericIconPng,
@@ -154,5 +156,182 @@ describe('assemblePptxEmbed', () => {
         slide: 9,
       }),
     ).rejects.toMatchObject({ code: 'bad_slide' })
+  })
+})
+
+async function makeHostXlsx(withDrawings: boolean): Promise<Uint8Array> {
+  const z = new JSZip()
+  z.file(
+    '[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet.main+xml"/></Types>',
+  )
+  z.file(
+    '_rels/.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+  )
+  z.file(
+    'xl/workbook.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+  )
+  z.file(
+    'xl/_rels/workbook.xml.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+  )
+  z.file(
+    'xl/worksheets/sheet1.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row></sheetData></worksheet>',
+  )
+  z.file(
+    'xl/worksheets/_rels/sheet1.xml.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings" Target="../printerSettings/printerSettings1.bin"/></Relationships>',
+  )
+  if (withDrawings) {
+    z.file(
+      'xl/drawings/drawing1.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="1" name="pic"/></xdr:nvSpPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>',
+    )
+    z.file(
+      'xl/worksheets/_rels/sheet1.xml.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings" Target="../printerSettings/printerSettings1.bin"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>',
+    )
+  }
+  return z.generateAsync({ type: 'uint8array' })
+}
+
+describe('assembleXlsxEmbed', () => {
+  it('빈 시트에 docx를 넣는다 (3곳 일치+progId+PNG)', async () => {
+    const host = await makeHostXlsx(false)
+    const attach = await makeAttachDocx('ZZ xlsx attach')
+    const out = await assembleXlsxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'a.docx',
+      attachKind: 'docx',
+    })
+    const z = await JSZip.loadAsync(out)
+    // embeddings 원본.
+    expect(Buffer.from(await z.files['xl/embeddings/a.docx']!.async('uint8array'))).toEqual(Buffer.from(attach))
+    // 미리보기 PNG.
+    expect(Object.keys(z.files).some((n) => n === 'xl/media/image1.png')).toBe(true)
+    // sheet 3곳: drawing ref + legacyDrawing ref + oleObjects.
+    const sheet = await z.files['xl/worksheets/sheet1.xml']!.async('string')
+    expect(/<drawing\b[^>]*r:id="/.test(sheet)).toBe(true)
+    expect(/legacyDrawing\b[^>]*r:id="/.test(sheet)).toBe(true)
+    expect(sheet).toContain('<oleObjects')
+    expect(sheet).toContain('progId="Word.Document.12"')
+    // drawing anchor + VML shape.
+    const drawing = await z.files['xl/drawings/drawing1.xml']!.async('string')
+    expect(drawing.match(/<xdr:twoCellAnchor/g)?.length).toBe(1)
+    expect(sheet).toContain('DVASPECT_ICON')
+    const vmlNames = Object.keys(z.files).filter((n) => n.endsWith('.vml'))
+    expect(vmlNames.length).toBe(1)
+    const vml = await z.files[vmlNames[0]!]!.async('string')
+    expect(vml).toContain('<v:shape')
+    expect(vml).toContain('o:relid="rId')
+    // rels + content types.
+    const rels = await z.files['xl/worksheets/_rels/sheet1.xml.rels']!.async('string')
+    expect(rels).toContain('/oleObject')
+    expect(rels).toContain('/image')
+    expect(rels).toContain('/drawing')
+    expect(rels).toContain('/vmlDrawing')
+    const ct = await z.files['[Content_Types].xml']!.async('string')
+    expect(ct).toContain('Extension="png"')
+    expect(ct).toContain('xl/embeddings/a.docx')
+  })
+
+  it('그림 있는 시트에도 추가된다', async () => {
+    const host = await makeHostXlsx(true)
+    const attach = await makeAttachDocx()
+    const out = await assembleXlsxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'b.xlsx',
+      attachKind: 'xlsx',
+    })
+    const z = await JSZip.loadAsync(out)
+    expect(Buffer.from(await z.files['xl/embeddings/b.xlsx']!.async('uint8array'))).toEqual(Buffer.from(attach))
+    const sheet = await z.files['xl/worksheets/sheet1.xml']!.async('string')
+    expect(sheet).toContain('progId="Excel.Sheet.12"')
+    const drawing = await z.files['xl/drawings/drawing1.xml']!.async('string')
+    expect(drawing.match(/<xdr:twoCellAnchor/g)?.length).toBe(2)
+  })
+
+  it('잘못된 호스트/시트는 거부된다', async () => {
+    await expect(
+      assembleXlsxEmbed(zipLoad, {
+        hostBytes: new Uint8Array([1, 2, 3]),
+        attachBytes: await makeAttachDocx(),
+        attachName: 'a.docx',
+        attachKind: 'docx',
+      }),
+    ).rejects.toMatchObject({ code: 'bad_host' })
+    await expect(
+      assembleXlsxEmbed(zipLoad, {
+        hostBytes: await makeHostXlsx(false),
+        attachBytes: await makeAttachDocx(),
+        attachName: 'a.docx',
+        attachKind: 'docx',
+        sheet: 4,
+      }),
+    ).rejects.toMatchObject({ code: 'bad_sheet' })
+  })
+})
+
+async function makeHostDocx(): Promise<Uint8Array> {
+  const z = new JSZip()
+  z.file(
+    '[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+  )
+  z.file(
+    '_rels/.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+  )
+  z.file(
+    'word/document.xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>host</w:t></w:r></w:p></w:body></w:document>',
+  )
+  z.file(
+    'word/_rels/document.xml.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+  )
+  return z.generateAsync({ type: 'uint8array' })
+}
+
+describe('assembleDocxEmbed', () => {
+  it('문서 끝에 xlsx를 넣는다 (embeddings+rels+progId+PNG)', async () => {
+    const host = await makeHostDocx()
+    const attach = await makeAttachDocx('ZZ docx attach')
+    const out = await assembleDocxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 's.xlsx',
+      attachKind: 'xlsx',
+    })
+    const z = await JSZip.loadAsync(out)
+    expect(Buffer.from(await z.files['word/embeddings/s.xlsx']!.async('uint8array'))).toEqual(Buffer.from(attach))
+    expect(Object.keys(z.files).some((n) => n === 'word/media/image1.png')).toBe(true)
+    const doc = await z.files['word/document.xml']!.async('string')
+    expect(doc).toContain('<w:object')
+    expect(doc).toContain('ProgID="Excel.Sheet.12"')
+    expect(doc).toContain('DrawAspect="Icon"')
+    expect(doc).toContain('<o:FieldCodes>\\s</o:FieldCodes>')
+    const rels = await z.files['word/_rels/document.xml.rels']!.async('string')
+    expect(rels).toContain('/package')
+    expect(rels).toContain('/image')
+    const ct = await z.files['[Content_Types].xml']!.async('string')
+    expect(ct).toContain('Extension="png"')
+    expect(ct).toContain('word/embeddings/s.xlsx')
+  })
+
+  it('잘못된 호스트는 거부된다', async () => {
+    await expect(
+      assembleDocxEmbed(zipLoad, {
+        hostBytes: new Uint8Array([1, 2, 3]),
+        attachBytes: await makeAttachDocx(),
+        attachName: 'a.docx',
+        attachKind: 'docx',
+      }),
+    ).rejects.toMatchObject({ code: 'bad_host' })
   })
 })
