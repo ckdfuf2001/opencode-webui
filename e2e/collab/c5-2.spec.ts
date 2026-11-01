@@ -7,8 +7,8 @@ import { gotoApp } from './helpers/viewer'
 import { ADA, seedUser } from './helpers/users'
 
 /**
- * C5-2 red: INSERT 문서 첨부.
- * - 타이틀바/헤더의 "문서 첨부" 버튼 → 파일 선택 → 서버 조립 → 방 리셋 →
+ * C5-2: INSERT 문서 첨부 (리본 "첨부" 탭 = 공식 ribbonAddIns).
+ * - Edit → "첨부" 탭 → "문서 첨부" 명령 → 파일 선택 → 서버 조립 → 방 리셋 →
  *   기존 첨부로 취급 (C5-1 보기·다운로드·보존 경로 재사용).
  * - 순서 PPTX → XLSX → DOCX. 관문 G: docx/xlsx 첨부 + 제네릭 PNG + 영문 progId.
  */
@@ -111,26 +111,10 @@ async function backendBytes(localPath: string, name: string): Promise<Buffer> {
   return fs.readFileSync(path.join(workspaceDir(), 'repos', localPath, name))
 }
 
-/** 문서 첨부 버튼으로 파일을 올린다 (input=file 방식). */
-async function attachViaButton(page: Page, attachAbs: string): Promise<void> {
-  const btn = page.getByRole('button', { name: '문서 첨부', exact: true }).first()
-  await btn.waitFor({ timeout: 20000 })
-  // 숨은 input에 직접 세팅한다.
-  const input = page.locator('input[data-testid="office-attach-input"]').first()
-  if ((await input.count()) > 0) {
-    await input.setInputFiles(attachAbs)
-  } else {
-    const [chooser] = await Promise.all([
-      page.waitForEvent('filechooser', { timeout: 15000 }),
-      btn.click({ timeout: 15000 }),
-    ])
-    await chooser.setFiles(attachAbs)
-  }
-}
-
 /**
  * C5-2 add-in 탭: 리본 "첨부" 탭 → "문서 첨부" 명령으로 파일을 올린다
  * (공식 ribbonAddIns — Help 뒤 새 탭, lib 패치 없음).
+ * Edit 진입이 포함된다 (첨부는 편집 행위 — 보기 모드 헤더 버튼 삭제, D60).
  */
 async function attachViaAddInTab(page: Page, attachAbs: string): Promise<void> {
   await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
@@ -160,7 +144,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const z0 = await JSZip.loadAsync(before)
       const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
       const emb0 = Object.keys(z0.files).filter(embName).length
-      await attachViaButton(page, path.resolve(FIX, 'embed-docx.docx'))
+      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
       // 서버 조립 확인: 디스크 embeddings가 1개 늘어난다.
       await expect
         .poll(
@@ -250,7 +234,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const z0 = await JSZip.loadAsync(before)
       const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
       const emb0 = Object.keys(z0.files).filter(embName).length
-      await attachViaButton(page, path.resolve(FIX, 'embed-docx.docx'))
+      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
       // 서버 조립 확인: embeddings가 1개 늘어난다.
       await expect
         .poll(
@@ -320,7 +304,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
         return ms.length > 0 ? ms[ms.length - 1]!.slice(0, 250) : 'NO-ANCHOR'
       }
       const anchorBefore = await anchorOf()
-      await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
+      // attachViaAddInTab에서 이미 편집 중이다. Done 버튼 대기 후 드래그한다.
       await page.getByRole('button', { name: 'Done', exact: true }).waitFor({ timeout: 30000 })
       await page.waitForTimeout(2000)
       const picRect = await page.evaluate(() => {
@@ -369,7 +353,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const z0 = await JSZip.loadAsync(before)
       const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
       const emb0 = Object.keys(z0.files).filter(embName).length
-      await attachViaButton(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
       // 서버 조립 확인: embeddings가 1개 늘어난다.
       await expect
         .poll(

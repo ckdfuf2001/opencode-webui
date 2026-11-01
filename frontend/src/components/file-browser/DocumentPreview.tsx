@@ -821,17 +821,6 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
           </div>
           {(kind === 'pptx' || kind === 'docx' || kind === 'xlsx') && !pdfMode && (
             <div className="flex items-center gap-2 ml-auto">
-              {/* C5-2 add-in 탭: 편집 모드에서는 리본 "첨부" 탭이 진입점이라 헤더 버튼을 숨긴다. */}
-              {!editing && (
-              <button
-                type="button"
-                onClick={() => embedInputRef.current?.click()}
-                className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
-                title="문서 첨부 (docx/xlsx/pptx)"
-              >
-                문서 첨부
-              </button>
-              )}
               <button
                 type="button"
                 onClick={() => {
