@@ -1103,3 +1103,11 @@ E21만의 문제가 아니다. 근거:
 - 판단1: Insert 탭 그룹 추가 불가. xlsx/docx 렌더러는 기존 패널 불변 + 새 패널만 append, pptx도 별도 탭 버튼 렌더. 탭 방식 유지 (D60 추기).
 - 보완2: 보기 모드 헤더 "문서 첨부" 버튼 삭제 (편집 행위로 통일, solo는 Edit 후 첨부). P2-1/2/3도 탭 경로로 전환.
 - 실물 progId 참고: 한글 Office 원본은 progId="포함된 개체"/"Package" (C5-0 영문 팩트는 서버 신규 조립분에 해당).
+
+## C5-2 회귀 행렬 (2026-11-02)
+- msedge: c5-2 6/6, c5-1 5/5. chromium: c3/c4-3/c4-4/c4-6/ui-layout 58 passed, E2 5종(E2·E2b·E2f-strict·E2g·E2r) green.
+- xlsx 묶음 29 passed + 2 flake (X-B1 404 /objects, X0a-9 — 단독 재실행 green, 인과 경로 없음).
+- pptx 전수: 17 failed / 17 passed / 1 skipped. v0.12.70 기준과 차이나는 2건 worktree(6150122) 대조: E13은 기준에서도 실패(기존), E19b는 기준·HEAD 모두 통과.
+- eslint 333 (272E+61W, 신규 0 — 전수 기존 이슈), check-memory 0E+1W, check-encoding 이상 없음(경고 2 기존).
+- keepEditing 수정: 임베드용 선저장은 편집 유지 (수동 Save 종료 유지). P2-1 프레임 stale 해소.
+- 0.12.79 exe+zip 빌드 완료. 실기 파일: C:/Users/oh/AppData/Local/Temp/opencode/c52-real/ (형식별 1개, 편집 모드 첨부).
