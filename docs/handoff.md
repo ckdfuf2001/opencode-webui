@@ -1085,3 +1085,13 @@ E21만의 문제가 아니다. 근거:
 
 ## pic 이동 저장 검증 (2026-11-01)
 - P2-2에 pic 드래그 후 디스크 앵커 이동 assert 추가 (네이티브 저장). green.
+
+## C5-2 첨부 탭 (리본 add-in, 2026-11-01)
+- lib가 built-in 탭(Insert 등) 교체를 금지하므로(acceptedRibbonAddIns) 공식 ribbonAddIns로 Help 뒤에 "첨부" 탭을 둔다 (Office ACROBAT 탭 방식). lib 패치 없음.
+- officeEmbed.ts: buildOfficeAttachAddIn + requestEmbedFile(officeEmbedRequest). 숨은 input 상시 마운트, DocumentPreview가 요청을 받아 클릭 → 기존 officeEmbedFile 흐름 재사용.
+- 편집 모드 진입점=리본 탭, 보기 모드(리본 없음)=헤더 버튼 유지. 헤더 조건 실수로 Done/Save까지 숨긴 회귀 → 버튼에만 !editing 적용해 복구.
+- e2e P2-4/5/6 (pptx/xlsx/docx 탭 경유) green. c5-2 6/6, c5-1 5/5, 단위 14/14, tsc 0.
+
+## xlsx append xdr 네임스페이스 수정 (2026-11-01)
+- 증상: 편집 모드에서 첨부 후 "Invalid XLSX worksheet XML ... NamespaceError". 편집 저장본(lib 저장본, oleObjects xmlns:x14 형태)에 덧붙일 때 서버 템플릿의 xdr: 접두사가 미선언.
+- 수정: oleObject 엘리먼트 자체에 xmlns:xdr 선언 (자립형). 단위 테스트(append 경로) 추가 — 수정 전 red 확인.
