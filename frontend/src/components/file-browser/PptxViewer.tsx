@@ -28,6 +28,7 @@ import { pptxThemeColors } from './viewerTheme'
 import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSync'
 import { createSlideGate } from '@/lib/slideLocationGate'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
+import { deepQueryAllVisible } from '@/lib/domDeep'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
@@ -1903,15 +1904,14 @@ const peersRef = useRef<Peer[]>([])
   }, [collab, peers])
 
   // C5-1: lib compat 토스트는 파일당 1회만 남긴다 (중복 렌더 정리, 폴링 없음).
+  // 토스트는 shadow DOM 아래 있으므로 deep query로 찾는다 (probe P3).
   useEffect(() => {
     const root = viewerRootRef.current
     if (!root) return
     const sweep = (node: ParentNode): void => {
       try {
-        const nodes = node.querySelectorAll(
-          'pptx-ui-compat-toasts, [data-testid*="compat-toast"], [data-testid*="compat_toast"]',
-        )
-        nodes.forEach((el, i) => {
+        const toasts = deepQueryAllVisible(node, '[data-testid="pptx-compat-toast"]')
+        toasts.forEach((el, i) => {
           if (i > 0) (el as HTMLElement).style.display = 'none'
         })
       } catch {
@@ -2064,7 +2064,7 @@ const peersRef = useRef<Peer[]>([])
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
     >
       {/* C5-1: 기존 OLE 첨부 아이콘 1개 + 더블클릭 다운로드 (lib 렌더는 그대로). */}
-      <OleAttachmentOverlay data={content} />
+      <OleAttachmentOverlay data={content} anchor="pptx" />
       {isDecrypted && editing && (
         <div className="px-3 py-1.5 border-b border-border text-[11px] text-muted-foreground">
           Encrypted documents cannot be co-edited — editing solo.

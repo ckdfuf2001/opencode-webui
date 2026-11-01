@@ -1337,7 +1337,7 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host relative h-full min-h-[480px]">
-      <OleAttachmentOverlay data={content} />
+      <OleAttachmentOverlay data={content} anchor="docx" />
       <div className="flex h-full min-h-0">
         <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
@@ -3719,7 +3719,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="xlsxengine-host relative h-full min-h-[480px]">
-      <OleAttachmentOverlay data={content} guard />
+      <OleAttachmentOverlay data={content} anchor="xlsx" />
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>

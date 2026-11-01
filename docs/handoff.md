@@ -1052,3 +1052,9 @@ E21만의 문제가 아니다. 근거:
 - 원인 2개: (1) 신원 미발급 브라우저는 rooms() self-match 실패로 scheduleAutosave가 조용히 skip (owner 선출됐는데도 some(owner)=true라 전원 skip). (2) 저장돼도 lib saveBytes가 unsupported drawing을 원본 그대로 보존해서 앵커 이동이 디스크에 안 남음.
 - 수정: ensureCollabIdentity() (PPTX 세션과 같은 자동 발급, 표시명 user 유지) + 참가자 1명이면 self로 보는 solo fail-open (autosave 타이머, peer-arrive flush) + 저장 직전 flushObjectsNow() 후 서버 표 앵커를 drawing XML에 수술 패치 (frontend/src/lib/xlsxAnchorPatch.ts, twoCellAnchor from/to만 교체, vmlDrawing rel 우선 매칭 회피, 개수 불일치 시 fail-closed).
 - 검증: e2e/collab/xlsx-ole-solo.spec.ts S1(드래그 후 move 이후 save에서 앵커 이동+oleObject 보존) S2(신원 자동발급). 단위 5/5. 회귀 c5-1 4/4 + xlsx-solo 2/2 + xlsx-collab 20/20 (chromium), tsc 0, eslint 신규 0, memory/encoding clean.
+
+## S2 ole anchor (2026-11-01)
+- ole-icon 분리 버튼 문제를 lib 도형 위 앵커로 해결: OleAttachmentOverlay가 anchor prop으로 도형 rect에 아이콘 1개를 둔다. hover 파일명, dblclick 다운로드 유지. 앵커 없으면 좌상단 칩 폴백.
+- shadow DOM 추적 domDeep.ts (deepCollect/observeDeep). xlsx 도형은 shadow 아래라 컨테이너 MO만으로 못 보고 shadowRoot까지 관찰한다. PPTX compat 토스트 sweep도 deep query로 수정.
+- XLSX 읽기전용 가드 제거: S1 방향에 따라 아이콘 드래그/삭제는 무시 (토스트 없음). c5-1 가드 테스트를 S2b로 교체. EMB는 서버 emb_locked 유지.
+- 검증: c5-1 5/5. tsc 0, eslint 신규 0, memory/encoding clean.

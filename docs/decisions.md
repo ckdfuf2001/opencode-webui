@@ -719,6 +719,9 @@
 ## D56 solo ole 이동 저장 (S1, 2026-11-01)
 - 결정: solo 자동저장 skip은 신원 미발급 탓이라 편집 진입 시 자동 발급한다 (표시명 불변). 방에 나 혼자면 self-owner로 저장한다.
 - lib가 unsupported drawing을 원본 보존해서 앵커 이동이 유실되므로, 저장 직전 개체 변경을 flush한 뒤 서버 수용 앵커로 drawing XML from/to만 패치한다. 그 외 바이트는 손대지 않는다 (oleObject 보존 S1 assert).
+## D57 ole 앵커 UX (S2, 2026-11-01)
+- 결정: 분리된 좌상단 버튼 대신 lib 도형 위에 아이콘을 앵커한다. 아이콘은 affordance 전용(hover 파일명, dblclick 다운로드)으로 두고, 이동은 lib 도형에서 직접 한다 (저장은 S1 보장).
+- shadow 렌더에는 컨테이너 MO가 안 먹혀 shadowRoot까지 관찰한다 (observeDeep).
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.

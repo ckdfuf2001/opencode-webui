@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import { Paperclip } from 'lucide-react'
 import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
+import { deepCollect, observeDeep } from '@/lib/domDeep'
 
 function saveBlob(name: string, bytes: Uint8Array): void {
   const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/octet-stream' })
@@ -16,28 +17,75 @@ function saveBlob(name: string, bytes: Uint8Array): void {
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
 
+export type OleAnchorKind = 'xlsx' | 'pptx' | 'docx'
+
+/** 컨테이너 안에서 lib가 그린 첨부 도형을 찾는다 (없으면 null). */
+function findAnchorEl(container: HTMLElement, kind: OleAnchorKind): Element | null {
+  const vis = (e: Element): boolean => {
+    try {
+      const r = e.getBoundingClientRect()
+      return r.width > 0 && r.height > 0
+    } catch {
+      return false
+    }
+  }
+  try {
+    if (kind === 'xlsx') {
+      for (const el of deepCollect(container)) {
+        try {
+          if ((el.className?.toString?.() ?? '').includes('xg-obj-unsupported') && vis(el)) return el
+        } catch {
+          /* 무시 */
+        }
+      }
+      return null
+    }
+    if (kind === 'pptx') {
+      // lib ole 프레임: data-element-id "...-frame-N" + Download 문구.
+      for (const el of deepCollect(container)) {
+        try {
+          const eid = el.getAttribute?.('data-element-id') ?? ''
+          if (eid.includes('-frame-') && /download/i.test(el.textContent ?? '') && vis(el)) return el
+        } catch {
+          /* 무시 */
+        }
+      }
+      return null
+    }
+    for (const el of deepCollect(container)) {
+      try {
+        if (el.hasAttribute?.('data-docx-ole') && vis(el)) return el
+      } catch {
+        /* 무시 */
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 /**
- * C5-1: 기존 OLE 첨부 오버레이 (XLSX/DOCX/PPTX 공통).
- * - embeddings/가 있을 때만 첫 항목 아이콘 1개를 렌더한다 (spec: 1개).
- * - 더블클릭 → 원본 파일명·바이트로 다운로드 (package 그대로 / oleObject는 Ole10Native 풀기).
- * - XLSX 이동·삭제 시도 → 읽기전용 가드 토스트 1회 (드래그·Delete).
+ * C5-1 후속 S2: 기존 OLE 첨부 오버레이를 lib 도형 위에 앵커한다.
+ * - 앵커가 있으면 도형 위에 작은 아이콘 1개: hover → 파일명(title),
+ *   더블클릭 → 원본 파일명·바이트로 다운로드.
+ * - 앵커가 없으면 기존처럼 좌상단 칩 1개 (폴백).
+ * - 아이콘 드래그는 무시한다 (도형 이동은 lib 도형을 직접 끈다 — S1에서 저장됨).
  */
 export default function OleAttachmentOverlay({
   data,
-  guard = false,
+  anchor,
 }: {
   data: ArrayBuffer | Uint8Array
-  guard?: boolean
+  anchor?: OleAnchorKind
 }) {
   const [entries, setEntries] = useState<OleEmbeddingRef[]>([])
-  const [guardShown, setGuardShown] = useState(false)
-  const dragFrom = useRef<{ x: number; y: number } | null>(null)
-  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let dead = false
     setEntries([])
-    setGuardShown(false)
     void listOleEmbeddings(data).then((list) => {
       if (!dead) setEntries(list.slice(0, 1))
     })
@@ -46,35 +94,58 @@ export default function OleAttachmentOverlay({
     }
   }, [data])
 
-  // 드래그 가드: mouseup이 버튼 밖에서 일어나도 window에서 잡는다.
-  // mousedown 시점에 좌표를 기록하고, window mouseup에서 거리를 잰다.
+  // 앵커 추적: 스크롤·리사이즈·DOM 변경 때 재계산 (폴링 없음).
   useEffect(() => {
-    if (!guard || entries.length === 0) return
-    const onUp = (e: MouseEvent): void => {
-      const s = dragFrom.current
-      dragFrom.current = null
-      if (!s) return
-      if (Math.hypot(e.clientX - s.x, e.clientY - s.y) > 8) {
-        setGuardShown((v) => (v ? v : true))
+    if (!anchor || entries.length === 0) {
+      setPos(null)
+      return
+    }
+    const root = rootRef.current
+    const container = root?.parentElement as HTMLElement | null
+    if (!container) return
+    let dead = false
+    const update = (): void => {
+      if (dead) return
+      try {
+        const target = findAnchorEl(container, anchor)
+        if (!target) {
+          setPos(null)
+          return
+        }
+        const c = container.getBoundingClientRect()
+        const r = target.getBoundingClientRect()
+        setPos((prev) => {
+          const x = Math.max(0, Math.round(r.left - c.left))
+          const y = Math.max(0, Math.round(r.top - c.top))
+          if (prev && prev.x === x && prev.y === y) return prev
+          return { x, y }
+        })
+      } catch {
+        /* 무시 */
       }
     }
-    window.addEventListener('mouseup', onUp)
-    return () => window.removeEventListener('mouseup', onUp)
-  }, [guard, entries.length])
-  useEffect(() => {
-    if (!guard || entries.length === 0) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      const t = e.target as HTMLElement | null
-      const onIcon = !!t?.closest?.('[data-testid="ole-icon"]')
-      if (!onIcon) return
-      e.preventDefault()
-      e.stopPropagation()
-      setGuardShown((v) => (v ? v : true))
+    update()
+    // shadow 안의 삽입까지 본다 (xlsx 도형은 shadow 아래에 렌더된다).
+    const stopDeep = observeDeep(container, update)
+    const onScroll = (): void => update()
+    const onResize = (): void => update()
+    try {
+      container.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    } catch {
+      /* 무시 */
     }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [guard, entries.length])
+    window.addEventListener('resize', onResize)
+    return () => {
+      dead = true
+      stopDeep()
+      try {
+        container.removeEventListener('scroll', onScroll, { capture: true })
+      } catch {
+        /* 무시 */
+      }
+      window.removeEventListener('resize', onResize)
+    }
+  }, [anchor, entries.length, data])
 
   if (entries.length === 0) return null
   const entry = entries[0]!
@@ -94,50 +165,33 @@ export default function OleAttachmentOverlay({
     }
   }
 
-  const showGuard = (): void => {
-    if (!guard) return
-    setGuardShown((v) => (v ? v : true))
-  }
-
+  const anchored = anchor != null && pos != null
   return (
-    <div className="absolute left-2 top-2 z-20 flex flex-col items-start gap-1">
+    <div
+      ref={rootRef}
+      className="absolute left-2 top-2 z-20 flex flex-col items-start gap-1"
+      style={anchored && pos ? { left: pos.x, top: pos.y } : undefined}
+    >
       <button
-        ref={btnRef}
         type="button"
         data-testid="ole-icon"
         title={entry.fallbackName}
         aria-label={`첨부 ${entry.fallbackName}`}
         draggable={false}
         onDoubleClick={() => void download()}
-        onMouseDown={(e) => {
-          dragFrom.current = { x: e.clientX, y: e.clientY }
-        }}
-        onMouseUp={(e) => {
-          const s = dragFrom.current
-          dragFrom.current = null
-          if (!s) return
-          const dx = e.clientX - s.x
-          const dy = e.clientY - s.y
-          if (Math.hypot(dx, dy) > 8) showGuard()
-        }}
         onDragStart={(e) => {
+          // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
           e.preventDefault()
-          showGuard()
         }}
-        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted"
+        className={
+          anchored
+            ? 'inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background/95 text-foreground shadow-sm hover:bg-muted'
+            : 'inline-flex items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
+        }
       >
         <Paperclip className="h-3.5 w-3.5" />
-        <span className="max-w-44 truncate">{entry.fallbackName}</span>
+        {!anchored && <span className="max-w-44 truncate">{entry.fallbackName}</span>}
       </button>
-      {guard && guardShown && (
-        <div
-          data-testid="ole-guard-toast"
-          role="status"
-          className="rounded-md border border-border bg-background/95 px-2 py-1 text-[11px] text-muted-foreground shadow-sm"
-        >
-          임베디드 개체는 이동·삭제할 수 없습니다 (읽기전용)
-        </div>
-      )}
     </div>
   )
 }

@@ -288,7 +288,10 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
     }
   })
 
-  test('XLSX OLE 이동·삭제 시도는 거부되고 토스트 1회', async ({ browser }) => {
+  test('S2b: ole 아이콘 드래그·삭제는 무시된다 (가드 토스트 없음)', async ({ browser }) => {
+    // S1 방향 전환 (이동 저장 지원) 이후: 아이콘은 hover 파일명+dblclick
+    // 다운로드 전용 affordance다. 아이콘을 끌어도 가드 토스트가 뜨지 않고,
+    // 실제 이동은 lib 도형에서 한다 (저장은 S1 xlsx-ole-solo가 보장).
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -300,20 +303,95 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
       await expect(icon, 'ole icon').toBeVisible({ timeout: 15000 })
       const box = await icon.boundingBox()
       expect(box, 'icon box').not.toBeNull()
-      // 이동 시도: 드래그해도 위치가 바뀌지 않고 토스트가 1회 뜬다.
       await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
       await page.mouse.down()
       await page.mouse.move(box!.x + 200, box!.y + 200, { steps: 5 })
       await page.mouse.up()
       await page.waitForTimeout(1500)
-      const toasts = page.locator('[data-testid="ole-guard-toast"]')
-      expect(await toasts.count(), 'guard toast once').toBe(1)
-      // 삭제 시도: Delete 키 후에도 토스트는 1회 그대로, 에디터는 그대로 있다.
+      expect(await page.locator('[data-testid="ole-guard-toast"]').count(), 'no guard toast').toBe(0)
       await icon.click({ timeout: 15000 })
       await page.keyboard.press('Delete')
       await page.waitForTimeout(1500)
-      expect(await toasts.count(), 'still once').toBe(1)
-      expect(await page.locator('xlsx-editor').count(), 'editor intact').toBe(1)
+      expect(await page.locator('[data-testid="ole-guard-toast"]').count(), 'still none').toBe(0)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('S2: ole 아이콘이 lib 도형 위에 앵커된다', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c51anchor')
+    try {
+      // xlsx: .xg-obj-unsupported / pptx: ole frame / docx: data-docx-ole span.
+      // shadow DOM을 뚫고 찾는다.
+      const probes: Record<string, string> = {
+        'embed-docx.xlsx': 'xlsx',
+        'embed-docx.pptx': 'pptx',
+        'embed-docx.docx': 'docx',
+      }
+      for (const [name, kind] of Object.entries(probes)) {
+        await openViaWorkspace(page, name, 'c51anchor')
+        const icon = page.getByTestId('ole-icon').first()
+        await expect(icon, `${name} icon`).toBeVisible({ timeout: 15000 })
+        // 앵커 적용은 비동기(MO/스크롤/리사이즈 추적)라 겹칠 때까지 폴링한다.
+        // waitForFunction은 원시값만 돌려주므로 JSON 문자열로 받는다.
+        const anchoredRaw = await page
+          .waitForFunction(
+            (k) => {
+              const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
+                if (depth > 8) return acc
+                for (const el of [...((root as Element).querySelectorAll?.('*') ?? [])]) {
+                  acc.push(el)
+                  const sr = (el as HTMLElement).shadowRoot
+                  if (sr) deep(sr, acc, depth + 1)
+                }
+                return acc
+              }
+              const vis = (e: Element): boolean => {
+                const r = e.getBoundingClientRect()
+                return r.width > 0 && r.height > 0
+              }
+              const host = document.querySelector('.xlsxengine-host, [data-testid="pptx-viewer-root"], .docxengine-host')
+              const all = host ? deep(host) : []
+              let shape: { x: number; y: number; w: number; h: number } | null = null
+              if (k === 'xlsx') {
+                const el = all.find((e) => (e.className?.toString?.() ?? '').includes('xg-obj-unsupported') && vis(e))
+                if (el) { const r = el.getBoundingClientRect(); shape = { x: r.x, y: r.y, w: r.width, h: r.height } }
+              } else if (k === 'pptx') {
+                const el = all.find(
+                  (e) =>
+                    (e.getAttribute('data-element-id') || '').includes('-frame-') &&
+                    /download/i.test(e.textContent || '') && vis(e),
+                )
+                if (el) { const r = el.getBoundingClientRect(); shape = { x: r.x, y: r.y, w: r.width, h: r.height } }
+              } else {
+                const el = all.find((e) => e.hasAttribute('data-docx-ole') && vis(e))
+                if (el) { const r = el.getBoundingClientRect(); shape = { x: r.x, y: r.y, w: r.width, h: r.height } }
+              }
+              const btn = document.querySelector('[data-testid="ole-icon"]')
+              const br = btn?.getBoundingClientRect()
+              if (!shape || !br) return 'wait'
+              const s = shape
+              const insideX = br.x + br.width >= s.x - 24 && br.x <= s.x + s.w + 24
+              const insideY = br.y + br.height >= s.y - 24 && br.y <= s.y + s.h + 24
+              return insideX && insideY
+                ? 'ok'
+                : `no:icon=${Math.round(br.x)},${Math.round(br.y)} shape=${Math.round(s.x)},${Math.round(s.y)}`
+            },
+            kind,
+            { timeout: 20000, polling: 500 },
+          )
+          .then(
+            (v) => String(v),
+            () => 'timeout',
+          )
+        expect(anchoredRaw === 'ok', `${name} icon anchored on shape (${anchoredRaw})`).toBe(true)
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(1500)
+      }
     } finally {
       await ctx.close().catch(() => {})
     }
