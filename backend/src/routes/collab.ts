@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Database } from 'bun:sqlite'
 import { z } from 'zod'
+import JSZip from 'jszip'
 import { createNodeWebSocket } from '@hono/node-ws'
 import { issueCollabName } from '../db/collab-name-queries'
 import {
@@ -8,9 +9,13 @@ import {
   addConn,
   applySave,
   checkSave,
+  clientRoleInRoom,
   createSession,
+  currentDiskHash,
   deleteObject,
   getRoomObjects,
+  hashBytes,
+  hashFile,
   isValidRoomId,
   listRooms,
   lockInfo,
@@ -18,11 +23,27 @@ import {
   registerRoomObjects,
   releaseObjectLock,
   removeConn,
+  resetRoomByServer,
+  roomHasEditors,
+  roomIdForAbs,
   rooms,
   wsMessage,
   MAX_SAVE_BYTES,
 } from '../services/collab-rooms'
+import {
+  assemblePptxEmbed,
+  assertAttachBytes,
+  attachKindOf,
+  sanitizeEmbedName,
+  type EmbedAttachKind,
+  type ZipLike,
+} from '../services/office-embed'
+import { getRawFileContent, resolveWorkspaceFile } from '../services/files'
+import { writeFileContent } from '../services/file-operations'
 import { logger } from '../utils/logger'
+
+const zipLoadJSZip = (b: Uint8Array): Promise<ZipLike> =>
+  JSZip.loadAsync(b) as unknown as Promise<ZipLike>
 
 const SessionSchema = z.object({
   path: z.string().min(1),
@@ -292,6 +313,94 @@ app.post('/:room/objects/:key/delete', async (c) => {
 app.post('/suggest-name', async (c) => {
   try {
     return c.json({ name: issueCollabName(collabDb) })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+const EmbedSchema = z.object({
+  path: z.string().min(1).max(512),
+  slide: z.coerce.number().int().min(1).max(999).optional(),
+  roomId: z.string().min(1).max(128).optional(),
+  clientId: z.coerce.number().int().optional(),
+  baseHash: z.string().min(1).max(128).optional(),
+})
+
+/**
+ * C5-2: INSERT 문서 첨부 (multipart: path + file + slide? + roomId? + clientId? + baseHash?).
+ * - 첨부는 docx/xlsx/pptx + 매직바이트 + 20MB (office-embed).
+ * - viewer는 403 (방이 있고 clientId의 role이 viewer면).
+ * - dirty면 409 dirty_room: 방 기준(disk != lastHash) 또는 baseHash stale.
+ *   클라이언트는 owner 저장 후 1회 재시도한다.
+ * - 조립 후 디스크에 쓰고 방이 있으면 resetRoomByServer → 4001 재입장.
+ *   방이 없어도(solo 미참가) 디스크 조립은 수행한다 (호출자가 reload).
+ */
+app.post('/embed', async (c) => {
+  try {
+    const body = await c.req.parseBody()
+    const q = EmbedSchema.parse({
+      path: typeof body.path === 'string' ? body.path : '',
+      slide: body.slide !== undefined ? Number(body.slide) : undefined,
+      roomId: typeof body.roomId === 'string' ? body.roomId : undefined,
+      clientId: body.clientId !== undefined ? Number(body.clientId) : undefined,
+      baseHash: typeof body.baseHash === 'string' ? body.baseHash : undefined,
+    })
+    const file = body.file as unknown as { arrayBuffer?: () => Promise<ArrayBuffer>; name?: unknown } | undefined
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      return c.json({ error: 'Missing file', code: 'bad_file' }, 400)
+    }
+    const attachBytes = new Uint8Array(await file.arrayBuffer())
+    const attachName = sanitizeEmbedName(typeof file.name === 'string' ? file.name : 'attachment', 'bin')
+    const kind = attachKindOf(attachName)
+    try {
+      assertAttachBytes(attachBytes, kind)
+    } catch (e) {
+      return errJson(c, e, 500)
+    }
+    const abs = await resolveWorkspaceFile(q.path).catch(() => null)
+    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
+    const hostLower = abs.toLowerCase()
+    if (!hostLower.endsWith('.pptx')) {
+      return c.json({ error: 'Only pptx hosts supported yet', code: 'unsupported_host' }, 400)
+    }
+    const roomId = q.roomId && isValidRoomId(q.roomId) ? q.roomId : roomIdForAbs(abs)
+    const room = rooms.get(roomId)
+    if (room && q.clientId === undefined) {
+      return c.json({ error: 'Missing client', code: 'bad_client' }, 400)
+    }
+    if (room && q.clientId !== undefined && clientRoleInRoom(roomId, q.clientId) === 'view' && roomHasEditors(room)) {
+      return c.json({ error: 'View-only participant cannot attach while editors are present', code: 'view_only' }, 403)
+    }
+    const disk = room ? await currentDiskHash(roomId) : await hashFile(abs).catch(() => null)
+    if (room) {
+      if (!q.baseHash || q.baseHash !== room.lastHash || disk !== room.lastHash) {
+        return c.json({ error: 'Room changed since loaded — save first, then retry', code: 'dirty_room', currentHash: disk }, 409)
+      }
+    } else if (q.baseHash && disk !== q.baseHash) {
+      return c.json({ error: 'File changed since loaded — reload, then retry', code: 'dirty_room', currentHash: disk }, 409)
+    }
+    const hostBytes = new Uint8Array(await getRawFileContent(q.path))
+    let out: Uint8Array
+    try {
+      out = await assemblePptxEmbed(zipLoadJSZip, {
+        hostBytes,
+        attachBytes,
+        attachName,
+        attachKind: kind as EmbedAttachKind,
+        slide: q.slide,
+      })
+    } catch (e) {
+      return errJson(c, e, 500)
+    }
+    await writeFileContent(abs, Buffer.from(out))
+    const newHash = hashBytes(out)
+    logger.warn(`[embed] room=${roomId.slice(0, 8)} bytes=${out.length} newHash=${newHash.slice(0, 8)}`)
+    if (room) {
+      room.lastHash = newHash
+      room.externalChanged = false
+      resetRoomByServer(roomId)
+    }
+    return c.json({ ok: true, newHash, embeddings: [`ppt/embeddings/${attachName}`] })
   } catch (error) {
     return errJson(c, error, 500)
   }

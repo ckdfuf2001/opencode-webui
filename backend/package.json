@@ -19,6 +19,7 @@
     "@opencode-webui/shared": "workspace:*",
     "dotenv": "^17.2.3",
     "hono": "^4.10.1",
+    "jszip": "3.10.1",
     "lib0": "^0.2.119",
     "ws": "^8.22.0",
     "y-protocols": "^1.0.7",

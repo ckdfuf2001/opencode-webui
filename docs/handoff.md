@@ -1058,3 +1058,9 @@ E21만의 문제가 아니다. 근거:
 - shadow DOM 추적 domDeep.ts (deepCollect/observeDeep). xlsx 도형은 shadow 아래라 컨테이너 MO만으로 못 보고 shadowRoot까지 관찰한다. PPTX compat 토스트 sweep도 deep query로 수정.
 - XLSX 읽기전용 가드 제거: S1 방향에 따라 아이콘 드래그/삭제는 무시 (토스트 없음). c5-1 가드 테스트를 S2b로 교체. EMB는 서버 emb_locked 유지.
 - 검증: c5-1 5/5. tsc 0, eslint 신규 0, memory/encoding clean.
+
+## C5-2 INSERT 문서 첨부 P2-1 (pptx, 2026-11-01)
+- POST /api/collab/embed (multipart path/file/slide?/roomId?/clientId?/baseHash?): 첨부 docx/xlsx/pptx + 매직바이트 + 20MB, viewer는 편집자 있을 때만 403, dirty면 409 dirty_room (owner 저장 후 1회 재시도).
+- 서버 조립 backend/src/services/office-embed.ts: pptx/embeddings + 미리보기 PNG(제네릭 아이콘) + slide rels 2개 + graphicFrame + VML(있을 때) + Content_Types. progId 영문 네이티브, pptx 첨부는 package rel.
+- 조립 후 디스크 기록 + 방 있으면 resetRoomByServer (4001 dispose). 클라이언트는 4001 후 새 바이트를 먼저 받고 재입장한다 (stale 호스팅 방지: PptxViewer resetPending + officeResetReload).
+- UI: 헤더 문서 첨부 버튼 + 숨은 input, officeEmbedFile 이벤트로 뷰어가 자기 컨텍스트로 POST. 단위 7/7, e2e P2-1 (pptx+docx 아이콘 2개+다운로드 원본 일치).

@@ -722,6 +722,9 @@
 ## D57 ole 앵커 UX (S2, 2026-11-01)
 - 결정: 분리된 좌상단 버튼 대신 lib 도형 위에 아이콘을 앵커한다. 아이콘은 affordance 전용(hover 파일명, dblclick 다운로드)으로 두고, 이동은 lib 도형에서 직접 한다 (저장은 S1 보장).
 - shadow 렌더에는 컨테이너 MO가 안 먹혀 shadowRoot까지 관찰한다 (observeDeep).
+## D58 C5-2 embed (2026-11-01)
+- 결정: INSERT는 서버 조립 + 방 리셋으로 기존 첨부로 취급한다 (lib 패치 없음). 4001 재입장은 새 바이트를 먼저 받고 한다 (안 그러면 stale 호스트가 방을 오염시킨다).
+- solo viewer 첨부는 허용한다 (편집자 있을 때만 viewer 거부 — 볼 것만 보는 방에 unsaved 상태가 없음). dirty는 disk!=lastHash 또는 baseHash stale이면 409.
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.

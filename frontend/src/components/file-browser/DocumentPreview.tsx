@@ -41,6 +41,7 @@ import { createPortal } from 'react-dom'
 import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
+import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail } from './officeEmbed'
 
 type ExtractedMsg = {
   html?: string
@@ -535,6 +536,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
   const [editing, setEditing] = useState(false)
   const [viewerRetry, setViewerRetry] = useState(0)
   const [endingEdit, setEndingEdit] = useState(false)
+  const embedInputRef = useRef<HTMLInputElement | null>(null)
   // X2a-③: XlsxViewer 가 방에 편집자가 있음을 알리면(보기 모드) 코멘트 버튼을 막는다.
   const [xlsxRoomHasEditors, setXlsxRoomHasEditors] = useState(false)
   useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
@@ -681,6 +683,26 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
   const hasClientFallback = kind ? CONVERTABLE_CLIENT_KINDS.has(kind) : false
   /** C2-a: ETag 누락 시 같은 파일을 다시 받기 위한 재수신 트리거. */
   const [fileReloadKey, setFileReloadKey] = useState(0)
+  // C5-2: 문서 첨부 후 호스트 바이트를 다시 받는다 (방 리셋과 무관하게 자기도 갱신).
+  // C5-2: 4001 리셋 후 재입장 전에 새 바이트를 먼저 받는다 (stale 호스팅 방지).
+  useEffect(() => {
+    const onEmbedDone = (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string }>).detail
+      if (!d?.path || d.path !== file.path) return
+      setFileReloadKey((k) => k + 1)
+    }
+    const onResetReload = (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string }>).detail
+      if (!d?.path || d.path !== file.path) return
+      setFileReloadKey((k) => k + 1)
+    }
+    window.addEventListener(OFFICE_EMBED_DONE, onEmbedDone as EventListener)
+    window.addEventListener(OFFICE_RESET_RELOAD, onResetReload as EventListener)
+    return () => {
+      window.removeEventListener(OFFICE_EMBED_DONE, onEmbedDone as EventListener)
+      window.removeEventListener(OFFICE_RESET_RELOAD, onResetReload as EventListener)
+    }
+  }, [file.path])
   const { data: raw, status: rawStatus, error: rawError, etag: rawEtag } = useRawFile(
     file.path,
     isOfficeNative ? !pdfMode : isViewerOnly || (hasClientFallback && converted.status !== 'ready'),
@@ -788,6 +810,29 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
           </div>
           {(kind === 'pptx' || kind === 'docx' || kind === 'xlsx') && !pdfMode && (
             <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={() => embedInputRef.current?.click()}
+                className="h-6 text-xs px-2 rounded text-muted-foreground hover:text-foreground"
+                title="문서 첨부 (docx/xlsx/pptx)"
+              >
+                문서 첨부
+              </button>
+              <input
+                ref={embedInputRef}
+                type="file"
+                accept=".docx,.xlsx,.pptx"
+                data-testid="office-attach-input"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (!f) return
+                  window.dispatchEvent(
+                    new CustomEvent<EmbedDetail>(OFFICE_EMBED_FILE, { detail: { file: f, hostPath: file.path } }),
+                  )
+                }}
+              />
               <button
                 type="button"
                 onClick={() => {
@@ -1322,6 +1367,21 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [save, editing])
+  // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다 (DOCX는 방이 없다).
+  useEffect(() => {
+    const onEmbed = (e: Event) => {
+      const d = (e as CustomEvent<EmbedDetail>).detail
+      if (!d?.file || d.hostPath !== path) return
+      void runOfficeEmbed(d.file, {
+        hostPath: path,
+        kind: 'docx',
+        saveFirst: () => saveBeforeEmbed(path, editing),
+        reload: () => {},
+      })
+    }
+    window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
+    return () => window.removeEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
+  }, [path, editing])
 
   // 조건부 early-return보다 뒤에 hook이 오면 렌더마다 hook 개수가 달라져
   // React #300("fewer hooks than expected")으로 터진다. error 분기는 모든
@@ -3692,6 +3752,26 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [save, editing])
+  // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
+  useEffect(() => {
+    const onEmbed = (e: Event) => {
+      const d = (e as CustomEvent<EmbedDetail>).detail
+      if (!d?.file || d.hostPath !== path) return
+      const room = collabRef.current
+      void runOfficeEmbed(d.file, {
+        hostPath: path,
+        kind: 'xlsx',
+        roomId: room?.roomId,
+        clientId: selfClientIdRef.current ?? undefined,
+        getBaseHash: () => collabRef.current?.baseHash,
+        isViewer: room?.role === 'viewer',
+        saveFirst: () => (editingRef.current ? save() : Promise.resolve(true)),
+        reload: () => onReloadFileRef.current?.(),
+      })
+    }
+    window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
+    return () => window.removeEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
+  }, [path, save])
   // 상단 코멘트 버튼: 우측 목록 패널을 여닫는다.
   useEffect(() => {
     const onToggle = () => {

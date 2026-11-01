@@ -1004,6 +1004,53 @@ export function resetRoomFromDisk(
 }
 
 /**
+ * C5-2: 서버 주도 방 리셋 (문서 첨부 조립 후).
+ * resetRoomFromDisk의 owner-conn 확인 없이 수행한다 — 호출자가 이미
+ * dirty/viewer 판정을 마친 embed 경로에서만 쓴다.
+ * 전원 conn을 4001로 닫고 방을 해체한다. 클라이언트는 resume 없이
+ * 새로 입장한다 → 첫 입장자가 새 디스크 바이트 기준으로 재시드.
+ */
+export function resetRoomByServer(roomId: string): { ok: true } | { ok: false; reason: 'no_room' } {
+  const room = rooms.get(roomId)
+  if (!room) return { ok: false, reason: 'no_room' }
+  for (const ws of [...room.conns.keys()]) {
+    try {
+      const sock = ws as { close?: (code?: number, reason?: string) => void }
+      sock.close?.(CLOSE_ROOM_RESET, 'embed_reset')
+    } catch {
+      // 무시
+    }
+  }
+  disposeRoom(room)
+  logger.warn(`Collab room ${roomId}: reset by server (embed) — all conns closed (4001), room disposed`)
+  return { ok: true }
+}
+
+/**
+ * C5-2: 방 참가자의 모드 (viewer 거부 판정용).
+ * roomParticipants와 같은 규칙: app.mode 우선, 없으면 lib presence role.
+ * 상태를 못 찾으면 null (solo/미참가 → 허용).
+ */
+export function clientRoleInRoom(roomId: string, clientId: number): 'view' | 'edit' | null {
+  const room = rooms.get(roomId)
+  if (!room) return null
+  try {
+    const states = room.awareness.getStates() as Map<number, unknown>
+    const st = states.get(clientId) as { app?: { mode?: unknown } } | undefined
+    if (!st || typeof st !== 'object') return null
+    const app = (st as { app?: { mode?: unknown } }).app
+    if (app && typeof app === 'object') {
+      return app.mode === 'view' ? 'view' : 'edit'
+    }
+    const lib = readLibPresence(st as Record<string, unknown>)
+    if (!lib) return null
+    return lib.role === 'viewer' ? 'view' : 'edit'
+  } catch {
+    return null
+  }
+}
+
+/**
  * owner 저장 적용. 판정은 서버의 lastHash 기준이다 (클라이언트 baseHash는
  * 진단용으로만 받는다). 디스크가 lastHash와 다르면 409 conflict (자동 병합 없음).
  * room 단위 체인으로 직렬화한다 (S6C).

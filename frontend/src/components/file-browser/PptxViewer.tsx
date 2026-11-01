@@ -29,6 +29,7 @@ import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSyn
 import { createSlideGate } from '@/lib/slideLocationGate'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { deepQueryAllVisible } from '@/lib/domDeep'
+import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail } from './officeEmbed'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
@@ -152,6 +153,32 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   // R4: sync 후 슬라이드 게시를 1회만 시도하기 위한 플래그 (세션마다 초기화).
   const slidePublishedRef = useRef(false)
   const [reloadKey, setReloadKey] = useState(0)
+  // C5-2: 4001 리셋 후 새 바이트가 오면 세션을 재생성한다.
+  // data identity가 바뀌었다 = outer가 디스크를 다시 받아온 것이다.
+  // 이때 저장 중이던 구 바이트(savedBytes/latestSaved)를 버려야
+  // 새 baseContent가 보인다.
+  useEffect(() => {
+    if (!resetPendingRef.current) return
+    resetPendingRef.current = false
+    if (resetFallbackTimer.current) {
+      clearTimeout(resetFallbackTimer.current)
+      resetFallbackTimer.current = null
+    }
+    setSavedBytes(null)
+    latestSavedRef.current = null
+    setReloadKey((v) => v + 1)
+    setSlideIdx(0)
+    setCurSlide(0)
+    setRenameSessionKey((v) => v + 1)
+    return () => {
+      if (resetFallbackTimer.current) {
+        clearTimeout(resetFallbackTimer.current)
+        resetFallbackTimer.current = null
+      }
+    }
+    // data가 바뀔 때만 돈다 (resetPending일 때).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
   // 신원 단일 통로: collab-user (presence·코멘트 공통).
   const [collabUser, saveCollabUser] = useCollabUser()
   const collabUserRef = useRef(collabUser)
@@ -196,6 +223,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
    * (버린 방의 내용이 새 세션으로 저장되면 리셋이 무효가 된다).
    */
   const resetInFlightRef = useRef(false)
+  /**
+   * C5-2: 4001 리셋 후 새 바이트 대기 플래그. outer가 파일을 다시 받아오면
+   * data가 바뀌고 아래 effect가 reloadKey를 올려 세션을 재생성한다
+   * (stale 바이트로 호스팅하는 레이스 방지). 8초 안전망 포함.
+   */
+  const resetPendingRef = useRef(false)
+  const resetFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
    * M11: 뷰어 리마운트가 발생한 뒤, 성공 저장이 아직 없는 상태.
    *
@@ -784,6 +818,35 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [savePath, fileName, saving, persistBytes])
+  // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
+  useEffect(() => {
+    const onEmbed = (e: Event) => {
+      const d = (e as CustomEvent<EmbedDetail>).detail
+      if (!d?.file || !savePath || d.hostPath !== savePath) return
+      const c = collabRef.current
+      const slide = (() => {
+        try {
+          const idx = viewerRef.current?.getActiveSlideIndex?.()
+          return typeof idx === 'number' && idx >= 0 ? idx + 1 : 1
+        } catch {
+          return 1
+        }
+      })()
+      void runOfficeEmbed(d.file, {
+        hostPath: savePath,
+        kind: 'pptx',
+        roomId: c?.roomId,
+        clientId: c?.session?.clientId,
+        getBaseHash: () => baseHashRef.current ?? undefined,
+        slide,
+        isViewer: c?.role === 'viewer',
+        saveFirst: () => saveBeforeEmbed(savePath, editingRef.current),
+        reload: () => setReloadKey((v) => v + 1),
+      })
+    }
+    window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
+    return () => window.removeEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
+  }, [savePath])
 
   // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, 리마운트 없음).
   // role은 reconcile이 meta 기준으로 확정한다 (prop 런타임 변경 지원 — lib 확인됨).
@@ -1107,6 +1170,9 @@ writeBackHaltedRef.current = false
       }
     })
     // Q1: 서버가 방을 해체했다(4001). resume 없이 새로 입장해 파일 기준으로 다시 시작한다.
+    // C5-2: 리셋은 디스크가 바뀌었다는 뜻이므로, 파일 바이트를 먼저 다시 받고
+    // 나서 세션을 재생성한다 (stale 호스팅 방지). outer가 officeResetReload로
+    // fileReloadKey를 올리면 data가 바뀌고 아래 effect가 reloadKey를 올린다.
     session.onReset(() => {
       logClient('room_reset_reload')
       if (collabRef.current?.session === session) {
@@ -1125,11 +1191,23 @@ writeBackHaltedRef.current = false
         setMetaOwner(null)
         ownerIdRef.current = null
         setMetaTick(0)
-        // 파일 바이트로 다시 로드 (reloadKey + 파일 경로 기준으로 세션 재생성).
-        setReloadKey((v) => v + 1)
-        setSlideIdx(0)
-        setCurSlide(0)
-        setRenameSessionKey((v) => v + 1)
+        resetPendingRef.current = true
+        try {
+          window.dispatchEvent(new CustomEvent(OFFICE_RESET_RELOAD, { detail: { path: savePath } }))
+        } catch {
+          /* 무시 */
+        }
+        // 안전망: 바이트가 안 오면 8초 뒤 기존 동작대로 진행한다.
+        if (resetFallbackTimer.current) clearTimeout(resetFallbackTimer.current)
+        resetFallbackTimer.current = setTimeout(() => {
+          resetFallbackTimer.current = null
+          if (!resetPendingRef.current) return
+          resetPendingRef.current = false
+          setReloadKey((v) => v + 1)
+          setSlideIdx(0)
+          setCurSlide(0)
+          setRenameSessionKey((v) => v + 1)
+        }, 8000)
       }
       showToast.info('owner가 파일 기준으로 다시 열었습니다')
     })

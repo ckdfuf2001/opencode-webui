@@ -66,11 +66,11 @@ function findAnchorEl(container: HTMLElement, kind: OleAnchorKind): Element | nu
 }
 
 /**
- * C5-1 후속 S2: 기존 OLE 첨부 오버레이를 lib 도형 위에 앵커한다.
- * - 앵커가 있으면 도형 위에 작은 아이콘 1개: hover → 파일명(title),
- *   더블클릭 → 원본 파일명·바이트로 다운로드.
- * - 앵커가 없으면 기존처럼 좌상단 칩 1개 (폴백).
- * - 아이콘 드래그는 무시한다 (도형 이동은 lib 도형을 직접 끈다 — S1에서 저장됨).
+ * C5-1 후속 S2 + C5-2: 기존 OLE 첨부 오버레이를 lib 도형 위에 앵커한다.
+ * - 앵커가 있으면 첫 도형 위에 작은 아이콘 1개 + 나머지는 이름 칩:
+ *   hover → 파일명(title), 더블클릭 → 원본 파일명·바이트로 다운로드.
+ * - 앵커가 없으면 좌상단 칩들 (폴백).
+ * - 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서 — S1에서 저장됨).
  */
 export default function OleAttachmentOverlay({
   data,
@@ -86,8 +86,9 @@ export default function OleAttachmentOverlay({
   useEffect(() => {
     let dead = false
     setEntries([])
+    // C5-2: 첨부가 여러 개면 아이콘도 여러 개 (첫 항목만 도형에 앵커).
     void listOleEmbeddings(data).then((list) => {
-      if (!dead) setEntries(list.slice(0, 1))
+      if (!dead) setEntries(list.slice(0, 8))
     })
     return () => {
       dead = true
@@ -148,9 +149,8 @@ export default function OleAttachmentOverlay({
   }, [anchor, entries.length, data])
 
   if (entries.length === 0) return null
-  const entry = entries[0]!
 
-  const download = async (): Promise<void> => {
+  const download = async (entry: OleEmbeddingRef): Promise<void> => {
     try {
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
       const zip = await JSZip.loadAsync(bytes)
@@ -172,26 +172,32 @@ export default function OleAttachmentOverlay({
       className="absolute left-2 top-2 z-20 flex flex-col items-start gap-1"
       style={anchored && pos ? { left: pos.x, top: pos.y } : undefined}
     >
-      <button
-        type="button"
-        data-testid="ole-icon"
-        title={entry.fallbackName}
-        aria-label={`첨부 ${entry.fallbackName}`}
-        draggable={false}
-        onDoubleClick={() => void download()}
-        onDragStart={(e) => {
-          // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
-          e.preventDefault()
-        }}
-        className={
-          anchored
-            ? 'inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background/95 text-foreground shadow-sm hover:bg-muted'
-            : 'inline-flex items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
-        }
-      >
-        <Paperclip className="h-3.5 w-3.5" />
-        {!anchored && <span className="max-w-44 truncate">{entry.fallbackName}</span>}
-      </button>
+      {entries.map((entry, i) => {
+        const first = i === 0 && anchored
+        return (
+          <button
+            key={entry.partName}
+            type="button"
+            data-testid="ole-icon"
+            title={entry.fallbackName}
+            aria-label={`첨부 ${entry.fallbackName}`}
+            draggable={false}
+            onDoubleClick={() => void download(entry)}
+            onDragStart={(e) => {
+              // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
+              e.preventDefault()
+            }}
+            className={
+              first
+                ? 'inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background/95 text-foreground shadow-sm hover:bg-muted'
+                : 'inline-flex items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
+            }
+          >
+            <Paperclip className="h-3.5 w-3.5" />
+            {!first && <span className="max-w-44 truncate">{entry.fallbackName}</span>}
+          </button>
+        )
+      })}
     </div>
   )
 }
