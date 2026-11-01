@@ -492,8 +492,10 @@ export async function assembleXlsxEmbed(
   // sheet 본문: drawing/legacyDrawing ref + oleObjects (3곳 일치, 순서 유지).
   const oleName = embName.replace(/\.[A-Za-z0-9]{1,8}$/, '')
   const progAttr = progId ? ` progId="${progId}"` : ''
+  // xdr 접두사는 oleEl 자체에 선언한다 — 기존 <oleObjects>에 덧붙일 때
+  // (lib 저장본의 xmlns:x14 형태) 호스트 선언과 무관하게 유효하다.
   const oleEl =
-    `<oleObject${progAttr} dvAspect="DVASPECT_ICON" shapeId="${shapeId}" r:id="${oleRelId}"><objectPr defaultSize="0" r:id="${imgRelId}"><anchor moveWithCells="1"><from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>${toCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></objectPr></oleObject>`
+    `<oleObject${progAttr} dvAspect="DVASPECT_ICON" shapeId="${shapeId}" xmlns:xdr="${XLSX_NS_XDR}" r:id="${oleRelId}"><objectPr defaultSize="0" r:id="${imgRelId}"><anchor moveWithCells="1"><from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>${toCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></objectPr></oleObject>`
   const RNS = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
   const parts: string[] = []
   if (drawingRelId && !/<[\w.-]*:?drawing\b[^>]*r:id=/.test(sheet)) parts.push(`<drawing ${RNS} r:id="${drawingRelId}"/>`)

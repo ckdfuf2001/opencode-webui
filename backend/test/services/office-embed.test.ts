@@ -270,6 +270,32 @@ describe('assembleXlsxEmbed', () => {
     expect(drawing.match(/<xdr:twoCellAnchor/g)?.length).toBe(2)
   })
 
+  it('oleObjects가 이미 있으면 덧붙여도 xdr 네임스페이스가 유효하다 (lib 저장본 append)', async () => {
+    // lib 저장본 형태: oleObjects는 xmlns:x14만 선언, 기존 anchor의 xdr은 인라인 선언.
+    const host0 = await makeHostXlsx(false)
+    const z0 = await JSZip.loadAsync(host0)
+    const sheet0 = await z0.files['xl/worksheets/sheet1.xml']!.async('string')
+    const R = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    const XD = 'xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"'
+    const libForm = sheet0.replace(
+      '</worksheet>',
+      `<oleObjects xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><oleObject progId="Word.Document.12" dvAspect="DVASPECT_ICON" shapeId="1024" r:id="rId9" ${R}><objectPr defaultSize="0" r:id="rId9"><anchor moveWithCells="1"><from><xdr:col ${XD}>0</xdr:col></from></anchor></objectPr></oleObject></oleObjects></worksheet>`,
+    )
+    z0.file('xl/worksheets/sheet1.xml', libForm)
+    const host = await z0.generateAsync({ type: 'uint8array' })
+    const out = await assembleXlsxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: await makeAttachDocx(),
+      attachName: 'c.docx',
+      attachKind: 'docx',
+    })
+    const z = await JSZip.loadAsync(out)
+    const sheet = await z.files['xl/worksheets/sheet1.xml']!.async('string')
+    // 새로 덧붙인 oleObject는 xdr 선언을 스스로 가진다 (호스트 선언과 무관).
+    const added = sheet.match(/<oleObject[^>]*shapeId="1025"[^>]*>/)?.[0] ?? ''
+    expect(added).toContain('xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"')
+  })
+
   it('잘못된 호스트/시트는 거부된다', async () => {
     await expect(
       assembleXlsxEmbed(zipLoad, {
