@@ -12,6 +12,7 @@
  */
 
 import { deflateSync } from 'node:zlib'
+import { randomUUID } from 'node:crypto'
 
 export type EmbedAttachKind = 'docx' | 'xlsx' | 'pptx'
 
@@ -261,10 +262,13 @@ export async function assemblePptxEmbed(
   const extCy = 1270000
   const oleName = embName.replace(/\.[A-Za-z0-9]{1,8}$/, '')
   const progAttr = progId ? ` progId="${progId}"` : ''
+  const creationId = randomUUID().toUpperCase()
   const frame =
-    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${frameId}" name="${oleName}"><a:extLst><a:ext uri="{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{00000000-0000-0000-0000-000000000000}"/></a:ext></a:extLst></p:cNvPr><p:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="${offX}" y="${offY}"/><a:ext cx="${extCx}" cy="${extCy}"/></a:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:v="urn:schemas-microsoft-com:vml" Requires="v"><p:oleObj spid="${spid}" name="${oleName}" showAsIcon="1" r:id="${embRelId}" imgW="${extCx}" imgH="${extCy}"${progAttr}><p:embed/></p:oleObj></mc:Choice><mc:Fallback><p:oleObj name="${oleName}" showAsIcon="1" r:id="${embRelId}" imgW="${extCx}" imgH="${extCy}"${progAttr}><p:embed/><p:pic><p:nvPicPr><p:cNvPr id="0" name=""/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${imgRelId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${offX}" y="${offY}"/><a:ext cx="${extCx}" cy="${extCy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:oleObj></mc:Fallback></mc:AlternateContent></a:graphicData></a:graphic></p:graphicFrame>`
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${frameId}" name="${oleName}"><a:extLst><a:ext uri="{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{${creationId}}"/></a:ext></a:extLst></p:cNvPr><p:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="${offX}" y="${offY}"/><a:ext cx="${extCx}" cy="${extCy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:v="urn:schemas-microsoft-com:vml" Requires="v"><p:oleObj spid="${spid}" name="${oleName}" showAsIcon="1" r:id="${embRelId}" imgW="${extCx}" imgH="${extCy}"${progAttr}><p:embed/></p:oleObj></mc:Choice><mc:Fallback><p:oleObj name="${oleName}" showAsIcon="1" r:id="${embRelId}" imgW="${extCx}" imgH="${extCy}"${progAttr}><p:embed/><p:pic><p:nvPicPr><p:cNvPr id="0" name=""/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${imgRelId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${offX}" y="${offY}"/><a:ext cx="${extCx}" cy="${extCy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:oleObj></mc:Fallback></mc:AlternateContent></a:graphicData></a:graphic></p:graphicFrame>`
   if (!slide.includes('</p:spTree>')) embedError('Unsupported slide structure', 400, 'bad_slide')
-  zip.file(slideFile, slide.replace('</p:spTree>', `${frame}</p:spTree>`))
+  const newSlide = slide.replace('</p:spTree>', `${frame}</p:spTree>`)
+  checkBalancedXml(newSlide, slideFile)
+  zip.file(slideFile, newSlide)
 
   // VML이 있으면 shape 추가 (없으면 Fallback pic으로 충분).
   const vmlMatch = rels.match(/\bTarget="([^"]*vmlDrawing[^"]*)"/)
@@ -289,6 +293,32 @@ export async function assemblePptxEmbed(
   ct = ensureContentOverride(ct, `ppt/embeddings/${embName}`, ATTACH_MIME[input.attachKind])
   zip.file('[Content_Types].xml', ct)
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}
+
+/**
+ * 조립한 XML의 태그 균형을 검사한다 (깨진 바이트 기록 방지, fail-closed).
+ * 코멘트/CDATA는 제외하고 검사한다.
+ */
+export function checkBalancedXml(xml: string, what: string): void {
+  const clean = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '').replace(/<!--[\s\S]*?-->/g, '')
+  const stack: string[] = []
+  const re = /<(\/?)([\w:.-]+)([^>]*?)(\/?)>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(clean)) !== null) {
+    const closing = m[1] ?? ''
+    const name = m[2] ?? ''
+    const attrs = m[3] ?? ''
+    const selfclose = m[4] ?? ''
+    if (!name || name[0] === '?' || name[0] === '!') continue
+    if (selfclose === '/' || /\/\s*$/.test(attrs)) continue
+    if (closing === '/') {
+      const top = stack.pop()
+      if (top !== name) embedError(`Unbalanced XML in ${what}`, 500, 'bad_assembly')
+    } else {
+      stack.push(name)
+    }
+  }
+  if (stack.length > 0) embedError(`Unbalanced XML in ${what}`, 500, 'bad_assembly')
 }
 
 export interface XlsxEmbedInput {
@@ -481,18 +511,35 @@ export async function assembleXlsxEmbed(
     if (!sheet.includes('</worksheet>')) embedError('Unsupported sheet structure', 400, 'bad_host')
     const closeTag = `</${'worksheet'}>`
     sheet = sheet.replace(closeTag, `${parts.join('')}${closeTag}`)
+    checkBalancedXml(sheet, sheetFile)
   }
   zip!.file(sheetFile, sheet)
 
-  // drawing anchor 추가.
+  // drawing anchor (pic: lib가 네이티브 렌더+이동+저장. ole 바인딩은 sheet oleObjects가 담당).
+  // cNvPr name/id는 ole와 일치시킨다 (오버레이가 img alt로 찾는다).
+  // drawing rels를 먼저 만들어 blip r:embed id를 확정한다.
+  const drawingRelsFile = (drawingFile as string).replace(/\/([^/]+)$/, '/_rels/$1.rels')
+  const drawingRels = (await readText(drawingRelsFile)) ??
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+  const drawingImgRelId = nextRelId(drawingRels)
+  zip!.file(
+    drawingRelsFile,
+    addRel(drawingRels, drawingImgRelId, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', `../media/${imgName}`),
+  )
   const drawingXml = (await readText(drawingFile as string)) ?? ''
   const anchor =
     `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>${toCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
-    `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${shapeId}" name="${oleName}" hidden="1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr bwMode="auto"><a:xfrm xmlns:a="${XLSX_NS_A}"><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm><a:prstGeom prst="rect" xmlns:a="${XLSX_NS_A}"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>`
+    `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${shapeId}" name="${oleName}"/><xdr:cNvPicPr/></xdr:nvPicPr>` +
+    `<xdr:blipFill><a:blip r:embed="${drawingImgRelId}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>` +
+    `<xdr:spPr><a:xfrm xmlns:a="${XLSX_NS_A}"><a:off x="0" y="0"/><a:ext cx="1828800" cy="1270000"/></a:xfrm><a:prstGeom prst="rect" xmlns:a="${XLSX_NS_A}"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>`
   if (drawingXml.includes('</xdr:wsDr>')) {
-    zip!.file(drawingFile as string, drawingXml.replace('</xdr:wsDr>', `${anchor}</xdr:wsDr>`))
+    const next = drawingXml.replace('</xdr:wsDr>', `${anchor}</xdr:wsDr>`)
+    checkBalancedXml(next, drawingFile as string)
+    zip!.file(drawingFile as string, next)
   } else if (drawingXml.includes('</wsDr>')) {
-    zip!.file(drawingFile as string, drawingXml.replace('</wsDr>', `${anchor}</wsDr>`))
+    const next = drawingXml.replace('</wsDr>', `${anchor}</wsDr>`)
+    checkBalancedXml(next, drawingFile as string)
+    zip!.file(drawingFile as string, next)
   } else {
     embedError('Unsupported drawing structure', 400, 'bad_host')
   }
@@ -628,7 +675,9 @@ export async function assembleDocxEmbed(
     `<w:p><w:r><w:object w:dxaOrig="1480" w:dyaOrig="1028"><v:shape id="${shapeId}" type="#_x0000_t75" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:74pt;height:51.35pt" o:ole=""><v:imagedata r:id="${imgRelId}" o:title="" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></v:shape>` +
     `<o:OLEObject Type="Embed"${progAttr} ShapeID="${shapeId}" DrawAspect="Icon" ObjectID="${objectId}" r:id="${oleRelId}" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><o:FieldCodes>\\s</o:FieldCodes></o:OLEObject></w:object></w:r></w:p>`
   if (doc.includes('</w:body>')) {
-    doc = doc.replace('</w:body>', `${para}</w:body>`)
+    const next = doc.replace('</w:body>', `${para}</w:body>`)
+    checkBalancedXml(next, 'word/document.xml')
+    doc = next
   } else {
     embedError('Unsupported document structure', 400, 'bad_host')
   }

@@ -162,6 +162,44 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
         .toBe(emb0 + 1)
       // 방 리셋 후 재조회가 끝나면 ole 아이콘이 2개가 된다.
       await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      // 본문에 새 ole 프레임이 보인다 (Fallback pic 렌더). lib 렌더는 비동기라 폴링한다.
+      const frameFn = (): Promise<string> =>
+        page.evaluate(() => {
+          const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
+            if (depth > 8) return acc
+            for (const el of [...((root as Element).querySelectorAll?.('*') ?? [])]) {
+              acc.push(el)
+              const sr = (el as HTMLElement).shadowRoot
+              if (sr) deep(sr, acc, depth + 1)
+            }
+            return acc
+          }
+          const host = document.querySelector('[data-testid="pptx-viewer-root"]')
+          if (!host) return 'no-host'
+          const all = deep(host)
+          const frames = all.filter((e) => (e.getAttribute?.('data-element-id') || '').includes('-frame-'))
+          const mine = frames.filter((e) => (e.textContent || '').includes('embed-docx'))
+          if (mine.length === 0) {
+            const texts = frames.map((e) => (e.textContent || '').slice(0, 40))
+            return `noframe texts=${JSON.stringify(texts)}`
+          }
+          const r = mine[0]!.getBoundingClientRect()
+          const imgs = [...mine[0]!.querySelectorAll('img')].slice(0, 3).map((im) => {
+            const b = im.getBoundingClientRect()
+            return `src=${(im.getAttribute('src') || '').slice(-40)} ${Math.round(b.width)}x${Math.round(b.height)}`
+          })
+          if (r.width > 0 && r.height > 0) return 'ok'
+          // 비교용: 기존 pdf 프레임도 함께 덤프.
+          const others = frames
+            .filter((e) => !(e.textContent || '').includes('embed-docx'))
+            .slice(0, 3)
+            .map((e) => {
+              const b = e.getBoundingClientRect()
+              return `eid=${(e.getAttribute('data-element-id') || '').slice(-30)} rect=${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.width)}x${Math.round(b.height)} style=${(e.getAttribute('style') || '').slice(0, 120)}`
+            })
+          return `hidden rect=${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}x${Math.round(r.height)} style=${(mine[0]!.getAttribute('style') || '').slice(0, 160)} others=${JSON.stringify(others)}`
+        })
+      await expect.poll(frameFn, { timeout: 20000, intervals: [1000] }).toBe('ok')
       const after = await backendBytes('c52pptx', 'embed-pdf.pptx')
       const z1 = await JSZip.loadAsync(after)
       const emb1 = Object.keys(z1.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/'))
@@ -213,6 +251,29 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
         .toBe(emb0 + 1)
       // 방 리셋 후 재조회가 끝나면 ole 아이콘이 2개가 된다.
       await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      // 본문에 미리보기 그림이 보인다 (pic 앵커 네이티브 렌더).
+      const previewState = await page.evaluate(() => {
+        const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
+          if (depth > 8) return acc
+          for (const el of [...((root as Element).querySelectorAll?.('*') ?? [])]) {
+            acc.push(el)
+            const sr = (el as HTMLElement).shadowRoot
+            if (sr) deep(sr, acc, depth + 1)
+          }
+          return acc
+        }
+        const host = document.querySelector('.xlsxengine-host')
+        if (!host) return 'no-host'
+        const imgs = deep(host).filter((e) => e.tagName === 'IMG')
+        const alts = imgs.map((e) => e.getAttribute('alt'))
+        if (!alts.includes('embed-docx')) return `alts=${JSON.stringify(alts)}`
+        const vis = imgs.some((e) => {
+          const r = e.getBoundingClientRect()
+          return r.width > 0 && r.height > 0
+        })
+        return vis ? 'ok' : 'hidden'
+      })
+      expect(previewState, 'body preview image visible').toBe('ok')
       const after = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
       const z1 = await JSZip.loadAsync(after)
       // 3곳 일치: drawing anchor + oleObjects + VML.

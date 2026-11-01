@@ -1073,3 +1073,9 @@ E21만의 문제가 아니다. 근거:
 ## E7 실패 확인 (2026-11-01)
 - pptx-collab E7이 3회 연속 실패(mountCount 6 vs 7). d2434b9 worktree에서 동일하게 실패하므로 내 변경과 무관한 기존/환경 문제로 판정. E2는 green.
 - backend 전체: 625 pass + 2 fail (bun:sqlite 환경, 기존과 동일 - config-migration, repo-tracking).
+
+## 본문 미리보기 수정 (2026-11-01)
+- 증상: 첨부는 되는데 본문에 미리보기 그림이 안 보임. 원인 2개: (1) PPTX graphicFrame xfrm 접두어 오류(p:가 맞는데 a:로 씀) +اصمة?아님+ lib가 xfrm을 못 읽어 0x0 렌더. (2) XLSX ole를 sp로 넣어서 lib가 unsupported 박스만 그림.
+- 수정: p:xfrm로 고침 + assembleXlsxEmbed를 pic 앵커로 변경 (cNvPr name=ole명, blip PNG, drawing rels). pic은 네이티브라 렌더+이동+저장이 그대로 된다.
+- 오버레이도 pic에 앵커되게 변경 (img alt 매칭, 없으면 구형 sp 박스로 폴백). checkBalancedXml로 조립 XML 검증 (깨진 바이트 기록 방지).
+- 검증: 단위 13/13, P2-1 본문 프레임 표시 assert + P2-2 본문 IMG assert green, c5-1 5/5 + S1/S2 green.

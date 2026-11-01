@@ -5,6 +5,7 @@ import {
   assemblePptxEmbed,
   assembleXlsxEmbed,
   attachKindOf,
+  checkBalancedXml,
   EMBED_MAX_BYTES,
   genericIconPng,
   sanitizeEmbedName,
@@ -78,6 +79,12 @@ describe('office-embed helpers', () => {
   it('EMBED_MAX_BYTES는 20MB다', () => {
     expect(EMBED_MAX_BYTES).toBe(20 * 1024 * 1024)
   })
+  it('checkBalancedXml은 어긋난 태그를 거부한다', () => {
+    expect(() => checkBalancedXml('<a><b></a></b>', 't')).toThrowError(/nbalanced/)
+    expect(() => checkBalancedXml('<a><b></b>', 't')).toThrowError(/nbalanced/)
+    expect(() => checkBalancedXml('<a><br/><b>x</b></a>', 't')).not.toThrow()
+    expect(() => checkBalancedXml('<a><!-- <b> --><b>x</b></a>', 't')).not.toThrow()
+  })
 })
 
 describe('assemblePptxEmbed', () => {
@@ -104,6 +111,8 @@ describe('assemblePptxEmbed', () => {
     expect(slide).toContain('presentationml/2006/ole')
     expect(slide).toContain('progId="Word.Document.12"')
     expect(slide).toContain('name="report"')
+    // graphicFrame 지오메트리는 p:xfrm (a:가 아니라 PowerPoint 네이티브).
+    expect(slide).toContain('<p:xfrm><a:off')
     const rels = await z.files['ppt/slides/_rels/slide1.xml.rels']!.async('string')
     expect(rels).toContain('/package')
     expect(rels).toContain('../embeddings/')
@@ -219,10 +228,15 @@ describe('assembleXlsxEmbed', () => {
     expect(/legacyDrawing\b[^>]*r:id="/.test(sheet)).toBe(true)
     expect(sheet).toContain('<oleObjects')
     expect(sheet).toContain('progId="Word.Document.12"')
-    // drawing anchor + VML shape.
+    // drawing anchor (pic: lib 네이티브 렌더) + VML shape.
     const drawing = await z.files['xl/drawings/drawing1.xml']!.async('string')
     expect(drawing.match(/<xdr:twoCellAnchor/g)?.length).toBe(1)
+    expect(drawing).toContain('<xdr:pic>')
+    expect(drawing).toContain('name="a"')
+    expect(drawing).toContain('r:embed="rId1"')
     expect(sheet).toContain('DVASPECT_ICON')
+    const drawingRels = await z.files['xl/drawings/_rels/drawing1.xml.rels']!.async('string')
+    expect(drawingRels).toContain('/image')
     const vmlNames = Object.keys(z.files).filter((n) => n.endsWith('.vml'))
     expect(vmlNames.length).toBe(1)
     const vml = await z.files[vmlNames[0]!]!.async('string')
