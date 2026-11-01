@@ -41,7 +41,7 @@ import { createPortal } from 'react-dom'
 import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
-import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail } from './officeEmbed'
+import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
 
 type ExtractedMsg = {
   html?: string
@@ -703,6 +703,17 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
       window.removeEventListener(OFFICE_RESET_RELOAD, onResetReload as EventListener)
     }
   }, [file.path])
+  // C5-2 add-in 탭: 리본 "첨부" 탭의 run이 파일 선택을 요청하면 숨은 input을 클릭한다.
+  // input은 상시 마운트라 pptx 편집 모드(헤더 없음)에서도 받는다.
+  useEffect(() => {
+    const onRequest = (e: Event) => {
+      const d = (e as CustomEvent<EmbedRequestDetail>).detail
+      if (!d?.hostPath || d.hostPath !== file.path) return
+      embedInputRef.current?.click()
+    }
+    window.addEventListener(OFFICE_EMBED_REQUEST, onRequest as EventListener)
+    return () => window.removeEventListener(OFFICE_EMBED_REQUEST, onRequest as EventListener)
+  }, [file.path])
   const { data: raw, status: rawStatus, error: rawError, etag: rawEtag } = useRawFile(
     file.path,
     isOfficeNative ? !pdfMode : isViewerOnly || (hasClientFallback && converted.status !== 'ready'),
@@ -810,6 +821,8 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
           </div>
           {(kind === 'pptx' || kind === 'docx' || kind === 'xlsx') && !pdfMode && (
             <div className="flex items-center gap-2 ml-auto">
+              {/* C5-2 add-in 탭: 편집 모드에서는 리본 "첨부" 탭이 진입점이라 헤더 버튼을 숨긴다. */}
+              {!editing && (
               <button
                 type="button"
                 onClick={() => embedInputRef.current?.click()}
@@ -818,21 +831,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
               >
                 문서 첨부
               </button>
-              <input
-                ref={embedInputRef}
-                type="file"
-                accept=".docx,.xlsx,.pptx"
-                data-testid="office-attach-input"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  e.target.value = ''
-                  if (!f) return
-                  window.dispatchEvent(
-                    new CustomEvent<EmbedDetail>(OFFICE_EMBED_FILE, { detail: { file: f, hostPath: file.path } }),
-                  )
-                }}
-              />
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -905,6 +904,27 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
             </div>
           )}
         </div>
+      )}
+      {/* C5-2 add-in 탭: 리본 "첨부" 탭의 run → officeEmbedRequest → 여기서 클릭.
+          pptx 편집 모드에서는 위 헤더가 없으므로 상시 마운트한다. */}
+      {isOfficeNative && !pdfMode && (
+        <input
+          ref={embedInputRef}
+          type="file"
+          accept=".docx,.xlsx,.pptx"
+          data-testid="office-attach-input"
+          className="hidden"
+          aria-hidden="true"
+          tabIndex={-1}
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''
+            if (!f) return
+            window.dispatchEvent(
+              new CustomEvent<EmbedDetail>(OFFICE_EMBED_FILE, { detail: { file: f, hostPath: file.path } }),
+            )
+          }}
+        />
       )}
       {body}
     </div>
@@ -1076,6 +1096,8 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const [laidOut, setLaidOut] = useState(0)
   const laidOutRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
+  const attachAddIns = useMemo(() => buildOfficeAttachAddIn(() => requestEmbedFile(path)), [path])
   // G2: lib 타이틀바 actions 슬롯에 presence를 꽂는다 (portal). DOCX는
   // 동시편집이 없어 항상 빈 목록 — 표시는 없고 testid 자리만 유지한다.
   const docxTitleSlot = useTitlebarSlot(
@@ -1406,6 +1428,7 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
               readOnly={!editing}
               showToolbar={editing}
               theme={appTheme}
+              ribbonAddIns={attachAddIns}
               onDocumentChange={scheduleRelayout}
               onDirtyChange={setDocDirty}
               onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
@@ -1714,6 +1737,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     updateCollabIdentity?: (patch: { name?: string; color?: string; sheet?: string | null; range?: string | null }) => boolean
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
+  // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
+  const attachAddIns = useMemo(() => buildOfficeAttachAddIn(() => requestEmbedFile(path)), [path])
   // X1c(P0): 단독 저장의 잠금 ETag. 파일을 **읽은 시점**의 값부터 시작해,
   // 단독 저장 성공마다 서버가 돌려준 새 ETag 로 갱신한다(디스크와 동기화 유지).
   const [etag, setEtag] = useState<string | null>(null)
@@ -3866,6 +3891,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             showFormulaBar={editing}
             theme={appTheme}
             collaboration={collabOptions}
+            ribbonAddIns={attachAddIns}
             onCollaborationChange={(state) => {
               // X1c(P1): 방에 실제로 붙었을 때(연결 + 첫 교환 완료)만 잠금을 푼다.
               // X1d: `active` 는 공유가 시작됐다는 뜻일 뿐 소켓이 열렸다는 뜻이 아니다

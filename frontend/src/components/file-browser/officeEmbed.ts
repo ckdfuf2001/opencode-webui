@@ -1,10 +1,12 @@
 import { API_BASE_URL } from '@/config'
 import { showToast } from '@/lib/toast'
+import type { RibbonAddInTab } from 'ooxml-core/ribbon'
 
 /**
  * C5-2: INSERT 문서 첨부 — 클라이언트 플로우.
- * 헤더 "문서 첨부" 버튼 → 파일 선택(officeEmbedFile 이벤트) →
- * 마운트된 뷰어가 자기 방 컨텍스트로 POST → 200이면 reload.
+ * 리본 "첨부" 탭(공식 ribbonAddIns) → 파일 선택(officeEmbedRequest →
+ * 숨은 input 클릭 → officeEmbedFile 이벤트) → 마운트된 뷰어가 자기 방
+ * 컨텍스트로 POST → 200이면 reload. 보기 모드(리본 없음)에서는 헤더 버튼 유지.
  * - 편집 중이면 먼저 저장한다 (방/단독 공통 officeSaveRequest 경로).
  * - 409 dirty_room이면 저장 후 1회만 재시도한다.
  * - viewer는 서버가 403으로 막는다 (클라이언트도 미리 막는다).
@@ -19,6 +21,45 @@ export const OFFICE_RESET_RELOAD = 'officeResetReload'
 export interface EmbedDetail {
   file: File
   hostPath: string
+}
+
+/** C5-2 add-in 탭: 파일 선택을 요청한다 (숨은 input을 가진 호스트가 받아 클릭한다). */
+export interface EmbedRequestDetail {
+  hostPath: string
+}
+
+export function requestEmbedFile(hostPath: string): void {
+  window.dispatchEvent(new CustomEvent<EmbedRequestDetail>(OFFICE_EMBED_REQUEST, { detail: { hostPath } }))
+}
+
+/**
+ * C5-2 add-in 탭: lib 공식 확장점(`ribbonAddIns`)용 "첨부" 탭 기술자.
+ * lib가 built-in 탭 교체를 금지하므로(acceptedRibbonAddIns) Help 뒤에 새 탭으로
+ * 붙는다 (Office의 ACROBAT 탭과 같은 방식). PPTX/XLSX/DOCX 공통.
+ */
+export const OFFICE_ATTACH_TAB_ID = 'attach'
+export const OFFICE_ATTACH_COMMAND_ID = 'attach-document'
+
+export function buildOfficeAttachAddIn(onPick: () => void): RibbonAddInTab[] {
+  return [
+    {
+      id: OFFICE_ATTACH_TAB_ID,
+      label: '첨부',
+      groups: [
+        {
+          label: '문서',
+          commands: [
+            {
+              id: OFFICE_ATTACH_COMMAND_ID,
+              label: '문서 첨부',
+              title: '문서 첨부 (docx/xlsx/pptx)',
+              run: onPick,
+            },
+          ],
+        },
+      ],
+    },
+  ]
 }
 
 export interface EmbedCtx {

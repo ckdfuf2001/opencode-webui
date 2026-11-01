@@ -29,7 +29,7 @@ import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSyn
 import { createSlideGate } from '@/lib/slideLocationGate'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { deepQueryAllVisible } from '@/lib/domDeep'
-import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail } from './officeEmbed'
+import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail } from './officeEmbed'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
@@ -72,6 +72,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const narrowViewport = useMobile()
   const appTheme = useTheme()
   const viewerTheme = useMemo(() => ({ colors: pptxThemeColors(appTheme === 'dark') }), [appTheme])
+  // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
+  // run은 DocumentPreview의 숨은 input을 거쳐 officeEmbedFile로 이어진다.
+  const attachAddIns = useMemo(() => buildOfficeAttachAddIn(() => requestEmbedFile(savePath ?? '')), [savePath])
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
@@ -2283,6 +2286,8 @@ const peersRef = useRef<Peer[]>([])
                   fileName={fileName}
                   canEdit={editing}
                   showToolbar={editing || narrowViewport}
+                  // C5-2: 리본 "첨부" 탭 (공식 ribbonAddIns — Help 뒤 새 탭).
+                  ribbonAddIns={attachAddIns}
                   // U2: 앱이 관리하는 저장(소유자 write-back)만 남긴다 — lib 타이틀바의
                   // AutoSave 표시/토글은 제거(ooxml-ui 패치: 호스트가 끄면 표시 안 함).
                   autosave={false}
