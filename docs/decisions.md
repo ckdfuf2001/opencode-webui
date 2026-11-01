@@ -716,6 +716,9 @@
   열고 저장하던 문제. 동일 파일명 행은 `seg/name` 정규화 매칭 + 마킹 후 클릭.
 - 관할: test red(0263dff) → oleExtract(874f8d2) → chore 패치(41d7880) →
   fix lib(f715c41) → feat 오버레이(8643142) → fix nits(c583ff3) → test 보정(3dba991).
+## D56 solo ole 이동 저장 (S1, 2026-11-01)
+- 결정: solo 자동저장 skip은 신원 미발급 탓이라 편집 진입 시 자동 발급한다 (표시명 불변). 방에 나 혼자면 self-owner로 저장한다.
+- lib가 unsupported drawing을 원본 보존해서 앵커 이동이 유실되므로, 저장 직전 개체 변경을 flush한 뒤 서버 수용 앵커로 drawing XML from/to만 패치한다. 그 외 바이트는 손대지 않는다 (oleObject 보존 S1 assert).
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.

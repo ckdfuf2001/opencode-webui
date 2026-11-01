@@ -45,6 +45,26 @@ export function writeCollabUser(user: CollabIdentity): void {
 }
 
 /** 열린 viewer 전체에 신원 변경을 전파한다. */
+/**
+ * S1: 편집 진입 시 신원이 없으면 자동 발급한다 (PPTX 세션은 이미 이렇게 한다).
+ * 근거: XLSX 자동저장은 rooms() 참가자 목록에서 내 id로 owner를 판정하는데,
+ * 신원이 없으면 self-match가 실패해 solo에서도 조용히 skip된다
+ * (objects/move는 가는데 /api/collab/save가 never).
+ * 이름은 기존 기본값 'user'를 유지해 표시가 바뀌지 않는다 — id만 보장한다.
+ */
+export function ensureCollabIdentity(): CollabIdentity {
+  const cur = readCollabUser()
+  if (cur && cur.id) return cur
+  const name = cur?.name?.trim() || 'user'
+  const fresh: CollabIdentity = {
+    id: `u-${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+    name,
+    color: cur?.color || colorForName(name),
+  }
+  writeCollabUser(fresh)
+  return fresh
+}
+
 export function useCollabUser(): [CollabIdentity | null, (u: CollabIdentity) => void] {
   const [user, setUser] = useState<CollabIdentity | null>(() => readCollabUser())
   useEffect(() => {

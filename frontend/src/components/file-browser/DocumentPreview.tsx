@@ -32,14 +32,15 @@ import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, 
 import { collabApi, collabServerUrl, type CollabRoomSummary } from '@/api/collab'
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
-import { readCollabUser } from '@/lib/collabUser'
+import { readCollabUser, ensureCollabIdentity } from '@/lib/collabUser'
 import { hasEmbObject, isBlockedXlsxEdit, decideObjectOp, NO_OBJECT_GUARD, shouldFlushOnPeerArrive, type ObjectGuardCtx } from '@/lib/xlsxCollabGuard'
-import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectsStateMsg } from '@/lib/xlsxObjects'
+import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectAnchor, type ObjectsStateMsg } from '@/lib/xlsxObjects'
 import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/CollabPresence'
 import type { PresencePeerView } from '@/components/collab/collabPresenceView'
 import { createPortal } from 'react-dom'
 import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
+import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
 
 type ExtractedMsg = {
   html?: string
@@ -1954,6 +1955,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     setJoinKey((k) => k + 1)
   }, [])
   useEffect(() => {
+    // S1: 신원 미발급이면 여기서 자동 발급한다. rooms() owner self-match와
+    // presence userId 묶음의 전제다 (없으면 solo 자동저장이 조용히 skip된다).
+    ensureCollabIdentity()
     // X2a-③: 보기 모드도 방에 참가한다(viewer 역할, presence만 공유).
     // 모드가 바뀌면 viewer 따라가기 상태도 처음부터 다시 본다.
     hadEditorsRef.current = false
@@ -2404,16 +2408,72 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    * C2-c: quiet=true면 성공 토스트를 띄우지 않는다(자동 저장용).
    * 실패 경로(토스트+배너+내 사본 다운로드)는 그대로 둔다.
    */
+  // S1: unsupported 도형(ole 등) 이동분을 저장 바이트에 수술식으로 반영한다.
+  // lib saveBytes는 알 수 없는 drawing을 원본 그대로 보존해서 앵커 이동이
+  // 유실된다. 저장 직전 개체 변경을 즉시 flush한 뒤 서버 표(진실)에서
+  // 앵커를 읽는다. 모델은 서버가 비었을 때만 폴백으로 쓴다.
+  // (C4: order[sheet]에서 drawing 인덱스를 구한다.)
+  // 패치 실패는 원본 바이트로 진행한다(저장을 막지 않는다).
+  // objAllKeyed/flushObjectsNow는 stable 체인이라 []로 고정한다.
+  const patchUnsupportedForSave = useCallback(
+    async (raw: Uint8Array): Promise<Uint8Array> => {
+      try {
+        const keyed = objAllKeyed()
+        // raw kind가 'unsupported' 또는 'unsupported:*' — lib가 원본 그대로
+        // 보존하는 도형. 이동 후 description이 떨어져 bare가 되기도 한다.
+        const isUnsupportedKind = (k: unknown): boolean =>
+          k === 'unsupported' || (typeof k === 'string' && k.startsWith('unsupported:'))
+        const targets = keyed.filter((o) => isUnsupportedKind(o.d?.kind))
+        if (targets.length === 0) return raw
+        try {
+          await flushObjectsNow()
+        } catch {
+          /* flush 실패해도 저장·패치는 계속한다 */
+        }
+        let server: { order: Record<string, string[]> | null; objects: Array<{ key: string; anchor: unknown; deleted: boolean }> } | null = null
+        try {
+          const room = collabRef.current
+          if (room) {
+            const st = await collabApi.objects.get(room.roomId)
+            server = st
+          }
+        } catch {
+          server = null
+        }
+        const updates: Array<{ sheet: number; index: number; anchor: ObjectAnchor }> = []
+        for (const o of targets) {
+          const entry = server?.objects.find((e) => e.key === o.key)
+          const serverAnchor =
+            entry && !entry.deleted && entry.anchor != null ? (entry.anchor as unknown as ObjectAnchor) : null
+          // flush 직후라 서버가 최신이다. 모델은 서버가 비었을 때만 쓴다.
+          const modelAnchor = (o.d.anchor ?? null) as unknown as ObjectAnchor | null
+          const anchor = serverAnchor ?? modelAnchor
+          if (anchor == null) continue
+          const orderArr = server?.order?.[String(o.sheet)]
+          const index = orderArr ? orderArr.indexOf(o.key) : o.index
+          updates.push({ sheet: o.sheet, index: index >= 0 ? index : o.index, anchor })
+        }
+        if (updates.length === 0) return raw
+        return await patchUnsupportedAnchors(raw, updates)
+      } catch {
+        return raw
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable chain
+    [],
+  )
   const saveViaRoom = useCallback(async (quiet = false): Promise<boolean> => {
     const room = collabRef.current
     const handle = xlsxHandleRef.current
     if (!room || !handle?.saveBytes) return false
     try {
-      let bytes = new Uint8Array(await handle.saveBytes())
+      const raw = new Uint8Array(await handle.saveBytes())
+      let bytes = await patchUnsupportedForSave(raw)
       let res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, room.baseHash)
       if (!res.ok && res.reason === 'conflict_room') {
         // 방 상태를 다시 직렬화해서 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
-        bytes = new Uint8Array(await handle.saveBytes())
+        const raw2 = new Uint8Array(await handle.saveBytes())
+        bytes = await patchUnsupportedForSave(raw2)
         res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
       }
       if (!res.ok) {
@@ -2456,7 +2516,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true } }))
       return false
     }
-  }, [path, queryClient, storeFailedBytes])
+  }, [path, queryClient, storeFailedBytes, patchUnsupportedForSave])
 
   /**
    * C2-c: 편집이 멈추면 owner만 자동 저장한다.
@@ -3010,6 +3070,25 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
       void objFlushChanged(room.roomId, clientId)
     }, 500)
   }, [objFlushChanged])
+  /** S1: 저장 직전 개체 변경을 즉시 서버에 반영한다 (디바운스 대기 없음).
+   * 저장 바이트 패치가 최신 앵커를 읽기 위한 전제. 실패해도 저장은 진행한다.
+   * objFlushChanged는 체인에 걸고, 체인이 빌 때까지 기다린다.
+   */
+  const flushObjectsNow = useCallback(async (): Promise<void> => {
+    try {
+      const room = collabRef.current
+      const clientId = selfClientIdRef.current
+      if (!room || clientId == null || !editingRef.current) return
+      if (objSendTimerRef.current) {
+        clearTimeout(objSendTimerRef.current)
+        objSendTimerRef.current = null
+      }
+      objFlushChanged(room.roomId, clientId)
+      await objChainRef.current
+    } catch {
+      /* 실패해도 저장은 진행한다 */
+    }
+  }, [objFlushChanged])
   /**
    * C3: lib 편집 가드를 등록/해제한다. 편집기 마운트 상태와 무관하게,
    * 방 참가 + 2명 이상일 때만 켠다. 언마운트·나가기·혼자 남으면 끈다.
@@ -3507,7 +3586,13 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     void (async () => {
       try {
         const rooms = await collabApi.rooms()
-        const me = collabRef.current ? rooms.find((r) => r.roomId === collabRef.current!.roomId)?.participants.find((x) => x.id === collabRef.current!.user.id) : undefined
+        const list = collabRef.current
+          ? (rooms.find((r) => r.roomId === collabRef.current!.roomId)?.participants ?? [])
+          : []
+        // S1: solo 규칙과 동일 — 참가자 1명이면 그게 나다.
+        const me = collabRef.current
+          ? (list.find((x) => x.id === collabRef.current!.user.id) ?? (list.length === 1 ? list[0] : undefined))
+          : undefined
         if (!shouldFlushOnPeerArrive({ hasPendingAutosave: true, isOwner: me?.owner, joined: true })) return
         if (autosaveTimerRef.current) {
           clearTimeout(autosaveTimerRef.current)
@@ -3543,9 +3628,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
           let skip = false
           try {
             const rooms = await collabApi.rooms()
-            const mine = rooms.find((r) => r.roomId === c.roomId)?.participants.find((x) => x.id === c.user.id)
+            const list = rooms.find((r) => r.roomId === c.roomId)?.participants ?? []
+            // S1: 참가자가 나 하나면 그게 나다 (신원 미발급 탭의 self-match 실패 대비).
+            const mine = list.find((x) => x.id === c.user.id) ?? (list.length === 1 ? list[0] : undefined)
             if (mine) skip = mine.owner !== true
-            else skip = (rooms.find((r) => r.roomId === c.roomId)?.participants.some((x) => x.owner === true)) === true
+            else skip = list.some((x) => x.owner === true)
           } catch {
             // 조회 실패는 잠금에 맡긴다.
           }

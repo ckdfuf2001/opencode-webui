@@ -1046,3 +1046,9 @@ E21만의 문제가 아니다. 근거:
   eslint 신규파일 0, memory/encoding clean.
 - 관문 G(사용자 PC): xlsx(docx첨부 2종)+pptx(docx첨부)+docx(xlsx첨부), 제네릭 PNG,
   영문 progId, Excel/PPT/Word 열기·더블클릭·재저장 — 미착수.
+
+## S1 solo ole 자동저장 수정 (2026-11-01)
+- 증상: 혼자 편집에서 ole 도형 이동이 저장 안됨 (같이 있을 땐 됨).
+- 원인 2개: (1) 신원 미발급 브라우저는 rooms() self-match 실패로 scheduleAutosave가 조용히 skip (owner 선출됐는데도 some(owner)=true라 전원 skip). (2) 저장돼도 lib saveBytes가 unsupported drawing을 원본 그대로 보존해서 앵커 이동이 디스크에 안 남음.
+- 수정: ensureCollabIdentity() (PPTX 세션과 같은 자동 발급, 표시명 user 유지) + 참가자 1명이면 self로 보는 solo fail-open (autosave 타이머, peer-arrive flush) + 저장 직전 flushObjectsNow() 후 서버 표 앵커를 drawing XML에 수술 패치 (frontend/src/lib/xlsxAnchorPatch.ts, twoCellAnchor from/to만 교체, vmlDrawing rel 우선 매칭 회피, 개수 불일치 시 fail-closed).
+- 검증: e2e/collab/xlsx-ole-solo.spec.ts S1(드래그 후 move 이후 save에서 앵커 이동+oleObject 보존) S2(신원 자동발급). 단위 5/5. 회귀 c5-1 4/4 + xlsx-solo 2/2 + xlsx-collab 20/20 (chromium), tsc 0, eslint 신규 0, memory/encoding clean.
