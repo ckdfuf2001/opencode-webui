@@ -1079,3 +1079,6 @@ E21만의 문제가 아니다. 근거:
 - 수정: p:xfrm로 고침 + assembleXlsxEmbed를 pic 앵커로 변경 (cNvPr name=ole명, blip PNG, drawing rels). pic은 네이티브라 렌더+이동+저장이 그대로 된다.
 - 오버레이도 pic에 앵커되게 변경 (img alt 매칭, 없으면 구형 sp 박스로 폴백). checkBalancedXml로 조립 XML 검증 (깨진 바이트 기록 방지).
 - 검증: 단위 13/13, P2-1 본문 프레임 표시 assert + P2-2 본문 IMG assert green, c5-1 5/5 + S1/S2 green.
+
+## 본문 미리보기 검증 강화 (2026-11-01)
+- P2-1에 프레임 표시+PNG img assert, P2-2에 본문 IMG alt assert 추가. 셋 다 green.

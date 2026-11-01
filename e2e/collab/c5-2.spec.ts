@@ -186,9 +186,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           const r = mine[0]!.getBoundingClientRect()
           const imgs = [...mine[0]!.querySelectorAll('img')].slice(0, 3).map((im) => {
             const b = im.getBoundingClientRect()
-            return `src=${(im.getAttribute('src') || '').slice(-40)} ${Math.round(b.width)}x${Math.round(b.height)}`
+            return { src: (im.getAttribute('src') || '').slice(0, 15), w: Math.round(b.width), h: Math.round(b.height) }
           })
-          if (r.width > 0 && r.height > 0) return 'ok'
+          const imgOk = imgs.some((im) => im.w > 0 && im.h > 0 && im.src.indexOf('data:image/png') === 0)
+          if (r.width > 0 && r.height > 0 && imgOk) return 'ok'
           // 비교용: 기존 pdf 프레임도 함께 덤프.
           const others = frames
             .filter((e) => !(e.textContent || '').includes('embed-docx'))
@@ -197,7 +198,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
               const b = e.getBoundingClientRect()
               return `eid=${(e.getAttribute('data-element-id') || '').slice(-30)} rect=${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.width)}x${Math.round(b.height)} style=${(e.getAttribute('style') || '').slice(0, 120)}`
             })
-          return `hidden rect=${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}x${Math.round(r.height)} style=${(mine[0]!.getAttribute('style') || '').slice(0, 160)} others=${JSON.stringify(others)}`
+          return `hidden rect=${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}x${Math.round(r.height)} imgs=${JSON.stringify(imgs)} others=${JSON.stringify(others)}`
         })
       await expect.poll(frameFn, { timeout: 20000, intervals: [1000] }).toBe('ok')
       const after = await backendBytes('c52pptx', 'embed-pdf.pptx')
