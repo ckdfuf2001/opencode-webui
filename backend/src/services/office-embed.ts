@@ -692,3 +692,125 @@ export async function assembleDocxEmbed(
   zip!.file('[Content_Types].xml', ct)
   return zip!.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 }
+
+/* ---------- C5-3: 첨부 읽기/교체 (GET/PUT /api/collab/embed) ---------- */
+
+export interface EmbedPartInfo {
+  /** zip 안 정규 경로 (예: xl/embeddings/report.docx). */
+  part: string
+  relType: 'package' | 'oleObject'
+  /** rels에 적힌 원문 Target. */
+  target: string
+}
+
+const EMBED_REL_RE =
+  /Type="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships\/(package|oleObject)"[^>]*Target="([^"]+)"/g
+
+/**
+ * part 경로 문법 검증 (역참조·절대경로·역슬래시·빈 조각 거부).
+ * rels 대조는 하지 않는다 (read/replace에서 수행).
+ */
+export function normalizeEmbedPart(raw: string): string {
+  if (typeof raw !== 'string' || !raw) embedError('Bad part', 400, 'bad_part')
+  const p = raw.replace(/\\/g, '/')
+  if (!p || p.startsWith('/') || p.includes('\0')) embedError('Bad part', 400, 'bad_part')
+  const segs = p.split('/')
+  if (segs.some((s) => s === '' || s === '.' || s === '..')) embedError('Bad part', 400, 'bad_part')
+  return segs.join('/')
+}
+
+/** rel Target을 rels 파일 기준으로 해석해 파트 경로로 바꾼다. */
+export function resolveRelTarget(relsFile: string, target: string): string | null {
+  if (!target || target.includes('\\')) return null
+  if (target.startsWith('/')) return target.slice(1) || null
+  const m = /^(.*)\/_rels\/[^/]+$/.exec(relsFile)
+  if (!m) return null
+  const parts = m[1]!.split('/')
+  for (const seg of target.split('/')) {
+    if (seg === '' || seg === '.') continue
+    else if (seg === '..') {
+      if (parts.length === 0) return null
+      parts.pop()
+    } else parts.push(seg)
+  }
+  return parts.join('/')
+}
+
+/** 부모 zip에서 embeddings 파트 목록 (rels 기준, 중복 제거). */
+export async function listEmbedParts(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+): Promise<EmbedPartInfo[]> {
+  let zip: ZipLike
+  try {
+    zip = await zipLoad(hostBytes)
+  } catch {
+    embedError('Host is not a valid Office file', 400, 'bad_host')
+  }
+  const out: EmbedPartInfo[] = []
+  const seen = new Set<string>()
+  for (const rn of Object.keys(zip!.files)) {
+    if (!rn.endsWith('.rels')) continue
+    const f = zip!.files[rn]
+    if (!f || f.dir) continue
+    let text: string
+    try {
+      text = (await f.async('string')) as string
+    } catch {
+      continue
+    }
+    if (typeof text !== 'string') continue
+    EMBED_REL_RE.lastIndex = 0
+    let mm: RegExpExecArray | null
+    while ((mm = EMBED_REL_RE.exec(text)) !== null) {
+      const resolved = resolveRelTarget(rn, mm[2]!)
+      if (!resolved || !resolved.includes('embeddings/')) continue
+      if (seen.has(resolved)) continue
+      seen.add(resolved)
+      out.push({ part: resolved, relType: mm[1] as 'package' | 'oleObject', target: mm[2]! })
+    }
+  }
+  return out
+}
+
+/** 임베딩 파트 바이트를 꺼낸다 (allowlist 대조 포함). */
+export async function readEmbedPart(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+  part: string,
+): Promise<{ bytes: Uint8Array; name: string; relType: 'package' | 'oleObject' }> {
+  const norm = normalizeEmbedPart(part)
+  let zip: ZipLike
+  try {
+    zip = await zipLoad(hostBytes)
+  } catch {
+    embedError('Host is not a valid Office file', 400, 'bad_host')
+  }
+  const parts = await listEmbedParts(zipLoad, hostBytes)
+  const hit = parts.find((p) => p.part === norm)
+  if (!hit) embedError('No such embedded part', 404, 'bad_part')
+  const f = zip!.files[norm]
+  if (!f || f.dir) embedError('No such embedded part', 404, 'bad_part')
+  const bytes = new Uint8Array((await f!.async('uint8array')) as Uint8Array)
+  return { bytes, name: norm.split('/').pop() ?? 'attachment.bin', relType: (hit as EmbedPartInfo).relType }
+}
+
+/** 임베딩 파트를 교체한 새 호스트 바이트를 만든다 (나머지 불변). */
+export async function replaceEmbedPart(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+  part: string,
+  newBytes: Uint8Array,
+): Promise<Uint8Array> {
+  const norm = normalizeEmbedPart(part)
+  let zip: ZipLike
+  try {
+    zip = await zipLoad(hostBytes)
+  } catch {
+    embedError('Host is not a valid Office file', 400, 'bad_host')
+  }
+  const parts = await listEmbedParts(zipLoad, hostBytes)
+  if (!parts.some((p) => p.part === norm)) embedError('No such embedded part', 404, 'bad_part')
+  zip!.file(norm, newBytes)
+  return zip!.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}

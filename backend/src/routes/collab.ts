@@ -31,11 +31,20 @@ import {
   MAX_SAVE_BYTES,
 } from '../services/collab-rooms'
 import {
+  acquireEmbedLock,
+  getEmbedLock,
+  releaseEmbedLock,
+} from '../services/embed-locks'
+import {
   assembleDocxEmbed,
   assemblePptxEmbed,
   assembleXlsxEmbed,
   assertAttachBytes,
   attachKindOf,
+  listEmbedParts,
+  normalizeEmbedPart,
+  readEmbedPart,
+  replaceEmbedPart,
   sanitizeEmbedName,
   type EmbedAttachKind,
   type ZipLike,
@@ -427,6 +436,200 @@ app.post('/embed', async (c) => {
       resetRoomByServer(roomId)
     }
     return c.json({ ok: true, newHash, embeddings: [embPart] })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// C5-3: 첨부 읽기/교체/잠금 (GET/PUT /api/collab/embed, /embed/lock).
+// - GET: 파트 바이트 + 파일 해시(baseHash용) 반환. 읽기 전용 열람에도 쓴다.
+// - PUT: 해당 파트만 원자 교체. dirty_room(디스크 선행 변경)/stale(baseHash 불일치)
+//   구분, viewer 403, 잠금 확인, 조립 후 방 리셋(4001)은 POST embed과 동일.
+// - lock: path+part 임대 (TTL 60s, renew로 연장, 만료 시 자동 해제).
+// ---------------------------------------------------------------------------
+
+const EmbedPartQuery = z.object({
+  path: z.string().min(1).max(512),
+  part: z.string().min(1).max(512),
+  roomId: z.string().min(1).max(128).optional(),
+  clientId: z.coerce.number().int().optional(),
+})
+
+const EmbedPutSchema = z.object({
+  baseHash: z.string().min(1).max(128).optional(),
+  lockId: z.string().min(1).max(128),
+  roomId: z.string().min(1).max(128).optional(),
+  clientId: z.coerce.number().int().optional(),
+})
+
+const EmbedLockSchema = z.object({
+  path: z.string().min(1).max(512),
+  part: z.string().min(1).max(512),
+  name: z.string().max(100).optional(),
+  token: z.string().min(1).max(128),
+  lockId: z.string().min(1).max(128).optional(),
+})
+
+const EmbedUnlockSchema = z.object({
+  path: z.string().min(1).max(512),
+  part: z.string().min(1).max(512),
+  lockId: z.string().min(1).max(128),
+  token: z.string().min(1).max(128).optional(),
+})
+
+/** POST /embed과 같은 viewer 판정 (room+viewer+편집자 존재 → 403). */
+function embedViewerForbidden(roomId: string, clientId: number | undefined): boolean {
+  if (clientId === undefined) return false
+  const room = rooms.get(roomId)
+  if (!room) return false
+  return clientRoleInRoom(roomId, clientId) === 'view' && roomHasEditors(room)
+}
+
+app.get('/embed', async (c) => {
+  try {
+    const q = EmbedPartQuery.parse({
+      path: c.req.query('path'),
+      part: c.req.query('part'),
+      roomId: c.req.query('roomId') ?? undefined,
+      clientId: c.req.query('clientId') ?? undefined,
+    })
+    const abs = await resolveWorkspaceFile(q.path).catch(() => null)
+    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
+    const roomId = q.roomId && isValidRoomId(q.roomId) ? q.roomId : roomIdForAbs(abs)
+    const room = rooms.get(roomId)
+    if (room && embedViewerForbidden(roomId, q.clientId)) {
+      return c.json({ error: 'View-only participant cannot read attachments while editors are present', code: 'view_only' }, 403)
+    }
+    const norm = normalizeEmbedPart(q.part)
+    const hostBytes = new Uint8Array(await getRawFileContent(q.path))
+    const { bytes, name } = await readEmbedPart(zipLoadJSZip, hostBytes, norm)
+    const hash = hashBytes(hostBytes)
+    return c.json({
+      ok: true,
+      name,
+      hash,
+      size: bytes.length,
+      data: Buffer.from(bytes).toString('base64'),
+    })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.put('/embed', async (c) => {
+  try {
+    const q = EmbedPartQuery.parse({
+      path: c.req.query('path'),
+      part: c.req.query('part'),
+      roomId: c.req.query('roomId') ?? undefined,
+      clientId: c.req.query('clientId') ?? undefined,
+    })
+    const body = await c.req.parseBody()
+    const q2 = EmbedPutSchema.parse({
+      baseHash: typeof body.baseHash === 'string' ? body.baseHash : undefined,
+      lockId: typeof body.lockId === 'string' ? body.lockId : undefined,
+      roomId: typeof body.roomId === 'string' ? body.roomId : undefined,
+      clientId: body.clientId !== undefined ? Number(body.clientId) : undefined,
+    })
+    const roomId = q.roomId ?? q2.roomId
+    const clientId = q.clientId ?? q2.clientId
+    const norm = normalizeEmbedPart(q.part)
+    const abs = await resolveWorkspaceFile(q.path).catch(() => null)
+    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
+    const file = body.file as unknown as { arrayBuffer?: () => Promise<ArrayBuffer>; name?: unknown } | undefined
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      return c.json({ error: 'Missing file', code: 'bad_file' }, 400)
+    }
+    const attachBytes = new Uint8Array(await file.arrayBuffer())
+    const partBase = norm.split('/').pop() ?? 'attachment.bin'
+    const kind = attachKindOf(partBase) ?? attachKindOf(typeof file.name === 'string' ? file.name : '')
+    try {
+      assertAttachBytes(attachBytes, kind)
+    } catch (e) {
+      return errJson(c, e, 500)
+    }
+    // 잠금 확인 (임대자만 교체).
+    const lock = getEmbedLock(abs, norm)
+    if (!lock || lock.lockId !== q2.lockId) {
+      if (lock && lock.expiresAt > Date.now()) {
+        return c.json({ error: 'Attachment is being edited', code: 'locked', holderName: lock.holder }, 409)
+      }
+      return c.json({ error: 'Attachment lock required', code: 'no_lock' }, 409)
+    }
+    const rid = roomId && isValidRoomId(roomId) ? roomId : roomIdForAbs(abs)
+    const room = rooms.get(rid)
+    if (room && clientId === undefined) {
+      return c.json({ error: 'Missing client', code: 'bad_client' }, 400)
+    }
+    if (room && embedViewerForbidden(rid, clientId)) {
+      return c.json({ error: 'View-only participant cannot edit attachments while editors are present', code: 'view_only' }, 403)
+    }
+    const hostBytes = new Uint8Array(await getRawFileContent(q.path))
+    const disk = room ? await currentDiskHash(rid) : await hashFile(abs).catch(() => null)
+    if (room) {
+      if (!q2.baseHash || q2.baseHash !== room.lastHash) {
+        return c.json({ error: 'Stale base — reload the attachment and retry', code: 'stale', currentHash: disk }, 409)
+      }
+      if (disk !== room.lastHash) {
+        return c.json({ error: 'Room changed since loaded — save first, then retry', code: 'dirty_room', currentHash: disk }, 409)
+      }
+    } else if (q2.baseHash && disk !== q2.baseHash) {
+      return c.json({ error: 'File changed since loaded — reload, then retry', code: 'dirty_room', currentHash: disk }, 409)
+    }
+    const out = await replaceEmbedPart(zipLoadJSZip, hostBytes, norm, attachBytes)
+    await writeFileContent(abs, Buffer.from(out))
+    const newHash = hashBytes(out)
+    logger.warn(`[embed-put] room=${rid.slice(0, 8)} part=${norm} bytes=${out.length} newHash=${newHash.slice(0, 8)}`)
+    if (room) {
+      room.lastHash = newHash
+      room.externalChanged = false
+      resetRoomByServer(rid)
+    }
+    return c.json({ ok: true, newHash })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.post('/embed/lock', async (c) => {
+  try {
+    const q = EmbedLockSchema.parse(await c.req.json())
+    const abs = await resolveWorkspaceFile(q.path).catch(() => null)
+    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
+    const norm = normalizeEmbedPart(q.part)
+    // 잠그는 파트가 실제로 있어야 한다 (경로 조작·오타 방지).
+    const hostBytes = new Uint8Array(await getRawFileContent(q.path).catch(() => new Uint8Array()))
+    if (hostBytes.length > 0) {
+      let found = false
+      try {
+        const parts = await listEmbedParts(zipLoadJSZip, hostBytes)
+        found = parts.some((p) => p.part === norm)
+      } catch {
+        found = false
+      }
+      if (!found) return c.json({ error: 'No such embedded part', code: 'bad_part' }, 404)
+    }
+    const r = acquireEmbedLock(abs, norm, q.name ?? 'user', q.token, q.lockId ? { lockId: q.lockId } : undefined)
+    if (!r.ok) return c.json({ error: 'Attachment is being edited', code: 'locked', holderName: r.holderName, expiresAt: r.expiresAt }, 409)
+    return c.json({ ok: true, lockId: r.lockId, expiresAt: r.expiresAt, renewed: r.renewed })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+app.delete('/embed/lock', async (c) => {
+  try {
+    const q = EmbedUnlockSchema.parse(await c.req.json())
+    const abs = await resolveWorkspaceFile(q.path).catch(() => null)
+    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
+    const norm = normalizeEmbedPart(q.part)
+    const r = releaseEmbedLock(abs, norm, q.lockId, q.token)
+    if (!r.ok) {
+      if (r.code === 'no_lock') return c.json({ error: 'No such lock', code: 'no_lock' }, 404)
+      return c.json({ error: 'Not the lock holder', code: 'not_holder' }, 403)
+    }
+    return c.json({ ok: true })
   } catch (error) {
     return errJson(c, error, 500)
   }

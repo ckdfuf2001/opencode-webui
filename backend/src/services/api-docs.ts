@@ -1119,6 +1119,61 @@ export const openApiSpec = {
         },
       },
     },
+    '/api/collab/embed': {
+      get: {
+        tags: ['collab'],
+        summary: 'Read an embedded attachment part (bytes + file hash for PUT baseHash)',
+        parameters: [
+          { name: 'path', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'part', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'roomId', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'clientId', in: 'query', required: false, schema: { type: 'integer' } },
+        ],
+        responses: {
+          '200': { description: 'ok with name, hash, size, base64 data' },
+          '400': { description: 'bad_part' },
+          '403': { description: 'view_only' },
+          '404': { description: 'no_host / bad_part' },
+        },
+      },
+      put: {
+        tags: ['collab'],
+        summary: 'Replace one embedded part atomically (multipart file + baseHash + lockId)',
+        parameters: [
+          { name: 'path', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'part', in: 'query', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'ok with newHash (room reset via 4001 when joined)' },
+          '400': { description: 'bad_part / bad_file / bad_kind / bad_client / too_large / bad_magic' },
+          '403': { description: 'view_only / not_holder' },
+          '404': { description: 'no_host / no_lock / bad_part' },
+          '409': { description: 'locked / no_lock / stale / dirty_room' },
+          '413': { description: 'too_large' },
+        },
+      },
+    },
+    '/api/collab/embed/lock': {
+      post: {
+        tags: ['collab'],
+        summary: 'Lease one embedded part for editing (TTL 60s, renew with same token+lockId)',
+        responses: {
+          '200': { description: 'ok with lockId, expiresAt, renewed' },
+          '400': { description: 'bad_part' },
+          '404': { description: 'no_host / bad_part' },
+          '409': { description: 'locked with holderName' },
+        },
+      },
+      delete: {
+        tags: ['collab'],
+        summary: 'Release an attachment edit lock',
+        responses: {
+          '200': { description: 'ok' },
+          '403': { description: 'not_holder' },
+          '404': { description: 'no_host / no_lock / bad_part' },
+        },
+      },
+    },
     '/api/collab/lock': {
       get: {
         tags: ['collab'],
