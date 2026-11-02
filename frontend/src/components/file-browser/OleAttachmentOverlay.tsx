@@ -1,9 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import JSZip from 'jszip'
-import { Paperclip } from 'lucide-react'
+import {
+  File as FileIcon,
+  FileArchive,
+  FileAudio,
+  FileImage,
+  FileSpreadsheet,
+  FileText,
+  FileVideo,
+  Paperclip,
+  Presentation,
+} from 'lucide-react'
 import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
+
+/** lib가 렌더를 포기한 자리 표시자 ("shape (not shown)" 등). */
+const NOT_SHOWN_RE = /shape\s*\(not shown\)/i
+
+/** 확장자별 카드 아이콘. */
+function iconForFile(name: string): typeof FileIcon {
+  const ext = (name.split('.').pop() ?? '').toLowerCase()
+  if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return FileSpreadsheet
+  if (['ppt', 'pptx', 'odp', 'key'].includes(ext)) return Presentation
+  if (['pdf', 'txt', 'md', 'doc', 'docx', 'rtf', 'odt', 'hwp', 'hwpx'].includes(ext)) return FileText
+  if (['zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return FileArchive
+  if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'tif', 'tiff', 'ico'].includes(ext)) return FileImage
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)) return FileVideo
+  if (['mp3', 'wav', 'flac', 'ogg', 'm4a'].includes(ext)) return FileAudio
+  return FileIcon
+}
 
 function saveBlob(name: string, bytes: Uint8Array): void {
   const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/octet-stream' })
@@ -102,12 +128,18 @@ export default function OleAttachmentOverlay({
   anchor?: OleAnchorKind
 }) {
   const [entries, setEntries] = useState<OleEmbeddingRef[]>([])
-  const [posMap, setPosMap] = useState<Record<string, { x: number; y: number }>>({})
+  // 앵커 사각형 + lib placeholder 여부 (placeholder면 미리보기 카드로 덮는다).
+  const [posMap, setPosMap] = useState<
+    Record<string, { x: number; y: number; w: number; h: number; cover: boolean }>
+  >({})
+  // 표시용 실제 파일명 (oleObject면 CFB 안 원본명, package면 파트명).
+  const [names, setNames] = useState<Record<string, string>>({})
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let dead = false
     setEntries([])
+    setNames({})
     void listOleEmbeddings(data).then((list) => {
       if (!dead) setEntries(list.slice(0, 8))
     })
@@ -115,6 +147,40 @@ export default function OleAttachmentOverlay({
       dead = true
     }
   }, [data])
+
+  // 실제 파일명 해석 (표시용 — 다운로드는 기존 경로 그대로).
+  useEffect(() => {
+    if (entries.length === 0) return
+    let dead = false
+    void (async () => {
+      try {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
+        const zip = await JSZip.loadAsync(bytes)
+        const next: Record<string, string> = {}
+        for (const e of entries) {
+          try {
+            const f = zip.files[e.partName]
+            if (!f) continue
+            if (e.relType === 'oleObject') {
+              const raw = new Uint8Array(await f.async('uint8array'))
+              if (!looksLikeCfb(raw)) continue
+              next[e.partName] = extractOleAttachment(raw, 'oleObject', e.fallbackName).fileName
+            } else {
+              next[e.partName] = e.fallbackName
+            }
+          } catch {
+            /* 실패하면 fallback 표시 */
+          }
+        }
+        if (!dead && Object.keys(next).length > 0) setNames(next)
+      } catch {
+        /* 무시 */
+      }
+    })()
+    return () => {
+      dead = true
+    }
+  }, [data, entries])
 
   // 앵커 추적: 스크롤·리사이즈·DOM 변경 때 재계산 (폴링 없음).
   useEffect(() => {
@@ -130,12 +196,19 @@ export default function OleAttachmentOverlay({
       if (dead) return
       try {
         const c = container.getBoundingClientRect()
-        const next: Record<string, { x: number; y: number }> = {}
+        const next: Record<string, { x: number; y: number; w: number; h: number; cover: boolean }> = {}
         for (const entry of entries) {
           const target = findAnchorEl(container, anchor, entry)
           if (!target) continue
           const r = target.getBoundingClientRect()
-          next[entry.partName] = { x: Math.max(0, Math.round(r.left - c.left)), y: Math.max(0, Math.round(r.top - c.top)) }
+          next[entry.partName] = {
+            x: Math.max(0, Math.round(r.left - c.left)),
+            y: Math.max(0, Math.round(r.top - c.top)),
+            w: Math.max(0, Math.round(r.width)),
+            h: Math.max(0, Math.round(r.height)),
+            // lib가 렌더를 포기한 자리("shape (not shown)")는 카드로 덮는다.
+            cover: NOT_SHOWN_RE.test(target.textContent ?? ''),
+          }
         }
         setPosMap((prev) => {
           const a = JSON.stringify(prev)
@@ -191,8 +264,8 @@ export default function OleAttachmentOverlay({
       key={entry.partName}
       type="button"
       data-testid="ole-icon"
-      title={entry.fallbackName}
-      aria-label={`첨부 ${entry.fallbackName}`}
+      title={displayName(entry)}
+      aria-label={`첨부 ${displayName(entry)}`}
       draggable={false}
       onDoubleClick={() => void download(entry)}
       onDragStart={(e) => {
@@ -207,17 +280,59 @@ export default function OleAttachmentOverlay({
       }
     >
       <Paperclip className="h-3.5 w-3.5" />
-      {!anchored && <span className="max-w-44 truncate">{entry.fallbackName}</span>}
+      {!anchored && <span className="max-w-44 truncate">{displayName(entry)}</span>}
     </button>
   )
 
   const anchored = entries.filter((e) => anchor != null && posMap[e.partName] != null)
   const fallback = entries.filter((e) => !(anchor != null && posMap[e.partName] != null))
+  const displayName = (entry: OleEmbeddingRef): string => names[entry.partName] ?? entry.fallbackName
+
+  // lib placeholder를 덮는 미리보기 카드 (표시 전용 — "shape (not shown)"을 가린다).
+  // pointer-events-none: lib 도형 드래그(S1)를 막지 않는다. 다운로드는 모서리 아이콘으로.
+  const coverCard = (
+    entry: OleEmbeddingRef,
+    pos: { x: number; y: number; w: number; h: number },
+  ): React.ReactNode => {
+    const name = displayName(entry)
+    const Icon = iconForFile(name)
+    return (
+      <div
+        key={entry.partName}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: pos.x,
+          top: pos.y,
+          minWidth: Math.max(pos.w, 148),
+          minHeight: Math.max(pos.h, 44),
+        }}
+        className="pointer-events-none z-10 inline-flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-2 text-left shadow-sm"
+      >
+        <Icon className="h-6 w-6 shrink-0 text-muted-foreground" />
+        <span className="max-w-44 truncate text-xs font-medium text-foreground">{name}</span>
+      </div>
+    )
+  }
+
   return (
     <>
       {/* 앵커 탐색용 기준점 (위치는 잡지 않는다). */}
       <div ref={rootRef} className="pointer-events-none absolute left-2 top-2" aria-hidden="true" />
-      {anchored.map((e) => chip(e, true, posMap[e.partName]))}
+      {anchored.map((e) => {
+        const pos = posMap[e.partName]
+        if (!pos) return null
+        // placeholder는 카드로 가리고 모서리 아이콘으로 조작한다 (드래그 차단 방지).
+        if (pos.cover) {
+          return (
+            <span key={e.partName}>
+              {coverCard(e, pos)}
+              {chip(e, true, { x: pos.x, y: pos.y })}
+            </span>
+          )
+        }
+        return chip(e, true, { x: pos.x, y: pos.y })
+      })}
       {fallback.length > 0 && (
         <div className="absolute left-2 top-2 z-20 flex flex-col items-start gap-1">
           {fallback.map((e) => chip(e, false))}
