@@ -1727,7 +1727,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
   // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
-  const attachAddIns = useMemo(() => buildOfficeAttachAddIn(() => requestEmbedFile(path)), [path])
+  // 보기 모드에서는 탭을 숨긴다 (첨부는 편집 행위 — 보완2).
+  const attachAddIns = useMemo(
+    () => (editing ? buildOfficeAttachAddIn(() => requestEmbedFile(path)) : []),
+    [path, editing],
+  )
   // X1c(P0): 단독 저장의 잠금 ETag. 파일을 **읽은 시점**의 값부터 시작해,
   // 단독 저장 성공마다 서버가 돌려준 새 ETag 로 갱신한다(디스크와 동기화 유지).
   const [etag, setEtag] = useState<string | null>(null)
@@ -3876,7 +3880,9 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             fileName={fileName}
             // X1c(P1): 방 판정이 끝날 때까지 편집을 막는다(먼저 입력한 내용의 유실 방지).
             readOnly={!editing || connecting || forceViewOnly}
-            showToolbar={editing}
+            // 보기 모드에서도 리본을 보여준다 (Insert/첨부 탭 진입점).
+            // readOnly 라 lib 가 편집 커맨드를 비활성화한다.
+            showToolbar
             showFormulaBar={editing}
             theme={appTheme}
             collaboration={collabOptions}
