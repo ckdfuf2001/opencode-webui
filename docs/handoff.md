@@ -1111,3 +1111,9 @@ E21만의 문제가 아니다. 근거:
 - eslint 333 (272E+61W, 신규 0 — 전수 기존 이슈), check-memory 0E+1W, check-encoding 이상 없음(경고 2 기존).
 - keepEditing 수정: 임베드용 선저장은 편집 유지 (수동 Save 종료 유지). P2-1 프레임 stale 해소.
 - 0.12.79 exe+zip 빌드 완료. 실기 파일: C:/Users/oh/AppData/Local/Temp/opencode/c52-real/ (형식별 1개, 편집 모드 첨부).
+
+## xlsx 보기 모드 리본 표시 + unsupported ole 카드 (2026-11-02)
+- 증상 2건: (1) 보기 모드에서 리본 자체가 없어 Insert 탭이 안 보임 (`showToolbar={editing}` 때문). (2) 기존 ole(sp 앵커, lib 미렌더)가 "shape (not shown)" 자리 표시자로만 보임.
+- 수정1: XlsxViewer `showToolbar` 상시 true. readOnly라 lib가 편집 커맨드 비활성화 확인 (Insert 패널 Table/Pictures/Link/Comment/Symbol 전부 disabled). 보기 모드 첨부 탭은 숨김 유지 (첨부는 편집 행위 — 보완2).
+- 수정2: OleAttachmentOverlay가 placeholder(`xg-obj-unsupported` + "shape (not shown)" 텍스트) 위치에 미리보기 카드(불투명, 파일형식 아이콘 + CFB Ole10Native에서 꺼낸 실제 파일명, 예: oleObject1.bin → payload.pdf)를 덮는다. 카드는 표시 전용(pointer-events-none) + 모서리 기존 아이콘으로 dblclick 다운로드 (S1 드래그 회귀 1건 잡고 수정 — 카드가 mouse 이벤트를 삼켜 shape 이동이 안 됐음).
+- 검증: c5-2 6/6, c5-1 + xlsx-ole-solo (S1/S2) green, ui-layout 8 passed, tsc 0, eslint 신규 0.
