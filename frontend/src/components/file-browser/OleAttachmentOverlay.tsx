@@ -15,8 +15,7 @@ import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
 
-/** lib가 렌더를 포기한 자리 표시자 ("shape (not shown)" 등). */
-const NOT_SHOWN_RE = /shape\s*\(not shown\)/i
+/** lib가 렌더를 포기한 자리 표시자 (xg-obj-unsupported — 텍스트 판정 금지). */
 
 /** 확장자별 카드 아이콘. */
 function iconForFile(name: string): typeof FileIcon {
@@ -63,8 +62,13 @@ function stemOf(name: string): string {
  * - xlsx: ole pic (img alt = cNvPr 이름) 우선, 없으면 구형 sp 박스.
  * - pptx: data-element-id "...-frame-N" + Download 문구.
  * - docx: span[data-docx-ole].
+ * unsupported=true면 lib가 렌더를 포기한 자리 표시자다.
  */
-function findAnchorEl(container: HTMLElement, kind: OleAnchorKind, entry: OleEmbeddingRef): Element | null {
+function findAnchorEl(
+  container: HTMLElement,
+  kind: OleAnchorKind,
+  entry: OleEmbeddingRef,
+): { el: Element; unsupported: boolean } | null {
   try {
     const all = deepCollect(container)
     if (kind === 'xlsx') {
@@ -75,7 +79,7 @@ function findAnchorEl(container: HTMLElement, kind: OleAnchorKind, entry: OleEmb
           if (!isVis(el)) continue
           const img = el.tagName === 'IMG' ? el : el.querySelector?.('img')
           const alt = img?.getAttribute?.('alt') ?? ''
-          if (alt && names.has(alt)) return el
+          if (alt && names.has(alt)) return { el, unsupported: false }
         } catch {
           /* 무시 */
         }
@@ -83,7 +87,8 @@ function findAnchorEl(container: HTMLElement, kind: OleAnchorKind, entry: OleEmb
       // 구형 sp 박스 (네이티브 ole sp / 게이트 파일).
       for (const el of all) {
         try {
-          if ((el.className?.toString?.() ?? '').includes('xg-obj-unsupported') && isVis(el)) return el
+          if ((el.className?.toString?.() ?? '').includes('xg-obj-unsupported') && isVis(el))
+            return { el, unsupported: true }
         } catch {
           /* 무시 */
         }
@@ -94,7 +99,8 @@ function findAnchorEl(container: HTMLElement, kind: OleAnchorKind, entry: OleEmb
       for (const el of all) {
         try {
           const eid = el.getAttribute?.('data-element-id') ?? ''
-          if (eid.includes('-frame-') && /download/i.test(el.textContent ?? '') && isVis(el)) return el
+          if (eid.includes('-frame-') && /download/i.test(el.textContent ?? '') && isVis(el))
+            return { el, unsupported: false }
         } catch {
           /* 무시 */
         }
@@ -103,7 +109,7 @@ function findAnchorEl(container: HTMLElement, kind: OleAnchorKind, entry: OleEmb
     }
     for (const el of all) {
       try {
-        if (el.hasAttribute?.('data-docx-ole') && isVis(el)) return el
+        if (el.hasAttribute?.('data-docx-ole') && isVis(el)) return { el, unsupported: false }
       } catch {
         /* 무시 */
       }
@@ -132,14 +138,12 @@ export default function OleAttachmentOverlay({
   const [posMap, setPosMap] = useState<
     Record<string, { x: number; y: number; w: number; h: number; cover: boolean }>
   >({})
-  // 표시용 실제 파일명 (oleObject면 CFB 안 원본명, package면 파트명).
-  const [names, setNames] = useState<Record<string, string>>({})
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let dead = false
     setEntries([])
-    setNames({})
+    // 표시명까지 한 번에 해석된다 (zip 단일 로드 — 대용량 이중 로드 방지).
     void listOleEmbeddings(data).then((list) => {
       if (!dead) setEntries(list.slice(0, 8))
     })
@@ -147,40 +151,6 @@ export default function OleAttachmentOverlay({
       dead = true
     }
   }, [data])
-
-  // 실제 파일명 해석 (표시용 — 다운로드는 기존 경로 그대로).
-  useEffect(() => {
-    if (entries.length === 0) return
-    let dead = false
-    void (async () => {
-      try {
-        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
-        const zip = await JSZip.loadAsync(bytes)
-        const next: Record<string, string> = {}
-        for (const e of entries) {
-          try {
-            const f = zip.files[e.partName]
-            if (!f) continue
-            if (e.relType === 'oleObject') {
-              const raw = new Uint8Array(await f.async('uint8array'))
-              if (!looksLikeCfb(raw)) continue
-              next[e.partName] = extractOleAttachment(raw, 'oleObject', e.fallbackName).fileName
-            } else {
-              next[e.partName] = e.fallbackName
-            }
-          } catch {
-            /* 실패하면 fallback 표시 */
-          }
-        }
-        if (!dead && Object.keys(next).length > 0) setNames(next)
-      } catch {
-        /* 무시 */
-      }
-    })()
-    return () => {
-      dead = true
-    }
-  }, [data, entries])
 
   // 앵커 추적: 스크롤·리사이즈·DOM 변경 때 재계산 (폴링 없음).
   useEffect(() => {
@@ -198,16 +168,16 @@ export default function OleAttachmentOverlay({
         const c = container.getBoundingClientRect()
         const next: Record<string, { x: number; y: number; w: number; h: number; cover: boolean }> = {}
         for (const entry of entries) {
-          const target = findAnchorEl(container, anchor, entry)
-          if (!target) continue
-          const r = target.getBoundingClientRect()
+          const hit = findAnchorEl(container, anchor, entry)
+          if (!hit) continue
+          const r = hit.el.getBoundingClientRect()
           next[entry.partName] = {
             x: Math.max(0, Math.round(r.left - c.left)),
             y: Math.max(0, Math.round(r.top - c.top)),
             w: Math.max(0, Math.round(r.width)),
             h: Math.max(0, Math.round(r.height)),
-            // lib가 렌더를 포기한 자리("shape (not shown)")는 카드로 덮는다.
-            cover: NOT_SHOWN_RE.test(target.textContent ?? ''),
+            // lib가 렌더를 포기한 자리(xg-obj-unsupported)는 카드로 덮는다.
+            cover: hit.unsupported,
           }
         }
         setPosMap((prev) => {
@@ -275,20 +245,43 @@ export default function OleAttachmentOverlay({
       style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute' } : undefined}
       className={
         anchored
-          ? 'z-20 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background/95 text-foreground shadow-sm hover:bg-muted'
-          : 'inline-flex items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
+          ? 'z-20 inline-flex h-7 w-7 select-none items-center justify-center rounded-md border border-border bg-background/95 text-foreground shadow-sm hover:bg-muted'
+          : 'inline-flex select-none items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
       }
     >
       <Paperclip className="h-3.5 w-3.5" />
-      {!anchored && <span className="max-w-44 truncate">{displayName(entry)}</span>}
+      {!anchored && <span className="max-w-44 truncate select-none">{displayName(entry)}</span>}
     </button>
   )
 
   const anchored = entries.filter((e) => anchor != null && posMap[e.partName] != null)
   const fallback = entries.filter((e) => !(anchor != null && posMap[e.partName] != null))
-  const displayName = (entry: OleEmbeddingRef): string => names[entry.partName] ?? entry.fallbackName
+  const displayName = (entry: OleEmbeddingRef): string => entry.displayName ?? entry.fallbackName
 
-  // lib placeholder를 덮는 미리보기 카드 (표시 전용 — "shape (not shown)"을 가린다).
+  // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
+  const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number }): React.ReactNode => {
+    const name = displayName(entry)
+    return (
+      <div
+        key={entry.partName}
+        data-testid="ole-label"
+        title={name}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: pos.x + pos.w / 2,
+          top: pos.y + pos.h + 4,
+          transform: 'translateX(-50%)',
+          maxWidth: 240,
+        }}
+        className="pointer-events-none z-10 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
+      >
+        {name}
+      </div>
+    )
+  }
+
+  // lib placeholder를 덮는 세로형 카드 (표시 전용 — 영역을 벗어나지 않는다).
   // pointer-events-none: lib 도형 드래그(S1)를 막지 않는다. 다운로드는 모서리 아이콘으로.
   const coverCard = (
     entry: OleEmbeddingRef,
@@ -299,18 +292,21 @@ export default function OleAttachmentOverlay({
     return (
       <div
         key={entry.partName}
+        data-testid="ole-cover"
         aria-hidden="true"
         style={{
           position: 'absolute',
           left: pos.x,
           top: pos.y,
-          minWidth: Math.max(pos.w, 148),
-          minHeight: Math.max(pos.h, 44),
+          width: Math.max(pos.w, 1),
+          minHeight: Math.max(pos.h, 1),
         }}
-        className="pointer-events-none z-10 inline-flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-2 text-left shadow-sm"
+        className="pointer-events-none z-10 flex select-none flex-col items-center justify-center gap-0.5 rounded-md border border-border bg-background px-1 py-1 shadow-sm"
       >
         <Icon className="h-6 w-6 shrink-0 text-muted-foreground" />
-        <span className="max-w-44 truncate text-xs font-medium text-foreground">{name}</span>
+        <span data-testid="ole-label" title={name} className="max-w-full truncate text-center text-[11px] font-medium leading-4 text-foreground">
+          {name}
+        </span>
       </div>
     )
   }
@@ -331,7 +327,12 @@ export default function OleAttachmentOverlay({
             </span>
           )
         }
-        return chip(e, true, { x: pos.x, y: pos.y })
+        return (
+          <span key={e.partName}>
+            {chip(e, true, { x: pos.x, y: pos.y })}
+            {caption(e, pos)}
+          </span>
+        )
       })}
       {fallback.length > 0 && (
         <div className="absolute left-2 top-2 z-20 flex flex-col items-start gap-1">

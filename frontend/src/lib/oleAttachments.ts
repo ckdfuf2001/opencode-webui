@@ -1,9 +1,12 @@
 import JSZip from 'jszip'
+import { extractOleAttachment } from './oleExtract'
 
 export interface OleEmbeddingRef {
   partName: string
   relType: 'package' | 'oleObject'
   fallbackName: string
+  /** 표시용 실제 파일명 (oleObject면 CFB 안 원본명, package면 파트명). */
+  displayName: string
 }
 
 /**
@@ -41,12 +44,27 @@ export async function listOleEmbeddings(data: ArrayBuffer | Uint8Array): Promise
         if (base && !relTypeByBase.has(base)) relTypeByBase.set(base, kind)
       }
     }
-    return embNames.map((partName) => {
-      const base = partName.split('/').pop() ?? 'attachment.bin'
-      const fromRel = relTypeByBase.get(base)
-      const relType = fromRel ?? (base.endsWith('.bin') ? 'oleObject' : 'package')
-      return { partName, relType, fallbackName: base }
-    })
+  // 표시명까지 한 번에 해석한다 (CFB 파싱용 zip 재사용 — 대용량 이중 로드 방지).
+  const out: OleEmbeddingRef[] = []
+  for (const partName of embNames) {
+    const base = partName.split('/').pop() ?? 'attachment.bin'
+    const fromRel = relTypeByBase.get(base)
+    const relType = fromRel ?? (base.endsWith('.bin') ? 'oleObject' : 'package')
+    let displayName = base
+    if (relType === 'oleObject') {
+      try {
+        const f = zip.files[partName]
+        if (f) {
+          const raw = new Uint8Array(await f.async('uint8array'))
+          if (looksLikeCfb(raw)) displayName = extractOleAttachment(raw, 'oleObject', base).fileName
+        }
+      } catch {
+        /* 실패하면 fallback 표시 */
+      }
+    }
+    out.push({ partName, relType, fallbackName: base, displayName })
+  }
+  return out
   } catch {
     return []
   }
