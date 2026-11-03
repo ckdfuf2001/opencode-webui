@@ -1151,3 +1151,8 @@ E21만의 문제가 아니다. 근거:
 - flag-day 부채 (Edit 버튼 팝업 전환으로 구 흐름 red, 다음 단계에서 스위트별 마이그레이션): c5-1(2곳)·c5-2(attachViaAddInTab)·c5-3(E2 dblclick)·c3/c4-3/c4-4/c4-6/xlsx-collab/xlsx-solo/xlsx-c2/presence 직접 Edit 클릭. 증거: c5-2 P2-1 첨부 탭 대기 타임아웃 (in-page 탭 미생성, 팝업으로 이동됨).
 - 관측: StrictMode remount cleanup이 onEditingChange(false)를 쏴 에디터 탭이 자살 -> EditPage 전이+디바운스로 방어. xlsx INSERT는 oleObject라 다운로드 유지 (package만 편집탭).
 
+
+## 0e7abb4a spec 변경 기록 (P0-5, 2026-11-03)
+- 원래: attachViaAddInTab이 in-page Edit 후 in-page 첨부 탭을 조작하고 ole 아이콘 dblclick을 page에서 했다. xlsx 파트는 zip 직접 수정(수동 package)으로 열었다.
+- 변경: (1) openViaWorkspace에 폴더 진입 루프 추가 (c5-2와 동일, seg 행 탐색). (2) attachViaAddInTab이 Edit 팝업(에디터 탭)을 받아 반환하고 이후 단계(첨부 탭·filechooser·ole 아이콘·dblclick)를 editor에서 수행. (3) U-open-part-xlsx를 실제 INSERT 경로로 전환 (P0-4에서 zip 수술 제거).
+- 이유: Edit 버튼이 /edit/* 새 탭을 열게 되면서 in-page 첨부 탭이 사라졌고, xlsx INSERT는 oleObject라 다운로드라서 수동 package로 우회했었다. P0-4 package 조립 후 실제 경로가 편집탭으로 열리므로 우회가 불필요해졌다.
