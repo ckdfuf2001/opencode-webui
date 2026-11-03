@@ -2,7 +2,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import fs from 'node:fs'
 import path from 'node:path'
 import { absForRel, backendBase, uniqueRelWithExt, workspaceDir } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -239,12 +239,15 @@ test.describe('C4-4 G1: 미리보기+큰 화면 중복 접속', () => {
       await sheet.locator('[data-testid="file-row"][data-path$="m.xlsx"]').locator('span', { hasText: 'm.xlsx' }).first().click({ timeout: 20000 })
       await page.waitForFunction(() => document.querySelectorAll('.xlsxengine-host').length >= 2, null, { timeout: 30000 }).catch(() => {})
       await page.waitForTimeout(4000)
-      // 시트 쪽 Edit 버튼으로 편집 진입.
+      // C5-4 flag-day: 시트 쪽 Edit은 /edit/* 새 탭을 연다. 락 흐름은 팝업 에디터에서 본다.
       const sheetScope = page.locator('div.fixed.inset-0.z-50')
-      await sheetScope.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
-      await page.waitForTimeout(3000)
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        sheetScope.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForSelector('xlsx-editor', { timeout: 30000 })
       // 첫 이미지 pointerdown → 락.
-      const locked = await page.evaluate(() => {
+      const locked = await editor.evaluate(() => {
         const eds = [...document.querySelectorAll('xlsx-editor')] as any[]
         const target = eds[eds.length - 1]
         const root = target?.shadowRoot ?? document
@@ -260,8 +263,10 @@ test.describe('C4-4 G1: 미리보기+큰 화면 중복 접속', () => {
         const st = await apiGet(`/api/collab/${roomId}/objects`)
         return (st.json.objects ?? []).some((o: any) => o.lock != null) ? 1 : 0
       }, { timeout: 15000, intervals: [500] }).toBe(1)
-      // 시트 닫기 → 락 해제.
-      await closeSheet(page)
+      // 에디터 탭 닫기 → 락 해제.
+      const closeWaiter = editor.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await editor.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 20000 })
+      await closeWaiter
       await expect.poll(async () => {
         const st = await apiGet(`/api/collab/${roomId}/objects`)
         return (st.json.objects ?? []).some((o: any) => o.lock != null) ? 1 : 0
@@ -282,28 +287,9 @@ test.describe('C4-4 G2: 사용자 표시는 타이틀바 슬롯 한 곳', () => 
     const abs = absForRel(rel)
     fs.mkdirSync(path.dirname(abs), { recursive: true })
     fs.copyFileSync(FIXTURE_PPTX, abs)
-    const name = rel.split('/').pop()!
     try {
-      await page.getByTitle('Workspace').click({ timeout: 20000 })
-      await expect.poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 15000, intervals: [200] }).toBeGreaterThan(0)
-      for (let i = 0; i < 8; i++) {
-        const has = await page.evaluate(
-          (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-          name,
-        )
-        if (has) break
-        const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-        if ((await folder.count()) > 0) {
-          await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-        }
-        await page.waitForTimeout(1500)
-      }
-      await expect.poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 15000, intervals: [200] }).toBeGreaterThan(0)
-      await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
-      await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 30000 })
-      await page.waitForTimeout(4000)
-      // lib 타이틀바(actions 슬롯)는 편집 모드에만 렌더된다.
-      await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
+      // C5-4 flag-day: 편집 진입은 /edit/* 직접 goto다 (lib 타이틀바는 편집 모드에만 렌더).
+      await openEditor(page, rel.replace(/^repos\//, ''))
       await page.waitForTimeout(4000)
       const loc = await page.evaluate(() => {
         const all = [...document.querySelectorAll('[data-testid="collab-presence"]')]
@@ -448,11 +434,9 @@ test.describe('C4-4 G2: 사용자 표시는 타이틀바 슬롯 한 곳', () => 
       await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 30000 })
     }
     try {
-      await openPptx(tA.page)
+      // C5-4 flag-day: A는 /edit/* 직접 goto, B는 보기 모드. 이름 변경은 A 에디터 탭 타이틀바에서.
+      await openEditor(tA.page, rel.replace(/^repos\//, ''))
       await openPptx(tB.page)
-      await tA.page.waitForTimeout(5000)
-      // lib 타이틀바는 편집 모드에만 렌더된다.
-      await tA.page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
       await tA.page.waitForTimeout(3000)
       // A가 타이틀바 presence에서 이름 변경.
       const slotAvatars = tA.page.locator('[slot="actions"] [data-testid="collab-avatars"]')
