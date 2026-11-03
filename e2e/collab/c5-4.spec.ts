@@ -142,6 +142,22 @@ async function setCellByFormulaBar(page: Page, ref: string, value: string): Prom
   await bar.click({ timeout: 15000 })
   await bar.fill(value)
   await bar.press('Enter')
+  // Enter가 에디터 초기화 레이스로 씹히면 dirty가 안 선다 (c5-1과 같은 패턴, 최대 3회 재시도).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await expect
+        .poll(async () => page.evaluate(() => (document.querySelector('xlsx-editor') as unknown as { dirty?: boolean } | null)?.dirty === true), {
+          timeout: 8000,
+          intervals: [200],
+        })
+        .toBe(true)
+      return
+    } catch {
+      await bar.click({ timeout: 15000 }).catch(() => {})
+      await bar.fill(value)
+      await bar.press('Enter')
+    }
+  }
   await expect
     .poll(async () => page.evaluate(() => (document.querySelector('xlsx-editor') as unknown as { dirty?: boolean } | null)?.dirty === true), {
       timeout: 15000,
