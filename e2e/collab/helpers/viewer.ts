@@ -277,6 +277,37 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
     })
 }
 
+/**
+ * C5-4 flag-day: 편집 진입은 /edit/* 직접 goto로 통일한다 (팝업 추적 없음).
+ * - workspacePath: 워크스페이스 상대 경로 (예: 'c54host/embed-pdf.xlsx').
+ * - 로드 후 형식별 에디터를 기다린다. waitForTimeout/dispatch 클릭을 쓰지 않는다.
+ * - 팝업 경로는 U-open 3종이 검증하므로 여기서는 다루지 않는다.
+ */
+export async function openEditor(page: Page, workspacePath: string): Promise<void> {
+  const { editUrlForFile } = await import('../../../frontend/src/lib/editUrls')
+  await page.goto(editUrlForFile(workspacePath), { waitUntil: 'domcontentloaded', timeout: 30000 })
+  await page.getByTestId('edit-page').waitFor({ timeout: 30000 })
+  const ext = workspacePath.split('.').pop()?.toLowerCase()
+  if (ext === 'xlsx') {
+    await page.waitForSelector('xlsx-editor', { timeout: 60000 })
+  } else if (ext === 'docx') {
+    await page.waitForSelector('.docxengine-host', { timeout: 60000 })
+  } else if (ext === 'pptx') {
+    await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 60000 })
+  } else {
+    throw new Error(`openEditor: unsupported ext ${ext ?? ''}`)
+  }
+  // M21: lib가 로드된 뒤에야 런타임 표식을 단언한다.
+  await assertLibPatchesLoaded(page)
+  await page
+    .waitForFunction(() => document.querySelector('[data-testid="collab-status"]')?.getAttribute('data-status') === 'connected', null, {
+      timeout: 60000,
+    })
+    .catch(() => {
+      throw new Error('collab-status never connected (60s)')
+    })
+}
+
 /** 썸네일 클릭으로 슬라이드 이동. 근거: ASIDE[role=navigation][aria-label=Slides]
  *  하위 BUTTON[aria-label="Go to slide N"] (scratch DOM 덤프 2026-10-15). */
 export async function gotoSlide(page: Page, n: number): Promise<void> {
