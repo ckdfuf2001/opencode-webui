@@ -1357,7 +1357,7 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
         }, { timeout: 15000, intervals: [500] })
         .toBe(target)
       // C가 늦게 들어온다: 디스크·참가 시점과 무관하게 서버 진실로 수렴한다.
-      await openXlsxEditingRetry(pageC, f.name)
+      await openXlsxEditingRetry(pageC, f.rel)
       await expect.poll(async () => xlsxActive(pageC), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect
         .poll(async () => (await xlsxImageAnchor(pageC))?.row, { timeout: 20000, intervals: [500] })

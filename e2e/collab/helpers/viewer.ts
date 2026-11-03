@@ -271,10 +271,11 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
   }
   await page
     .waitForFunction(() => document.querySelector('[data-testid="collab-status"]')?.getAttribute('data-status') === 'connected', null, {
-      timeout: 10000,
+      // C5-4: 크로스탭 진입은 lib cold load + 시딩을 포함하므로 10초가 빡빡하다. 스위트 표준 30초.
+      timeout: 30000,
     })
     .catch(() => {
-      throw new Error('collab-status never connected (10s)')
+      throw new Error('collab-status never connected (30s)')
     })
 }
 
