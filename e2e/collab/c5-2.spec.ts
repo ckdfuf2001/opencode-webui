@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { backendBase, workspaceDir } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, seedUser } from './helpers/users'
 
 /**
@@ -114,10 +114,10 @@ async function backendBytes(localPath: string, name: string): Promise<Buffer> {
 /**
  * C5-2 add-in 탭: 리본 "첨부" 탭 → "문서 첨부" 명령으로 파일을 올린다
  * (공식 ribbonAddIns — Help 뒤 새 탭, lib 패치 없음).
- * Edit 진입이 포함된다 (첨부는 편집 행위 — 보기 모드 헤더 버튼 삭제, D60).
+ * C5-4 flag-day: /edit/* 직접 goto 후 리본 첨부 탭에서 삽입한다 (in-page Edit 폐지).
  */
-async function attachViaAddInTab(page: Page, attachAbs: string): Promise<void> {
-  await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
+async function attachViaAddInTab(page: Page, seg: string, hostName: string, attachAbs: string): Promise<void> {
+  await openEditor(page, `${seg}/${hostName}`)
   const tab = page.getByRole('tab', { name: '첨부', exact: true }).first()
   await tab.waitFor({ timeout: 30000 })
   await tab.click({ timeout: 15000 })
@@ -144,7 +144,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const z0 = await JSZip.loadAsync(before)
       const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
       const emb0 = Object.keys(z0.files).filter(embName).length
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
+      await attachViaAddInTab(page, 'c52pptx', 'embed-pdf.pptx', path.resolve(FIX, 'embed-docx.docx'))
       // 서버 조립 확인: 디스크 embeddings가 1개 늘어난다.
       await expect
         .poll(
@@ -208,16 +208,17 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       // progId 영문 유지.
       const slide = await z1.files['ppt/slides/slide1.xml']!.async('string')
       expect(/progId="[A-Za-z0-9.]+"/.test(slide), 'progId english').toBe(true)
-      // C5-3: package 오피스 파트는 더블클릭하면 편집기로 열린다 (다운로드 아님).
+      // C5-4 flag-day: package 오피스 파트 dblclick → /edit/* 새 탭 (오버레이 폐지).
       // 원본 바이트 보존은 디스크 embeddings와 첨부 파일을 직접 비교한다.
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
       const icons = page.getByTestId('ole-icon')
-      await icons.nth(1).dblclick({ timeout: 15000 })
-      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(page.getByTestId('attach-title')).toContainText('embed-pdf.pptx › embed-docx.docx', {
-        timeout: 15000,
-      })
-      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        icons.nth(1).dblclick({ timeout: 15000 }),
+      ])
+      await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
+      await popup.close().catch(() => {})
       const zAfter = await JSZip.loadAsync(backendBytes('c52pptx', 'embed-pdf.pptx'))
       const partName = Object.keys(zAfter.files).find((n) => n.includes('embeddings/') && n.endsWith('embed-docx.docx'))
       expect(partName, 'inserted part present').toBeTruthy()
@@ -228,7 +229,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
     }
   })
 
-  test('P2-2: xlsx에 docx 첨부 → 아이콘+다운로드', async ({ browser }) => {    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+  test('P2-2: xlsx에 docx 첨부 → 아이콘+편집기(원본 바이트 보존)', async ({ browser }) => {    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
     await gotoApp(page)
@@ -239,7 +240,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const z0 = await JSZip.loadAsync(before)
       const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
       const emb0 = Object.keys(z0.files).filter(embName).length
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
+      await attachViaAddInTab(page, 'c52xlsx', 'embed-pdf.xlsx', path.resolve(FIX, 'embed-docx.docx'))
       // 서버 조립 확인: embeddings가 1개 늘어난다.
       await expect
         .poll(
@@ -288,16 +289,22 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       expect(sheet).toContain('<oleObjects')
       expect(sheet).toContain('progId="Word.Document.12"')
       expect(Object.keys(z1.files).some((n) => n.includes('vmlDrawing') && !n.endsWith('/'))).toBe(true)
-      // 새로 붙은 첨부를 더블클릭하면 원본 바이트 그대로 내려온다.
+      // P0-4: xlsx INSERT는 package 조립이라 편집 탭으로 열린다 (다운로드 아님).
+      // 새로 붙은 첨부의 바이트 보존은 디스크 embeddings와 직접 비교한다.
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
       const icons = page.getByTestId('ole-icon')
-      const [dl] = await Promise.all([
-        page.waitForEvent('download', { timeout: 20000 }),
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
         icons.nth(1).dblclick({ timeout: 15000 }),
       ])
-      const dlPath = await dl.path()
-      expect(dlPath, 'download path').toBeTruthy()
-      expect(fs.readFileSync(dlPath!).equals(attachBuf), 'attached bytes intact').toBe(true)
+      await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      expect(popup.url()).toMatch(/\/edit\/.+\.xlsx\/-\/.+\.docx/)
+      await popup.close().catch(() => {})
+      const zAfter = await JSZip.loadAsync(await backendBytes('c52xlsx', 'embed-pdf.xlsx'))
+      const partName = Object.keys(zAfter.files).find((n) => n.includes('embeddings/') && n.endsWith('embed-docx.docx'))
+      expect(partName, 'inserted part present').toBeTruthy()
+      const partBytes = Buffer.from(await zAfter.files[partName!]!.async('uint8array'))
+      expect(partBytes.equals(attachBuf), 'attached bytes intact').toBe(true)
       // pic 앵커는 네이티브로 이동+저장된다 (S1 수술 패치 불필요).
       const anchorOf = async (): Promise<string> => {
         const b = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
@@ -358,7 +365,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const z0 = await JSZip.loadAsync(before)
       const embName = (n: string): boolean => n.includes('embeddings/') && !n.endsWith('/')
       const emb0 = Object.keys(z0.files).filter(embName).length
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      await attachViaAddInTab(page, 'c52docx', 'embed-pdf.docx', path.resolve(FIX, 'embed-docx.xlsx'))
       // 서버 조립 확인: embeddings가 1개 늘어난다.
       await expect
         .poll(
@@ -383,16 +390,17 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       // progId 영문 유지.
       const doc = await z1.files['word/document.xml']!.async('string')
       expect(/ProgID="[A-Za-z0-9.]+"/.test(doc), 'ProgID english').toBe(true)
-      // C5-3: package 오피스 파트는 더블클릭하면 편집기로 열린다 (다운로드 아님).
+      // C5-4 flag-day: package 오피스 파트 dblclick → /edit/* 새 탭 (오버레이 폐지).
       // 원본 바이트 보존은 디스크 embeddings와 첨부 파일을 직접 비교한다.
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
       const icons = page.getByTestId('ole-icon')
-      await icons.nth(1).dblclick({ timeout: 15000 })
-      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(page.getByTestId('attach-title')).toContainText('embed-pdf.docx › embed-docx.xlsx', {
-        timeout: 15000,
-      })
-      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        icons.nth(1).dblclick({ timeout: 15000 }),
+      ])
+      await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      expect(popup.url()).toMatch(/\/edit\/.+\.docx\/-\/.+\.xlsx/)
+      await popup.close().catch(() => {})
       const zAfter = await JSZip.loadAsync(backendBytes('c52docx', 'embed-pdf.docx'))
       const partName = Object.keys(zAfter.files).find((n) => n.includes('embeddings/') && n.endsWith('embed-docx.xlsx'))
       expect(partName, 'inserted part present').toBeTruthy()
@@ -414,7 +422,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const before = await backendBytes('c52pptxtab', 'embed-pdf.pptx')
       const z0 = await JSZip.loadAsync(before)
       const emb0 = Object.keys(z0.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
+      await attachViaAddInTab(page, 'c52pptxtab', 'embed-pdf.pptx', path.resolve(FIX, 'embed-docx.docx'))
       await expect
         .poll(
           async () => {
@@ -448,7 +456,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const before = await backendBytes('c52xlsxtab', 'embed-pdf.xlsx')
       const z0 = await JSZip.loadAsync(before)
       const emb0 = Object.keys(z0.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
+      await attachViaAddInTab(page, 'c52xlsxtab', 'embed-pdf.xlsx', path.resolve(FIX, 'embed-docx.docx'))
       await expect
         .poll(
           async () => {
@@ -480,7 +488,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const before = await backendBytes('c52docxtab', 'embed-pdf.docx')
       const z0 = await JSZip.loadAsync(before)
       const emb0 = Object.keys(z0.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/')).length
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      await attachViaAddInTab(page, 'c52docxtab', 'embed-pdf.docx', path.resolve(FIX, 'embed-docx.xlsx'))
       await expect
         .poll(
           async () => {
