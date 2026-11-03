@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { absForRel, backendBase, uniqueRelWithExt } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -71,58 +71,9 @@ async function twoPages(browser: Browser, opts?: { noSubtle?: boolean }): Promis
 }
 
 /** 워크스페이스를 열고 XLSX 를 연다(편집 모드 진입까지). 고정 대기 없이 폴링으로만 기다린다. */
-async function openXlsxEditing(page: Page, name: string): Promise<void> {
-  for (let i = 0; i < 6; i++) {
-    try {
-      await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
-      break
-    } catch {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-    }
-  }
-  for (let i = 0; i < 5; i++) {
-    await page.getByTitle('Workspace').click({ timeout: 20000 })
-    const opened = await expect
-      .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 8000, intervals: [200] })
-      .toBeGreaterThan(0)
-      .then(() => true)
-      .catch(() => false)
-    if (opened) break
-    // 시트를 닫고 다시 시도한다(두 번째 클릭은 "닫기"가 된다).
-    await page.keyboard.press('Escape')
-  }
-  await expect
-    .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 15000, intervals: [200] })
-    .toBeGreaterThan(0)
-  // 폴더(collab-e2e)를 펼친 뒤 파일 행이 보일 때까지 폴링한다.
-  for (let i = 0; i < 8; i++) {
-    const has = await page.evaluate(
-      (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-      name,
-    )
-    if (has) break
-    const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-    if ((await folder.count()) > 0) {
-      await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-    }
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(
-            (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-            name,
-          ),
-        { timeout: 8000, intervals: [300] },
-      )
-      .toBe(true)
-      .catch(() => {})
-  }
-  await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
-  await page.waitForSelector('.xlsxengine-host', { timeout: 30000 })
-  const edit = page.getByRole('button', { name: 'Edit', exact: true })
-  await edit.waitFor({ timeout: 20000 })
-  await edit.click({ timeout: 20000 })
-  await page.waitForSelector('xlsx-editor', { timeout: 20000 })
+async function openXlsxEditing(page: Page, rel: string): Promise<void> {
+  // C5-4 flag-day: /edit/* 직접 goto (in-page Edit 폐지). rel은 repos/ 접두 포함.
+  await openEditor(page, rel.replace(/^repos\//, ''))
 }
 
 /** lib 의 collaboration 상태(방 id·연결·사람 수). */
@@ -149,7 +100,8 @@ async function setCellByFormulaBar(page: Page, ref: string, value: string): Prom
     el?.select?.(r)
     el?.focusGrid?.()
   }, ref)
-  const bar = page.locator('xlsx-editor [part~="formula-bar"] input').last()
+  // 수식 입력은 textarea (input은 네임박스일 수 있어 Enter가 확정되지 않는다).
+  const bar = page.locator('xlsx-editor [part~="formula-bar"] textarea').last()
   await bar.waitFor({ timeout: 15000 })
   await bar.click({ timeout: 15000 })
   await bar.fill(value)
@@ -184,11 +136,13 @@ async function clickAppSave(page: Page): Promise<void> {
   await save.click({ timeout: 20000 })
 }
 
-/** 편집 종료(Done). */
+/** 편집 종료(Done). C5-4 flag-day: Done은 편집 탭을 닫는다. */
 async function clickDone(page: Page): Promise<void> {
+  const closeWaiter = page.waitForEvent('close', { timeout: 20000 }).catch(() => null)
   const done = page.getByRole('button', { name: 'Done', exact: true })
   await done.waitFor({ timeout: 20000 })
   await done.click({ timeout: 20000 })
+  await closeWaiter
 }
 
 /** X0a-9: 편집 모드 도입 직후의 즉시 입력 시도. 편집이 막혀 있어도 실패하지 않는다. */
@@ -198,7 +152,8 @@ async function tryCellEdit(page: Page, ref: string, value: string): Promise<bool
     el?.select?.(r)
     el?.focusGrid?.()
   }, ref)
-  const bar = page.locator('xlsx-editor [part~="formula-bar"] input').last()
+  // 수식 입력은 textarea (input은 네임박스일 수 있어 Enter가 확정되지 않는다).
+  const bar = page.locator('xlsx-editor [part~="formula-bar"] textarea').last()
   const found = await bar.waitFor({ timeout: 5000 }).then(() => true).catch(() => false)
   if (!found) return false
   const filled = await bar
@@ -260,8 +215,8 @@ test.describe('X0a: XLSX 동시편집', () => {
     const t = await twoPages(browser)
     const f = freshXlsx('x0a1', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
 
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
@@ -283,8 +238,8 @@ test.describe('X0a: XLSX 동시편집', () => {
     const f = freshXlsx('x0a2', 0)
     const stamp = `X0A${Date.now().toString(36)}`
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
@@ -307,7 +262,7 @@ test.describe('X0a: XLSX 동시편집', () => {
     const t = await twoPages(browser)
     const f = freshXlsx('x0a3', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
       // 디스크의 파일을 다른 내용으로 바꾼다(유효한 xlsx 로 유지).
@@ -321,7 +276,7 @@ test.describe('X0a: XLSX 동시편집', () => {
       // B 는 디스크의 새 파일을 읽는다. 방(A 있음)은 옛 해시라 strict로는 막힌다.
       // C2-b: 편집자가 있는 방은 strict 없이 참가해 방 내용을 따라가고 외부 배너를 띄운다.
       await t.pageB.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toContainText('외부', { timeout: 15000 })
       await expect(t.pageB.getByText('단독')).toHaveCount(0)
@@ -336,7 +291,7 @@ test.describe('X0a: XLSX 동시편집', () => {
     const f = freshXlsx('x0a4', 0)
     const stamp = `X0A4${Date.now().toString(36)}`
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
       await setCellByFormulaBar(t.pageA, 'B2', stamp)
@@ -347,7 +302,7 @@ test.describe('X0a: XLSX 동시편집', () => {
       await seedUser(ctxC, { id: 'u-c', name: 'Cathy', color: '#d97706' })
       const pageC = await ctxC.newPage()
       await gotoApp(pageC)
-      await openXlsxEditing(pageC, f.name)
+      await openXlsxEditing(pageC, f.rel)
 
       await expect.poll(async () => (await collabState(pageC)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       const c = await collabState(pageC)
@@ -370,8 +325,8 @@ test.describe('X0a: XLSX 동시편집', () => {
     const t = await twoPages(browser)
     const f = freshXlsx('x0a5', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
@@ -392,7 +347,7 @@ test.describe('X0a: XLSX 동시편집', () => {
     const f = freshXlsx('x0a6', 0)
     const external = 'EXTERNAL9'
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await setCellByFormulaBar(t.pageA, 'B2', `X0A6${Date.now().toString(36)}`)
 
@@ -418,7 +373,7 @@ test.describe('X0a: XLSX 동시편집', () => {
     const t = await twoPages(browser, { noSubtle: true })
     const f = freshXlsx('x0a7', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       // nohash 폴백은 삭제됐다. https 문구가 뜨면 안 된다.
       await expect(t.pageA.getByText('https 또는 localhost')).toHaveCount(0)
@@ -433,7 +388,7 @@ test.describe('X0a: XLSX 동시편집', () => {
     const f = freshXlsx('xe2f', 0)
     const stamp = `XE2F${Date.now().toString(36)}`
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await setCellByFormulaBar(t.pageA, 'B2', stamp)
 
@@ -447,11 +402,11 @@ test.describe('X0a: XLSX 동시편집', () => {
     }
   })
 
-  test('X-M6: 편집을 끝내면 viewer로 전환되고(방 유지), 미리보기를 닫으면 방이 해제된다', async ({ browser }) => {
+  test('X-M6: 편집 탭을 닫으면 방에서 나가고 TTL 뒤 방이 해제된다', async ({ browser }) => {
     const t = await twoPages(browser)
     const f = freshXlsx('xm6', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
       // 서버가 아는 방 상태(소켓이 하나도 없으면 목록에서 사라진다).
@@ -462,14 +417,10 @@ test.describe('X0a: XLSX 동시편집', () => {
       }
       await expect.poll(roomPresent, { timeout: 15000, intervals: [500] }).toBe(true)
 
+      // C5-4: Done은 편집 탭을 닫아 방에서 나간다 (viewer 재참가 없음).
       await clickDone(t.pageA)
-      // X2a-③: Done 뒤에는 viewer 로 다시 붙으므로 방이 유지된다(편집 소켓은 내려간다).
-      await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
-      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
-      await expect.poll(roomPresent, { timeout: 15000, intervals: [500] }).toBe(true)
-      // 미리보기를 닫으면 viewer 소켓도 닫히고 방이 해제된다.
-      await closeXlsxPreview(t.pageA)
-      await expect.poll(roomPresent, { timeout: 20000, intervals: [500] }).toBe(false)
+      // 빈 방은 TTL(30초) 뒤에 해제된다.
+      await expect.poll(roomPresent, { timeout: 60000, intervals: [1000] }).toBe(false)
     } finally {
       await t.ctxA.close()
       await t.ctxB.close()
@@ -493,7 +444,7 @@ test.describe('X0a: XLSX 동시편집', () => {
       }, { base: backendBase(), rel: f.rel.replace(/^repos\//, '') })
       expect(stale.etag, 'raw 응답에 ETag가 있어야 한다').not.toBeNull()
       // A 가 편집·저장 → 디스크는 A 의 내용.
-      await openXlsxEditing(page, f.name)
+      await openXlsxEditing(page, f.rel)
       await expect.poll(async () => (await collabState(page)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await setCellByFormulaBar(page, 'B2', stampA)
       await clickAppSave(page)
@@ -516,7 +467,7 @@ test.describe('X0a: XLSX 동시편집', () => {
       expect(res.body?.code).toBe('conflict_external')
       expect(await workbookContains(f.abs, stampA), 'A의 저장이 디스크에 남아 있어야 한다').toBe(true)
     } finally {
-      await closeXlsxPreview(page).catch(() => {})
+      await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
     }
   })
 
@@ -526,15 +477,13 @@ test.describe('X0a: XLSX 동시편집', () => {
     const stampA = `X9A${Date.now().toString(36)}`
     const stampB = `X9B${Date.now().toString(36)}`
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await setCellByFormulaBar(t.pageA, 'B2', stampA)
 
       // B 는 편집에 들어가 **바로** 수식 바에 입력한다(연결 판정 전).
-      await openXlsxFileOnly(t.pageB, f.name)
-      const edit = t.pageB.getByRole('button', { name: 'Edit', exact: true })
-      await edit.waitFor({ timeout: 20000 })
-      await edit.click({ timeout: 20000 })
+      // C5-4 flag-day: /edit/* 직접 goto — 연결 중 배너는 에디터 탭에 뜬다.
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
       // X1d(P0): 편집 진입 직후엔 **연결 중 배너**가 보여야 한다(입력 차단 상태).
       // webui-pre(9bc434e) 에는 이 배너가 없어 이 단계에서 실패한다(수정 효과 증명).
       // X2a-③ 후속(display:none 가드): 부하가 낮으면 배너가 빨리 사라질 수 있어,
@@ -583,18 +532,20 @@ test.describe('X0a: XLSX 동시편집', () => {
     })
     await gotoApp(page)
     await openXlsxFileOnly(page, f.name)
-    const edit = page.getByRole('button', { name: 'Edit', exact: true })
-    await edit.waitFor({ timeout: 20000 })
-    await edit.click({ timeout: 20000 })
+    // C5-4 flag-day: Edit은 /edit/* 새 탭을 연다. 연결 대기 배너는 에디터 탭에 뜬다.
+    const [editor] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 15000 }),
+      page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+    ])
     // 연결 대기 배너가 먼저 보인다.
-    await expect(page.getByTestId('xlsx-collab-connecting')).toBeVisible({ timeout: 10000 })
+    await expect(editor.getByTestId('xlsx-collab-connecting')).toBeVisible({ timeout: 10000 })
     // 15초 상한: '연결 시간 초과' 배너 + 다시 연결 버튼. 대기 배너는 사라진다.
-    await expect(page.getByTestId('xlsx-collab-banner')).toContainText('시간 초과', { timeout: 30000 })
-    await expect(page.getByTestId('xlsx-collab-connecting')).toHaveCount(0)
-    await expect(page.getByTestId('xlsx-reconnect')).toBeVisible({ timeout: 15000 })
-    await expect(page.getByTestId('xlsx-collab-banner')).not.toContainText('단독')
+    await expect(editor.getByTestId('xlsx-collab-banner')).toContainText('시간 초과', { timeout: 30000 })
+    await expect(editor.getByTestId('xlsx-collab-connecting')).toHaveCount(0)
+    await expect(editor.getByTestId('xlsx-reconnect')).toBeVisible({ timeout: 15000 })
+    await expect(editor.getByTestId('xlsx-collab-banner')).not.toContainText('단독')
     // 방에 붙지 못했다.
-    await expect.poll(async () => (await collabState(page)).active, { timeout: 5000, intervals: [500] }).toBe(false)
+    await expect.poll(async () => (await collabState(editor)).active, { timeout: 5000, intervals: [500] }).toBe(false)
   })
 })
 
@@ -610,7 +561,7 @@ test.describe('X2a: presence 와 보기 모드', () => {
     const t = await twoPages(browser)
     const f = freshXlsx('x2a5', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect
         .poll(async () => (await participantsFor(t.pageA, f.name)).map((p) => p.length), { timeout: 20000, intervals: [500] })
@@ -653,7 +604,7 @@ test.describe('X2a-1: 같은 사용자 2탭', () => {
       const p1 = await ctx.newPage()
       track(p1)
       await gotoApp(p1)
-      await openXlsxEditing(p1, f.name)
+      await openXlsxEditing(p1, f.rel)
       await expect.poll(async () => (await collabState(p1)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       // X2a 패치 표식: ooxml-core 패치 파일이 실제로 로드됐는지(런타임)
       await expect
@@ -679,7 +630,7 @@ test.describe('X2a-1: 같은 사용자 2탭', () => {
       const p2 = await ctx.newPage()
       track(p2)
       await gotoApp(p2)
-      await openXlsxEditing(p2, f.name)
+      await openXlsxEditing(p2, f.rel)
       await expect.poll(async () => (await collabState(p2)).active, { timeout: 30000, intervals: [500] }).toBe(true)
 
       // 진단 덤프(단언 아님): 실패 원문에서 DOM 표면을 확인하려고 남긴다.
@@ -789,7 +740,7 @@ test.describe('X2a: viewer 참가', () => {
       // 빈 시트가 아니다(자기 파일이 보인다).
       await expect.poll(async () => liveHasCell(t.pageB), { timeout: 20000, intervals: [500] }).toBe(true)
       // A 가 편집자로 들어와 디스크와 다른 값을 넣는다.
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await setCellByFormulaBar(t.pageA, 'B2', stamp)
       // viewer 화면이 방 내용을 따라간다.
@@ -806,7 +757,7 @@ test.describe('X2a: viewer 참가', () => {
     const external = `X2A3EXT${Date.now().toString(36)}`
     try {
       // A 가 방을 만든다.
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       // 외부에서 디스크를 바꾼다(방은 낡는다).
       const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
@@ -866,7 +817,7 @@ test.describe('X2a: viewer 참가', () => {
     const t = await twoPages(browser)
     const f = freshXlsx('x2a6', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await openXlsxFileOnly(t.pageB, f.name)
       await t.pageB.waitForSelector('xlsx-editor', { timeout: 20000 })
@@ -880,7 +831,7 @@ test.describe('X2a: viewer 참가', () => {
     }
   })
 
-  test('X2a-7: 보기→편집→보기 전환 내내 탭당 소켓은 1개 이하, 미리보기를 닫으면 0개', async ({ browser }) => {
+  test('X2a-7: 보기→편집(새 탭)→닫기 내내 탭당 소켓은 1개 이하, 미리보기를 닫으면 0개', async ({ browser }) => {
     const t = await twoPages(browser)
     const f = freshXlsx('x2a7', 0)
     const socks = trackCollabSockets(t.pageA)
@@ -890,15 +841,15 @@ test.describe('X2a: viewer 참가', () => {
       await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(() => socks.get(), { timeout: 20000, intervals: [300] }).toBe(1)
-      // 보기→편집: 다시 붙어도 1개(중복 금지).
-      const edit = t.pageA.getByRole('button', { name: 'Edit', exact: true })
-      await edit.waitFor({ timeout: 20000 })
-      await edit.click({ timeout: 20000 })
-      await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
+      // 보기→편집: C5-4 flag-day에서는 /edit/* 새 탭이 열린다. opener는 그대로 1개.
+      const [editor] = await Promise.all([
+        t.pageA.waitForEvent('popup', { timeout: 15000 }),
+        t.pageA.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await expect.poll(async () => (await collabState(editor)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(() => socks.get(), { timeout: 20000, intervals: [300] }).toBe(1)
-      // 편집→보기(Done): 1개 유지.
-      await clickDone(t.pageA)
-      await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
+      // 편집 탭 Done: 탭이 닫히고 opener는 1개 유지.
+      await clickDone(editor)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(() => socks.get(), { timeout: 20000, intervals: [300] }).toBe(1)
       expect(socks.max(), 'transient duplicate socket').toBeLessThanOrEqual(1)
@@ -916,15 +867,15 @@ test.describe('X2a: viewer 참가', () => {
     const t = await twoPages(browser)
     const f = freshXlsx('xm6x', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await openXlsxFileOnly(t.pageB, f.name)
       await t.pageB.waitForSelector('xlsx-editor', { timeout: 20000 })
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(() => roomListed(f.rel), { timeout: 15000, intervals: [500] }).toBe(true)
+      // C5-4: A Done은 편집 탭을 닫아 방에서 나간다. B 미리보기를 닫으면 방이 해제된다.
       await clickDone(t.pageA)
       await closeXlsxPreview(t.pageB)
-      await closeXlsxPreview(t.pageA)
       await expect.poll(() => roomListed(f.rel), { timeout: 20000, intervals: [500] }).toBe(false)
     } finally {
       await t.ctxA.close()
