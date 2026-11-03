@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { absForRel } from './helpers/env'
+import { openEditor } from './helpers/viewer'
 import JSZip from 'jszip'
 
 /**
@@ -66,7 +67,7 @@ function editorUi(page: import('@playwright/test').Page) {
 }
 
 test.describe('X-B1: XLSX edit entry (solo path)', () => {
-  test('X-B1: 20 Edit clicks in a row always open the editor', async ({ page }) => {
+  test('X-B1: 20 sequential /edit navigations always render the editor', async ({ page }) => {
     const errs: string[] = []
     page.on('pageerror', (e) => errs.push(String(e)))
     page.on('console', (m) => {
@@ -74,86 +75,19 @@ test.describe('X-B1: XLSX edit entry (solo path)', () => {
     })
 
     assertSeeded()
-    const name = SEEDED_NAME
-    await page.goto('/?collabDebug=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
-
-    // 워크스페이스를 열고 파일을 연다 (collab 없이 solo 경로).
-    // PPT openFile과 같은 재시도 구조: 백엔드 스캔이 늦을 수 있다.
-    for (let i = 0; i < 6; i++) {
-      try {
-        await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
-        break
-      } catch {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-      }
-    }
-    for (let i = 0; i < 5; i++) {
-      await page.getByTitle('Workspace').click({ timeout: 20000 })
-      try {
-        await page.waitForFunction(
-          () => document.querySelectorAll('[data-testid="file-row"]').length > 0,
-          null,
-          { timeout: 10000 },
-        )
-        break
-      } catch {
-        await page.keyboard.press('Escape')
-        await page.waitForTimeout(2000)
-      }
-      if (i === 4) throw new Error('workspace sheet has no rows after retries')
-    }
-    // 폴더 펼치기 (PPT openFile과 동일 구조: 폴더 행 자체는 안 눌리고 안쪽 div가 대상)
-    for (let i = 0; i < 8; i++) {
-      const has = await page.evaluate(
-        (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-        name,
-      )
-      if (has) break
-      const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-      if ((await folder.count()) > 0) {
-        // 행 바깥 div에는 핸들러가 없고 안쪽 div에 onClick이 있다(PPT openFile 주석 참고).
-        // span 클릭이 통하지 않아 행 자체에 실제 클릭을 시도한다.
-        await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-      } else {
-        await page.evaluate(() => {
-          const rows = [...document.querySelectorAll('[data-testid="file-row"]')]
-          const target =
-            rows.find((r) => (r.getAttribute('data-path') || '').replace(/\\/g, '/').endsWith('collab-e2e')) ||
-            rows.find((r) => !(r.getAttribute('data-path') || '').includes('.'))
-          const inner = target?.querySelector('div.flex-1') ?? target?.querySelector('div')
-          inner?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-        })
-      }
-      await page.waitForTimeout(2500)
-    }
-    await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({
-      timeout: 20000,
-    })
-    await waitXlsxMounted(page)
-
-const failures: Array<{ i: number; ui: unknown }> = []
+    // C5-4 flag-day: 편집 진입은 /edit/* 직접 goto다 (in-page Edit 폐지).
+    // 20회 반복 진입해도 매회 편집 UI가 보여야 한다. Done은 누르지 않는다
+    // (다음 goto가 내비게이션으로 대체한다 — Done은 탭을 닫는다).
+    const failures: Array<{ i: number; ui: unknown }> = []
     for (let i = 0; i < 20; i++) {
-      // 매 반복마다 편집 진입 → 저장 없이 Done으로 종료하지 않는다.
-      // 편집 상태인지만 확인하고 파일은 다시 열지 않는다(리마운트가 필요하면 새로고침).
-      const edit = page.getByRole('button', { name: 'Edit', exact: true })
-      if ((await edit.count()) === 0) break
-      await edit.click({ timeout: 15000 })
-      // 편집 모드 표시: 버튼이 Done으로 바뀌면 editing 상태가 들어간 것이다.
-      await expect(page.getByRole('button', { name: 'Done', exact: true })).toBeVisible({ timeout: 15000 })
+      await openEditor(page, `collab-e2e/${SEEDED_NAME}`)
       // 엔진이 실제로 그려질 때까지 기다린다(B1 은 렌더 지연이 아니라 아예 비어있다).
       await page.waitForTimeout(1200)
       const ui = await editorUi(page)
       if (!ui.mounted || ui.visible === 0) failures.push({ i, ui })
-      // 다음 반복을 위해 편집을 종료한다(저장은 하지 않는다).
-      const done = page.getByRole('button', { name: 'Done', exact: true })
-      if ((await done.count()) > 0) {
-        await done.click({ timeout: 15000 }).catch(() => {})
-        await page.waitForTimeout(600)
-        await page.getByRole('button', { name: 'Edit', exact: true }).waitFor({ timeout: 15000 }).catch(() => {})
-      }
     }
 
-    expect(failures, `edit UI missing on clicks: ${failures.join(',')}`).toEqual([])
+    expect(failures, `edit UI missing on entries: ${failures.join(',')}`).toEqual([])
     // X-B1은 solo 경로 검증이므로 창/툴바 조작이 없다. 이 잡음은 E2E 환경에서
 // commands 엔드포인트가 간헐적으로 실패해 발생한다(PPT 스위트도 동일).
 const noise = /Failed to fetch commands|AxiosError/
@@ -227,50 +161,8 @@ test.describe('X-B2: DOCX edit entry (other-office save path)', () => {
     const abs = absForRel(path.posix.join('repos', 'collab-e2e', name))
     await makeMinimalDocx(abs)
 
-    await page.goto('/?collabDebug=1', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    for (let i = 0; i < 6; i++) {
-      try {
-        await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
-        break
-      } catch {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-      }
-    }
-    for (let i = 0; i < 5; i++) {
-      await page.getByTitle('Workspace').click({ timeout: 20000 })
-      try {
-        await page.waitForFunction(
-          () => document.querySelectorAll('[data-testid="file-row"]').length > 0,
-          null,
-          { timeout: 10000 },
-        )
-        break
-      } catch {
-        await page.keyboard.press('Escape')
-        await page.waitForTimeout(2000)
-      }
-      if (i === 4) throw new Error('workspace sheet has no rows after retries')
-    }
-    for (let i = 0; i < 8; i++) {
-      const has = await page.evaluate(
-        (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-        name,
-      )
-      if (has) break
-      const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-      if ((await folder.count()) > 0) {
-        await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-      }
-      await page.waitForTimeout(2500)
-    }
-    await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({
-      timeout: 20000,
-    })
-    // 편집 진입 → DOCX 편집기 마운트
-    const edit = page.getByRole('button', { name: 'Edit', exact: true })
-    await edit.waitFor({ timeout: 20000 })
-    await edit.click({ timeout: 20000 })
-    await page.waitForSelector('docx-editor', { timeout: 30000 })
+    // C5-4 flag-day: 편집 진입은 /edit/* 직접 goto다 (트리 가시성과 무관하게 API로 읽는다).
+    await openEditor(page, `collab-e2e/${name}`)
     // ProseMirror 본문에 타이핑한다(기존 문단 끝에 마커 추가).
     const pm = page.locator('docx-editor [contenteditable="true"]').first()
     await pm.waitFor({ timeout: 30000 })
