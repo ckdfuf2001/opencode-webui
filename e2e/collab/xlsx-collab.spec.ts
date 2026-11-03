@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { absForRel, backendBase, uniqueRelWithExt } from './helpers/env'
-import { gotoApp, openEditor } from './helpers/viewer'
+import { gotoApp, openEditor, expectEditorClosed } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -136,13 +136,12 @@ async function clickAppSave(page: Page): Promise<void> {
   await save.click({ timeout: 20000 })
 }
 
-/** 편집 종료(Done). C5-4 flag-day: Done은 편집 탭을 닫는다. */
+/** 편집 종료(Done). C5-4 flag-day: Done은 편집 탭을 닫는다 (goto 탭은 닫힘 화면). */
 async function clickDone(page: Page): Promise<void> {
-  const closeWaiter = page.waitForEvent('close', { timeout: 20000 }).catch(() => null)
   const done = page.getByRole('button', { name: 'Done', exact: true })
   await done.waitFor({ timeout: 20000 })
   await done.click({ timeout: 20000 })
-  await closeWaiter
+  await expectEditorClosed(page)
 }
 
 /** X0a-9: 편집 모드 도입 직후의 즉시 입력 시도. 편집이 막혀 있어도 실패하지 않는다. */

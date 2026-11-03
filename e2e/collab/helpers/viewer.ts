@@ -280,15 +280,24 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
 }
 
 /**
+ * 에디터 탭 종료를 확인한다. window.open 팝업은 실제로 닫히고,
+ * goto 직접 진입 탭은 window.close가 막혀 "닫아도 됩니다" 화면이 남는다.
+ */
+export async function expectEditorClosed(page: Page): Promise<void> {
+  await page.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+  if (page.isClosed()) return
+  await expect(page.getByTestId('edit-closed')).toBeVisible({ timeout: 10000 })
+}
+
+/**
  * C5-4 flag-day: 편집 진입은 /edit/* 직접 goto로 통일한다 (팝업 추적 없음).
  * - workspacePath: 워크스페이스 상대 경로 (예: 'c54host/embed-pdf.xlsx').
  * - 로드 후 형식별 에디터를 기다린다. waitForTimeout/dispatch 클릭을 쓰지 않는다.
  * - 팝업 경로는 U-open 3종이 검증하므로 여기서는 다루지 않는다.
+ * - E2E 디버그 계측(?collabDebug=1)은 쿼리로만 켜지므로 직접 goto에서도 붙인다.
  */
 export async function openEditor(page: Page, workspacePath: string): Promise<void> {
   const { editUrlForFile } = await import('../../../frontend/src/lib/editUrls')
-  // E2E 디버그 계측(?collabDebug=1 → window.__collabDebug)은 쿼리로만 켜지므로
-  // 직접 goto에서도 붙인다 (in-page 진입은 gotoApp의 쿼리를 물려받는다).
   const url = `${editUrlForFile(workspacePath)}${editUrlForFile(workspacePath).includes('?') ? '&' : '?'}collabDebug=1&e2e=1`
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
   await page.getByTestId('edit-page').waitFor({ timeout: 30000 })

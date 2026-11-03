@@ -1030,7 +1030,7 @@ const t = await twoPages(browser)
     const closeWaiter = t.pageA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 15000 })
     await closeWaiter
-    expect(t.pageA.isClosed(), 'editor tab closed').toBe(true)
+    if (!t.pageA.isClosed()) await t.pageA.getByTestId('edit-closed').waitFor({ timeout: 10000 })
     // 떠난 피어 표시의 정리(유령·폴백 '1' 포함)는 U-close에서 단언한다.
     // (닫힘 자체와 닫기 전 '3' 전파·리마운트 없음은 위에서 검증済み.)
     void testName
@@ -1055,11 +1055,11 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
     }).toPass({ timeout: 20000 })
     // Z3(2) 전환 "이전" 이력 길이를 기록해 전환 이후 구간만 판정한다.
     // (초기 열람 때 슬라이드 1이 한 번 나오는 것은 정상이다)
-    // C5-4: Done은 탭을 닫는다. 떠난 피어 표시의 정리는 U-close에서 단언한다.
+    // C5-4: Done은 탭을 닫는다 (goto 탭은 닫힘 화면). B 화면 peer 정리는 U-close에서 단언.
     const closeWaiter = t.pageA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 20000 })
     await closeWaiter
-    expect(t.pageA.isClosed(), 'editor tab closed').toBe(true)
+    if (!t.pageA.isClosed()) await t.pageA.getByTestId('edit-closed').waitFor({ timeout: 10000 })
     void testName
     await closeTwo(t)
   })
