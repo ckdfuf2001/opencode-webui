@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { backendBase, workspaceDir } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, seedUser } from './helpers/users'
 
 /**
@@ -160,13 +160,14 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
           }
         }
         if (isPackageOffice) {
-          await page.getByTestId('ole-icon').first().dblclick({ timeout: 15000 })
-          await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-          await expect(page.getByTestId('attach-title')).toContainText('Microsoft_Word_Document.docx', {
-            timeout: 15000,
-          })
-          await page.getByTestId('attach-done').click({ timeout: 15000 })
-          await page.waitForTimeout(1500)
+          // C5-4 flag-day: 편집기는 /edit/* 새 탭으로 열린다 (오버레이 폐지).
+          const [popup] = await Promise.all([
+            page.waitForEvent('popup', { timeout: 15000 }),
+            page.getByTestId('ole-icon').first().dblclick({ timeout: 15000 }),
+          ])
+          await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
+          expect(popup.url()).toMatch(/\/edit\/.+\/-\/.+/)
+          await popup.close().catch(() => {})
           continue
         }
         const [dl] = await Promise.all([
@@ -204,10 +205,11 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
     await mkRepo('c51save')
     try {
       for (const name of ['embed-pdf.xlsx', 'embed-docx.xlsx', 'embed-pdf.docx', 'embed-docx.docx']) {
-        await openViaWorkspace(page, name, 'c51save')
+        // C5-4 flag-day: 편집 진입은 /edit/* 직접 goto다. Done은 누르지 않는다
+        // (다음 openEditor가 내비게이션으로 대체한다 — Done은 탭을 닫는다).
+        await openEditor(page, `c51save/${name}`)
         const isXlsx = name.endsWith('.xlsx')
         if (isXlsx) {
-          await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
           await page.waitForSelector('xlsx-editor', { timeout: 20000 })
           const stamp = `C51${Date.now().toString(36)}`
           await page.evaluate((r) => {
@@ -253,11 +255,10 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
           }
           expect(saved, `${name} autosaved`).toBe(true)
         } else {
-          // DOCX: 편집 진입 후 타이핑하고 저장 (xlsx-solo proven pattern:
-          // contenteditable 직접 클릭 + Control+End + 헤더 Save + Done).
-          const edit = page.getByRole('button', { name: 'Edit', exact: true })
-          if ((await edit.count()) > 0) {
-            await edit.first().click({ timeout: 20000 }).catch(() => {})
+          // DOCX: 타이핑하고 저장 (xlsx-solo proven pattern:
+          // contenteditable 직접 클릭 + Control+End + 헤더 Save).
+          // Done은 누르지 않는다 (탭이 닫힌다).
+          {
             const stamp = `C51D${Date.now().toString(36)}`
             const pm = page.locator('docx-editor [contenteditable="true"]').first()
             await pm.waitFor({ timeout: 30000 })
@@ -280,9 +281,6 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
               await page.waitForTimeout(5000)
             }
             expect(saved, `${name} docx saved`).toBe(true)
-            const done = page.getByRole('button', { name: 'Done', exact: true })
-            if ((await done.count()) > 0) await done.first().click({ timeout: 20000 }).catch(() => {})
-            await page.waitForTimeout(3000)
           }
         }
         const buf = await backendBytes('c51save', name)

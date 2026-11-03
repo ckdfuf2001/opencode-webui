@@ -297,8 +297,11 @@ export async function openEditor(page: Page, workspacePath: string): Promise<voi
   } else {
     throw new Error(`openEditor: unsupported ext ${ext ?? ''}`)
   }
-  // M21: lib가 로드된 뒤에야 런타임 표식을 단언한다.
-  await assertLibPatchesLoaded(page)
+  // M21: lib가 로드된 뒤에야 런타임 표식을 단언한다 (pptx 패치 표식 — xlsx/docx는
+  // 자체 번들이라 이 표식이 없고 기존 헬퍼도 단언하지 않는다).
+  if (ext === 'pptx') {
+    await assertLibPatchesLoaded(page)
+  }
   await page
     .waitForFunction(() => document.querySelector('[data-testid="collab-status"]')?.getAttribute('data-status') === 'connected', null, {
       timeout: 60000,
