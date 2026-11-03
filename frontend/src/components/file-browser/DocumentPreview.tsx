@@ -42,6 +42,7 @@ import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
 import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
+import { ATTACHMENT_OPEN_REQUEST, openAttachmentEditor, type AttachmentOpenRequest, type AttachmentSaver } from './embedEdit'
 
 type ExtractedMsg = {
   html?: string
@@ -1071,7 +1072,7 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
   )
 }
 
-function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string }) {
+export function DocxViewer({ data, editing = false, path, fileName, standalone = false, persistOverride, registerSaver }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void }) {
   const appTheme = useTheme()
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
@@ -1085,8 +1086,18 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   const [laidOut, setLaidOut] = useState(0)
   const laidOutRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // C5-3 standalone(첨부 편집): PUT 저장 + 저장 슬롯 등록.
+  const standaloneRef = useRef(standalone)
+  standaloneRef.current = standalone
+  const persistOverrideRef = useRef(persistOverride)
+  persistOverrideRef.current = persistOverride
+  const dirtyRef = useRef(false)
   // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
-  const attachAddIns = useMemo(() => buildOfficeAttachAddIn(() => requestEmbedFile(path)), [path])
+  // 보기 모드와 standalone(중첩 첨부 금지)에서는 탭을 숨긴다.
+  const attachAddIns = useMemo(
+    () => (editing && !standalone ? buildOfficeAttachAddIn(() => requestEmbedFile(path)) : []),
+    [path, editing, standalone],
+  )
   // G2: lib 타이틀바 actions 슬롯에 presence를 꽂는다 (portal). DOCX는
   // 동시편집이 없어 항상 빈 목록 — 표시는 없고 testid 자리만 유지한다.
   const docxTitleSlot = useTitlebarSlot(
@@ -1108,7 +1119,32 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     setSavedBytes(new Uint8Array(bytes))
     setDocDirty(false)
   }, [])
-  const { save } = useOfficeSave(path, fileName ?? 'document.docx', handle, onSavedDoc)
+  const { save: saveBase } = useOfficeSave(path, fileName ?? 'document.docx', handle, onSavedDoc)
+  // C5-3 standalone(첨부 편집): PUT 경로로 저장한다.
+  const save = useCallback(async (): Promise<boolean> => {
+    const ov = standaloneRef.current ? persistOverrideRef.current : undefined
+    if (ov) {
+      try {
+        if (!handle) return false
+        const blob: Blob = await handle.save()
+        const bytes = new Uint8Array(await blob.arrayBuffer())
+        const ok = await ov(bytes)
+        if (ok) {
+          try {
+            handle.markClean()
+          } catch {
+            /* 무시 */
+          }
+          dirtyRef.current = false
+          onSavedDoc(bytes)
+        }
+        return ok
+      } catch {
+        return false
+      }
+    }
+    return saveBase()
+  }, [saveBase, handle, onSavedDoc])
   const [comments, setComments] = useState<DocxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [author, setAuthor] = useState(() => {
@@ -1372,12 +1408,14 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   // 보기 화면에서 떠오른 저장이 XLSX 편집 세션과 엮인다. 편집 중에만 등록한다.
   useEffect(() => {
     if (!editing) return
+    // C5-3 standalone(첨부 편집): 부모 저장 이벤트를 무시한다 (saver 경로만 사용).
+    if (standaloneRef.current) return
     const onSave = () => {
       void save()
     }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [save, editing])
+  }, [save, editing, standalone])
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다 (DOCX는 방이 없다).
   useEffect(() => {
     const onEmbed = (e: Event) => {
@@ -1393,6 +1431,26 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
     window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
     return () => window.removeEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
   }, [path, editing])
+  // C5-3 standalone(첨부 편집): 저장 슬롯을 AttachmentEditor에 등록한다.
+  // (룸이 없어 officeSaveRequest 경로는 쓰지 않는다).
+  useEffect(() => {
+    if (!standalone || !registerSaver) return
+    registerSaver({
+      saveNow: () => save(),
+      isDirty: () => dirtyRef.current,
+    })
+    return () => registerSaver(null)
+  }, [standalone, registerSaver, save])
+  // C5-3: 첨부 편집 열기. 자기 경로의 요청만 뷰어 컨텍스트를 붙여 전달한다 (DOCX는 방이 없다).
+  useEffect(() => {
+    const onOpenReq = (e: Event) => {
+      const d = (e as CustomEvent<AttachmentOpenRequest>).detail
+      if (!d || d.parentPath !== path) return
+      openAttachmentEditor({ ...d })
+    }
+    window.addEventListener(ATTACHMENT_OPEN_REQUEST, onOpenReq as EventListener)
+    return () => window.removeEventListener(ATTACHMENT_OPEN_REQUEST, onOpenReq as EventListener)
+  }, [path])
 
   // 조건부 early-return보다 뒤에 hook이 오면 렌더마다 hook 개수가 달라져
   // React #300("fewer hooks than expected")으로 터진다. error 분기는 모든
@@ -1408,18 +1466,21 @@ function DocxViewer({ data, editing = false, path, fileName }: { data: ArrayBuff
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host relative h-full min-h-[480px]">
-      <OleAttachmentOverlay data={content} anchor="docx" />
+      <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} parentName={fileName ?? 'document.docx'} />
       <div className="flex h-full min-h-0">
         <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
             <WordEditor
               ref={setHandle}
               readOnly={!editing}
-              showToolbar={editing}
+              showToolbar
               theme={appTheme}
               ribbonAddIns={attachAddIns}
               onDocumentChange={scheduleRelayout}
-              onDirtyChange={setDocDirty}
+              onDirtyChange={(d) => {
+                if (standaloneRef.current) dirtyRef.current = !!d
+                setDocDirty(d)
+              }}
               onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
             />
           </Suspense>
@@ -1704,7 +1765,7 @@ function XlsxIconBtn({
   )
 }
 
-function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onRoomHasEditorsChange, onRequestReload }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null; onRoomHasEditorsChange?: (has: boolean) => void; onRequestReload?: () => void }) {
+export function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onRoomHasEditorsChange, onRequestReload, standalone = false, persistOverride, registerSaver }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null; onRoomHasEditorsChange?: (has: boolean) => void; onRequestReload?: () => void; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void }) {
   const appTheme = useTheme()
   const queryClient = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -1726,11 +1787,17 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     updateCollabIdentity?: (patch: { name?: string; color?: string; sheet?: string | null; range?: string | null }) => boolean
   } | null>(null)
   const listenRef = useRef<HTMLDivElement>(null)
+  // C5-3 standalone(첨부 편집): 방 미참가·자동저장 금지·PUT 저장.
+  const standaloneRef = useRef(standalone)
+  standaloneRef.current = standalone
+  const persistOverrideRef = useRef(persistOverride)
+  persistOverrideRef.current = persistOverride
+  const dirtyRef = useRef(false)
   // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
-  // 보기 모드에서는 탭을 숨긴다 (첨부는 편집 행위 — 보완2).
+  // 보기 모드에서는 탭을 숨긴다 (첨부는 편집 행위 — 보완2). standalone에서는 중첩 금지.
   const attachAddIns = useMemo(
-    () => (editing ? buildOfficeAttachAddIn(() => requestEmbedFile(path)) : []),
-    [path, editing],
+    () => (editing && !standalone ? buildOfficeAttachAddIn(() => requestEmbedFile(path)) : []),
+    [path, editing, standalone],
   )
   // X1c(P0): 단독 저장의 잠금 ETag. 파일을 **읽은 시점**의 값부터 시작해,
   // 단독 저장 성공마다 서버가 돌려준 새 ETag 로 갱신한다(디스크와 동기화 유지).
@@ -1780,11 +1847,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
    * 풀리므로, VPN/프록시 등으로 WebSocket 이 막힌 환경에서는 영원히 막힌다. 초과하면
    * 보기 전용으로 두고 배너("연결 시간 초과") + "다시 연결"을 띄운다(C2-b).
    */
-  const joining = !collabNotice && !(collab?.joined)
+  const joining = standalone ? false : !collabNotice && !(collab?.joined)
   // X2a-③ 후속: viewer 로 붙어 있어도 편집 잠금은 풀지 않는다. 편집 입력은
   // editor 역할 세션이 방에 붙고 문서를 적용한 뒤에만 받는다(viewer→editor 전환
   // 사이 leave/rejoin 구간에 입력하면 "방의 문서가 이긴다"로 조용히 사라진다).
-  const connecting = editing && !collabNotice && !(collab?.role === 'edit' && collab?.joined)
+  const connecting = editing && !standalone && !collabNotice && !(collab?.role === 'edit' && collab?.joined)
   const editingRef = useRef(editing)
   editingRef.current = editing
   /** X2a-③: viewer가 방 내용을 따라가도록 에디터를 다시 마운트한 세대. key 에 들어간다. */
@@ -2036,6 +2103,8 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     // S1: 신원 미발급이면 여기서 자동 발급한다. rooms() owner self-match와
     // presence userId 묶음의 전제다 (없으면 solo 자동저장이 조용히 skip된다).
     ensureCollabIdentity()
+    // C5-3 standalone(첨부 편집): 방에 참가하지 않는다 (방 안의 방 금지).
+    if (standalone) return
     // X2a-③: 보기 모드도 방에 참가한다(viewer 역할, presence만 공유).
     // 모드가 바뀌면 viewer 따라가기 상태도 처음부터 다시 본다.
     hadEditorsRef.current = false
@@ -2223,7 +2292,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     }
     // etagProp(바이트와 같은 응답의 ETag)이 바뀌면 재참가한다.
     // content 자체는 deps에 넣지 않는다(저장 후 raw 재수신으로 방에서 떨어지면 안 된다).
-  }, [editing, path, joinKey, etagProp])
+  }, [editing, path, joinKey, etagProp, standalone])
   const [comments, setComments] = useState<XlsxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -3729,6 +3798,34 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   }, [saveViaRoom])
   // 방에 붙었으면 방 경로, 단독이면 단독 경로(/api/files)로 저장한다.
   const save = useCallback(async (): Promise<boolean> => {
+    // C5-3 standalone(첨부 편집): PUT 경로로 저장한다 (방·단독 경로 모두 우회).
+    const ov = standaloneRef.current ? persistOverrideRef.current : undefined
+    if (ov) {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
+      autosavePendingRef.current = false
+      try {
+        const h = xlsxHandleRef.current
+        if (!h) return false
+        const blob: Blob = await h.save()
+        const bytes = new Uint8Array(await blob.arrayBuffer())
+        const ok = await ov(bytes)
+        if (ok) {
+          try {
+            h.markClean()
+          } catch {
+            /* 무시 */
+          }
+          dirtyRef.current = false
+          setSavedBytes(new Uint8Array(bytes))
+        }
+        return ok
+      } catch {
+        return false
+      }
+    }
     if (autosaveTimerRef.current) {
       clearTimeout(autosaveTimerRef.current)
       autosaveTimerRef.current = null
@@ -3763,13 +3860,14 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   // 보기 화면에서 떠오른 저장이 XLSX 편집 세션과 엮인다.
   // X2a-③: viewer 로 참가 중에도 듣는다(403 view_only 확인용). 방에 붙지 않았으면 무시한다.
   useEffect(() => {
+    if (standalone) return
     const onSave = () => {
       if (!editing && collabRef.current?.role !== 'viewer') return
       void save()
     }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [save, editing])
+  }, [save, editing, standalone])
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
   useEffect(() => {
     const onEmbed = (e: Event) => {
@@ -3791,6 +3889,31 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
     window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
     return () => window.removeEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
   }, [path, save])
+  // C5-3 standalone(첨부 편집): 저장 슬롯을 AttachmentEditor에 등록한다.
+  // (룸/자동저장이 없어 officeSaveRequest 경로는 쓰지 않는다.)
+  useEffect(() => {
+    if (!standalone || !registerSaver) return
+    registerSaver({
+      saveNow: () => save(),
+      isDirty: () => dirtyRef.current,
+    })
+    return () => registerSaver(null)
+  }, [standalone, registerSaver, save])
+  // C5-3: 첨부 편집 열기. 자기 경로의 요청만 방 컨텍스트를 붙여 전달한다.
+  useEffect(() => {
+    const onOpenReq = (e: Event) => {
+      const d = (e as CustomEvent<AttachmentOpenRequest>).detail
+      if (!d || d.parentPath !== path) return
+      const room = collabRef.current
+      openAttachmentEditor({
+        ...d,
+        roomId: room?.roomId,
+        clientId: selfClientIdRef.current ?? undefined,
+      })
+    }
+    window.addEventListener(ATTACHMENT_OPEN_REQUEST, onOpenReq as EventListener)
+    return () => window.removeEventListener(ATTACHMENT_OPEN_REQUEST, onOpenReq as EventListener)
+  }, [path])
   // 상단 코멘트 버튼: 우측 목록 패널을 여닫는다.
   useEffect(() => {
     const onToggle = () => {
@@ -3818,7 +3941,7 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="xlsxengine-host relative h-full min-h-[480px]">
-      <OleAttachmentOverlay data={content} anchor="xlsx" />
+      <OleAttachmentOverlay data={content} anchor="xlsx" parentPath={path} parentName={fileName ?? 'workbook.xlsx'} />
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
@@ -3920,6 +4043,11 @@ function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onR
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
           onWorkbookChange={() => {
+            // C5-3 standalone(첨부 편집): 자동 저장·방 sweep 없이 dirty만 기록한다.
+            if (standaloneRef.current) {
+              dirtyRef.current = true
+              return
+            }
             scheduleXlsxRefresh()
             if (editingRef.current) scheduleAutosave()
             objSendSweep()

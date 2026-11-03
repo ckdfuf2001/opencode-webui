@@ -14,6 +14,8 @@ import { detectDocKind } from './docKind'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
 import { useShadowedFile, type OpenFileSurface } from './openFileRegistry'
+import AttachmentEditor from './AttachmentEditor'
+import { ATTACHMENT_OPEN_EVENT, type AttachmentOpenDetail } from './embedEdit'
 
 
 const API_BASE = API_BASE_URL
@@ -53,6 +55,18 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   const contentRef = useRef<HTMLDivElement>(null)
   
   
+  // C5-3: 첨부 편집기 열기 (오버레이→뷰어 2단계를 거쳐 온 요청, 자기 파일만).
+  const [attachTarget, setAttachTarget] = useState<AttachmentOpenDetail | null>(null)
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<AttachmentOpenDetail>).detail
+      if (!d || d.parentPath !== file.path) return
+      setAttachTarget(d)
+    }
+    window.addEventListener(ATTACHMENT_OPEN_EVENT, onOpen as EventListener)
+    return () => window.removeEventListener(ATTACHMENT_OPEN_EVENT, onOpen as EventListener)
+  }, [file.path])
+
   const docKind = detectDocKind(file.name)
   
   const shouldVirtualize = docKind === null && file.size > VIRTUALIZATION_THRESHOLD_BYTES && !file.mimeType?.startsWith('image/')
@@ -546,6 +560,7 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
           {renderContent()}
         </div>
       </div>
+      {attachTarget && <AttachmentEditor target={attachTarget} onClose={() => setAttachTarget(null)} />}
     </div>
   )
 })

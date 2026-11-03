@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
@@ -118,6 +118,29 @@ async function openViaWorkspace(page: Page, name: string, seg: string): Promise<
 
 async function backendBytes(localPath: string, name: string): Promise<Buffer> {
   return fs.readFileSync(path.join(workspaceDir(), 'repos', localPath, name))
+}
+
+/**
+ * 첨부 편집기의 ProseMirror에 포커스를 준다. docx lib은 shadow DOM에 렌더하므로
+ * document.activeElement는 호스트를 가리킨다 — 섀도우 루트 기준으로 확인한다.
+ * 중앙 임베드 아이콘에 클릭이 먹으면 포커스가 텍스트에 안 가므로 첫 문단 좌측을 클릭한다.
+ */
+async function focusAttachEditor(page: Page): Promise<Locator> {
+  const pm = page.locator('[data-testid="attach-editor"] [contenteditable="true"]').first()
+  await pm.waitFor({ timeout: 30000 })
+  await pm.click({ position: { x: 120, y: 60 }, timeout: 15000 })
+  await expect
+    .poll(
+      () =>
+        pm.evaluate((el) => {
+          const root = el.getRootNode() as ShadowRoot | Document
+          const ae = root instanceof ShadowRoot ? root.activeElement : el.ownerDocument.activeElement
+          return ae === el
+        }),
+      { timeout: 10000, intervals: [500] },
+    )
+    .toBe(true)
+  return pm
 }
 
 /** 직접 POST 조립 (E1/E2 셋업용 — UI 첨부 대신 서버 조립 경로 사용). */
@@ -492,16 +515,33 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       })
       // 편집 모드 직접 진입 (Edit 버튼 없음)
       const stamp = `E2X${Date.now().toString(36)}`
-      const pm = page.locator('[data-testid="attach-editor"] [contenteditable="true"]').first()
-      await pm.waitFor({ timeout: 30000 })
-      await pm.click({ timeout: 15000 })
+      const pm = await focusAttachEditor(page, 'E2-xlsx-edit')
       await page.keyboard.press('Control+End')
       await page.keyboard.type(stamp, { delay: 30 })
+      await expect(pm, 'stamp typed in attachment').toContainText(stamp, { timeout: 15000 })
       await page.getByTestId('attach-save').click({ timeout: 15000 })
+      await expect(page.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
       // 부모 zip: 해당 파트만 바뀌고 나머지는 바이트 동일
-      const after = await expect
-        .poll(async () => backendBytes(seg, 'collab-features.xlsx'), { timeout: 60000, intervals: [2000] })
-        .toBeTruthy()
+      // (expect.poll은 값을 반환하지 않으므로 스탬프로 대기 후 명시 재읽기)
+      await expect
+        .poll(
+          async () => {
+            try {
+              const z = await JSZip.loadAsync(backendBytes(seg, 'collab-features.xlsx'))
+              const f = z.files['xl/embeddings/report.docx']
+              if (!f) return false
+              const inner = await JSZip.loadAsync(await f.async('uint8array'))
+              const doc = inner.files['word/document.xml']
+              if (!doc) return false
+              return (await doc.async('string')).includes(stamp)
+            } catch {
+              return false
+            }
+          },
+          { timeout: 60000, intervals: [2000] },
+        )
+        .toBe(true)
+      const after = backendBytes(seg, 'collab-features.xlsx')
       const z0 = await JSZip.loadAsync(before)
       const z1 = await JSZip.loadAsync(after as unknown as Buffer)
       const names0 = new Set(Object.keys(z0.files))
@@ -516,8 +556,9 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         expect(n, 'only attachment part changes').toBe('xl/embeddings/report.docx')
       }
       expect(changed, 'exactly one part changed').toBe(1)
-      const part = await z1.files['xl/embeddings/report.docx']!.async('string')
-      expect(part.includes(stamp), 'stamp in replaced part').toBe(true)
+      const partZip = await JSZip.loadAsync(await z1.files['xl/embeddings/report.docx']!.async('uint8array'))
+      const partDoc = await partZip.files['word/document.xml']!.async('string')
+      expect(partDoc.includes(stamp), 'stamp in replaced part').toBe(true)
       await page.getByTestId('attach-done').click({ timeout: 15000 })
     } finally {
       await ctx.close().catch(() => {})
@@ -591,28 +632,37 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         el?.select?.(ref)
         el?.focusGrid?.()
       }, 'B2')
-      const barB = pageB.locator('xlsx-editor [part~="formula-bar"] input').last()
+      const barB = pageB.locator('xlsx-editor [part~="formula-bar"] textarea').last()
       await barB.waitFor({ timeout: 15000 })
       await barB.click({ timeout: 15000 })
       await barB.fill(stampB)
+      await expect(barB, 'stampB in formula bar').toHaveValue(stampB, { timeout: 15000 })
       await barB.press('Enter')
       // A가 첨부를 열어 저장 (방 리셋 발생)
       await pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 })
       await pageA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       const stampA = `E2A${Date.now().toString(36)}`
-      const pmA = pageA.locator('[data-testid="attach-editor"] [contenteditable="true"]').first()
-      await pmA.waitFor({ timeout: 30000 })
-      await pmA.click({ timeout: 15000 })
+      const pmA = await focusAttachEditor(pageA, 'E2-unsaved')
       await pageA.keyboard.press('Control+End')
       await pageA.keyboard.type(stampA, { delay: 30 })
+      await expect(pmA, 'stampA typed in attachment').toContainText(stampA, { timeout: 15000 })
       await pageA.getByTestId('attach-save').click({ timeout: 15000 })
+      await expect(pageA.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
       await expect
         .poll(
           async () => {
-            const b = await backendBytes(seg, 'collab-features.xlsx')
-            const z = await JSZip.loadAsync(b)
-            const part = await z.files['xl/embeddings/report.docx']!.async('string')
-            return part.includes(stampA)
+            try {
+              const b = await backendBytes(seg, 'collab-features.xlsx')
+              const z = await JSZip.loadAsync(b)
+              const f = z.files['xl/embeddings/report.docx']
+              if (!f) return false
+              const inner = await JSZip.loadAsync(await f.async('uint8array'))
+              const doc = inner.files['word/document.xml']
+              if (!doc) return false
+              return (await doc.async('string')).includes(stampA)
+            } catch {
+              return false
+            }
           },
           { timeout: 60000, intervals: [2000] },
         )
@@ -658,15 +708,31 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       await expect(page.getByTestId('attach-title')).toContainText('collab-3slides.pptx › Rp.docx', { timeout: 15000 })
       const stamp = `E2P${Date.now().toString(36)}`
-      const pm = page.locator('[data-testid="attach-editor"] [contenteditable="true"]').first()
-      await pm.waitFor({ timeout: 30000 })
-      await pm.click({ timeout: 15000 })
+      const pm = await focusAttachEditor(page, 'E2-pptx-edit')
       await page.keyboard.press('Control+End')
       await page.keyboard.type(stamp, { delay: 30 })
+      await expect(pm, 'stamp typed in attachment').toContainText(stamp, { timeout: 15000 })
       await page.getByTestId('attach-save').click({ timeout: 15000 })
-      const after = await expect
-        .poll(async () => backendBytes(seg, 'collab-3slides.pptx'), { timeout: 60000, intervals: [2000] })
-        .toBeTruthy()
+      await expect(page.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
+      await expect
+        .poll(
+          async () => {
+            try {
+              const z = await JSZip.loadAsync(backendBytes(seg, 'collab-3slides.pptx'))
+              const f = z.files['ppt/embeddings/Rp.docx']
+              if (!f) return false
+              const inner = await JSZip.loadAsync(await f.async('uint8array'))
+              const doc = inner.files['word/document.xml']
+              if (!doc) return false
+              return (await doc.async('string')).includes(stamp)
+            } catch {
+              return false
+            }
+          },
+          { timeout: 60000, intervals: [2000] },
+        )
+        .toBe(true)
+      const after = backendBytes(seg, 'collab-3slides.pptx')
       const z0 = await JSZip.loadAsync(before)
       const z1 = await JSZip.loadAsync(after as unknown as Buffer)
       expect([...Object.keys(z1.files)].sort()).toEqual([...Object.keys(z0.files)].sort())
@@ -679,8 +745,9 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         expect(n, 'only attachment part changes').toBe('ppt/embeddings/Rp.docx')
       }
       expect(changed, 'exactly one part changed').toBe(1)
-      const part = await z1.files['ppt/embeddings/Rp.docx']!.async('string')
-      expect(part.includes(stamp), 'stamp in replaced part').toBe(true)
+      const part = await JSZip.loadAsync(await z1.files['ppt/embeddings/Rp.docx']!.async('uint8array'))
+      const partDoc = await part.files['word/document.xml']!.async('string')
+      expect(partDoc.includes(stamp), 'stamp in replaced part').toBe(true)
       await page.getByTestId('attach-done').click({ timeout: 15000 })
     } finally {
       await ctx.close().catch(() => {})
@@ -713,15 +780,37 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         el?.select?.('B2')
         el?.focusGrid?.()
       })
-      const bar = page.locator('[data-testid="attach-editor"] xlsx-editor [part~="formula-bar"] input').last()
+      const bar = page.locator('[data-testid="attach-editor"] xlsx-editor [part~="formula-bar"] textarea').last()
       await bar.waitFor({ timeout: 30000 })
       await bar.click({ timeout: 15000 })
       await bar.fill(stamp)
+      await expect(bar, 'stamp in formula bar').toHaveValue(stamp, { timeout: 15000 })
       await bar.press('Enter')
       await page.getByTestId('attach-save').click({ timeout: 15000 })
-      const after = await expect
-        .poll(async () => backendBytes(seg, 'collab-features.docx'), { timeout: 60000, intervals: [2000] })
-        .toBeTruthy()
+      await expect(page.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
+      await expect
+        .poll(
+          async () => {
+            try {
+              const z = await JSZip.loadAsync(backendBytes(seg, 'collab-features.docx'))
+              const f = z.files['word/embeddings/Sh.xlsx']
+              if (!f) return false
+              const inner = await JSZip.loadAsync(await f.async('uint8array'))
+              const ss = inner.files['xl/sharedStrings.xml']
+                ? await inner.files['xl/sharedStrings.xml']!.async('string')
+                : ''
+              const sh = inner.files['xl/worksheets/sheet1.xml']
+                ? await inner.files['xl/worksheets/sheet1.xml']!.async('string')
+                : ''
+              return (ss + sh).includes(stamp)
+            } catch {
+              return false
+            }
+          },
+          { timeout: 60000, intervals: [2000] },
+        )
+        .toBe(true)
+      const after = backendBytes(seg, 'collab-features.docx')
       const z0 = await JSZip.loadAsync(before)
       const z1 = await JSZip.loadAsync(after as unknown as Buffer)
       expect([...Object.keys(z0.files)].sort()).toEqual([...Object.keys(z1.files)].sort())
@@ -760,11 +849,20 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await openViaWorkspace(page, 'collab-features.xlsx', seg)
       const icon = page.getByRole('button', { name: '첨부 note.pdf', exact: true }).first()
       await icon.waitFor({ timeout: 30000 })
+      // headless-shell에는 PDF 뷰어가 없어 blob 탐색이 다운로드로 바뀐다.
+      const dlWaiter = page.waitForEvent('download', { timeout: 25000 }).catch(() => null)
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
         icon.dblclick({ timeout: 15000 }),
       ])
-      expect(popup.url().startsWith('blob:'), 'pdf preview popup').toBe(true)
+      try {
+        await expect.poll(() => popup.url(), { timeout: 10000, intervals: [500] }).toMatch(/^blob:/)
+      } catch {
+        const dl = await dlWaiter
+        expect(dl, 'pdf download when no viewer').toBeTruthy()
+        expect(await dl!.path(), 'pdf download path').toBeTruthy()
+        expect(dl!.suggestedFilename(), 'pdf filename').toMatch(/note\.pdf$/)
+      }
       await popup.close().catch(() => {})
     } finally {
       await ctx.close().catch(() => {})

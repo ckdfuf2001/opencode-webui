@@ -14,6 +14,7 @@ import {
 import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
+import { attachmentKindOf, requestAttachmentOpen } from './embedEdit'
 
 /** lib가 렌더를 포기한 자리 표시자 (xg-obj-unsupported — 텍스트 판정 금지). */
 
@@ -129,9 +130,14 @@ function findAnchorEl(
 export default function OleAttachmentOverlay({
   data,
   anchor,
+  parentPath,
+  parentName,
 }: {
   data: ArrayBuffer | Uint8Array
   anchor?: OleAnchorKind
+  /** C5-3: 첨부 편집기 열기에 필요한 부모 식별자 (없으면 다운로드만). */
+  parentPath?: string
+  parentName?: string
 }) {
   const [entries, setEntries] = useState<OleEmbeddingRef[]>([])
   // 앵커 사각형 + lib placeholder 여부 (placeholder면 미리보기 카드로 덮는다).
@@ -214,6 +220,80 @@ export default function OleAttachmentOverlay({
 
   if (entries.length === 0) return null
 
+  /** C5-3: 더블클릭 동작 — package 오피스면 편집기, pdf면 새 탭 미리보기, 나머지는 다운로드. */
+  const openKind = (entry: OleEmbeddingRef): 'edit' | 'preview' | 'download' => {
+    if (!parentPath || entry.relType !== 'package') return 'download'
+    const name = displayName(entry)
+    if (attachmentKindOf(name)) return 'edit'
+    if (/\.pdf$/i.test(name)) return 'preview'
+    return 'download'
+  }
+
+  const previewPdf = (entry: OleEmbeddingRef): void => {
+    let win: Window | null = null
+    try {
+      // 팝업 차단을 피하려고 동기 시점에 빈 탭을 먼저 연다.
+      win = window.open('', '_blank', 'noopener')
+    } catch {
+      win = null
+    }
+    void (async () => {
+      try {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
+        const zip = await JSZip.loadAsync(bytes)
+        const file = zip.files[entry.partName]
+        if (!file) throw new Error('missing part')
+        const raw = new Uint8Array(await file.async('uint8array'))
+        const url = URL.createObjectURL(new Blob([raw as unknown as BlobPart], { type: 'application/pdf' }))
+        if (win && !win.closed) {
+          win.location.href = url
+          window.setTimeout(() => {
+            try {
+              URL.revokeObjectURL(url)
+            } catch {
+              /* 무시 */
+            }
+          }, 60000)
+          return
+        }
+        // 팝업 차단 → 다운로드로 폴백.
+        saveBlob(displayName(entry), raw)
+      } catch {
+        try {
+          if (win && !win.closed) win.close()
+        } catch {
+          /* 무시 */
+        }
+        await download(entry)
+      }
+    })()
+  }
+
+  const openOrDownload = (entry: OleEmbeddingRef): void => {
+    const kind = openKind(entry)
+    if (kind === 'download' || !parentPath) {
+      void download(entry)
+      return
+    }
+    if (kind === 'preview') {
+      previewPdf(entry)
+      return
+    }
+    const name = displayName(entry)
+    const attachKind = attachmentKindOf(name)
+    if (!attachKind) {
+      void download(entry)
+      return
+    }
+    requestAttachmentOpen({
+      parentPath,
+      parentName: parentName ?? name,
+      part: entry.partName,
+      name,
+      kind: attachKind,
+    })
+  }
+
   const download = async (entry: OleEmbeddingRef): Promise<void> => {
     try {
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
@@ -237,7 +317,7 @@ export default function OleAttachmentOverlay({
       title={displayName(entry)}
       aria-label={`첨부 ${displayName(entry)}`}
       draggable={false}
-      onDoubleClick={() => void download(entry)}
+      onDoubleClick={() => void openOrDownload(entry)}
       onDragStart={(e) => {
         // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
         e.preventDefault()

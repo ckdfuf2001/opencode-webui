@@ -7,6 +7,8 @@ import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
 import { saveOfficeBytes } from './officeSave'
 import type { OfficeSaveRequestDetail } from './officeSave'
+import type { AttachmentOpenRequest, AttachmentSaver } from './embedEdit'
+import { ATTACHMENT_OPEN_REQUEST, openAttachmentEditor } from './embedEdit'
 import { showToast } from '@/lib/toast'
 import { PptxViewerBoundary } from './ViewerBoundaries'
 import { lazyWithRetry } from './lazyRetry'
@@ -66,7 +68,7 @@ interface PowerPointViewerHandle {
   getActiveSlideIndex?: () => number
 }
 
-export default function PptxViewer({ data, fileName, editing, savePath, onFail, titleBarSlot }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void; titleBarSlot?: ReactNode }) {
+export default function PptxViewer({ data, fileName, editing, savePath, onFail, titleBarSlot, standalone = false, persistOverride, registerSaver }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void; titleBarSlot?: ReactNode; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void }) {
   // lib는 768px 미만에서 썸네일 패널을 숨기고 모바일 바/시트로 바꾼다.
   // 보기 모드에서도 좁은 화면에선 모바일 바를 켜야 슬라이드 시트에 닿는다.
   // (데스크톱은 editing 그대로라 변화 없음)
@@ -75,7 +77,17 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const viewerTheme = useMemo(() => ({ colors: pptxThemeColors(appTheme === 'dark') }), [appTheme])
   // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
   // run은 DocumentPreview의 숨은 input을 거쳐 officeEmbedFile로 이어진다.
-  const attachAddIns = useMemo(() => buildOfficeAttachAddIn(() => requestEmbedFile(savePath ?? '')), [savePath])
+  // standalone(첨부 편집)에서는 중첩 첨부를 막는다.
+  const attachAddIns = useMemo(
+    () => (editing && !standalone ? buildOfficeAttachAddIn(() => requestEmbedFile(savePath ?? '')) : []),
+    [savePath, editing, standalone],
+  )
+  // C5-3 standalone(첨부 편집): 방 미참가·자동저장 금지·PUT 저장.
+  const standaloneRef = useRef(standalone)
+  standaloneRef.current = standalone
+  const persistOverrideRef = useRef(persistOverride)
+  persistOverrideRef.current = persistOverride
+  const dirtyRef = useRef(false)
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
@@ -106,6 +118,11 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const commentRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onViewerContentChange = useCallback(() => {
+    if (standaloneRef.current) {
+      // C5-3 standalone(첨부 편집): 자동 저장 없음. dirty만 표시한다.
+      if (editingRef.current) dirtyRef.current = true
+      return
+    }
     if (commentRefreshTimer.current) clearTimeout(commentRefreshTimer.current)
     commentRefreshTimer.current = setTimeout(() => {
       if (!showCommentsRef.current) return
@@ -414,6 +431,15 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   // 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지). 세션 종료·파일 교체 때 반영.
   const latestSavedRef = useRef<Uint8Array | null>(null)
   const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean; allowImageLoss?: boolean }): Promise<boolean> => {
+    // C5-3 standalone(첨부 편집): PUT 경로로 저장한다 (방·단독 저장 모두 우회).
+    const ov = standaloneRef.current ? persistOverrideRef.current : undefined
+    if (ov) {
+      try {
+        return await ov(bytes)
+      } catch {
+        return false
+      }
+    }
     const quiet = opts?.quiet ?? false
     const auto = opts?.auto ?? false
     const c = collabRef.current
@@ -784,6 +810,8 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   // 평가되므로 앞에서 참조하면 TDZ가 난다).
   useEffect(() => {
     const onSave = (e: Event) => {
+      // C5-3 standalone(첨부 편집): 부모 저장 이벤트를 무시한다 (saver 경로만 사용).
+      if (standaloneRef.current) return
       if (saving) return
       const h = viewerRef.current
       if (!h || !savePath) return
@@ -855,6 +883,40 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
     return () => window.removeEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
   }, [savePath])
 
+  // C5-3 standalone(첨부 편집): 저장 슬롯 등록 + 열기 요청 중계 (방 컨텍스트 부착).
+  // 중첩 attach 탭은 standalone에서 숨기므로 onEmbed는 그대로 둔다.
+  useEffect(() => {
+    if (!standalone) return
+    registerSaver?.({
+      saveNow: async () => {
+        try {
+          const h = viewerRef.current
+          if (!h) return false
+          const bytes = new Uint8Array(await h.getContent())
+          if (bytes.length === 0) return false
+          const ok = await persistOverrideRef.current?.(bytes)
+          if (ok) dirtyRef.current = false
+          return ok === true
+        } catch {
+          return false
+        }
+      },
+      isDirty: () => dirtyRef.current,
+    })
+    return () => registerSaver?.(null)
+  }, [standalone, registerSaver])
+
+  useEffect(() => {
+    const onOpenReq = (e: Event) => {
+      const d = (e as CustomEvent<AttachmentOpenRequest>).detail
+      if (!d || !savePath || d.parentPath !== savePath) return
+      const c = collabRef.current
+      openAttachmentEditor({ ...d, roomId: c?.roomId, clientId: c?.session?.clientId })
+    }
+    window.addEventListener(ATTACHMENT_OPEN_REQUEST, onOpenReq as EventListener)
+    return () => window.removeEventListener(ATTACHMENT_OPEN_REQUEST, onOpenReq as EventListener)
+  }, [savePath])
+
   // 편집 진입/종료에 맞춰 세션 모드 전환 (세션·doc 유지, 리마운트 없음).
   // role은 reconcile이 meta 기준으로 확정한다 (prop 런타임 변경 지원 — lib 확인됨).
   // 토글 effect와 세션 생성 완료 시점이 함께 호출한다: 비동기 생성과 토글이
@@ -894,6 +956,8 @@ const syncSessionMode = useCallback(() => {
   // 신원이 없으면 서버 발급 기본 이름으로 즉시 만들어서 참가한다 (모달 없음).
   useEffect(() => {
     if (!savePath) return
+    // C5-3 standalone(첨부 편집): 방에 참가하지 않는다 (방 안의 방 금지).
+    if (standaloneRef.current) return
     // M7 측정(S0): 공동편집을 끄면 세션·WS·awareness가 아예 없다.
     if (collabDisabled) return
     let dead = false
@@ -2149,7 +2213,7 @@ const peersRef = useRef<Peer[]>([])
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
     >
       {/* C5-1: 기존 OLE 첨부 아이콘 1개 + 더블클릭 다운로드 (lib 렌더는 그대로). */}
-      <OleAttachmentOverlay data={content} anchor="pptx" />
+      <OleAttachmentOverlay data={content} anchor="pptx" parentPath={savePath} parentName={fileName ?? 'presentation.pptx'} />
       {isDecrypted && editing && (
         <div className="px-3 py-1.5 border-b border-border text-[11px] text-muted-foreground">
           Encrypted documents cannot be co-edited — editing solo.
