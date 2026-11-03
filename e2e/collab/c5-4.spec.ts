@@ -275,6 +275,32 @@ test.describe('C5-4: URL 편집 분리', () => {
     }
   })
 
+  test('U-pollers-quiet: 편집 탭에서는 세션·헬스 폴링이 나가지 않는다', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54quiet', ['embed-pdf.xlsx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54quiet', '.xlsxengine-host')
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForSelector('xlsx-editor', { timeout: 30000 })
+      // P0-6: 편집 탭의 Pollers(세션 2s·헬스 3s)는 낭비다. 8초 관측하면 최소 2회씩 잡힌다.
+      const hits: string[] = []
+      editor.on('request', (req) => {
+        const u = req.url()
+        if (u.includes('/api/health') || u.includes('/api/session-status')) hits.push(u)
+      })
+      await editor.waitForTimeout(8000)
+      expect(hits).toEqual([])
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
   test('U-popup-blocked: 새 탭이 차단되면 대체 링크를 보여준다', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
