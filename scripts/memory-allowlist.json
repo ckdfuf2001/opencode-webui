@@ -132,6 +132,11 @@
       "file": "frontend/src/pages/SessionDetail.tsx",
       "value": "^\\(\\) =>",
       "reason": "세션 상세 표시 갱신."
+    },
+    {
+      "file": "frontend/src/components/file-browser/AttachmentEditor.tsx",
+      "value": "^\\(\\) =>",
+      "reason": "첨부 잠금 하트비트(20초, TTL 60초). 편집기 마운트 중에만, 언마운트 시 해제, 숨김 탭 skip. D63."
     }
   ],
   "streamCapConstants": [

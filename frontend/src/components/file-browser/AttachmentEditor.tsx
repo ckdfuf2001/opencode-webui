@@ -178,7 +178,7 @@ export default function AttachmentEditor({
         return r
       }
       try {
-        let r = await doPut(baseHashRef.current)
+        const r = await doPut(baseHashRef.current)
         if (r.ok) {
           if (r.newHash) {
             baseHashRef.current = r.newHash
@@ -342,7 +342,7 @@ export default function AttachmentEditor({
     const copy = new Uint8Array(bytes.length)
     copy.set(bytes)
     return copy.buffer
-  }, [bytes, gen])
+  }, [bytes])
 
   if (phase === 'loading') {
     return (

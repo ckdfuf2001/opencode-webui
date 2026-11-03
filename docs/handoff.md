@@ -1117,3 +1117,12 @@ E21만의 문제가 아니다. 근거:
 - 수정1: XlsxViewer `showToolbar` 상시 true. readOnly라 lib가 편집 커맨드 비활성화 확인 (Insert 패널 Table/Pictures/Link/Comment/Symbol 전부 disabled). 보기 모드 첨부 탭은 숨김 유지 (첨부는 편집 행위 — 보완2).
 - 수정2: OleAttachmentOverlay가 placeholder(`xg-obj-unsupported` + "shape (not shown)" 텍스트) 위치에 미리보기 카드(불투명, 파일형식 아이콘 + CFB Ole10Native에서 꺼낸 실제 파일명, 예: oleObject1.bin → payload.pdf)를 덮는다. 카드는 표시 전용(pointer-events-none) + 모서리 기존 아이콘으로 dblclick 다운로드 (S1 드래그 회귀 1건 잡고 수정 — 카드가 mouse 이벤트를 삼켜 shape 이동이 안 됐음).
 - 검증: c5-2 6/6, c5-1 + xlsx-ole-solo (S1/S2) green, ui-layout 8 passed, tsc 0, eslint 신규 0.
+
+## C5-3 첨부 편집 (2026-11-03)
+- 구현: AttachmentEditor 신규 (package 파트 GET/PUT, path+part 잠금 TTL60, 읽기전용 분기, dirty 무관 항상 PUT, saver 미준비 toast, 409 dirty_room/stale/locked/no_lock/view_only 구분, 20초 하트비트+D63+allowlist).
+  FilePreview ATTACHMENT_OPEN_EVENT 오버레이 마운트 (손상 블록 원복). OleAttachmentOverlay dblclick 라우팅 (edit/previewPDF/downloadCFB).
+  DocumentPreview standalone guard (방 미참가·첨부탭 숨김·PUT 우회). PptxViewer 리터럴 \r\n 개행 원복.
+- 서버 (debaa62e): GET/PUT /api/collab/embed + POST/DELETE /embed/lock, PUT 성공 시 방 리셋(4001).
+- E2 디버깅 4건: (1) expect.poll은 값 반환 안함 → zip 2단계 unzip+word/document.xml stamp poll로 전환. (2) xlsx 수식바는 input이 아니라 textarea. (3) docx lib은 shadow DOM 렌더라 document.activeElement는 호스트를 가리킴 → shadowRoot.activeElement 기준 focusAttachEditor 헬퍼 + 중앙 아이콘 회피 (120,60) 클릭. (4) VITE_E2E=1에서 Toaster display:none → 저장 토스트는 toBeAttached로 단언.
+- 검증: c5-3 14/14 chromium, backend embed-attachment 15/15, tsc 0, eslint 신규 0 (기존 6E+11W), check-memory 0E+1W (D36 기존), check-encoding 이상 없음 (경고 1 기존).
+  backend 전체 645 pass + 2파일 실패 (config-migration/repo-tracking, bun:sqlite를 node vitest에서 못 읽는 기존 환경 이슈).
