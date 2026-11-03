@@ -288,27 +288,33 @@ export async function openEditor(page: Page, workspacePath: string): Promise<voi
   await page.goto(editUrlForFile(workspacePath), { waitUntil: 'domcontentloaded', timeout: 30000 })
   await page.getByTestId('edit-page').waitFor({ timeout: 30000 })
   const ext = workspacePath.split('.').pop()?.toLowerCase()
+  if (ext === 'pptx') {
+    await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 60000 })
+    // M21: lib가 로드된 뒤에야 런타임 표식을 단언한다 (pptx 패치 표식).
+    await assertLibPatchesLoaded(page)
+    // collab-status는 pptx 뷰어에만 있다. xlsx/docx는 lib 세션 소유라
+    // 별도 상태 엘리먼트가 없고, 저장이 알아서 참가를 기다린다.
+    await page
+      .waitForFunction(
+        () => document.querySelector('[data-testid="collab-status"]')?.getAttribute('data-status') === 'connected',
+        null,
+        { timeout: 60000 },
+      )
+      .catch(() => {
+        throw new Error('collab-status never connected (60s)')
+      })
+    return
+  }
   if (ext === 'xlsx') {
     await page.waitForSelector('xlsx-editor', { timeout: 60000 })
-  } else if (ext === 'docx') {
+    return
+  }
+  if (ext === 'docx') {
     await page.waitForSelector('.docxengine-host', { timeout: 60000 })
-  } else if (ext === 'pptx') {
-    await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 60000 })
-  } else {
-    throw new Error(`openEditor: unsupported ext ${ext ?? ''}`)
+    await page.waitForSelector('docx-editor', { timeout: 60000 })
+    return
   }
-  // M21: lib가 로드된 뒤에야 런타임 표식을 단언한다 (pptx 패치 표식 — xlsx/docx는
-  // 자체 번들이라 이 표식이 없고 기존 헬퍼도 단언하지 않는다).
-  if (ext === 'pptx') {
-    await assertLibPatchesLoaded(page)
-  }
-  await page
-    .waitForFunction(() => document.querySelector('[data-testid="collab-status"]')?.getAttribute('data-status') === 'connected', null, {
-      timeout: 60000,
-    })
-    .catch(() => {
-      throw new Error('collab-status never connected (60s)')
-    })
+  throw new Error(`openEditor: unsupported ext ${ext ?? ''}`)
 }
 
 /** 썸네일 클릭으로 슬라이드 이동. 근거: ASIDE[role=navigation][aria-label=Slides]
