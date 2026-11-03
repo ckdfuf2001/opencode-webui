@@ -25,13 +25,10 @@ export default function EditPage() {
     if (!isPptxHost || closed) return
     let dead = false
     const t0 = Date.now()
-    // 편집 전환은 viewer가 붙고 lib이 settle한 뒤에 한다 (너무 이르면
-    // lib 인스턴스 교체 레이스로 write-back 스케줄이 묶이지 않는다).
     const timer = window.setInterval(() => {
       if (dead) return
       const el = document.querySelector('[data-testid="collab-status"]')
-      const connected = el?.getAttribute('data-status') === 'connected'
-      if ((connected && Date.now() - t0 > 8000) || Date.now() - t0 > 30000) {
+      if (el?.getAttribute('data-status') === 'connected' || Date.now() - t0 > 30000) {
         window.clearInterval(timer)
         if (!dead) setEditSignal((s) => s + 1)
       }
