@@ -137,8 +137,10 @@ function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => 
   return (
     <>
       {!isE2E && !isEditPage && <PushPrompt />}
-      {/* M7-4 (d): 세션 상태/헬스 폴링은 이 한 곳에서만 한다. */}
-      <Pollers />
+      {/* M7-4 (d): 세션 상태/헬스 폴링은 이 한 곳에서만 한다.
+          P0-6: 편집 탭에는 채팅·세션 목록이 없어 폴링이 낭비이므로 렌더하지 않는다
+          (편집기는 WS+직접 fetch만 쓴다). */}
+      {!isEditPage && <Pollers />}
       <div className="pointer-events-none fixed bottom-1 right-2 z-[5] text-[10px] text-muted-foreground/50 select-none" title="build">
         {BUILD_LABEL}
       </div>
