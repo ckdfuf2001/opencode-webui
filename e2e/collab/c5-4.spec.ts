@@ -294,4 +294,28 @@ test.describe('C5-4: URL 편집 분리', () => {
       await ctx.close().catch(() => {})
     }
   })
+
+  test('U-popup-blocked: 새 탭이 차단되면 대체 링크를 보여준다', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54blocked', ['embed-pdf.xlsx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54blocked', '.xlsxengine-host')
+      // 팝업 차단 시뮬레이션: window.open이 null을 돌려준다.
+      await page.addInitScript(() => {
+        ;(window as unknown as { open: unknown }).open = () => null
+      })
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+      await page.waitForSelector('.xlsxengine-host', { timeout: 60000 })
+      await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
+      // P0-3: 차단되면 토스트+직접 열 수 있는 링크를 보여준다 (조용한 무응답 금지).
+      await expect(page.getByTestId('edit-popup-blocked')).toBeVisible({ timeout: 15000 })
+      const href = await page.getByTestId('edit-popup-blocked-link').getAttribute('href')
+      expect(href ?? '').toMatch(/\/edit\/.+\.xlsx/)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
 })
