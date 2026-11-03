@@ -757,9 +757,20 @@
   레이스를 막고, 409 재시도 경로도 그대로 둔다. 미시드가 아니면(시드됨·조회 실패) 기존대로 중단한다.
   계기: P2-4가 편집 없이 바로 첨부하면 선저장(not_seeded/empty)으로 중단돼 풀런에서만 실패.
 - 추기(판단3, 2026-11-03): AttachmentEditor는 FilePreview에서 lazy 로딩한다.
-  근거: 정적 import가 뷰어 청크 로드 순서를 바꿔 PPT 보기 모드 collab join이
-  멈췄다 (c3 P-9a·P-5a·P-6a·P-7 계열 실패, view 페이지 collab-status가 connecting에 정체).
-  bisec 결과 FilePreview 정적 import가 원인 — lazy 전환 후 26초대로 복귀. 편집기 자체는
+  근거: FilePreview 정적 import가 PPT 보기 모드 collab join을 멈췄다
+  (c3 P-9a·P-5a·P-6a·P-7 계열 실패, view 페이지 collab-status가 connecting에 60초+ 정체).
+  bisec: 1cab443c·debaa62e 통과 → 0a0c22fe 실패 → 5개 파일 단위 되돌리기에서
+  FilePreview만 되돌리면 통과, 다시 올리면 실패. FilePreview diff는 import 1줄+상태/리스너/조건부 렌더뿐이라
+  모듈 로드 순서가 원인으로 확정 (조건부 렌더는 attachTarget=null이라 no-op).
+  - 제외 (a) yjs 이중 로드: 실패 trace에 "Yjs was already imported" 없음.
+    node_modules에 yjs@13.6.33 단일, ooxml-core는 yjs/y-protocols를 외부 의존으로 선언 (번들 내장 아님).
+  - 의심 (b) 모듈 로드 시점 초기화, 파일:줄:
+    PptxViewer.tsx:41 `ensurePptxImagesSyncable()` (lib/pptxImageSync.ts:35 — ooxml-core 프로토타입 패치),
+    PptxViewer.tsx:46-52 i18n `createInstance().init()`.
+    정적 import는 이들을 앱 시작 시점으로 앞당긴다 (원래는 첫 pptx 열 때 lazy 평가).
+    lib WS/sync가 멈추는 정확한 경로는 미확정 — 정적 import로 되돌리는 것은 하지 않는다
+    (회귀 위험 > 이득). 회귀 잠금: c3 P-9a (보기 join 10초 타임아웃 단언).
+  lazy 전환 후 P-9a 26초대 복귀 + pptx-collab 18 passed/1 skipped. 편집기 자체는
   E2가 여는 시점에 로드되므로 기능 영향 없음 (E2-unsaved·E2-pptx-edit 통과로 확인).
 ## 미결정 (사용자 판단 대기)
 
