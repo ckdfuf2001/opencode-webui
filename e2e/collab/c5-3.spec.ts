@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test'
+﻿import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
@@ -515,7 +515,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       })
       // 편집 모드 직접 진입 (Edit 버튼 없음)
       const stamp = `E2X${Date.now().toString(36)}`
-      const pm = await focusAttachEditor(page, 'E2-xlsx-edit')
+      const pm = await focusAttachEditor(page)
       await page.keyboard.press('Control+End')
       await page.keyboard.type(stamp, { delay: 30 })
       await expect(pm, 'stamp typed in attachment').toContainText(stamp, { timeout: 15000 })
@@ -565,8 +565,41 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
     }
   })
 
-  test('E2-lock: B가 같은 첨부를 열면 읽기 전용 + 토스트 1회', async ({ browser }) => {
-    const ctxA = await mkCtx(browser, ADA)
+  test('E2-download: 편집기 타이틀바 다운로드 버튼으로 원본 바이트', async ({ browser }) => {
+    const ctx = await mkCtx(browser, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    const seg = `c53e2dl-${Date.now().toString(36)}`
+    await mkRepo(seg, ['collab-features.xlsx'])
+    try {
+      const hostAbs = path.join(workspaceDir(), 'repos', seg, 'collab-features.xlsx')
+      const docxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx'))
+      await addPackagePart(hostAbs, {
+        dir: 'xl',
+        sheetRels: 'xl/worksheets/_rels/sheet1.xml.rels',
+        partName: 'report.docx',
+        bytes: docxBytes,
+      })
+      await openViaWorkspace(page, 'collab-features.xlsx', seg)
+      const icon = page.getByRole('button', { name: '첨부 report.docx', exact: true }).first()
+      await icon.waitFor({ timeout: 30000 })
+      await icon.dblclick({ timeout: 15000 })
+      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      const [dl] = await Promise.all([
+        page.waitForEvent('download', { timeout: 20000 }),
+        page.getByTestId('attach-download').click({ timeout: 15000 }),
+      ])
+      const dlPath = await dl.path()
+      expect(dlPath, 'download path').toBeTruthy()
+      expect(dl.suggestedFilename()).toBe('report.docx')
+      expect(fs.readFileSync(dlPath!).equals(docxBytes), 'original bytes intact').toBe(true)
+      await page.getByTestId('attach-done').click({ timeout: 15000 })
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('E2-lock: B가 같은 첨부를 열면 읽기 전용 + 토스트 1회', async ({ browser }) => {    const ctxA = await mkCtx(browser, ADA)
     const ctxB = await mkCtx(browser, GRACE)
     const pageA = await ctxA.newPage()
     const pageB = await ctxB.newPage()
@@ -642,7 +675,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 })
       await pageA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       const stampA = `E2A${Date.now().toString(36)}`
-      const pmA = await focusAttachEditor(pageA, 'E2-unsaved')
+      const pmA = await focusAttachEditor(pageA)
       await pageA.keyboard.press('Control+End')
       await pageA.keyboard.type(stampA, { delay: 30 })
       await expect(pmA, 'stampA typed in attachment').toContainText(stampA, { timeout: 15000 })
@@ -708,7 +741,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       await expect(page.getByTestId('attach-title')).toContainText('collab-3slides.pptx › Rp.docx', { timeout: 15000 })
       const stamp = `E2P${Date.now().toString(36)}`
-      const pm = await focusAttachEditor(page, 'E2-pptx-edit')
+      const pm = await focusAttachEditor(page)
       await page.keyboard.press('Control+End')
       await page.keyboard.type(stamp, { delay: 30 })
       await expect(pm, 'stamp typed in attachment').toContainText(stamp, { timeout: 15000 })
