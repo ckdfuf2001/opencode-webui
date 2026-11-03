@@ -481,26 +481,30 @@ test.describe('X0a: XLSX 동시편집', () => {
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await setCellByFormulaBar(t.pageA, 'B2', stampA)
 
-      // B 는 편집에 들어가 **바로** 수식 바에 입력한다(연결 판정 전).
-      // C5-4 flag-day: /edit/* 직접 goto — 연결 중 배너는 에디터 탭에 뜬다.
-      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
+      // B 는 미리보기에서 Edit으로 편집 진입 → 팝업 에디터 탭에서 연결 판정을 본다.
+      // (in-page Edit 폐지 후에도 진입 게이트 검증은 팝업에서 그대로 성립한다.)
+      await openXlsxFileOnly(t.pageB, f.name)
+      const [editorB] = await Promise.all([
+        t.pageB.waitForEvent('popup', { timeout: 15000 }),
+        t.pageB.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
       // X1d(P0): 편집 진입 직후엔 **연결 중 배너**가 보여야 한다(입력 차단 상태).
       // webui-pre(9bc434e) 에는 이 배너가 없어 이 단계에서 실패한다(수정 효과 증명).
       // X2a-③ 후속(display:none 가드): 부하가 낮으면 배너가 빨리 사라질 수 있어,
       // "배너가 보이거나, 아니면 입력이 차단된 상태(typed=false)" 중 하나를 만족해야 한다.
-      const bannerVisible = await t.pageB
+      const bannerVisible = await editorB
         .getByTestId('xlsx-collab-connecting')
         .waitFor({ timeout: 10000 })
         .then(() => true)
         .catch(() => false)
-      const typed = await tryCellEdit(t.pageB, 'B3', stampB)
+      const typed = await tryCellEdit(editorB, 'B3', stampB)
       expect(bannerVisible || !typed, 'connecting 중에는 배너가 보이거나 입력이 막혀야 한다').toBe(true)
 
       // 연결 판정이 끝나고 방 문서가 적용된다(synced).
       await expect
         .poll(
           async () => {
-            const s = await collabState(t.pageB)
+            const s = await collabState(editorB)
             return s.active && s.synced ? 'ok' : 'wait'
           },
           { timeout: 30000, intervals: [500] },
@@ -509,8 +513,8 @@ test.describe('X0a: XLSX 동시편집', () => {
       // X1d(P0): 반복 재입력 루프는 없다. 요구는 "입력이 막히거나(차단), 살아 있거나" 둘 중 하나다.
       //  - 막혔다면(tryCellEdit=false) 판정 뒤 **1회**만 재입력한다.
       //  - 입력이 통과했다면(tryCellEdit=true) 유실되면 안 되므로 추가 입력 없이 저장한다.
-      if (!typed) await setCellByFormulaBar(t.pageB, 'B3', stampB)
-      await clickAppSave(t.pageB)
+      if (!typed) await setCellByFormulaBar(editorB, 'B3', stampB)
+      await clickAppSave(editorB)
       // 저장된 디스크에 B 의 입력이 실제 존재해야 한다(A 의 입력이 치환되면 안 된다).
       await expect
         .poll(async () => (await workbookContains(f.abs, stampB)) ? stampB : '', { timeout: 25000, intervals: [500] })
@@ -526,7 +530,8 @@ test.describe('X0a: XLSX 동시편집', () => {
     // X1d(P0): /api/collab WebSocket 을 막는다(VPN/프록시 차단 환경 재현).
     // session(HTTP) 은 통과하므로 방 판정은 "joining" 에 멈춘다 → 15초 상한 → 보기 전용.
     // C2-b: 서버가 살아 있는데 단독 편집으로 넘어가면 방과 갈라진다. 보기 전용으로 둔다.
-    await page.routeWebSocket(/\/api\/collab/, (ws) => {
+    // C5-4: 팝업 에디터 탭에도 적용되도록 컨텍스트 단위로 가로챈다.
+    await page.context().routeWebSocket(/\/api\/collab/, (ws) => {
       // 서버에 연결하지 않는다(조용한 차단).
       ws.close()
     })
