@@ -2,7 +2,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import fs from 'node:fs'
 import path from 'node:path'
 import { absForRel, uniqueRel, uniqueRelWithExt } from './helpers/env'
-import { gotoApp, openFile } from './helpers/viewer'
+import { gotoApp, openEditor, openFile } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -39,72 +39,25 @@ async function twoPages(browser: Browser): Promise<Two> {
   return { ctxA: a.ctx, ctxB: b.ctx, pageA: a.page, pageB: b.page }
 }
 
-async function freshPptx(slug: string, index: number): Promise<{ name: string }> {
+async function freshPptx(slug: string, index: number): Promise<{ name: string; rel: string }> {
   const rel = uniqueRel(slug, index)
   const abs = absForRel(rel)
   fs.mkdirSync(path.dirname(abs), { recursive: true })
   fs.copyFileSync(PPTX_FIXTURE, abs)
-  return { name: rel.split('/').pop()! }
+  return { name: rel.split('/').pop()!, rel }
 }
 
-function freshXlsx(slug: string, index: number): { name: string } {
+function freshXlsx(slug: string, index: number): { name: string; rel: string } {
   const rel = uniqueRelWithExt(slug, index, '.xlsx')
   const abs = absForRel(rel)
   fs.mkdirSync(path.dirname(abs), { recursive: true })
   fs.copyFileSync(XLSX_FIXTURE, abs)
-  return { name: rel.split('/').pop()! }
+  return { name: rel.split('/').pop()!, rel }
 }
 
-async function openXlsxEditing(page: Page, name: string): Promise<void> {
-  for (let i = 0; i < 6; i++) {
-    try {
-      await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
-      break
-    } catch {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-    }
-  }
-  for (let i = 0; i < 5; i++) {
-    await page.getByTitle('Workspace').click({ timeout: 20000 })
-    const opened = await expect
-      .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 8000, intervals: [200] })
-      .toBeGreaterThan(0)
-      .then(() => true)
-      .catch(() => false)
-    if (opened) break
-    await page.keyboard.press('Escape')
-  }
-  await expect
-    .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 15000, intervals: [200] })
-    .toBeGreaterThan(0)
-  for (let i = 0; i < 8; i++) {
-    const has = await page.evaluate(
-      (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-      name,
-    )
-    if (has) break
-    const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-    if ((await folder.count()) > 0) {
-      await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-    }
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(
-            (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-            name,
-          ),
-        { timeout: 8000, intervals: [300] },
-      )
-      .toBe(true)
-      .catch(() => {})
-  }
-  await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
-  await page.waitForSelector('.xlsxengine-host', { timeout: 30000 })
-  const edit = page.getByRole('button', { name: 'Edit', exact: true })
-  await edit.waitFor({ timeout: 20000 })
-  await edit.click({ timeout: 20000 })
-  await page.waitForSelector('xlsx-editor', { timeout: 20000 })
+async function openXlsxEditing(page: Page, rel: string): Promise<void> {
+  // C5-4 flag-day: /edit/* 직접 goto (in-page Edit 폐지). rel은 repos/ 접두 포함.
+  await openEditor(page, rel.replace(/^repos\//, ''))
 }
 
 test.describe('C1 presence unification', () => {
@@ -112,7 +65,7 @@ test.describe('C1 presence unification', () => {
     const f = await freshPptx('c1p1', 0)
     const t = await twoPages(browser)
     try {
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await openFile(t.pageB, f.name, 'view')
       await expect(t.pageB.getByTestId('collab-presence')).toBeVisible({ timeout: 30000 })
     } finally {
@@ -125,8 +78,8 @@ test.describe('C1 presence unification', () => {
     const f = freshXlsx('c1p2', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect
         .poll(
           async () =>
@@ -162,7 +115,7 @@ test.describe('C1 presence unification', () => {
     const f = freshXlsx('c1p3', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect(t.pageA.getByTestId('collab-presence')).toBeVisible({ timeout: 30000 })
     } finally {
       await t.ctxA.close()
@@ -174,7 +127,7 @@ test.describe('C1 presence unification', () => {
     const f = freshXlsx('c1p4', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect
         .poll(
           () =>
