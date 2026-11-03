@@ -1144,3 +1144,10 @@ E21만의 문제가 아니다. 근거:
 - C5-3 오버레이 미커밋 4파일 revert, b5a11ca2/94437f7c는 history 유지. U-* 테스트로 대체.
 - 멈춤 조건: 부모 flush에 lib 패치 필요 / U-parent 유실 / exe 새 창 불가. 출시 0.12.81, 태그 보류.
 
+
+## C5-4 구현 1단계 (2026-11-03)
+- 구현: editUrls 빌드/파싱, EditPage(크롬리스+DocumentPreview initialEditing/AttachmentEditor 재사용), App /edit/* 라우트+크롬 숨김, 미리보기 Edit->window.open, 첨부 dblclick->window.open, DocumentPreview 마운트 리셋 가드+StrictMode close 디바운스(1.5s).
+- U-open 3/3 chromium green (host/part-xlsx/part-pptx). tsc 0, eslint 신규 0.
+- flag-day 부채 (Edit 버튼 팝업 전환으로 구 흐름 red, 다음 단계에서 스위트별 마이그레이션): c5-1(2곳)·c5-2(attachViaAddInTab)·c5-3(E2 dblclick)·c3/c4-3/c4-4/c4-6/xlsx-collab/xlsx-solo/xlsx-c2/presence 직접 Edit 클릭. 증거: c5-2 P2-1 첨부 탭 대기 타임아웃 (in-page 탭 미생성, 팝업으로 이동됨).
+- 관측: StrictMode remount cleanup이 onEditingChange(false)를 쏴 에디터 탭이 자살 -> EditPage 전이+디바운스로 방어. xlsx INSERT는 oleObject라 다운로드 유지 (package만 편집탭).
+
