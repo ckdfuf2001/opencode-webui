@@ -43,7 +43,7 @@ import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
 import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitCollabSeed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
 import { ATTACHMENT_OPEN_REQUEST, openAttachmentEditor, type AttachmentOpenRequest, type AttachmentSaver } from './embedEdit'
-import { editUrlForFile } from '@/lib/editUrls'
+import { editUrlForFile, openInNewTab } from '@/lib/editUrls'
 
 type ExtractedMsg = {
   html?: string
@@ -528,7 +528,7 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
   )
 }
 
-export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initialEditing = false, editInNewTab = true }: { file: FileInfo; refreshKey?: number; onEditingChange?: (editing: boolean) => void; initialEditing?: boolean; editInNewTab?: boolean }) {
+export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone, initialEditing = false, editInNewTab = true }: { file: FileInfo; refreshKey?: number; onEditingChange?: (editing: boolean) => void; onDone?: () => void; initialEditing?: boolean; editInNewTab?: boolean }) {
   const kind = detectDocKind(file.name)
   // office 문서(docx/xlsx/pptx)는 바로 보기 우선 — PDF 변환 없이 바로 본다.
   // PDF가 필요하면 토글로 서버 변환을 켠다.
@@ -540,6 +540,9 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initial
   const [endingEdit, setEndingEdit] = useState(false)
   const embedInputRef = useRef<HTMLInputElement | null>(null)
   // X2a-③: XlsxViewer 가 방에 편집자가 있음을 알리면(보기 모드) 코멘트 버튼을 막는다.
+  // P0-3: 팝업 차단 시 대체 링크를 보여준다 (조용한 무응답 금지).
+  const [popupBlockedUrl, setPopupBlockedUrl] = useState<string | null>(null)
+  // X2a-③: XlsxViewer 가 방에 편집자가 있음을 알리면(보기 모드) 코멘트 버튼을 막는다.
   const [xlsxRoomHasEditors, setXlsxRoomHasEditors] = useState(false)
   // C5-4: 마운트 때는 리셋하지 않는다 (/edit 페이지 initialEditing이 즉시 꺼지면 탭이 닫힌다).
   // 파일이 바뀌었을 때만 리셋한다.
@@ -549,6 +552,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initial
     prevPathRef.current = file.path
     setPdfMode(false)
     setEditing(false)
+    setPopupBlockedUrl(null)
   }, [file.path])
   useEffect(() => { setXlsxRoomHasEditors(false) }, [editing, file.path])
   // U3: 편집 상태를 상위(FilePreview)에 알린다 — 편집 화면에서는 앱 헤더를
@@ -608,6 +612,9 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initial
     },
     [],
   )
+  // P0-2: Done 콜백은 ref로 읽는다 (endEditing deps를 흔들지 않는다).
+  const onDoneRef = useRef(onDone)
+  onDoneRef.current = onDone
   const endEditing = useCallback(async (after?: () => void) => {
     if (!editing || endingEdit) {
       after?.()
@@ -631,6 +638,8 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initial
         if (confirmedDiscard) showToast.info('확인을 눌렀으므로 편집 화면을 닫습니다(사본은 닫기 전에 내려받으세요)')
         window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false, path: file.path } }))
         after?.()
+        // P0-2: 저장에 성공했을 때만 Done 콜백 (실패·확인거부는 탭을 닫지 않는다).
+        if (outcome.ok) onDoneRef.current?.()
       } else {
         showToast.error('Save failed — staying in edit mode')
       }
@@ -839,11 +848,16 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initial
                     return
                   }
                   // C5-4 (D64): 편집은 /edit/* 새 탭에서. /edit 페이지 안에서는 제자리 전환.
+                  // P0-3: noopener 피처는 반환값을 null로 만들어 차단을 감지할 수 없으므로
+                  // openInNewTab(opener 수동 절단)을 쓰고, null이면 대체 링크를 보여준다.
                   if (editInNewTab) {
-                    try {
-                      window.open(editUrlForFile(file.path), '_blank', 'noopener')
-                    } catch {
-                      /* 팝업 차단이면 무시 (사용자가 직접 새 탭으로 열 수 있음) */
+                    const url = editUrlForFile(file.path)
+                    const w = openInNewTab(url)
+                    if (w) {
+                      setPopupBlockedUrl(null)
+                    } else {
+                      setPopupBlockedUrl(url)
+                      showToast.error('새 탭이 차단되었습니다 — 링크로 직접 열어주세요')
                     }
                     return
                   }
@@ -859,6 +873,14 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initial
               >
                 {endingEdit ? 'Saving…' : editing ? 'Done' : 'Edit'}
               </button>
+              {popupBlockedUrl && (
+                <span data-testid="edit-popup-blocked" className="h-6 text-xs px-2 rounded bg-amber-500/10 border border-amber-500/40 flex items-center gap-1">
+                  새 탭이 차단됨
+                  <a data-testid="edit-popup-blocked-link" href={popupBlockedUrl} target="_blank" rel="noopener" className="underline font-medium">
+                    직접 열기
+                  </a>
+                </span>
+              )}
               {editing && (
                 <button
                   type="button"

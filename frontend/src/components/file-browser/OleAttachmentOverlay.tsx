@@ -15,7 +15,8 @@ import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
 import { attachmentKindOf } from './embedEdit'
-import { editUrlForAttachment } from '@/lib/editUrls'
+import { editUrlForAttachment, openInNewTab } from '@/lib/editUrls'
+import { showToast } from '@/lib/toast'
 
 /** lib가 렌더를 포기한 자리 표시자 (xg-obj-unsupported — 텍스트 판정 금지). */
 
@@ -144,6 +145,8 @@ export default function OleAttachmentOverlay({
     Record<string, { x: number; y: number; w: number; h: number; cover: boolean }>
   >({})
   const rootRef = useRef<HTMLDivElement | null>(null)
+  // P0-3: 팝업 차단 시 대체 링크를 보여준다 (조용한 무응답 금지).
+  const [popupBlockedUrl, setPopupBlockedUrl] = useState<string | null>(null)
 
   useEffect(() => {
     let dead = false
@@ -234,11 +237,11 @@ export default function OleAttachmentOverlay({
 
   const previewPdf = (entry: OleEmbeddingRef): void => {
     let win: Window | null = null
-    try {
-      // 팝업 차단을 피하려고 동기 시점에 빈 탭을 먼저 연다.
-      win = window.open('', '_blank', 'noopener')
-    } catch {
-      win = null
+    // P0-3: 팝업 차단을 먼저 감지하려고 빈 탭을 동기로 연다 (openInNewTab이 opener를 끊는다).
+    win = openInNewTab('about:blank')
+    if (!win) {
+      void download(entry)
+      return
     }
     void (async () => {
       try {
@@ -288,12 +291,15 @@ export default function OleAttachmentOverlay({
       void download(entry)
       return
     }
-    // C5-4 (D64): 첨부 편집은 /edit/<부모>/-/<파트> 새 탭에서. 팝업 차단을 피하려고
-    // 클릭 핸들러 안에서 동기로 연다.
-    try {
-      window.open(editUrlForAttachment(parentPath, entry.partName), '_blank', 'noopener')
-    } catch {
-      /* 팝업 차단이면 무시 (사용자가 직접 새 탭으로 열 수 있음) */
+    // C5-4 (D64) + P0-3: 첨부 편집은 /edit/<부모>/-/<파트> 새 탭에서.
+    // 팝업 차단을 피하려고 클릭 핸들러 안에서 동기로 연다.
+    const url = editUrlForAttachment(parentPath, entry.partName)
+    const w = openInNewTab(url)
+    if (w) {
+      setPopupBlockedUrl(null)
+    } else {
+      setPopupBlockedUrl(url)
+      showToast.error('새 탭이 차단되었습니다 — 링크로 직접 열어주세요')
     }
   }
 
@@ -398,6 +404,17 @@ export default function OleAttachmentOverlay({
     <>
       {/* 앵커 탐색용 기준점 (위치는 잡지 않는다). */}
       <div ref={rootRef} className="pointer-events-none absolute left-2 top-2" aria-hidden="true" />
+      {popupBlockedUrl && (
+        <div
+          data-testid="edit-popup-blocked"
+          className="absolute left-2 top-2 z-30 flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-foreground shadow-sm"
+        >
+          새 탭이 차단됨
+          <a data-testid="edit-popup-blocked-link" href={popupBlockedUrl} target="_blank" rel="noopener" className="underline font-medium">
+            직접 열기
+          </a>
+        </div>
+      )}
       {anchored.map((e) => {
         const pos = posMap[e.partName]
         if (!pos) return null

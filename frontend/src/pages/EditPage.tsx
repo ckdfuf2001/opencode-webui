@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { DocumentPreview } from '@/components/file-browser/DocumentPreview'
 import AttachmentEditor from '@/components/file-browser/AttachmentEditor'
@@ -20,43 +20,14 @@ export default function EditPage() {
     setClosed(false)
   }, [pathname])
 
-  const closeTab = (): void => {
+  // P0-2: Done은 명시적 onDone으로만 닫는다 (언마운트 cleanup의 false 추정은 쓰지 않는다).
+  const closeTab = useCallback((): void => {
     setClosed(true)
     try {
       window.close()
     } catch {
       /* 차단되면 아래 안내 화면이 남는다 */
     }
-  }
-
-  // StrictMode(개발/E2E)는 마운트→언마운트→리마운트를 돌려서 언마운트 cleanup이
-  // onEditingChange(false)를 쏜다. 진짜 Done과 구분하려고 true→false 전이가
-  // 1.5초 유지될 때만 닫는다 (리마운트는 수 ms 안에 true로 복귀해 취소된다).
-  const latestEditingRef = useRef(true)
-  const closeTimerRef = useRef<number | null>(null)
-  useEffect(
-    () => () => {
-      if (closeTimerRef.current !== null) {
-        window.clearTimeout(closeTimerRef.current)
-        closeTimerRef.current = null
-      }
-    },
-    [],
-  )
-  const handleEditingChange = useCallback((editing: boolean) => {
-    latestEditingRef.current = editing
-    if (editing) {
-      if (closeTimerRef.current !== null) {
-        window.clearTimeout(closeTimerRef.current)
-        closeTimerRef.current = null
-      }
-      return
-    }
-    if (closeTimerRef.current !== null) return
-    closeTimerRef.current = window.setTimeout(() => {
-      closeTimerRef.current = null
-      if (!latestEditingRef.current) closeTab()
-    }, 1500)
   }, [])
 
   useEffect(() => {
@@ -132,7 +103,7 @@ export default function EditPage() {
         file={file}
         initialEditing
         editInNewTab={false}
-        onEditingChange={handleEditingChange}
+        onDone={closeTab}
       />
     </div>
   )

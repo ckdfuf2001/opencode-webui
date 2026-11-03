@@ -61,6 +61,27 @@ export function parseEditUrl(pathname: string): ParsedEditUrl | null {
   }
 }
 
+/**
+ * C5-4 (D64) + P0-3: 새 탭으로 연다. `noopener` 피처는 반환값을 null로 만들어
+ * 차단 감지를 막으므로 쓰지 않는다. 대신 opener를 수동으로 끊는다.
+ * 차단되면 null을 돌려준다 (호출자가 토스트+링크를 보여준다).
+ * 이렇게 열린 탭은 "스크립트로 연 탭"이라 window.close()가 동작한다.
+ */
+export function openInNewTab(url: string): Window | null {
+  try {
+    const w = window.open(url, '_blank')
+    if (!w) return null
+    try {
+      w.opener = null
+    } catch {
+      /* 크로스 오리진이면 끊기만 안 된다 — 탭은 열렸다 */
+    }
+    return w
+  } catch {
+    return null
+  }
+}
+
 export function baseNameOf(p: string): string {
   const norm = p.replace(/\\/g, '/')
   const i = norm.lastIndexOf('/')
