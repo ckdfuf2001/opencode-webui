@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { absForRel, uniqueRelWithExt } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -57,56 +57,9 @@ function freshXlsx(slug: string, index: number): { rel: string; abs: string; nam
   return { rel, abs, name: rel.split('/').pop()! }
 }
 
-async function openXlsxEditing(page: Page, name: string): Promise<void> {
-  for (let i = 0; i < 6; i++) {
-    try {
-      await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
-      break
-    } catch {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-    }
-  }
-  for (let i = 0; i < 5; i++) {
-    await page.getByTitle('Workspace').click({ timeout: 20000 })
-    const opened = await expect
-      .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 8000, intervals: [200] })
-      .toBeGreaterThan(0)
-      .then(() => true)
-      .catch(() => false)
-    if (opened) break
-    await page.keyboard.press('Escape')
-  }
-  await expect
-    .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 15000, intervals: [200] })
-    .toBeGreaterThan(0)
-  for (let i = 0; i < 8; i++) {
-    const has = await page.evaluate(
-      (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-      name,
-    )
-    if (has) break
-    const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-    if ((await folder.count()) > 0) {
-      await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-    }
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(
-            (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-            name,
-          ),
-        { timeout: 8000, intervals: [300] },
-      )
-      .toBe(true)
-      .catch(() => {})
-  }
-  await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
-  await page.waitForSelector('.xlsxengine-host', { timeout: 30000 })
-  const edit = page.getByRole('button', { name: 'Edit', exact: true })
-  await edit.waitFor({ timeout: 20000 })
-  await edit.click({ timeout: 20000 })
-  await page.waitForSelector('xlsx-editor', { timeout: 20000 })
+async function openXlsxEditing(page: Page, rel: string): Promise<void> {
+  // C5-4 flag-day: /edit/* 직접 goto (in-page Edit 폐지). rel은 repos/ 접두 포함.
+  await openEditor(page, rel.replace(/^repos\//, ''))
 }
 
 async function collabState(page: Page): Promise<{ active: boolean }> {
@@ -125,7 +78,8 @@ async function setCellByFormulaBar(page: Page, ref: string, value: string): Prom
     el?.select?.(r)
     el?.focusGrid?.()
   }, ref)
-  const bar = page.locator('xlsx-editor [part~="formula-bar"] input').last()
+  // 수식 입력은 textarea (input은 네임박스일 수 있어 Enter가 확정되지 않는다).
+  const bar = page.locator('xlsx-editor [part~="formula-bar"] textarea').last()
   await bar.waitFor({ timeout: 15000 })
   await bar.click({ timeout: 15000 })
   await bar.fill(value)
@@ -172,30 +126,13 @@ async function liveBytesContain(page: Page, needle: string): Promise<boolean> {
   return false
 }
 
-/** 편집 종료(Done). */
-async function clickDone(page: Page): Promise<void> {
-  const done = page.getByRole('button', { name: 'Done', exact: true })
-  await done.waitFor({ timeout: 20000 })
-  await done.click({ timeout: 20000 })
-}
-
-async function closeXlsxPreview(page: Page): Promise<void> {
-  const btn = page.locator('[aria-label="Close explorer"]')
-  if (await btn.count()) {
-    await btn.first().click({ timeout: 10000 })
-  } else {
-    await page.keyboard.press('Escape')
-  }
-  await expect.poll(async () => page.locator('.xlsxengine-host').count(), { timeout: 10000, intervals: [300] }).toBe(0)
-}
-
 test.describe('C2-a: non-secure context 참가', () => {
   test('C2-a: subtle 없이 2명이 같은 방에 참가하고 nohash 배너가 0회다', async ({ browser }) => {
     const t = await twoPagesNoSubtle(browser)
     const f = freshXlsx('c2a', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       // 방 참가 또는 배너 중 먼저 오는 쪽을 기다린다. 현재 코드는 배너가 온다.
       await expect
         .poll(
@@ -240,11 +177,11 @@ test.describe('C2-a: non-secure context 참가', () => {
       }
     })
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       // 같은 파일을 다시 열어도(브라우저 캐시) ETag가 읽혀야 한다.
       await t.pageA.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       console.log('C2A_RAW ' + JSON.stringify(raws))
       expect(raws.length).toBeGreaterThanOrEqual(2)
@@ -264,8 +201,8 @@ test.describe('C2-a: non-secure context 참가', () => {
     const f = freshXlsx('c2a2', 0)
     const stamp = `C2A2${Date.now().toString(36)}`
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await setCellByFormulaBar(t.pageA, 'B2', stamp)
@@ -297,8 +234,8 @@ test.describe('C2-c: owner 자동 저장', () => {
       if (r.url().includes('/api/collab/save') && r.method() === 'POST') postB += 1
     })
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       // 둘 다 편집한다 (수동 Save는 누르지 않는다).
@@ -311,9 +248,8 @@ test.describe('C2-c: owner 자동 저장', () => {
       expect(postB).toBe(0)
       expect(postA).toBeGreaterThanOrEqual(1)
       // A가 나가면 B에게 위임된다. B가 편집하면 B가 저장한다.
-      await clickDone(t.pageA)
-      await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
-      await closeXlsxPreview(t.pageA)
+      // C5-4 flag-day: Done은 탭을 닫으므로, 떠남은 루트로 내비게이션한다.
+      await t.pageA.goto('/', { waitUntil: 'domcontentloaded', timeout: 30000 })
       await setCellByFormulaBar(t.pageB, 'D2', stampC)
       await expect
         .poll(async () => ((await workbookContains(f.abs, stampC)) ? stampC : ''), { timeout: 40000, intervals: [500] })
@@ -346,7 +282,7 @@ test.describe('C2-b: stale 자동 복구', () => {
       await route.continue()
     })
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       // 낡은 ETag로는 stale_client → 자동 재수신 뒤 참가한다.
       // 진단 덤프(단언 아님): 재참가 경로의 배너 원문을 확인하려고 남긴다.
       await expect
@@ -375,7 +311,7 @@ test.describe('C2-b: stale 자동 복구', () => {
     const t = await twoPagesNoSubtle(browser)
     const f = freshXlsx('c2b2', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       // 디스크를 외부에서 바꾼다.
       const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
@@ -385,7 +321,7 @@ test.describe('C2-b: stale 자동 복구', () => {
       zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="903"><c r="A903" t="inlineStr"><is><t>C2B2</t></is></c></row></sheetData>'))
       fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
       // B는 새 디스크를 읽는다. 방(A 있음)은 옛 해시 → 방 내용으로 참가 + 외부 배너.
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toContainText('외부', { timeout: 15000 })
       await expect(t.pageB.getByText('단독')).toHaveCount(0)
@@ -399,12 +335,11 @@ test.describe('C2-b: stale 자동 복구', () => {
     const t = await twoPagesNoSubtle(browser)
     const f = freshXlsx('c2b3', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => (await collabState(t.pageA)).active, { timeout: 30000, intervals: [500] }).toBe(true)
-      // A가 편집을 끝내고(→viewer 재참가) 미리보기를 닫는다 (방은 TTL 30초 동안 비어 있다).
-      await clickDone(t.pageA)
-      await t.pageA.waitForSelector('xlsx-editor', { timeout: 20000 })
-      await closeXlsxPreview(t.pageA)
+      // A가 편집을 끝내고 나간다 (방은 TTL 30초 동안 비어 있다).
+      // C5-4 flag-day: Done은 탭을 닫으므로, 떠남은 루트로 내비게이션한다.
+      await t.pageA.goto('/', { waitUntil: 'domcontentloaded', timeout: 30000 })
       // 디스크를 외부에서 바꾼다.
       const zip = await JSZip.loadAsync(fs.readFileSync(f.abs))
       const sheetName = Object.keys(zip.files).find((n) => n.startsWith('xl/worksheets/') && n.endsWith('.xml'))
@@ -413,7 +348,7 @@ test.describe('C2-b: stale 자동 복구', () => {
       zip.file(sheetName!, sheetXml.replace('</sheetData>', '<row r="904"><c r="A904" t="inlineStr"><is><t>C2B3</t></is></c></row></sheetData>'))
       fs.writeFileSync(f.abs, await zip.generateAsync({ type: 'nodebuffer' }))
       // B는 빈 방을 서버가 리셋한 뒤 host로 참가한다. 배너 없이 열린다.
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => (await collabState(t.pageB)).active, { timeout: 30000, intervals: [500] }).toBe(true)
       await expect(t.pageB.locator('[data-testid="xlsx-collab-banner"]')).toHaveCount(0)
       await expect(t.pageB.getByText('단독')).toHaveCount(0)
