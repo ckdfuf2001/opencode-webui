@@ -130,6 +130,26 @@ async function embeddingsCount(localPath: string, name: string): Promise<number>
   }
 }
 
+/** 수식 바에 값을 넣어 셀을 편집한다(그리드는 canvas라 수식 바가 확정 경로). */
+async function setCellByFormulaBar(page: Page, ref: string, value: string): Promise<void> {
+  await page.evaluate((r) => {
+    const el = document.querySelector('xlsx-editor') as unknown as { select?: (ref: string) => void; focusGrid?: () => void } | null
+    el?.select?.(r)
+    el?.focusGrid?.()
+  }, ref)
+  const bar = page.locator('xlsx-editor [part~="formula-bar"] input').last()
+  await bar.waitFor({ timeout: 15000 })
+  await bar.click({ timeout: 15000 })
+  await bar.fill(value)
+  await bar.press('Enter')
+  await expect
+    .poll(async () => page.evaluate(() => (document.querySelector('xlsx-editor') as unknown as { dirty?: boolean } | null)?.dirty === true), {
+      timeout: 15000,
+      intervals: [200],
+    })
+    .toBe(true)
+}
+
 test.describe('C5-4: URL 편집 분리', () => {
   test('U-open-host: 미리보기 Edit 버튼이 /edit/<경로> 새 탭을 연다', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
@@ -219,6 +239,57 @@ test.describe('C5-4: URL 편집 분리', () => {
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('U-done-close: 에디터 탭 Done이 성공 저장 뒤 탭을 닫는다', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54done', ['embed-pdf.xlsx'])
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54done', '.xlsxengine-host')
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForSelector('xlsx-editor', { timeout: 30000 })
+      await editor.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 20000 })
+      // P0-2/P0-3: 명시적 onDone + opener 있는 window.open이면 탭이 닫힌다.
+      await editor.waitForEvent('close', { timeout: 15000 })
+      expect(editor.isClosed()).toBe(true)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('U-done-fail-keeps-open: 저장 실패 시 탭이 닫히지 않고 사본 다운로드를 제공한다', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54donefail', ['embed-pdf.xlsx'])
+    const hostAbs = path.join(workspaceDir(), 'repos', 'c54donefail', 'embed-pdf.xlsx')
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54donefail', '.xlsxengine-host')
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForSelector('xlsx-editor', { timeout: 30000 })
+      await setCellByFormulaBar(editor, 'A1', 'c54-stale-stamp')
+      // 외부 변경: 자동 저장(2.5s 디바운스)이 나가기 전에 디스크를 갈아끼운다.
+      fs.copyFileSync(path.join('e2e/collab/fixtures', 'collab-features.xlsx'), hostAbs)
+      // 자동 저장이 409 conflict_external로 막히면 배너+사본 다운로드가 뜬다.
+      await editor.getByTestId('xlsx-collab-banner').waitFor({ timeout: 30000 })
+      await editor.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 20000 })
+      // 확인 대화상자는 Playwright가 기본 거부(취소)한다 → 편집 화면에 남는다.
+      await editor.waitForTimeout(3000)
+      expect(editor.isClosed()).toBe(false)
+      await expect(editor.getByTestId('xlsx-collab-download')).toBeVisible({ timeout: 15000 })
     } finally {
       await ctx.close().catch(() => {})
     }
