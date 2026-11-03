@@ -599,7 +599,48 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
     }
   })
 
-  test('E2-lock: B가 같은 첨부를 열면 읽기 전용 + 토스트 1회', async ({ browser }) => {    const ctxA = await mkCtx(browser, ADA)
+  test('E2-close-clean: 편집 없이 Done이면 확인 없이 닫히고 락이 풀린다', async ({ browser }) => {
+    const ctxA = await mkCtx(browser, ADA)
+    const ctxB = await mkCtx(browser, GRACE)
+    const pageA = await ctxA.newPage()
+    const pageB = await ctxB.newPage()
+    await gotoApp(pageA)
+    await gotoApp(pageB)
+    const seg = `c53e2cc-${Date.now().toString(36)}`
+    await mkRepo(seg, ['collab-features.xlsx'])
+    try {
+      const hostAbs = path.join(workspaceDir(), 'repos', seg, 'collab-features.xlsx')
+      const docxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx'))
+      await addPackagePart(hostAbs, {
+        dir: 'xl',
+        sheetRels: 'xl/worksheets/_rels/sheet1.xml.rels',
+        partName: 'report.docx',
+        bytes: docxBytes,
+      })
+      await openViaWorkspace(pageA, 'collab-features.xlsx', seg)
+      const icon = pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first()
+      await icon.waitFor({ timeout: 30000 })
+      await icon.dblclick({ timeout: 15000 })
+      await pageA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      // 편집 없이 Done → 확인 다이얼로그 없이 바로 닫혀야 한다 (로드 시 spurious dirty 금지).
+      await pageA.getByTestId('attach-done').click({ timeout: 15000 })
+      await expect(pageA.getByTestId('attach-editor')).toHaveCount(0, { timeout: 15000 })
+      // 락이 풀렸으므로 B는 편집 가능해야 한다 (읽기 전용 아님).
+      await openViaWorkspace(pageB, 'collab-features.xlsx', seg)
+      await pageB.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 })
+      await pageB.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(pageB.getByTestId('attach-save')).toBeEnabled({ timeout: 15000 })
+      await expect(pageB.getByTestId('attach-readonly')).toHaveCount(0)
+      await pageB.getByTestId('attach-done').click({ timeout: 15000 })
+      await expect(pageB.getByTestId('attach-editor')).toHaveCount(0, { timeout: 15000 })
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
+  test('E2-lock: B가 같은 첨부를 열면 읽기 전용 + 토스트 1회', async ({ browser }) => {
+    const ctxA = await mkCtx(browser, ADA)
     const ctxB = await mkCtx(browser, GRACE)
     const pageA = await ctxA.newPage()
     const pageB = await ctxB.newPage()
