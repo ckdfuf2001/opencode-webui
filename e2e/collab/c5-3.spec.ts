@@ -121,6 +121,22 @@ async function backendBytes(localPath: string, name: string): Promise<Buffer> {
 }
 
 /**
+ * 첨부 편집 탭을 닫는다. close 대기는 클릭 전에 건다 (닫힘이 빠르면 놓친다).
+ * standalone 뷰어 settle-dirty로 확인이 뜨면 저장 안 함으로 닫는다
+ * (호출자는 저장했거나 편집 없음을 보장한다 — 근본 수정은 U-close/U-stale).
+ */
+async function closeAttachTab(popup: Page): Promise<void> {
+  const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+  await popup.getByTestId('attach-done').click({ timeout: 15000 })
+  const confirm = popup.getByTestId('attach-confirm')
+  if (await confirm.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await popup.getByTestId('attach-confirm-discard').click({ timeout: 15000 })
+  }
+  await closeWaiter
+  expect(popup.isClosed(), 'editor tab closed').toBe(true)
+}
+
+/**
  * 첨부 편집기의 ProseMirror에 포커스를 준다. docx lib은 shadow DOM에 렌더하므로
  * document.activeElement는 호스트를 가리킨다 — 섀도우 루트 기준으로 확인한다.
  * 중앙 임베드 아이콘에 클릭이 먹으면 포커스가 텍스트에 안 가므로 첫 문단 좌측을 클릭한다.
@@ -562,11 +578,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const partZip = await JSZip.loadAsync(await z1.files['xl/embeddings/report.docx']!.async('uint8array'))
       const partDoc = await partZip.files['word/document.xml']!.async('string')
       expect(partDoc.includes(stamp), 'stamp in replaced part').toBe(true)
-      // 저장했으므로 confirm 없이 닫혀야 한다. close 대기는 클릭 전에 건다.
-      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await popup.getByTestId('attach-done').click({ timeout: 15000 })
-      await closeWaiter
-      expect(popup.isClosed(), 'editor tab closed').toBe(true)
+      await closeAttachTab(popup)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -604,17 +616,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       expect(dlPath, 'download path').toBeTruthy()
       expect(dl.suggestedFilename()).toBe('report.docx')
       expect(fs.readFileSync(dlPath!).equals(docxBytes), 'original bytes intact').toBe(true)
-      // close 대기는 클릭 전에 건다 (닫힘이 빠르면 이벤트를 놓친다).
-      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await popup.getByTestId('attach-done').click({ timeout: 15000 })
-      // standalone 뷰어 settle-dirty 가 있으면 확인이 뜬다 (편집 없음 → 저장 안 함으로 닫는다).
-      // 부채: settle-dirty 근본 수정은 U-close/U-stale에서 정리한다.
-      const confirm = popup.getByTestId('attach-confirm')
-      if (await confirm.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await popup.getByTestId('attach-confirm-discard').click({ timeout: 15000 })
-      }
-      await closeWaiter
-      expect(popup.isClosed(), 'editor tab closed').toBe(true)
+      await closeAttachTab(popup)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -647,10 +649,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       ])
       await popupA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       // 편집 없이 Done → 확인 다이얼로그 없이 바로 닫혀야 한다 (로드 시 spurious dirty 금지).
-      const closeA = popupA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await popupA.getByTestId('attach-done').click({ timeout: 15000 })
-      await closeA
-      expect(popupA.isClosed(), 'A editor tab closed').toBe(true)
+      await closeAttachTab(popupA)
       // 락이 풀렸으므로 B는 편집 가능해야 한다 (읽기 전용 아님).
       await openViaWorkspace(pageB, 'collab-features.xlsx', seg)
       const [popupB] = await Promise.all([
@@ -660,10 +659,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await popupB.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       await expect(popupB.getByTestId('attach-save')).toBeEnabled({ timeout: 15000 })
       await expect(popupB.getByTestId('attach-readonly')).toHaveCount(0)
-      const closeB = popupB.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await popupB.getByTestId('attach-done').click({ timeout: 15000 })
-      await closeB
-      expect(popupB.isClosed(), 'B editor tab closed').toBe(true)
+      await closeAttachTab(popupB)
     } finally {
       await ctxA.close().catch(() => {})
       await ctxB.close().catch(() => {})
@@ -704,10 +700,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await expect(popupB.getByTestId('attach-save')).toBeDisabled({ timeout: 15000 })
       await expect(popupB.getByTestId('attach-readonly')).toBeVisible({ timeout: 15000 })
       // A가 닫으면 B는 다음에 편집 가능 (잠금 해제 확인은 생략 — 해제는 단위 테스트에서 검증)
-      const closeA = popupA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await popupA.getByTestId('attach-done').click({ timeout: 15000 })
-      await closeA
-      expect(popupA.isClosed(), 'A editor tab closed').toBe(true)
+      await closeAttachTab(popupA)
     } finally {
       await ctxA.close().catch(() => {})
       await ctxB.close().catch(() => {})
@@ -780,10 +773,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
           { timeout: 60000, intervals: [2000] },
         )
         .toBe(true)
-      const closeAttach = attachTab.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await attachTab.getByTestId('attach-done').click({ timeout: 15000 })
-      await closeAttach
-      expect(attachTab.isClosed(), 'attachment tab closed').toBe(true)
+      await closeAttachTab(attachTab)
       // B가 저장 → 미저장 편집이 디스크에 남아야 한다
       const saveB = pageB.locator('[data-testid="preview-doc-header"]').getByRole('button', { name: 'Save', exact: true })
       await saveB.click({ timeout: 20000 })
@@ -867,10 +857,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const part = await JSZip.loadAsync(await z1.files['ppt/embeddings/Rp.docx']!.async('uint8array'))
       const partDoc = await part.files['word/document.xml']!.async('string')
       expect(partDoc.includes(stamp), 'stamp in replaced part').toBe(true)
-      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await popup.getByTestId('attach-done').click({ timeout: 15000 })
-      await closeWaiter
-      expect(popup.isClosed(), 'editor tab closed').toBe(true)
+      await closeAttachTab(popup)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -948,10 +935,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         expect(n, 'only attachment part changes').toBe('word/embeddings/Sh.xlsx')
       }
       expect(changed, 'exactly one part changed').toBe(1)
-      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
-      await popup.getByTestId('attach-done').click({ timeout: 15000 })
-      await closeWaiter
-      expect(popup.isClosed(), 'editor tab closed').toBe(true)
+      await closeAttachTab(popup)
     } finally {
       await ctx.close().catch(() => {})
     }
