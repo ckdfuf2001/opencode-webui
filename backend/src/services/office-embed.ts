@@ -340,8 +340,9 @@ const XLSX_PROG_ID: Record<EmbedAttachKind, string | null> = {
 }
 
 /**
- * XLSX에 OLE 개체를 넣는다 (drawing + oleObjects + VML 3곳 일치).
- * - embeddings + 미리보기 PNG + sheet rels (oleObject/image/drawing/vmlDrawing).
+ * XLSX에 문서 첨부를 넣는다 (drawing + oleObjects + VML 3곳 일치).
+ * - embeddings + 미리보기 PNG + sheet rels (package/image/drawing/vmlDrawing).
+ *   office 첨부는 package rel이다 (oleObject 요소의 progId가 package rel을 가리킨다).
  * - sheet oleObjects (plain form) + drawing twoCellAnchor + VML shape.
  * - 앵커는 사용 영역 아래(빈 행)에 둔다. 없으면 drawing/VML 파트를 새로 만든다.
  */
@@ -472,12 +473,15 @@ export async function assembleXlsxEmbed(
       `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"><v:stroke joinstyle="miter"/><v:path o:extrusionok="f" gradientshapeok="t" o:connecttype="rect"/><o:lock v:ext="edit" aspectratio="t"/></v:shapetype></xml>`,
     )
   }
-  // oleObject + image rel.
+  // P0-4: office 첨부(docx/xlsx/pptx)는 package rel로 조립한다.
+  // <oleObject progId="Word.Document.12" ...> 요소는 유지하되 r:id가 package rel을
+  // 가리킨다 (Excel이 OOXML 첨부를 저장하는 기본 형태). 진짜 OLE(CFB) 다운로드는
+  // 기존 oleObject 파트(C5-1 경로)에만 남는다 — INSERT는 office만 받으므로 분기 없다.
   const oleRelId = nextRelId(sheetRels)
   sheetRels = addRel(
     sheetRels,
     oleRelId,
-    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject',
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/package',
     `../embeddings/${embName}`,
   )
   const imgRelId = nextRelId(sheetRels)
