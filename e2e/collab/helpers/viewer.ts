@@ -287,7 +287,10 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
  */
 export async function openEditor(page: Page, workspacePath: string): Promise<void> {
   const { editUrlForFile } = await import('../../../frontend/src/lib/editUrls')
-  await page.goto(editUrlForFile(workspacePath), { waitUntil: 'domcontentloaded', timeout: 30000 })
+  // E2E 디버그 계측(?collabDebug=1 → window.__collabDebug)은 쿼리로만 켜지므로
+  // 직접 goto에서도 붙인다 (in-page 진입은 gotoApp의 쿼리를 물려받는다).
+  const url = `${editUrlForFile(workspacePath)}${editUrlForFile(workspacePath).includes('?') ? '&' : '?'}collabDebug=1&e2e=1`
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
   await page.getByTestId('edit-page').waitFor({ timeout: 30000 })
   const ext = workspacePath.split('.').pop()?.toLowerCase()
   if (ext === 'pptx') {
