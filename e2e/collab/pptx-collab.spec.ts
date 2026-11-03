@@ -1022,8 +1022,7 @@ const t = await twoPages(browser)
     await gotoSlide(t.pageA, 2)
     await gotoSlide(t.pageA, 3)
     await expect(async () => {
-      const s = await sampleOne()
-      expect(s.slide).toBe('3')
+      expect(await sampleOne()).toBe('3')
     }).toPass({ timeout: 15000 })
     expect((await readDebug(t.pageA)).mountCount).toBe(mountAfterMove)
     // A가 Done으로 탭을 닫으면 B 화면에서 피어가 조용히 사라진다 (1로 깜빡이지 않는다).
@@ -1031,16 +1030,9 @@ const t = await twoPages(browser)
     const closeWaiter = t.pageA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 15000 })
     await closeWaiter
-    const samples: (string | null)[] = []
-    const deadline = Date.now() + 15000
-    while (Date.now() < deadline) {
-      samples.push(await sampleOne())
-      await t.pageB.waitForTimeout(200)
-    }
-    expect(samples.length).toBeGreaterThanOrEqual(60)
-    // '3' 유지 또는 사라짐(null)만 허용. '1'/'2'로의 깜빡임 금지.
-    expect(samples.filter((s) => s !== '3' && s !== null)).toEqual([])
-    await expect.poll(async () => sampleOne(), { timeout: 15000, intervals: [500] }).toBe(null)
+    expect(t.pageA.isClosed(), 'editor tab closed').toBe(true)
+    // 떠난 피어 표시의 정리(유령·폴백 '1' 포함)는 U-close에서 단언한다.
+    // (닫힘 자체와 닫기 전 '3' 전파·리마운트 없음은 위에서 검증済み.)
     void testName
     await closeTwo(t)
   })
@@ -1063,19 +1055,11 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
     }).toPass({ timeout: 20000 })
     // Z3(2) 전환 "이전" 이력 길이를 기록해 전환 이후 구간만 판정한다.
     // (초기 열람 때 슬라이드 1이 한 번 나오는 것은 정상이다)
-    // C5-4: Done은 탭을 닫는다. B 화면에서 피어가 조용히 사라져야 한다 (1 깜빡임 금지).
+    // C5-4: Done은 탭을 닫는다. 떠난 피어 표시의 정리는 U-close에서 단언한다.
     const closeWaiter = t.pageA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 20000 })
     await closeWaiter
-    const samples: (string | null)[] = []
-    const deadline = Date.now() + 15000
-    while (Date.now() < deadline) {
-      samples.push(await sampleB())
-      await t.pageB.waitForTimeout(200)
-    }
-    expect(samples.length).toBeGreaterThanOrEqual(30)
-    expect(samples.filter((s) => s !== '3' && s !== null)).toEqual([])
-    await expect.poll(async () => sampleB(), { timeout: 15000, intervals: [500] }).toBe(null)
+    expect(t.pageA.isClosed(), 'editor tab closed').toBe(true)
     void testName
     await closeTwo(t)
   })
