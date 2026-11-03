@@ -2,7 +2,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import fs from 'node:fs'
 import path from 'node:path'
 import { absForRel, backendBase, uniqueRelWithExt } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -43,46 +43,9 @@ function freshXlsx(slug: string, index: number): { rel: string; abs: string; nam
   return { rel, abs, name: rel.split('/').pop()! }
 }
 
-async function openXlsxEditing(page: Page, name: string): Promise<void> {
-  for (let i = 0; i < 6; i++) {
-    try {
-      await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
-      break
-    } catch {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-    }
-  }
-  for (let i = 0; i < 5; i++) {
-    await page.getByTitle('Workspace').click({ timeout: 20000 })
-    const opened = await expect
-      .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 8000, intervals: [200] })
-      .toBeGreaterThan(0)
-      .then(() => true)
-      .catch(() => false)
-    if (opened) break
-    await page.keyboard.press('Escape')
-  }
-  await expect
-    .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 15000, intervals: [200] })
-    .toBeGreaterThan(0)
-  for (let i = 0; i < 8; i++) {
-    const has = await page.evaluate(
-      (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-      name,
-    )
-    if (has) break
-    const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-    if ((await folder.count()) > 0) {
-      await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-    }
-    await page.waitForTimeout(1500)
-  }
-  await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
-  await page.waitForSelector('.xlsxengine-host', { timeout: 30000 })
-  const edit = page.getByRole('button', { name: 'Edit', exact: true })
-  await edit.waitFor({ timeout: 20000 })
-  await edit.click({ timeout: 20000 })
-  await page.waitForSelector('xlsx-editor', { timeout: 20000 })
+async function openXlsxEditing(page: Page, rel: string): Promise<void> {
+  // C5-4 flag-day: /edit/* 직접 goto (in-page Edit 폐지). rel은 repos/ 접두 포함.
+  await openEditor(page, rel.replace(/^repos\//, ''))
 }
 
 async function xlsxActive(page: Page): Promise<boolean> {
@@ -218,9 +181,9 @@ test.describe('C4-3 F1: presence 중복 표시', () => {
     const pageB = await ctxB.newPage()
     await gotoApp(pageB)
     try {
-      await openXlsxEditing(pageA1, f.name)
-      await openXlsxEditing(pageA2, f.name)
-      await openXlsxEditing(pageB, f.name)
+      await openXlsxEditing(pageA1, f.rel)
+      await openXlsxEditing(pageA2, f.rel)
+      await openXlsxEditing(pageB, f.rel)
       await expect.poll(async () => xlsxActive(pageA1), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(pageA2), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(pageB), { timeout: 30000, intervals: [500] }).toBe(true)
@@ -252,8 +215,8 @@ test.describe('C4-3 F1: presence 중복 표시', () => {
     })()
     const f = freshXlsx('c43f1b', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect
@@ -285,8 +248,8 @@ test.describe('C4-3 F2: 타이틀바 사용자 표시 제거', () => {
     })()
     const f = freshXlsx('c43f2e', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const visibleTitlePresence = async (page: Page): Promise<number> => {
@@ -325,8 +288,8 @@ test.describe('C4-3 F3: 셀 클릭 시 락 해제 + 셀 잔상 제거', () => {
     })()
     const f = freshXlsx('c43f3g', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -361,8 +324,8 @@ test.describe('C4-3 F3: 셀 클릭 시 락 해제 + 셀 잔상 제거', () => {
     })()
     const f = freshXlsx('c43f3u', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -440,8 +403,8 @@ test.describe('C4-3 F3: 셀 클릭 시 락 해제 + 셀 잔상 제거', () => {
     })()
     const f = freshXlsx('c43f3e', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -486,8 +449,8 @@ test.describe('C4-3 F4: 남이 잡은 이미지 테두리+이름표', () => {
     })()
     const f = freshXlsx('c43f4s', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -524,8 +487,8 @@ test.describe('C4-3 F4: 남이 잡은 이미지 테두리+이름표', () => {
     })()
     const f = freshXlsx('c43f4f', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -599,8 +562,8 @@ test.describe('C4-3 F4: 남이 잡은 이미지 테두리+이름표', () => {
     })()
     const f = freshXlsx('c43f4h', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -630,8 +593,8 @@ test.describe('C4-3 F4: 남이 잡은 이미지 테두리+이름표', () => {
     })()
     const f = freshXlsx('c43f4t', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
