@@ -1126,3 +1126,14 @@ E21만의 문제가 아니다. 근거:
 - E2 디버깅 4건: (1) expect.poll은 값 반환 안함 → zip 2단계 unzip+word/document.xml stamp poll로 전환. (2) xlsx 수식바는 input이 아니라 textarea. (3) docx lib은 shadow DOM 렌더라 document.activeElement는 호스트를 가리킴 → shadowRoot.activeElement 기준 focusAttachEditor 헬퍼 + 중앙 아이콘 회피 (120,60) 클릭. (4) VITE_E2E=1에서 Toaster display:none → 저장 토스트는 toBeAttached로 단언.
 - 검증: c5-3 14/14 chromium, backend embed-attachment 15/15, tsc 0, eslint 신규 0 (기존 6E+11W), check-memory 0E+1W (D36 기존), check-encoding 이상 없음 (경고 1 기존).
   backend 전체 645 pass + 2파일 실패 (config-migration/repo-tracking, bun:sqlite를 node vitest에서 못 읽는 기존 환경 이슈).
+
+## C5-3 회귀·판단 추기 (2026-11-03)
+- package dblclick → 편집기 통일 (D63 판단1). C5-1:133·C5-2 P2-1/P2-3 다운로드 단언을
+  에디터+바이트보존 단언으로 교체 (신 스펙 우선, 구 UX 폐기). oleObject/CFB 다운로드는 그대로.
+- 선저장 실패해도 방 미시드면 POST 진행 (D63 판단2). 미시드=플러시할 내용 없음이 보장되므로 안전.
+  계기: P2-4가 편집 없이 첨부하면 선저장 실패로 중단돼 풀런에서만 실패 → 90초 폴+재시도로 green.
+- FilePreview AttachmentEditor 정적 import가 PPT 보기 join을 멈춤 (D63 판단3, c3 P-9a 계열).
+  bisec으로 FilePreview 확정 → lazy 로딩 전환 후 26초대 복귀. E2unsaved·pptx-edit로 에디터 동작 확인.
+- 회귀: c3/c5-1/c5-2 38 passed, c4-3/4/6 28 passed, xlsx-collab 19+1flake(X2a-6, debaa62e에서도 실패하는 기존 이슈),
+  pptx-collab 18 passed +1 skipped, ui-layout·unmount·presence·solo·ole-solo·c2 19+1flake(P-1, 단독 통과),
+  msedge c5-3 14/14·c5-1 5/5·c5-2 5/6(P2-1 풀런 flake, 단독 통과). X2a-6·P-1·P2-1은 부하 flake로 기록.
