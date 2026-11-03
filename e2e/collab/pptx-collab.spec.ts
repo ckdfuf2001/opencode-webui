@@ -15,6 +15,7 @@ import {
   editShapeText,
   closePreview,
   openEditor,
+  openFileSeeded,
   selectShape,
   peer,
   measure,
@@ -288,7 +289,8 @@ test.describe('pptx collab (desktop)', () => {
     const shapesA = new ShapeLocator(t.pageA)
     await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
     await gotoSlide(t.pageA, 2)
-    await openFile(t.pageB, f.name, 'view')
+    // C5-4: B는 시딩된 방에만 들어간다 (mid-seed join 교착 회피).
+    await openFileSeeded(t.pageB, f.name, f.rel)
     await gotoSlide(t.pageB, 2)
     const testName = `E2[${testInfo.repeatEachIndex}]`
     const { ms } = await measure(testName, 'reflect', async () => {

@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import { backendBase } from './env'
 
 /**
  * 원격 선택 표시 선택자.
@@ -290,11 +291,35 @@ export async function expectEditorClosed(page: Page): Promise<void> {
 }
 
 /**
+ * C5-4: 시딩된 방에만 viewer로 들어간다.
+ * 편집자가 시딩하는 도중에 들어가면 join이 영원히 멈출 수 있어
+ * (mid-seed join 교착 — U-close/join 강건성에서 근본 해결) 회귀가 빨개진다.
+ * 이미 시딩됐으면 즉시 통과하므로 view-first 흐름에는 쓰지 않는다.
+ */
+export async function openFileSeeded(page: Page, fileName: string, rel: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        try {
+          const res = await fetch(`${backendBase()}/api/collab/rooms`)
+          const body = (await res.json()) as { rooms?: Array<{ rel?: string; seeded?: boolean }> }
+          return (body.rooms ?? []).some((r) => r.rel === rel && r.seeded === true)
+        } catch {
+          return false
+        }
+      },
+      { timeout: 60000, intervals: [1000] },
+    )
+    .toBe(true)
+  await openFile(page, fileName, 'view')
+}
+
+/**
  * C5-4 flag-day: 편집 진입은 /edit/* 직접 goto로 통일한다 (팝업 추적 없음).
  * - workspacePath: 워크스페이스 상대 경로 (예: 'c54host/embed-pdf.xlsx').
  * - 로드 후 형식별 에디터를 기다린다. waitForTimeout/dispatch 클릭을 쓰지 않는다.
  * - 팝업 경로는 U-open 3종이 검증하므로 여기서는 다루지 않는다.
- * - E2E 디버그 계측(?collabDebug=1)은 쿼리로만 켜지므로 직접 goto에서도 붙인다.
+ * - E2E 디버그 계측(?collabDebug=1 → window.__collabDebug)은 쿼리로만 켜지므로 직접 goto에서도 붙인다.
  */
 export async function openEditor(page: Page, workspacePath: string): Promise<void> {
   const { editUrlForFile } = await import('../../../frontend/src/lib/editUrls')
