@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+﻿import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Loader2, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -2215,7 +2215,7 @@ const peersRef = useRef<Peer[]>([])
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
     >
       {/* C5-1: 기존 OLE 첨부 아이콘 1개 + 더블클릭 다운로드 (lib 렌더는 그대로). */}
-      <OleAttachmentOverlay data={content} anchor="pptx" parentPath={savePath} parentName={fileName ?? 'presentation.pptx'} />
+      <OleAttachmentOverlay data={content} anchor="pptx" parentPath={savePath} />
       {isDecrypted && editing && (
         <div className="px-3 py-1.5 border-b border-border text-[11px] text-muted-foreground">
           Encrypted documents cannot be co-edited — editing solo.
@@ -2670,3 +2670,4 @@ function IconBtn({
     </button>
   )
 }
+

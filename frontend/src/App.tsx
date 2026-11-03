@@ -8,6 +8,7 @@ import { RepoDetail } from './pages/RepoDetail'
 import { SessionDetail } from './pages/SessionDetail'
 import { Search } from './pages/Search'
 import { ExposeCommands } from './pages/ExposeCommands'
+import EditPage from './pages/EditPage'
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import { useSettingsDialog } from './hooks/useSettingsDialog'
 import { useTheme } from './hooks/useTheme'
@@ -127,13 +128,15 @@ function AppContent() {
 function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => void }) {
   const location = useLocation()
   const isExpose = location.pathname === '/expose'
+  // C5-4 (D64): /edit/* 편집 페이지는 사이드바·탐색기·채팅을 렌더하지 않는다.
+  const isEditPage = location.pathname === '/edit' || location.pathname.startsWith('/edit/')
   // M9/6절: E2E 하네스 복구용 앱 플래그.
   // 토스트/오버레이(알림·배너)가 클릭을 가로채면 Playwright 액션이 타임아웃한다.
   // ?e2e=1 일 때만 표시 요소를 끈다(프로덕션 동작은 그대로).
   const isE2E = useMemo(() => isE2EFlag(), [location.search])
   return (
     <>
-      {!isE2E && <PushPrompt />}
+      {!isE2E && !isEditPage && <PushPrompt />}
       {/* M7-4 (d): 세션 상태/헬스 폴링은 이 한 곳에서만 한다. */}
       <Pollers />
       <div className="pointer-events-none fixed bottom-1 right-2 z-[5] text-[10px] text-muted-foreground/50 select-none" title="build">
@@ -146,10 +149,11 @@ function AppRoutesWithPanels({ isOpen, close }: { isOpen: boolean; close: () => 
         <Route path="/repos/:id" element={<RepoDetail />} />
         <Route path="/repos/:id/sessions/:sessionId" element={<SessionDetail />} />
         <Route path="/session/:sessionId" element={<SessionDetail />} />
+        <Route path="/edit/*" element={<EditPage />} />
       </Routes>
       <SettingsDialog open={isOpen} onOpenChange={close} />
-      {!isExpose && !isE2E && <FavoriteSessionsPanel />}
-      {!isExpose && !isE2E && <HtmlViewerMenu />}
+      {!isExpose && !isE2E && !isEditPage && <FavoriteSessionsPanel />}
+      {!isExpose && !isE2E && !isEditPage && <HtmlViewerMenu />}
       {/* C3: E2E에서도 Toaster DOM은 유지해 토스트 횟수를 단언한다. E2E에서는
           보이지 않게(클릭 가로챔 없음)만 한다. */}
       <Toaster

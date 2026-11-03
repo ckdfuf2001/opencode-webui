@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { ViewerLoadBoundary } from './ViewerBoundaries'
@@ -43,6 +43,7 @@ import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
 import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitCollabSeed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
 import { ATTACHMENT_OPEN_REQUEST, openAttachmentEditor, type AttachmentOpenRequest, type AttachmentSaver } from './embedEdit'
+import { editUrlForFile } from '@/lib/editUrls'
 
 type ExtractedMsg = {
   html?: string
@@ -527,20 +528,28 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
   )
 }
 
-export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { file: FileInfo; refreshKey?: number; onEditingChange?: (editing: boolean) => void }) {
+export function DocumentPreview({ file, refreshKey = 0, onEditingChange, initialEditing = false, editInNewTab = true }: { file: FileInfo; refreshKey?: number; onEditingChange?: (editing: boolean) => void; initialEditing?: boolean; editInNewTab?: boolean }) {
   const kind = detectDocKind(file.name)
   // office 문서(docx/xlsx/pptx)는 바로 보기 우선 — PDF 변환 없이 바로 본다.
   // PDF가 필요하면 토글로 서버 변환을 켠다.
   const isOfficeNative = kind === 'docx' || kind === 'xlsx' || kind === 'pptx'
   const isViewerOnly = kind === 'visio'
   const [pdfMode, setPdfMode] = useState(false)
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(initialEditing)
   const [viewerRetry, setViewerRetry] = useState(0)
   const [endingEdit, setEndingEdit] = useState(false)
   const embedInputRef = useRef<HTMLInputElement | null>(null)
   // X2a-③: XlsxViewer 가 방에 편집자가 있음을 알리면(보기 모드) 코멘트 버튼을 막는다.
   const [xlsxRoomHasEditors, setXlsxRoomHasEditors] = useState(false)
-  useEffect(() => { setPdfMode(false); setEditing(false) }, [file.path])
+  // C5-4: 마운트 때는 리셋하지 않는다 (/edit 페이지 initialEditing이 즉시 꺼지면 탭이 닫힌다).
+  // 파일이 바뀌었을 때만 리셋한다.
+  const prevPathRef = useRef(file.path)
+  useEffect(() => {
+    if (prevPathRef.current === file.path) return
+    prevPathRef.current = file.path
+    setPdfMode(false)
+    setEditing(false)
+  }, [file.path])
   useEffect(() => { setXlsxRoomHasEditors(false) }, [editing, file.path])
   // U3: 편집 상태를 상위(FilePreview)에 알린다 — 편집 화면에서는 앱 헤더를
   // 숨기고 에디터가 컨테이너 전체를 채우게 한다.
@@ -827,6 +836,15 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange }: { fil
                 onClick={() => {
                   if (editing) {
                     void endEditing()
+                    return
+                  }
+                  // C5-4 (D64): 편집은 /edit/* 새 탭에서. /edit 페이지 안에서는 제자리 전환.
+                  if (editInNewTab) {
+                    try {
+                      window.open(editUrlForFile(file.path), '_blank', 'noopener')
+                    } catch {
+                      /* 팝업 차단이면 무시 (사용자가 직접 새 탭으로 열 수 있음) */
+                    }
                     return
                   }
                   setEditing(true)
@@ -1466,7 +1484,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host relative h-full min-h-[480px]">
-      <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} parentName={fileName ?? 'document.docx'} />
+      <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} />
       <div className="flex h-full min-h-0">
         <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
@@ -3943,7 +3961,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="xlsxengine-host relative h-full min-h-[480px]">
-      <OleAttachmentOverlay data={content} anchor="xlsx" parentPath={path} parentName={fileName ?? 'workbook.xlsx'} />
+      <OleAttachmentOverlay data={content} anchor="xlsx" parentPath={path} />
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
@@ -4384,3 +4402,4 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     </EngineHost>
   )
 }
+

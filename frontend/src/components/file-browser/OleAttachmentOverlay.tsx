@@ -14,7 +14,8 @@ import {
 import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
-import { attachmentKindOf, requestAttachmentOpen } from './embedEdit'
+import { attachmentKindOf } from './embedEdit'
+import { editUrlForAttachment } from '@/lib/editUrls'
 
 /** lib가 렌더를 포기한 자리 표시자 (xg-obj-unsupported — 텍스트 판정 금지). */
 
@@ -131,13 +132,11 @@ export default function OleAttachmentOverlay({
   data,
   anchor,
   parentPath,
-  parentName,
 }: {
   data: ArrayBuffer | Uint8Array
   anchor?: OleAnchorKind
-  /** C5-3: 첨부 편집기 열기에 필요한 부모 식별자 (없으면 다운로드만). */
+  /** C5-4: 첨부 편집 URL에 필요한 부모 식별자 (없으면 다운로드만). */
   parentPath?: string
-  parentName?: string
 }) {
   const [entries, setEntries] = useState<OleEmbeddingRef[]>([])
   // 앵커 사각형 + lib placeholder 여부 (placeholder면 미리보기 카드로 덮는다).
@@ -289,13 +288,13 @@ export default function OleAttachmentOverlay({
       void download(entry)
       return
     }
-    requestAttachmentOpen({
-      parentPath,
-      parentName: parentName ?? name,
-      part: entry.partName,
-      name,
-      kind: attachKind,
-    })
+    // C5-4 (D64): 첨부 편집은 /edit/<부모>/-/<파트> 새 탭에서. 팝업 차단을 피하려고
+    // 클릭 핸들러 안에서 동기로 연다.
+    try {
+      window.open(editUrlForAttachment(parentPath, entry.partName), '_blank', 'noopener')
+    } catch {
+      /* 팝업 차단이면 무시 (사용자가 직접 새 탭으로 열 수 있음) */
+    }
   }
 
   const download = async (entry: OleEmbeddingRef): Promise<void> => {

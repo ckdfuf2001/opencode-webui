@@ -60,6 +60,28 @@ async function openViaWorkspace(page: Page, name: string, seg: string, hostSel: 
       await page.waitForTimeout(2000)
     }
   }
+  for (let i = 0; i < 8; i++) {
+    const has = await page.evaluate(
+      ([n, s]) =>
+        [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => {
+          const p = (r.getAttribute('data-path') || '').replace(/\\/g, '/')
+          return p === `${s}/${n}` || p.endsWith(`/${s}/${n}`)
+        }),
+      [name, seg],
+    )
+    if (has) break
+    await page.evaluate((s) => {
+      const rows = [...document.querySelectorAll('[data-testid="file-row"]')]
+      const folder =
+        rows.find((r) => {
+          const p = (r.getAttribute('data-path') || '').replace(/\\/g, '/')
+          return p === (s as string) || p.endsWith('/' + (s as string))
+        }) ?? rows.find((r) => !(r.getAttribute('data-path') || '').includes('.'))
+      const inner = folder?.querySelector('div.flex-1') ?? folder?.querySelector('div')
+      inner?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    }, seg)
+    await page.waitForTimeout(2000)
+  }
   const marked = await page.evaluate(
     ([n, s]) => {
       const rows = [...document.querySelectorAll('[data-testid="file-row"]')]
@@ -80,16 +102,22 @@ async function openViaWorkspace(page: Page, name: string, seg: string, hostSel: 
   await page.waitForTimeout(4000)
 }
 
-async function attachViaAddInTab(page: Page, attachAbs: string): Promise<void> {
-  await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
-  const tab = page.getByRole('tab', { name: '첨부', exact: true }).first()
+async function attachViaAddInTab(page: Page, attachAbs: string): Promise<Page> {
+  // C5-4: Edit은 /edit/* 새 탭을 연다. 첨부 탭 조작은 에디터 탭에서 계속한다.
+  const [editor] = await Promise.all([
+    page.waitForEvent('popup', { timeout: 15000 }),
+    page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+  ])
+  await editor.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {})
+  const tab = editor.getByRole('tab', { name: '첨부', exact: true }).first()
   await tab.waitFor({ timeout: 30000 })
   await tab.click({ timeout: 15000 })
   const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 15000 }),
-    page.getByText('문서 첨부', { exact: true }).first().click({ timeout: 15000 }),
+    editor.waitForEvent('filechooser', { timeout: 15000 }),
+    editor.getByText('문서 첨부', { exact: true }).first().click({ timeout: 15000 }),
   ])
   await chooser.setFiles(attachAbs)
+  return editor
 }
 
 async function embeddingsCount(localPath: string, name: string): Promise<number> {
@@ -123,23 +151,46 @@ test.describe('C5-4: URL 편집 분리', () => {
     }
   })
 
-  test('U-open-part-xlsx: xlsx 첨부 dblclick이 /edit/<부모>/-/<파트> 새 탭을 연다', async ({ browser }) => {
+  test('U-open-part-xlsx: xlsx package 첨부 dblclick이 /edit/<부모>/-/<파트> 새 탭을 연다', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
     await gotoApp(page)
+    // xlsx INSERT는 oleObject라 다운로드가 맞다. package 파트는 디스크에 직접 추가한다.
     await mkRepo('c54xlsx', ['embed-pdf.xlsx'])
+    const hostAbs = path.join(workspaceDir(), 'repos', 'c54xlsx', 'embed-pdf.xlsx')
+    const z = await JSZip.loadAsync(fs.readFileSync(hostAbs))
+    const part = 'xl/embeddings/embed-docx.docx'
+    z.file(part, fs.readFileSync(path.resolve(FIX, 'embed-docx.docx')))
+    const relsName = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const rels = await z.files[relsName]!.async('string')
+    let max = 0
+    for (const m of rels.matchAll(/\bId="rId(\d+)"/g)) max = Math.max(max, Number(m[1]))
+    z.file(
+      relsName,
+      rels.replace(
+        '</Relationships>',
+        `<Relationship Id="rId${max + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/embed-docx.docx"/></Relationships>`,
+      ),
+    )
+    const ctName = '[Content_Types].xml'
+    const ct = await z.files[ctName]!.async('string')
+    z.file(
+      ctName,
+      ct.replace(
+        '</Types>',
+        '<Override PartName="/xl/embeddings/embed-docx.docx" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+      ),
+    )
+    fs.writeFileSync(hostAbs, await z.generateAsync({ type: 'nodebuffer' }))
     try {
       await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54xlsx', '.xlsxengine-host')
-      const emb0 = await embeddingsCount('c54xlsx', 'embed-pdf.xlsx')
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
-      await expect
-        .poll(() => embeddingsCount('c54xlsx', 'embed-pdf.xlsx'), { timeout: 30000, intervals: [1000] })
-        .toBe(emb0 + 1)
       await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      const icon = page.locator('[data-testid="ole-icon"][title*="embed-docx.docx"]')
+      await icon.waitFor({ timeout: 30000 })
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
-        page.getByTestId('ole-icon').nth(1).dblclick({ timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.xlsx\/-\/.+\.docx/)
@@ -157,14 +208,14 @@ test.describe('C5-4: URL 편집 분리', () => {
     try {
       await openViaWorkspace(page, 'embed-pdf.pptx', 'c54pptx', '[data-testid="pptx-viewer-root"]')
       const emb0 = await embeddingsCount('c54pptx', 'embed-pdf.pptx')
-      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
+      const editor = await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.docx'))
       await expect
         .poll(() => embeddingsCount('c54pptx', 'embed-pdf.pptx'), { timeout: 30000, intervals: [1000] })
         .toBe(emb0 + 1)
-      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      await expect(editor.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
       const [popup] = await Promise.all([
-        page.waitForEvent('popup', { timeout: 15000 }),
-        page.getByTestId('ole-icon').nth(1).dblclick({ timeout: 15000 }),
+        editor.waitForEvent('popup', { timeout: 15000 }),
+        editor.getByTestId('ole-icon').nth(1).dblclick({ timeout: 15000 }),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
