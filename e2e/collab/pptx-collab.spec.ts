@@ -14,6 +14,7 @@ import {
   gotoSlide,
   editShapeText,
   closePreview,
+  openEditor,
   selectShape,
   peer,
   measure,
@@ -210,7 +211,7 @@ test.describe('pptx collab (desktop)', () => {
     const shapesA = new ShapeLocator(t.pageA)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     await gotoSlide(t.pageA, 2)
     await gotoSlide(t.pageB, 2)
     const adopted = t.pageA.waitForEvent('console', {
@@ -260,7 +261,7 @@ test.describe('pptx collab (desktop)', () => {
     const shapesA = new ShapeLocator(t.pageA)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     await gotoSlide(t.pageA, 2)
     await gotoSlide(t.pageB, 2)
     // B가 슬라이드 2의 Body 2 를 수정한다(원격 편집).
@@ -314,7 +315,7 @@ test.describe('pptx collab (desktop)', () => {
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'view')
     await gotoSlide(t.pageA, 2)
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     await gotoSlide(t.pageB, 2)
     await editShapeText(t.pageB, shapesB, 'Body 2', 'Hello from Ada')
     const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === 'Hello from Ada', 8000)
@@ -358,7 +359,7 @@ const t = await twoPages(browser)
     const t = await twoPages(browser)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit') // A가 owner
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     await gotoSlide(t.pageA, 2)
     await gotoSlide(t.pageB, 2)
     await editShapeText(t.pageB, shapesB, 'Body 2', 'Hello from Grace')
@@ -380,7 +381,7 @@ const t = await twoPages(browser)
     t.pageB.on('console', (m) => { const x = m.text(); if (x.includes('[collab-tl]')) tlB.push(x) })
     const shapesA = new ShapeLocator(t.pageA)
     try {
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await gotoSlide(t.pageA, 2)
       await editShapeText(t.pageA, shapesA, 'Body 2', 'Hello from Ada')
       // A 의 편집이 먼저 디스크에 반영되어야 한다.
@@ -403,7 +404,7 @@ const t = await twoPages(browser)
     const t = await twoPages(browser)
     const shapesA = new ShapeLocator(t.pageA)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
 
     // 두 탭이 서로를 owner가 아닌 상태로 수렴할 때까지 기다린다.
     await expect(async () => {
@@ -488,7 +489,7 @@ const t = await twoPages(browser)
     const shapesA = new ShapeLocator(t.pageA)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     const testName = `E4[${testInfo.repeatEachIndex}]`
     await gotoSlide(t.pageA, 1)
     await gotoSlide(t.pageB, 3)
@@ -562,7 +563,7 @@ const t = await twoPages(browser)
     const shapesA = new ShapeLocator(t.pageA)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     const testName = `E6[${testInfo.repeatEachIndex}]`
     // A가 owner인지 확인.
     await expect
@@ -598,7 +599,7 @@ const t = await twoPages(browser)
     const t = await twoPages(browser)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     const testName = `E7[${testInfo.repeatEachIndex}]`
     const states: string[] = []
     const recorder = setInterval(async () => {
@@ -736,7 +737,7 @@ const t = await twoPages(browser)
     // A가 보기 모드로 먼저 연다.
     await openFile(t.pageA, f.name, 'view')
     // B가 편집으로 들어간다 — 5초 안에 편집 가능해야 한다.
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     const testName = `E12[${testInfo.repeatEachIndex}]`
     await t.pageB.waitForFunction(() => [...document.querySelectorAll('[data-element-id]')].some((e) => (e.textContent || '').includes('Hello')), null, {
       timeout: 15000,
@@ -757,7 +758,7 @@ const t = await twoPages(browser)
     const t = await twoPages(browser)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     const testName = `E13[${testInfo.repeatEachIndex}]`
     await gotoSlide(t.pageA, 2)
     await gotoSlide(t.pageB, 2)
@@ -794,7 +795,7 @@ const t = await twoPages(browser)
     const shapesA = new ShapeLocator(t.pageA)
     const shapesB = new ShapeLocator(t.pageB)
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
     const testName = `E15[${testInfo.repeatEachIndex}]`
     await gotoSlide(t.pageA, 1)
     await gotoSlide(t.pageB, 3)
@@ -999,7 +1000,7 @@ const t = await twoPages(browser)
     await closeTwo(t)
   })
 
-  test('E20: peer slide survives edit<->view switch (F3 app republish)', async ({ browser }, testInfo) => {
+  test('E20: peer slide survives slides moves; tab close removes peer cleanly (F3)', async ({ browser }, testInfo) => {
     const f = await freshFile('e20', 0)
     const t = await twoPages(browser)
     const testName = `E20[${testInfo.repeatEachIndex}]`
@@ -1025,13 +1026,11 @@ const t = await twoPages(browser)
       expect(s.slide).toBe('3')
     }).toPass({ timeout: 15000 })
     expect((await readDebug(t.pageA)).mountCount).toBe(mountAfterMove)
-    // A가 view로 전환(리마운트 지점) → 상대 화면에서 15초간 계속 3이어야 한다.
-    // DocumentPreview의 편집 종료 버튼 라벨이 Done이다 (helpers/viewer.ts의 Edit와 짝).
+    // A가 Done으로 탭을 닫으면 B 화면에서 피어가 조용히 사라진다 (1로 깜빡이지 않는다).
+    // C5-4: edit→view 전환이 아니라 탭 종료다 (리마운트 없음).
+    const closeWaiter = t.pageA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 15000 })
-    // X2: 이 지점만 리마운트다. 마운트 시 slideIdx가 현재 위치로 고정되므로 3이 복원된다.
-    await expect(async () => {
-      expect((await readDebug(t.pageA)).mountCount).toBeGreaterThan(mountAfterMove)
-    }).toPass({ timeout: 15000 })
+    await closeWaiter
     const samples: (string | null)[] = []
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
@@ -1039,15 +1038,16 @@ const t = await twoPages(browser)
       await t.pageB.waitForTimeout(200)
     }
     expect(samples.length).toBeGreaterThanOrEqual(60)
-    expect(samples.filter((s) => s !== '3')).toEqual([])
+    // '3' 유지 또는 사라짐(null)만 허용. '1'/'2'로의 깜빡임 금지.
+    expect(samples.filter((s) => s !== '3' && s !== null)).toEqual([])
+    await expect.poll(async () => sampleOne(), { timeout: 15000, intervals: [500] }).toBe(null)
     void testName
     await closeTwo(t)
   })
 
-  // Y2 slow-parse 변형: CPU를 4배 느리게 만들어 parse가 게이트 300ms보다 오래 걸리게 한다.
-  // 수정 전에는 리마운트 직후 lib의 activeSlideIndex 초기값 0이 curSlide를 0으로 되돌리고,
-  // 예약된 0 게시가 통과해 B 화면이 "슬라이드 1"로 깜빡인다.
-  test('E20s: slow parse on remount keeps slide 3 (Y2)', async ({ browser }, testInfo) => {
+  // Y2 slow-parse 변형: CPU를 4배 느리게 만들어도 탭 종료가 B 화면을 깨지 않는다.
+  // C5-4: 리마운트가 없으므로 Z3(2) 이력 단언 대신 "조용한 사라짐"을 본다.
+  test('E20s: slow parse tab close keeps B clean (Y2)', async ({ browser }, testInfo) => {
     const f = await freshFile('e20s', 0)
     const t = await twoPages(browser)
     const testName = `E20s[${testInfo.repeatEachIndex}]`
@@ -1063,9 +1063,10 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
     }).toPass({ timeout: 20000 })
     // Z3(2) 전환 "이전" 이력 길이를 기록해 전환 이후 구간만 판정한다.
     // (초기 열람 때 슬라이드 1이 한 번 나오는 것은 정상이다)
-    const histBefore = (await readDebug(t.pageB)).peerSlideHistory?.['u-ada']?.length ?? 0
-    // 리마운트를 일으킨다 (editing이 viewKey를 바꾼다).
+    // C5-4: Done은 탭을 닫는다. B 화면에서 피어가 조용히 사라져야 한다 (1 깜빡임 금지).
+    const closeWaiter = t.pageA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
     await t.pageA.getByRole('button', { name: 'Done' }).click({ timeout: 20000 })
+    await closeWaiter
     const samples: (string | null)[] = []
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
@@ -1073,23 +1074,8 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
       await t.pageB.waitForTimeout(200)
     }
     expect(samples.length).toBeGreaterThanOrEqual(30)
-    // 기존 200ms 샘플 검사는 data-slide 확인용으로 유지한다.
-    expect(samples.filter((s) => s !== '3')).toEqual([])
-    // Z3(1) 공허함 방지: throttle 4배로도 parse가 게이트 300ms 창 안에 끝나면
-    // 이 테스트는 아무것도 검증하지 못한다(E16b 교훈). 먼저 창을 실제로 넘었는지 본다.
-    const dbgA = await readDebug(t.pageA)
-    const armDelay = dbgA.armDelayMs
-    expect(armDelay, 'armDelayMs is required by E20s').not.toBeNull()
-    expect(armDelay ?? 0, `E20s is vacuous unless parse exceeds 300ms (got ${armDelay}ms)`).toBeGreaterThan(300)
-    // Z3(2) 이벤트 기준 이력: edit→view 전환 이후 구간에 1이 없고 마지막이 3이다.
-    // 200ms 샘플이 놓칠 짧은 깜빡임도 이력에는 남는다. 상대가 보는 값이므로 B에서 읽는다.
-    const hist = (await readDebug(t.pageB)).peerSlideHistory?.['u-ada'] ?? []
-    const after = hist.slice(histBefore)
-    expect(after.length, 'peer slide history must record a post-switch event').toBeGreaterThan(0)
-    expect(after).not.toContain(1)
-    expect(after[after.length - 1]).toBe(3)
-    // A도 리마운트 직후 "슬라이드 1"을 거치지 않아야 한다.
-    expect(dbgA.curSlideHistory ?? []).not.toContain(1)
+    expect(samples.filter((s) => s !== '3' && s !== null)).toEqual([])
+    await expect.poll(async () => sampleB(), { timeout: 15000, intervals: [500] }).toBe(null)
     void testName
     await closeTwo(t)
   })
@@ -1154,7 +1140,7 @@ const row = t.pageB.locator('[data-testid="collab-peer"][data-peer-id="u-ada"]')
     const t = await twoPages(browser)
     // 둘 다 편집 모드로 연다. 먼저 연 쪽(A)이 owner가 된다.
     await openFile(t.pageA, f.name, 'edit')
-    await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
 
     // 두 탭 모두 "나 = owner 아님"으로 수렴할 때까지 기다린다.
     await expect(async () => {
