@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { workspaceDir } from './helpers/env'
+import { openEditor } from './helpers/viewer'
 
 /**
  * C5-1 후속 S1: solo(혼자) 편집에서 개체 이동이 자동 저장되어야 한다.
@@ -159,22 +160,12 @@ test.describe('S1: xlsx solo ole autosave', () => {
     await page.exposeFunction('__s1Done', (d: unknown) => {
       dones.push(d)
     })
-    await openViaWorkspace(page, 'probe.xlsx', seg)
+    await openEditor(page, `${seg}/probe.xlsx`)
     await page.evaluate(() => {
       window.addEventListener('officeSaveDone', (e) =>
         (window as unknown as { __s1Done?: (d: unknown) => void }).__s1Done?.((e as CustomEvent).detail),
       )
     })
-    const edit = page.getByRole('button', { name: 'Edit', exact: true })
-    await edit.waitFor({ timeout: 20000 })
-    await edit.click({ timeout: 20000 })
-    await page.getByRole('button', { name: 'Done', exact: true }).waitFor({ timeout: 30000 })
-    await page
-      .waitForFunction(() => !document.querySelector('[data-testid="xlsx-collab-connecting"]'), null, {
-        timeout: 30000,
-      })
-      .catch(() => {})
-    await page.waitForTimeout(2000)
 
     const target = await oleShapeRect(page)
     expect(target, 'ole unsupported shape visible').toBeTruthy()
@@ -213,11 +204,8 @@ test.describe('S1: xlsx solo ole autosave', () => {
   test('S2: 신원 미발급이면 편집 진입 시 자동 발급된다', async ({ page }) => {
     const seg = `s1id-${Date.now().toString(36)}`
     await mkRepo(seg, ['embed-docx.xlsx'])
-    await openViaWorkspace(page, 'embed-docx.xlsx', seg)
-    const edit = page.getByRole('button', { name: 'Edit', exact: true })
-    await edit.waitFor({ timeout: 20000 })
-    await edit.click({ timeout: 20000 })
-    await page.getByRole('button', { name: 'Done', exact: true }).waitFor({ timeout: 30000 })
+    // C5-4 flag-day: 편집 진입은 /edit/* 직접 goto다.
+    await openEditor(page, `${seg}/embed-docx.xlsx`)
     const id = await page.evaluate(() => {
       try {
         const raw = localStorage.getItem('collab-user')
