@@ -962,15 +962,17 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const icon = page.getByRole('button', { name: '첨부 note.pdf', exact: true }).first()
       await icon.waitFor({ timeout: 30000 })
       // headless-shell에는 PDF 뷰어가 없어 blob 탐색이 다운로드로 바뀐다.
+      // 다운로드는 팝업 쪽에서 일어날 수 있어 opener+popup 양쪽에서 듣는다.
       const dlWaiter = page.waitForEvent('download', { timeout: 25000 }).catch(() => null)
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
         icon.dblclick({ timeout: 15000 }),
       ])
+      const popupDlWaiter = popup.waitForEvent('download', { timeout: 25000 }).catch(() => null)
       try {
         await expect.poll(() => popup.url(), { timeout: 10000, intervals: [500] }).toMatch(/^blob:/)
       } catch {
-        const dl = await dlWaiter
+        const dl = (await popupDlWaiter) ?? (await dlWaiter)
         expect(dl, 'pdf download when no viewer').toBeTruthy()
         expect(await dl!.path(), 'pdf download path').toBeTruthy()
         expect(dl!.suggestedFilename(), 'pdf filename').toMatch(/note\.pdf$/)
