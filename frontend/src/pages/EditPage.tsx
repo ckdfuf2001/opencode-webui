@@ -15,6 +15,29 @@ export default function EditPage() {
   const { pathname } = useLocation()
   const parsed = useMemo(() => parseEditUrl(pathname), [pathname])
   const [closed, setClosed] = useState(false)
+  // C5-4: PPTX는 viewer로 마운트해 세션을 웜업한 뒤 in-place로 편집 전환한다
+  // (in-page와 같은 순서: viewer join → edit flip → seed).
+  // cold mount-as-editor는 create-intent/owner 레이스로 시딩이 안 돼 상대 join이 멈춘다 (E17).
+  // xlsx/docx는 cold edit mount로도 저장되므로 직접 진입한다.
+  const isPptxHost = parsed?.kind === 'file' && parsed.path.toLowerCase().endsWith('.pptx')
+  const [editSignal, setEditSignal] = useState(0)
+  useEffect(() => {
+    if (!isPptxHost || closed) return
+    let dead = false
+    const t0 = Date.now()
+    const timer = window.setInterval(() => {
+      if (dead) return
+      const el = document.querySelector('[data-testid="collab-status"]')
+      if (el?.getAttribute('data-status') === 'connected' || Date.now() - t0 > 30000) {
+        window.clearInterval(timer)
+        if (!dead) setEditSignal((s) => s + 1)
+      }
+    }, 500)
+    return () => {
+      dead = true
+      window.clearInterval(timer)
+    }
+  }, [pathname, parsed, isPptxHost, closed])
 
   useEffect(() => {
     setClosed(false)
@@ -101,7 +124,8 @@ export default function EditPage() {
     <div data-testid="edit-page" className="h-screen w-screen overflow-hidden bg-background text-foreground">
       <DocumentPreview
         file={file}
-        initialEditing
+        initialEditing={!isPptxHost}
+        editSignal={editSignal}
         editInNewTab={false}
         onDone={closeTab}
       />
