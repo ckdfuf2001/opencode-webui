@@ -74,7 +74,50 @@ export interface EmbedCtx {
   sheet?: number
   isViewer?: boolean
   saveFirst: () => Promise<boolean>
+  /** 방 미시드(not_seeded)로 선저장이 실패하면 시드를 기다렸다가 1회 재시도한다. 없으면 즉시 중단. */
+  waitSeed?: () => Promise<boolean>
   reload: () => void
+}
+
+/** 방 시드를 최대 timeoutMs까지 기다린다 (setTimeout 체인, 상시 타이머 없음). */
+export function waitCollabSeed(isSeeded: () => boolean, timeoutMs = 30000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const start = Date.now()
+    const tick = (): void => {
+      let ok = false
+      try {
+        ok = isSeeded()
+      } catch {
+        ok = false
+      }
+      if (ok || Date.now() - start >= timeoutMs) {
+        resolve(ok)
+        return
+      }
+      setTimeout(tick, 500)
+    }
+    tick()
+  })
+}
+
+/**
+ * 서버 방의 시드 여부. 방이 없거나 조회 실패면 null.
+ * (시드는 originated 업데이트 때만 생긴다 — collab-rooms.ts. unseeded면
+ * 로컬에 플러시할 내용이 없으므로 임베드 POST를 디스크 기준으로 진행해도 안전하다.)
+ */
+async function roomSeeded(roomId?: string): Promise<boolean | null> {
+  if (!roomId) return null
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/collab/rooms`)
+    const body = (await res.json().catch(() => null)) as {
+      rooms?: { roomId?: string; seeded?: boolean }[]
+    } | null
+    const hit = body?.rooms?.find((r) => r.roomId === roomId)
+    if (!hit) return null
+    return hit.seeded === true
+  } catch {
+    return null
+  }
 }
 
 function waitSaveDone(path: string, timeoutMs = 30000): Promise<boolean> {
@@ -136,7 +179,19 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
     if (baseHash) fd.append('baseHash', baseHash)
     return postEmbed(fd)
   }
-  const ok = await ctx.saveFirst()
+  const ok = await ctx.saveFirst().then(async (first) => {
+    if (first) return true
+    // 선저장 실패가 방 미시드(not_seeded) 탓이면 시드를 기다렸다가 1회만 재시도한다.
+    if (ctx.waitSeed) {
+      const seeded = await ctx.waitSeed()
+      if (seeded && (await ctx.saveFirst())) return true
+    }
+    // 그래도 실패했는데 방이 한 번도 시드된 적 없으면 로컬에 플러시할 내용이 없다.
+    // 디스크 기준으로 POST한다 (서버 dirty_room 검사가 디스크 레이스를 막는다).
+    const seeded = await roomSeeded(ctx.roomId)
+    if (seeded === false) return true
+    return false
+  })
   if (!ok) {
     showToast.error('저장에 실패해 첨부를 중단합니다')
     return

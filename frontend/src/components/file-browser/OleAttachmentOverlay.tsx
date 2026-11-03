@@ -220,7 +220,11 @@ export default function OleAttachmentOverlay({
 
   if (entries.length === 0) return null
 
-  /** C5-3: 더블클릭 동작 — package 오피스면 편집기, pdf면 새 탭 미리보기, 나머지는 다운로드. */
+  /**
+   * C5-3: 더블클릭 동작 — package 오피스면 편집기, pdf면 새 탭 미리보기, 나머지는 다운로드.
+   * (앵커/폴백 구분 없음 — C5-2 INSERT분도 package면 편집기로 열린다. P2-1/P2-3의
+   * 다운로드 단언은 바이트 보존 단언으로 전환한다.)
+   */
   const openKind = (entry: OleEmbeddingRef): 'edit' | 'preview' | 'download' => {
     if (!parentPath || entry.relType !== 'package') return 'download'
     const name = displayName(entry)

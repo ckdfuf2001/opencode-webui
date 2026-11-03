@@ -41,7 +41,7 @@ import { createPortal } from 'react-dom'
 import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
-import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
+import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitCollabSeed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
 import { ATTACHMENT_OPEN_REQUEST, openAttachmentEditor, type AttachmentOpenRequest, type AttachmentSaver } from './embedEdit'
 
 type ExtractedMsg = {
@@ -3883,6 +3883,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         isViewer: room?.role === 'viewer',
         sheet: objActiveSheetRef.current,
         saveFirst: () => (editingRef.current ? save() : Promise.resolve(true)),
+        // 선저장이 방 미시드로 실패하면 시드를 기다렸다가 1회 재시도한다.
+        waitSeed: () => waitCollabSeed(() => collabRef.current?.joined === true),
         reload: () => onReloadFileRef.current?.(),
       })
     }

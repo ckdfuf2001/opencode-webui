@@ -32,7 +32,7 @@ import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSyn
 import { createSlideGate } from '@/lib/slideLocationGate'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { deepQueryAllVisible } from '@/lib/domDeep'
-import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, type EmbedDetail } from './officeEmbed'
+import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitCollabSeed, type EmbedDetail } from './officeEmbed'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
@@ -876,6 +876,8 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         slide,
         isViewer: c?.role === 'viewer',
         saveFirst: () => saveBeforeEmbed(savePath, editingRef.current),
+        // 선저장이 방 미시드로 실패하면 시드를 기다렸다가 1회 재시도한다.
+        waitSeed: () => waitCollabSeed(() => collabRef.current?.session.synced === true),
         reload: () => setReloadKey((v) => v + 1),
       })
     }
