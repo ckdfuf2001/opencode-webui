@@ -1,4 +1,4 @@
-# Handoff — 2026-10-19 기준
+﻿# Handoff — 2026-10-19 기준
 
 ## 메모리 트랙 상태 (M2~M8, 2026-10-19)
 
@@ -1137,3 +1137,10 @@ E21만의 문제가 아니다. 근거:
 - 회귀: c3/c5-1/c5-2 38 passed, c4-3/4/6 28 passed, xlsx-collab 19+1flake(X2a-6, debaa62e에서도 실패하는 기존 이슈),
   pptx-collab 18 passed +1 skipped, ui-layout·unmount·presence·solo·ole-solo·c2 19+1flake(P-1, 단독 통과),
   msedge c5-3 14/14·c5-1 5/5·c5-2 5/6(P2-1 풀런 flake, 단독 통과). X2a-6·P-1·P2-1은 부하 flake로 기록.
+
+## C5-4 URL 편집 분리 (2026-11-03, D64)
+- 방향: 편집 모드별 개별 URL (/edit/<경로>, /edit/<부모>/-/<파트>), 새 탭 window.open. 락 대신 partHash 낙관적 잠금(파트 해시 비교), 부모 flush는 서버 WS 요청으로 전환.
+- 0절: 원격 상단은 7570a926 (e783efe는 조상, stale 보고 정정). 양 브랜치 7fa2b711 동기화. exe는 bun compile 서버+내장 에셋, 웹뷰 없음 -> window.open 정상.
+- C5-3 오버레이 미커밋 4파일 revert, b5a11ca2/94437f7c는 history 유지. U-* 테스트로 대체.
+- 멈춤 조건: 부모 flush에 lib 패치 필요 / U-parent 유실 / exe 새 창 불가. 출시 0.12.81, 태그 보류.
+
