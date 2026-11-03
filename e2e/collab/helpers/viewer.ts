@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import { expect } from '@playwright/test'
 
 /**
  * 원격 선택 표시 선택자.
@@ -291,7 +292,16 @@ export async function openEditor(page: Page, workspacePath: string): Promise<voi
   if (ext === 'pptx') {
     await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 60000 })
     // M21: lib가 로드된 뒤에야 런타임 표식을 단언한다 (pptx 패치 표식).
-    await assertLibPatchesLoaded(page)
+    // 청크 평가 타이밍이 있어 폴링한다 (루트 렌더보다 늦을 수 있다).
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () => (globalThis as unknown as { __ooxmlPatches?: Record<string, string> }).__ooxmlPatches ?? null,
+          ),
+        { timeout: 30000, intervals: [500] },
+      )
+      .toMatchObject({ ui: 'M21', viewer: 'M21-esm', viewerBroadcastFollow: 'off' })
     // collab-status는 pptx 뷰어에만 있다. xlsx/docx는 lib 세션 소유라
     // 별도 상태 엘리먼트가 없고, 저장이 알아서 참가를 기다린다.
     await page
