@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { absForRel, backendBase, uniqueRelWithExt, workspaceDir } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 const FIXTURE_XLSX = path.resolve('e2e/collab/fixtures/collab-features.xlsx')
@@ -113,8 +113,8 @@ async function visibleRemoteCount(page: Page, cid: number): Promise<number> {
   }, cid)
 }
 
-test.describe('C4-6 H1: Edit을 누르면 그 화면이 편집 모드로', () => {
-  test('H1-panel-edit: 패널 Edit → 전체화면+편집, 편집기 1개', async ({ browser }) => {
+test.describe('C4-6 H1: Edit을 누르면 편집은 새 탭에서', () => {
+  test('H1-panel-edit: 패널 Edit → 새 탭 에디터, opener는 그대로', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -123,33 +123,37 @@ test.describe('C4-6 H1: Edit을 누르면 그 화면이 편집 모드로', () =>
     try {
       await openInPanel(page, repoId, 'm.xlsx', '.xlsxengine-host')
       const t0 = Date.now()
-      await page.getByRole('button', { name: 'Edit', exact: true }).first().click({ timeout: 20000 })
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.getByRole('button', { name: 'Edit', exact: true }).first().click({ timeout: 20000 }),
+      ])
       // 5초 안에 편집 가능 상태가 된다.
       await expect.poll(async () => {
-        const eds = await xlsxEditors(page)
+        const eds = await xlsxEditors(editor)
         return eds.length === 1 && eds[0]!.readOnly === false ? 'editing' : 'wait'
       }, { timeout: 30000, intervals: [500] }).toBe('editing')
       const elapsed = Date.now() - t0
       console.log(`DBG_H1_EDIT_MS ${elapsed}`)
-      // 미리보기 편집기는 0개 (같은 게 편집기로 전환됐으므로 전체 에디터 1개).
-      const eds = await xlsxEditors(page)
-      expect(eds.length).toBe(1)
+      // opener에는 전체화면이 없고 에디터 탭은 1개.
+      expect(await page.locator('[data-testid="preview-fullscreen-root"]').count()).toBe(0)
+      expect((await xlsxEditors(editor)).length).toBe(1)
       // 셀 입력이 실제로 먹는다: 빈 곳 클릭 → 선택이 바뀐다.
-      const box = await page.locator('.xlsxengine-host').boundingBox()
+      const box = await editor.locator('.xlsxengine-host').boundingBox()
       expect(box).not.toBeNull()
-      await page.mouse.click(box!.x + 200, box!.y + 650)
+      await editor.mouse.click(box!.x + 200, box!.y + 650)
       await expect.poll(async () => {
-        return page.evaluate(() => {
+        return editor.evaluate(() => {
           const el = document.querySelector('xlsx-editor') as any
           try { return el.getSelection() } catch { return '' }
         })
       }, { timeout: 10000, intervals: [500] }).not.toBe('A1')
+      await editor.close().catch(() => {})
     } finally {
       await ctx.close().catch(() => {})
     }
   })
 
-  test('H1-fanout: 시트에서 Edit해도 Edit한 쪽만 전체화면', async ({ browser }) => {
+  test('H1-fanout: 시트에서 Edit해도 새 탭 1개만 열린다', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -175,13 +179,17 @@ test.describe('C4-6 H1: Edit을 누르면 그 화면이 편집 모드로', () =>
       // 패널이 b로 따라오고 플레이스홀더가 된다 (H2).
       await expect(page.getByTestId('preview-shadowed').first()).toBeVisible({ timeout: 30000 })
       await page.waitForTimeout(3000)
-      // 시트(b.xlsx)에서 Edit → 시트 쪽만 전체화면이 된다 (H1 path 스코프).
-      await sheet.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
-      await page.waitForTimeout(4000)
-      const fsCount = await page.locator('[data-testid="preview-fullscreen-root"]').count()
-      expect(fsCount, 'only the editing FilePreview goes fullscreen').toBe(1)
-      const fsHasB = await page.locator('[data-testid="preview-fullscreen-root"]').first().getByText('b.xlsx', { exact: false }).count()
-      expect(fsHasB, 'fullscreen shows the edited file').toBeGreaterThan(0)
+      // 시트(b.xlsx)에서 Edit → 새 탭 에디터 1개만 열린다 (H1 경로).
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        sheet.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForSelector('xlsx-editor', { timeout: 30000 })
+      const eds = await xlsxEditors(editor)
+      expect(eds.length, 'popup has exactly one editor').toBe(1)
+      expect(eds[0]!.readOnly, 'popup editor is editing').toBe(false)
+      expect(await page.locator('[data-testid="preview-fullscreen-root"]').count(), 'no fullscreen on opener').toBe(0)
+      await editor.close().catch(() => {})
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -210,7 +218,7 @@ test.describe('C4-6 H2: 한 탭에 편집기는 하나', () => {
     }
   })
 
-  test('H2-edit-single: 시트에서 Edit해도 편집기는 1개, 보는 쪽 0개', async ({ browser }) => {
+  test('H2-edit-single: 시트에서 Edit해도 새 탭 편집기 1개', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -224,14 +232,17 @@ test.describe('C4-6 H2: 한 탭에 편집기는 하나', () => {
       await sheet.locator('[data-testid="file-row"][data-path$="m.xlsx"]').locator('span', { hasText: 'm.xlsx' }).first().click({ timeout: 20000 })
       await page.waitForFunction(() => document.querySelectorAll('.xlsxengine-host').length >= 2, null, { timeout: 30000 }).catch(() => {})
       await page.waitForTimeout(3000)
-      await sheet.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
-      await page.waitForTimeout(5000)
-      const eds = await xlsxEditors(page)
+      // C5-4: 시트 Edit은 /edit/* 새 탭을 연다. 탭당 편집기는 1개다.
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        sheet.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForSelector('xlsx-editor', { timeout: 30000 })
+      const eds = await xlsxEditors(editor)
       const editing = eds.filter((e) => e.readOnly === false)
-      const viewing = eds.filter((e) => e.readOnly !== false)
       expect(eds.length, 'single editor per tab').toBe(1)
       expect(editing.length, 'the one editor is editing').toBe(1)
-      expect(viewing.length, 'no viewing editor left').toBe(0)
+      await editor.close().catch(() => {})
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -328,9 +339,8 @@ test.describe('C4-6 H3: 보기 모드는 셀을 게시하지 않는다', () => {
       await page.waitForTimeout(3000)
     }
     try {
-      // B가 먼저 편집 (방 시드).
-      await openView(tB.page)
-      await tB.page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
+      // B가 먼저 편집 (방 시드) — C5-4: /edit/* 직접 goto.
+      await openEditor(tB.page, rel.replace(/^repos\//, ''))
       await tB.page.waitForTimeout(4000)
       const cidB = await tB.page.evaluate(() => {
         const el = document.querySelector('xlsx-editor') as any
@@ -386,7 +396,7 @@ test.describe('C4-6 H3: 보기 모드는 셀을 게시하지 않는다', () => {
 })
 
 test.describe('C4-6 H4: 반복 편집해도 늘지 않는다', () => {
-  test('H4-cycles: Edit→Done 10회 후에도 WS·참가자·슬롯 래퍼 1개', async ({ browser }) => {
+  test('H4-cycles: Edit→Done 10회 후에도 소켓 누수·방 유령 없음', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -398,39 +408,34 @@ test.describe('C4-6 H4: 반복 편집해도 늘지 않는다', () => {
     })
     await gotoApp(page)
     const { repoId } = await mkRepoWithFiles('g6h4', [{ name: 'm.xlsx', fixture: FIXTURE_XLSX }])
-    const slotWrappers = () => page.evaluate(() => {
-      let n = 0
-      for (const el of document.querySelectorAll('xlsx-editor')) {
-        const root = (el as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot
-        if (root) n += root.querySelectorAll('[data-testid="app-titlebar-slot"]').length
-      }
-      return n
-    })
     try {
       await openInPanel(page, repoId, 'm.xlsx', '.xlsxengine-host')
       await page.waitForTimeout(3000)
+      // C5-4: Edit은 /edit/* 새 탭을 열고 Done은 닫는다. 10회 반복해도 소켓이 새지 않아야 한다.
       for (let i = 0; i < 10; i++) {
-        await page.getByRole('button', { name: 'Edit', exact: true }).first().click({ timeout: 20000 })
-        await page.waitForFunction(() => {
-          const el = document.querySelector('xlsx-editor') as any
-          return el && el.readOnly === false
-        }, null, { timeout: 20000 })
-        await page.getByRole('button', { name: 'Done', exact: true }).first().click({ timeout: 20000 })
-        await page.waitForFunction(() => {
-          const el = document.querySelector('xlsx-editor') as any
-          return el && el.readOnly !== false
-        }, null, { timeout: 20000 })
+        const [editor] = await Promise.all([
+          page.waitForEvent('popup', { timeout: 15000 }),
+          page.getByRole('button', { name: 'Edit', exact: true }).first().click({ timeout: 20000 }),
+        ])
+        await editor.waitForSelector('xlsx-editor', { timeout: 30000 })
+        expect(await editor.locator('xlsx-editor').count(), 'popup editor present').toBe(1)
+        const closeWaiter = editor.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+        await editor.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 20000 })
+        await closeWaiter
+        expect(editor.isClosed(), 'editor tab closed').toBe(true)
       }
       await page.waitForTimeout(3000)
-      expect(await page.locator('xlsx-editor').count(), 'editors stay 1').toBe(1)
-      expect(await slotWrappers(), 'titlebar slots do not accumulate').toBe(1)
-      const rooms = await apiGet('/api/collab/rooms')
-      const mine = (rooms.rooms ?? []).filter((r: any) => typeof r.path === 'string' && r.path.replace(/\\/g, '/').endsWith('/g6h4/m.xlsx'))
-      expect(mine.length, 'single room').toBe(1)
-      expect((((mine[0] as any).participants ?? []) as unknown[]).length, 'single participant').toBe(1)
       const opens = wsEvents.filter((e) => e === 'open').length
       const closes = wsEvents.filter((e) => e === 'close').length
-      expect(opens - closes, 'no leaked collab sockets').toBe(1)
+      // opener 미리보기 viewer 소켓 1개만 남고, 10개 팝업 소켓은 전부 닫혀야 한다.
+      expect(opens - closes, 'only opener viewer socket remains').toBe(1)
+      // 방에는 opener viewer만 남는다 (10개 에디터 참가자는 전부 나갔다).
+      await expect.poll(async () => {
+        const rooms = await apiGet('/api/collab/rooms')
+        const mine = (rooms.rooms ?? []).filter((r: any) => typeof r.path === 'string' && r.path.replace(/\\/g, '/').endsWith('/g6h4/m.xlsx'))
+        if (mine.length === 0) return -1
+        return (((mine[0] as any).participants ?? []) as unknown[]).length
+      }, { timeout: 30000, intervals: [1000] }).toBe(1)
     } finally {
       await ctx.close().catch(() => {})
     }
