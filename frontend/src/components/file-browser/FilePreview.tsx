@@ -10,11 +10,13 @@ import { lazyWithRetry } from './lazyRetry'
 const DocumentPreview = lazyWithRetry(() =>
   import('./DocumentPreview').then((m) => ({ default: m.DocumentPreview })),
 )
+/** 첨부 편집기도 열 때만 로드한다. 정적 import는 뷰어 청크 로드 순서를 바꿔
+ *  PPT 뷰 모드 collab join을 깨뜨린다 (C5-3 회귀). */
+const AttachmentEditor = lazyWithRetry(() => import('./AttachmentEditor'))
 import { detectDocKind } from './docKind'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
 import { useShadowedFile, type OpenFileSurface } from './openFileRegistry'
-import AttachmentEditor from './AttachmentEditor'
 import { ATTACHMENT_OPEN_EVENT, type AttachmentOpenDetail } from './embedEdit'
 
 
@@ -560,7 +562,11 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
           {renderContent()}
         </div>
       </div>
-      {attachTarget && <AttachmentEditor target={attachTarget} onClose={() => setAttachTarget(null)} />}
+      {attachTarget && (
+        <Suspense fallback={null}>
+          <AttachmentEditor target={attachTarget} onClose={() => setAttachTarget(null)} />
+        </Suspense>
+      )}
     </div>
   )
 })
