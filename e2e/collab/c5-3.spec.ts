@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { backendBase, workspaceDir } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
+import { gotoApp, openEditor } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -508,19 +508,22 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const before = await backendBytes(seg, 'collab-features.xlsx')
       const icon = page.getByRole('button', { name: '첨부 report.docx', exact: true }).first()
       await icon.waitFor({ timeout: 30000 })
-      await icon.dblclick({ timeout: 15000 })
-      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(page.getByTestId('attach-title')).toContainText('collab-features.xlsx › report.docx', {
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
+      ])
+      await popup.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(popup.getByTestId('attach-title')).toContainText('collab-features.xlsx › report.docx', {
         timeout: 15000,
       })
       // 편집 모드 직접 진입 (Edit 버튼 없음)
       const stamp = `E2X${Date.now().toString(36)}`
-      const pm = await focusAttachEditor(page)
-      await page.keyboard.press('Control+End')
-      await page.keyboard.type(stamp, { delay: 30 })
+      const pm = await focusAttachEditor(popup)
+      await popup.keyboard.press('Control+End')
+      await popup.keyboard.type(stamp, { delay: 30 })
       await expect(pm, 'stamp typed in attachment').toContainText(stamp, { timeout: 15000 })
-      await page.getByTestId('attach-save').click({ timeout: 15000 })
-      await expect(page.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
+      await popup.getByTestId('attach-save').click({ timeout: 15000 })
+      await expect(popup.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
       // 부모 zip: 해당 파트만 바뀌고 나머지는 바이트 동일
       // (expect.poll은 값을 반환하지 않으므로 스탬프로 대기 후 명시 재읽기)
       await expect
@@ -559,7 +562,11 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const partZip = await JSZip.loadAsync(await z1.files['xl/embeddings/report.docx']!.async('uint8array'))
       const partDoc = await partZip.files['word/document.xml']!.async('string')
       expect(partDoc.includes(stamp), 'stamp in replaced part').toBe(true)
-      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      // 저장했으므로 confirm 없이 닫혀야 한다. close 대기는 클릭 전에 건다.
+      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await popup.getByTestId('attach-done').click({ timeout: 15000 })
+      await closeWaiter
+      expect(popup.isClosed(), 'editor tab closed').toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -634,19 +641,29 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await openViaWorkspace(pageA, 'collab-features.xlsx', seg)
       const icon = pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first()
       await icon.waitFor({ timeout: 30000 })
-      await icon.dblclick({ timeout: 15000 })
-      await pageA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      const [popupA] = await Promise.all([
+        pageA.waitForEvent('popup', { timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
+      ])
+      await popupA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       // 편집 없이 Done → 확인 다이얼로그 없이 바로 닫혀야 한다 (로드 시 spurious dirty 금지).
-      await pageA.getByTestId('attach-done').click({ timeout: 15000 })
-      await expect(pageA.getByTestId('attach-editor')).toHaveCount(0, { timeout: 15000 })
+      const closeA = popupA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await popupA.getByTestId('attach-done').click({ timeout: 15000 })
+      await closeA
+      expect(popupA.isClosed(), 'A editor tab closed').toBe(true)
       // 락이 풀렸으므로 B는 편집 가능해야 한다 (읽기 전용 아님).
       await openViaWorkspace(pageB, 'collab-features.xlsx', seg)
-      await pageB.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 })
-      await pageB.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(pageB.getByTestId('attach-save')).toBeEnabled({ timeout: 15000 })
-      await expect(pageB.getByTestId('attach-readonly')).toHaveCount(0)
-      await pageB.getByTestId('attach-done').click({ timeout: 15000 })
-      await expect(pageB.getByTestId('attach-editor')).toHaveCount(0, { timeout: 15000 })
+      const [popupB] = await Promise.all([
+        pageB.waitForEvent('popup', { timeout: 15000 }),
+        pageB.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 }),
+      ])
+      await popupB.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(popupB.getByTestId('attach-save')).toBeEnabled({ timeout: 15000 })
+      await expect(popupB.getByTestId('attach-readonly')).toHaveCount(0)
+      const closeB = popupB.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await popupB.getByTestId('attach-done').click({ timeout: 15000 })
+      await closeB
+      expect(popupB.isClosed(), 'B editor tab closed').toBe(true)
     } finally {
       await ctxA.close().catch(() => {})
       await ctxB.close().catch(() => {})
@@ -672,16 +689,25 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         bytes: docxBytes,
       })
       await openViaWorkspace(pageA, 'collab-features.xlsx', seg)
-      await pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 })
-      await pageA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      const [popupA] = await Promise.all([
+        pageA.waitForEvent('popup', { timeout: 15000 }),
+        pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 }),
+      ])
+      await popupA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       await openViaWorkspace(pageB, 'collab-features.xlsx', seg)
-      await pageB.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 })
-      await pageB.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(pageB.getByText('Ada님이 편집 중')).toHaveCount(1, { timeout: 15000 })
-      await expect(pageB.getByTestId('attach-save')).toBeDisabled({ timeout: 15000 })
-      await expect(pageB.getByTestId('attach-readonly')).toBeVisible({ timeout: 15000 })
+      const [popupB] = await Promise.all([
+        pageB.waitForEvent('popup', { timeout: 15000 }),
+        pageB.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 }),
+      ])
+      await popupB.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(popupB.getByText('Ada님이 편집 중')).toHaveCount(1, { timeout: 15000 })
+      await expect(popupB.getByTestId('attach-save')).toBeDisabled({ timeout: 15000 })
+      await expect(popupB.getByTestId('attach-readonly')).toBeVisible({ timeout: 15000 })
       // A가 닫으면 B는 다음에 편집 가능 (잠금 해제 확인은 생략 — 해제는 단위 테스트에서 검증)
-      await pageA.getByTestId('attach-done').click({ timeout: 15000 })
+      const closeA = popupA.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await popupA.getByTestId('attach-done').click({ timeout: 15000 })
+      await closeA
+      expect(popupA.isClosed(), 'A editor tab closed').toBe(true)
     } finally {
       await ctxA.close().catch(() => {})
       await ctxB.close().catch(() => {})
@@ -706,13 +732,9 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         partName: 'report.docx',
         bytes: docxBytes,
       })
-      await openViaWorkspace(pageA, 'collab-features.xlsx', seg)
-      await openViaWorkspace(pageB, 'collab-features.xlsx', seg)
-      // 둘 다 편집 진입 (B가 방 참가자로 붙는다)
-      await pageA.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
-      await pageA.getByRole('button', { name: 'Done', exact: true }).waitFor({ timeout: 30000 })
-      await pageB.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
-      await pageB.getByRole('button', { name: 'Done', exact: true }).waitFor({ timeout: 30000 })
+      // 둘 다 편집 진입 (B가 방 참가자로 붙는다) — C5-4 flag-day: /edit/* 직접 goto.
+      await openEditor(pageA, `${seg}/collab-features.xlsx`)
+      await openEditor(pageB, `${seg}/collab-features.xlsx`)
       // B가 셀 편집 (저장 안 함)
       const stampB = `E2U${Date.now().toString(36)}`
       await pageB.evaluate((ref) => {
@@ -726,16 +748,19 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await barB.fill(stampB)
       await expect(barB, 'stampB in formula bar').toHaveValue(stampB, { timeout: 15000 })
       await barB.press('Enter')
-      // A가 첨부를 열어 저장 (방 리셋 발생)
-      await pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 })
-      await pageA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      // A가 첨부를 열어 저장 (방 리셋 발생) — 첨부 편집은 별도 /edit/* 탭으로 열린다.
+      const [attachTab] = await Promise.all([
+        pageA.waitForEvent('popup', { timeout: 15000 }),
+        pageA.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 }),
+      ])
+      await attachTab.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       const stampA = `E2A${Date.now().toString(36)}`
-      const pmA = await focusAttachEditor(pageA)
-      await pageA.keyboard.press('Control+End')
-      await pageA.keyboard.type(stampA, { delay: 30 })
+      const pmA = await focusAttachEditor(attachTab)
+      await attachTab.keyboard.press('Control+End')
+      await attachTab.keyboard.type(stampA, { delay: 30 })
       await expect(pmA, 'stampA typed in attachment').toContainText(stampA, { timeout: 15000 })
-      await pageA.getByTestId('attach-save').click({ timeout: 15000 })
-      await expect(pageA.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
+      await attachTab.getByTestId('attach-save').click({ timeout: 15000 })
+      await expect(attachTab.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
       await expect
         .poll(
           async () => {
@@ -755,7 +780,10 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
           { timeout: 60000, intervals: [2000] },
         )
         .toBe(true)
-      await pageA.getByTestId('attach-done').click({ timeout: 15000 })
+      const closeAttach = attachTab.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await attachTab.getByTestId('attach-done').click({ timeout: 15000 })
+      await closeAttach
+      expect(attachTab.isClosed(), 'attachment tab closed').toBe(true)
       // B가 저장 → 미저장 편집이 디스크에 남아야 한다
       const saveB = pageB.locator('[data-testid="preview-doc-header"]').getByRole('button', { name: 'Save', exact: true })
       await saveB.click({ timeout: 20000 })
@@ -792,16 +820,19 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const before = await backendBytes(seg, 'collab-3slides.pptx')
       const icon = page.getByRole('button', { name: '첨부 Rp.docx', exact: true }).first()
       await icon.waitFor({ timeout: 30000 })
-      await icon.dblclick({ timeout: 15000 })
-      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(page.getByTestId('attach-title')).toContainText('collab-3slides.pptx › Rp.docx', { timeout: 15000 })
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
+      ])
+      await popup.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(popup.getByTestId('attach-title')).toContainText('collab-3slides.pptx › Rp.docx', { timeout: 15000 })
       const stamp = `E2P${Date.now().toString(36)}`
-      const pm = await focusAttachEditor(page)
-      await page.keyboard.press('Control+End')
-      await page.keyboard.type(stamp, { delay: 30 })
+      const pm = await focusAttachEditor(popup)
+      await popup.keyboard.press('Control+End')
+      await popup.keyboard.type(stamp, { delay: 30 })
       await expect(pm, 'stamp typed in attachment').toContainText(stamp, { timeout: 15000 })
-      await page.getByTestId('attach-save').click({ timeout: 15000 })
-      await expect(page.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
+      await popup.getByTestId('attach-save').click({ timeout: 15000 })
+      await expect(popup.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
       await expect
         .poll(
           async () => {
@@ -836,7 +867,10 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const part = await JSZip.loadAsync(await z1.files['ppt/embeddings/Rp.docx']!.async('uint8array'))
       const partDoc = await part.files['word/document.xml']!.async('string')
       expect(partDoc.includes(stamp), 'stamp in replaced part').toBe(true)
-      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await popup.getByTestId('attach-done').click({ timeout: 15000 })
+      await closeWaiter
+      expect(popup.isClosed(), 'editor tab closed').toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -855,12 +889,15 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       const before = await backendBytes(seg, 'collab-features.docx')
       const icon = page.getByRole('button', { name: '첨부 Sh.xlsx', exact: true }).first()
       await icon.waitFor({ timeout: 30000 })
-      await icon.dblclick({ timeout: 15000 })
-      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(page.getByTestId('attach-title')).toContainText('collab-features.docx › Sh.xlsx', { timeout: 15000 })
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
+      ])
+      await popup.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(popup.getByTestId('attach-title')).toContainText('collab-features.docx › Sh.xlsx', { timeout: 15000 })
       // xlsx 첨부 편집: 수식 바에 입력
       const stamp = `E2D${Date.now().toString(36)}`
-      await page.evaluate(() => {
+      await popup.evaluate(() => {
         const el = document.querySelector('[data-testid="attach-editor"] xlsx-editor') as unknown as {
           select?: (r: string) => void
           focusGrid?: () => void
@@ -868,14 +905,14 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         el?.select?.('B2')
         el?.focusGrid?.()
       })
-      const bar = page.locator('[data-testid="attach-editor"] xlsx-editor [part~="formula-bar"] textarea').last()
+      const bar = popup.locator('[data-testid="attach-editor"] xlsx-editor [part~="formula-bar"] textarea').last()
       await bar.waitFor({ timeout: 30000 })
       await bar.click({ timeout: 15000 })
       await bar.fill(stamp)
       await expect(bar, 'stamp in formula bar').toHaveValue(stamp, { timeout: 15000 })
       await bar.press('Enter')
-      await page.getByTestId('attach-save').click({ timeout: 15000 })
-      await expect(page.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
+      await popup.getByTestId('attach-save').click({ timeout: 15000 })
+      await expect(popup.getByText('저장했습니다'), 'attach save toast').toBeAttached({ timeout: 20000 })
       await expect
         .poll(
           async () => {
@@ -911,7 +948,10 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         expect(n, 'only attachment part changes').toBe('word/embeddings/Sh.xlsx')
       }
       expect(changed, 'exactly one part changed').toBe(1)
-      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
+      await popup.getByTestId('attach-done').click({ timeout: 15000 })
+      await closeWaiter
+      expect(popup.isClosed(), 'editor tab closed').toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -1021,10 +1061,10 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await page.waitForTimeout(1500)
       // 첨부 탭은 보기 모드에서 없다
       await expect(tabs.filter({ hasText: '첨부' }).first()).toHaveCount(0, { timeout: 5000 })
-      // 편집 모드에서는 생긴다
-      await page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 })
-      await page.getByRole('button', { name: 'Done', exact: true }).waitFor({ timeout: 30000 })
-      await expect(tabs.filter({ hasText: '첨부' }).first()).toBeVisible({ timeout: 30000 })
+      // 편집 모드에서는 생긴다 — C5-4 flag-day: /edit/* 직접 goto.
+      await openEditor(page, `${seg}/embed-pdf.docx`)
+      const editTabs = page.getByRole('tab')
+      await expect(editTabs.filter({ hasText: '첨부' }).first()).toBeVisible({ timeout: 30000 })
     } finally {
       await ctx.close().catch(() => {})
     }
