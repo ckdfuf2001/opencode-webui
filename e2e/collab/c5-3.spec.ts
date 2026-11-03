@@ -975,7 +975,8 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         const dl = (await popupDlWaiter) ?? (await dlWaiter)
         expect(dl, 'pdf download when no viewer').toBeTruthy()
         expect(await dl!.path(), 'pdf download path').toBeTruthy()
-        expect(dl!.suggestedFilename(), 'pdf filename').toMatch(/note\.pdf$/)
+        // blob 탐색 다운로드의 파일명은 브라우저가 붙인 UUID라 확장자만 본다.
+        expect(dl!.suggestedFilename(), 'pdf filename').toMatch(/\.pdf$/)
       }
       await popup.close().catch(() => {})
     } finally {
