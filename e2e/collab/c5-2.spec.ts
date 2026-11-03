@@ -129,7 +129,7 @@ async function attachViaAddInTab(page: Page, attachAbs: string): Promise<void> {
 }
 
 test.describe('C5-2: INSERT 문서 첨부', () => {
-  test('P2-1: pptx에 docx 첨부 → 아이콘+다운로드', async ({ browser }) => {    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+  test('P2-1: pptx에 docx 첨부 → 아이콘+편집기(원본 바이트 보존)', async ({ browser }) => {    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
     await gotoApp(page)
@@ -208,16 +208,21 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       // progId 영문 유지.
       const slide = await z1.files['ppt/slides/slide1.xml']!.async('string')
       expect(/progId="[A-Za-z0-9.]+"/.test(slide), 'progId english').toBe(true)
-      // 새로 붙은 첨부를 더블클릭하면 원본 바이트 그대로 내려온다.
+      // C5-3: package 오피스 파트는 더블클릭하면 편집기로 열린다 (다운로드 아님).
+      // 원본 바이트 보존은 디스크 embeddings와 첨부 파일을 직접 비교한다.
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
       const icons = page.getByTestId('ole-icon')
-      const [dl] = await Promise.all([
-        page.waitForEvent('download', { timeout: 20000 }),
-        icons.nth(1).dblclick({ timeout: 15000 }),
-      ])
-      const dlPath = await dl.path()
-      expect(dlPath, 'download path').toBeTruthy()
-      expect(fs.readFileSync(dlPath!).equals(attachBuf), 'attached bytes intact').toBe(true)
+      await icons.nth(1).dblclick({ timeout: 15000 })
+      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(page.getByTestId('attach-title')).toContainText('embed-pdf.pptx › embed-docx.docx', {
+        timeout: 15000,
+      })
+      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      const zAfter = await JSZip.loadAsync(backendBytes('c52pptx', 'embed-pdf.pptx'))
+      const partName = Object.keys(zAfter.files).find((n) => n.includes('embeddings/') && n.endsWith('embed-docx.docx'))
+      expect(partName, 'inserted part present').toBeTruthy()
+      const partBytes = Buffer.from(await zAfter.files[partName!]!.async('uint8array'))
+      expect(partBytes.equals(attachBuf), 'attached bytes intact').toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -341,7 +346,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
     }
   })
 
-  test('P2-3: docx에 xlsx 첨부 → 아이콘+다운로드', async ({ browser }) => {
+  test('P2-3: docx에 xlsx 첨부 → 아이콘+편집기(원본 바이트 보존)', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -378,16 +383,21 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       // progId 영문 유지.
       const doc = await z1.files['word/document.xml']!.async('string')
       expect(/ProgID="[A-Za-z0-9.]+"/.test(doc), 'ProgID english').toBe(true)
-      // 새로 붙은 첨부를 더블클릭하면 원본 바이트 그대로 내려온다.
+      // C5-3: package 오피스 파트는 더블클릭하면 편집기로 열린다 (다운로드 아님).
+      // 원본 바이트 보존은 디스크 embeddings와 첨부 파일을 직접 비교한다.
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
       const icons = page.getByTestId('ole-icon')
-      const [dl] = await Promise.all([
-        page.waitForEvent('download', { timeout: 20000 }),
-        icons.nth(1).dblclick({ timeout: 15000 }),
-      ])
-      const dlPath = await dl.path()
-      expect(dlPath, 'download path').toBeTruthy()
-      expect(fs.readFileSync(dlPath!).equals(attachBuf), 'attached bytes intact').toBe(true)
+      await icons.nth(1).dblclick({ timeout: 15000 })
+      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      await expect(page.getByTestId('attach-title')).toContainText('embed-pdf.docx › embed-docx.xlsx', {
+        timeout: 15000,
+      })
+      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      const zAfter = await JSZip.loadAsync(backendBytes('c52docx', 'embed-pdf.docx'))
+      const partName = Object.keys(zAfter.files).find((n) => n.includes('embeddings/') && n.endsWith('embed-docx.xlsx'))
+      expect(partName, 'inserted part present').toBeTruthy()
+      const partBytes = Buffer.from(await zAfter.files[partName!]!.async('uint8array'))
+      expect(partBytes.equals(attachBuf), 'attached bytes intact').toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -416,7 +426,9 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
               return -1
             }
           },
-          { timeout: 30000, intervals: [1000] },
+          // pptx 직렬화+방 시드가 무거워 부하 시 30초를 넘긴다. 중단은
+          // 토스트로 확인한다 (성공하면 반드시 +1이 된다).
+          { timeout: 90000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
       await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })

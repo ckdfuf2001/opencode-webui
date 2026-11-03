@@ -130,7 +130,7 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
     }
   })
 
-  test('더블클릭하면 원본 파일명·바이트로 내려온다', async ({ browser }) => {
+  test('더블클릭 → 다운로드(oleObject/CFB) 또는 편집기(package 오피스)', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
     const page = await ctx.newPage()
@@ -144,16 +144,36 @@ test.describe('C5-1: 기존 첨부 보기와 다운로드', () => {
     try {
       for (const name of NAMES) {
         await openViaWorkspace(page, name, 'c51dl')
-        const [dl] = await Promise.all([
-          page.waitForEvent('download', { timeout: 20000 }),
-          page.getByTestId('ole-icon').first().dblclick({ timeout: 15000 }),
-        ])
-        const got = await accept(dl)
         // 서버 디스크 파일에서 임베딩 원본을 꺼내 비교한다.
         const buf = await backendBytes('c51dl', name)
         const zip = await JSZip.loadAsync(buf)
         const embName = Object.keys(zip.files).find((n) => n.includes('embeddings/'))!
         expect(embName, `${name} has embedding`).toBeTruthy()
+        // C5-3: package 오피스 파트는 더블클릭하면 편집기로 열린다 (다운로드 아님).
+        let isPackageOffice = false
+        for (const n of Object.keys(zip.files)) {
+          if (!n.endsWith('.rels')) continue
+          const t = await zip.files[n]!.async('string')
+          if (t.includes('/relationships/package') && t.includes('embeddings/')) {
+            isPackageOffice = true
+            break
+          }
+        }
+        if (isPackageOffice) {
+          await page.getByTestId('ole-icon').first().dblclick({ timeout: 15000 })
+          await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+          await expect(page.getByTestId('attach-title')).toContainText('Microsoft_Word_Document.docx', {
+            timeout: 15000,
+          })
+          await page.getByTestId('attach-done').click({ timeout: 15000 })
+          await page.waitForTimeout(1500)
+          continue
+        }
+        const [dl] = await Promise.all([
+          page.waitForEvent('download', { timeout: 20000 }),
+          page.getByTestId('ole-icon').first().dblclick({ timeout: 15000 }),
+        ])
+        const got = await accept(dl)
         if (name.includes('pdf')) {
           const raw = await zip.files[embName]!.async('nodebuffer')
           // oleObject bin이면 Ole10Native를 풀어 비교한다 (패키지명=원본 파일명).
