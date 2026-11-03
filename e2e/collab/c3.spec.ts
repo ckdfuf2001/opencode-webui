@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { absForRel, backendBase, uniqueRel, uniqueRelWithExt } from './helpers/env'
-import { gotoApp, openFile, gotoSlide, peer } from './helpers/viewer'
+import { gotoApp, openEditor, openFile, gotoSlide, peer } from './helpers/viewer'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -69,56 +69,9 @@ async function clickAppSave(page: Page): Promise<void> {
   await save.click({ timeout: 20000 })
 }
 
-async function openXlsxEditing(page: Page, name: string): Promise<void> {
-  for (let i = 0; i < 6; i++) {
-    try {
-      await page.getByTitle('Workspace').waitFor({ timeout: 12000 })
-      break
-    } catch {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-    }
-  }
-  for (let i = 0; i < 5; i++) {
-    await page.getByTitle('Workspace').click({ timeout: 20000 })
-    const opened = await expect
-      .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 8000, intervals: [200] })
-      .toBeGreaterThan(0)
-      .then(() => true)
-      .catch(() => false)
-    if (opened) break
-    await page.keyboard.press('Escape')
-  }
-  await expect
-    .poll(async () => page.locator('[data-testid="file-row"]').count(), { timeout: 15000, intervals: [200] })
-    .toBeGreaterThan(0)
-  for (let i = 0; i < 8; i++) {
-    const has = await page.evaluate(
-      (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-      name,
-    )
-    if (has) break
-    const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]')
-    if ((await folder.count()) > 0) {
-      await folder.locator('div.flex-1').first().click({ timeout: 10000 }).catch(() => {})
-    }
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(
-            (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => (r.textContent || '').includes(n)),
-            name,
-          ),
-        { timeout: 8000, intervals: [300] },
-      )
-      .toBe(true)
-      .catch(() => {})
-  }
-  await page.locator(`[data-testid="file-row"][data-path$="${name}"]`).locator('span', { hasText: name }).first().click({ timeout: 20000 })
-  await page.waitForSelector('.xlsxengine-host', { timeout: 30000 })
-  const edit = page.getByRole('button', { name: 'Edit', exact: true })
-  await edit.waitFor({ timeout: 20000 })
-  await edit.click({ timeout: 20000 })
-  await page.waitForSelector('xlsx-editor', { timeout: 20000 })
+async function openXlsxEditing(page: Page, rel: string): Promise<void> {
+  // C5-4 flag-day: /edit/* 직접 goto (in-page Edit 폐지). rel은 repos/ 접두 포함.
+  await openEditor(page, rel.replace(/^repos\//, ''))
 }
 
 async function xlsxActive(page: Page): Promise<boolean> {
@@ -257,7 +210,7 @@ test.describe('C3 P-5: 팝오버 열기/닫기', () => {
     const f = await freshPptx('c3p5a', 0)
     const t = await twoPages(browser)
     try {
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await openFile(t.pageB, f.name, 'view')
       await expect(peer(t.pageB, 'u-ada')).toBeVisible({ timeout: 15000 })
       // 닫혀 있으면 DOM에 없다.
@@ -284,8 +237,8 @@ test.describe('C3 P-5: 팝오버 열기/닫기', () => {
     const f = freshXlsx('c3p5b', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect(t.pageA.getByTestId('collab-popover')).toHaveCount(0)
       await t.pageA.getByTestId('collab-avatars').click({ timeout: 10000 })
@@ -308,7 +261,7 @@ test.describe('C3 P-6: 이름 변경 + "(Me)"', () => {
     const f = await freshPptx('c3p6a', 0)
     const t = await twoPages(browser)
     try {
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await openFile(t.pageB, f.name, 'view')
       await expect(peer(t.pageB, 'u-ada')).toBeVisible({ timeout: 15000 })
       // 팝오버에서 이름을 바꾼다.
@@ -328,7 +281,7 @@ test.describe('C3 P-6: 이름 변경 + "(Me)"', () => {
       // 새로고침해도 유지된다 (재접속 = 새 세션, 같은 이름).
       await t.pageA.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
       await gotoApp(t.pageA)
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await expect(t.pageB.getByTestId('collab-presence-row').filter({ hasText: 'Ada2' }).getByTestId('collab-peer-name')).toHaveText('Ada2', { timeout: 30000 })
     } finally {
       await t.ctxA.close()
@@ -340,8 +293,8 @@ test.describe('C3 P-6: 이름 변경 + "(Me)"', () => {
     const f = freshXlsx('c3p6b', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await t.pageA.getByTestId('collab-avatars').click({ timeout: 10000 })
       await t.pageA.getByTestId('collab-rename-edit').click({ timeout: 10000 })
@@ -369,7 +322,7 @@ test.describe('C3 P-7: 따라가기', () => {
     const f = await freshPptx('c3p7a', 0)
     const t = await twoPages(browser)
     try {
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await openFile(t.pageB, f.name, 'view')
       await expect(peer(t.pageB, 'u-ada')).toBeVisible({ timeout: 15000 })
       // B가 A를 따라간다 (팝오버에서).
@@ -391,7 +344,7 @@ test.describe('C3 P-7: 따라가기', () => {
     const f = await freshPptx('c3p7b', 0)
     const t = await twoPages(browser)
     try {
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await openFile(t.pageB, f.name, 'view')
       await expect(peer(t.pageB, 'u-ada')).toBeVisible({ timeout: 15000 })
       await t.pageB.getByTestId('collab-avatars').click({ timeout: 10000 })
@@ -426,8 +379,8 @@ test.describe('C3 P-7: 따라가기', () => {
     const f = await freshPptx('c3p7c', 0)
     const t = await twoPages(browser)
     try {
-      await openFile(t.pageA, f.name, 'edit')
-      await openFile(t.pageB, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
+      await openEditor(t.pageB, f.rel.replace(/^repos\//, ''))
       await expect(peer(t.pageB, 'u-ada')).toBeVisible({ timeout: 15000 })
       await expect(peer(t.pageA, 'u-grace')).toBeVisible({ timeout: 15000 })
       // 서로 따라간다.
@@ -462,8 +415,8 @@ test.describe('C3 P-7: 따라가기', () => {
     const f = freshXlsx('c3p7d', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       // B가 A를 따라간다.
@@ -514,10 +467,10 @@ test.describe('C3 P-8: 탭 묶음', () => {
       const f = freshPptx('c3p8', 0)
       const p1 = await ctx.newPage()
       await gotoApp(p1)
-      await openFile(p1, f.name, 'edit')
+      await openEditor(p1, f.rel.replace(/^repos\//, ''))
       const p2 = await ctx.newPage()
       await gotoApp(p2)
-      await openFile(p2, f.name, 'edit')
+      await openEditor(p2, f.rel.replace(/^repos\//, ''))
       await expect(peer(p1, 'u-ada')).toBeVisible({ timeout: 15000 })
       await p1.getByTestId('collab-avatars').click({ timeout: 10000 })
       // 같은 userId 탭은 한 행으로 묶인다 (P-6/P-7과 같은 testid+hasText 단언).
@@ -535,7 +488,7 @@ test.describe('C3 P-9: 상단 표기 정리', () => {
     const f = await freshPptx('c3p9a', 0)
     const t = await twoPages(browser)
     try {
-      await openFile(t.pageA, f.name, 'edit')
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
       await openFile(t.pageB, f.name, 'view')
       await expect(peer(t.pageB, 'u-ada')).toBeVisible({ timeout: 15000 })
       await expect(t.pageB.getByText('viewer -', { exact: false })).toHaveCount(0)
@@ -553,8 +506,8 @@ test.describe('C3 P-9: 상단 표기 정리', () => {
     const f = freshXlsx('c3p9b', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect(t.pageA.getByText('viewer -', { exact: false })).toHaveCount(0)
       await expect(t.pageA.getByText('editor -', { exact: false })).toHaveCount(0)
@@ -575,8 +528,8 @@ test.describe('C3-img: 동시편집 중 이미지 편집 잠금', () => {
     const f = freshXlsx('c3img1', 0)
     t.pageB.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageB)
@@ -612,7 +565,7 @@ test.describe('C3-img: 동시편집 중 이미지 편집 잠금', () => {
     t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
       // A 혼자: 이미지 이동이 허용된다 (토스트 없음).
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
@@ -625,7 +578,7 @@ test.describe('C3-img: 동시편집 중 이미지 편집 잠금', () => {
         .poll(async () => workbookContains(f.abs, `<row>${before!.row + 4}</row>`), { timeout: 20000, intervals: [500] })
         .toBe(true)
       // B가 들어와서 저장해도 유지된다.
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await clickAppSave(t.pageB)
       await expect.poll(async () => workbookContains(f.abs, `<row>${before!.row + 4}</row>`), { timeout: 20000, intervals: [500] }).toBe(true)
@@ -651,7 +604,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
       }
     })
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
@@ -659,7 +612,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
       await xlsxMoveImage(t.pageA, before!.sheet, before!.index, before!.row + 4)
       // B가 바로 참가한다 (디바운스 만료 전).
       const joinStart = Date.now() - t0
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       // flush: 디바운스를 기다리지 않고 저장된다. POST는 1건이다.
       await expect
@@ -669,7 +622,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
       console.log(`C3_FLUSH postTimes=${JSON.stringify(postTimes)} joinAt=${joinStart}`)
       // B가 다시 읽으면 이동된 그림이 보인다.
       await t.pageB.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const seen = await xlsxImageAnchor(t.pageB)
       expect(seen?.row).toBe(before!.row + 4)
@@ -685,7 +638,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     const f = freshXlsx('c3undo', 0)
     t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA)).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
@@ -694,7 +647,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
         .toMatchObject({ moved: true })
       expect((await xlsxImageAnchor(t.pageA))?.row).toBe(before!.row + 4)
       // B가 들어온 뒤 undo하면 이동이 되돌아가고 B·서버에 전파된다.
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       // C4: 이동 undo는 그냥 이동이라 통과한다 (삭제 undo만 막는다).
       const undone = await xlsxUndo(t.pageA)
@@ -718,7 +671,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     const f = freshXlsx('c3undoc', 0)
     t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA)).toBe(true)
       // 혼자 코멘트 추가 (허용). P0-1 확인용: B 참가 후 undo가 막히는지 본다.
       const beforeCount = await t.pageA.evaluate(() => {
@@ -746,7 +699,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
         }
       })
       expect(added).toEqual({ comments: beforeCount + 1, canUndo: true, label: 'New comment' })
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const undone = await t.pageA.evaluate(() => {
         try {
@@ -788,7 +741,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     const f = freshXlsx('c3redoc', 0)
     t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA)).toBe(true)
       // 혼자 추가 후 혼자 undo (허용) → redo 스택에 'New comment'가 남는다.
       const beforeCount = await t.pageA.evaluate(() => {
@@ -820,7 +773,7 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
         }
       })
       expect(setup).toEqual({ comments: beforeCount, canUndo: false, canRedo: true, label: 'New comment' })
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const redone = await t.pageA.evaluate(() => {
         try {
@@ -862,8 +815,8 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     const f = freshXlsx('c3recon', 0)
     t.pageA.on('pageerror', (e) => errors.push(String(e && (e as Error).message ? (e as Error).message : e)))
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
@@ -900,15 +853,15 @@ test.describe('C3 1→2 flush + undo + 해제', () => {
     const t = await twoPages(browser)
     const f = freshXlsx('c3rel', 0)
     try {
-      await openXlsxEditing(t.pageA, f.name)
-      await openXlsxEditing(t.pageB, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
+      await openXlsxEditing(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       // 모두 나간다 (reload = 세션 종료 + 선택 해제. 모달 닫기 대신 flush 테스트와 같은 방식).
       await t.pageA.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
       await t.pageB.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
       await gotoApp(t.pageA)
       // A 혼자 다시 들어오면 잠금이 풀려 있다.
-      await openXlsxEditing(t.pageA, f.name)
+      await openXlsxEditing(t.pageA, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       const before = await xlsxImageAnchor(t.pageA)
       expect(before, 'fixture에 이미지가 있어야 한다').not.toBeNull()
@@ -1001,15 +954,15 @@ async function xlsxCellValue(page: Page, sheet: number, row: number, col: number
   )
 }
 
-async function openXlsxEditingRetry(page: Page, name: string): Promise<void> {
-  // C4: dev 프록시 간헐 실패(vite http proxy error)로 미리보기가 안 붙으면
-  // 한 번만 새로고침 후 재시도한다 (C3 기존 헬퍼는 손대지 않는다).
+async function openXlsxEditingRetry(page: Page, rel: string): Promise<void> {
+  // C4: dev 프록시 장애(vite http proxy error)로 진입이 안 되면
+  // 한 번만 새로고침 후 재시도한다 (C3 이하 재시도는 붙이지 않는다).
   try {
-    await openXlsxEditing(page, name)
+    await openXlsxEditing(page, rel)
     return
   } catch {
     await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
-    await openXlsxEditing(page, name)
+    await openXlsxEditing(page, rel)
   }
 }
 
@@ -1121,8 +1074,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
     // mismatch 확정(console.warn)을 먼저 기다린다 (등록 재시도 레이스 제거).
     const mismatchSeen = waitConsole(t.pageA, 'order mismatch', 25000)
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(() => Promise.resolve(getObjects.n()), { timeout: 15000, intervals: [500] }).toBeGreaterThanOrEqual(1)
@@ -1150,8 +1103,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
     const movePostsA = countRequests(t.pageA, 'POST', '/move')
     const movePostsB = countRequests(t.pageB, 'POST', '/move')
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       // 양쪽 등록·태그 완료 대기 (서버 순서 확정 후 __ck 부착).
@@ -1194,8 +1147,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
     const t = await twoPages(browser)
     const movePostsA = countRequests(t.pageA, 'POST', '/move')
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
@@ -1268,8 +1221,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
     const f = freshXlsx('c4del', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
@@ -1304,8 +1257,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
     const movePostsA = countRequests(t.pageA, 'POST', '/move')
     const movePostsB = countRequests(t.pageB, 'POST', '/move')
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
@@ -1351,8 +1304,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
     const f = freshXlsx('c4delu', 0)
     const t = await twoPages(browser)
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
@@ -1382,8 +1335,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
       await seedUser(ctxC, { id: 'u-ivan', name: 'Ivan', color: '#9333ea' })
       const pageC = await ctxC.newPage()
       await gotoApp(pageC)
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
@@ -1423,8 +1376,8 @@ test.describe('C4: 개체 잠금·이동 (서버 표 + 락)', () => {
     const t = await twoPages(browser)
     const movePostsA = countRequests(t.pageA, 'POST', '/move')
     try {
-      await openXlsxEditingRetry(t.pageA, f.name)
-      await openXlsxEditingRetry(t.pageB, f.name)
+      await openXlsxEditingRetry(t.pageA, f.rel)
+      await openXlsxEditingRetry(t.pageB, f.rel)
       await expect.poll(async () => xlsxActive(t.pageA), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxActive(t.pageB), { timeout: 30000, intervals: [500] }).toBe(true)
       await expect.poll(async () => xlsxImageCk(t.pageA), { timeout: 20000, intervals: [500] }).not.toBeNull()
