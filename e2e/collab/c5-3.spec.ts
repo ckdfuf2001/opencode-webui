@@ -566,6 +566,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
   })
 
   test('E2-download: 편집기 타이틀바 다운로드 버튼으로 원본 바이트', async ({ browser }) => {
+    // C5-4 flag-day: 편집기는 /edit/* 새 탭 (오버레이 폐지). 다운로드 버튼은 탭 타이틀바에 있다.
     const ctx = await mkCtx(browser, ADA)
     const page = await ctx.newPage()
     await gotoApp(page)
@@ -583,17 +584,21 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await openViaWorkspace(page, 'collab-features.xlsx', seg)
       const icon = page.getByRole('button', { name: '첨부 report.docx', exact: true }).first()
       await icon.waitFor({ timeout: 30000 })
-      await icon.dblclick({ timeout: 15000 })
-      await page.getByTestId('attach-editor').waitFor({ timeout: 30000 })
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
+      ])
+      await popup.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       const [dl] = await Promise.all([
-        page.waitForEvent('download', { timeout: 20000 }),
-        page.getByTestId('attach-download').click({ timeout: 15000 }),
+        popup.waitForEvent('download', { timeout: 20000 }),
+        popup.getByTestId('attach-download').click({ timeout: 15000 }),
       ])
       const dlPath = await dl.path()
       expect(dlPath, 'download path').toBeTruthy()
       expect(dl.suggestedFilename()).toBe('report.docx')
       expect(fs.readFileSync(dlPath!).equals(docxBytes), 'original bytes intact').toBe(true)
-      await page.getByTestId('attach-done').click({ timeout: 15000 })
+      await popup.getByTestId('attach-done').click({ timeout: 15000 })
+      await popup.waitForEvent('close', { timeout: 15000 })
     } finally {
       await ctx.close().catch(() => {})
     }
