@@ -559,9 +559,10 @@ app.put('/embed', async (c) => {
     }
     const rid = roomId && isValidRoomId(roomId) ? roomId : roomIdForAbs(abs)
     const room = rooms.get(rid)
-    if (room && clientId === undefined) {
-      return c.json({ error: 'Missing client', code: 'bad_client' }, 400)
-    }
+    // C5-4: standalone 편집 탭(유효 잠금 보유)은 방 identity가 없다.
+    // 위에서 lockId 일치로 편집권을 이미 확인했으므로 clientId 부재를 막지 않는다
+    // (lockId는 서버 발급 랜덤 비밀값이라 탈취 없이 보유 자체가 소유 증명).
+    // 방 참가자 신원이 있을 때만 viewer 여부를 판정한다.
     if (room && embedViewerForbidden(rid, clientId)) {
       return c.json({ error: 'View-only participant cannot edit attachments while editors are present', code: 'view_only' }, 403)
     }
