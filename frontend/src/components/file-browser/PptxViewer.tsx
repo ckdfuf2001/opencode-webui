@@ -967,6 +967,10 @@ const syncSessionMode = useCallback(() => {
     // collabRef.current는 렌더 시점(L194)에 채워지므로 acquire 직후 언마운트하면 null이고,
     // 이전처럼 경로로 release하면 **acquire하지 않은 뷰어가 남의 refs를 깎을 수 있다.**
     let lease: ReturnType<typeof acquireCollabSession> | null = null
+    // connBadge 구독은 마운트마다 건다. onCreate 때만 걸면 grace 재사용 세션을
+    // 들고 온 마운트는 구독 없이 남아 상태가 영원히 connecting에 멈춘다.
+    // (박스 객체로 둬서 클로저 캡처 시 narrowing 문제를 피한다.)
+    const badgeSub: { unsub: (() => void) | null } = { unsub: null }
     const user = collabUserRef.current
     if (!user) {
       // 자동 참여: 기본 이름 발급 → 저장 → effect 재실행에서 참가한다.
@@ -1058,6 +1062,17 @@ writeBackHaltedRef.current = false
           intent: 'join',
           userId: userNow.id,
         })
+        // 이 마운트의 상태 구독을 건다 (grace 재사용 세션도 포함 — onCreate 때만
+        // 걸면 재사용 세션을 든 마운트는 상태 갱신을 영원히 놓친다).
+        if (badgeSub.unsub) badgeSub.unsub()
+        badgeSub.unsub = session.subscribe(() => {
+          const snap = session.getSnapshot()
+          setConnBadge({ status: snap.status, synced: snap.synced })
+        })
+        {
+          const snap0 = session.getSnapshot()
+          setConnBadge({ status: snap0.status, synced: snap0.synced })
+        }
         setMetaTick(0)
         setMetaOwner(null)
         updateDebug()
@@ -1069,6 +1084,13 @@ writeBackHaltedRef.current = false
     })()
     return () => {
       dead = true
+      try {
+        if (badgeSub.unsub) badgeSub.unsub()
+      } catch {
+        /* 무시 */
+      } finally {
+        badgeSub.unsub = null
+      }
       const c = collabRef.current
       // M3/N1: 해제는 **내 토큰**으로만 한다.
       // - acquire를 마치지 못한 마운트는 lease가 null이라 아무것도 하지 않는다.
