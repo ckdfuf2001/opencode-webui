@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, Suspense } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertCircle, ZoomIn, ZoomOut, User, Users, Clock, Paperclip, File, RefreshCw, Reply, Pencil, Check, RotateCcw, Trash2, X } from 'lucide-react'
 import { ViewerLoadBoundary } from './ViewerBoundaries'
