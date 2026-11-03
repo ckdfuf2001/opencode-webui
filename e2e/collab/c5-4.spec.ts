@@ -137,7 +137,8 @@ async function setCellByFormulaBar(page: Page, ref: string, value: string): Prom
     el?.select?.(r)
     el?.focusGrid?.()
   }, ref)
-  const bar = page.locator('xlsx-editor [part~="formula-bar"] input').last()
+  // 수식 입력은 textarea (input은 네임박스일 수 있어 Enter가 셀로 확정되지 않는다 — E2-unsaved proven pattern).
+  const bar = page.locator('xlsx-editor [part~="formula-bar"] textarea').last()
   await bar.waitFor({ timeout: 15000 })
   await bar.click({ timeout: 15000 })
   await bar.fill(value)
