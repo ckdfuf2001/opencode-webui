@@ -597,8 +597,17 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       expect(dlPath, 'download path').toBeTruthy()
       expect(dl.suggestedFilename()).toBe('report.docx')
       expect(fs.readFileSync(dlPath!).equals(docxBytes), 'original bytes intact').toBe(true)
+      // close 대기는 클릭 전에 건다 (닫힘이 빠르면 이벤트를 놓친다).
+      const closeWaiter = popup.waitForEvent('close', { timeout: 20000 }).catch(() => null)
       await popup.getByTestId('attach-done').click({ timeout: 15000 })
-      await popup.waitForEvent('close', { timeout: 15000 })
+      // standalone 뷰어 settle-dirty 가 있으면 확인이 뜬다 (편집 없음 → 저장 안 함으로 닫는다).
+      // 부채: settle-dirty 근본 수정은 U-close/U-stale에서 정리한다.
+      const confirm = popup.getByTestId('attach-confirm')
+      if (await confirm.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await popup.getByTestId('attach-confirm-discard').click({ timeout: 15000 })
+      }
+      await closeWaiter
+      expect(popup.isClosed(), 'editor tab closed').toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }

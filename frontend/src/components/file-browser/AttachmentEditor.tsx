@@ -401,6 +401,34 @@ export default function AttachmentEditor({
         <div className="flex-1" />
         <button
           type="button"
+          onClick={() => {
+            // C5-4: 편집 탭 타이틀바에서 원본 바이트를 내려받는다 (D63-판단1 유지).
+            const b = origBytesRef.current
+            if (!b) {
+              showToast.error('원본을 불러오지 못했습니다')
+              return
+            }
+            try {
+              const url = URL.createObjectURL(new Blob([b as unknown as BlobPart], { type: 'application/octet-stream' }))
+              const a = document.createElement('a')
+              a.href = url
+              a.download = name
+              document.body.appendChild(a)
+              a.click()
+              a.remove()
+              setTimeout(() => URL.revokeObjectURL(url), 5000)
+            } catch {
+              showToast.error('다운로드에 실패했습니다')
+            }
+          }}
+          data-testid="attach-download"
+          title="원본 바이트 다운로드"
+          className="h-7 text-xs px-3 rounded border border-border hover:bg-muted"
+        >
+          다운로드
+        </button>
+        <button
+          type="button"
           onClick={() => void doSave()}
           disabled={readOnly || saving}
           data-testid="attach-save"
