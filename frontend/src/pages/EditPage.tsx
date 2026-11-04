@@ -108,9 +108,13 @@ export default function EditPage() {
     size: 0,
     lastModified: new Date(),
   }
+  // C5-4c A1: 예전 전체화면 컨테이너와 같은 구조 (FilePreview isFullscreen +
+  // h-full p-2). fixed 루트 + 패딩 래퍼 — 리본 수치가 예전과 같아진다.
   return (
-    <div data-testid="edit-page" className="h-screen w-screen overflow-hidden bg-background text-foreground">
-      <DocumentPreview file={file} initialEditing editInNewTab={false} onDone={closeTab} />
+    <div data-testid="edit-page" className="fixed inset-0 z-[100] bg-background flex flex-col text-foreground">
+      <div className="flex-1 h-full p-2 min-w-0 min-h-0 overflow-hidden">
+        <DocumentPreview file={file} initialEditing editInNewTab={false} onDone={closeTab} />
+      </div>
     </div>
   )
 }
