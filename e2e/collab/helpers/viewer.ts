@@ -167,9 +167,9 @@ export async function assertLibPatchesLoaded(page: Page): Promise<void> {
   const patches = await page.evaluate(
     () => (globalThis as unknown as { __ooxmlPatches?: Record<string, string> }).__ooxmlPatches ?? null,
   )
-  if (!patches || patches.ui !== 'M21' || patches.viewer !== 'M21-esm' || patches.viewerBroadcastFollow !== 'off') {
+  if (!patches || patches.ui !== 'M21' || patches.viewer !== 'M21-esm' || patches.viewerBroadcastFollow !== 'off' || patches.viewerCommit !== 'M30M31M32') {
     throw new Error(
-      `lib patch not loaded (expected ui=M21, viewer=M21-esm, viewerBroadcastFollow=off, got ${JSON.stringify(patches)}) — ` +
+      `lib patch not loaded (expected ui=M21, viewer=M21-esm, viewerBroadcastFollow=off, viewerCommit=M30M31M32, got ${JSON.stringify(patches)}) — ` +
         `pnpm install 로 패치를 적용하고 frontend/node_modules/.vite 캐시를 지운 뒤 다시 실행할 것.`,
     )
   }
@@ -339,7 +339,7 @@ export async function openEditor(page: Page, workspacePath: string): Promise<voi
           ),
         { timeout: 30000, intervals: [500] },
       )
-      .toMatchObject({ ui: 'M21', viewer: 'M21-esm', viewerBroadcastFollow: 'off' })
+      .toMatchObject({ ui: 'M21', viewer: 'M21-esm', viewerBroadcastFollow: 'off', viewerCommit: 'M30M31M32' })
     // collab-status는 pptx 뷰어에만 있다. xlsx/docx는 lib 세션 소유라
     // 별도 상태 엘리먼트가 없고, 저장이 알아서 참가를 기다린다.
     await page
