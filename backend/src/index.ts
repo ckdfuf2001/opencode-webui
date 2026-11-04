@@ -42,6 +42,7 @@ import { stopConverter } from './services/doc-converter'
 import { startScheduleRunner } from './services/scheduler'
 import { startSessionStatusPoller, stopSessionStatusPoller } from './services/session-status'
 import { startReconcileSweep, stopReconcileSweep } from './services/reconcile-wire'
+import { startBashWatchdog, stopBashWatchdog } from './services/bash-watchdog'
 import { startPermissionAutoApprover, stopPermissionAutoApprover } from './services/permission-auto-approver'
 import { startGitCommitIndexer, stopGitCommitIndexer } from './services/git-indexer'
 import { migrateCommandRunsToFiles } from './services/command-run-migration'
@@ -478,6 +479,7 @@ const shutdown = async (signal: string) => {
   if (scheduleRunner) clearInterval(scheduleRunner)
   stopSessionStatusPoller()
   stopReconcileSweep()
+  stopBashWatchdog()
   stopAutomationWatcher()
   stopPermissionAutoApprover()
   stopGitCommitIndexer()
@@ -611,6 +613,9 @@ logger.info('Session status poller started')
 
 startReconcileSweep(db)
 logger.info('Reconcile sweep started')
+
+startBashWatchdog(db)
+logger.info('Bash watchdog started')
 
 // 문서 변환기 백그라운드 예열 — 첫 미리보기 1분 대기를 없앤다 (부팅은 막지 않는다).
 try {

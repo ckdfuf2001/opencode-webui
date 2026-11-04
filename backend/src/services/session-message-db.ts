@@ -296,6 +296,86 @@ export async function listRunningToolParts(olderThanMs: number, maxAgeMs = RUNNI
 }
 
 /**
+ * bash-watchdog용: running인 bash/shell/terminal part 상세 (timeout/start 포함).
+ * reconcile sweep의 120s 하한과 무관하게 전수 조회하고, 호출자가
+ * input.timeout(기본 120s, 상한 600s)+grace로 만료 판정한다.
+ * opencode가 kill했는데 part를 running으로 남긴 고착이 대상이다.
+ * 24h 초과 고대 잔재는 제외한다.
+ */
+export interface RunningBashDetail {
+  sessionId: string
+  messageId: string
+  partId: string
+  tool: string
+  command: string
+  /** opencode state.input.timeout (ms). 없으면 120000으로 간주 — 호출자에서 정규화. */
+  rawTimeout: number | null
+  /** opencode state.time.start (ms). 없으면 null — 호출자가 message.time_created/time_updated로 폴백. */
+  rawStart: number | null
+  timeUpdated: number
+  messageCreated: number | null
+}
+
+export async function listRunningBashDetails(maxAgeMs = RUNNING_PART_MAX_AGE_MS): Promise<RunningBashDetail[]> {
+  const oc = await openOcDb()
+  if (!oc) return []
+  try {
+    const cutoff = Date.now() - Math.max(0, maxAgeMs)
+    const rows = oc
+      .query(
+        `SELECT p.session_id AS sid, p.message_id AS mid, p.id AS pid,
+                json_extract(p.data,'$.tool') AS tool,
+                substr(json_extract(p.data,'$.state.input.command'),1,200) AS cmd,
+                json_extract(p.data,'$.state.input.timeout') AS timeout,
+                json_extract(p.data,'$.state.time.start') AS st,
+                p.time_updated AS tu,
+                m.time_created AS mc
+         FROM part p LEFT JOIN message m ON m.id = p.message_id
+         WHERE json_extract(p.data,'$.type') = 'tool'
+           AND json_extract(p.data,'$.state.status') = 'running'
+           AND json_extract(p.data,'$.tool') IN ('bash','shell','terminal')
+           AND p.time_updated > ?
+         ORDER BY p.time_updated ASC
+         LIMIT 200`,
+      )
+      .all(cutoff) as Array<{
+        sid: string
+        mid: string
+        pid: string
+        tool: string | null
+        cmd: string | null
+        timeout: number | string | null
+        st: number | string | null
+        tu: number
+        mc: number | null
+      }>
+    return rows.map((r) => {
+      const toNum = (v: number | string | null): number | null => {
+        if (typeof v === 'number' && Number.isFinite(v)) return v
+        if (typeof v === 'string' && v.trim() !== '') {
+          const n = Number(v)
+          return Number.isFinite(n) ? n : null
+        }
+        return null
+      }
+      return {
+        sessionId: r.sid,
+        messageId: r.mid,
+        partId: r.pid,
+        tool: r.tool ?? 'bash',
+        command: r.cmd ?? '',
+        rawTimeout: toNum(r.timeout),
+        rawStart: toNum(r.st),
+        timeUpdated: r.tu,
+        messageCreated: typeof r.mc === 'number' && Number.isFinite(r.mc) ? r.mc : null,
+      }
+    })
+  } finally {
+    oc.close()
+  }
+}
+
+/**
  * P1-1: 여러 part의 현재 상태를 한 번의 open·쿼리로 읽는다.
  * sweep이 part마다 openOcDb()를 여는 것(최대 200회)을 없애기 위한 배치 경로.
  * 행이 없으면 done(끝난 것으로 간주).
