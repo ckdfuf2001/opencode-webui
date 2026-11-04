@@ -18,6 +18,7 @@ const PowerPointViewer = lazyWithRetry(() =>
 )
 import { loadPptxComments, type PptxComment } from './pptxComments'
 import { createSaveSerializer, type SaveSerializer } from '@/lib/saveSerializer'
+import { decideBackstopSave } from '@/lib/collabBackstop'
 import { addPptxComment, replyPptxComment, setPptxCommentDone, editPptxComment, deletePptxComment } from './pptxCommentWriter'
 import { collabApi, collabServerUrl, type ImageLossDetail } from '@/api/collab'
 import { YCollabSession, buildCollaborationConfig, COLLAB_PALETTE, formatWhere } from '@/lib/ycollab'
@@ -60,6 +61,12 @@ const SPINNER = (
 function isEncryptedOle(data: Uint8Array): boolean {
   return data.length > 8 && data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0
 }
+
+/**
+ * lib Y.Doc 로컬 동기 origin (ooxml-core collaboration-reconcile.ts LOCAL_SYNC_ORIGIN).
+ * U-close dirty 판정에 쓴다: 이와 정확히 일치하는 업데이트만 로컬 편집으로 친다.
+ */
+const LOCAL_SYNC_ORIGIN = 'pptx-viewer:local-sync'
 
 interface PowerPointViewerHandle {
   getContent: () => Promise<Uint8Array>
@@ -428,8 +435,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다
   // (quiet 자동 저장만 조용히 실패한다).
   // S3: content 고정 — 성공해도 setSavedBytes를 호출하지 않고 latestSavedRef에만
-  // 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지). 세션 종료·파일 교체 때 반영.
+  // 둔다 (content 변경 → lib 리로드 → 캐럿 유실 방지). 세션 종료·파일 교체 때 반영한다.
   const latestSavedRef = useRef<Uint8Array | null>(null)
+  /** U-close: 로컬 편집이 마지막 성공 저장보다 새것인지. beforeunload 가드가 본다. */
+  const unsavedLocalEditRef = useRef(false)
+  /** 마지막 성공 저장의 서버 해시 (ABA 판정용: 서버 해시가 이것과 다르면
+   * 다른 사람이 그사이 저장한 것이다 → latestSavedRef를 믿지 않는다). */
+  const lastSavedHashRef = useRef<string | null>(null)
   const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean; allowImageLoss?: boolean }): Promise<boolean> => {
     // C5-3 standalone(첨부 편집): PUT 경로로 저장한다 (방·단독 저장 모두 우회).
     const ov = standaloneRef.current ? persistOverrideRef.current : undefined
@@ -525,6 +537,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
         c.session.knownHash = res.newHash
         // S3: content 고정 — 세션 종료 때 한 번만 반영한다.
         latestSavedRef.current = new Uint8Array(bytes)
+        lastSavedHashRef.current = res.newHash ?? null
+        // U-close: 저장 성공 — 닫힘 확인 대상에서 해제.
+        unsavedLocalEditRef.current = false
         // M11: 저장이 성공했으므로 "리마운트 후 미검증 상태"를 해제한다.
         remountedSinceSaveRef.current = false
         writebackStalledRef.current = false
@@ -570,10 +585,23 @@ if (!writeBackHaltedRef.current) {
       return false
     }
     latestSavedRef.current = new Uint8Array(bytes)
+    // U-close: 직접 저장도 성공이면 닫힘 확인 대상에서 제외.
+    unsavedLocalEditRef.current = false
     return true
   }, [fileName, savePath, updateDebug, ownerStateOf, waitOwnerId])
   const persistBytesRef = useRef(persistBytes)
   persistBytesRef.current = persistBytes
+
+  // U-close: 저장 안 된 편집이 있으면 탭 닫힘을 브라우저에 확인시킨다 (조용한 유실 방지).
+  // Done 저장은 onDone→closeTab 경로라 여기 걸리지 않는다 (저장 후 닫히므로).
+  useEffect(() => {
+    if (!editing) return
+    const onBeforeUnload = (e: BeforeUnloadEvent): void => {
+      if (unsavedLocalEditRef.current) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [editing])
 
   // owner write-back (lib이 변경 debounce 후 호출). 서버 owner일 때만 저장한다.
   // lib role과 서버 owner가 어긋나도 409가 나지 않게 meta 기준으로 걸러 낸다.
@@ -762,6 +790,10 @@ if (!writeBackHaltedRef.current) {
         /* ignore */
       }
       if (!editingRef.current || standaloneRef.current) return
+      if (typeof origin === 'string' && origin === LOCAL_SYNC_ORIGIN && editingRef.current) {
+        // U-close: 내 타이핑은 디스크에 아직 안 갔을 수 있다 (자동 저장 전 닫힘 방지용).
+        unsavedLocalEditRef.current = true
+      }
       if (backstopTimerRef.current) clearTimeout(backstopTimerRef.current)
     backstopTimerRef.current = setTimeout(() => {
       backstopTimerRef.current = null
@@ -794,15 +826,17 @@ if (!writeBackHaltedRef.current) {
         .then((b) => {
           const bytes = new Uint8Array(b)
           if (bytes.length === 0) return
-          // lib 경로가 같은 내용을 이미 저장했으면 건너뛴다 (중복 저장 방지).
-          // 시간 기준이면 E2처럼 경합에서 영원히 건너뛰어 조용한 유실이 된다 —
-          // 내용은 latestSavedRef(마지막 성공 저장 바이트)로 판정한다.
-          const snap = latestSavedRef.current
-          if (
-            snap &&
-            snap.length === bytes.length &&
-            snap.every((v, i) => v === bytes[i])
-          ) {
+          const decision = decideBackstopSave({
+            snap: latestSavedRef.current,
+            bytes,
+            mineHash: lastSavedHashRef.current,
+            serverHash: baseHashRef.current,
+          })
+          if (decision.aba) {
+            tl('writeback.backstop.aba', { server: baseHashRef.current, mine: lastSavedHashRef.current })
+            latestSavedRef.current = null
+          }
+          if (decision.action === 'skip-duplicate') {
             tl('writeback.backstop.skip', { reason: 'duplicate-content' })
             return
           }
@@ -1362,6 +1396,9 @@ writeBackHaltedRef.current = false
     // fileReloadKey를 올리면 data가 바뀌고 아래 effect가 reloadKey를 올린다.
     session.onReset(() => {
       logClient('room_reset_reload')
+      // ABA: 세션이 바뀌면 latestSavedRef/lastSavedHashRef는 무효 (디스크 상태 불명).
+      latestSavedRef.current = null
+      lastSavedHashRef.current = null
       if (collabRef.current?.session === session) {
         // M18: 리셋으로 언마운트되므로 예약된 write-back 을 실행하지 않는다.
         resetInFlightRef.current = true

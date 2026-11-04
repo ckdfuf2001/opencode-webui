@@ -31,6 +31,21 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** U-stale: /edit URL에 파트 버전을 기록한다 (새로고침·공유 링크가 버전을 가진다). */
+function stampPartHashUrl(hash: string | null): void {
+  if (!hash) return
+  try {
+    const u = new URL(window.location.href)
+    if (!u.pathname.startsWith('/edit/')) return
+    if (u.searchParams.get('partHash') !== hash) {
+      u.searchParams.set('partHash', hash)
+      window.history.replaceState(null, '', `${u.pathname}${u.search}${u.hash}`)
+    }
+  } catch {
+    /* 무시 */
+  }
+}
+
 /** officeSaveDone 대기 (부모 저장 요청 후 1회 재시도용). */
 function waitParentSaveDone(parentPath: string, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -60,9 +75,12 @@ function waitParentSaveDone(parentPath: string, timeoutMs: number): Promise<bool
 export default function AttachmentEditor({
   target,
   onClose,
+  expectedPartHash,
 }: {
   target: AttachmentOpenDetail
   onClose: () => void
+  /** U-stale: ?partHash= 로 열린 딥링크의 기대 파트 해시. 다르면 알린다. */
+  expectedPartHash?: string | null
 }) {
   const { parentPath, parentName, part, name, kind, roomId, clientId } = target
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -85,25 +103,47 @@ export default function AttachmentEditor({
   const tokenRef = useRef<string | null>(null)
   if (!tokenRef.current) tokenRef.current = randomToken()
 
+  // U-close: 저장 안 된 첨부 편집이 있으면 탭 닫힘을 브라우저에 확인시킨다.
+  // (뒤로 버튼은 requestClose→확인 다이얼로그가 처리, 여기는 직접 탭 닫기용.)
+  useEffect(() => {
+    if (readOnly) return
+    const onBeforeUnload = (e: BeforeUnloadEvent): void => {
+      let dirty = false
+      try {
+        dirty = saverRef.current?.isDirty?.() === true
+      } catch {
+        dirty = false
+      }
+      if (dirty) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [readOnly])
+
   // 열기: 바이트 수신 + 잠금 획득 (한 번만, 마운트 시).
   useEffect(() => {
     mountedRef.current = true
     let dead = false
     const token = tokenRef.current!
-    void (async () => {
-      try {
-        const got = await getAttachmentPart(parentPath, part, { roomId, clientId })
-        if (dead) return
-        setBytes(got.bytes)
-        setBaseHash(got.hash)
-        baseHashRef.current = got.hash
-        origBytesRef.current = got.bytes
+  void (async () => {
         try {
-          setOrigPartHash(await sha256Hex(got.bytes))
-        } catch {
-          setOrigPartHash('')
-        }
-      } catch (e) {
+          const got = await getAttachmentPart(parentPath, part, { roomId, clientId })
+          if (dead) return
+          setBytes(got.bytes)
+          setBaseHash(got.hash)
+          baseHashRef.current = got.hash
+          origBytesRef.current = got.bytes
+    try {
+        const h = await sha256Hex(got.bytes)
+        setOrigPartHash(h)
+        if (expectedPartHash && expectedPartHash !== h) {
+              showToast.info('첨부가 바뀌었습니다 — 최신 내용으로 열었습니다')
+            }
+            stampPartHashUrl(h)
+          } catch {
+            setOrigPartHash('')
+          }
+        } catch (e) {
         if (dead) return
         const code = (e as { code?: string })?.code
         if (code === 'view_only') {
@@ -170,6 +210,9 @@ export default function AttachmentEditor({
       const doPut = async (hash: string | undefined) => {
         const r = await putAttachmentPart(parentPath, part, next, {
           baseHash: hash,
+          // U-stale: 파트 단위 낙관적 잠금. 연 시점 파트 해시를 함께 보내고,
+          // 서버가 현재 파트와 다르면 stale_part로 막는다 (조용한 덮어쓰기 방지).
+          partHash: origPartHash || undefined,
           lockId: l.lockId,
           roomId,
           clientId,
@@ -185,7 +228,9 @@ export default function AttachmentEditor({
             setBaseHash(r.newHash)
           }
           try {
-            setOrigPartHash(await sha256Hex(next))
+            const h = await sha256Hex(next)
+            setOrigPartHash(h)
+            stampPartHashUrl(h)
             origBytesRef.current = next
           } catch {
             /* 무시 */
@@ -193,7 +238,7 @@ export default function AttachmentEditor({
           showToast.success('저장했습니다')
           return true
         }
-        if (r.code === 'stale') {
+        if (r.code === 'stale' || r.code === 'stale_part') {
           // 방이 앞서감. 파트가 실제로 바뀌었는지 확인하고 같으면 base만 갱신해 1회 재시도.
           try {
             const fresh = await getAttachmentPart(parentPath, part, { roomId, clientId })
@@ -206,21 +251,23 @@ export default function AttachmentEditor({
             if (same) {
               baseHashRef.current = fresh.hash
               setBaseHash(fresh.hash)
-              const r2 = await doPut(fresh.hash)
-              if (r2.ok) {
-                if (r2.newHash) {
-                  baseHashRef.current = r2.newHash
-                  setBaseHash(r2.newHash)
-                }
-                try {
-                  setOrigPartHash(await sha256Hex(next))
-                  origBytesRef.current = next
-                } catch {
-                  /* 무시 */
-                }
-                showToast.success('저장했습니다')
-                return true
+            const r2 = await doPut(fresh.hash)
+            if (r2.ok) {
+              if (r2.newHash) {
+                baseHashRef.current = r2.newHash
+                setBaseHash(r2.newHash)
               }
+              try {
+                const h2 = await sha256Hex(next)
+                setOrigPartHash(h2)
+                stampPartHashUrl(h2)
+                origBytesRef.current = next
+              } catch {
+                /* 무시 */
+              }
+              showToast.success('저장했습니다')
+              return true
+            }
               showToast.error(r2.error ?? '저장에 실패했습니다')
               return false
             }
@@ -239,7 +286,9 @@ export default function AttachmentEditor({
               baseHashRef.current = fresh.hash
               origBytesRef.current = fresh.bytes
               try {
-                setOrigPartHash(await sha256Hex(fresh.bytes))
+                const fh = await sha256Hex(fresh.bytes)
+                setOrigPartHash(fh)
+                stampPartHashUrl(fh)
               } catch {
                 /* 무시 */
               }
@@ -258,6 +307,36 @@ export default function AttachmentEditor({
           }
           try {
             const fresh = await getAttachmentPart(parentPath, part, { roomId, clientId })
+            // U-stale: 부모 저장 뒤에도 파트가 바뀌어 있으면 덮어쓰지 않고 새로고침한다.
+            let same = false
+            try {
+              same = (await sha256Hex(fresh.bytes)) === origPartHash
+            } catch {
+              same = false
+            }
+            if (!same) {
+              showToast.error('다른 곳에서 변경되었습니다 — 다시 열기')
+              setBytes(null)
+              setGen((g) => g + 1)
+              void getAttachmentPart(parentPath, part, { roomId, clientId })
+                .then(async (f2) => {
+                  if (!mountedRef.current) return
+                  setBytes(f2.bytes)
+                  setBaseHash(f2.hash)
+                  baseHashRef.current = f2.hash
+                  origBytesRef.current = f2.bytes
+                  try {
+                    const fh2 = await sha256Hex(f2.bytes)
+                    setOrigPartHash(fh2)
+                    stampPartHashUrl(fh2)
+                  } catch {
+                    /* 무시 */
+                  }
+                  setGen((g) => g + 1)
+                })
+                .catch(() => {})
+              return false
+            }
             baseHashRef.current = fresh.hash
             setBaseHash(fresh.hash)
             const r2 = await doPut(fresh.hash)

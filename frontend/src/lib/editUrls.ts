@@ -25,8 +25,12 @@ export function editUrlForFile(filePath: string): string {
   return `/edit/${encodePathSegments(filePath)}${currentSearch()}`
 }
 
-export function editUrlForAttachment(parentPath: string, part: string): string {
-  return `/edit/${encodePathSegments(parentPath)}/-/${encodePathSegments(part)}${currentSearch()}`
+export function editUrlForAttachment(parentPath: string, part: string, partHash?: string): string {
+  const base = `/edit/${encodePathSegments(parentPath)}/-/${encodePathSegments(part)}`
+  const q = new URLSearchParams(currentSearch())
+  if (partHash) q.set('partHash', partHash)
+  const qs = q.toString()
+  return qs ? `${base}?${qs}` : base
 }
 
 export type ParsedEditUrl =

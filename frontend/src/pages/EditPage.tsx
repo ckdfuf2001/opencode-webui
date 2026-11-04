@@ -12,8 +12,17 @@ import type { FileInfo } from '@/types/files'
  * 스크립트로 연 탭이 아니면 window.close()가 막히므로 "닫아도 됩니다" 화면을 대신 보여준다.
  */
 export default function EditPage() {
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   const parsed = useMemo(() => parseEditUrl(pathname), [pathname])
+  // U-stale: ?partHash= 로 열린 딥링크면 로드 뒤 파트 해시와 대조한다.
+  const expectedPartHash = useMemo(() => {
+    try {
+      const h = new URLSearchParams(search ?? '').get('partHash')
+      return h && h.length > 0 ? h : null
+    } catch {
+      return null
+    }
+  }, [search])
   const [closed, setClosed] = useState(false)
   // C5-4: 편집 페이지는 마운트 시점부터 편집 모드다 (in-place 전환 없음).
 
@@ -77,16 +86,17 @@ export default function EditPage() {
     }
     return (
       <div data-testid="edit-page" className="h-screen w-screen overflow-hidden bg-background text-foreground">
-        <AttachmentEditor
-          target={{
-            parentPath: parsed.parentPath,
-            parentName: baseNameOf(parsed.parentPath),
-            part: parsed.part,
-            name,
-            kind,
-          }}
-          onClose={closeTab}
-        />
+      <AttachmentEditor
+        target={{
+          parentPath: parsed.parentPath,
+          parentName: baseNameOf(parsed.parentPath),
+          part: parsed.part,
+          name,
+          kind,
+        }}
+        expectedPartHash={expectedPartHash}
+        onClose={closeTab}
+      />
       </div>
     )
   }

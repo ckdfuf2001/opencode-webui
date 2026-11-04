@@ -461,6 +461,8 @@ const EmbedPutSchema = z.object({
   lockId: z.string().min(1).max(128),
   roomId: z.string().min(1).max(128).optional(),
   clientId: z.coerce.number().int().optional(),
+  // U-stale: 파트 단위 낙관적 잠금. 연 시점 파트 해시와 다르면 409 stale_part.
+  partHash: z.string().min(1).max(128).optional(),
 })
 
 const EmbedLockSchema = z.object({
@@ -531,6 +533,7 @@ app.put('/embed', async (c) => {
       lockId: typeof body.lockId === 'string' ? body.lockId : undefined,
       roomId: typeof body.roomId === 'string' ? body.roomId : undefined,
       clientId: body.clientId !== undefined ? Number(body.clientId) : undefined,
+      partHash: typeof body.partHash === 'string' ? body.partHash : undefined,
     })
     const roomId = q.roomId ?? q2.roomId
     const clientId = q.clientId ?? q2.clientId
@@ -568,6 +571,18 @@ app.put('/embed', async (c) => {
     }
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
     const disk = room ? await currentDiskHash(rid) : await hashFile(abs).catch(() => null)
+    // U-stale: 파트 단위 낙관적 잠금. 연 시점 파트와 다르면 덮어쓰지 않는다.
+    // 방 해시와 무관하게 파트 자체를 비교한다 (방이 모르는 외부 변경도 잡힌다).
+    if (q2.partHash) {
+      try {
+        const cur = await readEmbedPart(zipLoadJSZip, hostBytes, norm)
+        if (hashBytes(cur.bytes) !== q2.partHash) {
+          return c.json({ error: 'Part changed since loaded — reload the attachment and retry', code: 'stale_part', currentHash: disk }, 409)
+        }
+      } catch {
+        // 파트 읽기 실패는 아래 replaceEmbedPart에서 404 등으로 판정한다.
+      }
+    }
     if (room) {
       if (!q2.baseHash || q2.baseHash !== room.lastHash) {
         return c.json({ error: 'Stale base — reload the attachment and retry', code: 'stale', currentHash: disk }, 409)

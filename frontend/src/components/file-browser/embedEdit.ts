@@ -160,12 +160,13 @@ export async function putAttachmentPart(
   parentPath: string,
   part: string,
   bytes: Uint8Array,
-  opts: { baseHash?: string; lockId: string; roomId?: string; clientId?: number; fileName: string },
+  opts: { baseHash?: string; lockId: string; roomId?: string; clientId?: number; fileName: string; partHash?: string },
 ): Promise<AttachmentPutResult> {
   const q = new URLSearchParams({ path: parentPath, part })
   const fd = new FormData()
   fd.append('file', new Blob([bytes as unknown as BlobPart], { type: 'application/octet-stream' }), opts.fileName)
   if (opts.baseHash) fd.append('baseHash', opts.baseHash)
+  if (opts.partHash) fd.append('partHash', opts.partHash)
   fd.append('lockId', opts.lockId)
   if (opts.roomId) fd.append('roomId', opts.roomId)
   if (opts.clientId !== undefined) fd.append('clientId', String(opts.clientId))
