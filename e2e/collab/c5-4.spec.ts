@@ -928,6 +928,45 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
     }
   })
 
+  test('R-attach: 새 탭에서 형식 3종 모두 문서 첨부 삽입이 동작한다', async ({ browser }, testInfo) => {
+    // C5-4c A3: /edit 탭의 "첨부" 탭 → "문서 첨부" → 파일 선택 → 디스크 embeddings +1.
+    testInfo.setTimeout(420000)
+    const cases = [
+      { slug: 'rattach', ext: '.pptx', copy: 'e2e/collab/fixtures/collab-3slides.pptx', sel: '[data-testid="pptx-viewer-root"]' },
+      { slug: 'rattachx', ext: '.xlsx', copy: `${FIX}/embed-pdf.xlsx`, sel: 'xlsx-editor' },
+      { slug: 'rattachd', ext: '.docx', copy: `${FIX}/embed-docx.docx`, sel: '.docxengine-host' },
+    ] as Array<{ slug: string; ext: string; copy: string; sel: string }>
+    for (const c of cases) {
+      const rel = uniqueRelWithExt(c.slug, 0, c.ext)
+      const abs = absForRel(rel)
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      fs.copyFileSync(c.copy, abs)
+      const before = await embeddingsCount('collab-e2e', rel.split('/').pop()!)
+      const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+      await seedUser(ctx, ADA)
+      const page = await ctx.newPage()
+      await gotoApp(page)
+      try {
+        await openEditor(page, rel.replace(/^repos\//, ''))
+        await page.locator(c.sel).first().waitFor({ timeout: 60000 })
+        const tab = page.getByRole('tab', { name: '첨부', exact: true }).first()
+        await expect(tab, `${c.slug}: attach tab`).toBeVisible({ timeout: 30000 })
+        await tab.click({ timeout: 15000 })
+        const [chooser] = await Promise.all([
+          page.waitForEvent('filechooser', { timeout: 15000 }),
+          page.getByText('문서 첨부', { exact: true }).first().click({ timeout: 15000 }),
+        ])
+        await chooser.setFiles(path.resolve(FIX, 'embed-docx.xlsx'))
+        const fname = rel.split('/').pop()!
+        await expect
+          .poll(() => embeddingsCount('collab-e2e', fname), { timeout: 60000, intervals: [1000] })
+          .toBe(before + 1)
+      } finally {
+        await ctx.close().catch(() => {})
+      }
+    }
+  })
+
   test('R-ribbon: 새 탭 홈 리본이 예전 전체화면 수치와 같다 (PPT·XLSX·DOCX)', async ({ browser }, testInfo) => {
     // C5-4c A1: 0절 예전 수치(1400x900 기준) — 탭행 35px/폰트 16px, PPT 버튼대 92px,
     // xlsx 리본 141px, docx 리본 145px, 에디터 루트 x=8/w=1384 (p-2 구조).
