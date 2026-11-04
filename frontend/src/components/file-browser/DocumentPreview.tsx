@@ -541,6 +541,11 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
   useEffect(() => {
     if (editSignal > 0) setEditing(true)
   }, [editSignal])
+  // C5-4: /edit 페이지의 in-place 편집 전환 신호 (viewer 웜업 후 edit flip).
+  // in-page Edit 클릭과 같은 순서로 editing을 켠다 (리마운트 없음).
+  useEffect(() => {
+    if (editSignal > 0) setEditing(true)
+  }, [editSignal])
   const [viewerRetry, setViewerRetry] = useState(0)
   const [endingEdit, setEndingEdit] = useState(false)
   const embedInputRef = useRef<HTMLInputElement | null>(null)
