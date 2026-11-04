@@ -639,8 +639,6 @@ if (!writeBackHaltedRef.current) {
   // 닫기 경로(E2f-strict)가 실제로 실패할 때 endEditing 경로로 다시 만든다.
 
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
-    // C5-4 U3 backstop 계측: lib 경로가 동작했음을 기록한다 (아래 backstop이 중복 저장을 피한다).
-    lastWritebackAtRef.current = Date.now()
     // M31 1-a: 언마운트 후에는 화면 상태(collab)가 null 이지만 세션은 유예 동안 살아 있다.
     // collabRef 만 보면 hasSession=false 가 되어 flush 가 버려진다 → 마지막 세션을 fallback 으로 쓴다.
     const c = collabRef.current ?? lastCollabRef.current
@@ -712,6 +710,9 @@ if (!writeBackHaltedRef.current) {
     // M33 A: 언마운트 후에도 collabRef 가 null 이어도 마지막 세션으로 epoch/roomId 를 붙인다.
     // (epoch 이 없으면 serializer 의 fail-closed 규칙에 걸려 저장이 조용히 버려진다.)
     const c0 = collabRef.current ?? lastCollabRef.current
+    // C5-4 U3 backstop 계측: 실제 저장 요청 시점을 기록한다 (건너뛴 호출은 제외).
+    // 스킵된 호출까지 기록하면 backstop이 영원히 건너뛰어 조용한 유실이 된다.
+    lastWritebackAtRef.current = Date.now()
     return saveSerializerRef.current!.request(bytes, {
       session: { path: savePath, epoch: c0?.epoch, roomId: c0?.roomId },
     })
@@ -756,14 +757,27 @@ if (!writeBackHaltedRef.current) {
     }
     if (!doc || typeof doc.on !== 'function') return
     const onUpdate = (): void => {
+      tl('writeback.backstop.see', { editing: !!editingRef.current })
       if (!editingRef.current || standaloneRef.current) return
       if (backstopTimerRef.current) clearTimeout(backstopTimerRef.current)
-      backstopTimerRef.current = setTimeout(() => {
-        backstopTimerRef.current = null
-        // lib 경로가 최근에 저장했으면 건너뛴다 (중복 저장 방지).
-        if (Date.now() - lastWritebackAtRef.current < 8000) return
-        const cur = collabRef.current
-        if (!cur || !editingRef.current || !isOwnerNowRef.current(cur) || !cur.session.synced) return
+    backstopTimerRef.current = setTimeout(() => {
+      backstopTimerRef.current = null
+      // lib 경로가 최근에 저장했으면 건너뛴다 (중복 저장 방지).
+      if (Date.now() - lastWritebackAtRef.current < 8000) {
+        tl('writeback.backstop.skip', { reason: 'recent-lib-save' })
+        return
+      }
+      const cur = collabRef.current
+      if (!cur || !editingRef.current || !isOwnerNowRef.current(cur) || !cur.session.synced) {
+        tl('writeback.backstop.skip', {
+          reason: 'gate',
+          hasCollab: !!cur,
+          editing: !!editingRef.current,
+          owner: cur ? isOwnerNowRef.current(cur) : false,
+          synced: cur ? cur.session.synced : false,
+        })
+        return
+      }
         let slides = 0
         try {
           slides = cur.session.doc.getArray('pptx:slides').length
@@ -771,16 +785,20 @@ if (!writeBackHaltedRef.current) {
           return
         }
         if (slides === 0) return
-        const h = viewerRef.current
-        if (!h) return
-        void h
-          .getContent()
-          .then((b) => {
-            const bytes = new Uint8Array(b)
-            if (bytes.length === 0) return
-            void persistBytesRef.current(bytes, { quiet: true, auto: true })
-          })
-          .catch(() => {})
+      const h = viewerRef.current
+      if (!h) {
+        tl('writeback.backstop.skip', { reason: 'no-viewer' })
+        return
+      }
+      tl('writeback.backstop.fire', {})
+      void h
+        .getContent()
+        .then((b) => {
+          const bytes = new Uint8Array(b)
+          if (bytes.length === 0) return
+          void persistBytesRef.current(bytes, { quiet: true, auto: true })
+        })
+        .catch(() => {})
       }, 4000)
     }
     doc.on!('update', onUpdate)
