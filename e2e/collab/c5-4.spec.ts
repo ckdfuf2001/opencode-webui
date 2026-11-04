@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { createHash } from 'node:crypto'
-import { backendBase, workspaceDir, absForRel, uniqueRel } from './helpers/env'
+import { backendBase, workspaceDir, absForRel, uniqueRel, uniqueRelWithExt } from './helpers/env'
 import { gotoApp, openEditor, openFileSeeded, gotoSlide, editShapeText, ShapeLocator, peer } from './helpers/viewer'
 import { waitForDisk, readDeck } from './helpers/disk'
 import { ADA, GRACE, seedUser } from './helpers/users'
@@ -876,6 +876,185 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
       })
     } finally {
       await ctx.close().catch(() => {})
+    }
+  })
+
+  test('R-ribbon: 새 탭 홈 리본이 예전 전체화면 수치와 같다 (PPT·XLSX·DOCX)', async ({ browser }, testInfo) => {
+    // C5-4c A1: 0절 예전 수치(1400x900 기준) — 탭행 35px/폰트 16px, PPT 버튼대 92px,
+    // xlsx 리본 141px, docx 리본 145px, 에디터 루트 x=8/w=1384 (p-2 구조).
+    testInfo.setTimeout(420000)
+    const within = (v: number, want: number, tol = 2): boolean => Math.abs(v - want) <= tol
+    const cases = [
+      { slug: 'rribbon-pptx', src: 'e2e/collab/fixtures/collab-3slides.pptx', ext: '.pptx', wsPath: '', rootSel: '[data-testid="pptx-viewer-root"]' },
+      { slug: 'rribbon-xlsx', src: `${FIX}/embed-pdf.xlsx`, ext: '.xlsx', wsPath: '', rootSel: 'xlsx-editor' },
+      { slug: 'rribbon-docx', src: `${FIX}/embed-docx.docx`, ext: '.docx', wsPath: '', rootSel: '.docxengine-host' },
+    ] as Array<{ slug: string; src: string; ext: string; wsPath: string; rootSel: string }>
+    for (const c of cases) {
+      // R-ribbon은 편집하지 않으므로 파일명을 고정한다 (타이틀바 텍스트 안정화).
+      const rel = `repos/collab-e2e/${c.slug}${c.ext}`
+      const abs = absForRel(rel)
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      fs.copyFileSync(c.src, abs)
+      const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+      await seedUser(ctx, ADA)
+      const page = await ctx.newPage()
+      await gotoApp(page)
+      try {
+        await openEditor(page, rel.replace(/^repos\//, ''))
+        // lib 리본이 마운트될 때까지 대기 (뷰어 루트보다 늦을 수 있다).
+        if (c.ext === '.pptx') {
+          await page.getByRole('tab', { name: 'Home' }).first().waitFor({ timeout: 60000 })
+        } else if (c.ext === '.xlsx') {
+          await page.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+          await page.getByRole('tab', { name: 'Home' }).first().waitFor({ timeout: 60000 })
+        } else {
+          await page.locator('.docxengine-host button').first().waitFor({ timeout: 60000 })
+          await page.getByRole('tab', { name: 'Home' }).first().waitFor({ timeout: 60000 })
+        }
+        const boxes = await page
+          .evaluate(() => {
+            // lib 리본(xlsx/docx)은 shadow DOM 안에 있다 — 뚫고 수집한다.
+            const allEls = (root: ParentNode, out: Element[] = []): Element[] => {
+              for (const el of [...root.querySelectorAll('*')]) {
+                out.push(el)
+                const sr = (el as HTMLElement).shadowRoot
+                if (sr) allEls(sr, out)
+              }
+              return out
+            }
+            const els = allEls(document)
+            const textOf = (e: Element): string => (e.textContent ?? '').slice(0, 60)
+            // 탭행: light-DOM의 File 탭리스트를 우선 (pptx 본행 16px). 없으면 shadow까지 탐색.
+            const lightTls = [...document.querySelectorAll('[role="tablist"]')]
+            const tlLight = lightTls.find((t) => /File/.test(t.textContent ?? '')) ?? null
+            const tabs = els.filter((e) => e.getAttribute?.('role') === 'tab')
+            const tl = tlLight ?? tabs.find((t) => /File/.test(textOf(t))) ?? null
+            // 리본 컨테이너: 상단 300px 안에서 가장 넓고 80~250px 높이인 요소 (xlsx 141 / docx 145).
+            // 클래스 무관 휴리스틱을 우선 적용한다 (lib 구조 변경에 둔감).
+            let rib: Element | null = null
+            {
+              let best = 0
+              for (const e of els) {
+                const b = e.getBoundingClientRect()
+                if (b.width > 1000 && b.y < 300 && b.height >= 80 && b.height <= 250 && b.width > best) {
+                  best = b.width
+                  rib = e
+                }
+              }
+              // 폴백: Home 탭 조상 중 버튼대를 포함한 첫 컨테이너.
+              if (!rib) {
+                const home = tabs.find((t) => /Home/.test(textOf(t))) as HTMLElement | null
+                let el = home?.parentElement ?? null
+                for (let i = 0; i < 8 && el; i++) {
+                  const b = el.getBoundingClientRect()
+                  if (b.width > 1000 && b.y < 300 && b.height >= 80 && b.height <= 250) {
+                    rib = el as Element
+                    break
+                  }
+                  el = el.parentElement
+                }
+              }
+            }
+            const r = tl?.getBoundingClientRect() ?? rib?.getBoundingClientRect() ?? null
+            const b = rib?.getBoundingClientRect() ?? null
+            // 버튼대: 리본 컨테이너 자식 중 가장 큰 행 (probe-px 검증 방식).
+            let strip: { y: number; h: number } | null = null
+            {
+              // light-DOM 탭행이면 부모 자식으로 버튼대를 잰다 (pptx 검증 방식).
+              const tlel = tl as HTMLElement | null
+              const par = tlel?.parentElement ?? null
+              if (par && tlel === tlLight) {
+                let best = 0
+                for (const s of [...par.children]) {
+                  if (s === tlel) continue
+                  const sb = s.getBoundingClientRect()
+                  if (sb.height > best) {
+                    best = sb.height
+                    strip = { y: Math.round(sb.y), h: Math.round(sb.height) }
+                  }
+                }
+                if (best < 40) strip = null
+              } else {
+              const tlel = tl as HTMLElement | null
+              const getCls = (e: Element | null): string => {
+                try {
+                  return String((e as HTMLElement)?.className?.baseVal ?? (e as HTMLElement)?.className ?? '')
+                } catch {
+                  return ''
+                }
+              }
+              // shadow 경계를 넘어 closest가 안 통하므로 수동으로 오른다.
+              let ribHost: HTMLElement | null = null
+              if (tlel) {
+                let el: HTMLElement | null = tlel
+                for (let i = 0; i < 6 && el && !ribHost; i++) {
+                  if (/ribbon/i.test(getCls(el))) ribHost = el
+                  el = el.parentElement
+                }
+                if (!ribHost) ribHost = tlel.parentElement
+              }
+              if (ribHost) {
+                let best = 0
+                for (const s of [...ribHost.children]) {
+                  if (s === tl) continue
+                  const sb = s.getBoundingClientRect()
+                  if (sb.height > best) {
+                    best = sb.height
+                    strip = { y: Math.round(sb.y), h: Math.round(sb.height) }
+                  }
+                }
+                if (best < 40) strip = null
+              }
+            }
+            }
+            return {
+              tab: r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } : null,
+              tabFont: tl ? getComputedStyle(tl).fontSize : null,
+              ribbon: b ? { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) } : null,
+              strip,
+            }
+          })
+          .catch(() => null) as {
+          tab: { x: number; y: number; w: number; h: number } | null
+          tabFont: string | null
+          ribbon: { x: number; y: number; w: number; h: number } | null
+          strip: { y: number; h: number } | null
+        } | null
+        expect(boxes, `${c.slug}: ribbon boxes`).not.toBeNull()
+        // 탭행: 예전 35px/16px. xlsx/docx는 shadow 탭 행이 섞이므로 25~45px인 것만 단언.
+        if (boxes!.tab && (c.ext === '.pptx' || (boxes!.tab.h >= 25 && boxes!.tab.h <= 45))) {
+          expect(within(boxes!.tab.h, 35), `${c.slug}: tab h=${boxes!.tab.h}`).toBe(true)
+          expect(boxes!.tabFont, `${c.slug}: tab font`).toBe('16px')
+        }
+        if (c.ext === '.pptx') {
+          // 버튼대 92px (예전 strip y=111 h=92).
+          expect(boxes!.strip, `${c.slug}: strip`).not.toBeNull()
+          expect(within(boxes!.strip!.h, 92), `${c.slug}: strip h=${boxes!.strip!.h}`).toBe(true)
+        } else {
+          // xlsx 141px / docx 145px 리본 컨테이너.
+          expect(boxes!.ribbon, `${c.slug}: ribbon`).not.toBeNull()
+          const want = c.ext === '.xlsx' ? 141 : 145
+          expect(within(boxes!.ribbon!.h, want), `${c.slug}: ribbon h=${boxes!.ribbon!.h}`).toBe(true)
+        }
+        // 에디터 루트: 예전 p-2 구조 (x=8, w=1384).
+        const root = await page.locator(c.rootSel).first().boundingBox()
+        expect(root, `${c.slug}: root`).not.toBeNull()
+        expect(within(root!.x, 8), `${c.slug}: root x=${root!.x}`).toBe(true)
+        expect(within(root!.width, 1384), `${c.slug}: root w=${root!.width}`).toBe(true)
+        // 리본 영역 스크린샷 잠금 (탭행+버튼대만: 타이틀바 검색창 변동 제외).
+        // 폰트 로딩 뒤에 찍는다 (fallback/웹폰트 혼용 렌더 방지).
+        await page.evaluate(() => document.fonts.ready.then(() => true)).catch(() => false)
+        await page.waitForTimeout(1500)
+        await expect(page).toHaveScreenshot(`r-ribbon-${c.slug}.png`, {
+          timeout: 30000,
+          clip: { x: 0, y: 64, width: 1400, height: 196 },
+          animations: 'disabled',
+          caret: 'hide',
+          maxDiffPixels: 100,
+        })
+      } finally {
+        await ctx.close().catch(() => {})
+      }
     }
   })
 })
