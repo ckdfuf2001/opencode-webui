@@ -118,6 +118,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const commentRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onViewerContentChange = useCallback(() => {
+    // eslint-disable-next-line no-console
+    console.log('[dbg-content-change] fired, editing=', editingRef.current)
     if (standaloneRef.current) {
       // C5-3 standalone(첨부 편집): 자동 저장 없음. dirty만 표시한다.
       if (editingRef.current) dirtyRef.current = true

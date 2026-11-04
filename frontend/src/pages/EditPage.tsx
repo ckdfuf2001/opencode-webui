@@ -15,29 +15,7 @@ export default function EditPage() {
   const { pathname } = useLocation()
   const parsed = useMemo(() => parseEditUrl(pathname), [pathname])
   const [closed, setClosed] = useState(false)
-  // C5-4: PPTX는 viewer로 먼저 마운트한 뒤 편집으로 전환한다.
-  // 직접 edit 마운트는 시딩이 안 되고(E17), 전환이 너무 이르면 lib write-back
-  // 스케줄이 묶여 타이핑이 디스크에 안 남는다(E2). viewer가 붙고 lib이
-  // settle한 뒤 전환한다: connected + 3초 여유 (정확한 ready 신호는 백로그).
-  const isPptxHost = parsed?.kind === 'file' && parsed.path.toLowerCase().endsWith('.pptx')
-  const [editSignal, setEditSignal] = useState(0)
-  useEffect(() => {
-    if (!isPptxHost || closed) return
-    let dead = false
-    const t0 = Date.now()
-    const timer = window.setInterval(() => {
-      if (dead) return
-      const el = document.querySelector('[data-testid="collab-status"]')
-      if ((el?.getAttribute('data-status') === 'connected' && Date.now() - t0 > 3000) || Date.now() - t0 > 30000) {
-        window.clearInterval(timer)
-        if (!dead) setEditSignal((s) => s + 1)
-      }
-    }, 500)
-    return () => {
-      dead = true
-      window.clearInterval(timer)
-    }
-  }, [pathname, parsed, isPptxHost, closed])
+  // C5-4: 편집 페이지는 마운트 시점부터 편집 모드다 (in-place 전환 없음).
 
   useEffect(() => {
     setClosed(false)
@@ -122,7 +100,7 @@ export default function EditPage() {
   }
   return (
     <div data-testid="edit-page" className="h-screen w-screen overflow-hidden bg-background text-foreground">
-      <DocumentPreview file={file} initialEditing={!isPptxHost} editSignal={editSignal} editInNewTab={false} onDone={closeTab} />
+      <DocumentPreview file={file} initialEditing editInNewTab={false} onDone={closeTab} />
     </div>
   )
 }
