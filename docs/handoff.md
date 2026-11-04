@@ -1156,3 +1156,12 @@ E21만의 문제가 아니다. 근거:
 - 원래: attachViaAddInTab이 in-page Edit 후 in-page 첨부 탭을 조작하고 ole 아이콘 dblclick을 page에서 했다. xlsx 파트는 zip 직접 수정(수동 package)으로 열었다.
 - 변경: (1) openViaWorkspace에 폴더 진입 루프 추가 (c5-2와 동일, seg 행 탐색). (2) attachViaAddInTab이 Edit 팝업(에디터 탭)을 받아 반환하고 이후 단계(첨부 탭·filechooser·ole 아이콘·dblclick)를 editor에서 수행. (3) U-open-part-xlsx를 실제 INSERT 경로로 전환 (P0-4에서 zip 수술 제거).
 - 이유: Edit 버튼이 /edit/* 새 탭을 열게 되면서 in-page 첨부 탭이 사라졌고, xlsx INSERT는 oleObject라 다운로드라서 수동 package로 우회했었다. P0-4 package 조립 후 실제 경로가 편집탭으로 열리므로 우회가 불필요해졌다.
+
+## E2 디스크 반영 수정 (2026-11-04)
+- 수정 (1) patches/pptx-react-viewer@4.33.0.patch M30/M31/M32 (+pnpm-lock hash).
+  M30: handleInlineEditCommit 뒤 [...prev]로 참조 교체→publish 발화. M31: Escape도 커밋.
+  M32: reader stale(도형 이름·원본·빈)시 DOM 텍스트로 대체(E7 오프라인 지움 방지).
+  (2) PptxViewer 백스톱: 8s 시간게이트→latestSavedRef 바이트 비교(duplicate-content 스킵).
+- 검증: E2/E2f-strict/E2r/E2c/E2f/E2g/E2b/E7 green(chromium), c5-4 7/7·presence 4/4 green.
+  tsc 0. eslint PptxViewer 신규 0(1039 no-unsafe-finally 기존).
+- 다음: U-close(참여자0/WS0 10회)→U-stale→U-parent. exe 0.12.81 빌드 미완.

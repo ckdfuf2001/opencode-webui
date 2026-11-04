@@ -710,9 +710,6 @@ if (!writeBackHaltedRef.current) {
     // M33 A: 언마운트 후에도 collabRef 가 null 이어도 마지막 세션으로 epoch/roomId 를 붙인다.
     // (epoch 이 없으면 serializer 의 fail-closed 규칙에 걸려 저장이 조용히 버려진다.)
     const c0 = collabRef.current ?? lastCollabRef.current
-    // C5-4 U3 backstop 계측: 실제 저장 요청 시점을 기록한다 (건너뛴 호출은 제외).
-    // 스킵된 호출까지 기록하면 backstop이 영원히 건너뛰어 조용한 유실이 된다.
-    lastWritebackAtRef.current = Date.now()
     return saveSerializerRef.current!.request(bytes, {
       session: { path: savePath, epoch: c0?.epoch, roomId: c0?.roomId },
     })
@@ -736,9 +733,6 @@ if (!writeBackHaltedRef.current) {
   const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
   offerMineDownloadRef.current = offerMineDownload
   const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** C5-4 U3 backstop: lib write-back 호출 시각. lib 경로가 살아 있으면
-   * backstop이 중복 저장하지 않도록 건너뛴다. */
-  const lastWritebackAtRef = useRef(0)
   const backstopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
    * C5-4 U3 backstop: Y.Doc 변경을 직접 구독해 자동 저장한다.
@@ -751,8 +745,8 @@ if (!writeBackHaltedRef.current) {
     const sess = backstopSession
     if (!sess) return
     const doc = sess.doc as unknown as {
-      on?: (ev: string, fn: () => void) => void
-      off?: (ev: string, fn: () => void) => void
+      on?: (ev: string, fn: (update: unknown, origin: unknown) => void) => void
+      off?: (ev: string, fn: (update: unknown, origin: unknown) => void) => void
       getArray?: (key: string) => { length: number }
     }
     if (!doc || typeof doc.on !== 'function') return
@@ -771,11 +765,6 @@ if (!writeBackHaltedRef.current) {
       if (backstopTimerRef.current) clearTimeout(backstopTimerRef.current)
     backstopTimerRef.current = setTimeout(() => {
       backstopTimerRef.current = null
-      // lib 경로가 최근에 저장했으면 건너뛴다 (중복 저장 방지).
-      if (Date.now() - lastWritebackAtRef.current < 8000) {
-        tl('writeback.backstop.skip', { reason: 'recent-lib-save' })
-        return
-      }
       const cur = collabRef.current
       if (!cur || !editingRef.current || !isOwnerNowRef.current(cur) || !cur.session.synced) {
         tl('writeback.backstop.skip', {
@@ -805,6 +794,18 @@ if (!writeBackHaltedRef.current) {
         .then((b) => {
           const bytes = new Uint8Array(b)
           if (bytes.length === 0) return
+          // lib 경로가 같은 내용을 이미 저장했으면 건너뛴다 (중복 저장 방지).
+          // 시간 기준이면 E2처럼 경합에서 영원히 건너뛰어 조용한 유실이 된다 —
+          // 내용은 latestSavedRef(마지막 성공 저장 바이트)로 판정한다.
+          const snap = latestSavedRef.current
+          if (
+            snap &&
+            snap.length === bytes.length &&
+            snap.every((v, i) => v === bytes[i])
+          ) {
+            tl('writeback.backstop.skip', { reason: 'duplicate-content' })
+            return
+          }
           void persistBytesRef.current(bytes, { quiet: true, auto: true })
         })
         .catch(() => {})

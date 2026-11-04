@@ -812,3 +812,14 @@
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
 - Q02 v0.13에서 이미지를 part 참조로 전환할지(Y.Doc 크기·전송량 문제, W3 측정 선행).
 - Q03 C5-4 후 openFileRegistry(H2) 보기 전용 경로 유지 여부 (0절 측정 후 판단).
+
+## D65 E2 디스크 유실: Escape=취소·in-place 커밋·백스톱 시간게이트 (2026-11-04)
+-원인 3단: (1) lib 인라인 에디터 Escape=onCancel(파기)라 타이핑이 slides에 안 들어가 publish 미발화.
+  (2) ops.updateElementById가 in-place 변이라 동일 참조 → publish effect 미발화(M23 기지).
+  (3) 백스톱 8s recent-lib-save 윈도우가 4s 디바운스와 경합해 영구 스킵.
+-판단: Escape=커밋(PowerPoint 동일, M31), 커밋 뒤 얇은 복사로 publish 깨우기(M30),
+  stale-read(DOM 크로스체크) 방어(M32). 백스톱은 시간→바이트 비교(latestSavedRef)로 교체.
+- E2 증거: pub.call 10704→reconcile→save 8144, DISK body2="Hello from Ada". E7(오프라인) 회귀 1건
+  발견→M32로 해결(E7 green). E19/E19b/E6 풀런 실패는 격리 재실행 green(로드 플레이크).
+- pre-existing 실패 14종(pristine 동일 실패, 베이스라인 대조): E21b/E3/E8/E9/E12/E18/E16b/E21/
+  E1m/E2m/E3m/U3/U2/X2a-6. 이번 범위 밖.
