@@ -833,6 +833,55 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
     }
   })
 
+  test('R-follow: 새 탭에서 이름 클릭 → 우리 팝오버 → Follow, lib people UI 0개', async ({ browser }, testInfo) => {
+    // C5-4c A2: 따라가기는 우리 팝오버(C3, paused:true)가 전담. lib people UI·자동 따라가기 금지.
+    testInfo.setTimeout(420000)
+    const rel = uniqueRel('rfollow', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const fname = rel.split('/').pop()!
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxB, GRACE)
+    const pageA = await ctxA.newPage()
+    const pageB = await ctxB.newPage()
+    await gotoApp(pageA)
+    await gotoApp(pageB)
+    try {
+      await openEditor(pageA, rel.replace(/^repos\//, ''))
+      await openEditor(pageB, rel.replace(/^repos\//, ''))
+      await gotoSlide(pageA, 2)
+      await gotoSlide(pageB, 2)
+      await expect(peer(pageB, 'u-ada')).toBeVisible({ timeout: 30000 })
+      // lib people UI가 꺼져 있어야 한다 (follow-mode-bar는 CSS로 숨김 — C5-4c A2).
+      // display:none이라 DOM에는 남으므로 hidden으로 단언한다.
+      await expect(pageB.getByTestId('follow-mode-bar')).toBeHidden({ timeout: 15000 })
+      await expect(pageB.getByTestId('user-avatar-bar')).toHaveCount(0)
+      // 우리 팝오버로 Follow.
+      await pageB.getByTestId('collab-avatars').click({ timeout: 10000 })
+      await pageB.getByTestId('collab-presence-row').filter({ hasText: 'Ada' }).getByTestId('collab-follow').click({ timeout: 10000 })
+      await pageB.keyboard.press('Escape')
+      await gotoSlide(pageA, 3)
+      await expect(peer(pageB, 'u-ada')).toHaveAttribute('data-slide', '3', { timeout: 15000 })
+      // B가 직접 움직이면 풀린다.
+      await pageB.mouse.click(400, 300)
+      await pageB.getByTestId('collab-avatars').click({ timeout: 10000 })
+      const followBtn = pageB.getByTestId('collab-presence-row').filter({ hasText: 'Ada' }).getByTestId('collab-follow')
+      await expect(followBtn).toHaveAttribute('aria-pressed', 'false', { timeout: 5000 })
+      await pageB.keyboard.press('Escape')
+      const navBefore = await pageB.evaluate(() => (window as unknown as { __c3FollowNav?: number }).__c3FollowNav ?? 0)
+      await gotoSlide(pageA, 1)
+      await expect(peer(pageB, 'u-ada')).toHaveAttribute('data-slide', '1', { timeout: 15000 })
+      const navAfter = await pageB.evaluate(() => (window as unknown as { __c3FollowNav?: number }).__c3FollowNav ?? 0)
+      expect(navAfter).toBe(navBefore)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
   test('U-deeplink: /edit/<부모>/-/<파트> 직접 열기', async ({ browser }, testInfo) => {
     // D64 U-deeplink: 딥링크로 첨부 편집기가 바로 열린다 (회귀 잠금).
     testInfo.setTimeout(180000)
