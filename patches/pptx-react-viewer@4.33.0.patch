@@ -305,3 +305,149 @@ index 5c532a8274346567f961066eb4818ec207e6f2c2..ab6c45fcc2ad08a0676bee1913529bac
    /** Callback when content has unsaved changes */
    onDirtyChange?: (isDirty: boolean) => void;
    onContentChange?: (content: Uint8Array) => void;
+diff --git a/dist/chunk-DD3ARHEW.mjs b/dist/chunk-DD3ARHEW.mjs
+--- a/dist/chunk-DD3ARHEW.mjs
++++ b/dist/chunk-DD3ARHEW.mjs
+@@ -5739,6 +5739,8 @@
+     marqueeStateRef,
+     justInteractedRef,
+     setInlineEditingElementId,
+     setInlineEditingText,
++    // M30: 아래 handleInlineEditCommit에서 in-place 커밋 뒤 참조를 바꼼다.
++    setSlides,
+     setContextMenuState,
+     setCanvasContextMenuState,
+@@ -5816,11 +5816,15 @@
+           textStyle: {
+             ...el.textStyle,
+             autoFitFontScale: shrink.fontScale,
+             autoFitLineSpacingReduction: shrink.lnSpcReduction
+           }
+         } : {}
+       });
+       history.markDirty();
++      // M30: updateElement는 in-place 변이라 slides 참조가 그대로라 publish가 안 돈다
++      // (타이핑이 Y.Doc에만 있고 디스크에 안 남는다, E2). 얇은 복사로 참조를 바꿔
++      // Y.Doc reconcile → write-back 예약을 깨운다. 내용은 이미 변이돼 있다.
++      setSlides((prev) => (Array.isArray(prev) ? [...prev] : prev));
+     }
+     setInlineEditingElementId(null);
+     setInlineEditingText("");
+@@ -10064,6 +10064,8 @@
+     shapeAdjustmentDragStateRef: state.shapeAdjustmentDragStateRef,
+     marqueeStateRef: state.marqueeStateRef,
+     justInteractedRef: state.justInteractedRef,
+     setInlineEditingElementId: state.setInlineEditingElementId,
+     setInlineEditingText: state.setInlineEditingText,
++    // M30: 인라인 커밋의 in-place 변이를 publish에 알리기 위한 setter 스레딩.
++    setSlides: state.setSlides,
+     setContextMenuState: state.setContextMenuState,
+@@ -16203,6 +16203,11 @@
+         if (e.key === "Escape") {
+           e.preventDefault();
+-          list.retire();
+-          onCancel();
++          // M31: Escape도 커밋한다(PowerPoint와 동일). 취소로 버리면 타이핑이
++          // Y.Doc에만 남고 slides에 안 들어가 디스크에 안 남는다(E2).
++          if (!list.canCommit()) {
++            return;
++          }
++          handleInput();
++          onCommit();
+           return;
+         }
+diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
+--- a/dist/chunk-552NAFTD.js
++++ b/dist/chunk-552NAFTD.js
+@@ -5745,6 +5745,8 @@
+     marqueeStateRef,
+     justInteractedRef,
+     setInlineEditingElementId,
+     setInlineEditingText,
++    // M30: 아래 handleInlineEditCommit에서 in-place 커밋 뒤 참조를 바꼼다.
++    setSlides,
+     setContextMenuState,
+     setCanvasContextMenuState,
+@@ -5822,11 +5822,15 @@
+           textStyle: {
+             ...el.textStyle,
+             autoFitFontScale: shrink.fontScale,
+             autoFitLineSpacingReduction: shrink.lnSpcReduction
+           }
+         } : {}
+       });
+       history.markDirty();
++      // M30: updateElement는 in-place 변이라 slides 참조가 그대로라 publish가 안 돈다
++      // (타이핑이 Y.Doc에만 있고 디스크에 안 남는다, E2). 얇은 복사로 참조를 바꿔
++      // Y.Doc reconcile → write-back 예약을 깨운다. 내용은 이미 변이돼 있다.
++      setSlides((prev) => (Array.isArray(prev) ? [...prev] : prev));
+     }
+     setInlineEditingElementId(null);
+     setInlineEditingText("");
+@@ -10070,6 +10070,8 @@
+     shapeAdjustmentDragStateRef: state.shapeAdjustmentDragStateRef,
+     marqueeStateRef: state.marqueeStateRef,
+     justInteractedRef: state.justInteractedRef,
+     setInlineEditingElementId: state.setInlineEditingElementId,
+     setInlineEditingText: state.setInlineEditingText,
++    // M30: 인라인 커밋의 in-place 변이를 publish에 알리기 위한 setter 스레딩.
++    setSlides: state.setSlides,
+     setContextMenuState: state.setContextMenuState,
+@@ -16187,6 +16187,11 @@
+         if (e.key === "Escape") {
+           e.preventDefault();
+-          list.retire();
+-          onCancel();
++          // M31: Escape도 커밋한다(PowerPoint와 동일). 취소로 버리면 타이핑이
++          // Y.Doc에만 남고 slides에 안 들어가 디스크에 안 남는다(E2).
++          if (!list.canCommit()) {
++            return;
++          }
++          handleInput();
++          onCommit();
+           return;
+         }
+diff --git a/dist/chunk-DD3ARHEW.mjs b/dist/chunk-DD3ARHEW.mjs
+--- a/dist/chunk-DD3ARHEW.mjs
++++ b/dist/chunk-DD3ARHEW.mjs
+@@ -5797,7 +5797,17 @@
+       const liveText = read?.snapshot.text ?? inlineEditingTextRef?.current ?? inlineEditingText;
+       const committedText = transformCommittedText ? transformCommittedText(liveText) : liveText;
++      // M32: reader가 stale/엉뛛한(도형 이름·편집 전·빈) 텍스트를 돌려주면 Y.Doc 타이핑을 지운다(E7).
++      // 커밋 시점 DOM이 진실이다: DOM에 텍스트가 있는데 읽은 값과 다르면 DOM 값을 쓴다.
++      // (fresh한 읽기는 DOM과 같아 치환이 일어나지 않는다. snapshot은 stale이라
++      // 세그먼트가 모델과 같아 remap 경로로 빠져 나간다.)
++      let finalText = committedText;
++      try {
++        const domEditor = document.querySelector("[data-inline-editor]");
++        const domText = domEditor ? readEditableText(domEditor) : "";
++        if (domText && domText !== committedText) finalText = domText;
++      } catch {}
+       const textPatch = buildInlineTextCommitPatch(
+         el,
+-        committedText,
++        finalText,
+         read?.snapshot ?? inlineEditingSnapshotRef?.current
+       );
+diff --git a/dist/chunk-552NAFTD.js b/dist/chunk-552NAFTD.js
+--- a/dist/chunk-552NAFTD.js
++++ b/dist/chunk-552NAFTD.js
+@@ -5803,7 +5803,17 @@
+       const liveText = read?.snapshot.text ?? inlineEditingTextRef?.current ?? inlineEditingText;
+       const committedText = transformCommittedText ? transformCommittedText(liveText) : liveText;
++      // M32: reader가 stale/엉뛛한(도형 이름·편집 전·빈) 텍스트를 돌려주면 Y.Doc 타이핑을 지운다(E7).
++      // 커밋 시점 DOM이 진실이다: DOM에 텍스트가 있는데 읽은 값과 다르면 DOM 값을 쓴다.
++      // (fresh한 읽기는 DOM과 같아 치환이 일어나지 않는다. snapshot은 stale이라
++      // 세그먼트가 모델과 같아 remap 경로로 빠져 나간다.)
++      let finalText = committedText;
++      try {
++        const domEditor = document.querySelector("[data-inline-editor]");
++        const domText = domEditor ? pptx.readEditableText(domEditor) : "";
++        if (domText && domText !== committedText) finalText = domText;
++      } catch {}
+       const textPatch = pptx.buildInlineTextCommitPatch(
+         el,
+-        committedText,
++        finalText,
+         read?.snapshot ?? inlineEditingSnapshotRef?.current
+       );
