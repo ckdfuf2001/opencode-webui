@@ -141,6 +141,23 @@ export interface CollabRoom {
   aiBlockedAt: number | null
   /** C4: 시트 개체(이미지·도형·차트·EMB) 표. 방과 함께 생기고 방과 함께 사라진다. */
   objects: RoomObjects
+  /**
+   * U-parent: 진행 중인 부모 flush 요청 (있으면 1개 — 동시 PUT은 공유한다).
+   * resolve는 서버가 직접 들고 있고, 104 수신·타임아웃·방 해체 때 1회만 호출한다.
+   */
+  pendingFlush: {
+    promise: Promise<FlushResult>
+    resolve: (r: FlushResult) => void
+    timer: ReturnType<typeof setTimeout>
+    /** flush를 요청한 conn (104는 이 conn의 응답만 받는다). */
+    conn: unknown
+  } | null
+  /**
+   * U-parent: 편집 conn이 떨어진 마지막 시각 (clean close 1000이면 0으로 지운다).
+   * conns가 비었는데 이 값이 살아 있으면 "오프라인·크래시 탭이 미저장을 들고 있을 수 있다" →
+   * PUT은 409 dirty_room으로 막는다 (조용한 유실 방지).
+   */
+  lastEditorDropAt: number
 }
 
 export interface CollabParticipant {
@@ -425,6 +442,8 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     saving: false,
     aiBlockedAt: null,
     objects: newRoomObjects(),
+    pendingFlush: null,
+    lastEditorDropAt: 0,
   }
   awareness.on('update', (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
@@ -542,6 +561,8 @@ function stopWatch(room: CollabRoom): void {
 
 function disposeRoom(room: CollabRoom): void {
   stopWatch(room)
+  // U-parent: 대기 중인 flush는 방과 함께 끝난다 (PUT이 8초를 다 기다리지 않게).
+  settlePendingFlush(room, { ok: false, reason: 'reset' })
   try { room.doc.destroy() } catch { /* 무시 */ }
   rooms.delete(room.id)
   const key = normalizeAbs(room.path)
@@ -805,6 +826,17 @@ export function wsMessage(roomId: string, ws: unknown, data: Uint8Array): void {
       // 이 conn이 ownerConn인지 서버가 직접 대조한다.
       const result = resetRoomFromDisk(roomId, ws)
       logger.info(`Collab room ${roomId}: reset request from conn → ${JSON.stringify(result)}`)
+    } else if (messageType === MSG_FLUSHED) {
+      // U-parent: 부모 flush 확인. 요청한 conn의 응답만 받는다 (사칭 방지).
+      let ok = false
+      try {
+        const raw = decoding.readVarUint8Array(d)
+        ok = (JSON.parse(new TextDecoder().decode(raw)) as { ok?: boolean }).ok === true
+      } catch {
+        ok = false
+      }
+      const settled = settlePendingFlush(room, ok ? { ok: true, reason: 'flushed' } : { ok: false, reason: 'client_fail' }, ws)
+      if (settled) logger.info(`Collab room ${roomId}: parent flush ack ok=${ok}`)
     }
   } catch (error) {
     logger.warn(`Collab room ${roomId}: bad message ignored`)
@@ -818,6 +850,13 @@ function dropConnFromRoom(room: CollabRoom, ws: unknown): void {
       awarenessProtocol.removeAwarenessStates(room.awareness, [...info.clientIds], null)
     } catch { /* 무시 */ }
     for (const cid of info.clientIds) room.ownerIds.delete(cid)
+  }
+  // U-parent: 편집 conn이 떨어졌다. clean close(1000)는 onClose에서 지운다.
+  // (크래시·오프라인은 1006/무프레임이라 남는다 → PUT 409 근거.)
+  try {
+    if (connMode(room, ws) !== 'view') room.lastEditorDropAt = Date.now()
+  } catch {
+    /* 무시 */
   }
   room.conns.delete(ws)
   room.order = room.order.filter((w) => w !== ws)
@@ -971,6 +1010,23 @@ async function diskImageCounts(room: CollabRoom): Promise<{ media: number; refs:
 export const CLOSE_ROOM_RESET = 4001
 /** Q2: reset 요청 WS 메시지 타입 (클라이언트→서버). */
 export const MSG_RESET_ROOM = 101
+/**
+ * U-parent: 부모 flush 요청 (서버→부모 방 owner) + 확인 (클라이언트→서버).
+ * 103을 받은 탭은 officeSaveRequest로 즉시 저장하고, officeSaveDone를 보면 104 {ok}로 답한다.
+ * 서버 PUT /embed는 104 ok(또는 clean ack)를 받아야 디스크를 교체한다. 최대 8초 대기.
+ */
+export const MSG_FLUSH_REQUEST = 103
+export const MSG_FLUSHED = 104
+/** U-parent: flush 전체 예산 (owner 선출 대기 3초 포함). D64 "최대 8초 대기". */
+export const FLUSH_WAIT_MS = 8000
+/** U-parent: owner 선출 대기 상한 (재접속 레이스용, 전체 예산 안에 든다). */
+const FLUSH_OWNER_WAIT_MS = 3000
+
+/** U-parent: 부모 flush 요청 결과. */
+export interface FlushResult {
+  ok: boolean
+  reason: string
+}
 
 /**
  * Q1: 오염된 room 복구.
@@ -1022,6 +1078,112 @@ export function resetRoomByServer(roomId: string): { ok: true } | { ok: false; r
   disposeRoom(room)
   logger.warn(`Collab room ${roomId}: reset by server (embed) — all conns closed (4001), room disposed`)
   return { ok: true }
+}
+
+/**
+ * U-parent: 대기 중인 flush를 1회만 끝낸다. onlyConn이 있으면 그 conn의 응답만 받는다.
+ */
+function settlePendingFlush(
+  room: CollabRoom,
+  result: FlushResult,
+  onlyConn?: unknown,
+): boolean {
+  const p = room.pendingFlush
+  if (!p) return false
+  if (onlyConn !== undefined && p.conn !== onlyConn) return false
+  room.pendingFlush = null
+  try {
+    clearTimeout(p.timer)
+  } catch {
+    /* 무시 */
+  }
+  try {
+    p.resolve(result)
+  } catch {
+    /* 무시 */
+  }
+  return true
+}
+
+/**
+ * U-parent: clean close(1000)면 "편집 탭이 떨어졌다" 기록을 지운다.
+ * 탭을 정상 종료했으면 미저장이 있을 수 없으므로 PUT이 진행돼도 된다.
+ * collab.ts onClose에서 코드 1000일 때만 호출한다.
+ */
+export function clearEditorDropOnCleanClose(roomId: string): void {
+  const room = rooms.get(roomId)
+  if (room) room.lastEditorDropAt = 0
+}
+
+/** U-parent: 지금 저장할 수 있는 편집 conn이 열려 있는가 (flush 대상). */
+export function roomHasOpenEditor(roomId: string): boolean {
+  const room = rooms.get(roomId)
+  if (!room) return false
+  for (const ws of room.conns.keys()) {
+    try {
+      if (connMode(room, ws) === 'view') continue
+    } catch {
+      continue
+    }
+    const rs = (ws as unknown as { readyState?: unknown }).readyState
+    if (rs === undefined || rs === 1) return true
+  }
+  return false
+}
+
+/**
+ * U-parent: 부모 방 owner에게 flush(즉시 저장)를 요청한다 (D64).
+ * - owner가 열려 있으면 103을 보내고 104 ack(또는 저장 반영)를 최대 timeoutMs까지 기다린다.
+ * - owner 선출 전이면 최대 3초까지 선출을 기다린다 (재접속 레이스).
+ * - owner가 없으면 {ok:false, reason:'no_owner'} — 호출자는 409로 막는다.
+ * - 동시 요청은 1개로 합친다 (같은 promise 공유).
+ */
+export function requestParentFlush(roomId: string, timeoutMs = FLUSH_WAIT_MS): Promise<FlushResult> {
+  const room = rooms.get(roomId)
+  if (!room) return Promise.resolve({ ok: true, reason: 'no_room' })
+  if (room.pendingFlush) return room.pendingFlush.promise
+  let resolve!: (r: FlushResult) => void
+  const promise = new Promise<FlushResult>((res) => {
+    resolve = res
+  })
+  const finish = (r: FlushResult): void => {
+    settlePendingFlush(room, r)
+  }
+  const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs)
+  room.pendingFlush = { promise, resolve, timer, conn: null }
+  const sendToOwner = (owner: unknown): void => {
+    const rs = (owner as unknown as { readyState?: unknown }).readyState
+    if (rs !== undefined && rs !== 1) {
+      finish({ ok: false, reason: 'unreachable' })
+      return
+    }
+    try {
+      const e = encoding.createEncoder()
+      encoding.writeVarUint(e, MSG_FLUSH_REQUEST)
+      ;(owner as CollabSocket).send(encoding.toUint8Array(e))
+    } catch {
+      finish({ ok: false, reason: 'unreachable' })
+      return
+    }
+    const p = room.pendingFlush
+    if (p) p.conn = owner
+  }
+  const startedAt = Date.now()
+  const waitOwner = (): void => {
+    if (!rooms.has(roomId) || !room.pendingFlush) return
+    const owner = room.ownerConn
+    if (owner !== null && owner !== undefined && room.conns.has(owner)) {
+      sendToOwner(owner)
+      return
+    }
+    if (Date.now() - startedAt > FLUSH_OWNER_WAIT_MS) {
+      finish({ ok: false, reason: 'no_owner' })
+      return
+    }
+    setTimeout(waitOwner, 100)
+  }
+  waitOwner()
+  return promise
 }
 
 /**

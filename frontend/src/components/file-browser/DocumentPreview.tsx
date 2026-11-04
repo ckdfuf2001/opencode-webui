@@ -721,8 +721,10 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
       setFileReloadKey((k) => k + 1)
     }
     const onResetReload = (e: Event) => {
-      const d = (e as CustomEvent<{ path?: string }>).detail
+      const d = (e as CustomEvent<{ path?: string; reason?: string }>).detail
       if (!d?.path || d.path !== file.path) return
+      // U-parent: 첨부 갱신 리셋이면 1회 알린다 (PptxViewer는 이 경우 토스트를 띄우지 않는다).
+      if (d.reason === 'embed_reset') showToast.info('첨부가 갱신되어 다시 불러왔습니다')
       setFileReloadKey((k) => k + 1)
     }
     window.addEventListener(OFFICE_EMBED_DONE, onEmbedDone as EventListener)

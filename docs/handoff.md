@@ -1165,3 +1165,76 @@ E21만의 문제가 아니다. 근거:
 - 검증: E2/E2f-strict/E2r/E2c/E2f/E2g/E2b/E7 green(chromium), c5-4 7/7·presence 4/4 green.
   tsc 0. eslint PptxViewer 신규 0(1039 no-unsafe-finally 기존).
 - 다음: U-close(참여자0/WS0 10회)→U-stale→U-parent. exe 0.12.81 빌드 미완.
+
+## E2 bisect + U-close/U-stale (2026-11-04, 리뷰 대응)
+
+### E2 bisect 결과 (7570a926..0a6fa9c4)
+- 첫 적색 커밋: 0e7abb4a "feat(c5-4): /edit/* routes + EditPage + window.open entries".
+  근거: 베이스(7570a926)에서 in-page E2 메커니즘 green 확인(디스크 반영 포함,
+  3s reflect 예산만 38ms 초과 — 환경 flake). 0e7abb4a에서 Edit 버튼이 새 탭으로
+  바뀌어 in-page 진입이 깨짐을 probe로 확인 (A가 viewer로 남고 에디터 미오픈).
+  이후 flag-day(b1f35459~)가 진입을 openEditor(/edit)로 이관했으나, /edit에는
+  unmount-remount가 없어 stale slides → write-back 미발화 → 디스크 미반영이 드러남.
+- "14/14", "30/30" 카운트는 재현 환경에서 대응되는 정수를 찾지 못함
+  (해당 시점 E-시리즈 테스트 수는 34개). 메커니즘 bisect로 갈음.
+- 결론: 트리거는 앱 변경(D64 새탭+리마운트 제거)이 맞으나, lib 결함 3종은 실재한다:
+  (1) Escape=취소로 collab 타이핑 유실 (solo는 refs 경유로 저장되므로 collab 전용 버그),
+  (2) in-place 커밋이 publish를 깨우지 않음, (3) stale-read 커밋이 Y.Doc을 지움(E7).
+  앱 리마운트로는 (3)을 못 고친다(blur-커밋도 같은 경로). lib 패치 유지가 정당하다.
+
+### U-close (완료)
+- U-close-1: 마지막 퇴장 뒤 방 참가자 0명 확인 x10 반복 (rooms API 폴링).
+- U-close-2: 떠난 참가자의 피어 행이 B 화면에서 사라짐 (유령 없음).
+- U-close-3: 저장 안 된 /edit 탭 닫기 시 beforeunload 확인 (PptxViewer unsavedLocalEditRef).
+  red 확인: 가드 제거 시 테스트 실패, 복원 시 통과.
+- AttachmentEditor에도 동일 가드 추가 (saverRef.isDirty).
+
+### U-stale (완료)
+- 서버 PUT에 partHash 낙관적 잠금 추가: 현재 파트와 다르면 409 stale_part.
+  기존 baseHash/dirty_room 검사는 그대로 (방 수준), partHash는 파트 수준.
+- 클라이언트: doPut에 origPartHash 전송, stale_part를 stale과 동일 처리
+  (refetch → same-check → 1회 재시도 또는 reload+notice).
+- dirty_room 경로에도 same-check 추가 (무조건 재시도 금지).
+- /edit URL에 ?partHash= 버전 태그 (열기·저장 시 갱신, 딥링크 불일치 시 notice).
+- 테스트: U-stale-1 (외부 변경→stale_part→덮어쓰기 없이 새로고침),
+  U-stale-2 (?partHash= 불일치→경고+최신 로드).
+- 서버 E2E 확인: unit test 6종 (frontend/test/collabBackstop.test.ts) +
+  E2 no-false-positive 단언 (backstop.aba 미발화).
+
+### ABA (backstop ETag) — 설계 기록
+- 구현: decideBackstopSave (순수함수, frontend/src/lib/collabBackstop.ts).
+  mineHash != serverHash 이면 스냅샷을 버리고 무조건 저장.
+- E2E 재현 불가 사유 (기록용): ABA는 "내 snap==디스크 바이트인데 서버 해시가 바뀜"에서만
+  발화하는데, 도달하려면 소유권 이전+재접속이 필요하고 lib write-back이 항상 먼저
+  저장해 스냅샷을 갱신해 버린다. 대신 (1) 단위 테스트 6종, (2) E2 no-aba 단언으로 커버.
+- 후속(별도): 오프라인→재접속 시 owner null 고착 (서버 election liveness).
+  E2k 시도 중 발견: A 재접속+synced 상태에서도 ownerClientId가 null으로 남음.
+  재현 조건 — A 오프라인(2분+ dead-conn sweep) 중 B가 owner로 저장 후 B 종료,
+  A 복귀. 영향: 해당 방에서 아무도 저장 못함. C5-range 밖이라 이번에 안 건드림.
+
+### lib 패치 재생성 (pnpm patch-commit)
+- node_modules/.pnpm_patches 수작업본 폐기 → pnpm patch 로 새 디렉토리,
+  M30/M31/M32 + viewerCommit 마커 재적용(영문 코멘트), pnpm patch-commit으로 재생성.
+  파일당 단일 diff 블록, hunk 파일당 5개 (M30 3 + M31 1 + M32 1; 마커는 기존 hunk 내 변경).
+  --frozen-lockfile clean-worktree 설치 검증 + marker 원문 확인 완료.
+- 59커밋 대조(bcd54704..0a6fa9c4): P0-1 7edfa41e(BOM), P0-2+P0-3 95197834(onDone+opener),
+  P0-4 888dbd9f(package), P0-5 2f7864cf(handoff), P0-6 1794fb9f(Pollers),
+  커밋 규칙=1수정1커밋 red→fix 쌍 (c5-1/c5-2/c5-3/c5-4/xlsx/c3/c4-3/c4-4/c4-6 flag-day 일괄).
+  pre-existing 실패 14종: E21b/E3/E8/E9/E12/E18/E16b/E21/E1m/E2m/E3m/U3/U2/X2a-6
+  (pristine 1b74ea35 동일 실패 확인 — U2/U3는 이번에 새 동작 기준으로 재작성해 green).
+
+## U-parent (2026-11-04, D66)
+- 구현: 서버 WS flush 103/104 (`collab-rooms.ts` requestParentFlush + `collab.ts` PUT 연결).
+  방에 편집자가 있으면 owner에게 flush 요청(8초), `preFlushHash` 수렴(flush 저장이 움직인
+  해시는 받아들임 — 사이 부모 저장은 flush에 포함). 편집 conn 비정상 종료 기록이 있으면 409.
+- 클라: ycollab own·transport 103 처리 + ack, xlsx 탭 transport 103 처리 + ack,
+  officeSaveRequest는 `{keepEditing:true}` (없으면 바깥이 편집 종료). 4001 사유별 토스트
+  (embed_reset은 바깥이 "첨부가 갱신되어 다시 불러왔습니다" 1회, PptxViewer 중복 억제).
+- 테스트 4종 (c5-4): U-parent red 확인(수정 전 PUT 200으로 '부모 파일' 토스트 실패) →
+  구현 후 green. U-parent-autosave/U-http/U-deeplink lock-in green.
+- 디버그 기록: (1) pptx own 모드 직행 분기에 103이 없어 버려짐 → `100 || 103` 수정.
+  (2) 재입장 자동 저장에 기대지 말 것 — 복구는 attach 재저장의 flush가 강제한다.
+  (3) 오프라인 30초(room TTL) 초과 시 재입장이 디스크 기준이 될 수 있음 — 테스트는 안에 복구.
+- 회귀: c5-4 16/16 · pptx-collab 26+1skip · xlsx-collab 19(+X2a-6 기존) · c5-3+c5-2 22 ·
+  c5-1+presence 9 · c4-6+ui-layout+viewer-unmount+xlsx-c2+xlsx-ole-solo+xlsx-solo 23
+  (+C2-b-1 flake, 단독 green) · c3+c4-3+c4-4 47 · backend unit 62 · frontend unit 20.

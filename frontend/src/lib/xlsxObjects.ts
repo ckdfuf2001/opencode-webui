@@ -8,11 +8,19 @@
  *   lib 쪽 핸들러까지 도달하지 않는다.
  */
 import * as decoding from 'lib0/decoding'
+import * as encoding from 'lib0/encoding'
 import { createWebSocketTransport, roomUrl, transportProvider } from 'ooxml-core/collab'
 import type { Transport, TransportHandlers } from 'ooxml-core/collab'
 
 /** C4: 서버 개체 브로드캐스트 WS 메시지 타입 (99 keepalive·100 meta·101 reset 다음). */
 export const MSG_ROOM_OBJECTS = 102
+/**
+ * U-parent: 부모 flush 요청 (서버→부모 방 owner) + 확인 (클라이언트→서버).
+ * 103을 받으면 officeSaveRequest로 즉시 저장하고, officeSaveDone를 보면 104 {ok}로 답한다.
+ * (ycollab.ts의 MSG_FLUSH_REQUEST/MSG_FLUSHED와 같은 값 — xlsx 탭은 이 탭 transport만 가진다.)
+ */
+export const MSG_FLUSH_REQUEST = 103
+export const MSG_FLUSHED = 104
 
 export interface ObjectAnchor {
   from?: { row?: number; col?: number; rowOffset?: number; colOffset?: number }
@@ -128,6 +136,49 @@ export function createObjectTapTransport(
 ): Transport {
   const inner = createWebSocketTransport({ url })
   let handlers: TransportHandlers | null = null
+  // U-parent: flush 요청 뒤 officeSaveDone 대기 (connect 단위로 1개).
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
+  let flushHandler: ((e: Event) => void) | null = null
+  const armFlushAck = (): void => {
+    if (flushHandler) {
+      try {
+        window.removeEventListener('officeSaveDone', flushHandler)
+      } catch {
+        /* 무시 */
+      }
+      flushHandler = null
+    }
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    const done = (e: Event): void => {
+      if (flushHandler !== done) return
+      flushHandler = null
+      window.removeEventListener('officeSaveDone', done)
+      if (flushTimer) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
+      const ok = (e as CustomEvent<{ ok?: boolean }>).detail?.ok === true
+      try {
+        const enc = encoding.createEncoder()
+        encoding.writeVarUint(enc, MSG_FLUSHED)
+        encoding.writeVarUint8Array(enc, new TextEncoder().encode(JSON.stringify({ ok })))
+        inner.send(encoding.toUint8Array(enc))
+      } catch {
+        // 무시 (서버 타임아웃이 처리한다)
+      }
+    }
+    flushHandler = done
+    window.addEventListener('officeSaveDone', done)
+    // 서버 예산(8초)보다 길게 잡는다. 늦은 ack는 서버가 무시한다.
+    flushTimer = setTimeout(() => {
+      window.removeEventListener('officeSaveDone', done)
+      if (flushHandler === done) flushHandler = null
+      flushTimer = null
+    }, 10000)
+  };
   return {
     connect(h) {
       handlers = {
@@ -136,6 +187,17 @@ export function createObjectTapTransport(
           const hNow = handlers
           if (!hNow) return
           try {
+            if (data.length > 0 && data[0] === MSG_FLUSH_REQUEST) {
+              // U-parent: 서버가 부모 flush를 요청했다. 편집을 유지한 채 즉시 저장한다.
+              // (data[0] 단일 바이트 판정: 103 < 128이라 varUint 1바이트다.)
+              try {
+                window.dispatchEvent(new CustomEvent('officeSaveRequest', { detail: { keepEditing: true } }))
+              } catch {
+                // 무시 (서버 타임아웃이 처리한다)
+              }
+              armFlushAck()
+              return
+            }
             if (data.length > 0 && data[0] === MSG_ROOM_OBJECTS) {
               const d = decoding.createDecoder(data.subarray(1))
               const raw = decoding.readVarUint8Array(d)
@@ -166,9 +228,21 @@ export function createObjectTapTransport(
       }
       inner.connect(handlers)
     },
-    send: (data: Uint8Array) => inner.send(data),
+    send: (data) => inner.send(data),
     disconnect: () => {
       handlers = null
+      if (flushHandler) {
+        try {
+          window.removeEventListener('officeSaveDone', flushHandler)
+        } catch {
+          /* 무시 */
+        }
+        flushHandler = null
+      }
+      if (flushTimer) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
       inner.disconnect()
     },
   }

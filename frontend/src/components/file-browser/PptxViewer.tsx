@@ -1396,6 +1396,9 @@ writeBackHaltedRef.current = false
     // fileReloadKey를 올리면 data가 바뀌고 아래 effect가 reloadKey를 올린다.
     session.onReset(() => {
       logClient('room_reset_reload')
+      // U-parent: 첨부 갱신 리셋이면 바깥 DocumentPreview가 전용 토스트를 1회 띄운다 (중복 방지).
+      const embedReset =
+        (session as unknown as { lastResetReason?: string | null }).lastResetReason === 'embed_reset'
       // ABA: 세션이 바뀌면 latestSavedRef/lastSavedHashRef는 무효 (디스크 상태 불명).
       latestSavedRef.current = null
       lastSavedHashRef.current = null
@@ -1417,7 +1420,11 @@ writeBackHaltedRef.current = false
         setMetaTick(0)
         resetPendingRef.current = true
         try {
-          window.dispatchEvent(new CustomEvent(OFFICE_RESET_RELOAD, { detail: { path: savePath } }))
+          window.dispatchEvent(
+            new CustomEvent(OFFICE_RESET_RELOAD, {
+              detail: { path: savePath, ...(embedReset ? { reason: 'embed_reset' } : {}) },
+            }),
+          )
         } catch {
           /* 무시 */
         }
@@ -1433,7 +1440,7 @@ writeBackHaltedRef.current = false
           setRenameSessionKey((v) => v + 1)
         }, 8000)
       }
-      showToast.info('owner가 파일 기준으로 다시 열었습니다')
+      if (!embedReset) showToast.info('owner가 파일 기준으로 다시 열었습니다')
     })
     // Y 슬라이드 수 추적 (doc은 세션 동안 유지되므로 여기서 1회만).
     const onDocUpdate = (): void => updateDebug()

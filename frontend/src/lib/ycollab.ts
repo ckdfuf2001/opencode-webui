@@ -193,6 +193,12 @@ export class YCollabSession {
   lastRxAt: number = Date.now()
   /** 마지막 수신 meta (없으면 null). */
   lastMeta: YCollabMeta | null = null
+  /** U-parent: 마지막 4001 close의 reason ('embed_reset'이면 첨부 갱신 리셋). */
+  lastResetReason: string | null = null
+  /** U-parent: flush 요청 뒤 officeSaveDone 대기 타이머. */
+  private flushAckTimer: ReturnType<typeof setTimeout> | null = null
+  /** U-parent: 위 타이머와 쌍을 이루는 window 리스너 (dispose 때 제거). */
+  private flushAckHandler: ((e: Event) => void) | null = null
   private metaListeners = new Set<(meta: YCollabMeta) => void>()
   /** clientId → 마지막 편집 시각 (step2 초기동기화 제외, 3.3). */
   readonly lastEditAt = new Map<number, number>()
@@ -359,7 +365,7 @@ export class YCollabSession {
       if (this.mode === 'transport') {
         // A1′: y-protocol 바이트는 손대지 않고 provider에 그대로 넘긴다
         // (0=sync, 1=awareness, 3=queryAwareness). 전용 타입만 여기서 처리한다.
-        if (type === 99 || type === 100 || type === 101) {
+        if (type === 99 || type === 100 || type === 101 || type === 103) {
           this.handleOwnMessage(type, d)
         } else {
           this.transportHandlers?.message(data)
@@ -397,7 +403,9 @@ export class YCollabSession {
           awarenessProtocol.modifyAwarenessUpdate(raw, stripCursorFields),
           this,
         )
-      } else if (type === 100) {
+      } else if (type === 100 || type === 103) {
+        // U-parent: 103 flush 요청도 전용 채널이다. lib 프로토콜(0/1)이 아니므로
+        // 여기서 소비한다 (transport 분기와 동일).
         this.handleOwnMessage(type, d)
       }
     }
@@ -421,6 +429,12 @@ export class YCollabSession {
       if (code === ROOM_RESET_CLOSE_CODE) {
         // Q1: owner가 방을 해체했다. 재연결/재시도하지 않는다.
         // resume 없이 새 방에 다시 들어가야 첫 입장자가 host로 파일 기준 재시드한다.
+        // U-parent: reason이 'embed_reset'이면 첨부 갱신 리셋 (토스트 분기용).
+        try {
+          this.lastResetReason = (evt as CloseEvent).reason ?? null
+        } catch {
+          this.lastResetReason = null
+        }
         this.resetRequested = true
         this.setStatus('disconnected')
         this.emitReset()
@@ -451,8 +465,14 @@ export class YCollabSession {
     }
   }
 
-  /** 전용 타입(99/100/101) 처리부. own·transport 공통. */
+  /** 전용 타입(99/100/101/103) 처리부. own·transport 공통. */
   private handleOwnMessage(type: number, d: decoding.Decoder): void {
+    if (type === 103) {
+      // U-parent: 서버가 부모 flush(즉시 저장)를 요청했다. 편집을 유지한 채 저장하고
+      // officeSaveDone를 보면 104 {ok}로 답한다 (서버 PUT이 최대 8초 기다린다).
+      this.requestParentFlush()
+      return
+    }
     if (type === 100) {
       // 서버 meta push (owner/lastHash/epoch/externalChanged/aiBlockedAt).
       try {
@@ -477,6 +497,54 @@ export class YCollabSession {
       } catch {
         // 무시 (구서버 호환)
       }
+    }
+  }
+
+  /**
+   * U-parent: 서버 flush 요청 처리. 편집을 유지한 채 즉시 저장하고,
+   * 첫 officeSaveDone를 104 ack로 서버에 돌려준다.
+   * 저장 리스너가 없거나 실패해도 서버 타임아웃(8초)이 409로 막으므로 조용한 유실은 없다.
+   */
+  private requestParentFlush(): void {
+    try {
+      // keepEditing: flush로 편집이 끝나면 안 된다 (DocumentPreview가 setEditing(false)한다).
+      window.dispatchEvent(new CustomEvent('officeSaveRequest', { detail: { keepEditing: true } }))
+    } catch {
+      // 무시 (서버 타임아웃이 처리한다)
+    }
+    const done = (e: Event): void => {
+      if (this.flushAckHandler !== done) return
+      this.flushAckHandler = null
+      window.removeEventListener('officeSaveDone', done)
+      if (this.flushAckTimer) {
+        clearTimeout(this.flushAckTimer)
+        this.flushAckTimer = null
+      }
+      const ok = (e as CustomEvent<{ ok?: boolean }>).detail?.ok === true
+      this.sendFlushAck(ok)
+    }
+    if (this.flushAckHandler) window.removeEventListener('officeSaveDone', this.flushAckHandler)
+    this.flushAckHandler = done
+    window.addEventListener('officeSaveDone', done)
+    if (this.flushAckTimer) clearTimeout(this.flushAckTimer)
+    // 서버 예산(8초)보다 길게 잡는다. 늦은 ack는 서버가 무시한다.
+    this.flushAckTimer = setTimeout(() => {
+      window.removeEventListener('officeSaveDone', done)
+      if (this.flushAckHandler === done) this.flushAckHandler = null
+      this.flushAckTimer = null
+    }, 10000)
+  }
+
+  /** U-parent: flush 확인을 서버에 보낸다 (104). */
+  private sendFlushAck(ok: boolean): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    try {
+      const e = encoding.createEncoder()
+      encoding.writeVarUint(e, MSG_FLUSHED)
+      encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify({ ok })))
+      this.send(encoding.toUint8Array(e))
+    } catch {
+      // 무시 (서버 타임아웃이 처리한다)
     }
   }
 
@@ -949,6 +1017,19 @@ export class YCollabSession {
     this.metaListeners.clear()
     this.activityListeners.clear()
     this.lastEditAt.clear()
+    // U-parent: flush 대기 중이면 정리한다 (늦은 officeSaveDone가 죽은 세션에서 ack하지 않게).
+    if (this.flushAckTimer) {
+      clearTimeout(this.flushAckTimer)
+      this.flushAckTimer = null
+    }
+    if (this.flushAckHandler) {
+      try {
+        window.removeEventListener('officeSaveDone', this.flushAckHandler)
+      } catch {
+        /* 무시 */
+      }
+      this.flushAckHandler = null
+    }
     if (this.mode === 'own') {
       // own은 우리가 소유하므로 끝까지 정리한다.
       try {
@@ -973,6 +1054,12 @@ export class YCollabSession {
 export const ROOM_RESET_CLOSE_CODE = 4001
 /** Q2: reset 요청 WS 메시지 타입. */
 export const MSG_RESET_ROOM = 101
+/**
+ * U-parent: 부모 flush 요청 (서버→부모 방 owner) + 확인 (클라이언트→서버).
+ * 103을 받으면 officeSaveRequest로 즉시 저장하고, officeSaveDone를 보면 104 {ok}로 답한다.
+ */
+export const MSG_FLUSH_REQUEST = 103
+export const MSG_FLUSHED = 104
 
 const PALETTE = ['#e11d48', '#2563eb', '#059669', '#d97706', '#7c3aed', '#db2777', '#0891b2', '#65a30d']
 

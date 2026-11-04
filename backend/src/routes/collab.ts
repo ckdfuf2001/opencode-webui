@@ -9,6 +9,7 @@ import {
   addConn,
   applySave,
   checkSave,
+  clearEditorDropOnCleanClose,
   clientRoleInRoom,
   createSession,
   currentDiskHash,
@@ -23,8 +24,10 @@ import {
   registerRoomObjects,
   releaseObjectLock,
   removeConn,
+  requestParentFlush,
   resetRoomByServer,
   roomHasEditors,
+  roomHasOpenEditor,
   roomIdForAbs,
   rooms,
   wsMessage,
@@ -569,8 +572,8 @@ app.put('/embed', async (c) => {
     if (room && embedViewerForbidden(rid, clientId)) {
       return c.json({ error: 'View-only participant cannot edit attachments while editors are present', code: 'view_only' }, 403)
     }
-    const hostBytes = new Uint8Array(await getRawFileContent(q.path))
-    const disk = room ? await currentDiskHash(rid) : await hashFile(abs).catch(() => null)
+    let hostBytes = new Uint8Array(await getRawFileContent(q.path))
+    let disk = room ? await currentDiskHash(rid) : await hashFile(abs).catch(() => null)
     // U-stale: 파트 단위 낙관적 잠금. 연 시점 파트와 다르면 덮어쓰지 않는다.
     // 방 해시와 무관하게 파트 자체를 비교한다 (방이 모르는 외부 변경도 잡힌다).
     if (q2.partHash) {
@@ -584,7 +587,27 @@ app.put('/embed', async (c) => {
       }
     }
     if (room) {
-      if (!q2.baseHash || q2.baseHash !== room.lastHash) {
+      // U-parent: 부모 방에 저장할 수 있는 편집자가 있으면 flush를 강제한다 (D64).
+      // flush가 부모 미저장을 디스크에 쓴 뒤에야 파트를 교체한다 (둘 다 생존).
+      // 수렴성: flush 저장 자체가 lastHash를 움직이므로, 재시도 base가 flush 전 해시와
+      // 같아도 받아들인다 (그 사이 부모 저장은 flush 저장에 포함되어 보존된다).
+      const preFlushHash = room.lastHash
+      if (roomHasOpenEditor(rid)) {
+        const flush = await requestParentFlush(rid)
+        if (!flush.ok) {
+          const cur = await currentDiskHash(rid)
+          return c.json({ error: 'Parent has unsaved changes — save the parent file first, then retry', code: 'dirty_room', currentHash: cur }, 409)
+        }
+        // flush 저장이 디스크·방 해시를 바꿨으므로 다시 읽는다.
+        hostBytes = new Uint8Array(await getRawFileContent(q.path))
+        disk = await currentDiskHash(rid)
+      } else if (room.lastEditorDropAt > 0) {
+        // U-parent: 편집 탭이 비정상 종료된 뒤다 (오프라인·크래시).
+        // 미저장을 들고 있을 수 있으므로 교체하지 않는다 (조용한 유실 방지).
+        const cur = await currentDiskHash(rid)
+        return c.json({ error: 'Parent tab is unreachable — open the parent file, save it, then retry', code: 'dirty_room', currentHash: cur }, 409)
+      }
+      if (!q2.baseHash || (q2.baseHash !== room.lastHash && q2.baseHash !== preFlushHash)) {
         return c.json({ error: 'Stale base — reload the attachment and retry', code: 'stale', currentHash: disk }, 409)
       }
       if (disk !== room.lastHash) {
@@ -685,8 +708,18 @@ export function registerCollabSockets(rootApp: Hono): { injectWebSocket: (server
         if (!data || !rooms.has(roomId)) return
         wsMessage(roomId, ws, data)
       },
-      onClose(_evt, ws) {
-        if (rooms.has(roomId)) removeConn(roomId, ws)
+      onClose(evt, ws) {
+        if (rooms.has(roomId)) {
+          // U-parent: clean close(1000)면 편집 탭이 정상 종료된 것이다.
+          // "떨어진 편집 탭" 기록을 지워 PUT이 진행되게 한다 (1006·무프레임은 남긴다).
+          try {
+            const code = (evt as unknown as { code?: unknown })?.code
+            if (code === 1000) clearEditorDropOnCleanClose(roomId)
+          } catch {
+            /* 무시 */
+          }
+          removeConn(roomId, ws)
+        }
       },
       onError(err) {
         logger.warn('Collab socket error:', err)

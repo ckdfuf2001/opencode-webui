@@ -807,6 +807,29 @@
 - 회귀 검사: U-open/U-close/U-stale/U-parent/U-parent-autosave/U-http/U-deeplink
   (U-parent가 최중요: 부모 미저장 편집 + 첨부 변경 둘 다 디스크 생존).
   멈춤 조건: 부모 flush에 lib 패치 필요 / U-parent 어느 한쪽 유실 / exe 새 창 불가.
+## D66 U-parent: 서버 WS flush 요청 + preFlush 수렴 (C5-4, 2026-11-04)
+-결정: PUT /embed는 방에 편집자가 있으면 서버가 부모 방 owner에게 WS 103 flush를
+ 요청하고 104 ack를 최대 8초 기다린다. ack ok면 교체, 초과·실패·도달 불가는 409
+ dirty_room. 편집 conn 없이 떨어진 기록(lastEditorDropAt)이 있으면(오프라인·크래시)
+ 교체하지 않는다 — clean close(1000)는 기록을 지운다. 4001 리셋 사유를 살려 부모 탭에
+ "첨부가 갱신되어 다시 불러왔습니다" 1회 토스트.
+-수렴성: flush 저장 자체가 lastHash를 움직여 재시도가 영원히 stale이 된다.
+ base가 flush 전 해시(preFlushHash)와 같아도 받아들인다 — 그 사이 부모 저장은
+ flush 저장에 포함되어 보존된다(조립은 flush 후 디스크 기준).
+-클라: ycollab(own·transport 공통, 103 소비) + xlsx 탭 transport가 officeSaveRequest
+ {keepEditing:true}로 즉시 저장하고 officeSaveDone를 104 {ok}로 답한다.
+ keepEditing이 없으면 바깥 DocumentPreview가 편집을 끝내버리므로 필수.
+-테스트: U-parent(오프라인 부모+첨부 저장→409→복구 후 둘 다 생존, red 확인:
+ 수정 전 PUT 200 통과), U-parent-autosave(온라인 강제 flush, 디바운스 운 무관),
+ U-http(solo HTTP 잠금→읽기→교체, 방 없음), U-deeplink(직접 URL 진입+저장).
+-관측: (1) pptx 세션 own 모드에서 103이 직행 분기에 없어 버려졌다 → 100||103으로 수정.
+ (2) 재입장 후 자동 저장에 기대면 안 된다 — flush가 부모 저장을 강제하므로 복구는
+ attach 재저장으로 한다. (3) 오프라인 30초(room TTL)를 넘기면 재입장이 디스크 기준이
+ 될 수 있어 테스트는 sweep 안에 복구한다 (범위 밖, 별도 기록).
+-회귀: c5-4 16/16, pptx-collab 26+1skip, xlsx-collab 19(+X2a-6 기존),
+ c5-3+c5-2 22, c5-1+presence 9, c4-6+ui-layout+viewer-unmount+xlsx-c2+xlsx-ole-solo+xlsx-solo 23
+ (+C2-b-1 flake, 단독 green), c3+c4-3+c4-4 47. backend unit 62, frontend unit 20.
+ tsc/eslint 신규 0 (backend 기존 에러만).
 ## 미결정 (사용자 판단 대기)
 
 - Q01 /handoff 410 스텁을 완전히 삭제할지.
