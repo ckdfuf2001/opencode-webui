@@ -1,12 +1,22 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Browser, type Page } from '@playwright/test'
 import { gotoApp, openFile, closePreview } from './helpers/viewer'
+import { ADA, seedUser } from './helpers/users'
 
 /**
  * UI 개편 트랙(U1~U3) 수용 기준 테스트.
  *
  * U1: 미리보기 닫기 버튼이 없고, 탐색기를 축소하면 미리보기가 언마운트된다.
- * U2: 편집 모드에서 Done/Save/Comments 가 에디터의 기능 search 오른쪽에 있다.
- * U3: 편집 모드는 전체화면 — 탐색기/파일 행/앱 헤더가 보이지 않는다.
+ * U2: /edit 새 탭에서 Done/Save/Comments 가 에디터의 기능 search 오른쪽에 있다.
+ * U3: /edit 새 탭은 크롬리스 — 탐색기/파일 행/앱 헤더가 보이지 않는다.
+ *
+ * 원래/변경/이유 (D64 URL 편집 분리, 2026-11):
+ * - 원래: 미리보기에서 Edit 버튼을 누르면 같은 탭이 전체화면 편집 모드로 전환됐다
+ *   (preview-fullscreen-root 오버레이, 탐색기·헤더 숨김, Escape로 복귀).
+ * - 변경: Edit은 /edit/<경로> 새 탭을 연다. in-page 전체화면 전환은 없어졌다.
+ *   U2/U3는 새 탭 기준으로 다시 썼다: 편집 탭 자체가 크롬리스이고,
+ *   Done/Save/Comments는 lib 타이틀바 actions 슬롯(기능 search 오른쪽)에 있다.
+ * - 이유: C5-4 D64에서 편집 진입점이 새 탭으로 바뀌어, 구 단언(오버레이·Escape 복귀)이
+ *   더 이상 성립하지 않는다. in-page 미리보기(보기 모드)는 그대로이므로 U1은 유지.
  *
  * 픽스처: config 가 서버 기동 전에 심는 probe-seeded-before-server.pptx
  * (테스트 중 새로 만들면 백엔드 파일 트리에 안 올라가 행을 못 찾는다 — M9/6절).
@@ -19,45 +29,6 @@ function viewerRoots(page: Page) {
     return {
       pptx: n('[data-testid="pptx-viewer-root"]'),
       sockets: (window as unknown as { __openSockets?: () => number }).__openSockets?.() ?? -1,
-    }
-  })
-}
-
-/** 네 귀퉁이가 어디에 걸리는지 + 앱 헤더/탐색기가 가려졌는지. */
-async function cornerProbe(page: Page) {
-  return page.evaluate(() => {
-    const desc = (el: Element | null): string => {
-      if (!el) return 'null'
-      const cls = String((el as HTMLElement).className || '')
-      const tid = el.getAttribute('data-testid')
-      return `${el.tagName.toLowerCase()}${tid ? '#' + tid : ''}${cls.includes('inset-0') ? '.inset0' : ''}`
-    }
-    const overlay = document.querySelector('[data-testid="preview-fullscreen-root"]')
-    const appHeader = document.querySelector('[data-testid="preview-file-header"]')
-    const w = window.innerWidth
-    const h = window.innerHeight
-    const points: Array<[number, number]> = [[2, 2], [w - 2, 2], [2, h - 2], [w - 2, h - 2]]
-    const corners = points.map(([x, y]) => {
-      const el = document.elementFromPoint(x, y)
-      return {
-        el: desc(el),
-        insideOverlay: !!(overlay && el && overlay.contains(el)),
-        insideAppHeader: !!(appHeader && el && appHeader.contains(el)),
-      }
-    })
-    const row = document.querySelector('[data-testid="file-row"]')
-    let rowCovered: boolean | null = null
-    if (row) {
-      const b = row.getBoundingClientRect()
-      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
-      rowCovered = !(hit && (row === hit || row.contains(hit)))
-    }
-    return {
-      corners,
-      rowCovered,
-      appHeaderPresent: !!appHeader,
-      docHeaderPresent: !!document.querySelector('[data-testid="preview-doc-header"]'),
-      fileRows: document.querySelectorAll('[data-testid="file-row"]').length,
     }
   })
 }
@@ -78,43 +49,55 @@ test.describe('UI 개편 (U1~U3)', () => {
     await expect.poll(async () => (await viewerRoots(page)).sockets, { timeout: 8000, intervals: [200] }).toBe(0)
   })
 
-  test('U3: 편집 모드는 전체화면 — 탐색기/파일 행/앱 헤더가 보이지 않는다', async ({ page }) => {
-    await gotoApp(page)
-    await openFile(page, PPTX, 'view')
-    await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
-    await page.getByRole('button', { name: 'Edit' }).click({ timeout: 20000 })
-    await page.waitForSelector('[data-testid="preview-fullscreen-root"]', { timeout: 20000 })
-    await page.waitForTimeout(1500)
-
-    const inEdit = await cornerProbe(page)
-    // 앱 헤더(파일명/액션 바)는 편집 화면에서 사라진다.
-    expect(inEdit.appHeaderPresent).toBe(false)
-    // 문서 헤더(View/Office(PDF)/Done/Save/Comments)도 사라진다.
-    expect(inEdit.docHeaderPresent).toBe(false)
-    // 네 귀퉁이가 모두 에디터 컨테이너 안이다.
-    for (const c of inEdit.corners) {
-      expect(c.insideOverlay, `corner element ${c.el}`).toBe(true)
-      expect(c.insideAppHeader).toBe(false)
+  test('U3: /edit 새 탭은 크롬리스 — 탐색기/파일 행/앱 헤더가 보이지 않는다', async ({ browser }: { browser: Browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    try {
+      await gotoApp(page)
+      await openFile(page, PPTX, 'view')
+      await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      expect(editor.url()).toMatch(/\/edit\//)
+      await editor.getByTestId('pptx-viewer-root').waitFor({ timeout: 60000 })
+      // 새 탭은 크롬리스: 탐색기 파일 행도 앱 헤더도 없다.
+      await expect(editor.locator('[data-testid="file-row"]')).toHaveCount(0)
+      await expect(editor.locator('[data-testid="preview-file-header"]')).toHaveCount(0)
+      // Escape는 탭을 닫지 않는다 (편집 유지 — 닫기는 Done/탭 닫기).
+      await editor.keyboard.press('Escape')
+      await editor.waitForTimeout(1000)
+      await expect(editor.getByTestId('pptx-viewer-root')).toBeVisible()
+      expect(editor.url()).toMatch(/\/edit\//)
+      await editor.close()
+      // 원본 탭은 그대로 (파일 행 살아 있음).
+      await expect(page.locator('[data-testid="file-row"]').first()).toBeVisible()
+    } finally {
+      await ctx.close().catch(() => {})
     }
-    // 파일 행은 화면에서 가려져 있다(탐색기 자체가 보이지 않는다).
-    expect(inEdit.rowCovered).toBe(true)
-
-    // Escape → 원래 레이아웃으로 돌아온다.
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(1500)
-    const after = await cornerProbe(page)
-    expect(after.appHeaderPresent).toBe(true)
-    expect(after.fileRows).toBeGreaterThan(0)
   })
 
-  test('U2: 편집 모드에서 Done/Save/Comments 가 기능 search 오른쪽에 있다', async ({ page }) => {
-    await gotoApp(page)
-    await openFile(page, PPTX, 'view')
-    await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
-    await page.getByRole('button', { name: 'Edit' }).click({ timeout: 20000 })
-    await page.waitForTimeout(2000)
+  test('U2: /edit 탭에서 Done/Save/Comments 가 기능 search 오른쪽에 있다', async ({ browser }: { browser: Browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    try {
+      await gotoApp(page)
+      await openFile(page, PPTX, 'view')
+      await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 30000 })
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      expect(editor.url()).toMatch(/\/edit\//)
+      await editor.getByTestId('pptx-viewer-root').waitFor({ timeout: 60000 })
+      await editor.waitForTimeout(2000)
 
-    const layout = await page.evaluate(() => {
+      const layout = await editor.evaluate(() => {
       const bar = document.querySelector('pptx-ui-title-bar')
       const root = bar?.shadowRoot
       const search = root?.querySelector('.search')
@@ -158,5 +141,9 @@ test.describe('UI 개편 (U1~U3)', () => {
     expect(layout.actionsRect!.x).toBeGreaterThanOrEqual(layout.searchRect!.x + layout.searchRect!.w - 1)
     // 자동 저장 토글(꺼는 수단)은 표시되지 않는다.
     expect(layout.autosaveVisible).toBe(false)
+    await editor.close()
+    } finally {
+      await ctx.close().catch(() => {})
+    }
   })
 })

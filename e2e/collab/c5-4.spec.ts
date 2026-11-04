@@ -1,10 +1,11 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
-import { backendBase, workspaceDir } from './helpers/env'
-import { gotoApp } from './helpers/viewer'
-import { ADA, seedUser } from './helpers/users'
+import { backendBase, workspaceDir, absForRel, uniqueRel } from './helpers/env'
+import { gotoApp, openEditor, openFileSeeded, gotoSlide, editShapeText, ShapeLocator, peer } from './helpers/viewer'
+import { waitForDisk } from './helpers/disk'
+import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
  * C5-4: 편집은 URL 단위로 분리한다 (D64).
@@ -26,6 +27,58 @@ async function mkRepo(localPath: string, files: string[]): Promise<void> {
   const dir = path.join(workspaceDir(), 'repos', localPath)
   fs.mkdirSync(dir, { recursive: true })
   for (const n of files) fs.copyFileSync(path.join(FIX, n), path.join(dir, n))
+}
+
+/** U-stale: 부모 zip 안의 첨부 파트를 통째로 교체한다 (외부 변경 시뮬레이션). 유효한 xlsx 유지. */
+async function tamperAttachPart(hostAbs: string, part: string, marker: string): Promise<Buffer> {
+  const host = fs.readFileSync(hostAbs)
+  const zip = await JSZip.loadAsync(host)
+  const f = zip.file(part)
+  if (!f) throw new Error('part missing: ' + part)
+  const inner = await JSZip.loadAsync(await f.async('uint8array'))
+  const ssNames = Object.keys(inner.files).filter((n) => n === 'xl/sharedStrings.xml')
+  if (ssNames.length === 0) throw new Error('no sharedStrings in part')
+  const sn = ssNames[0]!
+  let xml = await inner.file(sn)!.async('string')
+  const m = /<t>([^<]*)<\/t>/.exec(xml)
+  if (!m) throw new Error('no <t> in sharedStrings')
+  xml = xml.slice(0, m.index) + `<t>${m[1]}${marker}</t>` + xml.slice(m.index + m[0].length)
+  inner.file(sn, xml)
+  const partBytes = Buffer.from(await inner.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+  zip.file(part, partBytes)
+  const out = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+  fs.writeFileSync(hostAbs, out)
+  return partBytes
+}
+
+/** U-stale: 디스크 부모 파일에서 첨부 파트를 읽는다. */
+async function readAttachPart(hostAbs: string, part: string): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(fs.readFileSync(hostAbs))
+  const f = zip.file(part)
+  if (!f) throw new Error('part missing: ' + part)
+  return Buffer.from(await f.async('uint8array'))
+}
+
+function partPathOf(attachUrl: string): string {
+  const segs = new URL(attachUrl).pathname.split('/-/')
+  if (segs.length < 2 || !segs[1]) throw new Error('no part in attach url')
+  return decodeURIComponent(segs[1]!)
+}
+
+function partHashOf(attachUrl: string): string | null {
+  return new URL(attachUrl).searchParams.get('partHash')
+}
+
+/** 서버 rooms API에서 이 파일의 방 참가자 목록을 읽는다 (U-close 방 정리 단언용). */
+async function roomsForFile(fileName: string): Promise<Array<{ id?: unknown; name?: unknown }>> {
+  const res = await fetch(`${backendBase()}/api/collab/rooms`)
+  const body = (await res.json().catch(() => null)) as {
+    rooms?: Array<{ rel: string; participants?: Array<{ id?: unknown; name?: unknown }> }>
+  } | null
+  const rooms = body?.rooms ?? []
+  const mine = rooms.filter((r) => r.rel.endsWith(fileName))
+  if (mine.length === 0) return []
+  return mine[0]?.participants ?? []
 }
 
 async function openViaWorkspace(page: Page, name: string, seg: string, hostSel: string): Promise<void> {
@@ -316,6 +369,212 @@ test.describe('C5-4: URL 편집 분리', () => {
     } finally {
       await ctx.close().catch(() => {})
     }
+  })
+
+  test('U-close: 마지막 퇴장 뒤 방이 비고 정리된다 x10', async ({ browser }, testInfo) => {
+    // U-close: 참가자 0 + WS 0. 마지막 탭을 닫으면 서버 방에서 참가자가 사라져야 한다.
+    // (룸 객체 정리는 30s sweep 뒤 — 여기서는 참가자 0을 단언한다.)
+    testInfo.setTimeout(600000)
+    const FIX = 'e2e/collab/fixtures/collab-3slides.pptx'
+    for (let i = 0; i < 10; i++) {
+      const rel = uniqueRel(`uclose-${i}`, 0)
+      const abs = absForRel(rel)
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      fs.copyFileSync(FIX, abs)
+      const fname = rel.split('/').pop()!
+      const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+      await seedUser(ctxA, ADA)
+      const pageA = await ctxA.newPage()
+      await gotoApp(pageA)
+      const ctxB = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+      await seedUser(ctxB, GRACE)
+      const pageB = await ctxB.newPage()
+      await gotoApp(pageB)
+      try {
+        await openEditor(pageA, rel.replace(/^repos\//, ''))
+        await gotoSlide(pageA, 2)
+        await openFileSeeded(pageB, fname, rel)
+        await gotoSlide(pageB, 2)
+        await expect
+          .poll(async () => roomsForFile(fname).then((r) => r.length), { timeout: 30000, intervals: [1000] })
+          .toBe(2)
+      } finally {
+        await ctxA.close().catch(() => {})
+        await ctxB.close().catch(() => {})
+      }
+      // 두 탭을 닫으면 서버 방 참가자가 0이 되거나 방이 사라진다.
+      await expect
+        .poll(async () => roomsForFile(fname).then((r) => r.length), { timeout: 45000, intervals: [1000] })
+        .toBe(0)
+    }
+  })
+
+  test('U-close: 떠난 참가자가 피어 목록에서 사라진다 (유령 없음)', async ({ browser }, testInfo) => {
+    testInfo.setTimeout(300000)
+    const FIX = 'e2e/collab/fixtures/collab-3slides.pptx'
+    const rel = uniqueRel('uclose-ghost', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync(FIX, abs)
+    const fname = rel.split('/').pop()!
+    const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    await seedUser(ctxA, ADA)
+    const pageA = await ctxA.newPage()
+    await gotoApp(pageA)
+    const ctxB = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    await seedUser(ctxB, GRACE)
+    const pageB = await ctxB.newPage()
+    await gotoApp(pageB)
+    try {
+      await openEditor(pageA, rel.replace(/^repos\//, ''))
+      await gotoSlide(pageA, 2)
+      await openFileSeeded(pageB, fname, rel)
+      await gotoSlide(pageB, 2)
+      await expect(peer(pageB, 'u-ada')).toBeVisible({ timeout: 15000 })
+      await ctxA.close()
+      // A가 나가면 B 화면에서 A 행이 사라진다 (유령·폴백 '1' 없음).
+      await expect(peer(pageB, 'u-ada')).toBeHidden({ timeout: 15000 })
+      await expect
+        .poll(async () => peer(pageB, 'u-ada').count(), { timeout: 15000, intervals: [500] })
+        .toBe(0)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+    void testInfo
+  })
+
+  test('U-close: 저장 안 된 편집 탭을 닫으려 하면 브라우저가 확인한다', async ({ browser }, testInfo) => {
+    testInfo.setTimeout(300000)
+    // U-close 근본 수정: 조용한 유실 대신 beforeunload 확인. 자동 저장이 끝나면 묻지 않는다.
+    const FIX = 'e2e/collab/fixtures/collab-3slides.pptx'
+    const rel = uniqueRel('uclose-dirty', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync(FIX, abs)
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    try {
+      await openEditor(page, rel.replace(/^repos\//, ''))
+      await gotoSlide(page, 2)
+      // 오프라인으로 자동 저장을 막고 타이핑 → 저장 안 됨이 확정된다.
+      await ctx.setOffline(true)
+      const shapes = new ShapeLocator(page)
+      await editShapeText(page, shapes, 'Body 2', 'unsaved-stuff')
+      const seen: string[] = []
+      page.on('dialog', (d) => {
+        seen.push(d.type())
+        void d.dismiss().catch(() => {})
+      })
+      await page.goto('about:blank').catch(() => {})
+      // beforeunload 확인이 떠서 머문다.
+      expect(seen).toContain('beforeunload')
+      expect(page.url()).toMatch(/\/edit\//)
+      // 온라인 복귀 → 자동 저장 후에는 조용히 나간다.
+      await ctx.setOffline(false)
+      await waitForDisk(abs, (d) => (d.textOf('Body 2') ?? '').includes('unsaved-stuff'), 30000)
+      seen.length = 0
+      await page.goto('about:blank')
+      expect(seen).not.toContain('beforeunload')
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+    void testInfo
+  })
+
+  test('U-stale-1: 외부에서 바뀐 첨부는 덮어쓰지 않고 새로고침한다', async ({ browser }, testInfo) => {
+    // U-stale: PUT이 partHash를 대조해 stale_part로 막는다. 조용 덮어쓰기 금지.
+    testInfo.setTimeout(420000)
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54stale1', ['embed-pdf.xlsx'])
+    const hostAbs = path.join(workspaceDir(), 'repos', 'c54stale1', 'embed-pdf.xlsx')
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54stale1', '.xlsxengine-host')
+      const editor = await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      await expect(editor.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      const icon = editor.locator('[data-testid="ole-icon"][title*="embed-docx.xlsx"]')
+      await icon.waitFor({ timeout: 30000 })
+      const [attach] = await Promise.all([
+        editor.waitForEvent('popup', { timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
+      ])
+      await attach.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      // 편집 시작 (저장 안 함).
+      await setCellByFormulaBar(attach, 'A1', 'stale-probe-1')
+      // 외부 변경: 부모 디스크의 파트를 통째로 교체한다.
+      const part = partPathOf(attach.url())
+      const extBytes = await tamperAttachPart(hostAbs, part, '-EXT')
+      expect(extBytes.length).toBeGreaterThan(0)
+      // 저장 시도 → stale_part → 새로고침 (덮어쓰기 금지).
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      // 디스크 파트는 외부 내용 그대로여야 한다.
+      await expect
+        .poll(async () => (await readAttachPart(hostAbs, part)).equals(extBytes), { timeout: 15000, intervals: [500] })
+        .toBe(true)
+      // 새로고침 완료 증거: URL에 새 파트 해시가 찍힌다.
+      const { createHash } = await import('node:crypto')
+      const extHash = createHash('sha256').update(extBytes).digest('hex')
+      await expect
+        .poll(() => Promise.resolve(partHashOf(attach.url())), { timeout: 15000, intervals: [500] })
+        .toBe(extHash)
+      // stale 알림이 떴다.
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '다른 곳에서 변경' })).toHaveCount(1, { timeout: 15000 })
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+    void testInfo
+  })
+
+/** U-stale: 부모 zip 안의 임베딩 파트 목록 (서버 listEmbedParts와 동등). */
+async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
+  const zip = await JSZip.loadAsync(fs.readFileSync(hostAbs))
+  return Object.keys(zip.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/'))
+}
+
+  test('U-stale-2: ?partHash=가 다르면 경고를 보여주고 최신으로 연다', async ({ browser }, testInfo) => {
+    // U-stale: 딥링크 버전과 디스크가 다르면 조용히 열지 않고 알린다.
+    testInfo.setTimeout(420000)
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54stale2', ['embed-pdf.xlsx'])
+    const hostAbs = path.join(workspaceDir(), 'repos', 'c54stale2', 'embed-pdf.xlsx')
+    try {
+      const before = await listEmbeddedParts(hostAbs)
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54stale2', '.xlsxengine-host')
+      await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      let part = ''
+      await expect
+        .poll(async () => {
+          const after = await listEmbeddedParts(hostAbs)
+          const added = after.filter((p) => !before.includes(p))
+          if (added.length > 0) part = added[0]!
+          return added.length
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(1)
+      const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+      // editUrls.ts와 같은 형식(/edit/<경로>/-/<파트>)으로 직접 구성한다.
+      const origin = new URL(page.url()).origin
+      const base = `${origin}/edit/${enc('c54stale2/embed-pdf.xlsx')}/-/${enc(part)}?e2e=1&collabDebug=1`
+      // bogus 해시로 열면 경고를 보여주고 최신으로 연다.
+      const bogus = new URL(base)
+      bogus.searchParams.set('partHash', '0'.repeat(64))
+      const page2 = await ctx.newPage()
+      await page2.goto(bogus.toString(), { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await expect(page2.locator('[data-sonner-toast]').filter({ hasText: '첨부가 바뀌었습니다' })).toHaveCount(1, { timeout: 15000 })
+      await page2.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      await page2.close()
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+    void testInfo
   })
 
   test('U-popup-blocked: 새 탭이 차단되면 대체 링크를 보여준다', async ({ browser }) => {

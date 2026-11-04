@@ -8,6 +8,7 @@ import {
 } from './helpers/users'
 import { absForRel, uniqueRel, backendBase } from './helpers/env'
 import { readDeck, waitForDisk } from './helpers/disk'
+import JSZip from 'jszip'
 import {
   gotoApp,
   openFile,
@@ -46,6 +47,61 @@ async function freshFile(slug: string, index: number): Promise<{ rel: string; ab
   fs.mkdirSync(path.dirname(abs), { recursive: true })
   fs.copyFileSync(FIXTURE, abs)
   return { rel, abs, name: rel.split('/').pop()! }
+}
+
+/**
+ * 서식 픽스처: collab-3slides 복사본에 굵게/글머리표/번호를 심는다 (E2h~j).
+ * slide2/Body 2: "Hel"(일반) + "lo"(굵게). slide3/Body 3: 글머리표 2개 + 자동번호 1개.
+ */
+async function freshFormattedFile(slug: string, index: number): Promise<{ rel: string; abs: string; name: string }> {
+  const rel = uniqueRel(slug, index)
+  const abs = absForRel(rel)
+  fs.mkdirSync(path.dirname(abs), { recursive: true })
+  const src = fs.readFileSync(FIXTURE)
+  const zip = await JSZip.loadAsync(src)
+  const s2 = await zip.file('ppt/slides/slide2.xml')!.async('string')
+  const s2old =
+    '<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="3200"/><a:t>Hello</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody>'
+  const s2new =
+    '<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="3200"/><a:t>Hel</a:t></a:r><a:r><a:rPr lang="en-US" sz="3200" b="1"/><a:t>lo</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody>'
+  if (!s2.includes(s2old)) throw new Error('format fixture base mismatch (slide2)')
+  zip.file('ppt/slides/slide2.xml', s2.replace(s2old, s2new))
+  const s3 = await zip.file('ppt/slides/slide3.xml')!.async('string')
+  const s3old =
+    '<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="3200"/><a:t>Third</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody>'
+  const s3new =
+    '<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>' +
+    '<a:p><a:pPr><a:buChar char="&#x2022;"/></a:pPr><a:r><a:rPr lang="en-US" sz="3200"/><a:t>Third item</a:t></a:r><a:endParaRPr lang="en-US"/></a:p>' +
+    '<a:p><a:pPr><a:buChar char="&#x2022;"/></a:pPr><a:r><a:rPr lang="en-US" sz="3200"/><a:t>Second</a:t></a:r><a:endParaRPr lang="en-US"/></a:p>' +
+    '<a:p><a:pPr><a:buAutoNum type="arabicPeriod"/></a:pPr><a:r><a:rPr lang="en-US" sz="3200"/><a:t>Step1</a:t></a:r><a:endParaRPr lang="en-US"/></a:p>' +
+    '</p:txBody>'
+  if (!s3.includes(s3old)) throw new Error('format fixture base mismatch (slide3)')
+  zip.file('ppt/slides/slide3.xml', s3.replace(s3old, s3new))
+  const out = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+  fs.writeFileSync(abs, out)
+  return { rel, abs, name: rel.split('/').pop()! }
+}
+
+/** 도형 더블클릭 → 끝으로 이동(Ctrl+End) → 이어쓰기 → Escape (전체선택 없이 편집). */
+async function appendShapeText(page: Page, shapes: ShapeLocator, shapeName: string, suffix: string): Promise<void> {
+  const id = await shapes.idFor(shapeName)
+  await page.evaluate((eid) => {
+    const el = document.querySelector(`[data-element-id="${CSS.escape(eid)}"]`)
+    el?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  }, id)
+  await page.waitForFunction(() => document.querySelectorAll('textarea, [contenteditable="true"]').length > 0, null, { timeout: 8000 })
+  await page.keyboard.press('ControlOrMeta+End')
+  await page.keyboard.type(suffix)
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(800)
+}
+
+/** 디스크 pptx의 slideN.xml 원문을 읽는다 (서식 마커 단언용). */
+async function readSlideXml(abs: string, slideNo: number): Promise<string> {
+  const zip = await JSZip.loadAsync(fs.readFileSync(abs))
+  const f = zip.file(`ppt/slides/slide${slideNo}.xml`)
+  if (!f) throw new Error(`slide${slideNo}.xml missing`)
+  return f.async('string')
 }
 
 async function twoPages(browser: Browser, opts?: { seed?: boolean; mobile?: boolean }): Promise<Two> {
@@ -306,6 +362,8 @@ test.describe('pptx collab (desktop)', () => {
       `=== E2 saved-content === body2="${after.textOf('Body 2') ?? ''}" body3="${after.textOf('Body 3') ?? ''}" at=${Date.now()}`,
     )
     console.log('=== E2 timeline ===\n' + tl.join('\n'))
+    // ABA: 정상 경로에서는 서버 해시가 내 저장과 일치해야 한다 (오탐 저장 금지).
+    expect(tl.join('\n')).not.toContain('backstop.aba')
     await closeTwo(t)
   })
 
@@ -396,6 +454,104 @@ const t = await twoPages(browser)
     } finally {
       console.log('=== E2b A timeline ===\n' + tlA.join('\n'))
       console.log('=== E2b B timeline ===\n' + tlB.join('\n'))
+      await closeTwo(t)
+    }
+    void testInfo
+  })
+
+  test('E2h: Korean text commit reaches disk (IME path)', async ({ browser }, testInfo) => {
+    // 한글 입력(완성형) + Escape 커밋 → 디스크에 그대로 남는다 (M31).
+    const f = await freshFile('e2h', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    try {
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
+      await gotoSlide(t.pageA, 2)
+      await openFileSeeded(t.pageB, f.name, f.rel)
+      await gotoSlide(t.pageB, 2)
+      await editShapeText(t.pageA, shapesA, 'Body 2', '한글 테스트')
+      await expect(t.pageB.locator('[data-testid="pptx-viewer-root"]')).toContainText('한글 테스트', { timeout: 15000 })
+      const deck = await waitForDisk(f.abs, (d) => d.textOf('Body 2') === '한글 테스트', 12000)
+      expect(deck.slideCount).toBe(3)
+    } finally {
+      await closeTwo(t)
+    }
+    void testInfo
+  })
+
+  test('E2h2: IME composition + Escape keeps text (CDP)', async ({ browser }, testInfo) => {
+    // 한글 IME 조합 중에 Escape를 눌러도 글자가 남는다 (M31 폴백이 에디터를 깨지 않는다).
+    const f = await freshFile('e2h2', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    try {
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
+      await gotoSlide(t.pageA, 2)
+      const id = await shapesA.idFor('Body 2')
+      await t.pageA.evaluate((eid) => {
+        const el = document.querySelector(`[data-element-id="${CSS.escape(eid)}"]`)
+        el?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      }, id)
+      await t.pageA.waitForFunction(() => document.querySelectorAll('textarea, [contenteditable="true"]').length > 0, null, { timeout: 8000 })
+      await t.pageA.keyboard.press('ControlOrMeta+a')
+      // 활성 조합 시작: '한' 조합 중 (CDP IME).
+      const cdp = await t.pageA.context().newCDPSession(t.pageA)
+      await cdp.send('Input.imeSetComposition', { selectionStart: 1, selectionEnd: 1, text: '한' })
+      await t.pageA.waitForTimeout(500)
+      await t.pageA.keyboard.press('Escape')
+      await t.pageA.waitForTimeout(800)
+      // 크래시 없이 끝나고, 기존 글자가 지워지지 않는다 (지움 버그는 ''/쓰레기를 남긴다).
+      // 조합이 확정됐으면 '한'이, 브라우저가 취소했으면 원문 'Hello'가 남는다.
+      const deck = await readDeck(f.abs)
+      const body2 = deck.textOf('Body 2') ?? ''
+      expect(body2.length).toBeGreaterThan(0)
+      expect(body2.includes('Hello') || body2.includes('한')).toBe(true)
+    } finally {
+      await closeTwo(t)
+    }
+    void testInfo
+  })
+
+  test('E2i: bold run survives append + Escape commit', async ({ browser }, testInfo) => {
+    // 굵게 일부가 있는 문단에 이어쓰기 → 텍스트 반영 + 굵게 유지 (M32 DOM 대체가 서식을 깨지 않는다).
+    const f = await freshFormattedFile('e2i', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    try {
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
+      await gotoSlide(t.pageA, 2)
+      await openFileSeeded(t.pageB, f.name, f.rel)
+      await gotoSlide(t.pageB, 2)
+      await appendShapeText(t.pageA, shapesA, 'Body 2', '!')
+      await expect(t.pageB.locator('[data-testid="pptx-viewer-root"]')).toContainText('Hello!', { timeout: 15000 })
+      const deck = await waitForDisk(f.abs, (d) => (d.textOf('Body 2') ?? '').includes('Hello!'), 12000)
+      expect(deck.textOf('Body 2')).toContain('Hello!')
+      const xml = await readSlideXml(f.abs, 2)
+      expect(xml).toContain('b="1"')
+    } finally {
+      await closeTwo(t)
+    }
+    void testInfo
+  })
+
+  test('E2j: bullets and numbered list survive append + Escape commit', async ({ browser }, testInfo) => {
+    // 글머리표/번호 목록에 이어쓰기 → 텍스트 반영 + 목록 마커 유지.
+    const f = await freshFormattedFile('e2j', 0)
+    const t = await twoPages(browser)
+    const shapesA = new ShapeLocator(t.pageA)
+    try {
+      await openEditor(t.pageA, f.rel.replace(/^repos\//, ''))
+      await gotoSlide(t.pageA, 3)
+      await openFileSeeded(t.pageB, f.name, f.rel)
+      await gotoSlide(t.pageB, 3)
+      await appendShapeText(t.pageA, shapesA, 'Body 3', '!')
+      await expect(t.pageB.locator('[data-testid="pptx-viewer-root"]')).toContainText('Step1!', { timeout: 15000 })
+      const deck = await waitForDisk(f.abs, (d) => (d.textOf('Body 3') ?? '').includes('Step1!'), 12000)
+      expect(deck.textOf('Body 3')).toContain('Step1!')
+      const xml = await readSlideXml(f.abs, 3)
+      expect(xml).toContain('buChar')
+      expect(xml).toContain('buAutoNum')
+    } finally {
       await closeTwo(t)
     }
     void testInfo
