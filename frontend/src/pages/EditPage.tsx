@@ -4,7 +4,6 @@ import { DocumentPreview } from '@/components/file-browser/DocumentPreview'
 import AttachmentEditor from '@/components/file-browser/AttachmentEditor'
 import { attachmentKindOf } from '@/components/file-browser/embedEdit'
 import { baseNameOf, parseEditUrl } from '@/lib/editUrls'
-import { API_BASE_URL } from '@/config'
 import type { FileInfo } from '@/types/files'
 
 /**
@@ -16,50 +15,10 @@ export default function EditPage() {
   const { pathname } = useLocation()
   const parsed = useMemo(() => parseEditUrl(pathname), [pathname])
   const [closed, setClosed] = useState(false)
-  // C5-4: PPTX는 viewer로 마운트해 세션을 웜업한 뒤 in-place로 편집 전환한다
-  // (in-page와 같은 순서: viewer join → edit flip → seed).
-  // cold mount-as-editor는 create-intent/owner 레이스로 시딩이 안 돼 상대 join이 멈춘다 (E17).
-  // xlsx/docx는 cold edit mount로도 저장되므로 직접 진입한다.
-  const isPptxHost = parsed?.kind === 'file' && parsed.path.toLowerCase().endsWith('.pptx')
-  const [editSignal, setEditSignal] = useState(0)
-  useEffect(() => {
-    if (!isPptxHost || closed) return
-    let dead = false
-    const t0 = Date.now()
-    // 편집 전환은 협업 파이프라인이 증명된 뒤에 한다 (시딩된 방).
-    // cold mount에서 바로 뒤집으면 lib 인스턴스 교체 레이스로
-    // write-back 스케줄이 묶여 타이핑이 디스크에 안 남는다 (E2).
-    const timer = window.setInterval(() => {
-      if (dead) return
-      void (async () => {
-        try {
-          const res = await fetch(`${API_BASE_URL}/api/collab/rooms`)
-          const body = (await res.json()) as { rooms?: Array<{ rel?: string; seeded?: boolean }> }
-          // 서버 rel은 repos/ 접두 포함, URL 경로는 제외 — 양쪽으로 매칭한다.
-          const want = parsed?.kind === 'file' ? parsed.path.replace(/^\/+/, '') : ''
-          const mine = (body.rooms ?? []).filter((r) => {
-            const rel = (r.rel ?? '').replace(/^\/+/, '')
-            return rel === want || rel === `repos/${want}` || want === `repos/${rel}` || rel.endsWith(`/${want}`) || want.endsWith(`/${rel}`)
-          })
-          if (mine.some((r) => r.seeded)) {
-            window.clearInterval(timer)
-            if (!dead) setEditSignal((s) => s + 1)
-            return
-          }
-        } catch {
-          /* 조회 실패는 다음 틱에 재시도 */
-        }
-        if (Date.now() - t0 > 30000) {
-          window.clearInterval(timer)
-          if (!dead) setEditSignal((s) => s + 1)
-        }
-      })()
-    }, 1000)
-    return () => {
-      dead = true
-      window.clearInterval(timer)
-    }
-  }, [pathname, parsed, isPptxHost, closed])
+  // C5-4: 편집 페이지는 마운트 시점부터 편집 모드다 (in-place 전환 없음).
+  // viewer-first 전환은 lib 인스턴스 교체 레이스를 일으켜 write-back이
+  // 묶일 수 있으므로 직접 편집 마운트로 통일한다 (E2).
+  // (per-mount connBadge 구독 수정 뒤에는 cold edit mount도 정상 시딩된다.)
 
   useEffect(() => {
     setClosed(false)
@@ -144,13 +103,7 @@ export default function EditPage() {
   }
   return (
     <div data-testid="edit-page" className="h-screen w-screen overflow-hidden bg-background text-foreground">
-      <DocumentPreview
-        file={file}
-        initialEditing={!isPptxHost}
-        editSignal={editSignal}
-        editInNewTab={false}
-        onDone={closeTab}
-      />
+      <DocumentPreview file={file} initialEditing editInNewTab={false} onDone={closeTab} />
     </div>
   )
 }
