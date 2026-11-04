@@ -1,6 +1,5 @@
-import { memo, useMemo, useEffect, useRef, useCallback } from 'react'
+import { memo, useMemo } from 'react'
 import { useSettings } from '@/hooks/useSettings'
-import { useAbortSession } from '@/hooks/useOpenCode'
 import { MessagePart } from './MessagePart'
 import { CornerDownLeft, Scissors, Eraser, X, Copy } from 'lucide-react'
 import type { MessageWithParts } from '@/api/types'
@@ -11,7 +10,6 @@ import { parseSkillInvocation } from '@/lib/skillBlock'
 import { absToWsPath } from '@opencode-webui/shared/lib/repoPath'
 import { formatChatTime } from '@/lib/chatTime'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { showToast } from '@/lib/toast'
 import { toolPartRenderMode } from '@/lib/toolPartRender'
 
 function getMessageTextContent(msg: MessageWithParts): string {
@@ -161,73 +159,10 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
   // 툴 호출이 시작된 뒤에는 고정된 앞부분(텍스트·완료 파트)과 실행 중 툴 상태(스피너 없음)를 보여준다.
   const { preferences } = useSettings()
   const sseOn = preferences?.sseStreaming ?? false
-  // bash 감시자: opencode가 timeout에 kill하지 못하고 running이 고착되면
-  // 중단 확인 토스트만 띄운다 (자동 abort 금지 — 되돌릴 수 없는 동작이라 사용자 판단에 맡긴다).
-  // (opencode 기본 2분·최대 10분 강제 + grace 60초. 정상 종료분은 status가 바뀌어 스킵된다.)
-  // 표시 여부(SSE off 숨김)와 무관하게 여기서 감시한다.
-  const abortSession = useAbortSession(opcodeUrl, directory)
-  const abortRef = useRef(abortSession.mutate)
-  abortRef.current = abortSession.mutate
-  const watchdogFiredRef = useRef<{ sessionID: string; keys: Set<string> }>({ sessionID: '', keys: new Set() })
-  const runBashWatchdog = useCallback(() => {
-    if (!messages || !sessionID) return
-    if (watchdogFiredRef.current.sessionID !== sessionID) {
-      watchdogFiredRef.current = { sessionID, keys: new Set() }
-    }
-    const fired = watchdogFiredRef.current.keys
-    if (fired.size > 1000) fired.clear()
-    for (const m of messages) {
-      if (m.info.role !== 'assistant') continue
-      for (const p of m.parts ?? []) {
-        if ((p as { type?: string }).type !== 'tool') continue
-        const tool = (p as { tool?: string }).tool
-        if (tool !== 'bash' && tool !== 'shell' && tool !== 'terminal') continue
-        const st = (p as { state?: { status?: string; time?: { start?: number }; input?: { timeout?: number } } }).state
-        if (st?.status !== 'running') continue
-        const inputTimeout = typeof st.input?.timeout === 'number' && st.input.timeout > 0 ? st.input.timeout : 120_000
-        const timeoutMs = Math.min(inputTimeout, 600_000)
-        const start = st.time?.start ?? m.info.time?.created ?? 0
-        if (!start || Date.now() - start < timeoutMs + 60_000) continue
-        const pid = (p as { id?: string }).id ?? ''
-        const key = `bash-stuck:${sessionID}:${m.info.id}:${pid}`
-        if (fired.has(key)) continue
-        fired.add(key)
-        const secs = Math.round(timeoutMs / 1000)
-        showToast.warning(`Bash가 timeout(${secs}s)을 넘겨도 실행 중입니다 — 고착이면 중단하세요`, {
-          id: key,
-          duration: 15000,
-          action: {
-            label: '중단하기',
-            onClick: () => abortRef.current(sessionID),
-          },
-        })
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, sessionID])
-
-  useEffect(() => { runBashWatchdog() }, [runBashWatchdog])
-
-  // 위 감시자는 messages 가 바뀔 때만 돈다. 조용히 오래 도는 bash 는 파트 갱신이
-  // 없어서 이펙트가 다시 실행되지 않는다 -> SSE on/off·폴링 주기와 무관하게
-  // running bash 가 있으면 주기적으로도 검사한다.
-  useEffect(() => {
-    if (!messages || !sessionID) return
-    const hasRunningBash = messages.some((m) =>
-      m.info.role === 'assistant'
-      && (m.parts ?? []).some((p) => {
-        const t = (p as { type?: string }).type
-        const tool = (p as { tool?: string }).tool
-        const status = (p as { state?: { status?: string } }).state?.status
-        return t === 'tool'
-          && (tool === 'bash' || tool === 'shell' || tool === 'terminal')
-          && status === 'running'
-      }),
-    )
-    if (!hasRunningBash) return
-    const id = setInterval(runBashWatchdog, 20_000)
-    return () => clearInterval(id)
-  }, [messages, sessionID, runBashWatchdog])
+  // bash 고착 감시·토스트는 백단 bash-watchdog(10s)이 전담한다.
+  // (opencode 기본 2분·최대 10분 + grace 30s, opencode idle 확인 후 강제 idle+orphan+abort)
+  // 프론트는 orphan 배지 표시만 한다.
+  void opcodeUrl
   if (!messages) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
