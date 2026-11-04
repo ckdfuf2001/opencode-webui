@@ -354,6 +354,13 @@ body {
   display: none;
 }
 
+/* C5-4c A2: lib 따라가기 바를 끈다 — 따라가기는 우리 팝오버(C3, paused:true)가 전담한다.
+   lib CollaborationFollowLayer는 collab이 있으면 항상 이 바를 렌더하므로(신규 탭·기존 전체화면 공통),
+   앱 CSS로 숨긴다. lib 패치 아님. */
+[data-testid='follow-mode-bar'] {
+  display: none !important;
+}
+
 /* 탐색기 버튼 테두리 — 채팅 영역처럼 연하게.
    unlayered라 Button outline의 dark:border-input을 이긴다. */
 .btn-soft-border {
