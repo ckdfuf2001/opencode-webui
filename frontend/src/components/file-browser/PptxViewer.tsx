@@ -756,8 +756,17 @@ if (!writeBackHaltedRef.current) {
       getArray?: (key: string) => { length: number }
     }
     if (!doc || typeof doc.on !== 'function') return
-    const onUpdate = (): void => {
-      tl('writeback.backstop.see', { editing: !!editingRef.current })
+    const onUpdate = (update: unknown, origin: unknown): void => {
+      try {
+        const b = update as Uint8Array | undefined
+        tl('writeback.backstop.see', {
+          editing: !!editingRef.current,
+          origin: typeof origin === 'string' ? origin : origin == null ? 'null' : typeof origin,
+          len: b instanceof Uint8Array ? b.length : -1,
+        })
+      } catch {
+        /* ignore */
+      }
       if (!editingRef.current || standaloneRef.current) return
       if (backstopTimerRef.current) clearTimeout(backstopTimerRef.current)
     backstopTimerRef.current = setTimeout(() => {
