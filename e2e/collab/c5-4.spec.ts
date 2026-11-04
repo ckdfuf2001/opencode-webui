@@ -2,9 +2,10 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
+import { createHash } from 'node:crypto'
 import { backendBase, workspaceDir, absForRel, uniqueRel } from './helpers/env'
 import { gotoApp, openEditor, openFileSeeded, gotoSlide, editShapeText, ShapeLocator, peer } from './helpers/viewer'
-import { waitForDisk } from './helpers/disk'
+import { waitForDisk, readDeck } from './helpers/disk'
 import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
@@ -57,6 +58,53 @@ async function readAttachPart(hostAbs: string, part: string): Promise<Buffer> {
   const f = zip.file(part)
   if (!f) throw new Error('part missing: ' + part)
   return Buffer.from(await f.async('uint8array'))
+}
+
+/** U-parent: xlsx 바이트 안의 모든 XML에 마커가 있는지 (셀 값·공유 문자열 모두 탐지). */
+async function xlsxBytesContain(partBytes: Uint8Array, marker: string): Promise<boolean> {
+  try {
+    const inner = await JSZip.loadAsync(partBytes)
+    const names = Object.keys(inner.files).filter((n) => n.endsWith('.xml'))
+    for (const n of names) {
+      const t = await inner.file(n)!.async('string')
+      if (t.includes(marker)) return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+/** U-parent: 호스트 xlsx 자체에 마커가 있는지 (첨부 제외 본문 시트). */
+async function xlsxContains(abs: string, marker: string): Promise<boolean> {
+  try {
+    return await xlsxBytesContain(new Uint8Array(fs.readFileSync(abs)), marker)
+  } catch {
+    return false
+  }
+}
+
+/** U-parent: 디스크 부모 파일의 첨부 파트에 마커가 있는지. */
+async function partContains(hostAbs: string, part: string, marker: string): Promise<boolean> {
+  try {
+    return await xlsxBytesContain(new Uint8Array(await readAttachPart(hostAbs, part)), marker)
+  } catch {
+    return false
+  }
+}
+
+/** U-http: 파트 xlsx 바이트의 공유 문자열에 마커를 추가한다. */
+async function tamperPartXlsx(partBytes: Uint8Array, marker: string): Promise<Buffer> {
+  const inner = await JSZip.loadAsync(partBytes)
+  const sn = 'xl/sharedStrings.xml'
+  const f = inner.file(sn)
+  if (!f) throw new Error('no sharedStrings in part')
+  let xml = await f.async('string')
+  const m = /<t>([^<]*)<\/t>/.exec(xml)
+  if (!m) throw new Error('no <t> in sharedStrings')
+  xml = xml.slice(0, m.index) + `<t>${m[1]}${marker}</t>` + xml.slice(m.index + m[0].length)
+  inner.file(sn, xml)
+  return Buffer.from(await inner.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
 }
 
 function partPathOf(attachUrl: string): string {
@@ -594,6 +642,238 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
       await expect(page.getByTestId('edit-popup-blocked')).toBeVisible({ timeout: 15000 })
       const href = await page.getByTestId('edit-popup-blocked-link').getAttribute('href')
       expect(href ?? '').toMatch(/\/edit\/.+\.xlsx/)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('U-parent: 부모 미저장 상태에서 첨부 저장 — 409 뒤 복구하면 둘 다 생존', async ({ browser }, testInfo) => {
+    // D64 U-parent: 서버가 부모 방 owner에게 WS flush를 요청한다.
+    // 부모 오프라인(flush 도달 불가)이면 PUT은 409 dirty_room으로 막히고,
+    // 복구 뒤에는 부모 편집 + 첨부 변경이 둘 다 디스크에 생존한다.
+    testInfo.setTimeout(420000)
+    const FIX3 = 'e2e/collab/fixtures/collab-3slides.pptx'
+    const rel = uniqueRel('uparent', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync(FIX3, abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const fname = rel.split('/').pop()!
+    // INSERT는 HTTP solo 경로로 한다 (/edit 탭에는 Edit 버튼이 없다).
+    const fileBytes = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    const fd = new FormData()
+    fd.append('path', parentPath)
+    fd.append('file', new Blob([new Uint8Array(fileBytes)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+    fd.append('slide', '2')
+    const ins = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+      r.json(),
+    ) as { ok?: boolean; embeddings?: string[] }
+    expect(ins.ok).toBe(true)
+    const part = (ins.embeddings ?? [])[0]!
+    expect(part).toMatch(/embeddings\//)
+    const got = await fetch(
+      `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part }).toString()}`,
+    ).then((r) => r.json()) as { ok?: boolean; data?: string }
+    expect(got.ok).toBe(true)
+    const partHash = createHash('sha256').update(Buffer.from(got.data!, 'base64')).digest('hex')
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const pageA = await ctxA.newPage()
+    await gotoApp(pageA)
+    const origin = new URL(pageA.url()).origin
+    const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+    // 첨부 탭은 별도 컨텍스트(온라인 유지) — 부모만 오프라인으로 떨어뜨린다.
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxB, ADA)
+    try {
+      await openEditor(pageA, parentPath)
+      await gotoSlide(pageA, 2)
+      const attach = await ctxB.newPage()
+      await attach.goto(`${origin}/edit/${enc(parentPath)}/-/${enc(part)}?partHash=${partHash}&e2e=1&collabDebug=1`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      })
+      await attach.getByTestId('edit-page').waitFor({ timeout: 30000 })
+      await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      // 첨부 편집 (저장 안 함).
+      await setCellByFormulaBar(attach, 'A1', 'uparent-attach-1')
+      // 부모 오프라인: 자동 저장도 막히고 서버 flush도 도달하지 않는다 (첨부 탭은 온라인).
+      // (방 30초 sweep 전에 복구해야 재입장이 병합된다 — sweep 뒤 재입장은 디스크 기준이라 범위 밖.)
+      await ctxA.setOffline(true)
+      const shapes = new ShapeLocator(pageA)
+      await editShapeText(pageA, shapes, 'Body 2', 'uparent-mark')
+      // 첨부 저장 시도 → 409 dirty_room (조용한 덮어쓰기 금지).
+      // flush 도달 불가(half-open이면 8초 타임아웃, 정리됐으면 즉시)라 결과는 항상 409다.
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '부모 파일' })).toHaveCount(1, {
+        timeout: 30000,
+      })
+      // 디스크는 그대로다 (부모 편집도 첨부 변경도 아직 없음).
+      expect(await partContains(abs, part, 'uparent-attach-1')).toBe(false)
+      expect((await readDeck(abs)).textOf('Body 2') ?? '').not.toContain('uparent-mark')
+      // 부모 복구 → 재입장 뒤 첨부 저장이 flush로 부모를 저장시킨다 (자동 저장에 기대지 않는다).
+      await ctxA.setOffline(false)
+      // 부모가 방에 다시 들어오고 owner가 선출될 때까지 대기한다.
+      await expect
+        .poll(async () => roomsForFile(fname).then((r) => r.length), { timeout: 60000, intervals: [1000] })
+        .toBe(1)
+      await attach.waitForTimeout(3000)
+      // 첨부 다시 저장 → 성공하고 둘 다 생존한다.
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(1, {
+        timeout: 60000,
+      })
+      await expect
+        .poll(() => Promise.resolve(partContains(abs, part, 'uparent-attach-1')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      expect((await readDeck(abs)).textOf('Body 2') ?? '').toContain('uparent-mark')
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
+  test('U-parent-autosave: 온라인 부모 편집 + 첨부 저장 — 강제 flush로 둘 다 생존', async ({ browser }, testInfo) => {
+    // D64 U-parent-autosave: PUT이 부모 owner에게 flush를 강제하므로
+    // 디바운스 운과 무관하게 부모 편집 + 첨부 변경이 둘 다 디스크에 생존한다.
+    testInfo.setTimeout(420000)
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54upauto', ['embed-pdf.xlsx'])
+    const hostAbs = path.join(workspaceDir(), 'repos', 'c54upauto', 'embed-pdf.xlsx')
+    try {
+      await openViaWorkspace(page, 'embed-pdf.xlsx', 'c54upauto', '.xlsxengine-host')
+      const editor = await attachViaAddInTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
+      await expect(editor.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      const icon = editor.locator('[data-testid="ole-icon"][title*="embed-docx.xlsx"]')
+      await icon.waitFor({ timeout: 30000 })
+      const [attach] = await Promise.all([
+        editor.waitForEvent('popup', { timeout: 15000 }),
+        icon.dblclick({ timeout: 15000 }),
+      ])
+      await attach.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      // 첨부 먼저 편집 (저장 안 함), 부모 편집 직후 바로 저장 → 디바운스(2.5s)보다 PUT이 빠르다.
+      await setCellByFormulaBar(attach, 'A1', 'uparent-auto-attach')
+      await setCellByFormulaBar(editor, 'A1', 'uparent-auto-mark')
+      const part = partPathOf(attach.url())
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(1, {
+        timeout: 60000,
+      })
+      await expect
+        .poll(() => Promise.resolve(partContains(hostAbs, part, 'uparent-auto-attach')), {
+          timeout: 60000,
+          intervals: [1000],
+        })
+        .toBe(true)
+      await expect
+        .poll(() => Promise.resolve(xlsxContains(hostAbs, 'uparent-auto-mark')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('U-http: HTTP만으로 잠금→읽기→교체 (방 없음)', async ({ }, testInfo) => {
+    // D64 U-http: 방이 없는 파일은 solo 경로로 HTTP만으로 교체된다 (회귀 잠금).
+    testInfo.setTimeout(120000)
+    await mkRepo('c54http', ['embed-pdf.xlsx'])
+    const parentPath = 'c54http/embed-pdf.xlsx'
+    const hostAbs = path.join(workspaceDir(), 'repos', parentPath)
+    const fileBytes = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    // INSERT (solo, 방 없음).
+    const fd = new FormData()
+    fd.append('path', parentPath)
+    fd.append('file', new Blob([new Uint8Array(fileBytes)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+    fd.append('sheet', '0')
+    const ins = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+      r.json(),
+    ) as { ok?: boolean; embeddings?: string[] }
+    expect(ins.ok).toBe(true)
+    const part = (ins.embeddings ?? [])[0]
+    expect(part).toMatch(/embeddings\//)
+    // GET → 잠금 → 변조 → PUT.
+    const got = await fetch(
+      `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part: part! }).toString()}`,
+    ).then((r) => r.json()) as { ok?: boolean; data?: string; hash?: string }
+    expect(got.ok).toBe(true)
+    const partBytes = Buffer.from(got.data!, 'base64')
+    const token = `t-http-${Date.now().toString(36)}`
+    const lock = await fetch(`${backendBase()}/api/collab/embed/lock`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: parentPath, part, name: 'http-probe', token }),
+    }).then((r) => r.json()) as { ok?: boolean; lockId?: string }
+    expect(lock.ok).toBe(true)
+    try {
+      const mod = await tamperPartXlsx(partBytes, 'uhttp-mark')
+      const partHash = createHash('sha256').update(partBytes).digest('hex')
+      const fd2 = new FormData()
+      fd2.append('file', new Blob([new Uint8Array(mod)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+      fd2.append('baseHash', got.hash!)
+      fd2.append('partHash', partHash)
+      fd2.append('lockId', lock.lockId!)
+      const put = await fetch(
+        `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part: part! }).toString()}`,
+        { method: 'PUT', body: fd2 },
+      ).then((r) => r.json()) as { ok?: boolean; newHash?: string }
+      expect(put.ok).toBe(true)
+      expect(await partContains(hostAbs, part!, 'uhttp-mark')).toBe(true)
+      // 방이 생기지 않았다 (solo 경로).
+      expect(await roomsForFile('embed-pdf.xlsx').then((r) => r.filter((p) => JSON.stringify(p).includes('c54http')))).toEqual([])
+    } finally {
+      await fetch(`${backendBase()}/api/collab/embed/lock`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: parentPath, part, lockId: lock.lockId!, token }),
+      }).catch(() => {})
+    }
+  })
+
+  test('U-deeplink: /edit/<부모>/-/<파트> 직접 열기', async ({ browser }, testInfo) => {
+    // D64 U-deeplink: 딥링크로 첨부 편집기가 바로 열린다 (회귀 잠금).
+    testInfo.setTimeout(180000)
+    await mkRepo('c54deep', ['embed-pdf.xlsx'])
+    const parentPath = 'c54deep/embed-pdf.xlsx'
+    const fileBytes = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    const fd = new FormData()
+    fd.append('path', parentPath)
+    fd.append('file', new Blob([new Uint8Array(fileBytes)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+    fd.append('sheet', '0')
+    const ins = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+      r.json(),
+    ) as { ok?: boolean; embeddings?: string[] }
+    expect(ins.ok).toBe(true)
+    const part = (ins.embeddings ?? [])[0]!
+    const got = await fetch(
+      `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part }).toString()}`,
+    ).then((r) => r.json()) as { ok?: boolean; data?: string }
+    expect(got.ok).toBe(true)
+    const partHash = createHash('sha256').update(Buffer.from(got.data!, 'base64')).digest('hex')
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    try {
+      const origin = new URL(page.url()).origin
+      const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+      const deep = `${origin}/edit/${enc(parentPath)}/-/${enc(part)}?partHash=${partHash}&e2e=1&collabDebug=1`
+      await page.goto(deep, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.getByTestId('edit-page').waitFor({ timeout: 30000 })
+      await page.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      await expect(page.getByTestId('attach-title')).toContainText('embed-docx.xlsx')
+      // 해시가 맞으면 경고 없이 열린다.
+      await expect(page.locator('[data-sonner-toast]').filter({ hasText: '첨부가 바뀌었습니다' })).toHaveCount(0, {
+        timeout: 10000,
+      })
+      // 저장까지 된다 (잠금+PUT 경로).
+      await page.getByTestId('attach-save').click({ timeout: 20000 })
+      await expect(page.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(1, {
+        timeout: 60000,
+      })
     } finally {
       await ctx.close().catch(() => {})
     }
