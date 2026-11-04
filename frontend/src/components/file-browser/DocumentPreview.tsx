@@ -528,7 +528,7 @@ function PdfViewer({ data, fileName }: { data: ArrayBuffer; fileName?: string })
   )
 }
 
-export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone, initialEditing = false, editInNewTab = true }: { file: FileInfo; refreshKey?: number; onEditingChange?: (editing: boolean) => void; onDone?: () => void; initialEditing?: boolean; editInNewTab?: boolean }) {
+export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone, initialEditing = false, editSignal = 0, editInNewTab = true }: { file: FileInfo; refreshKey?: number; onEditingChange?: (editing: boolean) => void; onDone?: () => void; initialEditing?: boolean; editSignal?: number; editInNewTab?: boolean }) {
   const kind = detectDocKind(file.name)
   // office 문서(docx/xlsx/pptx)는 바로 보기 우선 — PDF 변환 없이 바로 본다.
   // PDF가 필요하면 토글로 서버 변환을 켠다.
@@ -536,6 +536,11 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
   const isViewerOnly = kind === 'visio'
   const [pdfMode, setPdfMode] = useState(false)
   const [editing, setEditing] = useState(initialEditing)
+  // C5-4: /edit 페이지의 in-place 편집 전환 신호 (viewer 웜업 후 edit flip).
+  // in-page Edit 클릭과 같은 순서로 editing을 켠다 (리마운트 없음).
+  useEffect(() => {
+    if (editSignal > 0) setEditing(true)
+  }, [editSignal])
   const [viewerRetry, setViewerRetry] = useState(0)
   const [endingEdit, setEndingEdit] = useState(false)
   const embedInputRef = useRef<HTMLInputElement | null>(null)
