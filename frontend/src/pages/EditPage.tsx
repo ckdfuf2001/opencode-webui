@@ -4,6 +4,7 @@ import { DocumentPreview } from '@/components/file-browser/DocumentPreview'
 import AttachmentEditor from '@/components/file-browser/AttachmentEditor'
 import { attachmentKindOf } from '@/components/file-browser/embedEdit'
 import { baseNameOf, parseEditUrl } from '@/lib/editUrls'
+import { API_BASE_URL } from '@/config'
 import type { FileInfo } from '@/types/files'
 
 /**
@@ -25,14 +26,35 @@ export default function EditPage() {
     if (!isPptxHost || closed) return
     let dead = false
     const t0 = Date.now()
+    // 편집 전환은 협업 파이프라인이 증명된 뒤에 한다 (시딩된 방).
+    // cold mount에서 바로 뒤집으면 lib 인스턴스 교체 레이스로
+    // write-back 스케줄이 묶여 타이핑이 디스크에 안 남는다 (E2).
     const timer = window.setInterval(() => {
       if (dead) return
-      const el = document.querySelector('[data-testid="collab-status"]')
-      if (el?.getAttribute('data-status') === 'connected' || Date.now() - t0 > 30000) {
-        window.clearInterval(timer)
-        if (!dead) setEditSignal((s) => s + 1)
-      }
-    }, 500)
+      void (async () => {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/collab/rooms`)
+          const body = (await res.json()) as { rooms?: Array<{ rel?: string; seeded?: boolean }> }
+          // 서버 rel은 repos/ 접두 포함, URL 경로는 제외 — 양쪽으로 매칭한다.
+          const want = parsed?.kind === 'file' ? parsed.path.replace(/^\/+/, '') : ''
+          const mine = (body.rooms ?? []).filter((r) => {
+            const rel = (r.rel ?? '').replace(/^\/+/, '')
+            return rel === want || rel === `repos/${want}` || want === `repos/${rel}` || rel.endsWith(`/${want}`) || want.endsWith(`/${rel}`)
+          })
+          if (mine.some((r) => r.seeded)) {
+            window.clearInterval(timer)
+            if (!dead) setEditSignal((s) => s + 1)
+            return
+          }
+        } catch {
+          /* 조회 실패는 다음 틱에 재시도 */
+        }
+        if (Date.now() - t0 > 30000) {
+          window.clearInterval(timer)
+          if (!dead) setEditSignal((s) => s + 1)
+        }
+      })()
+    }, 1000)
     return () => {
       dead = true
       window.clearInterval(timer)
