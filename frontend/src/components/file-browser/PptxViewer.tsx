@@ -118,8 +118,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const commentRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onViewerContentChange = useCallback(() => {
-    // eslint-disable-next-line no-console
-    console.log('[dbg-content-change] fired, editing=', editingRef.current)
     if (standaloneRef.current) {
       // C5-3 standalone(첨부 편집): 자동 저장 없음. dirty만 표시한다.
       if (editingRef.current) dirtyRef.current = true
@@ -641,6 +639,8 @@ if (!writeBackHaltedRef.current) {
   // 닫기 경로(E2f-strict)가 실제로 실패할 때 endEditing 경로로 다시 만든다.
 
   const handleWriteBack = useCallback(async (bytes: Uint8Array) => {
+    // C5-4 U3 backstop 계측: lib 경로가 동작했음을 기록한다 (아래 backstop이 중복 저장을 피한다).
+    lastWritebackAtRef.current = Date.now()
     // M31 1-a: 언마운트 후에는 화면 상태(collab)가 null 이지만 세션은 유예 동안 살아 있다.
     // collabRef 만 보면 hasSession=false 가 되어 flush 가 버려진다 → 마지막 세션을 fallback 으로 쓴다.
     const c = collabRef.current ?? lastCollabRef.current
@@ -735,6 +735,68 @@ if (!writeBackHaltedRef.current) {
   const offerMineDownloadRef = useRef<(() => Promise<void>) | null>(null)
   offerMineDownloadRef.current = offerMineDownload
   const emptyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** C5-4 U3 backstop: lib write-back 호출 시각. lib 경로가 살아 있으면
+   * backstop이 중복 저장하지 않도록 건너뛴다. */
+  const lastWritebackAtRef = useRef(0)
+  const backstopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * C5-4 U3 backstop: Y.Doc 변경을 직접 구독해 자동 저장한다.
+   * lib write-back 호출이 묶이면(리마운트 경합 등) 타이핑이 디스크에 안 남는다 (E2).
+   * Y.Doc 구독은 lib 배선과 무관하게 동작하므로 폴백 경로로 쓴다.
+   * lib 경로가 정상이면 최근 저장 기록 때문에 건너뛰어 중복 저장을 피한다.
+   */
+  const backstopSession = collab?.session ?? null
+  useEffect(() => {
+    const sess = backstopSession
+    if (!sess) return
+    const doc = sess.doc as unknown as {
+      on?: (ev: string, fn: () => void) => void
+      off?: (ev: string, fn: () => void) => void
+      getArray?: (key: string) => { length: number }
+    }
+    if (!doc || typeof doc.on !== 'function') return
+    const onUpdate = (): void => {
+      if (!editingRef.current || standaloneRef.current) return
+      if (backstopTimerRef.current) clearTimeout(backstopTimerRef.current)
+      backstopTimerRef.current = setTimeout(() => {
+        backstopTimerRef.current = null
+        // lib 경로가 최근에 저장했으면 건너뛴다 (중복 저장 방지).
+        if (Date.now() - lastWritebackAtRef.current < 8000) return
+        const cur = collabRef.current
+        if (!cur || !editingRef.current || !isOwnerNowRef.current(cur) || !cur.session.synced) return
+        let slides = 0
+        try {
+          slides = cur.session.doc.getArray('pptx:slides').length
+        } catch {
+          return
+        }
+        if (slides === 0) return
+        const h = viewerRef.current
+        if (!h) return
+        void h
+          .getContent()
+          .then((b) => {
+            const bytes = new Uint8Array(b)
+            if (bytes.length === 0) return
+            void persistBytesRef.current(bytes, { quiet: true, auto: true })
+          })
+          .catch(() => {})
+      }, 4000)
+    }
+    doc.on!('update', onUpdate)
+    return () => {
+      try {
+        doc.off?.('update', onUpdate)
+      } catch {
+        /* 무시 */
+      }
+      if (backstopTimerRef.current) {
+        clearTimeout(backstopTimerRef.current)
+        backstopTimerRef.current = null
+      }
+    }
+    // 세션 객체 단위로 구독한다 (meta 갱신으로 collab 래퍼가 바뀌어도 같은 세션이면 유지).
+  }, [backstopSession])
 /**
  * M16: **커밋 반영 대기는 삭제.** 앵커(바이트 비교)는 원리상 틀렸다 —
  * 앵커는 "마지막으로 실행된 write-back" 이므로 Escape 시점의 커밋 write-back(아직 예약 상태)과
