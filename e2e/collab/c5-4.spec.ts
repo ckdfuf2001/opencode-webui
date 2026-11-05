@@ -1145,4 +1145,337 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
       }
     }
   })
+
+  test('U-flush-race: 진행 중인 저장이 있어도 103 직전 글자가 디스크에 남는다', async ({ browser }, testInfo) => {
+    // C5-4c B1: 진행 중인 저장의 완료를 flush 응답으로 쓰면 낡은 바이트를 확정한다.
+    // 같은 requestId의 done만 응답으로 쓴다.
+    testInfo.setTimeout(420000)
+    const rel = uniqueRel('uflushrace', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const fileBytes = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    const fd = new FormData()
+    fd.append('path', parentPath)
+    fd.append('file', new Blob([new Uint8Array(fileBytes)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+    fd.append('slide', '2')
+    const ins = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+      r.json(),
+    ) as { ok?: boolean; embeddings?: string[] }
+    expect(ins.ok).toBe(true)
+    const part = (ins.embeddings ?? [])[0]!
+    const got = await fetch(
+      `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part }).toString()}`,
+    ).then((r) => r.json()) as { ok?: boolean; data?: string }
+    expect(got.ok).toBe(true)
+    const partHash = createHash('sha256').update(Buffer.from(got.data!, 'base64')).digest('hex')
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxB, ADA)
+    const pageA = await ctxA.newPage()
+    await gotoApp(pageA)
+    try {
+      await openEditor(pageA, parentPath)
+      await gotoSlide(pageA, 2)
+      const attach = await ctxB.newPage()
+      const origin = new URL(pageA.url()).origin
+      const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+      await attach.goto(`${origin}/edit/${enc(parentPath)}/-/${enc(part)}?partHash=${partHash}&e2e=1&collabDebug=1`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      })
+      await attach.getByTestId('edit-page').waitFor({ timeout: 30000 })
+      await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      await setCellByFormulaBar(attach, 'A1', 'uflushrace-attach')
+      // 부모 글 입력 + 수동 저장 (진행 중 저장을 만든다).
+      const shapes = new ShapeLocator(pageA)
+      await editShapeText(pageA, shapes, 'Body 2', 'uflushrace-mark')
+      await pageA.route('**/api/collab/save', async (route) => {
+        await new Promise((r) => setTimeout(r, 3000))
+        await route.continue().catch(() => {})
+      })
+      await pageA.getByRole('button', { name: 'Save', exact: true }).first().click({ timeout: 20000 })
+      // 저장 진행 중에 첨부 저장 (103이 in-flight 저장을 본다).
+      await pageA.waitForTimeout(800)
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      // 성공하고 둘 다 디스크에 남는다.
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(1, {
+        timeout: 60000,
+      })
+      await expect
+        .poll(() => Promise.resolve(partContains(abs, part, 'uflushrace-attach')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      await waitForDisk(abs, (d) => (d.textOf('Body 2') ?? '').includes('uflushrace-mark'), 60000)
+      expect((await readDeck(abs)).textOf('Body 2') ?? '').toContain('uflushrace-mark')
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
+  test('U-flush-clean: 손대지 않은 부모 탭이면 첨부 저장이 바로 200이다', async ({ browser }, testInfo) => {
+    // C5-4c B2: 미저장 변경이 없으면 저장 없이 즉시 ok. 8초 타임을 타면 안 된다.
+    // RED(수정 전): 부모가 항상 강제 저장하므로 /save 가 나간다.
+    testInfo.setTimeout(420000)
+    const rel = uniqueRel('uflushclean', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const fileBytes = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    const fd = new FormData()
+    fd.append('path', parentPath)
+    fd.append('file', new Blob([new Uint8Array(fileBytes)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+    fd.append('slide', '2')
+    const ins = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+      r.json(),
+    ) as { ok?: boolean; embeddings?: string[] }
+    expect(ins.ok).toBe(true)
+    const part = (ins.embeddings ?? [])[0]!
+    const got = await fetch(
+      `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part }).toString()}`,
+    ).then((r) => r.json()) as { ok?: boolean; data?: string }
+    expect(got.ok).toBe(true)
+    const partHash = createHash('sha256').update(Buffer.from(got.data!, 'base64')).digest('hex')
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxB, ADA)
+    const pageA = await ctxA.newPage()
+    await gotoApp(pageA)
+    const parentSaveTimes: number[] = []
+    try {
+      await openEditor(pageA, parentPath)
+      await gotoSlide(pageA, 2)
+      await pageA.route('**/api/collab/save', async (route) => {
+        parentSaveTimes.push(Date.now())
+        await route.continue()
+      })
+      // 부모가 열기 직후의 수렴 저장을 다 끝낼 때까지 대기 (flush와 무관한 배경 저장).
+      // 수렴 전에 첨부탭을 열면 baseHash가 stale이 되어 PUT이 409가 난다.
+      // 수렴하지 않으면 flush가 유발한 저장인지 구분할 수 없다.
+      await expect
+        .poll(
+          async () => {
+            const n = parentSaveTimes.length
+            await pageA.waitForTimeout(4000)
+            return parentSaveTimes.length === n
+          },
+          { timeout: 90000, intervals: [1000] },
+        )
+        .toBe(true)
+      const attach = await ctxB.newPage()
+      const origin = new URL(pageA.url()).origin
+      const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+      await attach.goto(`${origin}/edit/${enc(parentPath)}/-/${enc(part)}?partHash=${partHash}&e2e=1&collabDebug=1`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      })
+      await attach.getByTestId('edit-page').waitFor({ timeout: 30000 })
+      await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      await setCellByFormulaBar(attach, 'A1', 'uflushclean-attach')
+      const t0 = Date.now()
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(1, {
+        timeout: 15000,
+      })
+      const elapsed = Date.now() - t0
+      const parentSaves = parentSaveTimes.filter((t) => t >= t0)
+      console.log(`UFLUSH-CLEAN elapsed=${elapsed}ms savesAfterClick=${parentSaves.length}`)
+      expect(parentSaves).toEqual([])
+      expect(await partContains(abs, part, 'uflushclean-attach')).toBe(true)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
+  test('U-close-save: 정상 종료 뒤 미저장이 있으면 첨부 저장이 409다 (B3 dirty)', async ({ browser }, testInfo) => {
+    // C5-4c B3: 편집 conn이 없고 방이 dirty면 PUT은 409 dirty_room (조용한 유실 방지).
+    // 복구: 다시 열어 저장하면 첨부 저장이 200이 된다.
+    testInfo.setTimeout(420000)
+    const rel = uniqueRel('uclosesave', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const fileBytes = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    const mkPart = async (): Promise<{ part: string; partHash: string }> => {
+      const fd = new FormData()
+      fd.append('path', parentPath)
+      fd.append('file', new Blob([new Uint8Array(fileBytes)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+      fd.append('slide', '2')
+      const ins = (await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+        r.json(),
+      )) as { ok?: boolean; embeddings?: string[] }
+      expect(ins.ok).toBe(true)
+      const part = (ins.embeddings ?? [])[0]!
+      const got = (await fetch(
+        `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part }).toString()}`,
+      ).then((r) => r.json())) as { ok?: boolean; data?: string }
+      expect(got.ok).toBe(true)
+      return { part, partHash: createHash('sha256').update(Buffer.from(got.data!, 'base64')).digest('hex') }
+    }
+    const { part, partHash } = await mkPart()
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxB, ADA)
+    try {
+      const pageA = await ctxA.newPage()
+      await gotoApp(pageA)
+      await openEditor(pageA, parentPath)
+      await gotoSlide(pageA, 2)
+      const appOrigin = new URL(pageA.url()).origin
+      // 시딩 윈도우(10초) 이후에 타이핑해야 서버 docDirty가 선다.
+      await pageA.waitForTimeout(12000)
+      const shapes = new ShapeLocator(pageA)
+      await editShapeText(pageA, shapes, 'Body 2', 'uclosesave-mark')
+      await pageA.waitForTimeout(2000)
+      // 저장 없이 정상 종료 (pagehide → 1000, drop 기록은 지워지지만 dirty는 남는다).
+      await pageA.close()
+      const attach = await ctxB.newPage()
+      const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+      await attach.goto(`${appOrigin}/edit/${enc(parentPath)}/-/${enc(part)}?partHash=${partHash}&e2e=1&collabDebug=1`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      })
+      await attach.getByTestId('edit-page').waitFor({ timeout: 30000 })
+      await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      await setCellByFormulaBar(attach, 'A1', 'uclosesave-attach')
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      // 409 dirty_room: 성공 토스트 없이 부모 저장 요구 토스트가 뜬다.
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(0, {
+        timeout: 20000,
+      })
+      await expect(
+        attach.locator('[data-sonner-toast]').filter({ hasText: '부모 파일' }),
+      ).not.toHaveCount(0, { timeout: 20000 })
+      // 복구: 부모를 다시 열면 마크가 방에 살아 있고, 저장 후 첨부 저장이 된다.
+      const pageA2 = await ctxA.newPage()
+      await gotoApp(pageA2)
+      await openEditor(pageA2, parentPath)
+      await gotoSlide(pageA2, 2)
+      await pageA2.getByRole('button', { name: 'Save', exact: true }).first().click({ timeout: 20000 })
+      await waitForDisk(abs, (d) => (d.textOf('Body 2') ?? '').includes('uclosesave-mark'), 60000)
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(1, {
+        timeout: 60000,
+      })
+      expect(await partContains(abs, part, 'uclosesave-attach')).toBe(true)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
+  test('U-offline-long: 30초+ 끊기면 방이 새로 생기고 미저장 배너가 뜬다 (B4)', async ({ browser }, testInfo) => {
+    // C5-4c B4: 서버 방이 dispose된 뒤 같은 세션이 resume으로 재접속하면,
+    // 로컬 미저장이 있을 때 배너+내 사본 안내가 뜬다.
+    // setOffline은 기존 WS를 끊지 않으므로(half-open) 서버의 무수신 정리
+    // (120초, sweepDeadConns) + 빈 방 TTL(30초)이 돌 때까지 기다린다.
+    testInfo.setTimeout(420000)
+    const rel = uniqueRel('uofflinelong', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    try {
+      const page = await ctx.newPage()
+      await gotoApp(page)
+      await openEditor(page, parentPath)
+      await gotoSlide(page, 2)
+      // 저장을 막아 미저장을 만든다 (수렴 저장도 차단).
+      await page.route('**/api/collab/save', async (route) => {
+        await route.abort().catch(() => {})
+      })
+      const shapes = new ShapeLocator(page)
+      await editShapeText(page, shapes, 'Body 2', 'uofflinelong-mark')
+      await page.waitForTimeout(2000)
+      const fileName = parentPath.split('/').pop()!
+      const roomListed = async (): Promise<boolean> => {
+        const res = await fetch(`${backendBase()}/api/collab/rooms`).then((r) => r.json())
+        const rooms = (res as { rooms?: Array<{ rel?: string }> }).rooms ?? []
+        return rooms.some((r) => r.rel === parentPath || r.rel?.endsWith(fileName))
+      }
+      // 120초 무수신 정리 + 30초 TTL + sweep 여유. 온라인 복귀 때 poke가
+      // 재연결하고 방이 없으면 getSession resume → 배너.
+      // setOffline은 기존 WS를 끊지 않으므로(half-open) 서버가 무수신을
+      // 감지해 drop할 때까지 기다린다 (방이 rooms 목록에서 사라진다).
+      await ctx.setOffline(true)
+      await expect
+        .poll(roomListed, { timeout: 240000, intervals: [5000] })
+        .toBe(false)
+      // 빈 방 TTL(30초)+sweep(10초) 후 dispose. 그 뒤 온라인 복귀.
+      // dispose는 drop 감지 후 TTL+sweep라 최대 40초 — 여유 60초.
+      await page.waitForTimeout(60000)
+      await ctx.setOffline(false)
+      // 재연결 후 resume + 미저장 배너.
+      await expect(page.getByText('방이 새로 만들어졌습니다')).toBeVisible({ timeout: 90000 })
+      await page.unroute('**/api/collab/save').catch(() => {})
+      await page.getByRole('button', { name: 'Save', exact: true }).first().click({ timeout: 30000 })
+      await waitForDisk(abs, (d) => (d.textOf('Body 2') ?? '').includes('uofflinelong-mark'), 90000)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('O-1: owner가 나가면 남은 편집자가 owner가 되고 편집·저장이 된다 (C)', async ({ browser }, testInfo) => {
+    // C5-4c C: dropConn/awareness에서 needsElection→reevaluateOwner로 즉시 재선출 (폴링 금지).
+    testInfo.setTimeout(420000)
+    const rel = uniqueRel('owner1', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const fileName = parentPath.split('/').pop()!
+    const ownerNames = async (): Promise<string[]> => {
+      const parts = (await roomsForFile(fileName)) as Array<{ name?: unknown; owner?: unknown }>
+      return parts.filter((p) => p.owner === true).map((p) => String(p.name ?? ''))
+    }
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxB, GRACE)
+    try {
+      const pageA = await ctxA.newPage()
+      await gotoApp(pageA)
+      await openEditor(pageA, parentPath)
+      await gotoSlide(pageA, 2)
+      await expect.poll(ownerNames, { timeout: 60000, intervals: [1000] }).toContain('Ada')
+      const pageB = await ctxB.newPage()
+      await gotoApp(pageB)
+      await openEditor(pageB, parentPath)
+      await gotoSlide(pageB, 2)
+      // A가 정상 종료하면 B가 owner가 된다.
+      await pageA.close()
+      await expect.poll(ownerNames, { timeout: 60000, intervals: [1000] }).toContain('Grace')
+      expect(await ownerNames()).not.toContain('Ada')
+      // B가 편집·저장하면 디스크에 반영된다 (Body 3은 슬라이드 3에 있다).
+      await gotoSlide(pageB, 3)
+      const shapesB = new ShapeLocator(pageB)
+      await editShapeText(pageB, shapesB, 'Body 3', 'owner1-bmark')
+      await pageB.getByRole('button', { name: 'Save', exact: true }).first().click({ timeout: 20000 })
+      await waitForDisk(abs, (d) => (d.textOf('Body 3') ?? '').includes('owner1-bmark'), 60000)
+      // A가 다시 들어오면 방이 동작하고 (owner 1명) A도 편집·저장된다.
+      const pageA2 = await ctxA.newPage()
+      await gotoApp(pageA2)
+      await openEditor(pageA2, parentPath)
+      await gotoSlide(pageA2, 2)
+      await expect
+        .poll(async () => (await ownerNames()).length, { timeout: 60000, intervals: [1000] })
+        .toBe(1)
+      const shapesA = new ShapeLocator(pageA2)
+      await editShapeText(pageA2, shapesA, 'Body 2', 'owner1-amark')
+      await pageA2.getByRole('button', { name: 'Save', exact: true }).first().click({ timeout: 20000 })
+      await waitForDisk(abs, (d) => (d.textOf('Body 2') ?? '').includes('owner1-amark'), 60000)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
 })
