@@ -601,11 +601,15 @@ app.put('/embed', async (c) => {
         // flush 저장이 디스크·방 해시를 바꿨으므로 다시 읽는다.
         hostBytes = new Uint8Array(await getRawFileContent(q.path))
         disk = await currentDiskHash(rid)
-      } else if (room.lastEditorDropAt > 0) {
-        // U-parent: 편집 탭이 비정상 종료된 뒤다 (오프라인·크래시).
-        // 미저장을 들고 있을 수 있으므로 교체하지 않는다 (조용한 유실 방지).
+      } else if (room.docDirty || room.lastEditorDropAt > 0) {
+        // B3: 편집 conn이 없고 (a) 방이 dirty면 미저장이 stranded될 수 있으므로 막는다.
+        // (b) 비정상 종료 기록이 있으면 보수적으로 막는다. clean close(1000/1001)는
+        // onClose에서 기록을 지우므로 여기로 오지 않는다.
         const cur = await currentDiskHash(rid)
-        return c.json({ error: 'Parent tab is unreachable — open the parent file, save it, then retry', code: 'dirty_room', currentHash: cur }, 409)
+        const why = room.docDirty
+          ? 'Parent has unsaved changes — save the parent file first, then retry'
+          : 'Parent tab is unreachable — open the parent file, save it, then retry'
+        return c.json({ error: why, code: 'dirty_room', currentHash: cur }, 409)
       }
       if (!q2.baseHash || (q2.baseHash !== room.lastHash && q2.baseHash !== preFlushHash)) {
         return c.json({ error: 'Stale base — reload the attachment and retry', code: 'stale', currentHash: disk }, 409)
@@ -714,7 +718,7 @@ export function registerCollabSockets(rootApp: Hono): { injectWebSocket: (server
           // "떨어진 편집 탭" 기록을 지워 PUT이 진행되게 한다 (1006·무프레임은 남긴다).
           try {
             const code = (evt as unknown as { code?: unknown })?.code
-            if (code === 1000) clearEditorDropOnCleanClose(roomId)
+            if (code === 1000 || code === 1001) clearEditorDropOnCleanClose(roomId)
           } catch {
             /* 무시 */
           }

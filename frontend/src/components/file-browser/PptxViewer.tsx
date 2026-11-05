@@ -95,6 +95,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const persistOverrideRef = useRef(persistOverride)
   persistOverrideRef.current = persistOverride
   const dirtyRef = useRef(false)
+  // B1: 저장 중 도착한 flush 요청 id. 진행 중인 저장이 끝나면 이 id로 신선 저장을 한 번 더 한다
+  // (진행 중 저장의 완료를 flush 응답으로 쓰면 낡은 바이트를 확정한다).
+  const pendingFlushIdRef = useRef<string | null>(null)
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
@@ -935,17 +938,47 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
   // 평가되므로 앞에서 참조하면 TDZ가 난다).
   useEffect(() => {
-    const onSave = (e: Event) => {
-      // C5-3 standalone(첨부 편집): 부모 저장 이벤트를 무시한다 (saver 경로만 사용).
-      if (standaloneRef.current) return
-      if (saving) return
+    // flush용 신선 저장을 한 번 실행한다. 완료 신호에 id를 실어 ack와 짝짓는다.
+    const runPersistForFlush = async (flushRequestId: string, keepEditing: boolean): Promise<void> => {
       const h = viewerRef.current
       if (!h || !savePath) return
-      // C5-2: 임베드용 선저장은 편집 세션을 유지한다 (수동 Save는 종료).
-      const keepEditing = (e as CustomEvent<OfficeSaveRequestDetail>).detail?.keepEditing === true
       delegatedSaveRef.current = false
       setSaving(true)
-      void (async () => {
+      try {
+        const bytes = await h.getContent()
+        const fresh = new Uint8Array(bytes)
+        const ok = await persistBytes(fresh, { quiet: true, auto: false })
+        if (!ok) throw new Error('Save rejected')
+        const cs = await loadPptxComments(fresh)
+        setComments(cs)
+      } catch (e) {
+        delegatedSaveRef.current = false
+        showToast.error(e instanceof Error ? e.message : '저장 실패')
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', {
+            detail: { ok: false, path: savePath, flushRequestId },
+          }),
+        )
+        return
+      } finally {
+        setSaving(false)
+      }
+      const delegated = delegatedSaveRef.current
+      delegatedSaveRef.current = false
+      showToast.success(delegated ? '자동 저장됩니다 — owner가 디스크에 씁니다' : '저장했습니다')
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', {
+          detail: { ok: true, path: savePath, ...(keepEditing ? { keepEditing: true } : {}), flushRequestId },
+        }),
+      )
+    }
+    // 일반 저장 1회 (flush id 없음).
+    const runPersistPlain = async (keepEditing: boolean): Promise<void> => {
+      const h = viewerRef.current
+      if (!h || !savePath) return
+      delegatedSaveRef.current = false
+      setSaving(true)
+      try {
         // M16: 수동 저장 경로는 대기 없이 getContent 1회로 직렬화한다.
         const bytes = await h.getContent()
         // 수동 저장 경로라 배너/토스트를 막지 않는다 (R3).
@@ -954,30 +987,86 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         if (!ok) throw new Error('Save rejected')
         const cs = await loadPptxComments(fresh)
         setComments(cs)
-      })()
-        .then(() => {
-          // B3: owner가 아닌 사람의 저장은 위임이다. "저장했습니다"라고 하면
-          // 디스크에 쓴 사람이 나인 것처럼 보인다. 토스트는 수동 저장 1회 = 1개.
-          const delegated = delegatedSaveRef.current
-          delegatedSaveRef.current = false
-          showToast.success(delegated ? '자동 저장됩니다 — owner가 디스크에 씁니다' : '저장했습니다')
-          // B1(b): 파일 식별자를 함께 보낸다. 없으면 다른 뷰어의 저장 완료에
-          // 이 문서의 편집이 종료된다 (DocumentPreview.tsx:452).
-          window.dispatchEvent(
-            new CustomEvent('officeSaveDone', { detail: { ok: true, path: savePath, ...(keepEditing ? { keepEditing: true } : {}) } }),
-          )
-        })
-        .catch((e) => {
-          delegatedSaveRef.current = false
-          showToast.error(e instanceof Error ? e.message : '저장 실패')
-          window.dispatchEvent(
-            new CustomEvent('officeSaveDone', { detail: { ok: false, path: savePath } }),
-          )
-        })
-        .finally(() => setSaving(false))
+      } catch (e) {
+        delegatedSaveRef.current = false
+        showToast.error(e instanceof Error ? e.message : '저장 실패')
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', { detail: { ok: false, path: savePath } }),
+        )
+        return
+      } finally {
+        setSaving(false)
+      }
+      // B3: owner가 아닌 사람의 저장은 위임이다. "저장했습니다"라고 하면
+      // 디스크에 쓴 사람이 나인 것처럼 보인다. 토스트는 수동 저장 1회 = 1개.
+      const delegated = delegatedSaveRef.current
+      delegatedSaveRef.current = false
+      showToast.success(delegated ? '자동 저장됩니다 — owner가 디스크에 씁니다' : '저장했습니다')
+      // B1(b): 파일 식별자를 함께 보낸다. 없으면 다른 뷰어의 저장 완료에
+      // 이 문서의 편집이 종료된다 (DocumentPreview.tsx:452).
+      // (flush id 없음 — ycollab은 무시하고, 수동 저장 대기자는 정상 진행한다.)
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', {
+          detail: { ok: true, path: savePath, ...(keepEditing ? { keepEditing: true } : {}) },
+        }),
+      )
+    }
+    const onSave = (e: Event) => {
+      // C5-3 standalone(첨부 편집): 부모 저장 이벤트를 무시한다 (saver 경로만 사용).
+      if (standaloneRef.current) return
+      const h = viewerRef.current
+      if (!h || !savePath) return
+      // C5-2: 임베드용 선저장은 편집 세션을 유지한다 (수동 Save는 종료).
+      const detail = (e as CustomEvent<OfficeSaveRequestDetail>).detail
+      const keepEditing = detail?.keepEditing === true
+      // B1: flush 요청 id. 완료 신호에 실어 서버 ack와 짝짓는다.
+      const flushRequestId = typeof detail?.flushRequestId === 'string' ? detail.flushRequestId : undefined
+      if (saving) {
+        // B1: 저장 중이면 flush만 적재해 둔다. 어떤 저장이 끝나든 신선 저장으로 응답한다.
+        if (flushRequestId) pendingFlushIdRef.current = flushRequestId
+        return
+      }
+      // B2: flush 요청인데 미저장이 없으면 저장 없이 즉시 ok (서버가 docDirty로 재확인한다).
+      if (flushRequestId && !unsavedLocalEditRef.current) {
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', {
+            detail: { ok: true, path: savePath, keepEditing: true, flushRequestId },
+          }),
+        )
+        return
+      }
+      if (flushRequestId) {
+        void runPersistForFlush(flushRequestId, keepEditing)
+      } else {
+        void runPersistPlain(keepEditing)
+      }
     }
     window.addEventListener('officeSaveRequest', onSave)
-    return () => window.removeEventListener('officeSaveRequest', onSave)
+    // B1: 적재된 flush는 어떤 경로의 저장이 끝나든 신선 저장으로 응답한다.
+    // (자동저장·백스톱은 runPersistPlain을 거치지 않으므로 여기서 받는다.)
+    // flush 자신의 done(id 있음)은 ycollab이 직접 받으므로 건드리지 않는다.
+    const onAnyDone = (e: Event): void => {
+      const d = (e as CustomEvent<{ ok?: boolean; path?: string; flushRequestId?: unknown }>).detail
+      if (!d || d.path !== savePath || d.flushRequestId) return
+      const pid = pendingFlushIdRef.current
+      if (!pid) return
+      pendingFlushIdRef.current = null
+      if (d.ok && !unsavedLocalEditRef.current) {
+        // 끝나 보니 깨끗해졌다 — 저장 없이 즉시 ok.
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', {
+            detail: { ok: true, path: savePath, keepEditing: true, flushRequestId: pid },
+          }),
+        )
+        return
+      }
+      void runPersistForFlush(pid, true)
+    }
+    window.addEventListener('officeSaveDone', onAnyDone)
+    return () => {
+      window.removeEventListener('officeSaveRequest', onSave)
+      window.removeEventListener('officeSaveDone', onAnyDone)
+    }
   }, [savePath, fileName, saving, persistBytes])
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
   useEffect(() => {
@@ -1342,6 +1431,13 @@ writeBackHaltedRef.current = false
             knownHash: session.knownHash,
             clientId: session.clientId,
           })
+          // B4: 방이 새로 만들어졌는데(resume) 로컬 미저장이 있으면 배너+내 사본 다운로드.
+          // 조용히 합쳐지면 미저장이 증발한 것처럼 보인다.
+          if (info.role === 'resume' && unsavedLocalEditRef.current) {
+            setCollabNotice('연결이 끊긴 동안 방이 새로 만들어졌습니다 — 저장 안 된 내용은 내 사본을 내려받으세요')
+            void offerMineDownloadRef.current?.()
+            showToast.warning('다시 연결됐습니다 — 내 사본을 내려받으세요')
+          }
           return {
             kind: 'ok' as const,
             info: { roomId: info.roomId, role: info.role, epoch: info.epoch, lastHash: info.lastHash },
@@ -1815,11 +1911,34 @@ writeBackHaltedRef.current = false
   // P0-2 마운트 게이트: 편집 모드는 synced+meta 수신 전에는 collab 없이 solo로
   // 마운트한다 (판정 전 seed 금지). 보기 모드는 게이트 없이 바로 붙는다.
   const collabGated = !editing || (connBadge.synced && metaTick > 0)
+  // B4: 재연결 찰나의 unsync로 곧장 solo 폴백하면 lib이 디스크 기준으로 리마운트되고
+  // 미저장이 lib 모델에서 증발한다. 한 번 gate됐으면 30초간 유예한다 (재동기는 수초 내).
+  // 초기 마운트(한 번도 gate된 적 없음)는 유예하지 않는다 — 판정 전 seed 금지 (P0-2).
+  const GRACE_MS = 30000
+  const gateLostAtRef = useRef(0)
+  const wasGatedRef = useRef(false)
+  const [, setGraceTick] = useState(0)
+  useEffect(() => {
+    if (collabGated) {
+      wasGatedRef.current = true
+      gateLostAtRef.current = 0
+      return undefined
+    }
+    if (collab && wasGatedRef.current && gateLostAtRef.current === 0) {
+      gateLostAtRef.current = Date.now()
+      const t = setTimeout(() => setGraceTick((v) => v + 1), GRACE_MS + 100)
+      return () => clearTimeout(t)
+    }
+    return undefined
+  }, [collabGated, collab])
+  const inGrace =
+    !collabGated && !!collab && gateLostAtRef.current !== 0 && Date.now() - gateLostAtRef.current < GRACE_MS
+  const effGated = collabGated || inGrace
   const isDecrypted = unlocked !== null
   const collaboration = useMemo(
     () =>
       collabUser
-      ? buildCollaborationConfig(collabGated ? collab : null, {
+      ? buildCollaborationConfig(effGated ? collab : null, {
           editing,
           viewing: !editing,
           user: { name: collabUser.name, color: collabUser.color },
@@ -1833,7 +1952,7 @@ writeBackHaltedRef.current = false
           },
         })
         : undefined,
-    [collabGated, collab, editing, collabUser, isDecrypted, handleWriteBack],
+    [effGated, collab, editing, collabUser, isDecrypted, handleWriteBack],
   )
   const viewerRootRef = useRef<HTMLDivElement | null>(null)
 
@@ -2109,7 +2228,7 @@ const peersRef = useRef<Peer[]>([])
   // E2E: PowerPointViewer 마운트 횟수 (?collabDebug=1일 때만).
   // viewer key가 바뀌면 리마운트되므로 key 문자열을 deps로 둔다.
   // S4: slideIdx를 key에서 뺀다 — 이동은 lib goTo API로 한다 (리마운트 금지).
-  const viewerKey = `${editing ? 'edit' : 'view'}#${reloadKey}#${collabGated && collab ? collab.roomId : 'solo'}`
+  const viewerKey = `${editing ? 'edit' : 'view'}#${reloadKey}#${effGated && collab ? collab.roomId : 'solo'}`
   // Y2: slideIdx(=lib의 initialSlide)는 key가 바뀌는 렌더에서만 갱신한다.
   // edit↔view 전환·reloadKey bump·4001 재생성이 모두 viewerKey에 포함되어 있고,
   // `editing`은 외부 prop이라 "바꾸기 직전"에 실행할 코드를 소유할 수 없다.
@@ -2126,9 +2245,9 @@ const peersRef = useRef<Peer[]>([])
       next: viewerKey,
       editing: !!editing,
       reloadKey,
-      collabGated: !!collabGated,
+      collabGated: !!effGated,
       roomId: collab?.roomId ?? null,
-      solo: !(collabGated && collab),
+      solo: !(effGated && collab),
     })
     // M11: 리마운트 후 첫 자동 저장은 구(舊) 내용으로 덮어쓸 수 있어 막는다.
     remountedSinceSaveRef.current = true

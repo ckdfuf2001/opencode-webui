@@ -45,6 +45,9 @@ interface ConnInfo {
 /** 무수신 conn 정리 임계값 (D). 테스트는 sweepDeadConns를 직접 호출한다. */
 export const DEAD_CONN_MS = 120_000
 
+/** B3: 시딩 윈도우. 방 생성 후 이 시간 안의 원격 업데이트는 시딩으로 보고 dirty를 세지 않는다. */
+export const DOC_DIRTY_GRACE_MS = 10_000
+
 /**
  * C4: 시트 위 개체(이미지·도형·차트·EMB) 1개의 서버 측 상태.
  * 키는 서버가 발급한다(`o1`, `o2`, …). image/chart는 lib에 안정 식별자가 없어
@@ -151,13 +154,25 @@ export interface CollabRoom {
     timer: ReturnType<typeof setTimeout>
     /** flush를 요청한 conn (104는 이 conn의 응답만 받는다). */
     conn: unknown
+    /** B1: 요청과 응답을 짝짓는 id. 104의 id가 다르면 무시한다. */
+    requestId: string
   } | null
   /**
-   * U-parent: 편집 conn이 떨어진 마지막 시각 (clean close 1000이면 0으로 지운다).
-   * conns가 비었는데 이 값이 살아 있으면 "오프라인·크래시 탭이 미저장을 들고 있을 수 있다" →
-   * PUT은 409 dirty_room으로 막는다 (조용한 유실 방지).
+   * U-parent: 편집 conn이 떨어진 마지막 시각 (clean close 1000/1001이면 0으로 지운다).
+   * conns가 비어 있을 때만 본다.
    */
   lastEditorDropAt: number
+  /**
+   * B3: 마지막 applySave 이후 Y 업데이트가 있었는가 (미저장 가능성).
+   * 방 생성 직후 10초(시딩 윈도우)의 업데이트는 세지 않는다.
+   */
+  docDirty: boolean
+  /** 방 생성 시각 (B3 시딩 윈도우 기준). */
+  createdAt: number
+  /** B3: 마지막 원격 Y 업데이트 시각 (flush 신선도 판정용). */
+  lastRemoteUpdateAt: number
+  /** B3: 마지막 applySave 성공 시각 (flush 신선도 판정용). */
+  lastSaveAt: number
 }
 
 export interface CollabParticipant {
@@ -380,6 +395,14 @@ function reevaluateOwner(room: CollabRoom): void {
   // 저장은 그대로 낙관적 잠금으로 판정한다(checkSave가 xlsx를 건너뜀).
   const current = room.ownerConn
   if (current !== null && current !== undefined && room.conns.has(current) && connMode(room, current) !== 'view') {
+    // C: owner는 살아 있으나 ids가 비었다면(선출 시 awareness 미도착) 보수한다.
+    // ids가 비면 클라이언트는 owner가 null인 것으로 본다 (owner null 고착).
+    const info = room.conns.get(current)
+    const next = new Set(info ? [...info.clientIds] : [])
+    if (next.size !== room.ownerIds.size) {
+      room.ownerIds = next
+      broadcastMeta(room)
+    }
     return
   }
   room.ownerConn = null
@@ -413,6 +436,43 @@ export function markAiBlocked(roomId: string): void {
   broadcastMeta(room)
 }
 
+/**
+ * C: owner가 필요한 상태인가. owner가 없거나 viewer이거나 ids가 비었는데
+ * edit conn이 있으면 true (conn 추가·제거·awareness 변경 이벤트에서 바로 재선출).
+ * 폴링 금지.
+ */
+function needsElection(room: CollabRoom): boolean {
+  const oc = room.ownerConn
+  if (oc === null || oc === undefined || !room.conns.has(oc)) return true
+  try {
+    if (connMode(room, oc) === 'view') return true
+  } catch {
+    return true
+  }
+  if (room.ownerIds.size === 0) return true
+  return false
+}
+
+/**
+ * C: 적어도 하나의 conn이 알려진(awareness 도착) 모드를 가졌는가.
+ * addConn 직후에는 awareness가 아직 도착하지 않아 unknown이 edit으로 보인다 —
+ * 이때 선출하면 view-only 방에 owner가 생긴다 (V5). awareness 도착 이벤트가
+ * 오면 그때 선출하므로, addConn에서는 알려진 모드가 있을 때만 즉시 선출한다.
+ */
+function hasKnownMode(room: CollabRoom): boolean {
+  try {
+    const states = room.awareness.getStates() as Map<number, unknown>
+    for (const info of room.conns.values()) {
+      for (const cid of info.clientIds) {
+        if (states.get(cid) !== undefined) return true
+      }
+    }
+  } catch {
+    /* 무시 */
+  }
+  return false
+}
+
 function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
   const doc = new Y.Doc()
   const awareness = new awarenessProtocol.Awareness(doc)
@@ -444,6 +504,10 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     objects: newRoomObjects(),
     pendingFlush: null,
     lastEditorDropAt: 0,
+    docDirty: false,
+    createdAt: Date.now(),
+    lastRemoteUpdateAt: 0,
+    lastSaveAt: 0,
   }
   awareness.on('update', (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
@@ -458,10 +522,8 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
       added.forEach((cid) => room.ownerIds.add(cid))
       removed.forEach((cid) => room.ownerIds.delete(cid))
     }
-    // owner가 비어 있거나 view-only가 되면 edit 참가자 중 첫 conn을 선출한다.
-    if (room.ownerConn === null || !room.conns.has(room.ownerConn)) {
-      reevaluateOwner(room)
-    } else if (connMode(room, room.ownerConn) === 'view') {
+    // owner가 비었거나 view-only가 되거나 ids가 비면 edit 참가자 중 첫 conn을 선출한다 (C).
+    if (needsElection(room)) {
       reevaluateOwner(room)
     }
     // C4: awareness가 사라진 클라이언트의 개체 락은 즉시 푼다 (WS close 때도
@@ -471,7 +533,17 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
   })
   doc.on('update', (update: Uint8Array, origin: unknown) => {
     // 서버는 직접 쓰지 않으므로 origin이 있는 update는 전부 원격 내용이다.
-    if (origin !== null && origin !== undefined) room.seeded = true
+    if (origin !== null && origin !== undefined) {
+      room.seeded = true
+      // B3: 생성 직후 10초(시딩 윈도우) 이후의 원격 업데이트는 미저장으로 본다.
+      // 시딩 자체(빈 방에 호스트가 올리는 초기 상태)는 dirty가 아니다.
+      try {
+        if (Date.now() - room.createdAt > DOC_DIRTY_GRACE_MS) room.docDirty = true
+        room.lastRemoteUpdateAt = Date.now()
+      } catch {
+        /* 무시 */
+      }
+    }
     broadcast(room, encodeSyncUpdate(update))
   })
   rooms.set(id, room)
@@ -768,6 +840,10 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
     room.order.push(ws)
     room.emptySince = null
     room.everConnected = true
+    // C: 새로 붙은 conn이 있는데 owner가 없으면 바로 선출한다.
+    // 단 awareness 도착 전(unknown)에는 선출하지 않는다 — view-only 방에
+    // owner가 생긴다 (V5). awareness 도착 이벤트가 오면 그때 선출한다.
+    if (needsElection(room) && hasKnownMode(room)) reevaluateOwner(room)
     broadcastMeta(room)
   }
   const e = encoding.createEncoder()
@@ -827,16 +903,26 @@ export function wsMessage(roomId: string, ws: unknown, data: Uint8Array): void {
       const result = resetRoomFromDisk(roomId, ws)
       logger.info(`Collab room ${roomId}: reset request from conn → ${JSON.stringify(result)}`)
     } else if (messageType === MSG_FLUSHED) {
-      // U-parent: 부모 flush 확인. 요청한 conn의 응답만 받는다 (사칭 방지).
+      // U-parent: 부모 flush 확인. 같은 conn + 같은 requestId의 응답만 받는다 (B1).
+      // B2 clean-ack라도 방이 dirty면(다른 참가자의 미저장) 바로 끝내지 않고
+      // 저장을 기다린다 — 유실 방지. 타임아웃이면 409.
       let ok = false
+      let rid: string | undefined
       try {
         const raw = decoding.readVarUint8Array(d)
-        ok = (JSON.parse(new TextDecoder().decode(raw)) as { ok?: boolean }).ok === true
+        const body = JSON.parse(new TextDecoder().decode(raw)) as { ok?: boolean; requestId?: unknown }
+        ok = body.ok === true
+        if (typeof body.requestId === 'string') rid = body.requestId
       } catch {
         ok = false
       }
-      const settled = settlePendingFlush(room, ok ? { ok: true, reason: 'flushed' } : { ok: false, reason: 'client_fail' }, ws)
-      if (settled) logger.info(`Collab room ${roomId}: parent flush ack ok=${ok}`)
+      const p = room.pendingFlush
+      if (ok && p && (rid === undefined || p.requestId === rid) && room.docDirty) {
+        logger.warn(`Collab room ${roomId}: parent flush ack ok but room dirty — waiting for save`)
+      } else {
+        const settled = settlePendingFlush(room, ok ? { ok: true, reason: 'flushed' } : { ok: false, reason: 'client_fail' }, ws, rid)
+        if (settled) logger.info(`Collab room ${roomId}: parent flush ack ok=${ok}`)
+      }
     }
   } catch (error) {
     logger.warn(`Collab room ${roomId}: bad message ignored`)
@@ -863,7 +949,9 @@ function dropConnFromRoom(room: CollabRoom, ws: unknown): void {
   if (room.ownerConn === ws) {
     room.ownerConn = null
     room.ownerIds = new Set()
-    // 남은 edit 참가자 중 가장 먼저 들어온 conn으로 승계.
+  }
+  // C: owner가 빠졌거나 ids가 비었으면 남은 edit 참가자 중 첫 conn으로 바로 승계한다.
+  if (needsElection(room)) {
     reevaluateOwner(room)
   }
   if (room.conns.size === 0) {
@@ -1081,16 +1169,19 @@ export function resetRoomByServer(roomId: string): { ok: true } | { ok: false; r
 }
 
 /**
- * U-parent: 대기 중인 flush를 1회만 끝낸다. onlyConn이 있으면 그 conn의 응답만 받는다.
+ * U-parent: 대기 중인 flush를 1회만 끝낸다. onlyConn/onlyRequestId가 있으면
+ * 둘 다 맞는 응답만 받는다 (B1: 앞선 저장의 완료를 flush 응답으로 오인 금지).
  */
 function settlePendingFlush(
   room: CollabRoom,
   result: FlushResult,
   onlyConn?: unknown,
+  onlyRequestId?: string,
 ): boolean {
   const p = room.pendingFlush
   if (!p) return false
   if (onlyConn !== undefined && p.conn !== onlyConn) return false
+  if (onlyRequestId !== undefined && p.requestId !== onlyRequestId) return false
   room.pendingFlush = null
   try {
     clearTimeout(p.timer)
@@ -1131,9 +1222,12 @@ export function roomHasOpenEditor(roomId: string): boolean {
   return false
 }
 
+/** B1: flush 요청 id 발급용 단조 카운터 (프로세스 내 유일). */
+let flushSeq = 0
+
 /**
  * U-parent: 부모 방 owner에게 flush(즉시 저장)를 요청한다 (D64).
- * - owner가 열려 있으면 103을 보내고 104 ack(또는 저장 반영)를 최대 timeoutMs까지 기다린다.
+ * - owner가 열려 있으면 103 {requestId}를 보내고 104 ack(같은 id)를 최대 timeoutMs까지 기다린다.
  * - owner 선출 전이면 최대 3초까지 선출을 기다린다 (재접속 레이스).
  * - owner가 없으면 {ok:false, reason:'no_owner'} — 호출자는 409로 막는다.
  * - 동시 요청은 1개로 합친다 (같은 promise 공유).
@@ -1146,11 +1240,12 @@ export function requestParentFlush(roomId: string, timeoutMs = FLUSH_WAIT_MS): P
   const promise = new Promise<FlushResult>((res) => {
     resolve = res
   })
+  const requestId = `f${Date.now().toString(36)}${(flushSeq = (flushSeq + 1) % 2176782336).toString(36)}`
   const finish = (r: FlushResult): void => {
     settlePendingFlush(room, r)
   }
   const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs)
-  room.pendingFlush = { promise, resolve, timer, conn: null }
+  room.pendingFlush = { promise, resolve, timer, conn: null, requestId }
   const sendToOwner = (owner: unknown): void => {
     const rs = (owner as unknown as { readyState?: unknown }).readyState
     if (rs !== undefined && rs !== 1) {
@@ -1160,6 +1255,8 @@ export function requestParentFlush(roomId: string, timeoutMs = FLUSH_WAIT_MS): P
     try {
       const e = encoding.createEncoder()
       encoding.writeVarUint(e, MSG_FLUSH_REQUEST)
+      // B1: 응답 짝짓기용 id를 함께 보낸다.
+      encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify({ requestId, roomId })))
       ;(owner as CollabSocket).send(encoding.toUint8Array(e))
     } catch {
       finish({ ok: false, reason: 'unreachable' })
@@ -1311,6 +1408,16 @@ export async function applySave(
       room.saving = false
     }
     room.lastHash = newHash
+    // B3: 저장 성공 — 미저장 표시를 지운다.
+    room.docDirty = false
+    room.lastSaveAt = Date.now()
+    // B1: 대기 중인 flush가 있고, 이 저장이 flush 요청 이후의 원격 업데이트를
+    // 모두 포함한 것이 확실할 때만 끝낸다 (저장 이후 도착한 업데이트가 있으면
+    // ack 경로의 신선 저장을 기다린다 — 낡은 바이트 확정 금지).
+    // 같은 동기 블록이라 사이에 업데이트가 끼어들 수 없다.
+    if (room.pendingFlush && room.lastRemoteUpdateAt <= room.lastSaveAt) {
+      settlePendingFlush(room, { ok: true, reason: 'saved' })
+    }
     // M25 5번: 계측은 **저장 성공 후**에 찍는다(실패해도 "ok" 가 남으면 안 된다).
     // 레벨: warn — 이 로그는 E2E 저장경로 표를 만드는 계측용이며, 테스트 환경의 기본
     // 로그 레벨(warn 이상)에서만 보인다(info 로 낮추면 Playwright webServer 출력에 안 나온다).

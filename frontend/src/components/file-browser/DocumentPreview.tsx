@@ -26,6 +26,7 @@ import { sanitizeDocxForEdit } from './docxEditSanitize'
 import { loadDocxComments, type DocxComment } from './docxComments'
 import { addDocxComment, replyDocxComment, setDocxCommentDone, editDocxComment, deleteDocxComment } from './docxCommentWriter'
 import { useOfficeSave, saveOfficeBytes } from './officeSave'
+import type { OfficeSaveRequestDetail } from './officeSave'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
@@ -548,6 +549,10 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
   }, [editSignal])
   const [viewerRetry, setViewerRetry] = useState(0)
   const [endingEdit, setEndingEdit] = useState(false)
+  // B4: 편집 종료는 endEditing이 요청한 저장(Done)에만 반응한다.
+  // flush·배경 저장·수동 Save의 완료 신호에 편집이 끝나면 (재연결 직후 배너 표시 중 등)
+  // 화면이 보기 모드로 뒤집힌다. Save ≠ Done (X1b).
+  const expectDoneRef = useRef(false)
   const embedInputRef = useRef<HTMLInputElement | null>(null)
   // X2a-③: XlsxViewer 가 방에 편집자가 있음을 알리면(보기 모드) 코멘트 버튼을 막는다.
   // P0-3: 팝업 차단 시 대체 링크를 보여준다 (조용한 무응답 금지).
@@ -590,6 +595,9 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
       // lib 이 소유한 방 세션까지 내려가 presence 가 사라진다.
       // "Done" 은 endEditing 이 별도로 편집을 끝낸다.
       if (d.keepEditing) return
+      // B4: endEditing이 요청한 저장이 아니면 편집을 끝내지 않는다 (배경 저장·flush 등).
+      if (!expectDoneRef.current) return
+      expectDoneRef.current = false
       setEditing(false)
       window.dispatchEvent(new CustomEvent('fileFullscreenRequest', { detail: { isFullscreen: false, path: file.path } }))
     }
@@ -630,6 +638,8 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
       after?.()
       return
     }
+    // B4: 이 저장이 끝나면 편집을 끝낸다 (전역 done 리스너가 식별).
+    expectDoneRef.current = true
     setEndingEdit(true)
     try {
       // X1c(P0-2): 실패 바이트 보관 중이면 Ok 확인을 묻는다 — 그냥 닫으면 편집이 사라진다.
@@ -654,6 +664,8 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
         showToast.error('Save failed — staying in edit mode')
       }
     } finally {
+      // B4: 실패·취소면 플래그를 거둔다 (다음 배경 저장에 편집이 끝나면 안 된다).
+      expectDoneRef.current = false
       setEndingEdit(false)
     }
   }, [editing, endingEdit, requestOfficeSave])
@@ -1845,6 +1857,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   const persistOverrideRef = useRef(persistOverride)
   persistOverrideRef.current = persistOverride
   const dirtyRef = useRef(false)
+  // B1: 진행 중인 flush 요청 id. 다음 저장 완료 신호에 실어 서버 ack와 짝짓고 비운다.
+  const pendingFlushIdRef = useRef<string | null>(null)
   // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
   // 보기 모드에서는 탭을 숨긴다 (첨부는 편집 행위 — 보완2). standalone에서는 중첩 금지.
   const attachAddIns = useMemo(
@@ -2665,6 +2679,12 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     const room = collabRef.current
     const handle = xlsxHandleRef.current
     if (!room || !handle?.saveBytes) return false
+    // B1: 진행 중인 flush 요청 id를 이번 저장 완료 신호에 싣는다 (있을 때만).
+    const takeFlushId = (): string | undefined => {
+      const id = pendingFlushIdRef.current
+      pendingFlushIdRef.current = null
+      return id ?? undefined
+    }
     try {
       const raw = new Uint8Array(await handle.saveBytes())
       let bytes = await patchUnsupportedForSave(raw)
@@ -2684,7 +2704,9 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
             text: '파일이 동시편집 밖에서 변경되어 저장을 막았습니다 — 내 사본을 내려받아 확인하세요',
           })
           showToast.error('파일이 외부에서 변경되어 저장을 막았습니다')
-          window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true } }))
+          window.dispatchEvent(
+            new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+          )
           return false
         }
         setCollabNotice({
@@ -2692,17 +2714,23 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
           text: `저장 실패 — 내 사본을 내려받아 확인하세요 (${res.message ?? res.reason})`,
         })
         showToast.error(res.message ?? '저장 실패')
-        window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true } }))
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+        )
         return false
       }
       room.baseHash = res.newHash
+      // B2: 저장 성공 — 미저장 표시를 지운다 (flush clean-ack 판정용).
+      dirtyRef.current = false
       // X1c: 방 저장이 디스크를 바꿨으므로 단독 저장의 If-Match(ETag) 도 새 해시로 동기화한다.
       // 놓치면 뒤에 단독 저장이 낡은 ETag 로 나가 409 를 반복한다.
       setEtag(res.newHash)
       void queryClient.invalidateQueries({ queryKey: ['files'] })
       if (!quiet) showToast.success('저장했습니다')
       // X1b: keepEditing — Save 는 편집을 유지한다(Done 만 편집을 끝낸다).
-      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true } }))
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: takeFlushId() } }),
+      )
       return true
     } catch (e) {
       // X1c(P0-2): 예외(네트워크·방 없음)도 내 사본 다운로드를 제공한다.
@@ -2712,7 +2740,9 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         text: `저장 실패 — 내 사본을 내려받아 확인하세요 (${e instanceof Error ? e.message : 'unknown'})`,
       })
       showToast.error(e instanceof Error ? e.message : '저장 실패')
-      window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true } }))
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+      )
       return false
     }
   }, [path, queryClient, storeFailedBytes, patchUnsupportedForSave])
@@ -3913,13 +3943,24 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   // X2a-③: viewer 로 참가 중에도 듣는다(403 view_only 확인용). 방에 붙지 않았으면 무시한다.
   useEffect(() => {
     if (standalone) return
-    const onSave = () => {
+    const onSave = (e: Event) => {
       if (!editing && collabRef.current?.role !== 'viewer') return
+      // B1: flush 요청 id — 완료 신호에 실어 서버 ack와 짝짓는다.
+      const fid = (e as CustomEvent<OfficeSaveRequestDetail>).detail?.flushRequestId
+      const flushId = typeof fid === 'string' && fid.length > 0 ? fid : undefined
+      // B2: flush 요청인데 미저장이 없으면 저장 없이 즉시 ok.
+      if (flushId && !dirtyRef.current) {
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: flushId } }),
+        )
+        return
+      }
+      if (flushId) pendingFlushIdRef.current = flushId
       void save()
     }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [save, editing, standalone])
+  }, [save, editing, standalone, path])
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
   useEffect(() => {
     const onEmbed = (e: Event) => {
@@ -4097,9 +4138,10 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
             }}
             onWorkbookError={(e) => setError(e instanceof Error ? e.message : String(e))}
           onWorkbookChange={() => {
+            // B2: flush clean-ack 판정용. standalone 여부와 무관하게 변경이면 dirty다.
+            dirtyRef.current = true
             // C5-3 standalone(첨부 편집): 자동 저장·방 sweep 없이 dirty만 기록한다.
             if (standaloneRef.current) {
-              dirtyRef.current = true
               return
             }
             scheduleXlsxRefresh()

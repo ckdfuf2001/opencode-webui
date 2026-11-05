@@ -195,6 +195,8 @@ export class YCollabSession {
   lastMeta: YCollabMeta | null = null
   /** U-parent: 마지막 4001 close의 reason ('embed_reset'이면 첨부 갱신 리셋). */
   lastResetReason: string | null = null
+  /** B3: pagehide 때 명시 close(1000). 탭 종료를 정상 종료로 알려 서버 dropAt을 지운다. */
+  private pageHideHandler: (() => void) | null = null
   /** U-parent: flush 요청 뒤 officeSaveDone 대기 타이머. */
   private flushAckTimer: ReturnType<typeof setTimeout> | null = null
   /** U-parent: 위 타이머와 쌍을 이루는 window 리스너 (dispose 때 제거). */
@@ -263,6 +265,21 @@ export class YCollabSession {
     }
     // 작성자 집계는 양 모드에서 필요하다(transport에서 provider가 doc을 갱신하므로).
     this.doc.on('update', this.onDocActivity)
+    // B3: pagehide 때 명시 close(1000). 브라우저가 소켓을 그냥 죽이면 서버가
+    // 1006으로 보고 비정상 종료로 기록한다 — 정상 탭 종료와 구분하기 위해서다.
+    try {
+      const onHide = (): void => {
+        try {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.close(1000, 'pagehide')
+        } catch {
+          /* 무시 */
+        }
+      }
+      this.pageHideHandler = onHide
+      window.addEventListener('pagehide', onHide)
+    } catch {
+      /* 무시 */
+    }
   }
 
   get clientId(): number {
@@ -468,9 +485,18 @@ export class YCollabSession {
   /** 전용 타입(99/100/101/103) 처리부. own·transport 공통. */
   private handleOwnMessage(type: number, d: decoding.Decoder): void {
     if (type === 103) {
-      // U-parent: 서버가 부모 flush(즉시 저장)를 요청했다. 편집을 유지한 채 저장하고
-      // officeSaveDone를 보면 104 {ok}로 답한다 (서버 PUT이 최대 8초 기다린다).
-      this.requestParentFlush()
+      // U-parent: 서버가 부모 flush(즉시 저장)를 요청했다. 편집을 유지한 채 저장하고,
+      // 같은 requestId의 officeSaveDone만 104 ack로 답한다 (B1: 앞선 저장 완료 오인 방지).
+      // 구서버(페이로드 없음)와 호환된다 (id 없이 ack).
+      let requestId: string | null = null
+      try {
+        const raw = decoding.readVarUint8Array(d)
+        const body = JSON.parse(new TextDecoder().decode(raw)) as { requestId?: unknown }
+        if (typeof body.requestId === 'string') requestId = body.requestId
+      } catch {
+        requestId = null
+      }
+      this.requestParentFlush(requestId)
       return
     }
     if (type === 100) {
@@ -502,26 +528,25 @@ export class YCollabSession {
 
   /**
    * U-parent: 서버 flush 요청 처리. 편집을 유지한 채 즉시 저장하고,
-   * 첫 officeSaveDone를 104 ack로 서버에 돌려준다.
+   * 같은 requestId의 officeSaveDone만 104 ack로 서버에 돌려준다 (B1).
    * 저장 리스너가 없거나 실패해도 서버 타임아웃(8초)이 409로 막으므로 조용한 유실은 없다.
    */
-  private requestParentFlush(): void {
-    try {
-      // keepEditing: flush로 편집이 끝나면 안 된다 (DocumentPreview가 setEditing(false)한다).
-      window.dispatchEvent(new CustomEvent('officeSaveRequest', { detail: { keepEditing: true } }))
-    } catch {
-      // 무시 (서버 타임아웃이 처리한다)
-    }
+  private requestParentFlush(requestId: string | null): void {
+    // B2: 즉시-ok는 dispatchEvent 안에서 동기로 터질 수 있다 — 리스너를 먼저 등록한다.
+    // (등록보다 dispatch가 먼저면 ack가 증발하고 서버가 8초 타임아웃으로 간다.)
     const done = (e: Event): void => {
       if (this.flushAckHandler !== done) return
+      const d = (e as CustomEvent<{ ok?: boolean; flushRequestId?: unknown }>).detail
+      // B1: 이 요청의 응답이 아니면 무시한다 (앞선 저장의 완료).
+      if (requestId !== null && d?.flushRequestId !== requestId) return
       this.flushAckHandler = null
       window.removeEventListener('officeSaveDone', done)
       if (this.flushAckTimer) {
         clearTimeout(this.flushAckTimer)
         this.flushAckTimer = null
       }
-      const ok = (e as CustomEvent<{ ok?: boolean }>).detail?.ok === true
-      this.sendFlushAck(ok)
+      const ok = d?.ok === true
+      this.sendFlushAck(ok, requestId)
     }
     if (this.flushAckHandler) window.removeEventListener('officeSaveDone', this.flushAckHandler)
     this.flushAckHandler = done
@@ -533,15 +558,26 @@ export class YCollabSession {
       if (this.flushAckHandler === done) this.flushAckHandler = null
       this.flushAckTimer = null
     }, 10000)
+    try {
+      // keepEditing: flush로 편집이 끝나면 안 된다 (DocumentPreview가 setEditing(false)한다).
+      window.dispatchEvent(
+        new CustomEvent('officeSaveRequest', { detail: { keepEditing: true, flushRequestId: requestId ?? undefined } }),
+      )
+    } catch {
+      // 무시 (서버 타임아웃이 처리한다)
+    }
   }
 
-  /** U-parent: flush 확인을 서버에 보낸다 (104). */
-  private sendFlushAck(ok: boolean): void {
+  /** U-parent: flush 확인을 서버에 보낸다 (104 + B1 requestId). */
+  private sendFlushAck(ok: boolean, requestId: string | null): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
     try {
       const e = encoding.createEncoder()
       encoding.writeVarUint(e, MSG_FLUSHED)
-      encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify({ ok })))
+      encoding.writeVarUint8Array(
+        e,
+        new TextEncoder().encode(JSON.stringify(requestId ? { ok, requestId } : { ok })),
+      )
       this.send(encoding.toUint8Array(e))
     } catch {
       // 무시 (서버 타임아웃이 처리한다)
@@ -1029,6 +1065,14 @@ export class YCollabSession {
         /* 무시 */
       }
       this.flushAckHandler = null
+    }
+    if (this.pageHideHandler) {
+      try {
+        window.removeEventListener('pagehide', this.pageHideHandler)
+      } catch {
+        /* 무시 */
+      }
+      this.pageHideHandler = null
     }
     if (this.mode === 'own') {
       // own은 우리가 소유하므로 끝까지 정리한다.

@@ -139,7 +139,8 @@ export function createObjectTapTransport(
   // U-parent: flush 요청 뒤 officeSaveDone 대기 (connect 단위로 1개).
   let flushTimer: ReturnType<typeof setTimeout> | null = null
   let flushHandler: ((e: Event) => void) | null = null
-  const armFlushAck = (): void => {
+  let flushRequestId: string | null = null
+  const armFlushAck = (requestId: string | null): void => {
     if (flushHandler) {
       try {
         window.removeEventListener('officeSaveDone', flushHandler)
@@ -154,28 +155,35 @@ export function createObjectTapTransport(
     }
     const done = (e: Event): void => {
       if (flushHandler !== done) return
+      const d = (e as CustomEvent<{ ok?: boolean; flushRequestId?: unknown }>).detail
+      // B1: 이 요청의 응답이 아니면 무시한다 (앞선 저장의 완료).
+      if (flushRequestId !== null && d?.flushRequestId !== flushRequestId) return
+      const rid = flushRequestId
       flushHandler = null
+      flushRequestId = null
       window.removeEventListener('officeSaveDone', done)
       if (flushTimer) {
         clearTimeout(flushTimer)
         flushTimer = null
       }
-      const ok = (e as CustomEvent<{ ok?: boolean }>).detail?.ok === true
+      const ok = d?.ok === true
       try {
         const enc = encoding.createEncoder()
         encoding.writeVarUint(enc, MSG_FLUSHED)
-        encoding.writeVarUint8Array(enc, new TextEncoder().encode(JSON.stringify({ ok })))
+        encoding.writeVarUint8Array(enc, new TextEncoder().encode(JSON.stringify(rid ? { ok, requestId: rid } : { ok })))
         inner.send(encoding.toUint8Array(enc))
       } catch {
         // 무시 (서버 타임아웃이 처리한다)
       }
     }
+    flushRequestId = requestId
     flushHandler = done
     window.addEventListener('officeSaveDone', done)
     // 서버 예산(8초)보다 길게 잡는다. 늦은 ack는 서버가 무시한다.
     flushTimer = setTimeout(() => {
       window.removeEventListener('officeSaveDone', done)
       if (flushHandler === done) flushHandler = null
+      flushRequestId = null
       flushTimer = null
     }, 10000)
   };
@@ -189,13 +197,28 @@ export function createObjectTapTransport(
           try {
             if (data.length > 0 && data[0] === MSG_FLUSH_REQUEST) {
               // U-parent: 서버가 부모 flush를 요청했다. 편집을 유지한 채 즉시 저장한다.
-              // (data[0] 단일 바이트 판정: 103 < 128이라 varUint 1바이트다.)
+              // B1: 응답 짝짓기용 id를 함께 받는다 (없으면 구서버).
+              let requestId: string | null = null
               try {
-                window.dispatchEvent(new CustomEvent('officeSaveRequest', { detail: { keepEditing: true } }))
+                const dd = decoding.createDecoder(data.subarray(1))
+                const body = JSON.parse(new TextDecoder().decode(decoding.readVarUint8Array(dd))) as {
+                  requestId?: unknown
+                }
+                if (typeof body.requestId === 'string') requestId = body.requestId
+              } catch {
+                requestId = null
+              }
+              // B2: 즉시-ok는 dispatchEvent 안에서 동기로 터질 수 있다 — 리스너를 먼저 등록한다.
+              armFlushAck(requestId)
+              try {
+                window.dispatchEvent(
+                  new CustomEvent('officeSaveRequest', {
+                    detail: { keepEditing: true, flushRequestId: requestId ?? undefined },
+                  }),
+                )
               } catch {
                 // 무시 (서버 타임아웃이 처리한다)
               }
-              armFlushAck()
               return
             }
             if (data.length > 0 && data[0] === MSG_ROOM_OBJECTS) {
@@ -239,6 +262,7 @@ export function createObjectTapTransport(
         }
         flushHandler = null
       }
+      flushRequestId = null
       if (flushTimer) {
         clearTimeout(flushTimer)
         flushTimer = null

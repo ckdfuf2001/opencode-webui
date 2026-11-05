@@ -71,11 +71,15 @@ export interface OfficeSaveDoneDetail {
   path?: string
   /** true면 편집을 유지한다 (XLSX room 저장, C5-2 임베드용 선저장). */
   keepEditing?: boolean
+  /** B1: flush 요청 id. 같은 id의 요청에 대한 응답일 때만 서버 ack로 쓴다. */
+  flushRequestId?: string
 }
 
 /** officeSaveRequest 요청. keepEditing이면 완료 신호에도 편집을 유지한다. */
 export interface OfficeSaveRequestDetail {
   keepEditing?: boolean
+  /** B1: flush 요청 id (서버 103 페이로드). 완료 신호에 실어 돌려준다. */
+  flushRequestId?: string
 }
 
 /**
