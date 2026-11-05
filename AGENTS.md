@@ -253,8 +253,10 @@
 - 메모리 규칙: `pnpm check:memory` (scripts/check-memory-rules.mjs) — 폴링·interval·EventSource
   추가 시 실패한다. `pnpm test`가 이 검사를 먼저 돌린다. 허용 목록은 scripts/memory-allowlist.json.
 - 타입: `pnpm -C frontend exec tsc -b` (별도 스크립트 없음). 기준선: **에러 0**.
-- 린트: `pnpm -C frontend exec eslint .`. 기준선: **330 problems (272 errors, 58 warnings)** —
-  `no-explicit-any`·`no-empty` 중심의 기존 누적값. 새 문제를 늘리지 않는 것이 목표.
+- 린트: `pnpm -C frontend exec eslint .`. 기준선(2026-11-05 실측): **332 problems (272 errors, 60 warnings)** —
+  `no-explicit-any`·`no-empty` 중심의 기존 누적값. errors 272 고정이 게이트, warnings는 코드 이동에 따라
+  소폭 증감한다. 새 issues를 늘리는 것이 목표.
+  (D67의 "6e+11w"는 변경 5파일 범위 측정치였음 — 전수 기준과 혼동 금지.)
   (PPT 파일만 볼 때는 `pnpm -C frontend exec eslint src/components/file-browser/PptxViewer.tsx` = 9 problems.)
 - E2E: `bun run test:e2e:collab --repeat-each=3` (chromium + msedge, workers 1, retries 0).
   VPN 끄고 실행. 실패 시 `test-results/`의 trace.zip 첨부.

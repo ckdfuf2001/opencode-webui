@@ -10,6 +10,10 @@
  *   2) UTF-8 BOM 혼입 — 도구 혼동 흔적
  *   3) 한글 자리에 연속된 '?' — CP949→ASCII 재인코딩 흔적
  *   4) 한자(CJK ideograph) 혼입 — 어휘 혼합(경고)
+ *   5) strict UTF-8 디코딩 실패 — CP949 등 비UTF-8 바이트 혼입.
+ *      Node lenient 디코딩은 CP949 바이트쌍을 유효한 문자로 오인해
+ *      U+FFFD 없이 통과시킨다 (handoff.md C5-4c절 사고, 2026-11-05).
+ *      TextDecoder fatal:true 로 원본 버퍼를 검증한다.
  *
  * 규칙: 파일 수정은 edit/write 도구로만 한다.
  */
@@ -67,6 +71,13 @@ for (const rel of gitFiles()) {
   const buf = fs.readFileSync(abs)
   if (buf.length > 8 * 1024 * 1024) continue
   checked += 1
+  // strict UTF-8 검증: CP949 등 비UTF-8 바이트는 여기서 걸린다.
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(buf)
+  } catch {
+    errors.push(`${rel}: strict UTF-8 디코딩 실패 — 비UTF-8 바이트 혼입 (BOM 없이 UTF-8로 다시 저장할 것)`)
+    continue
+  }
   const text = buf.toString('utf8')
 
   if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
