@@ -1238,3 +1238,20 @@ E21ë§Œì˜ ë¬¸ì œê°€ ì•„ë‹ˆë‹¤. ê·¼ê±°:
 - íšŒê·€: c5-4 16/16 Â· pptx-collab 26+1skip Â· xlsx-collab 19(+X2a-6 ê¸°ì¡´) Â· c5-3+c5-2 22 Â·
   c5-1+presence 9 Â· c4-6+ui-layout+viewer-unmount+xlsx-c2+xlsx-ole-solo+xlsx-solo 23
   (+C2-b-1 flake, ë‹¨ë… green) Â· c3+c4-3+c4-4 47 Â· backend unit 62 Â· frontend unit 20.
+
+## C5-4c (2026-11-05, D67: U-parent º¸¿Ï B1/B2/B3/B4 + C Àç¼±Ãâ)
+- ±¸Çö: 103/104 requestId Â¦Áş±â(¸®½º³Ê¸¦ dispatchº¸´Ù ¸ÕÀú µî·Ï ? µ¿±â Áï½Ã-ok Áõ¹ß ¹æÁö).
+  B2 clean-ack + ¼­¹ö docDirty ÀçÈ®ÀÎ + xlsx dirtyRef ½ÇÃøÁ¤(onWorkbookChange true/room ÀúÀå false).
+  B3 docDirty(½Ãµù 10ÃÊ Á¦¿Ü)+lastRemoteUpdateAt/lastSaveAt Á¶°ÇºÎ settle, clean close 1000/1001
+  drop »èÁ¦ + pagehide close(1000). C needsElection/reevaluateOwner(ownerIds º¸¼ö, addConnÀº
+  hasKnownMode °ÔÀÌÆ®). B4 resume ¹è³Ê+³» »çº» + solo Æú¹é 30ÃÊ À¯¿¹(ÃÊ±â ¸¶¿îÆ® Á¦¿Ü) +
+  Àü¿ª doneÀº endEditing ¿äÃ»¿¡¸¸ ¹İÀÀ(Save´Â ÆíÁı À¯Áö).
+- Å×½ºÆ®(c5-4 ½Å±Ô 5Á¾, red È®ÀÎ ÈÄ green): U-flush-race / U-flush-clean(0È¸¡¤507ms) /
+  U-close-save(409¡æº¹±¸ 200) / U-offline-long(ÀûÀÀÇü 120s+30s ´ë±â¡æresume¡æ¹è³Ê, chromium+msedge) /
+  O-1(Ada¡æGrace ½Â°è¡æÀçÀÔÀå). R-ribbon/follow/attach lock-in Æ÷ÇÔ.
+- È¸±Í: c5-4 ÀüÃ¼(chromium, º¯°æºĞ msedge) ¡¤ xlsx-collab(X2a-6 ±âÁ¸ Á¦¿Ü) ¡¤
+  pptx-collab(½Å±Ô 0; D26/E3/E12/E18/E16b/E20s/E21/E8/E9/¸ğ¹ÙÀÏ 3Á¾ º£ÀÌ½º¶óÀÎ µ¿ÀÏ ½ÇÆĞ) ¡¤
+  c5-1/2/3 ¡¤ c3 ¡¤ presence ¡¤ c4-3/4/6 ¡¤ xlsx-c2/solo ¡¤ ui-layout.
+  backend unit collab ÀüÁ¾ green, frontend tsc 0, backend tsc ±âÁ¸¸¸, eslint µ¿ÀÏ, encoding/memory clean.
+- ÁÖÀÇ: setOfflineÀº WS¸¦ ¾È ²÷´Â´Ù ? B4·ù Å×½ºÆ®´Â rooms ¸ñ·Ï ¼Ò¸ê poll + TTL ¿©À¯·Î.
+  µ¿±â dispatch ÀÌº¥Æ®´Â ¸®½º³Ê¸¦ ¸ÕÀú µî·ÏÇÒ °Í.

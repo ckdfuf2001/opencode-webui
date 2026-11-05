@@ -846,3 +846,43 @@
   발견→M32로 해결(E7 green). E19/E19b/E6 풀런 실패는 격리 재실행 green(로드 플레이크).
 - pre-existing 실패 14종(pristine 동일 실패, 베이스라인 대조): E21b/E3/E8/E9/E12/E18/E16b/E21/
   E1m/E2m/E3m/U3/U2/X2a-6. 이번 범위 밖.
+
+## D67 C5-4c: U-parent 보완 + 새 탭 편집 회귀 (B1/B2/B3/B4/C, 2026-11-05)
+-배경: 0절 측정(1400x900, 루트 0,0 vs 예전 8,8/1384x884)에서 새 탭 EditPage 구조를
+ 구 전체화면으로 복원(A1), lib follow-mode-bar를 CSS로 숨기고 우리 팝오버만 유지(A2),
+ 첨부탭 1개+filechooser+embeddings 증가 lock-in(A3).
+-B1(flush 짝짓기): 진행 중 저장의 완료를 flush 응답으로 오인하면 낡은 바이트를 확정한다.
+ 103 페이로드+104 응답에 requestId를 싣고 같은 id의 done만 ack한다. 즉시-ok(B2)는
+ dispatchEvent 안에서 동기로 터지므로 리스너를 dispatch보다 먼저 등록한다
+ (역순이면 ack가 증발하고 8초 타임아웃 → U-flush-clean으로 확인).
+-B2(깨끗하면 저장 생략): flush 요청 시점에 미저장이 없으면 저장 없이 즉시 ok.
+ 서버는 docDirty로 재확인한다. xlsx dirtyRef가 non-standalone에서 절대 true가 안 돼
+ 항상 저장 없이 ack하던 버그 수정 — onWorkbookChange에서 항상 true, room 저장 성공에 false
+ (U-parent-autosave 회귀로 확인).
+-B3(닫힘 정책): 방 dirty는 마지막 applySave 이후 Y 업데이트(생성 10초 시딩 윈도우 제외,
+ DOC_DIRTY_GRACE_MS), clean close 1000/1001은 drop 기록 삭제(1006 유지), 클라는
+ pagehide에서 명시 close(1000). applySave 성공 시 dirty 해제+조건부 settle
+ (lastRemoteUpdateAt <= lastSaveAt일 때만 — 늦게 도착한 업데이트가 있으면 ack 경로의
+ 신선 저장을 기다린다).
+-C(재선출): dropConn/awareness/addConn에서 needsElection→reevaluateOwner 즉시 재선출
+ (폴링 금지). owner 살아있는데 ids가 비면 보수. 단 addConn은 awareness 도착 전
+ blind 선출 금지 — view-only 방에 owner가 생긴다 (V5 회귀로 확인, hasKnownMode 게이트).
+-B4(장기 오프라인): setOffline은 기존 WS를 끊지 않는다(half-open) — 서버 무수신 정리
+ 120초+TTL 30초를 기다려야 방이 dispose된다. resume+미저장이면 배너+내 사본 안내.
+ 재연결 찰나 unsync에 solo 폴백하면 lib이 디스크 기준으로 리마운트해 미저장이 증발하므로
+ 한 번 gate된 뒤 30초 유예한다 (초기 마운트는 P0-2 seed-금지라 유예 제외).
+ 회복·배경 저장이 편집을 끝내면 배너가 함께 사라지므로, 전역 officeSaveDone은
+ endEditing이 요청한 저장(Done)에만 반응한다 (Save ≠ Done, X1b).
+-테스트(c5-4 신규 5종, 모두 red 확인): U-flush-race(진행 중 저장+103, 같은 id만 ack),
+ U-flush-clean(깨끗하면 저장 0회·507ms), U-close-save(정상 종료+dirty→409→재열람 저장 후 200),
+ U-offline-long(180초+poll 적응형 대기→resume→배너→저장, chromium+msedge),
+ O-1(A 종료→B owner→저장→A 재입장, Ada/Grace owner 플래그 판정).
+-회귀: c5-4 전체(chromium 전부, 변경분 msedge 전부 green) · xlsx-collab(X2a-6 기존 제외)
+ · pptx-collab(신규 0; D26/E3/E12/E18/E16b/E20s/E21/E8/E9/모바일 3종은 베이스라인 동일 실패)
+ · c5-1/2/3 · c3 · presence · c4-3/4/6 · xlsx-c2/solo · ui-layout.
+ backend unit(collab-rooms 30/objects/participants/image-count/relay 17) green.
+ frontend tsc 0, backend tsc 기존 에러만, eslint 동일(6e+11w), encoding/memory clean.
+-교훈: (1) 동기 dispatch+나중 리스너 등록은 ack 증발 — 리스너 먼저.
+ (2) e2e 재현에 half-open 소켓을 가정하지 말 것 — 서버 sweep(drop 120s+TTL 30s)을 적응형으로
+ 기다려라 (rooms 목록 소멸 poll). (3) UI 경로 작업은 예전 exe와 나란히 놓은 스크린샷을
+ 완료 보고에 필수 첨부 (AGENTS.md 규칙 제안).
