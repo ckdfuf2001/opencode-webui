@@ -113,10 +113,6 @@ function partPathOf(attachUrl: string): string {
   return decodeURIComponent(segs[1]!)
 }
 
-function partHashOf(attachUrl: string): string | null {
-  return new URL(attachUrl).searchParams.get('partHash')
-}
-
 /** 서버 rooms API에서 이 파일의 방 참가자 목록을 읽는다 (U-close 방 정리 단언용). */
 async function roomsForFile(fileName: string): Promise<Array<{ id?: unknown; name?: unknown }>> {
   const res = await fetch(`${backendBase()}/api/collab/rooms`)
@@ -339,6 +335,54 @@ test.describe('C5-4: URL 편집 분리', () => {
       expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
     } finally {
       await ctx.close().catch(() => {})
+    }
+  })
+
+  test('P-open-part-coedit: 같은 하위문서를 두 탭에서 열면 같이 편집된다', async ({ browser }) => {
+    // C6c: /edit/<부모>/-/<파트> 두 탭이 같은 파트 방에 붙어 실시간 공유한다.
+    // A가 입력하면 B에 보이고, A가 저장하면 부모 zip 파트에 반영된다.
+    const seg = 'c6cpart'
+    await mkRepo(seg, ['embed-docx.pptx'])
+    const parent = `${seg}/embed-docx.pptx`
+    const part = 'ppt/embeddings/Microsoft_Word_Document.docx'
+    const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+    const url = (p: string): string => `/edit/${enc(parent)}/-/${enc(p)}?e2e=1&collabDebug=1`
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    await seedUser(ctxB, GRACE)
+    const pageA = await ctxA.newPage()
+    const pageB = await ctxB.newPage()
+    try {
+      await pageA.goto(url(part), { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await pageB.goto(url(part), { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await pageA.locator('docx-editor [contenteditable="true"]').first().waitFor({ timeout: 60000 })
+      await pageB.locator('docx-editor [contenteditable="true"]').first().waitFor({ timeout: 60000 })
+      // B는 읽기 전용이 아니어야 한다 (공동편집).
+      await expect(pageB.getByTestId('attach-readonly')).toHaveCount(0, { timeout: 15000 })
+      const marker = `C6C${Date.now().toString(36)}`
+      const pm = pageA.locator('docx-editor [contenteditable="true"]').first()
+      await pm.click({ timeout: 15000 })
+      await pageA.keyboard.press('Control+End')
+      await pageA.keyboard.type(marker, { delay: 20 })
+      // B 화면에 A 입력이 보인다 (yjs 공유).
+      await expect
+        .poll(() => pageB.locator('docx-editor [contenteditable="true"]').first().textContent(), {
+          timeout: 90000,
+          intervals: [1000],
+        })
+        .toContain(marker)
+      // A가 저장하면 부모 zip 파트에 반영된다.
+      await pageA.getByTestId('attach-save').click({ timeout: 15000 })
+      await expect
+        .poll(async () => partContains(path.join(workspaceDir(), 'repos', parent), part, marker), {
+          timeout: 60000,
+          intervals: [2000],
+        })
+        .toBe(true)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
     }
   })
 
@@ -575,8 +619,10 @@ test.describe('C5-4: URL 편집 분리', () => {
     void testInfo
   })
 
-  test('U-stale-1: 외부에서 바뀐 첨부는 덮어쓰지 않고 새로고침한다', async ({ browser }, testInfo) => {
-    // U-stale: PUT이 partHash를 대조해 stale_part로 막는다. 조용 덮어쓰기 금지.
+  test('U-stale-1: 외부에서 바뀐 첨부는 덮어쓰지 않고 막는다', async ({ browser }, testInfo) => {
+    // C6c: 파트 방 저장도 디스크 대조로 막는다 (조용한 덮어쓰기 금지).
+    // PUT 시절의 자동 새로고침+URL 해시 스탬프 대신 방 저장 규칙을 따른다:
+    // 막힘 + 배너/토스트, 디스크 그대로, 편집 내용은 유지.
     testInfo.setTimeout(420000)
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
@@ -598,24 +644,25 @@ test.describe('C5-4: URL 편집 분리', () => {
       await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
       // 편집 시작 (저장 안 함).
       await setCellByFormulaBar(attach, 'A1', 'stale-probe-1')
+      // 룸 모드 자동저장(2.5s 디바운스)이 먼저 정리되게 둔다 — 수동 저장과 레이스하면
+      // 토스트를 놓친다. 자동저장이 끝나면 방 lastHash가 입력 반영 상태가 된다.
+      await attach.waitForTimeout(5000)
       // 외부 변경: 부모 디스크의 파트를 통째로 교체한다.
       const part = partPathOf(attach.url())
       const extBytes = await tamperAttachPart(hostAbs, part, '-EXT')
       expect(extBytes.length).toBeGreaterThan(0)
-      // 저장 시도 → stale_part → 새로고침 (덮어쓰기 금지).
+      // 저장 시도 → conflict_external → 막힘 (덮어쓰기 금지).
       await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      // 막힘 알림이 떴다 (토스트 + 배너 — 토스트는 몇 초 뒤 사라지고, 자동저장과 겹치면
+      // 여러 개가 쌓일 수 있으므로 0개가 아님만 단언한다).
+      await expect(
+        attach.locator('[data-sonner-toast]').filter({ hasText: '외부에서 변경' }),
+      ).not.toHaveCount(0, { timeout: 15000 })
+      await expect(attach.getByTestId('xlsx-collab-banner')).toContainText('동시편집 밖에서 변경', { timeout: 15000 })
       // 디스크 파트는 외부 내용 그대로여야 한다.
       await expect
         .poll(async () => (await readAttachPart(hostAbs, part)).equals(extBytes), { timeout: 15000, intervals: [500] })
         .toBe(true)
-      // 새로고침 완료 증거: URL에 새 파트 해시가 찍힌다.
-      const { createHash } = await import('node:crypto')
-      const extHash = createHash('sha256').update(extBytes).digest('hex')
-      await expect
-        .poll(() => Promise.resolve(partHashOf(attach.url())), { timeout: 15000, intervals: [500] })
-        .toBe(extHash)
-      // stale 알림이 떴다.
-      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '다른 곳에서 변경' })).toHaveCount(1, { timeout: 15000 })
     } finally {
       await ctx.close().catch(() => {})
     }

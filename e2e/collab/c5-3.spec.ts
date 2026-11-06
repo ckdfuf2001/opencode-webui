@@ -650,7 +650,7 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await popupA.getByTestId('attach-editor').waitFor({ timeout: 30000 })
       // 편집 없이 Done → 확인 다이얼로그 없이 바로 닫혀야 한다 (로드 시 spurious dirty 금지).
       await closeAttachTab(popupA)
-      // 락이 풀렸으므로 B는 편집 가능해야 한다 (읽기 전용 아님).
+      // C6c: 파트 방 공유라 락 개념이 없다 — B는 바로 편집 가능하다 (읽기 전용 아님).
       await openViaWorkspace(pageB, 'collab-features.xlsx', seg)
       const [popupB] = await Promise.all([
         pageB.waitForEvent('popup', { timeout: 15000 }),
@@ -666,7 +666,8 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
     }
   })
 
-  test('E2-lock: B가 같은 첨부를 열면 읽기 전용 + 토스트 1회', async ({ browser }) => {
+  test('E2-join: B가 같은 첨부를 열면 같이 편집한다 (독점 잠금 없음)', async ({ browser }) => {
+    // C6c: 하위문서는 방을 공유한다. 먼저 연 A가 있어도 B는 읽기 전용이 아니다.
     const ctxA = await mkCtx(browser, ADA)
     const ctxB = await mkCtx(browser, GRACE)
     const pageA = await ctxA.newPage()
@@ -696,10 +697,21 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
         pageB.getByRole('button', { name: '첨부 report.docx', exact: true }).first().dblclick({ timeout: 15000 }),
       ])
       await popupB.getByTestId('attach-editor').waitFor({ timeout: 30000 })
-      await expect(popupB.getByText('Ada님이 편집 중')).toHaveCount(1, { timeout: 15000 })
-      await expect(popupB.getByTestId('attach-save')).toBeDisabled({ timeout: 15000 })
-      await expect(popupB.getByTestId('attach-readonly')).toBeVisible({ timeout: 15000 })
-      // A가 닫으면 B는 다음에 편집 가능 (잠금 해제 확인은 생략 — 해제는 단위 테스트에서 검증)
+      // B도 편집자다 (읽기 전용 없음, 저장 가능).
+      await expect(popupB.getByTestId('attach-readonly')).toHaveCount(0, { timeout: 15000 })
+      await expect(popupB.getByTestId('attach-save')).toBeEnabled({ timeout: 15000 })
+      // B가 입력하면 A에 보인다 (같은 파트 방 공유).
+      const marker = `E2J${Date.now().toString(36)}`
+      const pm = popupB.locator('docx-editor [contenteditable="true"]').first()
+      await pm.click({ timeout: 15000 })
+      await popupB.keyboard.press('Control+End')
+      await popupB.keyboard.type(marker, { delay: 20 })
+      await expect
+        .poll(() => popupA.locator('docx-editor [contenteditable="true"]').first().textContent(), {
+          timeout: 90000,
+          intervals: [1000],
+        })
+        .toContain(marker)
       await closeAttachTab(popupA)
     } finally {
       await ctxA.close().catch(() => {})
