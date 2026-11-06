@@ -1331,3 +1331,27 @@ E21만의 문제가 아니다. 근거:
  fresh `pnpm install`은 patches/*.patch에서 재생성되므로 소스는 패치 파일.
 - 회귀: 위 D69 참조. 남은 순서: 0.12.83 exe 재빌드(본 수정 포함) → 푸시 → PC 2대
  수동확인 → v0.12.83 태그(버전 bump 없음 — 태그 전이므로 같은 버전으로 재빌드).
+
+## C6c 하위문서 공동편집 (2026-11-07, D70)
+- 요구: /edit/부모/-/파트 새 탭 두 개가 같이 편집되게. 권한 체크는 나중.
+ URL 규칙(/edit/문서·/edit/부모/-/파트 모두 무조건 편집모드)은 이미 성립 — 변경 없음.
+- 서버: 파트 방(roomIdForPart, kind=파트 확장자). seed/lastHash/저장/disk/watcher
+ 전부 파트 바이트 기준. 저장=replaceEmbedPart+부모 방 adopt+reset (PUT과 동일),
+ 부모 flush/dirty 검사도 PUT과 동일 순서. /save dirty_room 메시지는 기존 PUT UX
+ 문구('부모 파일을 먼저 저장하세요') 그대로 둔다.
+- 클라이언트: AttachmentEditor가 파트 세션 선점 → 성공 시 잠금 없이 viewer 방 모드
+ (path=부모+part+etag, standalone=false), 실패 시 기존 잠금+PUT 폴백.
+ stale은 에러+다시 열기. viewer 3종 part 대응(세션/nested attach/officeSaveRequest/
+ registerSaver). PptxViewer 세션키는 파트별로 분리한다.
+- 테스트: backend 단위 8건(roomId/세션 host·guest·stale·list/저장·conflict·부모adopt) +
+ e2e P-open-part-coedit(두 탭 동시입력+저장, docx 파트) + E2-join(E2-lock 교체).
+ red 원문:popup timeout(무응답→join 확인) / stale_client 404 아님(host/guest 확인).
+- 회귀: backend unit 신규 실패 0(기존 3파일 실패 동일: bun:sqlite 2 + office-embed
+ 기준선 1). e2e: c5-4 25/26(U-open-part-pptx 풀런 플레이크, base 동일) · c5-3 15/16
+ (E2-pdf-preview base 단독 실패) · c5-1 5/5 · c5-2 P2-3/P2-5 단독 green ·
+ xlsx-ole-solo 2/2 · ui-layout 3/3 · docx-collab 10/10 · pptx-collab 27 ·
+ R-ribbon-narrow + U-open-part-pptx-shape green 유지.
+ U-stale-1은 새 의미(막힘+배너/토스트, 새로고침 없음)로 갱신. E2-join으로 교체된
+ E2-lock(독점 잠금)은 의도된 동작 변경이다.
+- 남은 일: 권한 체크(v0.13 이후, 사용자 지정) — 파트 방 참가 시 역할 판정.
+ CFB(oleObject) 파트 편집 미지원(기존) — 다운로드만 된다.

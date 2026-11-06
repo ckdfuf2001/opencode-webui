@@ -935,3 +935,28 @@
  플레이크), c5-1 5/5, c5-2 P2-5 단독 green, c5-3 E2-pdf-preview는 base 단독도 실패(기존),
  xlsx-ole-solo 재실행 2/2, ui-layout 3/3, pptx-collab 27(모바일 포함), unit 신규 실패 0
  (config-migration/repo-tracking bun:sqlite 2건 + office-embed 1건은 base 동일).
+
+## D70 C6c 하위문서 공동편집 — 파트 방 (2026-11-07)
+-배경: /edit/부모/-/파트 새 탭은 standalone+독점 잠금이라 둘이 열면 한쪽이 읽기 전용이었다.
+ 요구: 하위문서도 상위처럼 바로 공동편집. 권한 체크는 나중. URL 규칙(/edit/문서,
+ /edit/부모/-/파트 모두 무조건 편집모드)은 이미 성립하므로 변경 없음.
+-결정: 파트를 가상 문서로 취급하는 part-room. 방 id = f_sha256("embed-part\n부모abs\n파트").
+ 서버(CollabRoom.part): seed/lastHash/저장/disk판정/watcher 전부 파트 바이트 기준,
+ 저장은 replaceEmbedPart + 부모 방 adopt(lastHash 갱신+resetRoomByServer — PUT과 동일).
+ 부모 flush(열린 에디터 있으면 requestParentFlush, dirty 잔류면 dirty_room 409)도 PUT과
+ 동일 순서. kind는 파트 확장자로 판정한다(xlsx/docx lib 규칙·baseHash 필수 동일 적용).
+ pptx 파트의 이미지 손실 가드는 파트 파일명으로 판정한다.
+-클라이언트: AttachmentEditor가 먼저 파트 세션에 붙고 성공하면 잠금 없이 viewer를
+ 방 모드로 마운트한다(path=부모 유지 + part prop + etag=파트 해시 + standalone=false).
+ 실패(오프라인 등)하면 기존 독점 잠금+PUT으로 폴백한다. stale은 폴백하지 않고 에러로
+ 알린다(조용한 덮어쓰기 금지). viewer 3종은 part로 세션에 붙고(Docx/Xlsx strict,
+ Pptx 세션키도 파트별로 분리), Nested attach 탭·부모 officeSaveRequest 수신·
+ registerSaver를 파트에 맞게 분기한다(룸 저장 슬롯 등록).
+-회귀 유의: (1) /save dirty_room 메시지는 기존 PUT UX 문구('부모 파일을 먼저 저장하세요')
+ 그대로 — U-parent/U-close-save 단언이 서버 메시지에 의존한다. (2) 룸 모드 자동저장이
+ 돌므로 U-stale-1은 저장 전 5초 settle + 토스트 다건 허용(not.toHaveCount(0))으로 바꿨다.
+ E2-lock은 의도된 동작 변경이라 E2-join(같이 편집)으로 교체했다. (3) 파트 방은 부모
+ watcher 디렉터리를 공유하므로 watcher 해시도 파트 기준이어야 한다(아니면 부모 저장
+ 때마다 externalChanged 오탐). (4) CFB(oleObject) 파트는 편집 불가라 기존대로 다운로드만
+ 된다(서버 GET이 CFB를 풀지 않음). (5) edit 훅 순서: C6b와 같은 #310 함정에 주의
+ (AttachmentEditor useEffect는 early return 뒤에 없음 — 확인됨).
