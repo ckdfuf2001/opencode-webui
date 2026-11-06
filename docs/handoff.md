@@ -1312,3 +1312,22 @@ E21만의 문제가 아니다. 근거:
  docxHiddenActions 누락 DOCX_UNSYNCED_ACTION_IDS(모듈 스코프 이동).
 - docxTapTransport 개명(역할 일치) + armFlushAck 중복 병합은 v0.13/W3로 이연(xlsx 경로 동결).
 - Q01/Q02/Q03: 위 C6절 결정 참조. 남은 일 — Q01: v0.13 스텁 제거 판단 / Q02: W3 측정 후 전환 / Q03: 없음.
+
+## C6b 도형 dblclick + 리본 늘어짐 수정 (2026-11-07, D69)
+- 증상 2건(사용자 샷): (1) PPTX embedded docx 도형 dblclick → 무응답. lib dblclick이
+ OLE에 no-op이라 편집 진입이 Properties "Edit content..." 버튼에만 있었다.
+ (2) ~900px 창에서 리본이 세로로 늘어남(160→223px, Font/Clipboard 스택).
+- 수정1(우리 코드): OleAttachmentOverlay 컨테이너 캡처 dblclick 라우팅(pptx만).
+ posMap rect 히트 → 칩과 같은 openOrDownload(새 탭 편집/미리보기/다운로드).
+ lib 푸터 버튼 위 dblclick은 lib 동작 유지. 순수 함수 findOleEntryAtPoint + 단위 6건.
+ CFB(oleObject) 임베딩은 편집 미지원(서버 GET이 CFB를 풀지 않음) — 다운로드는 된다.
+- 수정2(lib 패치): ooxml-ui ribbon CSS 5곳
+ `@media (pointer:coarse),(max-width:900px)` → `@media (pointer:coarse)`
+ (터치 44px 유지, 데스크톱 좁은 창은 22px 한 줄 + 그룹 접기). .mjs/.cjs 쌍.
+- 테스트: c5-4에 U-open-part-pptx-shape + R-ribbon-narrow 추가(chromium+msedge green).
+ red 원문: popup 15s timeout / clipboard 작은 버튼 min-height 44px.
+- 주의: pnpm patch-commit이 행에 걸려 패치 파일만 커밋되고 설치 반영이 안 됐음 —
+ live node_modules(.pnpm/ooxml-ui@1.8.0_…) 2파일을 수동 동기화함.
+ fresh `pnpm install`은 patches/*.patch에서 재생성되므로 소스는 패치 파일.
+- 회귀: 위 D69 참조. 남은 순서: 0.12.83 exe 재빌드(본 수정 포함) → 푸시 → PC 2대
+ 수동확인 → v0.12.83 태그(버전 bump 없음 — 태그 전이므로 같은 버전으로 재빌드).

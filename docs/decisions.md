@@ -902,3 +902,36 @@
  다음엔 바이섹트 없이 원인이 보인다. (3) 재연결 출렁임은 W0-9a(순수 offline→복귀, 폴백 없음)/
  W0-9b(이탈 후 재참가)로 확인한다. (4) TextDecoder fatal은 이미 유효한 UTF-8 오독(U+020E/022D류)을
  못 잡는다 → C6a에서 경고 패턴으로 보완 (18a8292 handoff에 U+020E 2건이 살아남은 것이 근거).
+
+## D69 C6b PPTX OLE 도형 dblclick + 좁은 창 리본 늘어짐 (2026-11-07)
+-배경: 게이트 파일(embedded docx) 도형을 더블클릭해도 하위 문서 편집이 안 열린다.
+ lib(pptx-react-viewer) handleElementDoubleClick은 OLE에 no-op(방정식/텍스트만 처리)이고,
+ 편집은 Properties "Edit content..." 버튼(OleEditorDialog)에만 있다. 우리 칩(클립)은
+ 구석 28px 아이콘이라 발견이 어렵다. 좁은 창(~900px)에서는 리본이 160→223px로 늘어
+ 슬라이드를 밀어낸다(Font/Clipboard 세로 스택).
+-원인1: lib dblclick이 OLE를 무시한다. e2e probe(1137px edit)에서 frame center dblclick이
+ 무응답(POPUP=none, dialog=0)임을 확인. 우리 컨테이너에는 dblclick 라우팅이 없었다.
+-원인2: ooxml-ui ribbon CSS `@media (pointer:coarse),(max-width:900px)`가 버튼 min-height를
+ 22→44px로 올린다(!important). 그룹 접기(overflow loop)는 너비만 보고 접으므로 wrap 없는
+ 채로 키만 커져 루프가 멈춘다. probe: 1000px h160/22px → 900px h223/44px, 800px 동일,
+ 700px MobileToolbar. 동일 규칙 5곳(animations/font/clipboard/list/sound).
+-결정: (1) OleAttachmentOverlay에 컨테이너 캡처 dblclick 라우팅을 둔다(pptx만 —
+ xlsx/docx 도형 dblclick은 lib 동작 유지). posMap rect 히트 + 순수 함수
+ findOleEntryAtPoint(좁은 쪽 우선) + 단위 6건. 칩/버튼/링크/입력/다이얼로그 위는
+ lib에 맡긴다(푸터 Download/Open 동작 유지). 열기는 칩과 같은 openOrDownload
+ (package+office=새 탭 편집, pdf=미리보기, 그 외/CFB=다운로드). CFB(oleObject) 편집은
+ 미지원 — 서버 GET이 CFB를 풀지 않아 다운로드만 된다(제한으로 기록).
+ (2) ooxml-ui 패치: 5곳의 `(pointer:coarse),(max-width:900px)` → `(pointer:coarse)`
+ (터치 기기는 유지, 데스크톱 좁은 창은 22px 한 줄 + 그룹 접기). pnpm patch-commit이
+ 행에 걸려(10분 timeout) 패치 파일은 커밋됐고 live node_modules는 수동 동기화 —
+ fresh install은 patches/*.patch에서 재생성된다. .mjs/.cjs 쌍 모두 수정.
+-회귀 유의: useRef/useEffect를 early return(`entries.length===0`) 뒤에 두면
+ React #310(훅 순서)으로 미리보기가 깨진다 — ref 거울 + 리스너를 return 앞에 둔다.
+ 리스너 effect deps는 [anchor, entries] (마운트 시 root가 없어 1회 등록이면 안 붙는다).
+-테스트: U-open-part-pptx-shape(도형 본문 dblclick→/edit/…/-parents… popup, chromium+msedge),
+ R-ribbon-narrow(900px: 작은 버튼 22px + ribbon content <200px, chromium+msedge),
+ oleHitTest 단위 6건. red 원문: popup timeout / min-height 44px.
+-회귀: c5-4 전체 25/26(U-open-part-pptx 풀런 실패는 base 전체에서도 동일 — 기존 순서
+ 플레이크), c5-1 5/5, c5-2 P2-5 단독 green, c5-3 E2-pdf-preview는 base 단독도 실패(기존),
+ xlsx-ole-solo 재실행 2/2, ui-layout 3/3, pptx-collab 27(모바일 포함), unit 신규 실패 0
+ (config-migration/repo-tracking bun:sqlite 2건 + office-embed 1건은 base 동일).
