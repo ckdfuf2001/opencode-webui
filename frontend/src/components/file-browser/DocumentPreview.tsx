@@ -28,7 +28,7 @@ import { addDocxComment, replyDocxComment, setDocxCommentDone, editDocxComment, 
 import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import type { OfficeSaveRequestDetail } from './officeSave'
 import { createCollabSession, type CollabSession } from 'ooxml-core/collab'
-import { createDocxTapProvider } from '@/lib/docxObjects'
+import { createDocxTapProvider } from '@/lib/docxTapTransport'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
@@ -145,6 +145,51 @@ const SPINNER = (
     <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
   </div>
 )
+
+// C6/W0: 동기 불가한 구역/페이지 작업을 동시편집(2인 이상) 중 숨긴다.
+// 0절 감사(C6a): fragment는 "docx:body" 하나(Yjs 바인딩 본문만).
+// - 머리글/바닥글/각주/미주는 fragment 밖 + lib canEditOutsideBody가 collab 중 차단.
+//   리본 버튼도 숨긴다(보이면 무음 no-op이라 C3 규칙상 숨김).
+// - 구역/단/페이지설정/페이지테두리/워터마크는 레이아웃(model.sections)이라 미동기 → 숨김.
+// - 변경추적 토글/해결/옵션은 보수 차단(attributes 맵 동기 가능성은 있으나
+//   revision 해결 경로 미검증 → W3에서 해소).
+// - 본문 표/이미지/서식적용/코멘트는 동기되므로 숨기지 않는다
+//   (comments: 방 identity가 항상 independent/inline-relative라 sharedComments=true).
+// 모듈 스코프(매 렌더 새 배열이면 useMemo가 무용지물 + exhaustive-deps 경고).
+const DOCX_UNSYNCED_ACTION_IDS: readonly string[] = [
+  'page-setup-dialog',
+  'margins',
+  'orientation',
+  'page-size',
+  'page-borders',
+  'columns',
+  'header',
+  'footer',
+  'page-number',
+  'header-from-top',
+  'footer-from-bottom',
+  'header-footer-link',
+  'header-footer-close',
+  'header-footer-go-header',
+  'header-footer-go-footer',
+  'header-footer-previous',
+  'header-footer-next',
+  'different-first-page',
+  'different-odd-and-even-pages',
+  'insert-footnote',
+  'insert-endnote',
+  'watermark',
+  'track-changes',
+  'tracking-options',
+  'accept',
+  'accept-all',
+  'reject',
+  'reject-all',
+  'next-page-section-break',
+  'continuous-section-break',
+  'even-page-section-break',
+  'odd-page-section-break',
+]
 
 function ErrorNote({ msg }: { msg: string }) {
   return (
@@ -1387,7 +1432,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     })
     ensureCollabIdentity()
     return true
-  }, [path, editing, standalone, etagProp])
+  }, [path, editing, etagProp])
 
   useEffect(() => {
     let dead = false
@@ -1403,7 +1448,10 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   // or an empty editor would seed the room and wipe the disk content.
   const [docReady, setDocReady] = useState(false)
   useEffect(() => {
-    const c = collab
+    // collab 본체가 아니라 roomId/epoch primitive에 의존한다. setCollab(joined)이
+    // effect를 재실행시켜 진행 중 viewer 대기를 dead로 죽이지 않게 한다.
+    // (collabRef 읽기이므로 exhaustive-deps에 collab 본체가 필요 없다.)
+    const c = collabRef.current
     const roomKey = c && !standaloneRef.current ? c.roomId + ':' + c.epoch : null
     if (!c || !roomKey || !docReady) return
     const el = wrapRef.current?.querySelector('docx-editor') as unknown as {
@@ -1786,41 +1834,14 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [save, editing, standalone, path])
-  // C6/W0: unsyncable section/page ops are hidden while collaborating (2+ people).
-  // docx lib has no edit-guard hook, so hide the ribbon actions + toast once.
-  const DOCX_UNSYNCED_ACTION_IDS: readonly string[] = [
-    'page-setup-dialog',
-    'margins',
-    'orientation',
-    'page-size',
-    'columns',
-    'header',
-    'footer',
-    'page-number',
-    'header-from-top',
-    'footer-from-bottom',
-    'header-footer-link',
-    'header-footer-close',
-    'header-footer-go-header',
-    'header-footer-go-footer',
-    'header-footer-previous',
-    'header-footer-next',
-    'different-first-page',
-    'different-odd-and-even-pages',
-    'watermark',
-    'track-changes',
-    'next-page-section-break',
-    'continuous-section-break',
-    'even-page-section-break',
-    'odd-page-section-break',
-  ]
   // C6/W0: lib React wrapper가 리렌더 때마다 hiddenActions prop을 Element에
   // 그대로 덮어쓴다(prop 없으면 []로 리셋). 그래서 imperative set 대신 prop으로 건넨다.
+  // 목록은 모듈 스코프 DOCX_UNSYNCED_ACTION_IDS (0절 감사 C6a 주석 참조).
   const docxHiddenActions = useMemo(() => {
-    const others = (docxPeopleRef.current ?? []).filter((p) => !p.self).length
+    const others = (docxPeople ?? []).filter((p) => !p.self).length
     if (!collab?.joined || !editing || others < 1) return [] as readonly string[]
     return DOCX_UNSYNCED_ACTION_IDS
-  }, [collab?.joined, collab?.roomId, editing, docxPeople])
+  }, [collab?.joined, editing, docxPeople])
   useEffect(() => {
     const others = docxPeopleRef.current.filter((p) => !p.self).length
     const roomKey = collab?.joined ? collab.roomId : null
