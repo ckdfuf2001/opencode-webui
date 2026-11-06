@@ -110,6 +110,14 @@ for (const rel of gitFiles()) {
     const line = text.slice(0, hanHit.index).split('\n').length
     warnings.push(`${rel}:${line}: 한자 혼입 — "${hanHit[0]}" (어휘 혼합 확인)`)
   }
+  // 이미 유효한 UTF-8이라 strict도 못 잡는 CP949 오독 글리프 (경고, 차단 아님).
+  // 예: 18a8292 handoff의 U+020E 2건. Latin Extended-B는 정상 문서에 거의 안 나온다.
+  const misread = /[\u020E\u022D]/g
+  const misHit = misread.exec(text)
+  if (misHit) {
+    const line = text.slice(0, misHit.index).split('\n').length
+    warnings.push(`${rel}:${line}: CP949 오독 의심 글리프 "${misHit[0]}" (어휘 대조 확인)`)
+  }
 }
 
 console.log('인코딩 검사 (M17/1절) — 변경 파일', checked, '개')

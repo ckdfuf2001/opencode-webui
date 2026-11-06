@@ -1259,31 +1259,56 @@ E21만의 문제가 아니다. 근거:
 
 ## C6 Word 동시편집 (2026-11-06, D68)
 - C6-0 정리: handoff C5-4c절 UTF-8 재작성(깨진 절 복구), encoding 검사 보강
- (TextDecoder fatal strict 판정), eslint 기준선 정정(전수 332 problems = 272e+60w —
- D67의 6e+11w는 변경 5파일 범위치였다). Q01(/handoff 410 스텝 구판 문구),
- Q02(v0.13 part 참조 전환 보류 — Y.Doc 읽기·전송 문제, W3 측정 선행),
- Q03(openFileRegistry 보기 공용 경로 유지 — 0절 측정 후 판단) 처리.
-- 0절 측정(1400x900 기준, lib d.ts 근거):
- | 영역 | 동기 | 근거 |
- | body 텍스트 (Yjs) | O | WordYjsCollaboration, startYjsCollaboration(session, options) |
- | presence/피어 | O | session peers → CollabPresenceBar |
- | 저장 (owner 1명) | O | saveViaRoom PUT + baseHash, 조건부 conflict_room |
- | parts/첨부 | X | canEditOutsideBody "parts and page setup aren't synced" — W0-7 리셋 후 재삽입으로 처리 |
- | 페이지 설정(여백/방향/용지/단/머리말/바닥글/번호/워터마크/변경추적/구역나눔) | X | hiddenActions prop + 토스트 1회 (W0-6) |
- | 코멘트 | X | 디스크 로드(loadDocxComments), Yjs 미동기 |
-- 테스트(test 커밋 3026ccc5): docx-collab W0-1~W0-9 + presenceGate 단위 4건 +
- R-ribbon solo 슬롯 단언. red 원문(제품 stash = a3c8813 동일, b397a694와 제품 diff 0):
+ (TextDecoder fatal strict 판정 + 유효-UTF-8 오독 글리프(U+020E/022D) 경고),
+ eslint 기준선 332 problems = 272e+60w 유지(C6a에서 C6 신규 exhaustive-deps 3건을 제거하고 복원).
+ Q01(410 스텁 유지 — D04 자동선출 유효, v0.13에서 제거 여부 판단),
+ Q02(part 참조 전환 보류 — W3 측정 선행, v0.13),
+ Q03(H2 보기 공용 경로 유지 — W0-4 viewer-first로 검증됨, 남은 일 없음).
+- 0절 측정(C6a 항목별 확정, dist 근거):
+ | 항목 | 판정 | 처리 | 근거 |
+ | 본문 텍스트/서식/표 | O | fragment 동기 | Y.XmlFragment "docx:body" — ooxml-core/dist/docx/ui/index.mjs WordYjsCollaboration 생성자 + W0-2 |
+ | 본문 이미지 | O | media 맵(신규) + 동일 원본 매칭(기존) | WordYjsMedia.publish/get — ooxml-core yjs-media.d.ts ("Loaded package assets stay in the matching source package") |
+ | 코멘트 | O | Yjs 동기 (C6 초기 기록 X는 오기) | 방 identity가 항상 independent/inline-relative 기록 → sharedComments=true — ooxml-core ui/index.mjs identity.set 블록 + 생성자; canEditComments 허용 — ooxml-ui docx.js (e2e 미커버, 남은 일) |
+ | 문서 루트 속성(trackChanges 토글 등) | O(신호) | attributes 맵 동기 | wordYjsDocumentAttributes 별도 맵 ("body binding omits them") — ooxml-core yjs-document-attributes.d.ts |
+ | 머리글/바닥글 | X | lib 차단 + 리본 숨김 12종 + 토스트 | fragment 밖 + canEditOutsideBody collab 중 false — ooxml-ui docx.js 4곳(toggleLink/headerFooter/insertNote/updateNote) |
+ | 각주/미주 | X | lib 차단 + 리본 숨김(insert-footnote/insert-endnote) + 토스트 | 위와 동일 |
+ | 구역/단/페이지설정/페이지테두리 | X | 리본 숨김 + 토스트 | layout(model.sections) 미동기 — sections.d.ts/section-edit.d.ts 계열이 fragment 밖 |
+ | 변경추적 토글/해결/옵션 | X(보수 차단) | 리본 숨김 7종 + 토스트 | 토글 신호(attributes 맵) 동기 가능하나 accept/reject 동기 미검증 → W3에서 해소 |
+ | 스타일 정의 | 해당 없음 | 수정 UI 없음 | RIBBON_ACTION_IDS에 style 수정 id 없음(적용만 — 적용은 본문 서식이라 O) |
+ | 워터마크 | X | 리본 숨김 + 토스트 | section 속성 |
+ | undo/redo | 동기 범위만 | 우회 불가 (W0-6 단언) | UndoManager 추적 = fragment/attributes/comments/inlineAnchors — index.mjs 생성자 |
+- 테스트(test 커밋 3026ccc5 + C6a test 커밋): docx-collab W0-1~W0-9a/9b + presenceGate 단위 4건 +
+ R-ribbon solo 슬롯 단언. red 원문(제품 stash = a3c8813 동일):
  W0-1 line 111 participantCount poll timeout, W0-9 line 348 동일,
  R-ribbon line 1136 app-titlebar-slot attached 60s timeout, unit 4 failed(import).
+ C6a red: W0-6 line 249 insert-footnote hidden 포함 실패(가드+8 미적용 상태).
 - W0-4 증거(viewer-first): B가 view로 먼저 입장(participant 1) → A가 edit로 seed+입력 →
  B 화면에 w04-mark 표시(새로고침 없음, 90s 내). W0-5 증거(http): page URL protocol http
  확인 + w05-mark 입력→저장→word/document.xml 디스크 판정.
 - R-ribbon 회귀(C6 미커밋 코드, 커밋 전 해소): 빈 presence Shell/Bar를 슬롯에 무조건 포털 →
  타이틀바 밀림 328px. 바이섹트 제외 항목(join HTTP·세션/startYjs·hiddenActions prop·
  value import·etag prop·viewer.ts openFile 분기 — 전부 꺼도 재현, 베이스라인 동시간 4회 passed).
- 수정: shouldShowPresence 공용 게이트 + R-ribbon solo 0개/W0-1 joined 1개 DOM 단언 + W0-9.
+ 수정: shouldShowPresence 공용 게이트 + R-ribbon solo 0개/W0-1 joined 1개 DOM 단언 + W0-9a/9b.
 - code 커밋 366a8ecf: 서버 RoomKind/isLibRoomKind, DocxViewer join/session/저장/가드/첨부,
- docxObjects.ts(제품 코드: tap transport 103/104 가로채기 + 100/101 소비 — code 커밋에 포함),
+ docxTapTransport.ts(구 docxObjects.ts — 제품 코드: tap transport 103/104 가로채기 + 100/101 소비.
+ xlsx createObjectTapTransport와 armFlushAck/스켈레톤 중복 → v0.13에서 공통 모듈 병합 검토),
  collabPresenceView shouldShowPresence (xlsx 게이트도 여기로 통합).
-- 회귀(예정): msedge W0 전체, R-ribbon 양쪽, X-B2, c5 시리즈, xlsx-collab, pptx-collab
- (베이스라인 대조), ui-layout. 0.12.82 exe 나란히 스크린샷(solo + 2인) 필수.
+- 회귀: docx 10/10 (chromium — W0-5 flake 1회, 단독 재실행 green) · msedge W0 전부 ·
+ R-ribbon 양쪽 · X-B2 · c5-4 24/24 · c5-1/2/3 · c3 26/26 · xlsx-collab 19/19 양쪽 ·
+ pptx-collab 26/26(신규 0) · presence 4/4 · ui-layout 3/3 · collab 백엔드 단위 59/59 ·
+ presenceGate 4/4 · tsc 0 · encoding clean.
+ office-embed.test.ts 1건 실패(assembleXlsxEmbed '/oleObject' 미포함)는 베이스 동일 실패 — 기준선 추가.
+ 0.12.82 exe 대신 b397a694 worktree(제품 diff 0) 나란히 샷: solo 140px(Share 버튼 AA, benign),
+ 2인 846px(GR 아바타 추가 — 의도된 UI). 다음부터 태그 버전 exe 보관.
+
+## C6a 태그 전 확인 (2026-11-07)
+- W0-9 분리: W0-9a(순수 offline→재연결, 폴백 없음. D07 25초 sweep + 여유 60s poll) +
+ W0-9b(닫고 다시 열기). chromium·msedge 모두 통과. 30초 미전파는 D07 설계 범위 내
+ (lastRxAt 기준 25초 무수신이면 서버가 sweep으로 정리 — setOffline 후 25~30초에 감소 관측이 정상).
+- encoding red: 18a8292 handoff — 구 검사기 관점 FFD 315개, 신 검사기 fatal decode 실패.
+ 둘 다 못 잡는 유효-UTF-8 오독 Ȯ 2건 → U+020E/022D 경고 패턴 추가(D68 한계 보완).
+- eslint: C6-0 332(60w) → C6 335(63w, 신규 3건 전부 C6 exhaustive-deps) → C6a에서 제거 후 332 복원.
+ 제거된 3건: joinDocxRoom 불필요 의존성 standalone / session effect 누락 collab(collabRef로 대체) /
+ docxHiddenActions 누락 DOCX_UNSYNCED_ACTION_IDS(모듈 스코프 이동).
+- docxTapTransport 개명(역할 일치) + armFlushAck 중복 병합은 v0.13/W3로 이연(xlsx 경로 동결).
+- Q01/Q02/Q03: 위 C6절 결정 참조. 남은 일 — Q01: v0.13 스텁 제거 판단 / Q02: W3 측정 후 전환 / Q03: 없음.

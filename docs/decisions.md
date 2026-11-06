@@ -899,5 +899,6 @@
 -결정: (1) `shouldShowPresence(joined, peopleCount)` 공용 게이트 1곳 — xlsx/docx가 같이 쓰고
  형식별 조건 복사를 두지 않는다 (PPT는 titleBarSlot에 Shell을 꽂지 않아 제외). (2) 픽셀 옆에
  DOM 단언을 둔다: solo는 슬롯 내 presence 0개(R-ribbon), joined는 presence 1개(W0-1).
- 다음엔 바이섹트 없이 원인이 보인다. (3) 재연결 출렁임은 W0-9(offline→복귀, shell ≤1 유지 +
- 0 구간 경유 복귀)로 확인한다.
+ 다음엔 바이섹트 없이 원인이 보인다. (3) 재연결 출렁임은 W0-9a(순수 offline→복귀, 폴백 없음)/
+ W0-9b(이탈 후 재참가)로 확인한다. (4) TextDecoder fatal은 이미 유효한 UTF-8 오독(U+020E/022D류)을
+ 못 잡는다 → C6a에서 경고 패턴으로 보완 (18a8292 handoff에 U+020E 2건이 살아남은 것이 근거).
