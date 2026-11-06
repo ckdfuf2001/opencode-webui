@@ -342,6 +342,49 @@ test.describe('C5-4: URL 편집 분리', () => {
     }
   })
 
+  test('U-open-part-pptx-shape: pptx OLE 도형 본문 dblclick이 /edit/<부모>/-/<파트> 새 탭을 연다', async ({ browser }) => {
+    // C6b: lib 캔버스의 OLE 도형 dblclick은 lib no-op이라 컨테이너 캡처에서 연다.
+    // 기존 임베딩(embed-docx.pptx = package docx)을 쓴다 — INSERT 없이 도형 직접 dblclick.
+    // 푸터 버튼(Download)은 lib 동작 유지, 도형 본문(상단 프리뷰 영역)만 연다.
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    await mkRepo('c54pptxshape', ['embed-docx.pptx'])
+    try {
+      await openEditor(page, 'c54pptxshape/embed-docx.pptx')
+      await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 30000 })
+      // OLE 프레임 렌더 대기 (슬라이드 파싱이 viewer 마운트보다 늦을 수 있다).
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() =>
+              [...document.querySelectorAll('[data-testid="pptx-viewer-root"] [data-element-id]')].some((e) =>
+                /Download/i.test(e.textContent || ''),
+              ),
+            ),
+          { timeout: 30000, intervals: [1000] },
+        )
+        .toBe(true)
+      const pt = await page.evaluate(() => {
+        const els = [...document.querySelectorAll('[data-testid="pptx-viewer-root"] [data-element-id]')]
+        const hit = els.find((e) => /Download/i.test(e.textContent || ''))
+        if (!hit) return null
+        const r = (hit as HTMLElement).getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.top + r.height * 0.25 }
+      })
+      expect(pt, 'ole frame found').toBeTruthy()
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.mouse.dblclick(pt!.x, pt!.y),
+      ])
+      await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
   test('U-done-close: 에디터 탭 Done이 성공 저장 뒤 탭을 닫는다', async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctx, ADA)
@@ -1153,8 +1196,45 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
     }
   })
 
-  test('U-flush-race: 진행 중인 저장이 있어도 103 직전 글자가 디스크에 남는다', async ({ browser }, testInfo) => {
-    // C5-4c B1: 진행 중인 저장의 완료를 flush 응답으로 쓰면 낡은 바이트를 확정한다.
+  test('R-ribbon-narrow: 900px 너비에서도 pptx 리본이 한 줄을 유지한다', async ({ browser }) => {
+    // C6b: lib ribbon CSS `@media (pointer:coarse),(max-width:900px)`가 버튼을
+    // 44px로 키워 리본이 160→223px로 늘어났다. 데스크톱 좁은 창에서는 22px
+    // 한 줄 + 그룹 접기를 유지해야 한다 (터치 기기는 coarse로 유지).
+    const rel = 'repos/collab-e2e/rribbon-narrow.pptx'
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const ctx = await browser.newContext({ viewport: { width: 900, height: 800 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    try {
+      await openEditor(page, rel.replace(/^repos\//, ''))
+      await page.getByRole('tab', { name: 'Home' }).first().waitFor({ timeout: 60000 })
+      const m = await page.evaluate(() => {
+        // 첫 .b는 Paste(원래 66px) — 작은 버튼(Cut/Copy/Format Painter)이 22px여야 한다.
+        const btns = [
+          ...document.querySelectorAll('[data-ribbon-group="home.clipboard"] button.b'),
+        ].slice(1) as HTMLElement[]
+        const content = document.querySelector(
+          '[data-pptx-chrome="ribbon-content"]'
+        ) as HTMLElement | null
+        return {
+          minHs: btns.map((b) => getComputedStyle(b).minHeight),
+          contentH: content ? Math.round(content.getBoundingClientRect().height) : null,
+        }
+      })
+      // 44px 터치 규칙이 데스크톱 좁은 창에 걸리면 red (규칙 적용 시 44px).
+      expect(m.minHs.length, 'small buttons').toBeGreaterThan(0)
+      for (const h of m.minHs) expect(h, 'clipboard small button min-height').toBe('22px')
+      expect(m.contentH, `ribbon content h=${m.contentH}`).not.toBeNull()
+      expect(m.contentH!).toBeLessThan(200)
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
+
+  test('U-flush-race: 진행 중인 저장이 있어도 103 직전 글자가 디스크에 남는다', async ({ browser }, testInfo) => {    // C5-4c B1: 진행 중인 저장의 완료를 flush 응답으로 쓰면 낡은 바이트를 확정한다.
     // 같은 requestId의 done만 응답으로 쓴다.
     testInfo.setTimeout(420000)
     const rel = uniqueRel('uflushrace', 0)
