@@ -1129,6 +1129,13 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
         expect(root, `${c.slug}: root`).not.toBeNull()
         expect(within(root!.x, 8), `${c.slug}: root x=${root!.x}`).toBe(true)
         expect(within(root!.width, 1384), `${c.slug}: root w=${root!.width}`).toBe(true)
+        // R-ribbon 회귀(C6): solo에서는 타이틀바 actions 슬롯에 우리 presence 노드가 0개.
+        // (빈 Shell/Bar를 꽂으면 타이틀바가 밀려 픽셀 diff가 난다. 픽셀보다 먼저 원인이 보인다.)
+        if (c.ext === '.docx') {
+          // 슬롯은 display:contents 빈 껍데기라 hidden 판정 → attached로 대기한다.
+          await page.locator('[data-testid="app-titlebar-slot"]').first().waitFor({ state: 'attached', timeout: 60000 })
+          await expect(page.locator('[data-testid="collab-presence"]')).toHaveCount(0)
+        }
         // 리본 영역 스크린샷 잠금 (탭행+버튼대만: 타이틀바 검색창 변동 제외).
         // 폰트 로딩 뒤에 찍는다 (fallback/웹폰트 혼용 렌더 방지).
         await page.evaluate(() => document.fonts.ready.then(() => true)).catch(() => false)

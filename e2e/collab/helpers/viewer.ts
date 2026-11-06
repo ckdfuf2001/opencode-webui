@@ -256,7 +256,7 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
     }
     await row.locator('span', { hasText: fileName }).first().click({ timeout: 15000 }).catch(() => {})
     try {
-      await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 20000 })
+      if (fileName.endsWith('.docx')) { await page.locator('docx-editor').first().waitFor({ timeout: 20000 }) } else { await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 20000 }) }
       const failed = await page.getByText('Cannot preview this document').count()
       if (failed > 0) throw new Error('preview failed')
       // M21: 뷰어((lib)가 로드된 뒤에야 런타임 표식을 단언한다.
@@ -266,18 +266,19 @@ export async function openFile(page: Page, fileName: string, mode: 'view' | 'edi
       await page.waitForTimeout(3000)
     }
   }
-  await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 20000 })
+  if (fileName.endsWith('.docx')) { await page.locator('docx-editor').first().waitFor({ timeout: 20000 }) } else { await page.getByTestId('pptx-viewer-root').waitFor({ timeout: 20000 }) }
   if (mode === 'edit') {
     await page.getByRole('button', { name: 'Edit' }).click({ timeout: 15000 })
   }
-  await page
-    .waitForFunction(() => document.querySelector('[data-testid="collab-status"]')?.getAttribute('data-status') === 'connected', null, {
-      // C5-4: 크로스탭 진입은 lib cold load + 시딩을 포함하므로 10초가 빡빡하다. 스위트 표준 30초.
-      timeout: 30000,
-    })
-    .catch(() => {
-      throw new Error('collab-status never connected (30s)')
-    })
+  if (!fileName.endsWith('.docx')) {
+    await page
+      .waitForFunction(() => document.querySelector('[data-testid="collab-status"]')?.getAttribute('data-status') === 'connected', null, {
+        timeout: 30000,
+      })
+      .catch(() => {
+        throw new Error('collab-status never connected (30s)')
+      })
+  }
 }
 
 /**
