@@ -28,6 +28,7 @@ import { addDocxComment, replyDocxComment, setDocxCommentDone, editDocxComment, 
 import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import type { OfficeSaveRequestDetail } from './officeSave'
 import { createCollabSession, type CollabSession } from 'ooxml-core/collab'
+import type { RibbonActionId } from 'ooxml-core/docx/ui'
 import { createDocxTapProvider } from '@/lib/docxTapTransport'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
@@ -156,7 +157,7 @@ const SPINNER = (
 // - 본문 표/이미지/서식적용/코멘트는 동기되므로 숨기지 않는다
 //   (comments: 방 identity가 항상 independent/inline-relative라 sharedComments=true).
 // 모듈 스코프(매 렌더 새 배열이면 useMemo가 무용지물 + exhaustive-deps 경고).
-const DOCX_UNSYNCED_ACTION_IDS: readonly string[] = [
+const DOCX_UNSYNCED_ACTION_IDS: readonly RibbonActionId[] = [
   'page-setup-dialog',
   'margins',
   'orientation',
@@ -1521,7 +1522,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
           if (dead || !ok) return
         }
         if (dead) return
-        el.startYjsCollaboration(live, { documentId: path, initializeIfEmpty: editingRef.current })
+        el.startYjsCollaboration?.(live, { documentId: path, initializeIfEmpty: editingRef.current })
         startedYjsRef.current = roomKey
         } catch (e) {
           try { console.error('[docx-collab] startYjs failed', e) } catch { /* ignore */ }
@@ -1837,9 +1838,9 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   // C6/W0: lib React wrapper가 리렌더 때마다 hiddenActions prop을 Element에
   // 그대로 덮어쓴다(prop 없으면 []로 리셋). 그래서 imperative set 대신 prop으로 건넨다.
   // 목록은 모듈 스코프 DOCX_UNSYNCED_ACTION_IDS (0절 감사 C6a 주석 참조).
-  const docxHiddenActions = useMemo(() => {
+  const docxHiddenActions = useMemo<readonly RibbonActionId[]>(() => {
     const others = (docxPeople ?? []).filter((p) => !p.self).length
-    if (!collab?.joined || !editing || others < 1) return [] as readonly string[]
+    if (!collab?.joined || !editing || others < 1) return []
     return DOCX_UNSYNCED_ACTION_IDS
   }, [collab?.joined, editing, docxPeople])
   useEffect(() => {
