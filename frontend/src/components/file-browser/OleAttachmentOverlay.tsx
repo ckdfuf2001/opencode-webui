@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
+import { findOleEntryAtPoint } from '@/lib/oleHitTest'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
 import { attachmentKindOf } from './embedEdit'
 import { editUrlForAttachment, openInNewTab } from '@/lib/editUrls'
@@ -125,7 +126,8 @@ function findAnchorEl(
 
 /**
  * C5-1 후속 S2 + C5-2: 기존 OLE 첨부 오버레이를 lib 도형 위에 앵커한다.
- * - 항목마다 도형 위에 작은 아이콘 (hover → 파일명, dblclick → 다운로드).
+ * - 항목마다 도형 위에 작은 아이콘 (hover → 파일명, dblclick → 열기/다운로드).
+ * - C6b: pptx는 lib 도형 본문 dblclick도 컨테이너 캡처에서 연다 (lib no-op).
  * - 앵커가 없으면 좌상단 이름 칩 (폴백).
  * - 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
  */
@@ -147,6 +149,14 @@ export default function OleAttachmentOverlay({
   const rootRef = useRef<HTMLDivElement | null>(null)
   // P0-3: 팝업 차단 시 대체 링크를 보여준다 (조용한 무응답 금지).
   const [popupBlockedUrl, setPopupBlockedUrl] = useState<string | null>(null)
+  // C6b: 컨테이너 캡처 dblclick이 최신 값을 보도록 ref 거울 (리스너 재등록 없음).
+  const posMapRef = useRef(posMap)
+  posMapRef.current = posMap
+  const entriesRef = useRef(entries)
+  entriesRef.current = entries
+  // C6b: 최신 openOrDownload 거울 (아래 early return보다 먼저 선언해야 한다 —
+  // 조건부 훅이 되면 React #310으로 깨진다).
+  const openRef = useRef<((entry: OleEmbeddingRef) => void) | null>(null)
 
   useEffect(() => {
     let dead = false
@@ -219,6 +229,55 @@ export default function OleAttachmentOverlay({
       window.removeEventListener('resize', onResize)
     }
   }, [anchor, entries, data])
+
+  /**
+   * C6b: lib 캔버스의 OLE 도형 dblclick은 lib no-op이라 컨테이너 캡처에서 연다.
+   * - pptx만: xlsx/docx 도형 dblclick은 lib 동작을 건드리지 않는다.
+   * - 우리 칩은 자기 핸들러가 연다. lib 푸터 버튼/링크/입력/다이얼로그는 lib 동작 유지.
+   * - posMap rect 안(도형 본문)일 때만 열고, 버블을 끊는다 (lib 텍스트 편집 방지).
+   * - early return보다 앞에 둔다 (조건부 훅 React #310 방지).
+   */
+  useEffect(() => {
+    if (anchor !== 'pptx') return
+    const root = rootRef.current
+    const container = root?.parentElement as HTMLElement | null
+    if (!container) return
+    const onDbl = (e: MouseEvent): void => {
+      try {
+        const t = e.target as HTMLElement | null
+        if (!t || typeof t.closest !== 'function') return
+        if (
+          t.closest(
+            '[data-testid="ole-icon"],button,a,input,select,textarea,[role="button"],[role="dialog"]'
+          )
+        )
+          return
+        const entries = entriesRef.current
+        if (entries.length === 0) return
+        const c = container.getBoundingClientRect()
+        const part = findOleEntryAtPoint(posMapRef.current, e.clientX - c.left, e.clientY - c.top)
+        if (!part) return
+        const entry = entries.find((en) => en.partName === part)
+        const open = openRef.current
+        if (!entry || !open) return
+        e.stopPropagation()
+        e.preventDefault()
+        open(entry)
+      } catch {
+        /* 무시 (lib 렌더는 그대로) */
+      }
+    }
+    container.addEventListener('dblclick', onDbl, true)
+    return () => {
+      try {
+        container.removeEventListener('dblclick', onDbl, true)
+      } catch {
+        /* 무시 */
+      }
+    }
+    // entries가 비어 있으면 root가 렌더되지 않아 container를 못 찾으므로
+    // entries 로드 뒤에도 다시 시도한다 (마운트 1회면 리스너가 안 붙는다).
+  }, [anchor, entries])
 
   if (entries.length === 0) return null
 
@@ -317,6 +376,10 @@ export default function OleAttachmentOverlay({
       /* 무시 (lib 렌더는 그대로) */
     }
   }
+
+  // C6b: 최신 openOrDownload 거울 (컨테이너 캡처 리스너에서 쓴다).
+  // openOrDownload는 아래 early return 뒤에 정의되므로 여기서 대입한다.
+  openRef.current = openOrDownload
 
   const chip = (entry: OleEmbeddingRef, anchored: boolean, pos?: { x: number; y: number }): React.ReactNode => (
     <button

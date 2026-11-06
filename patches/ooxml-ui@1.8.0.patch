@@ -1,7 +1,7 @@
 diff --git a/dist/docx.js b/dist/docx.js
 index d05bac204031a673839c085e6caed39bad7eef16..eba021ee8361a051092ca26e671f2aae61f68d6b 100644
 --- a/dist/docx.js
-+++ b/dist/docx.js	
++++ b/dist/docx.js
 @@ -15,6 +15,8 @@ export { CollaborationAuthority, CollaborationClient, RIBBON_ACTION_IDS, RIBBON_
  import { parseOmml, convertOmmlToLatex, convertOmmlToMathMl } from 'ooxml-core/math';
  import { PluginKey, EditorState, Plugin, NodeSelection, TextSelection, Selection } from 'prosemirror-state';
@@ -56,10 +56,59 @@ index d05bac204031a673839c085e6caed39bad7eef16..eba021ee8361a051092ca26e671f2aae
      table: {
        content: "tableRow+",
        group: "block",
+diff --git a/dist/pptx/chunk-GCS5KBMR.cjs b/dist/pptx/chunk-GCS5KBMR.cjs
+index 948edbf416e505bf3ebd92eadf359d184d363c12..0acc9dee1be0fb4ae72eac50d3d32ac44921abad 100644
+--- a/dist/pptx/chunk-GCS5KBMR.cjs
++++ b/dist/pptx/chunk-GCS5KBMR.cjs
+@@ -69923,7 +69923,7 @@ input:disabled { opacity:.4; }
+ input[type=number]::-webkit-inner-spin-button { opacity:1; }
+ .gallery { max-width:430px; }
+ [data-ribbon-control="animations.motionPath.gallery"] { max-width:240px; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	input { min-height:44px; }
+ }
+ @media (forced-colors:active) {
+@@ -70327,7 +70327,7 @@ summary::after { content:''; width:6px; height:6px; margin-top:-3px; border-righ
+ input[type=color] { width:30px; height:28px; padding:2px; cursor:pointer; }
+ input[type=range] { width:72px; accent-color:var(--pptx-primary,#6366f1); }
+ pptx-ui-select { font-size:11px; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	button,summary,input[type=color],input[type=range] { min-width:44px; min-height:44px; }
+ 	.swatch { width:44px; height:44px; }
+ 	.palette { width:264px; }
+@@ -70841,7 +70841,7 @@ input.num:focus-visible { outline:2px solid var(--pptx-ring,#818cf8); outline-of
+ .popup .frame { position:absolute; box-sizing:border-box; border:0 dashed color-mix(in srgb,var(--pptx-muted-foreground,#94a3b8) 70%,transparent); background:color-mix(in srgb,var(--pptx-background,#111827) 20%,transparent); }
+ .popup .name { width:100%; overflow:hidden; text-align:center; text-overflow:ellipsis; white-space:nowrap; }
+ button.b[hidden] { display:none !important; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	button.b { min-width:44px !important; min-height:44px !important; }
+ 	input.num { min-height:44px; }
+ 	.popup button.item { min-height:44px; }
+@@ -71820,7 +71820,7 @@ svg { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke
+ @media (max-width:767px) {
+ 	:host { flex-wrap:wrap; max-width:100%; }
+ }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	.list button { min-height:44px; }
+ 	.list.grid { grid-template-columns:repeat(6,44px); }
+ 	.list.grid button { width:44px; height:44px; }
+@@ -72314,7 +72314,7 @@ input[type=number]::-webkit-inner-spin-button { opacity:1; }
+ button:disabled,input:disabled { opacity:.4; cursor:default; }
+ button:focus-visible,input:focus-visible { outline:2px solid var(--pptx-ring,#818cf8); outline-offset:2px; }
+ .preset:focus-visible,.more:focus-visible { outline-offset:-2px; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	.sound-preview,input[type=number],input[type=text] { min-height:44px; }
+ 	.sound-preview { min-width:44px; }
+ 	.check { min-height:44px; }
 diff --git a/dist/pptx/chunk-MCHPNO42.mjs b/dist/pptx/chunk-MCHPNO42.mjs
-index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fec588d9ed 100644
+index 92b863533178236b3e6178f67df7ee33cc9b819f..280ad7351b1ddd54e5319e9f8fbaebea6f480d1f 100644
 --- a/dist/pptx/chunk-MCHPNO42.mjs
-+++ b/dist/pptx/chunk-MCHPNO42.mjs	
++++ b/dist/pptx/chunk-MCHPNO42.mjs
 @@ -111,6 +111,8 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  import { repeat } from 'lit/directives/repeat.js';
  import { unsafeStatic, html as html$1 } from 'lit/static-html.js';
@@ -210,6 +259,51 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fe
  }
  var POSITION_THRESHOLD = 2;
  var SIZE_THRESHOLD = 2;
+@@ -69928,7 +70041,7 @@ input:disabled { opacity:.4; }
+ input[type=number]::-webkit-inner-spin-button { opacity:1; }
+ .gallery { max-width:430px; }
+ [data-ribbon-control="animations.motionPath.gallery"] { max-width:240px; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	input { min-height:44px; }
+ }
+ @media (forced-colors:active) {
+@@ -70332,7 +70445,7 @@ summary::after { content:''; width:6px; height:6px; margin-top:-3px; border-righ
+ input[type=color] { width:30px; height:28px; padding:2px; cursor:pointer; }
+ input[type=range] { width:72px; accent-color:var(--pptx-primary,#6366f1); }
+ pptx-ui-select { font-size:11px; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	button,summary,input[type=color],input[type=range] { min-width:44px; min-height:44px; }
+ 	.swatch { width:44px; height:44px; }
+ 	.palette { width:264px; }
+@@ -70846,7 +70959,7 @@ input.num:focus-visible { outline:2px solid var(--pptx-ring,#818cf8); outline-of
+ .popup .frame { position:absolute; box-sizing:border-box; border:0 dashed color-mix(in srgb,var(--pptx-muted-foreground,#94a3b8) 70%,transparent); background:color-mix(in srgb,var(--pptx-background,#111827) 20%,transparent); }
+ .popup .name { width:100%; overflow:hidden; text-align:center; text-overflow:ellipsis; white-space:nowrap; }
+ button.b[hidden] { display:none !important; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	button.b { min-width:44px !important; min-height:44px !important; }
+ 	input.num { min-height:44px; }
+ 	.popup button.item { min-height:44px; }
+@@ -71825,7 +71938,7 @@ svg { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke
+ @media (max-width:767px) {
+ 	:host { flex-wrap:wrap; max-width:100%; }
+ }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	.list button { min-height:44px; }
+ 	.list.grid { grid-template-columns:repeat(6,44px); }
+ 	.list.grid button { width:44px; height:44px; }
+@@ -72319,7 +72432,7 @@ input[type=number]::-webkit-inner-spin-button { opacity:1; }
+ button:disabled,input:disabled { opacity:.4; cursor:default; }
+ button:focus-visible,input:focus-visible { outline:2px solid var(--pptx-ring,#818cf8); outline-offset:2px; }
+ .preset:focus-visible,.more:focus-visible { outline-offset:-2px; }
+-@media (pointer:coarse),(max-width:900px) {
++/* C6b: narrow desktop keeps compact ribbon buttons (44px touch sizing only on coarse pointers) */@media (pointer:coarse) {
+ 	.sound-preview,input[type=number],input[type=text] { min-height:44px; }
+ 	.sound-preview { min-width:44px; }
+ 	.check { min-height:44px; }
 @@ -73851,7 +73964,7 @@ function officeTitleBarState(state, placement) {
      fileName: state.fileName || t(TITLE_BAR_DEFAULT_FILE_KEY),
      status: state.editing ? t(state.autosave.statusKey) : void 0,
@@ -222,7 +316,7 @@ index 92b863533178236b3e6178f67df7ee33cc9b819f..6fe5be173e4514be2ed63f5c1b98a7fe
 diff --git a/dist/xlsx.js b/dist/xlsx.js
 index b867c6c71909a3fd5ce41480b98a07e6ccfcc29e..4ff3525d409d5df73ad1d8b82e5269dbf781e0ec 100644
 --- a/dist/xlsx.js
-+++ b/dist/xlsx.js	
++++ b/dist/xlsx.js
 @@ -943,11 +943,26 @@ function renderShare(page) {
    page.content.replaceChildren(...children);
  }
