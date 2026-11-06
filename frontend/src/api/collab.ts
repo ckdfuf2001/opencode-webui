@@ -7,6 +7,8 @@ export interface CollabSessionInfo {
   epoch: string
   lastHash: string
   path: string
+  /** C6c: 하위문서 방의 파트 경로 (파일 방이면 undefined). */
+  part?: string
   /**
    * X1b(P0-2): 서버 판정 결과. stale 이면 방에 붙지 않는다(fail-closed).
    * `stale_room` = 디스크가 방의 마지막 저장과 다르다(외부 변경이 방 뒤에 있었음).
@@ -181,7 +183,7 @@ async function postSaveBinary(
 export const collabApi = {
   session: async (
     path: string,
-    resume?: { resumeEpoch?: string; knownHash?: string | null; clientId?: number; strict?: boolean },
+    resume?: { resumeEpoch?: string; knownHash?: string | null; clientId?: number; strict?: boolean; part?: string },
   ): Promise<CollabSessionInfo> => {
     try {
       // loopback SYN 블랙홀 대비: 무한 대기를 막는다 (실패하면 solo 폴백).
@@ -192,6 +194,8 @@ export const collabApi = {
         clientId: resume?.clientId,
         // X1b(P0-2): 서버가 staleness 를 판정한다.
         strict: resume?.strict,
+        // C6c: 하위문서 방.
+        part: resume?.part,
       }, { timeout: 15000 })
       return data
     } catch (error) {

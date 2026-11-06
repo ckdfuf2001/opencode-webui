@@ -10,6 +10,16 @@ import { resolveWorkspaceFile, workspaceRootAbs } from './files'
 import { readLibPresence } from '@opencode-webui/shared/lib/collab-presence'
 import { writeFileContent } from './file-operations'
 import { logger } from '../utils/logger'
+import JSZip from 'jszip'
+import {
+  listEmbedParts,
+  normalizeEmbedPart,
+  readEmbedPart,
+  replaceEmbedPart,
+  type ZipLike,
+} from './office-embed'
+
+const zipLoadJSZip = (b: Uint8Array): Promise<ZipLike> => JSZip.loadAsync(b) as unknown as Promise<ZipLike>
 
 /**
  * 공동편집 room 레지스트리 (Phase 0 + v0.12.50).
@@ -145,6 +155,12 @@ export interface CollabRoom {
   /** C4: 시트 개체(이미지·도형·차트·EMB) 표. 방과 함께 생기고 방과 함께 사라진다. */
   objects: RoomObjects
   /**
+   * C6c: 하위문서(part) 방. 같은 부모 파일 안의 임베딩 파트를 별도 Y.Doc으로 공유한다.
+   * - path는 부모 절대경로(watcher는 부모 디렉터리를 본다).
+   * - lastHash/seed/저장 기준은 파트 바이트 해시(부모 파일 해시가 아니다).
+   */
+  part?: { parentAbs: string; part: string }
+  /**
    * U-parent: 진행 중인 부모 flush 요청 (있으면 1개 — 동시 PUT은 공유한다).
    * resolve는 서버가 직접 들고 있고, 104 수신·타임아웃·방 해체 때 1회만 호출한다.
    */
@@ -205,6 +221,10 @@ export function isLibRoomKind(kind: RoomKind | string | undefined): boolean {
 }
 /** path(abs 정규화) -> roomId. 같은 파일을 두 room이 열지 않게 한다. */
 const pathIndex = new Map<string, string>()
+/** C6c: part 방의 pathIndex 키 (부모 방과 충돌하지 않게 분리). */
+export function pathKeyForPart(parentAbs: string, part: string): string {
+  return `${normalizeAbs(parentAbs)}\n${normalizeEmbedPart(part)}`
+}
 /**
  * M10/D37: 방 생성 중복 방지(경합).
  *
@@ -282,6 +302,62 @@ export function normalizeAbs(p: string): string {
 export function roomIdForAbs(absPath: string): string {
   const h = createHash('sha256').update(normalizeAbs(absPath), 'utf8').digest('hex')
   return `f_${h.slice(0, 40)}`
+}
+
+/**
+ * C6c: 하위문서(part) 방 id. 부모 파일 방과 절대 겹치지 않게 도메인을 분리한다.
+ * (`embed-part` 접두 + 부모 경로 + 정규화 파트 경로를 해시 — 파일 방과 충돌 불가.)
+ */
+export function roomIdForPart(parentAbs: string, part: string): string {
+  const h = createHash('sha256')
+    .update(`embed-part\n${normalizeAbs(parentAbs)}\n${normalizeEmbedPart(part)}`, 'utf8')
+    .digest('hex')
+  return `f_${h.slice(0, 40)}`
+}
+
+/** C6c: 파트 방의 문서 종류 (파트 파일명으로 판정 — 부모 확장자와 무관). */
+export function roomKindForPart(part: string): RoomKind {
+  const base = normalizeEmbedPart(part).split('/').pop() ?? ''
+  if (/\.xlsx$/i.test(base)) return 'xlsx'
+  if (/\.pptx$/i.test(base)) return 'pptx'
+  if (/\.docx$/i.test(base)) return 'docx'
+  return 'other'
+}
+
+/** C6c: 방의 디스크 기준 바이트를 읽는다 (파일 방=파일 전체, 파트 방=부모 안 파트). */
+export async function roomDiskBytes(room: CollabRoom): Promise<Uint8Array> {
+  if (!room.part) return new Uint8Array(await fs.readFile(room.path))
+  return partBytesOf(room.part.parentAbs, room.part.part)
+}
+
+/** C6c: 부모 zip에서 임베딩 파트 바이트를 꺼낸다 (없으면 404 throw). */
+export async function partBytesOf(parentAbs: string, part: string): Promise<Uint8Array> {
+  const norm = normalizeEmbedPart(part)
+  let host: Uint8Array
+  try {
+    host = new Uint8Array(await fs.readFile(parentAbs))
+  } catch {
+    throw { message: 'Host file not readable', statusCode: 404 }
+  }
+  let names: string[]
+  try {
+    const zip = await zipLoadJSZip(host)
+    names = Object.keys(zip.files)
+  } catch {
+    throw { message: 'Host is not a valid Office file', statusCode: 400, code: 'bad_host' }
+  }
+  if (!names.includes(norm)) throw { message: 'No such embedded part', statusCode: 404, code: 'bad_part' }
+  const { bytes } = await readEmbedPart(zipLoadJSZip, host, norm)
+  return bytes
+}
+
+/** C6c: 방의 디스크 해시 (파일 방=파일 해시, 파트 방=파트 바이트 해시). */
+export async function roomDiskHash(room: CollabRoom): Promise<string | null> {
+  try {
+    return hashBytes(await roomDiskBytes(room))
+  } catch {
+    return null
+  }
 }
 
 export function isValidRoomId(id: string): boolean {
@@ -479,7 +555,12 @@ function hasKnownMode(room: CollabRoom): boolean {
   return false
 }
 
-function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
+function createRoom(
+  id: string,
+  absPath: string,
+  seedHash: string,
+  part?: { parentAbs: string; part: string },
+): CollabRoom {
   const doc = new Y.Doc()
   const awareness = new awarenessProtocol.Awareness(doc)
   awareness.setLocalState(null)
@@ -501,7 +582,7 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     lastHash: seedHash,
     pendingHashes: [],
     recentSaveHashes: [],
-    kind: roomKindFor(absPath),
+    kind: part ? roomKindForPart(part.part) : roomKindFor(absPath),
     externalChanged: false,
     lastImageCounts: undefined,
     saveChain: Promise.resolve(),
@@ -515,6 +596,7 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     lastRemoteUpdateAt: 0,
     lastSaveAt: 0,
   }
+  if (part) room.part = part
   awareness.on('update', (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown,
@@ -553,7 +635,8 @@ function createRoom(id: string, absPath: string, seedHash: string): CollabRoom {
     broadcast(room, encodeSyncUpdate(update))
   })
   rooms.set(id, room)
-  pathIndex.set(normalizeAbs(absPath), id)
+  // C6c: part 방은 부모 방과 pathIndex 키를 분리한다 (파일 조회가 part 방을 잡지 않게).
+  pathIndex.set(room.part ? pathKeyForPart(room.part.parentAbs, room.part.part) : normalizeAbs(absPath), id)
   ensureSweeper()
   return room
 }
@@ -593,7 +676,8 @@ function startWatch(room: CollabRoom): void {
             try {
               const stat = await fs.stat(room.path)
               // 쓰기 중간(크기 0)이면 판정을 보류하고 재시도한다.
-              if (stat.size > 0) h = await hashFile(room.path)
+              // C6c: 파트 방은 부모 파일 해시가 아니라 파트 바이트 해시가 기준이다.
+              if (stat.size > 0) h = await roomDiskHash(room)
             } catch {
               h = null
             }
@@ -643,7 +727,8 @@ function disposeRoom(room: CollabRoom): void {
   settlePendingFlush(room, { ok: false, reason: 'reset' })
   try { room.doc.destroy() } catch { /* 무시 */ }
   rooms.delete(room.id)
-  const key = normalizeAbs(room.path)
+  // C6c: part 방은 분리된 pathIndex 키를 쓴다.
+  const key = room.part ? pathKeyForPart(room.part.parentAbs, room.part.part) : normalizeAbs(room.path)
   if (pathIndex.get(key) === room.id) pathIndex.delete(key)
   logger.info(`Collab room ${room.id} disposed (last conn left)`)
 }
@@ -654,6 +739,8 @@ export interface SessionResult {
   epoch: string
   lastHash: string
   path: string
+  /** C6c: 하위문서 방의 파트 경로 (파일 방이면 undefined). */
+  part?: string
   /**
    * X1b(P0-2): 방이 낡았다는 서버 판정 결과(있으면 클라이언트는 방에 붙지 않는다).
    * `stale_room` = 디스크가 방의 마지막 저장과 다르다(외부 변경이 방 뒤에 있었음).
@@ -686,14 +773,17 @@ async function staleRoomCheck(
   abs: string,
   room: CollabRoom | undefined,
   knownHash?: string,
+  part?: { parentAbs: string; part: string },
 ): Promise<{ stale: true; code: 'stale_room' | 'stale_client'; currentHash: string | null } | null> {
   let disk: string | null = null
   let failed = false
   try {
-    disk = await hashFile(abs)
+    // C6c: 파트 방은 부모 파일 해시가 아니라 파트 바이트 해시가 기준이다.
+    disk = part ? hashBytes(await partBytesOf(part.parentAbs, part.part)) : await hashFile(abs)
   } catch {
-    // X1c: strict 모드는 판정할 수 없으면 stale 로 처리한다(fail-closed).
-    // XLSX 는 "방에 먼저 들어온 문서"가 방의 기준이라, 확인 없이 붙으면 덮어쓸 위험이 크다.
+    // X1c: strict 모드에서 판정 불가면 stale 로 처리한다(fail-closed).
+    // XLSX 는 "방에 먼저 들어온 문서"가 방의 기준이라, 디스크와 어긋난 방에 붙으면
+    // 낡은 내용이 디스크를 덮어쓴다.
     failed = true
   }
   if (failed) return { stale: true, code: 'stale_room', currentHash: null }
@@ -720,20 +810,32 @@ async function staleRoomCheck(
  */
 export async function createSession(
   userPath: string,
-  opts?: ResumeOptions,
+  opts?: ResumeOptions & { part?: string },
 ): Promise<SessionResult> {
   const abs = await resolveWorkspaceFile(String(userPath ?? ''))
   if (!abs) throw { message: 'File not found', statusCode: 404 }
-  const id = roomIdForAbs(abs)
+  // C6c: part 지정이면 부모 파일 안 임베딩 방 (정규화 + 존재 확인 — 경로 조작 차단).
+  let partInfo: { parentAbs: string; part: string } | undefined
+  if (opts?.part !== undefined) {
+    const norm = normalizeEmbedPart(String(opts.part))
+    await partBytesOf(abs, norm) // 없으면 404 throw
+    partInfo = { parentAbs: abs, part: norm }
+  }
+  const id = partInfo ? roomIdForPart(abs, partInfo.part) : roomIdForAbs(abs)
   const resumeEpoch = opts?.resumeEpoch
   let existing = rooms.get(id)
+  // C6c: 디스크 기준 해시 (파일 방=파일 전체, 파트 방=파트 바이트).
+  const diskOf = async (): Promise<string> => {
+    if (!partInfo) return hashFile(abs)
+    return hashBytes(await partBytesOf(abs, partInfo.part))
+  }
 
   // X1b(P0-2): strict 세션은 **서버가** staleness 를 판정한다.
   // XLSX(lib 방)는 "방에 먼저 들어온 문서"가 방의 기준이라, 디스크와 어긋난 방에 붙으면
   // 낡은 내용이 디스크를 덮어쓴다.
   // C2-a: knownHash는 클라이언트가 준 서버 ETag다(subtle 계산 없음).
   if (opts?.strict) {
-    const stale = await staleRoomCheck(abs, existing, opts?.knownHash)
+    const stale = await staleRoomCheck(abs, existing, opts?.knownHash, partInfo)
     if (stale) {
       // C2-b: 빈 방의 stale_room은 서버가 디스크 기준으로 리셋한다.
       // conns==0 && everConnected(붙었다 나간 고아 방)만 해당한다.
@@ -758,7 +860,7 @@ export async function createSession(
     if (creating) {
       try {
         const room = await creating
-        return { roomId: id, role: 'guest', epoch: room.epoch, lastHash: room.lastHash, path: abs }
+        return { roomId: id, role: 'guest', epoch: room.epoch, lastHash: room.lastHash, path: abs, part: partInfo?.part }
       } catch {
         // 생성이 실패하면 아래 경로에서 다시 시도한다.
       }
@@ -766,7 +868,7 @@ export async function createSession(
     const creatingPromise = (async (): Promise<CollabRoom> => {
       let fileHash: string
       try {
-        fileHash = await hashFile(abs)
+        fileHash = await diskOf()
       } catch {
         throw { message: 'File not readable', statusCode: 404 }
       }
@@ -775,22 +877,22 @@ export async function createSession(
         if (fileHash !== opts?.knownHash) {
           throw { message: 'File changed while away (no auto-merge)', statusCode: 409, code: 'external_change', currentHash: fileHash }
         }
-        const room = createRoom(id, abs, fileHash)
+        const room = createRoom(id, abs, fileHash, partInfo)
         room.epoch = resumeEpoch
         startWatch(room)
         logger.info(`Collab room ${id} re-created on resume (epoch kept)`)
         return room
       }
-      const room = createRoom(id, abs, fileHash)
+      const room = createRoom(id, abs, fileHash, partInfo)
       startWatch(room)
-      logger.info(`Collab room ${id} created for ${abs}`)
+      logger.info(`Collab room ${id} created for ${abs}${partInfo ? ` part ${partInfo.part}` : ''}`)
       return room
     })()
     creatingRooms.set(id, creatingPromise)
     try {
       const room = await creatingPromise
       const role = resumeEpoch ? 'resume' : 'host'
-      return { roomId: id, role, epoch: room.epoch, lastHash: room.lastHash, path: abs }
+      return { roomId: id, role, epoch: room.epoch, lastHash: room.lastHash, path: abs, part: partInfo?.part }
     } finally {
       if (creatingRooms.get(id) === creatingPromise) creatingRooms.delete(id)
     }
@@ -805,16 +907,16 @@ export async function createSession(
       disposeRoom(existing)
       let fileHash: string
       try {
-        fileHash = await hashFile(abs)
+        fileHash = await diskOf()
       } catch {
         throw { message: 'File not readable', statusCode: 404 }
       }
-      const room = createRoom(id, abs, fileHash)
+      const room = createRoom(id, abs, fileHash, partInfo)
       startWatch(room)
       logger.info(`Collab room ${id} re-created (orphan disposed, host)`)
-      return { roomId: id, role: 'host', epoch: room.epoch, lastHash: fileHash, path: abs }
+      return { roomId: id, role: 'host', epoch: room.epoch, lastHash: fileHash, path: abs, part: partInfo?.part }
     }
-    return { roomId: id, role: 'guest', epoch: existing.epoch, lastHash: existing.lastHash, path: abs }
+    return { roomId: id, role: 'guest', epoch: existing.epoch, lastHash: existing.lastHash, path: abs, part: partInfo?.part }
   }
 
   if (resumeEpoch !== existing.epoch) {
@@ -825,7 +927,7 @@ export async function createSession(
   {
     let disk: string | null = null
     try {
-      disk = await hashFile(abs)
+      disk = await diskOf()
     } catch {
       throw { message: 'File not readable', statusCode: 404 }
     }
@@ -833,7 +935,7 @@ export async function createSession(
       throw { message: 'File changed while away (no auto-merge)', statusCode: 409, code: 'external_change', currentHash: disk }
     }
   }
-  return { roomId: id, role: 'resume', epoch: existing.epoch, lastHash: existing.lastHash, path: abs }
+  return { roomId: id, role: 'resume', epoch: existing.epoch, lastHash: existing.lastHash, path: abs, part: partInfo?.part }
 }
 
 /** WS 접속 등록. owner는 첫 awareness가 증명한 conn이 된다. syncStep1 + awareness 스냅샷을 보낸다. */
@@ -1015,11 +1117,8 @@ export function checkSave(
 export async function currentDiskHash(roomId: string): Promise<string | null> {
   const room = rooms.get(roomId)
   if (!room) return null
-  try {
-    return await hashFile(room.path)
-  } catch {
-    return null
-  }
+  // C6c: 파트 방은 부모 파일이 아니라 파트 바이트가 기준이다.
+  return roomDiskHash(room)
 }
 
 /**
@@ -1091,7 +1190,8 @@ export function countPptxImages(
 async function diskImageCounts(room: CollabRoom): Promise<{ media: number; refs: number } | null> {
   if (room.lastImageCounts !== undefined) return room.lastImageCounts
   try {
-    const buf = await fs.readFile(room.path)
+    // C6c: 파트 방은 부모 파일이 아니라 파트 바이트가 기준이다.
+    const buf = await roomDiskBytes(room)
     const counts = countPptxImages(new Uint8Array(buf))
     room.lastImageCounts = counts
     return counts
@@ -1328,7 +1428,7 @@ export async function applySave(
   opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: RoomKind },
 ): Promise<
   | { newHash: string }
-  | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' }
+  | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' | 'dirty_room' }
   | { imageLoss: true; before: { media: number; refs: number }; after: { media: number; refs: number } }
 > {
   const room = rooms.get(roomId)
@@ -1347,6 +1447,34 @@ export async function applySave(
     }
   }
   const run = room.saveChain.then(async () => {
+    // C6c: 파트 방 저장 전에 부모를 깨끗하게 만든다 (PUT /embed과 동일한 순서).
+    // 부모에 열린 에디터가 있으면 flush를 강제하고, 미저장이 stranded면 막는다.
+    if (room.part) {
+      const parentId = roomIdForAbs(room.part.parentAbs)
+      const proom = rooms.get(parentId)
+      if (proom) {
+        if (roomHasOpenEditor(parentId)) {
+          const flush = await requestParentFlush(parentId)
+          if (!flush.ok) {
+            const cur = await currentDiskHash(parentId)
+            const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
+              conflict: true,
+              currentHash: cur,
+              code: 'dirty_room',
+            }
+            return r
+          }
+        } else if (proom.docDirty || proom.lastEditorDropAt > 0) {
+          const cur = await currentDiskHash(parentId)
+          const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
+            conflict: true,
+            currentHash: cur,
+            code: 'dirty_room',
+          }
+          return r
+        }
+      }
+    }
     const disk = await currentDiskHash(roomId)
     // X1b(P0-3/P0-4): 낙관적 잠금(**XLSX 경로만**).
     // PPT 경로는 기존 판정(디스크 vs room.lastHash → conflict)을 그대로 쓴다.
@@ -1387,7 +1515,9 @@ export async function applySave(
     }
     // 4-0 가드: pptx 저장에서 이미지(파트·관계)가 줄었으면 막는다.
     // 명시적 승인(allowImageLoss)이 있을 때만 통과한다.
-    if (!opts?.allowImageLoss && /\.pptx$/i.test(room.path)) {
+    // C6c: 파트 방은 부모 확장자가 아니라 파트 파일명으로 판정한다.
+    const imageSubject = room.part ? room.part.part.split('/').pop() ?? '' : room.path
+    if (!opts?.allowImageLoss && /\.pptx$/i.test(imageSubject)) {
       const before = await diskImageCounts(room)
       const after = countPptxImages(bytes)
       if (before && after && (after.media < before.media || after.refs < before.refs)) {
@@ -1408,8 +1538,26 @@ export async function applySave(
     // watcher 가 rename 이벤트를 받아도 이 해시로 자기 저장임을 확인할 수 있다.
     room.pendingHashes.push(newHash)
     if (room.pendingHashes.length > 3) room.pendingHashes.shift()
+    // C6c: 파트 방 저장은 부모 zip 안 파트를 교체한다 (PUT /embed와 동일).
+    // 부모 방이 열려 있으면 lastHash를 새 부모 해시로 adopt하고 리셋한다
+    // (PUT이 하던 것과 동일 — 부모 편집자는 resume으로 따라온다).
     try {
-      await writeFileContent(room.path, Buffer.from(bytes))
+      if (room.part) {
+        const parentAbs = room.part.parentAbs
+        const norm = normalizeEmbedPart(room.part.part)
+        const hostBytes = new Uint8Array(await fs.readFile(parentAbs))
+        const out = await replaceEmbedPart(zipLoadJSZip, hostBytes, norm, bytes)
+        await writeFileContent(parentAbs, Buffer.from(out))
+        const parentId = roomIdForAbs(parentAbs)
+        const proom = rooms.get(parentId)
+        if (proom) {
+          proom.lastHash = hashBytes(out)
+          proom.externalChanged = false
+          resetRoomByServer(parentId)
+        }
+      } else {
+        await writeFileContent(room.path, Buffer.from(bytes))
+      }
     } finally {
       room.saving = false
     }
@@ -1441,7 +1589,9 @@ export async function applySave(
     room.recentSaveHashes.push(newHash)
     if (room.recentSaveHashes.length > 5) room.recentSaveHashes.shift()
     room.externalChanged = false
-    if (/\.pptx$/i.test(room.path)) room.lastImageCounts = countPptxImages(bytes)
+    // C6c: 이미지 계측 캐시는 파트 방이면 파트 파일 기준으로 갱신한다.
+    const imageSubject2 = room.part ? room.part.part.split('/').pop() ?? '' : room.path
+    if (/\.pptx$/i.test(imageSubject2)) room.lastImageCounts = countPptxImages(bytes)
     broadcastMeta(room)
     const r: { newHash: string } = { newHash: newHash }
     return r
@@ -1603,6 +1753,8 @@ export interface RoomSummary {
   participants: CollabParticipant[]
   /** X2a-③: 방에 문서가 올라왔는가. viewer가 리마운트 시점을 정할 때 쓴다. */
   seeded: boolean
+  /** C6c: 하위문서 방의 파트 경로 (파일 방이면 undefined). */
+  part?: string
 }
 
 export function listRooms(): RoomSummary[] {
@@ -1617,6 +1769,7 @@ export function listRooms(): RoomSummary[] {
       epoch: room.epoch,
       participants: roomParticipants(room),
       seeded: room.seeded,
+      part: room.part?.part,
     })
   }
   return out

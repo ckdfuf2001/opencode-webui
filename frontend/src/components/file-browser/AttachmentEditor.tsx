@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { showToast } from '@/lib/toast'
 import { readCollabUser } from '@/lib/collabUser'
+import { collabApi } from '@/api/collab'
 import {
   acquireAttachmentLock,
   getAttachmentPart,
@@ -94,6 +95,9 @@ export default function AttachmentEditor({
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [gen, setGen] = useState(0)
   const [dirtyTick, setDirtyTick] = useState(0)
+  const [retryKey, setRetryKey] = useState(0)
+  // C6c: 파트 방 공동편집 모드 (잠금 없이 둘이 같이 편집한다).
+  const [collabMode, setCollabMode] = useState(false)
   const saverRef = useRef<AttachmentSaver | null>(null)
   const lockRef = useRef<{ lockId: string; token: string } | null>(null)
   const baseHashRef = useRef<string | undefined>(undefined)
@@ -120,12 +124,18 @@ export default function AttachmentEditor({
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [readOnly])
 
-  // 열기: 바이트 수신 + 잠금 획득 (한 번만, 마운트 시).
+  // 열기: 바이트 수신 + (C6c 파트 방 공동편집 || 폴백 독점 잠금).
   useEffect(() => {
     mountedRef.current = true
     let dead = false
     const token = tokenRef.current!
+    setPhase('loading')
+    setErrorText('')
+    setBytes(null)
+    setCollabMode(false)
+    setReadOnly(false)
   void (async () => {
+        let partHash: string | null = null
         try {
           const got = await getAttachmentPart(parentPath, part, { roomId, clientId })
           if (dead) return
@@ -135,6 +145,7 @@ export default function AttachmentEditor({
           origBytesRef.current = got.bytes
     try {
         const h = await sha256Hex(got.bytes)
+        partHash = h
         setOrigPartHash(h)
         if (expectedPartHash && expectedPartHash !== h) {
               showToast.info('첨부가 바뀌었습니다 — 최신 내용으로 열었습니다')
@@ -155,6 +166,36 @@ export default function AttachmentEditor({
         setPhase('error')
         return
       }
+      // C6c: 하위문서 공동편집 — 파트 방에 붙으면 잠금 없이 같이 편집한다.
+      // 해시를 못 구한 환경(비보안 컨텍스트 subtle 부재)에서는 strict 없이 붙는다
+      // (저장 시 baseHash 대조는 그대로라 조용한 덮어쓰기는 없다).
+      try {
+        const info = await collabApi.session(
+          parentPath,
+          partHash ? { knownHash: partHash, strict: true, part } : { part },
+        )
+        if (dead) return
+        if (!info.stale) {
+          setCollabMode(true)
+          setReadOnly(false)
+          setLockHolder(null)
+          setPhase('ready')
+          return
+        }
+        // stale이면 덮어쓰지 않고 에러로 알린다 (다시 열기로 최신 바이트 재수신).
+        setErrorText('공유 상태가 어긋났습니다. 다시 열어 주세요.')
+        setPhase('error')
+        return
+      } catch (e) {
+        if (dead) return
+        const code = (e as { code?: string })?.code
+        if (code === 'stale_room' || code === 'stale_client' || code === 'external_change' || code === 'epoch_mismatch' || code === 'conflict') {
+          setErrorText('공유 상태가 어긋났습니다. 다시 열어 주세요.')
+          setPhase('error')
+          return
+        }
+        // 세션 실패(오프라인 등)는 기존 독점 잠금 경로로 폴백한다.
+      }
       try {
         const r = await acquireAttachmentLock(parentPath, part, holderName, token)
         if (dead) {
@@ -162,6 +203,7 @@ export default function AttachmentEditor({
           return
         }
         lockRef.current = { lockId: r.lockId, token }
+        setCollabMode(false)
         setReadOnly(false)
         setLockHolder(null)
       } catch (e) {
@@ -195,8 +237,8 @@ export default function AttachmentEditor({
       lockRef.current = null
       if (l) void releaseAttachmentLock(parentPath, part, l.lockId, l.token).catch(() => {})
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 1회 오픈 플로우
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 오픈 플로우 (retryKey로만 재실행)
+  }, [retryKey])
 
   void dirtyTick
 
@@ -445,8 +487,16 @@ export default function AttachmentEditor({
             {parentName} › {name}
           </span>
         </div>
-        <div className="flex-1 flex items-center justify-center text-sm text-destructive p-4 text-center">
-          {errorText || '첨부를 불러오지 못했습니다'}
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-destructive p-4 text-center">
+          <span>{errorText || '첨부를 불러오지 못했습니다'}</span>
+          <button
+            type="button"
+            onClick={() => setRetryKey((k) => k + 1)}
+            data-testid="attach-retry"
+            className="h-7 text-xs px-3 rounded border border-border text-foreground hover:bg-muted"
+          >
+            다시 열기
+          </button>
         </div>
       </div>
     )
@@ -532,7 +582,9 @@ export default function AttachmentEditor({
               data={viewerBytes}
               fileName={name}
               editing={!readOnly}
-              standalone
+              savePath={parentPath}
+              part={part}
+              standalone={!collabMode}
               persistOverride={persist}
               registerSaver={(s) => {
                 saverRef.current = s
@@ -552,7 +604,9 @@ export default function AttachmentEditor({
               fileName={name}
               editing={!readOnly}
               path={parentPath}
-              standalone
+              part={part}
+              etag={origPartHash || undefined}
+              standalone={!collabMode}
               persistOverride={persist}
               registerSaver={(s) => {
                 saverRef.current = s
@@ -568,7 +622,9 @@ export default function AttachmentEditor({
               fileName={name}
               editing={!readOnly}
               path={parentPath}
-              standalone
+              part={part}
+              etag={origPartHash || undefined}
+              standalone={!collabMode}
               persistOverride={persist}
               registerSaver={(s) => {
                 saverRef.current = s

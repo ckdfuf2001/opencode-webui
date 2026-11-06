@@ -70,6 +70,8 @@ const SessionSchema = z.object({
    * 낡은 내용이 디스크를 덮어쓴다 ⇒ 서버가 미리 판정해 알려준다.
    */
   strict: z.boolean().optional(),
+  /** C6c: 하위문서 방 — 부모 경로 안의 임베딩 파트 경로 (zip 정규 경로). */
+  part: z.string().min(1).optional(),
 })
 
 const SaveSchema = z.object({
@@ -118,6 +120,7 @@ app.post('/session', async (c) => {
       knownHash: body.knownHash,
       clientId: body.clientId,
       strict: body.strict,
+      part: body.part,
     })
     return c.json(result)
   } catch (error) {
@@ -168,6 +171,8 @@ app.post('/save', async (c) => {
     if ('conflict' in applied) {
       // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능).
       //          conflict_external = 외부 변경(재시도 금지, 배너·다운로드로 알린다).
+      // C6c: dirty_room = 부모 파일에 미저장이 있어 파트 저장을 막았다(부모 먼저 저장).
+      // 문구는 기존 PUT 경로의 클라이언트 토스트와 동일하게 둔다 (U-parent 단언).
       const code = applied.code ?? 'conflict'
       return c.json(
         {
@@ -176,7 +181,9 @@ app.post('/save', async (c) => {
               ? 'Another participant saved first (re-serialize and retry)'
               : code === 'conflict_external'
                 ? 'File changed outside this session (no auto-merge)'
-                : 'File changed on disk since last save (no auto-merge)',
+                : code === 'dirty_room'
+                  ? '부모 파일을 먼저 저장하세요'
+                  : 'File changed on disk since last save (no auto-merge)',
           code,
           currentHash: applied.currentHash,
         },

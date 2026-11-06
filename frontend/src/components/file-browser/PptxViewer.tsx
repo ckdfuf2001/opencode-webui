@@ -75,7 +75,7 @@ interface PowerPointViewerHandle {
   getActiveSlideIndex?: () => number
 }
 
-export default function PptxViewer({ data, fileName, editing, savePath, onFail, titleBarSlot, standalone = false, persistOverride, registerSaver }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void; titleBarSlot?: ReactNode; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void }) {
+export default function PptxViewer({ data, fileName, editing, savePath, onFail, titleBarSlot, standalone = false, persistOverride, registerSaver, part }: { data: ArrayBuffer; fileName?: string; editing: boolean; savePath?: string; onFail: () => void; titleBarSlot?: ReactNode; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void; part?: string }) {
   // lib는 768px 미만에서 썸네일 패널을 숨기고 모바일 바/시트로 바꾼다.
   // 보기 모드에서도 좁은 화면에선 모바일 바를 켜야 슬라이드 시트에 닿는다.
   // (데스크톱은 editing 그대로라 변화 없음)
@@ -85,9 +85,15 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
   // run은 DocumentPreview의 숨은 input을 거쳐 officeEmbedFile로 이어진다.
   // standalone(첨부 편집)에서는 중첩 첨부를 막는다.
+  // C6c: 파트 편집에서도 중첩 첨부를 막는다.
   const attachAddIns = useMemo(
-    () => (editing && !standalone ? buildOfficeAttachAddIn(() => requestEmbedFile(savePath ?? '')) : []),
-    [savePath, editing, standalone],
+    () => (editing && !standalone && !part ? buildOfficeAttachAddIn(() => requestEmbedFile(savePath ?? '')) : []),
+    [savePath, editing, standalone, part],
+  )
+  // C6c: 세션 레지스트리 키. 파트는 부모와 분리한다 (같은 부모의 다른 파트가 세션을 공유하면 안 된다).
+  const sessionKey = useMemo(
+    () => (part && savePath ? `${savePath}/-/${part}` : (savePath ?? '')),
+    [savePath, part],
   )
   // C5-3 standalone(첨부 편집): 방 미참가·자동저장 금지·PUT 저장.
   const standaloneRef = useRef(standalone)
@@ -1013,7 +1019,8 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
     }
     const onSave = (e: Event) => {
       // C5-3 standalone(첨부 편집): 부모 저장 이벤트를 무시한다 (saver 경로만 사용).
-      if (standaloneRef.current) return
+      // C6c: 파트 방도 무시한다 (부모 flush는 서버가 부모 방 conns로 직접 보낸다).
+      if (standaloneRef.current || part) return
       const h = viewerRef.current
       if (!h || !savePath) return
       // C5-2: 임베드용 선저장은 편집 세션을 유지한다 (수동 Save는 종료).
@@ -1067,7 +1074,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       window.removeEventListener('officeSaveRequest', onSave)
       window.removeEventListener('officeSaveDone', onAnyDone)
     }
-  }, [savePath, fileName, saving, persistBytes])
+  }, [savePath, fileName, saving, persistBytes, part])
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
   useEffect(() => {
     const onEmbed = (e: Event) => {
@@ -1102,23 +1109,41 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
 
   // C5-3 standalone(첨부 편집): 저장 슬롯 등록 + 열기 요청 중계 (방 컨텍스트 부착).
   // 중첩 attach 탭은 standalone에서 숨기므로 onEmbed는 그대로 둔다.
+  // C6c: 파트 방 모드에서도 같은 슬롯으로 룸 저장을 등록한다 (상위에는 슬롯이 없다).
   useEffect(() => {
-    if (!standalone) return
-    registerSaver?.({
+    if (!registerSaver) return
+    if (standalone) {
+      registerSaver({
+        saveNow: async () => {
+          try {
+            const h = viewerRef.current
+            if (!h) return false
+            const bytes = new Uint8Array(await h.getContent())
+            if (bytes.length === 0) return false
+            const ok = await persistOverrideRef.current?.(bytes)
+            if (ok) dirtyRef.current = false
+            return ok === true
+          } catch {
+            return false
+          }
+        },
+        isDirty: () => dirtyRef.current,
+      })
+      return () => registerSaver?.(null)
+    }
+    registerSaver({
       saveNow: async () => {
         try {
           const h = viewerRef.current
           if (!h) return false
           const bytes = new Uint8Array(await h.getContent())
           if (bytes.length === 0) return false
-          const ok = await persistOverrideRef.current?.(bytes)
-          if (ok) dirtyRef.current = false
-          return ok === true
+          return await persistBytesRef.current(bytes)
         } catch {
           return false
         }
       },
-      isDirty: () => dirtyRef.current,
+      isDirty: () => unsavedLocalEditRef.current,
     })
     return () => registerSaver?.(null)
   }, [standalone, registerSaver])
@@ -1226,15 +1251,16 @@ const syncSessionMode = useCallback(() => {
     // fresh하게 읽는다 (stale 캡처 금지).
     void (async () => {
       try {
-        const info = await collabApi.session(savePath)
+        // C6c: part가 있으면 부모 안 임베딩 방에 붙는다.
+        const info = await collabApi.session(savePath, part ? { part } : undefined)
         if (dead) return
         const userNow = collabUserRef.current
         if (!userNow) return
         const freshEditing = editingRef.current
         sessionModeRef.current = freshEditing ? 'edit' : 'view'
-        // 2-2: 탭당 파일당 세션 1개 (인라인/전체화면 공유).
+        // 2-2: 탭당 파일당 세션 1개 (인라인/전체화면 공유). 파트는 파트별로 공유한다.
       const acquired = acquireCollabSession(
-        savePath,
+        sessionKey,
         () =>
           new YCollabSession(
             `${collabServerUrl()}/${info.roomId}`,
@@ -1351,7 +1377,7 @@ writeBackHaltedRef.current = false
       })()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savePath, collabUser, renameSessionKey, collabDisabled])
+  }, [sessionKey, collabUser, renameSessionKey, collabDisabled])
 
   // E10: 서버 aiBlockedAt이 새로 찍히면 칩을 래치한다. 같은 값이면 유지.
   // 표시는 래치 시점 기준 30초 (page.clock으로 앞당길 수 있다).
@@ -1508,7 +1534,8 @@ writeBackHaltedRef.current = false
         // 이전에는 여기서 release하지 않아 registry에 항목이 남았고, reloadKey로 재진입할 때
         // acquire가 죽은 세션을 재사용(refs=2)했다. 언마운트 시 release가 1회만 돌아
         // 세션이 영구 생존했다. 항목을 즉시 버려야 한다.
-        if (savePath) dropCollabSession(savePath, session)
+        // C6c: 파트는 파트 키로 버린다.
+        if (savePath) dropCollabSession(sessionKey, session)
         collabRef.current = null
         setCollab(null)
         setMetaOwner(null)
