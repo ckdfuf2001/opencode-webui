@@ -232,6 +232,28 @@ test.describe('W0: DOCX 동시편집', () => {
       await expect(
         t.pageA.locator('[data-sonner-toast]').filter({ hasText: '동시편집' }),
       ).toHaveCount(1, { timeout: 30000 })
+      const hiddenOf = () =>
+        t.pageA.evaluate(() => {
+          const el = document.querySelector('docx-editor') as unknown as {
+            hiddenActions?: readonly string[]
+          } | null
+          return el?.hiddenActions ?? null
+        })
+      // undo/redo 우회 불가: Yjs undoManager는 동기 범위(fragment/attributes/코멘트)만
+      // 다루므로 숨김 목록이 유지되고 동기 경로가 산다.
+      await t.pageA.locator('docx-editor [contenteditable="true"]').first().click({ timeout: 15000 })
+      await t.pageA.keyboard.press('Control+z')
+      await t.pageA.keyboard.press('Control+y')
+      await expect.poll(() => hiddenOf(), { timeout: 30000, intervals: [1000] }).toContain('page-setup-dialog')
+      await expect.poll(() => hiddenOf(), { timeout: 30000, intervals: [1000] }).toContain('track-changes')
+      await expect.poll(() => hiddenOf(), { timeout: 30000, intervals: [1000] }).toContain('insert-footnote')
+      await expect.poll(() => hiddenOf(), { timeout: 30000, intervals: [1000] }).toContain('page-borders')
+      // 동기 코멘트 경로는 막지 않는다 (방 identity가 항상 shared → sharedComments=true).
+      await expect.poll(() => hiddenOf(), { timeout: 30000, intervals: [1000] }).not.toContain('add-comment')
+      // 동기 경로 생존: 마커가 B에 보인다.
+      await typeAtEnd(t.pageA, 'w06-mark')
+      const bEditable = t.pageB.locator('docx-editor [contenteditable="true"]').first()
+      await expect.poll(() => bEditable.textContent(), { timeout: 60000, intervals: [1000] }).toContain('w06-mark')
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
@@ -301,17 +323,13 @@ test.describe('W0: DOCX 동시편집', () => {
     }
   })
 
-  test('W0-9: B가 나갔다 돌아와도 타이틀바 presence는 1개를 유지한다', async ({ browser }, testInfo) => {
-    // R-ribbon 후속: presence unmount/remount 때 슬롯에 껍데기가 쌓이거나
-    // 타이틀바가 출렁이지 않는지 확인한다 (joined는 세션 중 false로 안 돌아감).
-    testInfo.setTimeout(420000)
-    const f = await freshDocx('w09', 0)
-    const t = await twoPages(browser)
-    // 슬롯 안 shell 수/화면 avatar 수를 200ms마다 기록한다 (evaluate는 shadow를 못 뚫으므로 순회).
+  // R-ribbon 후속: presence unmount/remount 때 슬롯에 껍데기가 쌓이지 않는지 본다.
+  // 슬롯 안 shell 수/화면 avatar 수를 200ms마다 기록한다 (evaluate는 shadow를 못 뚫으므로 순회).
+  async function watchTitlebarShell(page: Page): Promise<{ samples: string[]; stop: () => void }> {
     const samples: string[] = []
     const rec = setInterval(async () => {
       try {
-        const s = await t.pageA.evaluate(() => {
+        const s = await page.evaluate(() => {
           const all: Element[] = []
           const walk = (root: ParentNode) => {
             for (const el of Array.from(root.querySelectorAll('*'))) {
@@ -340,46 +358,73 @@ test.describe('W0: DOCX 동시편집', () => {
         /* 무시 */
       }
     }, 200)
-    let pageB: Page = t.pageB
-    let ctxB: BrowserContext | null = null
+    return { samples, stop: () => clearInterval(rec) }
+  }
+
+  async function assertNoShellPileup(samples: string[]): Promise<void> {
+    // 슬롯에 shell이 2개 이상 쌓인 적이 없고, 비는 구간(0/)을 거쳐 1개로 복귀했다.
+    const over = samples.filter((s) => Number(s.split('/')[0]) > 1)
+    expect(over, `duplicate shells: ${samples.join(',')}`).toEqual([])
+    expect(samples.some((s) => s.startsWith('0/')), `samples: ${samples.join(',')}`).toBe(true)
+  }
+
+  test('W0-9a: B가 offline됐다 돌아와도 타이틀바 presence는 1개를 유지한다', async ({ browser }, testInfo) => {
+    // 순수 재연결 경로만 쓴다 (폴백 없음). D07: lastRxAt 기준 25초 무수신이면
+    // 서버가 sweep으로 정리하므로, 30초 안에 참가자 수 감소가 관측되는 것이 정상이다.
+    testInfo.setTimeout(420000)
+    const f = await freshDocx('w09a', 0)
+    const t = await twoPages(browser)
+    const watch = await watchTitlebarShell(t.pageA)
     try {
       await openDocxEditing(t.pageA, f.rel)
       await openDocxEditing(t.pageB, f.rel)
       await expect.poll(() => participantCount(f.name), { timeout: 60000, intervals: [1000] }).toBe(2)
       await expect(t.pageA.locator('[data-testid="collab-presence"]')).toHaveCount(1, { timeout: 60000 })
-      // B 이탈: setOffline이 30초 안에 안 먹으면(half-open) 컨텍스트를 닫는다 (동일 경로: B 이탈→재참가).
       await t.ctxB.setOffline(true)
-      let offlineDropped = false
-      try {
-        await expect.poll(() => participantCount(f.name), { timeout: 30000, intervals: [1000] }).toBe(1)
-        offlineDropped = true
-      } catch {
-        offlineDropped = false
-      }
-      if (offlineDropped) {
-        await t.ctxB.setOffline(false)
-      } else {
-        await t.ctxB.setOffline(false).catch(() => {})
-        await t.ctxB.close().catch(() => {})
-        ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
-        await seedUser(ctxB, GRACE)
-        pageB = await ctxB.newPage()
-        await gotoApp(pageB)
-        await openDocxEditing(pageB, f.rel)
-      }
+      await expect.poll(() => participantCount(f.name), { timeout: 60000, intervals: [1000] }).toBe(1)
+      await t.ctxB.setOffline(false)
+      // B 복귀: 참가자 2명 + 양쪽 presence 1개.
+      await expect.poll(() => participantCount(f.name), { timeout: 90000, intervals: [1000] }).toBe(2)
+      await expect(t.pageA.locator('[data-testid="collab-presence"]')).toHaveCount(1, { timeout: 60000 })
+      await expect(t.pageB.locator('[data-testid="collab-presence"]')).toHaveCount(1, { timeout: 60000 })
+    } finally {
+      watch.stop()
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+    await assertNoShellPileup(watch.samples)
+  })
+
+  test('W0-9b: B가 나갔다 다시 열어도 타이틀바 presence는 1개를 유지한다', async ({ browser }, testInfo) => {
+    // 이탈 후 재참가 경로 (W0-9a의 offline 전파와 별개).
+    testInfo.setTimeout(420000)
+    const f = await freshDocx('w09b', 0)
+    const t = await twoPages(browser)
+    const watch = await watchTitlebarShell(t.pageA)
+    let ctxB: BrowserContext | null = null
+    let pageB: Page = t.pageB
+    try {
+      await openDocxEditing(t.pageA, f.rel)
+      await openDocxEditing(t.pageB, f.rel)
+      await expect.poll(() => participantCount(f.name), { timeout: 60000, intervals: [1000] }).toBe(2)
+      await expect(t.pageA.locator('[data-testid="collab-presence"]')).toHaveCount(1, { timeout: 60000 })
+      await t.ctxB.close().catch(() => {})
+      await expect.poll(() => participantCount(f.name), { timeout: 60000, intervals: [1000] }).toBe(1)
+      ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+      await seedUser(ctxB, GRACE)
+      pageB = await ctxB.newPage()
+      await gotoApp(pageB)
+      await openDocxEditing(pageB, f.rel)
       // B 복귀: 참가자 2명 + 양쪽 presence 1개.
       await expect.poll(() => participantCount(f.name), { timeout: 60000, intervals: [1000] }).toBe(2)
       await expect(t.pageA.locator('[data-testid="collab-presence"]')).toHaveCount(1, { timeout: 60000 })
       await expect(pageB.locator('[data-testid="collab-presence"]')).toHaveCount(1, { timeout: 60000 })
     } finally {
-      clearInterval(rec)
+      watch.stop()
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
       if (ctxB) await ctxB.close().catch(() => {})
     }
-    // 슬롯에 shell이 2개 이상 쌓인 적이 없고, 비는 구간(0/)을 거쳐 1개로 복귀했다.
-    const over = samples.filter((s) => Number(s.split('/')[0]) > 1)
-    expect(over, `duplicate shells: ${samples.join(',')}`).toEqual([])
-    expect(samples.some((s) => s.startsWith('0/')), `samples: ${samples.join(',')}`).toBe(true)
+    await assertNoShellPileup(watch.samples)
   })
 })
