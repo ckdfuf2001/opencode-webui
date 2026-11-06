@@ -1255,4 +1255,35 @@ E21만의 문제가 아니다. 근거:
   c5-1/2/3 · c3 · presence · c4-3/4/6 · xlsx-c2/solo · ui-layout.
   backend unit collab 전종 green, frontend tsc 0, backend tsc 기존만, eslint 동일, encoding/memory clean.
 - 주의: setOffline은 WS를 끊지 않는다 — B4류 테스트는 rooms 목록 소멸 poll + TTL 여유로.
-  동기 dispatch 이벤트는 리스너를 먼저 등록할 것.
+ 동기 dispatch 이벤트는 리스너를 먼저 등록할 것.
+
+## C6 Word 동시편집 (2026-11-06, D68)
+- C6-0 정리: handoff C5-4c절 UTF-8 재작성(깨진 절 복구), encoding 검사 보강
+ (TextDecoder fatal strict 판정), eslint 기준선 정정(전수 332 problems = 272e+60w —
+ D67의 6e+11w는 변경 5파일 범위치였다). Q01(/handoff 410 스텝 구판 문구),
+ Q02(v0.13 part 참조 전환 보류 — Y.Doc 읽기·전송 문제, W3 측정 선행),
+ Q03(openFileRegistry 보기 공용 경로 유지 — 0절 측정 후 판단) 처리.
+- 0절 측정(1400x900 기준, lib d.ts 근거):
+ | 영역 | 동기 | 근거 |
+ | body 텍스트 (Yjs) | O | WordYjsCollaboration, startYjsCollaboration(session, options) |
+ | presence/피어 | O | session peers → CollabPresenceBar |
+ | 저장 (owner 1명) | O | saveViaRoom PUT + baseHash, 조건부 conflict_room |
+ | parts/첨부 | X | canEditOutsideBody "parts and page setup aren't synced" — W0-7 리셋 후 재삽입으로 처리 |
+ | 페이지 설정(여백/방향/용지/단/머리말/바닥글/번호/워터마크/변경추적/구역나눔) | X | hiddenActions prop + 토스트 1회 (W0-6) |
+ | 코멘트 | X | 디스크 로드(loadDocxComments), Yjs 미동기 |
+- 테스트(test 커밋 3026ccc5): docx-collab W0-1~W0-9 + presenceGate 단위 4건 +
+ R-ribbon solo 슬롯 단언. red 원문(제품 stash = a3c8813 동일, b397a694와 제품 diff 0):
+ W0-1 line 111 participantCount poll timeout, W0-9 line 348 동일,
+ R-ribbon line 1136 app-titlebar-slot attached 60s timeout, unit 4 failed(import).
+- W0-4 증거(viewer-first): B가 view로 먼저 입장(participant 1) → A가 edit로 seed+입력 →
+ B 화면에 w04-mark 표시(새로고침 없음, 90s 내). W0-5 증거(http): page URL protocol http
+ 확인 + w05-mark 입력→저장→word/document.xml 디스크 판정.
+- R-ribbon 회귀(C6 미커밋 코드, 커밋 전 해소): 빈 presence Shell/Bar를 슬롯에 무조건 포털 →
+ 타이틀바 밀림 328px. 바이섹트 제외 항목(join HTTP·세션/startYjs·hiddenActions prop·
+ value import·etag prop·viewer.ts openFile 분기 — 전부 꺼도 재현, 베이스라인 동시간 4회 passed).
+ 수정: shouldShowPresence 공용 게이트 + R-ribbon solo 0개/W0-1 joined 1개 DOM 단언 + W0-9.
+- code 커밋 366a8ecf: 서버 RoomKind/isLibRoomKind, DocxViewer join/session/저장/가드/첨부,
+ docxObjects.ts(제품 코드: tap transport 103/104 가로채기 + 100/101 소비 — code 커밋에 포함),
+ collabPresenceView shouldShowPresence (xlsx 게이트도 여기로 통합).
+- 회귀(예정): msedge W0 전체, R-ribbon 양쪽, X-B2, c5 시리즈, xlsx-collab, pptx-collab
+ (베이스라인 대조), ui-layout. 0.12.82 exe 나란히 스크린샷(solo + 2인) 필수.

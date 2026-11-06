@@ -886,3 +886,18 @@
  (2) e2e 재현에 half-open 소켓을 가정하지 말 것 — 서버 sweep(drop 120s+TTL 30s)을 적응형으로
  기다려라 (rooms 목록 소멸 poll). (3) UI 경로 작업은 예전 exe와 나란히 놓은 스크린샷을
  완료 보고에 필수 첨부 (AGENTS.md 규칙 제안).
+
+## D68 C6 DOCX 동시편집 + R-ribbon 회귀: 타이틀바 presence 공통 게이트 (2026-11-06)
+-배경: C6은 xlsx처럼 lib 소유 Yjs 방 + tap transport(103/104 가로채기)로 relay 방에 붙는다.
+ 서버는 docx를 lib 방 종류로 취급한다(RoomKind + isLibRoomKind: meta 미방송·owner/seeded 면제·
+ baseHash 필수·viewer 저장 거부·조건부 conflict_room). 가드는 hiddenActions prop + 토스트 1회.
+-회귀: 미커밋 C6 코드가 R-ribbon DOCX를 328px 깨뜨렸다. 원인은 타이틀바 actions 슬롯에
+ 빈 CollabPresenceShell/Bar(px-3 py-1 border-b 빈 막대)를 무조건 포털한 것 — 슬롯 존재만으로
+ 마운트하면 타이틀바 레이아웃이 밀린다. join·세션·hiddenActions·import를 전부 비활성화해도
+ 재현됐고, 픽셀 diff 클러스터(행 0~14, x-run 7개)가 슬롯 쪽을 가리켜 확정했다. 베이스라인은
+ 동시간대 4회 passed라 환경 원인이 아니다. 분류: C6 미커밋 코드가 만든 회귀, 커밋 전 해소.
+-결정: (1) `shouldShowPresence(joined, peopleCount)` 공용 게이트 1곳 — xlsx/docx가 같이 쓰고
+ 형식별 조건 복사를 두지 않는다 (PPT는 titleBarSlot에 Shell을 꽂지 않아 제외). (2) 픽셀 옆에
+ DOM 단언을 둔다: solo는 슬롯 내 presence 0개(R-ribbon), joined는 presence 1개(W0-1).
+ 다음엔 바이섹트 없이 원인이 보인다. (3) 재연결 출렁임은 W0-9(offline→복귀, shell ≤1 유지 +
+ 0 구간 경유 복귀)로 확인한다.
