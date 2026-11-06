@@ -27,6 +27,8 @@ import { loadDocxComments, type DocxComment } from './docxComments'
 import { addDocxComment, replyDocxComment, setDocxCommentDone, editDocxComment, deleteDocxComment } from './docxCommentWriter'
 import { useOfficeSave, saveOfficeBytes } from './officeSave'
 import type { OfficeSaveRequestDetail } from './officeSave'
+import { createCollabSession, type CollabSession } from 'ooxml-core/collab'
+import { createDocxTapProvider } from '@/lib/docxObjects'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
@@ -38,6 +40,7 @@ import { hasEmbObject, isBlockedXlsxEdit, decideObjectOp, NO_OBJECT_GUARD, shoul
 import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectAnchor, type ObjectsStateMsg } from '@/lib/xlsxObjects'
 import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/CollabPresence'
 import type { PresencePeerView } from '@/components/collab/collabPresenceView'
+import { shouldShowPresence } from '@/components/collab/collabPresenceView'
 import { createPortal } from 'react-dom'
 import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
@@ -773,7 +776,7 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
       if (kind === 'docx') {
         return (
           <ViewerLoadBoundary key={bkey} onRetry={retryViewer}>
-            <DocxViewer data={raw} fileName={file.name} editing={editing} path={file.path} />
+            <DocxViewer data={raw} fileName={file.name} editing={editing} path={file.path} etag={rawEtag} />
           </ViewerLoadBoundary>
         )
       }
@@ -1136,7 +1139,7 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
   )
 }
 
-export function DocxViewer({ data, editing = false, path, fileName, standalone = false, persistOverride, registerSaver }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void }) {
+export function DocxViewer({ data, editing = false, path, fileName, standalone = false, persistOverride, registerSaver, etag: etagProp }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void; etag?: string | null }) {
   const appTheme = useTheme()
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
@@ -1145,17 +1148,52 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     load: (b: Uint8Array) => Promise<void>
     save: () => Promise<Blob>
     markClean: () => void
+    startYjsCollaboration?: (session: CollabSession, options: { documentId: string; initializeIfEmpty?: boolean }) => void
+    reconnectCollaboration?: () => void
+    resyncCollaboration?: () => boolean
+    hiddenActions?: readonly string[]
   } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [laidOut, setLaidOut] = useState(0)
   const laidOutRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const editingRef = useRef(editing)
+  editingRef.current = editing
   // C5-3 standalone(첨부 편집): PUT 저장 + 저장 슬롯 등록.
   const standaloneRef = useRef(standalone)
   standaloneRef.current = standalone
   const persistOverrideRef = useRef(persistOverride)
   persistOverrideRef.current = persistOverride
   const dirtyRef = useRef(false)
+  // ---- DOCX collab (C6/W0): xlsx-style lib-owned room. ----
+  // The app only creates the HTTP session; the lib session owns Yjs sync.
+  // The tap transport intercepts 103/104 flush into officeSaveRequest saves.
+  type DocxCollab = {
+    roomId: string
+    baseHash: string
+    epoch: string
+    serverUrl: string
+    user: { name: string; color: string; id?: string; role: 'collaborator' | 'viewer' }
+    role: 'edit' | 'viewer'
+    joined: boolean
+  }
+  const [collab, setCollab] = useState<DocxCollab | null>(null)
+  const collabRef = useRef<DocxCollab | null>(null)
+  collabRef.current = collab
+  const [collabNotice, setCollabNotice] = useState<{ kind: string; text: string } | null>(null)
+  const [docxPeople, setDocxPeople] = useState<Array<{ clientId: number; name: string; color: string; self: boolean; role?: string }>>([])
+  const docxPeopleRef = useRef<typeof docxPeople>([])
+  docxPeopleRef.current = docxPeople
+  const sessionRef = useRef<CollabSession | null>(null)
+  const pendingFlushIdRef = useRef<string | null>(null)
+  const [joinKey, setJoinKey] = useState(0)
+  const [mineBytes, setMineBytes] = useState<Uint8Array | null>(null)
+  const guardToastedRoomRef = useRef<string | null>(null)
+  // B2: flush clean-ack decision (standalone or not).
+  const markDocxDirty = useRef(false)
+  // C6/W0: which room+epoch the live session belongs to, and whether startYjs ran on it.
+  const sessionKeyRef = useRef<string | null>(null)
+  const startedYjsRef = useRef<string | null>(null)
   // C5-2 add-in 탭: 리본 "첨부" 탭 → 파일 선택 요청 (공식 ribbonAddIns, lib 패치 없음).
   // 보기 모드와 standalone(중첩 첨부 금지)에서는 탭을 숨긴다.
   const attachAddIns = useMemo(
@@ -1185,6 +1223,67 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   }, [])
   const { save: saveBase } = useOfficeSave(path, fileName ?? 'document.docx', handle, onSavedDoc)
   // C5-3 standalone(첨부 편집): PUT 경로로 저장한다.
+  // C6/W0: room save via PUT /save with optimistic base hash (server decides).
+  // Solo falls back to useOfficeSave. Mirrors the xlsx saveViaRoom path.
+  const saveViaRoom = useCallback(async (quiet = false): Promise<boolean> => {
+    const room = collabRef.current
+    const h = handle
+    if (!room || !h?.save) return false
+    const takeFlushId = (): string | undefined => {
+      const id = pendingFlushIdRef.current
+      pendingFlushIdRef.current = null
+      return id ?? undefined
+    }
+    try {
+      const blob: Blob = await h.save()
+      let bytes = new Uint8Array(await blob.arrayBuffer())
+      let res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, room.baseHash)
+      if (!res.ok && res.reason === 'conflict_room') {
+        // Same-room retry with a fresh serialization (all peers share the room state).
+        const blob2: Blob = await h.save()
+        bytes = new Uint8Array(await blob2.arrayBuffer())
+        res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, res.currentHash ?? room.baseHash)
+      }
+      if (!res.ok) {
+        setMineBytes(new Uint8Array(bytes))
+        setCollabNotice({ kind: 'error', text: `저장 실패 — 내 사본을 내려받으세요: ${res.message ?? res.reason}` })
+        showToast.error(res.message ?? '저장 실패')
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+        )
+        return false
+      }
+      room.baseHash = res.newHash
+      markDocxDirty.current = false
+      dirtyRef.current = false
+      setDocDirty(false)
+      try {
+        h.markClean()
+      } catch {
+        /* ignore */
+      }
+      // NOTE: onSavedDoc(setSavedBytes)를 호출하지 않는다 — lib 문서가 최신이라
+      // 리로드가 필요 없고, collab 중 handle.load()는 lib이 거부한다.
+      if (!quiet) showToast.success('저장했습니다')
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: takeFlushId() } }),
+      )
+      return true
+    } catch (e) {
+      try {
+        const blob: Blob = await h.save()
+        setMineBytes(new Uint8Array(await blob.arrayBuffer()))
+      } catch {
+        /* no bytes to offer */
+      }
+      setCollabNotice({ kind: 'error', text: `저장 실패 — 내 사본을 내려받으세요: ${e instanceof Error ? e.message : 'unknown'}` })
+      showToast.error(e instanceof Error ? e.message : '저장 실패')
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+      )
+      return false
+    }
+  }, [path, handle])
   const save = useCallback(async (): Promise<boolean> => {
     const ov = standaloneRef.current ? persistOverrideRef.current : undefined
     if (ov) {
@@ -1207,8 +1306,201 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         return false
       }
     }
+    // C6/W0: joined room saves via PUT /save with optimistic base hash (server decides).
+    // Solo falls back to the plain file save.
+    if (collabRef.current?.joined) {
+      return saveViaRoom()
+    }
     return saveBase()
-  }, [saveBase, handle, onSavedDoc])
+  }, [saveBase, handle, onSavedDoc, saveViaRoom])
+  // ---- C6/W0: collab join (HTTP session) + lib session wiring. ----
+  // Mirrors the xlsx join: strict session with disk ETag, stale rooms refuse to join.
+  // Viewer-first: lib throws unless the room was initialized by its creator.
+  // Wait for the server to mark the room seeded (editor joins and syncs first).
+  // NOTE: startYjsCollaboration needs session.canWrite() (gate open). The lib opens
+  // the gate right AFTER emitting 'synced', so drive the start on 'ready' instead.
+  // Deps use stable primitives (roomId/epoch) so setCollab(joined) does not retrigger
+  // the effect and kill an in-flight viewer wait via the dead flag.
+  const waitDocxSeeded = useCallback(async (roomId: string): Promise<boolean> => {
+    const t0 = Date.now()
+    while (Date.now() - t0 < 90000) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/collab/rooms`)
+        const body = (await res.json()) as { rooms?: Array<{ roomId?: string; seeded?: boolean }> }
+        if ((body.rooms ?? []).some((r) => r.roomId === roomId && r.seeded === true)) {
+          return true
+        }
+      } catch {
+        /* retry */
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+    return false
+  }, [])
+
+  const joinDocxRoom = useCallback(async (): Promise<boolean> => {
+    setCollabNotice(null)
+    setCollab(null)
+    if (sessionRef.current) {
+      try { sessionRef.current.destroy() } catch { /* ignore */ }
+      sessionRef.current = null
+    }
+    if (standaloneRef.current) return false
+    const rawTag = (etagProp ?? '').replace(/^"|"$/g, '')
+    if (!rawTag) {
+      // ETag without a loaded file: stay solo (same rule as xlsx noetag path).
+      setCollabNotice({ kind: 'noetag', text: '파일 정보를 확인하지 못했습니다. 다시 연결해 보세요.' })
+      return false
+    }
+    const me = readCollabUser()
+    const role: 'edit' | 'viewer' = editing ? 'edit' : 'viewer'
+    let info: { roomId: string; lastHash: string; epoch: string; stale?: unknown; code?: unknown }
+    try {
+      info = await collabApi.session(path, { knownHash: rawTag, strict: true })
+    } catch (e) {
+      const code = (e as { code?: unknown })?.code
+      if (code === 'stale_client' || code === 'stale_room' || code === 'external_change' || code === 'epoch_mismatch') {
+        setCollabNotice({ kind: 'stale', text: '공유 상태가 어긋났습니다. 디스크 기준으로 다시 열어 주세요.' })
+        return false
+      }
+      setCollabNotice({ kind: 'error', text: '공유 방에 연결하지 못했습니다.' })
+      return false
+    }
+    if ((info as { stale?: unknown }).stale) {
+      setCollabNotice({ kind: 'stale', text: '공유 상태가 어긋났습니다. 디스크 기준으로 다시 열어 주세요.' })
+      return false
+    }
+    const user = {
+      name: (me?.name ?? '').trim() || 'user',
+      color: me?.color || '#2563eb',
+      id: me?.id,
+      role: (role === 'viewer' ? 'viewer' : 'collaborator') as 'viewer' | 'collaborator',
+    }
+    setCollab({
+      roomId: info.roomId,
+      baseHash: info.lastHash,
+      epoch: info.epoch ?? '',
+      serverUrl: collabServerUrl(),
+      user,
+      role,
+      joined: false,
+    })
+    ensureCollabIdentity()
+    return true
+  }, [path, editing, standalone, etagProp])
+
+  useEffect(() => {
+    let dead = false
+    void (async () => {
+      const ok = await joinDocxRoom()
+      if (!ok || dead) return
+    })()
+    return () => {
+      dead = true
+    }
+  }, [joinDocxRoom, joinKey])
+  // lib Yjs session + startYjsCollaboration. Start only after the initial document load,
+  // or an empty editor would seed the room and wipe the disk content.
+  const [docReady, setDocReady] = useState(false)
+  useEffect(() => {
+    const c = collab
+    const roomKey = c && !standaloneRef.current ? c.roomId + ':' + c.epoch : null
+    if (!c || !roomKey || !docReady) return
+    const el = wrapRef.current?.querySelector('docx-editor') as unknown as {
+      startYjsCollaboration?: (session: CollabSession, opts: { documentId: string; initializeIfEmpty?: boolean }) => void
+    } | null
+    if (!el || typeof el.startYjsCollaboration !== 'function') return
+    let dead = false
+    // One session per room+epoch; reuse across StrictMode remounts. Handlers attach fresh every run.
+    let session = sessionRef.current
+    if (!session || sessionKeyRef.current !== roomKey) {
+      try {
+        sessionRef.current?.destroy()
+      } catch { /* ignore */ }
+      try {
+        session = createCollabSession({
+          roomId: c.roomId,
+          provider: createDocxTapProvider(c.serverUrl, c.roomId, {}),
+          user: {
+            name: c.user.name,
+            color: c.user.color,
+            role: c.role === 'edit' ? 'collaborator' : 'viewer',
+            ...(typeof c.user.id === 'string' && c.user.id ? { userId: c.user.id } : {}),
+          },
+        })
+      } catch (e) {
+        try { console.error('[docx-collab] session setup failed', e) } catch { /* ignore */ }
+        setCollabNotice({ kind: 'error', text: '공유 세션을 시작하지 못했습니다.' })
+        return undefined
+      }
+      sessionRef.current = session
+      sessionKeyRef.current = roomKey
+      startedYjsRef.current = null
+    }
+    const live = session
+    const offPeers = live.on('peers', (list) => {
+      if (dead) return
+      const me = live.clientId
+      setDocxPeople(
+        (list as Array<{ clientId?: unknown; userName?: unknown; userColor?: unknown; role?: unknown }>)
+          .map((py) => ({
+            clientId: typeof py.clientId === 'number' ? py.clientId : -1,
+            name: typeof py.userName === 'string' ? py.userName : 'user',
+            color: typeof py.userColor === 'string' ? py.userColor : '#888888',
+            self: py.clientId === me,
+            role: typeof py.role === 'string' ? py.role : undefined,
+          }))
+          .filter((py) => py.clientId >= 0),
+      )
+    })
+    const offSynced = live.on('synced', (v) => {
+      if (dead || !v) return
+      setCollab((prev) => (prev && !prev.joined ? { ...prev, joined: true } : prev))
+    })
+    // Start Yjs on ready (gate open, canWrite true). The lib opens the gate right AFTER
+    // emitting synced, so starting on synced races canWrite and throws for editors.
+    // 'ready' also fires on the grace path when a fresh room never completes the
+    // handshake, so drive joined + startYjs here (synced alone is not reliable).
+    const offReady = live.on('ready', () => {
+      if (dead) return
+      setCollab((prev) => (prev && !prev.joined ? { ...prev, joined: true } : prev))
+      if (startedYjsRef.current === roomKey) return
+    void (async () => {
+      try {
+        if (!editingRef.current) {
+          // Viewer-first: wait until the editor seeds the room (lib throws otherwise).
+          const ok = await waitDocxSeeded(c.roomId)
+          if (dead || !ok) return
+        }
+        if (dead) return
+        el.startYjsCollaboration(live, { documentId: path, initializeIfEmpty: editingRef.current })
+        startedYjsRef.current = roomKey
+        } catch (e) {
+          try { console.error('[docx-collab] startYjs failed', e) } catch { /* ignore */ }
+        if (!dead) setCollabNotice({ kind: 'error', text: '공유 편집 시작에 실패했습니다.' })
+        }
+      })()
+    })
+    return () => {
+      dead = true
+      offPeers()
+      offSynced()
+      offReady()
+    }
+  }, [collab?.roomId, collab?.epoch, docReady, path, waitDocxSeeded])
+
+  useEffect(() => {
+    return () => {
+      if (sessionRef.current) {
+        try {
+          sessionRef.current.destroy()
+        } catch {
+          /* ignore */
+        }
+        sessionRef.current = null
+      }
+    }
+  }, [])
   const [comments, setComments] = useState<DocxComment[]>([])
   const [showComments, setShowComments] = useState(false)
   const [author, setAuthor] = useState(() => {
@@ -1379,6 +1671,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
       .then(() => {
         // 로드 직후 모델은 깨끗하다 (이전 dirty 잔재 무시).
         setDocDirty(false)
+        setDocReady(true)
         // 렌더가 자리 잡은 뒤 떠있는 텍스트상자를 앵커 좌표에 배치한다 (보기/편집 공통).
         timer = setTimeout(() => {
           if (cancelled || !wrapRef.current) return
@@ -1409,6 +1702,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     setLaidOut(0)
     laidOutRef.current = 0
     setDocDirty(false)
+    setDocReady(false)
   }, [data])
 
   // 리플로우(리사이즈·줌·편집 변경)되면 앵커 배치를 다시 맞춘다.
@@ -1470,26 +1764,98 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   }, [save, editing])
   // B1(b): officeSaveRequest는 window 전역이다. 편집이 아닐 때 듣으면 편집 진입 전이나
   // 보기 화면에서 떠오른 저장이 XLSX 편집 세션과 엮인다. 편집 중에만 등록한다.
+  // B1: flush request carries requestId; only the matching done acks (same pattern as pptx/xlsx).
+  // B2: clean-ack when nothing unsaved (server re-checks docDirty).
   useEffect(() => {
     if (!editing) return
-    // C5-3 standalone(첨부 편집): 부모 저장 이벤트를 무시한다 (saver 경로만 사용).
+    // C5-3 standalone: ignore parent events, saver path is used.
     if (standaloneRef.current) return
-    const onSave = () => {
+    const onSave = (e: Event) => {
+      const fid = (e as CustomEvent<OfficeSaveRequestDetail>).detail?.flushRequestId
+      const flushId = typeof fid === 'string' && fid.length > 0 ? fid : undefined
+      // B2: flush request but nothing unsaved -> immediate ok.
+      if (flushId && !markDocxDirty.current) {
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: flushId } }),
+        )
+        return
+      }
+      if (flushId) pendingFlushIdRef.current = flushId
       void save()
     }
     window.addEventListener('officeSaveRequest', onSave)
     return () => window.removeEventListener('officeSaveRequest', onSave)
-  }, [save, editing, standalone])
-  // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다 (DOCX는 방이 없다).
+  }, [save, editing, standalone, path])
+  // C6/W0: unsyncable section/page ops are hidden while collaborating (2+ people).
+  // docx lib has no edit-guard hook, so hide the ribbon actions + toast once.
+  const DOCX_UNSYNCED_ACTION_IDS: readonly string[] = [
+    'page-setup-dialog',
+    'margins',
+    'orientation',
+    'page-size',
+    'columns',
+    'header',
+    'footer',
+    'page-number',
+    'header-from-top',
+    'footer-from-bottom',
+    'header-footer-link',
+    'header-footer-close',
+    'header-footer-go-header',
+    'header-footer-go-footer',
+    'header-footer-previous',
+    'header-footer-next',
+    'different-first-page',
+    'different-odd-and-even-pages',
+    'watermark',
+    'track-changes',
+    'next-page-section-break',
+    'continuous-section-break',
+    'even-page-section-break',
+    'odd-page-section-break',
+  ]
+  // C6/W0: lib React wrapper가 리렌더 때마다 hiddenActions prop을 Element에
+  // 그대로 덮어쓴다(prop 없으면 []로 리셋). 그래서 imperative set 대신 prop으로 건넨다.
+  const docxHiddenActions = useMemo(() => {
+    const others = (docxPeopleRef.current ?? []).filter((p) => !p.self).length
+    if (!collab?.joined || !editing || others < 1) return [] as readonly string[]
+    return DOCX_UNSYNCED_ACTION_IDS
+  }, [collab?.joined, collab?.roomId, editing, docxPeople])
+  useEffect(() => {
+    const others = docxPeopleRef.current.filter((p) => !p.self).length
+    const roomKey = collab?.joined ? collab.roomId : null
+    if (!collab?.joined || !editing || others < 1) {
+      guardToastedRoomRef.current = null
+      return
+    }
+    // Toast once per room.
+    if (guardToastedRoomRef.current !== roomKey) {
+      guardToastedRoomRef.current = roomKey
+      showToast.warning('동시편집 중에는 구역·페이지 설정을 바꿀 수 없습니다')
+    }
+  }, [collab?.joined, collab?.roomId, editing, docxPeople])
+  // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
+  // C6/W0-7: 살아있는 방에서는 roomId/clientId/baseHash를 함께 보내야 PUT이 받는다.
   useEffect(() => {
     const onEmbed = (e: Event) => {
       const d = (e as CustomEvent<EmbedDetail>).detail
       if (!d?.file || d.hostPath !== path) return
+      const room = collabRef.current
       void runOfficeEmbed(d.file, {
         hostPath: path,
         kind: 'docx',
+        roomId: room?.roomId,
+        clientId: sessionRef.current?.clientId,
+        getBaseHash: () => collabRef.current?.baseHash,
+        isViewer: room?.role === 'viewer',
         saveFirst: () => saveBeforeEmbed(path, editing),
-        reload: () => {},
+        reload: () => {
+          // 서버가 방을 리셋했으므로 세션을 버리고 다시 붙는다.
+          try { sessionRef.current?.destroy() } catch { /* ignore */ }
+          sessionRef.current = null
+          startedYjsRef.current = null
+          setJoinKey((k) => k + 1)
+        },
       })
     }
     window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
@@ -1530,30 +1896,71 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="docxengine-host relative h-full min-h-[480px]">
+      {(collabNotice || mineBytes) && (
+        <div data-testid="docx-collab-notice" className="absolute left-2 right-2 top-2 z-30 flex items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-2 text-xs shadow-sm">
+          <span className="flex-1">{collabNotice ? collabNotice.text : '저장하지 못한 내용이 있습니다. 내 사본을 내려받으세요.'}</span>
+          {mineBytes && (
+            <button
+              type="button"
+              className="shrink-0 underline underline-offset-2 hover:text-amber-500"
+              onClick={() => {
+                try {
+                  const blob = new Blob([mineBytes as unknown as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+                  const url = URL.createObjectURL(blob)
+                  const link = document.createElement('a')
+                  const base = (fileName ?? 'document.docx').replace(/\.docx$/i, '')
+                  link.href = url
+                  link.download = `${base}.mine.docx`
+                  document.body.appendChild(link)
+                  link.click()
+                  link.remove()
+                  setTimeout(() => URL.revokeObjectURL(url), 10000)
+                } catch {
+                  /* ignore */
+                }
+              }}
+            >
+             내 사본 다운로드
+            </button>
+          )}
+          <button
+            type="button"
+            className="shrink-0 underline underline-offset-2 hover:text-muted-foreground"
+            onClick={() => { setCollabNotice(null); }}
+          >
+            닫기
+          </button>
+        </div>
+      )}
       <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} />
       <div className="flex h-full min-h-0">
         <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
-            <WordEditor
-              ref={setHandle}
-              readOnly={!editing}
-              showToolbar
-              theme={appTheme}
-              ribbonAddIns={attachAddIns}
+              <WordEditor
+                ref={setHandle}
+                readOnly={!editing}
+                showToolbar
+                theme={appTheme}
+                ribbonAddIns={attachAddIns}
+                hiddenActions={docxHiddenActions}
               onDocumentChange={scheduleRelayout}
               onDirtyChange={(d) => {
-                if (standaloneRef.current) dirtyRef.current = !!d
+                dirtyRef.current = !!d
+                markDocxDirty.current = !!d
                 setDocDirty(d)
               }}
               onDocumentError={(e) => setError(e instanceof Error ? e.message : String(e))}
             />
           </Suspense>
         </div>
-        {docxTitleSlot != null &&
+          {shouldShowPresence(collab?.joined ?? false, docxPeople.length) && docxTitleSlot != null &&
           createPortal(
-            // G2: DOCX는 동시편집이 없어 항상 빈 목록 — 표시는 없고 testid 자리만 유지.
+            // G2: docx titlebar slot shows collaborators (same rule as pptx/xlsx).
             <CollabPresenceShell>
-              <></>
+              <CollabPresenceBar
+                dropAlign="right"
+                peers={groupXlsxPeopleForView(docxPeople)}
+              />
             </CollabPresenceShell>,
             docxTitleSlot,
           )}
@@ -4051,7 +4458,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
               동시편집 연결 중 — 판정이 끝나면 편집이 열립니다
             </div>
           )}
-          {collab && xlsxPeople.length > 0 && xlsxTitleSlot != null &&
+          {shouldShowPresence(collab?.joined ?? false, xlsxPeople.length) && xlsxTitleSlot != null &&
             createPortal(
               // G2: 사용자 표시는 lib 타이틀바 actions 슬롯 한 곳에만 둔다.
               <CollabPresenceShell>

@@ -59,3 +59,13 @@ export function peerInitials(name: string): string {
   if (parts.length >= 2) return ((parts[0]![0] ?? '') + (parts[1]![0] ?? '')).toUpperCase()
   return t.slice(0, 2).toUpperCase()
 }
+
+/**
+ * R-ribbon 회귀(C6): 타이틀바 actions 슬롯에는 joined + 피어 1명 이상일 때만
+ * presence를 꽂는다. 슬롯 존재만으로 빈 Shell/Bar를 마운트하면(px-3 py-1
+ * border-b 빈 막대) 타이틀바 레이아웃이 밀려 리본 스냅샷이 깨진다.
+ * xlsx/docx/PPT 공용 게이트 — 형식별 복사를 두지 않는다.
+ */
+export function shouldShowPresence(joined: boolean, peopleCount: number): boolean {
+  return joined && peopleCount > 0
+}

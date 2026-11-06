@@ -132,7 +132,7 @@ export interface CollabRoom {
    * lib 클라이언트는 type 100 room meta 를 모른다 ⇒ xlsx 방은 meta 방송을 하지 않는다
    * (외부 변경은 저장 시 409 로 판정한다).
    */
-  kind: 'pptx' | 'xlsx' | 'other'
+  kind: RoomKind
   externalChanged: boolean
   /** 4-0 가드용: 마지막으로 계측한 디스크 이미지 수 (undefined=미계측). */
   lastImageCounts: { media: number; refs: number } | null | undefined
@@ -191,11 +191,17 @@ slide?: number
 
 export const rooms = new Map<string, CollabRoom>()
 
-/** X1b: 파일 종류별로 방의 동작이 다르다(pptx = 앱 프로토콜, xlsx = lib 프로토콜). */
-export function roomKindFor(absPath: string): 'pptx' | 'xlsx' | 'other' {
+/** X1b: 파일 종류별로 방의 동작이 다르다(pptx = 앱 프로토콜, xlsx/docx = lib 프로토콜). */
+export type RoomKind = 'pptx' | 'xlsx' | 'docx' | 'other'
+export function roomKindFor(absPath: string): RoomKind {
   if (/\.xlsx$/i.test(absPath)) return 'xlsx'
   if (/\.pptx$/i.test(absPath)) return 'pptx'
+  if (/\.docx$/i.test(absPath)) return 'docx'
   return 'other'
+}
+/** lib이 동기화를 소유하는 방(xlsx/docx). 앱 Y.Doc 방(pptx)과 규칙이 다르다. */
+export function isLibRoomKind(kind: RoomKind | string | undefined): boolean {
+  return kind === 'xlsx' || kind === 'docx'
 }
 /** path(abs 정규화) -> roomId. 같은 파일을 두 room이 열지 않게 한다. */
 const pathIndex = new Map<string, string>()
@@ -352,10 +358,10 @@ function encodeMeta(room: CollabRoom): Uint8Array {
 
 function broadcastMeta(room: CollabRoom): void {
   if (room.conns.size === 0) return
-  // X1b(P0-1(다)): XLSX 방의 소켓은 lib(ooxml-ui xlsx) 클라이언트다.
+  // X1b(P0-1(다)): XLSX/DOCX 방의 소켓은 lib(ooxml-ui) 클라이언트다.
   // 이 클라이언트는 type 100 room meta 를 모른다 ⇒ 보내지 않는다.
-  // XLSX 의 외부 변경은 **저장 시 서버 판정(409 conflict_external)** 으로 알린다.
-  if (room.kind === 'xlsx') return
+  // 외부 변경은 **저장 시 서버 판정(409 conflict_external)** 으로 알린다.
+  if (isLibRoomKind(room.kind)) return
   broadcast(room, encodeMeta(room))
 }
 
@@ -986,13 +992,13 @@ export function checkSave(
   roomId: string,
   clientId: number,
   byteLength: number,
-  opts?: { kind?: 'pptx' | 'xlsx' | 'other' },
+  opts?: { kind?: RoomKind },
 ): SaveCheck {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, status: 404, error: 'No such room', code: 'no_room' }
   // X1b: XLSX 방은 lib(ooxml-ui)가 소유한다 → owner/seeded 개념이 없다.
   // 저장은 낙관적 잠금(base hash) 으로만 판정한다.
-  if (opts?.kind !== 'xlsx') {
+  if (!isLibRoomKind(opts?.kind)) {
     if (!room.seeded) {
       return { ok: false, status: 409, error: 'Room has no synced content yet', code: 'not_seeded' }
     }
@@ -1319,7 +1325,7 @@ export function clientRoleInRoom(roomId: string, clientId: number): 'view' | 'ed
 export async function applySave(
   roomId: string,
   bytes: Uint8Array,
-  opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: 'pptx' | 'xlsx' | 'other' },
+  opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: RoomKind },
 ): Promise<
   | { newHash: string }
   | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' }
@@ -1327,14 +1333,14 @@ export async function applySave(
 > {
   const room = rooms.get(roomId)
   if (!room) throw { message: 'No such room', statusCode: 404 }
-  // X1c: xlsx 방에서는 baseHash 가 **필수**다. 없으면 잠금이 아예 건너뛰어져
+  // X1c: lib 방(xlsx/docx)에서는 baseHash 가 **필수**다. 없으면 잠금이 아예 건너뛰어져
   // 옛 바이트가 늦게 도착해 저장을 덮어쓸 수 있다(P0-3).
-  if (opts?.kind === 'xlsx' && !opts?.baseHash) {
+  if (isLibRoomKind(opts?.kind) && !opts?.baseHash) {
     throw { message: 'Missing base hash (optimistic lock required)', statusCode: 400, code: 'missing_base_hash' }
   }
   // X2a: 보기 모드(lib viewer) 참가자의 저장은 거부한다(D40 과 같은 원칙).
   // clientId 는 클라이언트가 보고하는 값이라 HTTP 저장의 완전한 보안 경계는 아니다(보고서 참조).
-  if (opts?.kind === 'xlsx' && opts.clientId !== undefined) {
+  if (opts && isLibRoomKind(opts.kind) && opts.clientId !== undefined) {
     const role = readLibPresence(room.awareness.getStates().get(opts.clientId) as Record<string, unknown> | undefined)?.role
     if (role === 'viewer') {
       throw { message: 'View-only participant cannot save', statusCode: 403, code: 'view_only' }
@@ -1348,7 +1354,7 @@ export async function applySave(
     //    클라이언트는 방 상태를 다시 직렬화해 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
     // 2) 디스크가 방의 해시와 다르면 → 외부 변경(AI 편집·보기 모드 코멘트).
     //    재시도하지 않는다(덮어쓰면 조용한 유실이 된다).
-    if (opts?.kind === 'xlsx') {
+    if (isLibRoomKind(opts?.kind)) {
       if (opts?.baseHash && opts.baseHash !== room.lastHash) {
         logger.warn(
           `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
