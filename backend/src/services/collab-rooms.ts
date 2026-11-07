@@ -1489,13 +1489,16 @@ export async function applySave(
       }
     }
     const disk = await currentDiskHash(roomId)
-    // X1b(P0-3/P0-4): 낙관적 잠금(**XLSX 경로만**).
-    // PPT 경로는 기존 판정(디스크 vs room.lastHash → conflict)을 그대로 쓴다.
+    // X1b(P0-3/P0-4): 낙관적 잠금. lib 방(xlsx/docx)은 기존대로, P0-2부터
+    // PPT 방도 baseHash가 있으면 방 해시와 대조한다 (낡은 탭의 덮어쓰기 차단).
+    // baseHash가 없으면 기존 디스크 판정만 유지한다 (하위 호환).
+    // epoch 별도 대조는 두지 않는다: epoch이 바뀌는 리셋은 lastHash도 함께
+    // 갱신하므로(바이트가 같으면 무해) baseHash 대조로 충분하다.
     // 1) baseHash 가 방의 현재 해시와 다르면 → 방이 앞서갔다(다른 참가자가 먼저 저장).
     //    클라이언트는 방 상태를 다시 직렬화해 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
     // 2) 디스크가 방의 해시와 다르면 → 외부 변경(AI 편집·보기 모드 코멘트).
     //    재시도하지 않는다(덮어쓰면 조용한 유실이 된다).
-    if (isLibRoomKind(opts?.kind)) {
+    if (isLibRoomKind(opts?.kind) || opts?.kind === 'pptx') {
       if (opts?.baseHash && opts.baseHash !== room.lastHash) {
         logger.warn(
           `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
