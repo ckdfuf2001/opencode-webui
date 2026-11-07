@@ -1367,3 +1367,10 @@ E21만의 문제가 아니다. 근거:
 - 중첩 OLE(embed-docx.docx, live w:object): 저장 200 + 파트 73615→73712 + 안쪽 document.xml 마커 포함(strip 포함) + 안쪽 임베딩 보존(word/embeddings/Microsoft_Word_Document.docx, w:object 유지). 조용한 유실 아님. 과거 실패 판정은 앵커 미스 시절 + raw-includes 단편화 오판이었음. K-dbl-nested로 회귀 고정.
 - URL: D64(/edit/ + /-/) 유지가 현재 스킴. 사용자 지시 /{상위}/{하위} 전환(D71)은 C6c-a 이후로 연기됨. GET /api/collab/resolve 신설(서버가 단일 진실, shared/src/lib/editPath.ts) — 테스트는 서버 판정으로만 URL을 해석한다(partPathOf/정규식 단언 제거). 한글·공백 왕복은 단위 테스트로 증명, 라우트 우선순위·/edit/ 리다이렉트는 D71로 이월.
 - 라벨 dblclick: 캡션이 rect 바깥이라 컨테이너 캡처에 안 걸림 → 캡션 자체 onDoubleClick + pointer-events:auto/zIndex(조상 none 상속·lib 토스트 가림 대응). pptx는 lib 호환성 토스트를 닫고 누른다. K-dbl-docx는 시트 XML 텍스트 단언으로 강화(바이트 변화만 보지 않음).
+
+## C6c-a P0 (2026-11-07)
+- P0-1: 부모 경로 단위 저장 직렬화. 부모 방+모든 파트 방이 같은 체인 공유(saveChains, parentChainKey). flush 응답 저장(pendingFlush 보유)은 체인을 건너뛴다(교착 방지 — 체인을 잡은 파트 저장이 그 응답을 기다림). red: 동시 저장 3라운드 중 1회 유실 → fix 후 5/5 green.
+- P0-2: PPT 낡은 저장 차단. baseHash-vs-room 대조를 pptx에도 적용(conflict_room). epoch 별도 대조 없음 — epoch이 바뀌는 리셋은 lastHash도 함께 갱신하므로(바이트가 같으면 무해) baseHash로 충분. red: 낡은 baseHash 저장 성공 → fix 후 conflict_room.
+- P0-3: 리셋 빈도 계측(resetStats total/disruptive/lastAt, /api/collab/rooms 노출) + 무접속 리셋 스킵(lastHash adopt만, 방 유지). 기존 테스트 1건이 옛 동작(항상 dispose)을 단언해서 새 요구사항에 맞게 갱신. defer(조용한 구간/Done/마지막 퇴장)는 미구현 — 미반영 구간 표시 UI도 그에 묶여 보류. 근거: 현재 미반영 구간은 저장 직후 부모 리로드까지 수초이며 EMBED_DONE 토스트+재조회가 이미 알림+반영을 담당한다.
+- P0-4: subtle 없는 http도 strict. knownHash 없이 strict만 오면 서버가 디스크/파트 해시를 직접 구해 판정하고 serverHash로 돌려준다. 클라이언트는 serverHash를 origPartHash 대신 쓴다(AttachmentEditor). red: serverHash 없음 → fix 후 2/2.
+- 중첩 OLE와 P0-1/P0-2는 원인 다름(중첩은 테스트 단언+앵커 문제였고 저장 경로는 정상). 같이 고칠 것 없음.
