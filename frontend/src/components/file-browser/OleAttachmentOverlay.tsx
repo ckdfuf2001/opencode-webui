@@ -177,6 +177,42 @@ function findAnchorEl(
 }
 
 /**
+ * 도형 아래 파일명 캡션(pointer-events:none이라 lib 캔버스로 떨어진다) 위인지
+ * 실측 박스로 판정한다. 커버 안 라벨은 도형 rect로 잡히므로 제외한다.
+ */
+function captionPartAt(container: HTMLElement, entries: OleEmbeddingRef[], x: number, y: number): string | null {
+  let labels: NodeListOf<Element>
+  try {
+    labels = container.querySelectorAll('[data-testid="ole-label"]')
+  } catch {
+    return null
+  }
+  const c = container.getBoundingClientRect()
+  for (const el of Array.from(labels)) {
+    try {
+      const e = el as HTMLElement
+      if (e.closest('[data-testid="ole-cover"]')) continue
+      const r = e.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) continue
+      const lx = r.left - c.left
+      const ly = r.top - c.top
+      if (x < lx || x > lx + r.width || y < ly || y > ly + r.height) continue
+      const title = e.getAttribute('title') ?? e.textContent ?? ''
+      const name = title.trim()
+      if (!name) continue
+      const hit = entries.find((en) => {
+        const dn = en.displayName ?? en.fallbackName
+        return dn === name || dn.includes(name) || name.includes(dn)
+      })
+      if (hit) return hit.partName
+    } catch {
+      /* 다음 라벨 */
+    }
+  }
+  return null
+}
+
+/**
  * C5-1 후속 S2 + C5-2: 기존 OLE 첨부 오버레이를 lib 도형 위에 앵커한다.
  * - 항목마다 도형 위에 작은 아이콘 (hover → 파일명, dblclick → 열기/다운로드).
  * - C6b: pptx는 lib 도형 본문 dblclick도 컨테이너 캡처에서 연다 (lib no-op).
@@ -195,8 +231,10 @@ export default function OleAttachmentOverlay({
 }) {
   const [entries, setEntries] = useState<OleEmbeddingRef[]>([])
   // 앵커 사각형 + lib placeholder 여부 (placeholder면 미리보기 카드로 덮는다).
+  // captionAbove: 아래에 캡션이 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면
+  // 캡처 리스너가 못 받는다).
   const [posMap, setPosMap] = useState<
-    Record<string, { x: number; y: number; w: number; h: number; cover: boolean }>
+    Record<string, { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean }>
   >({})
   const rootRef = useRef<HTMLDivElement | null>(null)
   // P0-3: 팝업 차단 시 대체 링크를 보여준다 (조용한 무응답 금지).
@@ -223,6 +261,11 @@ export default function OleAttachmentOverlay({
   }, [data])
 
   // 앵커 추적: 스크롤·리사이즈·DOM 변경 때 재계산 (폴링 없음).
+  // CAPTION_PAD: 컨테이너 캡처 hit-test가 도형 rect 아래로 넓히는 폭 (캡션 영역).
+  const CAPTION_PAD = 32
+  // CAPTION_H: 캡션 박스 높이+간격. 아래에 안 들어가면 위로 뒤집는다
+  // (컨테이너 밖으로 나가면 캡처 리스너가 못 받는다).
+  const CAPTION_H = 30
   useEffect(() => {
     if (!anchor || entries.length === 0) {
       setPosMap({})
@@ -236,18 +279,22 @@ export default function OleAttachmentOverlay({
       if (dead) return
       try {
         const c = container.getBoundingClientRect()
-        const next: Record<string, { x: number; y: number; w: number; h: number; cover: boolean }> = {}
+        type PosEntry = { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean }
+        const next: Record<string, PosEntry> = {}
         for (const entry of entries) {
           const hit = findAnchorEl(container, anchor, entry)
           if (!hit) continue
           const r = hit.el.getBoundingClientRect()
+          const y = Math.max(0, Math.round(r.top - c.top))
+          const h = Math.max(0, Math.round(r.height))
           next[entry.partName] = {
             x: Math.max(0, Math.round(r.left - c.left)),
-            y: Math.max(0, Math.round(r.top - c.top)),
+            y,
             w: Math.max(0, Math.round(r.width)),
-            h: Math.max(0, Math.round(r.height)),
+            h,
             // lib가 렌더를 포기한 자리(xg-obj-unsupported)는 카드로 덮는다.
             cover: hit.unsupported,
+            captionAbove: y + h + CAPTION_H > c.height && y - CAPTION_H >= 0,
           }
         }
         setPosMap((prev) => {
@@ -299,16 +346,35 @@ export default function OleAttachmentOverlay({
       try {
         const t = e.target as HTMLElement | null
         if (!t || typeof t.closest !== 'function') return
+        const entries = entriesRef.current
+        if (entries.length === 0) return
+        const c = container.getBoundingClientRect()
+        const px = e.clientX - c.left
+        const py = e.clientY - c.top
+        const directHit = typeof t.matches === 'function'
+          && t.matches('button,a,input,select,textarea,[role="button"],[role="dialog"],[data-testid="ole-icon"]')
+        const cap = !directHit ? captionPartAt(container, entries, px, py) : null
+        // 캡션 위면 lib 동작보다 먼저 연다 (직접 interactive 요소를 두드린 경우 제외).
+        if (cap && !directHit) {
+          const capEntry = entries.find((en) => en.partName === cap)
+          const capOpen = openRef.current
+          if (capEntry && capOpen) {
+            e.stopPropagation()
+            e.preventDefault()
+            capOpen(capEntry)
+            return
+          }
+        }
+        // lib 푸터 버튼/링크/입력/다이얼로그 + 우리 칩은 lib 동작을 유지한다.
         if (
           t.closest(
             '[data-testid="ole-icon"],button,a,input,select,textarea,[role="button"],[role="dialog"]'
           )
         )
           return
-        const entries = entriesRef.current
-        if (entries.length === 0) return
-        const c = container.getBoundingClientRect()
-        const part = findOleEntryAtPoint(posMapRef.current, e.clientX - c.left, e.clientY - c.top)
+        // 도형 본문 dblclick → lib이 no-op이므로 여기서 연다.
+        // rect 아래쪽에 캡션 높이만큼 패딩을 둔다 (근접 허용치).
+        const part = findOleEntryAtPoint(posMapRef.current, px, py, CAPTION_PAD)
         if (!part) return
         const entry = entries.find((en) => en.partName === part)
         const open = openRef.current
@@ -463,31 +529,26 @@ export default function OleAttachmentOverlay({
   const fallback = entries.filter((e) => !(anchor != null && posMap[e.partName] != null))
   const displayName = (entry: OleEmbeddingRef): string => entry.displayName ?? entry.fallbackName
 
-  // 아이콘 바로 아래 가운데 정렬 파일명 라벨.
-  // C6c-a0: 라벨 dblclick으로도 열린다. 캡션은 도형 rect 바깥(아래 4px)이라
-  // 컨테이너 캡처 hit-test에 걸리지 않으므로 자체 핸들러를 둔다.
-  // lib 캔버스/토스트 레이어가 겹쳐 있어도 라벨이 직접 맞도록
-  // pointer-events를 명시한다 (조상 none 상속이면 클릭을 통과시킨다).
-  const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number }): React.ReactNode => {
+  // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
+  // dblclick은 컨테이너 캡처가 잡는다: rect 아래쪽 패딩 + 실측 박스.
+  // 아래에 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면 캡처가 못 받는다).
+  const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number; captionAbove?: boolean }): React.ReactNode => {
     const name = displayName(entry)
+    const above = !!pos.captionAbove
     return (
       <div
         key={entry.partName}
         data-testid="ole-label"
         title={name}
         aria-hidden="true"
-        onDoubleClick={() => void openOrDownload(entry)}
         style={{
           position: 'absolute',
           left: pos.x + pos.w / 2,
-          top: pos.y + pos.h + 4,
+          top: above ? pos.y - 30 : pos.y + pos.h + 4,
           transform: 'translateX(-50%)',
           maxWidth: 240,
-          cursor: 'pointer',
-          pointerEvents: 'auto',
-          zIndex: 30,
         }}
-        className="z-10 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
+        className="pointer-events-none z-10 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
       >
         {name}
       </div>
