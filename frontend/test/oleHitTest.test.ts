@@ -44,4 +44,23 @@ describe('findOleEntryAtPoint (pptx ole dblclick routing)', () => {
   it('빈 맵이면 null이다', () => {
     expect(findOleEntryAtPoint({}, 10, 10)).toBe(null)
   })
+
+  it('padBottom이 있으면 rect 아래 캡션 영역도 잡는다', () => {
+    // rect y=20 h=50 → 아래 70까지. 캡션은 그 아래 ~30px.
+    expect(findOleEntryAtPoint(rects, 50, 85)).toBe(null)
+    expect(findOleEntryAtPoint(rects, 50, 85, 32)).toBe('ppt/embeddings/a.bin')
+    // 기본값(0)이면 기존 동작 그대로다.
+    expect(findOleEntryAtPoint(rects, 50, 85, 0)).toBe(null)
+  })
+
+  it('padBottom 겹침은 원래 면적이 좁은 쪽이 이긴다', () => {
+    const m = {
+      'ppt/embeddings/wide.bin': { x: 0, y: 0, w: 200, h: 20 },
+      'ppt/embeddings/narrow.bin': { x: 0, y: 25, w: 20, h: 20 },
+    }
+    // y=30: 위 rect의 캡션 패드이자 아래 rect의 본문 → 원래 면적이 좁은 아래쪽이 이긴다.
+    expect(findOleEntryAtPoint(m, 10, 30, 32)).toBe('ppt/embeddings/narrow.bin')
+    // x=100: 아래 rect 밖 → 위 rect의 캡션 패드만 걸린다.
+    expect(findOleEntryAtPoint(m, 100, 30, 32)).toBe('ppt/embeddings/wide.bin')
+  })
 })
