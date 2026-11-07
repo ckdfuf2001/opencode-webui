@@ -559,6 +559,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
       }
       if (res.reason === 'conflict') {
         setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
+      } else if (res.reason === 'conflict_room' || res.reason === 'conflict_external') {
+        // P0-2: 낡은 저장은 막고 내 사본을 내려받게 한다 (조용한 유실 방지).
+        setCollabNotice('다른 탭이 먼저 저장했습니다 — 새로고침 후 다시 저장하세요. 내 사본을 내려받으세요.')
+        void offerMineDownloadRef.current?.()
       } else if (res.reason === 'image_loss') {
         // R1/R2: 자동 write-back을 중지하고(epoch당 1회), 다운로드 제안도 1회만.
         // 배너에서 "이미지 삭제 확정 저장"을 누르면 allowImageLoss로 다시 시도한다.
