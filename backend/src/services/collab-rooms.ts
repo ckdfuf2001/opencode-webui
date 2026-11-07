@@ -146,8 +146,6 @@ export interface CollabRoom {
   externalChanged: boolean
   /** 4-0 가드용: 마지막으로 계측한 디스크 이미지 수 (undefined=미계측). */
   lastImageCounts: { media: number; refs: number } | null | undefined
-  /** 저장 직렬화 체인 (room 단위). */
-  saveChain: Promise<void>
   /** 저장 중에는 watcher가 무시한다. */
   saving: boolean
   /** AI 편집이 409로 막힌 마지막 시각 (V7 칩용). */
@@ -585,7 +583,6 @@ function createRoom(
     kind: part ? roomKindForPart(part.part) : roomKindFor(absPath),
     externalChanged: false,
     lastImageCounts: undefined,
-    saveChain: Promise.resolve(),
     saving: false,
     aiBlockedAt: null,
     objects: newRoomObjects(),
@@ -982,6 +979,19 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
 
 export function isOwner(room: CollabRoom, clientId: number): boolean {
   return room.ownerIds.has(clientId)
+}
+
+/**
+ * P0-1: 부모 경로 단위 저장 직렬화 체인. 부모 방과 그 안의 모든 파트 방이
+ * 같은 체인을 공유한다 — 같은 파일을 건드리는 저장이 엇갈려 덮어쓰지 않는다.
+ * flush 응답 저장(pendingFlush 보유 방)은 체인을 타지 않는다: 체인을 잡은
+ * 파트 저장이 그 응답을 기다리므로 같이 타면 교착한다. flush 응답 시점에
+ * 체인 대기자는 곧 그 파트 저장 하나뿐이라 안전하다.
+ */
+const saveChains = new Map<string, Promise<void>>()
+
+function parentChainKey(room: CollabRoom): string {
+  return normalizeAbs(room.part ? room.part.parentAbs : room.path)
 }
 
 /** y-websocket 메시지 처리 (0=sync, 1=awareness). */
@@ -1446,7 +1456,10 @@ export async function applySave(
       throw { message: 'View-only participant cannot save', statusCode: 403, code: 'view_only' }
     }
   }
-  const run = room.saveChain.then(async () => {
+  const chainKey = parentChainKey(room)
+  // flush 응답 저장은 체인을 건너뛴다 (교착 방지 — 위 주석 참조).
+  const prev = room.pendingFlush ? Promise.resolve() : (saveChains.get(chainKey) ?? Promise.resolve())
+  const run = prev.then(async () => {
     // C6c: 파트 방 저장 전에 부모를 깨끗하게 만든다 (PUT /embed과 동일한 순서).
     // 부모에 열린 에디터가 있으면 flush를 강제하고, 미저장이 stranded면 막는다.
     if (room.part) {
@@ -1596,10 +1609,12 @@ export async function applySave(
     const r: { newHash: string } = { newHash: newHash }
     return r
   })
-  room.saveChain = run.then(
-    () => undefined,
-    () => undefined,
-  )
+  if (!room.pendingFlush) {
+    saveChains.set(chainKey, run.then(
+      () => undefined,
+      () => undefined,
+    ))
+  }
   return run
 }
 
@@ -1780,6 +1795,7 @@ export function resetCollabForTests(): void {
   for (const room of [...rooms.values()]) disposeRoom(room)
   rooms.clear()
   pathIndex.clear()
+  saveChains.clear()
   roomTtlMs = 30_000
 }
 
