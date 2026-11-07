@@ -994,6 +994,29 @@ function parentChainKey(room: CollabRoom): string {
   return normalizeAbs(room.part ? room.part.parentAbs : room.path)
 }
 
+/**
+ * P0-3: 방 리셋 빈도 계측. total=수행된 리셋, disruptive=접속자를 끊은 리셋
+ * (무접속 리셋은 건너뛰므로 수행된 리셋은 항상 disruptive다).
+ */
+export interface RoomResetStats {
+  total: number
+  disruptive: number
+  lastAt: number
+}
+const resetStatsMap = new Map<string, RoomResetStats>()
+
+export function resetStats(roomId: string): RoomResetStats | null {
+  return resetStatsMap.get(roomId) ?? null
+}
+
+function noteReset(roomId: string, conns: number): void {
+  const st = resetStatsMap.get(roomId) ?? { total: 0, disruptive: 0, lastAt: 0 }
+  st.total += 1
+  if (conns > 0) st.disruptive += 1
+  st.lastAt = Date.now()
+  resetStatsMap.set(roomId, st)
+}
+
 /** y-websocket 메시지 처리 (0=sync, 1=awareness). */
 export function wsMessage(roomId: string, ws: unknown, data: Uint8Array): void {
   const room = rooms.get(roomId)
@@ -1248,6 +1271,7 @@ export function resetRoomFromDisk(
   if (room.ownerConn === null || room.ownerConn !== conn) return { ok: false, reason: 'not_owner' }
   const diskHash = room.lastHash
   // 전원 종료 → 재입장. 이 시점에 owner는 접속 중이므로 디스크 == lastHash가 정상.
+  noteReset(roomId, room.conns.size)
   for (const ws of [...room.conns.keys()]) {
     try {
       const sock = ws as { close?: (code?: number, reason?: string) => void }
@@ -1271,6 +1295,12 @@ export function resetRoomFromDisk(
 export function resetRoomByServer(roomId: string): { ok: true } | { ok: false; reason: 'no_room' } {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, reason: 'no_room' }
+  if (room.conns.size === 0) {
+    // P0-3: 볼 사람 없는 리셋은 건너뛴다. lastHash는 호출자가 이미 adopt했으므로
+    // 방 객체·watcher를 유지하는 편이 다음 입장에 유리하다 (계측에도 잡지 않는다).
+    return { ok: true }
+  }
+  noteReset(roomId, room.conns.size)
   for (const ws of [...room.conns.keys()]) {
     try {
       const sock = ws as { close?: (code?: number, reason?: string) => void }
@@ -1773,6 +1803,8 @@ export interface RoomSummary {
   seeded: boolean
   /** C6c: 하위문서 방의 파트 경로 (파일 방이면 undefined). */
   part?: string
+  /** P0-3: 방 리셋 빈도 (없으면 리셋된 적 없음). */
+  resets?: RoomResetStats
 }
 
 export function listRooms(): RoomSummary[] {
@@ -1788,6 +1820,7 @@ export function listRooms(): RoomSummary[] {
       participants: roomParticipants(room),
       seeded: room.seeded,
       part: room.part?.part,
+      resets: resetStatsMap.get(room.id),
     })
   }
   return out
@@ -1799,6 +1832,7 @@ export function resetCollabForTests(): void {
   rooms.clear()
   pathIndex.clear()
   saveChains.clear()
+  resetStatsMap.clear()
   roomTtlMs = 30_000
 }
 
