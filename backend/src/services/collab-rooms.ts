@@ -1016,8 +1016,8 @@ function parentChainKey(room: CollabRoom): string {
 }
 
 /**
- * P0-3: 방 리셋 빈도 계측. total=수행된 리셋, disruptive=접속자를 끊은 리셋
- * (무접속 리셋은 건너뛰므로 수행된 리셋은 항상 disruptive다).
+ * P0-3: 방 리셋 빈도 계측. 무접속 리셋은 dispose되지만 집계에서 제외한다
+ * (수행돼서 기록되는 리셋은 전부 disruptive다).
  */
 export interface RoomResetStats {
   total: number
@@ -1316,12 +1316,10 @@ export function resetRoomFromDisk(
 export function resetRoomByServer(roomId: string): { ok: true } | { ok: false; reason: 'no_room' } {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, reason: 'no_room' }
-  if (room.conns.size === 0) {
-    // P0-3: 볼 사람 없는 리셋은 건너뛴다. lastHash는 호출자가 이미 adopt했으므로
-    // 방 객체·watcher를 유지하는 편이 다음 입장에 유리하다 (계측에도 잡지 않는다).
-    return { ok: true }
-  }
-  noteReset(roomId, room.conns.size)
+  // P0-3(C6c-b): 무접속 방도 예전처럼 dispose한다 (adopt된 lastHash만 가진
+  // 채 방 객체(Y.Doc)가 남으면, 재입장자가 옛 Y 상태를 받아 owner 자동저장으로
+  // 덮어쓸 수 있다). 집계에서만 제외한다 — 수행된 리셋은 전부 disruptive다.
+  if (room.conns.size > 0) noteReset(roomId, room.conns.size)
   for (const ws of [...room.conns.keys()]) {
     try {
       const sock = ws as { close?: (code?: number, reason?: string) => void }
