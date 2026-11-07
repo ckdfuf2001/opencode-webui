@@ -4,8 +4,9 @@ import path from 'path'
 import fs from 'fs/promises'
 import JSZip from 'jszip'
 import { createHash } from 'node:crypto'
+import { Hono } from 'hono'
 
-// files.tsê°€ ëª¨ë“ˆ ë¡œë“œ ì‹œì ì— WORKSPACE_PATHë¥¼ ìº¡ì²˜í•˜ë¯€ë¡œ ì ì¬ importë³´ë‹¤ ë¨¼ì € envë¥¼ ê¹ë‹¤.
+// files.ts°¡ ¸ğµâ ·Îµå ½ÃÁ¡¿¡ WORKSPACE_PATH¸¦ Ä¸Ã³ÇÏ¹Ç·Î ÀûÀç importº¸´Ù ¸ÕÀú env¸¦ ±ñ´Ù.
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'collabstricthttp-'))
 process.env.WORKSPACE_PATH = tmp
 
@@ -13,35 +14,45 @@ const SEED_DIR = path.join(tmp, 'repos', 'pp')
 await fs.mkdir(SEED_DIR, { recursive: true })
 const FIX_HOST = path.resolve('..', 'e2e/collab/fixtures/ole/embed-docx.pptx')
 await fs.copyFile(FIX_HOST, path.join(SEED_DIR, 'host.pptx'))
-const HOST_REL = path.join('repos', 'pp', 'host.pptx')
+const HOST_REL = path.join('pp', 'host.pptx')
+const HOST_FS = path.join('repos', 'pp', 'host.pptx')
 const PART = 'ppt/embeddings/Microsoft_Word_Document.docx'
 
-const {
-  createSession,
-  resetCollabForTests,
-} = await import('../../src/services/collab-rooms')
+const rooms = await import('../../src/services/collab-rooms')
+const { createSession, resetCollabForTests } = rooms
+const { createCollabRoutes } = await import('../../src/routes/collab')
 
 const hostAbs = (...p: string[]) => path.join(tmp, ...p)
 
-async function diskPartHash(): Promise<string> {
-  const buf = await fs.readFile(hostAbs(HOST_REL))
+async function diskPartBytes(): Promise<Buffer> {
+  const buf = await fs.readFile(hostAbs(HOST_FS))
   const zip = await JSZip.loadAsync(buf)
   const f = zip.file(PART)
   if (!f) throw new Error('part missing')
-  return createHash('sha256').update(await f.async('uint8array')).digest('hex')
+  return Buffer.from(await f.async('uint8array'))
 }
 
-/** ë°©ì„ ê±°ì¹˜ì§€ ì•Šê³  ë””ìŠ¤í¬ì˜ íŒŒíŠ¸ë¥¼ ì§ì ‘ ë°”ê¾¼ë‹¤ (ì™¸ë¶€ ë³€ê²½ ì‹œë®¬ë ˆì´ì…˜). */
-async function tamperPartDisk(marker: string): Promise<void> {
-  const file = hostAbs(HOST_REL)
+function partHashOf(b: Uint8Array | Buffer): string {
+  return createHash('sha256').update(b).digest('hex')
+}
+
+/** ¿ÜºÎ º¯°æ ½Ã¹Ä·¹ÀÌ¼Ç: ¹æÀ» °ÅÄ¡Áö ¾Ê°í µğ½ºÅ© ÆÄÆ®¸¦ Á÷Á¢ ¹Ù²Û´Ù. */
+async function tamperDiskPart(marker: string): Promise<void> {
+  const file = hostAbs(HOST_FS)
   const zip = await JSZip.loadAsync(await fs.readFile(file))
   const raw = await zip.file(PART)!.async('uint8array')
   const inner = await JSZip.loadAsync(raw)
   const name = 'word/document.xml'
   const cur = await inner.file(name)!.async('string')
-  inner.file(name, cur.replace(/C5-0 payload|P0X4[A-Z0-9]*/, marker))
+  inner.file(name, cur.replace(/C5-0 payload|P0X5[A-Z0-9]*/, marker))
   zip.file(PART, await inner.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
   await fs.writeFile(file, await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+}
+
+function collabApp(): Hono {
+  const root = new Hono()
+  root.route('/api/collab', createCollabRoutes())
+  return root
 }
 
 beforeEach(() => {
@@ -52,16 +63,32 @@ afterEach(() => {
   resetCollabForTests()
 })
 
-describe('P0-4 strict without knownHash (subtle-less http)', () => {
-  it('ì„œë²„ê°€ ë””ìŠ¤í¬ í•´ì‹œë¡œ strict íŒì • + serverHash ë°˜í™˜', async () => {
-    const s = await createSession(HOST_REL, { part: PART, strict: true })
-    expect(s.stale).toBeFalsy()
-    expect(s.serverHash).toBe(await diskPartHash())
+describe('P0-4 http subtle-less strict (server-issued part ETag)', () => {
+  it('GET /embed°¡ ÆÄÆ® ¹ÙÀÌÆ® ÇØ½Ã¸¦ µ¹·ÁÁØ´Ù', async () => {
+    const app = collabApp()
+    const res = await app.request(`/api/collab/embed?path=${encodeURIComponent(HOST_REL)}&part=${encodeURIComponent(PART)}`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { partHash?: unknown; hash?: unknown }
+    expect(typeof body.partHash).toBe('string')
+    expect(body.partHash).toBe(partHashOf(await diskPartBytes()))
   })
 
-  it('ë°©ì´ ë‚¡ì•˜ìœ¼ë©´ knownHash ì—†ì´ë„ stale_room', async () => {
+  it('GET ETag¸¦ knownHash·Î ¾²¸é µğ½ºÅ© º¯°æ µÚ ¼¼¼ÇÀÌ stale_client´Ù', async () => {
+    // 1) GET: ¹ÙÀÌÆ®¿Í ÇÔ²² ETag¸¦ ¹Ş´Â´Ù (ÀÌ°Ô Å¬¶óÀÌ¾ğÆ®°¡ °¡Áø ÀüºÎ´Ù).
+    const app = collabApp()
+    const r1 = await app.request(`/api/collab/embed?path=${encodeURIComponent(HOST_REL)}&part=${encodeURIComponent(PART)}`)
+    const b1 = (await r1.json()) as { partHash: string }
+    // 2) ±× »çÀÌ µğ½ºÅ©°¡ ¹Ù²ï´Ù.
+    await tamperDiskPart('P0X5EXT')
+    // 3) ¼¼¼Ç strict + ETag knownHash ¡æ stale_client (subtle ¾øÀÌµµ °ËÁõµÈ´Ù).
+    const s = await createSession(HOST_REL, { part: PART, strict: true, knownHash: b1.partHash })
+    expect(s.stale).toBe(true)
+    expect(s.code).toBe('stale_client')
+  })
+
+  it('¹æÀÌ ³°¾ÒÀ¸¸é knownHash ¾ø¾îµµ stale_roomÀÌ´Ù', async () => {
     await createSession(HOST_REL, { part: PART, strict: true })
-    await tamperPartDisk('P0X4EXT')
+    await tamperDiskPart('P0X5EXT2')
     const s2 = await createSession(HOST_REL, { part: PART, strict: true })
     expect(s2.stale).toBe(true)
     expect(s2.code).toBe('stale_room')
