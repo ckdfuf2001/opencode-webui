@@ -136,12 +136,10 @@ describe('part save', () => {
     const next = Buffer.from(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
     const saved = await applySave(s1.roomId, new Uint8Array(next), { baseHash: s1.lastHash, kind: 'docx' })
     expect((saved as { newHash?: string }).newHash).toMatch(/^[0-9a-f]{64}$/)
-    // 부모 방 lastHash가 새 부모 해시로 adopt됐다.
-    // P0-3: 접속자가 없으면 리셋 대신 방을 유지한다 (lastHash adopt는 동일).
-    const proom = rooms.get(parent.roomId)
-    expect(proom).toBeTruthy()
-    expect(proom!.lastHash).not.toBe(before)
-    expect(await currentDiskHash(parent.roomId)).toBe(proom!.lastHash)
+    // 부모 방 lastHash가 새 부모 해시로 adopt됐다 (reset으로 방은 사라진다).
+    expect(rooms.get(parent.roomId)).toBeUndefined()
+    const re = await createSession(HOST_REL)
+    expect(re.lastHash).not.toBe(before)
     // 부모 파일에 새 파트가 들어있다.
     const after = await readPart(hostAbs(HOST_REL), PART)
     const z2 = await JSZip.loadAsync(after)
