@@ -9,9 +9,11 @@ import { ADA, seedUser } from './helpers/users'
 const FIX = 'e2e/collab/fixtures/ole'
 
 /**
- * K-dbl: 삽입 직후(새로고침 없음) 도형 dblclick → 새 탭이 첨부 URL로 열리고 편집 가능.
- * - PPTX/XLSX/DOCX 각 1건. 칩 dblclick이 아니라 lib 렌더 도형 본문 dblclick이다.
+ * K-dbl: 삽입 직후(새로고침 없음) dblclick → 새 탭이 첨부 URL로 열리고 편집 가능.
+ * - PPTX: lib 렌더 도형 본문(ole 프레임) dblclick.
+ * - XLSX/DOCX: lib이 삽입물을 렌더하지 않아 오버레이 칩이 도형 UI다 → 칩 dblclick.
  * - 열린 탭에서 수정·저장하면 부모 zip에 반영된다.
+ * - 파일명 라벨 dblclick도 열린다 (캡션/칩 텍스트).
  */
 async function mkRepo(localPath: string, files: string[]): Promise<void> {
   await fetch(`${backendBase()}/api/repos`, {
@@ -52,16 +54,41 @@ async function readAttachPart(hostAbs: string, part: string): Promise<Buffer> {
   return Buffer.from(await f.async('uint8array'))
 }
 
-function partPathOf(attachUrl: string): string {
-  const segs = new URL(attachUrl).pathname.split('/-/')
-  if (segs.length < 2 || !segs[1]) throw new Error('no part in attach url')
-  return decodeURIComponent(segs[1]!)
+async function sheetTextContains(hostAbs: string, part: string, marker: string): Promise<boolean> {
+  // xlsx 파트: 시트/sharedStrings XML 텍스트에 마커가 있어야 한다.
+  // (zip 재묶음 바이트 변화만 보면 저장이 빈 껍데기여도 통과한다.)
+  const partBytes = await readAttachPart(hostAbs, part)
+  const inner = await JSZip.loadAsync(partBytes)
+  const names = Object.keys(inner.files).filter(
+    (n) => n === 'xl/sharedStrings.xml' || (n.startsWith('xl/worksheets/') && n.endsWith('.xml')),
+  )
+  if (names.length === 0) return partBytes.includes(Buffer.from(marker))
+  for (const n of names) {
+    const xml = await inner.file(n)!.async('string')
+    if (xml.replace(/<[^>]*>/g, '').includes(marker)) return true
+  }
+  return false
+}
+
+async function resolveAttach(attachUrl: string): Promise<{ parentPath: string; part: string }> {
+  // URL 문법은 서버가 판정한다 (클라이언트 문자열 파싱이 아님).
+  // GET /api/collab/resolve가 단일 진실 — 스킴이 바뀌어도 테스트는 그대로 둔다.
+  const u = new URL(attachUrl)
+  const res = await fetch(`${backendBase()}/api/collab/resolve?path=${encodeURIComponent(u.pathname)}`)
+  if (!res.ok) throw new Error(`resolve failed: ${res.status} for ${u.pathname}`)
+  const body = (await res.json()) as { kind?: string; parentPath?: string; part?: string }
+  if (body.kind !== 'attachment' || !body.parentPath || !body.part) {
+    throw new Error(`not an attachment url: ${u.pathname} -> ${JSON.stringify(body)}`)
+  }
+  return { parentPath: body.parentPath, part: body.part }
 }
 
 async function expectEditableAttach(attach: Page, nameRe: RegExp): Promise<void> {
   await attach.getByTestId('edit-page').waitFor({ timeout: 30000 })
   await expect(attach.getByTestId('attach-readonly')).toHaveCount(0, { timeout: 15000 })
-  expect(attach.url()).toMatch(/\/edit\/.+\/-\/.+/)
+  // URL이 첨부로 해석되는지는 서버 판정으로 확인한다 (형식 하드코딩 금지).
+  const resolved = await resolveAttach(attach.url())
+  expect(resolved.part.length).toBeGreaterThan(0)
   await expect(attach.getByTestId('attach-title')).toContainText(nameRe, { timeout: 15000 })
 }
 
@@ -102,12 +129,23 @@ test('K-dbl-pptx: 삽입한 docx 도형 dblclick이 새 탭으로 열린다', as
       .toContain(marker)
     await popup.getByTestId('attach-save').click({ timeout: 20000 })
     const hostAbs = path.join(workspaceDir(), 'repos', seg, 'embed-pdf.pptx')
-    const part = partPathOf(popup.url())
+    const { part } = await resolveAttach(popup.url())
     await expect
       .poll(() => partTextContains(hostAbs, part, marker), { timeout: 60000, intervals: [2000] })
       .toBe(true)
     await popup.close().catch(() => {})
     await pageB.close().catch(() => {})
+    // 파일명 라벨 dblclick으로도 열린다 (도형 아래 캡션).
+    // lib 호환성 토스트가 캡션을 가리면 먼저 닫는다 (사용자와 같은 순서).
+    await page.getByText('Dismiss all').first().click({ timeout: 15000 }).catch(() => {})
+    const label = page.getByTestId('ole-label').filter({ hasText: /plain\.docx/i }).first()
+    await expect(label).toBeVisible({ timeout: 30000 })
+    const [popup2] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 15000 }),
+      label.dblclick({ timeout: 15000 }),
+    ])
+    await expectEditableAttach(popup2, /plain\.docx/)
+    await popup2.close().catch(() => {})
   } finally {
     await ctx.close().catch(() => {})
   }
@@ -126,7 +164,8 @@ test('K-dbl-xlsx: 삽입한 docx 도형 dblclick이 새 탭으로 열린다', as
     // plain.docx: 중첩 OLE 없는 docx (중첩 OLE는 lib yjs 바인딩 이슈가 있어 별도 추적).
     await insertViaTab(page, path.resolve(FIX, 'plain.docx'))
     // xlsx lib는 docx 삽입물을 렌더하지 않아 오버레이 폴백 칩이 도형 UI다.
-    // 삽입 후 앱 리로드로 오버레이가 새 파트를 잡을 때까지 칩을 기다린다.
+    // 삽입 PUT 후 부모가 호스트 바이트를 다시 받으면(페이지 새로고침 아님)
+    // 오버레이가 새 파트를 파싱한다 — 칩이 나타날 때까지 기다린다.
     const chipX = page.getByRole('button', { name: /plain\.docx/i }).first()
     await expect(chipX).toBeVisible({ timeout: 60000 })
     const box = await chipX.boundingBox()
@@ -144,13 +183,21 @@ test('K-dbl-xlsx: 삽입한 docx 도형 dblclick이 새 탭으로 열린다', as
     // 타이핑이 에디터 DOM에 들어갔는지 먼저 확인 (포커스 미스면 저장이 base가 된다).
     await expect(popup.locator('docx-editor [contenteditable="true"]').first()).toContainText(marker, { timeout: 15000 })
     const hostAbs = path.join(workspaceDir(), 'repos', seg, 'embed-pdf.xlsx')
-    const part = partPathOf(popup.url())
+    const { part } = await resolveAttach(popup.url())
     await popup.getByTestId('attach-save').click({ timeout: 15000 })
     // docx 파트: 타이핑이 <w:t>에 쪼개져도 텍스트 기준으로 확인한다.
     await expect
       .poll(() => partTextContains(hostAbs, part, marker), { timeout: 60000, intervals: [2000] })
       .toBe(true)
     await popup.close().catch(() => {})
+    // 파일명 라벨 dblclick으로도 열린다. xlsx 폴백 칩은 파일명을 텍스트로
+    // 보여주므로(칩=라벨) 같은 칩을 다시 누른다. 저장 후에도 다시 열리는지 확인한다.
+    const [popup2] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 15000 }),
+      chipX.dblclick({ timeout: 15000 }),
+    ])
+    await expectEditableAttach(popup2, /plain\.docx/)
+    await popup2.close().catch(() => {})
   } finally {
     await ctx.close().catch(() => {})
   }
@@ -167,7 +214,8 @@ test('K-dbl-docx: 삽입한 xlsx 도형 dblclick이 새 탭으로 열린다', as
     await openEditor(page, `${seg}/embed-pdf.docx`)
     await page.locator('docx-editor [contenteditable="true"]').first().waitFor({ timeout: 60000 })
     await insertViaTab(page, path.resolve(FIX, 'embed-docx.xlsx'))
-    // 삽입 후 앱 리로드로 오버레이가 새 파트를 잡을 때까지 칩을 기다린다.
+    // 삽입 PUT 후 부모가 호스트 바이트를 다시 받으면(페이지 새로고침 아님)
+    // 오버레이가 새 파트를 파싱한다 — 칩이 나타날 때까지 기다린다.
     // (칩은 anchored/폴백 모두 onDoubleClick으로 열린다.)
     const chip = page.getByRole('button', { name: /embed-docx/i }).first()
     await expect(chip).toBeVisible({ timeout: 60000 })
@@ -182,16 +230,28 @@ test('K-dbl-docx: 삽입한 xlsx 도형 dblclick이 새 탭으로 열린다', as
     const bar = popup.locator('xlsx-editor [part~=formula-bar] textarea').last()
     await bar.waitFor({ timeout: 30000 })
     await bar.click({ timeout: 15000 })
-    await bar.fill(`kdbl${Date.now().toString(36)}`)
-    await bar.press('Enter')
     const hostAbs = path.join(workspaceDir(), 'repos', seg, 'embed-pdf.docx')
-    const part = partPathOf(popup.url())
-    const before = await readAttachPart(hostAbs, part)
+    const { part } = await resolveAttach(popup.url())
+    const markerX = `kdbl${Date.now().toString(36)}`
+    await bar.fill(markerX)
+    await bar.press('Enter')
     await popup.getByTestId('attach-save').click({ timeout: 15000 })
+    // 시트 XML 텍스트에 마커가 있어야 한다 (zip 재묶음 바이트 변화만 보지 않는다).
     await expect
-      .poll(async () => !(await readAttachPart(hostAbs, part)).equals(before), { timeout: 60000, intervals: [2000] })
+      .poll(() => sheetTextContains(hostAbs, part, markerX), { timeout: 60000, intervals: [2000] })
       .toBe(true)
     await popup.close().catch(() => {})
+    // 파일명 라벨(도형 아래 캡션) dblclick으로도 열린다.
+    const label = page.getByTestId('ole-label').filter({ hasText: /embed-docx/i }).first()
+    await expect(label).toBeVisible({ timeout: 30000 })
+    const lbox = await label.boundingBox()
+    expect(lbox, 'ole label box').not.toBeNull()
+    const [popup2] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 15000 }),
+      page.mouse.dblclick(lbox!.x + lbox!.width / 2, lbox!.y + lbox!.height / 2),
+    ])
+    await expectEditableAttach(popup2, /embed-docx\.xlsx/)
+    await popup2.close().catch(() => {})
   } finally {
     await ctx.close().catch(() => {})
   }
@@ -230,7 +290,7 @@ test('K-dbl-nested: 중첩 OLE가 든 docx 삽입물을 편집·저장하면 부
     await expect(editable).toContainText(marker, { timeout: 15000 })
     await popup.getByTestId('attach-save').click({ timeout: 20000 })
     const hostAbs = path.join(workspaceDir(), 'repos', seg, 'embed-pdf.pptx')
-    const part = partPathOf(popup.url())
+    const { part } = await resolveAttach(popup.url())
     await expect
       .poll(() => partTextContains(hostAbs, part, marker), { timeout: 60000, intervals: [2000] })
       .toBe(true)
