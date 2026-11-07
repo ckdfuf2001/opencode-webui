@@ -54,6 +54,7 @@ import {
 } from '../services/office-embed'
 import { getRawFileContent, resolveWorkspaceFile } from '../services/files'
 import { writeFileContent } from '../services/file-operations'
+import { parseEditPath } from '@opencode-webui/shared/lib/editPath'
 import { logger } from '../utils/logger'
 
 const zipLoadJSZip = (b: Uint8Array): Promise<ZipLike> =>
@@ -223,6 +224,16 @@ app.get('/lock', async (c) => {
 
 app.get('/rooms', async (c) => {
   return c.json({ rooms: listRooms() })
+})
+
+// C6c-a0: 편집 URL 해석의 단일 진실. 클라이언트·테스트는 URL 문자열을
+// 직접 파싱하지 않고 이 결과를 따른다 (D64 스킴, D71 전환 시 여기만 바뀐다).
+app.get('/resolve', async (c) => {
+  const pathname = c.req.query('path') ?? ''
+  if (!pathname.startsWith('/edit/')) return c.json({ error: 'Not an edit URL', code: 'bad_path' }, 400)
+  const parsed = parseEditPath(pathname)
+  if (!parsed) return c.json({ error: 'Unparseable edit URL', code: 'bad_path' }, 400)
+  return c.json(parsed)
 })
 
 // ---------------------------------------------------------------------------

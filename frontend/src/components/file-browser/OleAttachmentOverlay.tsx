@@ -463,7 +463,11 @@ export default function OleAttachmentOverlay({
   const fallback = entries.filter((e) => !(anchor != null && posMap[e.partName] != null))
   const displayName = (entry: OleEmbeddingRef): string => entry.displayName ?? entry.fallbackName
 
-  // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
+  // 아이콘 바로 아래 가운데 정렬 파일명 라벨.
+  // C6c-a0: 라벨 dblclick으로도 열린다. 캡션은 도형 rect 바깥(아래 4px)이라
+  // 컨테이너 캡처 hit-test에 걸리지 않으므로 자체 핸들러를 둔다.
+  // lib 캔버스/토스트 레이어가 겹쳐 있어도 라벨이 직접 맞도록
+  // pointer-events를 명시한다 (조상 none 상속이면 클릭을 통과시킨다).
   const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number }): React.ReactNode => {
     const name = displayName(entry)
     return (
@@ -472,14 +476,18 @@ export default function OleAttachmentOverlay({
         data-testid="ole-label"
         title={name}
         aria-hidden="true"
+        onDoubleClick={() => void openOrDownload(entry)}
         style={{
           position: 'absolute',
           left: pos.x + pos.w / 2,
           top: pos.y + pos.h + 4,
           transform: 'translateX(-50%)',
           maxWidth: 240,
+          cursor: 'pointer',
+          pointerEvents: 'auto',
+          zIndex: 30,
         }}
-        className="pointer-events-none z-10 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
+        className="z-10 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
       >
         {name}
       </div>

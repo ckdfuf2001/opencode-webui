@@ -2,16 +2,17 @@
  * C5-4 (D64): 편집 모드 URL 규칙.
  * - 본 파일 편집: /edit/<워크스페이스 경로>
  * - 첨부 편집: /edit/<부모 경로>/-/<파트 경로>
- * 경로·파트에 모두 `/`가 들어가므로 `/-/`를 구분자로 고정한다.
- * 각 세그먼트는 encodeURIComponent로 인코딩한다.
+ * 문법의 단일 진실은 @opencode-webui/shared (서버·테스트와 공유).
+ * D71 `/{상위}/{하위}` 전환은 shared 파서 교체로 함께 바뀐다.
  */
+import {
+  encodePathSegments,
+  parseEditPath as parseEditUrl,
+} from '@opencode-webui/shared/lib/editPath'
+import type { ParsedEditPath as ParsedEditUrl } from '@opencode-webui/shared/lib/editPath'
 
-export function encodePathSegments(p: string): string {
-  return p
-    .split('/')
-    .map((s) => encodeURIComponent(s))
-    .join('/')
-}
+export { encodePathSegments, parseEditUrl }
+export type { ParsedEditUrl }
 
 function currentSearch(): string {
   try {
@@ -31,38 +32,6 @@ export function editUrlForAttachment(parentPath: string, part: string, partHash?
   if (partHash) q.set('partHash', partHash)
   const qs = q.toString()
   return qs ? `${base}?${qs}` : base
-}
-
-export type ParsedEditUrl =
-  | { kind: 'file'; path: string }
-  | { kind: 'attachment'; parentPath: string; part: string }
-
-export function parseEditUrl(pathname: string): ParsedEditUrl | null {
-  const prefix = '/edit/'
-  if (!pathname.startsWith(prefix)) return null
-  const rest = pathname.slice(prefix.length)
-  if (!rest) return null
-  const segs = rest.split('/')
-  const dash = segs.indexOf('-')
-  try {
-    if (dash < 0) {
-      const decoded = segs.map((s) => decodeURIComponent(s)).join('/')
-      if (!decoded) return null
-      return { kind: 'file', path: decoded }
-    }
-    const parent = segs
-      .slice(0, dash)
-      .map((s) => decodeURIComponent(s))
-      .join('/')
-    const part = segs
-      .slice(dash + 1)
-      .map((s) => decodeURIComponent(s))
-      .join('/')
-    if (!parent || !part) return null
-    return { kind: 'attachment', parentPath: parent, part }
-  } catch {
-    return null
-  }
 }
 
 /**
