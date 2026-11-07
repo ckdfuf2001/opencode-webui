@@ -17,6 +17,11 @@ export interface CollabSessionInfo {
   stale?: boolean
   code?: 'stale_room' | 'stale_client'
   currentHash?: string | null
+  /**
+   * P0-4: 서버가 산출한 strict 기준 해시. subtle 없는 http에서 knownHash를
+   * 못 구해도 서버 해시로 strict 검증 + 저장 검증 기준을 삼는다.
+   */
+  serverHash?: string
 }
 
 export interface CollabParticipant {

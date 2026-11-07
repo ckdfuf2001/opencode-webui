@@ -167,15 +167,21 @@ export default function AttachmentEditor({
         return
       }
       // C6c: 하위문서 공동편집 — 파트 방에 붙으면 잠금 없이 같이 편집한다.
-      // 해시를 못 구한 환경(비보안 컨텍스트 subtle 부재)에서는 strict 없이 붙는다
-      // (저장 시 baseHash 대조는 그대로라 조용한 덮어쓰기는 없다).
+      // P0-4: strict는 항상 건다. subtle 없는 http에서는 knownHash 없이 strict만
+      // 보내고, 서버가 돌려준 serverHash를 저장 검증 기준으로 쓴다.
       try {
         const info = await collabApi.session(
           parentPath,
-          partHash ? { knownHash: partHash, strict: true, part } : { part },
+          partHash ? { knownHash: partHash, strict: true, part } : { strict: true, part },
         )
         if (dead) return
         if (!info.stale) {
+          // 서버 해시가 있으면 subtle 계산 대신 쓴다 (http strict 검증).
+          const refHash = info.serverHash ?? partHash
+          if (refHash) {
+            setOrigPartHash(refHash)
+            stampPartHashUrl(refHash)
+          }
           setCollabMode(true)
           setReadOnly(false)
           setLockHolder(null)
