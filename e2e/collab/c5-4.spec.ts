@@ -386,6 +386,156 @@ test.describe('C5-4: URL 편집 분리', () => {
     }
   })
 
+  test('P-open-part-coedit-xlsx: xlsx 파트 두 탭이 셀을 공유하고 저장이 부모에 반영된다', async ({ browser }) => {
+    // P1: docx 파트(P-open-part-coedit)와 같은 흐름을 xlsx 파트로 검증한다.
+    // UI 삽입 대신 POST /embed로 파트를 박는다 (부모 방·세션 없이 깨끗한 시작).
+    const seg = `c6cpartx${Date.now()}`
+    await mkRepo(seg, ['embed-pdf.xlsx'])
+    const parent = `${seg}/embed-pdf.xlsx`
+    const fd = new FormData()
+    fd.append('path', parent)
+    const abuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    fd.append('file', new Blob([abuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'embed-docx.xlsx')
+    const embRes = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd })
+    if (!embRes.ok) throw new Error(`embed failed: ${embRes.status}`)
+    const embBody = (await embRes.json()) as { embeddings?: string[] }
+    const part = embBody.embeddings?.[0] ?? 'xl/embeddings/embed-docx.xlsx'
+    const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+    const url = (p: string): string => `/edit/${enc(parent)}/-/${enc(p)}?e2e=1&collabDebug=1`
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    await seedUser(ctxB, GRACE)
+    const pageA = await ctxA.newPage()
+    const pageB = await ctxB.newPage()
+    try {
+      await pageA.goto(url(part), { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await pageB.goto(url(part), { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await pageA.locator('xlsx-editor').first().waitFor({ timeout: 60000 })
+      await pageB.locator('xlsx-editor').first().waitFor({ timeout: 60000 })
+      await expect(pageB.getByTestId('attach-readonly')).toHaveCount(0, { timeout: 15000 })
+      const marker = `C6CX${Date.now().toString(36)}`
+      // 셀 선택→그리드 포커스 후 수식 바 입력 (canvas 그리드의 확정 경로).
+      await pageA.evaluate(() => {
+        const el = document.querySelector('xlsx-editor') as unknown as { select?: (ref: string) => void; focusGrid?: () => void } | null
+        el?.select?.('A1')
+        el?.focusGrid?.()
+      })
+      const bar = pageA.locator('xlsx-editor [part~=formula-bar] textarea').last()
+      await bar.waitFor({ timeout: 30000 })
+      await bar.click({ timeout: 15000 })
+      await bar.fill(marker)
+      await bar.press('Enter')
+      // 편집이 커밋됐는지(dirty) 먼저 확인한다.
+      await expect
+        .poll(() => pageA.evaluate(() => (document.querySelector('xlsx-editor') as unknown as { dirty?: boolean } | null)?.dirty === true), { timeout: 15000, intervals: [200] })
+        .toBe(true)
+      // B 화면에 A 입력이 보인다 (파트 방 공유). 그리드는 canvas라 DOM이 아니라
+      // lib 직렬화 바이트로 확인한다 (xlsx-collab liveBytesContain과 같은 방식).
+      await expect
+        .poll(async () => {
+          const b64 = await pageB.evaluate(async () => {
+            const el = document.querySelector('xlsx-editor') as unknown as { saveBytes?: () => Promise<Uint8Array> } | null
+            if (!el?.saveBytes) return null
+            const bytes = await el.saveBytes()
+            let bin = ''
+            for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192))
+            return btoa(bin)
+          }).catch(() => null)
+          if (!b64) return false
+          const inner = await JSZip.loadAsync(Buffer.from(b64, 'base64'))
+          for (const n of Object.keys(inner.files)) {
+            const e = inner.files[n]!
+            if (e.dir || !n.endsWith('.xml')) continue
+            if ((await e.async('string')).replace(/<[^>]*>/g, '').includes(marker)) return true
+          }
+          return false
+        }, { timeout: 90000, intervals: [1000] })
+        .toBe(true)
+      // A가 저장하면 부모 zip 파트에 반영된다 (시트 XML 텍스트 기준).
+      await pageA.getByTestId('attach-save').click({ timeout: 15000 })
+      const hostAbs = path.join(workspaceDir(), 'repos', parent)
+      await expect
+        .poll(async () => {
+          const buf = await readAttachPart(hostAbs, part)
+          const inner = await JSZip.loadAsync(buf)
+          const names = Object.keys(inner.files).filter(
+            (n) => n === 'xl/sharedStrings.xml' || (n.startsWith('xl/worksheets/') && n.endsWith('.xml')),
+          )
+          for (const n of names) {
+            const t = await inner.file(n)!.async('string')
+            if (t.replace(/<[^>]*>/g, '').includes(marker)) return true
+          }
+          return false
+        }, { timeout: 60000, intervals: [2000] })
+        .toBe(true)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
+  test('P-open-part-coedit-pptx: pptx 파트 두 탭이 슬라이드 텍스트를 공유하고 저장이 부모에 반영된다', async ({ browser }) => {
+    // P1: pptx 파트(임베딩된 pptx)를 두 탭에서 연다. A가 슬라이드 텍스트를
+    // 고치면 B에 보이고, 저장하면 부모 zip 파트에 반영된다.
+    const seg = `c6cpartp${Date.now()}`
+    await mkRepo(seg, ['embed-pdf.pptx'])
+    const parent = `${seg}/embed-pdf.pptx`
+    // UI 삽입 대신 POST /embed로 파트를 박는다 (부모 방·세션 없이 깨끗한 시작).
+    const pfd = new FormData()
+    pfd.append('path', parent)
+    const pabuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.pptx'))
+    pfd.append('file', new Blob([pabuf], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }), 'embed-docx.pptx')
+    const pembRes = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: pfd })
+    if (!pembRes.ok) throw new Error(`embed failed: ${pembRes.status}`)
+    const pembBody = (await pembRes.json()) as { embeddings?: string[] }
+    const part = pembBody.embeddings?.[0] ?? 'ppt/embeddings/embed-docx.pptx'
+    const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+    const url = (p: string): string => `/edit/${enc(parent)}/-/${enc(p)}?e2e=1&collabDebug=1`
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    await seedUser(ctxB, GRACE)
+    const pageA = await ctxA.newPage()
+    const pageB = await ctxB.newPage()
+    try {
+      await pageA.goto(url(part), { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await pageB.goto(url(part), { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await pageA.getByTestId('pptx-viewer-root').first().waitFor({ timeout: 60000 })
+      await pageB.getByTestId('pptx-viewer-root').first().waitFor({ timeout: 60000 })
+      await expect(pageB.getByTestId('attach-readonly')).toHaveCount(0, { timeout: 15000 })
+      const marker = `C6CP${Date.now().toString(36)}`
+      // 슬라이드 텍스트 dblclick → 편집 진입 후 타이핑 (pptx-collab과 같은 제스처).
+      await pageA.evaluate(() => {
+        const els = [...document.querySelectorAll('[data-element-id]')]
+        const el = els.find((e) => (e.textContent || '').includes('C5-0 host with embedded docx'))
+        el?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      })
+      await pageA.waitForFunction(() => document.querySelectorAll('textarea, [contenteditable="true"]').length > 0, null, { timeout: 15000 })
+      await pageA.keyboard.type(marker, { delay: 20 })
+      // B 화면에 A 입력이 보인다 (파트 방 공유).
+      await expect
+        .poll(() => pageB.locator('[data-element-id]').first().textContent(), { timeout: 90000, intervals: [1000] })
+        .toContain(marker)
+      // A가 저장하면 부모 zip 파트에 반영된다 (슬라이드 XML 텍스트 기준).
+      await pageA.getByTestId('attach-save').click({ timeout: 15000 })
+      const hostAbs = path.join(workspaceDir(), 'repos', parent)
+      await expect
+        .poll(async () => {
+          const buf = await readAttachPart(hostAbs, part)
+          const inner = await JSZip.loadAsync(buf)
+          const f = inner.file('ppt/slides/slide1.xml')
+          if (!f) return buf.includes(Buffer.from(marker))
+          const t = await f.async('string')
+          return t.replace(/<[^>]*>/g, '').includes(marker)
+        }, { timeout: 60000, intervals: [2000] })
+        .toBe(true)
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
   test('U-open-part-pptx-shape: pptx OLE 도형 본문 dblclick이 /edit/<부모>/-/<파트> 새 탭을 연다', async ({ browser }) => {
     // C6b: lib 캔버스의 OLE 도형 dblclick은 lib no-op이라 컨테이너 캡처에서 연다.
     // 기존 임베딩(embed-docx.pptx = package docx)을 쓴다 — INSERT 없이 도형 직접 dblclick.
