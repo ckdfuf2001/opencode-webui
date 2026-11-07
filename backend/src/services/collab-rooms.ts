@@ -751,12 +751,6 @@ export interface SessionResult {
   stale?: boolean
   code?: 'stale_room' | 'stale_client'
   currentHash?: string | null
-  /**
-   * P0-4: strict 요청에 대한 서버 산출 기준 해시 (subtle 없는 http에서도 strict 가능).
-   * knownHash 없이 strict만 온 경우 서버가 디스크 해시를 직접 구해 판정한 값이다.
-   * 클라이언트는 저장 검증 기준(origPartHash 대용)으로 쓴다.
-   */
-  serverHash?: string
 }
 
 export interface ResumeOptions {
@@ -842,23 +836,10 @@ export async function createSession(
   // XLSX(lib 방)는 "방에 먼저 들어온 문서"가 방의 기준이라, 디스크와 어긋난 방에 붙으면
   // 낡은 내용이 디스크를 덮어쓴다.
   // C2-a: knownHash는 클라이언트가 준 서버 ETag다(subtle 계산 없음).
-  // P0-4: knownHash가 없어도(subtle 없는 http) strict면 서버가 디스크 해시를
-  // 직접 구해 같은 strict 판정을 한다. 구한 해시는 serverHash로 돌려줘서
-  // 클라이언트가 저장 검증 기준으로 쓴다.
-  let strictServerHash: string | undefined
+  // P0-4: knownHash는 GET /embed 응답의 파트 해시(ETag)를 그대로 쓴다.
+  // subtle이 없는 http에서도 서버가 준 값이라 strict 검증이 된다.
   if (opts?.strict) {
-    let known = opts?.knownHash
-    if (!known) {
-      try {
-        known = partInfo
-          ? hashBytes(await partBytesOf(partInfo.parentAbs, partInfo.part))
-          : await hashFile(abs)
-      } catch {
-        // 구하기 실패는 staleRoomCheck이 fail-closed로 처리한다.
-      }
-      strictServerHash = known
-    }
-    const stale = await staleRoomCheck(abs, existing, known, partInfo)
+    const stale = await staleRoomCheck(abs, existing, opts?.knownHash, partInfo)
     if (stale) {
       // C2-b: 빈 방의 stale_room은 서버가 디스크 기준으로 리셋한다.
       // conns==0 && everConnected(붙었다 나간 고아 방)만 해당한다.
@@ -883,7 +864,7 @@ export async function createSession(
     if (creating) {
       try {
         const room = await creating
-        return { roomId: id, role: 'guest', epoch: room.epoch, lastHash: room.lastHash, path: abs, part: partInfo?.part, ...(strictServerHash ? { serverHash: strictServerHash } : {}) }
+        return { roomId: id, role: 'guest', epoch: room.epoch, lastHash: room.lastHash, path: abs, part: partInfo?.part }
       } catch {
         // 생성이 실패하면 아래 경로에서 다시 시도한다.
       }
@@ -915,7 +896,7 @@ export async function createSession(
     try {
       const room = await creatingPromise
       const role = resumeEpoch ? 'resume' : 'host'
-      return { roomId: id, role, epoch: room.epoch, lastHash: room.lastHash, path: abs, part: partInfo?.part, ...(strictServerHash ? { serverHash: strictServerHash } : {}) }
+      return { roomId: id, role, epoch: room.epoch, lastHash: room.lastHash, path: abs, part: partInfo?.part }
     } finally {
       if (creatingRooms.get(id) === creatingPromise) creatingRooms.delete(id)
     }
@@ -937,9 +918,9 @@ export async function createSession(
       const room = createRoom(id, abs, fileHash, partInfo)
       startWatch(room)
       logger.info(`Collab room ${id} re-created (orphan disposed, host)`)
-      return { roomId: id, role: 'host', epoch: room.epoch, lastHash: fileHash, path: abs, part: partInfo?.part, ...(strictServerHash ? { serverHash: strictServerHash } : {}) }
+      return { roomId: id, role: 'host', epoch: room.epoch, lastHash: fileHash, path: abs, part: partInfo?.part }
     }
-    return { roomId: id, role: 'guest', epoch: existing.epoch, lastHash: existing.lastHash, path: abs, part: partInfo?.part, ...(strictServerHash ? { serverHash: strictServerHash } : {}) }
+    return { roomId: id, role: 'guest', epoch: existing.epoch, lastHash: existing.lastHash, path: abs, part: partInfo?.part }
   }
 
   if (resumeEpoch !== existing.epoch) {
@@ -958,7 +939,7 @@ export async function createSession(
       throw { message: 'File changed while away (no auto-merge)', statusCode: 409, code: 'external_change', currentHash: disk }
     }
   }
-  return { roomId: id, role: 'resume', epoch: existing.epoch, lastHash: existing.lastHash, path: abs, part: partInfo?.part, ...(strictServerHash ? { serverHash: strictServerHash } : {}) }
+  return { roomId: id, role: 'resume', epoch: existing.epoch, lastHash: existing.lastHash, path: abs, part: partInfo?.part }
 }
 
 /** WS 접속 등록. owner는 첫 awareness가 증명한 conn이 된다. syncStep1 + awareness 스냅샷을 보낸다. */

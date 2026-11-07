@@ -135,26 +135,28 @@ export default function AttachmentEditor({
     setCollabMode(false)
     setReadOnly(false)
   void (async () => {
-        let partHash: string | null = null
-        try {
-          const got = await getAttachmentPart(parentPath, part, { roomId, clientId })
-          if (dead) return
-          setBytes(got.bytes)
-          setBaseHash(got.hash)
-          baseHashRef.current = got.hash
-          origBytesRef.current = got.bytes
+    let partHash: string | null = null
     try {
-        const h = await sha256Hex(got.bytes)
+      const got = await getAttachmentPart(parentPath, part, { roomId, clientId })
+      if (dead) return
+      setBytes(got.bytes)
+      setBaseHash(got.hash)
+      baseHashRef.current = got.hash
+      origBytesRef.current = got.bytes
+      // P0-4: 기준 해시는 서버가 준 파트 ETag를 쓴다 (subtle 없이도 strict 가능).
+      // 서버가 안 준 구버전 대비로만 subtle 계산을 둔다.
+      try {
+        const h = got.partHash ?? (await sha256Hex(got.bytes))
         partHash = h
         setOrigPartHash(h)
         if (expectedPartHash && expectedPartHash !== h) {
-              showToast.info('첨부가 바뀌었습니다 — 최신 내용으로 열었습니다')
-            }
-            stampPartHashUrl(h)
-          } catch {
-            setOrigPartHash('')
-          }
-        } catch (e) {
+          showToast.info('첨부가 바뀌었습니다 — 최신 내용으로 열었습니다')
+        }
+        stampPartHashUrl(h)
+      } catch {
+        setOrigPartHash('')
+      }
+    } catch (e) {
         if (dead) return
         const code = (e as { code?: string })?.code
         if (code === 'view_only') {
@@ -167,8 +169,8 @@ export default function AttachmentEditor({
         return
       }
       // C6c: 하위문서 공동편집 — 파트 방에 붙으면 잠금 없이 같이 편집한다.
-      // P0-4: strict는 항상 건다. subtle 없는 http에서는 knownHash 없이 strict만
-      // 보내고, 서버가 돌려준 serverHash를 저장 검증 기준으로 쓴다.
+      // P0-4: strict는 항상 건다. knownHash는 GET ETag(서버 산출)라서
+      // subtle 없는 http에서도 strict 검증이 된다.
       try {
         const info = await collabApi.session(
           parentPath,
@@ -176,12 +178,6 @@ export default function AttachmentEditor({
         )
         if (dead) return
         if (!info.stale) {
-          // 서버 해시가 있으면 subtle 계산 대신 쓴다 (http strict 검증).
-          const refHash = info.serverHash ?? partHash
-          if (refHash) {
-            setOrigPartHash(refHash)
-            stampPartHashUrl(refHash)
-          }
           setCollabMode(true)
           setReadOnly(false)
           setLockHolder(null)

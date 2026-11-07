@@ -45,6 +45,8 @@ export interface AttachmentBytes {
   name: string
   /** GET 시점 부모 파일 해시 (PUT baseHash). */
   hash: string
+  /** P0-4: GET 시점 파트 바이트 해시 (subtle 없이 knownHash·partHash로 쓴다). */
+  partHash?: string
   size: number
 }
 
@@ -61,6 +63,7 @@ export async function getAttachmentPart(
     ok?: boolean
     name?: string
     hash?: string
+    partHash?: string
     size?: number
     data?: string
     code?: string
@@ -76,7 +79,7 @@ export async function getAttachmentPart(
   const bin = atob(body.data)
   const bytes = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  return { bytes, name: body.name ?? part.split('/').pop() ?? 'attachment', hash: body.hash, size: body.size ?? bytes.length }
+  return { bytes, name: body.name ?? part.split('/').pop() ?? 'attachment', hash: body.hash, partHash: typeof body.partHash === 'string' ? body.partHash : undefined, size: body.size ?? bytes.length }
 }
 
 export interface AttachmentLock {

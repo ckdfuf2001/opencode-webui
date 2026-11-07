@@ -535,10 +535,14 @@ app.get('/embed', async (c) => {
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
     const { bytes, name } = await readEmbedPart(zipLoadJSZip, hostBytes, norm)
     const hash = hashBytes(hostBytes)
+    // P0-4: 파트 바이트 자체의 해시(ETag). 클라이언트는 subtle 없이도
+    // 이 값을 knownHash로 써서 strict 검증 + 저장 partHash 검증에 쓴다.
+    const partHash = hashBytes(bytes)
     return c.json({
       ok: true,
       name,
       hash,
+      partHash,
       size: bytes.length,
       data: Buffer.from(bytes).toString('base64'),
     })
