@@ -75,7 +75,11 @@ try {
 } catch {
   Write-Output "[package 3/7] WARN: embed patch failed: $_"
 }
-bun build --compile --target=bun --define PACKAGE_VERSION:"'$version'" backend/src/index.ts --outfile $exePath
+$buildSha = 'dev'
+try { $buildSha = (git rev-parse --short HEAD 2>$null | Out-String).Trim() } catch {}
+if (-not $buildSha) { $buildSha = 'dev' }
+Write-Output "[package 3/7] backend single-exe compile (commit $buildSha)"
+bun build --compile --target=bun --define PACKAGE_VERSION:"'$version'" --define BUILD_SHA:"'$buildSha'" backend/src/index.ts --outfile $exePath
 $compileExit = $LASTEXITCODE
 if ($didPatch -and $embedBackup) {
   Set-Content -Path $embedSrc -Value $embedBackup -NoNewline

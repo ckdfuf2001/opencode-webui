@@ -2,6 +2,16 @@ import { Hono } from 'hono'
 import type { Database } from 'bun:sqlite'
 import { opencodeServerManager } from '../services/opencode-single-server'
 
+declare const BUILD_SHA: string | undefined
+
+/** P1: exe 식별용 빌드 커밋 (portable 빌드에서 --define으로 박힌다). */
+function getCommit(): string {
+  try {
+    if (typeof BUILD_SHA !== 'undefined' && BUILD_SHA) return BUILD_SHA
+  } catch { /* ignore */ }
+  return 'dev'
+}
+
 export function createHealthRoutes(db: Database) {
   const app = new Hono()
 
@@ -17,7 +27,8 @@ export function createHealthRoutes(db: Database) {
         timestamp: new Date().toISOString(),
         database: dbCheck ? 'connected' : 'disconnected',
         opencode: opencodeHealthy ? 'healthy' : 'unhealthy',
-        opencodePort: opencodeServerManager.getPort()
+        opencodePort: opencodeServerManager.getPort(),
+        commit: getCommit()
       })
     } catch (error) {
       return c.json({
