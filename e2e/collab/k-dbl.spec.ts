@@ -146,6 +146,13 @@ test('K-dbl-pptx: 삽입한 docx 도형 dblclick이 새 탭으로 열린다', as
     ])
     await expectEditableAttach(popup2, /plain\.docx/)
     await popup2.close().catch(() => {})
+    // 캡션 바로 아래(lib 영역) dblclick은 새 탭을 열지 않는다 (히트 영역 확인).
+    // 캡션에 pointer-events:auto를 줘도 lib 상호작용(드래그·선택)을 막지 않는다.
+    const lbox2 = await label.boundingBox()
+    expect(lbox2, 'ole label box (recheck)').not.toBeNull()
+    const openedP = page.waitForEvent('popup', { timeout: 3000 }).then(() => 'opened', () => 'none')
+    await page.mouse.dblclick(lbox2!.x + lbox2!.width / 2, lbox2!.y + lbox2!.height + 10)
+    await expect(openedP).resolves.toBe('none')
   } finally {
     await ctx.close().catch(() => {})
   }
