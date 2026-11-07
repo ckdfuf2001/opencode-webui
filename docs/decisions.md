@@ -903,7 +903,7 @@
  W0-9b(이탈 후 재참가)로 확인한다. (4) TextDecoder fatal은 이미 유효한 UTF-8 오독(U+020E/022D류)을
  못 잡는다 → C6a에서 경고 패턴으로 보완 (18a8292 handoff에 U+020E 2건이 살아남은 것이 근거).
 
-## D69 C6b PPTX OLE 도형 dblclick + 좁은 창 리본 늘어짐 (2026-11-07)
+## D69 C6b PPTX OLE 도형 dblclick + 좁은 창 리본 늘어짐 (2026-11-06)
 -배경: 게이트 파일(embedded docx) 도형을 더블클릭해도 하위 문서 편집이 안 열린다.
  lib(pptx-react-viewer) handleElementDoubleClick은 OLE에 no-op(방정식/텍스트만 처리)이고,
  편집은 Properties "Edit content..." 버튼(OleEditorDialog)에만 있다. 우리 칩(클립)은
@@ -959,4 +959,5 @@
  watcher 디렉터리를 공유하므로 watcher 해시도 파트 기준이어야 한다(아니면 부모 저장
  때마다 externalChanged 오탐). (4) CFB(oleObject) 파트는 편집 불가라 기존대로 다운로드만
  된다(서버 GET이 CFB를 풀지 않음). (5) edit 훅 순서: C6b와 같은 #310 함정에 주의
+-추가: 세션 실패 시 잠금 폴백 경로. 파트 세션(join)이 실패하면(오프라인·서버 오류) 기존 독점 잠금(acquireAttachmentLock, TTL 60s+renew)으로 폴백한다 (AttachmentEditor useEffect, retryKey로만 재실행). 잠금 실패(locked)면 읽기 전용+보유자 표시, 그 외 실패도 읽기 전용으로 열고 토스트로 알린다. 공동편집도 잠금도 안 되면 편집 자체를 막는다 — 조용한 쓰기 유실이 없다.
  (AttachmentEditor useEffect는 early return 뒤에 없음 — 확인됨).
