@@ -451,7 +451,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   /** 마지막 성공 저장의 서버 해시 (ABA 판정용: 서버 해시가 이것과 다르면
    * 다른 사람이 그사이 저장한 것이다 → latestSavedRef를 믿지 않는다). */
   const lastSavedHashRef = useRef<string | null>(null)
-  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean; allowImageLoss?: boolean }): Promise<boolean> => {
+  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean; allowImageLoss?: boolean; flushRequestId?: string }): Promise<boolean> => {
     // C5-3 standalone(첨부 편집): PUT 경로로 저장한다 (방·단독 저장 모두 우회).
     const ov = standaloneRef.current ? persistOverrideRef.current : undefined
     if (ov) {
@@ -463,6 +463,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
     }
     const quiet = opts?.quiet ?? false
     const auto = opts?.auto ?? false
+    const flushRequestId = opts?.flushRequestId
     const c = collabRef.current
     if (c && savePath) {
       // 빈 바이트: adopt 경합·lib 준비 전(getContent가 아직 0바이트)일 때 발생한다.
@@ -521,7 +522,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
         if (!auto) setCollabNotice(null)
         return true
       }
-      let res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
+      let res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false, flushRequestId)
     tl('save.response', { ok: res.ok, reason: res.ok ? 'ok' : res.reason, bytes: bytes.length })
       // B3: 내가 owner인데 denied면 meta가 늦은 것일 수 있다(선출 직후). 1회만 기다려 재시도한다.
       if (!res.ok && res.reason === 'denied' && !auto && ownerStateOf(c) === 'self') {
@@ -953,7 +954,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       try {
         const bytes = await h.getContent()
         const fresh = new Uint8Array(bytes)
-        const ok = await persistBytes(fresh, { quiet: true, auto: false })
+        const ok = await persistBytes(fresh, { quiet: true, auto: false, flushRequestId })
         if (!ok) throw new Error('Save rejected')
         const cs = await loadPptxComments(fresh)
         setComments(cs)

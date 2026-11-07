@@ -30,6 +30,7 @@ import {
   roomHasOpenEditor,
   roomIdForAbs,
   rooms,
+  runParentChained,
   wsMessage,
   MAX_SAVE_BYTES,
 } from '../services/collab-rooms'
@@ -137,6 +138,8 @@ app.post('/save', async (c) => {
     let baseHash: string | undefined
     const contentType = c.req.header('content-type') ?? ''
     const forceImageLoss = c.req.header('x-collab-allow-image-loss') ?? ''
+    // P0-1: flush 응답(103 requestId와 짝이 맞는 저장 하나)만 체인을 건너뛴다.
+    const flushRequestId = c.req.header('x-collab-flush-request-id') || undefined
     if (contentType.includes('application/octet-stream')) {
       // M1: 바이너리 저장 (base64 없이 body 그대로). 메타는 헤더로.
       roomId = c.req.header('x-collab-room') ?? ''
@@ -168,6 +171,7 @@ app.post('/save', async (c) => {
       clientId,
       baseHash,
       kind,
+      flushRequestId,
     })
     if ('conflict' in applied) {
       // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능).
@@ -414,6 +418,8 @@ app.post('/embed', async (c) => {
     } else if (q.baseHash && disk !== q.baseHash) {
       return c.json({ error: 'File changed since loaded — reload, then retry', code: 'dirty_room', currentHash: disk }, 409)
     }
+    // P0-1: 조립+쓰기를 부모 체인에서 직렬화한다 (PUT /save와 같은 체인).
+    return runParentChained(abs, async () => {
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
     let out: Uint8Array
     let embPart: string
@@ -457,6 +463,7 @@ app.post('/embed', async (c) => {
       resetRoomByServer(roomId)
     }
     return c.json({ ok: true, newHash, embeddings: [embPart] })
+    })
   } catch (error) {
     return errJson(c, error, 500)
   }
@@ -590,6 +597,9 @@ app.put('/embed', async (c) => {
     if (room && embedViewerForbidden(rid, clientId)) {
       return c.json({ error: 'View-only participant cannot edit attachments while editors are present', code: 'view_only' }, 403)
     }
+    // P0-1: 읽기-검사-쓰기를 부모 체인에서 직렬화한다 (PUT /save와 같은 체인).
+    // flush 응답은 이 경로로 오지 않으므로 교착 없이 대기한다.
+    return runParentChained(abs, async () => {
     let hostBytes = new Uint8Array(await getRawFileContent(q.path))
     let disk = room ? await currentDiskHash(rid) : await hashFile(abs).catch(() => null)
     // U-stale: 파트 단위 낙관적 잠금. 연 시점 파트와 다르면 덮어쓰지 않는다.
@@ -648,6 +658,7 @@ app.put('/embed', async (c) => {
       resetRoomByServer(rid)
     }
     return c.json({ ok: true, newHash })
+    })
   } catch (error) {
     return errJson(c, error, 500)
   }

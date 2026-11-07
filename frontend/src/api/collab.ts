@@ -132,6 +132,8 @@ async function postSaveBinary(
   bytes: Uint8Array,
   baseHash?: string | null,
   allowImageLoss = false,
+  // P0-1: flush 응답(103 requestId와 짝이 맞는 저장 하나)만 체인을 건너뛴다.
+  flushRequestId?: string | null,
 ): Promise<CollabSaveResult> {
   let res: Response
   try {
@@ -144,6 +146,7 @@ async function postSaveBinary(
         ...(baseHash ? { 'x-collab-base-hash': baseHash } : {}),
         // R2: 사용자가 "이미지 삭제 확정"을 눌렀을 때만 붙인다. 그 외엔 절대 안 붙는다.
         ...(allowImageLoss ? { 'x-collab-allow-image-loss': '1' } : {}),
+        ...(flushRequestId ? { 'x-collab-flush-request-id': flushRequestId } : {}),
       },
       // 복사 없이 원본 버퍼를 그대로 보낸다.
       body: bytes as unknown as BodyInit,
@@ -218,11 +221,13 @@ export const collabApi = {
     bytes: Uint8Array,
     baseHash?: string | null,
     allowImageLoss = false,
+    // P0-1: flush 응답(103 requestId와 짝이 맞는 저장 하나)만 체인을 건너뛴다.
+    flushRequestId?: string | null,
   ): Promise<CollabSaveResult> => {
     // C2-a: 같은 바이트 재전송 생략(M1)은 보안 컨텍스트 전용 API에 의존하므로 삭제한다.
     // 서버 저장은 멱등(같은 바이트 → 같은 newHash)이라 생략 없이 바로 보낸다.
     try {
-      return await postSaveBinary(roomId, clientId, bytes, baseHash, allowImageLoss)
+      return await postSaveBinary(roomId, clientId, bytes, baseHash, allowImageLoss, flushRequestId)
     } catch (error) {
       return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Save failed' }
     }

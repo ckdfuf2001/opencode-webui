@@ -170,6 +170,11 @@ export interface CollabRoom {
     conn: unknown
     /** B1: 요청과 응답을 짝짓는 id. 104의 id가 다르면 무시한다. */
     requestId: string
+    /**
+     * P0-1: 짝이 맞는 flush 응답 저장이 체인을 건너뛴 뒤 true가 된다.
+     * 같은 id의 중복·재시도는 체인을 탄다 (하나만 우회).
+     */
+    bypassUsed?: boolean
   } | null
   /**
    * U-parent: 편집 conn이 떨어진 마지막 시각 (clean close 1000/1001이면 0으로 지운다).
@@ -1016,6 +1021,26 @@ function parentChainKey(room: CollabRoom): string {
 }
 
 /**
+ * P0-1: 부모 경로 단위 직렬화 실행기. PUT /save(applySave) 외에
+ * POST /embed(삽입) · PUT /embed(파트 교체)도 같은 부모 체인을 탄다 —
+ * 같은 파일을 건드리는 쓰기가 엇갈려 덮어쓰지 않는다.
+ * (flush 응답 저장은 applySave에서만 우회한다; embed는 항상 체인을 탄다.)
+ */
+export async function runParentChained<T>(absPath: string, fn: () => Promise<T>): Promise<T> {
+  const key = normalizeAbs(absPath)
+  const prev = saveChains.get(key) ?? Promise.resolve()
+  const run = prev.then(fn)
+  saveChains.set(
+    key,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  )
+  return run
+}
+
+/**
  * P0-3: 방 리셋 빈도 계측. 무접속 리셋은 dispose되지만 집계에서 제외한다
  * (수행돼서 기록되는 리셋은 전부 disruptive다).
  */
@@ -1484,7 +1509,7 @@ export function clientRoleInRoom(roomId: string, clientId: number): 'view' | 'ed
 export async function applySave(
   roomId: string,
   bytes: Uint8Array,
-  opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: RoomKind },
+  opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: RoomKind; flushRequestId?: string },
 ): Promise<
   | { newHash: string }
   | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' | 'dirty_room' }
@@ -1506,8 +1531,16 @@ export async function applySave(
     }
   }
   const chainKey = parentChainKey(room)
-  // flush 응답 저장은 체인을 건너뛴다 (교착 방지 — 위 주석 참조).
-  const prev = room.pendingFlush ? Promise.resolve() : (saveChains.get(chainKey) ?? Promise.resolve())
+  // P0-1: flush 응답 중 103 요청의 requestId와 짝이 맞는 저장 하나만 체인을
+  // 건너뛴다. 나머지는 파트 저장이 끝날 때까지 체인에서 기다린다 (겹쳐쓰기 금지).
+  // (기존: pendingFlush가 있으면 전부 건너뛰어 일반 자동저장이 끼어들 수 있었다.)
+  let bypassChain = false
+  const pending = room.pendingFlush
+  if (pending && opts?.flushRequestId && opts.flushRequestId === pending.requestId && !pending.bypassUsed) {
+    pending.bypassUsed = true
+    bypassChain = true
+  }
+  const prev = bypassChain ? Promise.resolve() : (saveChains.get(chainKey) ?? Promise.resolve())
   const run = prev.then(async () => {
     // C6c: 파트 방 저장 전에 부모를 깨끗하게 만든다 (PUT /embed과 동일한 순서).
     // 부모에 열린 에디터가 있으면 flush를 강제하고, 미저장이 stranded면 막는다.
@@ -1634,7 +1667,14 @@ export async function applySave(
     // 모두 포함한 것이 확실할 때만 끝낸다 (저장 이후 도착한 업데이트가 있으면
     // ack 경로의 신선 저장을 기다린다 — 낡은 바이트 확정 금지).
     // 같은 동기 블록이라 사이에 업데이트가 끼어들 수 없다.
-    if (room.pendingFlush && room.lastRemoteUpdateAt <= room.lastSaveAt) {
+    // P0-1: requestId가 짝이 맞는 flush 응답 저장일 때만 끝낸다.
+    // (무관한 저장이 flush를 끝내 버리면 파트 저장이 낡은 방 해시로 진행한다.)
+    if (
+      room.pendingFlush &&
+      room.lastRemoteUpdateAt <= room.lastSaveAt &&
+      opts?.flushRequestId !== undefined &&
+      opts.flushRequestId === room.pendingFlush.requestId
+    ) {
       settlePendingFlush(room, { ok: true, reason: 'saved' })
     }
     // M25 5번: 계측은 **저장 성공 후**에 찍는다(실패해도 "ok" 가 남으면 안 된다).
@@ -1661,7 +1701,7 @@ export async function applySave(
     const r: { newHash: string } = { newHash: newHash }
     return r
   })
-  if (!room.pendingFlush) {
+  if (!bypassChain) {
     saveChains.set(chainKey, run.then(
       () => undefined,
       () => undefined,

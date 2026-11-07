@@ -1273,18 +1273,21 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   // C6/W0: room save via PUT /save with optimistic base hash (server decides).
   // Solo falls back to useOfficeSave. Mirrors the xlsx saveViaRoom path.
   const saveViaRoom = useCallback(async (quiet = false): Promise<boolean> => {
-    const room = collabRef.current
-    const h = handle
-    if (!room || !h?.save) return false
-    const takeFlushId = (): string | undefined => {
+    // P0-1: 이 저장이 flush 요청에 대한 응답이면 requestId를 싣는다 (서버가
+    // 체인을 건너뛴다). officeSaveRequest 핸들러가 세팅한 1회용 값이다.
+    // 먼저 꺼내야 뒤따르는 일반 저장이 주워가지 않는다.
+    const flushRid: string | undefined = (() => {
       const id = pendingFlushIdRef.current
       pendingFlushIdRef.current = null
       return id ?? undefined
-    }
+    })()
+    const room = collabRef.current
+    const h = handle
+    if (!room || !h?.save) return false
     try {
       const blob: Blob = await h.save()
       let bytes = new Uint8Array(await blob.arrayBuffer())
-      let res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, room.baseHash)
+      let res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, room.baseHash, false, flushRid)
       if (!res.ok && res.reason === 'conflict_room') {
         // Same-room retry with a fresh serialization (all peers share the room state).
         const blob2: Blob = await h.save()
@@ -1296,7 +1299,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         setCollabNotice({ kind: 'error', text: `저장 실패 — 내 사본을 내려받으세요: ${res.message ?? res.reason}` })
         showToast.error(res.message ?? '저장 실패')
         window.dispatchEvent(
-          new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+          new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: flushRid } }),
         )
         return false
       }
@@ -1313,7 +1316,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
       // 리로드가 필요 없고, collab 중 handle.load()는 lib이 거부한다.
       if (!quiet) showToast.success('저장했습니다')
       window.dispatchEvent(
-        new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: takeFlushId() } }),
+        new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: flushRid } }),
       )
       return true
     } catch (e) {
@@ -1326,7 +1329,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
       setCollabNotice({ kind: 'error', text: `저장 실패 — 내 사본을 내려받으세요: ${e instanceof Error ? e.message : 'unknown'}` })
       showToast.error(e instanceof Error ? e.message : '저장 실패')
       window.dispatchEvent(
-        new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+        new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: flushRid } }),
       )
       return false
     }
@@ -3114,19 +3117,20 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     [],
   )
   const saveViaRoom = useCallback(async (quiet = false): Promise<boolean> => {
-    const room = collabRef.current
-    const handle = xlsxHandleRef.current
-    if (!room || !handle?.saveBytes) return false
-    // B1: 진행 중인 flush 요청 id를 이번 저장 완료 신호에 싣는다 (있을 때만).
-    const takeFlushId = (): string | undefined => {
+    // P0-1: 이 저장이 flush 요청에 대한 응답이면 requestId를 싣는다 (서버가
+    // 체인을 건너뛴다). officeSaveRequest 핸들러가 세팅한 1회용 값이다.
+    const flushRid: string | undefined = (() => {
       const id = pendingFlushIdRef.current
       pendingFlushIdRef.current = null
       return id ?? undefined
-    }
+    })()
+    const room = collabRef.current
+    const handle = xlsxHandleRef.current
+    if (!room || !handle?.saveBytes) return false
     try {
       const raw = new Uint8Array(await handle.saveBytes())
       let bytes = await patchUnsupportedForSave(raw)
-      let res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, room.baseHash)
+      let res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, room.baseHash, false, flushRid)
       if (!res.ok && res.reason === 'conflict_room') {
         // 방 상태를 다시 직렬화해서 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
         const raw2 = new Uint8Array(await handle.saveBytes())
@@ -3143,7 +3147,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
           })
           showToast.error('파일이 외부에서 변경되어 저장을 막았습니다')
           window.dispatchEvent(
-            new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+            new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: flushRid } }),
           )
           return false
         }
@@ -3153,7 +3157,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         })
         showToast.error(res.message ?? '저장 실패')
         window.dispatchEvent(
-          new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+          new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: flushRid } }),
         )
         return false
       }
@@ -3167,7 +3171,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
       if (!quiet) showToast.success('저장했습니다')
       // X1b: keepEditing — Save 는 편집을 유지한다(Done 만 편집을 끝낸다).
       window.dispatchEvent(
-        new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: takeFlushId() } }),
+        new CustomEvent('officeSaveDone', { detail: { ok: true, path, keepEditing: true, flushRequestId: flushRid } }),
       )
       return true
     } catch (e) {
@@ -3179,7 +3183,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
       })
       showToast.error(e instanceof Error ? e.message : '저장 실패')
       window.dispatchEvent(
-        new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: takeFlushId() } }),
+        new CustomEvent('officeSaveDone', { detail: { ok: false, path, hasFailedCopy: true, flushRequestId: flushRid } }),
       )
       return false
     }
