@@ -196,3 +196,46 @@ test('K-dbl-docx: 삽입한 xlsx 도형 dblclick이 새 탭으로 열린다', as
     await ctx.close().catch(() => {})
   }
 })
+
+test('K-dbl-nested: 중첩 OLE가 든 docx 삽입물을 편집·저장하면 부모 zip에 반영된다', async ({ browser }) => {
+  // C6c-a0 red: embed-docx.docx는 살아있는 <w:object>를 품은 중첩 OLE다.
+  // 저장이 200으로 성공해도 파트 바이트에 마커가 없으면 조용한 유실이다.
+  const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+  await seedUser(ctx, ADA)
+  const page = await ctx.newPage()
+  await gotoApp(page)
+  const seg = `kdblnest${Date.now()}`
+  await mkRepo(seg, ['embed-pdf.pptx'])
+  try {
+    await openEditor(page, `${seg}/embed-pdf.pptx`)
+    await page.getByRole('tab', { name: 'Home' }).first().waitFor({ timeout: 60000 })
+    await insertViaTab(page, path.resolve(FIX, 'embed-docx.docx'))
+    const frame = page.locator('[data-element-id*="-frame-"]', { hasText: /embed-docx\.docx/i }).first()
+    await expect(frame).toBeVisible({ timeout: 60000 })
+    const box = await frame.boundingBox()
+    expect(box, 'ole frame box').not.toBeNull()
+    const [popup] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 15000 }),
+      page.mouse.dblclick(box!.x + box!.width / 2, box!.y + box!.height * 0.25),
+    ])
+    await popup.bringToFront().catch(() => {})
+    await expectEditableAttach(popup, /embed-docx\.docx/)
+    const marker = `KDBL${Date.now().toString(36)}`
+    const editable = popup.locator('docx-editor [contenteditable="true"]').first()
+    await expect(editable).toBeVisible({ timeout: 60000 })
+    await popup.locator('docx-editor').getByText('C5-0 payload').first().click({ timeout: 15000 })
+    await editable.focus()
+    await popup.keyboard.press('Home')
+    await popup.keyboard.type(marker, { delay: 20 })
+    await expect(editable).toContainText(marker, { timeout: 15000 })
+    await popup.getByTestId('attach-save').click({ timeout: 20000 })
+    const hostAbs = path.join(workspaceDir(), 'repos', seg, 'embed-pdf.pptx')
+    const part = partPathOf(popup.url())
+    await expect
+      .poll(() => partTextContains(hostAbs, part, marker), { timeout: 60000, intervals: [2000] })
+      .toBe(true)
+    await popup.close().catch(() => {})
+  } finally {
+    await ctx.close().catch(() => {})
+  }
+})
