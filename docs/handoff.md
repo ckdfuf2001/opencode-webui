@@ -1362,3 +1362,8 @@ E21만의 문제가 아니다. 근거:
 - 제품 변경: OleAttachmentOverlay 앵커 매칭 보강(이름 우선+progId 확장자, docx ole placeholder) + oleMatch 순수함수(frontend/src/lib/oleMatch.ts, 단위 6건). plain.docx 픽스처(중첩 OLE 없음) 추가 — 중첩 OLE 파트 저장은 lib yjs 바인딩 이슈로 별도 추적.
 - 결과: k-dbl 3/3 (chromium), oleMatch 6/6.
 
+
+## C6c-a0 K-dbl 보완 (2026-11-07)
+- 중첩 OLE(embed-docx.docx, live w:object): 저장 200 + 파트 73615→73712 + 안쪽 document.xml 마커 포함(strip 포함) + 안쪽 임베딩 보존(word/embeddings/Microsoft_Word_Document.docx, w:object 유지). 조용한 유실 아님. 과거 실패 판정은 앵커 미스 시절 + raw-includes 단편화 오판이었음. K-dbl-nested로 회귀 고정.
+- URL: D64(/edit/ + /-/) 유지가 현재 스킴. 사용자 지시 /{상위}/{하위} 전환(D71)은 C6c-a 이후로 연기됨. GET /api/collab/resolve 신설(서버가 단일 진실, shared/src/lib/editPath.ts) — 테스트는 서버 판정으로만 URL을 해석한다(partPathOf/정규식 단언 제거). 한글·공백 왕복은 단위 테스트로 증명, 라우트 우선순위·/edit/ 리다이렉트는 D71로 이월.
+- 라벨 dblclick: 캡션이 rect 바깥이라 컨테이너 캡처에 안 걸림 → 캡션 자체 onDoubleClick + pointer-events:auto/zIndex(조상 none 상속·lib 토스트 가림 대응). pptx는 lib 호환성 토스트를 닫고 누른다. K-dbl-docx는 시트 XML 텍스트 단언으로 강화(바이트 변화만 보지 않음).
