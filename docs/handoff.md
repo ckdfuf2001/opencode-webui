@@ -1355,3 +1355,10 @@ E21만의 문제가 아니다. 근거:
  E2-lock(독점 잠금)은 의도된 동작 변경이다.
 - 남은 일: 권한 체크(v0.13 이후, 사용자 지정) — 파트 방 참가 시 역할 판정.
  CFB(oleObject) 파트 편집 미지원(기존) — 다운로드만 된다.
+
+## K-dbl 삽입첨부 dblclick (2026-11-07)
+- 삽입 직후(새로고침 없음) lib 도형 dblclick → 새 탭 첨부 URL → 편집·저장 → 부모 zip 반영. PPTX/XLSX/DOCX 각 1건 (e2e/collab/k-dbl.spec.ts).
+- 판정 포인트 3개: (1) docx 파트 단언은 바이트 includes가 아니라 태그 제거 텍스트 비교(partTextContains) — delay 타이핑이 <w:t>에 쪼개져 raw 바이트 매칭이 실패한다. 제품은 정상이었음. (2) xlsx/docx 호스트는 lib이 삽입물을 렌더하지 않아 오버레이 칩(getByRole button /이름/)이 타겟이다. (3) xlsx 테스트 타이핑은 본문 텍스트 클릭+Home 제스처만 확정 (contenteditable 클릭+Control+End는 포커스 미스).
+- 제품 변경: OleAttachmentOverlay 앵커 매칭 보강(이름 우선+progId 확장자, docx ole placeholder) + oleMatch 순수함수(frontend/src/lib/oleMatch.ts, 단위 6건). plain.docx 픽스처(중첩 OLE 없음) 추가 — 중첩 OLE 파트 저장은 lib yjs 바인딩 이슈로 별도 추적.
+- 결과: k-dbl 3/3 (chromium), oleMatch 6/6.
+

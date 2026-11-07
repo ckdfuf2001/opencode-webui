@@ -14,6 +14,7 @@ import {
 import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { findOleEntryAtPoint } from '@/lib/oleHitTest'
+import { frameFileNames, entryNameHit, progIdOfText, extOf, OLE_PROG_EXT } from '@/lib/oleMatch'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
 import { attachmentKindOf } from './embedEdit'
 import { editUrlForAttachment, openInNewTab } from '@/lib/editUrls'
@@ -61,11 +62,18 @@ function stemOf(name: string): string {
   return name.replace(/\.[A-Za-z0-9]{1,8}$/, '')
 }
 
+/** lib 도형 텍스트에서 progId를 읽는다. */
+function progIdOf(el: Element): string {
+  const t = `${el.getAttribute?.('alt') ?? ''} ${el.getAttribute?.('title') ?? ''} ${el.textContent ?? ''}`
+  return progIdOfText(t)
+}
+
 /**
  * 컨테이너 안에서 lib가 그린 첨부 도형을 찾는다 (없으면 null).
  * - xlsx: ole pic (img alt = cNvPr 이름) 우선, 없으면 구형 sp 박스.
- * - pptx: data-element-id "...-frame-N" + Download 문구.
- * - docx: span[data-docx-ole].
+ * - pptx: data-element-id "...-frame-N" + Download 문구 + 항목 파일명 매칭
+ *   (매칭 실패 때만 첫 프레임 폴백 — 여러 임베딩 대응, C6d).
+ * - docx: span[data-docx-ole] 또는 span.dve-ole-placeholder + 파일명/progId 매칭.
  * unsupported=true면 lib가 렌더를 포기한 자리 표시자다.
  */
 function findAnchorEl(
@@ -100,6 +108,19 @@ function findAnchorEl(
       return null
     }
     if (kind === 'pptx') {
+      // 1차: 파일명이 들어간 Download 프레임 (항목별 매칭).
+      for (const el of all) {
+        try {
+          const eid = el.getAttribute?.('data-element-id') ?? ''
+          if (!eid.includes('-frame-') || !isVis(el)) continue
+          const text = el.textContent ?? ''
+          if (!/download/i.test(text)) continue
+          if (frameFileNames(text).some((ff) => entryNameHit(ff, entry))) return { el, unsupported: false }
+        } catch {
+          /* 무시 */
+        }
+      }
+      // 2차: 기존 폴백 (첫 Download 프레임).
       for (const el of all) {
         try {
           const eid = el.getAttribute?.('data-element-id') ?? ''
@@ -111,6 +132,37 @@ function findAnchorEl(
       }
       return null
     }
+    const oleSel = (el: Element): boolean => {
+      try {
+        const c = el.className?.toString?.() ?? ''
+        return el.hasAttribute?.('data-docx-ole') === true || (el.tagName === 'SPAN' && c.includes('dve-ole-placeholder'))
+      } catch {
+        return false
+      }
+    }
+    // 1차: 파일명이 들어간 ole 자리 (에디터/뷰어 렌더 공통).
+    for (const el of all) {
+      try {
+        if (!oleSel(el) || !isVis(el)) continue
+        const hay = `${el.getAttribute?.('alt') ?? ''} ${el.getAttribute?.('title') ?? ''} ${el.textContent ?? ''}`
+        if (frameFileNames(hay).some((ff) => entryNameHit(ff, entry))) return { el, unsupported: false }
+      } catch {
+        /* 무시 */
+      }
+    }
+    // 2차: progId 확장자가 항목 확장자와 같은 자리.
+    const wantExt = extOf(entry.displayName ?? entry.fallbackName)
+    if (wantExt && wantExt !== 'bin') {
+      for (const el of all) {
+        try {
+          if (!oleSel(el) || !isVis(el)) continue
+          if (OLE_PROG_EXT[progIdOf(el)] === wantExt) return { el, unsupported: false }
+        } catch {
+          /* 무시 */
+        }
+      }
+    }
+    // 3차: 기존 폴백 (첫 data-docx-ole).
     for (const el of all) {
       try {
         if (el.hasAttribute?.('data-docx-ole') && isVis(el)) return { el, unsupported: false }
@@ -231,14 +283,15 @@ export default function OleAttachmentOverlay({
   }, [anchor, entries, data])
 
   /**
-   * C6b: lib 캔버스의 OLE 도형 dblclick은 lib no-op이라 컨테이너 캡처에서 연다.
-   * - pptx만: xlsx/docx 도형 dblclick은 lib 동작을 건드리지 않는다.
+   * C6b: lib 캔버스의 OLE 도형 dblclick은 lib이 편집으로 연결하지 않으므로
+   * 컨테이너 캡처에서 연다 (pptx 확인, xlsx/docx는 K-dbl에서 검증 — lib이
+   * dblclick을 삼키면 여기서 열리지 않는다).
    * - 우리 칩은 자기 핸들러가 연다. lib 푸터 버튼/링크/입력/다이얼로그는 lib 동작 유지.
    * - posMap rect 안(도형 본문)일 때만 열고, 버블을 끊는다 (lib 텍스트 편집 방지).
    * - early return보다 앞에 둔다 (조건부 훅 React #310 방지).
    */
   useEffect(() => {
-    if (anchor !== 'pptx') return
+    if (!anchor) return
     const root = rootRef.current
     const container = root?.parentElement as HTMLElement | null
     if (!container) return
