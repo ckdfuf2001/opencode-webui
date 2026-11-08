@@ -261,6 +261,27 @@ export const collabApi = {
     return data
   },
 
+  /**
+   * C6c-d-3: 미뤄진 리셋의 즉시 수행 ("다시 불러오기" 배너용).
+   * 미뤄진 변경이 있을 때만 동작하고, 호출자는 방의 편집자여야 한다.
+   */
+  resetPending: async (roomId: string, clientId: number): Promise<{ ok: boolean; code?: string }> => {
+    try {
+      const { data } = await axios.post(
+        `${API_BASE_URL}/api/collab/${encodeURIComponent(roomId)}/reset-pending`,
+        { clientId },
+        { timeout: 15000 },
+      )
+      return { ok: (data as { ok?: unknown })?.ok === true }
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const body = error.response?.data as { code?: unknown } | undefined
+        return { ok: false, code: typeof body?.code === 'string' ? body.code : undefined }
+      }
+      return { ok: false }
+    }
+  },
+
   /** C4: 시트 개체 표/락/이동/삭제. */
   objects: {
     get: (roomId: string) => objectsGet(roomId),

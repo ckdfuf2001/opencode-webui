@@ -1985,20 +1985,27 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
       {partChangePending && !collabNotice && !mineBytes && (
         <div data-testid="docx-part-pending" className="absolute left-2 right-2 top-2 z-30 flex items-center gap-2 rounded-md border border-sky-500/40 bg-background/95 px-3 py-2 text-xs shadow-sm">
           <span className="flex-1">첨부 변경 미반영 — 다시 불러오면 첨부 내용이 반영됩니다</span>
-          <button
-            type="button"
-            data-testid="docx-part-reload"
-            className="shrink-0 underline underline-offset-2 hover:text-sky-500"
-            onClick={() => {
-              setPartChangePending(false)
-              try { sessionRef.current?.destroy() } catch { /* ignore */ }
-              sessionRef.current = null
-              startedYjsRef.current = null
-              setJoinKey((k) => k + 1)
-            }}
-          >
-            다시 불러오기
-          </button>
+            <button
+              type="button"
+              data-testid="docx-part-reload"
+              className="shrink-0 underline underline-offset-2 hover:text-sky-500"
+              onClick={() => {
+                void (async () => {
+                  // C6c-d-3: xlsx 배너와 동일 — 미뤄진 리셋을 지금 수행한다.
+                  const id = collabRef.current?.roomId
+                  const cid = sessionRef.current?.clientId
+                  if (id && cid != null && (await collabApi.resetPending(id, cid)).ok) {
+                    setPartChangePending(false)
+                  }
+                  try { sessionRef.current?.destroy() } catch { /* ignore */ }
+                  sessionRef.current = null
+                  startedYjsRef.current = null
+                  setJoinKey((k) => k + 1)
+                })()
+              }}
+            >
+              다시 불러오기
+            </button>
         </div>
       )}
       <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} />
@@ -4773,8 +4780,16 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
             type="button"
             data-testid="xlsx-part-reload"
             onClick={() => {
-              setPartChangePending(false)
-              void reconnectCollab()
+              void (async () => {
+                // C6c-d-3: 미뤄진 리셋을 지금 수행한다. 편집자가 아니면 서버가
+                // 403을 돌려주고, 그때는 기존 재연결로 빠진다 (방은 그대로).
+                const id = collabRef.current?.roomId
+                const cid = selfClientIdRef.current
+                if (id && cid != null && (await collabApi.resetPending(id, cid)).ok) {
+                  setPartChangePending(false)
+                }
+                reconnectCollab()
+              })()
             }}
             className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted"
           >
