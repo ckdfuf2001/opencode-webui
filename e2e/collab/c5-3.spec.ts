@@ -702,10 +702,26 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await expect(popupB.getByTestId('attach-save')).toBeEnabled({ timeout: 15000 })
       // B가 입력하면 A에 보인다 (같은 파트 방 공유).
       const marker = `E2J${Date.now().toString(36)}`
-      const pm = popupB.locator('docx-editor [contenteditable="true"]').first()
-      await pm.click({ timeout: 15000 })
-      await popupB.keyboard.press('Control+End')
-      await popupB.keyboard.type(marker, { delay: 20 })
+      // msedge에서는 click만으로 포커스가 안 잡혀 키 입력이 유실될 때가 있다.
+      // 팝업을 앞으로 가져오고, 입력 착지를 직접 확인하면서 최대 3회 재시도한다.
+      await popupB.bringToFront().catch(() => {})
+      let landed = false
+      for (let attempt = 0; attempt < 3 && !landed; attempt++) {
+        const pm = popupB.locator('docx-editor [contenteditable="true"]').first()
+        await pm.click({ timeout: 15000 }).catch(() => {})
+        await pm.evaluate((el) => (el as HTMLElement).focus()).catch(() => {})
+        await popupB.keyboard.press('Control+End').catch(() => {})
+        await popupB.keyboard.type(marker, { delay: 20 }).catch(() => {})
+        try {
+          await expect
+            .poll(async () => (await pm.textContent().catch(() => null)) ?? '', { timeout: 8000, intervals: [500] })
+            .toContain(marker)
+          landed = true
+        } catch {
+          /* 입력이 안착하지 않으면 다시 클릭·입력한다 */
+        }
+      }
+      expect(landed).toBe(true)
       await expect
         .poll(() => popupA.locator('docx-editor [contenteditable="true"]').first().textContent(), {
           timeout: 90000,
