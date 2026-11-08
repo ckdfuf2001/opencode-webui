@@ -5,7 +5,7 @@ import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { translationsEn } from 'pptx-react-viewer/i18n'
 import 'pptx-react-viewer/styles.css'
 import { Button } from '@/components/ui/button'
-import { saveOfficeBytes } from './officeSave'
+import { saveOfficeBytes, waitParentSaveDone } from './officeSave'
 import type { OfficeSaveRequestDetail } from './officeSave'
 import type { AttachmentOpenRequest, AttachmentSaver } from './embedEdit'
 import { ATTACHMENT_OPEN_REQUEST, openAttachmentEditor } from './embedEdit'
@@ -451,7 +451,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   /** 마지막 성공 저장의 서버 해시 (ABA 판정용: 서버 해시가 이것과 다르면
    * 다른 사람이 그사이 저장한 것이다 → latestSavedRef를 믿지 않는다). */
   const lastSavedHashRef = useRef<string | null>(null)
-  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean; allowImageLoss?: boolean; flushRequestId?: string }): Promise<boolean> => {
+  const persistBytes = useCallback(async (bytes: Uint8Array, opts?: { quiet?: boolean; auto?: boolean; allowImageLoss?: boolean; flushRequestId?: string; retried?: boolean }): Promise<boolean> => {
     // C5-3 standalone(첨부 편집): PUT 경로로 저장한다 (방·단독 저장 모두 우회).
     const ov = standaloneRef.current ? persistOverrideRef.current : undefined
     if (ov) {
@@ -530,6 +530,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
         if (ownerStateOf(c) === 'self') {
           res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
         }
+      }
+      // P0-1c(3): 파트 방 dirty_room이면 부모가 수렴할 때까지 상한 내 대기 후
+      // 1회만 재시도한다 (U-dirty-timeout). 상한을 넘기면 아래 기존 실패 처리
+      // (내 사본 다운로드)로 끝난다.
+      if (!res.ok && res.reason === 'dirty_room' && part && !opts?.retried) {
+        await waitParentSaveDone(savePath)
+        return persistBytesRef.current!(bytes, { ...opts, quiet: true, auto: false, retried: true })
       }
       // E2E 디버그: 저장 결과 기록 (200/409 추적용).
       saveCountRef.current += 1

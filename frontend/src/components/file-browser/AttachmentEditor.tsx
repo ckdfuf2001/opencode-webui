@@ -15,9 +15,9 @@ import { Button } from '@/components/ui/button'
 import { ViewerLoadBoundary } from './ViewerBoundaries'
 import { DocxViewer, XlsxViewer } from './DocumentPreview'
 import PptxViewer from './PptxViewer'
+import { waitParentSaveDone } from './officeSave'
 
 const RENEW_MS = 20_000
-const SAVE_WAIT_MS = 8000
 
 function randomToken(): string {
   try {
@@ -47,34 +47,6 @@ function stampPartHashUrl(hash: string | null): void {
   }
 }
 
-/** officeSaveDone 대기 (부모 저장 요청 후 1회 재시도용). */
-function waitParentSaveDone(parentPath: string, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let done = false
-    const timer = setTimeout(() => {
-      if (!done) {
-        done = true
-        window.removeEventListener('officeSaveDone', onDone)
-        resolve(false)
-      }
-    }, timeoutMs)
-    const onDone = (e: Event): void => {
-      const d = (e as CustomEvent<{ ok?: boolean; path?: string }>).detail
-      if (d?.path !== undefined && d.path !== parentPath) return
-      // U-flush-race: 실패 done(경합 중 낡은 저장의 409)은 "저장됨"이 아니다.
-      // 먼저 온 실패에 포기하지 말고 성공까지 기다린다 (타임아웃이면 false).
-      if (d?.ok !== true) return
-      if (!done) {
-        done = true
-        clearTimeout(timer)
-        window.removeEventListener('officeSaveDone', onDone)
-        resolve(true)
-      }
-    }
-    window.addEventListener('officeSaveDone', onDone)
-  })
-}
-
 export default function AttachmentEditor({
   target,
   onClose,
@@ -102,6 +74,15 @@ export default function AttachmentEditor({
   const [collabMode, setCollabMode] = useState(false)
   const saverRef = useRef<AttachmentSaver | null>(null)
   const lockRef = useRef<{ lockId: string; token: string } | null>(null)
+  // U-dirty-timeout: 부모 저장이 상한 안에 안 끝나면 미저장 내 사본을 준다.
+  const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
+  const mineUrlRef = useRef<string | null>(null)
+  useEffect(() => () => {
+    if (mineUrlRef.current) {
+      URL.revokeObjectURL(mineUrlRef.current)
+      mineUrlRef.current = null
+    }
+  }, [])
   const baseHashRef = useRef<string | undefined>(undefined)
   const origBytesRef = useRef<Uint8Array | null>(null)
   const mountedRef = useRef(true)
@@ -344,12 +325,23 @@ export default function AttachmentEditor({
           return false
         }
         if (r.code === 'dirty_room') {
-          // 부모 저장 요청 후 1회 재시도. 성공 done까지 대기한다 (경합 중
-          // 낡은 저장의 실패 done에 포기하지 않는다 — U-flush-race).
+          // 부모 저장 요청 후 1회 재시도. 성공 done까지 최대 상한(기본 30초) 대기한다
+          // (경합 중 낡은 저장의 실패 done에 포기하지 않는다 — U-flush-race).
+          // 상한을 넘기면 저장 중을 풀고 실패 토스트 + 내 사본을 준다 (U-dirty-timeout).
           window.dispatchEvent(new CustomEvent('officeSaveRequest'))
-          const ok = await waitParentSaveDone(parentPath, SAVE_WAIT_MS)
+          const ok = await waitParentSaveDone(parentPath)
           if (!ok) {
-            showToast.error('부모 파일을 먼저 저장하세요')
+            try {
+              if (mineUrlRef.current) URL.revokeObjectURL(mineUrlRef.current)
+              const url = URL.createObjectURL(new Blob([next as unknown as BlobPart], { type: 'application/octet-stream' }))
+              mineUrlRef.current = url
+              const dot = name.lastIndexOf('.')
+              const mineDlName = dot > 0 ? `${name.slice(0, dot)}.mine${name.slice(dot)}` : `${name}.mine`
+              if (mountedRef.current) setMineFile({ url, name: mineDlName })
+            } catch {
+              /* 무시 */
+            }
+            showToast.error('부모 저장이 끝나지 않아 중단했습니다 — 내 사본을 내려받아 주세요')
             return false
           }
           try {
@@ -561,6 +553,17 @@ export default function AttachmentEditor({
         >
           다운로드
         </button>
+        {mineFile && (
+          <a
+            href={mineFile.url}
+            download={mineFile.name}
+            data-testid="attach-mine"
+            title="저장되지 않은 내 사본 다운로드"
+            className="h-7 text-xs px-3 rounded border border-destructive text-destructive hover:bg-muted flex items-center"
+          >
+            내 사본
+          </a>
+        )}
         <button
           type="button"
           onClick={() => void doSave()}

@@ -107,7 +107,7 @@ export type CollabSaveResult =
   | { ok: true; newHash: string }
   | {
       ok: false
-      reason: 'conflict' | 'conflict_room' | 'conflict_external' | 'denied' | 'not_seeded' | 'image_loss' | 'error'
+      reason: 'conflict' | 'conflict_room' | 'conflict_external' | 'denied' | 'not_seeded' | 'image_loss' | 'dirty_room' | 'error'
       currentHash?: string | null
       code?: string
       message?: string
@@ -169,6 +169,12 @@ async function postSaveBinary(
         message: body.error,
         detail: d && typeof d.before === 'object' && typeof d.after === 'object' ? d : undefined,
       }
+    }
+    if (body?.code === 'dirty_room') {
+      // P0-1c(3): 부모가 수렴하지 않아 파트 저장이 거부됨. reason을 살려
+      // 호출자가 상한 내 대기 후 1회 재시도한다 (예전에는 currentHash 탓에
+      // 아래 분기에서 'conflict'로 오인됐다).
+      return { ok: false, reason: 'dirty_room', currentHash: body?.currentHash ?? null, code: body.code, message: body?.error }
     }
     if (body?.code === 'conflict_room' || body?.code === 'conflict_external' || body?.code === 'conflict' || body?.currentHash !== undefined) {
       // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능),

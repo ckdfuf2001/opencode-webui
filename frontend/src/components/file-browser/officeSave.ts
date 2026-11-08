@@ -83,6 +83,40 @@ export interface OfficeSaveRequestDetail {
 }
 
 /**
+ * P0-1c(3): 부모 저장 완료 대기 (부모 저장 요청 후 1회 재시도용).
+ * 성공 done이 올 때까지 기다리되, 상한을 넘기면 false로 끝낸다.
+ * - 경합 중 낡은 저장의 실패 done은 "저장됨"이 아니므로 무시한다 (U-flush-race).
+ * - 크로스 탭에서는 부모 done이 오지 않으므로 상한까지 기다렸다가 끝난다.
+ *   상한(기본 30초)은 부모가 스스로 수렴할 시간을 주고, 그 뒤 재시도한다.
+ */
+export function waitParentSaveDone(parentPath: string, timeoutMs = 30000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true
+        window.removeEventListener('officeSaveDone', onDone)
+        resolve(false)
+      }
+    }, timeoutMs)
+    const onDone = (e: Event): void => {
+      const d = (e as CustomEvent<{ ok?: boolean; path?: string }>).detail
+      if (d?.path !== undefined && d.path !== parentPath) return
+      // 실패 done(경합 중 낡은 저장의 409)은 저장이 아니다. 먼저 온 실패에
+      // 포기하지 말고 성공까지 기다린다 (타임아웃이면 false).
+      if (d?.ok !== true) return
+      if (!done) {
+        done = true
+        clearTimeout(timer)
+        window.removeEventListener('officeSaveDone', onDone)
+        resolve(true)
+      }
+    }
+    window.addEventListener('officeSaveDone', onDone)
+  })
+}
+
+/**
  * 뷰어 툴바 저장 가로채기 + 상단 저장 버튼 공용.
  * handle이 없거나 저장 중이면 false.
  * onSaved는 저장된 바이트 후처리용 (모델 기준 상태 갱신 등).

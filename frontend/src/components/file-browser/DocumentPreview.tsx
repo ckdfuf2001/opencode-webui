@@ -25,7 +25,7 @@ import { layoutAnchoredTextBoxes } from './docxAnchorLayout'
 import { sanitizeDocxForEdit } from './docxEditSanitize'
 import { loadDocxComments, type DocxComment } from './docxComments'
 import { addDocxComment, replyDocxComment, setDocxCommentDone, editDocxComment, deleteDocxComment } from './docxCommentWriter'
-import { useOfficeSave, saveOfficeBytes } from './officeSave'
+import { useOfficeSave, saveOfficeBytes, waitParentSaveDone } from './officeSave'
 import type { OfficeSaveRequestDetail } from './officeSave'
 import { createCollabSession, type CollabSession } from 'ooxml-core/collab'
 import type { RibbonActionId } from 'ooxml-core/docx/ui'
@@ -1272,7 +1272,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   // C5-3 standalone(첨부 편집): PUT 경로로 저장한다.
   // C6/W0: room save via PUT /save with optimistic base hash (server decides).
   // Solo falls back to useOfficeSave. Mirrors the xlsx saveViaRoom path.
-  const saveViaRoom = useCallback(async (quiet = false): Promise<boolean> => {
+  const saveViaRoom = useCallback(async (quiet = false, retried = false): Promise<boolean> => {
     // P0-1: 이 저장이 flush 요청에 대한 응답이면 requestId를 싣는다 (서버가
     // 체인을 건너뛴다). officeSaveRequest 핸들러가 세팅한 1회용 값이다.
     // 먼저 꺼내야 뒤따르는 일반 저장이 주워가지 않는다.
@@ -1293,6 +1293,12 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         const blob2: Blob = await h.save()
         bytes = new Uint8Array(await blob2.arrayBuffer())
         res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, res.currentHash ?? room.baseHash)
+      }
+      if (!res.ok && res.reason === 'dirty_room' && part && !retried) {
+        // P0-1c(3): 부모가 수렴할 때까지 상한 내 대기 후 1회만 재시도한다
+        // (U-dirty-timeout). 그래도 안 되면 아래 기존 실패 처리(내 사본)로 끝난다.
+        await waitParentSaveDone(path)
+        return saveViaRoom(true, true)
       }
       if (!res.ok) {
         setMineBytes(new Uint8Array(bytes))
@@ -3116,7 +3122,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable chain
     [],
   )
-  const saveViaRoom = useCallback(async (quiet = false): Promise<boolean> => {
+  const saveViaRoom = useCallback(async (quiet = false, retried = false): Promise<boolean> => {
     // P0-1: 이 저장이 flush 요청에 대한 응답이면 requestId를 싣는다 (서버가
     // 체인을 건너뛴다). officeSaveRequest 핸들러가 세팅한 1회용 값이다.
     const flushRid: string | undefined = (() => {
@@ -3136,6 +3142,12 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         const raw2 = new Uint8Array(await handle.saveBytes())
         bytes = await patchUnsupportedForSave(raw2)
         res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
+      }
+      if (!res.ok && res.reason === 'dirty_room' && part && !retried) {
+        // P0-1c(3): 부모가 수렴할 때까지 상한 내 대기 후 1회만 재시도한다
+        // (U-dirty-timeout). 그래도 안 되면 아래 기존 실패 처리(내 사본)로 끝난다.
+        await waitParentSaveDone(path)
+        return saveViaRoom(true, true)
       }
       if (!res.ok) {
         // X1c(P0-2): 모든 저장 실패에 내 사본 다운로드를 제공한다.
