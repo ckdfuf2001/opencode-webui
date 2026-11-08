@@ -16,6 +16,7 @@ import {
   createSession,
   currentDiskHash,
   deleteObject,
+  doDeferredParentReset,
   getRoomObjects,
   hashBytes,
   hashFile,
@@ -235,6 +236,32 @@ app.get('/lock', async (c) => {
 
 app.get('/rooms', async (c) => {
   return c.json({ rooms: listRooms() })
+})
+
+// ---------------------------------------------------------------------------
+// C6c-d-3: 미뤄진 리셋의 즉시 수행 ("다시 불러오기" 배너용).
+// - 미뤄진 변경이 있을 때만 동작한다 (임의 방 리셋 불가).
+// - 호출자는 방의 편집자여야 한다 (viewer 실수 클릭·외부 호출로 타이핑이
+//   끊기지 않게; clientId는 presence 기준 — 저장 경로와 같은 신뢰 수준).
+// ---------------------------------------------------------------------------
+app.post('/:room/reset-pending', async (c) => {
+  try {
+    const roomId = c.req.param('room')
+    const body = (await c.req.json().catch(() => ({}))) as { clientId?: unknown }
+    const clientId = typeof body.clientId === 'number' ? body.clientId : undefined
+    if (!isValidRoomId(roomId) || !rooms.has(roomId)) {
+      return c.json({ error: 'No such room', code: 'no_room' }, 404)
+    }
+    const room = rooms.get(roomId)!
+    if (!room.pendingPartReset) return c.json({ error: 'No deferred reset', code: 'no_pending' }, 404)
+    if (clientId === undefined || clientRoleInRoom(roomId, clientId) !== 'edit') {
+      return c.json({ error: 'Only an editor can reload now', code: 'forbidden' }, 403)
+    }
+    doDeferredParentReset(roomId)
+    return c.json({ ok: true })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
 })
 
 // C6c-a0: 편집 URL 해석의 단일 진실. 클라이언트·테스트는 URL 문자열을
@@ -669,8 +696,8 @@ app.put('/embed', async (c) => {
     const newHash = hashBytes(out)
     logger.warn(`[embed-put] room=${rid.slice(0, 8)} part=${norm} bytes=${out.length} newHash=${newHash.slice(0, 8)}`)
     if (room) {
-      // C6c-1: 부모 zip은 즉시 반영하고, 방 리셋은 부모가 조용할 때까지 미룬다.
-      adoptParentPartAndMaybeReset(rid, newHash)
+      // C6c-d-1: 부모 zip은 즉시 반영하고, 방 리셋은 부모가 조용할 때까지 미룬다.
+      adoptParentPartAndMaybeReset(rid, newHash, norm)
     }
     return c.json({ ok: true, newHash, hasPendingPartChange: !!rooms.get(rid)?.pendingPartReset })
     })

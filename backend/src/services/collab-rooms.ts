@@ -193,8 +193,20 @@ export interface CollabRoom {
    * C6c-1: 미뤄진 부모 리셋. 파트 저장 때 부모에 열린 편집자가 있고 부모가
    * 입력 중이면 방을 닫지 않고 이 표시만 남긴다 (조용한 구간·첨부 종료·마지막
    * 퇴장 중 하나가 오면 리셋한다). 부모 화면에는 "첨부 변경 미반영" 배너로 보인다.
+   * C6c-d-1: 미뤄진 동안의 부모 저장은 adopt 전 해시를 받아주고, 디스크의
+   * adopt 파트를 들어온 부모 zip에 다시 끼워 쓴다 (옛 파트 덮개·409 방지).
    */
-  pendingPartReset: { at: number } | null
+  pendingPartReset: {
+    at: number
+    /** 미룸 시작 직전 부모 해시 (타이핑 중이던 클라이언트의 base). */
+    adoptBase: string | null
+    /** 미뤄진 동안 부모 저장에 허용하는 base 집합 (adoptBase + 병합 저장 해시). 1회성 소비. */
+    bases: string[]
+    /** adopt된 파트 정규 경로 (디스크에서 읽어 들어온 부모 zip에 다시 끼운다). */
+    parts: string[]
+    /** 연속 입력 상한 (이 시각이 지나면 입력 중이어도 리셋한다). 타이머만, 폴링 없음. */
+    deadlineAt: number
+  } | null
   /** C6c-1: 미뤄진 리셋의 조용한 구간 타이머 (한 번에 하나, 재시작 가능). */
   partResetTimer: ReturnType<typeof setTimeout> | null
 }
@@ -265,6 +277,16 @@ export function setParentQuietMs(ms: number): void {
   parentQuietMs = ms
 }
 
+/**
+ * C6c-d-3: 미뤄진 리셋의 연속 입력 상한 (ms). 조용한 구간 타이머가 입력마다
+ * 다시 시작돼도, 첫 미룸부터 이 시간이 지나면 입력 중이어도 리셋한다.
+ * 타이머만 쓰고 폴링은 하지 않는다.
+ */
+let parentResetMaxMs = 60_000
+export function setParentResetMaxMs(ms: number): void {
+  parentResetMaxMs = ms
+}
+
 /** 부모가 입력 중인가 (미저장 변경이 있거나 최근 Y 업데이트가 있음). */
 function parentIsActive(room: CollabRoom): boolean {
   if (room.docDirty) return true
@@ -293,19 +315,68 @@ export function doDeferredParentReset(parentId: string): void {
 }
 
 /**
- * C6c-1: 파트 저장을 부모 zip에 반영하고 방 리셋을 결정한다.
+ * C6c-d-1: 미뤄진 동안의 부모 저장에 adopt된 파트를 다시 끼운다.
+ * 들어온 부모 바이트는 옛 파트를 들고 있으므로, 디스크(adopt 반영됨)에서
+ * 각 파트의 현재 바이트를 읽어 교체한다. 파트가 디스크에 없으면 건너뛴다
+ * (외부 삭제는 위 disk 대조에서 먼저 걸리므로 여기 올 수 없다).
+ */
+async function reembedAdoptedParts(room: CollabRoom, incoming: Uint8Array): Promise<Uint8Array> {
+  const defer = room.pendingPartReset
+  if (!defer || defer.parts.length === 0) return incoming
+  let diskBytes: Uint8Array
+  try {
+    diskBytes = new Uint8Array(await fs.readFile(room.path))
+  } catch {
+    return incoming
+  }
+  let out = incoming
+  for (const norm of defer.parts) {
+    try {
+      const cur = await readEmbedPart(zipLoadJSZip, diskBytes, norm)
+      out = await replaceEmbedPart(zipLoadJSZip, out, norm, cur.bytes)
+    } catch (e) {
+      logger.warn(`Collab room ${room.id}: deferred re-embed skipped for ${norm} (${e instanceof Error ? e.message : e})`)
+    }
+  }
+  return out
+}
+
+/**
+ * C6c-d-1: 파트 저장을 부모 zip에 반영하고 방 리셋을 결정한다.
  * - 부모에 열린 편집자가 있고 부모가 입력 중이면 리셋을 미룬다 (4001로
  *   타이핑을 끊지 않는다). 디스크·방 해시는 즉시 adopt한다.
  * - 한가하면(편집자 없음/조용함) 즉시 리셋한다 (기존 동작).
+ * 미루면 adopt 전 해시와 adopt 파트 목록을 남긴다: 미뤄진 동안의 부모 저장은
+ * 이 해시를 받아주고 디스크의 adopt 파트를 다시 끼워 쓴다 (C6c-d-1).
  * 반환값: 리셋을 미뤘는지.
  */
-export function adoptParentPartAndMaybeReset(parentId: string, newHash: string): { deferred: boolean } {
+export function adoptParentPartAndMaybeReset(
+  parentId: string,
+  newHash: string,
+  partNorm?: string,
+): { deferred: boolean } {
   const proom = rooms.get(parentId)
   if (!proom) return { deferred: false }
+  const prevHash = proom.lastHash
   proom.lastHash = newHash
   proom.externalChanged = false
   if (roomHasOpenEditor(parentId) && parentIsActive(proom)) {
-    proom.pendingPartReset = { at: Date.now() }
+    const now = Date.now()
+    const norm = partNorm ? normalizeEmbedPart(partNorm) : null
+    const prev = proom.pendingPartReset
+    if (!prev) {
+      proom.pendingPartReset = {
+        at: now,
+        adoptBase: prevHash,
+        bases: prevHash ? [prevHash] : [],
+        parts: norm ? [norm] : [],
+        deadlineAt: now + parentResetMaxMs,
+      }
+    } else {
+      // 추가 adopt: 파트 목록만 넓힌다. 기준 해시·상한은 첫 미룸 그대로
+      // (타이핑 중인 클라이언트의 base는 첫 adopt 전 해시다).
+      if (norm && !prev.parts.includes(norm)) prev.parts.push(norm)
+    }
     armParentResetTimer(parentId)
     broadcastMeta(proom)
     logger.warn(`Collab room ${parentId.slice(0, 8)}: parent reset deferred (editing in progress)`)
@@ -320,19 +391,22 @@ export function adoptParentPartAndMaybeReset(parentId: string, newHash: string):
 /** 미뤄진 리셋 타이머를 걸거나 갱신한다 (한 번에 하나). */
 function armParentResetTimer(parentId: string): void {
   const r = rooms.get(parentId)
-  if (!r) return
+  if (!r || !r.pendingPartReset) return
   clearParentResetTimer(r)
+  // C6c-d-3: 조용한 구간과 상한 중 먼저 오는 쪽에 깨운다 (타이머만, 폴링 없음).
+  const delay = Math.max(250, Math.min(parentQuietMs, r.pendingPartReset.deadlineAt - Date.now()))
   r.partResetTimer = setTimeout(() => {
     r.partResetTimer = null
     const cur = rooms.get(parentId)
     if (!cur || !cur.pendingPartReset) return
     // 아직 입력 중이면 조용한 구간까지 미룬다 (타이머 체인, 폴링 아님).
-    if (parentIsActive(cur)) {
+    // 단, 상한이 지났으면 입력 중이어도 리셋한다 (C6c-d-3).
+    if (parentIsActive(cur) && Date.now() < cur.pendingPartReset.deadlineAt) {
       armParentResetTimer(parentId)
       return
     }
     doDeferredParentReset(parentId)
-  }, parentQuietMs)
+  }, delay)
 }
 
 function clearParentResetTimer(room: CollabRoom): void {
@@ -1228,6 +1302,10 @@ function dropConnFromRoom(room: CollabRoom, ws: unknown): void {
   if (room.conns.size === 0) {
     room.emptySince = Date.now()
     ensureSweeper()
+    // C6c-d-2: 미뤄진 변경이 있는 방은 마지막 퇴장 때 즉시 dispose한다.
+    // TTL(30초)을 기다리면 그 안 재입장이 strict를 통과해 옛 Y 상태를 받고,
+    // 자동저장이 디스크의 새 첨부를 덮는다 (C6c-b 1번 함정 재발).
+    if (room.pendingPartReset) doDeferredParentReset(room.id)
   }
 }
 
@@ -1686,16 +1764,23 @@ export async function applySave(
     // 2) 디스크가 방의 해시와 다르면 → 외부 변경(AI 편집·보기 모드 코멘트).
     //    재시도하지 않는다(덮어쓰면 조용한 유실이 된다).
     if (isLibRoomKind(opts?.kind) || opts?.kind === 'pptx') {
+      // C6c-d-1: 미뤄진 변경이 있는 부모 방이면 adopt 전 해시도 받아준다.
+      // 타이핑 중이던 클라이언트는 옛 파트를 든 바이트를 들고 있으므로, base가
+      // adopt 전 해시여도 병합 저장한다 (아래에서 디스크 파트를 다시 끼운다).
+      // 허용 집합에 없는 base는 기존대로 conflict_room이다 (다른 타이피스트 보호).
+      const deferBases = !room.part ? room.pendingPartReset?.bases : undefined
       if (opts?.baseHash && opts.baseHash !== room.lastHash) {
-        logger.warn(
-          `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
-        )
-        const r: { conflict: true; currentHash: string | null; code: 'conflict_room' } = {
-          conflict: true,
-          currentHash: room.lastHash,
-          code: 'conflict_room',
+        if (!deferBases || !deferBases.includes(opts.baseHash)) {
+          logger.warn(
+            `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
+          )
+          const r: { conflict: true; currentHash: string | null; code: 'conflict_room' } = {
+            conflict: true,
+            currentHash: room.lastHash,
+            code: 'conflict_room',
+          }
+          return r
         }
-        return r
       }
       if (disk !== room.lastHash) {
         const known = room.recentSaveHashes.includes(disk ?? '')
@@ -1736,7 +1821,15 @@ export async function applySave(
       }
     }
     room.saving = true
-    const newHash = hashBytes(bytes)
+    // C6c-d-1: 미뤄진 변경이 있는 부모 방이면 디스크의 adopt 파트를 들어온
+    // 부모 zip에 다시 끼워 쓴다. 들어온 바이트가 옛 파트를 들고 있어도
+    // 디스크의 새 첨부가 보존되고, 부모의 편집도 함께 남는다.
+    const deferMerge = !room.part ? room.pendingPartReset : null
+    let finalBytes = bytes
+    if (deferMerge && deferMerge.parts.length > 0) {
+      finalBytes = await reembedAdoptedParts(room, bytes)
+    }
+    const newHash = hashBytes(finalBytes)
     // M10/D37: rename **전에** 해시를 대기 목록에 넣는다.
     // watcher 가 rename 이벤트를 받아도 이 해시로 자기 저장임을 확인할 수 있다.
     room.pendingHashes.push(newHash)
@@ -1752,16 +1845,28 @@ export async function applySave(
         const out = await replaceEmbedPart(zipLoadJSZip, hostBytes, norm, bytes)
         await writeFileContent(parentAbs, Buffer.from(out))
         const parentId = roomIdForAbs(parentAbs)
-        // C6c-1: 부모 zip은 즉시 반영하고, 방 리셋은 부모가 조용할 때까지 미룬다
+        // C6c-1: 부모 zip은 즉시 반영하고, 방 리셋은 부모가 조용할 때까지 미룰 수 있다
         // (열린 편집자의 타이핑을 4001로 끊지 않는다).
-        adoptParentPartAndMaybeReset(parentId, hashBytes(out))
+        adoptParentPartAndMaybeReset(parentId, hashBytes(out), norm)
       } else {
-        await writeFileContent(room.path, Buffer.from(bytes))
+        await writeFileContent(room.path, Buffer.from(finalBytes))
       }
     } finally {
       room.saving = false
     }
     room.lastHash = newHash
+    // C6c-d-1: 미뤄진 동안의 부모 저장은 base를 1회성으로 소비한다.
+    // 쓴 base를 집합에서 빼고 새 병합 해시를 넣는다: 같은 타이피스트의 연속
+    // 저장은 이어지고, 묵은 base의 다른 타이피스트는 409가 난다 (편집 보호).
+    // 미뤄짐 자체는 유지한다 (클라이언트는 아직 옛 파트를 들고 있음).
+    if (deferMerge) {
+      const d2 = room.pendingPartReset
+      if (d2) {
+        if (opts?.baseHash) d2.bases = d2.bases.filter((b) => b !== opts.baseHash)
+        if (!d2.bases.includes(newHash)) d2.bases.push(newHash)
+        if (d2.bases.length > 8) d2.bases = d2.bases.slice(-8)
+      }
+    }
     // B3: 저장 성공 — 미저장 표시를 지운다.
     room.docDirty = false
     room.lastSaveAt = Date.now()
@@ -1784,7 +1889,7 @@ export async function applySave(
     // 레벨: warn — 이 로그는 E2E 저장경로 표를 만드는 계측용이며, 테스트 환경의 기본
     // 로그 레벨(warn 이상)에서만 보인다(info 로 낮추면 Playwright webServer 출력에 안 나온다).
     logger.warn(
-      `[applySave] room=${roomId.slice(0, 8)} b=${bytes.length} cid=${opts?.clientId ?? '?'} h=${newHash.slice(0, 8)} at=${Date.now()}`,
+      `[applySave] room=${roomId.slice(0, 8)} b=${finalBytes.length} cid=${opts?.clientId ?? '?'} h=${newHash.slice(0, 8)} at=${Date.now()}`,
     )
     // M12 계측: 저장 실물 기록(바이트 수/해시/시각).
     logger.info(
@@ -1798,8 +1903,9 @@ export async function applySave(
     if (room.recentSaveHashes.length > 5) room.recentSaveHashes.shift()
     room.externalChanged = false
     // C6c: 이미지 계측 캐시는 파트 방이면 파트 파일 기준으로 갱신한다.
+    // C6c-d-1: 미뤄진 병합 저장은 병합 바이트 기준으로 갱신한다.
     const imageSubject2 = room.part ? room.part.part.split('/').pop() ?? '' : room.path
-    if (/\.pptx$/i.test(imageSubject2)) room.lastImageCounts = countPptxImages(bytes)
+    if (/\.pptx$/i.test(imageSubject2)) room.lastImageCounts = countPptxImages(finalBytes)
     broadcastMeta(room)
     const r: { newHash: string } = { newHash: newHash }
     return r
@@ -1994,6 +2100,8 @@ export function resetCollabForTests(): void {
   saveChains.clear()
   resetStatsMap.clear()
   roomTtlMs = 30_000
+  parentQuietMs = 5000
+  parentResetMaxMs = 60_000
 }
 
 // ---------------------------------------------------------------------------
