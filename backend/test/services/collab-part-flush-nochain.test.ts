@@ -107,4 +107,45 @@ describe('P0-1c: 파트 저장이 부모 flush를 기다리는 동안 부모 저
     // 뒷정리: 파트 flush 타임아웃(8초)까지 기다렸다가 끝낸다.
     resetCollabForTests()
   }, 20000)
+
+  it('dirty_room은 재시도 가능 여부를 알린다 (편집자 있음 retryable / 없음 non-retryable)', async () => {
+    // U-close-save: 닫힌 부모(편집자 없음)는 절대 수렴하지 않으므로
+    // 클라이언트가 상한을 기다리면 안 된다. retryable=false면 즉시 실패한다.
+    const sParent = await createSession(HOST_REL)
+    const parentRoom = rooms.get(sParent.roomId)!
+    parentRoom.docDirty = true
+    const sPart = await createSession(HOST_REL, { part: PART })
+    const partRoom = rooms.get(sPart.roomId)!
+    const eBytes = await partBytesWithMark(hostAbs(HOST_REL), PART, 'P0X7E0')
+    const rClosed = await applySave(sPart.roomId, eBytes, {
+      kind: partRoom.kind,
+      baseHash: sPart.lastHash,
+      clientId: 7,
+    })
+    expect('conflict' in rClosed && (rClosed as { code?: string }).code).toBe('dirty_room')
+    expect((rClosed as { retryable?: boolean }).retryable).toBe(false)
+    resetCollabForTests()
+  }, 20000)
+
+  it('flush 실패(편집자 있음)는 retryable하다', async () => {
+    // U-dirty-timeout: 편집자가 열려 있으면 부모가 수렴할 수 있으므로
+    // 클라이언트가 상한 내 대기 후 1회 재시도한다.
+    const sParent = await createSession(HOST_REL)
+    const parentRoom = rooms.get(sParent.roomId)!
+    const fakeSock = { send: (_b: unknown) => {} }
+    parentRoom.conns.set(fakeSock, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
+    parentRoom.ownerConn = fakeSock
+    parentRoom.ownerIds.add(1)
+    const sPart = await createSession(HOST_REL, { part: PART })
+    const partRoom = rooms.get(sPart.roomId)!
+    const eBytes = await partBytesWithMark(hostAbs(HOST_REL), PART, 'P0X7E1')
+    const rOpen = await applySave(sPart.roomId, eBytes, {
+      kind: partRoom.kind,
+      baseHash: sPart.lastHash,
+      clientId: 7,
+    })
+    expect('conflict' in rOpen && (rOpen as { code?: string }).code).toBe('dirty_room')
+    expect((rOpen as { retryable?: boolean }).retryable).toBe(true)
+    resetCollabForTests()
+  }, 20000)
 })
