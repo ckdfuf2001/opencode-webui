@@ -1380,6 +1380,25 @@ E21만의 문제가 아니다. 근거:
 - 원인 2개, 둘 다 수정: (1) 서버 — 파트 저장이 체인을 잡고 flush(최대 8초)를 기다리면, 그 flush에 필요한 부모 저장이 같은 체인 뒤에 줄서는 순환대기. 판정(flush/깨끗체크)만 체인 밖에서 먼저 하고, 체인은 읽기-검사-쓰기만 직렬화한다 (PUT /save 파트분기 + PUT /embed 동일). 겹쳐쓰기는 baseHash 잠금 + 쓰기 체인이 막는다. (2) 클라이언트(AttachmentEditor.waitParentSaveDone) — 실패 done에 포기하지 말고 성공까지 대기 + 내부 중복 officeSaveRequest 제거.
 - 테스트: backend 단위 3건 green (신규 nochain 1 + gate 개정 2 — 구 큐잉 단언 "flush 중 일반 저장은 기다린다"를 새 동작 "바로 끝난다"로 갱신). e2e U-flush-race chromium+msedge 2 passed (47.1s). 회귀 매트릭스는 아래 C6c-b 항목에서 계속.
 
+## P0-1c-3 dirty_room 상한 + retryable (2026-11-08)
+- U-flush-race 수정 뒤에도 attach 재시도 대기가 때로 영원히 끝나지 않을 수 있어 상한을 둔다. `waitParentSaveDone`을 `officeSave.ts` 공용으로 옮기고 기본 30초 + 실패 done 무시.
+- collabApi.save가 서버 `dirty_room`을 `currentHash` 탓에 `conflict`로 오인하던 매핑을 고쳤다 (서버 코드를 reason으로 살림).
+- xlsx/docx saveViaRoom + PptxViewer.persistBytes + AttachmentEditor.persist의 dirty_room에 상한 대기 후 1회 재시도. 그래도 안 되면 기존 내 사본 경로로 끝난다.
+- red: U-dirty-timeout(부모 저장 영구 실패) — 수정 전 468/503ms 만에 포기(no mine) → 수정 후 상한 대기 후 내 사본, 양쪽 green (1.9분).
+- U-close-save 회귀 발견: 닫힌 부모는 절대 수렴하지 않는데 30초를 기다려 20초 단언이 깨졌다. 서버 gate가 `retryable`을 싣는다 (편집자 있음 true/없음 false). false면 즉시 실패(기존 `부모 파일을 먼저 저장하세요` 토스트), true일 때만 대기+재시도. 단위 red 2건 → green. U-close-save + U-dirty-timeout 4 passed (2.7분).
+- 단위 가드 추가: 파트 PUT body는 inner 바이트 (outer 통째 아님) + 디스크에 부모(G)+파트(E) 마크 보존 단언.
+
+## C6c-b 1~6 대조표 (2026-11-08)
+- 1) 무접속 dispose 원복 + 30초 reopen: 완료. `resetRoomByServer`는 항상 dispose, 집계만 conns>0일 때 (collab-rooms.ts 1324~1343). red `collab-reset-frequency.test.ts` 3 its green (무접속 dispose / 카운터 / 닫음→첨부저장→재입장 가시+낡은 owner 차단).
+- 2) 리셋 빈도 2분 disruptive 원문: 완료. 임시 프로브(부모 열어둠 + 2인 첨부편집 흉내, 매 10초 부모+파트 저장, 12라운드) — `rounds=12 elapsedMs=124604 resetStats={"total":12,"disruptive":12,"lastAt":...}`, 디스크 양쪽 마크 보존. (프로브 파일은 삭제, 원문만 기록.)
+- 3) requestId 짝짓기: 유지. P0-1c 이후 체인은 쓰기 구간(ms)만 잡으므로 매칭 응답이 막힐 일이 사실상 없고, 막혀도 baseHash 대조가 순서를 보장한다. 우회는 그대로 둔다 (gate 단위 테스트 round 2가 커버).
+- 4) P0-4 knownHash: 완료. AttachmentEditor 155~160 GET ETag→knownHash(strict), strict-http 단위 3 its green (GET 발급/신선도/stale 판정).
+- 5) pptx conflict_room 토스트 + 사본 e2e: 완료. PptxViewer 562~565 notice+mine, pptx-stale 단위+e2e green.
+- 6) 캡션 단언: 완료. e2e k-dbl 9 passed (캡션 라벨/아래 dblclick 3개 스텝 포함) + frontend oleHitTest 8 its (padBottom 2건 포함, 단 frontend 단위 러너 없음).
+- flake 3건 × 3회: U-open-part-pptx (chromium 3/6 pass, msedge 0/5 — insert saveFirst vs seeding 레이스, msedge는 item-3 제거 베이스라인에서도 실패로 코드 무관 확정), E2-join (chromium 3/3, msedge 1/3 — B 탭 포커스 미스, trace로 키입력 미도달 확인), nosubtle (3/3 양쪽 green — 단발성 부하).
+- 빠진 매트릭스: c5-1+c5-2+ui-layout 28 passed / c4-3 20 passed / c4-4+c4-6 34 passed + G2 2건 기존실패(베이스라인 동일) / docx-collab 20 passed / xlsx-collab 36 passed + X0a-9·X2a-6 4 failed(저장 경로 무관 타이밍, isolated X0a-9 chromium pass) / c3 54 passed / pptx-collab 절반A 12 passed + E21b·E3·E8·E9 8 failed(베이스라인 동일) / 절반B 크로미움 E12·E18·E16b·E21·모바일×3 실패(베이스라인 동일) + E13~E20 6 passed(msedge) / c5-4 X묶음 18 passed + U-close-save 2 failed→retryable 수정 후 green / c5-4 Y묶음 16 passed(R-ribbon 포함) / backend 전체 702 passed + 3 기존환경실패(bun:sqlite 2 + oleObject 1) / tsc backend 기존에러만·frontend clean / eslint 변경파일 clean(신규 warning 0, 베이스라인 대조) / encoding 통과.
+- PC 2대 수동 목록에 추가: "부모 문서를 계속 편집하는 동안 다른 PC에서 첨부 저장" (이번 교착 상황).
+
 ## P0-1c 회귀 매트릭스 (2026-11-08)
 - backend 전체: 702 passed / 3 실패는 전부 기존·환경 문제 (bun:sqlite 없음 config-migration·repo-tracking 스위트 2건 — node 실행 환경, office-embed assembleXlsxEmbed `/oleObject` 1건 — office-embed.ts는 node:zlib/crypto만 import, 수정 모듈과 무관).
 - e2e: U-flush-race 2 passed / U-flush-clean 2 passed / U-parent* 4 passed / P-open-part-coedit* 6 passed / c5-3 31 passed + E2-join 1 flake(단독 2 passed) / K-dbl 9 passed + nosubtle 1 flake(단독 2 passed) / c5-4 전체 39/58까지 1 실패(U-open-part-pptx msedge만 — INSERT 후 ole-icon 개수, PUT 무관·단독재실행도 msedge만 빨강/chromium green, 기존 msedge 렌더 flake).
