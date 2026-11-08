@@ -29,7 +29,7 @@ async function parentBytesWithMark(hostFile: string, mark: string): Promise<Uint
   const zip = await JSZip.loadAsync(await fs.readFile(hostFile))
   const name = 'ppt/slides/slide1.xml'
   const cur = await zip.file(name)!.async('string')
-  const next = cur.replace(/C5-0 host|P0X5[A-Z0-9]*/, mark)
+  const next = cur.replace(/C5-0 host|P0X5[A-Z0-9]*|P0X7[A-Z0-9]*/, mark)
   if (next === cur) throw new Error('fixture changed: no slide anchor text')
   zip.file(name, next)
   return new Uint8Array(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
@@ -58,7 +58,7 @@ afterEach(() => {
   resetCollabForTests()
 })
 
-describe('P0-1 flush gate: requestId가 맞는 저장 하나만 체인을 건너뛴다', () => {
+describe('P0-1 flush gate: flush 응답 저장도 체인을 탄다', () => {
   it('flush 대기 중 일반 저장도 끝난다 (순환대기 금지)', async () => {
     const sParent = await createSession(HOST_REL)
     const parentRoom = rooms.get(sParent.roomId)!
@@ -97,8 +97,9 @@ describe('P0-1 flush gate: requestId가 맞는 저장 하나만 체인을 건너
     // G가 요청 뒤에 끝난 일반 저장이라 flush가 끝나 파트 저장이 이어서 성공한다.
     const partR = await partP
     expect('newHash' in partR).toBe(true)
-    // F: 두 번째 파트 저장의 flush가 펜딩된 동안, 짝이 맞는 flush 응답은
-    // 쓰기 체인을 건너뛰고 바로 수행된다 (우회 막힘 방지).
+    // F: 두 번째 파트 저장의 flush가 펜딩된 동안에도, 짝이 맞는 flush 응답은
+    // 체인을 타되 막히지 않고 바로 수행된다 (체인은 쓰기 구간만 잡으므로
+    // flush 대기 중에는 비어 있다 — P0-1c-2, 우회 없음).
     // (파트 쓰기는 adopt 후 부모 방을 dispose하므로 부모 방을 다시 연다.)
     const sParentB = await createSession(HOST_REL)
     const parentRoomB = rooms.get(sParentB.roomId)!
