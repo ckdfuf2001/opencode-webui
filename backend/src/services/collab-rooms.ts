@@ -1513,9 +1513,43 @@ export async function applySave(
       throw { message: 'View-only participant cannot save', statusCode: 403, code: 'view_only' }
     }
   }
+  // P0-1c: 파트 저장의 부모 flush 판정은 체인을 잡기 전에 끝낸다.
+  // 체인 안에서 flush(최대 8초)를 기다리면 부모 수동·자동 저장이 뒤에 줄서서
+  // flush가 굶어 죽는 순환대기가 된다 (U-flush-race: 파트 PUT이 8초씩 두 번
+  // 잡으면 부모는 16초간 막히고 attach는 dirty_room으로 끝난다).
+  // 체인은 디스크 읽기-검사-쓰기만 직렬화한다. 겹쳐쓰기는 baseHash 잠금 +
+  // 쓰기 체인이 막는다 (flush 뒤에 도착한 부모 저장은 stale로 409가 난다).
+  // C6c: 파트 방 저장 전에 부모를 깨끗하게 만든다 (PUT /embed와 동일한 순서).
+  // 부모에 열린 에디터가 있으면 flush를 강제하고, 미저장이 stranded면 막는다.
+  if (room.part) {
+    const parentId = roomIdForAbs(room.part.parentAbs)
+    const proom = rooms.get(parentId)
+    if (proom) {
+      if (roomHasOpenEditor(parentId)) {
+        const flush = await requestParentFlush(parentId)
+        if (!flush.ok) {
+          const cur = await currentDiskHash(parentId)
+          const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
+            conflict: true,
+            currentHash: cur,
+            code: 'dirty_room',
+          }
+          return r
+        }
+      } else if (proom.docDirty || proom.lastEditorDropAt > 0) {
+        const cur = await currentDiskHash(parentId)
+        const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
+          conflict: true,
+          currentHash: cur,
+          code: 'dirty_room',
+        }
+        return r
+      }
+    }
+  }
   const chainKey = parentChainKey(room)
   // P0-1: flush 응답 중 103 요청의 requestId와 짝이 맞는 저장 하나만 체인을
-  // 건너뛴다. 나머지는 파트 저장이 끝날 때까지 체인에서 기다린다 (겹쳐쓰기 금지).
+  // 건너뛴다. 겹쳐쓰기는 baseHash 잠금 + 쓰기 체인이 막는다.
   // (기존: pendingFlush가 있으면 전부 건너뛰어 일반 자동저장이 끼어들 수 있었다.)
   let bypassChain = false
   const pending = room.pendingFlush
@@ -1525,34 +1559,6 @@ export async function applySave(
   }
   const prev = bypassChain ? Promise.resolve() : (saveChains.get(chainKey) ?? Promise.resolve())
   const run = prev.then(async () => {
-    // C6c: 파트 방 저장 전에 부모를 깨끗하게 만든다 (PUT /embed과 동일한 순서).
-    // 부모에 열린 에디터가 있으면 flush를 강제하고, 미저장이 stranded면 막는다.
-    if (room.part) {
-      const parentId = roomIdForAbs(room.part.parentAbs)
-      const proom = rooms.get(parentId)
-      if (proom) {
-        if (roomHasOpenEditor(parentId)) {
-          const flush = await requestParentFlush(parentId)
-          if (!flush.ok) {
-            const cur = await currentDiskHash(parentId)
-            const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
-              conflict: true,
-              currentHash: cur,
-              code: 'dirty_room',
-            }
-            return r
-          }
-        } else if (proom.docDirty || proom.lastEditorDropAt > 0) {
-          const cur = await currentDiskHash(parentId)
-          const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
-            conflict: true,
-            currentHash: cur,
-            code: 'dirty_room',
-          }
-          return r
-        }
-      }
-    }
     const disk = await currentDiskHash(roomId)
     // X1b(P0-3/P0-4): 낙관적 잠금. lib 방(xlsx/docx)은 기존대로, P0-2부터
     // PPT 방도 baseHash가 있으면 방 해시와 대조한다 (낡은 탭의 덮어쓰기 차단).

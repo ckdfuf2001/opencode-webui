@@ -601,11 +601,37 @@ app.put('/embed', async (c) => {
     if (room && embedViewerForbidden(rid, clientId)) {
       return c.json({ error: 'View-only participant cannot edit attachments while editors are present', code: 'view_only' }, 403)
     }
+    // P0-1c: flush 판정은 체인을 잡기 전에 끝낸다. 체인 안에서 flush(최대 8초)를
+    // 기다리면 부모 수동·자동 저장이 뒤에 줄서서 flush가 굶어 죽는 순환대기가
+    // 된다 (U-flush-race). 판정만 먼저 하고 읽기-검사-쓰기는 체인 안에서 한다.
+    // flush 뒤에 도착한 부모 저장은 아래 base/disk 대조에서 409가 난다.
+    let preFlushHash: string | null = null
+    if (room) {
+      // U-parent: 부모 방에 저장할 수 있는 편집자가 있으면 flush를 강제한다 (D64).
+      // flush가 부모 미저장을 디스크에 쓴 뒤에야 파트를 교체한다 (둘 다 생존).
+      preFlushHash = room.lastHash
+      if (roomHasOpenEditor(rid)) {
+        const flush = await requestParentFlush(rid)
+        if (!flush.ok) {
+          const cur = await currentDiskHash(rid)
+          return c.json({ error: 'Parent has unsaved changes — save the parent file first, then retry', code: 'dirty_room', currentHash: cur }, 409)
+        }
+      } else if (room.docDirty || room.lastEditorDropAt > 0) {
+        // B3: 편집 conn이 없고 (a) 방이 dirty면 미저장이 stranded될 수 있으므로 막는다.
+        // (b) 비정상 종료 기록이 있으면 보수적으로 막는다. clean close(1000/1001)는
+        // onClose에서 기록을 지우므로 여기로 오지 않는다.
+        const cur = await currentDiskHash(rid)
+        const why = room.docDirty
+          ? 'Parent has unsaved changes — save the parent file first, then retry'
+          : 'Parent tab is unreachable — open the parent file, save it, then retry'
+        return c.json({ error: why, code: 'dirty_room', currentHash: cur }, 409)
+      }
+    }
     // P0-1: 읽기-검사-쓰기를 부모 체인에서 직렬화한다 (PUT /save와 같은 체인).
     // flush 응답은 이 경로로 오지 않으므로 교착 없이 대기한다.
     return runParentChained(abs, async () => {
-    let hostBytes = new Uint8Array(await getRawFileContent(q.path))
-    let disk = room ? await currentDiskHash(rid) : await hashFile(abs).catch(() => null)
+    const hostBytes = new Uint8Array(await getRawFileContent(q.path))
+    const disk = room ? await currentDiskHash(rid) : await hashFile(abs).catch(() => null)
     // U-stale: 파트 단위 낙관적 잠금. 연 시점 파트와 다르면 덮어쓰지 않는다.
     // 방 해시와 무관하게 파트 자체를 비교한다 (방이 모르는 외부 변경도 잡힌다).
     if (q2.partHash) {
@@ -619,30 +645,8 @@ app.put('/embed', async (c) => {
       }
     }
     if (room) {
-      // U-parent: 부모 방에 저장할 수 있는 편집자가 있으면 flush를 강제한다 (D64).
-      // flush가 부모 미저장을 디스크에 쓴 뒤에야 파트를 교체한다 (둘 다 생존).
       // 수렴성: flush 저장 자체가 lastHash를 움직이므로, 재시도 base가 flush 전 해시와
       // 같아도 받아들인다 (그 사이 부모 저장은 flush 저장에 포함되어 보존된다).
-      const preFlushHash = room.lastHash
-      if (roomHasOpenEditor(rid)) {
-        const flush = await requestParentFlush(rid)
-        if (!flush.ok) {
-          const cur = await currentDiskHash(rid)
-          return c.json({ error: 'Parent has unsaved changes — save the parent file first, then retry', code: 'dirty_room', currentHash: cur }, 409)
-        }
-        // flush 저장이 디스크·방 해시를 바꿨으므로 다시 읽는다.
-        hostBytes = new Uint8Array(await getRawFileContent(q.path))
-        disk = await currentDiskHash(rid)
-      } else if (room.docDirty || room.lastEditorDropAt > 0) {
-        // B3: 편집 conn이 없고 (a) 방이 dirty면 미저장이 stranded될 수 있으므로 막는다.
-        // (b) 비정상 종료 기록이 있으면 보수적으로 막는다. clean close(1000/1001)는
-        // onClose에서 기록을 지우므로 여기로 오지 않는다.
-        const cur = await currentDiskHash(rid)
-        const why = room.docDirty
-          ? 'Parent has unsaved changes — save the parent file first, then retry'
-          : 'Parent tab is unreachable — open the parent file, save it, then retry'
-        return c.json({ error: why, code: 'dirty_room', currentHash: cur }, 409)
-      }
       if (!q2.baseHash || (q2.baseHash !== room.lastHash && q2.baseHash !== preFlushHash)) {
         return c.json({ error: 'Stale base — reload the attachment and retry', code: 'stale', currentHash: disk }, 409)
       }
