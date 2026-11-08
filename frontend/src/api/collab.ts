@@ -109,6 +109,7 @@ export type CollabSaveResult =
       ok: false
       reason: 'conflict' | 'conflict_room' | 'conflict_external' | 'denied' | 'not_seeded' | 'image_loss' | 'dirty_room' | 'error'
       currentHash?: string | null
+      retryable?: boolean
       code?: string
       message?: string
       detail?: ImageLossDetail
@@ -157,6 +158,7 @@ async function postSaveBinary(
     error?: string
     code?: string
     currentHash?: string | null
+    retryable?: boolean
   } | null
   if (res.status === 409) {
     if (body?.code === 'not_seeded') return { ok: false, reason: 'not_seeded', code: body.code, message: body.error }
@@ -173,8 +175,9 @@ async function postSaveBinary(
     if (body?.code === 'dirty_room') {
       // P0-1c(3): 부모가 수렴하지 않아 파트 저장이 거부됨. reason을 살려
       // 호출자가 상한 내 대기 후 1회 재시도한다 (예전에는 currentHash 탓에
-      // 아래 분기에서 'conflict'로 오인됐다).
-      return { ok: false, reason: 'dirty_room', currentHash: body?.currentHash ?? null, code: body.code, message: body?.error }
+      // 아래 분기에서 'conflict'로 오인됐다). retryable이 true일 때만 기다린다
+      // (닫힌 부모는 절대 수렴하지 않는다 — U-close-save).
+      return { ok: false, reason: 'dirty_room', currentHash: body?.currentHash ?? null, code: body.code, message: body?.error, retryable: body?.retryable === true }
     }
     if (body?.code === 'conflict_room' || body?.code === 'conflict_external' || body?.code === 'conflict' || body?.currentHash !== undefined) {
       // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능),

@@ -1495,7 +1495,7 @@ export async function applySave(
   opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: RoomKind; flushRequestId?: string },
 ): Promise<
   | { newHash: string }
-  | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' | 'dirty_room' }
+  | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' | 'dirty_room'; retryable?: boolean }
   | { imageLoss: true; before: { media: number; refs: number }; after: { media: number; refs: number } }
 > {
   const room = rooms.get(roomId)
@@ -1529,19 +1529,25 @@ export async function applySave(
         const flush = await requestParentFlush(parentId)
         if (!flush.ok) {
           const cur = await currentDiskHash(parentId)
-          const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
+          // retryable: 편집자가 열려 있어 부모가 수렴할 수 있다.
+          // 클라이언트는 상한 내 대기 후 1회 재시도한다 (U-dirty-timeout).
+          const r: { conflict: true; currentHash: string | null; code: 'dirty_room'; retryable: boolean } = {
             conflict: true,
             currentHash: cur,
             code: 'dirty_room',
+            retryable: true,
           }
           return r
         }
       } else if (proom.docDirty || proom.lastEditorDropAt > 0) {
         const cur = await currentDiskHash(parentId)
-        const r: { conflict: true; currentHash: string | null; code: 'dirty_room' } = {
+        // retryable: false — 편집자가 없어 부모가 스스로 수렴하지 않는다.
+        // 클라이언트는 상한을 기다리지 말고 즉시 실패한다 (U-close-save).
+        const r: { conflict: true; currentHash: string | null; code: 'dirty_room'; retryable: boolean } = {
           conflict: true,
           currentHash: cur,
           code: 'dirty_room',
+          retryable: false,
         }
         return r
       }

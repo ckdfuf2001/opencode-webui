@@ -1294,9 +1294,10 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         bytes = new Uint8Array(await blob2.arrayBuffer())
         res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, res.currentHash ?? room.baseHash)
       }
-      if (!res.ok && res.reason === 'dirty_room' && part && !retried) {
+      if (!res.ok && res.reason === 'dirty_room' && res.retryable === true && part && !retried) {
         // P0-1c(3): 부모가 수렴할 때까지 상한 내 대기 후 1회만 재시도한다
-        // (U-dirty-timeout). 그래도 안 되면 아래 기존 실패 처리(내 사본)로 끝난다.
+        // (U-dirty-timeout). 닫힌 부모(retryable false)는 즉시 기존 실패 처리로
+        // 끝난다 (U-close-save). 그래도 안 되면 아래 기존 실패 처리(내 사본)로 끝난다.
         await waitParentSaveDone(path)
         return saveViaRoom(true, true)
       }
@@ -3143,9 +3144,10 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         bytes = await patchUnsupportedForSave(raw2)
         res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
       }
-      if (!res.ok && res.reason === 'dirty_room' && part && !retried) {
+      if (!res.ok && res.reason === 'dirty_room' && res.retryable === true && part && !retried) {
         // P0-1c(3): 부모가 수렴할 때까지 상한 내 대기 후 1회만 재시도한다
-        // (U-dirty-timeout). 그래도 안 되면 아래 기존 실패 처리(내 사본)로 끝난다.
+        // (U-dirty-timeout). 닫힌 부모(retryable false)는 즉시 기존 실패 처리로
+        // 끝난다 (U-close-save). 그래도 안 되면 아래 기존 실패 처리(내 사본)로 끝난다.
         await waitParentSaveDone(path)
         return saveViaRoom(true, true)
       }

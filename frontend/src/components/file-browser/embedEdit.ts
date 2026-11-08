@@ -157,6 +157,7 @@ export interface AttachmentPutResult {
   code?: string
   error?: string
   currentHash?: string | null
+  retryable?: boolean
 }
 
 export async function putAttachmentPart(
@@ -180,6 +181,7 @@ export async function putAttachmentPart(
     code?: string
     error?: string
     currentHash?: string | null
+    retryable?: boolean
   }
   if (!res.ok || !body.ok) {
     return {
@@ -187,6 +189,7 @@ export async function putAttachmentPart(
       code: typeof body.code === 'string' ? body.code : `http_${res.status}`,
       error: body.error,
       currentHash: body.currentHash,
+      retryable: body.retryable,
     }
   }
   return { ok: true, newHash: body.newHash }

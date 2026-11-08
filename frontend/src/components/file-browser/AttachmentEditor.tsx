@@ -325,12 +325,12 @@ export default function AttachmentEditor({
           return false
         }
         if (r.code === 'dirty_room') {
-          // 부모 저장 요청 후 1회 재시도. 성공 done까지 최대 상한(기본 30초) 대기한다
-          // (경합 중 낡은 저장의 실패 done에 포기하지 않는다 — U-flush-race).
+          // 부모 저장 요청 후 1회 재시도. 편집자가 열려 있으면(retryable) 성공
+          // done까지 최대 상한(기본 30초) 대기한다 (경합 중 낡은 저장의 실패 done에
+          // 포기하지 않는다 — U-flush-race). 닫힌 부모(retryable false)는 절대
+          // 수렴하지 않으므로 기다리지 않고 즉시 내 사본을 준다 (U-close-save).
           // 상한을 넘기면 저장 중을 풀고 실패 토스트 + 내 사본을 준다 (U-dirty-timeout).
-          window.dispatchEvent(new CustomEvent('officeSaveRequest'))
-          const ok = await waitParentSaveDone(parentPath)
-          if (!ok) {
+          const offerMineNow = (): void => {
             try {
               if (mineUrlRef.current) URL.revokeObjectURL(mineUrlRef.current)
               const url = URL.createObjectURL(new Blob([next as unknown as BlobPart], { type: 'application/octet-stream' }))
@@ -341,6 +341,16 @@ export default function AttachmentEditor({
             } catch {
               /* 무시 */
             }
+          }
+          if (r.retryable !== true) {
+            offerMineNow()
+            showToast.error('부모 파일을 먼저 저장하세요 — 내 사본을 내려받아 주세요')
+            return false
+          }
+          window.dispatchEvent(new CustomEvent('officeSaveRequest'))
+          const ok = await waitParentSaveDone(parentPath)
+          if (!ok) {
+            offerMineNow()
             showToast.error('부모 저장이 끝나지 않아 중단했습니다 — 내 사본을 내려받아 주세요')
             return false
           }

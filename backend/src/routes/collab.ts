@@ -178,6 +178,8 @@ app.post('/save', async (c) => {
       //          conflict_external = 외부 변경(재시도 금지, 배너·다운로드로 알린다).
       // C6c: dirty_room = 부모 파일에 미저장이 있어 파트 저장을 막았다(부모 먼저 저장).
       // 문구는 기존 PUT 경로의 클라이언트 토스트와 동일하게 둔다 (U-parent 단언).
+      // P0-1c(3): retryable이 true면(편집자 있음) 클라이언트가 상한 내 대기 후
+      // 1회 재시도하고, false면(닫힌 부모) 즉시 실패한다 (U-close-save).
       const code = applied.code ?? 'conflict'
       return c.json(
         {
@@ -191,6 +193,7 @@ app.post('/save', async (c) => {
                   : 'File changed on disk since last save (no auto-merge)',
           code,
           currentHash: applied.currentHash,
+          retryable: 'retryable' in applied ? (applied.retryable ?? false) : undefined,
         },
         409,
       )
@@ -614,17 +617,18 @@ app.put('/embed', async (c) => {
         const flush = await requestParentFlush(rid)
         if (!flush.ok) {
           const cur = await currentDiskHash(rid)
-          return c.json({ error: 'Parent has unsaved changes — save the parent file first, then retry', code: 'dirty_room', currentHash: cur }, 409)
+          return c.json({ error: 'Parent has unsaved changes — save the parent file first, then retry', code: 'dirty_room', currentHash: cur, retryable: true }, 409)
         }
       } else if (room.docDirty || room.lastEditorDropAt > 0) {
         // B3: 편집 conn이 없고 (a) 방이 dirty면 미저장이 stranded될 수 있으므로 막는다.
         // (b) 비정상 종료 기록이 있으면 보수적으로 막는다. clean close(1000/1001)는
         // onClose에서 기록을 지우므로 여기로 오지 않는다.
+        // retryable: false — 편집자가 없어 부모가 스스로 수렴하지 않는다 (U-close-save).
         const cur = await currentDiskHash(rid)
         const why = room.docDirty
           ? 'Parent has unsaved changes — save the parent file first, then retry'
           : 'Parent tab is unreachable — open the parent file, save it, then retry'
-        return c.json({ error: why, code: 'dirty_room', currentHash: cur }, 409)
+        return c.json({ error: why, code: 'dirty_room', currentHash: cur, retryable: false }, 409)
       }
     }
     // P0-1: 읽기-검사-쓰기를 부모 체인에서 직렬화한다 (PUT /save와 같은 체인).

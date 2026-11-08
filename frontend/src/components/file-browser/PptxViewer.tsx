@@ -532,9 +532,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
         }
       }
       // P0-1c(3): 파트 방 dirty_room이면 부모가 수렴할 때까지 상한 내 대기 후
-      // 1회만 재시도한다 (U-dirty-timeout). 상한을 넘기면 아래 기존 실패 처리
-      // (내 사본 다운로드)로 끝난다.
-      if (!res.ok && res.reason === 'dirty_room' && part && !opts?.retried) {
+      // 1회만 재시도한다 (U-dirty-timeout). 닫힌 부모(retryable false)는 즉시
+      // 아래 기존 실패 처리(내 사본 다운로드)로 끝난다 (U-close-save).
+      if (!res.ok && res.reason === 'dirty_room' && res.retryable === true && part && !opts?.retried) {
         await waitParentSaveDone(savePath)
         return persistBytesRef.current!(bytes, { ...opts, quiet: true, auto: false, retried: true })
       }
