@@ -38,7 +38,10 @@ async function parentBytesWithMark(hostFile: string, mark: string): Promise<Uint
 }
 
 async function partInnerWithMark(hostFile: string, part: string, mark: string): Promise<Uint8Array> {
-  const zip = await JSZip.loadAsync(await fs.readFile(hostFile))
+  const raw = await fs.readFile(hostFile)
+  const zip = await JSZip.loadAsync(raw)
+  const f = zip.file(part)
+  if (!f) throw new Error(`part missing in fixture: ${part}`)
   const inner = await JSZip.loadAsync(await zip.file(part)!.async('uint8array'))
   const name = 'word/document.xml'
   const cur = await inner.file(name)!.async('string')
@@ -68,19 +71,23 @@ describe('C6c-1: 파트 저장은 부모가 조용할 때만 방을 리셋한다
   it('부모 입력 중 첨부 저장 3회 → 리셋 0회, 조용해지면 1회, 양쪽 디스크 보존', async () => {
     // C6c-1 red: 파트 저장이 부모 방을 즉시 리셋(4001+dispose)하면 타이핑이
     // 끊긴다. 조용한 구간까지 미뤄야 한다 (미뤄진 동안 부모 화면에 미반영 표시).
-    setParentQuietMs(300)
+    // 라운드당 입력→저장 왕복이 quiet 창 안에 들어가도록 타이밍을 잡는다.
+    setParentQuietMs(2000)
     try {
       const sParent = await createSession(HOST_REL)
       const parentRoom = rooms.get(sParent.roomId)!
-      const fakeSock = { send: (_b: unknown) => {} }
-      parentRoom.conns.set(fakeSock, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
-      parentRoom.ownerConn = fakeSock
-      parentRoom.ownerIds.add(1)
+      // 두 명의 편집자 conn (owner 선출용).
+      const fakeA = { send: (_b: unknown) => {} }
+      const fakeB = { send: (_b: unknown) => {} }
+      parentRoom.conns.set(fakeA, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
+      parentRoom.conns.set(fakeB, { joinedAt: Date.now(), clientIds: new Set([2]), lastMsgAt: Date.now() })
+      parentRoom.ownerConn = fakeA
+      parentRoom.ownerIds = new Set([1])
       const sPart = await createSession(HOST_REL, { part: PART })
       const partRoom = rooms.get(sPart.roomId)!
       // 3 라운드: 부모 입력(Y 업데이트) + 부모 저장 + 첨부 저장.
+      // 입력은 파트 쓰기 직전에 갱신한다 (flush 왕복 뒤에도 quiet 창 안에 들도록).
       for (let n = 1; n <= 3; n += 1) {
-        parentTyping(sParent.roomId, `P0X9T${n}`, fakeSock)
         const eBytes = await partInnerWithMark(hostAbs(HOST_REL), PART, `P0X9E${n}`)
         const partP = applySave(sPart.roomId, eBytes, {
           kind: partRoom.kind,
@@ -88,12 +95,13 @@ describe('C6c-1: 파트 저장은 부모가 조용할 때만 방을 리셋한다
           clientId: 7,
         })
         partP.catch(() => null)
-        await new Promise((r) => setTimeout(r, 200))
+        await new Promise((r) => setTimeout(r, 100))
+        parentTyping(sParent.roomId, `P0X9T${n}`, fakeA)
         const gBytes = await parentBytesWithMark(hostAbs(HOST_REL), `P0X9G${n}`)
         const gR = await applySave(sParent.roomId, gBytes, {
           kind: parentRoom.kind,
           baseHash: rooms.get(sParent.roomId)!.lastHash,
-          clientId: 1,
+          clientId: n % 2 === 0 ? 2 : 1,
         })
         expect('newHash' in gR).toBe(true)
         const partR = await partP
@@ -105,7 +113,7 @@ describe('C6c-1: 파트 저장은 부모가 조용할 때만 방을 리셋한다
       const before = resetStats(sParent.roomId)
       expect(before?.total ?? 0).toBe(0)
       // 입력을 멈추고 조용한 구간(+여유)을 기다리면 리셋이 1회 일어난다.
-      await new Promise((r) => setTimeout(r, 1200))
+      await new Promise((r) => setTimeout(r, 3000))
       expect(rooms.get(sParent.roomId)).toBeUndefined()
       const after = resetStats(sParent.roomId)
       expect(after?.total ?? 0).toBe(1)
