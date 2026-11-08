@@ -20,6 +20,7 @@ const {
   createSession,
   resetCollabForTests,
   rooms,
+  runParentChained,
 } = await import('../../src/services/collab-rooms')
 
 const hostAbs = (...p: string[]) => path.join(tmp, ...p)
@@ -162,6 +163,86 @@ describe('P0-1 flush gate: requestId가 맞는 저장 하나만 체인을 건너
     } finally {
       clearTimeout(room.pendingFlush?.timer as unknown as ReturnType<typeof setTimeout>)
       resetCollabForTests()
+    }
+  })
+
+  it('flush 응답 저장도 체인을 탄다 (우회 없음)', async () => {
+    // P0-1c 후속: flush 판정이 체인 밖으로 나갔으므로 매칭 응답의 체인 우회는
+    // 불필요하고, 우회가 남으면 쓰기 구간과 겹쳐 두 부모 저장이 서로 덮는다.
+    // 체인을 잡고 있는 동안은 짝이 맞는 저장도 기다려야 한다 (red: 우회가 있으면
+    // 곧바로 끝나 버린다).
+    const sParent = await createSession(HOST_REL)
+    const room = rooms.get(sParent.roomId)!
+    let resolveFlush!: (r: { ok: boolean; reason?: string }) => void
+    const flushed = new Promise<{ ok: boolean; reason?: string }>((r) => {
+      resolveFlush = r
+    })
+    room.pendingFlush = {
+      promise: flushed,
+      resolve: resolveFlush,
+      timer: setTimeout(() => {}, 60000),
+      conn: null,
+      requestId: 'f-test-chain',
+      requestedAt: Date.now() - 1000,
+    }
+    let releaseHolder!: () => void
+    const holderGate = new Promise<void>((r) => {
+      releaseHolder = r
+    })
+    const holderP = runParentChained(hostAbs(HOST_REL), () => holderGate)
+    holderP.catch(() => null)
+    await new Promise((r) => setTimeout(r, 200))
+    try {
+      // 일반 저장도, 짝이 맞는 flush 응답 저장도 체인에 막힌다.
+      const gBytes = await parentBytesWithMark(hostAbs(HOST_REL), 'P0X7G0')
+      let gDone = false
+      const gP = applySave(sParent.roomId, gBytes, {
+        kind: room.kind,
+        baseHash: rooms.get(sParent.roomId)!.lastHash,
+        clientId: 10,
+      }).then((r) => {
+        gDone = true
+        return r
+      })
+      gP.catch(() => null)
+      const fBytes = await parentBytesWithMark(hostAbs(HOST_REL), 'P0X7F0')
+      let fDone = false
+      const fP = applySave(sParent.roomId, fBytes, {
+        kind: room.kind,
+        baseHash: rooms.get(sParent.roomId)!.lastHash,
+        clientId: 9,
+        flushRequestId: 'f-test-chain',
+      }).then((r) => {
+        fDone = true
+        return r
+      })
+      fP.catch(() => null)
+      await new Promise((r) => setTimeout(r, 800))
+      expect(gDone).toBe(false)
+      expect(fDone).toBe(false)
+      releaseHolder()
+      const gR = await gP
+      expect('newHash' in gR).toBe(true)
+      // fP는 gP 뒤에 줄섰으므로 base가 낡아 conflict가 난다 — 겹쳐 실행이 아니라
+      // 직렬 실행이라는 증거다. 클라이언트와 동일하게 fresh base로 1회 재시도한다.
+      const fR1 = await fP
+      expect('conflict' in fR1).toBe(true)
+      const fBytes2 = await parentBytesWithMark(hostAbs(HOST_REL), 'P0X7F1')
+      const fR2 = await applySave(sParent.roomId, fBytes2, {
+        kind: room.kind,
+        baseHash: rooms.get(sParent.roomId)!.lastHash,
+        clientId: 9,
+      })
+      expect('newHash' in fR2).toBe(true)
+    } finally {
+      try {
+        releaseHolder!()
+      } catch {
+        /* 이미 해제됨 */
+      }
+      clearTimeout(room.pendingFlush?.timer as unknown as ReturnType<typeof setTimeout>)
+      resetCollabForTests()
+      await holderP.catch(() => null)
     }
   })
 })
