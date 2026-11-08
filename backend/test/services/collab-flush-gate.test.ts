@@ -34,23 +34,19 @@ async function parentBytesWithMark(hostFile: string, mark: string): Promise<Uint
   return new Uint8Array(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
 }
 
+// 파트 PUT의 body는 파트(inner) 바이트다 (outer 전체가 아니다 — e2e
+// AttachmentEditor가 보내는 것과 동일). outer를 통째로 넣으면 파트 자리에
+// 호스트가 통째로 박힌다 (unit에서만 성립하는 오판이 된다).
 async function partBytesWithMark(hostFile: string, part: string, mark: string): Promise<Uint8Array> {
   const buf = await fs.readFile(hostFile)
-  return partBytesWithMarkFromBytes(new Uint8Array(buf), part, /C5-0 payload|P0X5[A-Z0-9]*/, mark)
-}
-
-// 같은 outer 바이트에서 파트를 한 번 더 고친다 (디스크 재경유 없이 —
-// JSZip 재생성 디스크를 다시 읽으면 두 번 감싼 inner를 못 찾을 수 있다).
-async function partBytesWithMarkFromBytes(outer: Uint8Array, part: string, from: RegExp | string, mark: string): Promise<Uint8Array> {
-  const zip = await JSZip.loadAsync(outer)
+  const zip = await JSZip.loadAsync(buf)
   const inner = await JSZip.loadAsync(await zip.file(part)!.async('uint8array'))
   const name = 'word/document.xml'
   const cur = await inner.file(name)!.async('string')
-  const next = cur.replace(from, mark)
+  const next = cur.replace(/C5-0 payload|P0X5[A-Z0-9]*/, mark)
   if (next === cur) throw new Error('fixture changed: no part anchor text')
   inner.file(name, next)
-  zip.file(part, await inner.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
-  return new Uint8Array(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+  return new Uint8Array(await inner.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
 }
 
 beforeEach(() => {
@@ -109,7 +105,7 @@ describe('P0-1 flush gate: requestId가 맞는 저장 하나만 체인을 건너
     parentRoomB.ownerConn = fakeSock
     parentRoomB.ownerIds.add(1)
     const sPart2 = await createSession(HOST_REL, { part: PART })
-    const eBytes2 = await partBytesWithMarkFromBytes(eBytes, PART, 'P0X5E0', 'P0X5E1')
+    const eBytes2 = await partBytesWithMark(host, PART, 'P0X5E1')
     const partP2 = applySave(sPart2.roomId, eBytes2, {
       kind: partRoom.kind,
       baseHash: sPart2.lastHash,
