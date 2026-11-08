@@ -232,13 +232,10 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
   }
   const ok = await ctx.saveFirst().then(async (first) => {
     if (first) return true
-    // 선저장 실패가 방 미시드(not_seeded) 탓이면 시드를 기다렸다가 1회만 재시도한다.
     if (ctx.waitSeed) {
       const seeded = await ctx.waitSeed()
       if (seeded && (await ctx.saveFirst())) return true
     }
-    // 그래도 실패했는데 방이 한 번도 시드된 적 없으면 로컬에 플러시할 내용이 없다.
-    // 디스크 기준으로 POST한다 (서버 dirty_room 검사가 디스크 레이스를 막는다).
     const seeded = await roomSeeded(ctx.roomId)
     if (seeded === false) return true
     return false

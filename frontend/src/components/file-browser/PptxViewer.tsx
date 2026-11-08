@@ -116,6 +116,10 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
     [],
   )
   const [saving, setSaving] = useState(false)
+  // C6c-3: 저장 중 여부는 ref로도 들고 있는다. setSaving은 비동기라
+  // 앞 저장이 끝난 바로 다음 틱에 온 요청이 낡은 saving 클로저에 걸려
+  // stash되면, 그 저장을 끝낸 done은 이미 지나가 다시 오지 않는다 (무한 대기).
+  const savingRef = useRef(false)
   // lib에서 코멘트 추가 등 모델이 바뀌면 우리 목록도 다시 읽는다 (저장 전에도 보인다).
   const refreshComments = useCallback(async () => {
     const h = viewerRef.current
@@ -647,10 +651,28 @@ if (!writeBackHaltedRef.current) {
         // persistBytes 는 **boolean 반환형**(throw 하지 않음).
         //  M28: skip(빈 바이트/세션 없음) / denied(409) / network(상태 0) 를 구분한다.
         //  skip 은 재시도 금지(같은 바이트로 다시 보내도 결과가 같다).
-        if (bytes.length === 0) return { skipped: 'empty_bytes' as const }
-        if (!collabRef.current) return { skipped: 'nothing_to_save' as const }
+        // C6c-3: 자동저장 완료도 officeSaveDone으로 알린다. 안 그러면 이 저장
+        // 중에 온 officeSaveRequest 대기자가 done 없이 영원히 기다린다
+        // (U-open-part-pptx 삽입 멈춤). flush 응답이 아니므로 id는 싣지 않는다
+        // (ycollab flush 대기는 id가 없으면 무시한다).
+        const emitDone = (ok: boolean): void => {
+          try {
+            window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok, path: savePathRef.current } }))
+          } catch {
+            /* 무시 */
+          }
+        }
+        if (bytes.length === 0) {
+          emitDone(false)
+          return { skipped: 'empty_bytes' as const }
+        }
+        if (!collabRef.current) {
+          emitDone(false)
+          return { skipped: 'nothing_to_save' as const }
+        }
         const beforeAt = lastSaveRef.current?.at
         const r = await persistBytesRef.current(bytes)
+        emitDone(r === true)
         if (r === true) return { ok: true as const }
         // M29 P0-1: 분류는 **이 호출의 응답** 기준이다(직전 저장 상태로 추측하지 않는다).
         //  응답이 갱신되지 않았으면 persistBytes 안쪽의 skip 이다(정상 종료 → 재시도 없음).
@@ -959,14 +981,21 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
     }
   }
 
-  // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
-  // 평가되므로 앞에서 참조하면 TDZ가 난다).
+    // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
+    // 평가되므로 앞에서 참조하면 TDZ가 난다).
   useEffect(() => {
     // flush용 신선 저장을 한 번 실행한다. 완료 신호에 id를 실어 ack와 짝짓는다.
     const runPersistForFlush = async (flushRequestId: string, keepEditing: boolean): Promise<void> => {
       const h = viewerRef.current
-      if (!h || !savePath) return
+      if (!h || !savePath) {
+        // C6c-3: 저장할 수 없으면 조용히 끝나지 말고 실패로 알린다.
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', { detail: { ok: false, path: savePath, flushRequestId } }),
+        )
+        return
+      }
       delegatedSaveRef.current = false
+      savingRef.current = true
       setSaving(true)
       try {
         const bytes = await h.getContent()
@@ -985,6 +1014,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         )
         return
       } finally {
+        savingRef.current = false
         setSaving(false)
       }
       const delegated = delegatedSaveRef.current
@@ -999,8 +1029,13 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
     // 일반 저장 1회 (flush id 없음).
     const runPersistPlain = async (keepEditing: boolean): Promise<void> => {
       const h = viewerRef.current
-      if (!h || !savePath) return
+      if (!h || !savePath) {
+        // C6c-3: 저장할 수 없으면 조용히 끝나지 말고 실패로 알린다.
+        window.dispatchEvent(new CustomEvent('officeSaveDone', { detail: { ok: false, path: savePath } }))
+        return
+      }
       delegatedSaveRef.current = false
+      savingRef.current = true
       setSaving(true)
       try {
         // M16: 수동 저장 경로는 대기 없이 getContent 1회로 직렬화한다.
@@ -1019,6 +1054,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         )
         return
       } finally {
+        savingRef.current = false
         setSaving(false)
       }
       // B3: owner가 아닌 사람의 저장은 위임이다. "저장했습니다"라고 하면
@@ -1060,8 +1096,11 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       const keepEditing = detail?.keepEditing === true
       // B1: flush 요청 id. 완료 신호에 실어 서버 ack와 짝짓는다.
       const flushRequestId = typeof detail?.flushRequestId === 'string' ? detail.flushRequestId : undefined
-      if (saving) {
+      if (savingRef.current) {
         // B1: 저장 중이면 flush만 적재해 둔다. 어떤 저장이 끝나든 신선 저장으로 응답한다.
+        // (saving 상태가 아니라 ref로 본다 — setSaving은 비동기라 앞 저장이 끝난
+        // 바로 다음 틱의 요청이 낡은 클로저에 걸리면, 그 저장을 끝낸 done은 이미
+        // 지나가 다시 오지 않는다.)
         if (flushRequestId) pendingFlushIdRef.current = flushRequestId
         return
       }
