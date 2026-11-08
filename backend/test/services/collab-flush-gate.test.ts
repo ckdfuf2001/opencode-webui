@@ -56,8 +56,7 @@ afterEach(() => {
 })
 
 describe('P0-1 flush gate: requestId가 맞는 저장 하나만 체인을 건너뛴다', () => {
-  it('flush 대기 중 일반 저장은 끼어들지 않는다', async () => {
-    const sParent = await createSession(HOST_REL)
+  it('flush 대기 중 일반 저장은 끼어들지 않는다', async () => {    const sParent = await createSession(HOST_REL)
     const parentRoom = rooms.get(sParent.roomId)!
     // owner인 척하는 가짜 conn: 103을 삼키고 ack하지 않아 flush를 펜딩시킨다.
     const fakeSock = { send: (_b: unknown) => {} }
@@ -109,5 +108,41 @@ describe('P0-1 flush gate: requestId가 맞는 저장 하나만 체인을 건너
     resetCollabForTests()
     await partP.catch(() => null)
     await gP.catch(() => null)
+  })
+
+  it('요청 뒤에 끝난 일반 저장은 flush를 끝낸다 (교착 방지)', async () => {
+    // 진행 중이던 저장이 flush 응답을 겸하는 경우: id가 없어도,
+    // 요청 시점보다 늦게 끝났고 원격 업데이트를 모두 포함하면 끝낸다.
+    const sParent = await createSession(HOST_REL)
+    const room = rooms.get(sParent.roomId)!
+    let resolveFlush!: (r: { ok: boolean; reason?: string }) => void
+    const flushed = new Promise<{ ok: boolean; reason?: string }>((r) => {
+      resolveFlush = r
+    })
+    room.pendingFlush = {
+      promise: flushed,
+      resolve: resolveFlush,
+      timer: setTimeout(() => {}, 60000),
+      conn: null,
+      requestId: 'f-test-noid',
+      requestedAt: Date.now() - 1000,
+    }
+    try {
+      const b = await parentBytesWithMark(hostAbs(HOST_REL), 'P0X5N0')
+      const r = await applySave(sParent.roomId, b, {
+        kind: room.kind,
+        baseHash: room.lastHash,
+        clientId: 3,
+      })
+      expect('newHash' in r).toBe(true)
+      const settled = await Promise.race([
+        flushed.then(() => true),
+        new Promise((rr) => setTimeout(() => rr(false), 2000)),
+      ])
+      expect(settled).toBe(true)
+    } finally {
+      clearTimeout(room.pendingFlush?.timer as unknown as ReturnType<typeof setTimeout>)
+      resetCollabForTests()
+    }
   })
 })
