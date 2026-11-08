@@ -170,11 +170,6 @@ export interface CollabRoom {
     conn: unknown
     /** B1: 요청과 응답을 짝짓는 id. 104의 id가 다르면 무시한다. */
     requestId: string
-    /**
-     * P0-1: 짝이 맞는 flush 응답 저장이 체인을 건너뛴 뒤 true가 된다.
-     * 같은 id의 중복·재시도는 체인을 탄다 (하나만 우회).
-     */
-    bypassUsed?: boolean
     /** P0-1: flush 요청 시각. 이후에 끝난 저장은 ack 없어도 flush를 끝낼 수 있다. */
     requestedAt: number
   } | null
@@ -1554,16 +1549,12 @@ export async function applySave(
     }
   }
   const chainKey = parentChainKey(room)
-  // P0-1: flush 응답 중 103 요청의 requestId와 짝이 맞는 저장 하나만 체인을
-  // 건너뛴다. 겹쳐쓰기는 baseHash 잠금 + 쓰기 체인이 막는다.
-  // (기존: pendingFlush가 있으면 전부 건너뛰어 일반 자동저장이 끼어들 수 있었다.)
-  let bypassChain = false
-  const pending = room.pendingFlush
-  if (pending && opts?.flushRequestId && opts.flushRequestId === pending.requestId && !pending.bypassUsed) {
-    pending.bypassUsed = true
-    bypassChain = true
-  }
-  const prev = bypassChain ? Promise.resolve() : (saveChains.get(chainKey) ?? Promise.resolve())
+  // P0-1c-2: flush 응답 저장도 체인을 탄다 (우회 없음). P0-1c에서 flush 판정이
+  // 체인 밖으로 나갔으므로, 체인은 쓰기 구간만 잡는다. 우회가 남으면 쓰기 구간과
+  // 겹쳐 두 부모 저장이 서로의 baseHash 대조를 피해 덮어쓴다.
+  // 겹쳐쓰기는 baseHash 잠금 + 쓰기 체인이 막는다. flushRequestId는
+  // flush 완료 판정(같은 id의 저장·104 ack)에만 쓴다.
+  const prev = saveChains.get(chainKey) ?? Promise.resolve()
   const run = prev.then(async () => {
     const disk = await currentDiskHash(roomId)
     // X1b(P0-3/P0-4): 낙관적 잠금. lib 방(xlsx/docx)은 기존대로, P0-2부터
@@ -1697,12 +1688,10 @@ export async function applySave(
     const r: { newHash: string } = { newHash: newHash }
     return r
   })
-  if (!bypassChain) {
-    saveChains.set(chainKey, run.then(
-      () => undefined,
-      () => undefined,
-    ))
-  }
+  saveChains.set(chainKey, run.then(
+    () => undefined,
+    () => undefined,
+  ))
   return run
 }
 
