@@ -1548,13 +1548,16 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
       await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
       await setCellByFormulaBar(attach, 'A1', 'udirtytimeout-attach')
       await attach.getByTestId('attach-save').click({ timeout: 20000 })
-      // 성공 토스트는 뜨지 않는다.
+      const t0 = Date.now()
+      // 성공 토스트는 뜨지 않는다 (부모가 계속 깨져 있어 재시도도 실패한다).
       await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(0, {
         timeout: 10000,
       })
-      // 상한 안에 저장 중이 풀리고 (버튼 복구) 내 사본이 보인다.
+      // 상한(30초) 안에 저장 중이 풀리고 (버튼 복구) 내 사본이 보인다.
+      // 수정 전에는 8초 만에 포기하므로 경과시간 단언이 빨강이다.
       await expect(attach.getByTestId('attach-save')).toBeEnabled({ timeout: 90000 })
-      await expect(attach.getByTestId('attach-mine')).toBeVisible({ timeout: 90000 })
+      await expect(attach.getByTestId('xlsx-collab-download')).toBeVisible({ timeout: 90000 })
+      expect(Date.now() - t0).toBeGreaterThan(25000)
     } finally {
       await ctxA.close().catch(() => {})
       await ctxB.close().catch(() => {})
