@@ -1892,6 +1892,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         getBaseHash: () => collabRef.current?.baseHash,
         isViewer: room?.role === 'viewer',
         saveFirst: () => saveBeforeEmbed(path, editing),
+        isDirty: () => markDocxDirty.current === true,
         reload: () => {
           // 서버가 방을 리셋했으므로 세션을 버리고 다시 붙는다.
           try { sessionRef.current?.destroy() } catch { /* ignore */ }
@@ -4447,6 +4448,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         isViewer: room?.role === 'viewer',
         sheet: objActiveSheetRef.current,
         saveFirst: () => (editingRef.current ? save() : Promise.resolve(true)),
+        isDirty: () => dirtyRef.current === true,
         // 선저장이 방 미시드로 실패하면 시드를 기다렸다가 1회 재시도한다.
         waitSeed: () => waitCollabSeed(() => collabRef.current?.joined === true),
         reload: () => onReloadFileRef.current?.(),

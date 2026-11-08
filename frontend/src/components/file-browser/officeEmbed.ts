@@ -74,6 +74,8 @@ export interface EmbedCtx {
   sheet?: number
   isViewer?: boolean
   saveFirst: () => Promise<boolean>
+  /** 미저장 변경이 있는지. 없으면 선저장을 건너뛰고 바로 POST한다 (빈 저장 왕복 제거). */
+  isDirty?: () => boolean
   /** 방 미시드(not_seeded)로 선저장이 실패하면 시드를 기다렸다가 1회 재시도한다. 없으면 즉시 중단. */
   waitSeed?: () => Promise<boolean>
   reload: () => void
@@ -230,16 +232,27 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
     if (baseHash) fd.append('baseHash', baseHash)
     return postEmbed(fd)
   }
-  const ok = await ctx.saveFirst().then(async (first) => {
-    if (first) return true
-    if (ctx.waitSeed) {
-      const seeded = await ctx.waitSeed()
-      if (seeded && (await ctx.saveFirst())) return true
-    }
-    const seeded = await roomSeeded(ctx.roomId)
-    if (seeded === false) return true
-    return false
-  })
+  // 미저장 변경이 없으면 선저장을 건너뛰고 바로 POST한다. 빈 저장 왕복(PUT +
+  // 대기 + 재시도)은 시드·저장 레이스에 말려 삽입 자체를 멈추게 했다
+  // (U-open-part-pptx msedge). 미저장이 있을 때만 아래 절차를 탄다.
+  let needsSave = true
+  try {
+    if (ctx.isDirty) needsSave = ctx.isDirty() !== false
+  } catch {
+    needsSave = true
+  }
+  const ok = !needsSave
+    ? true
+    : await ctx.saveFirst().then(async (first) => {
+      if (first) return true
+      if (ctx.waitSeed) {
+        const seeded = await ctx.waitSeed()
+        if (seeded && (await ctx.saveFirst())) return true
+      }
+      const seeded = await roomSeeded(ctx.roomId)
+      if (seeded === false) return true
+      return false
+    })
   if (!ok) {
     showToast.error('저장에 실패해 첨부를 중단합니다')
     return

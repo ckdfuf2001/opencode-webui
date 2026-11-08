@@ -1169,6 +1169,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         slide,
         isViewer: c?.role === 'viewer',
         saveFirst: () => saveBeforeEmbed(savePath, editingRef.current),
+        isDirty: () => unsavedLocalEditRef.current === true,
         // 선저장이 방 미시드로 실패하면 시드를 기다렸다가 1회 재시도한다.
         waitSeed: () => waitForSessionSynced(() => collabRef.current?.session ?? null),
         reload: () => setReloadKey((v) => v + 1),
