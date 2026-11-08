@@ -189,6 +189,14 @@ export interface CollabRoom {
   lastRemoteUpdateAt: number
   /** B3: 마지막 applySave 성공 시각 (flush 신선도 판정용). */
   lastSaveAt: number
+  /**
+   * C6c-1: 미뤄진 부모 리셋. 파트 저장 때 부모에 열린 편집자가 있고 부모가
+   * 입력 중이면 방을 닫지 않고 이 표시만 남긴다 (조용한 구간·첨부 종료·마지막
+   * 퇴장 중 하나가 오면 리셋한다). 부모 화면에는 "첨부 변경 미반영" 배너로 보인다.
+   */
+  pendingPartReset: { at: number } | null
+  /** C6c-1: 미뤄진 리셋의 조용한 구간 타이머 (한 번에 하나, 재시작 가능). */
+  partResetTimer: ReturnType<typeof setTimeout> | null
 }
 
 export interface CollabParticipant {
@@ -245,6 +253,93 @@ export const MAX_SAVE_BYTES = 50 * 1024 * 1024
 let roomTtlMs = 30_000
 export function setRoomTtlMs(ms: number): void {
   roomTtlMs = ms
+}
+
+/**
+ * C6c-1: 부모가 "조용하다"는 기준 (ms). 파트 저장 때 부모에 열린 편집자가 있고
+ * 마지막 Y 업데이트가 이 시간 안에 있으면 리셋을 미룬다 (타이핑 중 화면 리셋 방지).
+ * 미뤄진 리셋은 타이머(폴링 아님)로 조용한 구간에 수행한다.
+ */
+let parentQuietMs = 5000
+export function setParentQuietMs(ms: number): void {
+  parentQuietMs = ms
+}
+
+/** 부모가 입력 중인가 (미저장 변경이 있거나 최근 Y 업데이트가 있음). */
+function parentIsActive(room: CollabRoom): boolean {
+  if (room.docDirty) return true
+  return Date.now() - room.lastRemoteUpdateAt < parentQuietMs
+}
+
+/** C6c-1: 이 방(파트 방이면 부모 방)의 미뤄진 파트 변경 여부. */
+export function hasDeferredPartChange(roomId: string): boolean {
+  const r = rooms.get(roomId)
+  if (!r) return false
+  if (r.pendingPartReset) return true
+  if (r.part) {
+    const p = rooms.get(roomIdForAbs(r.part.parentAbs))
+    return !!p?.pendingPartReset
+  }
+  return false
+}
+
+/** 미뤄진 부모 리셋을 수행한다 (조용한 구간·첨부 종료 시 호출). */
+export function doDeferredParentReset(parentId: string): void {
+  const r = rooms.get(parentId)
+  if (!r || !r.pendingPartReset) return
+  r.pendingPartReset = null
+  clearParentResetTimer(r)
+  resetRoomByServer(parentId)
+}
+
+/**
+ * C6c-1: 파트 저장을 부모 zip에 반영하고 방 리셋을 결정한다.
+ * - 부모에 열린 편집자가 있고 부모가 입력 중이면 리셋을 미룬다 (4001로
+ *   타이핑을 끊지 않는다). 디스크·방 해시는 즉시 adopt한다.
+ * - 한가하면(편집자 없음/조용함) 즉시 리셋한다 (기존 동작).
+ * 반환값: 리셋을 미뤘는지.
+ */
+export function adoptParentPartAndMaybeReset(parentId: string, newHash: string): { deferred: boolean } {
+  const proom = rooms.get(parentId)
+  if (!proom) return { deferred: false }
+  proom.lastHash = newHash
+  proom.externalChanged = false
+  if (roomHasOpenEditor(parentId) && parentIsActive(proom)) {
+    proom.pendingPartReset = { at: Date.now() }
+    armParentResetTimer(parentId)
+    broadcastMeta(proom)
+    logger.warn(`Collab room ${parentId.slice(0, 8)}: parent reset deferred (editing in progress)`)
+    return { deferred: true }
+  }
+  clearParentResetTimer(proom)
+  proom.pendingPartReset = null
+  resetRoomByServer(parentId)
+  return { deferred: false }
+}
+
+/** 미뤄진 리셋 타이머를 걸거나 갱신한다 (한 번에 하나). */
+function armParentResetTimer(parentId: string): void {
+  const r = rooms.get(parentId)
+  if (!r) return
+  clearParentResetTimer(r)
+  r.partResetTimer = setTimeout(() => {
+    r.partResetTimer = null
+    const cur = rooms.get(parentId)
+    if (!cur || !cur.pendingPartReset) return
+    // 아직 입력 중이면 조용한 구간까지 미룬다 (타이머 체인, 폴링 아님).
+    if (parentIsActive(cur)) {
+      armParentResetTimer(parentId)
+      return
+    }
+    doDeferredParentReset(parentId)
+  }, parentQuietMs)
+}
+
+function clearParentResetTimer(room: CollabRoom): void {
+  if (room.partResetTimer) {
+    clearTimeout(room.partResetTimer)
+    room.partResetTimer = null
+  }
 }
 
 let sweepTimer: ReturnType<typeof setInterval> | null = null
@@ -412,6 +507,8 @@ export interface RoomMeta {
   epoch: string
   externalChanged: boolean
   aiBlockedAt: number | null
+  /** C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태. */
+  hasPendingPartChange?: boolean
 }
 
 function roomMeta(room: CollabRoom): RoomMeta {
@@ -422,6 +519,7 @@ function roomMeta(room: CollabRoom): RoomMeta {
     epoch: room.epoch,
     externalChanged: room.externalChanged,
     aiBlockedAt: room.aiBlockedAt,
+    ...(room.pendingPartReset ? { hasPendingPartChange: true as const } : {}),
   }
 }
 
@@ -590,11 +688,13 @@ function createRoom(
     objects: newRoomObjects(),
     pendingFlush: null,
     lastEditorDropAt: 0,
-    docDirty: false,
-    createdAt: Date.now(),
-    lastRemoteUpdateAt: 0,
-    lastSaveAt: 0,
-  }
+  docDirty: false,
+  createdAt: Date.now(),
+  lastRemoteUpdateAt: 0,
+  lastSaveAt: 0,
+  pendingPartReset: null,
+  partResetTimer: null,
+}
   if (part) room.part = part
   awareness.on('update', (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
@@ -722,6 +822,12 @@ function stopWatch(room: CollabRoom): void {
 
 function disposeRoom(room: CollabRoom): void {
   stopWatch(room)
+  try {
+    if (process.env.COLLAb_DEBUG_DISPOSE) console.log('[dispose-dbg]', room.id.slice(0, 8), new Error('trace').stack?.split('\n').slice(1, 7).join(' <- '))
+  } catch {
+    /* 무시 */
+  }
+  clearParentResetTimer(room)
   // U-parent: 대기 중인 flush는 방과 함께 끝난다 (PUT이 8초를 다 기다리지 않게).
   settlePendingFlush(room, { ok: false, reason: 'reset' })
   try { room.doc.destroy() } catch { /* 무시 */ }
@@ -1129,6 +1235,16 @@ export function removeConn(roomId: string, ws: unknown): void {
   const room = rooms.get(roomId)
   if (!room) return
   dropConnFromRoom(room, ws)
+  // C6c-1: 파트 방이 비면(첨부 편집자 Done/종료) 미뤄둔 부모 리셋을 지금 한다.
+  if (room.part && room.conns.size === 0) {
+    try {
+      const parentId = roomIdForAbs(room.part.parentAbs)
+      const proom = rooms.get(parentId)
+      if (proom?.pendingPartReset) doDeferredParentReset(parentId)
+    } catch {
+      /* 무시 */
+    }
+  }
 }
 
 export interface SaveCheck {
@@ -1294,6 +1410,9 @@ export function resetRoomFromDisk(
   if (!room) return { ok: false, reason: 'no_room' }
   if (room.ownerConn === null || room.ownerConn !== conn) return { ok: false, reason: 'not_owner' }
   const diskHash = room.lastHash
+  // C6c-1: 리셋 자체가 미뤄진 파트 변경을 해소한다.
+  room.pendingPartReset = null
+  clearParentResetTimer(room)
   // 전원 종료 → 재입장. 이 시점에 owner는 접속 중이므로 디스크 == lastHash가 정상.
   noteReset(roomId, room.conns.size)
   for (const ws of [...room.conns.keys()]) {
@@ -1623,8 +1742,8 @@ export async function applySave(
     room.pendingHashes.push(newHash)
     if (room.pendingHashes.length > 3) room.pendingHashes.shift()
     // C6c: 파트 방 저장은 부모 zip 안 파트를 교체한다 (PUT /embed와 동일).
-    // 부모 방이 열려 있으면 lastHash를 새 부모 해시로 adopt하고 리셋한다
-    // (PUT이 하던 것과 동일 — 부모 편집자는 resume으로 따라온다).
+    // 부모 zip·해시는 즉시 adopt하고, 방 리셋은 조용한 구간까지 미룰 수 있다
+    // (C6c-1: 열린 편집자의 타이핑을 4001로 끊지 않는다).
     try {
       if (room.part) {
         const parentAbs = room.part.parentAbs
@@ -1633,12 +1752,9 @@ export async function applySave(
         const out = await replaceEmbedPart(zipLoadJSZip, hostBytes, norm, bytes)
         await writeFileContent(parentAbs, Buffer.from(out))
         const parentId = roomIdForAbs(parentAbs)
-        const proom = rooms.get(parentId)
-        if (proom) {
-          proom.lastHash = hashBytes(out)
-          proom.externalChanged = false
-          resetRoomByServer(parentId)
-        }
+        // C6c-1: 부모 zip은 즉시 반영하고, 방 리셋은 부모가 조용할 때까지 미룬다
+        // (열린 편집자의 타이핑을 4001로 끊지 않는다).
+        adoptParentPartAndMaybeReset(parentId, hashBytes(out))
       } else {
         await writeFileContent(room.path, Buffer.from(bytes))
       }

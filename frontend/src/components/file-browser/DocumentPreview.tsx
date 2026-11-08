@@ -1227,6 +1227,8 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   const collabRef = useRef<DocxCollab | null>(null)
   collabRef.current = collab
   const [collabNotice, setCollabNotice] = useState<{ kind: string; text: string } | null>(null)
+  // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
+  const [partChangePending, setPartChangePending] = useState(false)
   const [docxPeople, setDocxPeople] = useState<Array<{ clientId: number; name: string; color: string; self: boolean; role?: string }>>([])
   const docxPeopleRef = useRef<typeof docxPeople>([])
   docxPeopleRef.current = docxPeople
@@ -1308,6 +1310,9 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         await waitParentSaveDone(path)
         return saveViaRoom(true, true)
       }
+      // C6c-1: 서버가 미뤄진 파트 변경을 알리면 배너를 켠다 (해소되면 다음 응답에서 꺼진다).
+      // 첨부 탭(part)은 변경 주체라 표시하지 않는다.
+      if (!part && typeof res.hasPendingPartChange === 'boolean') setPartChangePending(res.hasPendingPartChange)
       if (!res.ok) {
         setMineBytes(new Uint8Array(bytes))
         setCollabNotice({ kind: 'error', text: `저장 실패 — 내 사본을 내려받으세요: ${res.message ?? res.reason}` })
@@ -1968,12 +1973,31 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
              내 사본 다운로드
             </button>
           )}
+        <button
+          type="button"
+          className="shrink-0 underline underline-offset-2 hover:text-muted-foreground"
+          onClick={() => { setCollabNotice(null); }}
+        >
+          닫기
+        </button>
+      </div>
+      )}
+      {partChangePending && !collabNotice && !mineBytes && (
+        <div data-testid="docx-part-pending" className="absolute left-2 right-2 top-2 z-30 flex items-center gap-2 rounded-md border border-sky-500/40 bg-background/95 px-3 py-2 text-xs shadow-sm">
+          <span className="flex-1">첨부 변경 미반영 — 다시 불러오면 첨부 내용이 반영됩니다</span>
           <button
             type="button"
-            className="shrink-0 underline underline-offset-2 hover:text-muted-foreground"
-            onClick={() => { setCollabNotice(null); }}
+            data-testid="docx-part-reload"
+            className="shrink-0 underline underline-offset-2 hover:text-sky-500"
+            onClick={() => {
+              setPartChangePending(false)
+              try { sessionRef.current?.destroy() } catch { /* ignore */ }
+              sessionRef.current = null
+              startedYjsRef.current = null
+              setJoinKey((k) => k + 1)
+            }}
           >
-            닫기
+            다시 불러오기
           </button>
         </div>
       )}
@@ -2358,6 +2382,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   // X1d: notice 종류에 'timeout'(연결 대기 상한)을 추가한다.
   const [collabNotice, setCollabNotice] = useState<{ kind: 'stale' | 'noetag' | 'error' | 'external' | 'timeout'; text: string } | null>(null)
   const [conflictBytes, setConflictBytes] = useState<Uint8Array | null>(null)
+  // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
+  const [partChangePending, setPartChangePending] = useState(false)
   /**
    * X1c(P1): 방 참가 판정(collab 또는 notice)이 끝날 때까지 편집기를 readOnly로 막는다.
    * 마운트 시 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 먼저 입력이 사라질 수 있다.
@@ -2615,6 +2641,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     staleRetryRef.current = false
     setForceViewOnly(false)
     setCollabNotice(null)
+    setPartChangePending(false)
     onReloadFileRef.current?.()
     setJoinKey((k) => k + 1)
   }, [])
@@ -3166,6 +3193,9 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         await waitParentSaveDone(path)
         return saveViaRoom(true, true)
       }
+      // C6c-1: 서버가 미뤄진 파트 변경을 알리면 배너를 켠다 (해소되면 다음 응답에서 꺼진다).
+      // 첨부 탭(part)은 변경 주체라 표시하지 않는다.
+      if (!part && typeof res.hasPendingPartChange === 'boolean') setPartChangePending(res.hasPendingPartChange)
       if (!res.ok) {
         // X1c(P0-2): 모든 저장 실패에 내 사본 다운로드를 제공한다.
         await storeFailedBytes(null)
@@ -4711,28 +4741,47 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
                   다시 연결
                 </button>
               )}
-              {conflictBytes && (
-                <button
-                  type="button"
-                  data-testid="xlsx-collab-download"
-                  onClick={() => {
-                    const blob = new Blob([conflictBytes as unknown as BlobPart], {
-                      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    })
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = fileName ?? 'workbook.xlsx'
-                    a.click()
-                    setTimeout(() => URL.revokeObjectURL(url), 1000)
-                  }}
-                  className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted"
-                >
-                  내 사본 다운로드
-                </button>
-              )}
-            </div>
-          )}
+        {conflictBytes && (
+          <button
+            type="button"
+            data-testid="xlsx-collab-download"
+            onClick={() => {
+              const blob = new Blob([conflictBytes as unknown as BlobPart], {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = fileName ?? 'workbook.xlsx'
+              a.click()
+              setTimeout(() => URL.revokeObjectURL(url), 1000)
+            }}
+            className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted"
+          >
+            내 사본 다운로드
+          </button>
+        )}
+      </div>
+      )}
+      {partChangePending && !collabNotice && (
+        <div
+          data-testid="xlsx-part-pending"
+          className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-3 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs shadow-sm"
+        >
+          <span className="flex-1">첨부 변경 미반영 — 다시 불러오면 첨부 내용이 반영됩니다</span>
+          <button
+            type="button"
+            data-testid="xlsx-part-reload"
+            onClick={() => {
+              setPartChangePending(false)
+              void reconnectCollab()
+            }}
+            className="h-6 shrink-0 rounded border border-border px-2 font-medium hover:bg-muted"
+          >
+            다시 불러오기
+          </button>
+        </div>
+      )}
           </Suspense>
         </div>
         {showComments && (

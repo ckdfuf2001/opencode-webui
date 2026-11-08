@@ -7,7 +7,9 @@ import { issueCollabName } from '../db/collab-name-queries'
 import {
   acquireObjectLock,
   addConn,
+  adoptParentPartAndMaybeReset,
   applySave,
+  hasDeferredPartChange,
   checkSave,
   clearEditorDropOnCleanClose,
   clientRoleInRoom,
@@ -180,6 +182,7 @@ app.post('/save', async (c) => {
       // 문구는 기존 PUT 경로의 클라이언트 토스트와 동일하게 둔다 (U-parent 단언).
       // P0-1c(3): retryable이 true면(편집자 있음) 클라이언트가 상한 내 대기 후
       // 1회 재시도하고, false면(닫힌 부모) 즉시 실패한다 (U-close-save).
+      // C6c-1: 미뤄진 파트 변경이 있으면 알린다 (배너→다시 불러오기).
       const code = applied.code ?? 'conflict'
       return c.json(
         {
@@ -194,6 +197,7 @@ app.post('/save', async (c) => {
           code,
           currentHash: applied.currentHash,
           retryable: 'retryable' in applied ? (applied.retryable ?? false) : undefined,
+          hasPendingPartChange: hasDeferredPartChange(roomId),
         },
         409,
       )
@@ -209,7 +213,7 @@ app.post('/save', async (c) => {
         409,
       )
     }
-    return c.json({ saved: true, newHash: applied.newHash })
+    return c.json({ saved: true, newHash: applied.newHash, hasPendingPartChange: hasDeferredPartChange(roomId) })
   } catch (error) {
     return errJson(c, error, 500)
   }
@@ -665,11 +669,10 @@ app.put('/embed', async (c) => {
     const newHash = hashBytes(out)
     logger.warn(`[embed-put] room=${rid.slice(0, 8)} part=${norm} bytes=${out.length} newHash=${newHash.slice(0, 8)}`)
     if (room) {
-      room.lastHash = newHash
-      room.externalChanged = false
-      resetRoomByServer(rid)
+      // C6c-1: 부모 zip은 즉시 반영하고, 방 리셋은 부모가 조용할 때까지 미룬다.
+      adoptParentPartAndMaybeReset(rid, newHash)
     }
-    return c.json({ ok: true, newHash })
+    return c.json({ ok: true, newHash, hasPendingPartChange: !!rooms.get(rid)?.pendingPartReset })
     })
   } catch (error) {
     return errJson(c, error, 500)

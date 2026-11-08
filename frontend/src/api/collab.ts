@@ -104,12 +104,13 @@ export interface ImageLossDetail {
 }
 
 export type CollabSaveResult =
-  | { ok: true; newHash: string }
+  | { ok: true; newHash: string; hasPendingPartChange?: boolean }
   | {
       ok: false
       reason: 'conflict' | 'conflict_room' | 'conflict_external' | 'denied' | 'not_seeded' | 'image_loss' | 'dirty_room' | 'error'
       currentHash?: string | null
       retryable?: boolean
+      hasPendingPartChange?: boolean
       code?: string
       message?: string
       detail?: ImageLossDetail
@@ -151,14 +152,19 @@ async function postSaveBinary(
     return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Save failed' }
   }
   if (res.ok) {
-    const data = (await res.json().catch(() => null)) as { newHash?: unknown } | null
-    return { ok: true, newHash: typeof data?.newHash === 'string' ? data.newHash : '' }
+    const data = (await res.json().catch(() => null)) as { newHash?: unknown; hasPendingPartChange?: unknown } | null
+    return {
+      ok: true,
+      newHash: typeof data?.newHash === 'string' ? data.newHash : '',
+      ...(data?.hasPendingPartChange === true ? { hasPendingPartChange: true as const } : {}),
+    }
   }
   const body = (await res.json().catch(() => null)) as {
     error?: string
     code?: string
     currentHash?: string | null
     retryable?: boolean
+    hasPendingPartChange?: unknown
   } | null
   if (res.status === 409) {
     if (body?.code === 'not_seeded') return { ok: false, reason: 'not_seeded', code: body.code, message: body.error }
@@ -177,14 +183,14 @@ async function postSaveBinary(
       // 호출자가 상한 내 대기 후 1회 재시도한다 (예전에는 currentHash 탓에
       // 아래 분기에서 'conflict'로 오인됐다). retryable이 true일 때만 기다린다
       // (닫힌 부모는 절대 수렴하지 않는다 — U-close-save).
-      return { ok: false, reason: 'dirty_room', currentHash: body?.currentHash ?? null, code: body.code, message: body?.error, retryable: body?.retryable === true }
+      return { ok: false, reason: 'dirty_room', currentHash: body?.currentHash ?? null, code: body.code, message: body?.error, retryable: body?.retryable === true, ...(body?.hasPendingPartChange === true ? { hasPendingPartChange: true as const } : {}) }
     }
     if (body?.code === 'conflict_room' || body?.code === 'conflict_external' || body?.code === 'conflict' || body?.currentHash !== undefined) {
       // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능),
       //        conflict_external = 외부 변경(재시도 금지, 배너·다운로드로 알린다).
       const reason =
         body?.code === 'conflict_room' ? 'conflict_room' : body?.code === 'conflict_external' ? 'conflict_external' : 'conflict'
-      return { ok: false, reason, currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error }
+      return { ok: false, reason, currentHash: body?.currentHash ?? null, code: body?.code, message: body?.error, ...(body?.hasPendingPartChange === true ? { hasPendingPartChange: true as const } : {}) }
     }
     return { ok: false, reason: 'denied', code: body?.code, message: body?.error }
   }

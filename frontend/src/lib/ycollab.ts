@@ -117,6 +117,8 @@ export interface YCollabMeta {
   epoch: string
   externalChanged: boolean
   aiBlockedAt: number | null
+  /** C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태. */
+  hasPendingPartChange?: boolean
 }
 
 /** Y.Doc 변경 집계 (작성자 판별용). writers가 비면 삭제-only일 수 있다. */

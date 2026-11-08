@@ -257,6 +257,8 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   // owner 대기 (2.4 교착 대비): 10초 초과 시 재시도 버튼.
   const [ownerWait, setOwnerWait] = useState(false)
   const [collabNotice, setCollabNotice] = useState<string | null>(null)
+  // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
+  const [partChangePending, setPartChangePending] = useState(false)
   const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
   const [connBadge, setConnBadge] = useState<{ status: string; synced: boolean }>({ status: 'connecting', synced: false })
   const baseHashRef = useRef<string | null>(null)
@@ -535,6 +537,9 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
           res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
         }
       }
+      // C6c-1: 서버가 미뤄진 파트 변경을 알리면 배너를 켠다 (해소되면 다음 응답에서 꺼진다).
+      // 첨부 탭(part)은 변경 주체라 표시하지 않는다.
+      if (!part && typeof res.hasPendingPartChange === 'boolean') setPartChangePending(res.hasPendingPartChange)
       // P0-1c(3): 파트 방 dirty_room이면 부모가 수렴할 때까지 상한 내 대기 후
       // 1회만 재시도한다 (U-dirty-timeout). 닫힌 부모(retryable false)는 즉시
       // 아래 기존 실패 처리(내 사본 다운로드)로 끝난다 (U-close-save).
@@ -1651,10 +1656,12 @@ writeBackHaltedRef.current = false
       ownerIdRef.current = meta.ownerClientId
       setMetaOwner(meta.ownerClientId)
       setMetaTick((v) => v + 1)
-      trackAiBlocked(meta.aiBlockedAt)
-      if (meta.externalChanged) {
-        setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
-      }
+        trackAiBlocked(meta.aiBlockedAt)
+        if (meta.externalChanged) {
+          setCollabNotice('외부에서 변경됨 — 다시 열기 (자동 병합 없음).')
+        }
+        // C6c-1: 미뤄진 파트 변경 알림. 해소(리셋·재입장) 후에는 meta에서 빠지므로 꺼진다.
+        setPartChangePending(meta.hasPendingPartChange === true)
       if (c && meta.lastHash) {
         baseHashRef.current = meta.lastHash
         session.knownHash = meta.lastHash
@@ -2712,6 +2719,26 @@ const peersRef = useRef<Peer[]>([])
           >
             Dismiss
           </button>
+        </div>
+      )}
+      {partChangePending && (
+        <div
+          data-testid="collab-part-pending"
+          className="flex items-center gap-2 px-3 py-1.5 border-b border-sky-500/40 bg-sky-500/10 text-[11px] text-sky-700 dark:text-sky-300"
+        >
+          <span className="flex-1">첨부 변경 미반영 — 다시 불러오면 첨부 내용이 반영됩니다</span>
+          {isOwnerNow(collabRef.current) ? (
+            <button
+              type="button"
+              data-testid="collab-part-reload"
+              onClick={() => void doResetRoom()}
+              className="shrink-0 underline underline-offset-2 hover:text-sky-500"
+            >
+              다시 불러오기
+            </button>
+          ) : (
+            <span className="shrink-0 opacity-70">소유자에게 다시 불러오기를 요청하세요</span>
+          )}
         </div>
       )}
       <div
