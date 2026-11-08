@@ -1379,3 +1379,8 @@ E21만의 문제가 아니다. 근거:
 - U-flush-race 4연속 실패(red원문): 3초 지연 루트 아래 수동+자동저장+flush 저장이 한꺼번에 도착하면 첫 승자 외 전부 409-conflict. 패자의 ok:false done에 attach 재시도 대기가 포기했고(trace: 두 attach PUT 다 dirty_room, 부모 PUT 3개가 파트 flush 타임아웃까지 체인에 묶임), flush는 8.0초+ε에 수렴해 타임아웃으로 죽었다.
 - 원인 2개, 둘 다 수정: (1) 서버 — 파트 저장이 체인을 잡고 flush(최대 8초)를 기다리면, 그 flush에 필요한 부모 저장이 같은 체인 뒤에 줄서는 순환대기. 판정(flush/깨끗체크)만 체인 밖에서 먼저 하고, 체인은 읽기-검사-쓰기만 직렬화한다 (PUT /save 파트분기 + PUT /embed 동일). 겹쳐쓰기는 baseHash 잠금 + 쓰기 체인이 막는다. (2) 클라이언트(AttachmentEditor.waitParentSaveDone) — 실패 done에 포기하지 말고 성공까지 대기 + 내부 중복 officeSaveRequest 제거.
 - 테스트: backend 단위 3건 green (신규 nochain 1 + gate 개정 2 — 구 큐잉 단언 "flush 중 일반 저장은 기다린다"를 새 동작 "바로 끝난다"로 갱신). e2e U-flush-race chromium+msedge 2 passed (47.1s). 회귀 매트릭스는 아래 C6c-b 항목에서 계속.
+
+## P0-1c 회귀 매트릭스 (2026-11-08)
+- backend 전체: 702 passed / 3 실패는 전부 기존·환경 문제 (bun:sqlite 없음 config-migration·repo-tracking 스위트 2건 — node 실행 환경, office-embed assembleXlsxEmbed `/oleObject` 1건 — office-embed.ts는 node:zlib/crypto만 import, 수정 모듈과 무관).
+- e2e: U-flush-race 2 passed / U-flush-clean 2 passed / U-parent* 4 passed / P-open-part-coedit* 6 passed / c5-3 31 passed + E2-join 1 flake(단독 2 passed) / K-dbl 9 passed + nosubtle 1 flake(단독 2 passed) / c5-4 전체 39/58까지 1 실패(U-open-part-pptx msedge만 — INSERT 후 ole-icon 개수, PUT 무관·단독재실행도 msedge만 빨강/chromium green, 기존 msedge 렌더 flake).
+- check-encoding + check-memory-rules 통과 (오류 0).
