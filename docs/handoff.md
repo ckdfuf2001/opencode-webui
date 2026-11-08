@@ -1374,3 +1374,8 @@ E21만의 문제가 아니다. 근거:
 - P0-3: 리셋 빈도 계측(resetStats total/disruptive/lastAt, /api/collab/rooms 노출) + 무접속 리셋 스킵(lastHash adopt만, 방 유지). 기존 테스트 1건이 옛 동작(항상 dispose)을 단언해서 새 요구사항에 맞게 갱신. defer(조용한 구간/Done/마지막 퇴장)는 미구현 — 미반영 구간 표시 UI도 그에 묶여 보류. 근거: 현재 미반영 구간은 저장 직후 부모 리로드까지 수초이며 EMBED_DONE 토스트+재조회가 이미 알림+반영을 담당한다.
 - P0-4: subtle 없는 http도 strict. knownHash 없이 strict만 오면 서버가 디스크/파트 해시를 직접 구해 판정하고 serverHash로 돌려준다. 클라이언트는 serverHash를 origPartHash 대신 쓴다(AttachmentEditor). red: serverHash 없음 → fix 후 2/2.
 - 중첩 OLE와 P0-1/P0-2는 원인 다름(중첩은 테스트 단언+앵커 문제였고 저장 경로는 정상). 같이 고칠 것 없음.
+
+## P0-1c 파트 flush 순환대기 해소 (2026-11-08)
+- U-flush-race 4연속 실패(red원문): 3초 지연 루트 아래 수동+자동저장+flush 저장이 한꺼번에 도착하면 첫 승자 외 전부 409-conflict. 패자의 ok:false done에 attach 재시도 대기가 포기했고(trace: 두 attach PUT 다 dirty_room, 부모 PUT 3개가 파트 flush 타임아웃까지 체인에 묶임), flush는 8.0초+ε에 수렴해 타임아웃으로 죽었다.
+- 원인 2개, 둘 다 수정: (1) 서버 — 파트 저장이 체인을 잡고 flush(최대 8초)를 기다리면, 그 flush에 필요한 부모 저장이 같은 체인 뒤에 줄서는 순환대기. 판정(flush/깨끗체크)만 체인 밖에서 먼저 하고, 체인은 읽기-검사-쓰기만 직렬화한다 (PUT /save 파트분기 + PUT /embed 동일). 겹쳐쓰기는 baseHash 잠금 + 쓰기 체인이 막는다. (2) 클라이언트(AttachmentEditor.waitParentSaveDone) — 실패 done에 포기하지 말고 성공까지 대기 + 내부 중복 officeSaveRequest 제거.
+- 테스트: backend 단위 3건 green (신규 nochain 1 + gate 개정 2 — 구 큐잉 단언 "flush 중 일반 저장은 기다린다"를 새 동작 "바로 끝난다"로 갱신). e2e U-flush-race chromium+msedge 2 passed (47.1s). 회귀 매트릭스는 아래 C6c-b 항목에서 계속.
