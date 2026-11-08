@@ -61,15 +61,17 @@ function waitParentSaveDone(parentPath: string, timeoutMs: number): Promise<bool
     const onDone = (e: Event): void => {
       const d = (e as CustomEvent<{ ok?: boolean; path?: string }>).detail
       if (d?.path !== undefined && d.path !== parentPath) return
+      // U-flush-race: 실패 done(경합 중 낡은 저장의 409)은 "저장됨"이 아니다.
+      // 먼저 온 실패에 포기하지 말고 성공까지 기다린다 (타임아웃이면 false).
+      if (d?.ok !== true) return
       if (!done) {
         done = true
         clearTimeout(timer)
         window.removeEventListener('officeSaveDone', onDone)
-        resolve(d?.ok === true)
+        resolve(true)
       }
     }
     window.addEventListener('officeSaveDone', onDone)
-    window.dispatchEvent(new CustomEvent('officeSaveRequest'))
   })
 }
 
@@ -342,7 +344,8 @@ export default function AttachmentEditor({
           return false
         }
         if (r.code === 'dirty_room') {
-          // 부모 저장 요청 후 1회 재시도 (무응답이면 중단).
+          // 부모 저장 요청 후 1회 재시도. 성공 done까지 대기한다 (경합 중
+          // 낡은 저장의 실패 done에 포기하지 않는다 — U-flush-race).
           window.dispatchEvent(new CustomEvent('officeSaveRequest'))
           const ok = await waitParentSaveDone(parentPath, SAVE_WAIT_MS)
           if (!ok) {
