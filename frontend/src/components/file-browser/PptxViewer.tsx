@@ -33,7 +33,7 @@ import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSyn
 import { createSlideGate } from '@/lib/slideLocationGate'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { deepQueryAllVisible } from '@/lib/domDeep'
-import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitCollabSeed, type EmbedDetail } from './officeEmbed'
+import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitForSessionSynced, type EmbedDetail } from './officeEmbed'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
@@ -592,7 +592,13 @@ if (!writeBackHaltedRef.current) {
       if (!quiet) showToast.error(res.message ?? 'Save failed')
       return false
     }
-    if (!savePath) return false
+    // C6c-3: 저장 경로가 없으면 조용히 끝나지 말고 실패로 알린다.
+    if (!savePath) {
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', { detail: { ok: false, path: savePath, ...(flushRequestId ? { flushRequestId } : {}) } }),
+      )
+      return false
+    }
     try {
       await saveOfficeBytes(
         savePath,
@@ -1034,7 +1040,21 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       // C6c: 파트 방도 무시한다 (부모 flush는 서버가 부모 방 conns로 직접 보낸다).
       if (standaloneRef.current || part) return
       const h = viewerRef.current
-      if (!h || !savePath) return
+      // C6c-3: 저장할 수 없으면 조용히 끝나지 말고 실패로 알린다.
+      // saveFirst 대기자(waitSaveDone)가 무한정 기다리면 삽입이 멈춘다.
+      if (!h || !savePath) {
+        const fid0 = (e as CustomEvent<OfficeSaveRequestDetail>).detail?.flushRequestId
+        window.dispatchEvent(
+          new CustomEvent('officeSaveDone', {
+            detail: {
+              ok: false,
+              path: savePath,
+              ...(typeof fid0 === 'string' && fid0.length > 0 ? { flushRequestId: fid0 } : {}),
+            },
+          }),
+        )
+        return
+      }
       // C5-2: 임베드용 선저장은 편집 세션을 유지한다 (수동 Save는 종료).
       const detail = (e as CustomEvent<OfficeSaveRequestDetail>).detail
       const keepEditing = detail?.keepEditing === true
@@ -1111,7 +1131,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         isViewer: c?.role === 'viewer',
         saveFirst: () => saveBeforeEmbed(savePath, editingRef.current),
         // 선저장이 방 미시드로 실패하면 시드를 기다렸다가 1회 재시도한다.
-        waitSeed: () => waitCollabSeed(() => collabRef.current?.session.synced === true),
+        waitSeed: () => waitForSessionSynced(() => collabRef.current?.session ?? null),
         reload: () => setReloadKey((v) => v + 1),
       })
     }

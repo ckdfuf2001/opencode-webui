@@ -1283,7 +1283,14 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     })()
     const room = collabRef.current
     const h = handle
-    if (!room || !h?.save) return false
+    // C6c-3: 저장할 수 없으면 조용히 끝나지 말고 실패로 알린다.
+    // saveFirst 대기자(waitSaveDone)가 무한정 기다리면 삽입이 멈춘다.
+    if (!room || !h?.save) {
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', { detail: { ok: false, path, ...(flushRid ? { flushRequestId: flushRid } : {}) } }),
+      )
+      return false
+    }
     try {
       const blob: Blob = await h.save()
       let bytes = new Uint8Array(await blob.arrayBuffer())
@@ -3133,7 +3140,14 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     })()
     const room = collabRef.current
     const handle = xlsxHandleRef.current
-    if (!room || !handle?.saveBytes) return false
+    // C6c-3: 저장할 수 없으면 조용히 끝나지 말고 실패로 알린다.
+    // saveFirst 대기자(waitSaveDone)가 무한정 기다리면 삽입이 멈춘다.
+    if (!room || !handle?.saveBytes) {
+      window.dispatchEvent(
+        new CustomEvent('officeSaveDone', { detail: { ok: false, path, ...(flushRid ? { flushRequestId: flushRid } : {}) } }),
+      )
+      return false
+    }
     try {
       const raw = new Uint8Array(await handle.saveBytes())
       let bytes = await patchUnsupportedForSave(raw)

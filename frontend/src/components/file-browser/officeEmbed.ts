@@ -101,6 +101,57 @@ export function waitCollabSeed(isSeeded: () => boolean, timeoutMs = 30000): Prom
 }
 
 /**
+ * 시드 완료를 구독으로 기다린다 (폴링 없음). 세션이 아직 없으면 구독할 수
+ * 없으므로 상한까지 기다렸다가 false를 돌려준다. 호출자는 상한 안에 끝나지
+ * 않으면 명시적 실패로 처리해야 한다 (조용한 중단 금지 — U-open-part-pptx).
+ */
+export function waitForSessionSynced(
+  getSession: () => {
+    getSnapshot: () => { synced: boolean }
+    subscribe: (listener: () => void) => () => void
+  } | null | undefined,
+  timeoutMs = 15000,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false
+    let unsub: (() => void) | null = null
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    const finish = (v: boolean): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      try {
+        unsub?.()
+      } catch {
+        /* 무시 */
+      }
+      resolve(v)
+    }
+    const check = (): boolean => {
+      try {
+        const s = getSession()
+        return !!s && s.getSnapshot().synced === true
+      } catch {
+        return false
+      }
+    }
+    if (check()) {
+      finish(true)
+      return
+    }
+    try {
+      const s = getSession()
+      if (s) unsub = s.subscribe(() => {
+        if (check()) finish(true)
+      })
+    } catch {
+      /* 무시 — 타임아웃이 처리 */
+    }
+    if (check()) finish(true)
+  })
+}
+
+/**
  * 서버 방의 시드 여부. 방이 없거나 조회 실패면 null.
  * (시드는 originated 업데이트 때만 생긴다 — collab-rooms.ts. unseeded면
  * 로컬에 플러시할 내용이 없으므로 임베드 POST를 디스크 기준으로 진행해도 안전하다.)
