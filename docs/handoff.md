@@ -1403,3 +1403,10 @@ E21ë§Œì˜ ë¬¸ì œê°€ ì•„ë‹ˆë‹¤. ê·¼ê±°:
 - backend ì „ì²´: 702 passed / 3 ì‹¤íŒ¨ëŠ” ì „ë¶€ ê¸°ì¡´Â·í™˜ê²½ ë¬¸ì œ (bun:sqlite ì—†ìŒ config-migrationÂ·repo-tracking ìŠ¤ìœ„íŠ¸ 2ê±´ â€” node ì‹¤í–‰ í™˜ê²½, office-embed assembleXlsxEmbed `/oleObject` 1ê±´ â€” office-embed.tsëŠ” node:zlib/cryptoë§Œ import, ìˆ˜ì • ëª¨ë“ˆê³¼ ë¬´ê´€).
 - e2e: U-flush-race 2 passed / U-flush-clean 2 passed / U-parent* 4 passed / P-open-part-coedit* 6 passed / c5-3 31 passed + E2-join 1 flake(ë‹¨ë… 2 passed) / K-dbl 9 passed + nosubtle 1 flake(ë‹¨ë… 2 passed) / c5-4 ì „ì²´ 39/58ê¹Œì§€ 1 ì‹¤íŒ¨(U-open-part-pptx msedgeë§Œ â€” INSERT í›„ ole-icon ê°œìˆ˜, PUT ë¬´ê´€Â·ë‹¨ë…ì¬ì‹¤í–‰ë„ msedgeë§Œ ë¹¨ê°•/chromium green, ê¸°ì¡´ msedge ë Œë” flake).
 - check-encoding + check-memory-rules í†µê³¼ (ì˜¤ë¥˜ 0).
+
+## C6c-1 deferred parent reset (2026-11-09)
+- ¹®Á¦: ÆÄÆ® ÀúÀå¸¶´Ù ºÎ¸ğ ¹æÀ» Áï½Ã 4001+disposeÇØ¼­, Å¸ÀÌÇÎ ÁßÀÎ ºÎ¸ğ È­¸éÀÌ ´Ù½Ã ºÒ·¯¿ÍÁø´Ù (ÀÓ½Ã ÇÁ·Îºê: rounds=12, resetStats={total:12,disruptive:12} / 124s).
+- ¼öÁ¤: ÆÄÆ® ÀúÀåÀº ºÎ¸ğ zip¿¡ Áï½Ã adoptÇÏµÇ, ÆíÁıÀÚ°¡ ÀÖ°í ÀÔ·Â ÁßÀÌ¸é ¹æ ¸®¼ÂÀ» Á¶¿ëÇÑ ±¸°£(5ÃÊ ¹«ÀÔ·Â)±îÁö ¹Ì·é´Ù. Æ®¸®°Å 3Á¾: Á¶¿ëÇÑ ±¸°£ Å¸ÀÌ¸Ó(ÇÑ ¹ø¿¡ ÇÏ³ª, Àç½ÃÀÛ), Ã·ºÎ ÅÇ Á¾·á(ÆÄÆ® ¹æ empty), (ºÎ¸ğ ¸¶Áö¸· ÅğÀåÀº sweeper¿¡ ¸Ã±è). Æú¸µ ¾øÀ½.
+- ¹Ì·ïÁø µ¿¾È: roomMeta + ÀúÀå ÀÀ´ä¿¡ hasPendingPartChange¸¦ ½Æ´Â´Ù. pptx´Â meta·Î, xlsx/docx´Â ÀúÀå ÀÀ´äÀ¸·Î ¹è³Ê¸¦ ÄÒ´Ù (´Ù½Ã ºÒ·¯¿À±â ¹öÆ° Æ÷ÇÔ).
+- red: collab-part-reset-defer.test.ts - ºÎ¸ğ ÀÔ·Â Áß Ã·ºÎ ÀúÀå 3È¸ -> ¸®¼Â 0È¸, Á¶¿ëÇØÁö¸é 1È¸, ¾çÂÊ µğ½ºÅ© º¸Á¸ (¼öÁ¤ Àü: ¸Å ÀúÀå¸¶´Ù ¸®¼ÂÀ¸·Î red). backend ÀüÃ¼ 706 passed (±âÁ¸ È¯°æ ½ÇÆĞ 3°Ç¸¸).
+- e2e ÀçÈ®ÀÎ: P-open-part-coedit 6 passed, U-flush-race/U-close-save/U-dirty-timeout/U-flush-clean 8 passed, K-dbl 9 passed + nosubtle flake 1°Ç(´Üµ¶ 2 passed, full ÆÄÀÏ ºÎÇÏ).
