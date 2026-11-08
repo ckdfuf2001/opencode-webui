@@ -175,6 +175,8 @@ export interface CollabRoom {
      * 같은 id의 중복·재시도는 체인을 탄다 (하나만 우회).
      */
     bypassUsed?: boolean
+    /** P0-1: flush 요청 시각. 이후에 끝난 저장은 ack 없어도 flush를 끝낼 수 있다. */
+    requestedAt: number
   } | null
   /**
    * U-parent: 편집 conn이 떨어진 마지막 시각 (clean close 1000/1001이면 0으로 지운다).
@@ -1416,7 +1418,7 @@ export function requestParentFlush(roomId: string, timeoutMs = FLUSH_WAIT_MS): P
     settlePendingFlush(room, r)
   }
   const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs)
-  room.pendingFlush = { promise, resolve, timer, conn: null, requestId }
+  room.pendingFlush = { promise, resolve, timer, conn: null, requestId, requestedAt: Date.now() }
   const sendToOwner = (owner: unknown): void => {
     const rs = (owner as unknown as { readyState?: unknown }).readyState
     if (rs !== undefined && rs !== 1) {
@@ -1648,13 +1650,14 @@ export async function applySave(
     // 모두 포함한 것이 확실할 때만 끝낸다 (저장 이후 도착한 업데이트가 있으면
     // ack 경로의 신선 저장을 기다린다 — 낡은 바이트 확정 금지).
     // 같은 동기 블록이라 사이에 업데이트가 끼어들 수 없다.
-    // P0-1: requestId가 짝이 맞는 flush 응답 저장일 때만 끝낸다.
-    // (무관한 저장이 flush를 끝내 버리면 파트 저장이 낡은 방 해시로 진행한다.)
+    // P0-1: 짝이 맞는 flush 응답 저장은 항상 끝낸다. 짝이 안 맞아도, 요청보다
+    // 늦게 끝나고 원격 업데이트를 모두 포함하면 끝낸다 (진행 중이던 저장이
+    // flush 응답을 겸하는 경우 — 막으면 교착으로 dirty_room이 된다).
     if (
       room.pendingFlush &&
       room.lastRemoteUpdateAt <= room.lastSaveAt &&
-      opts?.flushRequestId !== undefined &&
-      opts.flushRequestId === room.pendingFlush.requestId
+      (opts?.flushRequestId === room.pendingFlush.requestId ||
+        room.pendingFlush.requestedAt <= room.lastSaveAt)
     ) {
       settlePendingFlush(room, { ok: true, reason: 'saved' })
     }
