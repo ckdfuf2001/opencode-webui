@@ -1499,6 +1499,68 @@ async function listEmbeddedParts(hostAbs: string): Promise<string[]> {
     }
   })
 
+  test('U-dirty-timeout: 부모 저장이 계속 실패해도 첨부 저장은 상한 안에 끝나고 내 사본을 준다', async ({ browser }, testInfo) => {
+    // P0-1c(3): waitParentSaveDone 상한. 부모 저장이 영원히 실패하면 성공 done이
+    // 오지 않는다 — 상한이 지나면 저장 중을 풀고 실패 토스트 + 내 사본 다운로드를
+    // 준다. red: 상한·내 사본이 없어 영원히 저장 중이거나 사본 없이 끝난다.
+    testInfo.setTimeout(420000)
+    const rel = uniqueRel('udirtytimeout', 0)
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('e2e/collab/fixtures/collab-3slides.pptx', abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const fileBytes = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
+    const fd = new FormData()
+    fd.append('path', parentPath)
+    fd.append('file', new Blob([new Uint8Array(fileBytes)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+    fd.append('slide', '2')
+    const ins = await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+      r.json(),
+    ) as { ok?: boolean; embeddings?: string[] }
+    expect(ins.ok).toBe(true)
+    const part = (ins.embeddings ?? [])[0]!
+    const got = await fetch(
+      `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: parentPath, part }).toString()}`,
+    ).then((r) => r.json()) as { ok?: boolean; data?: string }
+    expect(got.ok).toBe(true)
+    const partHash = createHash('sha256').update(Buffer.from(got.data!, 'base64')).digest('hex')
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxB, ADA)
+    const pageA = await ctxA.newPage()
+    await gotoApp(pageA)
+    try {
+      await openEditor(pageA, parentPath)
+      await gotoSlide(pageA, 2)
+      // 부모의 모든 저장을 실패시킨다 (flush가 절대 끝나지 않는다).
+      await pageA.route('**/api/collab/save', async (route) => {
+        await route.abort().catch(() => {})
+      })
+      const attach = await ctxB.newPage()
+      const origin = new URL(pageA.url()).origin
+      const enc = (s: string): string => s.split('/').map((x) => encodeURIComponent(x)).join('/')
+      await attach.goto(`${origin}/edit/${enc(parentPath)}/-/${enc(part)}?partHash=${partHash}&e2e=1&collabDebug=1`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      })
+      await attach.getByTestId('edit-page').waitFor({ timeout: 30000 })
+      await attach.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 })
+      await setCellByFormulaBar(attach, 'A1', 'udirtytimeout-attach')
+      await attach.getByTestId('attach-save').click({ timeout: 20000 })
+      // 성공 토스트는 뜨지 않는다.
+      await expect(attach.locator('[data-sonner-toast]').filter({ hasText: '저장했습니다' })).toHaveCount(0, {
+        timeout: 10000,
+      })
+      // 상한 안에 저장 중이 풀리고 (버튼 복구) 내 사본이 보인다.
+      await expect(attach.getByTestId('attach-save')).toBeEnabled({ timeout: 90000 })
+      await expect(attach.getByTestId('attach-mine')).toBeVisible({ timeout: 90000 })
+    } finally {
+      await ctxA.close().catch(() => {})
+      await ctxB.close().catch(() => {})
+    }
+  })
+
   test('U-flush-clean: 손대지 않은 부모 탭이면 첨부 저장이 바로 200이다', async ({ browser }, testInfo) => {
     // C5-4c B2: 미저장 변경이 없으면 저장 없이 즉시 ok. 8초 타임을 타면 안 된다.
     // RED(수정 전): 부모가 항상 강제 저장하므로 /save 가 나간다.
