@@ -1,0 +1,96 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import os from 'os'
+import path from 'path'
+import fs from 'fs/promises'
+import JSZip from 'jszip'
+
+// files.ts가 모듈 로드 시점에 WORKSPACE_PATH를 캡처하므로 적재 import보다 먼저 env를 깐다.
+const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'collabpartnochain-'))
+process.env.WORKSPACE_PATH = tmp
+
+const SEED_DIR = path.join(tmp, 'repos', 'pp')
+await fs.mkdir(SEED_DIR, { recursive: true })
+const FIX_HOST = path.resolve('..', 'e2e/collab/fixtures/ole/embed-docx.pptx')
+await fs.copyFile(FIX_HOST, path.join(SEED_DIR, 'host.pptx'))
+const HOST_REL = path.join('repos', 'pp', 'host.pptx')
+const PART = 'ppt/embeddings/Microsoft_Word_Document.docx'
+
+const {
+  applySave,
+  createSession,
+  resetCollabForTests,
+  rooms,
+} = await import('../../src/services/collab-rooms')
+
+const hostAbs = (...p: string[]) => path.join(tmp, ...p)
+
+async function parentBytesWithMark(hostFile: string, mark: string): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(await fs.readFile(hostFile))
+  const name = 'ppt/slides/slide1.xml'
+  const cur = await zip.file(name)!.async('string')
+  const next = cur.replace(/C5-0 host|P0X5[A-Z0-9]*|P0X6[A-Z0-9]*/, mark)
+  if (next === cur) throw new Error('fixture changed: no slide anchor text')
+  zip.file(name, next)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+}
+
+async function partBytesWithMark(hostFile: string, part: string, mark: string): Promise<Uint8Array> {
+  const buf = await fs.readFile(hostFile)
+  const zip = await JSZip.loadAsync(buf)
+  const inner = await JSZip.loadAsync(await zip.file(part)!.async('uint8array'))
+  const name = 'word/document.xml'
+  const cur = await inner.file(name)!.async('string')
+  const next = cur.replace(/C5-0 payload|P0X5[A-Z0-9]*|P0X6[A-Z0-9]*/, mark)
+  if (next === cur) throw new Error('fixture changed: no part anchor text')
+  inner.file(name, next)
+  zip.file(part, await inner.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+}
+
+beforeEach(() => {
+  resetCollabForTests()
+})
+
+afterEach(() => {
+  resetCollabForTests()
+})
+
+describe('P0-1c: 파트 저장이 부모 flush를 기다리는 동안 부모 저장이 막히지 않는다', () => {
+  it('부모 저장은 파트 flush 대기 중에도 끝난다 (순환대기 금지)', async () => {
+    const sParent = await createSession(HOST_REL)
+    const parentRoom = rooms.get(sParent.roomId)!
+    // owner인 척하는 가짜 conn: 103을 삼키고 ack하지 않아 flush를 펜딩시킨다.
+    const fakeSock = { send: (_b: unknown) => {} }
+    parentRoom.conns.set(fakeSock, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
+    parentRoom.ownerConn = fakeSock
+    parentRoom.ownerIds.add(1)
+    const sPart = await createSession(HOST_REL, { part: PART })
+    const partRoom = rooms.get(sPart.roomId)!
+    const eBytes = await partBytesWithMark(hostAbs(HOST_REL), PART, 'P0X6E0')
+    // 파트 저장은 부모 flush를 기다리며 펜딩된다 (8초 타임아웃).
+    const partP = applySave(sPart.roomId, eBytes, {
+      kind: partRoom.kind,
+      baseHash: sPart.lastHash,
+      clientId: 7,
+    })
+    partP.catch(() => null)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(rooms.get(sParent.roomId)!.pendingFlush).toBeTruthy()
+    // 부모 저장: 파트 저장이 flush 대기로 부모 체인을 잡고 있으면 여기서 막힌다 (red).
+    // U-flush-race: 파트 PUT이 체인을 8초씩 두 번 잡으면 부모 수동·자동 저장이
+    // 전부 뒤에 줄서서 flush가 굶어 죽고 attach가 dirty_room으로 끝난다.
+    const gBytes = await parentBytesWithMark(hostAbs(HOST_REL), 'P0X6G0')
+    const gR = await Promise.race([
+      applySave(sParent.roomId, gBytes, {
+        kind: parentRoom.kind,
+        baseHash: rooms.get(sParent.roomId)!.lastHash,
+        clientId: 10,
+      }).then(() => true),
+      new Promise((rr) => setTimeout(() => rr(false), 5000)),
+    ])
+    expect(gR).toBe(true)
+    // 뒷정리: 파트 flush 타임아웃(8초)까지 기다렸다가 끝낸다.
+    resetCollabForTests()
+    await partP.catch(() => null)
+  }, 20000)
+})
