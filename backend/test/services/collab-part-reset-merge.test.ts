@@ -84,6 +84,44 @@ async function partMark(): Promise<string> {
 }
 
 /**
+ * 사용자 삭제 시뮬레이션: 디스크 바이트에서 파트 파일 + 그 rel을 지운다.
+ * 편집기가 첨부 개체를 지우면 rel이 사라지므로, 병합은 이 파트를
+ * 다시 끼우면 안 된다 (C6c-e item 3).
+ */
+async function parentBytesWithoutPart(hostFile: string, part: string): Promise<Uint8Array> {
+  const raw = await fs.readFile(hostFile)
+  const zip = await JSZip.loadAsync(raw)
+  const base = part.split('/').pop()!
+  for (const name of Object.keys(zip.files)) {
+    if (!name.endsWith('.rels')) continue
+    const f = zip.file(name)
+    if (!f || f.dir) continue
+    const text = await f.async('string')
+    if (!text.includes(base)) continue
+    const cleaned = text
+      .replace(new RegExp(`<Relationship\\b[^>]*${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^>]*\\/\\s*>`, 'g'), '')
+      .replace(new RegExp(`<Relationship\\b[^>]*${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^>]*>[\\s\\S]*?<\\/Relationship>`, 'g'), '')
+    if (cleaned !== text) zip.file(name, cleaned)
+  }
+  zip.remove(part)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+}
+
+/** 디스크 zip의 rel 어딘가에 해당 파트를 가리키는 Relationship이 있는가. */
+async function partHasRel(hostFile: string, part: string): Promise<boolean> {
+  const raw = await fs.readFile(hostFile)
+  const zip = await JSZip.loadAsync(raw)
+  const base = part.split('/').pop()!
+  for (const name of Object.keys(zip.files)) {
+    if (!name.endsWith('.rels')) continue
+    const f = zip.file(name)
+    if (!f || f.dir) continue
+    if ((await f.async('string')).includes(base)) return true
+  }
+  return false
+}
+
+/**
  * 파트 저장을 끝까지 진행시킨다. fake conn은 103에 답하지 않으므로,
  * 파트 저장 시작 뒤 부모 저장을 한 번 해서 flush를 settle시킨다 (실제 동작과 동일).
  * 부모 바이트/베이스는 호출자가 준 것을 그대로 쓴다 (멱등 저장이어도 됨).
@@ -292,5 +330,45 @@ describe('C6c-d-3: 조용한 구간이 안 와도 최대 상한 안에는 리셋
     await new Promise((r) => setTimeout(r, 1200))
     expect(rooms.get(sParent.roomId)).toBeUndefined()
     expect(resetStats(sParent.roomId)?.total ?? 0).toBe(1)
+  }, 60000)
+})
+
+describe('C6c-e: 미뤄진 동안 부모가 첨부를 삭제하고 저장하면 부활하지 않는다', () => {
+  it('rel 없는 파트는 다시 끼우지 않는다 (삭제 존중, 200)', async () => {
+    // P0: 미뤄진 동안 사용자가 첨부 개체를 삭제하면, 들어온 바이트에
+    // rel이 없다. 병합(re-embed)은 rel 기준으로만 끼워야 하며,
+    // rel이 없으면 건너뛰어 삭제가 유지돼야 한다 (부활 금지).
+    setParentQuietMs(60000)
+    const sParent = await createSession(HOST_REL)
+    const parentRoom = rooms.get(sParent.roomId)!
+    const { fakeA } = twoEditors(sParent.roomId)
+    const v0 = await parentBytesWithMark(hostAbs(HOST_REL), 'P0XE-A1')
+    const r0 = await applySave(sParent.roomId, v0, {
+      kind: parentRoom.kind,
+      baseHash: rooms.get(sParent.roomId)!.lastHash,
+      clientId: 1,
+    })
+    expect('newHash' in r0).toBe(true)
+    const adoptBase = (r0 as { newHash: string }).newHash
+    parentTyping(sParent.roomId, 'P0XE-T1', fakeA)
+    const sPart = await createSession(HOST_REL, { part: PART })
+    const eBytes = await partInnerWithMark(hostAbs(HOST_REL), PART, 'P0XE-E1')
+    await partSaveWithSettle(rooms.get(sPart.roomId)!.id, eBytes, sParent.roomId, v0, adoptBase, 1)
+    expect(rooms.get(sParent.roomId)?.pendingPartReset).toBeTruthy()
+    // 현재 디스크(adopt 반영됨)에서 파트 파일 + rel을 지운다: 사용자 삭제 시뮬레이션.
+    const noPartBytes = await parentBytesWithoutPart(hostAbs(HOST_REL), PART)
+    // 유효한 base(현재 방 해시)로 삭제분 저장 → 200이어야 한다 (차단·부활 금지).
+    const dR = await applySave(sParent.roomId, noPartBytes, {
+      kind: parentRoom.kind,
+      baseHash: rooms.get(sParent.roomId)!.lastHash,
+      clientId: 1,
+    })
+    expect('newHash' in dR).toBe(true)
+    // 디스크에 파트가 부활하지 않았다.
+    const diskZip = await JSZip.loadAsync(await fs.readFile(hostAbs(HOST_REL)))
+    expect(diskZip.file(PART)).toBeNull()
+    expect(await partHasRel(hostAbs(HOST_REL), PART)).toBe(false)
+    // 부모 입력 내용은 그대로 남는다 (삭제 외 부분 유실 없음).
+    expect(await slideMark()).toContain('P0XE-A1')
   }, 60000)
 })
