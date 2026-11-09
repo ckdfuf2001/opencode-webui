@@ -4,6 +4,8 @@ import path from 'path'
 import fs from 'fs/promises'
 import JSZip from 'jszip'
 import * as Y from 'yjs'
+import * as encoding from 'lib0/encoding'
+import * as decoding from 'lib0/decoding'
 
 // files.ts가 모듈 로드 시점에 WORKSPACE_PATH를 캡처하므로 적재 import보다 먼저 env를 깐다.
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'collabpartmerge-'))
@@ -25,6 +27,7 @@ const {
   rooms,
   setParentQuietMs,
   setParentResetMaxMs,
+  wsMessage,
 } = await import('../../src/services/collab-rooms')
 
 const hostAbs = (...p: string[]) => path.join(tmp, ...p)
@@ -61,7 +64,7 @@ function parentTyping(roomId: string, mark: string, origin: unknown): void {
   Y.applyUpdate(room.doc, Y.encodeStateAsUpdate(tmpDoc), origin)
 }
 
-function twoEditors(roomId: string): { fakeA: object; fakeB: object } {
+function twoEditors(roomId: string, opts?: { ackFlush?: boolean }): { fakeA: object; fakeB: object } {
   const room = rooms.get(roomId)!
   const fakeA = { send: (_b: unknown) => {} }
   const fakeB = { send: (_b: unknown) => {} }
@@ -69,6 +72,34 @@ function twoEditors(roomId: string): { fakeA: object; fakeB: object } {
   room.conns.set(fakeB, { joinedAt: Date.now(), clientIds: new Set([2]), lastMsgAt: Date.now() })
   room.ownerConn = fakeA
   room.ownerIds = new Set([1])
+  if (opts?.ackFlush) {
+    // C6c-f item 2: 미뤄진 리셋은 flush(103) 후 4001이다. owner(fakeA)는 103을
+    // 받으면 104 {ok:true}로 답한다. ack는 비동기로 보내야 한다 (동기 ack는
+    // 서버가 p.conn을 적재하기 전에 B1 짝짓기에 버려진다).
+    const tag = fakeA as { send: (b: unknown) => void }
+    tag.send = (b: unknown) => {
+      try {
+        if (!(b instanceof Uint8Array) || b.length === 0) return
+        const d = decoding.createDecoder(b)
+        if (decoding.readVarUint(d) !== 103) return
+        const raw = decoding.readVarUint8Array(d)
+        const body = JSON.parse(new TextDecoder().decode(raw)) as { requestId?: unknown }
+        const reqId = body.requestId
+        setTimeout(() => {
+          try {
+            const e = encoding.createEncoder()
+            encoding.writeVarUint(e, 104)
+            encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify({ ok: true, requestId: reqId })))
+            wsMessage(roomId, tag, encoding.toUint8Array(e))
+          } catch {
+            // 무시
+          }
+        }, 20)
+      } catch {
+        // 무시
+      }
+    }
+  }
   return { fakeA, fakeB }
 }
 
@@ -307,7 +338,9 @@ describe('C6c-d-3: 조용한 구간이 안 와도 최대 상한 안에는 리셋
     setParentQuietMs(1000)
     setParentResetMaxMs(2500)
     const sParent = await createSession(HOST_REL)
-    const { fakeA } = twoEditors(sParent.roomId)
+    // C6c-f item 2: 상한 리셋은 flush(103) 후 4001이다. mock owner가 ack해야
+    // 8초 타임아웃을 기다리지 않고 리셋된다.
+    const { fakeA } = twoEditors(sParent.roomId, { ackFlush: true })
     const v0 = await parentBytesWithMark(hostAbs(HOST_REL), 'P0XDD-A1')
     const r0 = await applySave(sParent.roomId, v0, {
       kind: rooms.get(sParent.roomId)!.kind,
