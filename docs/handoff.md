@@ -1438,3 +1438,13 @@ E21만의 문제가 아니다. 근거:
 - item 2 e2e D4-pptx: 미룸 중 부모 탭 닫기 → 즉시 dispose 증명(늦은 저장 404 fail-closed), 재입장 후 epoch 변경 + 정상 저장 + 디스크 첨부 보존.
 - item 3 단위 1건: 미룸 중 첨부삭제 — rel 없는 파트는 다시 끼우지 않음 (200, 디스크에 부활 없음).
 - 회귀: backend 전체 715 중 기존 실패만 (office-embed 1 + bun:sqlite collection 2). c6d 6/6 (D1×3 + D2 + D3 + D4). c5-3 16/16 (E2-pdf 1회 flake, 재실행 green). c5-4 29 + U-parent 기존실패 1. k-dbl: K-dbl-xlsx flake (pre-fix 트리 동일 실패 확인 — 내 변경 무관), 외 green. xlsx 19 + X2a-6 기존실패 + X0a-9 flake(단독 green). docx W0 10/10. pptx 27 + 베이스라인 11 실패 집합 일치. tsc clean, eslint 신규 0, encoding 이상 없음(기존 PptxViewer 큰따옴표 경고 1건 유지).
+## C6c-f 태그 전 작은 묶음 (v0.12.83 태그 전)
+- item 3 부모 저장 epoch 필수: POST /save가 부모 방 저장에 epoch 없으면 400 epoch_required (파트 방 제외). 호출점 대조: frontend 6곳 전부 epoch 전송 중(수정 없음), backend relay 테스트 9곳에 epoch 추가, 신규 단위 T2i(바이너리+JSON 400, epoch 있으면 200). red(200)->green(400) 분리 커밋.
+- item 1 가드: reloadAfterServerReset는 현재 세션과 같은 경우만 full reload, 아니면 토스트만. D5 e2e: 늦은 stale 409를 주입해도 중복 불러오기 없음(count==1). pre-fix count 4(red)->post-fix 1(green).
+  - 하네스 교훈: 수동 route.continue()/unrouteAll({behavior:'wait'})/headerValue()는 요청 소실·교착을 일으킨다. fulfill(확정 응답)과 플래그 통과 + 핸들러 내 즉시 continue만 쓴다. __collabDebug 미러는 ?collabDebug=1일 때만 기록되므로 단언에 쓰지 않는다 (서버 rooms API·카운터로 판정).
+- item 2 미뤄진 리셋 전 flush(103→104, 8초 예산): doDeferredParentReset가 flushThenResetParent로 103을 보내고 ack를 기다린 뒤 4001. 실패하면 reason embed_reset_unflushed로 닫고, 클라이언트는 사본 다운로드+배너("마지막 변경이 반영되지 않았을 수 있음"). 재입장 뒤에도 유지(Dismiss 때 해제). 파트 방·무접속 방은 제외(받을 탭이 없음).
+  - 단위: defer 테스트의 mock conn이 103에 104로 답한다 (동기 ack는 B1 짝짓기에 버려지므로 비동기+300ms 지연. 즉시 ack는 adopt 타이밍을 깨뜨려 즉시 리셋한다).
+  - D6 e2e Phase A(상한): flush 시도 프로토콜 지문(officeSaveRequest flushRequestId) 관측 + 재입장 + 디스크 보존. Phase B(flush 타임아웃): 배너+사본 링크. pre-fix red: Phase A flush 없음(75s poll timeout), Phase B 배너 없음.
+  - 꼬리 바이트를 디스크 단언에서 뺀 이유: 네트워크 홀드(5s+)는 freshness proxy(타임스탬프 대조)를 깨뜨려 낡은 저장이 flush를 조기 확정한다. 홀드 없는 자동저장 꼬리는 타이밍 비결정적이라 flush 시도 자체(103→officeSaveRequest)를 단언한다.
+  - 사본 링크 레이스 수정 2건: (1) 103 시점 getContent 스냅샷 + promise 대기 (2) unflushed 경고의 재입장 유지.
+- item 4: 198ec78(D4 신설 +115: 미룸 중 부모 탭 닫기→즉시 dispose/늦은 저장 404/재입장 정상) vs 341b49b(D4 보정 +12/-2: B PUT 전 자동저장 수렴 대기, 닫기 전 타이핑으로 in-flight 경합 재현, dialog 핸들러 들여쓰기 포맷). T2i 2-space 통일.

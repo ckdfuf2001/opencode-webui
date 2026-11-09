@@ -639,11 +639,11 @@ it('T2g: real external change flags the room but keeps room/owner/epoch', async 
 })
 
 it('T2h: concurrent session POSTs for the same file create only one room', async () => {
-  // M10/V1: StrictMode(dev) 등���서 같은 파일��� 세션 POST 가 동시에 나간다.
+  // M10/V1: StrictMode(dev) 등에서 같은 파일의 세션 POST 가 동시에 나간다.
   // 방 생성에 경합 가드가 없으면 **방이 2개** 만들어지고, rooms 맵에는 나중 것만 남는다.
-  // 앞의 방은 고아가 되��� 그 watcher 도 살아 있어, 다른 방이 방금 쓴 파일을
+  // 앞의 방은 고아가 되고 그 watcher 도 살아 있어, 다른 방이 방금 쓴 파일을
   // "외부 변경"으로 오인한다 → externalChanged → 클라이언트 재접속 → owner 상실 →
-  // 편집이 디스크에 반영되지 않��(E2 실패의 근본 원인).
+  // 편집이 디스크에 반영되지 않는다(E2 실패의 근본 원인).
   const rel = 'repos/aaa/race.txt'
   await fs.writeFile(path.join(tmp, rel), 'seed')
   const [r1, r2] = await Promise.all([
@@ -672,51 +672,51 @@ it('T2h: concurrent session POSTs for the same file create only one room', async
 })
 
 it('T2i: parent save without epoch -> 400 epoch_required (C6c-f item 3)', async () => {
-    const rel = 'repos/aaa/no-epoch.txt'
-    await fs.writeFile(path.join(tmp, rel), 'seed')
-    const s = await postSession(baseUrl, { path: rel })
-    const roomId = s.json.roomId as string
-    const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
-    a.connect()
-    await waitFor(() => a.synced, 'A synced')
-    a.doc.getText('t').insert(0, 'x')
-    await waitFor(() => {
-      const room = rooms.rooms.get(roomId)
-      return !!room && room.ownerIds.has(a.clientId)
-    }, 'A is owner')
-    // 바이너리 경로: epoch 헤더 없으면 400.
-    const noEpoch = await testFetch(`${baseUrl}/api/collab/save`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'x-collab-room': roomId,
-        'x-collab-client': String(a.clientId),
-      },
-      body: new TextEncoder().encode('no-epoch-bytes') as unknown as BodyInit,
-    })
-    expect(noEpoch.status).toBe(400)
-    expect(((await noEpoch.json()) as { code?: string }).code).toBe('epoch_required')
-    // JSON 경로: epoch 필드 없으면 400.
-    const noEpochJson = await testFetch(`${baseUrl}/api/collab/save`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, clientId: a.clientId, bytesB64: Buffer.from('x').toString('base64') }),
-    })
-    expect(noEpochJson.status).toBe(400)
-    expect(((await noEpochJson.json()) as { code?: string }).code).toBe('epoch_required')
-    // epoch를 붙이면 통과한다.
-    const ok = await testFetch(`${baseUrl}/api/collab/save`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'x-collab-room': roomId,
-        'x-collab-client': String(a.clientId),
-        'x-collab-epoch': s.json.epoch,
-      },
-      body: new TextEncoder().encode('with-epoch-bytes') as unknown as BodyInit,
-    })
-    expect(ok.status).toBe(200)
-    a.destroy()
+  const rel = 'repos/aaa/no-epoch.txt'
+  await fs.writeFile(path.join(tmp, rel), 'seed')
+  const s = await postSession(baseUrl, { path: rel })
+  const roomId = s.json.roomId as string
+  const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+  a.connect()
+  await waitFor(() => a.synced, 'A synced')
+  a.doc.getText('t').insert(0, 'x')
+  await waitFor(() => {
+    const room = rooms.rooms.get(roomId)
+    return !!room && room.ownerIds.has(a.clientId)
+  }, 'A is owner')
+  // 바이너리 경로: epoch 헤더 없으면 400.
+  const noEpoch = await testFetch(`${baseUrl}/api/collab/save`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'x-collab-room': roomId,
+      'x-collab-client': String(a.clientId),
+    },
+    body: new TextEncoder().encode('no-epoch-bytes') as unknown as BodyInit,
+  })
+  expect(noEpoch.status).toBe(400)
+  expect(((await noEpoch.json()) as { code?: string }).code).toBe('epoch_required')
+  // JSON 경로: epoch 필드 없으면 400.
+  const noEpochJson = await testFetch(`${baseUrl}/api/collab/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roomId, clientId: a.clientId, bytesB64: Buffer.from('x').toString('base64') }),
+  })
+  expect(noEpochJson.status).toBe(400)
+  expect(((await noEpochJson.json()) as { code?: string }).code).toBe('epoch_required')
+  // epoch를 붙이면 통과한다.
+  const ok = await testFetch(`${baseUrl}/api/collab/save`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'x-collab-room': roomId,
+      'x-collab-client': String(a.clientId),
+      'x-collab-epoch': s.json.epoch,
+    },
+    body: new TextEncoder().encode('with-epoch-bytes') as unknown as BodyInit,
+  })
+  expect(ok.status).toBe(200)
+  a.destroy()
 })
 
 it('T7: save before seed -> not_seeded', async () => {
