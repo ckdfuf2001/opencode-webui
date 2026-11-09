@@ -305,13 +305,33 @@ export function hasDeferredPartChange(roomId: string): boolean {
   return false
 }
 
-/** 미뤄진 부모 리셋을 수행한다 (조용한 구간·첨부 종료 시 호출). */
+/**
+ * C6c-f item 2: 미뤄진 부모 리셋을 수행한다 (조용한 구간·첨부 종료 시 호출).
+ * 리셋 전에 flush(103→104, ≤8s)로 미저장을 디스크에 먼저 쓴다.
+ * flush가 실패하면(타임아웃·무응답) 그래도 리셋은 진행하되, 클라이언트가
+ * 사본 다운로드를 제안하도록 'embed_reset_unflushed' reason을 보낸다.
+ */
 export function doDeferredParentReset(parentId: string): void {
   const r = rooms.get(parentId)
   if (!r || !r.pendingPartReset) return
   r.pendingPartReset = null
   clearParentResetTimer(r)
-  resetRoomByServer(parentId)
+  void flushThenResetParent(parentId)
+}
+
+/** 리셋 전 flush 후 4001 해체. 접속자가 없으면 flush를 건너뛴다 (받을 탭이 없다). */
+async function flushThenResetParent(parentId: string): Promise<void> {
+  let reason = 'embed_reset'
+  const r = rooms.get(parentId)
+  if (r && r.conns.size > 0 && (roomHasOpenEditor(parentId) || r.docDirty)) {
+    try {
+      const flush = await requestParentFlush(parentId)
+      if (!flush.ok) reason = 'embed_reset_unflushed'
+    } catch {
+      reason = 'embed_reset_unflushed'
+    }
+  }
+  resetRoomByServer(parentId, reason)
 }
 
 /**
@@ -1513,23 +1533,23 @@ export function resetRoomFromDisk(
  * 전원 conn을 4001로 닫고 방을 해체한다. 클라이언트는 resume 없이
  * 새로 입장한다 → 첫 입장자가 새 디스크 바이트 기준으로 재시드.
  */
-export function resetRoomByServer(roomId: string): { ok: true } | { ok: false; reason: 'no_room' } {
+export function resetRoomByServer(roomId: string, reason = 'embed_reset'): { ok: true } | { ok: false; reason: 'no_room' } {
   const room = rooms.get(roomId)
   if (!room) return { ok: false, reason: 'no_room' }
-  // P0-3(C6c-b): 무접속 방도 예전처럼 dispose한다 (adopt된 lastHash만 가진
+  // P0-3(C6c-b): 무접속 방도 예전처럼 dispose한다(adopt된 lastHash만 가진
   // 채 방 객체(Y.Doc)가 남으면, 재입장자가 옛 Y 상태를 받아 owner 자동저장으로
   // 덮어쓸 수 있다). 집계에서만 제외한다 — 수행된 리셋은 전부 disruptive다.
   if (room.conns.size > 0) noteReset(roomId, room.conns.size)
   for (const ws of [...room.conns.keys()]) {
     try {
       const sock = ws as { close?: (code?: number, reason?: string) => void }
-      sock.close?.(CLOSE_ROOM_RESET, 'embed_reset')
+      sock.close?.(CLOSE_ROOM_RESET, reason)
     } catch {
       // 무시
     }
   }
   disposeRoom(room)
-  logger.warn(`Collab room ${roomId}: reset by server (embed) — all conns closed (4001), room disposed`)
+  logger.warn(`Collab room ${roomId}: reset by server (embed) — all conns closed (4001), room disposed (reason=${reason})`)
   return { ok: true }
 }
 
