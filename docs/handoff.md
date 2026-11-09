@@ -1448,3 +1448,4 @@ E21만의 문제가 아니다. 근거:
   - 꼬리 바이트를 디스크 단언에서 뺀 이유: 네트워크 홀드(5s+)는 freshness proxy(타임스탬프 대조)를 깨뜨려 낡은 저장이 flush를 조기 확정한다. 홀드 없는 자동저장 꼬리는 타이밍 비결정적이라 flush 시도 자체(103→officeSaveRequest)를 단언한다.
   - 사본 링크 레이스 수정 2건: (1) 103 시점 getContent 스냅샷 + promise 대기 (2) unflushed 경고의 재입장 유지.
 - item 4: 198ec78(D4 신설 +115: 미룸 중 부모 탭 닫기→즉시 dispose/늦은 저장 404/재입장 정상) vs 341b49b(D4 보정 +12/-2: B PUT 전 자동저장 수렴 대기, 닫기 전 타이핑으로 in-flight 경합 재현, dialog 핸들러 들여쓰기 포맷). T2i 2-space 통일.
+- 회귀: backend 전체 716 중 기존 실패만(bun:sqlite collection 2 + assembleXlsxEmbed 1; merge deadline 1건은 내 변경 영향이라 104-ack 추가로 수정 후 green). c6d 8/8 (D1×3 + D2 + D3 + D4 + D5 + D6). c5-3 16/16 (E2-pdf flake 단독 green). c5-4 28 + P-open flake(단독 green) + U-parent 기존실패 1. k-dbl 5/5. xlsx 19 + X2a-6 기존실패. docx W0 10/10. pptx 27 + 베이스라인 11 실패 집합 일치(presence·UI 타임아웃, 단독 재실행 E21b 동일 실패 — 내 변경 경로 아님). tsc clean, eslint 신규 0 (PptxViewer 기존 1 error + 9 warnings 유지), encoding 이상 없음(T2h 깨진 문자 3줄 복원).
