@@ -606,4 +606,119 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       await t.ctxB.close().catch(() => {})
     }
   })
+
+  test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd4pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    try {
+      // A 입력 (저장 대기 없이 바로 B 저장 → 미룸).
+      await editShapeText(t.pageA, t.shapes!, `${slug}-ready`, `${slug}-a1`)
+      const token = `c6d-${Date.now().toString(36)}`
+      const lock = (await fetch(`${backendBase()}/api/collab/embed/lock`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: t.parentPath, part: t.part, name: 'c6d-d4', token }),
+      }).then((r) => r.json())) as { ok?: boolean; lockId?: string }
+      expect(lock.ok).toBe(true)
+      try {
+        const got = (await fetch(
+          `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+        ).then((r) => r.json())) as { ok?: boolean; data?: string; hash?: string }
+        expect(got.ok).toBe(true)
+        const partBytes = Buffer.from(got.data!, 'base64')
+        const mod = await tamperPartXlsxBytes(new Uint8Array(partBytes), `${slug}-b1`)
+        const partHashNow = createHash('sha256').update(partBytes).digest('hex')
+        const doPut = async (baseHash: string) => {
+          const fd = new FormData()
+          fd.append('file', new Blob([new Uint8Array(mod)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+          fd.append('baseHash', baseHash)
+          fd.append('partHash', partHashNow)
+          fd.append('lockId', lock.lockId!)
+          return (await fetch(
+            `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+            { method: 'PUT', body: fd },
+          ).then((r) => r.json())) as { ok?: boolean; newHash?: string; currentHash?: string; code?: string; hasPendingPartChange?: boolean }
+        }
+        let put = await doPut(got.hash!)
+        if (!put.ok && put.currentHash) put = await doPut(put.currentHash)
+        expect(put.ok).toBe(true)
+        console.log(`[c6d] D4 B-save ok, deferred=${put.hasPendingPartChange === true}`)
+      } finally {
+        await fetch(`${backendBase()}/api/collab/embed/lock`, {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: t.parentPath, part: t.part, lockId: lock.lockId!, token }),
+        }).catch(() => {})
+      }
+      // 현재 방 epoch 기록 (재입장 후 달라져야 즉시 dispose 증명).
+      const fileName = t.parentPath.split('/').pop()!
+      const roomOf = async () => {
+        const body = (await fetch(`${backendBase()}/api/collab/rooms`).then((r) => r.json())) as {
+          rooms?: Array<{ roomId?: string; rel?: string; part?: string; epoch?: string }>
+        }
+        return (body.rooms ?? []).find((r) => (r.rel ?? '').endsWith(fileName) && !r.part)
+      }
+      const before = await roomOf()
+      expect(before?.roomId).toBeTruthy()
+      // 미룸 중 부모 탭을 닫는다 (beforeunload 확인창은 수락).
+      t.pageA.on('dialog', (d) => void d.accept().catch(() => {}))
+      await t.pageA.close()
+      await t.ctxA.close().catch(() => {})
+      // 늦은 저장: 방이 없으면 404 (조용한 유실/덮개 금지). 즉시 dispose 증명이기도 하다.
+      const diskHash = createHash('sha256').update(fs.readFileSync(t.abs)).digest('hex')
+      await expect
+        .poll(
+          async () =>
+            fetch(`${backendBase()}/api/collab/save`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/octet-stream',
+                'x-collab-room': before!.roomId!,
+                'x-collab-client': '424242',
+                'x-collab-base-hash': diskHash,
+                'x-collab-epoch': 'stale-after-close',
+              },
+              body: fs.readFileSync(t.abs),
+            }).then((r) => r.status),
+          { timeout: 15000, intervals: [500] },
+        )
+        .toBe(404)
+      console.log(`[c6d] D4 late save after close → 404 (fail-closed)`)
+      // 디스크는 그대로다 (adopt된 첨부 보존, 닫기로 인한 손상 없음).
+      expect(await partDiskHas(t.abs, t.part, `${slug}-b1`)).toBe(true)
+      // 재입장: 새 방·새 epoch, 저장 정상 (무한 409 루프 없음).
+      const ctxA2 = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+      await seedUser(ctxA2, ADA)
+      const pageA2 = await ctxA2.newPage()
+      await gotoApp(pageA2)
+      try {
+        await openEditor(pageA2, t.parentPath)
+        await gotoSlide(pageA2, 2)
+        const shapes2 = new ShapeLocator(pageA2)
+        const curText = await pageA2.evaluate(() => {
+          const els = [...document.querySelectorAll('[data-element-id]')] as HTMLElement[]
+          const el = els.find((e) => (e.textContent || '').trim().length > 1)
+          return el ? (el.textContent ?? null) : null
+        })
+        expect(curText).not.toBeNull()
+        await editShapeText(pageA2, shapes2, curText!, `${slug}-a2`)
+        await clickParentSave(pageA2)
+        await expect
+          .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a2`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+        const after = await roomOf()
+        expect(after?.roomId).toBeTruthy()
+        expect(after!.roomId).toBe(before!.roomId)
+        expect(after!.epoch).not.toBe(before!.epoch)
+        expect(await partDiskHas(t.abs, t.part, `${slug}-b1`)).toBe(true)
+      } finally {
+        await ctxA2.close().catch(() => {})
+      }
+    } finally {
+      await t.ctxB.close().catch(() => {})
+    }
+  })
 })
