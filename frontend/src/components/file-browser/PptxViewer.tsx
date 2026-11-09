@@ -104,6 +104,14 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   // B1: 저장 중 도착한 flush 요청 id. 진행 중인 저장이 끝나면 이 id로 신선 저장을 한 번 더 한다
   // (진행 중 저장의 완료를 flush 응답으로 쓰면 낡은 바이트를 확정한다).
   const pendingFlushIdRef = useRef<string | null>(null)
+  // C6c-f item 2: unflushed 리셋 경고는 재입장 뒤에도 유지한다 (사본을
+  // 내려받기 전에 사라지면 경고 의미가 없다). Dismiss 때 해제한다.
+  const keepStaleNoticeRef = useRef(false)
+  // C6c-f item 2: flush 요청(103) 시점의 편집 바이트 스냅샷. unflushed 리셋 때
+  // 사본 다운로드를 제안한다 — 4001 뒤에는 뷰어가 리마운트되어 getContent가
+  // 레이스가 되므로, 103이 살아 있을 때 미리 떠 둔다.
+  const flushMineBytesRef = useRef<Uint8Array | null>(null)
+  const flushMinePromiseRef = useRef<Promise<Uint8Array | null> | null>(null)
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
@@ -464,21 +472,42 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
     [collabDebug],
   )
 
+  /** 리셋 진행 플래그 + E2E 디버그 미러 (?collabDebug=1일 때만 기록). */
+  const setResetInFlight = useCallback(
+    (v: boolean): void => {
+      resetInFlightRef.current = v
+      if (!collabDebug) return
+      try {
+        const w = window as unknown as { __collabDebug?: Record<string, unknown> }
+        w.__collabDebug = { ...(w.__collabDebug ?? {}), resetInFlight: v }
+      } catch {
+        // 무시
+      }
+    },
+    [collabDebug],
+  )
+
   /**
    * C6c-e(P0): 서버 리셋(4001) 또는 stale epoch 저장 응답 뒤의 공통 복구:
    * 죽은 세션을 버리고 새 바이트를 받아 다시 입장한다 (stale 호스팅 방지).
    * stale_client는 4001과 달리 토스트로 알린다 (재시도 금지 — 다시 불러와야 함).
+   * C6c-f item 1: 현재 살아있는 세션과 같은 경우에만 진행한다.
+   * 이미 버려졌거나(null) 다른 세션이면 토스트만 띄우고 끝낸다 —
+   * 늦게 도착한 stale 응답이 새 세션을 다시 리셋하는 중복 불러오기를 막는다.
    */
   const reloadAfterServerReset = useCallback(
     (sess: YCollabSession | null, opts?: { toast?: string | null; reason?: string }) => {
       const c = collabRef.current
-      if (c && sess && c.session !== sess) return
+      if (!c || !sess || c.session !== sess) {
+        if (opts?.toast) showToast.info(opts.toast)
+        return
+      }
       logClient('room_reset_reload')
       // ABA: 세션이 바뀌면 latestSavedRef/lastSavedHashRef는 무효 (디스크 상태 불명).
       latestSavedRef.current = null
       lastSavedHashRef.current = null
       // M18: 리셋으로 언마운트되므로 예약된 write-back 을 실행하지 않는다.
-      resetInFlightRef.current = true
+      setResetInFlight(true)
       writeBackHaltedRef.current = false
       lossPendingRef.current = null
       setImageLoss(null)
@@ -516,7 +545,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
       }, 8000)
       if (opts?.toast) showToast.info(opts.toast)
     },
-    [savePath, sessionKey, logClient, setCurSlide],
+    [savePath, sessionKey, logClient, setCurSlide, setResetInFlight],
   )
 
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
@@ -877,9 +906,27 @@ if (!writeBackHaltedRef.current) {
   // 내 사본 다운로드 (409 터미널 탈출용).
   const offerMineDownload = useCallback(async () => {
     try {
-      const h = viewerRef.current
-      if (!h) return
-      const bytes = new Uint8Array(await h.getContent())
+      // flush 스냅샷 우선 (4001 뒤 리마운트 레이스 회피). 진행 중이면 끝까지
+      // 기다린다 (10초 상한) — 배너는 재입장 뒤에도 유지되므로 늦어도 된다.
+      let bytes: Uint8Array | null = flushMineBytesRef.current
+      if (!bytes) {
+        try {
+          const p = flushMinePromiseRef.current
+          if (p) {
+            bytes = await Promise.race([
+              p,
+              new Promise<Uint8Array | null>((resolve) => setTimeout(() => resolve(null), 10000)),
+            ])
+          }
+        } catch {
+          // 무시하고 아래 live 경로로 진행한다.
+        }
+      }
+      if (!bytes) {
+        const h = viewerRef.current
+        if (!h) return
+        bytes = new Uint8Array(await h.getContent())
+      }
       const blob = new Blob([bytes as unknown as BlobPart], {
         type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       })
@@ -1165,6 +1212,19 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       const keepEditing = detail?.keepEditing === true
       // B1: flush 요청 id. 완료 신호에 실어 서버 ack와 짝짓는다.
       const flushRequestId = typeof detail?.flushRequestId === 'string' ? detail.flushRequestId : undefined
+    // C6c-f item 2: flush 요청 시점의 바이트를 스냅샷한다. 실패한 flush가
+    // unflushed 리셋으로 이어지면 이 사본을 제안한다 (4001 뒤에는 늦다).
+    // promise도 들고 있는다 — 리셋 때 아직 끝나지 않았으면 끝까지 기다린다.
+    if (flushRequestId && h) {
+      const p = h
+        .getContent()
+        .then((b) => new Uint8Array(b))
+        .catch(() => null)
+        flushMinePromiseRef.current = p
+        void p.then((snapshot) => {
+          if (snapshot) flushMineBytesRef.current = snapshot
+        })
+      }
       if (savingRef.current) {
         // B1: 저장 중이면 flush만 적재해 둔다. 어떤 저장이 끝나든 신선 저장으로 응답한다.
         // (saving 상태가 아니라 ref로 본다 — setSaving은 비동기라 앞 저장이 끝난
@@ -1408,13 +1468,13 @@ const syncSessionMode = useCallback(() => {
             { name: userNow.name, color: userNow.color },
             { mode: freshEditing ? 'edit' : 'view', userId: userNow.id, device: narrowViewport ? 'mobile' : 'desktop' },
           ),
-        (created) => {
-          created.knownHash = info.lastHash
-          // M18: 새 세션이므로 리셋 플래그를 해제한다(기본값 = 언마운트 시 flush 허용).
-          resetInFlightRef.current = false
-          wireSessionRecovery(created)
-          created.connect()
-        },
+      (created) => {
+        created.knownHash = info.lastHash
+        // M18: 새 세션이므로 리셋 플래그를 해제한다(기본값 = 언마운트 시 flush 허용).
+        setResetInFlight(false)
+        wireSessionRecovery(created)
+        created.connect()
+      },
         )
         // M3/N1: cleanup이 쓸 토큰을 effect 지역에 보관한다.
         lease = acquired
@@ -1425,8 +1485,11 @@ const syncSessionMode = useCallback(() => {
           session.setMode(freshEditing ? 'edit' : 'view')
         }
         baseHashRef.current = info.lastHash
-        setCollabNotice(null)
-        setMineFile(null)
+        // C6c-f item 2: unflushed 경고는 재입장 뒤에도 유지한다 (사본 다운로드 전).
+        if (!keepStaleNoticeRef.current) {
+          setCollabNotice(null)
+          setMineFile(null)
+        }
         toastedStatus.current = null
         // 새 세션(epoch)이면 이미지 손실 정지/대기 바이트를 초기화한다.
 writeBackHaltedRef.current = false
@@ -1659,8 +1722,16 @@ writeBackHaltedRef.current = false
     // fileReloadKey를 올리면 data가 바뀌고 아래 effect가 reloadKey를 올린다.
     session.onReset(() => {
       // U-parent: 첨부 갱신 리셋이면 바깥 DocumentPreview가 전용 토스트를 1회 띄운다 (중복 방지).
-      const embedReset =
-        (session as unknown as { lastResetReason?: string | null }).lastResetReason === 'embed_reset'
+      const lastReason = (session as unknown as { lastResetReason?: string | null }).lastResetReason
+      const embedReset = lastReason === 'embed_reset'
+      // C6c-f item 2: flush 실패 리셋이면 미저장이 증발했을 수 있다 — 사본 다운로드 + 배너.
+      // 재입장 뒤에도 유지된다 (아래 새 세션 정리에서 지우지 않는다).
+      if (lastReason === 'embed_reset_unflushed') {
+        keepStaleNoticeRef.current = true
+        setCollabNotice('마지막 변경이 반영되지 않았을 수 있음 — 내 사본을 내려받으세요')
+        void offerMineDownloadRef.current?.()
+        showToast.warning('마지막 변경이 반영되지 않았을 수 있음 — 내 사본을 내려받으세요')
+      }
       // C6c-e(P0): 공통 복구 경로로 통합 (stale_client와 동일).
       reloadAfterServerReset(
         session,
@@ -2739,7 +2810,11 @@ const peersRef = useRef<Peer[]>([])
           )}
           <button
             type="button"
-            onClick={() => setCollabNotice(null)}
+            onClick={() => {
+              keepStaleNoticeRef.current = false
+              setMineFile(null)
+              setCollabNotice(null)
+            }}
             className="shrink-0 underline underline-offset-2 hover:text-amber-500"
           >
             Dismiss
