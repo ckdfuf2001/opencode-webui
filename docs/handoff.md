@@ -1431,3 +1431,10 @@ E21만의 문제가 아니다. 근거:
 - 1: Edge���� ������ ���ڸ��� �ٷ� ÷�� �����ϱ�.
 - 2: �θ� 1�� �Ѱ� ��� Ÿ�����ϴ� ���� �ٸ� PC���� ÷�� ���� �� ���� �� �θ� ���� ���� �佺Ʈ ����, Ÿ���� ���߸� �� ���� ���ΰ�ħ, ���� ���� ����.
 - 3: �̷��� ����(÷�� ���� �̹ݿ� ��ʰ� ���̴� ����)���� �θ� �ݰ� �ٷ� �ٽ� ���� �� �� ÷�ΰ� ���̰� ������ ���� �ʴ���.
+- 4 (C6c-e 추가): 부모 타이핑 중 다른 PC에서 첨부 여러 번 저장 → 60초 안에 자동으로 다시 불러와질 때, 그 직전에 친 글자와 새 첨부가 모두 남는지.
+
+## C6c-e 리셋 경계를 넘어온 옛 저장 차단 (2026-11-09, epoch 대조)
+- red 먼저: 단위 collab-epoch-stale.test.ts 3건 red→green (stale base=M + 옛 epoch → pre-fix 200 덮개, post-fix 409 stale_client). e2e D3-pptx 1건: 리셋 경계를 넘긴 옛 저장을 HTTP로 직접 재현 — pre-fix 200 무음 덮개(red, 디스크 b1 소실), post-fix 409 stale_client + 디스크 보존 + 재저장 200 (green).
+- item 2 e2e D4-pptx: 미룸 중 부모 탭 닫기 → 즉시 dispose 증명(늦은 저장 404 fail-closed), 재입장 후 epoch 변경 + 정상 저장 + 디스크 첨부 보존.
+- item 3 단위 1건: 미룸 중 첨부삭제 — rel 없는 파트는 다시 끼우지 않음 (200, 디스크에 부활 없음).
+- 회귀: backend 전체 715 중 기존 실패만 (office-embed 1 + bun:sqlite collection 2). c6d 6/6 (D1×3 + D2 + D3 + D4). c5-3 16/16 (E2-pdf 1회 flake, 재실행 green). c5-4 29 + U-parent 기존실패 1. k-dbl: K-dbl-xlsx flake (pre-fix 트리 동일 실패 확인 — 내 변경 무관), 외 green. xlsx 19 + X2a-6 기존실패 + X0a-9 flake(단독 green). docx W0 10/10. pptx 27 + 베이스라인 11 실패 집합 일치. tsc clean, eslint 신규 0, encoding 이상 없음(기존 PptxViewer 큰따옴표 경고 1건 유지).

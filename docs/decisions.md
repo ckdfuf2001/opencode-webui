@@ -961,3 +961,9 @@
  된다(서버 GET이 CFB를 풀지 않음). (5) edit 훅 순서: C6b와 같은 #310 함정에 주의
 -추가: 세션 실패 시 잠금 폴백 경로. 파트 세션(join)이 실패하면(오프라인·서버 오류) 기존 독점 잠금(acquireAttachmentLock, TTL 60s+renew)으로 폴백한다 (AttachmentEditor useEffect, retryKey로만 재실행). 잠금 실패(locked)면 읽기 전용+보유자 표시, 그 외 실패도 읽기 전용으로 열고 토스트로 알린다. 공동편집도 잠금도 안 되면 편집 자체를 막는다 — 조용한 쓰기 유실이 없다.
  (AttachmentEditor useEffect는 early return 뒤에 없음 — 확인됨).
+
+## D71 C6c-e 리셋 경계를 넘어온 옛 저장 차단 — epoch 대조 (2026-11-09)
+- 배경(P0): 미뤄진 병합 저장은 lastHash를 M으로 올리지만 클라이언트 메모리에는 옛 파트를 든 바이트가 남는다. 리셋 뒤 같은 base(M)로 도착하는 옛 저장은 base 대조를 통과해 200으로 옛 파트를 덮는다 ((나)와 같은 유실). 방 세대(epoch)가 바뀌었으면 막아야 한다.
+- 선택지: (권장) 저장마다 epoch 전송, 방 epoch와 다르면 409 stale_client (재시도 금지·다시 불러오기) vs (대안) bases+part 목록 TTL 연장. epoch을 선택한 이유: 미뤄진 리셋 뒤에는 lastHash가 같아도 바이트가 다를 수 있어 base 대조만으로는 부족하다 (P0-2 "epoch 불필요" 판단 정정). epoch은 방 생성 시 1회 발급, 재입장 때만 갱신되므로 전송 비용 없이 방 세대 판정이 된다. TTL 연장은 경계 자체를 못 막는다 (옛 epoch 저장이 새 방에 들어오는 순간을 가릴 수 없음). xlsx/docx도 같은 경로를 탄다 (POST /save → applySave 단일 게이트, epoch 검사는 part 방 제외 모든 부모 방에 적용).
+- 결정: applySave opts에 epoch 추가, 부모 방에서 rooms.get 최신 방과 대조 후 불일치면 409 stale_client (part 방 제외). 라우트는 x-collab-epoch 헤더 + JSON epoch 필드 전달. pptx/xlsx/docx 모두 save()에 epoch 전송, stale 수신 시 재시도 없이 4001과 같은 재입장 경로로 수렴 (pptx: reloadAfterServerReset 공용 콜백, xlsx: reconnectCollab, docx: 세션파괴+joinKey).
+- 검증: 단위 collab-epoch-stale.test.ts 3건 (1 red → fix 후 green). e2e D3 (c6d.spec.ts, pptx 1건): 리셋 경계를 넘긴 옛 저장을 forge로 재현 — pre-fix 200 무음 덮개(red), post-fix 409 stale_client + 디스크 보존 + 재저장 200 (green, 무한 409 루프 없음). item 2 e2e D4 (닫기 중 미룸): 즉시 dispose 증명(늦은 저장 404 fail-closed) + 재입장 후 정상 저장. item 3 단위 1건: 미룸 중 첨부삭제 — rel 없는 파트는 다시 끼우지 않음 (200 + 디스크에 부활 없음).
