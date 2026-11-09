@@ -294,6 +294,72 @@ async function keepTypingDuring(
 }
 
 /**
+ * B의 파트 교체 (HTTP lock→GET→PUT→unlock). adopt+defer를 증명한다.
+ */
+async function putPartMarker(t: DeferCtx, slug: string, marker: string): Promise<void> {
+  const token = `c6d-${Date.now().toString(36)}${Math.floor(Math.random() * 1000000)}`
+  const lock = (await fetch(`${backendBase()}/api/collab/embed/lock`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: t.parentPath, part: t.part, name: `c6d-${slug}`, token }),
+  }).then((r) => r.json())) as { ok?: boolean; lockId?: string }
+  expect(lock.ok).toBe(true)
+  try {
+    const got = (await fetch(
+      `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+    ).then((r) => r.json())) as { ok?: boolean; data?: string; hash?: string }
+    expect(got.ok).toBe(true)
+    const partBytes = Buffer.from(got.data!, 'base64')
+    const mod = await tamperPartXlsxBytes(new Uint8Array(partBytes), marker)
+    const partHashNow = createHash('sha256').update(partBytes).digest('hex')
+    const doPut = async (baseHash: string) => {
+      const fd = new FormData()
+      fd.append('file', new Blob([new Uint8Array(mod)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+      fd.append('baseHash', baseHash)
+      fd.append('partHash', partHashNow)
+      fd.append('lockId', lock.lockId!)
+      return (await fetch(
+        `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+        { method: 'PUT', body: fd },
+      ).then((r) => r.json())) as { ok?: boolean; newHash?: string; currentHash?: string; code?: string; hasPendingPartChange?: boolean }
+    }
+    let put = await doPut(got.hash!)
+    if (!put.ok && put.currentHash) put = await doPut(put.currentHash)
+    // 상한 대기 중에는 부모 자동저장과 경합해 stale/dirty가 날 수 있다.
+    // currentHash가 없어도 base를 새로 읽어 1회 더 시도한다 (setup 내성).
+    if (!put.ok) {
+      console.log(`[c6d] putPartMarker retry after ${JSON.stringify({ code: (put as { code?: unknown }).code })}`)
+      const got2 = (await fetch(
+        `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+      ).then((r) => r.json())) as { ok?: boolean; data?: string; hash?: string }
+      if (got2.ok) {
+        const partBytes2 = Buffer.from(got2.data!, 'base64')
+        const mod2 = await tamperPartXlsxBytes(new Uint8Array(partBytes2), marker)
+        const partHashNow2 = createHash('sha256').update(partBytes2).digest('hex')
+        const fd2 = new FormData()
+        fd2.append('file', new Blob([new Uint8Array(mod2)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+        fd2.append('baseHash', got2.hash!)
+        fd2.append('partHash', partHashNow2)
+        fd2.append('lockId', lock.lockId!)
+        put = (await fetch(
+          `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+          { method: 'PUT', body: fd2 },
+        ).then((r) => r.json())) as { ok?: boolean; newHash?: string; currentHash?: string; code?: string; hasPendingPartChange?: boolean }
+      }
+    }
+    if (!put.ok) console.log(`[c6d] putPartMarker failed: ${JSON.stringify(put).slice(0, 300)}`)
+    expect(put.ok).toBe(true)
+    expect(put.hasPendingPartChange).toBe(true)
+  } finally {
+    await fetch(`${backendBase()}/api/collab/embed/lock`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: t.parentPath, part: t.part, lockId: lock.lockId!, token }),
+    }).catch(() => {})
+  }
+}
+
+/**
  * 재입장 후: 실제 텍스트를 읽어 seed로 쓴다 (자동저장 여부에 따라 내용이 다르다).
  * editShapeText의 포커스/대기 로직을 그대로 쓰되 seed만 동적으로 구한다.
  * D3 전용 (rejoin 뒤 구 텍스트를 모를 때).
@@ -601,6 +667,276 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       } finally {
         t.pageA.off('response', watchOk)
       }
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D5-pptx: 4001 뒤 stale 응답은 중복 불러오지 않는다 (guard)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd5pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    try {
+      // OFFICE_RESET_RELOAD 카운터 (in-page 리스너).
+      await t.pageA.evaluate(() => {
+        ;(window as unknown as Record<string, unknown>).__c6c_e_resetCount = 0
+        window.addEventListener('officeResetReload', () => {
+          const w = window as unknown as Record<string, unknown>
+          w.__c6c_e_resetCount = ((w.__c6c_e_resetCount as number) ?? 0) + 1
+        })
+      })
+      const resetCount = (): Promise<unknown> =>
+        t.pageA.evaluate(() => (window as unknown as Record<string, unknown>).__c6c_e_resetCount ?? -1)
+      // A 입력 후 B의 파트 교체 (adopt+defer; 미룸 증명).
+      await editShapeText(t.pageA, t.shapes!, `${slug}-ready`, `${slug}-a1`)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a1`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      const token = `c6d-${Date.now().toString(36)}`
+      const lock = (await fetch(`${backendBase()}/api/collab/embed/lock`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: t.parentPath, part: t.part, name: 'c6d-d5', token }),
+      }).then((r) => r.json())) as { ok?: boolean; lockId?: string }
+      expect(lock.ok).toBe(true)
+      try {
+        const got = (await fetch(
+          `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+        ).then((r) => r.json())) as { ok?: boolean; data?: string; hash?: string }
+        expect(got.ok).toBe(true)
+        const partBytes = Buffer.from(got.data!, 'base64')
+        const mod = await tamperPartXlsxBytes(new Uint8Array(partBytes), `${slug}-b1`)
+        const partHashNow = createHash('sha256').update(partBytes).digest('hex')
+        const doPut = async (baseHash: string) => {
+          const fd = new FormData()
+          fd.append('file', new Blob([new Uint8Array(mod)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+          fd.append('baseHash', baseHash)
+          fd.append('partHash', partHashNow)
+          fd.append('lockId', lock.lockId!)
+          return (await fetch(
+            `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+            { method: 'PUT', body: fd },
+          ).then((r) => r.json())) as { ok?: boolean; newHash?: string; currentHash?: string; code?: string; hasPendingPartChange?: boolean }
+        }
+        let put = await doPut(got.hash!)
+        if (!put.ok && put.currentHash) put = await doPut(put.currentHash)
+        expect(put.ok).toBe(true)
+        expect(put.hasPendingPartChange).toBe(true)
+      } finally {
+        await fetch(`${backendBase()}/api/collab/embed/lock`, {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: t.parentPath, part: t.part, lockId: lock.lockId!, token }),
+        }).catch(() => {})
+      }
+      // POST /save를 붙잡아 둔다 (수동 continue/unroute/abort/headerValue 금지 —
+      // 교착·소실의 원인. 해제는 fulfill(확정 응답)과 플래그 통과로만 한다).
+      // 리셋 전 저장을 붙잡아 두었다가 리셋 직후 stale 409로 답한다 (mock 아님 대신
+      // 서버 stale_client와 동일한 바디). 가드는 중복 불러오기를 막아야 한다.
+      let releaseSaves = false
+      let heldSaves = 0
+      const heldRoutes: { fulfill: (r: unknown) => Promise<void> }[] = []
+      await t.pageA.route('**/api/collab/save', async (route) => {
+        if (route.request().method() !== 'POST') {
+          await route.continue().catch(() => {})
+          return
+        }
+        if (releaseSaves) {
+          await route.continue().catch(() => {})
+          return
+        }
+        heldSaves += 1
+        heldRoutes.push(route as unknown as { fulfill: (r: unknown) => Promise<void> })
+      })
+      try {
+        await gotoSlide(t.pageA, 2)
+        await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-a1q`)
+        await clickParentSave(t.pageA)
+        await expect
+          .poll(() => Promise.resolve(heldSaves), { timeout: 60000, intervals: [500] })
+          .toBeGreaterThan(0)
+        // 조용한 구간 → 리셋(4001). 재입장은 즉시 진행된다.
+        await expect.poll(() => resetCount(), { timeout: 90000, intervals: [500] }).toBeGreaterThanOrEqual(1)
+        console.log(`[c6d] D5 reset fired, fulfilling stale 409`)
+        // 붙잡힌 저장은 전부 리셋 전 세대다 (재입장+자동저장이 돌기 전에 fulfill하므로
+        // E2가 섞일 수 없다). 늦은 stale 응답을 직접 답한다.
+        // pre-fix: 무조건 full reload → 2번째 dispatch. post-fix: 차단.
+        // collab이 null이어도, 새 세션이어도 가드가 막는다 — 재입장 대기가 필요 없다.
+        const respP = t.pageA
+          .waitForResponse((res) => res.url().includes('/api/collab/save') && res.request().method() === 'POST', {
+            timeout: 60000,
+          })
+          .catch(() => null)
+        for (const r of heldRoutes.splice(0)) {
+          await r
+            .fulfill({
+              status: 409,
+              contentType: 'application/json',
+              body: JSON.stringify({ error: 'Room was reset after your last sync - reload first', code: 'stale_client', currentHash: null }),
+            })
+            .catch(() => {})
+        }
+        const resp = await respP
+        expect(resp, 'held save got stale response').toBeTruthy()
+        expect(resp!.status()).toBe(409)
+        expect(((await resp!.json()) as { code?: unknown }).code).toBe('stale_client')
+        await t.pageA.waitForTimeout(2000)
+        // 단언 1: 중복 불러오기 없음 (pre-fix면 2).
+        expect(await resetCount()).toBe(1)
+        console.log(`[c6d] D5 no double reload (count==1)`)
+        // 단언 2: 재입장 수렴 (서버 기준 — 참가자 있음).
+        await expect
+          .poll(async () => {
+            const roomsRes = (await fetch(`${backendBase()}/api/collab/rooms`).then((r) => r.json())) as {
+              rooms?: Array<{ rel?: string; part?: string; participants?: unknown[] }>
+            }
+            const e = (roomsRes.rooms ?? []).find((x) => (x.rel ?? '').endsWith(t.parentPath.split('/').pop()!) && !x.part)
+            return e && Array.isArray(e.participants) && e.participants.length > 0
+          }, { timeout: 90000, intervals: [1000] })
+          .toBe(true)
+        // 단언 3: 새 세션 저장 200 (무한 409 루프 없음). 이후 저장은 통과시킨다.
+        releaseSaves = true
+        let saw200 = false
+        const watchOk = (res: { url(): string; status(): number }) => {
+          try {
+            if (res.url().includes('/api/collab/save') && res.status() === 200) saw200 = true
+          } catch { /* 무시 */ }
+        }
+        t.pageA.on('response', watchOk)
+        try {
+          await gotoSlide(t.pageA, 2)
+          await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-a1r`)
+          await clickParentSave(t.pageA)
+          await expect.poll(() => Promise.resolve(saw200), { timeout: 60000, intervals: [500] }).toBe(true)
+        } finally {
+          t.pageA.off('response', watchOk)
+        }
+        expect(await partDiskHas(t.abs, t.part, `${slug}-b1`)).toBe(true)
+      } finally {
+        await t.pageA.unrouteAll({ behavior: 'wait' }).catch(() => {})
+      }
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D6-pptx: 상한 리셋 전 flush — 구조+미반영 시 사본 제안', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd6pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    try {
+      await t.pageA.evaluate(() => {
+        ;(window as unknown as Record<string, unknown>).__c6c_e_resetCount = 0
+        window.addEventListener('officeResetReload', () => {
+          const w = window as unknown as Record<string, unknown>
+          w.__c6c_e_resetCount = ((w.__c6c_e_resetCount as number) ?? 0) + 1
+        })
+        // C6c-f item 2: 서버 103 flush 요청을 관측한다 (B2 즉시-ok면 저장이
+        // 없어도 officeSaveRequest는 항상 나가므로, 저장 유무와 무관한 지문).
+        // adopt 시점의 flush는 armed 전이라 무시된다 (아래에서 armed).
+        ;(window as unknown as Record<string, unknown>).__c6c_f_flushSeen = false
+        window.addEventListener('officeSaveRequest', (e) => {
+          const d = (e as CustomEvent<{ flushRequestId?: unknown }>).detail
+          if (d && typeof d.flushRequestId === 'string') {
+            ;(window as unknown as Record<string, unknown>).__c6c_f_flushSeen = true
+          }
+        })
+      })
+      const resetCount = (): Promise<unknown> =>
+        t.pageA.evaluate(() => (window as unknown as Record<string, unknown>).__c6c_e_resetCount ?? -1)
+      const flushSeen = (): Promise<unknown> =>
+        t.pageA.evaluate(() => (window as unknown as Record<string, unknown>).__c6c_f_flushSeen ?? false)
+      // Phase A: 상한(deadline) 경로 구조. flush(103)는 officeSaveRequest의
+      // flushRequestId로 관측한다 (B2 즉시-ok면 저장이 없어도 요청은 항상
+      // 나가므로, 저장 유무와 무관한 지문). pre-fix는 flush 자체가 없어 빨강.
+      // adopt 시점의 flush는 플래그를 리셋해 무시한다.
+      await editShapeText(t.pageA, t.shapes!, `${slug}-ready`, `${slug}-a1`)
+        await expect
+          .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a1`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+        await putPartMarker(t, slug, `${slug}-b1`)
+        const t0 = Date.now()
+        await t.pageA.evaluate(() => {
+          ;(window as unknown as Record<string, unknown>).__c6c_f_flushSeen = false
+        })
+        // 상한 직전(T0+56s)까지 계속 입력한다. flush 저장(103 직후 즉시 저장)이
+        // 꼬리까지 포함하고, 상한(60s)이 조용한 리셋보다 먼저 오도록 한다.
+        let cur = `${slug}-a1`
+        let lastMarker = cur
+        while (Date.now() - t0 < 56000) {
+          const m = `${slug}-a1d${Date.now().toString(36).slice(-4)}`
+          try {
+            await editShapeText(t.pageA, t.shapes!, cur, m)
+          } catch {
+            break
+          }
+          cur = m
+          lastMarker = m
+          if (Number(await resetCount()) >= 1) break
+        }
+        console.log(`[c6d] D6 typing done, lastMarker=${lastMarker}`)
+        // flush 시도 관측 (상한+여유 75s). pre-fix면 절대 안 온다.
+        await expect.poll(() => flushSeen(), { timeout: 75000, intervals: [500] }).toBe(true)
+        console.log(`[c6d] D6 flush attempted`)
+        await expect.poll(() => resetCount(), { timeout: 30000, intervals: [500] }).toBeGreaterThanOrEqual(1)
+        console.log(`[c6d] D6 reset fired`)
+        // 재입장 수렴 후 디스크: 마지막 마커 + B 첨부.
+        await expect
+          .poll(async () => {
+            const roomsRes = (await fetch(`${backendBase()}/api/collab/rooms`).then((r) => r.json())) as {
+              rooms?: Array<{ rel?: string; part?: string; participants?: unknown[] }>
+            }
+            const e = (roomsRes.rooms ?? []).find((x) => (x.rel ?? '').endsWith(t.parentPath.split('/').pop()!) && !x.part)
+            return e && Array.isArray(e.participants) && e.participants.length > 0
+          }, { timeout: 90000, intervals: [1000] })
+          .toBe(true)
+        await expect
+          .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, lastMarker, 'Body 2')), { timeout: 90000, intervals: [1000] })
+          .toBe(true)
+        expect(await partDiskHas(t.abs, t.part, `${slug}-b1`)).toBe(true)
+        console.log(`[c6d] D6 phase A rescued markers on disk`)
+      // Phase B: flush 실패(타임아웃)면 사본 제안. B-PUT 뒤에 저장을 30초
+      // 붙잡아 미뤄진 리셋의 flush를 굶긴다 (B-PUT 자체의 adopt-flush가 먼저
+      // 끝나야 하므로 홀드는 PUT 뒤에 건다).
+      await gotoSlide(t.pageA, 2)
+      await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-mB`)
+      await putPartMarker(t, slug, `${slug}-b2`)
+      // 홀드 뒤에 한 번 더 입력해야 flush 시점에 미저장이 남는다 (B2 즉시-ok
+      // 회피 — 미저장 없이 103이 오면 저장이 없어 타임아웃이 안 된다).
+      let holdSaves = true
+      await t.pageA.route('**/api/collab/save', async (route) => {
+        if (route.request().method() !== 'POST' || !holdSaves) {
+          await route.continue().catch(() => {})
+          return
+        }
+        await new Promise((r) => setTimeout(r, 30000))
+        await route.continue().catch(() => {})
+      })
+      await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-mB2`)
+      // 103 도달 확인 (flush 시도 자체 — pre-fix면 절대 안 온다).
+      await t.pageA.evaluate(() => {
+        ;(window as unknown as Record<string, unknown>).__c6c_f_flushSeen = false
+      })
+      await expect.poll(() => flushSeen(), { timeout: 30000, intervals: [500] }).toBe(true)
+      console.log(`[c6d] D6 phase B flush attempted`)
+      // 입력 중단 → 조용 5초 → flush(103, held) → 8초 타임아웃 → unflushed 리셋.
+      // 배너는 재입장 뒤에도 유지되므로(keepStaleNotice) 먼저 단언하고,
+      // 사본 링크는 별도로 단언한다 (getContent 완료 시점에 붙는다).
+      await expect
+        .poll(() => t.pageA.getByText('마지막 변경이 반영되지 않았을 수 있음').count(), { timeout: 60000, intervals: [500] })
+        .toBeGreaterThan(0)
+      console.log(`[c6d] D6 phase B stale banner shown`)
+      await expect
+        .poll(() => t.pageA.getByRole('link', { name: '내 사본 다운로드' }).count(), { timeout: 60000, intervals: [500] })
+        .toBeGreaterThan(0)
+      console.log(`[c6d] D6 phase B stale banner + download offered`)
+      expect(await partDiskHas(t.abs, t.part, `${slug}-b2`)).toBe(true)
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
