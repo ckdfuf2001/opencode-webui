@@ -293,6 +293,21 @@ async function keepTypingDuring(
   return seed
 }
 
+/**
+ * 재입장 후: 실제 텍스트를 읽어 seed로 쓴다 (자동저장 여부에 따라 내용이 다르다).
+ * editShapeText의 포커스/대기 로직을 그대로 쓰되 seed만 동적으로 구한다.
+ * D3 전용 (rejoin 뒤 구 텍스트를 모를 때).
+ */
+async function typeAfterRejoin(page: Page, shapes: ShapeLocator, marker: string): Promise<void> {
+  const curText = await page.evaluate(() => {
+    const els = [...document.querySelectorAll('[data-element-id]')] as HTMLElement[]
+    const el = els.find((e) => (e.textContent || '').trim().length > 1)
+    return el ? (el.textContent ?? null) : null
+  })
+  if (!curText) throw new Error('no editable text found after rejoin')
+  await editShapeText(page, shapes, curText, marker)
+}
+
 test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
   for (const kind of ['pptx', 'xlsx', 'docx']) {
     test(`D1-${kind}: 연속 입력+저장 중 첨부 2회 저장 — 409 없이 양쪽 디스크 보존, 리셋 1회`, async ({
@@ -416,7 +431,7 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         }
         let put = await doPut(got.hash!)
         if (!put.ok && put.currentHash) put = await doPut(put.currentHash)
-        expect(put.ok).toBe(true)
+        console.log(JSON.stringify(put)); expect(put.ok).toBe(true)
         // 미뤄짐 증명: PUT 응답이 미뤄진 변경을 알린다.
         expect(put.hasPendingPartChange).toBe(true)
       } finally {
@@ -456,6 +471,148 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         await ctxA2.close().catch(() => {})
       }
     } finally {
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D3-pptx: stale epoch save across reset is rejected (no silent overwrite)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd3pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    try {
+      // A 입력 후 B의 파트 교체를 HTTP로 한다 (U-http 패턴 lock→GET→PUT).
+      // 자동저장이 수렴한 뒤에 PUT해야 base가 안정적이다.
+      await editShapeText(t.pageA, t.shapes!, `${slug}-ready`, `${slug}-a1`)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a1`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      // 리셋 전 바이트 스냅샷 (옛 첨부).
+      const staleBytes = fs.readFileSync(t.abs)
+      const token = `c6d-${Date.now().toString(36)}`
+      const lock = (await fetch(`${backendBase()}/api/collab/embed/lock`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: t.parentPath, part: t.part, name: 'c6d-d3', token }),
+      }).then((r) => r.json())) as { ok?: boolean; lockId?: string }
+      expect(lock.ok).toBe(true)
+      try {
+        const got = (await fetch(
+          `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+        ).then((r) => r.json())) as { ok?: boolean; data?: string; hash?: string }
+        expect(got.ok).toBe(true)
+        const partBytes = Buffer.from(got.data!, 'base64')
+        const mod = await tamperPartXlsxBytes(new Uint8Array(partBytes), `${slug}-b1`)
+        const partHashNow = createHash('sha256').update(partBytes).digest('hex')
+        const doPut = async (baseHash: string) => {
+          const fd = new FormData()
+          fd.append('file', new Blob([new Uint8Array(mod)], { type: 'application/octet-stream' }), 'embed-docx.xlsx')
+          fd.append('baseHash', baseHash)
+          fd.append('partHash', partHashNow)
+          fd.append('lockId', lock.lockId!)
+          return (await fetch(
+            `${backendBase()}/api/collab/embed?${new URLSearchParams({ path: t.parentPath, part: t.part }).toString()}`,
+            { method: 'PUT', body: fd },
+          ).then((r) => r.json())) as { ok?: boolean; newHash?: string; currentHash?: string; code?: string; hasPendingPartChange?: boolean }
+        }
+        let put = await doPut(got.hash!)
+        if (!put.ok && put.currentHash) put = await doPut(put.currentHash)
+        expect(put.ok).toBe(true)
+        // 미뤄졌는지 기록만 남긴다 (즉시 리셋이어도 epoch 게이트 검증은 유효).
+        console.log(`[c6d] D3 B-save ok, deferred=${put.hasPendingPartChange === true}`)
+      } finally {
+        await fetch(`${backendBase()}/api/collab/embed/lock`, {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: t.parentPath, part: t.part, lockId: lock.lockId!, token }),
+        }).catch(() => {})
+      }
+      // 리셋+재입장 증거: 세션이 다시 생긴다 (새 epoch).
+      await expect.poll(() => Promise.resolve(t.sessionPosts()), { timeout: 60000, intervals: [1000] }).toBeGreaterThanOrEqual(2)
+      // 유효한 owner clientId를 관측된 저장에서 읽는다.
+    let observedClient: number | null = null
+    let observe = true
+    const observeSave = (req: { method(): string; url(): string; headers(): Record<string, string> }) => {
+      try {
+        if (!observe) return
+        // POST /api/collab/save (PUT 아님 — 실제 전송은 POST).
+        if (req.method() === 'POST' && req.url().includes('/api/collab/save')) {
+          const v = Number(req.headers()['x-collab-client'])
+          if (Number.isInteger(v)) observedClient = v
+        }
+      } catch { /* 무시 */ }
+    }
+    t.pageA.on('request', observeSave)
+    // DEBUG: 모든 PUT /api/collab* 요청을 로그한다.
+    const debugReq = (req: { method(): string; url(): string }) => {
+      try {
+        if (req.method() === 'POST' && req.url().includes('/api/collab/')) {
+          console.log(`[c6d] D3 saw POST: ${req.url()}`)
+        }
+      } catch { /* 무시 */ }
+    }
+    t.pageA.on('request', debugReq)
+    try {
+      // 재입장 후 실제 텍스트를 읽어 seed로 쓴다 (자동저장 여부에 따라 내용이 다르다).
+      // 재입장은 슬라이드 1로 돌아갈 수 있으므로 먼저 마커가 있는 슬라이드로 이동한다.
+      await gotoSlide(t.pageA, 2)
+      await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-a1q`)
+      await clickParentSave(t.pageA)
+      await expect
+        .poll(() => Promise.resolve(observedClient), { timeout: 60000, intervals: [500] })
+        .not.toBeNull()
+      // 조용해질 때까지 기다린다 (진행 중 저장 없음).
+      await t.pageA.waitForTimeout(6000)
+    } finally {
+      observe = false
+      t.pageA.off('request', observeSave)
+      t.pageA.off('request', debugReq)
+    }
+      // 방 ID를 rooms API에서 찾는다.
+      const roomsRes = (await fetch(`${backendBase()}/api/collab/rooms`).then((r) => r.json())) as {
+        rooms?: Array<{ roomId?: string; rel?: string; part?: string }>
+      }
+      const fileName = t.parentPath.split('/').pop()!
+      const roomEntry = (roomsRes.rooms ?? []).find((r) => (r.rel ?? '').endsWith(fileName) && !r.part)
+      expect(roomEntry?.roomId).toBeTruthy()
+      const diskHash = createHash('sha256').update(fs.readFileSync(t.abs)).digest('hex')
+      // 리셋을 넘어온 옛 저장: base는 맞지만 epoch이 옛 것이다.
+      const forged = await fetch(`${backendBase()}/api/collab/save`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'x-collab-room': roomEntry!.roomId!,
+          'x-collab-client': String(observedClient),
+          'x-collab-base-hash': diskHash,
+          'x-collab-epoch': 'stale-test-epoch',
+        },
+        body: staleBytes,
+      }).then((r) => r.json().then((b) => ({ status: r.status, body: b as { code?: unknown } })))
+      console.log(`[c6d] D3 forged save response: status=${forged.status} code=${String(forged.body?.code)}`)
+      // 200 덮개 금지: epoch이 다르면 409 stale_client이어야 한다.
+      expect(forged.status).toBe(409)
+      expect(forged.body?.code).toBe('stale_client')
+      // 디스크 첨부는 그대로다.
+      expect(await partDiskHas(t.abs, t.part, `${slug}-b1`)).toBe(true)
+      // 복구 확인: 새 epoch으로는 저장이 된다 (무한 409 루프 없음).
+      let saw200 = false
+      const watchOk = (res: { url(): string; status(): number }) => {
+        try {
+          if (res.url().includes('/api/collab/save') && res.status() === 200) saw200 = true
+        } catch { /* 무시 */ }
+      }
+      t.pageA.on('response', watchOk)
+      try {
+        await gotoSlide(t.pageA, 2)
+        await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-a1r`)
+        await clickParentSave(t.pageA)
+        await expect.poll(() => Promise.resolve(saw200), { timeout: 60000, intervals: [500] }).toBe(true)
+      } finally {
+        t.pageA.off('response', watchOk)
+      }
+    } finally {
+      await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
     }
   })
