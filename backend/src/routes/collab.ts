@@ -172,6 +172,11 @@ app.post('/save', async (c) => {
     }
     // X1b: 방 종류는 **서버가 방에서 안다**(클라이언트를 믿지 않는다).
     // xlsx 방은 lib 가 소유한다 → owner/seeded 검사 없이 낙관적 잠금으로만 판정한다.
+    // C6c-f item 3: 부모 방 저장은 epoch 필수 (없으면 400). 파트 방은 제외.
+    const epochRoom = rooms.get(roomId)
+    if (epochRoom && !epochRoom.part && !epoch) {
+      return c.json({ error: 'Parent save requires epoch', code: 'epoch_required' }, 400)
+    }
     const kind = rooms.get(roomId)?.kind ?? 'other'
     const check = checkSave(roomId, clientId, bytes.length, { kind })
     if (!check.ok) return c.json({ error: check.error, code: check.code }, check.status || 409)
