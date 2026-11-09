@@ -4,6 +4,8 @@ import path from 'path'
 import fs from 'fs/promises'
 import JSZip from 'jszip'
 import * as Y from 'yjs'
+import * as encoding from 'lib0/encoding'
+import * as decoding from 'lib0/decoding'
 
 // files.ts가 모듈 로드 시점에 WORKSPACE_PATH를 캡처하므로 적재 import보다 먼저 env를 깐다.
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'collabpartreset-'))
@@ -23,6 +25,7 @@ const {
   resetStats,
   rooms,
   setParentQuietMs,
+  wsMessage,
 } = await import('../../src/services/collab-rooms')
 
 const hostAbs = (...p: string[]) => path.join(tmp, ...p)
@@ -77,8 +80,37 @@ describe('C6c-1: 파트 저장은 부모가 조용할 때만 방을 리셋한다
       const sParent = await createSession(HOST_REL)
       const parentRoom = rooms.get(sParent.roomId)!
       // 두 명의 편집자 conn (owner 선출용).
-      const fakeA = { send: (_b: unknown) => {} }
+      // C6c-f item 2: 미뤄진 리셋은 flush(103) 후 4001이다. owner(fakeA)는 103을
+      // 받으면 104 {ok:true}로 답한다 (미저장 없음 → B2 즉시-ok 상당).
+      // ack는 비동기+지연으로 보낸다. 동기 ack는 서버가 p.conn을 적재하기 전이라
+      // B1 짝짓기에 버려지고 (실제 WS 왕복은 항상 비동기), 즉시 ack는 파트 저장이
+      // 부모 타이핑 전에 끝나 adopt가 defer 대신 즉시 리셋해 버린다. 300ms 지연은
+      // 현실적인 왕복 latency이며 라운드 타이밍(입력→저장→adopt)을 보존한다.
+      const ackFlush = (tag: { send: (b: unknown) => void }, roomId: string) => (b: unknown) => {
+        try {
+          if (!(b instanceof Uint8Array) || b.length === 0) return
+          const d = decoding.createDecoder(b)
+          if (decoding.readVarUint(d) !== 103) return
+          const raw = decoding.readVarUint8Array(d)
+          const body = JSON.parse(new TextDecoder().decode(raw)) as { requestId?: unknown }
+          const reqId = body.requestId
+          setTimeout(() => {
+            try {
+              const e = encoding.createEncoder()
+              encoding.writeVarUint(e, 104)
+              encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify({ ok: true, requestId: reqId })))
+              wsMessage(roomId, tag, encoding.toUint8Array(e))
+            } catch {
+              // 무시
+            }
+          }, 300)
+        } catch {
+          // 무시
+        }
+      }
+      const fakeA: { send: (b: unknown) => void } = { send: () => {} }
       const fakeB = { send: (_b: unknown) => {} }
+      fakeA.send = ackFlush(fakeA, sParent.roomId)
       parentRoom.conns.set(fakeA, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
       parentRoom.conns.set(fakeB, { joinedAt: Date.now(), clientIds: new Set([2]), lastMsgAt: Date.now() })
       parentRoom.ownerConn = fakeA
