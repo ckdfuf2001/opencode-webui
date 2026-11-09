@@ -544,15 +544,6 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       } catch { /* 무시 */ }
     }
     t.pageA.on('request', observeSave)
-    // DEBUG: 모든 PUT /api/collab* 요청을 로그한다.
-    const debugReq = (req: { method(): string; url(): string }) => {
-      try {
-        if (req.method() === 'POST' && req.url().includes('/api/collab/')) {
-          console.log(`[c6d] D3 saw POST: ${req.url()}`)
-        }
-      } catch { /* 무시 */ }
-    }
-    t.pageA.on('request', debugReq)
     try {
       // 재입장 후 실제 텍스트를 읽어 seed로 쓴다 (자동저장 여부에 따라 내용이 다르다).
       // 재입장은 슬라이드 1로 돌아갈 수 있으므로 먼저 마커가 있는 슬라이드로 이동한다.
@@ -567,7 +558,6 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     } finally {
       observe = false
       t.pageA.off('request', observeSave)
-      t.pageA.off('request', debugReq)
     }
       // 방 ID를 rooms API에서 찾는다.
       const roomsRes = (await fetch(`${backendBase()}/api/collab/rooms`).then((r) => r.json())) as {
