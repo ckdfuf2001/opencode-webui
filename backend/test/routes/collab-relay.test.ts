@@ -227,7 +227,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     const save1 = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, clientId: a.clientId, bytesB64: Buffer.from(bytes).toString('base64') }),
+      body: JSON.stringify({ roomId, clientId: a.clientId, bytesB64: Buffer.from(bytes).toString('base64'), epoch: s.json.epoch }),
     })
     expect(save1.status).toBe(200)
     // A 퇴장 → B 승계. B는 오래된 knownHash를 들고 있지만 저장된다.
@@ -239,7 +239,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
     const save2 = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, clientId: b.clientId, bytesB64: Buffer.from(bytes).toString('base64') }),
+      body: JSON.stringify({ roomId, clientId: b.clientId, bytesB64: Buffer.from(bytes).toString('base64'), epoch: s.json.epoch }),
     })
     expect(save2.status).toBe(200)
     const lock = (await (await testFetch(`${baseUrl}/api/collab/lock?path=repos/aaa/shared.txt`)).json()) as {
@@ -267,6 +267,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
         'Content-Type': 'application/octet-stream',
         'x-collab-room': roomId,
         'x-collab-client': String(a.clientId),
+        'x-collab-epoch': s.json.epoch,
       },
       body: bytes as unknown as BodyInit,
     })
@@ -307,6 +308,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
           'Content-Type': 'application/octet-stream',
           'x-collab-room': roomId,
           'x-collab-client': String(a.clientId),
+          'x-collab-epoch': s.json.epoch,
           ...(allow ? { 'x-collab-allow-image-loss': '1' } : {}),
         },
         body: bytes as unknown as BodyInit,
@@ -346,6 +348,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
           'Content-Type': 'application/octet-stream',
           'x-collab-room': roomId,
           'x-collab-client': String(a.clientId),
+          'x-collab-epoch': s.json.epoch,
           ...(allow ? { 'x-collab-allow-image-loss': '1' } : {}),
         },
         body: bytes as unknown as BodyInit,
@@ -493,6 +496,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
         roomId,
         clientId: ownerId,
         bytesB64: Buffer.from(new TextEncoder().encode('after-resume')).toString('base64'),
+        epoch,
       }),
     })
     expect(save.status).toBe(200)
@@ -563,6 +567,7 @@ describe('collab relay (live server, y-websocket compatible)', () => {
         'Content-Type': 'application/octet-stream',
         'x-collab-room': roomId,
         'x-collab-client': String(a.clientId),
+        'x-collab-epoch': epoch,
       },
       body: bytes as unknown as BodyInit,
     })
@@ -623,6 +628,7 @@ it('T2g: real external change flags the room but keeps room/owner/epoch', async 
       'Content-Type': 'application/octet-stream',
       'x-collab-room': roomId,
       'x-collab-client': String(a.clientId),
+      'x-collab-epoch': epoch,
     },
     body: new TextEncoder().encode('after-external') as unknown as BodyInit,
   })
@@ -665,6 +671,54 @@ it('T2h: concurrent session POSTs for the same file create only one room', async
   a.destroy()
 })
 
+it('T2i: parent save without epoch -> 400 epoch_required (C6c-f item 3)', async () => {
+    const rel = 'repos/aaa/no-epoch.txt'
+    await fs.writeFile(path.join(tmp, rel), 'seed')
+    const s = await postSession(baseUrl, { path: rel })
+    const roomId = s.json.roomId as string
+    const a = track(new YCollabSession(`${wsBase}/api/collab/${roomId}`, { name: 'a', color: '#e11d48' }))
+    a.connect()
+    await waitFor(() => a.synced, 'A synced')
+    a.doc.getText('t').insert(0, 'x')
+    await waitFor(() => {
+      const room = rooms.rooms.get(roomId)
+      return !!room && room.ownerIds.has(a.clientId)
+    }, 'A is owner')
+    // 바이너리 경로: epoch 헤더 없으면 400.
+    const noEpoch = await testFetch(`${baseUrl}/api/collab/save`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-collab-room': roomId,
+        'x-collab-client': String(a.clientId),
+      },
+      body: new TextEncoder().encode('no-epoch-bytes') as unknown as BodyInit,
+    })
+    expect(noEpoch.status).toBe(400)
+    expect(((await noEpoch.json()) as { code?: string }).code).toBe('epoch_required')
+    // JSON 경로: epoch 필드 없으면 400.
+    const noEpochJson = await testFetch(`${baseUrl}/api/collab/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId, clientId: a.clientId, bytesB64: Buffer.from('x').toString('base64') }),
+    })
+    expect(noEpochJson.status).toBe(400)
+    expect(((await noEpochJson.json()) as { code?: string }).code).toBe('epoch_required')
+    // epoch를 붙이면 통과한다.
+    const ok = await testFetch(`${baseUrl}/api/collab/save`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-collab-room': roomId,
+        'x-collab-client': String(a.clientId),
+        'x-collab-epoch': s.json.epoch,
+      },
+      body: new TextEncoder().encode('with-epoch-bytes') as unknown as BodyInit,
+    })
+    expect(ok.status).toBe(200)
+    a.destroy()
+})
+
 it('T7: save before seed -> not_seeded', async () => {
     const s = await postSession(baseUrl, { path: 'repos/aaa/shared.txt' })
     // WS도 붙이고 awareness까지 갔지만 doc update는 없음.
@@ -680,7 +734,7 @@ it('T7: save before seed -> not_seeded', async () => {
     const save = await testFetch(`${baseUrl}/api/collab/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId: s.json.roomId, clientId: c.clientId, bytesB64: Buffer.from('x').toString('base64') }),
+      body: JSON.stringify({ roomId: s.json.roomId, clientId: c.clientId, bytesB64: Buffer.from('x').toString('base64'), epoch: s.json.epoch }),
     })
     expect(save.status).toBe(409)
     expect(((await save.json()) as { code: string }).code).toBe('not_seeded')
