@@ -446,6 +446,24 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
     }
   }, [isOwnerNow])
 
+  // E2E 디버그 로그 (logClient는 reloadAfterServerReset보다 먼저 정의해야 한다 —
+  // useCallback deps 배열이 렌더 시점에 평가되므로 뒤에 있으면 TDZ가 난다).
+  const clientLogs = useRef<string[]>([])
+  const logClient = useCallback(
+    (msg: string): void => {
+      if (!collabDebug) return
+      try {
+        clientLogs.current.push(`${Date.now() % 1000000} ${msg}`)
+        if (clientLogs.current.length > 200) clientLogs.current.splice(0, clientLogs.current.length - 200)
+        const w = window as unknown as { __collabDebug?: Record<string, unknown> }
+        w.__collabDebug = { ...(w.__collabDebug ?? {}), clientLogs: [...clientLogs.current] }
+      } catch {
+        // 무시
+      }
+    },
+    [collabDebug],
+  )
+
   /**
    * C6c-e(P0): 서버 리셋(4001) 또는 stale epoch 저장 응답 뒤의 공통 복구:
    * 죽은 세션을 버리고 새 바이트를 받아 다시 입장한다 (stale 호스팅 방지).
@@ -498,7 +516,7 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
       }, 8000)
       if (opts?.toast) showToast.info(opts.toast)
     },
-    [savePath, sessionKey],
+    [savePath, sessionKey, logClient, setCurSlide],
   )
 
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
@@ -1032,22 +1050,8 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   /** guest용 안내 — 버튼은 owner에게만 보인다. */
   const isResetOwner = isOwnerNow(collabRef.current)
 
-  /** E2E/디버그용 클라이언트 로그 (?collabDebug=1에서만 수집, 상한 200). */
-  const clientLogs = useRef<string[]>([])
-  const logClient = (msg: string): void => {
-    if (!collabDebug) return
-    try {
-      clientLogs.current.push(`${Date.now() % 1000000} ${msg}`)
-      if (clientLogs.current.length > 200) clientLogs.current.splice(0, clientLogs.current.length - 200)
-      const w = window as unknown as { __collabDebug?: Record<string, unknown> }
-      w.__collabDebug = { ...(w.__collabDebug ?? {}), clientLogs: [...clientLogs.current] }
-    } catch {
-      // 무시
-    }
-  }
-
-    // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
-    // 평가되므로 앞에서 참조하면 TDZ가 난다).
+  // 저장 리스너: persistBytes보다 뒤에 있어야 한다 (deps 배열이 렌더 시점에
+  // 평가되므로 앞에서 참조하면 TDZ가 난다).
   useEffect(() => {
     // flush용 신선 저장을 한 번 실행한다. 완료 신호에 id를 실어 ack와 짝짓는다.
     const runPersistForFlush = async (flushRequestId: string, keepEditing: boolean): Promise<void> => {

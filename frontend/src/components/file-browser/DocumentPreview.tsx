@@ -3270,7 +3270,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
       )
       return false
     }
-  }, [path, queryClient, storeFailedBytes, patchUnsupportedForSave])
+  }, [path, queryClient, storeFailedBytes, patchUnsupportedForSave, reconnectCollab])
 
   /**
    * C2-c: 편집이 멈추면 owner만 자동 저장한다.
