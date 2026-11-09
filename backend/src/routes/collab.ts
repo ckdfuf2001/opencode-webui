@@ -84,6 +84,8 @@ const SaveSchema = z.object({
   clientId: z.number().int(),
   baseHash: z.string().optional(),
   bytesB64: z.string().min(1),
+  // C6c-e(P0): 방 세대. 리셋을 넘어온 옛 저장은 stale_client로 거부한다.
+  epoch: z.string().min(1).max(128).optional(),
 })
 
 const ResetRoomSchema = z.object({
@@ -139,6 +141,7 @@ app.post('/save', async (c) => {
     let clientId: number
     let bytes: Uint8Array
     let baseHash: string | undefined
+    let epoch: string | undefined
     const contentType = c.req.header('content-type') ?? ''
     const forceImageLoss = c.req.header('x-collab-allow-image-loss') ?? ''
     // P0-1: flush 응답(103 requestId와 짝이 맞는 저장 하나)만 체인을 건너뛴다.
@@ -151,6 +154,8 @@ app.post('/save', async (c) => {
         return c.json({ error: 'Missing room/client headers' }, 400)
       }
       baseHash = c.req.header('x-collab-base-hash') || undefined
+      // C6c-e(P0): 방 세대. 리셋을 넘어온 옛 저장은 stale_client로 거부한다.
+      epoch = c.req.header('x-collab-epoch') || undefined
       bytes = new Uint8Array(await c.req.arrayBuffer())
     } else {
       // TODO(v0.13): JSON+base64 경로를 삭제한다.
@@ -163,6 +168,7 @@ app.post('/save', async (c) => {
       roomId = body.roomId
       clientId = body.clientId
       baseHash = body.baseHash
+      epoch = body.epoch
     }
     // X1b: 방 종류는 **서버가 방에서 안다**(클라이언트를 믿지 않는다).
     // xlsx 방은 lib 가 소유한다 → owner/seeded 검사 없이 낙관적 잠금으로만 판정한다.
@@ -175,6 +181,7 @@ app.post('/save', async (c) => {
       baseHash,
       kind,
       flushRequestId,
+      epoch,
     })
     if ('conflict' in applied) {
       // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능).
@@ -192,9 +199,11 @@ app.post('/save', async (c) => {
               ? 'Another participant saved first (re-serialize and retry)'
               : code === 'conflict_external'
                 ? 'File changed outside this session (no auto-merge)'
-                : code === 'dirty_room'
-                  ? '부모 파일을 먼저 저장하세요'
-                  : 'File changed on disk since last save (no auto-merge)',
+                : code === 'stale_client'
+                  ? 'Room was reset after your last sync — reload first (retry is unsafe)'
+                  : code === 'dirty_room'
+                    ? '부모 파일을 먼저 저장하세요'
+                    : 'File changed on disk since last save (no auto-merge)',
           code,
           currentHash: applied.currentHash,
           retryable: 'retryable' in applied ? (applied.retryable ?? false) : undefined,

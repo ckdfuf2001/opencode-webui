@@ -1296,13 +1296,23 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     try {
       const blob: Blob = await h.save()
       let bytes = new Uint8Array(await blob.arrayBuffer())
-      let res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, room.baseHash, false, flushRid)
-      if (!res.ok && res.reason === 'conflict_room') {
-        // Same-room retry with a fresh serialization (all peers share the room state).
-        const blob2: Blob = await h.save()
-        bytes = new Uint8Array(await blob2.arrayBuffer())
-        res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, res.currentHash ?? room.baseHash)
-      }
+    let res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, room.baseHash, false, flushRid, room.epoch)
+    if (!res.ok && res.reason === 'stale_client') {
+      // C6c-e(P0): 리셋을 넘어온 옛 저장. 재시도 금지 — 다시 불러온다.
+      setPartChangePending(false)
+      showToast.info('방이 새로 만들어져 다시 불러옵니다')
+      try { sessionRef.current?.destroy() } catch { /* ignore */ }
+      sessionRef.current = null
+      startedYjsRef.current = null
+      setJoinKey((k) => k + 1)
+      return false
+    }
+    if (!res.ok && res.reason === 'conflict_room') {
+      // Same-room retry with a fresh serialization (all peers share the room state).
+      const blob2: Blob = await h.save()
+      bytes = new Uint8Array(await blob2.arrayBuffer())
+      res = await collabApi.save(room.roomId, sessionRef.current?.clientId ?? 0, bytes, res.currentHash ?? room.baseHash, false, flushRid, room.epoch)
+    }
       if (!res.ok && res.reason === 'dirty_room' && res.retryable === true && part && !retried) {
         // P0-1c(3): 부모가 수렴할 때까지 상한 내 대기 후 1회만 재시도한다
         // (U-dirty-timeout). 닫힌 부모(retryable false)는 즉시 기존 실패 처리로
@@ -3186,12 +3196,19 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     try {
       const raw = new Uint8Array(await handle.saveBytes())
       let bytes = await patchUnsupportedForSave(raw)
-      let res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, room.baseHash, false, flushRid)
+      let res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, room.baseHash, false, flushRid, room.epoch)
+      if (!res.ok && res.reason === 'stale_client') {
+        // C6c-e(P0): 리셋을 넘어온 옛 저장. 재시도 금지 — 다시 불러온다.
+        setPartChangePending(false)
+        showToast.info('방이 새로 만들어져 다시 불러옵니다')
+        reconnectCollab()
+        return false
+      }
       if (!res.ok && res.reason === 'conflict_room') {
         // 방 상태를 다시 직렬화해서 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
         const raw2 = new Uint8Array(await handle.saveBytes())
         bytes = await patchUnsupportedForSave(raw2)
-        res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash)
+        res = await collabApi.save(room.roomId, selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, bytes, res.currentHash ?? room.baseHash, false, flushRid, room.epoch)
       }
       if (!res.ok && res.reason === 'dirty_room' && res.retryable === true && part && !retried) {
         // P0-1c(3): 부모가 수렴할 때까지 상한 내 대기 후 1회만 재시도한다

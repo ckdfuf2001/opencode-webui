@@ -107,7 +107,7 @@ export type CollabSaveResult =
   | { ok: true; newHash: string; hasPendingPartChange?: boolean }
   | {
       ok: false
-      reason: 'conflict' | 'conflict_room' | 'conflict_external' | 'denied' | 'not_seeded' | 'image_loss' | 'dirty_room' | 'error'
+      reason: 'conflict' | 'conflict_room' | 'conflict_external' | 'denied' | 'not_seeded' | 'image_loss' | 'dirty_room' | 'stale_client' | 'error'
       currentHash?: string | null
       retryable?: boolean
       hasPendingPartChange?: boolean
@@ -131,6 +131,8 @@ async function postSaveBinary(
   allowImageLoss = false,
   // P0-1: flush 응답(103 requestId와 짝이 맞는 저장 하나)만 체인을 건너뛴다.
   flushRequestId?: string | null,
+  // C6c-e(P0): 방 세대. 리셋을 넘어온 옛 저장은 서버가 409 stale_client로 막는다.
+  epoch?: string | null,
 ): Promise<CollabSaveResult> {
   let res: Response
   try {
@@ -141,6 +143,7 @@ async function postSaveBinary(
         'x-collab-room': roomId,
         'x-collab-client': String(clientId),
         ...(baseHash ? { 'x-collab-base-hash': baseHash } : {}),
+        ...(epoch ? { 'x-collab-epoch': epoch } : {}),
         // R2: 사용자가 "이미지 삭제 확정"을 눌렀을 때만 붙인다. 그 외엔 절대 안 붙는다.
         ...(allowImageLoss ? { 'x-collab-allow-image-loss': '1' } : {}),
         ...(flushRequestId ? { 'x-collab-flush-request-id': flushRequestId } : {}),
@@ -184,6 +187,11 @@ async function postSaveBinary(
       // 아래 분기에서 'conflict'로 오인됐다). retryable이 true일 때만 기다린다
       // (닫힌 부모는 절대 수렴하지 않는다 — U-close-save).
       return { ok: false, reason: 'dirty_room', currentHash: body?.currentHash ?? null, code: body.code, message: body?.error, retryable: body?.retryable === true, ...(body?.hasPendingPartChange === true ? { hasPendingPartChange: true as const } : {}) }
+    }
+    if (body?.code === 'stale_client') {
+      // C6c-e(P0): 리셋을 넘어온 옛 저장. 재시도하면 옛 바이트가 디스크를 덮으므로
+      // 절대 재시도하지 않고 다시 불러와야 한다 (4001과 같은 취급).
+      return { ok: false, reason: 'stale_client', currentHash: body?.currentHash ?? null, code: body.code, message: body?.error }
     }
     if (body?.code === 'conflict_room' || body?.code === 'conflict_external' || body?.code === 'conflict' || body?.currentHash !== undefined) {
       // X1b: conflict_room = 다른 참가자가 먼저 저장(재직렬화 후 1회 재시도 가능),
@@ -233,11 +241,13 @@ export const collabApi = {
     allowImageLoss = false,
     // P0-1: flush 응답(103 requestId와 짝이 맞는 저장 하나)만 체인을 건너뛴다.
     flushRequestId?: string | null,
+    // C6c-e(P0): 방 세대. 리셋을 넘어온 옛 저장은 서버가 409 stale_client로 막는다.
+    epoch?: string | null,
   ): Promise<CollabSaveResult> => {
     // C2-a: 같은 바이트 재전송 생략(M1)은 보안 컨텍스트 전용 API에 의존하므로 삭제한다.
     // 서버 저장은 멱등(같은 바이트 → 같은 newHash)이라 생략 없이 바로 보낸다.
     try {
-      return await postSaveBinary(roomId, clientId, bytes, baseHash, allowImageLoss, flushRequestId)
+      return await postSaveBinary(roomId, clientId, bytes, baseHash, allowImageLoss, flushRequestId, epoch)
     } catch (error) {
       return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Save failed' }
     }

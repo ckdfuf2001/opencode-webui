@@ -446,6 +446,61 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
     }
   }, [isOwnerNow])
 
+  /**
+   * C6c-e(P0): 서버 리셋(4001) 또는 stale epoch 저장 응답 뒤의 공통 복구:
+   * 죽은 세션을 버리고 새 바이트를 받아 다시 입장한다 (stale 호스팅 방지).
+   * stale_client는 4001과 달리 토스트로 알린다 (재시도 금지 — 다시 불러와야 함).
+   */
+  const reloadAfterServerReset = useCallback(
+    (sess: YCollabSession | null, opts?: { toast?: string | null; reason?: string }) => {
+      const c = collabRef.current
+      if (c && sess && c.session !== sess) return
+      logClient('room_reset_reload')
+      // ABA: 세션이 바뀌면 latestSavedRef/lastSavedHashRef는 무효 (디스크 상태 불명).
+      latestSavedRef.current = null
+      lastSavedHashRef.current = null
+      // M18: 리셋으로 언마운트되므로 예약된 write-back 을 실행하지 않는다.
+      resetInFlightRef.current = true
+      writeBackHaltedRef.current = false
+      lossPendingRef.current = null
+      setImageLoss(null)
+      // M2-2: 4001로 방이 해체됐으므로 이 세션은 더 이상 유효하지 않다.
+      // 이전에는 여기서 release하지 않아 registry에 항목이 남았고, reloadKey로 재진입할 때
+      // acquire가 죽은 세션을 재사용(refs=2)했다. 언마운트 시 release가 1회만 돌아
+      // 세션이 영구 생존했다. 항목을 즉시 버려야 한다.
+      // C6c: 파트는 파트 키로 버린다.
+      if (savePath && sess) dropCollabSession(sessionKey, sess)
+      collabRef.current = null
+      setCollab(null)
+      setMetaOwner(null)
+      ownerIdRef.current = null
+      setMetaTick(0)
+      resetPendingRef.current = true
+      try {
+        window.dispatchEvent(
+          new CustomEvent(OFFICE_RESET_RELOAD, {
+            detail: { path: savePath, ...(opts?.reason ? { reason: opts.reason } : {}) },
+          }),
+        )
+      } catch {
+        /* 무시 */
+      }
+      // 안전망: 바이트가 안 오면 8초 뒤 기존 동작대로 진행한다.
+      if (resetFallbackTimer.current) clearTimeout(resetFallbackTimer.current)
+      resetFallbackTimer.current = setTimeout(() => {
+        resetFallbackTimer.current = null
+        if (!resetPendingRef.current) return
+        resetPendingRef.current = false
+        setReloadKey((v) => v + 1)
+        setSlideIdx(0)
+        setCurSlide(0)
+        setRenameSessionKey((v) => v + 1)
+      }, 8000)
+      if (opts?.toast) showToast.info(opts.toast)
+    },
+    [savePath, sessionKey],
+  )
+
   // 저장 일원화: collab 중이면 owner save API, 아니면 직접 저장.
   // 판정은 서버 lastHash 기준. 실패는 절대 조용히 넘기지 않는다
   // (quiet 자동 저장만 조용히 실패한다).
@@ -528,13 +583,13 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
         if (!auto) setCollabNotice(null)
         return true
       }
-      let res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false, flushRequestId)
+    let res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false, flushRequestId, c.epoch)
     tl('save.response', { ok: res.ok, reason: res.ok ? 'ok' : res.reason, bytes: bytes.length })
-      // B3: 내가 owner인데 denied면 meta가 늦은 것일 수 있다(선출 직후). 1회만 기다려 재시도한다.
-      if (!res.ok && res.reason === 'denied' && !auto && ownerStateOf(c) === 'self') {
-        await waitOwnerId(1000)
-        if (ownerStateOf(c) === 'self') {
-          res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false)
+    // B3: 내가 owner인데 denied면 meta가 늦은 것일 수 있다(선출 직후). 1회만 기다려 재시도한다.
+    if (!res.ok && res.reason === 'denied' && !auto && ownerStateOf(c) === 'self') {
+      await waitOwnerId(1000)
+      if (ownerStateOf(c) === 'self') {
+        res = await collabApi.save(c.roomId, c.session.clientId, bytes, baseHashRef.current, opts?.allowImageLoss ?? false, undefined, c.epoch)
         }
       }
       // C6c-1: 서버가 미뤄진 파트 변경을 알리면 배너를 켠다 (해소되면 다음 응답에서 꺼진다).
@@ -543,11 +598,16 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
       // P0-1c(3): 파트 방 dirty_room이면 부모가 수렴할 때까지 상한 내 대기 후
       // 1회만 재시도한다 (U-dirty-timeout). 닫힌 부모(retryable false)는 즉시
       // 아래 기존 실패 처리(내 사본 다운로드)로 끝난다 (U-close-save).
-      if (!res.ok && res.reason === 'dirty_room' && res.retryable === true && part && !opts?.retried) {
-        await waitParentSaveDone(savePath)
-        return persistBytesRef.current!(bytes, { ...opts, quiet: true, auto: false, retried: true })
-      }
-      // E2E 디버그: 저장 결과 기록 (200/409 추적용).
+    if (!res.ok && res.reason === 'dirty_room' && res.retryable === true && part && !opts?.retried) {
+      await waitParentSaveDone(savePath)
+      return persistBytesRef.current!(bytes, { ...opts, quiet: true, auto: false, retried: true })
+    }
+    // C6c-e(P0): 리셋을 넘어온 옛 저장. 재시도 금지 — 4001과 같이 다시 불러온다.
+    if (!res.ok && res.reason === 'stale_client') {
+      reloadAfterServerReset(c.session, { toast: '방이 새로 만들어져 다시 불러옵니다' })
+      return false
+    }
+    // E2E 디버그: 저장 결과 기록 (200/409 추적용).
       saveCountRef.current += 1
       if (res.ok) {
         lastSaveRef.current = { at: Date.now(), status: 200 }
@@ -624,7 +684,7 @@ if (!writeBackHaltedRef.current) {
     // U-close: 직접 저장도 성공이면 닫힘 확인 대상에서 제외.
     unsavedLocalEditRef.current = false
     return true
-  }, [fileName, savePath, updateDebug, ownerStateOf, waitOwnerId])
+  }, [fileName, savePath, updateDebug, ownerStateOf, waitOwnerId, reloadAfterServerReset])
   const persistBytesRef = useRef(persistBytes)
   persistBytesRef.current = persistBytes
 
@@ -1594,53 +1654,14 @@ writeBackHaltedRef.current = false
     // 나서 세션을 재생성한다 (stale 호스팅 방지). outer가 officeResetReload로
     // fileReloadKey를 올리면 data가 바뀌고 아래 effect가 reloadKey를 올린다.
     session.onReset(() => {
-      logClient('room_reset_reload')
       // U-parent: 첨부 갱신 리셋이면 바깥 DocumentPreview가 전용 토스트를 1회 띄운다 (중복 방지).
       const embedReset =
         (session as unknown as { lastResetReason?: string | null }).lastResetReason === 'embed_reset'
-      // ABA: 세션이 바뀌면 latestSavedRef/lastSavedHashRef는 무효 (디스크 상태 불명).
-      latestSavedRef.current = null
-      lastSavedHashRef.current = null
-      if (collabRef.current?.session === session) {
-        // M18: 리셋으로 언마운트되므로 예약된 write-back 을 실행하지 않는다.
-        resetInFlightRef.current = true
-        writeBackHaltedRef.current = false
-        lossPendingRef.current = null
-        setImageLoss(null)
-        // M2-2: 4001로 방이 해체됐으므로 이 세션은 더 이상 유효하지 않다.
-        // 이전에는 여기서 release하지 않아 registry에 항목이 남았고, reloadKey로 재진입할 때
-        // acquire가 죽은 세션을 재사용(refs=2)했다. 언마운트 시 release가 1회만 돌아
-        // 세션이 영구 생존했다. 항목을 즉시 버려야 한다.
-        // C6c: 파트는 파트 키로 버린다.
-        if (savePath) dropCollabSession(sessionKey, session)
-        collabRef.current = null
-        setCollab(null)
-        setMetaOwner(null)
-        ownerIdRef.current = null
-        setMetaTick(0)
-        resetPendingRef.current = true
-        try {
-          window.dispatchEvent(
-            new CustomEvent(OFFICE_RESET_RELOAD, {
-              detail: { path: savePath, ...(embedReset ? { reason: 'embed_reset' } : {}) },
-            }),
-          )
-        } catch {
-          /* 무시 */
-        }
-        // 안전망: 바이트가 안 오면 8초 뒤 기존 동작대로 진행한다.
-        if (resetFallbackTimer.current) clearTimeout(resetFallbackTimer.current)
-        resetFallbackTimer.current = setTimeout(() => {
-          resetFallbackTimer.current = null
-          if (!resetPendingRef.current) return
-          resetPendingRef.current = false
-          setReloadKey((v) => v + 1)
-          setSlideIdx(0)
-          setCurSlide(0)
-          setRenameSessionKey((v) => v + 1)
-        }, 8000)
-      }
-      if (!embedReset) showToast.info('owner가 파일 기준으로 다시 열었습니다')
+      // C6c-e(P0): 공통 복구 경로로 통합 (stale_client와 동일).
+      reloadAfterServerReset(
+        session,
+        embedReset ? { reason: 'embed_reset' } : { toast: 'owner가 파일 기준으로 다시 열었습니다' },
+      )
     })
     // Y 슬라이드 수 추적 (doc은 세션 동안 유지되므로 여기서 1회만).
     const onDocUpdate = (): void => updateDebug()

@@ -1684,10 +1684,10 @@ export function clientRoleInRoom(roomId: string, clientId: number): 'view' | 'ed
 export async function applySave(
   roomId: string,
   bytes: Uint8Array,
-  opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: RoomKind; flushRequestId?: string },
+  opts?: { allowImageLoss?: boolean; clientId?: number; baseHash?: string; kind?: RoomKind; flushRequestId?: string; epoch?: string },
 ): Promise<
   | { newHash: string }
-  | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' | 'dirty_room'; retryable?: boolean }
+  | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' | 'dirty_room' | 'stale_client'; retryable?: boolean }
   | { imageLoss: true; before: { media: number; refs: number }; after: { media: number; refs: number } }
 > {
   const room = rooms.get(roomId)
@@ -1754,11 +1754,31 @@ export async function applySave(
   const prev = saveChains.get(chainKey) ?? Promise.resolve()
   const run = prev.then(async () => {
     const disk = await currentDiskHash(roomId)
+    // C6c-e(P0): 리셋을 넘어온 옛 저장은 막는다. baseHash는 리셋 전후로 같을 수
+    // 있지만(M: 미뤄진 병합 저장의 해시 = 리셋 후 방 해시), 방 세대(epoch)가
+    // 바뀌었으면 클라이언트가 옛 바이트(옛 첨부)를 들고 있다. 409 stale_client —
+    // 재시도 금지, 다시 불러와야 한다 (P0-2 "epoch 불필요" 판단 정정: 미뤄진
+    // 리셋에서는 lastHash가 같아도 바이트가 다르다).
+    // 파트 방은 제외한다 (파트 내용은 부모 리셋과 무관하고 base 대조로 충분).
+    if (!room.part && opts?.epoch) {
+      const live = rooms.get(roomId)
+      if (live && live.epoch !== opts.epoch) {
+        logger.warn(
+          `Collab room ${roomId.slice(0, 8)}: save stale_client (epoch ${opts.epoch.slice(0, 8)} != room ${live.epoch.slice(0, 8)})`,
+        )
+        const r: { conflict: true; currentHash: string | null; code: 'stale_client' } = {
+          conflict: true,
+          currentHash: live.lastHash,
+          code: 'stale_client',
+        }
+        return r
+      }
+    }
     // X1b(P0-3/P0-4): 낙관적 잠금. lib 방(xlsx/docx)은 기존대로, P0-2부터
     // PPT 방도 baseHash가 있으면 방 해시와 대조한다 (낡은 탭의 덮어쓰기 차단).
     // baseHash가 없으면 기존 디스크 판정만 유지한다 (하위 호환).
-    // epoch 별도 대조는 두지 않는다: epoch이 바뀌는 리셋은 lastHash도 함께
-    // 갱신하므로(바이트가 같으면 무해) baseHash 대조로 충분하다.
+    // epoch 대조는 위 stale_client 게이트에서 한다: 미뤄진 리셋 뒤에는 lastHash가
+    // 같아도 바이트가 다를 수 있어 baseHash 대조만으로는 부족하다 (C6c-e).
     // 1) baseHash 가 방의 현재 해시와 다르면 → 방이 앞서갔다(다른 참가자가 먼저 저장).
     //    클라이언트는 방 상태를 다시 직렬화해 1회 재시도한다(모두 같은 방 상태를 갖고 있다).
     // 2) 디스크가 방의 해시와 다르면 → 외부 변경(AI 편집·보기 모드 코멘트).
