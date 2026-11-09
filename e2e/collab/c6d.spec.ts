@@ -614,8 +614,12 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     const slug = 'c6dd4pptx'
     const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
     try {
-      // A 입력 (저장 대기 없이 바로 B 저장 → 미룸).
+      // A 입력 후 자동저장이 수렴한 뒤에 B의 파트 교체를 HTTP로 한다 (U-http 패턴).
+      // 자동저장이 수렴해야 PUT의 base가 안정적이다 (D1/D3와 동일).
       await editShapeText(t.pageA, t.shapes!, `${slug}-ready`, `${slug}-a1`)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a1`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
       const token = `c6d-${Date.now().toString(36)}`
       const lock = (await fetch(`${backendBase()}/api/collab/embed/lock`, {
         method: 'POST',
@@ -663,8 +667,14 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       }
       const before = await roomOf()
       expect(before?.roomId).toBeTruthy()
+      // 닫기 직전 한 번 더 입력한다 (미저장 상태로 닫기 — 실제 사용자 패턴).
+      // 자동저장 debounce 안에 닫히므로 in-flight 저장 경합도 자연스럽게 포함된다.
+      await gotoSlide(t.pageA, 2)
+      await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-a1q`)
       // 미룸 중 부모 탭을 닫는다 (beforeunload 확인창은 수락).
-      t.pageA.on('dialog', (d) => void d.accept().catch(() => {}))
+      t.pageA.on('dialog', (d) => {
+        void d.accept().catch(() => {})
+      })
       await t.pageA.close()
       await t.ctxA.close().catch(() => {})
       // 늦은 저장: 방이 없으면 404 (조용한 유실/덮개 금지). 즉시 dispose 증명이기도 하다.
