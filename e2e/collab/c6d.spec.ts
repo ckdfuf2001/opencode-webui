@@ -943,6 +943,149 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
   })
 
+  test('D7-xlsx: 미룸 중 새로 들어온 peer에게 pending 배너 (C6N late join)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd7xlsx'
+    const t = await openDeferPair(browser, 'xlsx', slug, PARENT_FIX['xlsx']!)
+    let pageC: Page | null = null
+    let ctxC: BrowserContext | null = null
+    try {
+      // A 입력 후 수렴 확인.
+      await setCell(t.pageA, 'A1', `${slug}-a1`)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('xlsx', t.abs, `${slug}-a1`, 'Sheet1')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      // A 계속 입력 (미룸 유지). B는 attach 탭에서 파트 저장 (xlsx proven 패턴).
+      let cBannerOn = false
+      const keepP = keepTypingDuring('xlsx', t.pageA, null, `${slug}-a1`, () => cBannerOn).catch(() => `${slug}-a1`)
+      const bPhase = (async () => {
+        await setCell(t.attach, 'A1', `${slug}-b1`)
+        // lib 모델 전파 대기: 더티는 수식 바 확정 즉시 서지만, 저장 직렬화에는
+        // 한 박자 늦춰야 한다 (바로 저장하면 b 없는 바이트가 먼저 간다).
+        await t.pageA.waitForTimeout(3000)
+        await t.attach.getByTestId('attach-save').click({ timeout: 20000 })
+      })()
+      try {
+        // 미룸 증명: A에 배너가 켜진다.
+        await expect(t.pageA.getByTestId('xlsx-part-pending')).toBeVisible({ timeout: 60000 })
+        await bPhase
+        console.log(`[c6d] D7 deferred (A banner on, keep typing for C)`)
+        // C: 같은 파일을 새로 연다 (미룸 중 늦은 참가). 별도 컨텍스트 = 다른 참가자.
+        // keepP는 C 배너가 뜰 때까지 계속 입력한다 (A가 멈추면 조용한 리셋이 먼저 난다).
+        ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+        await seedUser(ctxC, ADA)
+        pageC = await ctxC.newPage()
+        // C 자신의 저장은 막는다: 배너는 105로만 와야 한다 (저장 응답 경로 차단).
+        // pre-fix면 절대 안 뜨므로 red가 된다.
+        await pageC.route('**/api/collab/save', async (route) => {
+          if (route.request().method() !== 'POST') {
+            await route.continue().catch(() => {})
+            return
+          }
+          await route.abort('blockedbyclient').catch(() => {})
+        })
+        await gotoApp(pageC)
+        await openEditor(pageC, t.parentPath)
+        await pageC.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 }).catch(() => {})
+        // C6N: 서버가 105를 보내므로 C에 미반영 배너가 뜬다 (pre-fix면 절대 안 뜸).
+        await expect(pageC.getByTestId('xlsx-part-pending')).toBeVisible({ timeout: 30000 })
+        cBannerOn = true
+        console.log(`[c6d] D7 late joiner sees pending banner`)
+      } finally {
+        cBannerOn = true
+        await keepP.catch(() => {})
+      }
+    } finally {
+      await pageC?.close().catch(() => {})
+      await ctxC?.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D8-pptx: 타이핑 중 첨부 삽입 → 5초 안에 양쪽 반영 (즉시 리셋)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd8pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    // B: 같은 파일을 보는 두 번째 탭 (peer).
+    const pageB = await t.ctxA.newPage()
+    try {
+      await gotoApp(pageB)
+      await openEditor(pageB, t.parentPath)
+      await pageB.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+      // A: clientId 관측용 저장 1회.
+      let observedClient: number | null = null
+      const observeSave = (req: { method(): string; url(): string; headers(): Record<string, string> }) => {
+        try {
+          if (req.method() !== 'POST' || !req.url().includes('/api/collab/save')) return
+          const v = Number(req.headers()['x-collab-client'])
+          if (Number.isInteger(v)) observedClient = v
+        } catch { /* 무시 */ }
+      }
+      t.pageA.on('request', observeSave)
+      try {
+        await gotoSlide(t.pageA, 2)
+        await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-aqq`)
+        await clickParentSave(t.pageA)
+        await expect.poll(() => Promise.resolve(observedClient), { timeout: 60000, intervals: [500] }).not.toBeNull()
+      } finally {
+        t.pageA.off('request', observeSave)
+      }
+      // A 계속 입력 + B는 대기.
+      let stop = false
+      const keepP = (async () => {
+        try {
+          let n = 0
+          while (!stop) {
+            n += 1
+            await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-aq${n}`)
+            await t.pageA.waitForTimeout(1000).catch(() => {})
+          }
+        } catch { /* 리셋으로 편집 중단되면 종료 */ }
+      })()
+      const attachName = `c6d8-insert.docx`
+      let attachBytes: Buffer
+      try {
+        attachBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx'))
+      } catch {
+        attachBytes = Buffer.from('c6d8-fallback-bytes')
+      }
+      const doPost = async (baseHash: string) => {
+        const fd = new FormData()
+        fd.append('path', t.parentPath)
+        fd.append('file', new Blob([new Uint8Array(attachBytes)]), attachName)
+        fd.append('clientId', String(observedClient))
+        fd.append('baseHash', baseHash)
+        return (await fetch(`${backendBase()}/api/collab/embed`, { method: 'POST', body: fd }).then((r) =>
+          r.json(),
+        )) as { ok?: boolean; code?: string; newHash?: string; currentHash?: string }
+      }
+      // 타이핑 중 삽입: 409면 따라잡고 재시도한다 (클라이언트와 동일, 최대 3회).
+      let post = await doPost(createHash('sha256').update(fs.readFileSync(t.abs)).digest('hex'))
+      for (let attempt = 0; !post.ok && post.code === 'dirty_room' && attempt < 2; attempt++) {
+        await t.pageA.waitForTimeout(2000).catch(() => {})
+        post = await doPost(createHash('sha256').update(fs.readFileSync(t.abs)).digest('hex'))
+      }
+      expect(post.ok).toBe(true)
+      console.log(`[c6d] D8 insert ok`)
+      stop = true
+      await keepP.catch(() => {})
+      // A와 B 양쪽에 5초 안에 첨부가 보인다 (즉시 리셋 — 미룸 없음).
+      const t0 = Date.now()
+      await expect(t.pageA.getByText(attachName).first()).toBeVisible({ timeout: 5000 })
+      await expect(pageB.getByText(attachName).first()).toBeVisible({ timeout: 5000 })
+      console.log(`[c6d] D8 both views show insert in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+    } finally {
+      await pageB.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
