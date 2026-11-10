@@ -85,17 +85,24 @@ function pngChunk(type: string, data: Uint8Array): Uint8Array {
   return out
 }
 
-/** 96x96 문서 아이콘 PNG (파랑 테두리 + 흰 바탕 + 줄무늬). */
+/** 192x192 문서 아이콘 PNG (파랑 테두리 + 흰 바탕 + 줄무늬). 96px 원본을 2배로 그려 고DPI에서도 깨지지 않는다. */
 export function genericIconPng(): Uint8Array {
-  const W = 96
-  const H = 96
+  const S = 2
+  const W = 96 * S
+  const H = 96 * S
   const px = new Uint8Array(W * H * 3).fill(255)
   const set = (x: number, y: number, r: number, g: number, b: number): void => {
-    if (x < 0 || y < 0 || x >= W || y >= H) return
-    const o = (y * W + x) * 3
-    px[o] = r
-    px[o + 1] = g
-    px[o + 2] = b
+    for (let dy = 0; dy < S; dy++) {
+      for (let dx = 0; dx < S; dx++) {
+        const xx = x * S + dx
+        const yy = y * S + dy
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue
+        const o = (yy * W + xx) * 3
+        px[o] = r
+        px[o + 1] = g
+        px[o + 2] = b
+      }
+    }
   }
   const rect = (x0: number, y0: number, x1: number, y1: number, c: [number, number, number]): void => {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y, c[0], c[1], c[2])
@@ -103,13 +110,13 @@ export function genericIconPng(): Uint8Array {
   const BLUE: [number, number, number] = [37, 99, 235]
   const GRAY: [number, number, number] = [148, 163, 184]
   const DARK: [number, number, number] = [51, 65, 85]
-  rect(0, 0, W - 1, H - 1, BLUE)
-  rect(4, 4, W - 5, H - 5, [255, 255, 255])
+  rect(0, 0, W / S - 1, H / S - 1, BLUE)
+  rect(4, 4, W / S - 5, H / S - 5, [255, 255, 255])
   for (let i = 0; i < 19; i++) {
-    set(W - 24 + i, 5 + i, ...GRAY)
-    set(W - 23 + i, 5 + i, ...GRAY)
+    set(W / S - 24 + i, 5 + i, ...GRAY)
+    set(W / S - 23 + i, 5 + i, ...GRAY)
   }
-  for (let r = 0; r < 4; r++) rect(14, 34 + r * 14, W - 15 - (r === 3 ? 22 : 0), 40 + r * 14, r === 0 ? DARK : GRAY)
+  for (let r = 0; r < 4; r++) rect(14, 34 + r * 14, W / S - 15 - (r === 3 ? 22 : 0), 40 + r * 14, r === 0 ? DARK : GRAY)
   const raw = new Uint8Array((W * 3 + 1) * H)
   for (let y = 0; y < H; y++) {
     raw[y * (W * 3 + 1)] = 0
@@ -255,11 +262,12 @@ export async function assemblePptxEmbed(
   let maxSp = 1024
   for (const m of slide.matchAll(/spid="_x0000_s(\d+)"/g)) maxSp = Math.max(maxSp, Number(m[1]))
   const spid = `_x0000_s${maxSp + 1}`
-  // 고정 배치: 우하단 2x1.4인치.
+  // 고정 배치: 우하단 아이콘 크기 (xlsx 앵커 2열x3행과 동급).
+  // 예전 2x1.4인치 도형 크기에서는 문서 모양으로 보여 아이콘 느낌이 안 났다.
   const offX = 7315200
   const offY = 5486400
-  const extCx = 1828800
-  const extCy = 1270000
+  const extCx = 1296000
+  const extCy = 648000
   const oleName = embName.replace(/\.[A-Za-z0-9]{1,8}$/, '')
   const progAttr = progId ? ` progId="${progId}"` : ''
   const creationId = randomUUID().toUpperCase()
@@ -282,7 +290,7 @@ export async function assemblePptxEmbed(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
       const vmlImgId = nextRelId(vmlRels)
       zip.file(vmlRelsFile, addRel(vmlRels, vmlImgId, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', `../media/${imgName}`))
-      const shape = `<v:shape id="${spid}" type="#_x0000_t75" style='position:absolute;left:576pt;top:432pt;width:144pt;height:100pt'><v:fill on="f"/><v:stroke on="f"/><v:imagedata o:relid="${vmlImgId}" o:title="" grayscale="f" bilevel="f"/><o:lock v:ext="edit" aspectratio="t" position="f" selection="f" grouping="f"/></v:shape>`
+      const shape = `<v:shape id="${spid}" type="#_x0000_t75" style='position:absolute;left:576pt;top:432pt;width:102pt;height:51pt'><v:fill on="f"/><v:stroke on="f"/><v:imagedata o:relid="${vmlImgId}" o:title="" grayscale="f" bilevel="f"/><o:lock v:ext="edit" aspectratio="t" position="f" selection="f" grouping="f"/></v:shape>`
       zip.file(vmlFile, vml.replace('</xml>', `${shape}</xml>`))
     }
   }
