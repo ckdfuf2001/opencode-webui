@@ -85,24 +85,18 @@ function pngChunk(type: string, data: Uint8Array): Uint8Array {
   return out
 }
 
-/** 192x192 문서 아이콘 PNG (파랑 테두리 + 흰 바탕 + 줄무늬). 96px 원본을 2배로 그려 고DPI에서도 깨지지 않는다. */
+/** 192x96 문서 아이콘 PNG (파랑 테두리 + 흰 바탕 + 줄무늬). pptx/xlsx 프레임(2:1)과
+ * 종횡비가 같아 늘어나지 않는다 (고DPI에서도 깨지지 않음). */
 export function genericIconPng(): Uint8Array {
-  const S = 2
-  const W = 96 * S
-  const H = 96 * S
+  const W = 192
+  const H = 96
   const px = new Uint8Array(W * H * 3).fill(255)
   const set = (x: number, y: number, r: number, g: number, b: number): void => {
-    for (let dy = 0; dy < S; dy++) {
-      for (let dx = 0; dx < S; dx++) {
-        const xx = x * S + dx
-        const yy = y * S + dy
-        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue
-        const o = (yy * W + xx) * 3
-        px[o] = r
-        px[o + 1] = g
-        px[o + 2] = b
-      }
-    }
+    if (x < 0 || y < 0 || x >= W || y >= H) return
+    const o = (y * W + x) * 3
+    px[o] = r
+    px[o + 1] = g
+    px[o + 2] = b
   }
   const rect = (x0: number, y0: number, x1: number, y1: number, c: [number, number, number]): void => {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y, c[0], c[1], c[2])
@@ -110,13 +104,17 @@ export function genericIconPng(): Uint8Array {
   const BLUE: [number, number, number] = [37, 99, 235]
   const GRAY: [number, number, number] = [148, 163, 184]
   const DARK: [number, number, number] = [51, 65, 85]
-  rect(0, 0, W / S - 1, H / S - 1, BLUE)
-  rect(4, 4, W / S - 5, H / S - 5, [255, 255, 255])
-  for (let i = 0; i < 19; i++) {
-    set(W / S - 24 + i, 5 + i, ...GRAY)
-    set(W / S - 23 + i, 5 + i, ...GRAY)
+  rect(0, 0, W - 1, H - 1, BLUE)
+  rect(4, 4, W - 5, H - 5, [255, 255, 255])
+  // 접힌 모서리 (우상단 삼각형).
+  for (let i = 0; i < 22; i++) {
+    set(W - 28 + i, 4 + i, ...GRAY)
+    set(W - 27 + i, 4 + i, ...GRAY)
   }
-  for (let r = 0; r < 4; r++) rect(14, 34 + r * 14, W / S - 15 - (r === 3 ? 22 : 0), 40 + r * 14, r === 0 ? DARK : GRAY)
+  // 본문 줄 3개.
+  rect(16, 34, W - 22, 39, DARK)
+  rect(16, 50, W - 22, 55, GRAY)
+  rect(16, 66, W - 62, 71, GRAY)
   const raw = new Uint8Array((W * 3 + 1) * H)
   for (let y = 0; y < H; y++) {
     raw[y * (W * 3 + 1)] = 0
@@ -686,7 +684,7 @@ export async function assembleDocxEmbed(
   const objectId = `_${Math.floor(Math.random() * 2 ** 31)}`
   const progAttr = progId ? ` ProgID="${progId}"` : ''
   const para =
-    `<w:p><w:r><w:object w:dxaOrig="1480" w:dyaOrig="1028"><v:shape id="${shapeId}" type="#_x0000_t75" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:74pt;height:51.35pt" o:ole=""><v:imagedata r:id="${imgRelId}" o:title="" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></v:shape>` +
+    `<w:p><w:r><w:object w:dxaOrig="1920" w:dyaOrig="960"><v:shape id="${shapeId}" type="#_x0000_t75" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:96pt;height:48pt" o:ole=""><v:imagedata r:id="${imgRelId}" o:title="" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></v:shape>` +
     `<o:OLEObject Type="Embed"${progAttr} ShapeID="${shapeId}" DrawAspect="Icon" ObjectID="${objectId}" r:id="${oleRelId}" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><o:FieldCodes>\\s</o:FieldCodes></o:OLEObject></w:object></w:r></w:p>`
   if (doc.includes('</w:body>')) {
     const next = doc.replace('</w:body>', `${para}</w:body>`)
