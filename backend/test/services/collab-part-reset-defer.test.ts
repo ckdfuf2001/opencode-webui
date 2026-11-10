@@ -20,6 +20,7 @@ const PART = 'ppt/embeddings/Microsoft_Word_Document.docx'
 
 const {
   adoptParentPartAndMaybeReset,
+  addConn,
   applySave,
   createSession,
   isLibRoomKind,
@@ -204,6 +205,38 @@ describe('C6c-1: 파트 저장은 부모가 조용할 때만 방을 리셋한다
       expect(found).toEqual([{ roomId: sParent.roomId, hasPendingPartChange: true }])
       // 미뤄진 방은 아직 살아 있다 (리셋은 조용한 구간·상한에).
       expect(rooms.get(sParent.roomId)).toBeDefined()
+    } finally {
+      setParentQuietMs(5000)
+      resetCollabForTests()
+    }
+  }, 30000)
+
+  it('미뤄진 방에 늦게 붙으면 그 conn에만 105를 보낸다 (C6N late join)', async () => {
+    setParentQuietMs(60000)
+    try {
+      const sParent = await createSession(HOST_REL)
+      const room = rooms.get(sParent.roomId)!
+      const fakeA = { send: (_b: unknown) => {} }
+      room.conns.set(fakeA, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
+      room.ownerConn = fakeA
+      room.ownerIds = new Set([1])
+      parentTyping(sParent.roomId, 'P0X9T1', fakeA)
+      const r = adoptParentPartAndMaybeReset(sParent.roomId, 'basehash0', 'ppt/embeddings/obj1.docx')
+      expect(r.deferred).toBe(true)
+      expect(rooms.get(sParent.roomId)).toBeDefined()
+      // 늦은 참가자: addConn으로 붙으면 105를 받아야 한다.
+      const got: Uint8Array[] = []
+      const fakeLate = { send: (b: unknown) => { if (b instanceof Uint8Array) got.push(b) } }
+      const joined = addConn(sParent.roomId, fakeLate)
+      expect(joined).not.toBeNull()
+      const found = got.map((b) => {
+        try {
+          const d = decoding.createDecoder(b)
+          if (decoding.readVarUint(d) !== MSG_PART_PENDING) return null
+          return JSON.parse(new TextDecoder().decode(decoding.readVarUint8Array(d)))
+        } catch { return null }
+      }).filter((x) => x !== null)
+      expect(found).toEqual([{ roomId: sParent.roomId, hasPendingPartChange: true }])
     } finally {
       setParentQuietMs(5000)
       resetCollabForTests()
