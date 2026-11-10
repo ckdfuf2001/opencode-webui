@@ -12,6 +12,10 @@ import { writeFileContent } from './file-operations'
 import { logger } from '../utils/logger'
 import JSZip from 'jszip'
 import {
+  assembleDocxEmbed,
+  assemblePptxEmbed,
+  assembleXlsxEmbed,
+  attachKindOf,
   listEmbedParts,
   normalizeEmbedPart,
   readEmbedPart,
@@ -209,6 +213,33 @@ export interface CollabRoom {
   } | null
   /** C6c-1: 미뤄진 리셋의 조용한 구간 타이머 (한 번에 하나, 재시작 가능). */
   partResetTimer: ReturnType<typeof setTimeout> | null
+  /**
+   * C7: 백그라운드 삽입 기록. POST /embed(신규 첨부)는 방을 리셋하지 않고
+   * 이 목록에만 남긴 뒤 106으로 알린다. 이후 부모 저장은 목록의 파트를
+   * 들어온 바이트에 다시 끼워 쓴다 (옛 모델 덮개 방지). 방 해체와 함께 사라진다.
+   */
+  knownEmbeds: KnownEmbed[]
+}
+
+/** C7: 백그라운드 삽입 1건 (106 페이로드와 동일). */
+export interface KnownEmbed {
+  /** 정규 파트 경로 (예: ppt/embeddings/a.docx). */
+  norm: string
+  /** 실제 기록된 파일명 (중복 시 -2 규칙 적용済). */
+  name: string
+  kind: 'pptx' | 'xlsx' | 'docx'
+  /** 삽입 위치 (클릭 지점 또는 화면 정가운데 기본값). */
+  pos: {
+    slide?: number
+    x?: number
+    y?: number
+    sheet?: number
+    col?: number
+    row?: number
+    block?: number
+  }
+  /** 삽입 직전 방 해시 (stale base 1회성 허용용, 소비 후 null). */
+  preHash: string | null
 }
 
 export interface CollabParticipant {
@@ -644,6 +675,95 @@ function encodePartPending(roomId: string): Uint8Array {
   return encoding.toUint8Array(e)
 }
 
+/**
+ * C7: 백그라운드 삽입 알림 (서버→방 전원). 리셋 없이 첨부 1건이 들어왔음을
+ * 알린다. transport가 받아 오버레이에 칩을 얹고 baseHash를 newHash로 갱신한다
+ * (다음 저장이 409 없이 나간다).
+ */
+export const MSG_PART_EMBEDDED = 106
+export function encodePartEmbedded(
+  roomId: string,
+  rec: Pick<KnownEmbed, 'norm' | 'name' | 'kind' | 'pos'> & { newHash: string },
+): Uint8Array {
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, MSG_PART_EMBEDDED)
+  encoding.writeVarUint8Array(
+    e,
+    new TextEncoder().encode(JSON.stringify({ roomId, part: rec.norm, name: rec.name, kind: rec.kind, pos: rec.pos, newHash: rec.newHash })),
+  )
+  return encoding.toUint8Array(e)
+}
+
+/**
+ * C7: 백그라운드 삽입 등록 + 106 방송 (리셋 없음).
+ * POST /embed(신규 첨부)가 디스크 쓰기·lastHash 갱신 뒤에 호출한다.
+ */
+export function registerEmbedInsert(parentId: string, rec: Omit<KnownEmbed, 'preHash'> & { preHash: string | null }): void {
+  const proom = rooms.get(parentId)
+  if (!proom || proom.part) return
+  proom.knownEmbeds.push({ ...rec })
+  if (proom.knownEmbeds.length > 32) {
+    proom.knownEmbeds.splice(0, proom.knownEmbeds.length - 32)
+    logger.warn(`Collab room ${parentId.slice(0, 8)}: knownEmbeds overflow, dropped oldest`)
+  }
+  broadcast(proom, encodePartEmbedded(parentId, { ...rec, newHash: proom.lastHash }))
+}
+
+/**
+ * C7: 백그라운드 삽입 보존. 들어온 저장 바이트에 없는 known 파트를
+ * 디스크 기준으로 같은 위치에 다시 조립한다 (옛 모델 덮개 방지).
+ * 이미 있는 파트는 그대로 둔다 (교체는 pendingPartReset 경로가 담당).
+ */
+async function ensureKnownEmbeds(room: CollabRoom, incoming: Uint8Array): Promise<Uint8Array> {
+  if (!room.knownEmbeds || room.knownEmbeds.length === 0) return incoming
+  let diskBytes: Uint8Array
+  try {
+    diskBytes = new Uint8Array(await fs.readFile(room.path))
+  } catch {
+    return incoming
+  }
+  let out = incoming
+  for (const ke of room.knownEmbeds) {
+    try {
+      const probe = await zipLoadJSZip(out)
+      if (probe.files[ke.norm] && !probe.files[ke.norm]!.dir) continue
+      const part = await readEmbedPart(zipLoadJSZip, diskBytes, ke.norm)
+      if (ke.kind === 'pptx') {
+        out = await assemblePptxEmbed(zipLoadJSZip, {
+          hostBytes: out,
+          attachBytes: part.bytes,
+          attachName: ke.name,
+          attachKind: attachKindOf(ke.name) ?? 'docx',
+          slide: ke.pos.slide,
+          xFrac: ke.pos.x,
+          yFrac: ke.pos.y,
+        })
+      } else if (ke.kind === 'xlsx') {
+        out = await assembleXlsxEmbed(zipLoadJSZip, {
+          hostBytes: out,
+          attachBytes: part.bytes,
+          attachName: ke.name,
+          attachKind: attachKindOf(ke.name) ?? 'docx',
+          sheet: ke.pos.sheet,
+          cellCol: ke.pos.col,
+          cellRow: ke.pos.row,
+        })
+      } else {
+        out = await assembleDocxEmbed(zipLoadJSZip, {
+          hostBytes: out,
+          attachBytes: part.bytes,
+          attachName: ke.name,
+          attachKind: attachKindOf(ke.name) ?? 'docx',
+          block: ke.pos.block,
+        })
+      }
+    } catch (e) {
+      logger.warn(`Collab room ${room.id.slice(0, 8)}: background re-embed skipped for ${ke.norm} (${e instanceof Error ? e.message : e})`)
+    }
+  }
+  return out
+}
+
 /** conn의 모드. app.mode가 전부 view면 'view', 모르면 edit 취급(하위 호환). */
 /**
  * X2a: 한 awareness 상태의 역할. PPT 는 app.mode, XLSX(lib)는 presence.role 로 알린다.
@@ -799,6 +919,7 @@ function createRoom(
   lastSaveAt: 0,
   pendingPartReset: null,
   partResetTimer: null,
+  knownEmbeds: [],
 }
   if (part) room.part = part
   awareness.on('update', (
@@ -1831,10 +1952,13 @@ export async function applySave(
       // C6c-d-1: 미뤄진 변경이 있는 부모 방이면 adopt 전 해시도 받아준다.
       // 타이핑 중이던 클라이언트는 옛 파트를 든 바이트를 들고 있으므로, base가
       // adopt 전 해시여도 병합 저장한다 (아래에서 디스크 파트를 다시 끼운다).
+      // C7: 백그라운드 삽입 직전 해시도 1회성으로 받아준다 (삽입을 모르는
+      // 클라이언트의 저장이 409 없이 병합된다).
       // 허용 집합에 없는 base는 기존대로 conflict_room이다 (다른 타이피스트 보호).
       const deferBases = !room.part ? room.pendingPartReset?.bases : undefined
+      const knownBases = !room.part ? room.knownEmbeds.map((e) => e.preHash).filter((h): h is string => !!h) : undefined
       if (opts?.baseHash && opts.baseHash !== room.lastHash) {
-        if (!deferBases || !deferBases.includes(opts.baseHash)) {
+        if ((!deferBases || !deferBases.includes(opts.baseHash)) && (!knownBases || !knownBases.includes(opts.baseHash))) {
           logger.warn(
             `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
           )
@@ -1865,13 +1989,21 @@ export async function applySave(
       const r: { conflict: true; currentHash: string | null } = { conflict: true, currentHash: disk }
       return r
     }
+    // C7: 백그라운드 삽입 보존 — 들어온 바이트에 없는 known 파트를 디스크
+    // 기준으로 같은 위치에 다시 조립한다. 이미지 가드보다 먼저
+    // (삽입 미리보기 PNG가 없으면 가드가 오작동한다). 미뤄진 adopt 교체는
+    // 그 다음에 얹는다 (이미 있는 파트의 새 바이트 교체).
+    let knownMerged = bytes
+    if (!room.part && room.knownEmbeds.length > 0) {
+      knownMerged = await ensureKnownEmbeds(room, bytes)
+    }
     // 4-0 가드: pptx 저장에서 이미지(파트·관계)가 줄었으면 막는다.
     // 명시적 승인(allowImageLoss)이 있을 때만 통과한다.
     // C6c: 파트 방은 부모 확장자가 아니라 파트 파일명으로 판정한다.
     const imageSubject = room.part ? room.part.part.split('/').pop() ?? '' : room.path
     if (!opts?.allowImageLoss && /\.pptx$/i.test(imageSubject)) {
       const before = await diskImageCounts(room)
-      const after = countPptxImages(bytes)
+      const after = countPptxImages(knownMerged)
       if (before && after && (after.media < before.media || after.refs < before.refs)) {
         logger.warn(
           `Collab room ${room.id}: image loss blocked (media ${before.media}->${after.media}, refs ${before.refs}->${after.refs})`,
@@ -1889,9 +2021,9 @@ export async function applySave(
     // 부모 zip에 다시 끼워 쓴다. 들어온 바이트가 옛 파트를 들고 있어도
     // 디스크의 새 첨부가 보존되고, 부모의 편집도 함께 남는다.
     const deferMerge = !room.part ? room.pendingPartReset : null
-    let finalBytes = bytes
+    let finalBytes = knownMerged
     if (deferMerge && deferMerge.parts.length > 0) {
-      finalBytes = await reembedAdoptedParts(room, bytes)
+      finalBytes = await reembedAdoptedParts(room, knownMerged)
     }
     const newHash = hashBytes(finalBytes)
     // M10/D37: rename **전에** 해시를 대기 목록에 넣는다.
@@ -1929,6 +2061,13 @@ export async function applySave(
         if (opts?.baseHash) d2.bases = d2.bases.filter((b) => b !== opts.baseHash)
         if (!d2.bases.includes(newHash)) d2.bases.push(newHash)
         if (d2.bases.length > 8) d2.bases = d2.bases.slice(-8)
+      }
+    }
+    // C7: 쓴 preHash는 1회성으로 소비한다 (같은 옛 base의 다른 타이피스트는
+    // 409 후 재시도 — 편집 보호. 병합 자체는 멱등이라 재시도도 안전하다).
+    if (!room.part && room.knownEmbeds.length > 0 && opts?.baseHash) {
+      for (const ke of room.knownEmbeds) {
+        if (ke.preHash === opts.baseHash) ke.preHash = null
       }
     }
     // B3: 저장 성공 — 미저장 표시를 지운다.

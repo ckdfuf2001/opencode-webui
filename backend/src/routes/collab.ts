@@ -24,11 +24,11 @@ import {
   listRooms,
   lockInfo,
   moveObject,
+  registerEmbedInsert,
   registerRoomObjects,
   releaseObjectLock,
   removeConn,
   requestParentFlush,
-  resetRoomByServer,
   roomHasEditors,
   roomHasOpenEditor,
   roomIdForAbs,
@@ -422,7 +422,8 @@ const EmbedSchema = z.object({
  * - viewer는 403 (방이 있고 clientId의 role이 viewer면).
  * - dirty면 409 dirty_room: 방 기준(disk != lastHash) 또는 baseHash stale.
  *   클라이언트는 owner 저장 후 1회 재시도한다.
- * - 조립 후 디스크에 쓰고 방이 있으면 resetRoomByServer → 4001 재입장.
+ * - 조립 후 디스크에 쓰고 방 해시를 갱신한 뒤 106(embed-added)을 방송한다
+ *   (C7 백그라운드 병합 — 리셋 없음, 클라이언트는 오버레이에 칩을 얹는다).
  *   방이 없어도(solo 미참가) 디스크 조립은 수행한다 (호출자가 reload).
  */
 app.post('/embed', async (c) => {
@@ -520,12 +521,37 @@ app.post('/embed', async (c) => {
     await writeFileContent(abs, Buffer.from(out))
     const newHash = hashBytes(out)
     logger.warn(`[embed] room=${roomId.slice(0, 8)} bytes=${out.length} newHash=${newHash.slice(0, 8)}`)
+    let finalPart = embPart
     if (room) {
+      const prevHash = room.lastHash
       room.lastHash = newHash
       room.externalChanged = false
-      resetRoomByServer(roomId)
+      // C7: 백그라운드 병합 — 리셋하지 않는다. 실제 기록된 파트(중복 시 -2)를
+      // before/after 차분으로 확정하고 knownEmbeds에 등록 + 106 방송.
+      // 클라이언트는 리로드 없이 오버레이에 칩을 얹는다.
+      try {
+        const beforeParts = new Set(
+          (await listEmbedParts(zipLoadJSZip, hostBytes).catch(() => [] as { part: string }[])).map((p) => p.part),
+        )
+        const added = (await listEmbedParts(zipLoadJSZip, out).catch(() => [] as { part: string }[])).filter(
+          (p) => !beforeParts.has(p.part),
+        )
+        if (added.length > 0 && added[0]) {
+          finalPart = added[0].part
+          const embFile = added[0].part.split('/').pop() ?? attachName
+          const pos =
+            hostKind === 'pptx'
+              ? { slide: q.slide, x: q.x, y: q.y }
+              : hostKind === 'xlsx'
+                ? { sheet: q.sheet, col: q.col, row: q.row }
+                : { block: q.block }
+          registerEmbedInsert(roomId, { norm: added[0].part, name: embFile, kind: hostKind, pos, preHash: prevHash })
+        }
+      } catch (e) {
+        logger.warn(`[embed] knownEmbeds register skipped (${e instanceof Error ? e.message : e})`)
+      }
     }
-    return c.json({ ok: true, newHash, embeddings: [embPart] })
+    return c.json({ ok: true, newHash, embeddings: [finalPart] })
     })
   } catch (error) {
     return errJson(c, error, 500)
