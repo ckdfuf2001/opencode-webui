@@ -19,8 +19,11 @@ const HOST_REL = path.join('repos', 'pp', 'host.pptx')
 const PART = 'ppt/embeddings/Microsoft_Word_Document.docx'
 
 const {
+  adoptParentPartAndMaybeReset,
   applySave,
   createSession,
+  isLibRoomKind,
+  MSG_PART_PENDING,
   resetCollabForTests,
   resetStats,
   rooms,
@@ -157,6 +160,50 @@ describe('C6c-1: 파트 저장은 부모가 조용할 때만 방을 리셋한다
       const finalInner = await JSZip.loadAsync(await finalZip.file(PART)!.async('uint8array'))
       const finalDoc = await finalInner.file('word/document.xml')!.async('string')
       expect(finalDoc).toContain('P0X9E3')
+    } finally {
+      setParentQuietMs(5000)
+      resetCollabForTests()
+    }
+  }, 30000)
+
+  it('미뤄진 리셋이면 lib 방 전원에게 105 part-pending을 보낸다 (C6N)', async () => {
+    // lib 방(xlsx/docx)은 type 100 meta를 모르므로 별도 타입으로 알린다.
+    // pptx 방에는 보내지 않는다 (meta 경로 그대로).
+    setParentQuietMs(60000)
+    try {
+      const xlsxHost = path.join(SEED_DIR, 'host.xlsx')
+      await fs.copyFile(path.resolve('..', 'e2e/collab/fixtures/ole/embed-pdf.xlsx'), xlsxHost)
+      const sParent = await createSession(path.join('repos', 'pp', 'host.xlsx'))
+      const proom = rooms.get(sParent.roomId)!
+      expect(isLibRoomKind(proom.kind)).toBe(true)
+      const got: Uint8Array[] = []
+      const fakeA = {
+        send: (b: unknown) => {
+          if (b instanceof Uint8Array) got.push(b)
+        },
+      }
+      const fakeB = { send: (_b: unknown) => {} }
+      proom.conns.set(fakeA, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
+      proom.conns.set(fakeB, { joinedAt: Date.now(), clientIds: new Set([2]), lastMsgAt: Date.now() })
+      proom.ownerConn = fakeA
+      proom.ownerIds = new Set([1])
+      parentTyping(sParent.roomId, 'P0X9T1', fakeA)
+      const r = adoptParentPartAndMaybeReset(sParent.roomId, 'basehash0', 'xl/embeddings/obj1.xlsx')
+      expect(r.deferred).toBe(true)
+      const found = got
+        .map((b) => {
+          try {
+            const d = decoding.createDecoder(b)
+            if (decoding.readVarUint(d) !== MSG_PART_PENDING) return null
+            return JSON.parse(new TextDecoder().decode(decoding.readVarUint8Array(d)))
+          } catch {
+            return null
+          }
+        })
+        .filter((x) => x !== null)
+      expect(found).toEqual([{ roomId: sParent.roomId, hasPendingPartChange: true }])
+      // 미뤄진 방은 아직 살아 있다 (리셋은 조용한 구간·상한에).
+      expect(rooms.get(sParent.roomId)).toBeDefined()
     } finally {
       setParentQuietMs(5000)
       resetCollabForTests()
