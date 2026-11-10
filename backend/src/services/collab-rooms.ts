@@ -399,6 +399,9 @@ export function adoptParentPartAndMaybeReset(
     }
     armParentResetTimer(parentId)
     broadcastMeta(proom)
+    // C6N: lib 방(xlsx/docx)은 type 100 meta를 모르므로 별도 타입(105)으로
+    // 미뤄진 파트 변경을 알린다. transport가 받아 배너를 띄운다.
+    if (isLibRoomKind(proom.kind)) broadcast(proom, encodePartPending(parentId))
     logger.warn(`Collab room ${parentId.slice(0, 8)}: parent reset deferred (editing in progress)`)
     return { deferred: true }
   }
@@ -631,6 +634,14 @@ function broadcastMeta(room: CollabRoom): void {
   // 외부 변경은 **저장 시 서버 판정(409 conflict_external)** 으로 알린다.
   if (isLibRoomKind(room.kind)) return
   broadcast(room, encodeMeta(room))
+}
+
+/** C6N: 미뤄진 파트 변경 알림 페이로드 (lib transport가 받아 배너를 띄운다). */
+function encodePartPending(roomId: string): Uint8Array {
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, MSG_PART_PENDING)
+  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify({ roomId, hasPendingPartChange: true })))
+  return encoding.toUint8Array(e)
 }
 
 /** conn의 모드. app.mode가 전부 view면 'view', 모르면 edit 취급(하위 호환). */
@@ -1482,6 +1493,12 @@ export const MSG_RESET_ROOM = 101
  */
 export const MSG_FLUSH_REQUEST = 103
 export const MSG_FLUSHED = 104
+/**
+ * C6N: 미뤄진 파트 변경 알림 (서버→방 전원). lib 방(xlsx/docx)은 type 100
+ * meta를 모르므로 별도 타입으로 보낸다. transport가 받아 배너를 띄운다
+ * (pptx는 기존 meta 경로 그대로).
+ */
+export const MSG_PART_PENDING = 105
 /** U-parent: flush 전체 예산 (owner 선출 대기 3초 포함). D64 "최대 8초 대기". */
 export const FLUSH_WAIT_MS = 8000
 /** U-parent: owner 선출 대기 상한 (재접속 레이스용, 전체 예산 안에 든다). */

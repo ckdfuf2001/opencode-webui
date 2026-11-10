@@ -21,6 +21,11 @@ export const MSG_ROOM_OBJECTS = 102
  */
 export const MSG_FLUSH_REQUEST = 103
 export const MSG_FLUSHED = 104
+/**
+ * C6N: 미뤄진 파트 변경 알림 (서버→방 전원). lib는 type 100을 모르므로 별도
+ * 타입으로 보낸다. transport가 받아 배너를 띄운다 (pptx는 기존 meta 경로).
+ */
+export const MSG_PART_PENDING = 105
 
 export interface ObjectAnchor {
   from?: { row?: number; col?: number; rowOffset?: number; colOffset?: number }
@@ -133,6 +138,7 @@ export function createObjectTapTransport(
   url: string,
   onObjects: (msg: ObjectsStateMsg) => void,
   onConnect?: () => void,
+  onPartPending?: (hasPending: boolean) => void,
 ): Transport {
   const inner = createWebSocketTransport({ url })
   let handlers: TransportHandlers | null = null
@@ -227,6 +233,21 @@ export function createObjectTapTransport(
               onObjects(JSON.parse(new TextDecoder().decode(raw)) as ObjectsStateMsg)
               return
             }
+            // C6N: 미뤄진 파트 변경 알림 (lib는 type 100을 모르므로 별도 타입).
+            if (data.length > 0 && data[0] === MSG_PART_PENDING) {
+              try {
+                const dd = decoding.createDecoder(data.subarray(1))
+                const body = JSON.parse(new TextDecoder().decode(decoding.readVarUint8Array(dd))) as {
+                  hasPendingPartChange?: unknown
+                }
+                if (typeof body?.hasPendingPartChange === 'boolean') {
+                  onPartPending?.(body.hasPendingPartChange)
+                }
+              } catch {
+                // 무시 (lib로 넘기면 모르는 타입이라 무시된다)
+              }
+              return
+            }
           } catch {
             // 파싱 실패는 lib로 넘겨 lib 판정에 맡긴다.
           }
@@ -278,8 +299,9 @@ export function createObjectTapProvider(
   roomId: string,
   onObjects: (msg: ObjectsStateMsg) => void,
   onConnect?: () => void,
+  onPartPending?: (hasPending: boolean) => void,
 ) {
   return transportProvider({
-    transport: createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect),
+    transport: createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect, onPartPending),
   })
 }

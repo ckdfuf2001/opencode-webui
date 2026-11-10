@@ -18,11 +18,15 @@ export const DOCX_MSG_FLUSHED = 104
 export const DOCX_MSG_META = 100
 /** 서버 방 리셋 통지(type 101): lib은 모르므로 tap이 소비하고 앱이 처리한다. */
 export const DOCX_MSG_ROOM_RESET = 101
+/** C6N: 미뤄진 파트 변경 알림 (서버→방 전원). lib는 type 100을 모르므로 별도 타입. */
+export const DOCX_MSG_PART_PENDING = 105
 
 export interface DocxTapCallbacks {
   onMeta?: (roomId: string) => void
   onReset?: (reason: string) => void
   onConnect?: () => void
+  /** C6N: 미뤄진 파트 변경 알림 (배너 표시용). */
+  onPartPending?: (hasPending: boolean) => void
 }
 
 function readPayload(data: Uint8Array): { requestId?: unknown; roomId?: unknown; reason?: unknown } | null {
@@ -123,6 +127,17 @@ export function createDocxTapTransport(url: string, cb: DocxTapCallbacks = {}): 
               try {
                 const body = readPayload(data)
                 if (typeof body?.roomId === 'string') cb.onMeta?.(body.roomId)
+              } catch {
+                /* 무시 */
+              }
+              return
+            }
+            if (data.length > 0 && data[0] === DOCX_MSG_PART_PENDING) {
+              try {
+                const body = readPayload(data) as { hasPendingPartChange?: unknown } | null
+                if (typeof body?.hasPendingPartChange === 'boolean') {
+                  cb.onPartPending?.(body.hasPendingPartChange === true)
+                }
               } catch {
                 /* 무시 */
               }

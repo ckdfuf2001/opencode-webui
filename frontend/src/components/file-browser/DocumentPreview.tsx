@@ -1498,13 +1498,20 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     // One session per room+epoch; reuse across StrictMode remounts. Handlers attach fresh every run.
     let session = sessionRef.current
     if (!session || sessionKeyRef.current !== roomKey) {
+      // C6N: 새 세션(방 세대)에서는 미뤄진 파트 변경 배너를 내린다 (새 바이트 기준).
+      setPartChangePending(false)
       try {
         sessionRef.current?.destroy()
       } catch { /* ignore */ }
       try {
         session = createCollabSession({
           roomId: c.roomId,
-          provider: createDocxTapProvider(c.serverUrl, c.roomId, {}),
+          provider: createDocxTapProvider(c.serverUrl, c.roomId, {
+            // C6N: 미뤄진 파트 변경 알림 (lib는 type 100 meta를 모르므로 별도 타입).
+            onPartPending: (v) => {
+              if (!dead) setPartChangePending(v)
+            },
+          }),
           user: {
             name: c.user.name,
             color: c.user.color,
@@ -2807,6 +2814,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
           role,
           joined: false,
         })
+        // C6N: 새 세션(방 세대)은 새 바이트 기준 — 미뤄진 파트 배너를 내린다.
+        setPartChangePending(false)
         setCollabNotice(null)
       } catch (e) {
         if (dead) return
@@ -3073,6 +3082,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         collab.roomId,
         (msg) => objOnMessageRef.current?.(msg),
         () => objConnectRef.current?.(),
+        // C6N: 미뤄진 파트 변경 알림 (lib는 type 100 meta를 모르므로 별도 타입).
+        (v) => setPartChangePending(v),
       ),
     }
     // joined 를 의존성에서 빼는 것은 방을 다시 열지 않기 위한 의도다.
