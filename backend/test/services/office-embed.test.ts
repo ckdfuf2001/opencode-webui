@@ -137,11 +137,11 @@ describe('assemblePptxEmbed', () => {
     const slide = await z.files['ppt/slides/slide1.xml']!.async('string')
     expect(slide).toContain('cx="1296000"')
     expect(slide).toContain('cy="648000"')
-    // 미리보기 PNG는 192x192 (고DPI 대응).
+    // 미리보기 PNG는 프레임과 같은 2:1 (192x96) — 찌그러짐 없음.
     const png = await z.files['ppt/media/image1.png']!.async('uint8array')
     const dv = new DataView(png.buffer, png.byteOffset, png.byteLength)
     expect(dv.getUint32(16)).toBe(192)
-    expect(dv.getUint32(20)).toBe(192)
+    expect(dv.getUint32(20)).toBe(96)
   })
 
   it('같은 이름이 있으면 -2를 붙인다', async () => {
