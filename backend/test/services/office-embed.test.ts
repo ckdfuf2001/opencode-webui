@@ -144,6 +144,34 @@ describe('assemblePptxEmbed', () => {
     expect(dv.getUint32(20)).toBe(96)
   })
 
+  it('x/y가 있으면 클릭 위치에 둔다 (기본은 우하단 유지)', async () => {
+    const host = await makeHostPptx()
+    const attach = await makeAttachDocx()
+    // 픽스처에 sldSz가 없으면 기본 12192000x6858000.
+    const at00 = await assemblePptxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'a.docx',
+      attachKind: 'docx',
+      slide: 1,
+      xFrac: 0,
+      yFrac: 0,
+    })
+    const s00 = await (await JSZip.loadAsync(at00)).files['ppt/slides/slide1.xml']!.async('string')
+    expect(s00).toContain('<a:off x="0" y="0"/>')
+    const at11 = await assemblePptxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'a.docx',
+      attachKind: 'docx',
+      slide: 1,
+      xFrac: 1,
+      yFrac: 1,
+    })
+    const s11 = await (await JSZip.loadAsync(at11)).files['ppt/slides/slide1.xml']!.async('string')
+    expect(s11).toContain(`<a:off x="${12192000 - 1296000}" y="${6858000 - 648000}"/>`)
+  })
+
   it('같은 이름이 있으면 -2를 붙인다', async () => {
     const host = await makeHostPptx()
     const attach = await makeAttachDocx()
@@ -274,6 +302,26 @@ describe('assembleXlsxEmbed', () => {
     expect(ct).toContain('xl/embeddings/a.docx')
   })
 
+  it('cell이 있으면 그 셀에 앵커한다 (기본은 내용 아래 유지)', async () => {
+    const host = await makeHostXlsx(false)
+    const attach = await makeAttachDocx('ZZ xlsx cell')
+    const out = await assembleXlsxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'c.docx',
+      attachKind: 'docx',
+      sheet: 0,
+      cellCol: 4,
+      cellRow: 9,
+    })
+    const z = await JSZip.loadAsync(out)
+    const drawing = await z.files['xl/drawings/drawing1.xml']!.async('string')
+    expect(drawing).toContain('<xdr:col>4</xdr:col>')
+    expect(drawing).toContain('<xdr:row>9</xdr:row>')
+    const sheet = await z.files['xl/worksheets/sheet1.xml']!.async('string')
+    expect(sheet).toContain('<xdr:col>4</xdr:col>')
+  })
+
   it('그림 있는 시트에도 추가된다', async () => {
     const host = await makeHostXlsx(true)
     const attach = await makeAttachDocx()
@@ -383,6 +431,35 @@ describe('assembleDocxEmbed', () => {
     const ct = await z.files['[Content_Types].xml']!.async('string')
     expect(ct).toContain('Extension="png"')
     expect(ct).toContain('word/embeddings/s.xlsx')
+  })
+
+  it('block이 있으면 그 문단 뒤에 넣는다 (기본은 문서 끝)', async () => {
+    const z0 = new JSZip()
+    z0.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+    )
+    z0.file(
+      'word/document.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>one</w:t></w:r></w:p><w:p><w:r><w:t>two</w:t></w:r></w:p><w:p><w:r><w:t>three</w:t></w:r></w:p></w:body></w:document>',
+    )
+    const host = await z0.generateAsync({ type: 'uint8array' })
+    const attach = await makeAttachDocx('ZZ docx block')
+    const out = await assembleDocxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'b.docx',
+      attachKind: 'docx',
+      block: 0,
+    })
+    const z = await JSZip.loadAsync(out)
+    const doc = await z.files['word/document.xml']!.async('string')
+    const objAt = doc.indexOf('<w:object')
+    const oneAt = doc.indexOf('>one<')
+    const twoAt = doc.indexOf('>two<')
+    // 첫 문단 뒤, 둘째 문단 앞.
+    expect(objAt).toBeGreaterThan(oneAt)
+    expect(objAt).toBeLessThan(twoAt)
   })
 
   it('잘못된 호스트는 거부된다', async () => {
