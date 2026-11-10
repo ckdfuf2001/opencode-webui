@@ -123,6 +123,27 @@ describe('assemblePptxEmbed', () => {
     expect(ct).toContain('ppt/embeddings/')
   })
 
+  it('ole 프레임은 아이콘 크기다 (xlsx 앵커와 동급)', async () => {
+    const host = await makeHostPptx()
+    const attach = await makeAttachDocx()
+    const out = await assemblePptxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'a.docx',
+      attachKind: 'docx',
+      slide: 1,
+    })
+    const z = await JSZip.loadAsync(out)
+    const slide = await z.files['ppt/slides/slide1.xml']!.async('string')
+    expect(slide).toContain('cx="1296000"')
+    expect(slide).toContain('cy="648000"')
+    // 미리보기 PNG는 192x192 (고DPI 대응).
+    const png = await z.files['ppt/media/image1.png']!.async('uint8array')
+    const dv = new DataView(png.buffer, png.byteOffset, png.byteLength)
+    expect(dv.getUint32(16)).toBe(192)
+    expect(dv.getUint32(20)).toBe(192)
+  })
+
   it('같은 이름이 있으면 -2를 붙인다', async () => {
     const host = await makeHostPptx()
     const attach = await makeAttachDocx()
