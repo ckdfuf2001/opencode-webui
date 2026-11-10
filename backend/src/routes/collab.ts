@@ -406,6 +406,11 @@ const EmbedSchema = z.object({
   path: z.string().min(1).max(512),
   slide: z.coerce.number().int().min(1).max(999).optional(),
   sheet: z.coerce.number().int().min(0).max(1024).optional(),
+  x: z.coerce.number().min(0).max(1).optional(),
+  y: z.coerce.number().min(0).max(1).optional(),
+  col: z.coerce.number().int().min(0).max(16383).optional(),
+  row: z.coerce.number().int().min(0).max(1048575).optional(),
+  block: z.coerce.number().int().min(0).max(1000000).optional(),
   roomId: z.string().min(1).max(128).optional(),
   clientId: z.coerce.number().int().optional(),
   baseHash: z.string().min(1).max(128).optional(),
@@ -427,6 +432,11 @@ app.post('/embed', async (c) => {
       path: typeof body.path === 'string' ? body.path : '',
       slide: body.slide !== undefined ? Number(body.slide) : undefined,
       sheet: body.sheet !== undefined ? Number(body.sheet) : undefined,
+      x: body.x !== undefined ? Number(body.x) : undefined,
+      y: body.y !== undefined ? Number(body.y) : undefined,
+      col: body.col !== undefined ? Number(body.col) : undefined,
+      row: body.row !== undefined ? Number(body.row) : undefined,
+      block: body.block !== undefined ? Number(body.block) : undefined,
       roomId: typeof body.roomId === 'string' ? body.roomId : undefined,
       clientId: body.clientId !== undefined ? Number(body.clientId) : undefined,
       baseHash: typeof body.baseHash === 'string' ? body.baseHash : undefined,
@@ -479,6 +489,8 @@ app.post('/embed', async (c) => {
           attachName,
           attachKind: kind,
           slide: q.slide,
+          xFrac: q.x,
+          yFrac: q.y,
         })
         embPart = `ppt/embeddings/${attachName}`
       } else if (hostKind === 'xlsx') {
@@ -488,6 +500,8 @@ app.post('/embed', async (c) => {
           attachName,
           attachKind: kind,
           sheet: q.sheet,
+          cellCol: q.col,
+          cellRow: q.row,
         })
         embPart = `xl/embeddings/${attachName}`
       } else {
@@ -496,6 +510,7 @@ app.post('/embed', async (c) => {
           attachBytes,
           attachName,
           attachKind: kind,
+          block: q.block,
         })
         embPart = `word/embeddings/${attachName}`
       }

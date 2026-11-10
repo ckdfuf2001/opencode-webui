@@ -194,6 +194,9 @@ export interface PptxEmbedInput {
   attachKind: EmbedAttachKind
   /** 1-based 슬라이드 번호 (기본 1). */
   slide?: number
+  /** 0..1 슬라이드 내 상대 위치 (클릭 지점). 없으면 기존 우하단 고정. */
+  xFrac?: number
+  yFrac?: number
 }
 
 /**
@@ -260,12 +263,29 @@ export async function assemblePptxEmbed(
   let maxSp = 1024
   for (const m of slide.matchAll(/spid="_x0000_s(\d+)"/g)) maxSp = Math.max(maxSp, Number(m[1]))
   const spid = `_x0000_s${maxSp + 1}`
-  // 고정 배치: 우하단 아이콘 크기 (xlsx 앵커 2열x3행과 동급).
-  // 예전 2x1.4인치 도형 크기에서는 문서 모양으로 보여 아이콘 느낌이 안 났다.
-  const offX = 7315200
-  const offY = 5486400
+  // 배치: 클릭 위치(x/y 0..1)가 있으면 그 자리, 없으면 기존 우하단 고정.
+  // 슬라이드 크기는 presentation.xml sldSz에서 읽고, 없으면 기본 13.33x7.5in.
   const extCx = 1296000
   const extCy = 648000
+  const presXml = await readText('ppt/presentation.xml')
+  let sldCx = 12192000
+  let sldCy = 6858000
+  if (presXml) {
+    const mSz =
+      /<p:sldSz\b[^>]*\bcx="(\d+)"[^>]*\bcy="(\d+)"|<p:sldSz\b[^>]*\bcy="(\d+)"[^>]*\bcx="(\d+)"/.exec(presXml)
+    if (mSz) {
+      const cx = Number(mSz[1] ?? mSz[4])
+      const cy = Number(mSz[2] ?? mSz[3])
+      if (Number.isFinite(cx) && cx > extCx) sldCx = cx
+      if (Number.isFinite(cy) && cy > extCy) sldCy = cy
+    }
+  }
+  const clamp01 = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null
+  const fx = clamp01(input.xFrac)
+  const fy = clamp01(input.yFrac)
+  const offX = fx === null ? 7315200 : Math.round(fx * (sldCx - extCx))
+  const offY = fy === null ? 5486400 : Math.round(fy * (sldCy - extCy))
   const oleName = embName.replace(/\.[A-Za-z0-9]{1,8}$/, '')
   const progAttr = progId ? ` progId="${progId}"` : ''
   const creationId = randomUUID().toUpperCase()
@@ -288,7 +308,7 @@ export async function assemblePptxEmbed(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
       const vmlImgId = nextRelId(vmlRels)
       zip.file(vmlRelsFile, addRel(vmlRels, vmlImgId, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', `../media/${imgName}`))
-      const shape = `<v:shape id="${spid}" type="#_x0000_t75" style='position:absolute;left:576pt;top:432pt;width:102pt;height:51pt'><v:fill on="f"/><v:stroke on="f"/><v:imagedata o:relid="${vmlImgId}" o:title="" grayscale="f" bilevel="f"/><o:lock v:ext="edit" aspectratio="t" position="f" selection="f" grouping="f"/></v:shape>`
+      const shape = `<v:shape id="${spid}" type="#_x0000_t75" style='position:absolute;left:${offX / 12700}pt;top:${offY / 12700}pt;width:102pt;height:51pt'><v:fill on="f"/><v:stroke on="f"/><v:imagedata o:relid="${vmlImgId}" o:title="" grayscale="f" bilevel="f"/><o:lock v:ext="edit" aspectratio="t" position="f" selection="f" grouping="f"/></v:shape>`
       zip.file(vmlFile, vml.replace('</xml>', `${shape}</xml>`))
     }
   }
@@ -334,6 +354,9 @@ export interface XlsxEmbedInput {
   attachKind: EmbedAttachKind
   /** 0-based 시트 순서 (기본 0). */
   sheet?: number
+  /** 0-based 클릭 셀 (없으면 사용 영역 아래 빈 행). */
+  cellCol?: number
+  cellRow?: number
 }
 
 const XLSX_NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -407,12 +430,20 @@ export async function assembleXlsxEmbed(
   for (const m of sheet.matchAll(/shapeId="(\d+)"/g)) maxShape = Math.max(maxShape, Number(m[1]))
   for (const m of sheet.matchAll(/<xdr:cNvPr[^>]*\bid="(\d+)"/g)) maxShape = Math.max(maxShape, Number(m[1]))
   const shapeId = maxShape + 1
-  // 앵커 위치: 사용 영역 아래 빈 행 (없으면 고정 위치).
+  // 앵커 위치: 클릭 셀(cellCol/cellRow)이 있으면 그 셀, 없으면 사용 영역 아래 빈 행.
   let maxRow = 0
   for (const m of sheet.matchAll(/<row[^>]*\br="(\d+)"/g)) maxRow = Math.max(maxRow, Number(m[1]))
-  const fromRow = maxRow > 0 ? maxRow + 2 : 7
-  const fromCol = 1
-  const toCol = 2
+  const cellCol =
+    typeof input.cellCol === 'number' && Number.isInteger(input.cellCol) && input.cellCol >= 0 && input.cellCol <= 16383
+      ? input.cellCol
+      : null
+  const cellRow =
+    typeof input.cellRow === 'number' && Number.isInteger(input.cellRow) && input.cellRow >= 0 && input.cellRow <= 1048575
+      ? input.cellRow
+      : null
+  const fromRow = cellRow ?? (maxRow > 0 ? maxRow + 2 : 7)
+  const fromCol = cellCol ?? 1
+  const toCol = fromCol + 1
   const toRow = fromRow + 3
 
   // 미리보기 PNG (빈 슬롯).
@@ -606,6 +637,8 @@ export interface DocxEmbedInput {
   attachBytes: Uint8Array
   attachName: string
   attachKind: EmbedAttachKind
+  /** 0-based 최상위 문단 (그 뒤에 삽입, 없으면 문서 끝). */
+  block?: number
 }
 
 const DOCX_PROG_ID: Record<EmbedAttachKind, string | null> = {
@@ -687,7 +720,31 @@ export async function assembleDocxEmbed(
     `<w:p><w:r><w:object w:dxaOrig="1920" w:dyaOrig="960"><v:shape id="${shapeId}" type="#_x0000_t75" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:96pt;height:48pt" o:ole=""><v:imagedata r:id="${imgRelId}" o:title="" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></v:shape>` +
     `<o:OLEObject Type="Embed"${progAttr} ShapeID="${shapeId}" DrawAspect="Icon" ObjectID="${objectId}" r:id="${oleRelId}" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><o:FieldCodes>\\s</o:FieldCodes></o:OLEObject></w:object></w:r></w:p>`
   if (doc.includes('</w:body>')) {
-    const next = doc.replace('</w:body>', `${para}</w:body>`)
+    // block(0-based 최상위 문단)이 있으면 그 문단 뒤, 없으면 문서 끝.
+    let next: string | null = null
+    const wantBlock =
+      typeof input.block === 'number' && Number.isInteger(input.block) && input.block >= 0 ? input.block : null
+    if (wantBlock !== null) {
+      let idx = -1
+      let count = -1
+      const re = /<w:p[\s>]/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(doc)) !== null) {
+        count += 1
+        if (count === wantBlock) {
+          idx = m.index
+          break
+        }
+      }
+      if (idx >= 0) {
+        const closeAt = doc.indexOf('</w:p>', idx)
+        if (closeAt >= 0) {
+          const at = closeAt + '</w:p>'.length
+          next = doc.slice(0, at) + para + doc.slice(at)
+        }
+      }
+    }
+    if (next === null) next = doc.replace('</w:body>', `${para}</w:body>`)
     checkBalancedXml(next, 'word/document.xml')
     doc = next
   } else {
