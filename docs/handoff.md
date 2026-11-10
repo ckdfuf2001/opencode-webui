@@ -1451,3 +1451,23 @@ E21만의 문제가 아니다. 근거:
 - 회귀: backend 전체 716 중 기존 실패만(bun:sqlite collection 2 + assembleXlsxEmbed 1; merge deadline 1건은 내 변경 영향이라 104-ack 추가로 수정 후 green). c6d 8/8 (D1×3 + D2 + D3 + D4 + D5 + D6). c5-3 16/16 (E2-pdf flake 단독 green). c5-4 28 + P-open flake(단독 green) + U-parent 기존실패 1. k-dbl 5/5. xlsx 19 + X2a-6 기존실패. docx W0 10/10. pptx 27 + 베이스라인 11 실패 집합 일치(presence·UI 타임아웃, 단독 재실행 E21b 동일 실패 — 내 변경 경로 아님). tsc clean, eslint 신규 0 (PptxViewer 기존 1 error + 9 warnings 유지), encoding 이상 없음(T2h 깨진 문자 3줄 복원).
 - C6N lib peer 미반영 배너 (신규): xlsx/docx peer는 type 100 meta를 받지 못해 첨부 미반영 배너를 볼 수 없었다(저장 때만 갱신). adopt-미룸 시 lib 방에 105 part-pending을 방송하고, transport(docxTapTransport/xlsxObjects)가 받아 배너를 띄운다. 재입장 시 배너 해제. 단위 red(105 없음)→green. pptx는 meta 경로 그대로.
 - icon 통일 (신규): pptx ole 프레임이 2"x1.39" 문서 모양으로 그려져 xlsx(2열x3행 앵커)와 달라 보였다. pptx 프레임을 1.42"x0.71" 아이콘 크기로 축소 + 미리보기 PNG를 192px로(고DPI). 단위 red(구 치수)→green. 스크린샷으로 렌더 확인(96x48 표시).
+## C6c-f 보고 누락분 (2026-11-10)
+- D5 red 원문: pre-fix `expect(await resetCount()).toBe(1)` → Expected 1, Received 4 (late stale이 reload를 4회 유발). post-fix 1 (no double reload).
+- D6 red 원문: pre-fix `expect.poll(flushSeen, 75s)` → Expected true, Received false (103 자체가 없음). post-fix flush observed → reset → phase A/B green.
+- epoch 호출점 대조표 (전부 세션/방 epoch 전송, 누락 없음):
+  - PptxViewer.tsx:633 persist `c.epoch` / :639 conflict 재시도 `c.epoch`
+  - DocumentPreview.tsx:1299 docx 저장 `room.epoch` / :1314 재시도 `room.epoch`
+  - DocumentPreview.tsx:3220 xlsx 저장 `room.epoch` / :3232 재시도 `room.epoch`
+- release/.env 원복 확인: health 체크용 PORT=5123 임시 변경 후 PORT=5002로 원복 (파일 내용 확인済).
+
+## C6N lib peer 미반영 배너 (2026-11-10)
+- 원인: lib 방(xlsx/docx)은 type 100 meta를 모르므로 미룸 알림을 못 받았다 (pptx는 meta로 수신). 새로고침해야만 보였다.
+- 수정: adopt defer 시 lib 방에 105 part-pending 방송 + transport가 받아서 배너 표시. 재입장한 방에는 addConn 시점에 105 재전송 (늦은 참가자/재연결 대응). 배너 해제는 새 세대에서만 (같은 세대 재연결은 유지).
+- test: defer 105 단위 (pre-fix found=[] red→green), late joiner 단위 (red→green), e2e D7 (pre-fix banner timeout red→green, 31s).
+- POST /embed(신규 삽입)는 미룸 경로를 타지 않음 (collab.ts:508-512 즉시 resetRoomByServer). 미룸 진입은 PUT /embed→adoptParentPartAndMaybeReset 하나뿐. e2e D8로 증명: 타이핑 중 삽입 → 양쪽 0.1s 내 반영 (5s 기준 green).
+
+## 아이콘 통일 2:1 (2026-11-10)
+- 원인: pptx ole 프레임이 2"x1.39" 도형 크기라 문서 그림처럼 보임. xlsx 앵커(~2:1)가 아이콘처럼 보임.
+- 수정: pptx extCx/extCy 1296000x648000 (2:1) + VML 102x51pt, 미리보기 PNG 192x96 2:1로 재설계 (프레임과 동일 비율 → 찌그러짐 없음), docx 96x48pt.
+- 단위: 프레임 cx/cy + PNG IHDR 192x96 assert (pre-fix 값으로 red 확인 후 green). 스크린샷으로 렌더 확인 (96x48 아이콘 + 클립 + 파일명).
+- 실기 PowerPoint 확인은 사용자 측에서 (0.12.83 exe에 포함 예정).
