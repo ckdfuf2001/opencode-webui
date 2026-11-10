@@ -1189,6 +1189,13 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
       sock.send(encodeObjects(room))
     } catch { /* 무시 */ }
   }
+  // C6N: 미뤄진 파트 변경을 놓친 탭((재)연결·늦은 참가)도 즉시 따라잡는다.
+  // lib은 모르는 타입(105)이라 무시하고, 탭이 가로채 배너를 띄운다.
+  if (room.pendingPartReset) {
+    try {
+      sock.send(encodePartPending(roomId))
+    } catch { /* 무시 */ }
+  }
   return room
 }
 

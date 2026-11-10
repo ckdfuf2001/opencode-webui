@@ -1498,8 +1498,10 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     // One session per room+epoch; reuse across StrictMode remounts. Handlers attach fresh every run.
     let session = sessionRef.current
     if (!session || sessionKeyRef.current !== roomKey) {
-      // C6N: 새 세션(방 세대)에서는 미뤄진 파트 변경 배너를 내린다 (새 바이트 기준).
-      setPartChangePending(false)
+      // C6N: 새 세대(방 재생성)로 다시 들어갈 때만 미뤄진 파트 배너를 내린다
+      // (새 바이트 기준 — 리셋이 미룸을 해소한다). 같은 세대 재접속·첫 입장은
+      // 유지한다 (105 수신·저장 응답이 진실을 정한다).
+      if (sessionKeyRef.current !== null && sessionKeyRef.current !== roomKey) setPartChangePending(false)
       try {
         sessionRef.current?.destroy()
       } catch { /* ignore */ }
@@ -2408,6 +2410,9 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   const [conflictBytes, setConflictBytes] = useState<Uint8Array | null>(null)
   // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
   const [partChangePending, setPartChangePending] = useState(false)
+  // C6N: 마지막으로 본 방 세대. 새 세대로 다시 들어갈 때만 미뤄진 파트
+  // 배너를 내린다 (새 바이트 기준 — 리셋이 미룸을 해소한다).
+  const lastRoomEpochRef = useRef<string | null>(null)
   /**
    * X1c(P1): 방 참가 판정(collab 또는 notice)이 끝날 때까지 편집기를 readOnly로 막는다.
    * 마운트 시 방에 붙으면 "방의 문서가 이긴다" 규칙 때문에 먼저 입력이 사라질 수 있다.
@@ -2814,8 +2819,13 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
           role,
           joined: false,
         })
-        // C6N: 새 세션(방 세대)은 새 바이트 기준 — 미뤄진 파트 배너를 내린다.
-        setPartChangePending(false)
+        // C6N: 새 세대(방 재생성)로 다시 들어갈 때만 미뤄진 파트 배너를 내린다
+        // (새 바이트 기준 — 리셋이 미룸을 해소한다). 같은 세대 재접속·첫 입장은
+        // 유지한다 (105 수신·저장 응답이 진실을 정한다).
+        if (lastRoomEpochRef.current !== null && lastRoomEpochRef.current !== (info.epoch ?? '')) {
+          setPartChangePending(false)
+        }
+        lastRoomEpochRef.current = info.epoch ?? ''
         setCollabNotice(null)
       } catch (e) {
         if (dead) return
