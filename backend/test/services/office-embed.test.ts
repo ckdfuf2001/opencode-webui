@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
 import {
+  anchorHashOf,
   assembleDocxEmbed,
   assemblePptxEmbed,
   assembleXlsxEmbed,
@@ -10,6 +11,7 @@ import {
   EMBED_MAX_BYTES,
   genericIconPng,
   sanitizeEmbedName,
+  topLevelBlocks,
   type ZipLike,
 } from '../../src/services/office-embed'
 
@@ -439,6 +441,25 @@ describe('assembleDocxEmbed', () => {
     expect(blockTextSnippet(doc, 0)).toBe('hello world')
     expect(blockTextSnippet(doc, 1)).toBe('second')
     expect(blockTextSnippet(doc, 9)).toBe('')
+  })
+
+  it('topLevelBlocks는 중첩 문단을 세지 않는다 (w:body 직계만)', () => {
+    const doc =
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+      '<w:p><w:r><w:t>first</w:t></w:r></w:p>' +
+      '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>nested cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>' +
+      '<w:p><w:r><w:t>second</w:t></w:r></w:p>' +
+      '</w:body></w:document>'
+    const blocks = topLevelBlocks(doc)
+    expect(blocks.map((b) => b.tag)).toEqual(['p', 'tbl', 'p'])
+    // tbl 블록 텍스트는 셀 내용까지 포함한다 (앵커 대조용).
+    expect(blocks.map((b) => b.text)).toEqual(['first', 'nested cell', 'second'])
+  })
+
+  it('anchorHashOf는 정규화 기준 안정적이다', () => {
+    expect(anchorHashOf('  hello   world ')).toBe(anchorHashOf('hello world'))
+    expect(anchorHashOf('hello world')).not.toBe(anchorHashOf('hello mars'))
+    expect(anchorHashOf('')).toBe('')
   })
 
   it('blockText가 있으면 텍스트 일치 문단 뒤에 둔다 (인덱스 어긋남 대응)', async () => {
