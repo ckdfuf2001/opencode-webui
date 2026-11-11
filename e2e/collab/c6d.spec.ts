@@ -374,6 +374,17 @@ async function typeAfterRejoin(page: Page, shapes: ShapeLocator, marker: string)
   await editShapeText(page, shapes, curText, marker)
 }
 
+/** 덧붙이기 (editShapeText는 전체 교체라 기존 마커가 지워진다 — 현재문+접미사로 교체). */
+async function appendShapeText(page: Page, shapes: ShapeLocator, suffix: string): Promise<void> {
+  const curText = await page.evaluate(() => {
+    const els = [...document.querySelectorAll('[data-element-id]')] as HTMLElement[]
+    const el = els.find((e) => (e.textContent || '').trim().length > 1)
+    return el ? (el.textContent ?? null) : null
+  })
+  if (!curText) throw new Error('no editable text found for append')
+  await editShapeText(page, shapes, curText, `${curText}${suffix}`)
+}
+
 test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
   for (const kind of ['pptx', 'xlsx', 'docx']) {
     test(`D1-${kind}: 연속 입력+저장 중 첨부 2회 저장 — 409 없이 양쪽 디스크 보존, 리셋 1회`, async ({
@@ -1081,6 +1092,141 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       console.log(`[c6d] D8 both views show insert in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
     } finally {
       await pageB.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D9-pptx: 타이핑 중 삽입 → 리셋 없이 칩이 클릭 자리에 (백그라운드 병합)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd9pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    // B 첨부탭을 닫는다: 파트 저장이 adopt 즉시 리셋을 유발해 POST 격리를 깨뜨린다.
+    await t.attach.close().catch(() => {})
+    // peer viewer page.
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, ADA)
+    const pageC = await ctxC.newPage()
+    // 리셋 감시: 삽입 시점 이후 새로 열리는 collab WS가 있으면 리셋이다.
+    // (초기 접속은 셋업 때 끝나므로 이후 새로 열리면 재입장이다.)
+    const newCollabWs: string[] = []
+    const watchWs = (tag: string, page: Page): void => {
+      page.on('websocket', (ws) => {
+        try {
+          if (ws.url().includes('/collab')) newCollabWs.push(`${tag}:${ws.url()}`)
+        } catch { /* 무시 */ }
+      })
+    }
+    await gotoApp(pageC)
+    await openEditor(pageC, t.parentPath)
+    await pageC.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+    watchWs('A', t.pageA)
+    watchWs('C', pageC)
+    // 초기 접속 WS가 모두 열린 뒤 비운다 (이후 새로 열리면 재입장=리셋).
+    await t.pageA.waitForTimeout(3000).catch(() => {})
+    newCollabWs.length = 0
+    try {
+      // A 수렴 저장.
+      await gotoSlide(t.pageA, 2)
+      await typeAfterRejoin(t.pageA, t.shapes!, `${slug}-a1`)
+      await clickParentSave(t.pageA)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a1`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      // C 타이핑 (미저장).
+      await gotoSlide(pageC, 2)
+      const shapesC = t.shapes!
+      await typeAfterRejoin(pageC, shapesC, `${slug}-c1`)
+      // A: 슬라이드 정가운데 클릭 → 삽입.
+      const pt = await t.pageA.evaluate(() => {
+        const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+        const box = root?.getBoundingClientRect()
+        if (!box) return null
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2, w: box.width, h: box.height }
+      })
+      expect(pt).not.toBeNull()
+      await t.pageA.mouse.click(pt!.x, pt!.y)
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'd9-insert.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      // 양쪽에 칩이 클릭 자리에 뜬다 (리로드 없음). 각 페이지 좌표계에서 판정.
+      // setup 칩(1개)이 아니라 새로 뜬 d9 칩(2개째)을 기다린다.
+      const chipNearCenter = async (page: Page, tag: string): Promise<void> => {
+        await expect
+          .poll(() => page.getByTestId('ole-icon').count(), { timeout: 30000, intervals: [500] })
+          .toBe(2)
+        const all = await page.getByTestId('ole-icon').evaluateAll((els) =>
+          els.map((e) => ({
+            label: e.getAttribute('aria-label') ?? (e as HTMLElement).innerText?.slice(0, 40) ?? '?',
+            box: (() => {
+              const r = (e as HTMLElement).getBoundingClientRect()
+              return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+            })(),
+          })),
+        )
+        const hit = all.find((c) => c.label.includes('d9-insert'))
+        expect(hit).toBeTruthy()
+        // 서버가 클릭 위치(중앙)에 두었는지 디스크로 확인 (고정 우하단이 아니어야 함).
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const slide = await zip.files['ppt/slides/slide2.xml']!.async('string')
+        const m = /<p:graphicFrame>[\s\S]*?<a:off x="(\d+)" y="(\d+)"\/>/.exec(slide)
+        expect(m).not.toBeNull()
+        expect(`${m![1]},${m![2]}`).not.toBe('7315200,5486400')
+        expect(hit!.box[2]).toBeGreaterThan(0)
+        const ctr = await page.evaluate(() => {
+          const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+          const b = root?.getBoundingClientRect()
+          if (!b) return null
+          return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
+        })
+        expect(ctr).not.toBeNull()
+        const dist = Math.hypot(hit!.box[0] + hit!.box[2] / 2 - ctr!.x, hit!.box[1] + hit!.box[3] / 2 - ctr!.y)
+        console.log(`[c6d] D9 ${tag} chip dist from click: ${Math.round(dist)}px`)
+        expect(dist).toBeLessThan(150)
+      }
+      await chipNearCenter(t.pageA, 'A')
+      await chipNearCenter(pageC, 'C')
+      // 리셋 없음: 새 collab WS가 열리면 안 된다.
+      expect(newCollabWs).toEqual([])
+      // 양쪽 타이핑 계속 → 저장 → 디스크 수렴.
+      // C가 A2를 받기 전에 저장하면 A2가 덮인다 — Yjs 전파를 기다렸다가 저장한다.
+      // 덧붙이기 (editShapeText는 전체 교체라 기존 마커가 지워진다).
+      await appendShapeText(t.pageA, t.shapes!, ` ${slug}-a2`)
+      await clickParentSave(t.pageA)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a2`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      const a2marker = `${slug}-a2`
+      await expect
+        .poll(
+          () =>
+            pageC.evaluate((m: string) => {
+              const els = [...document.querySelectorAll('[data-element-id]')] as HTMLElement[]
+              return els.some((e) => (e.textContent ?? '').includes(m))
+            }, a2marker),
+          { timeout: 60000, intervals: [1000] },
+        )
+        .toBe(true)
+      await appendShapeText(pageC, shapesC, ` ${slug}-c2`)
+      await clickParentSave(pageC)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-c2`, 'Body 2')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('pptx', t.abs, `${slug}-a2`, 'Body 2')), { timeout: 30000, intervals: [1000] })
+        .toBe(true)
+      console.log(`[c6d] D9 insert merged without reset`)
+    } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
     }

@@ -5,6 +5,7 @@ import {
   assemblePptxEmbed,
   assembleXlsxEmbed,
   attachKindOf,
+  blockTextSnippet,
   checkBalancedXml,
   EMBED_MAX_BYTES,
   genericIconPng,
@@ -431,6 +432,13 @@ describe('assembleDocxEmbed', () => {
     const ct = await z.files['[Content_Types].xml']!.async('string')
     expect(ct).toContain('Extension="png"')
     expect(ct).toContain('word/embeddings/s.xlsx')
+  })
+
+  it('blockTextSnippet은 N번째 문단 텍스트 앞부분을 돌려준다', () => {
+    const doc = '<w:document><w:body><w:p><w:r><w:t>hello </w:t><w:t>world</w:t></w:r></w:p><w:p><w:r><w:t>second</w:t></w:r></w:p></w:body></w:document>'
+    expect(blockTextSnippet(doc, 0)).toBe('hello world')
+    expect(blockTextSnippet(doc, 1)).toBe('second')
+    expect(blockTextSnippet(doc, 9)).toBe('')
   })
 
   it('block이 있으면 그 문단 뒤에 넣는다 (기본은 문서 끝)', async () => {
