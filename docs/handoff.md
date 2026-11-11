@@ -1471,3 +1471,18 @@ E21만의 문제가 아니다. 근거:
 - 수정: pptx extCx/extCy 1296000x648000 (2:1) + VML 102x51pt, 미리보기 PNG 192x96 2:1로 재설계 (프레임과 동일 비율 → 찌그러짐 없음), docx 96x48pt.
 - 단위: 프레임 cx/cy + PNG IHDR 192x96 assert (pre-fix 값으로 red 확인 후 green). 스크린샷으로 렌더 확인 (96x48 아이콘 + 클립 + 파일명).
 - 실기 PowerPoint 확인은 사용자 측에서 (0.12.83 exe에 포함 예정).
+## C7 백그라운드 삽입 + 클릭 위치 (2026-11-11)
+- 요구: 삽입해도 남 리로드 없음(화면 유지) + 첨부가 마지막 클릭 지점에 생길 것. 3종 한 번에, 칩만 OK.
+- 서버:
+  - POST /embed 위치 파라미터: pptx x/y(0..1, 슬라이드 크기 sldSz 기준), xlsx col/row, docx block(+blockText). 단위 red→green.
+  - 삽입은 resetRoomByServer를 타지 않는다 (file:line collab.ts POST 508-512 즉시 리셋 → registerEmbedInsert+106 방송으로 교체). 미룸 진입은 PUT→adopt 하나뿐 (불변).
+  - 106 embed-added {part,name,kind,pos,newHash} 방송. room.knownEmbeds(최대 32, 방과 함께 소멸) + 저장 병합(ensureKnownEmbeds: 없는 파트 재조립, 이미지 가드보다 먼저) + preHash 1회성 허용/소비. 단위 red→green.
+  - docx는 텍스트 앵커 (클라이언트 크롬 문단으로 인덱스 어긋남 + innerText 렌더 잔재 → 정규화 후 서로 포함이면 같은 문단). 단위 red→green.
+- 클라이언트:
+  - 클릭 캡처: pptx onClickCapture(컨테이너 기준 fractions, 기본 중앙), xlsx 선택 셀(없으면 화면 정가운데 셀 역산), docx 커서 문단(없으면 화면 정가운데). POST로 전송.
+  - 106 수신: ycollab 직접모드 + xlsx/docx tap transport. onInserted(POST 200 즉시 적용, 106과 멱등).
+  - 오버레이 extras: lib 폴백보다 명시 위치 우선 (findAnchorEl 첫 프레임 폴백이 엉뚱한 도형을 잡던 버그 수정). pptx fractions, xlsx .xg-cells 메트릭스(숨으면 스크롤 시 재해석), docx 텍스트 매칭.
+  - 삽입자는 106/POST응답으로 baseHash 갱신 + 칩 표시 (리로드 없음). solo(방 없음)는 기존처럼 리로드.
+- e2e D7/D8/D9: D9-pptx/xlsx/docx 모두 green (칩이 클릭 지점에, 새 collab WS 없음=리셋 없음, 양쪽 타이핑 저장 수렴).
+  - D9 red: pre-fix 서버는 4001 리셋 (WS 감시로 적발) + 고정 위치 칩.
+  - 주의: D9는 B 첨부탭을 닫고 시작한다 (B 파트 저장 adopt 즉시 리셋이 POST 격리를 깨뜨림). EPERM(윈도 rename 경합)은 기존 flake 1회 목격.
