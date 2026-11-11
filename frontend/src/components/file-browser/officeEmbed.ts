@@ -72,6 +72,12 @@ export interface EmbedCtx {
   slide?: number
   /** xlsx 0-based 시트 (기본 0). */
   sheet?: number
+  /** C7: 클릭 위치 (pptx: 슬라이드 내 0..1, xlsx: 0-based 셀, docx: 0-based 문단). 없으면 화면 정가운데. */
+  x?: number
+  y?: number
+  col?: number
+  row?: number
+  block?: number
   isViewer?: boolean
   saveFirst: () => Promise<boolean>
   /** 미저장 변경이 있는지. 없으면 선저장을 건너뛰고 바로 POST한다 (빈 저장 왕복 제거). */
@@ -79,6 +85,8 @@ export interface EmbedCtx {
   /** 방 미시드(not_seeded)로 선저장이 실패하면 시드를 기다렸다가 1회 재시도한다. 없으면 즉시 중단. */
   waitSeed?: () => Promise<boolean>
   reload: () => void
+  /** C7: 삽입 성공 시 백그라운드 칩을 즉시 얹는다 (106보다 먼저 — 106 유실 대비). */
+  onInserted?: (rec: { part: string; name: string; newHash: string; pos: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number; text?: string } }) => void
 }
 
 /** 방 시드를 최대 timeoutMs까지 기다린다 (setTimeout 체인, 상시 타이머 없음). */
@@ -206,9 +214,9 @@ export async function saveBeforeEmbed(hostPath: string, editing: boolean): Promi
   return waitSaveDone(hostPath)
 }
 
-async function postEmbed(fd: FormData): Promise<{ status: number; body: { code?: string; error?: string } }> {
+async function postEmbed(fd: FormData): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string } }> {
   const res = await fetch(`${API_BASE_URL}/api/collab/embed`, { method: 'POST', body: fd })
-  const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string }
+  const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string; embeddings?: string[]; newHash?: string }
   return { status: res.status, body }
 }
 
@@ -220,12 +228,19 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
   }
   // viewer 여부는 서버가 최종 판정한다 (편집자 없는 solo 보기는 허용).
   // isViewer는 호환용으로 남긴다.
-  const doPost = async (): Promise<{ status: number; body: { code?: string; error?: string } }> => {
+  // C7: 백그라운드 병합 — 방에 있으면 리로드하지 않는다 (106이 오버레이+해시를 갱신).
+  // solo(방 없음)는 106이 없으므로 기존처럼 리로드한다.
+  const doPost = async (): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string } }> => {
     const fd = new FormData()
     fd.append('path', ctx.hostPath)
     fd.append('file', file, file.name)
     if (ctx.slide != null) fd.append('slide', String(ctx.slide))
     if (ctx.sheet != null) fd.append('sheet', String(ctx.sheet))
+    if (ctx.x != null) fd.append('x', String(ctx.x))
+    if (ctx.y != null) fd.append('y', String(ctx.y))
+    if (ctx.col != null) fd.append('col', String(ctx.col))
+    if (ctx.row != null) fd.append('row', String(ctx.row))
+    if (ctx.block != null) fd.append('block', String(ctx.block))
     if (ctx.roomId) fd.append('roomId', ctx.roomId)
     if (ctx.clientId !== undefined) fd.append('clientId', String(ctx.clientId))
     const baseHash = ctx.getBaseHash?.()
@@ -269,8 +284,26 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
   }
   if (r.status === 200) {
     showToast.success('문서를 첨부했습니다')
-    window.dispatchEvent(new CustomEvent(OFFICE_EMBED_DONE, { detail: { path: ctx.hostPath } }))
-    ctx.reload()
+    // C7: 삽입자는 응답으로 바로 칩을 얹는다 (106과 멱등 — 먼저 오는 쪽이 이긴다).
+    try {
+      const part = r.body.embeddings?.[0]
+      if (part && typeof r.body.newHash === 'string') {
+        ctx.onInserted?.({
+          part,
+          name: part.split('/').pop() ?? file.name,
+          newHash: r.body.newHash,
+          pos: { slide: ctx.slide, x: ctx.x, y: ctx.y, sheet: ctx.sheet, col: ctx.col, row: ctx.row, block: ctx.block },
+        })
+      }
+    } catch {
+      /* 무시 — 106이 처리한다 */
+    }
+    if (!ctx.roomId) {
+      // solo(방 없음): 106이 없으므로 기존처럼 리로드한다.
+      window.dispatchEvent(new CustomEvent(OFFICE_EMBED_DONE, { detail: { path: ctx.hostPath } }))
+      ctx.reload()
+    }
+    // 방에 있으면 106(embed-added)이 오버레이+baseHash를 갱신한다 (리로드 없음).
     return
   }
   if (r.status === 403) {

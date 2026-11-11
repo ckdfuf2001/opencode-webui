@@ -121,6 +121,26 @@ export interface YCollabMeta {
   hasPendingPartChange?: boolean
 }
 
+/** C7: 백그라운드 삽입 알림 (106 embed-added) 페이로드. */
+export interface EmbedAddedMsg {
+  roomId: string
+  part: string
+  name: string
+  kind: 'pptx' | 'xlsx' | 'docx'
+  pos: {
+    slide?: number
+    x?: number
+    y?: number
+    sheet?: number
+    col?: number
+    row?: number
+    block?: number
+    /** C7: docx 문단 텍스트 앞부분 (칩 위치 찾기용 힌트). */
+    text?: string
+  }
+  newHash: string
+}
+
 /** Y.Doc 변경 집계 (작성자 판별용). writers가 비면 삭제-only일 수 있다. */
 export interface CollabActivity {
   at: number
@@ -204,6 +224,8 @@ export class YCollabSession {
   /** U-parent: 위 타이머와 쌍을 이루는 window 리스너 (dispose 때 제거). */
   private flushAckHandler: ((e: Event) => void) | null = null
   private metaListeners = new Set<(meta: YCollabMeta) => void>()
+  /** C7: 백그라운드 삽입 알림 구독 (106 embed-added). */
+  private embedAddedListeners = new Set<(msg: EmbedAddedMsg) => void>()
   /** clientId → 마지막 편집 시각 (step2 초기동기화 제외, 3.3). */
   readonly lastEditAt = new Map<number, number>()
   private activityListeners = new Set<(a: CollabActivity) => void>()
@@ -422,9 +444,9 @@ export class YCollabSession {
           awarenessProtocol.modifyAwarenessUpdate(raw, stripCursorFields),
           this,
         )
-      } else if (type === 100 || type === 103) {
+      } else if (type === 100 || type === 103 || type === 106) {
         // U-parent: 103 flush 요청도 전용 채널이다. lib 프로토콜(0/1)이 아니므로
-        // 여기서 소비한다 (transport 분기와 동일).
+        // 여기서 소비한다 (transport 분기와 동일). C7: 106도 마찬가지.
         this.handleOwnMessage(type, d)
       }
     }
@@ -486,6 +508,25 @@ export class YCollabSession {
 
   /** 전용 타입(99/100/101/103) 처리부. own·transport 공통. */
   private handleOwnMessage(type: number, d: decoding.Decoder): void {
+    if (type === 106) {
+      // C7: 백그라운드 삽입 알림. 리로드 없이 오버레이에 칩을 얹는다.
+      try {
+        const raw = decoding.readVarUint8Array(d)
+        const body = JSON.parse(new TextDecoder().decode(raw)) as EmbedAddedMsg
+        if (body && typeof body.part === 'string' && typeof body.newHash === 'string') {
+          this.embedAddedListeners.forEach((l) => {
+            try {
+              l(body)
+            } catch {
+              // 무시
+            }
+          })
+        }
+      } catch {
+        // 무시 (구서버 호환)
+      }
+      return
+    }
     if (type === 103) {
       // U-parent: 서버가 부모 flush(즉시 저장)를 요청했다. 편집을 유지한 채 저장하고,
       // 같은 requestId의 officeSaveDone만 104 ack로 답한다 (B1: 앞선 저장 완료 오인 방지).
@@ -841,6 +882,14 @@ export class YCollabSession {
     this.metaListeners.add(listener)
     return () => {
       this.metaListeners.delete(listener)
+    }
+  }
+
+  /** C7: 백그라운드 삽입 알림 구독 (106 embed-added). */
+  onEmbedAdded(listener: (msg: EmbedAddedMsg) => void): () => void {
+    this.embedAddedListeners.add(listener)
+    return () => {
+      this.embedAddedListeners.delete(listener)
     }
   }
 

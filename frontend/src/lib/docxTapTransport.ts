@@ -20,6 +20,28 @@ export const DOCX_MSG_META = 100
 export const DOCX_MSG_ROOM_RESET = 101
 /** C6N: 미뤄진 파트 변경 알림 (서버→방 전원). lib는 type 100을 모르므로 별도 타입. */
 export const DOCX_MSG_PART_PENDING = 105
+/** C7: 백그라운드 삽입 알림 (서버→방 전원). 리로드 없이 오버레이에 칩을 얹는다. */
+export const DOCX_MSG_PART_EMBEDDED = 106
+
+/** C7: 백그라운드 삽입 알림 페이로드 (106 embed-added). */
+export interface DocxEmbedAddedMsg {
+  roomId: string
+  part: string
+  name: string
+  kind: 'pptx' | 'xlsx' | 'docx'
+  pos: {
+    slide?: number
+    x?: number
+    y?: number
+    sheet?: number
+    col?: number
+    row?: number
+    block?: number
+    /** C7: docx 문단 텍스트 앞부분 (칩 위치 찾기용 힌트). */
+    text?: string
+  }
+  newHash: string
+}
 
 export interface DocxTapCallbacks {
   onMeta?: (roomId: string) => void
@@ -27,6 +49,8 @@ export interface DocxTapCallbacks {
   onConnect?: () => void
   /** C6N: 미뤄진 파트 변경 알림 (배너 표시용). */
   onPartPending?: (hasPending: boolean) => void
+  /** C7: 백그라운드 삽입 알림 (칩 표시용). */
+  onEmbedAdded?: (msg: DocxEmbedAddedMsg) => void
 }
 
 function readPayload(data: Uint8Array): { requestId?: unknown; roomId?: unknown; reason?: unknown } | null {
@@ -137,6 +161,17 @@ export function createDocxTapTransport(url: string, cb: DocxTapCallbacks = {}): 
                 const body = readPayload(data) as { hasPendingPartChange?: unknown } | null
                 if (typeof body?.hasPendingPartChange === 'boolean') {
                   cb.onPartPending?.(body.hasPendingPartChange === true)
+                }
+              } catch {
+                /* 무시 */
+              }
+              return
+            }
+            if (data.length > 0 && data[0] === DOCX_MSG_PART_EMBEDDED) {
+              try {
+                const body = readPayload(data) as DocxEmbedAddedMsg | null
+                if (body && typeof body.part === 'string' && typeof body.newHash === 'string') {
+                  cb.onEmbedAdded?.(body)
                 }
               } catch {
                 /* 무시 */

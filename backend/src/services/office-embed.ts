@@ -786,6 +786,33 @@ export function normalizeEmbedPart(raw: string): string {
   return segs.join('/')
 }
 
+/**
+ * C7: N번째 최상위 문단의 텍스트 앞부분 (클라이언트 칩 위치 찾기용 힌트).
+ * 없으면 빈 문자열 (인덱스로 폴백한다).
+ */
+export function blockTextSnippet(docXml: string, block: number): string {
+  try {
+    let count = -1
+    const re = /<w:p[\s>]/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(docXml)) !== null) {
+      count += 1
+      if (count !== block) continue
+      const closeAt = docXml.indexOf('</w:p>', m.index)
+      if (closeAt < 0) return ''
+      const para = docXml.slice(m.index, closeAt)
+      const texts: string[] = []
+      const tr = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g
+      let tm: RegExpExecArray | null
+      while ((tm = tr.exec(para)) !== null && texts.join('').length < 60) texts.push(tm[1] ?? '')
+      return texts.join('').slice(0, 60)
+    }
+  } catch {
+    /* 무시 */
+  }
+  return ''
+}
+
 /** rel Target을 rels 파일 기준으로 해석해 파트 경로로 바꾼다. */
 export function resolveRelTarget(relsFile: string, target: string): string | null {
   if (!target || target.includes('\\')) return null

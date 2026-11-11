@@ -26,6 +26,28 @@ export const MSG_FLUSHED = 104
  * 타입으로 보낸다. transport가 받아 배너를 띄운다 (pptx는 기존 meta 경로).
  */
 export const MSG_PART_PENDING = 105
+/** C7: 백그라운드 삽입 알림 (서버→방 전원). 리로드 없이 오버레이에 칩을 얹는다. */
+export const MSG_PART_EMBEDDED = 106
+
+/** C7: 백그라운드 삽입 알림 페이로드 (106 embed-added). */
+export interface EmbedAddedMsg {
+  roomId: string
+  part: string
+  name: string
+  kind: 'pptx' | 'xlsx' | 'docx'
+  pos: {
+    slide?: number
+    x?: number
+    y?: number
+    sheet?: number
+    col?: number
+    row?: number
+    block?: number
+    /** C7: docx 문단 텍스트 앞부분 (칩 위치 찾기용 힌트). */
+    text?: string
+  }
+  newHash: string
+}
 
 export interface ObjectAnchor {
   from?: { row?: number; col?: number; rowOffset?: number; colOffset?: number }
@@ -139,6 +161,7 @@ export function createObjectTapTransport(
   onObjects: (msg: ObjectsStateMsg) => void,
   onConnect?: () => void,
   onPartPending?: (hasPending: boolean) => void,
+  onEmbedAdded?: (msg: EmbedAddedMsg) => void,
 ): Transport {
   const inner = createWebSocketTransport({ url })
   let handlers: TransportHandlers | null = null
@@ -248,6 +271,19 @@ export function createObjectTapTransport(
               }
               return
             }
+            // C7: 백그라운드 삽입 알림. 리로드 없이 오버레이에 칩을 얹는다.
+            if (data.length > 0 && data[0] === MSG_PART_EMBEDDED) {
+              try {
+                const dd = decoding.createDecoder(data.subarray(1))
+                const body = JSON.parse(new TextDecoder().decode(decoding.readVarUint8Array(dd))) as EmbedAddedMsg
+                if (body && typeof body.part === 'string' && typeof body.newHash === 'string') {
+                  onEmbedAdded?.(body)
+                }
+              } catch {
+                // 무시 (lib로 넘기면 모르는 타입이라 무시된다)
+              }
+              return
+            }
           } catch {
             // 파싱 실패는 lib로 넘겨 lib 판정에 맡긴다.
           }
@@ -300,8 +336,9 @@ export function createObjectTapProvider(
   onObjects: (msg: ObjectsStateMsg) => void,
   onConnect?: () => void,
   onPartPending?: (hasPending: boolean) => void,
+  onEmbedAdded?: (msg: EmbedAddedMsg) => void,
 ) {
   return transportProvider({
-    transport: createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect, onPartPending),
+    transport: createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect, onPartPending, onEmbedAdded),
   })
 }

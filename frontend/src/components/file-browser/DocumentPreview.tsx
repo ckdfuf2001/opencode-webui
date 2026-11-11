@@ -1229,6 +1229,26 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   const [collabNotice, setCollabNotice] = useState<{ kind: string; text: string } | null>(null)
   // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
   const [partChangePending, setPartChangePending] = useState(false)
+  // C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시).
+  const [docxEmbedExtras, setDocxEmbedExtras] = useState<
+    Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { block?: number; text?: string } }>
+  >([])
+  /** C7: 106/삽입응답 적용 — 칩 추가(멱등) + baseHash 갱신. */
+  const applyDocxEmbedAdded = useCallback(
+    (msg: { part: string; name: string; newHash: string; pos: { block?: number; text?: string } }) => {
+      setDocxEmbedExtras((prev) => {
+        if (prev.some((e) => e.part === msg.part)) return prev
+        return [...prev, { part: msg.part, name: msg.name, kind: 'docx' as const, pos: msg.pos }]
+      })
+      try {
+        const r = collabRef.current
+        if (r) r.baseHash = msg.newHash
+      } catch {
+        /* 무시 */
+      }
+    },
+    [],
+  )
   const [docxPeople, setDocxPeople] = useState<Array<{ clientId: number; name: string; color: string; self: boolean; role?: string }>>([])
   const docxPeopleRef = useRef<typeof docxPeople>([])
   docxPeopleRef.current = docxPeople
@@ -1512,6 +1532,10 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
             // C6N: 미뤄진 파트 변경 알림 (lib는 type 100 meta를 모르므로 별도 타입).
             onPartPending: (v) => {
               if (!dead) setPartChangePending(v)
+            },
+            // C7: 백그라운드 삽입 알림 — 리로드 없이 오버레이에 칩을 얹는다.
+            onEmbedAdded: (msg) => {
+              if (!dead) applyDocxEmbedAdded(msg)
             },
           }),
           user: {
@@ -1903,11 +1927,52 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   }, [collab?.joined, collab?.roomId, editing, docxPeople])
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
   // C6/W0-7: 살아있는 방에서는 roomId/clientId/baseHash를 함께 보내야 PUT이 받는다.
+  // C7: 커서 문단 (없으면 화면 정가운데 문단)에 삽입한다.
+  const docxInsertPos = (): { block: number; text: string } => {
+    const blockOf = (el: Element | null): { block: number; text: string } | null => {
+      try {
+        if (!el) return null
+        const sr = (document.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null)?.shadowRoot
+        if (!sr) return null
+        let p: Element | null = el
+        while (p && p.tagName !== 'P') {
+          p = p.parentElement
+          if (p && p === (sr as unknown as Element)) return null
+        }
+        if (!p) return null
+        const paras = Array.from((sr as unknown as Element).querySelectorAll('p')) as Element[]
+        const idx = paras.indexOf(p)
+        if (idx < 0) return null
+        return { block: idx, text: ((p as HTMLElement).innerText ?? '').slice(0, 60) }
+      } catch {
+        return null
+      }
+    }
+    try {
+      const ed = document.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+      const sr = ed?.shadowRoot as (ShadowRoot & { getSelection?: () => Selection | null }) | null
+      const an = sr?.getSelection?.()?.anchorNode as Node | null
+      if (an) {
+        const hit = blockOf((an.nodeType === 1 ? an : an.parentElement) as unknown as Element | null)
+        if (hit) return hit
+      }
+      // 화면 정가운데.
+      const ep = (sr as unknown as { elementFromPoint?: (x: number, y: number) => Element | null } | null)?.elementFromPoint
+      if (typeof ep === 'function') {
+        const hit = blockOf(ep.call(sr, window.innerWidth / 2, window.innerHeight / 2))
+        if (hit) return hit
+      }
+    } catch {
+      /* 무시 */
+    }
+    return { block: 0, text: '' }
+  }
   useEffect(() => {
     const onEmbed = (e: Event) => {
       const d = (e as CustomEvent<EmbedDetail>).detail
       if (!d?.file || d.hostPath !== path) return
       const room = collabRef.current
+      const ipos = docxInsertPos()
       void runOfficeEmbed(d.file, {
         hostPath: path,
         kind: 'docx',
@@ -1915,8 +1980,12 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         clientId: sessionRef.current?.clientId,
         getBaseHash: () => collabRef.current?.baseHash,
         isViewer: room?.role === 'viewer',
+        block: ipos.block,
         saveFirst: () => saveBeforeEmbed(path, editing),
         isDirty: () => markDocxDirty.current === true,
+        onInserted: (rec) => {
+          applyDocxEmbedAdded({ part: rec.part, name: rec.name, newHash: rec.newHash, pos: { block: ipos.block, text: ipos.text } })
+        },
         reload: () => {
           // 서버가 방을 리셋했으므로 세션을 버리고 다시 붙는다.
           try { sessionRef.current?.destroy() } catch { /* ignore */ }
@@ -2027,7 +2096,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
             </button>
         </div>
       )}
-      <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} />
+      <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} extras={docxEmbedExtras} />
       <div className="flex h-full min-h-0">
         <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
@@ -2410,6 +2479,26 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   const [conflictBytes, setConflictBytes] = useState<Uint8Array | null>(null)
   // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
   const [partChangePending, setPartChangePending] = useState(false)
+  // C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시).
+  const [embedExtras, setEmbedExtras] = useState<
+    Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { sheet?: number; col?: number; row?: number; block?: number; text?: string } }>
+  >([])
+  /** C7: 106/삽입응답 적용 — 칩 추가(멱등) + baseHash 갱신. */
+  const applyXlsxEmbedAdded = useCallback(
+    (msg: { part: string; name: string; newHash: string; pos: { sheet?: number; col?: number; row?: number } }) => {
+      setEmbedExtras((prev) => {
+        if (prev.some((e) => e.part === msg.part)) return prev
+        return [...prev, { part: msg.part, name: msg.name, kind: 'xlsx' as const, pos: msg.pos }]
+      })
+      try {
+        const r = collabRef.current
+        if (r) r.baseHash = msg.newHash
+      } catch {
+        /* 무시 */
+      }
+    },
+    [],
+  )
   // C6N: 마지막으로 본 방 세대. 새 세대로 다시 들어갈 때만 미뤄진 파트
   // 배너를 내린다 (새 바이트 기준 — 리셋이 미룸을 해소한다).
   const lastRoomEpochRef = useRef<string | null>(null)
@@ -3094,6 +3183,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         () => objConnectRef.current?.(),
         // C6N: 미뤄진 파트 변경 알림 (lib는 type 100 meta를 모르므로 별도 타입).
         (v) => setPartChangePending(v),
+        // C7: 백그라운드 삽입 알림 — 리로드 없이 오버레이에 칩을 얹는다.
+        (msg) => applyXlsxEmbedAdded(msg),
       ),
     }
     // joined 를 의존성에서 빼는 것은 방을 다시 열지 않기 위한 의도다.
@@ -4509,11 +4600,66 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     return () => window.removeEventListener('officeSaveRequest', onSave)
   }, [save, editing, standalone, path, part])
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
+  // C7: 클릭 셀(선택) 또는 화면 정가운데 셀에 삽입한다.
+  const xlsxInsertCell = (): { col: number; row: number } => {
+    // 1) 현재 선택 파싱.
+    try {
+      const g = xlsxHandleRef.current?.getSelection?.()
+      if (typeof g === 'string' && g) {
+        const cell = g.split('!').pop()!.split(':')[0]!
+        const m = /^([A-Za-z]+)(\d+)$/.exec(cell.trim())
+        if (m) {
+          const letters = m[1]!.toUpperCase()
+          let col = 0
+          for (const ch of letters) col = col * 26 + (ch.charCodeAt(0) - 64)
+          const row = Number(m[2])
+          if (col >= 1 && row >= 1 && col <= 16384 && row <= 1048576) return { col: col - 1, row: row - 1 }
+        }
+      }
+    } catch {
+      /* 무시 — 중앙으로 폴백 */
+    }
+    // 2) 화면 정가운데 (스크롤+클라이언트 크기 기준).
+    try {
+      const ed = document.querySelector('xlsx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+      const cells = ed?.shadowRoot?.querySelector('.xg-cells') as unknown as {
+        getBoundingClientRect: () => DOMRect
+        clientWidth: number
+        clientHeight: number
+        scrollLeft: number
+        scrollTop: number
+        querySelector: (s: string) => Element | null
+      } | null
+      if (cells) {
+        let cellW = 64
+        let cellH = 20
+        try {
+          const sample = cells.querySelector('.xg-c') as unknown as { getBoundingClientRect: () => DOMRect } | null
+          if (sample) {
+            const r = sample.getBoundingClientRect()
+            if (r.width > 4 && r.height > 4) {
+              cellW = r.width
+              cellH = r.height
+            }
+          }
+        } catch {
+          /* 무시 */
+        }
+        const col = Math.max(0, Math.floor((cells.scrollLeft + cells.clientWidth / 2) / cellW))
+        const row = Math.max(0, Math.floor((cells.scrollTop + cells.clientHeight / 2) / cellH))
+        return { col, row }
+      }
+    } catch {
+      /* 무시 */
+    }
+    return { col: 1, row: 1 }
+  }
   useEffect(() => {
     const onEmbed = (e: Event) => {
       const d = (e as CustomEvent<EmbedDetail>).detail
       if (!d?.file || d.hostPath !== path) return
       const room = collabRef.current
+      const cell = xlsxInsertCell()
       void runOfficeEmbed(d.file, {
         hostPath: path,
         kind: 'xlsx',
@@ -4522,11 +4668,21 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         getBaseHash: () => collabRef.current?.baseHash,
         isViewer: room?.role === 'viewer',
         sheet: objActiveSheetRef.current,
+        col: cell.col,
+        row: cell.row,
         saveFirst: () => (editingRef.current ? save() : Promise.resolve(true)),
         isDirty: () => dirtyRef.current === true,
         // 선저장이 방 미시드로 실패하면 시드를 기다렸다가 1회 재시도한다.
         waitSeed: () => waitCollabSeed(() => collabRef.current?.joined === true),
         reload: () => onReloadFileRef.current?.(),
+        onInserted: (rec) => {
+          applyXlsxEmbedAdded({
+            part: rec.part,
+            name: rec.name,
+            newHash: rec.newHash,
+            pos: { sheet: objActiveSheetRef.current, col: cell.col, row: cell.row },
+          })
+        },
       })
     }
     window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
@@ -4585,7 +4741,13 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   if (error) return <ErrorNote msg={error} />
   return (
     <EngineHost className="xlsxengine-host relative h-full min-h-[480px]">
-      <OleAttachmentOverlay data={content} anchor="xlsx" parentPath={path} />
+      <OleAttachmentOverlay
+        data={content}
+        anchor="xlsx"
+        parentPath={path}
+        extras={embedExtras}
+        getExtraContext={() => ({ sheet: objActiveSheetRef.current })}
+      />
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>

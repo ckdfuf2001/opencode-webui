@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import {
   File as FileIcon,
@@ -48,6 +48,23 @@ function saveBlob(name: string, bytes: Uint8Array): void {
 }
 
 export type OleAnchorKind = 'xlsx' | 'pptx' | 'docx'
+
+/** C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시). */
+export interface OleExtraAttachment {
+  part: string
+  name: string
+  kind: OleAnchorKind
+  pos: {
+    slide?: number
+    x?: number
+    y?: number
+    sheet?: number
+    col?: number
+    row?: number
+    block?: number
+    text?: string
+  }
+}
 
 function isVis(e: Element): boolean {
   try {
@@ -219,17 +236,118 @@ function captionPartAt(container: HTMLElement, entries: OleEmbeddingRef[], x: nu
  * - 앵커가 없으면 좌상단 이름 칩 (폴백).
  * - 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
  */
+
+/** C7: 백그라운드 삽입 칩의 명시 위치 해석 (lib에 아직 없는 파트용). */
+function resolveExtraPos(
+  container: HTMLElement,
+  anchor: OleAnchorKind,
+  ex: OleExtraAttachment,
+  ctx: { slide?: number; sheet?: number } | undefined,
+  captionH: number,
+): { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean } | null {
+  try {
+    const c = container.getBoundingClientRect()
+    if (c.width <= 0 || c.height <= 0) return null
+    const above = (y: number, h: number): boolean => y + h + captionH > c.height && y - captionH >= 0
+    if (anchor === 'pptx') {
+      if (ex.pos.slide == null || ctx?.slide == null || ex.pos.slide !== ctx.slide) return null
+      if (typeof ex.pos.x !== 'number' || typeof ex.pos.y !== 'number') return null
+      const w = 96
+      const h = 48
+      const x = Math.round(ex.pos.x * c.width)
+      const y = Math.round(ex.pos.y * c.height)
+      return { x, y, w, h, cover: false, captionAbove: above(y, h) }
+    }
+    if (anchor === 'xlsx') {
+      if (ex.pos.sheet == null || ctx?.sheet == null || ex.pos.sheet !== ctx.sheet) return null
+      if (typeof ex.pos.col !== 'number' || typeof ex.pos.row !== 'number') return null
+      const ed = container.querySelector('xlsx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+      const sr = ed?.shadowRoot
+      if (!sr) return null
+      const cells = (sr as unknown as Element).querySelector('.xg-cells') as unknown as {
+        getBoundingClientRect: () => DOMRect
+        scrollLeft?: number
+        scrollTop?: number
+        querySelector: (s: string) => Element | null
+      } | null
+      if (!cells) return null
+      const gr = cells.getBoundingClientRect()
+      let cellW = 64
+      let cellH = 20
+      try {
+        const sample = cells.querySelector('.xg-c') as unknown as { getBoundingClientRect: () => DOMRect } | null
+        if (sample) {
+          const r = sample.getBoundingClientRect()
+          if (r.width > 4 && r.height > 4) {
+            cellW = r.width
+            cellH = r.height
+          }
+        }
+      } catch {
+        /* 무시 */
+      }
+      const sl = typeof cells.scrollLeft === 'number' ? cells.scrollLeft : 0
+      const st = typeof cells.scrollTop === 'number' ? cells.scrollTop : 0
+      const x = Math.round(gr.left - c.left + ex.pos.col * cellW - sl)
+      const y = Math.round(gr.top - c.top + ex.pos.row * cellH - st)
+      const w = Math.round(cellW * 1.5)
+      const h = Math.round(cellH * 2.5)
+      if (x + w < 0 || y + h < 0 || x > c.width || y > c.height) return null
+      return { x, y, w, h, cover: false, captionAbove: above(y, h) }
+    }
+    // docx: 문단 텍스트 힌트 우선, 없으면 블록 인덱스.
+    const ed = container.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+    const sr = ed?.shadowRoot
+    if (!sr) return null
+    const paras = Array.from((sr as unknown as Element).querySelectorAll('p')) as HTMLElement[]
+    let target: HTMLElement | null = null
+    if (typeof ex.pos.text === 'string' && ex.pos.text.length > 0) {
+      target = paras.find((p) => (p.innerText ?? '').includes(ex.pos.text!.slice(0, 30))) ?? null
+    }
+    if (!target && typeof ex.pos.block === 'number') {
+      target = paras[ex.pos.block] ?? null
+    }
+    if (!target) return null
+    const r = target.getBoundingClientRect()
+    if (r.width <= 0 && r.height <= 0) return null
+    return {
+      x: Math.max(0, Math.round(r.left - c.left)),
+      y: Math.max(0, Math.round(r.top - c.top)),
+      w: 96,
+      h: 48,
+      cover: false,
+      captionAbove: above(Math.max(0, Math.round(r.top - c.top)), 48),
+    }
+  } catch {
+    return null
+  }
+}
 export default function OleAttachmentOverlay({
   data,
   anchor,
   parentPath,
+  extras,
+  getExtraContext,
 }: {
   data: ArrayBuffer | Uint8Array
   anchor?: OleAnchorKind
   /** C5-4: 첨부 편집 URL에 필요한 부모 식별자 (없으면 다운로드만). */
   parentPath?: string
+  /** C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시). */
+  extras?: OleExtraAttachment[]
+  /** C7: extras 해석용 현재 위치 (슬라이드/시트). */
+  getExtraContext?: () => { slide?: number; sheet?: number }
 }) {
-  const [entries, setEntries] = useState<OleEmbeddingRef[]>([])
+  const [parsed, setParsed] = useState<OleEmbeddingRef[]>([])
+  // C7: 파싱분 + 백그라운드분 합집합 (칩·캡션·열기 모두 동일 처리).
+  const entries = useMemo(() => {
+    const out = [...parsed]
+    for (const ex of extras ?? []) {
+      if (out.some((e) => e.partName === ex.part)) continue
+      out.push({ partName: ex.part, relType: 'package', fallbackName: ex.name, displayName: ex.name })
+    }
+    return out
+  }, [parsed, extras])
   // 앵커 사각형 + lib placeholder 여부 (placeholder면 미리보기 카드로 덮는다).
   // captionAbove: 아래에 캡션이 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면
   // 캡처 리스너가 못 받는다).
@@ -250,10 +368,10 @@ export default function OleAttachmentOverlay({
 
   useEffect(() => {
     let dead = false
-    setEntries([])
+    setParsed([])
     // 표시명까지 한 번에 해석된다 (zip 단일 로드 — 대용량 이중 로드 방지).
     void listOleEmbeddings(data).then((list) => {
-      if (!dead) setEntries(list.slice(0, 8))
+      if (!dead) setParsed(list.slice(0, 8))
     })
     return () => {
       dead = true
@@ -266,8 +384,13 @@ export default function OleAttachmentOverlay({
   // CAPTION_H: 캡션 박스 높이+간격. 아래에 안 들어가면 위로 뒤집는다
   // (컨테이너 밖으로 나가면 캡처 리스너가 못 받는다).
   const CAPTION_H = 30
+  // C7: extras 해석용 컨텍스트 콜백 거울 (인라인 prop이어도 리스너 재등록 없음).
+  const extraCtxRef = useRef(getExtraContext)
+  extraCtxRef.current = getExtraContext
+  const extrasRef = useRef(extras)
+  extrasRef.current = extras
   useEffect(() => {
-    if (!anchor || entries.length === 0) {
+    if (!anchor || (entries.length === 0 && (extrasRef.current ?? []).length === 0)) {
       setPosMap({})
       return
     }
@@ -281,7 +404,12 @@ export default function OleAttachmentOverlay({
         const c = container.getBoundingClientRect()
         type PosEntry = { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean }
         const next: Record<string, PosEntry> = {}
+        // 파싱분: lib 도형 위치.
+        // C7: 백그라운드분은 여기서 건너뛰고 아래 명시 위치로만 둔다
+        // (findAnchorEl의 첫 프레임 폴백이 엉뚱한 도형을 잡는 것을 방지).
+        const extraParts = new Set((extrasRef.current ?? []).map((ex) => ex.part))
         for (const entry of entries) {
+          if (extraParts.has(entry.partName)) continue
           const hit = findAnchorEl(container, anchor, entry)
           if (!hit) continue
           const r = hit.el.getBoundingClientRect()
@@ -296,6 +424,19 @@ export default function OleAttachmentOverlay({
             cover: hit.unsupported,
             captionAbove: y + h + CAPTION_H > c.height && y - CAPTION_H >= 0,
           }
+        }
+        // C7: 백그라운드분: 명시 위치 해석 (lib에 아직 없음).
+        const ctx = (() => {
+          try {
+            return extraCtxRef.current?.()
+          } catch {
+            return undefined
+          }
+        })()
+        for (const ex of extrasRef.current ?? []) {
+          // 명시 위치가 있으면 lib 결과보다 우선한다 (최신 삽입 의도).
+          const p = resolveExtraPos(container, anchor, ex, ctx, CAPTION_H)
+          if (p) next[ex.part] = p
         }
         setPosMap((prev) => {
           const a = JSON.stringify(prev)

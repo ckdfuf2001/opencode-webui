@@ -48,6 +48,7 @@ import {
   assembleXlsxEmbed,
   assertAttachBytes,
   attachKindOf,
+  blockTextSnippet,
   listEmbedParts,
   normalizeEmbedPart,
   readEmbedPart,
@@ -544,7 +545,7 @@ app.post('/embed', async (c) => {
               ? { slide: q.slide, x: q.x, y: q.y }
               : hostKind === 'xlsx'
                 ? { sheet: q.sheet, col: q.col, row: q.row }
-                : { block: q.block }
+                : { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) }
           registerEmbedInsert(roomId, { norm: added[0].part, name: embFile, kind: hostKind, pos, preHash: prevHash })
         }
       } catch (e) {

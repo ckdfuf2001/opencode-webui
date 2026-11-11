@@ -267,6 +267,29 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const [collabNotice, setCollabNotice] = useState<string | null>(null)
   // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
   const [partChangePending, setPartChangePending] = useState(false)
+  // C7: 마지막 클릭 위치 (삽입 위치). 없으면 화면 정가운데.
+  const lastClickPosRef = useRef<{ slide: number; x: number; y: number } | null>(null)
+  // C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시).
+  const [embedExtras, setEmbedExtras] = useState<
+    Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { slide?: number; x?: number; y?: number } }>
+  >([])
+  const applyEmbedAdded = useCallback(
+    (msg: { part: string; name: string; kind: string; pos: { slide?: number; x?: number; y?: number }; newHash: string }) => {
+      if (msg.kind !== 'pptx') return
+      setEmbedExtras((prev) => {
+        if (prev.some((e) => e.part === msg.part)) return prev
+        return [...prev, { part: msg.part, name: msg.name, kind: 'pptx' as const, pos: msg.pos }]
+      })
+      baseHashRef.current = msg.newHash
+      try {
+        const c = collabRef.current
+        if (c) c.session.knownHash = msg.newHash
+      } catch {
+        /* 무시 */
+      }
+    },
+    [],
+  )
   const [mineFile, setMineFile] = useState<{ url: string; name: string } | null>(null)
   const [connBadge, setConnBadge] = useState<{ status: string; synced: boolean }>({ status: 'connecting', synced: false })
   const baseHashRef = useRef<string | null>(null)
@@ -1275,6 +1298,13 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
       window.removeEventListener('officeSaveDone', onAnyDone)
     }
   }, [savePath, fileName, saving, persistBytes, part])
+  // C7: 삽입 성공 시 바로 칩을 얹는다 (106과 멱등).
+  const onEmbedInserted = useCallback(
+    (rec: { part: string; name: string; newHash: string; pos: { slide?: number; x?: number; y?: number } }) => {
+      applyEmbedAdded({ part: rec.part, name: rec.name, kind: 'pptx', pos: rec.pos, newHash: rec.newHash })
+    },
+    [applyEmbedAdded],
+  )
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
   useEffect(() => {
     const onEmbed = (e: Event) => {
@@ -1296,12 +1326,16 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         clientId: c?.session?.clientId,
         getBaseHash: () => baseHashRef.current ?? undefined,
         slide,
+        // C7: 마지막 클릭 위치 (없으면 화면 정가운데).
+        x: lastClickPosRef.current?.slide === slide ? lastClickPosRef.current.x : 0.5,
+        y: lastClickPosRef.current?.slide === slide ? lastClickPosRef.current.y : 0.5,
         isViewer: c?.role === 'viewer',
         saveFirst: () => saveBeforeEmbed(savePath, editingRef.current),
         isDirty: () => unsavedLocalEditRef.current === true,
         // 선저장이 방 미시드로 실패하면 시드를 기다렸다가 1회 재시도한다.
         waitSeed: () => waitForSessionSynced(() => collabRef.current?.session ?? null),
         reload: () => setReloadKey((v) => v + 1),
+        onInserted: onEmbedInserted,
       })
     }
     window.addEventListener(OFFICE_EMBED_FILE, onEmbed as EventListener)
@@ -1765,6 +1799,14 @@ writeBackHaltedRef.current = false
       updateDebug()
       reconcileCollab()
     })
+    // C7: 백그라운드 삽입 알림 — 리로드 없이 오버레이에 칩을 얹는다.
+    try {
+      session.onEmbedAdded((msg) => {
+        applyEmbedAdded(msg)
+      })
+    } catch {
+      /* 무시 (구버전 세션 호환) */
+    }
   }
 
   // owner 승계 감지 + 외부변경 배너 + knownHash 갱신 (5초 폴).
@@ -2692,9 +2734,41 @@ const peersRef = useRef<Peer[]>([])
       ref={viewerRootRef}
       data-testid="pptx-viewer-root"
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
+      // C7: 마지막 클릭 위치 기록 (삽입 위치). 캡처 단계에서 잡는다
+      // (lib가 버블을 삼켜도 기록된다). 오버레이 컨테이너(viewerRoot) 기준.
+      onClickCapture={(e) => {
+        try {
+          const root = viewerRootRef.current
+          const box = root?.getBoundingClientRect()
+          if (!box || box.width <= 0 || box.height <= 0) return
+          const idx = viewerRef.current?.getActiveSlideIndex?.()
+          const clamp01 = (v: number): number => Math.min(1, Math.max(0, v))
+          lastClickPosRef.current = {
+            slide: typeof idx === 'number' && idx >= 0 ? idx + 1 : 1,
+            x: clamp01((e.clientX - box.left) / box.width),
+            y: clamp01((e.clientY - box.top) / box.height),
+          }
+        } catch {
+          /* 무시 */
+        }
+      }}
     >
       {/* C5-1: 기존 OLE 첨부 아이콘 1개 + 더블클릭 다운로드 (lib 렌더는 그대로). */}
-      <OleAttachmentOverlay data={content} anchor="pptx" parentPath={savePath} />
+      {/* C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시). */}
+      <OleAttachmentOverlay
+        data={content}
+        anchor="pptx"
+        parentPath={savePath}
+        extras={embedExtras}
+        getExtraContext={() => {
+          try {
+            const idx = viewerRef.current?.getActiveSlideIndex?.()
+            return { slide: typeof idx === 'number' && idx >= 0 ? idx + 1 : 1 }
+          } catch {
+            return {}
+          }
+        }}
+      />
       {isDecrypted && editing && (
         <div className="px-3 py-1.5 border-b border-border text-[11px] text-muted-foreground">
           Encrypted documents cannot be co-edited — editing solo.

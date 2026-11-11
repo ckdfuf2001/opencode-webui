@@ -237,6 +237,8 @@ export interface KnownEmbed {
     col?: number
     row?: number
     block?: number
+    /** C7: docx 문단 텍스트 앞부분 (클라이언트 칩 위치 찾기용 힌트). */
+    text?: string
   }
   /** 삽입 직전 방 해시 (stale base 1회성 허용용, 소비 후 null). */
   preHash: string | null
