@@ -1232,6 +1232,267 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
   })
 
+  test('D9-xlsx: 타이핑 중 삽입 → 리셋 없이 칩이 클릭 셀에 (백그라운드 병합)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd9xlsx'
+    const t = await openDeferPair(browser, 'xlsx', slug, PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, ADA)
+    const pageC = await ctxC.newPage()
+    const newCollabWs: string[] = []
+    const watchWs = (tag: string, page: Page): void => {
+      page.on('websocket', (ws) => {
+        try {
+          if (ws.url().includes('/collab')) newCollabWs.push(`${tag}:${ws.url()}`)
+        } catch { /* 무시 */ }
+      })
+    }
+    await gotoApp(pageC)
+    await openEditor(pageC, t.parentPath)
+    await pageC.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 }).catch(() => {})
+    watchWs('A', t.pageA)
+    watchWs('C', pageC)
+    await t.pageA.waitForTimeout(3000).catch(() => {})
+    newCollabWs.length = 0
+    try {
+      await setCell(t.pageA, 'A1', `${slug}-a1`)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('xlsx', t.abs, `${slug}-a1`)), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      await setCell(pageC, 'A1', `${slug}-c1`)
+      // C5 선택 → 삽입 (선택 셀이 앵커가 된다).
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch { /* 무시 */ }
+        try { ed?.focusGrid?.() } catch { /* 무시 */ }
+      })
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.xlsx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'd9-insert.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      // 양쪽에 칩이 C5 근처에 뜬다 (리로드 없음).
+      // d9 칩 자체를 기다린다 (픽스처에 기존 칩이 있을 수 있어 개수 단언 금지).
+      const chipNearCell = async (page: Page, tag: string): Promise<void> => {
+        await expect
+          .poll(
+            async () =>
+              page
+                .getByTestId('ole-icon')
+                .evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d9-insert'))),
+            { timeout: 30000, intervals: [500] },
+          )
+          .toBe(true)
+        const all = await page.getByTestId('ole-icon').evaluateAll((els) =>
+          els.map((e) => ({
+            label: e.getAttribute('aria-label') ?? (e as HTMLElement).innerText?.slice(0, 40) ?? '?',
+            box: (() => {
+              const r = (e as HTMLElement).getBoundingClientRect()
+              return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+            })(),
+          })),
+        )
+        const hit = all.find((c) => c.label.includes('d9-insert'))
+        console.log(`[c6d] D9 ${tag} allchips: ${JSON.stringify(all).slice(0, 400)}`)
+        expect(hit).toBeTruthy()
+        // 서버가 C5(col 2,row 4)에 두었는지 디스크로 확인 (기본 앵커가 아님).
+        // 앵커는 추가된 순서대로 쌓이므로 마지막 것을 본다.
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const drawing = await zip.files['xl/drawings/drawing1.xml']!.async('string')
+        const froms = [...drawing.matchAll(/<xdr:from><xdr:col>(\d+)<\/xdr:col>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/g)]
+        const m = froms.length > 0 ? froms[froms.length - 1]! : null
+        console.log(`[c6d] D9 ${tag} drawing from: ${m ? `${m[1]},${m[2]}` : 'n/a'}`)
+        expect(m).not.toBeNull()
+        expect([m![1], m![2]].join(',')).toBe('2,4')
+        // C5 셀 화면 위치와 칩 비교 (독립 계산).
+        const cell = await page.evaluate(() => {
+          const ed = document.querySelector('xlsx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+          const cells = ed?.shadowRoot?.querySelector('.xg-cells') as unknown as {
+            getBoundingClientRect: () => DOMRect
+            clientWidth: number
+            clientHeight: number
+            scrollLeft: number
+            scrollTop: number
+            querySelector: (s: string) => Element | null
+          } | null
+          if (!cells) return null
+          const gr = cells.getBoundingClientRect()
+          let cw = 64
+          let chh = 20
+          try {
+            const s = cells.querySelector('.xg-c') as unknown as { getBoundingClientRect: () => DOMRect } | null
+            if (s) {
+              const r = s.getBoundingClientRect()
+              if (r.width > 4 && r.height > 4) {
+                cw = r.width
+                chh = r.height
+              }
+            }
+          } catch { /* 무시 */ }
+          return { x: gr.left + 2 * cw - cells.scrollLeft, y: gr.top + 4 * chh - cells.scrollTop, cw, ch: chh }
+        })
+        expect(cell).not.toBeNull()
+        const dist = Math.hypot(hit!.box[0] + hit!.box[2] / 2 - (cell!.x + cell!.cw / 2), hit!.box[1] + hit!.box[3] / 2 - (cell!.y + cell!.ch / 2))
+        console.log(`[c6d] D9 ${tag} chip dist from C5: ${Math.round(dist)}px`)
+        expect(dist).toBeLessThan(200)
+      }
+      await chipNearCell(t.pageA, 'A')
+      await chipNearCell(pageC, 'C')
+      // 리셋 없음.
+      expect(newCollabWs).toEqual([])
+      // 양쪽 타이핑 계속 → 저장 → 디스크 수렴 (병합 보존).
+      await setCell(t.pageA, 'B2', `${slug}-a2`)
+      await clickParentSave(t.pageA)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('xlsx', t.abs, `${slug}-a2`)), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      await setCell(pageC, 'D4', `${slug}-c2`)
+      await clickParentSave(pageC)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('xlsx', t.abs, `${slug}-c2`)), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      console.log(`[c6d] D9 xlsx insert merged without reset`)
+    } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D9-docx: 타이핑 중 삽입 → 리셋 없이 칩이 커서 문단에 (백그라운드 병합)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd9docx'
+    const t = await openDeferPair(browser, 'docx', slug, PARENT_FIX['docx']!)
+    await t.attach.close().catch(() => {})
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, ADA)
+    const pageC = await ctxC.newPage()
+    const newCollabWs: string[] = []
+    const watchWs = (tag: string, page: Page): void => {
+      page.on('websocket', (ws) => {
+        try {
+          if (ws.url().includes('/collab')) newCollabWs.push(`${tag}:${ws.url()}`)
+        } catch { /* 무시 */ }
+      })
+    }
+    await gotoApp(pageC)
+    await openEditor(pageC, t.parentPath)
+    await pageC.locator('docx-editor').first().waitFor({ timeout: 60000 }).catch(() => {})
+    watchWs('A', t.pageA)
+    watchWs('C', pageC)
+    await t.pageA.waitForTimeout(3000).catch(() => {})
+    newCollabWs.length = 0
+    try {
+      await typeDocx(t.pageA, `${slug}-a1`)
+      await clickParentSave(t.pageA)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('docx', t.abs, `${slug}-a1`)), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      await typeDocx(pageC, `${slug}-c1`)
+      // M1 문단이 있는 곳을 클릭 → 커서를 그리로 (삽입 위치).
+      // (크롬 문단을 클릭하면 커서가 안 옮겨질 수 있어 텍스트로 찾는다.)
+      const pt = await t.pageA.evaluate((marker: string) => {
+        const ed = document.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+        const sr = ed?.shadowRoot as unknown as { querySelectorAll?: (s: string) => NodeListOf<Element> } | null
+        const paras = sr?.querySelectorAll ? Array.from(sr.querySelectorAll('p')) as HTMLElement[] : []
+        const el = paras.find((p) => (p.innerText ?? '').includes(marker)) ?? paras[paras.length - 1]
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      }, `${slug}-a1`)
+      expect(pt).not.toBeNull()
+      await t.pageA.mouse.click(pt!.x, pt!.y)
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'd9-insert.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      // 양쪽에 칩이 클릭 문단 근처에 뜬다 (리로드 없음).
+      // d9 칩 자체를 기다린다 (픽스처에 기존 칩이 있을 수 있어 개수 단언 금지).
+      const chipNearPara = async (page: Page, tag: string): Promise<void> => {
+        await expect
+          .poll(
+            async () =>
+              page
+                .getByTestId('ole-icon')
+                .evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d9-insert'))),
+            { timeout: 30000, intervals: [500] },
+          )
+          .toBe(true)
+        const all = await page.getByTestId('ole-icon').evaluateAll((els) =>
+          els.map((e) => ({
+            label: e.getAttribute('aria-label') ?? (e as HTMLElement).innerText?.slice(0, 40) ?? '?',
+            box: (() => {
+              const r = (e as HTMLElement).getBoundingClientRect()
+              return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+            })(),
+          })),
+        )
+        const hit = all.find((c) => c.label.includes('d9-insert'))
+        expect(hit).toBeTruthy()
+        // 서버가 클릭 문단 뒤에 두었는지 디스크로 확인 (문서 끝이 아님).
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const doc = await zip.files['word/document.xml']!.async('string')
+        const objAt = doc.indexOf('<w:object')
+        expect(objAt).toBeGreaterThan(-1)
+        const objParaEnd = doc.indexOf('</w:p>', objAt)
+        expect(objParaEnd).toBeGreaterThan(objAt)
+        // 오브젝트 문단 뒤에 다른 문단이 있어야 한다 (끝이 아님).
+        expect(doc.slice(objParaEnd).includes('<w:p')).toBe(true)
+        // 클릭 문단 근처인지 (같은 페이지 좌표계).
+        // 칩은 문단 시작점(좌상단)에 붙는다 — 넓은 문단의 가운데와 비교하면 안 된다.
+        const para = await page.evaluate((marker: string) => {
+          const ed = document.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+          const sr = ed?.shadowRoot as unknown as { querySelectorAll?: (s: string) => NodeListOf<Element> } | null
+          const paras = sr?.querySelectorAll ? Array.from(sr.querySelectorAll('p')) as HTMLElement[] : []
+          const el = paras.find((p) => (p.innerText ?? '').includes(marker)) ?? paras[paras.length - 1]
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { x: r.left, y: r.top }
+        }, `${slug}-a1`)
+        expect(para).not.toBeNull()
+        const dist = Math.hypot(hit!.box[0] + hit!.box[2] / 2 - para!.x, hit!.box[1] + hit!.box[3] / 2 - para!.y)
+        console.log(`[c6d] D9 ${tag} chip dist from para: ${Math.round(dist)}px`)
+        expect(dist).toBeLessThan(200)
+      }
+      await chipNearPara(t.pageA, 'A')
+      await chipNearPara(pageC, 'C')
+      // 리셋 없음.
+      expect(newCollabWs).toEqual([])
+      // 양쪽 타이핑 계속 → 저장 → 디스크 수렴 (병합 보존).
+      await typeDocx(t.pageA, `${slug}-a2`)
+      await clickParentSave(t.pageA)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('docx', t.abs, `${slug}-a2`)), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      await typeDocx(pageC, `${slug}-c2`)
+      await clickParentSave(pageC)
+      await expect
+        .poll(() => Promise.resolve(parentDiskHas('docx', t.abs, `${slug}-c2`)), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      console.log(`[c6d] D9 docx insert merged without reset`)
+    } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {

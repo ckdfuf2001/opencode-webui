@@ -441,6 +441,37 @@ describe('assembleDocxEmbed', () => {
     expect(blockTextSnippet(doc, 9)).toBe('')
   })
 
+  it('blockText가 있으면 텍스트 일치 문단 뒤에 둔다 (인덱스 어긋남 대응)', async () => {
+    const z0 = new JSZip()
+    z0.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+    )
+    z0.file(
+      'word/document.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>alpha one</w:t></w:r></w:p><w:p><w:r><w:t>beta two three</w:t></w:r></w:p><w:p><w:r><w:t>gamma</w:t></w:r></w:p></w:body></w:document>',
+    )
+    const host = await z0.generateAsync({ type: 'uint8array' })
+    const attach = await makeAttachDocx('ZZ text anchor')
+    // 인덱스는 틀렸지만(0) 텍스트가 둘째 문단을 가리키면 둘째 뒤에 둔다.
+    const out = await assembleDocxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 't.docx',
+      attachKind: 'docx',
+      block: 0,
+      blockText: 'beta two',
+    })
+    const z = await JSZip.loadAsync(out)
+    const doc = await z.files['word/document.xml']!.async('string')
+    const objAt = doc.indexOf('<w:object')
+    const betaAt = doc.indexOf('>beta two three<')
+    const gammaAt = doc.indexOf('>gamma<')
+    expect(objAt).toBeGreaterThan(-1)
+    expect(objAt).toBeGreaterThan(betaAt)
+    expect(objAt).toBeLessThan(gammaAt)
+  })
+
   it('block이 있으면 그 문단 뒤에 넣는다 (기본은 문서 끝)', async () => {
     const z0 = new JSZip()
     z0.file(
