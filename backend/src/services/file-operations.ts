@@ -35,18 +35,52 @@ export async function writeFileContent(
 ): Promise<void> {
   try {
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(getReposPath(), filePath)
-    
+
     await fs.mkdir(path.dirname(fullPath), { recursive: true })
-    
+
     // 원자적 교체: 동시 저장/읽기 중에 반만 쓰인 파일이 보이지 않게 tmp에 쓰고 rename.
     // rename은 같은 볼륨에서 원자적이라 리더는 항상 완전한 구/신 버전을 본다.
     const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')
     const tmp = `${fullPath}.tmp-${process.pid}-${Date.now()}`
     await fs.writeFile(tmp, buf)
-    await fs.rename(tmp, fullPath)
+    await renameWithRetry(tmp, fullPath)
     logger.info(`Wrote file to: ${fullPath}`)
   } catch (error) {
     throw new Error(`Failed to write file ${filePath}: ${error}`)
+  }
+}
+
+/** rename 주입점 (테스트용). */
+export interface RenameFs {
+  rename: (from: string, to: string) => Promise<unknown>
+}
+
+/**
+ * C7b: Windows 파일 잠금(EPERM/EBUSY) 시 rename 재시도 3회 (50/150/400ms).
+ * 바이러스 검사·인덱서·동시 읽기가 잠깐 잡고 있는 경우를 흡수한다.
+ * 다른 에러는 즉시 던진다.
+ */
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  opts?: {
+    fs?: RenameFs
+    sleep?: (ms: number) => Promise<unknown>
+  },
+): Promise<void> {
+  const run = opts?.fs?.rename ?? ((a: string, b: string) => fs.rename(a, b))
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const delays = [50, 150, 400]
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await run(from, to)
+      return
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : ''
+      const retryable = code === 'EPERM' || code === 'EBUSY'
+      if (!retryable || attempt >= delays.length) throw error
+      await sleep(delays[attempt]!)
+    }
   }
 }
 
