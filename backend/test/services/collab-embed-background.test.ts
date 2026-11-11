@@ -19,6 +19,7 @@ const HOST_REL = path.join('repos', 'pp', 'host.pptx')
 
 const {
   MSG_PART_EMBEDDED,
+  addConn,
   applySave,
   createSession,
   hashBytes,
@@ -132,6 +133,85 @@ describe('C7: 백그라운드 삽입 (리셋 없이 106 + 저장 병합)', () =>
     expect('conflict' in r2).toBe(true)
     // 무관한 stale base도 409.
     const r3 = await applySave(sParent.roomId, hostBytes, { kind: 'pptx', baseHash: 'deadbeef', clientId: 1 })
+    expect('conflict' in r3).toBe(true)
+  })
+
+  it('미뤄진 106은 늦은 참가자도 받는다 (addConn 재전송)', async () => {
+    const sParent = await createSession(HOST_REL)
+    const room = rooms.get(sParent.roomId)!
+    const fakeA = { send: (_b: unknown) => {} }
+    room.conns.set(fakeA, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
+    room.ownerConn = fakeA
+    room.ownerIds = new Set([1])
+    registerEmbedInsert(sParent.roomId, {
+      norm: 'ppt/embeddings/late.docx',
+      name: 'late.docx',
+      kind: 'pptx',
+      pos: { slide: 2, x: 0.25, y: 0.25 },
+      preHash: room.lastHash,
+    })
+    const got: Uint8Array[] = []
+    const fakeLate = { send: (b: unknown) => { if (b instanceof Uint8Array) got.push(b) } }
+    const joined = addConn(sParent.roomId, fakeLate)
+    expect(joined).not.toBeNull()
+    const found = got
+      .map((b) => {
+        try {
+          const d = decoding.createDecoder(b)
+          if (decoding.readVarUint(d) !== MSG_PART_EMBEDDED) return null
+          return JSON.parse(new TextDecoder().decode(decoding.readVarUint8Array(d)))
+        } catch {
+          return null
+        }
+      })
+      .filter((x) => x !== null)
+    expect(found).toEqual([
+      {
+        roomId: sParent.roomId,
+        part: 'ppt/embeddings/late.docx',
+        name: 'late.docx',
+        kind: 'pptx',
+        pos: { slide: 2, x: 0.25, y: 0.25 },
+        newHash: room.lastHash,
+      },
+    ])
+  })
+
+  it('같은 옛 base도 clientId마다 1회는 받아준다 (C7b clientId 집합)', async () => {
+    const sParent = await createSession(HOST_REL)
+    const room = rooms.get(sParent.roomId)!
+    const fakeA = { send: (_b: unknown) => {} }
+    room.conns.set(fakeA, { joinedAt: Date.now(), clientIds: new Set([1]), lastMsgAt: Date.now() })
+    room.ownerConn = fakeA
+    room.ownerIds = new Set([1])
+    parentTyping(sParent.roomId, 'C7C1', fakeA)
+    const hostBytes = new Uint8Array(await fs.readFile(hostAbs(HOST_REL)))
+    const preHash = room.lastHash
+    // 삽입 상당: 디스크+방 해시를 앞으로 (클라이언트 base만 옛날로 둔다).
+    const out = await assemblePptxEmbed(zipLoad, {
+      hostBytes,
+      attachBytes: new TextEncoder().encode('fake-attach-bytes'),
+      attachName: 'multi.docx',
+      attachKind: 'docx',
+      slide: 1,
+    })
+    await fs.writeFile(hostAbs(HOST_REL), out)
+    room.lastHash = hashBytes(out)
+    registerEmbedInsert(sParent.roomId, {
+      norm: 'ppt/embeddings/multi.docx',
+      name: 'multi.docx',
+      kind: 'pptx',
+      pos: { slide: 1 },
+      preHash,
+    })
+    // 첫 타이피스트 저장 → 병합.
+    const r1 = await applySave(sParent.roomId, hostBytes, { kind: 'pptx', baseHash: preHash, clientId: 11 })
+    expect('newHash' in r1).toBe(true)
+    // 같은 옛 base라도 다른 clientId면 1회 받아준다 (409 아님).
+    const r2 = await applySave(sParent.roomId, hostBytes, { kind: 'pptx', baseHash: preHash, clientId: 22 })
+    expect('newHash' in r2).toBe(true)
+    // 같은 clientId의 재사용은 409.
+    const r3 = await applySave(sParent.roomId, hostBytes, { kind: 'pptx', baseHash: preHash, clientId: 11 })
     expect('conflict' in r3).toBe(true)
   })
 })
