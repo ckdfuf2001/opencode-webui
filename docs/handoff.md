@@ -1486,3 +1486,20 @@ E21만의 문제가 아니다. 근거:
 - e2e D7/D8/D9: D9-pptx/xlsx/docx 모두 green (칩이 클릭 지점에, 새 collab WS 없음=리셋 없음, 양쪽 타이핑 저장 수렴).
   - D9 red: pre-fix 서버는 4001 리셋 (WS 감시로 적발) + 고정 위치 칩.
   - 주의: D9는 B 첨부탭을 닫고 시작한다 (B 파트 저장 adopt 즉시 리셋이 POST 격리를 깨뜨림). EPERM(윈도 rename 경합)은 기존 flake 1회 목격.
+## C7b 보완 (2026-11-11)
+- 상태 공개: `git status` clean, `git log origin/release-0.12..HEAD` 비어 있음(동기화),
+  `ls-remote` 양쪽 모두 23d24565, exe 빌드는 커밋된 트리에서만 (health commit == HEAD 확인済).
+- 원격에 클라이언트 코드 있음 (23d7b1d7 106 처리+오버레이+클릭, 23d24565 크로스슬라이드 숨김).
+  11-10 확인 시점과 현재 사이에 푸시된 것으로 보임 (그때는 서버 커밋까지만 있었음).
+- 105 late join: addConn 시 pendingPartReset이면 105 재전송 (단위 red→green, e2e D7 green).
+- 106 late join: addConn 시 knownEmbeds 전件 106 재전송 (단위 red→green). e2e D9가 피어 칩으로 106 경로 증명.
+- 1회성 preHash → clientId 집합으로 변경: 같은 옛 base도 아직 저장 안 한 clientId는 1회 허용,
+  쓴 clientId는 표시, 재사용은 409. 새 삽입마다 집합 초기화. 단위 red→green.
+- docx 직계만 카운트 (topLevelBlocks) + 앵커 해시 저장/대조 (단위 red→green, D9-docx green).
+- EPERM rename 재시도 3회 (50/150/400ms) (단위 red→green).
+- 크로스슬라이드 칩 숨김: extras는 명시 위치일 때만, 파싱분은 rels 기준 슬라이드/시트 일치할 때만
+  폴백. oleAttachments에 slides[] 추가 (실제 pptx로 검증: slide 2 → [2]).
+- 미적용 (다음 차례, 설계 필요):
+  - 삭제 구분: 삭제 API가 없어 파트 삭제 저장이 knownEmbeds에 의해 부활함.
+    DELETE /embed 설계 + 일련번호 필요.
+  - 32개 초과 시 버림 → 리셋 확정: disruptive하므로 별도 red e2e 필요.
