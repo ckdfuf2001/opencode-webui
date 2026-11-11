@@ -300,9 +300,17 @@ function resolveExtraPos(
     const sr = ed?.shadowRoot
     if (!sr) return null
     const paras = Array.from((sr as unknown as Element).querySelectorAll('p')) as HTMLElement[]
+    // innerText에 lib 렌더 잔재가 섞이므로 정규화 후 서로 포함이면 같은 문단.
+    const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
+    const matches = (a: string, b: string): boolean => {
+      const na = norm(a)
+      const nb = norm(b)
+      if (na.length < 8 || nb.length < 8) return false
+      return na.includes(nb) || nb.includes(na)
+    }
     let target: HTMLElement | null = null
     if (typeof ex.pos.text === 'string' && ex.pos.text.length > 0) {
-      target = paras.find((p) => (p.innerText ?? '').includes(ex.pos.text!.slice(0, 30))) ?? null
+      target = paras.find((p) => matches(p.innerText ?? '', ex.pos.text!)) ?? null
     }
     if (!target && typeof ex.pos.block === 'number') {
       target = paras[ex.pos.block] ?? null

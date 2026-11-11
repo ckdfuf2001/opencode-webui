@@ -78,6 +78,8 @@ export interface EmbedCtx {
   col?: number
   row?: number
   block?: number
+  /** C7: block 문단의 텍스트 앞부분 (서버 텍스트 대조용). */
+  blockText?: string
   isViewer?: boolean
   saveFirst: () => Promise<boolean>
   /** 미저장 변경이 있는지. 없으면 선저장을 건너뛰고 바로 POST한다 (빈 저장 왕복 제거). */
@@ -241,6 +243,7 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
     if (ctx.col != null) fd.append('col', String(ctx.col))
     if (ctx.row != null) fd.append('row', String(ctx.row))
     if (ctx.block != null) fd.append('block', String(ctx.block))
+    if (ctx.blockText) fd.append('blockText', ctx.blockText)
     if (ctx.roomId) fd.append('roomId', ctx.roomId)
     if (ctx.clientId !== undefined) fd.append('clientId', String(ctx.clientId))
     const baseHash = ctx.getBaseHash?.()

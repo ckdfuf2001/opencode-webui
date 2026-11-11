@@ -412,6 +412,7 @@ const EmbedSchema = z.object({
   col: z.coerce.number().int().min(0).max(16383).optional(),
   row: z.coerce.number().int().min(0).max(1048575).optional(),
   block: z.coerce.number().int().min(0).max(1000000).optional(),
+  blockText: z.string().min(1).max(120).optional(),
   roomId: z.string().min(1).max(128).optional(),
   clientId: z.coerce.number().int().optional(),
   baseHash: z.string().min(1).max(128).optional(),
@@ -439,6 +440,7 @@ app.post('/embed', async (c) => {
       col: body.col !== undefined ? Number(body.col) : undefined,
       row: body.row !== undefined ? Number(body.row) : undefined,
       block: body.block !== undefined ? Number(body.block) : undefined,
+      blockText: typeof body.blockText === 'string' ? body.blockText : undefined,
       roomId: typeof body.roomId === 'string' ? body.roomId : undefined,
       clientId: body.clientId !== undefined ? Number(body.clientId) : undefined,
       baseHash: typeof body.baseHash === 'string' ? body.baseHash : undefined,
@@ -513,6 +515,7 @@ app.post('/embed', async (c) => {
           attachName,
           attachKind: kind,
           block: q.block,
+          blockText: q.blockText,
         })
         embPart = `word/embeddings/${attachName}`
       }

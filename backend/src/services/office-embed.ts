@@ -639,6 +639,12 @@ export interface DocxEmbedInput {
   attachKind: EmbedAttachKind
   /** 0-based 최상위 문단 (그 뒤에 삽입, 없으면 문서 끝). */
   block?: number
+  /**
+   * C7: block 문단의 텍스트 앞부분 (클라이언트 힌트). 클라이언트와 서버의
+   * 문단 목록이 다를 수 있어(에디터 크롬 문단) 텍스트로 대조한다:
+   * block 위치의 텍스트가 다르면 텍스트가 일치하는 첫 문단 뒤에 둔다.
+   */
+  blockText?: string
 }
 
 const DOCX_PROG_ID: Record<EmbedAttachKind, string | null> = {
@@ -721,28 +727,75 @@ export async function assembleDocxEmbed(
     `<o:OLEObject Type="Embed"${progAttr} ShapeID="${shapeId}" DrawAspect="Icon" ObjectID="${objectId}" r:id="${oleRelId}" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><o:FieldCodes>\\s</o:FieldCodes></o:OLEObject></w:object></w:r></w:p>`
   if (doc.includes('</w:body>')) {
     // block(0-based 최상위 문단)이 있으면 그 문단 뒤, 없으면 문서 끝.
-    let next: string | null = null
-    const wantBlock =
-      typeof input.block === 'number' && Number.isInteger(input.block) && input.block >= 0 ? input.block : null
-    if (wantBlock !== null) {
+    // C7: blockText 힌트가 있으면 텍스트로 대조한다 (클라이언트 크롬 문단으로
+    // 인덱스가 어긋날 수 있고, innerText에 lib 렌더 잔재가 섞임).
+    // 정규화 후 서로 포함하면 같은 문단으로 본다. 텍스트를 우선한다.
+    const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
+    const matches = (a: string, b: string): boolean => {
+      const na = norm(a)
+      const nb = norm(b)
+      if (na.length < 8 || nb.length < 8) return false
+      return na.includes(nb) || nb.includes(na)
+    }
+    const paraTextAt = (fromIdx: number): string | null => {
       let idx = -1
       let count = -1
       const re = /<w:p[\s>]/g
       let m: RegExpExecArray | null
       while ((m = re.exec(doc)) !== null) {
         count += 1
-        if (count === wantBlock) {
-          idx = m.index
+        if (count !== fromIdx) continue
+        idx = m.index
+        break
+      }
+      if (idx < 0) return null
+      const closeAt = doc.indexOf('</w:p>', idx)
+      if (closeAt < 0) return null
+      const para = doc.slice(idx, closeAt)
+      const texts: string[] = []
+      const tr = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g
+      let tm: RegExpExecArray | null
+      while ((tm = tr.exec(para)) !== null && texts.join('').length < 60) texts.push(tm[1] ?? '')
+      return texts.join('')
+    }
+    const insertAfter = (atIdx: number): string | null => {
+      let idx = -1
+      let count = -1
+      const re = /<w:p[\s>]/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(doc)) !== null) {
+        count += 1
+        if (count !== atIdx) continue
+        idx = m.index
+        break
+      }
+      if (idx < 0) return null
+      const closeAt = doc.indexOf('</w:p>', idx)
+      if (closeAt < 0) return null
+      const at = closeAt + '</w:p>'.length
+      return doc.slice(0, at) + para + doc.slice(at)
+    }
+    let next: string | null = null
+    const wantBlock =
+      typeof input.block === 'number' && Number.isInteger(input.block) && input.block >= 0 ? input.block : null
+    const wantText = typeof input.blockText === 'string' && input.blockText.length > 0 ? input.blockText.slice(0, 60) : null
+    // 1) 텍스트 힌트 우선 (인덱스 어긋남에 강함).
+    if (wantText !== null) {
+      let idx = 0
+      for (;;) {
+        const t = paraTextAt(idx)
+        if (t === null) break
+        if (matches(t, wantText)) {
+          next = insertAfter(idx)
           break
         }
+        idx += 1
+        if (idx > 100000) break
       }
-      if (idx >= 0) {
-        const closeAt = doc.indexOf('</w:p>', idx)
-        if (closeAt >= 0) {
-          const at = closeAt + '</w:p>'.length
-          next = doc.slice(0, at) + para + doc.slice(at)
-        }
-      }
+    }
+    // 2) 인덱스 (텍스트가 없으면 그대로).
+    if (next === null && wantBlock !== null && wantText === null) {
+      next = insertAfter(wantBlock)
     }
     if (next === null) next = doc.replace('</w:body>', `${para}</w:body>`)
     checkBalancedXml(next, 'word/document.xml')

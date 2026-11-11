@@ -1981,6 +1981,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         getBaseHash: () => collabRef.current?.baseHash,
         isViewer: room?.role === 'viewer',
         block: ipos.block,
+        blockText: ipos.text,
         saveFirst: () => saveBeforeEmbed(path, editing),
         isDirty: () => markDocxDirty.current === true,
         onInserted: (rec) => {
