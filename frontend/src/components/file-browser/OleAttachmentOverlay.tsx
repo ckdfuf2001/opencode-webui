@@ -675,7 +675,29 @@ export default function OleAttachmentOverlay({
   )
 
   const anchored = entries.filter((e) => anchor != null && posMap[e.partName] != null)
-  const fallback = entries.filter((e) => !(anchor != null && posMap[e.partName] != null))
+  // C7: extras는 명시 위치가 있을 때만 보인다 (폴백 없음 — 다른 슬라이드/시트에서
+  // 좌상단 칩으로 새는 것을 막는다).
+  // 파싱분 폴백도 파일 기준 슬라이드/시트가 현재 화면과 다르면 숨긴다
+  // (다른 페이지의 첨부가 좌상단에 뜨지 않게). 슬라이드 정보가 없으면 보여준다.
+  const extraParts = new Set((extras ?? []).map((ex) => ex.part))
+  const curCtx = (() => {
+    try {
+      return getExtraContext?.()
+    } catch {
+      return undefined
+    }
+  })()
+  const onCurrentSheet = (e: OleEmbeddingRef): boolean => {
+    if (anchor === 'pptx' || anchor === 'xlsx') {
+      const want = anchor === 'pptx' ? curCtx?.slide : curCtx?.sheet
+      if (typeof want !== 'number' || !e.slides || e.slides.length === 0) return true
+      return e.slides.includes(want)
+    }
+    return true
+  }
+  const fallback = entries.filter(
+    (e) => !(anchor != null && posMap[e.partName] != null) && !extraParts.has(e.partName) && onCurrentSheet(e),
+  )
   const displayName = (entry: OleEmbeddingRef): string => entry.displayName ?? entry.fallbackName
 
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).

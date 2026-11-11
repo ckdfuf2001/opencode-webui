@@ -7,6 +7,11 @@ export interface OleEmbeddingRef {
   fallbackName: string
   /** 표시용 실제 파일명 (oleObject면 CFB 안 원본명, package면 파트명). */
   displayName: string
+  /**
+   * C7: 이 파트를 참조하는 슬라이드/시트 (폴백 칩을 현재 화면에만 띄우기용).
+   * pptx는 1-based 슬라이드 번호, xlsx는 0-based 시트 순서. 없으면不明(표시).
+   */
+  slides?: number[]
 }
 
 /**
@@ -24,6 +29,9 @@ export async function listOleEmbeddings(data: ArrayBuffer | Uint8Array): Promise
     if (embNames.length === 0) return []
     // rel 타입 맵: basename -> package | oleObject
     const relTypeByBase = new Map<string, 'package' | 'oleObject'>()
+    // C7: 파트를 참조하는 슬라이드/시트 (basename -> 번호 목록).
+    // pptx `ppt/slides/_rels/slideN.xml.rels` → N, xlsx `xl/worksheets/_rels/sheetN.xml.rels` → N-1.
+    const slidesByBase = new Map<string, number[]>()
     const relNames = Object.keys(zip.files).filter((n) => n.endsWith('.rels') && !zip.files[n]!.dir)
     for (const rn of relNames) {
       let text = ''
@@ -42,6 +50,18 @@ export async function listOleEmbeddings(data: ArrayBuffer | Uint8Array): Promise
         const target = m[2] ?? ''
         const base = target.split('/').pop() ?? ''
         if (base && !relTypeByBase.has(base)) relTypeByBase.set(base, kind)
+        if (base) {
+          let slideNo: number | null = null
+          const pm = /^ppt\/slides\/_rels\/slide(\d+)\.xml\.rels$/.exec(rn)
+          const xm = /^xl\/worksheets\/_rels\/sheet(\d+)\.xml\.rels$/.exec(rn)
+          if (pm) slideNo = Number(pm[1])
+          else if (xm) slideNo = Number(xm[1]) - 1
+          if (slideNo !== null && Number.isFinite(slideNo)) {
+            const arr = slidesByBase.get(base) ?? []
+            if (!arr.includes(slideNo)) arr.push(slideNo)
+            slidesByBase.set(base, arr)
+          }
+        }
       }
     }
   // 표시명까지 한 번에 해석한다 (CFB 파싱용 zip 재사용 — 대용량 이중 로드 방지).
@@ -62,7 +82,7 @@ export async function listOleEmbeddings(data: ArrayBuffer | Uint8Array): Promise
         /* 실패하면 fallback 표시 */
       }
     }
-    out.push({ partName, relType, fallbackName: base, displayName })
+    out.push({ partName, relType, fallbackName: base, displayName, slides: slidesByBase.get(base) })
   }
   return out
   } catch {
