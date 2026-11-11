@@ -242,6 +242,8 @@ export interface KnownEmbed {
   }
   /** 삽입 직전 방 해시 (stale base 1회성 허용용, 소비 후 null). */
   preHash: string | null
+  /** C7b: 앵커 해시 (위치 저장용 — 재조립 시 동일 문단을 찾는다). */
+  anchorHash?: string | null
 }
 
 export interface CollabParticipant {
@@ -757,6 +759,8 @@ async function ensureKnownEmbeds(room: CollabRoom, incoming: Uint8Array): Promis
           attachName: ke.name,
           attachKind: attachKindOf(ke.name) ?? 'docx',
           block: ke.pos.block,
+          blockText: ke.pos.text,
+          anchorHash: ke.anchorHash ?? undefined,
         })
       }
     } catch (e) {

@@ -12,7 +12,7 @@
  */
 
 import { deflateSync } from 'node:zlib'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 export type EmbedAttachKind = 'docx' | 'xlsx' | 'pptx'
 
@@ -645,6 +645,8 @@ export interface DocxEmbedInput {
    * block 위치의 텍스트가 다르면 텍스트가 일치하는 첫 문단 뒤에 둔다.
    */
   blockText?: string
+  /** C7b: 앵커 해시 (blockText 정규화 해시와 일치하는 블록 우선). */
+  anchorHash?: string
 }
 
 const DOCX_PROG_ID: Record<EmbedAttachKind, string | null> = {
@@ -726,76 +728,43 @@ export async function assembleDocxEmbed(
     `<w:p><w:r><w:object w:dxaOrig="1920" w:dyaOrig="960"><v:shape id="${shapeId}" type="#_x0000_t75" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:96pt;height:48pt" o:ole=""><v:imagedata r:id="${imgRelId}" o:title="" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></v:shape>` +
     `<o:OLEObject Type="Embed"${progAttr} ShapeID="${shapeId}" DrawAspect="Icon" ObjectID="${objectId}" r:id="${oleRelId}" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><o:FieldCodes>\\s</o:FieldCodes></o:OLEObject></w:object></w:r></w:p>`
   if (doc.includes('</w:body>')) {
-    // block(0-based 최상위 문단)이 있으면 그 문단 뒤, 없으면 문서 끝.
-    // C7: blockText 힌트가 있으면 텍스트로 대조한다 (클라이언트 크롬 문단으로
+    // block(0-based 최상위 블록)이 있으면 그 뒤, 없으면 문서 끝.
+    // C7b: 직계 w:p/w:tbl만 센다 (표 안·텍스트상자 안 문단 제외).
+    // 텍스트 힌트가 있으면 앵커 해시로 먼저 찾는다 (클라이언트 크롬 문단으로
     // 인덱스가 어긋날 수 있고, innerText에 lib 렌더 잔재가 섞임).
-    // 정규화 후 서로 포함하면 같은 문단으로 본다. 텍스트를 우선한다.
-    const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
+    const blocks = topLevelBlocks(doc)
     const matches = (a: string, b: string): boolean => {
+      const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
       const na = norm(a)
       const nb = norm(b)
       if (na.length < 8 || nb.length < 8) return false
       return na.includes(nb) || nb.includes(na)
     }
-    const paraTextAt = (fromIdx: number): string | null => {
-      let idx = -1
-      let count = -1
-      const re = /<w:p[\s>]/g
-      let m: RegExpExecArray | null
-      while ((m = re.exec(doc)) !== null) {
-        count += 1
-        if (count !== fromIdx) continue
-        idx = m.index
-        break
-      }
-      if (idx < 0) return null
-      const closeAt = doc.indexOf('</w:p>', idx)
-      if (closeAt < 0) return null
-      const para = doc.slice(idx, closeAt)
-      const texts: string[] = []
-      const tr = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g
-      let tm: RegExpExecArray | null
-      while ((tm = tr.exec(para)) !== null && texts.join('').length < 60) texts.push(tm[1] ?? '')
-      return texts.join('')
-    }
-    const insertAfter = (atIdx: number): string | null => {
-      let idx = -1
-      let count = -1
-      const re = /<w:p[\s>]/g
-      let m: RegExpExecArray | null
-      while ((m = re.exec(doc)) !== null) {
-        count += 1
-        if (count !== atIdx) continue
-        idx = m.index
-        break
-      }
-      if (idx < 0) return null
-      const closeAt = doc.indexOf('</w:p>', idx)
-      if (closeAt < 0) return null
-      const at = closeAt + '</w:p>'.length
-      return doc.slice(0, at) + para + doc.slice(at)
+    const insertAfterBlock = (bi: number): string | null => {
+      const b = blocks[bi]
+      if (!b) return null
+      return doc.slice(0, b.end) + para + doc.slice(b.end)
     }
     let next: string | null = null
     const wantBlock =
       typeof input.block === 'number' && Number.isInteger(input.block) && input.block >= 0 ? input.block : null
     const wantText = typeof input.blockText === 'string' && input.blockText.length > 0 ? input.blockText.slice(0, 60) : null
-    // 1) 텍스트 힌트 우선 (인덱스 어긋남에 강함).
-    if (wantText !== null) {
-      let idx = 0
-      for (;;) {
-        const t = paraTextAt(idx)
-        if (t === null) break
-        if (matches(t, wantText)) {
-          next = insertAfter(idx)
-          break
-        }
-        idx += 1
-        if (idx > 100000) break
-      }
+    const wantHash = typeof input.anchorHash === 'string' && input.anchorHash.length > 0 ? input.anchorHash : null
+    // 0) 저장된 앵커 해시 일치 (가장 정확).
+    if (wantHash !== null) {
+      const idx = blocks.findIndex((b) => anchorHashOf(b.text) === wantHash)
+      if (idx >= 0) next = insertAfterBlock(idx)
+    }
+    // 1) 텍스트 힌트 일치 (인덱스 어긋남에 강함).
+    if (next === null && wantText !== null) {
+      const textHash = anchorHashOf(wantText)
+      let idx = blocks.findIndex((b) => anchorHashOf(b.text) === textHash)
+      if (idx < 0) idx = blocks.findIndex((b) => matches(b.text, wantText))
+      if (idx >= 0) next = insertAfterBlock(idx)
     }
     // 2) 인덱스 (텍스트가 없으면 그대로).
-    if (next === null && wantBlock !== null && wantText === null) {
-      next = insertAfter(wantBlock)
+    if (next === null && wantBlock !== null && wantText === null && wantHash === null) {
+      next = insertAfterBlock(wantBlock)
     }
     if (next === null) next = doc.replace('</w:body>', `${para}</w:body>`)
     checkBalancedXml(next, 'word/document.xml')
@@ -845,25 +814,77 @@ export function normalizeEmbedPart(raw: string): string {
  */
 export function blockTextSnippet(docXml: string, block: number): string {
   try {
-    let count = -1
-    const re = /<w:p[\s>]/g
-    let m: RegExpExecArray | null
-    while ((m = re.exec(docXml)) !== null) {
-      count += 1
-      if (count !== block) continue
-      const closeAt = docXml.indexOf('</w:p>', m.index)
-      if (closeAt < 0) return ''
-      const para = docXml.slice(m.index, closeAt)
-      const texts: string[] = []
-      const tr = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g
-      let tm: RegExpExecArray | null
-      while ((tm = tr.exec(para)) !== null && texts.join('').length < 60) texts.push(tm[1] ?? '')
-      return texts.join('').slice(0, 60)
-    }
+    const blocks = topLevelBlocks(docXml)
+    const b = blocks[block]
+    if (!b) return ''
+    return b.text.slice(0, 60)
   } catch {
     /* 무시 */
   }
   return ''
+}
+
+/** w:body 직계 블록 (문단/표). 중첩 문단·텍스트상자 안은 제외. */
+export interface DocxBlock {
+  tag: 'p' | 'tbl'
+  start: number
+  end: number
+  text: string
+}
+
+/**
+ * C7b: w:body 직계 w:p/w:tbl 목록 (중첩 제외). 단순 정규식 카운트는
+ * 표 안·텍스트상자 안 문단까지 세서 어긋난다.
+ */
+export function topLevelBlocks(docXml: string): DocxBlock[] {
+  const out: DocxBlock[] = []
+  try {
+    const bodyOpen = docXml.indexOf('<w:body')
+    if (bodyOpen < 0) return out
+    const bodyStart = docXml.indexOf('>', bodyOpen)
+    const bodyClose = docXml.lastIndexOf('</w:body>')
+    if (bodyStart < 0 || bodyClose < 0 || bodyClose <= bodyStart) return out
+    const body = docXml.slice(bodyStart + 1, bodyClose)
+    const base = bodyStart + 1
+    // w:p / w:tbl 여닫기 토큰을 순서대로 훑으며 스택으로 직계만 모은다.
+    const re = /<\/?w:(p|tbl)(?=[\s>/])/g
+    const stack: Array<{ tag: 'p' | 'tbl'; start: number }> = []
+    let m: RegExpExecArray | null
+    while ((m = re.exec(body)) !== null) {
+      const isClose = m[0].startsWith('</')
+      const tag = (m[1] === 'tbl' ? 'tbl' : 'p') as 'p' | 'tbl'
+      if (!isClose) {
+        if (stack.length === 0) stack.push({ tag, start: base + m.index })
+        else stack.push({ tag, start: -1 })
+      } else {
+        const top = stack.pop()
+        if (!top) continue
+        if (top.start >= 0 && stack.length === 0) {
+          const endTag = tag === 'p' ? '</w:p>' : '</w:tbl>'
+          const endAt = body.indexOf(endTag, m.index)
+          if (endAt >= 0) {
+            const end = base + endAt + endTag.length
+            const inner = docXml.slice(top.start, end)
+            const texts: string[] = []
+            const tr = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g
+            let tm: RegExpExecArray | null
+            while ((tm = tr.exec(inner)) !== null && texts.join('').length < 120) texts.push(tm[1] ?? '')
+            out.push({ tag: top.tag, start: top.start, end, text: texts.join('') })
+          }
+        }
+      }
+    }
+  } catch {
+    /* 무시 — 빈 목록 */
+  }
+  return out
+}
+
+/** C7b: 앵커 텍스트 해시 (공백 정규화 뒤 sha256 앞 16자). 위치 저장용. */
+export function anchorHashOf(text: string): string {
+  const norm = text.replace(/\s+/g, ' ').trim()
+  if (!norm) return ''
+  return createHash('sha256').update(norm, 'utf8').digest('hex').slice(0, 16)
 }
 
 /** rel Target을 rels 파일 기준으로 해석해 파트 경로로 바꾼다. */

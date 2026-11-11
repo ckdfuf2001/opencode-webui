@@ -43,6 +43,7 @@ import {
   releaseEmbedLock,
 } from '../services/embed-locks'
 import {
+  anchorHashOf,
   assembleDocxEmbed,
   assemblePptxEmbed,
   assembleXlsxEmbed,
@@ -516,6 +517,7 @@ app.post('/embed', async (c) => {
           attachKind: kind,
           block: q.block,
           blockText: q.blockText,
+          anchorHash: q.blockText ? anchorHashOf(q.blockText) : undefined,
         })
         embPart = `word/embeddings/${attachName}`
       }
@@ -549,7 +551,14 @@ app.post('/embed', async (c) => {
               : hostKind === 'xlsx'
                 ? { sheet: q.sheet, col: q.col, row: q.row }
                 : { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) }
-          registerEmbedInsert(roomId, { norm: added[0].part, name: embFile, kind: hostKind, pos, preHash: prevHash })
+          registerEmbedInsert(roomId, {
+            norm: added[0].part,
+            name: embFile,
+            kind: hostKind,
+            pos,
+            preHash: prevHash,
+            anchorHash: hostKind === 'docx' && q.blockText ? anchorHashOf(q.blockText) : undefined,
+          })
         }
       } catch (e) {
         logger.warn(`[embed] knownEmbeds register skipped (${e instanceof Error ? e.message : e})`)
