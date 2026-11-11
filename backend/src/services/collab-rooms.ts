@@ -219,6 +219,11 @@ export interface CollabRoom {
    * 들어온 바이트에 다시 끼워 쓴다 (옛 모델 덮개 방지). 방 해체와 함께 사라진다.
    */
   knownEmbeds: KnownEmbed[]
+  /**
+   * C7b: 삽입 이후 저장한 clientId 집합 (1회 무료 패스 소비 기록).
+   * 새 삽입마다 비운다. 같은 옛 base라도 아직 저장 안 한 clientId는 1회 받아준다.
+   */
+  embedPassUsed: Set<number>
 }
 
 /** C7: 백그라운드 삽입 1건 (106 페이로드와 동일). */
@@ -710,6 +715,8 @@ export function registerEmbedInsert(parentId: string, rec: Omit<KnownEmbed, 'pre
     proom.knownEmbeds.splice(0, proom.knownEmbeds.length - 32)
     logger.warn(`Collab room ${parentId.slice(0, 8)}: knownEmbeds overflow, dropped oldest`)
   }
+  // C7b: 새 삽입이면 모두에게 다시 1회 무료 패스를 준다.
+  proom.embedPassUsed = new Set()
   broadcast(proom, encodePartEmbedded(parentId, { ...rec, newHash: proom.lastHash }))
 }
 
@@ -926,6 +933,7 @@ function createRoom(
   pendingPartReset: null,
   partResetTimer: null,
   knownEmbeds: [],
+  embedPassUsed: new Set(),
 }
   if (part) room.part = part
   awareness.on('update', (
@@ -1321,6 +1329,15 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
   if (room.pendingPartReset) {
     try {
       sock.send(encodePartPending(roomId))
+    } catch { /* 무시 */ }
+  }
+  // C7b: 백그라운드 삽입을 놓친 탭((재)연결·늦은 참가)도 즉시 따라잡는다.
+  // lib은 모르는 타입(106)이라 무시하고, 탭이 가로채 칩을 얹는다.
+  if (room.knownEmbeds.length > 0) {
+    try {
+      for (const ke of room.knownEmbeds) {
+        sock.send(encodePartEmbedded(roomId, { ...ke, newHash: room.lastHash }))
+      }
     } catch { /* 무시 */ }
   }
   return room
@@ -1958,13 +1975,19 @@ export async function applySave(
       // C6c-d-1: 미뤄진 변경이 있는 부모 방이면 adopt 전 해시도 받아준다.
       // 타이핑 중이던 클라이언트는 옛 파트를 든 바이트를 들고 있으므로, base가
       // adopt 전 해시여도 병합 저장한다 (아래에서 디스크 파트를 다시 끼운다).
-      // C7: 백그라운드 삽입 직전 해시도 1회성으로 받아준다 (삽입을 모르는
+      // C7: 백그라운드 삽입 직전 해시도 받아준다 (삽입을 모르는
       // 클라이언트의 저장이 409 없이 병합된다).
+      // C7b: 1회 무료 패스는 clientId 집합으로 관리한다. 같은 옛 base라도
+      // 아직 저장 안 한 clientId는 1회 받아준다 (두 번째 타이피스트 409 방지).
       // 허용 집합에 없는 base는 기존대로 conflict_room이다 (다른 타이피스트 보호).
       const deferBases = !room.part ? room.pendingPartReset?.bases : undefined
       const knownBases = !room.part ? room.knownEmbeds.map((e) => e.preHash).filter((h): h is string => !!h) : undefined
+      const cid = opts?.clientId
+      const inKnown = !!knownBases && !!opts?.baseHash && knownBases.includes(opts.baseHash)
+      // 무료 패스 사용済면 같은 옛 base라도 거부한다.
+      const passUsed = cid !== undefined && room.embedPassUsed.has(cid)
       if (opts?.baseHash && opts.baseHash !== room.lastHash) {
-        if ((!deferBases || !deferBases.includes(opts.baseHash)) && (!knownBases || !knownBases.includes(opts.baseHash))) {
+        if ((!deferBases || !deferBases.includes(opts.baseHash)) && (!inKnown || passUsed)) {
           logger.warn(
             `Collab room ${room.id}: save conflict_room (base ${opts.baseHash.slice(0, 8)} != room ${room.lastHash.slice(0, 8)})`,
           )
@@ -2069,11 +2092,15 @@ export async function applySave(
         if (d2.bases.length > 8) d2.bases = d2.bases.slice(-8)
       }
     }
-    // C7: 쓴 preHash는 1회성으로 소비한다 (같은 옛 base의 다른 타이피스트는
-    // 409 후 재시도 — 편집 보호. 병합 자체는 멱등이라 재시도도 안전하다).
+    // C7b: clientId별 1회 무료 패스 소비 (같은 옛 base 재사용은 409).
+    // id 없는 저장은 기존대로 preHash를 소비한다.
     if (!room.part && room.knownEmbeds.length > 0 && opts?.baseHash) {
-      for (const ke of room.knownEmbeds) {
-        if (ke.preHash === opts.baseHash) ke.preHash = null
+      if (opts.clientId !== undefined) {
+        room.embedPassUsed.add(opts.clientId)
+      } else {
+        for (const ke of room.knownEmbeds) {
+          if (ke.preHash === opts.baseHash) ke.preHash = null
+        }
       }
     }
     // B3: 저장 성공 — 미저장 표시를 지운다.
