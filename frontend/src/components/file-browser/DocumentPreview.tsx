@@ -800,8 +800,19 @@ export function DocumentPreview({ file, refreshKey = 0, onEditingChange, onDone,
   useEffect(() => {
     const onRequest = (e: Event) => {
       const d = (e as CustomEvent<EmbedRequestDetail>).detail
-      if (!d?.hostPath || d.hostPath !== file.path) return
-      embedInputRef.current?.click()
+      if (!d?.hostPath) return
+      // 경로 표기가 달라도 같은 파일이면 받는다 (앞슬래시·역슬래시·인코딩 차이 흡수).
+      const norm = (v: string): string => {
+        try { v = decodeURIComponent(v) } catch { /* 그대로 */ }
+        return v.replace(/\\/g, '/').replace(/^\/+/, '')
+      }
+      if (norm(d.hostPath) !== norm(file.path)) return
+      if (!embedInputRef.current) {
+        // input 미마운트면 조용히 죽지 말고 알린다.
+        console.warn('[embed] attach input not mounted for', file.path)
+        return
+      }
+      embedInputRef.current.click()
     }
     window.addEventListener(OFFICE_EMBED_REQUEST, onRequest as EventListener)
     return () => window.removeEventListener(OFFICE_EMBED_REQUEST, onRequest as EventListener)
