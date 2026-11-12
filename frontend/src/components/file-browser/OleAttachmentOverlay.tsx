@@ -649,7 +649,9 @@ export default function OleAttachmentOverlay({
   // openOrDownload는 아래 early return 뒤에 정의되므로 여기서 대입한다.
   openRef.current = openOrDownload
 
-  const chip = (entry: OleEmbeddingRef, anchored: boolean, pos?: { x: number; y: number }): React.ReactNode => (
+  const chip = (entry: OleEmbeddingRef, anchored: boolean, pos?: { x: number; y: number }): React.ReactNode => {
+    const Icon = iconForFile(displayName(entry))
+    return (
     <button
       key={entry.partName}
       type="button"
@@ -665,14 +667,16 @@ export default function OleAttachmentOverlay({
       style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30 } : undefined}
       className={
         anchored
-          ? 'z-20 inline-flex h-7 w-7 select-none items-center justify-center rounded-md border border-border bg-background/95 text-foreground shadow-sm hover:bg-muted'
+          ? 'z-20 inline-flex select-none items-center gap-1 rounded-md border border-border bg-background/95 py-1 pl-1.5 pr-2 text-xs text-foreground shadow-sm hover:bg-muted'
           : 'z-30 inline-flex select-none items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
       }
     >
-      <Paperclip className="h-3.5 w-3.5" />
-      {!anchored && <span className="max-w-44 truncate select-none">{displayName(entry)}</span>}
+      <Paperclip className="h-3.5 w-3.5 shrink-0" />
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="max-w-44 truncate select-none">{displayName(entry)}</span>
     </button>
-  )
+    )
+  }
 
   const anchored = entries.filter((e) => anchor != null && posMap[e.partName] != null)
   // C7: extras는 명시 위치가 있을 때만 보인다 (폴백 없음 — 다른 슬라이드/시트에서
