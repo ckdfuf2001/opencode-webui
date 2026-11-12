@@ -79,6 +79,46 @@ describe('office-embed helpers', () => {
     expect(png.length).toBeGreaterThan(100)
     expect(Buffer.from(genericIconPng())).toEqual(Buffer.from(png))
   })
+  it('genericIconPng는 가운데 칩 스타일이다 (파란 테두리 없음, 흰 바탕)', () => {
+    // PNG 파싱 (IHDR 192x96x8 truecolor, 필터 바이트 포함).
+    const png = genericIconPng()
+    const dv = new DataView(png.buffer, png.byteOffset)
+    const w = dv.getUint32(16)
+    const h = dv.getUint32(20)
+    expect(w).toBe(192)
+    expect(h).toBe(96)
+    // IDAT 찾기.
+    let off = 8
+    let idat: Uint8Array | null = null
+    while (off + 8 < png.length) {
+      const len = dv.getUint32(off)
+      const type = String.fromCharCode(png[off + 4]!, png[off + 5]!, png[off + 6]!, png[off + 7]!)
+      if (type === 'IDAT') {
+        idat = png.slice(off + 8, off + 8 + len)
+        break
+      }
+      off += 12 + len
+    }
+    expect(idat).not.toBeNull()
+    // Node zlib으로 압축 해제.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const zlib = require('node:zlib') as { inflateSync: (b: Uint8Array) => Uint8Array }
+    const raw = zlib.inflateSync(idat!)
+    const px = (x: number, y: number): [number, number, number] => {
+      const o = y * (w * 3 + 1) + 1 + x * 3
+      return [raw[o]!, raw[o + 1]!, raw[o + 2]!]
+    }
+    // 모서리(0,0)는 파란 테두리(37,99,235)가 아니라 밝은 회색/흰색이어야 한다.
+    const [r0, g0, b0] = px(0, 0)
+    expect(r0).toBeGreaterThan(150)
+    expect(g0).toBeGreaterThan(150)
+    expect(b0).toBeGreaterThan(150)
+    // 클립 배지 위쪽(24,13)은 진회색이어야 한다 (중앙은 흰 클립).
+    const [r1, g1, b1] = px(24, 13)
+    expect(r1).toBeLessThan(100)
+    expect(g1).toBeLessThan(120)
+    expect(b1).toBeLessThan(140)
+  })
   it('EMBED_MAX_BYTES는 20MB다', () => {
     expect(EMBED_MAX_BYTES).toBe(20 * 1024 * 1024)
   })
