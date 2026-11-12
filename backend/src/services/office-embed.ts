@@ -917,6 +917,41 @@ export function topLevelBlocks(docXml: string): DocxBlock[] {
 }
 
 /** C7b: 앵커 텍스트 해시 (공백 정규화 뒤 sha256 앞 16자). 위치 저장용. */
+export interface EmbedPos {
+  slide?: number
+  x?: number
+  y?: number
+  sheet?: number
+  col?: number
+  row?: number
+  block?: number
+}
+
+/**
+ * C7c-0: 같은 곳 겹침 방지. 같은 슬라이드/시트에 이미 있으면 아이콘 크기만큼 비켜 놓는다.
+ * - pptx: 가운데(0.5,0.5)에서 n번째는 (+0.12,+0.08)씩 (0.9 상한).
+ * - xlsx: (col+n,row+n) 대각선 (상한 클램프).
+ * - docx: 흐름 배치라 겹치지 않음 (그대로).
+ * existing는 같은 슬라이드/시트로 미리 걸러서 넘긴다.
+ */
+export function offsetOverlap(
+  hostKind: 'pptx' | 'xlsx' | 'docx',
+  req: EmbedPos,
+  existing: EmbedPos[],
+): EmbedPos {
+  const n = existing.length
+  if (n === 0) return { ...req }
+  if (hostKind === 'pptx') {
+    const bx = req.x ?? 0.5
+    const by = req.y ?? 0.5
+    return { ...req, x: Math.min(0.9, bx + n * 0.12), y: Math.min(0.9, by + n * 0.08) }
+  }
+  if (hostKind === 'xlsx') {
+    return { ...req, col: Math.min(16383, (req.col ?? 0) + n), row: Math.min(1048575, (req.row ?? 0) + n) }
+  }
+  return { ...req }
+}
+
 export function anchorHashOf(text: string): string {
   const norm = text.replace(/\s+/g, ' ').trim()
   if (!norm) return ''
