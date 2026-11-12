@@ -129,6 +129,9 @@ describe('office-embed helpers', () => {
     const o2 = offsetOverlap('pptx', { x: 0.5, y: 0.5 }, [{ x: 0.5, y: 0.5 }, { x: 0.62, y: 0.58 }])
     expect(o2.x!).toBeGreaterThan(o1.x!)
     expect(offsetOverlap('xlsx', { col: 2, row: 4 }, [{ col: 2, row: 4 }])).toEqual({ col: 3, row: 5 })
+    // 멀리 있으면 비키지 않는다.
+    expect(offsetOverlap('pptx', { x: 0.5, y: 0.5 }, [{ x: 0.1, y: 0.1 }])).toEqual({ x: 0.5, y: 0.5 })
+    expect(offsetOverlap('xlsx', { col: 2, row: 4 }, [{ col: 9, row: 9 }])).toEqual({ col: 2, row: 4 })
     expect(offsetOverlap('xlsx', { col: 2, row: 4 }, [])).toEqual({ col: 2, row: 4 })
     expect(offsetOverlap('docx', { block: 3 }, [{ block: 3 }])).toEqual({ block: 3 })
   })
