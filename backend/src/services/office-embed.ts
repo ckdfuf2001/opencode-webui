@@ -87,7 +87,7 @@ function pngChunk(type: string, data: Uint8Array): Uint8Array {
 
 /** 192x96 문서 아이콘 PNG (파랑 테두리 + 흰 바탕 + 줄무늬). pptx/xlsx 프레임(2:1)과
  * 종횡비가 같아 늘어나지 않는다 (고DPI에서도 깨지지 않음). */
-export function genericIconPng(): Uint8Array {
+export function genericIconPng(kind: EmbedAttachKind = 'docx'): Uint8Array {
   const W = 192
   const H = 96
   const px = new Uint8Array(W * H * 3).fill(255)
@@ -132,25 +132,61 @@ export function genericIconPng(): Uint8Array {
     set(ex + 1, ey, ...WHITE)
   }
   rect(bcx - 1, bcy - 4, bcx + 1, bcy + 8, WHITE)
-  // 문서 글리프 (중앙).
+  // 문서 글리프 (중앙) — 형식별 구분 (오버레이 iconForFile과 같은 기준).
   const gx0 = 74
   const gy0 = 14
   const gx1 = 134
   const gy1 = 82
-  rect(gx0, gy0, gx1, gy1, PAPER)
-  rect(gx0, gy0, gx1, gy0, GRAY)
-  rect(gx0, gy1, gx1, gy1, GRAY)
-  rect(gx0, gy0, gx0, gy1, GRAY)
-  rect(gx1, gy0, gx1, gy1, GRAY)
-  // 접힌 모서리 (우상단).
-  for (let i = 0; i < 16; i++) {
-    for (let j = 0; j <= i; j++) set(gx1 - i, gy0 + j, ...WHITE)
-    set(gx1 - i, gy0 + i, ...GRAY)
+  if (kind === 'xlsx') {
+    // 표: 외곽 + 격자 + 초록 헤더행.
+    const GREEN: [number, number, number] = [22, 163, 74]
+    const HLIGHT: [number, number, number] = [220, 252, 231]
+    rect(gx0, gy0, gx1, gy1, WHITE)
+    rect(gx0, gy0, gx1, gy0 + 12, HLIGHT)
+    rect(gx0, gy0, gx1, gy0, GREEN)
+    rect(gx0, gy1, gx1, gy1, GRAY)
+    rect(gx0, gy0, gx0, gy1, GRAY)
+    rect(gx1, gy0, gx1, gy1, GRAY)
+    rect(gx0, gy0 + 12, gx1, gy0 + 12, GREEN)
+    for (let c = 1; c < 4; c++) {
+      const x = gx0 + Math.round(((gx1 - gx0) * c) / 4)
+      rect(x, gy0, x, gy1, GRAY)
+    }
+    for (let r = 1; r < 4; r++) {
+      const y = gy0 + 12 + Math.round(((gy1 - gy0 - 12) * r) / 4)
+      rect(gx0, y, gx1, y, GRAY)
+    }
+  } else if (kind === 'pptx') {
+    // 슬라이드: 외곽 + 주황 제목바 + 불릿 2개.
+    const ORANGE: [number, number, number] = [234, 88, 12]
+    rect(gx0, gy0, gx1, gy1, WHITE)
+    rect(gx0, gy0, gx1, gy0 + 14, ORANGE)
+    rect(gx0, gy0, gx1, gy0, ORANGE)
+    rect(gx0, gy1, gx1, gy1, GRAY)
+    rect(gx0, gy0, gx0, gy1, GRAY)
+    rect(gx1, gy0, gx1, gy1, GRAY)
+    rect(gx0 + 8, gy0 + 24, gx0 + 12, gy0 + 28, SLATE)
+    rect(gx0 + 16, gy0 + 24, gx1 - 8, gy0 + 28, GRAY)
+    rect(gx0 + 8, gy0 + 36, gx0 + 12, gy0 + 40, SLATE)
+    rect(gx0 + 16, gy0 + 36, gx1 - 20, gy0 + 40, GRAY)
+  } else {
+    // docx/기타: 문서 + 접힌 모서리 + 줄 3개 (첫 줄 파랑).
+    const BLUE: [number, number, number] = [37, 99, 235]
+    rect(gx0, gy0, gx1, gy1, PAPER)
+    rect(gx0, gy0, gx1, gy0, GRAY)
+    rect(gx0, gy1, gx1, gy1, GRAY)
+    rect(gx0, gy0, gx0, gy1, GRAY)
+    rect(gx1, gy0, gx1, gy1, GRAY)
+    // 접힌 모서리 (우상단).
+    for (let i = 0; i < 16; i++) {
+      for (let j = 0; j <= i; j++) set(gx1 - i, gy0 + j, ...WHITE)
+      set(gx1 - i, gy0 + i, ...GRAY)
+    }
+    // 본문 줄 3개.
+    rect(gx0 + 8, gy0 + 22, gx1 - 8, gy0 + 26, BLUE)
+    rect(gx0 + 8, gy0 + 34, gx1 - 8, gy0 + 38, GRAY)
+    rect(gx0 + 8, gy0 + 46, gx1 - 30, gy0 + 50, GRAY)
   }
-  // 본문 줄 3개.
-  rect(gx0 + 8, gy0 + 22, gx1 - 8, gy0 + 26, SLATE)
-  rect(gx0 + 8, gy0 + 34, gx1 - 8, gy0 + 38, GRAY)
-  rect(gx0 + 8, gy0 + 46, gx1 - 30, gy0 + 50, GRAY)
   const raw = new Uint8Array((W * 3 + 1) * H)
   for (let y = 0; y < H; y++) {
     raw[y * (W * 3 + 1)] = 0
@@ -288,7 +324,7 @@ export async function assemblePptxEmbed(
   const imgName = `image${imgN}.png`
   const imgRelId = nextRelId(rels)
   rels = addRel(rels, imgRelId, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', `../media/${imgName}`)
-  zip.file(`ppt/media/${imgName}`, genericIconPng())
+  zip.file(`ppt/media/${imgName}`, genericIconPng(input.attachKind))
   zip.file(`ppt/embeddings/${embName}`, input.attachBytes)
   zip.file(slideRelsFile, rels)
 
@@ -486,7 +522,7 @@ export async function assembleXlsxEmbed(
   let imgN = 1
   while (zip!.files[`xl/media/image${imgN}.png`] || zip!.files[`xl/media/image${imgN}.emf`]) imgN++
   const imgName = `image${imgN}.png`
-  zip!.file(`xl/media/${imgName}`, genericIconPng())
+  zip!.file(`xl/media/${imgName}`, genericIconPng(input.attachKind))
   zip!.file(`xl/embeddings/${embName}`, input.attachBytes)
 
   // sheet rels.
@@ -731,7 +767,7 @@ export async function assembleDocxEmbed(
   let imgN = 1
   while (zip!.files[`word/media/image${imgN}.png`] || zip!.files[`word/media/image${imgN}.emf`]) imgN++
   const imgName = `image${imgN}.png`
-  zip!.file(`word/media/${imgName}`, genericIconPng())
+  zip!.file(`word/media/${imgName}`, genericIconPng(input.attachKind))
   zip!.file(`word/embeddings/${embName}`, input.attachBytes)
 
   // document rels.
