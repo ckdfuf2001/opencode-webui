@@ -1550,25 +1550,18 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         console.log(`[c6d] D10 diskOff err ${(e as Error).message}`)
       }
       const chipNearCenter = async (page: Page, tag: string): Promise<void> => {
-        const tl = await page.evaluate(() => {
-          try {
-            const w = window as unknown as { __collabTimeline?: { list: Array<Record<string, unknown>> } }
-            return (w.__collabTimeline?.list ?? []).map((e) => String(e.evt ?? '?'))
-          } catch {
-            return []
-          }
-        }).catch(() => [] as string[])
-        console.log(`[c6d] D10 ${tag} timeline: ${JSON.stringify(tl).slice(0, 400)}`)
-        await page.waitForTimeout(8000).catch(() => {})
         const allc = await page.getByTestId('ole-icon').evaluateAll((els) =>
           els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })(), title: e.getAttribute('title') ?? '?' })),
         )
-        console.log(`[c6d] D10 ${tag} allchips: ${JSON.stringify(allc)}`)
         // 정확한 aria-label 일치로 잰다 (getByTestId name 옵션은 유사 항목을 잡을 수 있음).
         const hit = allc.find((c) => c.label === '첨부 embed-docx.docx')
         expect(hit).toBeTruthy()
         const box = { x: hit!.box[0], y: hit!.box[1], width: hit!.box[2], height: hit!.box[3] }
         expect(box.width).toBeGreaterThan(0)
+        // 라벨 텍스트가 파일명과 같다 (ole-label).
+        const labelText = await page.getByTestId('ole-label').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim()))
+        console.log(`[c6d] D10 ${tag} labels: ${JSON.stringify(labelText)}`)
+        expect(labelText.some((t) => t.includes('embed-docx.docx'))).toBe(true)
         const ctr = await page.evaluate(() => {
           const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
           const b = root?.getBoundingClientRect()
@@ -1577,8 +1570,9 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         })
         expect(ctr).not.toBeNull()
         const dist = Math.hypot(box!.x + box!.width / 2 - ctr!.x, box!.y + box!.height / 2 - ctr!.y)
-        console.log(`[c6d] D10 ${tag} chip dist from click: ${Math.round(dist)}px`)
-        expect(dist).toBeLessThan(150)
+        console.log(`[c6d] D10 ${tag} chip dist from center: ${Math.round(dist)}px`)
+        // C7c-2: translate 중앙 정렬 — 칩 중심이 기준점에서 ±8px 안.
+        expect(dist).toBeLessThan(8)
       }
       await chipNearCenter(t.pageA, 'A')
       await chipNearCenter(pageC, 'C')
