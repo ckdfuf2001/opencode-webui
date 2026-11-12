@@ -267,8 +267,6 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const [collabNotice, setCollabNotice] = useState<string | null>(null)
   // C6c-1: 파트 저장이 디스크에 반영됐지만 부모 방 리셋이 미뤄진 상태.
   const [partChangePending, setPartChangePending] = useState(false)
-  // C7: 마지막 클릭 위치 (삽입 위치). 없으면 화면 정가운데.
-  const lastClickPosRef = useRef<{ slide: number; x: number; y: number; t: number } | null>(null)
   // C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시).
   const [embedExtras, setEmbedExtras] = useState<
     Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { slide?: number; x?: number; y?: number } }>
@@ -1326,18 +1324,10 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
         clientId: c?.session?.clientId,
         getBaseHash: () => baseHashRef.current ?? undefined,
         slide,
-        // C7: 마지막 클릭 위치 (없으면 화면 정가운데).
-        // 오래된 클릭(30초 초과)은 버린다 — 다른 파일·예전 화면의 잔재가 엉뚱한 곳에 찍히는 것을 막는다.
-        x: (() => {
-          const last = lastClickPosRef.current;
-          if (last && last.slide === slide && Date.now() - last.t < 30000) return last.x;
-          return 0.5;
-        })(),
-        y: (() => {
-          const last = lastClickPosRef.current;
-          if (last && last.slide === slide && Date.now() - last.t < 30000) return last.y;
-          return 0.5;
-        })(),
+        // C7b: 항상 화면 가운데 (클릭 추적 폐지 — 리본 클릭 오염·오래된 잔재로 엉뚱한 곳에 찍힘).
+        // 슬라이드는 현재 슬라이드 (어느 슬라이드인지만 본다).
+        x: 0.5,
+        y: 0.5,
         isViewer: c?.role === 'viewer',
         saveFirst: () => saveBeforeEmbed(savePath, editingRef.current),
         isDirty: () => unsavedLocalEditRef.current === true,
@@ -2743,32 +2733,6 @@ const peersRef = useRef<Peer[]>([])
       ref={viewerRootRef}
       data-testid="pptx-viewer-root"
       className={`relative h-full min-h-[480px]${editing ? '' : ' pptx-preview-compact'}`}
-      // C7: 마지막 클릭 위치 기록 (삽입 위치). 캡처 단계에서 잡는다
-      // (lib가 버블을 삼켜도 기록된다). 오버레이 컨테이너(viewerRoot) 기준.
-      // 리본·툴바·버튼 클릭은 무시한다 (슬라이드 캔버스 클릭만 위치로 쓴다).
-      onClickCapture={(e) => {
-        try {
-          const t = e.target as HTMLElement | null
-          if (t && typeof t.closest === 'function') {
-            if (t.closest('button, input, select, textarea, [role="button"], [role="dialog"], a, [data-testid="ole-icon"]')) {
-              return
-            }
-          }
-          const root = viewerRootRef.current
-          const box = root?.getBoundingClientRect()
-          if (!box || box.width <= 0 || box.height <= 0) return
-          const idx = viewerRef.current?.getActiveSlideIndex?.()
-          const clamp01 = (v: number): number => Math.min(1, Math.max(0, v))
-          lastClickPosRef.current = {
-            slide: typeof idx === 'number' && idx >= 0 ? idx + 1 : 1,
-            x: clamp01((e.clientX - box.left) / box.width),
-            y: clamp01((e.clientY - box.top) / box.height),
-            t: Date.now(),
-          }
-        } catch {
-          /* 무시 */
-        }
-      }}
     >
       {/* C5-1: 기존 OLE 첨부 아이콘 1개 + 더블클릭 다운로드 (lib 렌더는 그대로). */}
       {/* C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시). */}
