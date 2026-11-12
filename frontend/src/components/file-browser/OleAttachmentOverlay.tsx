@@ -714,9 +714,7 @@ export default function OleAttachmentOverlay({
   // (다른 페이지 도형에 잘못 붙은 라벨이 엉뚱한 곳에 뜨지 않게).
   // extras는 resolveExtraPos에서 이미 슬라이드를 확인했으므로 항상 true다.
   const anchoredVisible = anchored.filter((e) => extraParts.has(e.partName) || onCurrentSheet(e))
-  const fallback = entries.filter(
-    (e) => !(anchor != null && posMap[e.partName] != null) && !extraParts.has(e.partName) && onCurrentSheet(e),
-  )
+  // C7d-1: 위치 미상은 슬라이드에 그리지 않는다 (fallback 변수 자체를 두지 않는다).
   const displayName = (entry: OleEmbeddingRef): string => entry.displayName ?? entry.fallbackName
 
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
@@ -813,11 +811,8 @@ export default function OleAttachmentOverlay({
           </span>
         )
       })}
-      {fallback.length > 0 && (
-        <div className="absolute left-2 top-2 z-20 flex flex-col items-start gap-1">
-          {fallback.map((e) => chip(e, false))}
-        </div>
-      )}
+      {/* C7d-1: 위치를 모르는 첨부는 슬라이드 위에 그리지 않는다 (좌상단 폴백 폐지).
+          고아 파트는 첨부 패널 목록에서 다룬다 (후속). */}
     </>
   )
 }
