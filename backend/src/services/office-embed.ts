@@ -1118,7 +1118,16 @@ export function offsetOverlap(
   req: EmbedPos,
   existing: EmbedPos[],
 ): EmbedPos {
-  const n = existing.length
+  // C7d: 실제로 겹치는 것만 센다 (멀리 있는 기존분은 무시).
+  let close = existing
+  if (hostKind === 'pptx') {
+    const bx0 = req.x ?? 0.5
+    const by0 = req.y ?? 0.5
+    close = existing.filter((e) => Math.hypot((e.x ?? 0.5) - bx0, (e.y ?? 0.5) - by0) < 0.15)
+  } else if (hostKind === 'xlsx') {
+    close = existing.filter((e) => e.col === req.col && e.row === req.row)
+  }
+  const n = close.length
   if (n === 0) return { ...req }
   if (hostKind === 'pptx') {
     const bx = req.x ?? 0.5
