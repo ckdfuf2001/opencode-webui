@@ -1550,6 +1550,9 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         console.log(`[c6d] D10 diskOff err ${(e as Error).message}`)
       }
       const chipNearCenter = async (page: Page, tag: string): Promise<void> => {
+        // 선택 해제 (속성 사이드바가 열리면 viewer 중심이 어긋난다).
+        await page.keyboard.press('Escape').catch(() => {})
+        await page.waitForTimeout(1000).catch(() => {})
         const allc = await page.getByTestId('ole-icon').evaluateAll((els) =>
           els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })(), title: e.getAttribute('title') ?? '?' })),
         )
@@ -1730,6 +1733,47 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x120에 칩·라벨 0개', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    // ccc/collab-3slides.pptx 복사본 (원본 불변). 고아 임베딩 2건 포함.
+    const rel = uniqueRelWithExt('c6dd14pptx', 0, '.pptx')
+    const abs = absForRel(rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.copyFileSync('workspace/repos/ccc/collab-3slides.pptx', abs)
+    const parentPath = rel.replace(/^repos\//, '')
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA, ADA)
+    const pageA = await ctxA.newPage()
+    try {
+      await gotoApp(pageA)
+      await openEditor(pageA, parentPath)
+      await pageA.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 })
+      await gotoSlide(pageA, 1)
+      await pageA.waitForTimeout(5000).catch(() => {})
+      // 새로고침 후에도 좌상단 120x120에 칩·라벨이 없어야 한다 (고아는 슬라이드에 그리지 않음).
+      await pageA.reload()
+      await pageA.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+      await gotoSlide(pageA, 1).catch(() => {})
+      await pageA.waitForTimeout(5000).catch(() => {})
+      const stray = await pageA.evaluate(() => {
+        const out = []
+        for (const el of document.querySelectorAll('[data-testid="ole-icon"], [data-testid="ole-label"]')) {
+          const r = (el as HTMLElement).getBoundingClientRect()
+          if (r.x < 120 && r.y < 120 && r.width > 0 && r.height > 0) {
+            out.push({ t: el.getAttribute('data-testid'), label: el.getAttribute('aria-label') ?? el.textContent?.slice(0, 40), box: [Math.round(r.x), Math.round(r.y)] })
+          }
+        }
+        return out
+      })
+      console.log(`[c6d] D14 stray: ${JSON.stringify(stray)}`)
+      expect(stray).toEqual([])
+    } finally {
+      await ctxA.close().catch(() => {})
     }
   })
 
