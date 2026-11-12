@@ -294,6 +294,10 @@ describe('assembleXlsxEmbed', () => {
     const vml = await z.files[vmlNames[0]!]!.async('string')
     expect(vml).toContain('<v:shape')
     expect(vml).toContain('o:relid="rId')
+    // C7c: VML 위치는 셀 기준 (shapeId 기반 margin-top=60+id 금지 — 수백 pt 아래에 찍힘).
+    expect(vml).not.toMatch(/margin-top:\d{3,}pt/)
+    // drawing(144x100pt)과 같은 크기.
+    expect(vml).toContain('width:144pt;height:100pt')
     // rels + content types.
     const rels = await z.files['xl/worksheets/_rels/sheet1.xml.rels']!.async('string')
     expect(rels).toContain('/oleObject')
