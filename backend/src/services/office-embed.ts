@@ -603,7 +603,7 @@ export async function assembleXlsxEmbed(
     let mm: RegExpExecArray | null
     while ((mm = vm.exec(vml)) !== null) maxVml = Math.max(maxVml, Number(mm[1]))
     const vShape =
-      `<v:shape id="_x0000_s${maxVml + 1}" type="#_x0000_t75" style='position:absolute;margin-left:60pt;margin-top:${60 + shapeId}pt;width:60pt;height:41pt' filled="t" fillcolor="window [65]" stroked="t" strokecolor="windowText [64]">` +
+      `<v:shape id="_x0000_s${maxVml + 1}" type="#_x0000_t75" style='position:absolute;margin-left:${fromCol * 48}pt;margin-top:${fromRow * 15}pt;width:144pt;height:100pt' filled="t" fillcolor="window [65]" stroked="t" strokecolor="windowText [64]">` +
       `<v:fill on="f"/><v:stroke on="f"/><v:imagedata o:relid="${vmlImgId}" o:title="" grayscale="f" bilevel="f"/><o:lock v:ext="edit" aspectratio="t" position="f" selection="f" grouping="f"/></v:shape>`
     zip!.file(vmlFile as string, vml.replace('</xml>', `${vShape}</xml>`))
   }
