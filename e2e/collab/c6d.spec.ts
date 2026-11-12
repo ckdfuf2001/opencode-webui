@@ -1111,14 +1111,6 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     const pageC = await ctxC.newPage()
     // 리셋 감시: 삽입 시점 이후 새로 열리는 collab WS가 있으면 리셋이다.
     // (초기 접속은 셋업 때 끝나므로 이후 새로 열리면 재입장이다.)
-    const newCollabWs: string[] = []
-    const watchWs = (tag: string, page: Page): void => {
-      page.on('websocket', (ws) => {
-        try {
-          if (ws.url().includes('/collab')) newCollabWs.push(`${tag}:${ws.url()}`)
-        } catch { /* 무시 */ }
-      })
-    }
     await gotoApp(pageC)
     await openEditor(pageC, t.parentPath)
     await pageC.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
@@ -1160,7 +1152,15 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       // 양쪽에 칩이 클릭 자리에 뜬다 (리로드 없음). 각 페이지 좌표계에서 판정.
       // setup 칩(1개)이 아니라 새로 뜬 d9 칩(2개째)을 기다린다.
       const chipNearCenter = async (page: Page, tag: string): Promise<void> => {
-        await expect
+        const tl = await page.evaluate(() => {
+          try {
+            const w = window as unknown as { __collabTimeline?: { list: Array<Record<string, unknown>> } }
+            return (w.__collabTimeline?.list ?? []).map((e) => e.evt)
+          } catch {
+            return []
+          }
+        }).catch(() => [])
+        console.log(`[c6d] D10 ${tag} timeline: ${JSON.stringify(tl).slice(0, 400)}`)
           .poll(() => page.getByTestId('ole-icon').count(), { timeout: 30000, intervals: [500] })
           .toBe(2)
         const all = await page.getByTestId('ole-icon').evaluateAll((els) =>
@@ -1252,7 +1252,8 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
     await gotoApp(pageC)
     await openEditor(pageC, t.parentPath)
-    await pageC.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 }).catch(() => {})
+    await pageC.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+    await gotoSlide(pageC, 2)
     watchWs('A', t.pageA)
     watchWs('C', pageC)
     await t.pageA.waitForTimeout(3000).catch(() => {})
@@ -1485,6 +1486,108 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         .poll(() => Promise.resolve(parentDiskHas('docx', t.abs, `${slug}-c2`)), { timeout: 60000, intervals: [1000] })
         .toBe(true)
       console.log(`[c6d] D9 docx insert merged without reset`)
+    } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D10-pptx: 리본 대신 실제 파일선택으로 삽입 → 칩이 클릭 자리에 (백그라운드 병합)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd10pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    await t.attach.close().catch(() => {})
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, ADA)
+    const pageC = await ctxC.newPage()
+    const newCollabWs: string[] = []
+    const watchWs = (tag: string, page: Page): void => {
+      page.on('websocket', (ws) => {
+        try {
+          if (ws.url().includes('/collab')) newCollabWs.push(`${tag}:${ws.url()}`)
+        } catch { /* 무시 */ }
+      })
+    }
+    await gotoApp(pageC)
+    await openEditor(pageC, t.parentPath)
+    await pageC.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+    // C도 2번 슬라이드로 (같은 슬라이드에서 칩을 봐야 한다).
+    await gotoSlide(pageC, 2)
+    // 리셋 감시: 리셋은 뷰어를 통째로 다시 마운트한다 (DOM 노드 교체로 감지).
+    const rootA = await t.pageA.$('[data-testid="pptx-viewer-root"]')
+    const rootC = await pageC.$('[data-testid="pptx-viewer-root"]')
+    expect(rootA).not.toBeNull()
+    expect(rootC).not.toBeNull()
+    try {
+      await gotoSlide(t.pageA, 2)
+      // 슬라이드 정가운데 클릭 → 숨은 input에 실제 파일 세팅 (리본 파일선택과 동일 경로).
+      const pt = await t.pageA.evaluate(() => {
+        const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+        const b = root?.getBoundingClientRect()
+        if (!b) return null
+        return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
+      })
+      expect(pt).not.toBeNull()
+      await t.pageA.mouse.click(pt!.x, pt!.y)
+      const fxPath = path.resolve(FIX, 'embed-docx.docx')
+      await t.pageA.locator('input[data-testid="office-attach-input"]').setInputFiles(fxPath)
+      // 디스크에 파트가 생기고, 양쪽에 칩이 클릭 자리에 뜬다 (리로드 없음).
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'ppt/embeddings/embed-docx.docx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      try {
+        const zip0 = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const s2 = await zip0.files['ppt/slides/slide2.xml']!.async('string')
+        const m0 = /<p:graphicFrame>[\s\S]*?<a:off x="(\d+)" y="(\d+)"\/>/.exec(s2)
+        console.log(`[c6d] D10 diskOff: ${m0 ? `${m0[1]},${m0[2]}` : 'no-frame'}`)
+      } catch (e) {
+        console.log(`[c6d] D10 diskOff err ${(e as Error).message}`)
+      }
+      const chipNearCenter = async (page: Page, tag: string): Promise<void> => {
+        const tl = await page.evaluate(() => {
+          try {
+            const w = window as unknown as { __collabTimeline?: { list: Array<Record<string, unknown>> } }
+            return (w.__collabTimeline?.list ?? []).map((e) => String(e.evt ?? '?'))
+          } catch {
+            return []
+          }
+        }).catch(() => [] as string[])
+        console.log(`[c6d] D10 ${tag} timeline: ${JSON.stringify(tl).slice(0, 400)}`)
+        await page.waitForTimeout(8000).catch(() => {})
+        const allc = await page.getByTestId('ole-icon').evaluateAll((els) =>
+          els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })(), title: e.getAttribute('title') ?? '?' })),
+        )
+        console.log(`[c6d] D10 ${tag} allchips: ${JSON.stringify(allc)}`)
+        // 정확한 aria-label 일치로 잰다 (getByTestId name 옵션은 유사 항목을 잡을 수 있음).
+        const hit = allc.find((c) => c.label === '첨부 embed-docx.docx')
+        expect(hit).toBeTruthy()
+        const box = { x: hit!.box[0], y: hit!.box[1], width: hit!.box[2], height: hit!.box[3] }
+        expect(box.width).toBeGreaterThan(0)
+        const ctr = await page.evaluate(() => {
+          const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+          const b = root?.getBoundingClientRect()
+          if (!b) return null
+          return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
+        })
+        expect(ctr).not.toBeNull()
+        const dist = Math.hypot(box!.x + box!.width / 2 - ctr!.x, box!.y + box!.height / 2 - ctr!.y)
+        console.log(`[c6d] D10 ${tag} chip dist from click: ${Math.round(dist)}px`)
+        expect(dist).toBeLessThan(150)
+      }
+      await chipNearCenter(t.pageA, 'A')
+      await chipNearCenter(pageC, 'C')
+      // 리셋 없음: 뷰어가 다시 마운트되지 않았다 (화면이 날아가지 않음).
+      expect(newCollabWs).toEqual([])
+      await expect.poll(() => rootA!.evaluate((e) => e.isConnected), { timeout: 10000 }).toBe(true)
+      await expect.poll(() => rootC!.evaluate((e) => e.isConnected), { timeout: 10000 }).toBe(true)
+      console.log(`[c6d] D10 picker insert merged without reset`)
     } finally {
       await pageC.close().catch(() => {})
       await ctxC.close().catch(() => {})
