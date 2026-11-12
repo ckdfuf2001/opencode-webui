@@ -662,11 +662,11 @@ export default function OleAttachmentOverlay({
         // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
         e.preventDefault()
       }}
-      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute' } : undefined}
+      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30 } : undefined}
       className={
         anchored
           ? 'z-20 inline-flex h-7 w-7 select-none items-center justify-center rounded-md border border-border bg-background/95 text-foreground shadow-sm hover:bg-muted'
-          : 'inline-flex select-none items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
+          : 'z-30 inline-flex select-none items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
       }
     >
       <Paperclip className="h-3.5 w-3.5" />
