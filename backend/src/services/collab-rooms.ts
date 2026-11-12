@@ -12,11 +12,13 @@ import { writeFileContent } from './file-operations'
 import { logger } from '../utils/logger'
 import JSZip from 'jszip'
 import {
+  anchorHashOf,
   assembleDocxEmbed,
   assemblePptxEmbed,
   assembleXlsxEmbed,
   attachKindOf,
   listEmbedParts,
+  listEmbedPositions,
   normalizeEmbedPart,
   readEmbedPart,
   replaceEmbedPart,
@@ -224,6 +226,8 @@ export interface CollabRoom {
    * 새 삽입마다 비운다. 같은 옛 base라도 아직 저장 안 한 clientId는 1회 받아준다.
    */
   embedPassUsed: Set<number>
+  /** C7c: 디스크 백필 완료 여부 (예전 첨부 위치 복원, 방당 1회). */
+  embedBackfilled: boolean
 }
 
 /** C7: 백그라운드 삽입 1건 (106 페이로드와 동일). */
@@ -721,6 +725,39 @@ export function registerEmbedInsert(parentId: string, rec: Omit<KnownEmbed, 'pre
 }
 
 /**
+ * C7c: 디스크 백필. 방 생성 시 파일에 이미 있는 첨부의 위치를 역추적해
+ * knownEmbeds에 채운다 (예전 첨부·서버 재시작 후에도 칩 정위치).
+ * 방당 1회. 이미 추적 중인 파트는 건드리지 않는다.
+ */
+export async function backfillRoomEmbeds(room: CollabRoom): Promise<void> {
+  if (room.embedBackfilled || room.part) return
+  room.embedBackfilled = true
+  try {
+    const lower = room.path.toLowerCase()
+    const hostKind = lower.endsWith('.pptx') ? 'pptx' : lower.endsWith('.xlsx') ? 'xlsx' : lower.endsWith('.docx') ? 'docx' : null
+    if (!hostKind) return
+    const bytes = new Uint8Array(await fs.readFile(room.path))
+    const found = await listEmbedPositions(zipLoadJSZip, bytes, hostKind)
+    for (const f of found) {
+      if (room.knownEmbeds.some((ke) => ke.norm === f.part)) continue
+      const pos = f.pos as KnownEmbed['pos']
+      room.knownEmbeds.push({
+        norm: f.part,
+        name: f.name,
+        kind: hostKind,
+        pos,
+        preHash: null,
+        anchorHash: hostKind === 'docx' && typeof pos.text === 'string' && pos.text ? anchorHashOf(pos.text) : undefined,
+      })
+    }
+    if (room.knownEmbeds.length > 32) room.knownEmbeds.splice(0, room.knownEmbeds.length - 32)
+    if (found.length > 0) logger.warn(`[embed] backfilled ${found.length} parts for room=${room.id.slice(0, 8)}`)
+  } catch {
+    /* 무시 — 백필 실패해도 저장은 계속된다 */
+  }
+}
+
+/**
  * C7: 백그라운드 삽입 보존. 들어온 저장 바이트에 없는 known 파트를
  * 디스크 기준으로 같은 위치에 다시 조립한다 (옛 모델 덮개 방지).
  * 이미 있는 파트는 그대로 둔다 (교체는 pendingPartReset 경로가 담당).
@@ -934,6 +971,7 @@ function createRoom(
   partResetTimer: null,
   knownEmbeds: [],
   embedPassUsed: new Set(),
+  embedBackfilled: false,
 }
   if (part) room.part = part
   awareness.on('update', (
@@ -1227,11 +1265,13 @@ export async function createSession(
         const room = createRoom(id, abs, fileHash, partInfo)
         room.epoch = resumeEpoch
         startWatch(room)
+        await backfillRoomEmbeds(room)
         logger.info(`Collab room ${id} re-created on resume (epoch kept)`)
         return room
       }
       const room = createRoom(id, abs, fileHash, partInfo)
       startWatch(room)
+      await backfillRoomEmbeds(room)
       logger.info(`Collab room ${id} created for ${abs}${partInfo ? ` part ${partInfo.part}` : ''}`)
       return room
     })()
@@ -1260,6 +1300,7 @@ export async function createSession(
       }
       const room = createRoom(id, abs, fileHash, partInfo)
       startWatch(room)
+      await backfillRoomEmbeds(room)
       logger.info(`Collab room ${id} re-created (orphan disposed, host)`)
       return { roomId: id, role: 'host', epoch: room.epoch, lastHash: fileHash, path: abs, part: partInfo?.part }
     }
