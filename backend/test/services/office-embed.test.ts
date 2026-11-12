@@ -131,6 +131,15 @@ describe('office-embed helpers', () => {
     expect(offsetOverlap('xlsx', { col: 2, row: 4 }, [])).toEqual({ col: 2, row: 4 })
     expect(offsetOverlap('docx', { block: 3 }, [{ block: 3 }])).toEqual({ block: 3 })
   })
+  it('genericIconPng는 형식별로 다르다', () => {
+    const a = Buffer.from(genericIconPng('docx'))
+    const b = Buffer.from(genericIconPng('xlsx'))
+    const c = Buffer.from(genericIconPng('pptx'))
+    expect(a.equals(b)).toBe(false)
+    expect(a.equals(c)).toBe(false)
+    expect(b.equals(c)).toBe(false)
+    expect(Buffer.from(genericIconPng()).equals(a)).toBe(true)
+  })
   it('EMBED_MAX_BYTES는 20MB다', () => {
     expect(EMBED_MAX_BYTES).toBe(20 * 1024 * 1024)
   })
