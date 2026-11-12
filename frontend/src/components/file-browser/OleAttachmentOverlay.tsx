@@ -664,16 +664,16 @@ export default function OleAttachmentOverlay({
         // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
         e.preventDefault()
       }}
-      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30 } : undefined}
+      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30, transform: 'translate(-50%, -50%)' } : undefined}
       className={
         anchored
-          ? 'z-20 inline-flex select-none items-center gap-1 rounded-md border border-border bg-background/95 py-1 pl-1.5 pr-2 text-xs text-foreground shadow-sm hover:bg-muted'
+          ? 'z-20 inline-flex select-none items-center gap-1 rounded-md border border-border bg-background/95 p-1.5 text-foreground shadow-sm hover:bg-muted'
           : 'z-30 inline-flex select-none items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
       }
     >
       <Paperclip className="h-3.5 w-3.5 shrink-0" />
       <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span className="max-w-44 truncate select-none">{displayName(entry)}</span>
+      {!anchored && <span className="max-w-44 truncate select-none">{displayName(entry)}</span>}
     </button>
     )
   }
@@ -778,6 +778,10 @@ export default function OleAttachmentOverlay({
       {anchored.map((e) => {
         const pos = posMap[e.partName]
         if (!pos) return null
+        // C7c-1: lib이 실제 도형을 그리는 경우(파싱분+앵커)는 칩을 숨기고 파일명 라벨만 남긴다
+        // (lib 플레이스홀더와 우리 칩이 겹쳐 보이는 중복 방지).
+        // 백그라운드 삽입 직후(lib 모델에 아직 없음, extras)는 전체 칩을 쓴다.
+        const isExtra = extraParts.has(e.partName)
         // placeholder는 카드로 가리고 모서리 아이콘으로 조작한다 (드래그 차단 방지).
         if (pos.cover) {
           return (
@@ -789,7 +793,7 @@ export default function OleAttachmentOverlay({
         }
         return (
           <span key={e.partName}>
-            {chip(e, true, { x: pos.x, y: pos.y })}
+            {isExtra ? chip(e, true, { x: pos.x, y: pos.y }) : null}
             {caption(e, pos)}
           </span>
         )
