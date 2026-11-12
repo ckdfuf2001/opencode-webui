@@ -52,10 +52,12 @@ import {
   blockTextSnippet,
   listEmbedParts,
   normalizeEmbedPart,
+  offsetOverlap,
   readEmbedPart,
   replaceEmbedPart,
   sanitizeEmbedName,
   type EmbedAttachKind,
+  type EmbedPos,
   type ZipLike,
 } from '../services/office-embed'
 import { getRawFileContent, resolveWorkspaceFile } from '../services/files'
@@ -481,6 +483,13 @@ app.post('/embed', async (c) => {
     } else if (q.baseHash && disk !== q.baseHash) {
       return c.json({ error: 'File changed since loaded — reload, then retry', code: 'dirty_room', currentHash: disk }, 409)
     }
+    // C7c-0: 같은 슬라이드/시트 겹침 방지 (조립 전에 오프셋 확정).
+    const samePlace: EmbedPos[] = (room?.knownEmbeds ?? [])
+      .filter((ke) =>
+        hostKind === 'pptx' ? (ke.pos.slide ?? 1) === (q.slide ?? 1) : hostKind === 'xlsx' ? (ke.pos.sheet ?? 0) === (q.sheet ?? 0) : false,
+      )
+      .map((ke) => ke.pos)
+    const off = offsetOverlap(hostKind, { slide: q.slide, x: q.x, y: q.y, sheet: q.sheet, col: q.col, row: q.row, block: q.block }, samePlace)
     // P0-1: 조립+쓰기를 부모 체인에서 직렬화한다 (PUT /save와 같은 체인).
     return runParentChained(abs, async () => {
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
@@ -493,9 +502,9 @@ app.post('/embed', async (c) => {
           attachBytes,
           attachName,
           attachKind: kind,
-          slide: q.slide,
-          xFrac: q.x,
-          yFrac: q.y,
+          slide: off.slide,
+          xFrac: off.x,
+          yFrac: off.y,
         })
         embPart = `ppt/embeddings/${attachName}`
       } else if (hostKind === 'xlsx') {
@@ -504,9 +513,9 @@ app.post('/embed', async (c) => {
           attachBytes,
           attachName,
           attachKind: kind,
-          sheet: q.sheet,
-          cellCol: q.col,
-          cellRow: q.row,
+          sheet: off.sheet,
+          cellCol: off.col,
+          cellRow: off.row,
         })
         embPart = `xl/embeddings/${attachName}`
       } else {
@@ -547,9 +556,9 @@ app.post('/embed', async (c) => {
           const embFile = added[0].part.split('/').pop() ?? attachName
           const pos =
             hostKind === 'pptx'
-              ? { slide: q.slide, x: q.x, y: q.y }
+              ? { slide: off.slide, x: off.x, y: off.y }
               : hostKind === 'xlsx'
-                ? { sheet: q.sheet, col: q.col, row: q.row }
+                ? { sheet: off.sheet, col: off.col, row: off.row }
                 : { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) }
           registerEmbedInsert(roomId, {
             norm: added[0].part,
@@ -564,7 +573,14 @@ app.post('/embed', async (c) => {
         logger.warn(`[embed] knownEmbeds register skipped (${e instanceof Error ? e.message : e})`)
       }
     }
-    return c.json({ ok: true, newHash, embeddings: [finalPart] })
+    // C7c-0: 삽입자 칩도 오프셋 위치에 찍는다 (조립 위치와 일치).
+    const respPos =
+      hostKind === 'pptx'
+        ? { slide: off.slide, x: off.x, y: off.y }
+        : hostKind === 'xlsx'
+          ? { sheet: off.sheet, col: off.col, row: off.row }
+          : { block: q.block }
+    return c.json({ ok: true, newHash, embeddings: [finalPart], pos: respPos })
     })
   } catch (error) {
     return errJson(c, error, 500)

@@ -216,9 +216,9 @@ export async function saveBeforeEmbed(hostPath: string, editing: boolean): Promi
   return waitSaveDone(hostPath)
 }
 
-async function postEmbed(fd: FormData): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string } }> {
+async function postEmbed(fd: FormData): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number } } }> {
   const res = await fetch(`${API_BASE_URL}/api/collab/embed`, { method: 'POST', body: fd })
-  const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string; embeddings?: string[]; newHash?: string }
+  const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number } }
   return { status: res.status, body }
 }
 
@@ -232,7 +232,7 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
   // isViewer는 호환용으로 남긴다.
   // C7: 백그라운드 병합 — 방에 있으면 리로드하지 않는다 (106이 오버레이+해시를 갱신).
   // solo(방 없음)는 106이 없으므로 기존처럼 리로드한다.
-  const doPost = async (): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string } }> => {
+  const doPost = async (): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number } } }> => {
     const fd = new FormData()
     fd.append('path', ctx.hostPath)
     fd.append('file', file, file.name)
@@ -291,11 +291,12 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
     try {
       const part = r.body.embeddings?.[0]
       if (part && typeof r.body.newHash === 'string') {
-        ctx.onInserted?.({
+        const rp = r.body.pos ?? {}
+      ctx.onInserted?.({
           part,
           name: part.split('/').pop() ?? file.name,
           newHash: r.body.newHash,
-          pos: { slide: ctx.slide, x: ctx.x, y: ctx.y, sheet: ctx.sheet, col: ctx.col, row: ctx.row, block: ctx.block },
+          pos: { slide: rp.slide ?? ctx.slide, x: rp.x ?? ctx.x, y: rp.y ?? ctx.y, sheet: rp.sheet ?? ctx.sheet, col: rp.col ?? ctx.col, row: rp.row ?? ctx.row, block: rp.block ?? ctx.block },
         })
       }
     } catch {
