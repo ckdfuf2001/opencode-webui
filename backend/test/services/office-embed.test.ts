@@ -10,6 +10,7 @@ import {
   checkBalancedXml,
   EMBED_MAX_BYTES,
   genericIconPng,
+  offsetOverlap,
   sanitizeEmbedName,
   topLevelBlocks,
   type ZipLike,
@@ -118,6 +119,17 @@ describe('office-embed helpers', () => {
     expect(r1).toBeLessThan(100)
     expect(g1).toBeLessThan(120)
     expect(b1).toBeLessThan(140)
+  })
+  it('offsetOverlap: 같은 곳에 겹치면 비켜 놓는다', () => {
+    expect(offsetOverlap('pptx', { x: 0.5, y: 0.5 }, [])).toEqual({ x: 0.5, y: 0.5 })
+    const o1 = offsetOverlap('pptx', { x: 0.5, y: 0.5 }, [{ x: 0.5, y: 0.5 }])
+    expect(o1.x!).toBeGreaterThan(0.5)
+    expect(o1.y!).toBeGreaterThan(0.5)
+    const o2 = offsetOverlap('pptx', { x: 0.5, y: 0.5 }, [{ x: 0.5, y: 0.5 }, { x: 0.62, y: 0.58 }])
+    expect(o2.x!).toBeGreaterThan(o1.x!)
+    expect(offsetOverlap('xlsx', { col: 2, row: 4 }, [{ col: 2, row: 4 }])).toEqual({ col: 3, row: 5 })
+    expect(offsetOverlap('xlsx', { col: 2, row: 4 }, [])).toEqual({ col: 2, row: 4 })
+    expect(offsetOverlap('docx', { block: 3 }, [{ block: 3 }])).toEqual({ block: 3 })
   })
   it('EMBED_MAX_BYTES는 20MB다', () => {
     expect(EMBED_MAX_BYTES).toBe(20 * 1024 * 1024)
