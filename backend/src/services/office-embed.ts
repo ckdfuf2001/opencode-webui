@@ -101,20 +101,56 @@ export function genericIconPng(): Uint8Array {
   const rect = (x0: number, y0: number, x1: number, y1: number, c: [number, number, number]): void => {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y, c[0], c[1], c[2])
   }
-  const BLUE: [number, number, number] = [37, 99, 235]
+  // C7b: 가운데 칩 스타일 (흰 바탕+회색 테두리+클립 배지+문서 글리프).
+  const LINE: [number, number, number] = [203, 213, 225]
   const GRAY: [number, number, number] = [148, 163, 184]
-  const DARK: [number, number, number] = [51, 65, 85]
-  rect(0, 0, W - 1, H - 1, BLUE)
-  rect(4, 4, W - 5, H - 5, [255, 255, 255])
-  // 접힌 모서리 (우상단 삼각형).
-  for (let i = 0; i < 22; i++) {
-    set(W - 28 + i, 4 + i, ...GRAY)
-    set(W - 27 + i, 4 + i, ...GRAY)
+  const SLATE: [number, number, number] = [51, 65, 85]
+  const PAPER: [number, number, number] = [241, 245, 249]
+  const WHITE: [number, number, number] = [255, 255, 255]
+  // 1px 테두리.
+  rect(0, 0, W - 1, 0, LINE)
+  rect(0, H - 1, W - 1, H - 1, LINE)
+  rect(0, 0, 0, H - 1, LINE)
+  rect(W - 1, 0, W - 1, H - 1, LINE)
+  // 클립 배지 (좌상단 진회색 원).
+  const bcx = 24
+  const bcy = 24
+  const br = 13
+  for (let y = bcy - br - 1; y <= bcy + br + 1; y++) {
+    for (let x = bcx - br - 1; x <= bcx + br + 1; x++) {
+      const dx = x - bcx
+      const dy = y - bcy
+      if (dx * dx + dy * dy <= br * br) set(x, y, ...SLATE)
+    }
+  }
+  // 클립 (흰색 타원 고리 + 안쪽 막대).
+  for (let a = 0; a < 360; a += 3) {
+    const rad = (a * Math.PI) / 180
+    const ex = Math.round(bcx + 6 * Math.cos(rad))
+    const ey = Math.round(bcy + 8.5 * Math.sin(rad))
+    set(ex, ey, ...WHITE)
+    set(ex + 1, ey, ...WHITE)
+  }
+  rect(bcx - 1, bcy - 4, bcx + 1, bcy + 8, WHITE)
+  // 문서 글리프 (중앙).
+  const gx0 = 74
+  const gy0 = 14
+  const gx1 = 134
+  const gy1 = 82
+  rect(gx0, gy0, gx1, gy1, PAPER)
+  rect(gx0, gy0, gx1, gy0, GRAY)
+  rect(gx0, gy1, gx1, gy1, GRAY)
+  rect(gx0, gy0, gx0, gy1, GRAY)
+  rect(gx1, gy0, gx1, gy1, GRAY)
+  // 접힌 모서리 (우상단).
+  for (let i = 0; i < 16; i++) {
+    for (let j = 0; j <= i; j++) set(gx1 - i, gy0 + j, ...WHITE)
+    set(gx1 - i, gy0 + i, ...GRAY)
   }
   // 본문 줄 3개.
-  rect(16, 34, W - 22, 39, DARK)
-  rect(16, 50, W - 22, 55, GRAY)
-  rect(16, 66, W - 62, 71, GRAY)
+  rect(gx0 + 8, gy0 + 22, gx1 - 8, gy0 + 26, SLATE)
+  rect(gx0 + 8, gy0 + 34, gx1 - 8, gy0 + 38, GRAY)
+  rect(gx0 + 8, gy0 + 46, gx1 - 30, gy0 + 50, GRAY)
   const raw = new Uint8Array((W * 3 + 1) * H)
   for (let y = 0; y < H; y++) {
     raw[y * (W * 3 + 1)] = 0
