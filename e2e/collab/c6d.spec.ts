@@ -1595,6 +1595,77 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
   })
 
+  test('D12-pptx: 같은 슬라이드에 2회 삽입하면 위치가 다르고 둘 다 보인다 (겹침 방지)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd12pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    await t.attach.close().catch(() => {})
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, ADA)
+    const pageC = await ctxC.newPage()
+    try {
+      await gotoApp(pageC)
+      await openEditor(pageC, t.parentPath)
+      await pageC.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+      await gotoSlide(pageC, 2)
+      await gotoSlide(t.pageA, 2)
+      const rootA = await t.pageA.$('[data-testid="pptx-viewer-root"]')
+      const rootC = await pageC.$('[data-testid="pptx-viewer-root"]')
+      const doInsert = async (fname: string): Promise<void> => {
+        const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+        await t.pageA.evaluate(
+          ({ b64, hostPath, nm }: { b64: string; hostPath: string; nm: string }) => {
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+            const file = new File([bin], nm, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+            window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+          },
+          { b64: fxBytes, hostPath: t.parentPath, nm: fname },
+        )
+      }
+      await doInsert('d12-first.docx')
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'ppt/embeddings/d12-first.docx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      await doInsert('d12-second.docx')
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'ppt/embeddings/d12-second.docx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      // 두 도형의 a:off가 서로 다르다 (겹치지 않음).
+      const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+      const s2 = await zip.files['ppt/slides/slide2.xml']!.async('string')
+      const offs = [...s2.matchAll(/<p:graphicFrame>[\s\S]*?<a:off x="(\d+)" y="(\d+)"\/>/g)].map((m) => `${m[1]},${m[2]}`)
+      console.log(`[c6d] D12 offs: ${JSON.stringify(offs)}`)
+      expect(offs.length).toBeGreaterThanOrEqual(2)
+      expect(new Set(offs).size).toBe(offs.length)
+      // 둘 다 칩으로 보인다 (A·C).
+      for (const [page, tag] of [[t.pageA, 'A'], [pageC, 'C']] as Array<[Page, string]>) {
+        for (const nm of ['d12-first.docx', 'd12-second.docx']) {
+          await expect
+            .poll(() => page.getByTestId('ole-icon').evaluateAll((els, n) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes(n as string)), nm), { timeout: 30000, intervals: [500] })
+            .toBe(true)
+        }
+        console.log(`[c6d] D12 ${tag} both chips visible`)
+      }
+      // 리셋 없음.
+      await expect.poll(() => rootA!.evaluate((e) => e.isConnected), { timeout: 10000 }).toBe(true)
+      await expect.poll(() => rootC!.evaluate((e) => e.isConnected), { timeout: 10000 }).toBe(true)
+      console.log(`[c6d] D12 two inserts offset without reset`)
+    } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
