@@ -10,6 +10,7 @@ import {
   checkBalancedXml,
   EMBED_MAX_BYTES,
   genericIconPng,
+  listEmbedPositions,
   offsetOverlap,
   sanitizeEmbedName,
   topLevelBlocks,
@@ -139,6 +140,25 @@ describe('office-embed helpers', () => {
     expect(a.equals(c)).toBe(false)
     expect(b.equals(c)).toBe(false)
     expect(Buffer.from(genericIconPng()).equals(a)).toBe(true)
+  })
+  it('listEmbedPositions: 조립한 위치를 역추적한다', async () => {
+    const host = await makeHostPptx()
+    const fileBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3])
+    const zipLoad = async (b: Uint8Array): Promise<ZipLike> => (await import('jszip')).default.loadAsync(b) as unknown as ZipLike
+    const mk = async (name: string, slide: number, x: number, y: number): Promise<Uint8Array> => {
+      const out = await assemblePptxEmbed(zipLoad, { hostBytes: host, attachBytes: fileBytes, attachName: name, attachKind: 'docx', slide, xFrac: x, yFrac: y })
+      return out
+    }
+    const once = await mk('back-a.docx', 1, 0.5, 0.5)
+    const twice = await assemblePptxEmbed(zipLoad, { hostBytes: once, attachBytes: fileBytes, attachName: 'back-b.docx', attachKind: 'docx', slide: 1, xFrac: 0.62, yFrac: 0.58 })
+    const found = await listEmbedPositions(zipLoad, twice, 'pptx')
+    expect(found.length).toBe(2)
+    const byName: Record<string, { slide?: number; x?: number; y?: number }> = {}
+    for (const f of found) byName[f.name] = f.pos
+    expect(byName['back-a.docx']?.slide).toBe(1)
+    expect(Math.abs((byName['back-a.docx']?.x ?? -1) - 0.5)).toBeLessThan(0.01)
+    expect(byName['back-b.docx']?.slide).toBe(1)
+    expect(Math.abs((byName['back-b.docx']?.x ?? -1) - 0.62)).toBeLessThan(0.01)
   })
   it('EMBED_MAX_BYTES는 20MB다', () => {
     expect(EMBED_MAX_BYTES).toBe(20 * 1024 * 1024)
