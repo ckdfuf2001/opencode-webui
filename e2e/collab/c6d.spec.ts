@@ -1660,6 +1660,79 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
   })
 
+  test('D13-pptx: 방 재생성 후 예전 첨부가 백필되어 정위치에 보인다', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd13pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await gotoSlide(t.pageA, 2)
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'd13-keep.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'ppt/embeddings/d13-keep.docx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      // 전부 닫아 방을 비운다 (TTL 30초+스윕 만료 대기 → dispose → knownEmbeds 소멸).
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+      await new Promise((r) => setTimeout(r, 45000))
+      // 같은 파일 재입장 → 새 방 + 백필.
+      const ctxA2 = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+      await seedUser(ctxA2, ADA)
+      const pageA2 = await ctxA2.newPage()
+      try {
+        await gotoApp(pageA2)
+        await openEditor(pageA2, t.parentPath)
+        await pageA2.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 })
+        await gotoSlide(pageA2, 2)
+        // 칩이 있고 좌상단 폴백이 아니라 가운데 근처다 (백필 정위치).
+        await expect
+          .poll(() => pageA2.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d13-keep.docx'))), { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+        const allc = await pageA2.getByTestId('ole-icon').evaluateAll((els) =>
+          els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })() })),
+        )
+        console.log(`[c6d] D13 allchips: ${JSON.stringify(allc)}`)
+        const hit = allc.find((c) => c.label === '첨부 d13-keep.docx')
+        expect(hit).toBeTruthy()
+        const box = { x: hit!.box[0], y: hit!.box[1], width: hit!.box[2], height: hit!.box[3] }
+        expect(box.width).toBeGreaterThan(0)
+        const ctr = await pageA2.evaluate(() => {
+          const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+          const b = root?.getBoundingClientRect()
+          if (!b) return null
+          return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
+        })
+        expect(ctr).not.toBeNull()
+        const dist = Math.hypot(box!.x + box!.width / 2 - ctr!.x, box!.y + box!.height / 2 - ctr!.y)
+        console.log(`[c6d] D13 backfilled chip dist from center: ${Math.round(dist)}px`)
+        expect(dist).toBeLessThan(200)
+        // 라벨도 있다.
+        const labels = await pageA2.getByTestId('ole-label').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim()))
+        expect(labels.some((t) => t.includes('d13-keep.docx'))).toBe(true)
+        console.log(`[c6d] D13 backfilled chip positioned after room recreate`)
+      } finally {
+        await pageA2.close().catch(() => {})
+        await ctxA2.close().catch(() => {})
+      }
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
