@@ -1252,8 +1252,7 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
     await gotoApp(pageC)
     await openEditor(pageC, t.parentPath)
-    await pageC.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
-    await gotoSlide(pageC, 2)
+    await pageC.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 }).catch(() => {})
     watchWs('A', t.pageA)
     watchWs('C', pageC)
     await t.pageA.waitForTimeout(3000).catch(() => {})
