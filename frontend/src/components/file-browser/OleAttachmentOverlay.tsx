@@ -137,15 +137,20 @@ function findAnchorEl(
           /* 무시 */
         }
       }
-      // 2차: 기존 폴백 (첫 Download 프레임).
-      for (const el of all) {
-        try {
-          const eid = el.getAttribute?.('data-element-id') ?? ''
-          if (eid.includes('-frame-') && /download/i.test(el.textContent ?? '') && isVis(el))
-            return { el, unsupported: false }
-        } catch {
-          /* 무시 */
+      // 2차: Download 프레임이 정확히 1개일 때만 (여러 개면 엉뚱한 도형에 붙는다).
+      try {
+        const frames: Element[] = []
+        for (const el of all) {
+          try {
+            const eid = el.getAttribute?.('data-element-id') ?? ''
+            if (eid.includes('-frame-') && /download/i.test(el.textContent ?? '') && isVis(el)) frames.push(el)
+          } catch {
+            /* 무시 */
+          }
         }
+        if (frames.length === 1 && frames[0]) return { el: frames[0], unsupported: false }
+      } catch {
+        /* 무시 */
       }
       return null
     }
@@ -179,13 +184,19 @@ function findAnchorEl(
         }
       }
     }
-    // 3차: 기존 폴백 (첫 data-docx-ole).
-    for (const el of all) {
-      try {
-        if (el.hasAttribute?.('data-docx-ole') && isVis(el)) return { el, unsupported: false }
-      } catch {
-        /* 무시 */
+    // 3차: data-docx-ole 자리가 정확히 1개일 때만 (여러 개면 엉뚱한 곳에 붙는다).
+    try {
+      const oles: Element[] = []
+      for (const el of all) {
+        try {
+          if (el.hasAttribute?.('data-docx-ole') && isVis(el)) oles.push(el)
+        } catch {
+          /* 무시 */
+        }
       }
+      if (oles.length === 1 && oles[0]) return { el: oles[0], unsupported: false }
+    } catch {
+      /* 무시 */
     }
     return null
   } catch {
@@ -699,6 +710,10 @@ export default function OleAttachmentOverlay({
     }
     return true
   }
+  // C7c: 앵커된 파싱분도 현재 슬라이드/시트가 아니면 숨긴다
+  // (다른 페이지 도형에 잘못 붙은 라벨이 엉뚱한 곳에 뜨지 않게).
+  // extras는 resolveExtraPos에서 이미 슬라이드를 확인했으므로 항상 true다.
+  const anchoredVisible = anchored.filter((e) => extraParts.has(e.partName) || onCurrentSheet(e))
   const fallback = entries.filter(
     (e) => !(anchor != null && posMap[e.partName] != null) && !extraParts.has(e.partName) && onCurrentSheet(e),
   )
@@ -775,7 +790,7 @@ export default function OleAttachmentOverlay({
           </a>
         </div>
       )}
-      {anchored.map((e) => {
+      {anchoredVisible.map((e) => {
         const pos = posMap[e.partName]
         if (!pos) return null
         // C7c-1: lib이 실제 도형을 그리는 경우(파싱분+앵커)는 칩을 숨기고 파일명 라벨만 남긴다
