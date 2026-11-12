@@ -961,6 +961,7 @@ export interface EmbedPos {
   col?: number
   row?: number
   block?: number
+  text?: string
 }
 
 /**
@@ -970,6 +971,148 @@ export interface EmbedPos {
  * - docx: 흐름 배치라 겹치지 않음 (그대로).
  * existing는 같은 슬라이드/시트로 미리 걸러서 넘긴다.
  */
+/** C7c: 디스크에서 임베딩 위치를 역추적한다 (예전 첨부 백필용).
+ * - pptx: 각 슬라이드의 ole graphicFrame (a:off → sldSz 기준 fractions).
+ * - xlsx: sheet oleObjects + drawing 앵커 (shapeId 일치 → col/row).
+ * - docx: w:object 단락 (topLevel 순서 → block + text).
+ * 반환 pos는 assemble 입력과 같은 좌표계 ( fractions / 0-based cell / block ).
+ */
+export interface BackfilledEmbed {
+  part: string
+  name: string
+  pos: EmbedPos
+}
+
+export async function listEmbedPositions(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+  hostKind: 'pptx' | 'xlsx' | 'docx',
+): Promise<BackfilledEmbed[]> {
+  const out: BackfilledEmbed[] = []
+  const zip = await zipLoad(hostBytes)
+  const readText = async (name: string): Promise<string | null> => {
+    try {
+      const f = zip.files[name]
+      if (!f || f.dir) return null
+      return (await f.async('string')) as string
+    } catch {
+      return null
+    }
+  }
+  const relTarget = (relsXml: string, id: string): string | null => {
+    const m = new RegExp(`<[^>]*?Id="${id}"[^>]*?Target="([^"]+)"`).exec(relsXml)
+    return m?.[1] ?? null
+  }
+  const resolveRel = (base: string, target: string): string => {
+    if (target.startsWith('/')) return target.slice(1)
+    const dir = base.includes('/') ? base.slice(0, base.lastIndexOf('/') + 1) : ''
+    const parts = (dir + target).split('/')
+    const stack: string[] = []
+    for (const q of parts) {
+      if (q === '.' || q === '') continue
+      if (q === '..') stack.pop()
+      else stack.push(q)
+    }
+    return stack.join('/')
+  }
+  if (hostKind === 'pptx') {
+    const pres = (await readText('ppt/presentation.xml')) ?? ''
+    let sldCx = 12192000
+    let sldCy = 6858000
+    const szm = /<p:sldSz[^>]*cx="(\d+)"[^>]*cy="(\d+)"/.exec(pres) ?? /<p:sldSz[^>]*cy="(\d+)"[^>]*cx="(\d+)"/.exec(pres)
+    if (szm) { sldCx = Number(szm[1]); sldCy = Number(szm[2]) }
+    const presRels = (await readText('ppt/_rels/presentation.xml.rels')) ?? ''
+    const sldIds = [...pres.matchAll(/<p:sldId[^>]*r:id="([^"]+)"/g)].map((m) => m[1]!)
+    for (let si = 0; si < sldIds.length; si++) {
+      const tgt = relTarget(presRels, sldIds[si]!)
+      if (!tgt) continue
+      const slideFile = resolveRel('ppt/presentation.xml', tgt)
+      const slide = (await readText(slideFile)) ?? ''
+      if (!slide) continue
+      const slideRels = (await readText(slideFile.replace(/\/([^/]+)$/, '/_rels/$1.rels'))) ?? ''
+      const frames = [...slide.matchAll(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g)].map((m) => m[0])
+      for (const fr of frames) {
+        const off = /<a:off x="(\d+)" y="(\d+)"/.exec(fr)
+        const ext = /<a:ext cx="(\d+)" cy="(\d+)"/.exec(fr)
+        const ole = /<p:oleObj[^>]*r:id="([^"]+)"/.exec(fr)
+        if (!off || !ole) continue
+        const embTgt = relTarget(slideRels, ole[1]!)
+        if (!embTgt || embTgt.indexOf('embeddings/') < 0) continue
+        const embFile = resolveRel(slideFile, embTgt)
+        const name = embFile.split('/').pop() ?? embFile
+        // 조립은 off = frac*(sld-ext)로 넣는다 (도형 가운데 정렬) — 역산한다.
+        const ecxv = ext ? Number(ext[1]) : 0
+        const ecyv = ext ? Number(ext[2]) : 0
+        const denx = sldCx - ecxv > 0 ? sldCx - ecxv : sldCx
+        const deny = sldCy - ecyv > 0 ? sldCy - ecyv : sldCy
+        out.push({ part: embFile, name, pos: { slide: si + 1, x: Number(off[1]) / denx, y: Number(off[2]) / deny } })
+      }
+    }
+    return out
+  }
+  if (hostKind === 'xlsx') {
+    const wb = (await readText('xl/workbook.xml')) ?? ''
+    const wbRels = (await readText('xl/_rels/workbook.xml.rels')) ?? ''
+    const sheets = [...wb.matchAll(/<sheet[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)].map((m) => ({ name: m[1]!, rid: m[2]! }))
+    if (sheets.length === 0) {
+      for (const m of wb.matchAll(/<sheet[^>]*r:id="([^"]+)"[^>]*name="([^"]+)"/g)) sheets.push({ name: m[2]!, rid: m[1]! })
+    }
+    for (let si = 0; si < sheets.length; si++) {
+      const tgt = relTarget(wbRels, sheets[si]!.rid)
+      if (!tgt) continue
+      const sheetFile = resolveRel('xl/workbook.xml', tgt)
+      const sheet = (await readText(sheetFile)) ?? ''
+      if (!sheet) continue
+      const sheetRels = (await readText(sheetFile.replace(/\/([^/]+)$/, '/_rels/$1.rels'))) ?? ''
+      const oleEls = [...sheet.matchAll(/<oleObject[^>]*shapeId="(\d+)"[^>]*r:id="([^"]+)"|<oleObject[^>]*r:id="([^"]+)"[^>]*shapeId="(\d+)"/g)]
+      if (oleEls.length === 0) continue
+      // drawing 앵커 (shapeId 일치).
+      let drawingAnchors: Array<{ id: string; col: number; row: number }> = []
+      const drTgt = [...sheetRels.matchAll(/<[^>]*?Id="([^"]+)"[^>]*?Target="([^"]*drawing[^"]*)"/g)].map((m) => ({ id: m[1]!, tgt: m[2]! }))
+      for (const d of drTgt) {
+        const dFile = resolveRel(sheetFile, d.tgt)
+        const dXml = (await readText(dFile)) ?? ''
+        if (!dXml) continue
+        for (const am of dXml.matchAll(/<xdr:twoCellAnchor>[\s\S]*?<\/xdr:twoCellAnchor>/g)) {
+          const a = am[0]
+          const idm = /<xdr:cNvPr[^>]*id="(\d+)"/.exec(a)
+          const fromm = /<xdr:from><xdr:col>(\d+)<\/xdr:col>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/.exec(a)
+          if (idm && fromm) drawingAnchors.push({ id: idm[1]!, col: Number(fromm[1]), row: Number(fromm[2]) })
+        }
+      }
+      for (const om of oleEls) {
+        const shapeId = om[1] ?? om[4] ?? ''
+        const rid = om[2] ?? om[3] ?? ''
+        const embTgt = relTarget(sheetRels, rid)
+        if (!embTgt || embTgt.indexOf('embeddings/') < 0) continue
+        const embFile = resolveRel(sheetFile, embTgt)
+        const anch = drawingAnchors.find((a) => a.id === shapeId)
+        if (!anch) continue
+        out.push({ part: embFile, name: embFile.split('/').pop() ?? embFile, pos: { sheet: si, col: anch.col, row: anch.row } })
+      }
+    }
+    return out
+  }
+  // docx: w:object 단락 (topLevel 순서 → block + text).
+  {
+    const doc = (await readText('word/document.xml')) ?? ''
+    if (!doc) return out
+    const body = /<w:body[\s\S]*?<\/w:body>/.exec(doc)?.[0] ?? doc
+    const blocks = [...body.matchAll(/<(w:p|w:tbl)[\s>][\s\S]*?<\/\1>/g)].map((m) => m[0])
+    const docRels = (await readText('word/_rels/document.xml.rels')) ?? ''
+    blocks.forEach((blk, bi) => {
+      for (const om of blk.matchAll(/<o:OLEObject[^>]*r:id="([^"]+)"/g)) {
+        const embTgt = relTarget(docRels, om[1]!)
+        if (!embTgt || embTgt.indexOf('embeddings/') < 0) continue
+        const embFile = resolveRel('word/document.xml', embTgt)
+        const text = blk.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+        out.push({ part: embFile, name: embFile.split('/').pop() ?? embFile, pos: { block: bi, text } })
+      }
+    })
+    return out
+  }
+}
+
 export function offsetOverlap(
   hostKind: 'pptx' | 'xlsx' | 'docx',
   req: EmbedPos,
