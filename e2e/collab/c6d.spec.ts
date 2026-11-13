@@ -1828,10 +1828,11 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       await expect.poll(() => chipBox().then((b) => b !== null), { timeout: 30000, intervals: [500] }).toBe(true)
       const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
       const cb0 = (await chipBox())!
-      await t.pageA.mouse.click(cb0.x + cb0.width / 2, cb0.y + cb0.height / 2)
+      // 클립존 클릭 = 다운로드 (좌상단 배지 자리).
+      await t.pageA.mouse.click(cb0.x + cb0.width * 0.12, cb0.y + cb0.height * 0.25)
       const dl = await dlP
       expect(dl).not.toBeNull()
-      console.log(`[c6d] D15 single-click download ok: ${dl ? await dl.suggestedFilename() : '?'}`)
+      console.log(`[c6d] D15 clip-click download ok: ${dl ? await dl.suggestedFilename() : '?'}`)
       // 2) 드래그 이동 (+100,+50px).
       const box0 = (await chipBox())!
       const cx0 = box0.x + box0.width / 2
@@ -1852,7 +1853,10 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       const box1 = await chipBox()
       expect(box1).not.toBeNull()
       expect(Math.hypot(box1!.x - box0.x, box1!.y - box0.y)).toBeGreaterThan(50)
-      // 3) 리사이즈 핸들 (+40,+20px) — d15 래퍼 안의 핸들을 정확히 집는다.
+      // 3) 가운데 클릭 = 선택 (핸들 표시) 후 리사이즈 핸들 (+40,+20px).
+      const selBox = (await chipBox())!
+      await t.pageA.mouse.click(selBox.x + selBox.width / 2, selBox.y + selBox.height / 2)
+      await t.pageA.waitForTimeout(600).catch(() => {})
       const hb = await t.pageA.evaluate((): [number, number, number, number] | null => {
         const els = [...document.querySelectorAll('[data-testid="ole-icon"]')]
         const hit = els.find((e) => e.getAttribute('aria-label') === '첨부 d15-move.docx')
