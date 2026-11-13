@@ -1777,6 +1777,115 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
   })
 
+  test('D15-pptx: 칩 클릭=다운로드, 드래그=이동, 핸들=리사이즈 (파일에 반영)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const slug = 'c6dd15pptx'
+    const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await gotoSlide(t.pageA, 2)
+      const rootA = await t.pageA.$('[data-testid="pptx-viewer-root"]')
+      expect(rootA).not.toBeNull()
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'd15-move.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'ppt/embeddings/d15-move.docx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      const offOf = async (): Promise<[number, number, number, number] | null> => {
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const s2 = await zip.files['ppt/slides/slide2.xml']!.async('string')
+        const frames = [...s2.matchAll(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g)].map((m) => m[0])
+        const fr = frames.find((f) => f.includes('d15-move'))
+        if (!fr) return null
+        const off = /<a:off x="(\d+)" y="(\d+)"/.exec(fr)
+        const ext = /<a:ext cx="(\d+)" cy="(\d+)"/.exec(fr)
+        if (!off || !ext) return null
+        return [Number(off[1]), Number(off[2]), Number(ext[1]), Number(ext[2])]
+      }
+      const before = await offOf()
+      expect(before).not.toBeNull()
+      // 1) 단일 클릭 = 다운로드 (정확한 aria-label로 찾고 좌표 클릭).
+      const chipBox = async (): Promise<{ x: number; y: number; width: number; height: number } | null> => {
+        const allc = await t.pageA.getByTestId('ole-icon').evaluateAll((els) =>
+          els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })() })),
+        )
+        const hit = allc.find((c) => c.label === '첨부 d15-move.docx')
+        if (!hit || hit.box[2] <= 0) return null
+        return { x: hit.box[0], y: hit.box[1], width: hit.box[2], height: hit.box[3] }
+      }
+      await expect.poll(() => chipBox().then((b) => b !== null), { timeout: 30000, intervals: [500] }).toBe(true)
+      const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
+      const cb0 = (await chipBox())!
+      await t.pageA.mouse.click(cb0.x + cb0.width / 2, cb0.y + cb0.height / 2)
+      const dl = await dlP
+      expect(dl).not.toBeNull()
+      console.log(`[c6d] D15 single-click download ok: ${dl ? await dl.suggestedFilename() : '?'}`)
+      // 2) 드래그 이동 (+100,+50px).
+      const box0 = (await chipBox())!
+      const cx0 = box0.x + box0.width / 2
+      const cy0 = box0.y + box0.height / 2
+      await t.pageA.mouse.move(cx0, cy0)
+      await t.pageA.mouse.down()
+      await t.pageA.mouse.move(cx0 + 100, cy0 + 50, { steps: 10 })
+      await t.pageA.mouse.up()
+      await expect
+        .poll(async () => {
+          const o = await offOf()
+          return o ? o[0] - before![0] : 0
+        }, { timeout: 30000, intervals: [1000] })
+        .toBeGreaterThan(0)
+      const afterMove = (await offOf())!
+      expect(afterMove[1]).toBeGreaterThan(before![1])
+      console.log(`[c6d] D15 moved off: ${before![0]},${before![1]} -> ${afterMove[0]},${afterMove[1]}`)
+      const box1 = await chipBox()
+      expect(box1).not.toBeNull()
+      expect(Math.hypot(box1!.x - box0.x, box1!.y - box0.y)).toBeGreaterThan(50)
+      // 3) 리사이즈 핸들 (+40,+20px) — d15 래퍼 안의 핸들을 정확히 집는다.
+      const hb = await t.pageA.evaluate((): [number, number, number, number] | null => {
+        const els = [...document.querySelectorAll('[data-testid="ole-icon"]')]
+        const hit = els.find((e) => e.getAttribute('aria-label') === '첨부 d15-move.docx')
+        const h = hit ? hit.querySelector('[data-testid="ole-resize"]') : null
+        if (!h) return null
+        const r = (h as HTMLElement).getBoundingClientRect()
+        return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+      })
+      expect(hb).not.toBeNull()
+      const hx = hb![0] + hb![2] / 2
+      const hy = hb![1] + hb![3] / 2
+      await t.pageA.mouse.move(hx, hy)
+      await t.pageA.mouse.down()
+      await t.pageA.mouse.move(hx + 40, hy + 20, { steps: 10 })
+      await t.pageA.mouse.up()
+      await expect
+        .poll(async () => {
+          const o = await offOf()
+          return o ? o[2] - afterMove[2] : 0
+        }, { timeout: 30000, intervals: [1000] })
+        .toBeGreaterThan(0)
+      const afterSize = (await offOf())!
+      expect(afterSize[3]).toBeGreaterThan(afterMove[3])
+      console.log(`[c6d] D15 resized ext: ${afterMove[2]}x${afterMove[3]} -> ${afterSize[2]}x${afterSize[3]}`)
+      // 리셋 없음.
+      await expect.poll(() => rootA!.evaluate((e) => e.isConnected), { timeout: 10000 }).toBe(true)
+      console.log(`[c6d] D15 click-download + move + resize without reset`)
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
