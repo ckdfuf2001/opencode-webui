@@ -39,6 +39,8 @@ export interface EmbedAddedMsg {
     slide?: number
     x?: number
     y?: number
+    w?: number
+    h?: number
     sheet?: number
     col?: number
     row?: number

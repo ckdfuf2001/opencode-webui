@@ -75,6 +75,9 @@ export interface EmbedCtx {
   /** C7: 클릭 위치 (pptx: 슬라이드 내 0..1, xlsx: 0-based 셀, docx: 0-based 문단). 없으면 화면 정가운데. */
   x?: number
   y?: number
+  /** C7e: 크기 fractions (pptx: 슬라이드 기준). */
+  w?: number
+  h?: number
   col?: number
   row?: number
   block?: number
@@ -88,7 +91,7 @@ export interface EmbedCtx {
   waitSeed?: () => Promise<boolean>
   reload: () => void
   /** C7: 삽입 성공 시 백그라운드 칩을 즉시 얹는다 (106보다 먼저 — 106 유실 대비). */
-  onInserted?: (rec: { part: string; name: string; newHash: string; pos: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number; text?: string } }) => void
+  onInserted?: (rec: { part: string; name: string; newHash: string; pos: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number; text?: string } }) => void
 }
 
 /** 방 시드를 최대 timeoutMs까지 기다린다 (setTimeout 체인, 상시 타이머 없음). */
@@ -216,9 +219,31 @@ export async function saveBeforeEmbed(hostPath: string, editing: boolean): Promi
   return waitSaveDone(hostPath)
 }
 
-async function postEmbed(fd: FormData): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number } } }> {
+/** C7e: 임베딩 이동/리사이즈 (pptx). fractions 기준. */
+export async function putEmbedPos(args: {
+  hostPath: string;
+  part: string;
+  roomId?: string;
+  clientId?: number;
+  baseHash?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}): Promise<{ ok: boolean; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number }; error?: string; code?: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/collab/embed/pos`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: args.hostPath, part: args.part, roomId: args.roomId, clientId: args.clientId, baseHash: args.baseHash, x: args.x, y: args.y, w: args.w, h: args.h }),
+  })
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number }; error?: string; code?: string }
+  if (!res.ok || !body.ok) return { ok: false, error: body.error ?? (`이동 실패 (${res.status})`), code: body.code }
+  return { ok: true, newHash: body.newHash, pos: body.pos }
+}
+
+async function postEmbed(fd: FormData): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number } } }> {
   const res = await fetch(`${API_BASE_URL}/api/collab/embed`, { method: 'POST', body: fd })
-  const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number } }
+  const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number } }
   return { status: res.status, body }
 }
 
@@ -232,7 +257,7 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
   // isViewer는 호환용으로 남긴다.
   // C7: 백그라운드 병합 — 방에 있으면 리로드하지 않는다 (106이 오버레이+해시를 갱신).
   // solo(방 없음)는 106이 없으므로 기존처럼 리로드한다.
-  const doPost = async (): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number } } }> => {
+  const doPost = async (): Promise<{ status: number; body: { code?: string; error?: string; embeddings?: string[]; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number } } }> => {
     const fd = new FormData()
     fd.append('path', ctx.hostPath)
     fd.append('file', file, file.name)
@@ -296,7 +321,7 @@ export async function runOfficeEmbed(file: File, ctx: EmbedCtx): Promise<void> {
           part,
           name: part.split('/').pop() ?? file.name,
           newHash: r.body.newHash,
-          pos: { slide: rp.slide ?? ctx.slide, x: rp.x ?? ctx.x, y: rp.y ?? ctx.y, sheet: rp.sheet ?? ctx.sheet, col: rp.col ?? ctx.col, row: rp.row ?? ctx.row, block: rp.block ?? ctx.block },
+          pos: { slide: rp.slide ?? ctx.slide, x: rp.x ?? ctx.x, y: rp.y ?? ctx.y, w: (rp as { w?: number }).w ?? ctx.w, h: (rp as { h?: number }).h ?? ctx.h, sheet: rp.sheet ?? ctx.sheet, col: rp.col ?? ctx.col, row: rp.row ?? ctx.row, block: rp.block ?? ctx.block },
         })
       }
     } catch {

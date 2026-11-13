@@ -33,7 +33,7 @@ import { countPptxDocImages, ensurePptxImagesSyncable } from '@/lib/pptxImageSyn
 import { createSlideGate } from '@/lib/slideLocationGate'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { deepQueryAllVisible } from '@/lib/domDeep'
-import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitForSessionSynced, type EmbedDetail } from './officeEmbed'
+import { OFFICE_EMBED_FILE, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, putEmbedPos, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitForSessionSynced, type EmbedDetail } from './officeEmbed'
 import { decideSaveIntent, type OwnerState } from '@/lib/collabSaveIntent'
 import { acquireCollabSession, collabSessionCount, dropCollabSession } from '@/lib/collabSessionRegistry'
 import { tl, tlDump } from '@/lib/collabTimeline'
@@ -269,13 +269,16 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const [partChangePending, setPartChangePending] = useState(false)
   // C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시).
   const [embedExtras, setEmbedExtras] = useState<
-    Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { slide?: number; x?: number; y?: number } }>
+    Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { slide?: number; x?: number; y?: number; w?: number; h?: number } }>
   >([])
   const applyEmbedAdded = useCallback(
-    (msg: { part: string; name: string; kind: string; pos: { slide?: number; x?: number; y?: number }; newHash: string }) => {
+    (msg: { part: string; name: string; kind: string; pos: { slide?: number; x?: number; y?: number; w?: number; h?: number }; newHash: string }) => {
       if (msg.kind !== 'pptx') return
       setEmbedExtras((prev) => {
-        if (prev.some((e) => e.part === msg.part)) return prev
+        // C7e: 이미 있으면 위치를 갱신한다 (이동/리사이즈 106 반영).
+        if (prev.some((e) => e.part === msg.part)) {
+          return prev.map((e) => (e.part === msg.part ? { ...e, pos: msg.pos } : e))
+        }
         return [...prev, { part: msg.part, name: msg.name, kind: 'pptx' as const, pos: msg.pos }]
       })
       baseHashRef.current = msg.newHash
@@ -1298,10 +1301,59 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   }, [savePath, fileName, saving, persistBytes, part])
   // C7: 삽입 성공 시 바로 칩을 얹는다 (106과 멱등).
   const onEmbedInserted = useCallback(
-    (rec: { part: string; name: string; newHash: string; pos: { slide?: number; x?: number; y?: number } }) => {
+    (rec: { part: string; name: string; newHash: string; pos: { slide?: number; x?: number; y?: number; w?: number; h?: number } }) => {
       applyEmbedAdded({ part: rec.part, name: rec.name, kind: 'pptx', pos: rec.pos, newHash: rec.newHash })
     },
     [applyEmbedAdded],
+  )
+  // C7e: 도형 이동/리사이즈 (PUT /embed/pos → 106 방송으로 전파, 리로드 없음).
+  const moveEmbed = useCallback(
+    async (part: string, p: { x: number; y: number }) => {
+      if (!savePath) return
+      try {
+        const c = collabRef.current
+        const r = await putEmbedPos({ hostPath: savePath, part, roomId: c?.roomId, clientId: c?.session?.clientId, baseHash: baseHashRef.current ?? undefined, x: p.x, y: p.y })
+        if (r.ok) {
+          if (r.newHash) {
+            baseHashRef.current = r.newHash
+            try {
+              const cc = collabRef.current
+              if (cc) cc.session.knownHash = r.newHash
+            } catch {
+              /* 무시 */
+            }
+          }
+          if (r.pos) applyEmbedAdded({ part, name: part.split('/').pop() ?? part, kind: 'pptx', pos: { ...(r.pos as { slide?: number; x?: number; y?: number; w?: number; h?: number }) }, newHash: r.newHash ?? baseHashRef.current ?? '' })
+        }
+      } catch {
+        /* 무시 (106이 처리) */
+      }
+    },
+    [applyEmbedAdded, savePath],
+  )
+  const resizeEmbed = useCallback(
+    async (part: string, s: { w: number; h: number }) => {
+      if (!savePath) return
+      try {
+        const c = collabRef.current
+        const r = await putEmbedPos({ hostPath: savePath, part, roomId: c?.roomId, clientId: c?.session?.clientId, baseHash: baseHashRef.current ?? undefined, w: s.w, h: s.h })
+        if (r.ok) {
+          if (r.newHash) {
+            baseHashRef.current = r.newHash
+            try {
+              const cc = collabRef.current
+              if (cc) cc.session.knownHash = r.newHash
+            } catch {
+              /* 무시 */
+            }
+          }
+          if (r.pos) applyEmbedAdded({ part, name: part.split('/').pop() ?? part, kind: 'pptx', pos: { ...(r.pos as { slide?: number; x?: number; y?: number; w?: number; h?: number }) }, newHash: r.newHash ?? baseHashRef.current ?? '' })
+        }
+      } catch {
+        /* 무시 */
+      }
+    },
+    [applyEmbedAdded, savePath],
   )
   // C5-2: 문서 첨부. 자기 경로의 요청만 처리한다.
   useEffect(() => {
@@ -2741,6 +2793,8 @@ const peersRef = useRef<Peer[]>([])
         anchor="pptx"
         parentPath={savePath}
         extras={embedExtras}
+        onMoveEmbed={moveEmbed}
+        onResizeEmbed={resizeEmbed}
         getExtraContext={() => {
           try {
             const idx = viewerRef.current?.getActiveSlideIndex?.()

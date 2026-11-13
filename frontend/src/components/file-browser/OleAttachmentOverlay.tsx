@@ -16,6 +16,7 @@ import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/ole
 import { findOleEntryAtPoint } from '@/lib/oleHitTest'
 import { frameFileNames, entryNameHit, progIdOfText, extOf, OLE_PROG_EXT } from '@/lib/oleMatch'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
+import { API_BASE_URL } from '@/config'
 import { attachmentKindOf } from './embedEdit'
 import { editUrlForAttachment, openInNewTab } from '@/lib/editUrls'
 import { showToast } from '@/lib/toast'
@@ -58,6 +59,8 @@ export interface OleExtraAttachment {
     slide?: number
     x?: number
     y?: number
+    w?: number
+    h?: number
     sheet?: number
     col?: number
     row?: number
@@ -263,8 +266,11 @@ function resolveExtraPos(
     if (anchor === 'pptx') {
       if (ex.pos.slide == null || ctx?.slide == null || ex.pos.slide !== ctx.slide) return null
       if (typeof ex.pos.x !== 'number' || typeof ex.pos.y !== 'number') return null
-      const w = 96
-      const h = 48
+      // C7e: 실제 도형 크기 (fractions). 없으면 표준 슬라이드 기준 기본값 (서버가 준 w/h 우선).
+      const wFrac = typeof ex.pos.w === 'number' && ex.pos.w > 0 ? ex.pos.w : 1296000 / 12192000
+      const hFrac = typeof ex.pos.h === 'number' && ex.pos.h > 0 ? ex.pos.h : 648000 / 6858000
+      const w = Math.max(8, Math.round(wFrac * c.width))
+      const h = Math.max(8, Math.round(hFrac * c.height))
       const x = Math.round(ex.pos.x * c.width)
       const y = Math.round(ex.pos.y * c.height)
       return { x, y, w, h, cover: false, captionAbove: above(y, h) }
@@ -341,12 +347,160 @@ function resolveExtraPos(
     return null
   }
 }
+/** C7e: pptx 실제 아이콘 (<img> 오버레이 — 드래그 이동·리사이즈·클릭 다운로드). */
+function PptxImgEntry({
+  entry,
+  pos,
+  iconUrl,
+  onMove,
+  onResize,
+  onDownloadFile,
+  onOpen,
+}: {
+  entry: OleEmbeddingRef
+  pos: { x: number; y: number; w: number; h: number }
+  iconUrl: string
+  onMove?: (part: string, p: { x: number; y: number }) => void
+  onResize?: (part: string, s: { w: number; h: number }) => void
+  onDownloadFile: (entry: OleEmbeddingRef) => void
+  onOpen: (entry: OleEmbeddingRef) => void
+}): React.ReactNode {
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
+  const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; moved: boolean } | null>(null)
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const containerOf = (el: Element | null): HTMLElement | null => {
+    try {
+      const r = (el as HTMLElement | null)?.closest?.('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+      return r
+    } catch {
+      return null
+    }
+  }
+  useEffect(() => {
+    const onUp = (e: PointerEvent): void => {
+      const d = dragRef.current
+      const r = resizeRef.current
+      const box = boxRef.current
+      const cont = containerOf(box)
+      if (d && cont) {
+        const cb = cont.getBoundingClientRect()
+        const dx = e.clientX - d.sx
+        const dy = e.clientY - d.sy
+        if (Math.hypot(dx, dy) < 5 && !d.moved) {
+          // 단일 클릭 = 다운로드 (더블클릭이면 타이머 취소 후 열기).
+          if (clickTimer.current) {
+            try { clearTimeout(clickTimer.current) } catch { /* 무시 */ }
+            clickTimer.current = null
+            onOpen(entry)
+          } else {
+            clickTimer.current = setTimeout(() => {
+              clickTimer.current = null
+              onDownloadFile(entry)
+            }, 250)
+          }
+        } else if (onMove && (cb.width > 0 || cb.height > 0)) {
+          const nx = (d.ox + dx) / Math.max(1, cb.width)
+          const ny = (d.oy + dy) / Math.max(1, cb.height)
+          onMove(entry.partName, { x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)) })
+        }
+        setDrag(null)
+      }
+      if (r && box && cont) {
+        const cb = cont.getBoundingClientRect()
+        const dx = e.clientX - r.sx
+        const dy = e.clientY - r.sy
+        if ((r.moved || Math.hypot(dx, dy) >= 5) && onResize && cb.width > 0 && cb.height > 0) {
+          onResize(entry.partName, {
+            w: Math.min(1, Math.max(0.02, (r.ow + dx) / cb.width)),
+            h: Math.min(1, Math.max(0.02, (r.oh + dy) / cb.height)),
+          })
+        }
+        setSize(null)
+      }
+      dragRef.current = null
+      resizeRef.current = null
+    }
+    const onMoveWin = (e: PointerEvent): void => {
+      if (dragRef.current) {
+        const dx = e.clientX - dragRef.current.sx
+        const dy = e.clientY - dragRef.current.sy
+        if (Math.hypot(dx, dy) >= 5) dragRef.current.moved = true
+        setDrag({ dx, dy })
+      }
+      if (resizeRef.current) {
+        const dx = e.clientX - resizeRef.current.sx
+        const dy = e.clientY - resizeRef.current.sy
+        if (Math.hypot(dx, dy) >= 5) resizeRef.current.moved = true
+        setSize({ w: Math.max(8, resizeRef.current.ow + dx), h: Math.max(8, resizeRef.current.oh + dy) })
+      }
+    }
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointermove', onMoveWin)
+    return () => {
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointermove', onMoveWin)
+      if (clickTimer.current) {
+        try { clearTimeout(clickTimer.current) } catch { /* 무시 */ }
+        clickTimer.current = null
+      }
+    }
+  }, [entry, onMove, onResize, onDownloadFile, onOpen])
+  const w = size?.w ?? pos.w
+  const h = size?.h ?? pos.h
+  const x = pos.x + (drag?.dx ?? 0)
+  const y = pos.y + (drag?.dy ?? 0)
+  return (
+    <div
+      ref={boxRef}
+      data-testid="ole-icon"
+      title={entry.displayName ?? entry.fallbackName}
+      aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
+      style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: 'move' }}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        e.stopPropagation()
+        dragRef.current = { sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y, moved: false }
+      }}
+      onDoubleClick={(e) => {
+        // pointerup 더블탭 감지에서 이미 열었으므로 여기서는 중복 실행 방지.
+        e.preventDefault()
+        e.stopPropagation()
+      }}
+    >
+      <img
+        data-testid="ole-img"
+        src={iconUrl}
+        alt=""
+        draggable={false}
+        style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', userSelect: 'none' }}
+      />
+      <div
+        data-testid="ole-resize"
+        title="크기 조절"
+        style={{ position: 'absolute', right: -6, bottom: -6, width: 14, height: 14, cursor: 'nwse-resize', background: '#fff', border: '1px solid #94a3b8', borderRadius: 3 }}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: w, oh: h, moved: false }
+        }}
+      />
+    </div>
+  )
+}
+
 export default function OleAttachmentOverlay({
   data,
   anchor,
   parentPath,
   extras,
   getExtraContext,
+  onMoveEmbed,
+  onResizeEmbed,
 }: {
   data: ArrayBuffer | Uint8Array
   anchor?: OleAnchorKind
@@ -356,6 +510,9 @@ export default function OleAttachmentOverlay({
   extras?: OleExtraAttachment[]
   /** C7: extras 해석용 현재 위치 (슬라이드/시트). */
   getExtraContext?: () => { slide?: number; sheet?: number }
+  /** C7e: pptx 도형 이동/리사이즈 (fractions). */
+  onMoveEmbed?: (part: string, pos: { x: number; y: number }) => void
+  onResizeEmbed?: (part: string, size: { w: number; h: number }) => void
 }) {
   const [parsed, setParsed] = useState<OleEmbeddingRef[]>([])
   // C7: 파싱분 + 백그라운드분 합집합 (칩·캡션·열기 모두 동일 처리).
@@ -642,6 +799,21 @@ export default function OleAttachmentOverlay({
   }
 
   const download = async (entry: OleEmbeddingRef): Promise<void> => {
+    // C7e: 서버에서 최신 바이트로 받는다 (방금 삽입분은 로컬 zip에 없을 수 있음).
+    if (parentPath) {
+      try {
+        const u = `${API_BASE_URL}/api/collab/embed?path=${encodeURIComponent(parentPath)}&part=${encodeURIComponent(entry.partName)}`
+        const r = await fetch(u)
+        const j = (await r.json().catch(() => ({}))) as { ok?: boolean; name?: string; data?: string }
+        if (r.ok && j.ok && j.data) {
+          const bin = Uint8Array.from(atob(j.data), (c) => c.charCodeAt(0))
+          saveBlob(j.name ?? displayName(entry), bin)
+          return
+        }
+      } catch {
+        /* 폴백: 로컬 zip */
+      }
+    }
     try {
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
       const zip = await JSZip.loadAsync(bytes)
@@ -791,10 +963,6 @@ export default function OleAttachmentOverlay({
       {anchoredVisible.map((e) => {
         const pos = posMap[e.partName]
         if (!pos) return null
-        // C7c-1: lib이 실제 도형을 그리는 경우(파싱분+앵커)는 칩을 숨기고 파일명 라벨만 남긴다
-        // (lib 플레이스홀더와 우리 칩이 겹쳐 보이는 중복 방지).
-        // 백그라운드 삽입 직후(lib 모델에 아직 없음, extras)는 전체 칩을 쓴다.
-        const isExtra = extraParts.has(e.partName)
         // placeholder는 카드로 가리고 모서리 아이콘으로 조작한다 (드래그 차단 방지).
         if (pos.cover) {
           return (
@@ -804,6 +972,29 @@ export default function OleAttachmentOverlay({
             </span>
           )
         }
+        // C7e: pptx는 실제 아이콘 <img>를 그린다 (드래그 이동·리사이즈·클릭 다운로드).
+        // lib 플레이스홀더와 같은 자리를 덮어 중복 표시가 없다.
+        if (anchor === 'pptx' && parentPath) {
+          const iconUrl = `${API_BASE_URL}/api/collab/embed/icon?path=${encodeURIComponent(parentPath)}&part=${encodeURIComponent(e.partName)}`
+          return (
+            <span key={e.partName}>
+              <PptxImgEntry
+                entry={e}
+                pos={pos}
+                iconUrl={iconUrl}
+                onMove={onMoveEmbed ? (part, p) => onMoveEmbed(part, p) : undefined}
+                onResize={onResizeEmbed ? (part, s) => onResizeEmbed(part, s) : undefined}
+                onDownloadFile={(en) => void download(en)}
+                onOpen={(en) => void openOrDownload(en)}
+              />
+              {caption(e, pos)}
+            </span>
+          )
+        }
+        // C7c-1: lib이 실제 도형을 그리는 경우(파싱분+앵커)는 칩을 숨기고 파일명 라벨만 남긴다
+        // (lib 플레이스홀더와 우리 칩이 겹쳐 보이는 중복 방지).
+        // 백그라운드 삽입 직후(lib 모델에 아직 없음, extras)는 전체 칩을 쓴다.
+        const isExtra = extraParts.has(e.partName)
         return (
           <span key={e.partName}>
             {isExtra ? chip(e, true, { x: pos.x, y: pos.y }) : null}
