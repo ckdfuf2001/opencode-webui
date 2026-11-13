@@ -1140,6 +1140,197 @@ export function offsetOverlap(
   return { ...req }
 }
 
+/**
+ * C7e: pptx 임베딩 이동/리사이즈 (a:off/a:ext + VML 동기화). fractions 기준.
+ * 조립과 같은 중심 규칙 (off = frac*(sld-ext)) 을 쓴다.
+ */
+export async function movePptxEmbed(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+  embPart: string,
+  pos: { slide?: number; x?: number; y?: number; w?: number; h?: number },
+): Promise<{ bytes: Uint8Array; found: boolean }> {
+  const zip = await zipLoad(hostBytes)
+  const readText = async (name: string): Promise<string | null> => {
+    try {
+      const f = zip.files[name]
+      if (!f || f.dir) return null
+      return (await f.async('string')) as string
+    } catch {
+      return null
+    }
+  }
+  const relTarget = (relsXml: string, id: string): string | null => {
+    const m = new RegExp(`<[^>]*?Id="${id}"[^>]*?Target="([^"]+)"`).exec(relsXml)
+    return m?.[1] ?? null
+  }
+  const resolveRel = (base: string, target: string): string => {
+    if (target.startsWith('/')) return target.slice(1)
+    const dir = base.includes('/') ? base.slice(0, base.lastIndexOf('/') + 1) : ''
+    const parts = (dir + target).split('/')
+    const stack: string[] = []
+    for (const q of parts) {
+      if (q === '.' || q === '') continue
+      else if (q === '..') stack.pop()
+      else stack.push(q)
+    }
+    return stack.join('/')
+  }
+  const pres = (await readText('ppt/presentation.xml')) ?? ''
+  let sldCx = 12192000
+  let sldCy = 6858000
+  const szm = /<p:sldSz[^>]*cx="(\d+)"[^>]*cy="(\d+)"/.exec(pres) ?? /<p:sldSz[^>]*cy="(\d+)"[^>]*cx="(\d+)"/.exec(pres)
+  if (szm) {
+    sldCx = Number(szm[1])
+    sldCy = Number(szm[2])
+  }
+  const presRels = (await readText('ppt/_rels/presentation.xml.rels')) ?? ''
+  const sldIds = [...pres.matchAll(/<p:sldId[^>]*r:id="([^"]+)"/g)].map((m) => m[1]!)
+  if (pos.slide !== undefined && (pos.slide < 1 || pos.slide > sldIds.length)) {
+    embedError('Bad slide', 400, 'bad_slide')
+  }
+  const indices = pos.slide !== undefined ? [pos.slide - 1] : sldIds.map((_, i) => i)
+  let done = false
+  for (const si of indices) {
+    const tgt = relTarget(presRels, sldIds[si]!)
+    if (!tgt) continue
+    const slideFile = tgt.startsWith('/') ? tgt.slice(1) : 'ppt/' + tgt.replace(/^\.\.\//, '')
+    const slide = (await readText(slideFile)) ?? ''
+    if (!slide) continue
+    const slideRels = (await readText(slideFile.replace(/\/([^/]+)$/, '/_rels/$1.rels'))) ?? ''
+    let changed = slide
+    let slideDirty = false
+    const frames = [...slide.matchAll(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g)].map((m) => m[0])
+    for (const fr of frames) {
+      const ole = /<p:oleObj[^>]*r:id="([^"]+)"/.exec(fr)
+      if (!ole) continue
+      const embTgt = relTarget(slideRels, ole[1]!)
+      if (!embTgt || resolveRel(slideFile, embTgt) !== embPart) continue
+      const offm = /<a:off x="(\d+)" y="(\d+)"/.exec(fr)
+      const extm = /<a:ext cx="(\d+)" cy="(\d+)"/.exec(fr)
+      if (!offm || !extm) continue
+      const curCx = Number(extm[1])
+      const curCy = Number(extm[2])
+      const ncx = pos.w !== undefined ? Math.max(12700, Math.round(pos.w * sldCx)) : curCx
+      const ncy = pos.h !== undefined ? Math.max(12700, Math.round(pos.h * sldCy)) : curCy
+      const nx = pos.x !== undefined ? Math.round(pos.x * (sldCx - ncx)) : Number(offm[1])
+      const ny = pos.y !== undefined ? Math.round(pos.y * (sldCy - ncy)) : Number(offm[2])
+      const nfr = fr
+        .replace(/<a:off x="\d+" y="\d+"/, `<a:off x="${nx}" y="${ny}"`)
+        .replace(/<a:ext cx="\d+" cy="\d+"/, `<a:ext cx="${ncx}" cy="${ncy}"`)
+      if (nfr !== fr) {
+        changed = changed.replace(fr, nfr)
+        slideDirty = true
+      }
+      // VML 동기화 (spid 일치).
+      const spidm = /spid="(_x0000_s\d+)"/.exec(fr)
+      const vmlTgt = [...slideRels.matchAll(/<[^>]*?Type="[^"]*\/vmlDrawing"[^>]*?Target="([^"]+)"|<[^>]*?Target="([^"]*vmlDrawing[^"]*)"[^>]*?Type="[^"]*\/vmlDrawing"/g)].map((m) => m[1] ?? m[2]).find(Boolean)
+      if (spidm && vmlTgt) {
+        const vmlFile = resolveRel(slideFile, vmlTgt)
+        const vml = (await readText(vmlFile)) ?? ''
+        if (vml.includes(`id="${spidm[1]}"`)) {
+          const toPt = (emu: number): number => Math.round((emu / 12700) * 100) / 100
+          const nv = vml.replace(
+            new RegExp(`(<v:shape id="${spidm[1]}"[^>]*?style='[^']*?)(margin-left:[\\d.]+pt;[^']*?margin-top:[\\d.]+pt;)`),
+            `$1margin-left:${toPt(nx)}pt;margin-top:${toPt(ny)}pt;`,
+          )
+          if (nv !== vml) {
+            zip.file(vmlFile, nv)
+          }
+        }
+      }
+      done = true
+    }
+    if (slideDirty) {
+      zip.file(slideFile, changed)
+    }
+  }
+  if (!done) return { bytes: hostBytes, found: false }
+  const out = await zip.generateAsync({ type: 'uint8array' })
+  return { bytes: out, found: true }
+}
+
+/**
+ * C7e: 파트의 미리보기 PNG 바이트 (shape blip → media, 없으면 형식별 generic).
+ */
+export async function previewPngForPart(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+  hostKind: 'pptx' | 'xlsx' | 'docx',
+  embPart: string,
+  attachKind: EmbedAttachKind,
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const generic = (): { bytes: Uint8Array; contentType: string } => ({ bytes: genericIconPng(attachKind), contentType: 'image/png' })
+  try {
+    const zip = await zipLoad(hostBytes)
+    const readBin = async (name: string): Promise<Uint8Array | null> => {
+      try {
+        const f = zip.files[name]
+        if (!f || f.dir) return null
+        return (await f.async('uint8array')) as Uint8Array
+      } catch {
+        return null
+      }
+    }
+    const readText = async (name: string): Promise<string | null> => {
+      try {
+        const f = zip.files[name]
+        if (!f || f.dir) return null
+        return (await f.async('string')) as string
+      } catch {
+        return null
+      }
+    }
+    if (hostKind === 'pptx') {
+      const pres = (await readText('ppt/presentation.xml')) ?? ''
+      const presRels = (await readText('ppt/_rels/presentation.xml.rels')) ?? ''
+      const sldIds = [...pres.matchAll(/<p:sldId[^>]*r:id="([^"]+)"/g)].map((m) => m[1]!)
+      for (const sid of sldIds) {
+        const tm = new RegExp(`<[^>]*?Id="${sid}"[^>]*?Target="([^"]+)"`).exec(presRels)
+        if (!tm) continue
+        const slideFile = tm[1]!.startsWith('/') ? tm[1]!.slice(1) : 'ppt/' + tm[1]!.replace(/^\.\.\//, '')
+        const slide = (await readText(slideFile)) ?? ''
+        if (!slide || slide.indexOf(embPart.split('/').pop() ?? '\0part') < 0) continue
+        const slideRels = (await readText(slideFile.replace(/\/([^/]+)$/, '/_rels/$1.rels'))) ?? ''
+        // oleObj r:id → package target 확인 후 같은 프레임의 blip을 찾는다.
+        const frames = [...slide.matchAll(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g)].map((m) => m[0])
+        for (const fr of frames) {
+          const ole = /<p:oleObj[^>]*r:id="([^"]+)"/.exec(fr)
+          if (!ole) continue
+          const embTgt = new RegExp(`<[^>]*?Id="${ole[1]}"[^>]*?Target="([^"]+)"`).exec(slideRels)?.[1]
+          if (!embTgt) continue
+          const dir = slideFile.includes('/') ? slideFile.slice(0, slideFile.lastIndexOf('/') + 1) : ''
+          const norm = (dir + embTgt).split('/').filter((q) => q !== '.' && q !== '').join('/').replace(/[^/]+\/\.\.\//g, '')
+          const normParts: string[] = []
+          for (const q of (dir + embTgt).split('/')) {
+            if (q === '.' || q === '') continue
+            else if (q === '..') normParts.pop()
+            else normParts.push(q)
+          }
+          if (normParts.join('/') !== embPart && norm !== embPart) continue
+          const blip = /<a:blip[^>]*r:embed="([^"]+)"/.exec(fr)
+          if (!blip) continue
+          const imgTgt = new RegExp(`<[^>]*?Id="${blip[1]}"[^>]*?Target="([^"]+)"`).exec(slideRels)?.[1]
+          if (!imgTgt) continue
+          const imgParts: string[] = []
+          for (const q of (dir + imgTgt).split('/')) {
+            if (q === '.' || q === '') continue
+            else if (q === '..') imgParts.pop()
+            else imgParts.push(q)
+          }
+          const imgFile = imgParts.join('/')
+          const buf = await readBin(imgFile)
+          if (buf) return { bytes: buf, contentType: imgFile.endsWith('.emf') ? 'image/x-emf' : imgFile.endsWith('.wmf') ? 'image/x-wmf' : 'image/png' }
+        }
+      }
+    }
+    // xlsx/docx는 후속 (지금은 generic).
+    return generic()
+  } catch {
+    return generic()
+  }
+}
+
 export function anchorHashOf(text: string): string {
   const norm = text.replace(/\s+/g, ' ').trim()
   if (!norm) return ''
