@@ -347,7 +347,9 @@ function resolveExtraPos(
     return null
   }
 }
-/** C7e: pptx 실제 아이콘 (<img> 오버레이 — 드래그 이동·리사이즈·클릭 다운로드). */
+/** C7e: pptx 실제 아이콘 (<img> 오버레이).
+ * - 클릭(클립존): 다운로드 / 클릭(그 외): 선택(리사이즈 가능) / 더블클릭: 열기 / 드래그: 이동.
+ * - 클립존 = 좌상단 (우리 PNG의 클립 배지 자리, x<0.3 && y<0.45). */
 function PptxImgEntry({
   entry,
   pos,
@@ -356,6 +358,8 @@ function PptxImgEntry({
   onResize,
   onDownloadFile,
   onOpen,
+  selected,
+  onSelect,
 }: {
   entry: OleEmbeddingRef
   pos: { x: number; y: number; w: number; h: number }
@@ -364,6 +368,8 @@ function PptxImgEntry({
   onResize?: (part: string, s: { w: number; h: number }) => void
   onDownloadFile: (entry: OleEmbeddingRef) => void
   onOpen: (entry: OleEmbeddingRef) => void
+  selected: boolean
+  onSelect: (part: string | null) => void
 }): React.ReactNode {
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
@@ -390,15 +396,24 @@ function PptxImgEntry({
         const dx = e.clientX - d.sx
         const dy = e.clientY - d.sy
         if (Math.hypot(dx, dy) < 5 && !d.moved) {
-          // 단일 클릭 = 다운로드 (더블클릭이면 타이머 취소 후 열기).
+          // 클릭 위치로 구분: 클립존이면 다운로드, 아니면 선택(리사이즈 가능).
+          const br = box?.getBoundingClientRect()
+          const fx = br && br.width > 0 ? (e.clientX - br.left) / br.width : 0.5
+          const fy = br && br.height > 0 ? (e.clientY - br.top) / br.height : 0.5
+          const isClip = fx < 0.3 && fy < 0.45
           if (clickTimer.current) {
             try { clearTimeout(clickTimer.current) } catch { /* 무시 */ }
             clickTimer.current = null
             onOpen(entry)
-          } else {
+          } else if (isClip) {
             clickTimer.current = setTimeout(() => {
               clickTimer.current = null
               onDownloadFile(entry)
+            }, 250)
+          } else {
+            clickTimer.current = setTimeout(() => {
+              clickTimer.current = null
+              onSelect(entry.partName)
             }, 250)
           }
         } else if (onMove && (cb.width > 0 || cb.height > 0)) {
@@ -447,7 +462,7 @@ function PptxImgEntry({
         clickTimer.current = null
       }
     }
-  }, [entry, onMove, onResize, onDownloadFile, onOpen])
+  }, [entry, onMove, onResize, onDownloadFile, onOpen, onSelect])
   const w = size?.w ?? pos.w
   const h = size?.h ?? pos.h
   const x = pos.x + (drag?.dx ?? 0)
@@ -458,7 +473,7 @@ function PptxImgEntry({
       data-testid="ole-icon"
       title={entry.displayName ?? entry.fallbackName}
       aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
-      style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: 'move' }}
+      style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         e.preventDefault()
@@ -478,17 +493,19 @@ function PptxImgEntry({
         draggable={false}
         style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', userSelect: 'none' }}
       />
-      <div
-        data-testid="ole-resize"
-        title="크기 조절"
-        style={{ position: 'absolute', right: -6, bottom: -6, width: 14, height: 14, cursor: 'nwse-resize', background: '#fff', border: '1px solid #94a3b8', borderRadius: 3 }}
-        onPointerDown={(e) => {
-          if (e.button !== 0) return
-          e.preventDefault()
-          e.stopPropagation()
-          resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: w, oh: h, moved: false }
-        }}
-      />
+      {selected && onResize && (
+        <div
+          data-testid="ole-resize"
+          title="크기 조절"
+          style={{ position: 'absolute', right: -6, bottom: -6, width: 14, height: 14, cursor: 'nwse-resize', background: '#fff', border: '1px solid #94a3b8', borderRadius: 3 }}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return
+            e.preventDefault()
+            e.stopPropagation()
+            resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: w, oh: h, moved: false }
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -530,6 +547,21 @@ export default function OleAttachmentOverlay({
   const [posMap, setPosMap] = useState<
     Record<string, { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean }>
   >({})
+  // C7e: 선택된 첨부 (클릭 선택 → 리사이즈 핸들 표시, 배경 클릭 시 해제).
+  const [selectedPart, setSelectedPart] = useState<string | null>(null)
+  useEffect(() => {
+    const onDown = (e: Event): void => {
+      try {
+        const t = e.target as HTMLElement | null
+        if (t && typeof t.closest === 'function' && t.closest('[data-testid="ole-icon"],[data-testid="ole-resize"]')) return
+        setSelectedPart(null)
+      } catch {
+        /* 무시 */
+      }
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [])
   const rootRef = useRef<HTMLDivElement | null>(null)
   // P0-3: 팝업 차단 시 대체 링크를 보여준다 (조용한 무응답 금지).
   const [popupBlockedUrl, setPopupBlockedUrl] = useState<string | null>(null)
@@ -986,6 +1018,8 @@ export default function OleAttachmentOverlay({
                 onResize={onResizeEmbed ? (part, s) => onResizeEmbed(part, s) : undefined}
                 onDownloadFile={(en) => void download(en)}
                 onOpen={(en) => void openOrDownload(en)}
+                selected={selectedPart === e.partName}
+                onSelect={(p) => setSelectedPart(p)}
               />
               {caption(e, pos)}
             </span>
