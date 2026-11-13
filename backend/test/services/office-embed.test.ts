@@ -11,7 +11,9 @@ import {
   EMBED_MAX_BYTES,
   genericIconPng,
   listEmbedPositions,
+  movePptxEmbed,
   offsetOverlap,
+  previewPngForPart,
   sanitizeEmbedName,
   topLevelBlocks,
   type ZipLike,
@@ -162,6 +164,37 @@ describe('office-embed helpers', () => {
     expect(Math.abs((byName['back-a.docx']?.x ?? -1) - 0.5)).toBeLessThan(0.01)
     expect(byName['back-b.docx']?.slide).toBe(1)
     expect(Math.abs((byName['back-b.docx']?.x ?? -1) - 0.62)).toBeLessThan(0.01)
+  })
+  it('movePptxEmbed: 위치/크기를 파일에 반영한다', async () => {
+    const host = await makeHostPptx()
+    const fileBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3])
+    const zipLoad = async (b: Uint8Array): Promise<ZipLike> => (await import('jszip')).default.loadAsync(b) as unknown as ZipLike
+    const once = await assemblePptxEmbed(zipLoad, { hostBytes: host, attachBytes: fileBytes, attachName: 'mv.docx', attachKind: 'docx', slide: 1, xFrac: 0.5, yFrac: 0.5 })
+    const moved = await movePptxEmbed(zipLoad, once, 'ppt/embeddings/mv.docx', { slide: 1, x: 0.7, y: 0.6, w: 0.2, h: 0.15 })
+    expect(moved.found).toBe(true)
+    const z = await zipLoad(moved.bytes)
+    const s2 = await z.files['ppt/slides/slide1.xml']!.async('string') as string
+    const fr = (s2.match(/<p:graphicFrame>[\s\S]*?mv\.docx[\s\S]*?<\/p:graphicFrame>/) || s2.match(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g) || [])
+    const all = [...s2.matchAll(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g)].map((m) => m[0])
+    expect(all.length).toBeGreaterThan(0)
+    const last = all[all.length - 1]!
+    const off = /<a:off x="(\d+)" y="(\d+)"/.exec(last)
+    const ext = /<a:ext cx="(\d+)" cy="(\d+)"/.exec(last)
+    expect(off).not.toBeNull()
+    expect(ext).not.toBeNull()
+    expect(Number(off![1])).toBeGreaterThan(5448000)
+    expect(Number(ext![1])).not.toBe(1296000)
+  })
+  it('previewPngForPart: 도형 blip PNG를 돌려준다', async () => {
+    const host = await makeHostPptx()
+    const fileBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3])
+    const zipLoad = async (b: Uint8Array): Promise<ZipLike> => (await import('jszip')).default.loadAsync(b) as unknown as ZipLike
+    const once = await assemblePptxEmbed(zipLoad, { hostBytes: host, attachBytes: fileBytes, attachName: 'pv.docx', attachKind: 'docx', slide: 1, xFrac: 0.5, yFrac: 0.5 })
+    const prev = await previewPngForPart(zipLoad, once, 'pptx', 'ppt/embeddings/pv.docx', 'docx')
+    expect(prev.bytes.length).toBeGreaterThan(100)
+    expect(prev.bytes[0]).toBe(0x89)
+    const miss = await previewPngForPart(zipLoad, once, 'pptx', 'ppt/embeddings/none.docx', 'xlsx')
+    expect(miss.bytes.length).toBeGreaterThan(100)
   })
   it('EMBED_MAX_BYTES는 20MB다', () => {
     expect(EMBED_MAX_BYTES).toBe(20 * 1024 * 1024)
