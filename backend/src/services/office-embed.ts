@@ -957,6 +957,8 @@ export interface EmbedPos {
   slide?: number
   x?: number
   y?: number
+  w?: number
+  h?: number
   sheet?: number
   col?: number
   row?: number
@@ -1045,7 +1047,9 @@ export async function listEmbedPositions(
         const ecyv = ext ? Number(ext[2]) : 0
         const denx = sldCx - ecxv > 0 ? sldCx - ecxv : sldCx
         const deny = sldCy - ecyv > 0 ? sldCy - ecyv : sldCy
-        out.push({ part: embFile, name, pos: { slide: si + 1, x: Number(off[1]) / denx, y: Number(off[2]) / deny } })
+        const ww = ecxv > 0 ? ecxv / sldCx : 1296000 / sldCx
+        const hh = ecyv > 0 ? ecyv / sldCy : 648000 / sldCy
+        out.push({ part: embFile, name, pos: { slide: si + 1, x: Number(off[1]) / denx, y: Number(off[2]) / deny, w: ww, h: hh } })
       }
     }
     return out

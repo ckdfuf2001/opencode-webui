@@ -7,6 +7,8 @@ import { issueCollabName } from '../db/collab-name-queries'
 import {
   acquireObjectLock,
   addConn,
+  broadcast,
+  encodePartEmbedded,
   adoptParentPartAndMaybeReset,
   applySave,
   hasDeferredPartChange,
@@ -36,6 +38,7 @@ import {
   runParentChained,
   wsMessage,
   MAX_SAVE_BYTES,
+  type KnownEmbed,
 } from '../services/collab-rooms'
 import {
   acquireEmbedLock,
@@ -52,6 +55,8 @@ import {
   blockTextSnippet,
   listEmbedParts,
   normalizeEmbedPart,
+  movePptxEmbed,
+  previewPngForPart,
   offsetOverlap,
   readEmbedPart,
   replaceEmbedPart,
@@ -490,6 +495,7 @@ app.post('/embed', async (c) => {
       )
       .map((ke) => ke.pos)
     const off = offsetOverlap(hostKind, { slide: q.slide, x: q.x, y: q.y, sheet: q.sheet, col: q.col, row: q.row, block: q.block }, samePlace)
+    let savedPos: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number; text?: string } | undefined
     // P0-1: 조립+쓰기를 부모 체인에서 직렬화한다 (PUT /save와 같은 체인).
     return runParentChained(abs, async () => {
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
@@ -554,12 +560,22 @@ app.post('/embed', async (c) => {
         if (added.length > 0 && added[0]) {
           finalPart = added[0].part
           const embFile = added[0].part.split('/').pop() ?? attachName
-          const pos =
+          // C7e: 실제 기록 위치를 역추적으로 확정 (w/h 포함). 실패하면 요청값 폴백.
+          let pos: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: string; text?: string } =
             hostKind === 'pptx'
               ? { slide: off.slide, x: off.x, y: off.y }
               : hostKind === 'xlsx'
                 ? { sheet: off.sheet, col: off.col, row: off.row }
                 : { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) }
+          try {
+            const found = await listEmbedPositions(zipLoadJSZip, out, hostKind)
+            const hit = found.find((f) => f.part === added[0]!.part)
+            if (hit) {
+              pos = hostKind === 'docx' ? { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) } : (hit.pos as typeof pos)
+            }
+          } catch {
+            /* 폴백 유지 */
+          }
           registerEmbedInsert(roomId, {
             norm: added[0].part,
             name: embFile,
@@ -568,6 +584,8 @@ app.post('/embed', async (c) => {
             preHash: prevHash,
             anchorHash: hostKind === 'docx' && q.blockText ? anchorHashOf(q.blockText) : undefined,
           })
+          // C7e: 응답 pos도 등록 pos와 일치 (w/h 포함).
+          savedPos = pos as typeof savedPos
         }
       } catch (e) {
         logger.warn(`[embed] knownEmbeds register skipped (${e instanceof Error ? e.message : e})`)
@@ -576,11 +594,102 @@ app.post('/embed', async (c) => {
     // C7c-0: 삽입자 칩도 오프셋 위치에 찍는다 (조립 위치와 일치).
     const respPos =
       hostKind === 'pptx'
-        ? { slide: off.slide, x: off.x, y: off.y }
+        ? { slide: savedPos?.slide ?? off.slide, x: savedPos?.x ?? off.x, y: savedPos?.y ?? off.y, w: savedPos?.w, h: savedPos?.h }
         : hostKind === 'xlsx'
           ? { sheet: off.sheet, col: off.col, row: off.row }
           : { block: q.block }
     return c.json({ ok: true, newHash, embeddings: [finalPart], pos: respPos })
+    })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+// C7e: 미리보기 PNG (도형 blib → media, 없으면 형식별 generic). base64 JSON.
+app.get('/embed/icon', async (c) => {
+  try {
+    const q = EmbedPartQuery.parse({
+      path: c.req.query('path'),
+      part: c.req.query('part'),
+      roomId: c.req.query('roomId') ?? undefined,
+      clientId: c.req.query('clientId') ?? undefined,
+    })
+    const abs = await resolveWorkspaceFile(q.path).catch(() => null)
+    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
+    const norm = normalizeEmbedPart(q.part)
+    const hostLower = abs.toLowerCase()
+    const hostKind = hostLower.endsWith('.pptx') ? 'pptx' : hostLower.endsWith('.xlsx') ? 'xlsx' : hostLower.endsWith('.docx') ? 'docx' : null
+    if (!hostKind) return c.json({ error: 'Unsupported host', code: 'unsupported_host' }, 400)
+    const base = norm.split('/').pop() ?? 'a.bin'
+    const kind = attachKindOf(base) ?? 'docx'
+    const hostBytes = new Uint8Array(await getRawFileContent(q.path))
+    const prev = await previewPngForPart(zipLoadJSZip, hostBytes, hostKind, norm, kind)
+    return c.json({ ok: true, contentType: prev.contentType, data: Buffer.from(prev.bytes).toString('base64') })
+  } catch (error) {
+    return errJson(c, error, 500)
+  }
+})
+
+// C7e: 임베딩 이동/리사이즈 (pptx). fractions 기준, knownEmbeds+106 갱신.
+app.put('/embed/pos', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({})) as {
+      path?: string; part?: string; roomId?: string; clientId?: number | string;
+      baseHash?: string; slide?: number; x?: number; y?: number; w?: number; h?: number;
+    }
+    const path = typeof body.path === 'string' ? body.path : ''
+    const part = typeof body.part === 'string' ? body.part : ''
+    const abs = await resolveWorkspaceFile(path).catch(() => null)
+    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
+    const hostLower = abs.toLowerCase()
+    if (!hostLower.endsWith('.pptx')) return c.json({ error: 'Only pptx move supported yet', code: 'unsupported_host' }, 400)
+    const norm = normalizeEmbedPart(part)
+    const roomId = typeof body.roomId === 'string' && isValidRoomId(body.roomId) ? body.roomId : roomIdForAbs(abs)
+    const room = rooms.get(roomId)
+    const clientId = body.clientId !== undefined ? Number(body.clientId) : undefined
+    if (room && clientId === undefined) return c.json({ error: 'Missing client', code: 'bad_client' }, 400)
+    if (room && clientId !== undefined && clientRoleInRoom(roomId, clientId) === 'view' && roomHasEditors(room)) {
+      return c.json({ error: 'View-only participant cannot move attachments', code: 'view_only' }, 403)
+    }
+    const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+    const px = num(body.x)
+    const py = num(body.y)
+    const pw = num(body.w)
+    const ph = num(body.h)
+    if (px === undefined && py === undefined && pw === undefined && ph === undefined) {
+      return c.json({ error: 'Nothing to move', code: 'bad_pos' }, 400)
+    }
+    if ((px !== undefined && (px < 0 || px > 1)) || (py !== undefined && (py < 0 || py > 1))) {
+      return c.json({ error: 'Bad fractions', code: 'bad_pos' }, 400)
+    }
+    return runParentChained(abs, async () => {
+      const disk = room ? await currentDiskHash(roomId) : await hashFile(abs).catch(() => null)
+      if (room) {
+        if (!body.baseHash || body.baseHash !== room.lastHash || disk !== room.lastHash) {
+          return c.json({ error: 'Room changed since loaded — save first, then retry', code: 'dirty_room', currentHash: disk }, 409)
+        }
+      } else if (body.baseHash && disk !== body.baseHash) {
+        return c.json({ error: 'File changed since loaded — reload, then retry', code: 'dirty_room', currentHash: disk }, 409)
+      }
+      const hostBytes = new Uint8Array(await getRawFileContent(path))
+      const moved = await movePptxEmbed(zipLoadJSZip, hostBytes, norm, { x: px, y: py, w: pw, h: ph })
+      if (!moved.found) return c.json({ error: 'Part not placed on slide', code: 'no_anchor' }, 404)
+      await writeFileContent(abs, Buffer.from(moved.bytes))
+      const newHash = hashBytes(moved.bytes)
+      let pos: { slide?: number; x?: number; y?: number; w?: number; h?: number } = { x: px, y: py, w: pw, h: ph }
+      if (room) {
+        room.lastHash = newHash
+        room.externalChanged = false
+        const ke = room.knownEmbeds.find((k) => k.norm === norm)
+        const slide = ke?.pos.slide ?? 1
+        pos = { slide, x: px ?? ke?.pos.x, y: py ?? ke?.pos.y, w: pw ?? (ke?.pos as { w?: number } | undefined)?.w, h: ph ?? (ke?.pos as { h?: number } | undefined)?.h }
+        if (ke) {
+          ke.pos = { ...ke.pos, x: pos.x, y: pos.y, w: pos.w, h: pos.h } as KnownEmbed['pos']
+        }
+        broadcast(room, encodePartEmbedded(roomId, { norm, name: norm.split('/').pop() ?? norm, kind: 'pptx', pos: pos as KnownEmbed['pos'], newHash }))
+        logger.warn(`[embed] move room=${roomId.slice(0, 8)} part=${norm} pos=${JSON.stringify(pos)}`)
+      }
+      return c.json({ ok: true, newHash, pos })
     })
   } catch (error) {
     return errJson(c, error, 500)

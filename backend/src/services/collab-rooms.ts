@@ -242,6 +242,8 @@ export interface KnownEmbed {
     slide?: number
     x?: number
     y?: number
+    w?: number
+    h?: number
     sheet?: number
     col?: number
     row?: number
@@ -618,7 +620,7 @@ function sendTo(room: CollabRoom, ws: unknown, data: Uint8Array): void {
   }
 }
 
-function broadcast(room: CollabRoom, data: Uint8Array): void {
+export function broadcast(room: CollabRoom, data: Uint8Array): void {
   // C4: 폐기된 방 참조로는 보내지 않는다. dispose 후 남은 stale conns에
   // getRoomObjects error({"error":"No such room"})가 102로 감싸져 나가
   // 클라이언트 개체 표를 깨뜨리는 유령 프레임을 막는다.
