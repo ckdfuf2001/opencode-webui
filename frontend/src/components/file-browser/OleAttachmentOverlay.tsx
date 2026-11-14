@@ -373,6 +373,8 @@ function PptxImgEntry({
 }): React.ReactNode {
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  const [hoverClip, setHoverClip] = useState(false)
+  const hoverRef = useRef(false)
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
   const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; moved: boolean } | null>(null)
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -473,7 +475,21 @@ function PptxImgEntry({
       data-testid="ole-icon"
       title={entry.displayName ?? entry.fallbackName}
       aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
-      style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
+      style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: hoverClip ? 'pointer' : 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
+      onMouseMove={(e) => {
+        try {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          const fx = r.width > 0 ? (e.clientX - r.left) / r.width : 0.5
+          const fy = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5
+          const inClip = fx < 0.3 && fy < 0.45
+          if (inClip !== hoverRef.current) {
+            hoverRef.current = inClip
+            setHoverClip(inClip)
+          }
+        } catch {
+          /* 무시 */
+        }
+      }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         e.preventDefault()
