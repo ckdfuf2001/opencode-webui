@@ -605,7 +605,7 @@ app.post('/embed', async (c) => {
   }
 })
 
-// C7e: 미리보기 PNG (도형 blib → media, 없으면 형식별 generic). base64 JSON.
+// C7e: 미리보기 PNG (도형 blip → media, 없으면 형식별 generic). raw 바이트 (<img> src용).
 app.get('/embed/icon', async (c) => {
   try {
     const q = EmbedPartQuery.parse({
@@ -624,7 +624,10 @@ app.get('/embed/icon', async (c) => {
     const kind = attachKindOf(base) ?? 'docx'
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
     const prev = await previewPngForPart(zipLoadJSZip, hostBytes, hostKind, norm, kind)
-    return c.json({ ok: true, contentType: prev.contentType, data: Buffer.from(prev.bytes).toString('base64') })
+    return new Response(Buffer.from(prev.bytes) as unknown as BodyInit, {
+      status: 200,
+      headers: { 'Content-Type': prev.contentType, 'Cache-Control': 'public, max-age=60' },
+    })
   } catch (error) {
     return errJson(c, error, 500)
   }
