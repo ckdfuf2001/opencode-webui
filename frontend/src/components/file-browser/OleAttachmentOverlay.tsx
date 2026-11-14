@@ -473,7 +473,7 @@ function PptxImgEntry({
     <div
       ref={boxRef}
       data-testid="ole-icon"
-      title={entry.displayName ?? entry.fallbackName}
+      title={hoverClip ? `다운로드: ${entry.displayName ?? entry.fallbackName}` : (entry.displayName ?? entry.fallbackName)}
       aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
       style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: hoverClip ? 'pointer' : 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
       onMouseMove={(e) => {
@@ -509,6 +509,33 @@ function PptxImgEntry({
         draggable={false}
         style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', userSelect: 'none' }}
       />
+      {hoverClip && (
+        <div
+          data-testid="ole-download-hint"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: -8,
+            transform: 'translate(-50%, -100%)',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            userSelect: 'none',
+            background: '#0f172a',
+            color: '#fff',
+            borderRadius: 4,
+            padding: '1px 8px',
+            fontSize: 11,
+            lineHeight: '20px',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+            maxWidth: 240,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            zIndex: 31,
+          }}
+        >
+          다운로드: {entry.displayName ?? entry.fallbackName}
+        </div>
+      )}
       {selected && onResize && (
         <div
           data-testid="ole-resize"
