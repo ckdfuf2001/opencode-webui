@@ -165,16 +165,19 @@ describe('C7: 백그라운드 삽입 (리셋 없이 106 + 저장 병합)', () =>
         }
       })
       .filter((x) => x !== null)
-    expect(found).toEqual([
-      {
-        roomId: sParent.roomId,
-        part: 'ppt/embeddings/late.docx',
-        name: 'late.docx',
-        kind: 'pptx',
-        pos: { slide: 2, x: 0.25, y: 0.25 },
-        newHash: room.lastHash,
-      },
-    ])
+    // C7b+백필: 늦은 참가자는 미뤄진 106 + 디스크 백필분을 모두 받는다.
+    // (HOST_REL에 앞 테스트의 n1.docx가 남아 있으면 백필로 함께 온다.)
+    const late = found.find(
+      (f: { part?: string }) => f.part === 'ppt/embeddings/late.docx',
+    )
+    expect(late).toEqual({
+      roomId: sParent.roomId,
+      part: 'ppt/embeddings/late.docx',
+      name: 'late.docx',
+      kind: 'pptx',
+      pos: { slide: 2, x: 0.25, y: 0.25 },
+      newHash: room.lastHash,
+    })
   })
 
   it('같은 옛 base도 clientId마다 1회는 받아준다 (C7b clientId 집합)', async () => {
