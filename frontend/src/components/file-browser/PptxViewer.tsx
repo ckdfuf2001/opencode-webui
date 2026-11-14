@@ -271,6 +271,54 @@ export default function PptxViewer({ data, fileName, editing, savePath, onFail, 
   const [embedExtras, setEmbedExtras] = useState<
     Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { slide?: number; x?: number; y?: number; w?: number; h?: number } }>
   >([])
+  // C7f: 내가 선택한 첨부 (awareness로 전파 → 상대방이 내 선택을 본다).
+  const [selectedOlePart, setSelectedOlePart] = useState<string | null>(null)
+  useEffect(() => {
+    try {
+      collabRef.current?.session.awareness.setLocalStateField('selectedOle', selectedOlePart ? { part: selectedOlePart } : null)
+    } catch {
+      /* 무시 (solo/미참가) */
+    }
+  }, [selectedOlePart, collab])
+  // C7f: 다른 탭의 첨부 선택 (awareness selectedOle 읽기).
+  const [peerOleSel, setPeerOleSel] = useState<Array<{ part: string; name: string; color: string }>>([])
+  useEffect(() => {
+    const sess = collab?.session
+    if (!sess) {
+      setPeerOleSel([])
+      return
+    }
+    const mine = sess.doc.clientID
+    const update = (): void => {
+      try {
+        const out: Array<{ part: string; name: string; color: string }> = []
+        const states = sess.awareness.getStates() as Map<number, Record<string, unknown>>
+        states.forEach((st: Record<string, unknown>, clientId: number) => {
+          if (clientId === mine) return
+          const sel = st?.selectedOle as { part?: unknown } | null | undefined
+          if (!sel || typeof sel.part !== 'string' || !sel.part) return
+          const app = (st?.app ?? {}) as { name?: unknown; color?: unknown }
+          out.push({ part: sel.part, name: typeof app.name === 'string' && app.name ? app.name : '?', color: typeof app.color === 'string' && app.color ? app.color : '#64748b' })
+        })
+        setPeerOleSel((prev) => {
+          const a = JSON.stringify(prev)
+          const b = JSON.stringify(out)
+          return a === b ? prev : out
+        })
+      } catch {
+        /* 무시 */
+      }
+    }
+    sess.awareness.on('update', update)
+    update()
+    return () => {
+      try {
+        sess.awareness.off('update', update)
+      } catch {
+        /* 무시 */
+      }
+    }
+  }, [collab])
   const applyEmbedAdded = useCallback(
     (msg: { part: string; name: string; kind: string; pos: { slide?: number; x?: number; y?: number; w?: number; h?: number }; newHash: string }) => {
       if (msg.kind !== 'pptx') return
@@ -2795,6 +2843,9 @@ const peersRef = useRef<Peer[]>([])
         extras={embedExtras}
         onMoveEmbed={moveEmbed}
         onResizeEmbed={resizeEmbed}
+        selectedPart={selectedOlePart}
+        onSelectPart={setSelectedOlePart}
+        peerSelections={peerOleSel}
         getExtraContext={() => {
           try {
             const idx = viewerRef.current?.getActiveSlideIndex?.()

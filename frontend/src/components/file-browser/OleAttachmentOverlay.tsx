@@ -252,6 +252,38 @@ function captionPartAt(container: HTMLElement, entries: OleEmbeddingRef[], x: nu
  */
 
 /** C7: 백그라운드 삽입 칩의 명시 위치 해석 (lib에 아직 없는 파트용). */
+/** C7e: lib 슬라이드 rect (16:9/4:3 paper). fractions→px 기준을 viewerRoot가 아니라 슬라이드로 잡는다. */
+export function findSlideRect(container: HTMLElement | null): { x: number; y: number; width: number; height: number } | null {
+  try {
+    if (!container) return null
+    const cands = Array.from(container.querySelectorAll('div.shadow-2xl')) as HTMLElement[]
+    let best: HTMLElement | null = null
+    let bestArea = 0
+    for (const el of cands) {
+      let r: DOMRect | null = null
+      try {
+        r = el.getBoundingClientRect()
+      } catch {
+        continue
+      }
+      if (!r || r.width < 200 || r.height < 150) continue
+      const ar = r.width / Math.max(1, r.height)
+      if (ar < 1.2 || ar > 2.0) continue
+      const area = r.width * r.height
+      if (area > bestArea) {
+        bestArea = area
+        best = el
+      }
+    }
+    if (!best) return null
+    const b = best.getBoundingClientRect()
+    const cb = container.getBoundingClientRect()
+    return { x: b.left - cb.left, y: b.top - cb.top, width: b.width, height: b.height }
+  } catch {
+    return null
+  }
+}
+
 function resolveExtraPos(
   container: HTMLElement,
   anchor: OleAnchorKind,
@@ -269,10 +301,16 @@ function resolveExtraPos(
       // C7e: 실제 도형 크기 (fractions). 없으면 표준 슬라이드 기준 기본값 (서버가 준 w/h 우선).
       const wFrac = typeof ex.pos.w === 'number' && ex.pos.w > 0 ? ex.pos.w : 1296000 / 12192000
       const hFrac = typeof ex.pos.h === 'number' && ex.pos.h > 0 ? ex.pos.h : 648000 / 6858000
-      const w = Math.max(8, Math.round(wFrac * c.width))
-      const h = Math.max(8, Math.round(hFrac * c.height))
-      const x = Math.round(ex.pos.x * c.width)
-      const y = Math.round(ex.pos.y * c.height)
+      // C7f: fractions→px 기준은 슬라이드 rect (viewer 전체가 아님 — 브라우저마다 레이아웃이 달라도 같은 자리).
+      const sr = findSlideRect(container)
+      const bx = sr ? sr.x : 0
+      const by = sr ? sr.y : 0
+      const bw = sr && sr.width > 0 ? sr.width : c.width
+      const bh = sr && sr.height > 0 ? sr.height : c.height
+      const w = Math.max(8, Math.round(wFrac * bw))
+      const h = Math.max(8, Math.round(hFrac * bh))
+      const x = Math.round(bx + ex.pos.x * bw)
+      const y = Math.round(by + ex.pos.y * bh)
       return { x, y, w, h, cover: false, captionAbove: above(y, h) }
     }
     if (anchor === 'xlsx') {
@@ -393,8 +431,14 @@ function PptxImgEntry({
       const r = resizeRef.current
       const box = boxRef.current
       const cont = containerOf(box)
+      // C7f: fractions 변환 기준은 슬라이드 rect (없으면 컨테이너 폴백).
+      const sr = cont ? findSlideRect(cont) : null
+      const cb = cont ? cont.getBoundingClientRect() : null
+      const baseX = sr ? sr.x : 0
+      const baseY = sr ? sr.y : 0
+      const baseW = sr && sr.width > 0 ? sr.width : cb?.width ?? 1
+      const baseH = sr && sr.height > 0 ? sr.height : cb?.height ?? 1
       if (d && cont) {
-        const cb = cont.getBoundingClientRect()
         const dx = e.clientX - d.sx
         const dy = e.clientY - d.sy
         if (Math.hypot(dx, dy) < 5 && !d.moved) {
@@ -418,21 +462,21 @@ function PptxImgEntry({
               onSelect(entry.partName)
             }, 250)
           }
-        } else if (onMove && (cb.width > 0 || cb.height > 0)) {
-          const nx = (d.ox + dx) / Math.max(1, cb.width)
-          const ny = (d.oy + dy) / Math.max(1, cb.height)
+        } else if (onMove && baseW > 0 && baseH > 0) {
+          // d.ox/oy는 컨테이너 기준 px → 슬라이드 기준 fractions로 변환.
+          const nx = (d.ox - baseX + dx) / Math.max(1, baseW)
+          const ny = (d.oy - baseY + dy) / Math.max(1, baseH)
           onMove(entry.partName, { x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)) })
         }
         setDrag(null)
       }
       if (r && box && cont) {
-        const cb = cont.getBoundingClientRect()
         const dx = e.clientX - r.sx
         const dy = e.clientY - r.sy
-        if ((r.moved || Math.hypot(dx, dy) >= 5) && onResize && cb.width > 0 && cb.height > 0) {
+        if ((r.moved || Math.hypot(dx, dy) >= 5) && onResize && baseW > 0 && baseH > 0) {
           onResize(entry.partName, {
-            w: Math.min(1, Math.max(0.02, (r.ow + dx) / cb.width)),
-            h: Math.min(1, Math.max(0.02, (r.oh + dy) / cb.height)),
+            w: Math.min(1, Math.max(0.02, (r.ow + dx) / baseW)),
+            h: Math.min(1, Math.max(0.02, (r.oh + dy) / baseH)),
           })
         }
         setSize(null)
@@ -588,6 +632,9 @@ export default function OleAttachmentOverlay({
   getExtraContext,
   onMoveEmbed,
   onResizeEmbed,
+  selectedPart: selectedPartProp,
+  onSelectPart: onSelectPartProp,
+  peerSelections: peerSelectionsProp,
 }: {
   data: ArrayBuffer | Uint8Array
   anchor?: OleAnchorKind
@@ -600,6 +647,11 @@ export default function OleAttachmentOverlay({
   /** C7e: pptx 도형 이동/리사이즈 (fractions). */
   onMoveEmbed?: (part: string, pos: { x: number; y: number }) => void
   onResizeEmbed?: (part: string, size: { w: number; h: number }) => void
+  /** C7f: 선택 상태 (PptxViewer 제어; 없으면 내부 상태). */
+  selectedPart?: string | null
+  onSelectPart?: (part: string | null) => void
+  /** C7f: 다른 탭의 선택 표시. */
+  peerSelections?: Array<{ part: string; name: string; color: string }>
 }) {
   const [parsed, setParsed] = useState<OleEmbeddingRef[]>([])
   // C7: 파싱분 + 백그라운드분 합집합 (칩·캡션·열기 모두 동일 처리).
@@ -618,7 +670,12 @@ export default function OleAttachmentOverlay({
     Record<string, { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean }>
   >({})
   // C7e: 선택된 첨부 (클릭 선택 → 리사이즈 핸들 표시, 배경 클릭 시 해제).
-  const [selectedPart, setSelectedPart] = useState<string | null>(null)
+  // PptxViewer가 제어하면 그 값을 쓰고, 아니면 내부 상태 (xlsx/docx).
+  const [internalSel, setInternalSel] = useState<string | null>(null)
+  const selectedPart = selectedPartProp !== undefined ? selectedPartProp : internalSel
+  const setSelectedPart = onSelectPartProp ?? setInternalSel
+  // C7f: 다른 탭의 선택.
+  const peerSels = peerSelectionsProp ?? []
   useEffect(() => {
     const onDown = (e: Event): void => {
       try {
@@ -989,6 +1046,13 @@ export default function OleAttachmentOverlay({
   // extras는 resolveExtraPos에서 이미 슬라이드를 확인했으므로 항상 true다.
   const anchoredVisible = anchored.filter((e) => extraParts.has(e.partName) || onCurrentSheet(e))
   // C7d-1: 위치 미상은 슬라이드에 그리지 않는다 (fallback 변수 자체를 두지 않는다).
+  // C7f: peer별 선택 lookup.
+  const peerSelByPart = new Map<string, Array<{ name: string; color: string }>>()
+  for (const ps of peerSels) {
+    const arr = peerSelByPart.get(ps.part) ?? []
+    arr.push({ name: ps.name, color: ps.color })
+    peerSelByPart.set(ps.part, arr)
+  }
   const displayName = (entry: OleEmbeddingRef): string => entry.displayName ?? entry.fallbackName
 
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
@@ -1078,6 +1142,7 @@ export default function OleAttachmentOverlay({
         // lib 플레이스홀더와 같은 자리를 덮어 중복 표시가 없다.
         if (anchor === 'pptx' && parentPath) {
           const iconUrl = `${API_BASE_URL}/api/collab/embed/icon?path=${encodeURIComponent(parentPath)}&part=${encodeURIComponent(e.partName)}`
+          const peers = peerSelByPart.get(e.partName) ?? []
           return (
             <span key={e.partName}>
               <PptxImgEntry
@@ -1092,6 +1157,35 @@ export default function OleAttachmentOverlay({
                 onSelect={(p) => setSelectedPart(p)}
               />
               {/* C7e: 라벨은 img 안에 있어서 별도 캡션 불필요 (중복 방지). */}
+              {peers.map((p, i) => (
+                <span
+                  key={`peer-${i}-${p.name}`}
+                  data-testid="ole-peer"
+                  data-peer-part={e.partName}
+                  style={{
+                    position: 'absolute',
+                    left: pos.x,
+                    top: pos.y - pos.h / 2 - 4,
+                    transform: 'translate(-50%, -100%)',
+                    zIndex: 31,
+                    pointerEvents: 'none',
+                    userSelect: 'none',
+                    whiteSpace: 'nowrap',
+                    background: p.color,
+                    color: '#fff',
+                    borderRadius: 4,
+                    padding: '0 6px',
+                    fontSize: 11,
+                    lineHeight: '20px',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                    maxWidth: 200,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {p.name}
+                </span>
+              ))}
             </span>
           )
         }
