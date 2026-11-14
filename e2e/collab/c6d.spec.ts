@@ -1109,6 +1109,14 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
     await seedUser(ctxC, ADA)
     const pageC = await ctxC.newPage()
+    const newCollabWs: string[] = []
+    const watchWs = (tag: string, page: Page): void => {
+      page.on('websocket', (ws) => {
+        try {
+          if (ws.url().includes('/collab')) newCollabWs.push(`${tag}:${ws.url()}`)
+        } catch { /* 무시 */ }
+      })
+    }
     // 리셋 감시: 삽입 시점 이후 새로 열리는 collab WS가 있으면 리셋이다.
     // (초기 접속은 셋업 때 끝나므로 이후 새로 열리면 재입장이다.)
     await gotoApp(pageC)
@@ -1151,19 +1159,11 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         { b64: fxBytes, hostPath: t.parentPath },
       )
       // 양쪽에 칩이 클릭 자리에 뜬다 (리로드 없음). 각 페이지 좌표계에서 판정.
-      // setup 칩(1개)이 아니라 새로 뜬 d9 칩(2개째)을 기다린다.
+      // d9 칩 자체를 기다린다 (setup은 라벨만일 수 있어 개수 단언 금지).
       const chipNearCenter = async (page: Page, tag: string): Promise<void> => {
-        const tl = await page.evaluate(() => {
-          try {
-            const w = window as unknown as { __collabTimeline?: { list: Array<Record<string, unknown>> } }
-            return (w.__collabTimeline?.list ?? []).map((e) => e.evt)
-          } catch {
-            return []
-          }
-        }).catch(() => [])
-        console.log(`[c6d] D10 ${tag} timeline: ${JSON.stringify(tl).slice(0, 400)}`)
-          .poll(() => page.getByTestId('ole-icon').count(), { timeout: 30000, intervals: [500] })
-          .toBe(2)
+        await expect
+          .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d9-insert'))), { timeout: 30000, intervals: [500] })
+          .toBe(true)
         const all = await page.getByTestId('ole-icon').evaluateAll((els) =>
           els.map((e) => ({
             label: e.getAttribute('aria-label') ?? (e as HTMLElement).innerText?.slice(0, 40) ?? '?',
