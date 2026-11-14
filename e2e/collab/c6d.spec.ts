@@ -1553,8 +1553,13 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         // 선택 해제 (속성 사이드바가 열리면 viewer 중심이 어긋난다).
         await page.keyboard.press('Escape').catch(() => {})
         await page.waitForTimeout(1000).catch(() => {})
+        // img 중심을 잰다 (라벨은 img 아래에 붙어 박스 중심을 밀어내므로 제외).
         const allc = await page.getByTestId('ole-icon').evaluateAll((els) =>
-          els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })(), title: e.getAttribute('title') ?? '?' })),
+          els.map((e) => {
+            const img = (e as HTMLElement).querySelector('[data-testid="ole-img"]') as HTMLElement | null
+            const r = (img ?? (e as HTMLElement)).getBoundingClientRect()
+            return { label: e.getAttribute('aria-label') ?? '?', box: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] }
+          }),
         )
         // 정확한 aria-label 일치로 잰다 (getByTestId name 옵션은 유사 항목을 잡을 수 있음).
         const hit = allc.find((c) => c.label === '첨부 embed-docx.docx')
