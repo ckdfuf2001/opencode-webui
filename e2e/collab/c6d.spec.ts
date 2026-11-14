@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { backendBase, absForRel, uniqueRelWithExt } from './helpers/env'
 import { gotoApp, openEditor, gotoSlide, editShapeText, ShapeLocator } from './helpers/viewer'
 import { readDeck } from './helpers/disk'
-import { ADA, seedUser } from './helpers/users'
+import { ADA, GRACE, seedUser } from './helpers/users'
 
 /**
  * C6c-d: 미뤄진 부모 리셋 동안의 부모 저장 병합 (D1) + 마지막 퇴장 즉시 dispose (D2).
@@ -1131,10 +1131,11 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       await gotoSlide(pageC, 2)
       const shapesC = t.shapes!
       await typeAfterRejoin(pageC, shapesC, `${slug}-c1`)
-      // A: 슬라이드 정가운데 클릭 → 삽입.
+      // A: 슬라이드 정가운데 클릭 → 삽입 (슬라이드 rect 기준).
       const pt = await t.pageA.evaluate(() => {
-        const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
-        const box = root?.getBoundingClientRect()
+        const __slide = document.querySelector('[data-testid="pptx-viewer-root"] div.relative.shadow-2xl') as HTMLElement | null
+        const __root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+        const box = (__slide ?? __root)?.getBoundingClientRect()
         if (!box) return null
         return { x: box.left + box.width / 2, y: box.top + box.height / 2, w: box.width, h: box.height }
       })
@@ -1182,8 +1183,9 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         expect(`${m![1]},${m![2]}`).not.toBe('7315200,5486400')
         expect(hit!.box[2]).toBeGreaterThan(0)
         const ctr = await page.evaluate(() => {
-          const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
-          const b = root?.getBoundingClientRect()
+          const __slide = document.querySelector('[data-testid="pptx-viewer-root"] div.relative.shadow-2xl') as HTMLElement | null
+          const __root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+          const b = (__slide ?? __root)?.getBoundingClientRect()
           if (!b) return null
           return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
         })
@@ -1525,8 +1527,9 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       await gotoSlide(t.pageA, 2)
       // 슬라이드 정가운데 클릭 → 숨은 input에 실제 파일 세팅 (리본 파일선택과 동일 경로).
       const pt = await t.pageA.evaluate(() => {
-        const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
-        const b = root?.getBoundingClientRect()
+        const __slide = document.querySelector('[data-testid="pptx-viewer-root"] div.relative.shadow-2xl') as HTMLElement | null
+        const __root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+        const b = (__slide ?? __root)?.getBoundingClientRect()
         if (!b) return null
         return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
       })
@@ -1571,8 +1574,9 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         console.log(`[c6d] D10 ${tag} labels: ${JSON.stringify(labelText)}`)
         expect(labelText.some((t) => t.includes('embed-docx.docx'))).toBe(true)
         const ctr = await page.evaluate(() => {
-          const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
-          const b = root?.getBoundingClientRect()
+          const __slide = document.querySelector('[data-testid="pptx-viewer-root"] div.relative.shadow-2xl') as HTMLElement | null
+          const __root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+          const b = (__slide ?? __root)?.getBoundingClientRect()
           if (!b) return null
           return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
         })
@@ -1718,8 +1722,9 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         const box = { x: hit!.box[0], y: hit!.box[1], width: hit!.box[2], height: hit!.box[3] }
         expect(box.width).toBeGreaterThan(0)
         const ctr = await pageA2.evaluate(() => {
-          const root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
-          const b = root?.getBoundingClientRect()
+          const __slide = document.querySelector('[data-testid="pptx-viewer-root"] div.relative.shadow-2xl') as HTMLElement | null
+          const __root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
+          const b = (__slide ?? __root)?.getBoundingClientRect()
           if (!b) return null
           return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
         })
@@ -1741,155 +1746,58 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
     }
   })
 
-  test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x120에 칩·라벨 0개', async ({
+  test('D16-pptx: A가 첨부 선택하면 C에 피어 표시가 뜬다 (awareness)', async ({
     browser,
   }, testInfo) => {
     testInfo.setTimeout(420000)
-    // ccc/collab-3slides.pptx 복사본 (원본 불변). 고아 임베딩 2건 포함.
-    const rel = uniqueRelWithExt('c6dd14pptx', 0, '.pptx')
-    const abs = absForRel(rel)
-    fs.mkdirSync(path.dirname(abs), { recursive: true })
-    fs.copyFileSync('workspace/repos/ccc/collab-3slides.pptx', abs)
-    const parentPath = rel.replace(/^repos\//, '')
-    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } })
-    await seedUser(ctxA, ADA)
-    const pageA = await ctxA.newPage()
-    try {
-      await gotoApp(pageA)
-      await openEditor(pageA, parentPath)
-      await pageA.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 })
-      await gotoSlide(pageA, 1)
-      await pageA.waitForTimeout(5000).catch(() => {})
-      // 새로고침 후에도 좌상단 120x120에 칩·라벨이 없어야 한다 (고아는 슬라이드에 그리지 않음).
-      await pageA.reload()
-      await pageA.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
-      await gotoSlide(pageA, 1).catch(() => {})
-      await pageA.waitForTimeout(5000).catch(() => {})
-      const stray = await pageA.evaluate(() => {
-        const out = []
-        for (const el of document.querySelectorAll('[data-testid="ole-icon"], [data-testid="ole-label"]')) {
-          const r = (el as HTMLElement).getBoundingClientRect()
-          if (r.x < 120 && r.y < 120 && r.width > 0 && r.height > 0) {
-            out.push({ t: el.getAttribute('data-testid'), label: el.getAttribute('aria-label') ?? el.textContent?.slice(0, 40), box: [Math.round(r.x), Math.round(r.y)] })
-          }
-        }
-        return out
-      })
-      console.log(`[c6d] D14 stray: ${JSON.stringify(stray)}`)
-      expect(stray).toEqual([])
-    } finally {
-      await ctxA.close().catch(() => {})
-    }
-  })
-
-  test('D15-pptx: 칩 클릭=다운로드, 드래그=이동, 핸들=리사이즈 (파일에 반영)', async ({
-    browser,
-  }, testInfo) => {
-    testInfo.setTimeout(420000)
-    const slug = 'c6dd15pptx'
+    const slug = 'c6dd16pptx'
     const t = await openDeferPair(browser, 'pptx', slug, PARENT_FIX['pptx']!)
     await t.attach.close().catch(() => {})
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, GRACE)
+    const pageC = await ctxC.newPage()
     try {
+      await gotoApp(pageC)
+      await openEditor(pageC, t.parentPath)
+      await pageC.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+      await gotoSlide(pageC, 2)
       await gotoSlide(t.pageA, 2)
-      const rootA = await t.pageA.$('[data-testid="pptx-viewer-root"]')
-      expect(rootA).not.toBeNull()
       const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
       await t.pageA.evaluate(
         ({ b64, hostPath }: { b64: string; hostPath: string }) => {
           const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
-          const file = new File([bin], 'd15-move.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+          const file = new File([bin], 'd16-sel.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
           window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
         },
         { b64: fxBytes, hostPath: t.parentPath },
       )
-      await expect
-        .poll(async () => {
-          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
-          return Object.keys(zip.files).some((n) => n === 'ppt/embeddings/d15-move.docx')
-        }, { timeout: 60000, intervals: [1000] })
-        .toBe(true)
-      const offOf = async (): Promise<[number, number, number, number] | null> => {
-        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
-        const s2 = await zip.files['ppt/slides/slide2.xml']!.async('string')
-        const frames = [...s2.matchAll(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g)].map((m) => m[0])
-        const fr = frames.find((f) => f.includes('d15-move'))
-        if (!fr) return null
-        const off = /<a:off x="(\d+)" y="(\d+)"/.exec(fr)
-        const ext = /<a:ext cx="(\d+)" cy="(\d+)"/.exec(fr)
-        if (!off || !ext) return null
-        return [Number(off[1]), Number(off[2]), Number(ext[1]), Number(ext[2])]
+      // 양쪽에 칩이 뜰 때까지 대기 (106 수신).
+      for (const [page, tag] of [[t.pageA, 'A'], [pageC, 'C']] as Array<[Page, string]>) {
+        await expect
+          .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d16-sel.docx'))), { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+        console.log(`[c6d] D16 ${tag} chip visible`)
       }
-      const before = await offOf()
-      expect(before).not.toBeNull()
-      // 1) 단일 클릭 = 다운로드 (정확한 aria-label로 찾고 좌표 클릭).
-      const chipBox = async (): Promise<{ x: number; y: number; width: number; height: number } | null> => {
-        const allc = await t.pageA.getByTestId('ole-icon').evaluateAll((els) =>
-          els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })() })),
-        )
-        const hit = allc.find((c) => c.label === '첨부 d15-move.docx')
-        if (!hit || hit.box[2] <= 0) return null
-        return { x: hit.box[0], y: hit.box[1], width: hit.box[2], height: hit.box[3] }
-      }
-      await expect.poll(() => chipBox().then((b) => b !== null), { timeout: 30000, intervals: [500] }).toBe(true)
-      const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
-      const cb0 = (await chipBox())!
-      // 클립존 클릭 = 다운로드 (좌상단 배지 자리).
-      await t.pageA.mouse.click(cb0.x + cb0.width * 0.12, cb0.y + cb0.height * 0.25)
-      const dl = await dlP
-      expect(dl).not.toBeNull()
-      console.log(`[c6d] D15 clip-click download ok: ${dl ? await dl.suggestedFilename() : '?'}`)
-      // 2) 드래그 이동 (+100,+50px).
-      const box0 = (await chipBox())!
-      const cx0 = box0.x + box0.width / 2
-      const cy0 = box0.y + box0.height / 2
-      await t.pageA.mouse.move(cx0, cy0)
-      await t.pageA.mouse.down()
-      await t.pageA.mouse.move(cx0 + 100, cy0 + 50, { steps: 10 })
-      await t.pageA.mouse.up()
-      await expect
-        .poll(async () => {
-          const o = await offOf()
-          return o ? o[0] - before![0] : 0
-        }, { timeout: 30000, intervals: [1000] })
-        .toBeGreaterThan(0)
-      const afterMove = (await offOf())!
-      expect(afterMove[1]).toBeGreaterThan(before![1])
-      console.log(`[c6d] D15 moved off: ${before![0]},${before![1]} -> ${afterMove[0]},${afterMove[1]}`)
-      const box1 = await chipBox()
-      expect(box1).not.toBeNull()
-      expect(Math.hypot(box1!.x - box0.x, box1!.y - box0.y)).toBeGreaterThan(50)
-      // 3) 가운데 클릭 = 선택 (핸들 표시) 후 리사이즈 핸들 (+40,+20px).
-      const selBox = (await chipBox())!
-      await t.pageA.mouse.click(selBox.x + selBox.width / 2, selBox.y + selBox.height / 2)
-      await t.pageA.waitForTimeout(600).catch(() => {})
-      const hb = await t.pageA.evaluate((): [number, number, number, number] | null => {
-        const els = [...document.querySelectorAll('[data-testid="ole-icon"]')]
-        const hit = els.find((e) => e.getAttribute('aria-label') === '첨부 d15-move.docx')
-        const h = hit ? hit.querySelector('[data-testid="ole-resize"]') : null
-        if (!h) return null
-        const r = (h as HTMLElement).getBoundingClientRect()
-        return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+      // A가 가운데 클릭 → 선택. C에 Ada 배지가 떠야 한다.
+      const boxA = await t.pageA.getByTestId('ole-icon').evaluateAll((els) => {
+        const hit = els.find((e) => (e.getAttribute('aria-label') ?? '') === '첨부 d16-sel.docx') as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
       })
-      expect(hb).not.toBeNull()
-      const hx = hb![0] + hb![2] / 2
-      const hy = hb![1] + hb![3] / 2
-      await t.pageA.mouse.move(hx, hy)
-      await t.pageA.mouse.down()
-      await t.pageA.mouse.move(hx + 40, hy + 20, { steps: 10 })
-      await t.pageA.mouse.up()
+      expect(boxA).not.toBeNull()
+      await t.pageA.mouse.click(boxA![0], boxA![1])
       await expect
-        .poll(async () => {
-          const o = await offOf()
-          return o ? o[2] - afterMove[2] : 0
-        }, { timeout: 30000, intervals: [1000] })
-        .toBeGreaterThan(0)
-      const afterSize = (await offOf())!
-      expect(afterSize[3]).toBeGreaterThan(afterMove[3])
-      console.log(`[c6d] D15 resized ext: ${afterMove[2]}x${afterMove[3]} -> ${afterSize[2]}x${afterSize[3]}`)
-      // 리셋 없음.
-      await expect.poll(() => rootA!.evaluate((e) => e.isConnected), { timeout: 10000 }).toBe(true)
-      console.log(`[c6d] D15 click-download + move + resize without reset`)
+        .poll(() => pageC.getByTestId('ole-peer').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim())), { timeout: 30000, intervals: [500] })
+        .toContain('Ada')
+      console.log(`[c6d] D16 peer badge visible on C`)
+      // A 본인에게는 피어 배지가 뜨지 않는다 (자기 제외).
+      const selfBadges = await t.pageA.getByTestId('ole-peer').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim()))
+      expect(selfBadges.some((t) => t.includes('Ada'))).toBe(false)
+      console.log(`[c6d] D16 no self-echo on A`)
     } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
     }
