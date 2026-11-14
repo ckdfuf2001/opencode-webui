@@ -506,6 +506,33 @@ function PptxImgEntry({
           }}
         />
       )}
+      {/* C7e: 파일명 라벨 (img와 한 덩이 — 절대 따로 안 떨어진다). */}
+      <div
+        data-testid="ole-label"
+        title={entry.displayName ?? entry.fallbackName}
+        style={{
+          position: 'absolute',
+          left: '50%',
+          top: '100%',
+          marginTop: 4,
+          transform: 'translateX(-50%)',
+          maxWidth: 240,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          pointerEvents: 'none',
+          userSelect: 'none',
+          background: 'rgba(255,255,255,0.95)',
+          border: '1px solid #e2e8f0',
+          borderRadius: 4,
+          padding: '1px 6px',
+          fontSize: 11,
+          lineHeight: '20px',
+          color: '#0f172a',
+        }}
+      >
+        {entry.displayName ?? entry.fallbackName}
+      </div>
     </div>
   )
 }
@@ -1021,7 +1048,7 @@ export default function OleAttachmentOverlay({
                 selected={selectedPart === e.partName}
                 onSelect={(p) => setSelectedPart(p)}
               />
-              {caption(e, pos)}
+              {/* C7e: 라벨은 img 안에 있어서 별도 캡션 불필요 (중복 방지). */}
             </span>
           )
         }

@@ -90,124 +90,77 @@ function pngChunk(type: string, data: Uint8Array): Uint8Array {
 export function genericIconPng(kind: EmbedAttachKind = 'docx'): Uint8Array {
   const W = 192
   const H = 96
-  const px = new Uint8Array(W * H * 3).fill(255)
-  const set = (x: number, y: number, r: number, g: number, b: number): void => {
+  const R = 14
+  const px = new Uint8Array(W * H * 4).fill(255)
+  const set = (x: number, y: number, r: number, g: number, b: number, a = 255): void => {
     if (x < 0 || y < 0 || x >= W || y >= H) return
-    const o = (y * W + x) * 3
+    const o = (y * W + x) * 4
     px[o] = r
     px[o + 1] = g
     px[o + 2] = b
+    px[o + 3] = a
+  }
+  const inRR = (x: number, y: number, x0: number, y0: number, x1: number, y1: number, r: number): boolean => {
+    if (x < x0 || x > x1 || y < y0 || y > y1) return false
+    if (x >= x0 + r && x <= x1 - r) return true
+    if (y >= y0 + r && y <= y1 - r) return true
+    const cx = Math.min(Math.max(x, x0 + r), x1 - r)
+    const cy = Math.min(Math.max(y, y0 + r), y1 - r)
+    const dx = x - cx; const dy = y - cy
+    return dx * dx + dy * dy <= r * r
   }
   const rect = (x0: number, y0: number, x1: number, y1: number, c: [number, number, number]): void => {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y, c[0], c[1], c[2])
   }
-  // C7b: 가운데 칩 스타일 (흰 바탕+회색 테두리+클립 배지+문서 글리프).
-  const LINE: [number, number, number] = [203, 213, 225]
+  // C7d: 둥근 모서리 + 형식별 동일 도형·색만 구분.
   const GRAY: [number, number, number] = [148, 163, 184]
+  const LINE: [number, number, number] = [203, 213, 225]
   const SLATE: [number, number, number] = [51, 65, 85]
   const PAPER: [number, number, number] = [241, 245, 249]
   const WHITE: [number, number, number] = [255, 255, 255]
-  // 1px 테두리.
-  rect(0, 0, W - 1, 0, LINE)
-  rect(0, H - 1, W - 1, H - 1, LINE)
-  rect(0, 0, 0, H - 1, LINE)
-  rect(W - 1, 0, W - 1, H - 1, LINE)
-  // 클립 배지 (좌상단 진회색 원).
-  const bcx = 24
-  const bcy = 24
-  const br = 13
+  const ACCENT: [number, number, number] = kind === 'xlsx' ? [22, 163, 74] : kind === 'pptx' ? [234, 88, 12] : [37, 99, 235]
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (inRR(x, y, 0, 0, W - 1, H - 1, R)) set(x, y, 255, 255, 255, 255)
+      else set(x, y, 0, 0, 0, 0)
+    }
+  }
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (inRR(x, y, 0, 0, W - 1, H - 1, R) && !inRR(x, y, 1, 1, W - 2, H - 2, Math.max(1, R - 1))) set(x, y, ...LINE)
+    }
+  }
+  const bcx = 24; const bcy = 24; const br = 13
   for (let y = bcy - br - 1; y <= bcy + br + 1; y++) {
     for (let x = bcx - br - 1; x <= bcx + br + 1; x++) {
-      const dx = x - bcx
-      const dy = y - bcy
+      const dx = x - bcx; const dy = y - bcy
       if (dx * dx + dy * dy <= br * br) set(x, y, ...SLATE)
     }
   }
-  // 클립 (흰색 타원 고리 + 안쪽 막대).
   for (let a = 0; a < 360; a += 3) {
     const rad = (a * Math.PI) / 180
-    const ex = Math.round(bcx + 6 * Math.cos(rad))
-    const ey = Math.round(bcy + 8.5 * Math.sin(rad))
-    set(ex, ey, ...WHITE)
-    set(ex + 1, ey, ...WHITE)
+    const ex = Math.round(bcx + 6 * Math.cos(rad)); const ey = Math.round(bcy + 8.5 * Math.sin(rad))
+    set(ex, ey, ...WHITE); set(ex + 1, ey, ...WHITE)
   }
   rect(bcx - 1, bcy - 4, bcx + 1, bcy + 8, WHITE)
-  // 문서 글리프 (중앙) — 형식별 구분 (오버레이 iconForFile과 같은 기준).
-  const gx0 = 74
-  const gy0 = 14
-  const gx1 = 134
-  const gy1 = 82
-  if (kind === 'xlsx') {
-    // 표: 외곽 + 격자 + 초록 헤더행.
-    const GREEN: [number, number, number] = [22, 163, 74]
-    const HLIGHT: [number, number, number] = [220, 252, 231]
-    rect(gx0, gy0, gx1, gy1, WHITE)
-    rect(gx0, gy0, gx1, gy0 + 12, HLIGHT)
-    rect(gx0, gy0, gx1, gy0, GREEN)
-    rect(gx0, gy1, gx1, gy1, GRAY)
-    rect(gx0, gy0, gx0, gy1, GRAY)
-    rect(gx1, gy0, gx1, gy1, GRAY)
-    rect(gx0, gy0 + 12, gx1, gy0 + 12, GREEN)
-    for (let c = 1; c < 4; c++) {
-      const x = gx0 + Math.round(((gx1 - gx0) * c) / 4)
-      rect(x, gy0, x, gy1, GRAY)
-    }
-    for (let r = 1; r < 4; r++) {
-      const y = gy0 + 12 + Math.round(((gy1 - gy0 - 12) * r) / 4)
-      rect(gx0, y, gx1, y, GRAY)
-    }
-  } else if (kind === 'pptx') {
-    // 슬라이드: 외곽 + 주황 제목바 + 불릿 2개.
-    const ORANGE: [number, number, number] = [234, 88, 12]
-    rect(gx0, gy0, gx1, gy1, WHITE)
-    rect(gx0, gy0, gx1, gy0 + 14, ORANGE)
-    rect(gx0, gy0, gx1, gy0, ORANGE)
-    rect(gx0, gy1, gx1, gy1, GRAY)
-    rect(gx0, gy0, gx0, gy1, GRAY)
-    rect(gx1, gy0, gx1, gy1, GRAY)
-    rect(gx0 + 8, gy0 + 24, gx0 + 12, gy0 + 28, SLATE)
-    rect(gx0 + 16, gy0 + 24, gx1 - 8, gy0 + 28, GRAY)
-    rect(gx0 + 8, gy0 + 36, gx0 + 12, gy0 + 40, SLATE)
-    rect(gx0 + 16, gy0 + 36, gx1 - 20, gy0 + 40, GRAY)
-  } else {
-    // docx/기타: 문서 + 접힌 모서리 + 줄 3개 (첫 줄 파랑).
-    const BLUE: [number, number, number] = [37, 99, 235]
-    rect(gx0, gy0, gx1, gy1, PAPER)
-    rect(gx0, gy0, gx1, gy0, GRAY)
-    rect(gx0, gy1, gx1, gy1, GRAY)
-    rect(gx0, gy0, gx0, gy1, GRAY)
-    rect(gx1, gy0, gx1, gy1, GRAY)
-    // 접힌 모서리 (우상단).
-    for (let i = 0; i < 16; i++) {
-      for (let j = 0; j <= i; j++) set(gx1 - i, gy0 + j, ...WHITE)
-      set(gx1 - i, gy0 + i, ...GRAY)
-    }
-    // 본문 줄 3개.
-    rect(gx0 + 8, gy0 + 22, gx1 - 8, gy0 + 26, BLUE)
-    rect(gx0 + 8, gy0 + 34, gx1 - 8, gy0 + 38, GRAY)
-    rect(gx0 + 8, gy0 + 46, gx1 - 30, gy0 + 50, GRAY)
-  }
-  const raw = new Uint8Array((W * 3 + 1) * H)
-  for (let y = 0; y < H; y++) {
-    raw[y * (W * 3 + 1)] = 0
-    raw.set(px.subarray(y * W * 3, (y + 1) * W * 3), y * (W * 3 + 1) + 1)
-  }
+  const gx0 = 74; const gy0 = 14; const gx1 = 134; const gy1 = 82
+  rect(gx0, gy0, gx1, gy1, PAPER)
+  rect(gx0, gy0, gx1, gy0, GRAY); rect(gx0, gy1, gx1, gy1, GRAY); rect(gx0, gy0, gx0, gy1, GRAY); rect(gx1, gy0, gx1, gy1, GRAY)
+  for (let i = 0; i < 16; i++) { for (let j = 0; j <= i; j++) set(gx1 - i, gy0 + j, ...WHITE); set(gx1 - i, gy0 + i, ...ACCENT) }
+  rect(gx0 + 8, gy0 + 22, gx1 - 8, gy0 + 26, ACCENT)
+  rect(gx0 + 8, gy0 + 34, gx1 - 8, gy0 + 38, GRAY)
+  rect(gx0 + 8, gy0 + 46, gx1 - 30, gy0 + 50, GRAY)
+  const raw = new Uint8Array((W * 4 + 1) * H)
+  for (let y = 0; y < H; y++) { raw[y * (W * 4 + 1)] = 0; raw.set(px.subarray(y * W * 4, (y + 1) * W * 4), y * (W * 4 + 1) + 1) }
   const idat = deflateSync(raw)
   const ihdr = new Uint8Array(13)
   const dv = new DataView(ihdr.buffer)
-  dv.setUint32(0, W)
-  dv.setUint32(4, H)
-  ihdr[8] = 8
-  ihdr[9] = 2
+  dv.setUint32(0, W); dv.setUint32(4, H); ihdr[8] = 8; ihdr[9] = 6
   const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
   const parts = [sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', idat), pngChunk('IEND', new Uint8Array(0))]
   const total = parts.reduce((n, p) => n + p.length, 0)
   const out = new Uint8Array(total)
-  let o = 0
-  for (const p of parts) {
-    out.set(p, o)
-    o += p.length
-  }
+  let o = 0; for (const p of parts) { out.set(p, o); o += p.length }
   return out
 }
 
