@@ -54,6 +54,7 @@ import {
   attachKindOf,
   blockTextSnippet,
   listEmbedParts,
+  listEmbedPositions,
   normalizeEmbedPart,
   movePptxEmbed,
   previewPngForPart,
@@ -233,6 +234,7 @@ app.post('/save', async (c) => {
           code: 'image_loss',
           before: applied.before,
           after: applied.after,
+          missing: (applied as { missing?: string[] }).missing ?? [],
         },
         409,
       )
@@ -495,7 +497,7 @@ app.post('/embed', async (c) => {
       )
       .map((ke) => ke.pos)
     const off = offsetOverlap(hostKind, { slide: q.slide, x: q.x, y: q.y, sheet: q.sheet, col: q.col, row: q.row, block: q.block }, samePlace)
-    let savedPos: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number; text?: string } | undefined
+    let savedPos: EmbedPos | undefined
     // P0-1: 조립+쓰기를 부모 체인에서 직렬화한다 (PUT /save와 같은 체인).
     return runParentChained(abs, async () => {
     const hostBytes = new Uint8Array(await getRawFileContent(q.path))
@@ -561,7 +563,7 @@ app.post('/embed', async (c) => {
           finalPart = added[0].part
           const embFile = added[0].part.split('/').pop() ?? attachName
           // C7e: 실제 기록 위치를 역추적으로 확정 (w/h 포함). 실패하면 요청값 폴백.
-          let pos: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: string; text?: string } =
+          let pos: EmbedPos =
             hostKind === 'pptx'
               ? { slide: off.slide, x: off.x, y: off.y }
               : hostKind === 'xlsx'
@@ -569,9 +571,9 @@ app.post('/embed', async (c) => {
                 : { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) }
           try {
             const found = await listEmbedPositions(zipLoadJSZip, out, hostKind)
-            const hit = found.find((f) => f.part === added[0]!.part)
+            const hit = found.find((f: { part: string }) => f.part === added[0]!.part)
             if (hit) {
-              pos = hostKind === 'docx' ? { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) } : (hit.pos as typeof pos)
+              pos = hostKind === 'docx' ? { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) } : (hit.pos as EmbedPos)
             }
           } catch {
             /* 폴백 유지 */

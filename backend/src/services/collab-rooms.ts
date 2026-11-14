@@ -1662,6 +1662,36 @@ export function countPptxImages(
   }
 }
 
+/** ppt/media/* 파일명 목록 (이미지 유실 진단용, 압축 무관). */
+export function listPptxMedia(bytes: Uint8Array): string[] {
+  try {
+    const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) as Buffer
+    const names: string[] = []
+    for (let p = 0; p + 30 <= buf.length; ) {
+      if (buf.readUInt32LE(p) !== 0x04034b50) {
+        p += 1
+        continue
+      }
+      const nameLen = buf.readUInt16LE(p + 26)
+      const extraLen = buf.readUInt16LE(p + 28)
+      const compSize = buf.readUInt32LE(p + 18)
+      const name = buf.subarray(p + 30, p + 30 + nameLen).toString('latin1')
+      if (name.startsWith('ppt/media/') && !name.endsWith('/')) names.push(name)
+      const headerEnd = p + 30 + nameLen + extraLen
+      if (compSize > 0) {
+        p = headerEnd + compSize
+      } else {
+        const next = buf.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]), headerEnd)
+        if (next < 0) break
+        p = next
+      }
+    }
+    return names
+  } catch {
+    return []
+  }
+}
+
 /** 직전 저장본(디스크)의 이미지 계측값. room에 캐시한다. */
 async function diskImageCounts(room: CollabRoom): Promise<{ media: number; refs: number } | null> {
   if (room.lastImageCounts !== undefined) return room.lastImageCounts
@@ -1919,7 +1949,7 @@ export async function applySave(
 ): Promise<
   | { newHash: string }
   | { conflict: true; currentHash: string | null; code?: 'conflict' | 'conflict_room' | 'conflict_external' | 'dirty_room' | 'stale_client'; retryable?: boolean }
-  | { imageLoss: true; before: { media: number; refs: number }; after: { media: number; refs: number } }
+  | { imageLoss: true; before: { media: number; refs: number }; after: { media: number; refs: number }; missing: string[] }
 > {
   const room = rooms.get(roomId)
   if (!room) throw { message: 'No such room', statusCode: 404 }
@@ -2069,22 +2099,35 @@ export async function applySave(
     if (!room.part && room.knownEmbeds.length > 0) {
       knownMerged = await ensureKnownEmbeds(room, bytes)
     }
-    // 4-0 가드: pptx 저장에서 이미지(파트·관계)가 줄었으면 막는다.
+    // 4-0 가드: pptx 저장에서 이미지 파일이 줄었으면 막는다.
     // 명시적 승인(allowImageLoss)이 있을 때만 통과한다.
     // C6c: 파트 방은 부모 확장자가 아니라 파트 파일명으로 판정한다.
+    // C7f: refs(rels XML 텍스트 매칭)는 압축 방식에 따라 raw 바이트에
+    // 보일 수도 안 보일 수도 있어서(우리 조립은 DEFLATE, lib은 STORE 가능)
+    // 오탐이 난다 — 미디어 파일 수만 본다 (로컬 헤더 기준, 압축 무관).
     const imageSubject = room.part ? room.part.part.split('/').pop() ?? '' : room.path
     if (!opts?.allowImageLoss && /\.pptx$/i.test(imageSubject)) {
       const before = await diskImageCounts(room)
       const after = countPptxImages(knownMerged)
-      if (before && after && (after.media < before.media || after.refs < before.refs)) {
+      if (before && after && after.media < before.media) {
+        let missing: string[] = []
+        try {
+          const diskBuf = await roomDiskBytes(room)
+          const beforeNames = new Set(listPptxMedia(new Uint8Array(diskBuf)))
+          const afterNames = new Set(listPptxMedia(knownMerged))
+          missing = [...beforeNames].filter((n) => !afterNames.has(n)).slice(0, 10)
+        } catch {
+          /* 진단 실패는 무시 */
+        }
         logger.warn(
-          `Collab room ${room.id}: image loss blocked (media ${before.media}->${after.media}, refs ${before.refs}->${after.refs})`,
+          `Collab room ${room.id}: image loss blocked (media ${before.media}->${after.media}, missing=${missing.join(',') || '?'})`,
         )
         const r: {
           imageLoss: true
           before: { media: number; refs: number }
           after: { media: number; refs: number }
-        } = { imageLoss: true, before, after }
+          missing: string[]
+        } = { imageLoss: true, before, after, missing }
         return r
       }
     }
