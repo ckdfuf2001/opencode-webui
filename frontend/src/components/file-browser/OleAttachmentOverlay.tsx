@@ -1087,7 +1087,7 @@ export default function OleAttachmentOverlay({
     arr.push({ name: ps.name, color: ps.color })
     peerSelByPart.set(ps.part, arr)
   }
-  const displayName = (entry: OleEmbeddingRef): string => entry.displayName ?? entry.fallbackName
+  const displayName = (entry: OleEmbeddingRef): string => entry.displayName || entry.fallbackName || entry.partName.split('/').pop() || '첨부파일';
 
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
   // dblclick은 컨테이너 캡처가 잡는다: rect 아래쪽 패딩 + 실측 박스.
