@@ -2067,6 +2067,9 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       console.log(`[c6d] D18 before: ${JSON.stringify(before.map((b) => [b.sid, b.draw.slice(0, 4)]))}`)
       expect(before.length).toBeGreaterThanOrEqual(2)
       // 우리 칩 자리에서 lib 드래그 (probe 재현).
+      await expect
+        .poll(() => t.pageA.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d18-move.xlsx'))), { timeout: 30000, intervals: [1000] })
+        .toBe(true)
       const chipBox = await t.pageA.getByTestId('ole-icon').evaluateAll((els) => {
         const hit = els.find((e) => (e.getAttribute('aria-label') ?? '').includes('d18-move.xlsx')) as HTMLElement | null
         if (!hit) return null
@@ -2096,18 +2099,40 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       for (const m of moved) expect(m.objPr).toEqual(m.draw)
       console.log('[c6d] D18 lib move + save syncs DRAW/OBJPR')
       // C7h-2: 이어서 셀 2곳 입력 → 자동저장 2회. 409 루프면 값이 안 남는다.
-      await setCell(t.pageA, 'A1', 'd18a1')
-      await setCell(t.pageA, 'A2', 'd18a2')
-      await expect
-        .poll(async () => {
-          const v1 = await parentDiskHas('xlsx', t.abs, 'd18a1')
-          const v2 = await parentDiskHas('xlsx', t.abs, 'd18a2')
-          return v1 && v2
-        }, { timeout: 120000, intervals: [2000] })
-        .toBe(true)
-      const hasConflict = await t.pageA.evaluate(() => document.body.textContent?.includes('충돌') ?? false)
-      expect(hasConflict).toBe(false)
-      console.log('[c6d] D18 two autosaves persisted without conflict')
+      // C7i: POST /save 응답을 직접 세어 200이 2번 이상, 409가 0번인지 단언한다.
+      const saveStats = { ok: 0, conflict: 0 }
+      const onResp = (r: { url: () => string; status: () => number }): void => {
+        try {
+          if (r.url().includes('/api/collab/save')) {
+            if (r.status() === 200) saveStats.ok++
+            else if (r.status() === 409) saveStats.conflict++
+          }
+        } catch { /* 무시 */ }
+      }
+      t.pageA.on('response', onResp)
+      try {
+        await setCell(t.pageA, 'A1', 'd18a1')
+        // 첫 저장이 끝나고 다음 저장이 돌게 순차 대기 (배치 방지).
+        await expect
+          .poll(() => parentDiskHas('xlsx', t.abs, 'd18a1'), { timeout: 120000, intervals: [2000] })
+          .toBe(true)
+        await setCell(t.pageA, 'A2', 'd18a2')
+        await expect
+          .poll(async () => {
+            const v1 = await parentDiskHas('xlsx', t.abs, 'd18a1')
+            const v2 = await parentDiskHas('xlsx', t.abs, 'd18a2')
+            return v1 && v2
+          }, { timeout: 120000, intervals: [2000] })
+          .toBe(true)
+        const hasConflict = await t.pageA.evaluate(() => document.body.textContent?.includes('충돌') ?? false)
+        expect(hasConflict).toBe(false)
+        console.log('[c6d] D18 two autosaves persisted without conflict')
+        console.log(`[c6d] D18 save responses: ok=${saveStats.ok} conflict=${saveStats.conflict}`)
+        expect(saveStats.ok).toBeGreaterThanOrEqual(2)
+        expect(saveStats.conflict).toBe(0)
+      } finally {
+        try { t.pageA.off('response', onResp) } catch { /* 무시 */ }
+      }
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
