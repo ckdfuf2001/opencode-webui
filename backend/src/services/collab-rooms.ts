@@ -22,6 +22,7 @@ import {
   normalizeEmbedPart,
   readEmbedPart,
   replaceEmbedPart,
+  syncXlsxOleAnchors,
   type ZipLike,
 } from './office-embed'
 
@@ -1991,6 +1992,17 @@ export async function applySave(
     const role = readLibPresence(room.awareness.getStates().get(opts.clientId) as Record<string, unknown> | undefined)?.role
     if (role === 'viewer') {
       throw { message: 'View-only participant cannot save', statusCode: 403, code: 'view_only' }
+    }
+  }
+  // C7g-1: xlsx 저장 시 OLE 앵커 동기화 (DRAW→OBJPR/VML).
+  // lib 드래그는 drawing만 고치고 나머지는 그대로 두므로, 여기서 맞춘다.
+  // 실패해도 저장은 계속한다 (원본 바이트 유지).
+  if (opts?.kind === 'xlsx') {
+    try {
+      const synced = await syncXlsxOleAnchors(zipLoadJSZip, bytes)
+      if (synced.synced > 0) bytes = synced.bytes
+    } catch {
+      /* 무시 */
     }
   }
   // P0-1c: 파트 저장의 부모 flush 판정은 체인을 잡기 전에 끝낸다.
