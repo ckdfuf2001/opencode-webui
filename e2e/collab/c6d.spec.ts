@@ -2006,6 +2006,99 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
+  test('D18-xlsx: 삽입 후 lib로 옮기고 저장하면 DRAW/OBJPR이 일치한다', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'xlsx', 'c6dd18xlsx', PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch {}
+        try { ed?.focusGrid?.() } catch {}
+      })
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.xlsx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'd18-move.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'xl/embeddings/d18-move.xlsx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      const anchorsAll = async (): Promise<Array<{ sid: string; draw: number[]; objPr: number[] }>> => {
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const sheet = await zip.files['xl/worksheets/sheet1.xml']!.async('string')
+        const dname = Object.keys(zip.files).find((n) => /drawings\/drawing[0-9]*\.xml$/.test(n))!
+        const drawing = await zip.files[dname]!.async('string')
+        const out: Array<{ sid: string; draw: number[]; objPr: number[] }> = []
+        for (const om of sheet.matchAll(/<oleObject[^>]*\bshapeId="(\d+)"[^>]*>([\s\S]*?)<\/oleObject>/g)) {
+          // self-closing Fallback은 건너뛴다.
+          if (/\/\s*>$/.test(om[0].split('>')[0] + '>')) continue
+          const am = /<anchor[^>]*>([\s\S]*?)<\/anchor>/.exec(om[2])
+          if (!am) continue
+          const objPr = [...am[1].matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((m) => Number(m[1]))
+          if (objPr.length < 8) continue
+          const cPos = drawing.indexOf(`id="${om[1]}"`)
+          if (cPos < 0) continue
+          const openPos = drawing.indexOf('<xdr:twoCellAnchor', drawing.lastIndexOf('</xdr:twoCellAnchor>', cPos) + 1)
+          const closePos = drawing.indexOf('</xdr:twoCellAnchor>', cPos)
+          if (openPos < 0 || closePos < 0) continue
+          const blk = drawing.slice(openPos, closePos)
+          const fm = /<xdr:from>([\s\S]*?)<\/xdr:from>/.exec(blk)
+          const tm = /<xdr:to>([\s\S]*?)<\/xdr:to>/.exec(blk)
+          if (!fm || !tm) continue
+          const draw = [...`${fm[1]}${tm[1]}`.matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((m) => Number(m[1]))
+          if (draw.length < 8) continue
+          out.push({ sid: om[1], draw, objPr })
+        }
+        return out
+      }
+      const before = await anchorsAll()
+      console.log(`[c6d] D18 before: ${JSON.stringify(before.map((b) => [b.sid, b.draw.slice(0, 4)]))}`)
+      expect(before.length).toBeGreaterThanOrEqual(2)
+      // 우리 칩 자리에서 lib 드래그 (probe 재현).
+      const chipBox = await t.pageA.getByTestId('ole-icon').evaluateAll((els) => {
+        const hit = els.find((e) => (e.getAttribute('aria-label') ?? '').includes('d18-move.xlsx')) as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+      })
+      expect(chipBox).not.toBeNull()
+      await t.pageA.evaluate(() => {
+        document.querySelectorAll('[data-testid="ole-icon"],[data-testid="ole-label"],[data-testid="ole-img"]').forEach((el) => {
+          (el as HTMLElement).style.display = 'none'
+        })
+      })
+      const cx = chipBox![0] + chipBox![2] / 2
+      const cy = chipBox![1] + chipBox![3] / 2
+      await t.pageA.mouse.move(cx, cy)
+      await t.pageA.mouse.down()
+      await t.pageA.mouse.move(cx + 120, cy + 80, { steps: 12 })
+      await t.pageA.mouse.up()
+      await clickParentSave(t.pageA)
+      await t.pageA.waitForTimeout(3000).catch(() => {})
+      const after = await anchorsAll()
+      console.log(`[c6d] D18 after: ${JSON.stringify(after.map((b) => [b.sid, b.draw.slice(0, 4), b.objPr.slice(0, 4)]))}`)
+      // 움직인 파트가 있고, 그 파트의 OBJPR이 DRAW와 일치한다 (서버 동기화).
+      const moved = after.filter((a) => { const b = before.find((x) => x.sid === a.sid); return b && JSON.stringify(b.draw) !== JSON.stringify(a.draw) })
+      console.log(`[c6d] D18 moved sids: ${JSON.stringify(moved.map((m) => m.sid))}`)
+      expect(moved.length).toBeGreaterThan(0)
+      for (const m of moved) expect(m.objPr).toEqual(m.draw)
+      console.log('[c6d] D18 lib move + save syncs DRAW/OBJPR')
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
