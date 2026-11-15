@@ -45,7 +45,6 @@ describe('syncXlsxOleAnchors', () => {
     // lib 드래그 흉내: DRAW from만 C5→D8로 옮기고 OBJPR은 그대로 둔다 (부분 갱신).
     const zip = (await zipLoad(assembled)) as JSZip
     const dnames = Object.keys(zip.files).filter((n) => /drawings\/drawing[0-9]*\.xml$/.test(n))
-    console.log('DBG drawings: ' + JSON.stringify(dnames))
     const dname = dnames[0]!
     let dxml = await zip.files[dname]!.async('string')
     // shapeId 1026 (우리 삽입분, xdr:pic)의 DRAW from을 col 4→6, row 4→7로 바꾼다.
@@ -77,8 +76,6 @@ describe('syncXlsxOleAnchors', () => {
       }
     }
     expect(replaced).toBe(1)
-    const qm = /<xdr:cNvPr[^>]*\bid="1026"[^>]*>/.exec(dxml)
-    console.log('DBG after-replace 1026 from: ' + (qm ? dxml.slice(Math.max(0, qm.index - 400), qm.index).replace(/\s+/g, ' ').slice(-200) : '(no 1026)'))
     zip.file(dname, dxml)
     const moved = (await zip.generateAsync({ type: 'uint8array' })) as Uint8Array
     const before = await anchorsOf(moved)
