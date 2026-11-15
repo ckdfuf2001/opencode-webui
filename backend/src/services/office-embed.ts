@@ -1391,17 +1391,34 @@ export async function replaceEmbedPart(
 }
 
 /**
- * C7g-1: xlsx OLE 앵커 동기화 (저장 시).
+ * C7h-1: xlsx OLE 앵커 동기화 (저장 시, 시트별).
  * lib 드래그는 drawing twoCellAnchor만 고치고 oleObject objectPr/VML은 그대로 둔다.
  * 데스크톱 Excel에서 어긋나 보이므로, 저장할 때 DRAW 기준으로 나머지를 맞춘다.
  * - objectPr anchor: DRAW from/to를 그대로 복사 (EMU 단위 동일).
  * - VML x:Anchor: col/row만 복사, 오프셋은 0 (레거시 폴백용 셀 단위 근사).
- * 하나도 안 바뀌면 원본 바이트를 그대로 돌려준다 (재압축 없음).
+ * - 시트별로 짝짓는다 (rels → drawing): id는 시트마다 1025부터 다시 매겨지므로
+ *   전역 Map에 모으면 다른 시트 위치로 덮어쓴다.
+ * - `xl/embeddings/`가 없으면 zip을 풀지 않고 원본을 돌려준다.
+ * - 하나도 안 바뀌면 원본 바이트를 그대로 돌려준다 (재압축 없음).
  */
 export async function syncXlsxOleAnchors(
   zipLoad: (b: Uint8Array) => Promise<ZipLike>,
   hostBytes: Uint8Array,
 ): Promise<{ bytes: Uint8Array; synced: number }> {
+  try {
+    const needle = new TextEncoder().encode('xl/embeddings/')
+    let found = false
+    outer: for (let i = 0; i + needle.length <= hostBytes.length; i++) {
+      for (let k = 0; k < needle.length; k++) {
+        if (hostBytes[i + k] !== needle[k]) continue outer
+      }
+      found = true
+      break
+    }
+    if (!found) return { bytes: hostBytes, synced: 0 }
+  } catch {
+    return { bytes: hostBytes, synced: 0 }
+  }
   let zip: ZipLike
   try {
     zip = await zipLoad(hostBytes)
@@ -1417,22 +1434,24 @@ export async function syncXlsxOleAnchors(
       return null
     }
   }
-  // DRAW 앵커 수집 (cNvPr id → from/to 숫자 8개).
-  // twoCellAnchor 블록을 위치 기준으로 정확히 잘라낸다 (정규식 스패닝 방지:
-  // id 뒤쪽 닫힘까지 통째로 묶으면 앞 앵커까지 합쳐져 from/to가 뒤섞인다).
-  // - cNvPr id를 찾고, 그 앞에서 가장 가까운 twoCellAnchor 열림(단 사이에
-  //   닫힘이 없어야 함)부터 뒤의 첫 닫힘까지를 한 블록으로 본다.
-  const drawAnchors = new Map<string, number[]>()
-  for (const dname of Object.keys(zip!.files)) {
-    if (!/xl\/drawings\/drawing[0-9]*\.xml$/.test(dname)) continue
-    const dxml = await readText(dname)
-    if (!dxml) continue
+  const resolveTarget = (from: string, target: string): string => {
+    const base = from.slice(0, from.lastIndexOf('/') + 1)
+    const parts = (base + target).split('/')
+    const out: string[] = []
+    for (const q of parts) {
+      if (q === '.' || q === '') continue
+      if (q === '..') out.pop()
+      else out.push(q)
+    }
+    return out.join('/')
+  };
+  const anchorsIn = (dxml: string): Map<string, number[]> => {
+    const m = new Map<string, number[]>()
     for (const cm of dxml.matchAll(/<xdr:cNvPr[^>]*\bid="(\d+)"[^>]*>/g)) {
       const sid = cm[1]
-      if (drawAnchors.has(sid)) continue
+      if (m.has(sid)) continue
       const cPos = cm.index ?? -1
       if (cPos < 0) continue
-      // 우리 앵커의 열림: cNvPr 앞의 마지막 닫힘 뒤에 있는 첫 열림.
       const openTag = '<xdr:twoCellAnchor'
       const closeTag = '</xdr:twoCellAnchor>'
       const lastCloseBefore = dxml.lastIndexOf(closeTag, cPos)
@@ -1445,19 +1464,36 @@ export async function syncXlsxOleAnchors(
       const tm = /<xdr:to>([\s\S]*?)<\/xdr:to>/.exec(blk)
       if (!fm || !tm) continue
       const nums = [...`${fm[1]}${tm[1]}`.matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((n) => Number(n[1]))
-      if (nums.length >= 8) drawAnchors.set(sid, nums.slice(0, 8))
+      if (nums.length >= 8) m.set(sid, nums.slice(0, 8))
     }
-  }
-  if (drawAnchors.size === 0) return { bytes: hostBytes, synced: 0 }
+    return m
+  };
   let synced = 0
   const numRe = /(<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>)(\d+)(<)/g
   for (const sname of Object.keys(zip!.files)) {
     if (!/xl\/worksheets\/sheet[0-9]*\.xml$/.test(sname)) continue
     let sheet = await readText(sname)
     if (!sheet || sheet.indexOf('<oleObject') < 0) continue
+    const relsName = sname.replace(/\/([^/]+)$/, '/_rels/$1.rels')
+    const rels = (await readText(relsName)) ?? ''
+    let drawXml: string | null = null
+    let vmlName: string | null = null
+    let vmlXml: string | null = null
+    for (const rm of rels.matchAll(/<Relationship[^>]*>/g)) {
+      const tag = rm[0]
+      const type = /Type="[^"]*\/([^"/]+)"\s*$|Type="[^"]*\/([^"/]+)"/.exec(tag)
+      const tname = (type?.[1] ?? type?.[2] ?? '').toLowerCase()
+      const tgt = /Target="([^"]+)"/.exec(tag)?.[1]
+      if (!tgt) continue
+      if (tname === 'drawing') drawXml = await readText(resolveTarget(sname, tgt))
+      else if (tname === 'vmldrawing') {
+        vmlName = resolveTarget(sname, tgt)
+        vmlXml = await readText(vmlName)
+      }
+    }
+    const localAnchors = drawXml ? anchorsIn(drawXml) : new Map<string, number[]>()
+    if (localAnchors.size === 0) continue
     let changed = false
-    // oleObject는 self-closing(Fallback 중복)일 수 있으므로 위치 기준으로
-    // 짝을 짓는다 (정규식 스패닝 방지). self-closing은 앵커가 없어 건너뛴다.
     const out: string[] = []
     let pos = 0
     for (;;) {
@@ -1477,7 +1513,7 @@ export async function syncXlsxOleAnchors(
       const cPos = sheet.indexOf('</oleObject>', oEnd)
       if (cPos < 0) { out.push(sheet.slice(pos)); break }
       const inner = sheet.slice(oEnd + 1, cPos)
-      const draw = drawAnchors.get(String(sid))
+      const draw = localAnchors.get(String(sid))
       if (!draw) {
         out.push(sheet.slice(pos, cPos + '</oleObject>'.length))
         pos = cPos + '</oleObject>'.length
@@ -1511,29 +1547,26 @@ export async function syncXlsxOleAnchors(
       changed = true
       synced++
     }
-    if (changed) sheet = out.join('')
-    if (changed) zip!.file(sname, sheet)
-  }
-  // VML x:Anchor (col/row만, 오프셋은 0). 레거시 폴백용 셀 단위 근사.
-  // col/row가 DRAW와 다를 때만 고친다 (불필요한 재기록 방지).
-  for (const vname of Object.keys(zip!.files)) {
-    if (!/vmlDrawing[0-9]*\.vml$/.test(vname)) continue
-    let vml = await readText(vname)
-    if (!vml) continue
-    let changed = false
-    for (const [sid, draw] of drawAnchors) {
-      const re = new RegExp(`(<v:shape[^>]*id="_x0000_s${sid}"[^>]*>[\\s\\S]*?<x:Anchor>)([\\s\\S]*?)(<\\/x:Anchor>)`, 'g')
-      vml = vml.replace(re, (_s, open: string, nums: string, close: string) => {
-        const parts = nums.split(',').map((p) => p.trim())
-        if (parts.length < 8) return _s
-        if (Number(parts[0]) === draw[0] && Number(parts[2]) === draw[2] && Number(parts[4]) === draw[4] && Number(parts[6]) === draw[6]) return _s
-        const want = [draw[0], 0, draw[2], 0, draw[4], 0, draw[6], 0]
-        changed = true
-        synced++
-        return `${open} ${want.join(', ')} ${close}`
-      })
+    if (changed) {
+      sheet = out.join('')
+      zip!.file(sname, sheet)
     }
-    if (changed) zip!.file(vname, vml)
+    if (vmlName && vmlXml) {
+      let vmlChanged = false
+      for (const [vsid, vdraw] of localAnchors) {
+        const re = new RegExp(`(<v:shape[^>]*id="_x0000_s${vsid}"[^>]*>[\\s\\S]*?<x:Anchor>)([\\s\\S]*?)(<\\/x:Anchor>)`, 'g')
+        vmlXml = vmlXml.replace(re, (_s, open: string, nums: string, close: string) => {
+          const parts = nums.split(',').map((p) => p.trim())
+          if (parts.length < 8) return _s
+          if (Number(parts[0]) === vdraw[0] && Number(parts[2]) === vdraw[2] && Number(parts[4]) === vdraw[4] && Number(parts[6]) === vdraw[6]) return _s
+          const want = [vdraw[0], 0, vdraw[2], 0, vdraw[4], 0, vdraw[6], 0]
+          vmlChanged = true
+          synced++
+          return `${open} ${want.join(', ')} ${close}`
+        })
+      }
+      if (vmlChanged) zip!.file(vmlName, vmlXml)
+    }
   }
   if (synced === 0) return { bytes: hostBytes, synced: 0 }
   return { bytes: await zip!.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }) as Uint8Array, synced }
