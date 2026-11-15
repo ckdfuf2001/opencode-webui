@@ -29,7 +29,7 @@ import { useOfficeSave, saveOfficeBytes, waitParentSaveDone } from './officeSave
 import type { OfficeSaveRequestDetail } from './officeSave'
 import { createCollabSession, type CollabSession } from 'ooxml-core/collab'
 import type { RibbonActionId } from 'ooxml-core/docx/ui'
-import { createDocxTapProvider } from '@/lib/docxTapTransport'
+import { createDocxTapProvider, encodeDocxOleSelected } from '@/lib/docxTapTransport'
 import { showToast } from '@/lib/toast'
 import { loadXlsxComments, loadXlsxSheetNames, type XlsxComment } from './xlsxComments'
 import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, deleteXlsxComment } from './xlsxCommentWriter'
@@ -38,7 +38,7 @@ import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
 import { readCollabUser, ensureCollabIdentity } from '@/lib/collabUser'
 import { hasEmbObject, isBlockedXlsxEdit, decideObjectOp, NO_OBJECT_GUARD, shouldFlushOnPeerArrive, type ObjectGuardCtx } from '@/lib/xlsxCollabGuard'
-import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectAnchor, type ObjectsStateMsg } from '@/lib/xlsxObjects'
+import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectAnchor, type ObjectsStateMsg, encodeOleSelected } from '@/lib/xlsxObjects'
 import { CollabPresenceBar, CollabPresenceShell } from '@/components/collab/CollabPresence'
 import type { PresencePeerView } from '@/components/collab/collabPresenceView'
 import { shouldShowPresence } from '@/components/collab/collabPresenceView'
@@ -1261,33 +1261,32 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     [],
   )
   // C7f: 첨부 선택 공유 (107 broadcast, 탭 transport용 — awareness 없음). xlsx와 동일 패턴.
+  // C7g-2: WS 직접 전송 (conn 키 — 끊김 해제·늦은 참가 resend가 서버에서 된다).
   const docxTabId = useMemo(() => Math.random().toString(36).slice(2), [])
   const [docxSelected, setDocxSelected] = useState<string | null>(null)
-  const [docxPeerSel, setDocxPeerSel] = useState<Array<{ part: string; name: string; color: string }>>([])
+  const [docxPeerSel, setDocxPeerSel] = useState<Array<{ part: string; tabId: string; name: string; color: string }>>([])
+  const docxTapRef = useRef<{ send: (data: Uint8Array) => void } | null>(null)
   const publishDocxSelect = useCallback(
     (part: string | null) => {
       setDocxSelected(part)
       try {
         const c = collabRef.current
-        if (!c?.roomId) return
-        void fetch(`${API_BASE_URL}/api/collab/embed/select`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ path, part, roomId: c.roomId, tabId: docxTabId, name: c.user?.name ?? '?', color: c.user?.color ?? '#64748b' }),
-        })
+        const t = docxTapRef.current
+        if (!c?.roomId || !t) return
+        t.send(encodeDocxOleSelected({ part, tabId: docxTabId, name: c.user?.name ?? '?', color: c.user?.color ?? '#64748b' }))
       } catch {
         /* 무시 */
       }
     },
-    [path, docxTabId],
+    [docxTabId],
   )
   const onDocxPeerSelect = useCallback(
     (msg: { part: string | null; tabId: string; name: string; color: string }) => {
       if (!msg || msg.tabId === docxTabId) return
       setDocxPeerSel((prev) => {
-        if (!msg.part) return prev.filter((p) => p.name !== msg.name || p.color !== msg.color)
-        const rest = prev.filter((p) => !(p.name === msg.name && p.color === msg.color))
-        return [...rest, { part: msg.part, name: msg.name, color: msg.color }]
+        if (!msg.part) return prev.filter((p) => p.tabId !== msg.tabId)
+        const rest = prev.filter((p) => p.tabId !== msg.tabId)
+        return [...rest, { part: msg.part, tabId: msg.tabId, name: msg.name, color: msg.color }]
       })
     },
     [docxTabId],
@@ -1584,7 +1583,10 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
             onOleSelected: (msg) => {
               if (!dead) onDocxPeerSelect(msg)
             },
-          }),
+          },
+          // C7g-2: 선택 발행용 transport 캡처.
+          (t) => { docxTapRef.current = t },
+          ),
           user: {
             name: c.user.name,
             color: c.user.color,
@@ -2556,33 +2558,32 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     [],
   )
   // C7f: 첨부 선택 공유 (107 broadcast, 탭 transport용 — awareness 없음).
+  // C7g-2: WS 직접 전송 (conn 키 — 끊김 해제·늦은 참가 resend가 서버에서 된다).
   const xlsxTabId = useMemo(() => Math.random().toString(36).slice(2), [])
   const [xlsxSelected, setXlsxSelected] = useState<string | null>(null)
-  const [xlsxPeerSel, setXlsxPeerSel] = useState<Array<{ part: string; name: string; color: string }>>([])
+  const [xlsxPeerSel, setXlsxPeerSel] = useState<Array<{ part: string; tabId: string; name: string; color: string }>>([])
+  const xlsxTapRef = useRef<{ send: (data: Uint8Array) => void } | null>(null)
   const publishXlsxSelect = useCallback(
     (part: string | null) => {
       setXlsxSelected(part)
       try {
         const c = collabRef.current
-        if (!c?.roomId) return
-        void fetch(`${API_BASE_URL}/api/collab/embed/select`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ path, part, roomId: c.roomId, tabId: xlsxTabId, name: c.user?.name ?? '?', color: c.user?.color ?? '#64748b' }),
-        })
+        const t = xlsxTapRef.current
+        if (!c?.roomId || !t) return
+        t.send(encodeOleSelected({ part, tabId: xlsxTabId, name: c.user?.name ?? '?', color: c.user?.color ?? '#64748b' }))
       } catch {
         /* 무시 */
       }
     },
-    [path, xlsxTabId],
+    [xlsxTabId],
   )
   const onXlsxPeerSelect = useCallback(
     (msg: { part: string | null; tabId: string; name: string; color: string }) => {
       if (!msg || msg.tabId === xlsxTabId) return
       setXlsxPeerSel((prev) => {
-        if (!msg.part) return prev.filter((p) => p.name !== msg.name || p.color !== msg.color)
-        const rest = prev.filter((p) => !(p.name === msg.name && p.color === msg.color))
-        return [...rest, { part: msg.part, name: msg.name, color: msg.color }]
+        if (!msg.part) return prev.filter((p) => p.tabId !== msg.tabId)
+        const rest = prev.filter((p) => p.tabId !== msg.tabId)
+        return [...rest, { part: msg.part, tabId: msg.tabId, name: msg.name, color: msg.color }]
       })
     },
     [xlsxTabId],
@@ -3275,6 +3276,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         (msg) => applyXlsxEmbedAdded(msg),
         // C7f: 피어 첨부 선택.
         (msg) => onXlsxPeerSelect(msg),
+        // C7g-2: 선택 발행용 transport 캡처.
+        (t) => { xlsxTapRef.current = t },
       ),
     }
     // joined 를 의존성에서 빼는 것은 방을 다시 열지 않기 위한 의도다.

@@ -38,6 +38,13 @@ export interface OleSelectedMsg {
   name: string
   color: string
 }
+/** C7g-2: 첨부 선택 발행 인코딩 (클라이언트→서버, 107). */
+export function encodeOleSelected(rec: { part: string | null; tabId: string; name: string; color: string; clientId?: number }): Uint8Array {
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, MSG_OLE_SELECTED)
+  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify(rec)))
+  return encoding.toUint8Array(e)
+}
 
 /** C7: 백그라운드 삽입 알림 페이로드 (106 embed-added). */
 export interface EmbedAddedMsg {
@@ -364,8 +371,11 @@ export function createObjectTapProvider(
   onPartPending?: (hasPending: boolean) => void,
   onEmbedAdded?: (msg: EmbedAddedMsg) => void,
   onOleSelected?: (msg: OleSelectedMsg) => void,
+  onTransport?: (t: Transport) => void,
 ) {
+  const tap = createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect, onPartPending, onEmbedAdded, onOleSelected)
+  try { onTransport?.(tap) } catch { /* 무시 */ }
   return transportProvider({
-    transport: createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect, onPartPending, onEmbedAdded, onOleSelected),
+    transport: tap,
   })
 }

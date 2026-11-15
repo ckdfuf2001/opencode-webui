@@ -33,6 +33,14 @@ export interface DocxOleSelectedMsg {
   tabId: string
   name: string
   color: string
+}
+
+/** C7g-2: 첨부 선택 발행 인코딩 (클라이언트→서버, 107). */
+export function encodeDocxOleSelected(rec: { part: string | null; tabId: string; name: string; color: string; clientId?: number }): Uint8Array {
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, DOCX_MSG_OLE_SELECTED)
+  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify(rec)))
+  return encoding.toUint8Array(e)
 }
 
 /** C7: 백그라운드 삽입 알림 페이로드 (106 embed-added). */
@@ -263,8 +271,10 @@ export function createDocxTapTransport(url: string, cb: DocxTapCallbacks = {}): 
 }
 
 /** docx lib 세션에 넣는 provider 팩토리. transportProvider와 같은 시그니처다. */
-export function createDocxTapProvider(serverUrl: string, roomId: string, cb?: DocxTapCallbacks) {
+export function createDocxTapProvider(serverUrl: string, roomId: string, cb?: DocxTapCallbacks, onTransport?: (t: Transport) => void) {
+  const tap = createDocxTapTransport(roomUrl(serverUrl, roomId), cb ?? {})
+  try { onTransport?.(tap) } catch { /* 무시 */ }
   return transportProvider({
-    transport: createDocxTapTransport(roomUrl(serverUrl, roomId), cb ?? {}),
+    transport: tap,
   })
 }
