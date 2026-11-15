@@ -30,6 +30,27 @@ async function sheetObjPrNumbers(zip: JSZip, sname: string, sid: string): Promis
   return [...m[1].matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((n) => Number(n[1]))
 }
 
+describe('syncXlsxOleAnchors with pictures', () => {
+  it('그림 cNvPr는 건드리지 않고 OLE만 동기화한다 (id 충돌 없음)', async () => {
+    const hostBytes = new Uint8Array(
+      fs.readFileSync(path.join(process.cwd(), '../e2e/collab/fixtures/ole/embed-pics2.xlsx'))
+    )
+    const zip = (await zipLoad(hostBytes)) as JSZip
+    const d0 = await zip.files['xl/drawings/drawing1.xml']!.async('string')
+    const picsBefore = [...d0.matchAll(/<xdr:cNvPr[^>]*\bid="200\d"[^>]*>/g)].map((m) => m[0])
+    expect(picsBefore.length).toBe(2)
+    const { bytes, synced } = await syncXlsxOleAnchors(zipLoad as never, hostBytes)
+    // 일관된 파일이면 동기화 0건 (재압축 없음).
+    expect(synced).toBe(0)
+    expect(Buffer.from(bytes).equals(Buffer.from(hostBytes))).toBe(true)
+    // 그림 앵커가 그대로인지 확인 (OLE 동기화가 그림을 건드리지 않음).
+    const z2 = (await zipLoad(bytes)) as JSZip
+    const d1 = await z2.files['xl/drawings/drawing1.xml']!.async('string')
+    const picsAfter = [...d1.matchAll(/<xdr:cNvPr[^>]*\bid="200\d"[^>]*>/g)].map((m) => m[0])
+    expect(picsAfter).toEqual(picsBefore)
+  })
+})
+
 describe('syncXlsxOleAnchors multi-sheet', () => {
   it('시트1만 옮기면 시트2 위치는 바이트 그대로다 (동일 shapeId)', async () => {
     const base = new Uint8Array(

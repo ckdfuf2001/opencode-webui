@@ -1410,8 +1410,7 @@ export function resolveZipTarget(from: string, target: string): string {
  * lib 드래그는 drawing twoCellAnchor만 고치고 oleObject objectPr/VML은 그대로 둔다.
  * 데스크톱 Excel에서 어긋나 보이므로, 저장할 때 DRAW 기준으로 나머지를 맞춘다.
  * - objectPr anchor: DRAW from/to를 그대로 복사 (EMU 단위 동일).
- * - VML x:Anchor: col/row + px 오프셋 (EMU÷9525, 1px=9525 EMU).
- *   C7i 정정: 오프셋 단위는 셀이 아니라 픽셀이다.
+ * - VML x:Anchor: col/row만 맞춘다. 오프셋은 Excel 원본 그대로 둔다.
  * - 시트별로 짝짓는다 (rels → drawing): id는 시트마다 1025부터 다시 매겨지므로
  *   전역 Map에 모으면 다른 시트 위치로 덮어쓴다.
  * - `xl/embeddings/`가 없으면 zip을 풀지 않고 원본을 돌려준다.
@@ -1561,6 +1560,9 @@ export async function syncXlsxOleAnchors(
     }
     // VML x:Anchor (col/row + px 오프셋). C7i: 오프셋은 픽셀 단위라
     // EMU÷9525로 환산한다 (1px = 9525 EMU @96dpi). col/row가 DRAW와 다를 때만 고친다.
+    // VML x:Anchor: col/row만 맞춘다. 오프셋은 손대지 않는다 (C7i 정정:
+    // 오프셋 단위는 px이지만 열너비 메트릭 없이 EMU→px 환산은 Excel 원본보다
+    // 부정확해질 수 있다 — 레거시 폴백이라 셀 단위 일치가 목표다).
     if (vmlName && vmlXml) {
       let vmlChanged = false
       for (const [vsid, vdraw] of localAnchors) {
@@ -1568,10 +1570,8 @@ export async function syncXlsxOleAnchors(
         vmlXml = vmlXml.replace(re, (_s, open: string, nums: string, close: string) => {
           const parts = nums.split(',').map((p) => p.trim())
           if (parts.length < 8) return _s
-          const want = [vdraw[0], Math.round(vdraw[1] / 9525), vdraw[2], Math.round(vdraw[3] / 9525), vdraw[4], Math.round(vdraw[5] / 9525), vdraw[6], Math.round(vdraw[7] / 9525)]
-          let same = true
-          for (let k = 0; k < 8; k++) if (Number(parts[k]) !== want[k]) { same = false; break }
-          if (same) return _s
+          if (Number(parts[0]) === vdraw[0] && Number(parts[2]) === vdraw[2] && Number(parts[4]) === vdraw[4] && Number(parts[6]) === vdraw[6]) return _s
+          const want = [vdraw[0], parts[1], vdraw[2], parts[3], vdraw[4], parts[5], vdraw[6], parts[7]]
           vmlChanged = true
           synced++
           return `${open} ${want.join(', ')} ${close}`
