@@ -229,6 +229,11 @@ export interface CollabRoom {
   embedPassUsed: Set<number>
   /** C7c: 디스크 백필 완료 여부 (예전 첨부 위치 복원, 방당 1회). */
   embedBackfilled: boolean
+  /**
+   * C7g-2: 첨부 선택 공유 (conn 키 — 탭 transport용, awareness 없음).
+   * 같은 이름의 탭도 conn이 다르므로 따로 보인다. 끊기면 지운다.
+   */
+  oleSelections: Map<unknown, { part: string | null; tabId: string; name: string; color: string; clientId?: number }>
 }
 
 /** C7: 백그라운드 삽입 1건 (106 페이로드와 동일). */
@@ -1002,6 +1007,9 @@ function createRoom(
   knownEmbeds: [],
   embedPassUsed: new Set(),
   embedBackfilled: false,
+  // C7g-2: 첨부 선택 공유 (conn 키 — 탭 transport용, awareness 없음).
+  // 같은 이름의 탭도 conn이 다르므로 따로 보인다. 끊기면 지운다.
+  oleSelections: new Map(),
 }
   if (part) room.part = part
   awareness.on('update', (
@@ -1411,6 +1419,15 @@ export function addConn(roomId: string, ws: unknown): CollabRoom | null {
       }
     } catch { /* 무시 */ }
   }
+  // C7g-2: 첨부 선택을 놓친 탭(늦은 참가)도 즉시 따라잡는다.
+  // lib은 모르는 타입(107)이라 무시하고, 탭이 가로채 배지를 얹는다.
+  if (room.oleSelections.size > 0) {
+    try {
+      for (const [, sel] of room.oleSelections) {
+        sock.send(encodeOleSelected(roomId, { part: sel.part, tabId: sel.tabId, name: sel.name, color: sel.color }))
+      }
+    } catch { /* 무시 */ }
+  }
   return room
 }
 
@@ -1521,6 +1538,30 @@ export function wsMessage(roomId: string, ws: unknown, data: Uint8Array): void {
         const settled = settlePendingFlush(room, ok ? { ok: true, reason: 'flushed' } : { ok: false, reason: 'client_fail' }, ws, rid)
         if (settled) logger.info(`Collab room ${roomId}: parent flush ack ok=${ok}`)
       }
+    } else if (messageType === MSG_OLE_SELECTED) {
+      // C7g-2: 첨부 선택 공유 (탭 transport → 서버 → 방 전원). conn 키로 구분한다
+      // (같은 이름의 탭도 따로 보인다). 보기 전용은 방송하지 않는다.
+      try {
+        const raw = decoding.readVarUint8Array(d)
+        const body = JSON.parse(new TextDecoder().decode(raw)) as {
+          part?: unknown; tabId?: unknown; name?: unknown; color?: unknown; clientId?: unknown
+        }
+        const part = typeof body.part === 'string' ? body.part : null
+        const tabId = typeof body.tabId === 'string' ? body.tabId.slice(0, 64) : ''
+        if (!tabId) return
+        const clientId = typeof body.clientId === 'number' && Number.isInteger(body.clientId) ? body.clientId : undefined
+        if (clientId !== undefined && clientRoleInRoom(roomId, clientId) === 'view') return
+        const name = typeof body.name === 'string' ? body.name.slice(0, 64) : '?'
+        const color = typeof body.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(body.color) ? body.color : '#64748b'
+        if (part === null) {
+          room.oleSelections.delete(ws)
+        } else {
+          room.oleSelections.set(ws, { part, tabId, name, color, clientId })
+        }
+        broadcast(room, encodeOleSelected(roomId, { part, tabId, name, color }))
+      } catch {
+        /* 무시 */
+      }
     }
   } catch (error) {
     logger.warn(`Collab room ${roomId}: bad message ignored`)
@@ -1534,6 +1575,14 @@ function dropConnFromRoom(room: CollabRoom, ws: unknown): void {
       awarenessProtocol.removeAwarenessStates(room.awareness, [...info.clientIds], null)
     } catch { /* 무시 */ }
     for (const cid of info.clientIds) room.ownerIds.delete(cid)
+  }
+  // C7g-2: 끊긴 탭의 첨부 선택을 지우고 방에 알린다 (배지 잔상 방지).
+  const sel = room.oleSelections.get(ws)
+  if (sel) {
+    room.oleSelections.delete(ws)
+    try {
+      broadcast(room, encodeOleSelected(room.id, { part: null, tabId: sel.tabId, name: sel.name, color: sel.color }))
+    } catch { /* 무시 */ }
   }
   // U-parent: 편집 conn이 떨어졌다. clean close(1000)는 onClose에서 지운다.
   // (크래시·오프라인은 1006/무프레임이라 남는다 → PUT 409 근거.)
