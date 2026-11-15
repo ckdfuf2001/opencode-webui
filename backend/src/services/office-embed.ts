@@ -1514,7 +1514,8 @@ export async function syncXlsxOleAnchors(
     if (changed) sheet = out.join('')
     if (changed) zip!.file(sname, sheet)
   }
-  // VML x:Anchor (col/row만, 오프셋은 0). shape id `_x0000_s{shapeId}`.
+  // VML x:Anchor (col/row만, 오프셋은 0). 레거시 폴백용 셀 단위 근사.
+  // col/row가 DRAW와 다를 때만 고친다 (불필요한 재기록 방지).
   for (const vname of Object.keys(zip!.files)) {
     if (!/vmlDrawing[0-9]*\.vml$/.test(vname)) continue
     let vml = await readText(vname)
@@ -1525,10 +1526,8 @@ export async function syncXlsxOleAnchors(
       vml = vml.replace(re, (_s, open: string, nums: string, close: string) => {
         const parts = nums.split(',').map((p) => p.trim())
         if (parts.length < 8) return _s
+        if (Number(parts[0]) === draw[0] && Number(parts[2]) === draw[2] && Number(parts[4]) === draw[4] && Number(parts[6]) === draw[6]) return _s
         const want = [draw[0], 0, draw[2], 0, draw[4], 0, draw[6], 0]
-        let same = true
-        for (let k = 0; k < 8; k++) if (Number(parts[k]) !== want[k]) { same = false; break }
-        if (same) return _s
         changed = true
         synced++
         return `${open} ${want.join(', ')} ${close}`
