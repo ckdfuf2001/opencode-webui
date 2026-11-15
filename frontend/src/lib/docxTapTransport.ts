@@ -23,6 +23,18 @@ export const DOCX_MSG_PART_PENDING = 105
 /** C7: 백그라운드 삽입 알림 (서버→방 전원). 리로드 없이 오버레이에 칩을 얹는다. */
 export const DOCX_MSG_PART_EMBEDDED = 106
 
+/** C7f: 첨부 선택 알림 (서버→방 전원). 탭 transport용 (awareness 없음). */
+export const DOCX_MSG_OLE_SELECTED = 107
+
+/** C7f: 첨부 선택 페이로드. */
+export interface DocxOleSelectedMsg {
+  roomId: string
+  part: string | null
+  tabId: string
+  name: string
+  color: string
+}
+
 /** C7: 백그라운드 삽입 알림 페이로드 (106 embed-added). */
 export interface DocxEmbedAddedMsg {
   roomId: string
@@ -53,6 +65,8 @@ export interface DocxTapCallbacks {
   onPartPending?: (hasPending: boolean) => void
   /** C7: 백그라운드 삽입 알림 (칩 표시용). */
   onEmbedAdded?: (msg: DocxEmbedAddedMsg) => void
+  /** C7f: 첨부 선택 알림 (피어 표시용). */
+  onOleSelected?: (msg: DocxOleSelectedMsg) => void
 }
 
 function readPayload(data: Uint8Array): { requestId?: unknown; roomId?: unknown; reason?: unknown } | null {
@@ -174,6 +188,17 @@ export function createDocxTapTransport(url: string, cb: DocxTapCallbacks = {}): 
                 const body = readPayload(data) as DocxEmbedAddedMsg | null
                 if (body && typeof body.part === 'string' && typeof body.newHash === 'string') {
                   cb.onEmbedAdded?.(body)
+                }
+              } catch {
+                /* 무시 */
+              }
+              return
+            }
+            if (data.length > 0 && data[0] === DOCX_MSG_OLE_SELECTED) {
+              try {
+                const body = readPayload(data) as (DocxOleSelectedMsg & { part?: unknown }) | null
+                if (body && (typeof body.part === 'string' || body.part === null)) {
+                  cb.onOleSelected?.(body as DocxOleSelectedMsg)
                 }
               } catch {
                 /* 무시 */

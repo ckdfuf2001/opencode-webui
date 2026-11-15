@@ -28,6 +28,16 @@ export const MSG_FLUSHED = 104
 export const MSG_PART_PENDING = 105
 /** C7: 백그라운드 삽입 알림 (서버→방 전원). 리로드 없이 오버레이에 칩을 얹는다. */
 export const MSG_PART_EMBEDDED = 106
+/** C7f: 첨부 선택 알림 (서버→방 전원). 탭 transport용 (awareness 없음). */
+export const MSG_OLE_SELECTED = 107
+/** C7f: 첨부 선택 페이로드. */
+export interface OleSelectedMsg {
+  roomId: string
+  part: string | null
+  tabId: string
+  name: string
+  color: string
+}
 
 /** C7: 백그라운드 삽입 알림 페이로드 (106 embed-added). */
 export interface EmbedAddedMsg {
@@ -164,6 +174,7 @@ export function createObjectTapTransport(
   onConnect?: () => void,
   onPartPending?: (hasPending: boolean) => void,
   onEmbedAdded?: (msg: EmbedAddedMsg) => void,
+  onOleSelected?: (msg: OleSelectedMsg) => void,
 ): Transport {
   const inner = createWebSocketTransport({ url })
   let handlers: TransportHandlers | null = null
@@ -286,6 +297,19 @@ export function createObjectTapTransport(
               }
               return
             }
+            // C7f: 첨부 선택 알림. lib는 모르므로 여기서 가로챈다.
+            if (data.length > 0 && data[0] === MSG_OLE_SELECTED) {
+              try {
+                const dd = decoding.createDecoder(data.subarray(1))
+                const body = JSON.parse(new TextDecoder().decode(decoding.readVarUint8Array(dd))) as OleSelectedMsg
+                if (body && (typeof body.part === 'string' || body.part === null)) {
+                  onOleSelected?.(body)
+                }
+              } catch {
+                /* 무시 */
+              }
+              return
+            }
           } catch {
             // 파싱 실패는 lib로 넘겨 lib 판정에 맡긴다.
           }
@@ -339,8 +363,9 @@ export function createObjectTapProvider(
   onConnect?: () => void,
   onPartPending?: (hasPending: boolean) => void,
   onEmbedAdded?: (msg: EmbedAddedMsg) => void,
+  onOleSelected?: (msg: OleSelectedMsg) => void,
 ) {
   return transportProvider({
-    transport: createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect, onPartPending, onEmbedAdded),
+    transport: createObjectTapTransport(roomUrl(serverUrl, roomId), onObjects, onConnect, onPartPending, onEmbedAdded, onOleSelected),
   })
 }

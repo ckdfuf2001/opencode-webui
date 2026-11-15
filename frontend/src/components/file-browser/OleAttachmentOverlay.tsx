@@ -700,6 +700,8 @@ export default function OleAttachmentOverlay({
   // C6b: 최신 openOrDownload 거울 (아래 early return보다 먼저 선언해야 한다 —
   // 조건부 훅이 되면 React #310으로 깨진다).
   const openRef = useRef<((entry: OleEmbeddingRef) => void) | null>(null)
+  // C7f: 칩 단일 클릭 타이머 (더블클릭과 구분). 같은 이유로 early return보다 앞에서 선언.
+  const clickTimerRef = useRef<{ part: string; isClip: boolean; id: ReturnType<typeof setTimeout> } | null>(null)
 
   useEffect(() => {
     let dead = false
@@ -991,22 +993,60 @@ export default function OleAttachmentOverlay({
   // openOrDownload는 아래 early return 뒤에 정의되므로 여기서 대입한다.
   openRef.current = openOrDownload
 
-  const chip = (entry: OleEmbeddingRef, anchored: boolean, pos?: { x: number; y: number }): React.ReactNode => {
+  const chip = (
+    entry: OleEmbeddingRef,
+    anchored: boolean,
+    pos: { x: number; y: number } | undefined,
+    opts?: { selected?: boolean; onSelect?: (part: string | null) => void; onDownloadFile?: (entry: OleEmbeddingRef) => void },
+  ): React.ReactNode => {
     const Icon = iconForFile(displayName(entry))
+    const isSel = !!opts?.selected
     return (
     <button
       key={entry.partName}
       type="button"
       data-testid="ole-icon"
-      title={displayName(entry)}
+      title={isSel ? displayName(entry) : `다운로드: ${displayName(entry)}`}
       aria-label={`첨부 ${displayName(entry)}`}
       draggable={false}
-      onDoubleClick={() => void openOrDownload(entry)}
+      onClick={(e) => {
+        try {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          const fx = r.width > 0 ? (e.clientX - r.left) / r.width : 0.5
+          const fy = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5
+          const isClip = fx < 0.3 && fy < 0.45
+          const prev = clickTimerRef.current
+          if (prev) {
+            try { clearTimeout(prev.id) } catch { /* 무시 */ }
+            clickTimerRef.current = null
+            if (prev.part === entry.partName) {
+              // 더블클릭으로 확정 → 열기.
+              void openOrDownload(entry)
+              return
+            }
+            // 다른 칩 연타: 앞선 클릭은 즉시 실행 후 새로 시작.
+            if (prev.isClip) void download(entry)
+            else opts?.onSelect?.(prev.part)
+          }
+          const t = setTimeout(() => {
+            clickTimerRef.current = null
+            if (isClip) void download(entry)
+            else opts?.onSelect?.(entry.partName)
+          }, 250)
+          clickTimerRef.current = { part: entry.partName, isClip, id: t }
+        } catch {
+          /* 무시 */
+        }
+      }}
+      onDoubleClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+      }}
       onDragStart={(e) => {
         // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
         e.preventDefault()
       }}
-      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30, transform: 'translate(-50%, -50%)' } : undefined}
+      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30, transform: 'translate(-50%, -50%)', outline: isSel ? '2px solid #2563eb' : undefined, outlineOffset: 2 } : undefined}
       className={
         anchored
           ? 'z-20 inline-flex select-none items-center gap-1 rounded-md border border-border bg-background/95 p-1.5 text-foreground shadow-sm hover:bg-muted'
@@ -1189,13 +1229,41 @@ export default function OleAttachmentOverlay({
             </span>
           )
         }
-        // C7c-1: lib이 실제 도형을 그리는 경우(파싱분+앵커)는 칩을 숨기고 파일명 라벨만 남긴다
-        // (lib 플레이스홀더와 우리 칩이 겹쳐 보이는 중복 방지).
-        // 백그라운드 삽입 직후(lib 모델에 아직 없음, extras)는 전체 칩을 쓴다.
-        const isExtra = extraParts.has(e.partName)
+        // C7c-1/C7e: xlsx/docx는 lib이 네이티브 렌더하므로 작은 아이콘 칩(클릭·선택용) + 캡션을 둔다.
+        // (pptx는 위 PptxImgEntry 분기에서 처리 — 여기 오지 않음.)
+        const peers = peerSelByPart.get(e.partName) ?? []
         return (
           <span key={e.partName}>
-            {isExtra ? chip(e, true, { x: pos.x, y: pos.y }) : null}
+            {chip(e, true, { x: pos.x, y: pos.y }, { selected: selectedPart === e.partName, onSelect: (p) => setSelectedPart(p) })}
+            {peers.map((p, i) => (
+              <span
+                key={`peer-${i}-${p.name}`}
+                data-testid="ole-peer"
+                data-peer-part={e.partName}
+                style={{
+                  position: 'absolute',
+                  left: pos.x,
+                  top: pos.y - pos.h / 2 - 4,
+                  transform: 'translate(-50%, -100%)',
+                  zIndex: 31,
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                  whiteSpace: 'nowrap',
+                  background: p.color,
+                  color: '#fff',
+                  borderRadius: 4,
+                  padding: '0 6px',
+                  fontSize: 11,
+                  lineHeight: '20px',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                  maxWidth: 200,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {p.name}
+              </span>
+            ))}
             {caption(e, pos)}
           </span>
         )

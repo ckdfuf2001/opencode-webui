@@ -1260,6 +1260,38 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     },
     [],
   )
+  // C7f: 첨부 선택 공유 (107 broadcast, 탭 transport용 — awareness 없음). xlsx와 동일 패턴.
+  const docxTabId = useMemo(() => Math.random().toString(36).slice(2), [])
+  const [docxSelected, setDocxSelected] = useState<string | null>(null)
+  const [docxPeerSel, setDocxPeerSel] = useState<Array<{ part: string; name: string; color: string }>>([])
+  const publishDocxSelect = useCallback(
+    (part: string | null) => {
+      setDocxSelected(part)
+      try {
+        const c = collabRef.current
+        if (!c?.roomId) return
+        void fetch(`${API_BASE_URL}/api/collab/embed/select`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path, part, roomId: c.roomId, tabId: docxTabId, name: c.user?.name ?? '?', color: c.user?.color ?? '#64748b' }),
+        })
+      } catch {
+        /* 무시 */
+      }
+    },
+    [path, docxTabId],
+  )
+  const onDocxPeerSelect = useCallback(
+    (msg: { part: string | null; tabId: string; name: string; color: string }) => {
+      if (!msg || msg.tabId === docxTabId) return
+      setDocxPeerSel((prev) => {
+        if (!msg.part) return prev.filter((p) => p.name !== msg.name || p.color !== msg.color)
+        const rest = prev.filter((p) => !(p.name === msg.name && p.color === msg.color))
+        return [...rest, { part: msg.part, name: msg.name, color: msg.color }]
+      })
+    },
+    [docxTabId],
+  )
   const [docxPeople, setDocxPeople] = useState<Array<{ clientId: number; name: string; color: string; self: boolean; role?: string }>>([])
   const docxPeopleRef = useRef<typeof docxPeople>([])
   docxPeopleRef.current = docxPeople
@@ -1547,6 +1579,10 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
             // C7: 백그라운드 삽입 알림 — 리로드 없이 오버레이에 칩을 얹는다.
             onEmbedAdded: (msg) => {
               if (!dead) applyDocxEmbedAdded(msg)
+            },
+            // C7f: 피어 첨부 선택.
+            onOleSelected: (msg) => {
+              if (!dead) onDocxPeerSelect(msg)
             },
           }),
           user: {
@@ -2108,7 +2144,15 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
             </button>
         </div>
       )}
-      <OleAttachmentOverlay data={content} anchor="docx" parentPath={path} extras={docxEmbedExtras} />
+      <OleAttachmentOverlay
+        data={content}
+        anchor="docx"
+        parentPath={path}
+        extras={docxEmbedExtras}
+        selectedPart={docxSelected}
+        onSelectPart={(p) => publishDocxSelect(p)}
+        peerSelections={docxPeerSel}
+      />
       <div className="flex h-full min-h-0">
         <div ref={wrapRef} key={editing ? 'edit' : 'view'} className="flex-1 min-w-0 h-full">
           <Suspense fallback={SPINNER}>
@@ -2510,6 +2554,38 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
       }
     },
     [],
+  )
+  // C7f: 첨부 선택 공유 (107 broadcast, 탭 transport용 — awareness 없음).
+  const xlsxTabId = useMemo(() => Math.random().toString(36).slice(2), [])
+  const [xlsxSelected, setXlsxSelected] = useState<string | null>(null)
+  const [xlsxPeerSel, setXlsxPeerSel] = useState<Array<{ part: string; name: string; color: string }>>([])
+  const publishXlsxSelect = useCallback(
+    (part: string | null) => {
+      setXlsxSelected(part)
+      try {
+        const c = collabRef.current
+        if (!c?.roomId) return
+        void fetch(`${API_BASE_URL}/api/collab/embed/select`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path, part, roomId: c.roomId, tabId: xlsxTabId, name: c.user?.name ?? '?', color: c.user?.color ?? '#64748b' }),
+        })
+      } catch {
+        /* 무시 */
+      }
+    },
+    [path, xlsxTabId],
+  )
+  const onXlsxPeerSelect = useCallback(
+    (msg: { part: string | null; tabId: string; name: string; color: string }) => {
+      if (!msg || msg.tabId === xlsxTabId) return
+      setXlsxPeerSel((prev) => {
+        if (!msg.part) return prev.filter((p) => p.name !== msg.name || p.color !== msg.color)
+        const rest = prev.filter((p) => !(p.name === msg.name && p.color === msg.color))
+        return [...rest, { part: msg.part, name: msg.name, color: msg.color }]
+      })
+    },
+    [xlsxTabId],
   )
   // C6N: 마지막으로 본 방 세대. 새 세대로 다시 들어갈 때만 미뤄진 파트
   // 배너를 내린다 (새 바이트 기준 — 리셋이 미룸을 해소한다).
@@ -3197,6 +3273,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         (v) => setPartChangePending(v),
         // C7: 백그라운드 삽입 알림 — 리로드 없이 오버레이에 칩을 얹는다.
         (msg) => applyXlsxEmbedAdded(msg),
+        // C7f: 피어 첨부 선택.
+        (msg) => onXlsxPeerSelect(msg),
       ),
     }
     // joined 를 의존성에서 빼는 것은 방을 다시 열지 않기 위한 의도다.
@@ -4759,6 +4837,9 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         parentPath={path}
         extras={embedExtras}
         getExtraContext={() => ({ sheet: objActiveSheetRef.current })}
+        selectedPart={xlsxSelected}
+        onSelectPart={(p) => publishXlsxSelect(p)}
+        peerSelections={xlsxPeerSel}
       />
       <div ref={listenRef} className="flex h-full min-h-0">
         <div className="flex-1 min-w-0 h-full">
