@@ -24,6 +24,18 @@ describe('oleMatch', () => {
     expect(entryNameHit('', inserted)).toBe(false)
   })
 
+  it('부분 문자열 포함만으로는 매칭되지 않는다 (report vs report-final)', () => {
+    const report = { displayName: 'report.docx', fallbackName: 'report.docx' }
+    const reportFinal = { displayName: 'report-final.docx', fallbackName: 'report-final.docx' }
+    // 후보가 항목 줄기를 포함해도 다른 파일이면 안 된다.
+    expect(entryNameHit('report-final.docx', report)).toBe(false)
+    // 반대도 마찬가지.
+    expect(entryNameHit('report.docx', reportFinal)).toBe(false)
+    // 정확한 건 여전히 된다.
+    expect(entryNameHit('report.docx', report)).toBe(true)
+    expect(entryNameHit('report-final.docx', reportFinal)).toBe(true)
+  })
+
   it('프레임 텍스트에서 파일명 후보를 뽑는다', () => {
     expect(frameFileNames('WORDDocument.docx (35.7 KB)Download')).toContain('worddocument.docx')
     expect(frameFileNames('OLEpayload.pdf (591 bytes)DownloadOpen')).toContain('olepayload.pdf')
