@@ -696,6 +696,25 @@ function encodePartPending(roomId: string): Uint8Array {
  * (다음 저장이 409 없이 나간다).
  */
 export const MSG_PART_EMBEDDED = 106
+export const MSG_OLE_SELECTED = 107
+
+/** C7f: 첨부 선택 알림 페이로드 (107 ole-selected). 탭 transport용 (awareness 없음). */
+export interface OleSelectedMsg {
+  roomId: string
+  part: string | null
+  tabId: string
+  name: string
+  color: string
+}
+
+/** C7f: 107 인코딩 (JSON 바디). */
+export function encodeOleSelected(roomId: string, rec: Omit<OleSelectedMsg, 'roomId'>): Uint8Array {
+  const e = encoding.createEncoder()
+  encoding.writeVarUint(e, MSG_OLE_SELECTED)
+  encoding.writeVarUint8Array(e, new TextEncoder().encode(JSON.stringify({ roomId, ...rec })))
+  return encoding.toUint8Array(e)
+}
+
 export function encodePartEmbedded(
   roomId: string,
   rec: Pick<KnownEmbed, 'norm' | 'name' | 'kind' | 'pos'> & { newHash: string },
@@ -731,6 +750,14 @@ export function registerEmbedInsert(parentId: string, rec: Omit<KnownEmbed, 'pre
  * knownEmbeds에 채운다 (예전 첨부·서버 재시작 후에도 칩 정위치).
  * 방당 1회. 이미 추적 중인 파트는 건드리지 않는다.
  */
+/** C7f: 첨부 선택 브로드캐스트 (106과 달리 knownEmbeds를 건드리지 않는다). */
+export function broadcastOleSelected(parentId: string, rec: Omit<OleSelectedMsg, 'roomId'>): boolean {
+  const proom = rooms.get(parentId)
+  if (!proom || proom.part) return false
+  broadcast(proom, encodeOleSelected(parentId, rec))
+  return true
+}
+
 export async function backfillRoomEmbeds(room: CollabRoom): Promise<void> {
   if (room.embedBackfilled || room.part) return
   room.embedBackfilled = true
