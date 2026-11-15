@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { assembleXlsxEmbed, syncXlsxOleAnchors } from '../../src/services/office-embed'
+import { assembleXlsxEmbed, resolveZipTarget, syncXlsxOleAnchors } from '../../src/services/office-embed'
 
 const zipLoad = (b: Uint8Array): Promise<unknown> => JSZip.loadAsync(b) as unknown as Promise<unknown>
 
@@ -24,6 +24,14 @@ async function anchorsOf(bytes: Uint8Array): Promise<{ objPr: string[]; draw: st
     })
   return { objPr, draw }
 }
+
+describe('resolveZipTarget', () => {
+  it('/ 시작 절대경로는 zip 루트 기준으로 푼다', () => {
+    expect(resolveZipTarget('xl/worksheets/sheet1.xml', '../drawings/drawing1.xml')).toBe('xl/drawings/drawing1.xml')
+    expect(resolveZipTarget('xl/worksheets/sheet1.xml', '/xl/drawings/drawing1.xml')).toBe('xl/drawings/drawing1.xml')
+    expect(resolveZipTarget('xl/worksheets/sheet1.xml', '/xl/media/image1.png')).toBe('xl/media/image1.png')
+  })
+})
 
 describe('syncXlsxOleAnchors', () => {
   it('cNvPr id가 바뀌면 건드리지 않는다 (fail-safe, 부패 없음)', async () => {

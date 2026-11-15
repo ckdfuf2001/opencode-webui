@@ -13,6 +13,7 @@
 
 import { deflateSync } from 'node:zlib'
 import { createHash, randomUUID } from 'node:crypto'
+import { logger } from '../utils/logger'
 
 export type EmbedAttachKind = 'docx' | 'xlsx' | 'pptx'
 
@@ -1390,12 +1391,27 @@ export async function replaceEmbedPart(
   return zip!.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 }
 
+/** C7i: rels Target을 절대경로로 푼다. `/` 시작은 zip 루트 기준. */
+export function resolveZipTarget(from: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1)
+  const base = from.slice(0, from.lastIndexOf('/') + 1)
+  const parts = (base + target).split('/')
+  const out: string[] = []
+  for (const q of parts) {
+    if (q === '.' || q === '') continue
+    if (q === '..') out.pop()
+    else out.push(q)
+  }
+  return out.join('/')
+}
+
 /**
  * C7h-1: xlsx OLE 앵커 동기화 (저장 시, 시트별).
  * lib 드래그는 drawing twoCellAnchor만 고치고 oleObject objectPr/VML은 그대로 둔다.
  * 데스크톱 Excel에서 어긋나 보이므로, 저장할 때 DRAW 기준으로 나머지를 맞춘다.
  * - objectPr anchor: DRAW from/to를 그대로 복사 (EMU 단위 동일).
- * - VML x:Anchor: col/row만 복사, 오프셋은 0 (레거시 폴백용 셀 단위 근사).
+ * - VML x:Anchor: col/row + px 오프셋 (EMU÷9525, 1px=9525 EMU).
+ *   C7i 정정: 오프셋 단위는 셀이 아니라 픽셀이다.
  * - 시트별로 짝짓는다 (rels → drawing): id는 시트마다 1025부터 다시 매겨지므로
  *   전역 Map에 모으면 다른 시트 위치로 덮어쓴다.
  * - `xl/embeddings/`가 없으면 zip을 풀지 않고 원본을 돌려준다.
@@ -1434,17 +1450,7 @@ export async function syncXlsxOleAnchors(
       return null
     }
   }
-  const resolveTarget = (from: string, target: string): string => {
-    const base = from.slice(0, from.lastIndexOf('/') + 1)
-    const parts = (base + target).split('/')
-    const out: string[] = []
-    for (const q of parts) {
-      if (q === '.' || q === '') continue
-      if (q === '..') out.pop()
-      else out.push(q)
-    }
-    return out.join('/')
-  };
+  const resolveTarget = resolveZipTarget;
   const anchorsIn = (dxml: string): Map<string, number[]> => {
     const m = new Map<string, number[]>()
     for (const cm of dxml.matchAll(/<xdr:cNvPr[^>]*\bid="(\d+)"[^>]*>/g)) {
@@ -1485,9 +1491,9 @@ export async function syncXlsxOleAnchors(
       const tname = (type?.[1] ?? type?.[2] ?? '').toLowerCase()
       const tgt = /Target="([^"]+)"/.exec(tag)?.[1]
       if (!tgt) continue
-      if (tname === 'drawing') drawXml = await readText(resolveTarget(sname, tgt))
+      if (tname === 'drawing') drawXml = await readText(resolveZipTarget(sname, tgt))
       else if (tname === 'vmldrawing') {
-        vmlName = resolveTarget(sname, tgt)
+        vmlName = resolveZipTarget(sname, tgt)
         vmlXml = await readText(vmlName)
       }
     }
@@ -1515,6 +1521,8 @@ export async function syncXlsxOleAnchors(
       const inner = sheet.slice(oEnd + 1, cPos)
       const draw = localAnchors.get(String(sid))
       if (!draw) {
+        // C7i: 짝이 안 맞으면 건드리지 않고 경고만 (id 재발급 등 — 부패 방지).
+        try { logger.warn(`[syncXlsxOleAnchors] no DRAW anchor for ole shapeId=${sid} in ${sname} (skipped)`) } catch { /* 무시 */ }
         out.push(sheet.slice(pos, cPos + '</oleObject>'.length))
         pos = cPos + '</oleObject>'.length
         continue
@@ -1551,6 +1559,8 @@ export async function syncXlsxOleAnchors(
       sheet = out.join('')
       zip!.file(sname, sheet)
     }
+    // VML x:Anchor (col/row + px 오프셋). C7i: 오프셋은 픽셀 단위라
+    // EMU÷9525로 환산한다 (1px = 9525 EMU @96dpi). col/row가 DRAW와 다를 때만 고친다.
     if (vmlName && vmlXml) {
       let vmlChanged = false
       for (const [vsid, vdraw] of localAnchors) {
@@ -1558,8 +1568,10 @@ export async function syncXlsxOleAnchors(
         vmlXml = vmlXml.replace(re, (_s, open: string, nums: string, close: string) => {
           const parts = nums.split(',').map((p) => p.trim())
           if (parts.length < 8) return _s
-          if (Number(parts[0]) === vdraw[0] && Number(parts[2]) === vdraw[2] && Number(parts[4]) === vdraw[4] && Number(parts[6]) === vdraw[6]) return _s
-          const want = [vdraw[0], 0, vdraw[2], 0, vdraw[4], 0, vdraw[6], 0]
+          const want = [vdraw[0], Math.round(vdraw[1] / 9525), vdraw[2], Math.round(vdraw[3] / 9525), vdraw[4], Math.round(vdraw[5] / 9525), vdraw[6], Math.round(vdraw[7] / 9525)]
+          let same = true
+          for (let k = 0; k < 8; k++) if (Number(parts[k]) !== want[k]) { same = false; break }
+          if (same) return _s
           vmlChanged = true
           synced++
           return `${open} ${want.join(', ')} ${close}`
