@@ -2095,6 +2095,19 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       expect(moved.length).toBeGreaterThan(0)
       for (const m of moved) expect(m.objPr).toEqual(m.draw)
       console.log('[c6d] D18 lib move + save syncs DRAW/OBJPR')
+      // C7h-2: 이어서 셀 2곳 입력 → 자동저장 2회. 409 루프면 값이 안 남는다.
+      await setCell(t.pageA, 'A1', 'd18a1')
+      await setCell(t.pageA, 'A2', 'd18a2')
+      await expect
+        .poll(async () => {
+          const v1 = await parentDiskHas('xlsx', t.abs, 'd18a1')
+          const v2 = await parentDiskHas('xlsx', t.abs, 'd18a2')
+          return v1 && v2
+        }, { timeout: 120000, intervals: [2000] })
+        .toBe(true)
+      const hasConflict = await t.pageA.evaluate(() => document.body.textContent?.includes('충돌') ?? false)
+      expect(hasConflict).toBe(false)
+      console.log('[c6d] D18 two autosaves persisted without conflict')
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})

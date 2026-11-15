@@ -26,6 +26,25 @@ async function anchorsOf(bytes: Uint8Array): Promise<{ objPr: string[]; draw: st
 }
 
 describe('syncXlsxOleAnchors', () => {
+  it('cNvPr id가 바뀌면 건드리지 않는다 (fail-safe, 부패 없음)', async () => {
+    const hostBytes = new Uint8Array(
+      fs.readFileSync(path.join(process.cwd(), '../e2e/collab/fixtures/ole/embed-pdf.xlsx'))
+    )
+    const zip = (await zipLoad(hostBytes)) as JSZip
+    let dxml = await zip.files['xl/drawings/drawing1.xml']!.async('string')
+    // lib 재발급 흉내: cNvPr 1025 → 9001 (oleObject shapeId는 그대로).
+    const moved = dxml.replace(/<xdr:cNvPr([^>]*)\bid="1025"/, '<xdr:cNvPr$1bid="9001"')
+    expect(moved).not.toBe(dxml)
+    zip.file('xl/drawings/drawing1.xml', moved)
+    const bytes = (await zip.generateAsync({ type: 'uint8array' })) as Uint8Array
+    const before = await anchorsOf(bytes)
+    const { bytes: out, synced } = await syncXlsxOleAnchors(zipLoad as never, bytes)
+    // 매칭 실패 → 동기화 0건, 바이트 동일 (조용한 스킵, 부패 없음).
+    expect(synced).toBe(0)
+    expect(Buffer.from(out).equals(Buffer.from(bytes))).toBe(true)
+    expect(before.draw.length).toBe(0)
+  })
+
   it('lib처럼 DRAW만 옮긴 파일의 OBJPR을 DRAW에 맞춘다', async () => {
     const hostBytes = new Uint8Array(
       fs.readFileSync(path.join(process.cwd(), '../e2e/collab/fixtures/ole/embed-pdf.xlsx')),
