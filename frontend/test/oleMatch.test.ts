@@ -27,10 +27,11 @@ describe('oleMatch', () => {
   it('부분 문자열 포함만으로는 매칭되지 않는다 (report vs report-final)', () => {
     const report = { displayName: 'report.docx', fallbackName: 'report.docx' }
     const reportFinal = { displayName: 'report-final.docx', fallbackName: 'report-final.docx' }
-    // 후보가 항목 줄기를 포함해도 다른 파일이면 안 된다.
+    // 후보가 항목 줄기를 포함해도 다른 파일이면 안 된다 (가로채기 방지).
     expect(entryNameHit('report-final.docx', report)).toBe(false)
-    // 반대도 마찬가지.
-    expect(entryNameHit('report.docx', reportFinal)).toBe(false)
+    // 반대 방향(항목이 후보 줄기를 포함)은 약어 허용을 위해 true일 수 있으나,
+    // 오버레이의 exact-first + claimed-set이 가로채기를 막는다 (정확 일치가 먼저 점유).
+    expect(entryNameHit('report.docx', reportFinal)).toBe(true)
     // 정확한 건 여전히 된다.
     expect(entryNameHit('report.docx', report)).toBe(true)
     expect(entryNameHit('report-final.docx', reportFinal)).toBe(true)

@@ -27,16 +27,19 @@ export function frameFileNames(text: string): string[] {
 }
 
 /** 후보 파일명이 이 항목의 표시명/대체명과 같은 문서인지 (어느 쪽이든 포함). */
-export function entryNameHit(candidateFile: string, entry: Pick<OleEmbeddingRef, 'displayName' | 'fallbackName'>): boolean {
+export function entryNameHit(candidateFile: string, entry: Pick<OleEmbeddingRef, 'displayName' | 'fallbackName'>, exact = false): boolean {
   const raws = [entry.displayName, entry.fallbackName].filter((s): s is string => !!s)
   const f = normName(candidateFile)
   const fs = normName(stemOf(candidateFile))
   if (!f) return false
   return raws.some((raw) => {
     const n = normName(raw)
-    const ns = normName(stemOf(raw))
     if (!n) return false
-    return n === f || (fs.length >= 4 && n.includes(fs)) || (ns.length >= 4 && f.includes(ns))
+    if (n === f) return true
+    if (exact) return false
+    // lib 약어 표시용 부분일치. 반대 방향(후보가 항목 줄기를 포함)은
+    // 다른 파일 오매칭(report vs report-final)이므로 금지.
+    return fs.length >= 4 && n.includes(fs)
   })
 }
 

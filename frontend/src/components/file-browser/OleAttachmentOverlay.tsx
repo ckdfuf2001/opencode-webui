@@ -101,7 +101,16 @@ function findAnchorEl(
   container: HTMLElement,
   kind: OleAnchorKind,
   entry: OleEmbeddingRef,
+  claimed?: Set<Element>,
+  exactOnly?: boolean,
 ): { el: Element; unsupported: boolean } | null {
+  const taken = (el: Element): boolean => {
+    try {
+      return !!claimed?.has(el)
+    } catch {
+      return false
+    }
+  }
   try {
     const all = deepCollect(container)
     if (kind === 'xlsx') {
@@ -109,7 +118,7 @@ function findAnchorEl(
       for (const el of all) {
         try {
           if (!(el.className?.toString?.() ?? '').includes('xg-obj')) continue
-          if (!isVis(el)) continue
+          if (!isVis(el) || taken(el)) continue
           const img = el.tagName === 'IMG' ? el : el.querySelector?.('img')
           const alt = img?.getAttribute?.('alt') ?? ''
           if (alt && names.has(alt)) return { el, unsupported: false }
@@ -117,13 +126,15 @@ function findAnchorEl(
           /* 무시 */
         }
       }
-      // 구형 sp 박스 (네이티브 ole sp / 게이트 파일).
-      for (const el of all) {
-        try {
-          if ((el.className?.toString?.() ?? '').includes('xg-obj-unsupported') && isVis(el))
-            return { el, unsupported: true }
-        } catch {
-          /* 무시 */
+      // 구형 sp 박스 (네이티브 ole sp / 게이트 파일). exact 모드에서는 건너뛴다.
+      if (!exactOnly) {
+        for (const el of all) {
+          try {
+            if ((el.className?.toString?.() ?? '').includes('xg-obj-unsupported') && isVis(el) && !taken(el))
+              return { el, unsupported: true }
+          } catch {
+            /* 무시 */
+          }
         }
       }
       return null
@@ -133,28 +144,31 @@ function findAnchorEl(
       for (const el of all) {
         try {
           const eid = el.getAttribute?.('data-element-id') ?? ''
-          if (!eid.includes('-frame-') || !isVis(el)) continue
+          if (!eid.includes('-frame-') || !isVis(el) || taken(el)) continue
           const text = el.textContent ?? ''
           if (!/download/i.test(text)) continue
-          if (frameFileNames(text).some((ff) => entryNameHit(ff, entry))) return { el, unsupported: false }
+          if (frameFileNames(text).some((ff) => entryNameHit(ff, entry, exactOnly))) return { el, unsupported: false }
         } catch {
           /* 무시 */
         }
       }
       // 2차: Download 프레임이 정확히 1개일 때만 (여러 개면 엉뚱한 도형에 붙는다).
-      try {
-        const frames: Element[] = []
-        for (const el of all) {
-          try {
-            const eid = el.getAttribute?.('data-element-id') ?? ''
-            if (eid.includes('-frame-') && /download/i.test(el.textContent ?? '') && isVis(el)) frames.push(el)
-          } catch {
-            /* 무시 */
+      // exact 모드에서는 건너뛴다 (퍼지 패스에서 처리).
+      if (!exactOnly) {
+        try {
+          const frames: Element[] = []
+          for (const el of all) {
+            try {
+              const eid = el.getAttribute?.('data-element-id') ?? ''
+              if (eid.includes('-frame-') && /download/i.test(el.textContent ?? '') && isVis(el) && !taken(el)) frames.push(el)
+            } catch {
+              /* 무시 */
+            }
           }
+          if (frames.length === 1 && frames[0]) return { el: frames[0], unsupported: false }
+        } catch {
+          /* 무시 */
         }
-        if (frames.length === 1 && frames[0]) return { el: frames[0], unsupported: false }
-      } catch {
-        /* 무시 */
       }
       return null
     }
@@ -169,19 +183,20 @@ function findAnchorEl(
     // 1차: 파일명이 들어간 ole 자리 (에디터/뷰어 렌더 공통).
     for (const el of all) {
       try {
-        if (!oleSel(el) || !isVis(el)) continue
+        if (!oleSel(el) || !isVis(el) || taken(el)) continue
         const hay = `${el.getAttribute?.('alt') ?? ''} ${el.getAttribute?.('title') ?? ''} ${el.textContent ?? ''}`
-        if (frameFileNames(hay).some((ff) => entryNameHit(ff, entry))) return { el, unsupported: false }
+        if (frameFileNames(hay).some((ff) => entryNameHit(ff, entry, exactOnly))) return { el, unsupported: false }
       } catch {
         /* 무시 */
       }
     }
+    if (exactOnly) return null
     // 2차: progId 확장자가 항목 확장자와 같은 자리.
     const wantExt = extOf(entry.displayName ?? entry.fallbackName)
     if (wantExt && wantExt !== 'bin') {
       for (const el of all) {
         try {
-          if (!oleSel(el) || !isVis(el)) continue
+          if (!oleSel(el) || !isVis(el) || taken(el)) continue
           if (OLE_PROG_EXT[progIdOf(el)] === wantExt) return { el, unsupported: false }
         } catch {
           /* 무시 */
@@ -193,7 +208,7 @@ function findAnchorEl(
       const oles: Element[] = []
       for (const el of all) {
         try {
-          if (el.hasAttribute?.('data-docx-ole') && isVis(el)) oles.push(el)
+          if (el.hasAttribute?.('data-docx-ole') && isVis(el) && !taken(el)) oles.push(el)
         } catch {
           /* 무시 */
         }
@@ -702,11 +717,12 @@ export default function OleAttachmentOverlay({
         // 파싱분: lib 도형 위치.
         // C7: 백그라운드분은 여기서 건너뛰고 아래 명시 위치로만 둔다
         // (findAnchorEl의 첫 프레임 폴백이 엉뚱한 도형을 잡는 것을 방지).
+        // C7j: 한 도형에 한 항목만 — exact 패스로 먼저 확정하고 남은 것만 fuzzy.
+        // (report가 report-final 도형을 가로채는 오매칭 방지.)
         const extraParts = new Set((extrasRef.current ?? []).map((ex) => ex.part))
-        for (const entry of entries) {
-          if (extraParts.has(entry.partName)) continue
-          const hit = findAnchorEl(container, anchor, entry)
-          if (!hit) continue
+        const claimed = new Set<Element>()
+        const assign = (entry: OleEmbeddingRef, hit: { el: Element; unsupported: boolean }): void => {
+          claimed.add(hit.el)
           const r = hit.el.getBoundingClientRect()
           const y = Math.max(0, Math.round(r.top - c.top))
           const h = Math.max(0, Math.round(r.height))
@@ -719,6 +735,21 @@ export default function OleAttachmentOverlay({
             cover: hit.unsupported,
             captionAbove: y + h + CAPTION_H > c.height && y - CAPTION_H >= 0,
           }
+        }
+        const pending: OleEmbeddingRef[] = []
+        for (const entry of entries) {
+          if (extraParts.has(entry.partName)) continue
+          const hit = findAnchorEl(container, anchor, entry, claimed, true)
+          if (!hit) {
+            pending.push(entry)
+            continue
+          }
+          assign(entry, hit)
+        }
+        for (const entry of pending) {
+          const hit = findAnchorEl(container, anchor, entry, claimed, false)
+          if (!hit) continue
+          assign(entry, hit)
         }
         // C7: 백그라운드분: 명시 위치 해석 (lib에 아직 없음).
         const ctx = (() => {
