@@ -2099,6 +2099,166 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
+  test('D19-xlsx: 동명이탭 2개 선택→배지 2개, 탭닫기→해제, 늦은참가→보임', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'xlsx', 'c6dd19xlsx', PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    // A2: 같은 이름(Ada)의 두 번째 탭.
+    const ctxA2 = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxA2, ADA)
+    const pageA2 = await ctxA2.newPage()
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, GRACE)
+    const pageC = await ctxC.newPage()
+    try {
+      await gotoApp(pageA2)
+      await openEditor(pageA2, t.parentPath)
+      await pageA2.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 }).catch(() => {})
+      await gotoApp(pageC)
+      await openEditor(pageC, t.parentPath)
+      await pageC.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 }).catch(() => {})
+      // 첨부 2개 삽입 (A1이).
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch {}
+        try { ed?.focusGrid?.() } catch {}
+      })
+      for (const nm of ['d19-a.xlsx', 'd19-b.xlsx']) {
+        const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.xlsx')).toString('base64')
+        await t.pageA.evaluate(
+          ({ b64, hostPath, nm }: { b64: string; hostPath: string; nm: string }) => {
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+            const file = new File([bin], nm, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+            window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+          },
+          { b64: fxBytes, hostPath: t.parentPath, nm },
+        )
+        // 순차 확정 (baseHash 레이스 방지).
+        const partName = nm === 'd19-a.xlsx' ? 'xl/embeddings/d19-a.xlsx' : 'xl/embeddings/d19-b.xlsx'
+        await expect
+          .poll(async () => {
+            const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+            return Object.keys(zip.files).some((nn) => nn === partName)
+          }, { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+      }
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          const names = Object.keys(zip.files)
+          return names.includes('xl/embeddings/d19-a.xlsx') && names.includes('xl/embeddings/d19-b.xlsx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      console.log(`[c6d] D19 both parts on disk`)
+      for (const page of [t.pageA, pageA2, pageC]) {
+        await expect
+          .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.filter((e) => (e.getAttribute('aria-label') ?? '').includes('d19-')).length), { timeout: 60000, intervals: [1000] })
+          .toBe(2)
+      }
+      console.log(`[c6d] D19 both chips visible on all`)
+      // A1은 d19-a, A2는 d19-b 선택 (같은 이름 Ada, 다른 탭).
+      const clickChip = async (page: Page, label: string): Promise<void> => {
+        const box = await page.getByTestId('ole-icon').evaluateAll((els, want) => {
+          const hit = els.find((e) => e.getAttribute('aria-label') === want) as HTMLElement | null
+          if (!hit) return null
+          const r = hit.getBoundingClientRect()
+          return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+        }, `첨부 ${label}`)
+        expect(box).not.toBeNull()
+        await page.mouse.click(box![0], box![1])
+      }
+      await clickChip(t.pageA, 'd19-a.xlsx')
+      await clickChip(pageA2, 'd19-b.xlsx')
+      // C는 Ada 배지 2개 (서로 다른 파트).
+      await expect
+        .poll(() => pageC.getByTestId('ole-peer').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-peer-part') ?? ''}:${(e.textContent ?? '').trim()}`)), { timeout: 30000, intervals: [1000] })
+        .toEqual(expect.arrayContaining([expect.stringContaining('Ada'), expect.stringContaining('Ada')]))
+      const badges = await pageC.getByTestId('ole-peer').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-peer-part') ?? ''}:${(e.textContent ?? '').trim()}`))
+      console.log(`[c6d] D19 C badges: ${JSON.stringify(badges)}`)
+      expect(badges.length).toBe(2)
+      expect(new Set(badges.map((b) => b.split(':')[0])).size).toBe(2)
+      // A2 탭을 닫으면 C 화면에서 배지 1개가 5초 안에 사라진다.
+      await pageA2.close().catch(() => {})
+      await ctxA2.close().catch(() => {})
+      await expect
+        .poll(() => pageC.getByTestId('ole-peer').evaluateAll((els) => els.length), { timeout: 15000, intervals: [500] })
+        .toBe(1)
+      console.log(`[c6d] D19 badge removed after A2 close`)
+      // D가 늦게 들어와도 A1의 배지가 보인다.
+      const ctxD = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+      await seedUser(ctxD, GRACE)
+      const pageD = await ctxD.newPage()
+      try {
+        await gotoApp(pageD)
+        await openEditor(pageD, t.parentPath)
+        await pageD.locator('xlsx-editor [part~=formula-bar] textarea').first().waitFor({ timeout: 60000 }).catch(() => {})
+        await expect
+          .poll(() => pageD.getByTestId('ole-peer').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim())), { timeout: 30000, intervals: [1000] })
+          .toContain('Ada')
+        console.log(`[c6d] D19 late joiner D sees Ada badge`)
+      } finally {
+        await pageD.close().catch(() => {})
+        await ctxD.close().catch(() => {})
+      }
+    } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
+      await ctxA2.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D20-docx: A가 첨부 선택하면 C에 피어 표시가 뜬다 (107 broadcast)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'docx', 'c6dd20docx', PARENT_FIX['docx']!)
+    await t.attach.close().catch(() => {})
+    const ctxC = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctxC, GRACE)
+    const pageC = await ctxC.newPage()
+    try {
+      await gotoApp(pageC)
+      await openEditor(pageC, t.parentPath)
+      await pageC.locator('[data-testid="docx-viewer-root"]').first().waitFor({ timeout: 60000 }).catch(() => {})
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'd20-sel.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      for (const [page, tag] of [[t.pageA, 'A'], [pageC, 'C']] as Array<[Page, string]>) {
+        await expect
+          .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d20-sel.docx'))), { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+        console.log(`[c6d] D20 ${tag} chip visible`)
+      }
+      const boxA = await t.pageA.getByTestId('ole-icon').evaluateAll((els) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === '첨부 d20-sel.docx') as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      })
+      expect(boxA).not.toBeNull()
+      await t.pageA.mouse.click(boxA![0], boxA![1])
+      await expect
+        .poll(() => pageC.getByTestId('ole-peer').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim())), { timeout: 30000, intervals: [1000] })
+        .toContain('Ada')
+      console.log(`[c6d] D20 peer badge visible on C`)
+    } finally {
+      await pageC.close().catch(() => {})
+      await ctxC.close().catch(() => {})
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
