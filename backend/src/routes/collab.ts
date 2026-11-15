@@ -8,7 +8,6 @@ import {
   acquireObjectLock,
   addConn,
   broadcast,
-  broadcastOleSelected,
   encodePartEmbedded,
   adoptParentPartAndMaybeReset,
   applySave,
@@ -702,31 +701,8 @@ app.put('/embed/pos', async (c) => {
   }
 })
 
-// C7f: 첨부 선택 브로드캐스트 (107 ole-selected). 탭 transport용 (awareness 없음).
-// - knownEmbeds를 건드리지 않는다 (위치 아님, 선택 표시용).
-app.post('/embed/select', async (c) => {
-  try {
-    const body = (await c.req.json().catch(() => ({}))) as {
-      path?: string; part?: string | null; roomId?: string; tabId?: string; name?: string; color?: string
-    }
-    const path = typeof body.path === 'string' ? body.path : ''
-    const abs = await resolveWorkspaceFile(path).catch(() => null)
-    if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
-    const roomId = typeof body.roomId === 'string' && isValidRoomId(body.roomId) ? body.roomId : roomIdForAbs(abs)
-    const room = rooms.get(roomId)
-    if (!room) return c.json({ error: 'No such room', code: 'no_room' }, 404)
-    const part = typeof body.part === 'string' ? normalizeEmbedPart(body.part) : null
-    const tabId = typeof body.tabId === 'string' ? body.tabId.slice(0, 64) : 'unknown'
-    const name = typeof body.name === 'string' ? body.name.slice(0, 64) : '?'
-    const color = typeof body.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(body.color) ? body.color : '#64748b'
-    broadcastOleSelected(roomId, { part, tabId, name, color })
-    return c.json({ ok: true })
-  } catch (error) {
-    return errJson(c, error, 500)
-  }
-})
 
-// ---------------------------------------------------------------------------
+
 // C5-3: 첨부 읽기/교체/잠금 (GET/PUT /api/collab/embed, /embed/lock).
 // - GET: 파트 바이트 + 파일 해시(baseHash용) 반환. 읽기 전용 열람에도 쓴다.
 // - PUT: 해당 파트만 원자 교체. dirty_room(디스크 선행 변경)/stale(baseHash 불일치)
