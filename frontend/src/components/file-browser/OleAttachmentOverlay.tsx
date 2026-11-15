@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import {
+  Download,
   File as FileIcon,
   FileArchive,
   FileAudio,
@@ -411,11 +412,8 @@ function PptxImgEntry({
 }): React.ReactNode {
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
-  const [hoverClip, setHoverClip] = useState(false)
-  const hoverRef = useRef(false)
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
   const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; moved: boolean } | null>(null)
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const containerOf = (el: Element | null): HTMLElement | null => {
     try {
@@ -442,26 +440,8 @@ function PptxImgEntry({
         const dx = e.clientX - d.sx
         const dy = e.clientY - d.sy
         if (Math.hypot(dx, dy) < 5 && !d.moved) {
-          // 클릭 위치로 구분: 클립존이면 다운로드, 아니면 선택(리사이즈 가능).
-          const br = box?.getBoundingClientRect()
-          const fx = br && br.width > 0 ? (e.clientX - br.left) / br.width : 0.5
-          const fy = br && br.height > 0 ? (e.clientY - br.top) / br.height : 0.5
-          const isClip = fx < 0.3 && fy < 0.45
-          if (clickTimer.current) {
-            try { clearTimeout(clickTimer.current) } catch { /* 무시 */ }
-            clickTimer.current = null
-            onOpen(entry)
-          } else if (isClip) {
-            clickTimer.current = setTimeout(() => {
-              clickTimer.current = null
-              onDownloadFile(entry)
-            }, 250)
-          } else {
-            clickTimer.current = setTimeout(() => {
-              clickTimer.current = null
-              onSelect(entry.partName)
-            }, 250)
-          }
+          // C7g-3: 한 번 클릭은 선택만 (즉시, 타이머 없음). 더블클릭은 열기.
+          onSelect(entry.partName)
         } else if (onMove && baseW > 0 && baseH > 0) {
           // d.ox/oy는 컨테이너 기준 px → 슬라이드 기준 fractions로 변환.
           const nx = (d.ox - baseX + dx) / Math.max(1, baseW)
@@ -503,12 +483,8 @@ function PptxImgEntry({
     return () => {
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointermove', onMoveWin)
-      if (clickTimer.current) {
-        try { clearTimeout(clickTimer.current) } catch { /* 무시 */ }
-        clickTimer.current = null
-      }
     }
-  }, [entry, onMove, onResize, onDownloadFile, onOpen, onSelect])
+  }, [entry, onMove, onResize, onOpen, onSelect])
   const w = size?.w ?? pos.w
   const h = size?.h ?? pos.h
   const x = pos.x + (drag?.dx ?? 0)
@@ -517,23 +493,9 @@ function PptxImgEntry({
     <div
       ref={boxRef}
       data-testid="ole-icon"
-      title={hoverClip ? `다운로드: ${entry.displayName ?? entry.fallbackName}` : (entry.displayName ?? entry.fallbackName)}
+      title={entry.displayName ?? entry.fallbackName}
       aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
-      style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: hoverClip ? 'pointer' : 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
-      onMouseMove={(e) => {
-        try {
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-          const fx = r.width > 0 ? (e.clientX - r.left) / r.width : 0.5
-          const fy = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5
-          const inClip = fx < 0.3 && fy < 0.45
-          if (inClip !== hoverRef.current) {
-            hoverRef.current = inClip
-            setHoverClip(inClip)
-          }
-        } catch {
-          /* 무시 */
-        }
-      }}
+      style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%, -50%)', zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         e.preventDefault()
@@ -541,9 +503,10 @@ function PptxImgEntry({
         dragRef.current = { sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y, moved: false }
       }}
       onDoubleClick={(e) => {
-        // pointerup 더블탭 감지에서 이미 열었으므로 여기서는 중복 실행 방지.
+        // 한 번 클릭은 선택(무해) 후 열기. 타이머 없음.
         e.preventDefault()
         e.stopPropagation()
+        try { onOpen(entry) } catch { /* 무시 */ }
       }}
     >
       <img
@@ -553,32 +516,29 @@ function PptxImgEntry({
         draggable={false}
         style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', userSelect: 'none' }}
       />
-      {hoverClip && (
-        <div
-          data-testid="ole-download-hint"
-          style={{
-            position: 'absolute',
-            left: '50%',
-            top: -8,
-            transform: 'translate(-50%, -100%)',
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            userSelect: 'none',
-            background: '#0f172a',
-            color: '#fff',
-            borderRadius: 4,
-            padding: '1px 8px',
-            fontSize: 11,
-            lineHeight: '20px',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
-            maxWidth: 240,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            zIndex: 31,
+      {selected && (
+        <button
+          type="button"
+          data-testid="ole-download"
+          title={`다운로드: ${entry.displayName ?? entry.fallbackName}`}
+          aria-label={`다운로드 ${entry.displayName ?? entry.fallbackName}`}
+          style={{ position: 'absolute', left: -6, top: -6, width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: '#fff', border: '1px solid #94a3b8', borderRadius: 4, zIndex: 32 }}
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            try { onDownloadFile(entry) } catch { /* 무시 */ }
+          }}
+          onDoubleClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
           }}
         >
-          다운로드: {entry.displayName ?? entry.fallbackName}
-        </div>
+          <Download className="h-3.5 w-3.5" />
+        </button>
       )}
       {selected && onResize && (
         <div
@@ -700,8 +660,6 @@ export default function OleAttachmentOverlay({
   // C6b: 최신 openOrDownload 거울 (아래 early return보다 먼저 선언해야 한다 —
   // 조건부 훅이 되면 React #310으로 깨진다).
   const openRef = useRef<((entry: OleEmbeddingRef) => void) | null>(null)
-  // C7f: 칩 단일 클릭 타이머 (더블클릭과 구분). 같은 이유로 early return보다 앞에서 선언.
-  const clickTimerRef = useRef<{ part: string; isClip: boolean; id: ReturnType<typeof setTimeout> } | null>(null)
 
   useEffect(() => {
     let dead = false
@@ -997,56 +955,36 @@ export default function OleAttachmentOverlay({
     entry: OleEmbeddingRef,
     anchored: boolean,
     pos: { x: number; y: number } | undefined,
-    opts?: { selected?: boolean; onSelect?: (part: string | null) => void; onDownloadFile?: (entry: OleEmbeddingRef) => void },
+    opts?: { selected?: boolean; onSelect?: (part: string | null) => void },
   ): React.ReactNode => {
     const Icon = iconForFile(displayName(entry))
     const isSel = !!opts?.selected
     return (
-    <button
+    <span
       key={entry.partName}
+      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30, transform: 'translate(-50%, -50%)' } : undefined}
+      className="inline-flex items-center gap-1"
+    >
+    <button
       type="button"
       data-testid="ole-icon"
-      title={isSel ? displayName(entry) : `다운로드: ${displayName(entry)}`}
+      title={displayName(entry)}
       aria-label={`첨부 ${displayName(entry)}`}
       draggable={false}
-      onClick={(e) => {
-        try {
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-          const fx = r.width > 0 ? (e.clientX - r.left) / r.width : 0.5
-          const fy = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5
-          const isClip = fx < 0.3 && fy < 0.45
-          const prev = clickTimerRef.current
-          if (prev) {
-            try { clearTimeout(prev.id) } catch { /* 무시 */ }
-            clickTimerRef.current = null
-            if (prev.part === entry.partName) {
-              // 더블클릭으로 확정 → 열기.
-              void openOrDownload(entry)
-              return
-            }
-            // 다른 칩 연타: 앞선 클릭은 즉시 실행 후 새로 시작.
-            if (prev.isClip) void download(entry)
-            else opts?.onSelect?.(prev.part)
-          }
-          const t = setTimeout(() => {
-            clickTimerRef.current = null
-            if (isClip) void download(entry)
-            else opts?.onSelect?.(entry.partName)
-          }, 250)
-          clickTimerRef.current = { part: entry.partName, isClip, id: t }
-        } catch {
-          /* 무시 */
-        }
+      // C7g-3: 한 번 클릭은 선택만 (즉시, 타이머 없음). 더블클릭은 열기.
+      onClick={() => {
+        try { opts?.onSelect?.(entry.partName) } catch { /* 무시 */ }
       }}
       onDoubleClick={(e) => {
         e.preventDefault()
         e.stopPropagation()
+        try { void openOrDownload(entry) } catch { /* 무시 */ }
       }}
       onDragStart={(e) => {
         // 아이콘 드래그는 무시한다 (도형 이동은 lib 도형에서).
         e.preventDefault()
       }}
-      style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30, transform: 'translate(-50%, -50%)', outline: isSel ? '2px solid #2563eb' : undefined, outlineOffset: 2 } : undefined}
+      style={isSel ? { outline: '2px solid #2563eb', outlineOffset: 2 } : undefined}
       className={
         anchored
           ? 'z-20 inline-flex select-none items-center gap-1 rounded-md border border-border bg-background/95 p-1.5 text-foreground shadow-sm hover:bg-muted'
@@ -1057,6 +995,31 @@ export default function OleAttachmentOverlay({
       <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
       {!anchored && <span className="max-w-44 truncate select-none">{displayName(entry)}</span>}
     </button>
+    {isSel && (
+      <button
+        type="button"
+        data-testid="ole-download"
+        title={`다운로드: ${displayName(entry)}`}
+        aria-label={`다운로드 ${displayName(entry)}`}
+        draggable={false}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          try { void download(entry) } catch { /* 무시 */ }
+        }}
+        onDoubleClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }}
+        onDragStart={(e) => {
+          e.preventDefault()
+        }}
+        className="z-30 inline-flex select-none items-center rounded-md border border-border bg-background/95 p-1.5 text-foreground shadow-sm hover:bg-muted"
+      >
+        <Download className="h-4 w-4 shrink-0" />
+      </button>
+    )}
+    </span>
     )
   }
 

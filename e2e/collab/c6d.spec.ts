@@ -1785,7 +1785,7 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       }
       const before = await offOf()
       expect(before).not.toBeNull()
-      // 1) 클립존 클릭 = 다운로드.
+      // 1) 가운데 클릭 = 선택 후 다운로드 버튼 = 다운로드.
       const chipBox = async (): Promise<{ x: number; y: number; width: number; height: number } | null> => {
         const allc = await t.pageA.getByTestId('ole-icon').evaluateAll((els) =>
           els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] })() }))
@@ -1795,12 +1795,14 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         return { x: hit.box[0], y: hit.box[1], width: hit.box[2], height: hit.box[3] }
       }
       await expect.poll(() => chipBox().then((b) => b !== null), { timeout: 30000, intervals: [500] }).toBe(true)
+      const selBox0 = (await chipBox())!
+      await t.pageA.mouse.click(selBox0.x + selBox0.width / 2, selBox0.y + selBox0.height / 2)
+      await t.pageA.getByTestId('ole-download').first().waitFor({ timeout: 15000 })
       const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
-      const cb0 = (await chipBox())!
-      await t.pageA.mouse.click(cb0.x + cb0.width * 0.12, cb0.y + cb0.height * 0.25)
+      await t.pageA.getByTestId('ole-download').first().click()
       const dl = await dlP
       expect(dl).not.toBeNull()
-      console.log(`[c6d] D15 clip-click download ok: ${dl ? await dl.suggestedFilename() : '?'}`)
+      console.log(`[c6d] D15 download-button ok: ${dl ? await dl.suggestedFilename() : '?'}`)
       // 2) 드래그 이동 (+100,+50).
       const box0 = (await chipBox())!
       const cx0 = box0.x + box0.width / 2
