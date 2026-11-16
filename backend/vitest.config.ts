@@ -20,6 +20,8 @@ export default defineConfig({
       'ooxml-core': path.resolve(__dirname, '../frontend/node_modules/ooxml-core'),
       'ooxml-ui': path.resolve(__dirname, '../frontend/node_modules/ooxml-ui'),
       '@opencode-webui/shared': path.resolve(__dirname, '../shared/src'),
+      // C7l: 프론트 컴포넌트 단위 테스트용 (@/lib/* 임포트 해결).
+      '@': path.resolve(__dirname, '../frontend/src'),
     },
   },
   test: {
