@@ -97,7 +97,7 @@ function progIdOf(el: Element): string {
  * - docx: span[data-docx-ole] 또는 span.dve-ole-placeholder + 파일명/progId 매칭.
  * unsupported=true면 lib가 렌더를 포기한 자리 표시자다.
  */
-function findAnchorEl(
+export function findAnchorEl(
   container: HTMLElement,
   kind: OleAnchorKind,
   entry: OleEmbeddingRef,
@@ -768,16 +768,23 @@ export default function OleAttachmentOverlay({
         }
         // C7k: 완전히 겹치는 칩은 아래 것이 클릭 불가이므로 표시만 비킨다
         // (파일 위치는 그대로 — docx 동일 문단 연속 삽입 등).
-        // 같은 자리 N번째는 +22px 대각선으로.
+        // C7l: 백그라운드 삽입 칩에만 적용한다. lib 도형에 붙은 라벨은
+        // 정확한 위치에 둔다 (비키면 라벨이 자기 도형에서 떨어진다).
         {
           const seenPos = new Map<string, number>()
-          for (const key of Object.keys(next)) {
+          // lib 앵커 위치를 먼저 차지시킨다 (extras가 비킨다).
+          const orderedKeys = Object.keys(next).sort((a, b) => {
+            const aEx = extraParts.has(a) ? 1 : 0
+            const bEx = extraParts.has(b) ? 1 : 0
+            return aEx - bEx
+          })
+          for (const key of orderedKeys) {
             const p = next[key]
             if (!p) continue
             const k = `${Math.round(p.x / 4) * 4},${Math.round(p.y / 4) * 4}`
             const n = seenPos.get(k) ?? 0
             seenPos.set(k, n + 1)
-            if (n > 0) {
+            if (n > 0 && extraParts.has(key)) {
               p.x += n * 22
               p.y += n * 22
               p.captionAbove = p.y + p.h + CAPTION_H > c.height && p.y - CAPTION_H >= 0
