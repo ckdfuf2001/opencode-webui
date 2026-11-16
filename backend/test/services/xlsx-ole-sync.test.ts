@@ -33,6 +33,51 @@ describe('resolveZipTarget', () => {
   })
 })
 
+describe('assembleXlsxEmbed overlap', () => {
+  it('같은 셀에 2번 넣으면 두 twoCellAnchor 시작 셀이 다르다', async () => {
+    const hostBytes = new Uint8Array(
+      fs.readFileSync(path.join(process.cwd(), '../e2e/collab/fixtures/ole/embed-pdf.xlsx'))
+    );
+    const attachBytes = new Uint8Array(
+      fs.readFileSync(path.join(process.cwd(), '../e2e/collab/fixtures/ole/embed-docx.xlsx'))
+    );
+    const one = await assembleXlsxEmbed(zipLoad as never, {
+      hostBytes,
+      attachBytes,
+      attachName: 'dup-a.xlsx',
+      attachKind: 'xlsx',
+      sheet: 0,
+      cellCol: 4,
+      cellRow: 4,
+    } as never);
+    const two = await assembleXlsxEmbed(zipLoad as never, {
+      hostBytes: new Uint8Array(one),
+      attachBytes,
+      attachName: 'dup-b.xlsx',
+      attachKind: 'xlsx',
+      sheet: 0,
+      cellCol: 4,
+      cellRow: 4,
+    } as never);
+    const zip = (await zipLoad(two)) as JSZip;
+    const drawing = await zip.files['xl/drawings/drawing1.xml']!.async('string');
+    const froms: Array<[number, number]> = [];
+    for (const b of drawing.matchAll(/<xdr:twoCellAnchor[^>]*>[\s\S]*?<\/xdr:twoCellAnchor>/g)) {
+      const blk = b[0];
+      // 우리 삽입분만 (cNvPr name이 dup- 로 시작). 호스트 기존 도형은 제외.
+      const nm = /<xdr:cNvPr[^>]*\bname="([^"]*)"/.exec(blk)?.[1] ?? '';
+      if (!nm.startsWith('dup-')) continue;
+      const fm = /<xdr:from>([\s\S]*?)<\/xdr:from>/.exec(blk);
+      if (!fm) continue;
+      const c = /<xdr:col>(\d+)<\/xdr:col>/.exec(fm[1]);
+      const r = /<xdr:row>(\d+)<\/xdr:row>/.exec(fm[1]);
+      if (c && r) froms.push([Number(c[1]), Number(r[1])]);
+    }
+    expect(froms.length).toBe(2)
+    expect(JSON.stringify(froms[0])).not.toBe(JSON.stringify(froms[1]));
+  })
+});
+
 describe('syncXlsxOleAnchors', () => {
   it('cNvPr id가 바뀌면 건드리지 않는다 (fail-safe, 부패 없음)', async () => {
     const hostBytes = new Uint8Array(
