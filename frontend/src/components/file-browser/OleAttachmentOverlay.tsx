@@ -655,7 +655,9 @@ export default function OleAttachmentOverlay({
     const onDown = (e: Event): void => {
       try {
         const t = e.target as HTMLElement | null
-        if (t && typeof t.closest === 'function' && t.closest('[data-testid="ole-icon"],[data-testid="ole-resize"]')) return
+        // C7j: 다운로드 버튼 클릭은 선택 해제가 아니다 (capture 단계에서 먹히면
+        // 버튼이 언마운트돼 클릭이 유실된다 — ole-icon 안이 아니어도 유지).
+        if (t && typeof t.closest === 'function' && t.closest('[data-testid="ole-icon"],[data-testid="ole-resize"],[data-testid="ole-download"]')) return
         setSelectedPart(null)
       } catch {
         /* 무시 */
@@ -763,6 +765,24 @@ export default function OleAttachmentOverlay({
           // 명시 위치가 있으면 lib 결과보다 우선한다 (최신 삽입 의도).
           const p = resolveExtraPos(container, anchor, ex, ctx, CAPTION_H)
           if (p) next[ex.part] = p
+        }
+        // C7k: 완전히 겹치는 칩은 아래 것이 클릭 불가이므로 표시만 비킨다
+        // (파일 위치는 그대로 — docx 동일 문단 연속 삽입 등).
+        // 같은 자리 N번째는 +22px 대각선으로.
+        {
+          const seenPos = new Map<string, number>()
+          for (const key of Object.keys(next)) {
+            const p = next[key]
+            if (!p) continue
+            const k = `${Math.round(p.x / 4) * 4},${Math.round(p.y / 4) * 4}`
+            const n = seenPos.get(k) ?? 0
+            seenPos.set(k, n + 1)
+            if (n > 0) {
+              p.x += n * 22
+              p.y += n * 22
+              p.captionAbove = p.y + p.h + CAPTION_H > c.height && p.y - CAPTION_H >= 0
+            }
+          }
         }
         setPosMap((prev) => {
           const a = JSON.stringify(prev)

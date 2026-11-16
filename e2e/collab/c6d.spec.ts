@@ -2355,6 +2355,117 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
+  test('D22-xlsx: 헷갈리는 이름 2개가 각자 칩·다운로드를 가진다 (report vs report-final)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'xlsx', 'c6dd22xlsx', PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch {}
+        try { ed?.focusGrid?.() } catch {}
+      })
+      for (const nm of ['report.xlsx', 'report-final.xlsx']) {
+        const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.xlsx')).toString('base64')
+        await t.pageA.evaluate(
+          ({ b64, hostPath, nm }: { b64: string; hostPath: string; nm: string }) => {
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+            const file = new File([bin], nm, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+            window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+          },
+          { b64: fxBytes, hostPath: t.parentPath, nm },
+        )
+        await expect
+          .poll(async () => {
+            const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+            return Object.keys(zip.files).some((n) => n === `xl/embeddings/${nm}`)
+          }, { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+      }
+      for (const nm of ['report.xlsx', 'report-final.xlsx']) {
+        await expect
+          .poll(() => t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => els.some((e) => e.getAttribute('aria-label') === `첨부 ${want}`), nm), { timeout: 30000, intervals: [1000] })
+          .toBe(true)
+      }
+      console.log('[c6d] D22 both chips show own names')
+      for (const nm of ['report.xlsx', 'report-final.xlsx']) {
+        const box = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+          const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+          if (!hit) return null
+          const r = hit.getBoundingClientRect()
+          return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+        }, nm)
+        expect(box).not.toBeNull()
+        await t.pageA.mouse.click(box![0], box![1])
+        await t.pageA.getByTestId('ole-download').first().waitFor({ timeout: 15000 })
+        const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
+        await t.pageA.getByTestId('ole-download').first().click()
+        const dl = await dlP
+        expect(dl).not.toBeNull()
+        expect(await dl!.suggestedFilename()).toBe(nm)
+        console.log(`[c6d] D22 download ok: ${nm}`)
+      }
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D23-docx: 헷갈리는 이름 2개가 각자 칩·다운로드를 가진다 (report vs report-final)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'docx', 'c6dd23docx', PARENT_FIX['docx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      for (const nm of ['report.docx', 'report-final.docx']) {
+        const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+        await t.pageA.evaluate(
+          ({ b64, hostPath, nm }: { b64: string; hostPath: string; nm: string }) => {
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+            const file = new File([bin], nm, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+            window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+          },
+          { b64: fxBytes, hostPath: t.parentPath, nm },
+        )
+        await expect
+          .poll(async () => {
+            const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+            return Object.keys(zip.files).some((n) => n === `word/embeddings/${nm}`)
+          }, { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+      }
+      for (const nm of ['report.docx', 'report-final.docx']) {
+        await expect
+          .poll(() => t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => els.some((e) => e.getAttribute('aria-label') === `첨부 ${want}`), nm), { timeout: 30000, intervals: [1000] })
+          .toBe(true)
+      }
+      console.log('[c6d] D23 both chips show own names')
+      for (const nm of ['report.docx', 'report-final.docx']) {
+        const box = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+          const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+          if (!hit) return null
+          const r = hit.getBoundingClientRect()
+          return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+        }, nm)
+        expect(box).not.toBeNull()
+        await t.pageA.mouse.click(box![0], box![1])
+        await t.pageA.getByTestId('ole-download').first().waitFor({ timeout: 15000 })
+        const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
+        await t.pageA.getByTestId('ole-download').first().click()
+        const dl = await dlP
+        expect(dl).not.toBeNull()
+        expect(await dl!.suggestedFilename()).toBe(nm)
+        console.log(`[c6d] D23 download ok: ${nm}`)
+      }
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
