@@ -467,8 +467,43 @@ export async function assembleXlsxEmbed(
     typeof input.cellRow === 'number' && Number.isInteger(input.cellRow) && input.cellRow >= 0 && input.cellRow <= 1048575
       ? input.cellRow
       : null
-  const fromRow = cellRow ?? (maxRow > 0 ? maxRow + 2 : 7)
-  const fromCol = cellCol ?? 1
+  let fromRow = cellRow ?? (maxRow > 0 ? maxRow + 2 : 7)
+  let fromCol = cellCol ?? 1
+  // C7l: 같은 시트·같은 시작 셀에 이미 첨부가 있으면 아이콘 크기만큼 비켜 넣는다
+  // (데스크톱 Excel에서 완전히 겹쳐 보인다). 아래로 4행씩, 최대 100칸.
+  // self-closing Fallback은 앵커가 없어 건너뛴다.
+  {
+    const occupied: Array<[number, number, number, number]> = []
+    let opos = 0
+    for (;;) {
+      const oOpen = sheet.indexOf('<oleObject', opos)
+      if (oOpen < 0) break
+      const oEnd = sheet.indexOf('>', oOpen)
+      if (oEnd < 0) break
+      if (sheet.slice(oEnd - 1, oEnd + 1) === '/>') {
+        opos = oEnd + 1
+        continue
+      }
+      const cPos = sheet.indexOf('</oleObject>', oEnd)
+      if (cPos < 0) break
+      const inner = sheet.slice(oEnd + 1, cPos)
+      const am = /<anchor[^>]*>([\s\S]*?)<\/anchor>/.exec(inner)
+      opos = cPos + '</oleObject>'.length
+      if (!am) continue
+      const nums = [...am[1].matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((n) => Number(n[1]))
+      if (nums.length >= 8) occupied.push([nums[0], nums[2], nums[4], nums[6]])
+    }
+    const overlaps = (c1: number, r1: number): boolean => {
+      const c2 = c1 + 1
+      const r2 = r1 + 3
+      return occupied.some(([oc1, or1, oc2, or2]) => c1 <= oc2 && oc1 <= c2 && r1 <= or2 && or1 <= r2)
+    }
+    let guard = 0
+    while (overlaps(fromCol, fromRow) && guard < 100) {
+      fromRow += 4
+      guard++
+    }
+  }
   const toCol = fromCol + 1
   const toRow = fromRow + 3
 
