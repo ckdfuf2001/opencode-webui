@@ -1128,7 +1128,8 @@ export default function OleAttachmentOverlay({
     const isSel = !!opts?.selected
     return (
     <span
-      key={entry.partName}
+      // C7m: key는 바깥 span이 partName으로 이미 단다. 여기서 같은 key를 또 달면
+      // 형제 중복 key가 돼 자식이 복제/누락된다 (React 경고 + 중복 표시).
       style={anchored && pos ? { left: pos.x, top: pos.y, position: 'absolute', zIndex: 30, transform: 'translate(-50%, -50%)' } : undefined}
       className="inline-flex items-center gap-1"
     >
@@ -1241,7 +1242,6 @@ export default function OleAttachmentOverlay({
     const above = !!pos.captionAbove
     return (
       <div
-        key={entry.partName}
         data-testid="ole-label"
         title={name}
         aria-hidden="true"
@@ -1299,7 +1299,6 @@ export default function OleAttachmentOverlay({
     const Icon = iconForFile(name)
     return (
       <div
-        key={entry.partName}
         data-testid="ole-cover"
         aria-hidden="true"
         style={{
