@@ -64,4 +64,17 @@ describe('oleMatch', () => {
     expect(textContainsName('report-final.docx (10 KB)Download', report)).toBe(false)
     expect(textContainsName('my report.docx final version', report)).toBe(true)
   })
+
+  it('lib이 짧은 자동 이름으로 렌더해도 파일명 전체가 한쪽에 들어있으면 매칭된다', () => {
+    // C7m red: lib 프레임 "WORDDocument.docx" vs part "Microsoft_Word_Document.docx".
+    expect(textContainsName('WORDDocument.docx (35.7 KB)Download', docxPkg)).toBe(true)
+  })
+
+  it('양방향 포함이라도 확장자까지 온전하지 않으면 매칭되지 않는다', () => {
+    const report = { displayName: 'report.docx', fallbackName: 'report.docx' }
+    const reportFinal = { displayName: 'report-final.docx', fallbackName: 'report-final.docx' }
+    // 어느 쪽도 다른 쪽 파일명 전체(확장자 포함)를 포함하지 않는다.
+    expect(textContainsName('report.docx (10 KB)Download', reportFinal)).toBe(false)
+    expect(textContainsName('report-final.docx (10 KB)Download', report)).toBe(false)
+  })
 })
