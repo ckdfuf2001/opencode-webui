@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { createHash } from 'node:crypto'
-import { backendBase, absForRel, uniqueRelWithExt } from './helpers/env'
+import { backendBase, absForRel, uniqueRelWithExt, workspaceDir } from './helpers/env'
 import { gotoApp, openEditor, gotoSlide, editShapeText, ShapeLocator } from './helpers/viewer'
 import { readDeck } from './helpers/disk'
 import { ADA, GRACE, seedUser } from './helpers/users'
@@ -2520,6 +2520,58 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D25-pptx: 파싱분 첨부는 lib 도형만 보인다 (ole-img 0, 캡션+다운로드)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    await gotoApp(page)
+    // 파싱분 전용 호스트: embed-docx.pptx는 ppt/embeddings/Microsoft_Word_Document.docx를
+    // 이미 포함한다 (extras 없음 — 화면 전체 ole-img 0 단언이 유효).
+    const seg = `c6dd25pptx${Date.now()}`
+    await fetch(`${backendBase()}/api/repos`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ localPath: seg }),
+    })
+    const dir = path.join(workspaceDir(), 'repos', seg)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.copyFileSync(path.join(FIX, 'embed-docx.pptx'), path.join(dir, 'embed-docx.pptx'))
+    try {
+      await openEditor(page, `${seg}/embed-docx.pptx`)
+      await page.getByRole('tab', { name: 'Home' }).first().waitFor({ timeout: 60000 })
+      // 오버레이 준비: 파일명 캡션이 뜰 때까지 대기.
+      await expect
+        .poll(() => page.getByTestId('ole-label').count(), { timeout: 60000, intervals: [1000] })
+        .toBeGreaterThan(0)
+      // RED(현재 실패): 파싱분은 우리 img를 그리지 않는다.
+      await expect(page.getByTestId('ole-img')).toHaveCount(0, { timeout: 15000 })
+      // 가드: lib 프레임이 보인다.
+      const frame = page.locator('[data-element-id*="-frame-"]').first()
+      await expect(frame).toBeVisible({ timeout: 30000 })
+      // 캡션에 파일명이 보인다.
+      const label = page.getByTestId('ole-label').filter({ hasText: /\.docx/i }).first()
+      await expect(label).toBeVisible({ timeout: 30000 })
+      // RED(현재 실패): 선택 없이도 다운로드 버튼이 보인다 (캡션 오른쪽).
+      const dlBtn = page.getByTestId('ole-download').first()
+      await expect(dlBtn).toBeVisible({ timeout: 15000 })
+      // 버튼 dblclick으로는 열리지 않는다 (컨테이너 캡처 제외).
+      const noPopup = page.waitForEvent('popup', { timeout: 3000 }).then(() => 'opened', () => 'none')
+      await dlBtn.dblclick({ timeout: 15000 })
+      await expect(noPopup).resolves.toBe('none')
+      // 버튼 클릭으로는 실제 파일이 내려온다.
+      const dlP = page.waitForEvent('download', { timeout: 15000 }).catch(() => null)
+      await dlBtn.click({ timeout: 15000 })
+      const dl = await dlP
+      expect(dl).not.toBeNull()
+      expect(await dl!.suggestedFilename()).toMatch(/\.docx$/i)
+      console.log('[c6d] D25 lib-only parsed ok')
+    } finally {
+      await ctx.close().catch(() => {})
     }
   })
 
