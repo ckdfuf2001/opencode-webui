@@ -37,9 +37,22 @@ export function entryNameHit(candidateFile: string, entry: Pick<OleEmbeddingRef,
     if (!n) return false
     if (n === f) return true
     if (exact) return false
-    // lib 약어 표시용 부분일치. 반대 방향(후보가 항목 줄기를 포함)은
-    // 다른 파일 오매칭(report vs report-final)이므로 금지.
     return fs.length >= 4 && n.includes(fs)
+  })
+}
+
+/**
+ * lib 텍스트 전체에 항목 파일명(확장자 포함)이 그대로 들어있는지.
+ * ("WORDIcf.docx (348.8 KB)Download" 안에 "Icf.docx"가 있는 경우.
+ * report/report-final처럼 다른 파일은 확장자까지 일치해야 하므로 걸러진다.)
+ */
+export function textContainsName(haystack: string, entry: Pick<OleEmbeddingRef, 'displayName' | 'fallbackName'>): boolean {
+  const hay = normName(haystack)
+  if (!hay) return false
+  const raws = [entry.displayName, entry.fallbackName].filter((s): s is string => !!s)
+  return raws.some((raw) => {
+    const n = normName(raw)
+    return !!n && hay.includes(n)
   })
 }
 

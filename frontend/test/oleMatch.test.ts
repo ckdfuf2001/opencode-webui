@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normName, frameFileNames, entryNameHit, progIdOfText, extOf, OLE_PROG_EXT } from '../src/lib/oleMatch'
+import { normName, frameFileNames, entryNameHit, textContainsName, progIdOfText, extOf, OLE_PROG_EXT } from '../src/lib/oleMatch'
 
 /**
  * lib 렌더 OLE 도형 ↔ 임베딩 항목 매칭 (순수).
@@ -53,5 +53,15 @@ describe('oleMatch', () => {
     expect(normName('Microsoft_Word_Document.docx')).toBe('microsoftworddocumentdocx')
     expect(extOf('a.XLSX')).toBe('xlsx')
     expect(extOf(undefined)).toBe('')
+  })
+
+  it('lib 전체 텍스트에 파일명이 그대로 있으면 매칭된다 (WORD 접두사 등)', () => {
+    const icf = { displayName: 'Icf.docx', fallbackName: 'Icf.docx' }
+    expect(textContainsName('WORDIcf.docx (348.8 KB)Download', icf)).toBe(true)
+    expect(textContainsName('Icf.docx (348.8 KB)Download', icf)).toBe(true)
+    // 다른 파일의 부분 문자열만으로는 안 된다 (확장자까지 온전해야 함).
+    const report = { displayName: 'report.docx', fallbackName: 'report.docx' }
+    expect(textContainsName('report-final.docx (10 KB)Download', report)).toBe(false)
+    expect(textContainsName('my report.docx final version', report)).toBe(true)
   })
 })
