@@ -15,6 +15,7 @@ import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { findOleEntryAtPoint } from '@/lib/oleHitTest'
 import { frameFileNames, entryNameHit, textContainsName, progIdOfText, extOf, OLE_PROG_EXT } from '@/lib/oleMatch'
+import { SWAP_FAILED_ATTR, SWAPPED_ATTR, shouldSwapOleImg, mergePosMap } from '@/lib/oleSwapGuard'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
 import { API_BASE_URL } from '@/config'
 import { attachmentKindOf } from './embedEdit'
@@ -233,10 +234,11 @@ export function findAnchorEl(
 }
 
 /**
- * lib OLE 도형 안의 아이콘 <img>를 우리 미리보기로 바꾼다 (C7j).
+ * lib OLE 도형 안의 아이콘 <img>를 우리 미리보기로 바꾼다 (C7j, C7m 유지 결정).
  * - lib 네이티브 렌더(리사이즈·선택 그대로 둠) + 우리 아이콘(종류별 색상).
  * - 큰 아이콘만 교체 (작은 뱃지·인디케이터는 lib 것 유지).
- * - 실패하면 원복 (깨진 이미지 방지). 멱등 (이미 우리 URL이면 스킵).
+ * - 실패하면 원복 + 실패 표식 (깨진 이미지 방지 + 재swap 루프 방지, D35).
+ * - 멱등 (이미 우리 URL이면 스킵, 표식 있으면 스킵).
  */
 function swapOleIcon(root: Element, iconUrl: string): void {
   try {
@@ -263,10 +265,20 @@ function swapOleIcon(root: Element, iconUrl: string): void {
       try {
         if ((e as HTMLElement).tagName !== 'IMG') continue
         const img = e as unknown as HTMLImageElement
+        // C7m 1-a: 실패·교체済 표식이 있으면 손대지 않는다 (같은 요소 반복 swap 금지).
+        // lib이 img를 다시 그리면 새 요소라 표식이 없어 1회 swap된다 (정상 동작).
+        let failed = false
+        let swapped = false
+        try {
+          failed = img.hasAttribute(SWAP_FAILED_ATTR)
+          swapped = img.hasAttribute(SWAPPED_ATTR)
+        } catch {
+          continue
+        }
+        if (!shouldSwapOleImg(img.currentSrc || img.src || '', failed, swapped)) continue
         const r = (e as HTMLElement).getBoundingClientRect()
         if (r.width < 24 || r.height < 24) continue
         const cur = img.currentSrc || img.src || ''
-        if (!cur || cur.includes('/api/collab/embed/icon')) continue
         const orig = img.getAttribute('data-orig-src') ?? cur
         try {
           img.setAttribute('data-orig-src', orig)
@@ -276,12 +288,18 @@ function swapOleIcon(root: Element, iconUrl: string): void {
         try {
           img.onerror = () => {
             try {
+              img.setAttribute(SWAP_FAILED_ATTR, '1')
               const back = img.getAttribute('data-orig-src')
               if (back) img.src = back
             } catch {
               /* 무시 */
             }
           }
+        } catch {
+          /* 무시 */
+        }
+        try {
+          img.setAttribute(SWAPPED_ATTR, '1')
         } catch {
           /* 무시 */
         }
@@ -877,11 +895,8 @@ export default function OleAttachmentOverlay({
           }
         }
 
-        setPosMap((prev) => {
-          const a = JSON.stringify(prev)
-          const b = JSON.stringify(next)
-          return a === b ? prev : next
-        })
+        // C7m 1-b: 동일값이면 이전 객체 유지 (D35 유휴 렌더 0회).
+        setPosMap((prev) => mergePosMap(prev, next))
       } catch {
         /* 무시 */
       }
