@@ -2466,6 +2466,96 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
+  test('D24-xlsx: 종류별 칩 뱃지 색이 통일된다 (docx 파랑/xlsx 초록/pptx 주황)', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'xlsx', 'c6dd24xlsx', PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch {}
+        try { ed?.focusGrid?.() } catch {}
+      })
+      const files: Array<[string, string, string]> = [
+        ['kind-doc.docx', 'embed-docx.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        ['kind-sheet.xlsx', 'embed-docx.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+        ['kind-deck.pptx', 'embed-docx.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+      ]
+      for (const [nm, fix, mime] of files) {
+        const fxBytes = fs.readFileSync(path.join(FIX, fix)).toString('base64')
+        await t.pageA.evaluate(
+          ({ b64, hostPath, nm, mime }: { b64: string; hostPath: string; nm: string; mime: string }) => {
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+            const file = new File([bin], nm, { type: mime })
+            window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+          },
+          { b64: fxBytes, hostPath: t.parentPath, nm, mime },
+        )
+        await expect
+          .poll(async () => {
+            const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+            return Object.keys(zip.files).some((n) => n === `xl/embeddings/${nm}`)
+          }, { timeout: 60000, intervals: [1000] })
+          .toBe(true)
+      }
+      const expected: Record<string, string> = {
+        'kind-doc.docx': 'rgb(37, 99, 235)',
+        'kind-sheet.xlsx': 'rgb(22, 163, 74)',
+        'kind-deck.pptx': 'rgb(234, 88, 12)',
+      }
+      for (const nm of Object.keys(expected)) {
+        await expect
+          .poll(() => t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+            const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+            if (!hit) return null
+            const badge = hit.querySelector('span[style*="background-color"]') as HTMLElement | null
+            if (!badge) return null
+            return getComputedStyle(badge).backgroundColor
+          }, nm), { timeout: 30000, intervals: [1000] })
+          .toBe(expected[nm])
+      }
+      console.log('[c6d] D24 badge colors unified')
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('SHOT-badges: 3종 뱃지 스크린샷', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'xlsx', 'shotbadges', PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch {}
+        try { ed?.focusGrid?.() } catch {}
+      })
+      for (const [nm, fix, mime] of [["shot-doc.docx", "embed-docx.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"], ["shot-sheet.xlsx", "embed-docx.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"], ["shot-deck.pptx", "embed-docx.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]] as Array<[string, string, string]>) {
+        const fxBytes = fs.readFileSync(path.join(FIX, fix)).toString('base64')
+        await t.pageA.evaluate(
+          ({ b64, hostPath, nm, mime }: { b64: string; hostPath: string; nm: string; mime: string }) => {
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+            const file = new File([bin], nm, { type: mime })
+            window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+          },
+          { b64: fxBytes, hostPath: t.parentPath, nm, mime },
+        )
+        await t.pageA.waitForTimeout(2000).catch(() => {})
+      }
+      await t.pageA.waitForTimeout(3000).catch(() => {})
+      await t.pageA.screenshot({ path: 'test-results/shot-badges.png' })
+      console.log('[shot] badges captured')
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('D4-pptx: 미룸 중 부모 탭을 닫으면 즉시 dispose — 늦은 저장은 404, 재입장 후 정상 저장', async ({
     browser,
   }, testInfo) => {
