@@ -14,7 +14,7 @@ import {
 import { extractOleAttachment } from '@/lib/oleExtract'
 import { listOleEmbeddings, looksLikeCfb, type OleEmbeddingRef } from '@/lib/oleAttachments'
 import { findOleEntryAtPoint } from '@/lib/oleHitTest'
-import { frameFileNames, entryNameHit, progIdOfText, extOf, OLE_PROG_EXT } from '@/lib/oleMatch'
+import { frameFileNames, entryNameHit, textContainsName, progIdOfText, extOf, OLE_PROG_EXT } from '@/lib/oleMatch'
 import { deepCollect, observeDeep } from '@/lib/domDeep'
 import { API_BASE_URL } from '@/config'
 import { attachmentKindOf } from './embedEdit'
@@ -149,13 +149,14 @@ export function findAnchorEl(
     }
     if (kind === 'pptx') {
       // 1차: 파일명이 들어간 Download 프레임 (항목별 매칭).
+      // frameFileNames 추출 + 전체 텍스트 포함 매칭 (WORD 접두사 등 변형 대응).
       for (const el of all) {
         try {
           const eid = el.getAttribute?.('data-element-id') ?? ''
           if (!eid.includes('-frame-') || !isVis(el) || taken(el)) continue
           const text = el.textContent ?? ''
           if (!/download/i.test(text)) continue
-          if (frameFileNames(text).some((ff) => entryNameHit(ff, entry, exactOnly))) return { el, unsupported: false }
+          if (frameFileNames(text).some((ff) => entryNameHit(ff, entry, exactOnly)) || textContainsName(text, entry)) return { el, unsupported: false }
         } catch {
           /* 무시 */
         }
@@ -193,7 +194,7 @@ export function findAnchorEl(
       try {
         if (!oleSel(el) || !isVis(el) || taken(el)) continue
         const hay = `${el.getAttribute?.('alt') ?? ''} ${el.getAttribute?.('title') ?? ''} ${el.textContent ?? ''}`
-        if (frameFileNames(hay).some((ff) => entryNameHit(ff, entry, exactOnly))) return { el, unsupported: false }
+        if (frameFileNames(hay).some((ff) => entryNameHit(ff, entry, exactOnly)) || textContainsName(hay, entry)) return { el, unsupported: false }
       } catch {
         /* 무시 */
       }
@@ -228,6 +229,69 @@ export function findAnchorEl(
     return null
   } catch {
     return null
+  }
+}
+
+/**
+ * lib OLE 도형 안의 아이콘 <img>를 우리 미리보기로 바꾼다 (C7j).
+ * - lib 네이티브 렌더(리사이즈·선택 그대로 둠) + 우리 아이콘(종류별 색상).
+ * - 큰 아이콘만 교체 (작은 뱃지·인디케이터는 lib 것 유지).
+ * - 실패하면 원복 (깨진 이미지 방지). 멱등 (이미 우리 URL이면 스킵).
+ */
+function swapOleIcon(root: Element, iconUrl: string): void {
+  try {
+    const all: Element[] = []
+    const walk = (node: Element | ShadowRoot): void => {
+      let els: Element[] = []
+      try {
+        els = [...(node as Element).querySelectorAll('*')]
+      } catch {
+        return
+      }
+      for (const e of els) {
+        all.push(e)
+        try {
+          const sr = (e as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot
+          if (sr) walk(sr)
+        } catch {
+          /* 무시 */
+        }
+      }
+    }
+    walk(root)
+    for (const e of all) {
+      try {
+        if ((e as HTMLElement).tagName !== 'IMG') continue
+        const img = e as unknown as HTMLImageElement
+        const r = (e as HTMLElement).getBoundingClientRect()
+        if (r.width < 24 || r.height < 24) continue
+        const cur = img.currentSrc || img.src || ''
+        if (!cur || cur.includes('/api/collab/embed/icon')) continue
+        const orig = img.getAttribute('data-orig-src') ?? cur
+        try {
+          img.setAttribute('data-orig-src', orig)
+        } catch {
+          /* 무시 */
+        }
+        try {
+          img.onerror = () => {
+            try {
+              const back = img.getAttribute('data-orig-src')
+              if (back) img.src = back
+            } catch {
+              /* 무시 */
+            }
+          }
+        } catch {
+          /* 무시 */
+        }
+        img.src = iconUrl
+      } catch {
+        /* 무시 */
+      }
+    }
+  } catch {
+    /* 무시 */
   }
 }
 
@@ -733,6 +797,15 @@ export default function OleAttachmentOverlay({
         const claimed = new Set<Element>()
         const assign = (entry: OleEmbeddingRef, hit: { el: Element; unsupported: boolean }): void => {
           claimed.add(hit.el)
+          // C7j-2: lib 네이티브 아이콘을 우리 미리보기로 교체 (리사이즈·선택은 lib 그대로).
+          if (parentPath) {
+            try {
+              const iconUrl = `${API_BASE_URL}/api/collab/embed/icon?path=${encodeURIComponent(parentPath)}&part=${encodeURIComponent(entry.partName)}`
+              swapOleIcon(hit.el, iconUrl)
+            } catch {
+              /* 무시 */
+            }
+          }
           const r = hit.el.getBoundingClientRect()
           const y = Math.max(0, Math.round(r.top - c.top))
           const h = Math.max(0, Math.round(r.height))
