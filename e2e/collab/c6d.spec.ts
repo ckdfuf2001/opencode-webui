@@ -2367,6 +2367,13 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     testInfo.setTimeout(420000)
     const t = await openDeferPair(browser, 'xlsx', 'c6dd22xlsx', PARENT_FIX['xlsx']!)
     await t.attach.close().catch(() => {})
+    // C7m red: 칩·캡션이 같은 key로 형제 렌더되면 React가 중복 경고를 낸다.
+    const dupKeys: string[] = []
+    t.pageA.on('console', (m) => {
+      try {
+        if (m.text().includes('same key')) dupKeys.push(m.text().slice(0, 160))
+      } catch { /* 무시 */ }
+    })
     try {
       await t.pageA.evaluate(() => {
         const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
@@ -2405,14 +2412,17 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
         }, nm)
         expect(box).not.toBeNull()
         await t.pageA.mouse.click(box![0], box![1])
-        await t.pageA.getByTestId('ole-download').first().waitFor({ timeout: 15000 })
+        const dlBtn22 = t.pageA.getByRole('button', { name: `다운로드 ${nm}` })
+        await dlBtn22.waitFor({ timeout: 15000 })
         const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
-        await t.pageA.getByTestId('ole-download').first().click()
+        await dlBtn22.click()
         const dl = await dlP
         expect(dl).not.toBeNull()
         expect(await dl!.suggestedFilename()).toBe(nm)
         console.log(`[c6d] D22 download ok: ${nm}`)
       }
+      // C7m: React 중복 key 경고 0건 (칩·캡션·카드의 key가 겹치면 자식이 복제/누락된다).
+      expect(dupKeys).toEqual([])
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
