@@ -45,14 +45,22 @@ export function entryNameHit(candidateFile: string, entry: Pick<OleEmbeddingRef,
  * lib 텍스트 전체에 항목 파일명(확장자 포함)이 그대로 들어있는지.
  * ("WORDIcf.docx (348.8 KB)Download" 안에 "Icf.docx"가 있는 경우.
  * report/report-final처럼 다른 파일은 확장자까지 일치해야 하므로 걸러진다.)
+ * C7m: lib이 progId식 짧은 자동 이름(WORDDocument.docx)으로 렌더하고
+ * part는 전체 이름(Microsoft_Word_Document.docx)인 경우도 같은 문서로 본다.
+ * 어느 한쪽이 다른 쪽 파일명 전체(확장자 포함)를 포함하면 매칭한다.
+ * (report.docx vs report-final.docx는 어느 쪽도 상대 전체를 포함하지 않아 제외.)
  */
 export function textContainsName(haystack: string, entry: Pick<OleEmbeddingRef, 'displayName' | 'fallbackName'>): boolean {
   const hay = normName(haystack)
   if (!hay) return false
+  const cands = frameFileNames(haystack).map((c) => normName(c)).filter((c) => c.length >= 8)
   const raws = [entry.displayName, entry.fallbackName].filter((s): s is string => !!s)
   return raws.some((raw) => {
     const n = normName(raw)
-    return !!n && hay.includes(n)
+    if (!n) return false
+    if (hay.includes(n)) return true
+    if (n.length < 8) return false
+    return cands.some((c) => n.includes(c) || c.includes(n))
   })
 }
 

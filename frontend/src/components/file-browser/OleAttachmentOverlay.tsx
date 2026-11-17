@@ -714,7 +714,7 @@ export default function OleAttachmentOverlay({
   // captionAbove: 아래에 캡션이 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면
   // 캡처 리스너가 못 받는다).
   const [posMap, setPosMap] = useState<
-    Record<string, { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean }>
+    Record<string, { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean; libClaimed?: boolean }>
   >({})
   // C7e: 선택된 첨부 (클릭 선택 → 리사이즈 핸들 표시, 배경 클릭 시 해제).
   // PptxViewer가 제어하면 그 값을 쓰고, 아니면 내부 상태 (xlsx/docx).
@@ -786,7 +786,7 @@ export default function OleAttachmentOverlay({
       if (dead) return
       try {
         const c = container.getBoundingClientRect()
-        type PosEntry = { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean }
+        type PosEntry = { x: number; y: number; w: number; h: number; cover: boolean; captionAbove?: boolean; libClaimed?: boolean }
         const next: Record<string, PosEntry> = {}
         // 파싱분: lib 도형 위치.
         // C7: 백그라운드분은 여기서 건너뛰고 아래 명시 위치로만 둔다
@@ -817,11 +817,19 @@ export default function OleAttachmentOverlay({
             // lib가 렌더를 포기한 자리(xg-obj-unsupported)는 카드로 덮는다.
             cover: hit.unsupported,
             captionAbove: y + h + CAPTION_H > c.height && y - CAPTION_H >= 0,
+            // C7m: lib 도형에서 위치를 잡았으면 lib-only 표시 대상이다.
+            libClaimed: true,
           }
         }
         const pending: OleEmbeddingRef[] = []
         for (const entry of entries) {
-          if (extraParts.has(entry.partName)) continue
+          if (extraParts.has(entry.partName)) {
+            // C7m: extras도 exact 매칭만 시도한다 (lib 도형이 있으면 lib-only로 전환).
+            // 폴백은 쓰지 않는다 (엉뚱한 도형 포획 방지 — C7 유지).
+            const exHit = findAnchorEl(container, anchor, entry, claimed, true)
+            if (exHit) assign(entry, exHit)
+            continue
+          }
           const hit = findAnchorEl(container, anchor, entry, claimed, true)
           if (!hit) {
             pending.push(entry)
@@ -844,8 +852,9 @@ export default function OleAttachmentOverlay({
         })()
         for (const ex of extrasRef.current ?? []) {
           // 명시 위치가 있으면 lib 결과보다 우선한다 (최신 삽입 의도).
+          // 단 lib claim이 성공했으면 lib 위치를 유지한다 (lib-only 표시).
           const p = resolveExtraPos(container, anchor, ex, ctx, CAPTION_H)
-          if (p) next[ex.part] = p
+          if (p && !next[ex.part]?.libClaimed) next[ex.part] = { ...p, libClaimed: false }
         }
         // C7k: fully overlapping chips hide the lower one, so offset display only
         // (file position unchanged).
@@ -917,6 +926,13 @@ export default function OleAttachmentOverlay({
       try {
         const t = e.target as HTMLElement | null
         if (!t || typeof t.closest !== 'function') return
+        // C7m: 캡션 다운로드 버튼은 캡처 대상에서 뺀다 (버튼 dblclick으로 열리지 않게).
+        // matches()는 svg 자식에 안 먹히므로 closest로 판정한다.
+        try {
+          if (t.closest('[data-testid="ole-download"]')) return
+        } catch {
+          /* 무시 */
+        }
         const entries = entriesRef.current
         if (entries.length === 0) return
         const c = container.getBoundingClientRect()
@@ -1203,7 +1219,9 @@ export default function OleAttachmentOverlay({
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
   // dblclick은 컨테이너 캡처가 잡는다: rect 아래쪽 패딩 + 실측 박스.
   // 아래에 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면 캡처가 못 받는다).
-  const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number; captionAbove?: boolean }): React.ReactNode => {
+  // onDl이 있으면 파일명 오른쪽에 다운로드 버튼을 둔다 (버튼만 pointer-events:auto).
+  // 컨테이너 캡처 dblclick·선택 해제는 버튼을 제외한다 (button 매칭으로 early-return).
+  const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number; captionAbove?: boolean }, onDl?: (entry: OleEmbeddingRef) => void): React.ReactNode => {
     const name = displayName(entry)
     const above = !!pos.captionAbove
     return (
@@ -1219,9 +1237,39 @@ export default function OleAttachmentOverlay({
           transform: 'translateX(-50%)',
           maxWidth: 240,
         }}
-        className="pointer-events-none z-10 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
+        className="pointer-events-none z-30 flex select-none items-center gap-1 whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
       >
-        {name}
+        <span className="truncate">{name}</span>
+        {onDl && (
+          <button
+            type="button"
+            data-testid="ole-download"
+            title={`다운로드: ${name}`}
+            aria-label={`다운로드 ${name}`}
+            draggable={false}
+            style={{ pointerEvents: 'auto' }}
+            className="inline-flex shrink-0 select-none items-center rounded border border-border bg-background p-0.5 text-foreground hover:bg-muted"
+            onPointerDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              try { onDl(entry) } catch { /* 무시 */ }
+            }}
+            onDoubleClick={(e) => {
+              // 버튼 dblclick으로는 열지 않는다 (컨테이너 캡처도 button은 제외).
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            onDragStart={(e) => {
+              e.preventDefault()
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
     )
   }
@@ -1283,11 +1331,47 @@ export default function OleAttachmentOverlay({
             </span>
           )
         }
-        // C7e: pptx는 실제 아이콘 <img>를 그린다 (드래그 이동·리사이즈·클릭 다운로드).
-        // lib 플레이스홀더와 같은 자리를 덮어 중복 표시가 없다.
+        // C7m lib-only: lib 도형에서 위치를 잡은 파싱분은 lib만 보인다 (우리 img 없음).
+        // extras 중 lib 도형이 없는 것만 PptxImgEntry를 유지한다 (106 백그라운드 삽입분).
         if (anchor === 'pptx' && parentPath) {
           const iconUrl = `${API_BASE_URL}/api/collab/embed/icon?path=${encodeURIComponent(parentPath)}&part=${encodeURIComponent(e.partName)}`
           const peers = peerSelByPart.get(e.partName) ?? []
+          if (pos.libClaimed === true) {
+            return (
+              <span key={e.partName}>
+                {caption(e, pos, (en) => void download(en))}
+                {peers.map((p, i) => (
+                  <span
+                    key={`peer-${i}-${p.name}`}
+                    data-testid="ole-peer"
+                    data-peer-part={e.partName}
+                    style={{
+                      position: 'absolute',
+                      left: pos.x,
+                      top: pos.y - pos.h / 2 - 4,
+                      transform: 'translate(-50%, -100%)',
+                      zIndex: 31,
+                      pointerEvents: 'none',
+                      userSelect: 'none',
+                      whiteSpace: 'nowrap',
+                      background: p.color,
+                      color: '#fff',
+                      borderRadius: 4,
+                      padding: '0 6px',
+                      fontSize: 11,
+                      lineHeight: '20px',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                      maxWidth: 200,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {p.name}
+                  </span>
+                ))}
+              </span>
+            )
+          }
           return (
             <span key={e.partName}>
               <PptxImgEntry
