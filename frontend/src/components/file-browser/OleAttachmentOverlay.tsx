@@ -9,7 +9,6 @@ import {
   FileSpreadsheet,
   FileText,
   FileVideo,
-  Paperclip,
   Presentation,
 } from 'lucide-react'
 import { extractOleAttachment } from '@/lib/oleExtract'
@@ -35,6 +34,15 @@ function iconForFile(name: string): typeof FileIcon {
   if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)) return FileVideo
   if (['mp3', 'wav', 'flac', 'ogg', 'm4a'].includes(ext)) return FileAudio
   return FileIcon
+}
+
+/** 첨부 종류별 색 (pptx 임베딩 미리보기와 동일: docx 파랑, xlsx 초록, pptx 주황). */
+function kindColorForFile(name: string): string {
+  const ext = (name.split('.').pop() ?? '').toLowerCase()
+  if (['doc', 'docx', 'rtf', 'odt', 'hwp', 'hwpx', 'txt', 'md', 'pdf'].includes(ext)) return '#2563eb'
+  if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return '#16a34a'
+  if (['ppt', 'pptx', 'odp', 'key'].includes(ext)) return '#ea580c'
+  return '#64748b'
 }
 
 function saveBlob(name: string, bytes: Uint8Array): void {
@@ -766,31 +774,27 @@ export default function OleAttachmentOverlay({
           const p = resolveExtraPos(container, anchor, ex, ctx, CAPTION_H)
           if (p) next[ex.part] = p
         }
-        // C7k: 완전히 겹치는 칩은 아래 것이 클릭 불가이므로 표시만 비킨다
-        // (파일 위치는 그대로 — docx 동일 문단 연속 삽입 등).
-        // C7l: 백그라운드 삽입 칩에만 적용한다. lib 도형에 붙은 라벨은
-        // 정확한 위치에 둔다 (비키면 라벨이 자기 도형에서 떨어진다).
+        // C7k: fully overlapping chips hide the lower one, so offset display only
+        // (file position unchanged).
+        // C7l-fix: applies to ALL incl. lib-anchored - real files can have
+        // overlapping lib shapes (user screenshot). Singletons never move (n==0),
+        // so no lib label drift.
         {
           const seenPos = new Map<string, number>()
-          // lib 앵커 위치를 먼저 차지시킨다 (extras가 비킨다).
-          const orderedKeys = Object.keys(next).sort((a, b) => {
-            const aEx = extraParts.has(a) ? 1 : 0
-            const bEx = extraParts.has(b) ? 1 : 0
-            return aEx - bEx
-          })
-          for (const key of orderedKeys) {
+          for (const key of Object.keys(next)) {
             const p = next[key]
             if (!p) continue
             const k = `${Math.round(p.x / 4) * 4},${Math.round(p.y / 4) * 4}`
             const n = seenPos.get(k) ?? 0
             seenPos.set(k, n + 1)
-            if (n > 0 && extraParts.has(key)) {
+            if (n > 0) {
               p.x += n * 22
               p.y += n * 22
               p.captionAbove = p.y + p.h + CAPTION_H > c.height && p.y - CAPTION_H >= 0
             }
           }
         }
+
         setPosMap((prev) => {
           const a = JSON.stringify(prev)
           const b = JSON.stringify(next)
@@ -1016,6 +1020,7 @@ export default function OleAttachmentOverlay({
     opts?: { selected?: boolean; onSelect?: (part: string | null) => void },
   ): React.ReactNode => {
     const Icon = iconForFile(displayName(entry))
+    const badgeColor = kindColorForFile(displayName(entry))
     const isSel = !!opts?.selected
     return (
     <span
@@ -1049,8 +1054,14 @@ export default function OleAttachmentOverlay({
           : 'z-30 inline-flex select-none items-center gap-1.5 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-foreground shadow-sm hover:bg-muted'
       }
     >
-      <Paperclip className="h-3.5 w-3.5 shrink-0" />
-      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+      {/* 종류별 컬러 뱃지 (pptx 미리보기와 동일 색: docx 파랑/xlsx 초록/pptx 주황) */}
+      <span
+        aria-hidden="true"
+        style={{ backgroundColor: badgeColor }}
+        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+      >
+        <Icon className="h-3.5 w-3.5 text-white" />
+      </span>
       {!anchored && <span className="max-w-44 truncate select-none">{displayName(entry)}</span>}
     </button>
     {isSel && (
