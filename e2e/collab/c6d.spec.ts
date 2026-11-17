@@ -2331,6 +2331,11 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
           .toBe(true)
       }
       console.log('[c6d] D21 both chips show own names')
+      // C7m: seed(embed-docx.xlsx)는 디스크 drawing이 있어 lib-claim → 캡션 다운로드가
+      // 상시 표시된다. 삽입분(report*)은 lib 도형이 없어 칩+선택 다운로드를 유지한다.
+      // .first()는 seed 버튼을 잡으므로 aria-label로 스코프한다. lib 호환 토스트가
+      // 버튼을 가리면 먼저 닫는다 (K-dbl 선례).
+      await t.pageA.getByText('Dismiss all').first().click({ timeout: 15000 }).catch(() => {})
       // 각 칩 선택 → 다운로드 버튼 → 자기 파일이 내려온다.
       for (const nm of ['report.docx', 'report-final.docx']) {
         const box = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
@@ -2341,9 +2346,10 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
         }, nm)
         expect(box).not.toBeNull()
         await t.pageA.mouse.click(box![0], box![1])
-        await t.pageA.getByTestId('ole-download').first().waitFor({ timeout: 15000 })
+        const dlBtn = t.pageA.getByRole('button', { name: `다운로드 ${nm}` })
+        await dlBtn.waitFor({ timeout: 15000 })
         const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
-        await t.pageA.getByTestId('ole-download').first().click()
+        await dlBtn.click()
         const dl = await dlP
         expect(dl).not.toBeNull()
         expect(await dl!.suggestedFilename()).toBe(nm)
