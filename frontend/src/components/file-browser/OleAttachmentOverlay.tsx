@@ -265,7 +265,7 @@ function swapOleIcon(root: Element, iconUrl: string): void {
       try {
         if ((e as HTMLElement).tagName !== 'IMG') continue
         const img = e as unknown as HTMLImageElement
-        // C7m 1-a: 실패·교체済 표식이 있으면 손대지 않는다 (같은 요소 반복 swap 금지).
+        // C7m 1-a: 실패·교체됨 표식이 있으면 손대지 않는다 (같은 요소 반복 swap 금지).
         // lib이 img를 다시 그리면 새 요소라 표식이 없어 1회 swap된다 (정상 동작).
         let failed = false
         let swapped = false
