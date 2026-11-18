@@ -1709,19 +1709,19 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         await openEditor(pageA2, t.parentPath)
         await pageA2.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 })
         await gotoSlide(pageA2, 2)
-        // C7m: 재생성 후에는 파싱분이라 lib 도형만 보인다 (우리 img 0개, 칩 없음).
-        // lib 프레임 + 캡션 라벨이 정위치(가운데 근처)에 있어야 한다.
+        // C7m: 재생성 후에는 파싱분이라 lib 도형만 보인다 (우리 렌더 0개).
+        // lib 프레임에 파일명이 보이고, 정위치(가운데 근처)에 있다.
         await expect
           .poll(() => pageA2.getByTestId('ole-img').count(), { timeout: 30000, intervals: [1000] })
           .toBe(0)
+        await expect(pageA2.getByTestId('ole-label')).toHaveCount(0, { timeout: 15000 })
+        await expect(pageA2.getByTestId('ole-download')).toHaveCount(0, { timeout: 15000 })
         const frame13 = pageA2.locator('[data-element-id*="-frame-"]', { hasText: /d13-keep\.docx/i }).first()
         await expect(frame13).toBeVisible({ timeout: 60000 })
-        const label13 = pageA2.getByTestId('ole-label').filter({ hasText: /d13-keep\.docx/i }).first()
-        await expect(label13).toBeVisible({ timeout: 30000 })
-        const lbox = await label13.boundingBox()
-        expect(lbox).not.toBeNull()
-        expect(lbox!.width).toBeGreaterThan(0)
-        const box = { x: lbox!.x, y: lbox!.y, width: lbox!.width, height: lbox!.height }
+        const fbox = await frame13.boundingBox()
+        expect(fbox).not.toBeNull()
+        expect(fbox!.width).toBeGreaterThan(0)
+        const box = { x: fbox!.x, y: fbox!.y, width: fbox!.width, height: fbox!.height }
         const ctr = await pageA2.evaluate(() => {
           const __slide = document.querySelector('[data-testid="pptx-viewer-root"] div.relative.shadow-2xl') as HTMLElement | null
           const __root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
@@ -1731,11 +1731,8 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         })
         expect(ctr).not.toBeNull()
         const dist = Math.hypot(box!.x + box!.width / 2 - ctr!.x, box!.y + box!.height / 2 - ctr!.y)
-        console.log(`[c6d] D13 backfilled label dist from center: ${Math.round(dist)}px`)
+        console.log(`[c6d] D13 backfilled frame dist from center: ${Math.round(dist)}px`)
         expect(dist).toBeLessThan(200)
-        // 라벨도 있다.
-        const labels = await pageA2.getByTestId('ole-label').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim()))
-        expect(labels.some((t) => t.includes('d13-keep.docx'))).toBe(true)
         console.log(`[c6d] D13 backfilled lib-only positioned after room recreate`)
       } finally {
         await pageA2.close().catch(() => {})
@@ -2356,6 +2353,10 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
         const dl = await dlP
         expect(dl).not.toBeNull()
         expect(await dl!.suggestedFilename()).toBe(nm)
+        // C7m: 다운로드 버튼 dblclick으로는 열리지 않는다 (캡처 제외 가드).
+        const noPopup21 = t.pageA.waitForEvent('popup', { timeout: 3000 }).then(() => 'opened', () => 'none')
+        await dlBtn.dblclick({ timeout: 15000 })
+        await expect(noPopup21).resolves.toBe('none')
         console.log(`[c6d] D21 download ok: ${nm}`)
       }
     } finally {
@@ -2542,7 +2543,7 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
-  test('D25-pptx: 파싱분 첨부는 lib 도형만 보인다 (ole-img 0, 캡션+다운로드)', async ({
+  test('D25-pptx: 파싱분 첨부는 lib 도형만 보인다 (우리 렌더 0개)', async ({
     browser,
   }, testInfo) => {
     testInfo.setTimeout(420000)
@@ -2551,7 +2552,7 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     const page = await ctx.newPage()
     await gotoApp(page)
     // 파싱분 전용 호스트: embed-docx.pptx는 ppt/embeddings/Microsoft_Word_Document.docx를
-    // 이미 포함한다 (extras 없음 — 화면 전체 ole-img 0 단언이 유효).
+    // 이미 포함한다 (extras 없음).
     const seg = `c6dd25pptx${Date.now()}`
     await fetch(`${backendBase()}/api/repos`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -2563,31 +2564,23 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     try {
       await openEditor(page, `${seg}/embed-docx.pptx`)
       await page.getByRole('tab', { name: 'Home' }).first().waitFor({ timeout: 60000 })
-      // 오버레이 준비: 파일명 캡션이 뜰 때까지 대기.
-      await expect
-        .poll(() => page.getByTestId('ole-label').count(), { timeout: 60000, intervals: [1000] })
-        .toBeGreaterThan(0)
-      // RED(현재 실패): 파싱분은 우리 img를 그리지 않는다.
-      await expect(page.getByTestId('ole-img')).toHaveCount(0, { timeout: 15000 })
-      // 가드: lib 프레임이 보인다.
-      const frame = page.locator('[data-element-id*="-frame-"]').first()
+      // C7m: lib가 파일명을 렌더한다 (hover tooltip·다운로드는 lib 것). 우리 렌더는 0개.
+      // (lib 표기는 원본과 철자가 다를 수 있다 — WORDDocument.docx vs Microsoft_Word_Document.docx.)
+      const frame = page.locator('[data-element-id*="-frame-"]', { hasText: /Document\.docx/i }).first()
       await expect(frame).toBeVisible({ timeout: 30000 })
-      // 캡션에 파일명이 보인다.
-      const label = page.getByTestId('ole-label').filter({ hasText: /\.docx/i }).first()
-      await expect(label).toBeVisible({ timeout: 30000 })
-      // RED(현재 실패): 선택 없이도 다운로드 버튼이 보인다 (캡션 오른쪽).
-      const dlBtn = page.getByTestId('ole-download').first()
-      await expect(dlBtn).toBeVisible({ timeout: 15000 })
-      // 버튼 dblclick으로는 열리지 않는다 (컨테이너 캡처 제외).
-      const noPopup = page.waitForEvent('popup', { timeout: 3000 }).then(() => 'opened', () => 'none')
-      await dlBtn.dblclick({ timeout: 15000 })
-      await expect(noPopup).resolves.toBe('none')
-      // 버튼 클릭으로는 실제 파일이 내려온다.
-      const dlP = page.waitForEvent('download', { timeout: 15000 }).catch(() => null)
-      await dlBtn.click({ timeout: 15000 })
-      const dl = await dlP
-      expect(dl).not.toBeNull()
-      expect(await dl!.suggestedFilename()).toMatch(/\.docx$/i)
+      // RED(현재 실패): 우리 img·라벨·다운로드 버튼이 없어야 한다.
+      await expect(page.getByTestId('ole-img')).toHaveCount(0, { timeout: 15000 })
+      await expect(page.getByTestId('ole-label')).toHaveCount(0, { timeout: 15000 })
+      await expect(page.getByTestId('ole-download')).toHaveCount(0, { timeout: 15000 })
+      // 도형 본문 dblclick → 새 탭으로 열린다 (lib dblclick은 no-op이라 컨테이너 캡처가 연다).
+      const box = await frame.boundingBox()
+      expect(box, 'ole frame box').not.toBeNull()
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.mouse.dblclick(box!.x + box!.width / 2, box!.y + box!.height * 0.25),
+      ])
+      await expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+/)
+      await popup.close().catch(() => {})
       console.log('[c6d] D25 lib-only parsed ok')
     } finally {
       await ctx.close().catch(() => {})
