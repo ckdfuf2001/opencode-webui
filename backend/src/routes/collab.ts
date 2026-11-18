@@ -52,7 +52,6 @@ import {
   assembleXlsxEmbed,
   assertAttachBytes,
   attachKindOf,
-  blockTextSnippet,
   listEmbedParts,
   listEmbedPositions,
   normalizeEmbedPart,
@@ -566,17 +565,22 @@ app.post('/embed', async (c) => {
           finalPart = added[0].part
           const embFile = added[0].part.split('/').pop() ?? attachName
           // C7e: 실제 기록 위치를 역추적으로 확정 (w/h 포함). 실패하면 요청값 폴백.
+          // C7n: docx 텍스트 힌트는 클라이언트 것 우선 (디스크 스니펫은
+          // object-only 문단이라 비는 경우가 많다). 블록은 역추적 우선.
+          const clientText = typeof q.blockText === 'string' && q.blockText.trim().length >= 8 ? q.blockText.slice(0, 120) : undefined
           let pos: EmbedPos =
             hostKind === 'pptx'
               ? { slide: off.slide, x: off.x, y: off.y }
               : hostKind === 'xlsx'
                 ? { sheet: off.sheet, col: off.col, row: off.row }
-                : { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) }
+                : { block: q.block, ...(clientText ? { text: clientText } : {}) }
           try {
             const found = await listEmbedPositions(zipLoadJSZip, out, hostKind)
             const hit = found.find((f: { part: string }) => f.part === added[0]!.part)
             if (hit) {
-              pos = hostKind === 'docx' ? { block: q.block, text: blockTextSnippet(new TextDecoder().decode(hostBytes), q.block ?? -1) } : (hit.pos as EmbedPos)
+              pos = hostKind === 'docx'
+                ? { block: (hit.pos as { block?: number }).block ?? q.block, ...(clientText ? { text: clientText } : {}) }
+                : (hit.pos as EmbedPos)
             }
           } catch {
             /* 폴백 유지 */

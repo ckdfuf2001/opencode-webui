@@ -1514,19 +1514,11 @@ export async function moveDocxEmbed(
   checkBalancedXml(next, 'word/document.xml')
   zip!.file('word/document.xml', next)
   const out = await zip.generateAsync({ type: 'uint8array' })
-  // 실제 착지 인덱스와 텍스트를 돌려준다 (클라이언트 재확인 + knownEmbeds 갱신용).
-  const afterBlocks = topLevelBlocks(next.slice(next.indexOf('<w:body'), next.lastIndexOf('</w:body>')))
-  let newIdx = -1
-  for (let i = 0; i < afterBlocks.length; i++) {
-    const seg = next.slice(afterBlocks[i]!.start, afterBlocks[i]!.end)
-    const om = /<o:OLEObject\b[^>]*r:id="([^"]+)"/.exec(seg)
-    if (om && targetOf(om[1]!) === embPart) {
-      newIdx = i
-      break
-    }
-  }
-  const newText = newIdx >= 0 ? normT(afterBlocks[newIdx]!.text).slice(0, 60) : undefined
-  return { bytes: out, found: true, index: newIdx >= 0 ? newIdx : undefined, text: newText || undefined }
+  // 실제 착지 인덱스(restIdx 바로 뒤)와 앞 문단 텍스트를 돌려준다
+  // (클라이언트 재확인 + knownEmbeds 갱신용 — 디스크 기준이라 정확하다).
+  const newIdx = restIdx + 1
+  const newText = normT(restBlocks[restIdx]!.text).slice(0, 60)
+  return { bytes: out, found: true, index: newIdx, text: newText.length >= 8 ? newText : undefined }
 }
 
 
