@@ -326,10 +326,12 @@ test.describe('C5-4: URL 편집 분리', () => {
       await expect
         .poll(() => embeddingsCount('c54pptx', 'embed-pdf.pptx'), { timeout: 30000, intervals: [1000] })
         .toBe(emb0 + 1)
-      await expect(editor.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      // C7m: 파싱분(payload.pdf)은 lib 도형만 보인다. 우리 아이콘(ole-icon)은
+      // 갓 삽입한 extras 1개뿐이다 (lib 도형 없음).
+      await expect(editor.getByTestId('ole-icon')).toHaveCount(1, { timeout: 60000 })
       const [popup] = await Promise.all([
         editor.waitForEvent('popup', { timeout: 15000 }),
-        editor.getByTestId('ole-icon').nth(1).dblclick({ timeout: 15000 }),
+        editor.getByTestId('ole-icon').nth(0).dblclick({ timeout: 15000 }),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
