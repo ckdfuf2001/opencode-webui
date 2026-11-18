@@ -1246,6 +1246,266 @@ export async function movePptxEmbed(
 /**
  * C7e: 파트의 미리보기 PNG 바이트 (shape blip → media, 없으면 형식별 generic).
  */
+/**
+ * C7n: xlsx embedding move (rewrite anchor cells, keep size).
+ * - sheet oleObjects objectPr/anchor from/to moved to new cells (to-from delta kept).
+ * - drawing twoCellAnchor (from/to, matched by cNvPr id=shapeId) + VML x:Anchor (cols/rows only) synced.
+ * - other sheets, other parts, embedding bytes untouched.
+ */
+export async function moveXlsxEmbed(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+  embPart: string,
+  pos: { sheet?: number; col?: number; row?: number },
+): Promise<{ bytes: Uint8Array; found: boolean }> {
+  const zip = await zipLoad(hostBytes)
+  const readText = async (name: string): Promise<string | null> => {
+    try {
+      const f = zip!.files[name]
+      if (!f || f.dir) return null
+      return (await f.async('string')) as string
+    } catch {
+      return null
+    }
+  }
+  const workbookXml = (await readText('xl/workbook.xml')) ?? ''
+  if (!workbookXml || !workbookXml.includes('<workbook')) embedError('Host is not a valid Office file', 400, 'bad_host')
+  const sheetTags = [...(workbookXml as string).matchAll(/<[\w.-]*:?sheet\b[^>]*>/g)].map((m) => m[0])
+  if (pos.sheet !== undefined && (!Number.isInteger(pos.sheet) || pos.sheet < 0 || pos.sheet >= sheetTags.length)) {
+    embedError('Bad sheet number', 400, 'bad_sheet')
+  }
+  const wbRels = (await readText('xl/_rels/workbook.xml.rels')) ?? ''
+  const wbTarget = new Map(
+    [...wbRels.matchAll(/<[\w.-]*:?Relationship\b[^>]*>/g)].map((m) => {
+      const t = m[0]
+      return [/\bId="([^"]+)"/.exec(t)?.[1] ?? '', /\bTarget="([^"]+)"/.exec(t)?.[1] ?? '']
+    }),
+  )
+  const indices = pos.sheet !== undefined ? [pos.sheet] : sheetTags.map((_, i) => i)
+  const numRe = /(<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>)(\d+)(<)/g
+  const sheetRelsCache = new Map<string, string>()
+  const sheetRelOf = (sheetFile: string, id: string): string | null => {
+    const rels = sheetRelsCache.get(sheetFile)
+    if (!rels) return null
+    const m = new RegExp(`<[^>]*?Id="${id}"[^>]*?Target="([^"]+)"`).exec(rels)
+    return m?.[1] ? resolveZipTarget(sheetFile, m[1]) : null
+  }
+  let done = false
+  for (const si of indices) {
+    const relId = /r:id="([^"]+)"/.exec(sheetTags[si]!)?.[1] ?? /id="([^"]+)"/.exec(sheetTags[si]!)?.[1]
+    const tgt = relId ? wbTarget.get(relId) : undefined
+    if (!tgt) continue
+    const sheetFile = resolveZipTarget('xl/workbook.xml', tgt)
+    let sheet = (await readText(sheetFile)) ?? ''
+    if (!sheet || !sheet.includes('<oleObject')) continue
+    const relsFile = sheetFile.replace(/\/([^/]+)$/, '/_rels/$1.rels')
+    const rels = (await readText(relsFile)) ?? ''
+    sheetRelsCache.set(sheetFile, rels)
+    let drawXml: string | null = null
+    let drawFile: string | null = null
+    let vmlName: string | null = null
+    let vmlXml: string | null = null
+    for (const rm of rels.matchAll(/<Relationship[^>]*>/g)) {
+      const tag = rm[0]
+      const type = /Type="[^"]*\/([^"/]+)"\s*$|Type="[^"]*\/([^"/]+)"/.exec(tag)
+      const tname = (type?.[1] ?? type?.[2] ?? '').toLowerCase()
+      const tg = /Target="([^"]+)"/.exec(tag)?.[1]
+      if (!tg) continue
+      if (tname === 'drawing') {
+        drawFile = resolveZipTarget(sheetFile, tg)
+        drawXml = await readText(drawFile)
+      } else if (tname === 'vmldrawing') {
+        vmlName = resolveZipTarget(sheetFile, tg)
+        vmlXml = await readText(vmlName)
+      }
+    }
+    const drawAnchors = new Map<string, number[]>()
+    if (drawXml) {
+      for (const cm of drawXml.matchAll(/<xdr:cNvPr[^>]*\bid="(\d+)"[^>]*>/g)) {
+        const sid = cm[1]!
+        if (drawAnchors.has(sid)) continue
+        const cPos = cm.index ?? -1
+        if (cPos < 0) continue
+        const openPos = drawXml.lastIndexOf('<xdr:twoCellAnchor', cPos)
+        if (openPos < 0) continue
+        const closePos = drawXml.indexOf('</xdr:twoCellAnchor>', cPos)
+        if (closePos < 0) continue
+        const blk = drawXml.slice(openPos, closePos)
+        const fm = /<xdr:from>([\s\S]*?)<\/xdr:from>/.exec(blk)
+        const tm = /<xdr:to>([\s\S]*?)<\/xdr:to>/.exec(blk)
+        if (!fm || !tm) continue
+        const nums = [...`${fm[1]}${tm[1]}`.matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((n) => Number(n[1]))
+        if (nums.length >= 8) drawAnchors.set(sid, nums.slice(0, 8))
+      }
+    }
+    let changed = false
+    const out: string[] = []
+    let p = 0
+    for (;;) {
+      const oOpen = sheet.indexOf('<oleObject', p)
+      if (oOpen < 0) {
+        out.push(sheet.slice(p))
+        break
+      }
+      const oEnd = sheet.indexOf('>', oOpen)
+      if (oEnd < 0) {
+        out.push(sheet.slice(p))
+        break
+      }
+      const openTag = sheet.slice(oOpen, oEnd + 1)
+      const ridm = /r:id="([^"]+)"/.exec(openTag)
+      const sidm = /shapeId="(\d+)"/.exec(openTag)
+      const selfClose = /\/>$/.test(openTag)
+      if (!ridm || !sidm || selfClose) {
+        out.push(sheet.slice(p, oEnd + 1))
+        p = oEnd + 1
+        continue
+      }
+      const tgt2 = sheetRelOf(sheetFile, ridm[1]!)
+      if (!tgt2 || tgt2 !== embPart) {
+        out.push(sheet.slice(p, oEnd + 1))
+        p = oEnd + 1
+        continue
+      }
+      const sid = sidm[1]!
+      const cPos = sheet.indexOf('</oleObject>', oEnd)
+      if (cPos < 0) {
+        out.push(sheet.slice(p))
+        break
+      }
+      const inner = sheet.slice(oEnd + 1, cPos)
+      const am = /<anchor[^>]*>([\s\S]*?)<\/anchor>/.exec(inner)
+      if (!am) {
+        out.push(sheet.slice(p, cPos + '</oleObject>'.length))
+        p = cPos + '</oleObject>'.length
+        continue
+      }
+      const cur = [...am[1]!.matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((n) => Number(n[1]))
+      if (cur.length < 8 || pos.col === undefined || pos.row === undefined) {
+        out.push(sheet.slice(p, cPos + '</oleObject>'.length))
+        p = cPos + '</oleObject>'.length
+        continue
+      }
+      const dCol = cur[4]! - cur[0]!
+      const dRow = cur[6]! - cur[2]!
+      const want = [pos.col, cur[1], pos.row, cur[3], pos.col + dCol, cur[5], pos.row + dRow, cur[7]]
+      let ki = 0
+      const fixed = am[1]!.replace(numRe, (_s: string, open: string, _v: string, close: string) => `${open}${want[ki++ % 8]}${close}`)
+      out.push(sheet.slice(p, oEnd + 1))
+      out.push(inner.replace(am[0], am[0].replace(am[1]!, fixed)))
+      out.push('</oleObject>')
+      p = cPos + '</oleObject>'.length
+      changed = true
+      done = true
+      if (drawXml && drawFile) {
+        const draw = drawAnchors.get(String(sid))
+        if (draw) {
+          const dNew = [pos.col, draw[1], pos.row, draw[3], pos.col + (draw[4]! - draw[0]!), draw[5], pos.row + (draw[6]! - draw[2]!), draw[7]]
+          const hitPos = drawXml.indexOf(`<xdr:cNvPr id="${sid}"`) >= 0
+            ? drawXml.indexOf(`<xdr:cNvPr id="${sid}"`)
+            : drawXml.indexOf(`bid="${sid}"`)
+          if (hitPos >= 0) {
+            const aOpen = drawXml.lastIndexOf('<xdr:twoCellAnchor', hitPos)
+            const aClose = drawXml.indexOf('</xdr:twoCellAnchor>', hitPos)
+            if (aOpen >= 0 && aClose >= 0) {
+              let blk = drawXml.slice(aOpen, aClose)
+              let qi = 0
+              blk = blk.replace(/(<xdr:from>[\s\S]*?<\/xdr:from>)/, (_s: string, fmBlk: string) =>
+                fmBlk.replace(numRe, (_ss: string, o: string, _v: string, c: string) => `${o}${dNew[qi++ % 8]}${c}`),
+              )
+              blk = blk.replace(/(<xdr:to>[\s\S]*?<\/xdr:to>)/, (_s, tmBlk: string) => {
+                let qj = 4
+                return (tmBlk as string).replace(numRe, (_ss: string, o: string, _v: string, c: string) => `${o}${dNew[qj++ % 8]}${c}`)
+              })
+              drawXml = drawXml.slice(0, aOpen) + blk + drawXml.slice(aClose)
+              zip!.file(drawFile, drawXml)
+            }
+          }
+        }
+      }
+      if (vmlName && vmlXml && vmlXml.includes(`_x0000_s${sid}`)) {
+        const re = new RegExp(`(<v:shape[^>]*id="_x0000_s${sid}"[^>]*>[\\s\\S]*?<x:Anchor>)([\\s\\S]*?)(<\\/x:Anchor>)`, 'g')
+        const nv = vmlXml.replace(re, (_s: string, open: string, nums: string, close: string) => {
+          const parts = nums.split(',').map((x) => x.trim())
+          if (parts.length < 8) return _s
+          const wantV = [pos.col, parts[1], pos.row, parts[3], pos.col! + (Number(parts[4]) - Number(parts[0])), parts[5], pos.row! + (Number(parts[6]) - Number(parts[2])), parts[7]]
+          return `${open} ${wantV.join(', ')} ${close}`
+        })
+        if (nv !== vmlXml) {
+          vmlXml = nv
+          zip!.file(vmlName, vmlXml)
+        }
+      }
+    }
+    if (changed) {
+      sheet = out.join('')
+      zip!.file(sheetFile, sheet)
+    }
+  }
+  if (!done) return { bytes: hostBytes, found: false }
+  const out = await zip.generateAsync({ type: 'uint8array' })
+  return { bytes: out, found: true }
+}
+
+/**
+ * C7n: docx embedding move (relocate w:object paragraph after target block).
+ * - document rels에서 패키지 rel을 찾아 해당 o:OLEObject를 품은 최상위 w:p를
+ *   통째로 잘라내 대상 블록 뒤에 붙인다. relId·임베딩 바이트는 그대로.
+ */
+export async function moveDocxEmbed(
+  zipLoad: (b: Uint8Array) => Promise<ZipLike>,
+  hostBytes: Uint8Array,
+  embPart: string,
+  pos: { block?: number },
+): Promise<{ bytes: Uint8Array; found: boolean }> {
+  const zip = await zipLoad(hostBytes)
+  const readText = async (name: string): Promise<string | null> => {
+    try {
+      const f = zip!.files[name]
+      if (!f || f.dir) return null
+      return (await f.async('string')) as string
+    } catch {
+      return null
+    }
+  }
+  const docXml = (await readText('word/document.xml')) ?? ''
+  if (!docXml || !docXml.includes('<w:document')) embedError('Host is not a valid Office file', 400, 'bad_host')
+  let doc = docXml as string
+  const rels = (await readText('word/_rels/document.xml.rels')) ?? ''
+  const targetOf = (id: string): string | null => {
+    const m = new RegExp(`<[^>]*?Id="${id}"[^>]*?Target="([^"]+)"`).exec(rels)
+    if (!m?.[1]) return null
+    const t = m[1]
+    if (t.startsWith('/')) return t.slice(1)
+    return `word/${t.replace(/^\.\//, '')}`
+  }
+  const blocks = topLevelBlocks(doc)
+  let idx = -1
+  for (let i = 0; i < blocks.length; i++) {
+    const raw = doc.slice(blocks[i]!.start, blocks[i]!.end)
+    const om = /<o:OLEObject\b[^>]*r:id="([^"]+)"/.exec(raw)
+    if (om && targetOf(om[1]!) === embPart) {
+      idx = i
+      break
+    }
+  }
+  if (idx < 0) return { bytes: hostBytes, found: false }
+  if (pos.block === undefined || !Number.isInteger(pos.block) || pos.block < 0) {
+    embedError('Bad block', 400, 'bad_pos')
+  }
+  const moving = doc.slice(blocks[idx]!.start, blocks[idx]!.end)
+  const rest = doc.slice(0, blocks[idx]!.start) + doc.slice(blocks[idx]!.end)
+  const restBlocks = topLevelBlocks(rest)
+  if (pos.block! >= restBlocks.length) embedError('Bad block', 400, 'bad_pos')
+  const at = restBlocks[pos.block!]!
+  const next = rest.slice(0, at.end) + moving + rest.slice(at.end)
+  checkBalancedXml(next, 'word/document.xml')
+  zip!.file('word/document.xml', next)
+  const out = await zip.generateAsync({ type: 'uint8array' })
+  return { bytes: out, found: true }
+}
+
+
 export async function previewPngForPart(
   zipLoad: (b: Uint8Array) => Promise<ZipLike>,
   hostBytes: Uint8Array,

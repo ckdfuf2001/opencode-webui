@@ -56,11 +56,14 @@ import {
   listEmbedParts,
   listEmbedPositions,
   normalizeEmbedPart,
+  moveDocxEmbed,
   movePptxEmbed,
+  moveXlsxEmbed,
   previewPngForPart,
   offsetOverlap,
   readEmbedPart,
   replaceEmbedPart,
+  topLevelBlocks,
   sanitizeEmbedName,
   type EmbedAttachKind,
   type EmbedPos,
@@ -641,13 +644,16 @@ app.put('/embed/pos', async (c) => {
     const body = await c.req.json().catch(() => ({})) as {
       path?: string; part?: string; roomId?: string; clientId?: number | string;
       baseHash?: string; slide?: number; x?: number; y?: number; w?: number; h?: number;
+      sheet?: number; col?: number; row?: number; block?: number;
     }
     const path = typeof body.path === 'string' ? body.path : ''
     const part = typeof body.part === 'string' ? body.part : ''
     const abs = await resolveWorkspaceFile(path).catch(() => null)
     if (!abs) return c.json({ error: 'Host file not found', code: 'no_host' }, 404)
     const hostLower = abs.toLowerCase()
-    if (!hostLower.endsWith('.pptx')) return c.json({ error: 'Only pptx move supported yet', code: 'unsupported_host' }, 400)
+    // C7n: pptx fractions + xlsx 셀 자어 + docx 블록 이동 지원.
+    const hostKind: 'pptx' | 'xlsx' | 'docx' | null = hostLower.endsWith('.pptx') ? 'pptx' : hostLower.endsWith('.xlsx') ? 'xlsx' : hostLower.endsWith('.docx') ? 'docx' : null
+    if (!hostKind) return c.json({ error: 'Unsupported host', code: 'unsupported_host' }, 400)
     const norm = normalizeEmbedPart(part)
     const roomId = typeof body.roomId === 'string' && isValidRoomId(body.roomId) ? body.roomId : roomIdForAbs(abs)
     const room = rooms.get(roomId)
@@ -657,6 +663,18 @@ app.put('/embed/pos', async (c) => {
       return c.json({ error: 'View-only participant cannot move attachments', code: 'view_only' }, 403)
     }
     const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+    const cint = (v: unknown): number | undefined => (typeof v === 'number' && Number.isInteger(v) ? v : undefined)
+    if (hostKind === 'xlsx') {
+      const cc = num(body.col)
+      const cr = num(body.row)
+      const sh = body.sheet === undefined ? undefined : cint(body.sheet)
+      if (cc === undefined || cr === undefined || cc < 0 || cc > 16383 || cr < 0 || cr > 1048575 || (sh !== undefined && sh < 0)) {
+        return c.json({ error: 'Bad cell', code: 'bad_pos' }, 400)
+      }
+    } else if (hostKind === 'docx') {
+      const bb = cint(body.block)
+      if (bb === undefined || bb < 0) return c.json({ error: 'Bad block', code: 'bad_pos' }, 400)
+    }
     const px = num(body.x)
     const py = num(body.y)
     const pw = num(body.w)
@@ -677,6 +695,56 @@ app.put('/embed/pos', async (c) => {
         return c.json({ error: 'File changed since loaded — reload, then retry', code: 'dirty_room', currentHash: disk }, 409)
       }
       const hostBytes = new Uint8Array(await getRawFileContent(path))
+      if (hostKind === 'xlsx') {
+        const cc = num(body.col)!
+        const cr = num(body.row)!
+        const sh = body.sheet === undefined ? undefined : cint(body.sheet)
+        const movedX = await moveXlsxEmbed(zipLoadJSZip, hostBytes, norm, { sheet: sh, col: cc, row: cr })
+        if (!movedX.found) return c.json({ error: 'Part not anchored on sheet', code: 'no_anchor' }, 404)
+        await writeFileContent(abs, Buffer.from(movedX.bytes))
+        const newHashX = hashBytes(movedX.bytes)
+        const posX = { sheet: sh, col: cc, row: cr }
+        if (room) {
+          room.lastHash = newHashX
+          room.externalChanged = false
+          const kex = room.knownEmbeds.find((k) => k.norm === norm)
+          if (kex) {
+            kex.pos = { ...kex.pos, sheet: sh ?? kex.pos.sheet, col: cc, row: cr } as KnownEmbed['pos']
+          }
+          broadcast(room, encodePartEmbedded(roomId, { norm, name: norm.split('/').pop() ?? norm, kind: 'xlsx', pos: { sheet: sh, col: cc, row: cr }, newHash: newHashX }))
+          logger.warn('[embed] move xlsx room=' + roomId.slice(0, 8) + ' part=' + norm + ' pos=' + JSON.stringify(posX))
+        }
+        return c.json({ ok: true, newHash: newHashX, pos: posX })
+      }
+      if (hostKind === 'docx') {
+        const bb = cint(body.block)!
+        const movedD = await moveDocxEmbed(zipLoadJSZip, hostBytes, norm, { block: bb })
+        if (!movedD.found) return c.json({ error: 'Part not found in document', code: 'no_anchor' }, 404)
+        await writeFileContent(abs, Buffer.from(movedD.bytes))
+        const newHashD = hashBytes(movedD.bytes)
+        let posD: { block: number; text?: string } = { block: bb }
+        let anchorHashD = undefined
+        let textD = undefined
+        try {
+          const movedDoc = new TextDecoder().decode(movedD.bytes)
+          textD = blockTextSnippet(movedDoc, bb)
+          anchorHashD = textD ? anchorHashOf(textD) : undefined
+          if (textD) posD = { ...posD, text: textD }
+        } catch { /* hint 없으면 유지 */ }
+        if (room) {
+          room.lastHash = newHashD
+          room.externalChanged = false
+          const ked = room.knownEmbeds.find((k) => k.norm === norm)
+          if (ked) {
+            const np = { ...ked.pos, block: bb }
+            ked.pos = (textD ? { ...np, text: textD } : np) as KnownEmbed['pos']
+            ked.anchorHash = anchorHashD ?? ked.anchorHash
+          }
+          broadcast(room, encodePartEmbedded(roomId, { norm, name: norm.split('/').pop() ?? norm, kind: 'docx', pos: (textD ? { block: bb, text: textD } : { block: bb }) as KnownEmbed['pos'], newHash: newHashD }))
+          logger.warn('[embed] move docx room=' + roomId.slice(0, 8) + ' part=' + norm + ' pos=' + JSON.stringify(posD))
+        }
+        return c.json({ ok: true, newHash: newHashD, pos: posD })
+      }
       const moved = await movePptxEmbed(zipLoadJSZip, hostBytes, norm, { x: px, y: py, w: pw, h: ph })
       if (!moved.found) return c.json({ error: 'Part not placed on slide', code: 'no_anchor' }, 404)
       await writeFileContent(abs, Buffer.from(moved.bytes))
