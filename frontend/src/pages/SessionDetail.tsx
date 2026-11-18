@@ -775,6 +775,7 @@ export function SessionDetail() {
   const [navOpen, setNavOpen] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const lastLengthToastRef = useRef<string | null>(null);
+  const lastTurnErrorToastRef = useRef<string | null>(null);
 
   // 응답 완료 똑소리: 카드 상태 기준으로 전환 1회만 재생한다.
   const prevStreamingRef = useRef(false);
@@ -949,6 +950,32 @@ export function SessionDetail() {
       });
     }
   }, [messages, isBillingQuotaMessage]);
+
+  // opencode 통신 실패(APIError 등) — 빈 assistant로 끝나 조용히 넘어가던 것을 토스트로 알린다.
+  // MessageAbortedError(사용자 취소)·MessageOutputLengthError(전용 모달 있음)는 제외.
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    const last = messages[messages.length - 1] as unknown as {
+      info?: { id?: string; role?: string; error?: { name?: string; data?: { message?: string } } };
+    };
+    if (last?.info?.role !== 'assistant') return;
+    const msgId = last.info?.id;
+    if (!msgId || lastTurnErrorToastRef.current === msgId) return;
+    const err = last.info?.error;
+    if (!err) return;
+    const name = err.name ?? 'UnknownError';
+    if (name === 'MessageAbortedError') return;
+    if (name === 'MessageOutputLengthError') return; // length 전용 처리 있음
+    lastTurnErrorToastRef.current = msgId;
+    const detail = typeof err.data?.message === 'string' ? err.data.message : '';
+    const isConnect = /cannot connect|unable to connect|typo in the url|ECONN|ENOTFOUND|EAI_AGAIN|fetch failed|network|socket|timeout|timed out/i.test(`${name} ${detail}`);
+    showToast.error(
+      isConnect
+        ? `opencode 연결 실패 (${name})${detail ? ` — ${detail.slice(0, 300)}` : ''} — 네트워크·엔드포인트 확인 후 compact·truncate로 컨텍스트를 줄이고 재시도하세요.`
+        : `모델 응답 실패 (${name})${detail ? ` — ${detail.slice(0, 300)}` : ''} — truncate 후 재시도하거나 모델을 바꾸세요.`,
+      { duration: 10000 },
+    );
+  }, [messages]);
 
   const lastCompactAtRef = useRef<number>(0)
   // 컨텍스트 초과(length) — 실제 한계 도달 시에만 표시 (오탐 방지, compact 후 무시)

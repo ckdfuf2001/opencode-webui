@@ -78,7 +78,20 @@ function getEditablePrompt(
 }
 
 const isErrorMessage = (msg: MessageWithParts): boolean => {
-  return msg.info.id.startsWith(ERROR_MESSAGE_ID_PREFIX)
+  if (msg.info.id.startsWith(ERROR_MESSAGE_ID_PREFIX)) return true
+  // opencode 턴 에러(APIError 등)는 parts 없이 info.error만 남는다 — 빈 버블로
+  // 조용히 끝나지 않게 에러로 취급한다. 사용자 취소는 Canceled 표시가 맡는다.
+  const errName = (msg.info as unknown as { error?: { name?: string } })?.error?.name
+  return !!errName && errName !== 'MessageAbortedError'
+}
+
+function getTurnErrorText(msg: MessageWithParts): string | null {
+  const err = (msg.info as unknown as { error?: { name?: string; data?: { message?: string } } })?.error
+  if (!err || err.name === 'MessageAbortedError') return null
+  const detail = typeof err.data?.message === 'string' && err.data.message.trim()
+    ? err.data.message.trim().slice(0, 500)
+    : ''
+  return `${err.name ?? 'Error'}${detail ? `: ${detail}` : ''}`
 }
 
 interface MessageThreadProps {
@@ -308,6 +321,12 @@ export const MessageThread = memo(function MessageThread({ messages, onFileClick
                 </div>
               ) : (
                 <div className="space-y-2">
+                  {parts.length === 0 && isError && (() => {
+                    const text = getTurnErrorText(msg)
+                    return text ? (
+                      <div className="text-sm text-red-400 break-words whitespace-pre-wrap">{text}</div>
+                    ) : null
+                  })()}
                   {(() => {
                     const sseOffStreaming = !sseOn && streaming && msg.info.role === 'assistant'
                     const toolsStarted = !!sseOffStreaming && parts.some((p) => (p as { type?: string }).type === 'tool')

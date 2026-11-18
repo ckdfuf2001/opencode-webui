@@ -127,6 +127,45 @@ describe('큐 발송 — 턴 종료(idle 관측) 시 업스트림 요청을 끊�
     expect(listQueuedChats(s).length).toBe(0)
   }, 20000)
 
+  it('동시 확정 호출이 대기 중 메시지를 유실하지 않는다 (double-confirm race)', async () => {
+    const s = sid()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        const u = String(url)
+        if (u.includes('/message')) {
+          // 발송 실패 — 항목은 sending 유지, inFlight 해제, 2s 백오프.
+          throw new DOMException('This operation was aborted', 'AbortError')
+        }
+        if (u.includes('/session/status')) {
+          return { ok: true, status: 200, text: async () => '', json: async () => ({}) }
+        }
+        return { ok: true, status: 200, text: async () => '', json: async () => [] }
+      }),
+    )
+
+    enqueueQueuedChat(s, 'first', '/ws')
+    enqueueQueuedChat(s, 'second', '/ws')
+    flushQueueForSession(s)
+    await new Promise((r) => setTimeout(r, 500))
+    // first만 sending, second는 대기 — 둘 다 있어야 한다.
+    expect(listQueuedChats(s).length).toBe(2)
+    expect(listQueuedChats(s)[0]?.status).toBe('sending')
+
+    // AbortError 백오프(2s) 만료 대기 후 idle에서 두 경로가 동시에 확정을 시도한다
+    // (폴러 틱 + proxy 완료 콜백 경합 재현).
+    await new Promise((r) => setTimeout(r, 2200))
+    flushReadyQueues(new Set())
+    flushReadyQueues(new Set())
+    await new Promise((r) => setTimeout(r, 500))
+
+    // head(first)만 확정되고 second는 살아남아야 한다.
+    // 가드 없이는 두 호출이 같은 head를 보고 둘 다 splice해 큐가 빈다.
+    const q = listQueuedChats(s)
+    expect(q.length).toBe(1)
+    expect(q[0]?.text).toBe('second')
+  }, 20000)
+
   it('busy 를 한 번도 관측하지 못하면 idle 이여도 끊지 않는다 (오발 방지)', async () => {
     const s = sid()
     let upstreamAborted = false

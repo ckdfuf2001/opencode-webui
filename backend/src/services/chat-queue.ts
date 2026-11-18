@@ -94,6 +94,11 @@ const MAX_CONSECUTIVE_FAILURES = 1
 // 재시도한다. 독성 메시지는 사용자가 X로 지우거나 수동 retry한다.
 const TIMEOUT_RETRY_BACKOFF_MS = 10_000
 const inFlight = new Set<string>()
+// dispatchHead 동시 진입 가드. 폴러(1s) + proxy 완료 콜백(150ms)이 같은 세션에
+// fire-and-forget으로 들어오면, sending 확정 분기의 await 사이로 두 호출이
+// 겹쳐 head를 두 번 splice하고 대기 중이던 다음 메시지를 유실한다
+// (idle 관측 7ms 간격 double-confirm). 한 호출이 끝나면 다음 틱이 이어받는다.
+const dispatchActive = new Set<string>()
 // 발송 중 fetch를 취소하기 위한 세션별 AbortController.
 // clearSendingOnAbort/clearQueuedChats(중단 버튼)가 이것을 abort한다.
 // 없으면 600s 타임아웃 fetch가 살아남아 취소 후에도 실패 accounting/재발송을 일으킨다.
@@ -458,6 +463,9 @@ export function clearSendingOnAbort(sessionID: string): void {
  * status poller retries once the session goes idle.
  */
 async function dispatchHead(base: string, sessionID: string): Promise<void> {
+  if (dispatchActive.has(sessionID)) return
+  dispatchActive.add(sessionID)
+  try {
   if ((failedUntil.get(sessionID) ?? 0) > Date.now()) return
   const queue = queues.get(sessionID)
   if (!queue || queue.length === 0) return
@@ -497,8 +505,13 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       // 확정은 아래 'idle 관찰' 경로가 맡는다 — 지금 제거하면 발송 실패 시 유실된다.
       return
     }
-    queue.splice(0, 1)
-    if (queue.length === 0) {
+    // 위 await들(isSessionBusy) 사이로 다른 발송 경로가 끼어들 수 있어 확정 직전
+    // head를 재확인한다. stale `next`로 splice하면 대기 중이던 다음 메시지가
+    // 조용히 삭제된다 (idle 7ms 간격 double-confirm 유실 버그).
+    const live = queues.get(sessionID)
+    if (!live || live[0]?.id !== next.id || live[0]?.status !== 'sending') return
+    live.splice(0, 1)
+    if (live.length === 0) {
       queues.delete(sessionID)
       queueDirs.delete(sessionID)
     }
@@ -660,6 +673,9 @@ async function dispatchHead(base: string, sessionID: string): Promise<void> {
       inFlightControllers.delete(sessionID)
       idleReleasedSessions.delete(sessionID)
     })
+  } finally {
+    dispatchActive.delete(sessionID)
+  }
 }
 
 function recordFailure(sessionID: string, id: string): void {
@@ -1038,10 +1054,23 @@ async function getSkillTemplate(base: string, directory: string, name: string): 
  * 실패로 세면 거의 모든 run이 실패가 된다.
  */
 type TurnCheck =
-  | { kind: 'error'; name: string }
+  | { kind: 'error'; name: string; detail?: string }
   | { kind: 'clean' }
   | { kind: 'no-turn' }
   | { kind: 'unknown' }
+
+/** info.error에서 토스트·로그에 쓸 사유문을 뽑는다 (APIError data.message 등). */
+function turnErrorDetail(err: unknown): string | undefined {
+  if (!err || typeof err !== 'object') return undefined
+  const e = err as { name?: unknown; data?: unknown; message?: unknown }
+  const data = e.data as { message?: unknown; error?: unknown } | undefined
+  const raw =
+    (typeof data?.message === 'string' && data.message) ||
+    (typeof data?.error === 'string' && data.error) ||
+    (typeof e.message === 'string' && e.message) ||
+    undefined
+  return raw?.slice(0, 300)
+}
 
 async function checkTurnOnce(sessionID: string, sinceMs: number): Promise<TurnCheck> {
   try {
@@ -1058,7 +1087,7 @@ async function checkTurnOnce(sessionID: string, sinceMs: number): Promise<TurnCh
       if (!err) return { kind: 'clean' }
       const name = typeof err.name === 'string' && err.name ? err.name : 'UnknownError'
       if (name === 'MessageAbortedError') return { kind: 'clean' }
-      return { kind: 'error', name }
+      return { kind: 'error', name, detail: turnErrorDetail(err) }
     }
     return { kind: 'no-turn' }
   } catch {
@@ -1075,6 +1104,19 @@ async function checkTurnError(sessionID: string, sinceMs: number): Promise<strin
     r = await checkTurnOnce(sessionID, sinceMs)
   }
   return r.kind === 'error' ? r.name : null
+}
+
+/** 일반 채팅용 2층 판정 — 이름 + provider 사유문을 함께 돌려준다. */
+async function checkTurnErrorDetail(
+  sessionID: string,
+  sinceMs: number,
+): Promise<{ name: string; detail?: string } | null> {
+  let r = await checkTurnOnce(sessionID, sinceMs)
+  if (r.kind === 'no-turn') {
+    await new Promise((res) => setTimeout(res, 500))
+    r = await checkTurnOnce(sessionID, sinceMs)
+  }
+  return r.kind === 'error' ? { name: r.name, detail: r.detail } : null
 }
 
 /**
@@ -1688,6 +1730,17 @@ async function dispatchQueuedChat(
     const healed = await healMismatchAndRetryOnce(stored)
     finishPendingSkillRun(healed.sent)
     return healed
+  }
+  // 2층 판정: 전달(HTTP 2xx)과 별개로 턴이 에러로 끝났으면(예: APIError Cannot
+  // connect) 조용히 성공으로 넘기지 말고 사유를 남긴다. 큐는 전달됐으므로
+  // 비우고, 에러 표시는 메시지(info.error) + 프론트 토스트가 맡는다.
+  // 같은 컨텍스트로 즉시 재시도하면 같은 실패가 반복되므로 자동 재시도 없음.
+  const turnError = await checkTurnErrorDetail(sessionID, dispatchStartMs)
+  if (turnError) {
+    logger.warn(
+      `Queued chat for session ${sessionID} delivered but turn errored (${turnError.name})` +
+      (turnError.detail ? ` — ${turnError.detail}` : ''),
+    )
   }
   finishPendingSkillRun(true)
   return { sent: true }
