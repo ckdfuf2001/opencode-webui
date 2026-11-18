@@ -1252,18 +1252,21 @@ export default function OleAttachmentOverlay({
           transform: 'translateX(-50%)',
           maxWidth: 240,
         }}
-        className="pointer-events-none z-30 flex select-none items-center gap-1 whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
+        className={`pointer-events-none z-30 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background py-0.5 text-[11px] leading-5 text-foreground shadow-sm ${onDl ? 'px-7' : 'px-1.5'}`}
       >
-        <span className="truncate">{name}</span>
+        {name}
         {onDl && (
+          // C7m: 버튼은 흐름 밖(absolute)에 둔다 — 라벨 박스·중앙·말줄임(E1)을 바꾸지 않는다.
+          // 좌우 대칭 패딩(px-7)으로 텍스트 중앙을 유지한다.
+          // 컨테이너 캡처 dblclick 제외는 closest('[data-testid="ole-download"]') early-return이 담당한다.
           <button
             type="button"
             data-testid="ole-download"
             title={`다운로드: ${name}`}
             aria-label={`다운로드 ${name}`}
             draggable={false}
-            style={{ pointerEvents: 'auto' }}
-            className="inline-flex shrink-0 select-none items-center rounded border border-border bg-background p-0.5 text-foreground hover:bg-muted"
+            style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'auto' }}
+            className="inline-flex shrink-0 select-none items-center rounded border border-border bg-background p-0.5 text-foreground shadow-sm hover:bg-muted"
             onPointerDown={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -1274,7 +1277,7 @@ export default function OleAttachmentOverlay({
               try { onDl(entry) } catch { /* 무시 */ }
             }}
             onDoubleClick={(e) => {
-              // 버튼 dblclick으로는 열지 않는다 (컨테이너 캡처도 button은 제외).
+              // 버튼 dblclick으로는 열지 않는다.
               e.preventDefault()
               e.stopPropagation()
             }}
