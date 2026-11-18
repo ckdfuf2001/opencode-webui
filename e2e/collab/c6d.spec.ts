@@ -2630,9 +2630,12 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
         }
         return null
       }
-      const before = await expect.poll(anchorFromCol, { timeout: 30000, intervals: [1000] }).not.toBeNull()
+      const beforePoll = await expect.poll(anchorFromCol, { timeout: 30000, intervals: [1000] }).not.toBeNull()
+      expect(beforePoll).not.toBeNull()
+      const before = (await anchorFromCol()) as number
       const partBefore = Buffer.from(await (await JSZip.loadAsync(fs.readFileSync(t.abs))).files['xl/embeddings/dragmove.xlsx']!.async('uint8array'))
-      // 칩을 오른쪽으로 드래그한다 (RED: 현재 드래그 핸들러가 없어 디스크가 안 바뀐다).
+      // 칩을 오른쪽으로 크게 드래그한다 (셀을 확실히 넘어가게).
+      // RED: 현재 드래그 핸들러가 없어 디스크가 안 바뀐다.
       const center = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
         const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
         if (!hit) return null
@@ -2642,7 +2645,7 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       expect(center).not.toBeNull()
       await t.pageA.mouse.move(center![0], center![1])
       await t.pageA.mouse.down()
-      await t.pageA.mouse.move(center![0] + 130, center![1], { steps: 12 })
+      await t.pageA.mouse.move(center![0] + 300, center![1], { steps: 15 })
       await t.pageA.mouse.up()
       await expect
         .poll(async () => {
@@ -2673,11 +2676,33 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     browser,
   }, testInfo) => {
     testInfo.setTimeout(420000)
+    // openDeferPair와 같은 수립 절차를 밟는다 (방 생성·참가·저장 증명).
+    // 직접 open만 하면 lib 렌더 타이밍과 방 참가가 어긋나 칩이 안 뜬다.
     const t = await openDeferPair(browser, 'docx', 'c6dd27docx', PARENT_FIX['docx']!)
     await t.attach.close().catch(() => {})
     try {
+      // lib 렌더가 끝난 뒤에 삽입해야 오버레이가 앵커를 잡는다 (레이스 회피).
+      await expect
+        .poll(() => t.pageA.evaluate(() => {
+          const ed = document.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+          const sr = ed?.shadowRoot
+          if (!sr) return 0
+          let n = 0
+          const walk = (node: Element | ShadowRoot, depth: number): void => {
+            if (!node || depth > 6 || n > 0) return
+            let els: Element[] = []
+            try { els = [...(node as Element).querySelectorAll('*')] } catch { return }
+            for (const e of els) {
+              if (e.tagName === 'P' && (e as HTMLElement).getBoundingClientRect().width > 0) { n++; return }
+              try { const s = (e as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot; if (s) walk(s, depth + 1) } catch { /* 무시 */ }
+            }
+          }
+          walk(sr, 0)
+          return n
+        }), { timeout: 60000, intervals: [1000] })
+        .toBeGreaterThan(0)
       const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
-      await t.pageA.evaluate(
+      const doInsert = () => t.pageA.evaluate(
         ({ b64, hostPath }: { b64: string; hostPath: string }) => {
           const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
           const file = new File([bin], 'dragmove.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
@@ -2685,23 +2710,75 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
         },
         { b64: fxBytes, hostPath: t.parentPath },
       )
-      await expect
-        .poll(async () => {
-          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
-          return Object.keys(zip.files).some((n) => n === 'word/embeddings/dragmove.docx')
-        }, { timeout: 60000, intervals: [1000] })
-        .toBe(true)
+      // 방 참가 전 삽입은 조용히 버려질 수 있어 디스크 확인 후 최대 3회 재시도한다.
+      let inserted = false
+      for (let attempt = 0; attempt < 3 && !inserted; attempt++) {
+        await doInsert()
+        try {
+          await expect
+            .poll(async () => {
+              const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+              return Object.keys(zip.files).some((n) => n === 'word/embeddings/dragmove.docx')
+            }, { timeout: 20000, intervals: [1000] })
+            .toBe(true)
+          inserted = true
+        } catch {
+          /* 재시도 */
+        }
+      }
+      expect(inserted).toBe(true)
       const oleBlockIndex = async (): Promise<number> => {
         const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
         const doc = await zip.files['word/document.xml']!.async('string')
+        const rels = await zip.files['word/_rels/document.xml.rels']!.async('string')
+        const tgtById = new Map<string, string>()
+        for (const m of rels.matchAll(/<[^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)"/g)) tgtById.set(m[1]!, m[2]!)
         const body = doc.slice(doc.indexOf('<w:body'), doc.lastIndexOf('</w:body>'))
         const paras = [...body.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/g)].map((m) => m[0]!)
-        const idx = paras.findIndex((p) => p.includes('<w:object'))
+        const idx = paras.findIndex((p) => {
+          const om = /<o:OLEObject\b[^>]*r:id="([^"]+)"/.exec(p)
+          if (!om) return false
+          const t = tgtById.get(om[1]!) ?? ''
+          return t.endsWith('embeddings/dragmove.docx')
+        })
         return idx
       }
-      const before = await expect.poll(oleBlockIndex, { timeout: 30000, intervals: [1000] }).toBeGreaterThanOrEqual(0)
+      await expect.poll(oleBlockIndex, { timeout: 30000, intervals: [1000] }).toBeGreaterThanOrEqual(0)
       const partBefore = Buffer.from(await (await JSZip.loadAsync(fs.readFileSync(t.abs))).files['word/embeddings/dragmove.docx']!.async('uint8array'))
-      // 칩을 아래로 드래그한다 (RED: 현재 드래그 핸들러가 없어 디스크가 안 바뀐다).
+      // 칩이 나타날 때까지 기다린다 (106 수신 + 오버레이 반영).
+      await expect
+        .poll(() => t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => els.some((e) => e.getAttribute('aria-label') === `첨부 ${want}`), 'dragmove.docx'), { timeout: 30000, intervals: [1000] })
+        .toBe(true)
+      // 첫 번째 본문 문단(C5-0 payload...)의 화면 좌표를 구해 칩을 그리로 드래그한다.
+      // 텍스트 매칭이라 디스크/보이는 인덱스 공간이 달라도 정확히 이동한다.
+      const target = await t.pageA.evaluate(() => {
+        const needle = 'C5-0 payload document for OLE embedding test.'
+        const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
+        const ed = document.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+        const sr = ed?.shadowRoot
+        if (!sr) return null
+        const out: Array<{ x: number; y: number }> = []
+        const walk = (node: Element | ShadowRoot, depth: number): void => {
+          if (!node || depth > 8) return
+          let els: Element[] = []
+          try { els = [...(node as Element).querySelectorAll('*')] } catch { return }
+          for (const e of els) {
+            try {
+              if (e.tagName === 'P') {
+                const t = norm((e as HTMLElement).textContent ?? '')
+                if (t.length >= 8 && (t.includes(needle) || needle.includes(t))) {
+                  const r = (e as HTMLElement).getBoundingClientRect()
+                  if (r.width > 0 && r.height > 0) { out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }); return }
+                }
+              }
+            } catch { /* 무시 */ }
+            try { const s = (e as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot; if (s) walk(s, depth + 1) } catch { /* 무시 */ }
+          }
+        }
+        walk(sr, 0)
+        return out.length > 0 ? out[0] : null
+      })
+      expect(target, 'C5-0 target para').not.toBeNull()
       const center = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
         const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
         if (!hit) return null
@@ -2711,11 +2788,23 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       expect(center).not.toBeNull()
       await t.pageA.mouse.move(center![0], center![1])
       await t.pageA.mouse.down()
-      await t.pageA.mouse.move(center![0], center![1] + 120, { steps: 12 })
+      await t.pageA.mouse.move(target!.x, target!.y, { steps: 15 })
       await t.pageA.mouse.up()
+      // C5-0 문단 바로 뒤로 이동해야 한다 (디스크 기준).
+      const c5Index = async (): Promise<number> => {
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const doc = await zip.files['word/document.xml']!.async('string')
+        const body = doc.slice(doc.indexOf('<w:body'), doc.lastIndexOf('</w:body>'))
+        const paras = [...body.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/g)].map((m) => m[0]!)
+        return paras.findIndex((p) => p.includes('C5-0 payload document for OLE embedding test.'))
+      }
       await expect
-        .poll(oleBlockIndex, { timeout: 30000, intervals: [1000] })
-        .toBeGreaterThan(before as unknown as number)
+        .poll(async () => {
+          const mv = await oleBlockIndex()
+          const c5 = await c5Index()
+          return c5 >= 0 && mv === c5 + 1 ? 1 : 0
+        }, { timeout: 30000, intervals: [1000] })
+        .toBe(1)
       const partAfter = Buffer.from(await (await JSZip.loadAsync(fs.readFileSync(t.abs))).files['word/embeddings/dragmove.docx']!.async('uint8array'))
       expect(partAfter.equals(partBefore)).toBe(true)
       console.log('[c6d] D27 docx drag moved block')
