@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from 'react'
+import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -10,9 +10,9 @@ import { Button } from '@/components/ui/button'
 /** 뷰어 청크 로드 실패 시 다시 시도/PDF 폴백을 보여준다. 원인 문구도 표시한다. */
 export class ViewerLoadBoundary extends Component<
   { onRetry: () => void; onPdf?: () => void; children: ReactNode },
-  { failed: boolean; message: string }
+  { failed: boolean; message: string; stack: string }
 > {
-  state = { failed: false, message: '' }
+  state = { failed: false, message: '', stack: '' }
   private autoTried = false
   private onOnline = () => {
     // 네트워크 복귀 시 1회 자동 재시도 (VPN 플랩 등, 클릭 없이 복구).
@@ -25,11 +25,19 @@ export class ViewerLoadBoundary extends Component<
     if (document.visibilityState === 'visible') this.onOnline()
   }
 
-  static getDerivedStateFromError(): { failed: boolean; message: string } {
-    return { failed: true, message: '' }
+  static getDerivedStateFromError(): { failed: boolean; message: string; stack: string } {
+    return { failed: true, message: '', stack: '' }
   }
-  componentDidCatch(error: unknown): void {
-    this.setState({ message: error instanceof Error ? error.message : String(error) })
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    try {
+      console.error('[viewer-boundary]', error, info?.componentStack ?? '')
+    } catch {
+      /* 무시 */
+    }
+    this.setState({
+      message: error instanceof Error ? error.message : String(error),
+      stack: info?.componentStack ?? '',
+    })
   }
   componentDidMount(): void {
     window.addEventListener('online', this.onOnline)
@@ -46,6 +54,12 @@ export class ViewerLoadBoundary extends Component<
         <p className="text-sm text-muted-foreground">Failed to load preview.</p>
         {this.state.message && (
           <p className="text-[11px] text-muted-foreground/70 font-mono break-all max-w-md">{this.state.message}</p>
+        )}
+        {this.state.stack && (
+          <details className="max-w-md text-left">
+            <summary className="cursor-pointer text-[11px] text-muted-foreground/70">component stack</summary>
+            <pre className="whitespace-pre-wrap break-all text-[10px] text-muted-foreground/70 font-mono">{this.state.stack}</pre>
+          </details>
         )}
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={this.props.onRetry}>
