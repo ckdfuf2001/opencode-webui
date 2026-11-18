@@ -1237,7 +1237,7 @@ export default function OleAttachmentOverlay({
   // 아래에 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면 캡처가 못 받는다).
   // onDl이 있으면 파일명 오른쪽에 다운로드 버튼을 둔다 (버튼만 pointer-events:auto).
   // 컨테이너 캡처 dblclick·선택 해제는 버튼을 제외한다 (button 매칭으로 early-return).
-  const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number; captionAbove?: boolean }, onDl?: (entry: OleEmbeddingRef) => void): React.ReactNode => {
+  const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number; captionAbove?: boolean }): React.ReactNode => {
     const name = displayName(entry)
     const above = !!pos.captionAbove
     return (
@@ -1252,42 +1252,9 @@ export default function OleAttachmentOverlay({
           transform: 'translateX(-50%)',
           maxWidth: 240,
         }}
-        className={`pointer-events-none z-30 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background py-0.5 text-[11px] leading-5 text-foreground shadow-sm ${onDl ? 'px-7' : 'px-1.5'}`}
+        className="pointer-events-none z-10 select-none whitespace-nowrap overflow-hidden text-ellipsis rounded border border-border bg-background px-1.5 py-0.5 text-[11px] leading-5 text-foreground shadow-sm"
       >
         {name}
-        {onDl && (
-          // C7m: 버튼은 흐름 밖(absolute)에 둔다 — 라벨 박스·중앙·말줄임(E1)을 바꾸지 않는다.
-          // 좌우 대칭 패딩(px-7)으로 텍스트 중앙을 유지한다.
-          // 컨테이너 캡처 dblclick 제외는 closest('[data-testid="ole-download"]') early-return이 담당한다.
-          <button
-            type="button"
-            data-testid="ole-download"
-            title={`다운로드: ${name}`}
-            aria-label={`다운로드 ${name}`}
-            draggable={false}
-            style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'auto' }}
-            className="inline-flex shrink-0 select-none items-center rounded border border-border bg-background p-0.5 text-foreground shadow-sm hover:bg-muted"
-            onPointerDown={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-            }}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              try { onDl(entry) } catch { /* 무시 */ }
-            }}
-            onDoubleClick={(e) => {
-              // 버튼 dblclick으로는 열지 않는다.
-              e.preventDefault()
-              e.stopPropagation()
-            }}
-            onDragStart={(e) => {
-              e.preventDefault()
-            }}
-          >
-            <Download className="h-3.5 w-3.5" />
-          </button>
-        )}
       </div>
     )
   }
@@ -1348,15 +1315,17 @@ export default function OleAttachmentOverlay({
             </span>
           )
         }
-        // C7m lib-only: lib 도형에서 위치를 잡은 파싱분은 lib만 보인다 (우리 img 없음).
+        // C7m lib-only: lib 도형과 짝지어진 파싱분은 lib 네이티브만 보인다
+        // (우리 img·라벨·버튼 없음 — 파일명 hover·다운로드는 lib 것).
         // extras 중 lib 도형이 없는 것만 PptxImgEntry를 유지한다 (106 백그라운드 삽입분).
         if (anchor === 'pptx' && parentPath) {
           const iconUrl = `${API_BASE_URL}/api/collab/embed/icon?path=${encodeURIComponent(parentPath)}&part=${encodeURIComponent(e.partName)}`
           const peers = peerSelByPart.get(e.partName) ?? []
           if (pos.libClaimed === true) {
+            // 피어가 없으면 그릴 것이 없다 (dblclick 라우팅은 posMap 기준이라 유지된다).
+            if (peers.length === 0) return null
             return (
               <span key={e.partName}>
-                {caption(e, pos, (en) => void download(en))}
                 {peers.map((p, i) => (
                   <span
                     key={`peer-${i}-${p.name}`}
