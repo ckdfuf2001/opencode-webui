@@ -345,7 +345,7 @@ async function mkCtx(browser: Browser, user: { id: string; name: string; color: 
 }
 
 test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
-  test('E1-pptx: 짧은/긴 이름 라벨이 프레임 중앙에 있다', async ({ browser }) => {
+  test('E1-pptx: lib 프레임에 파일명이 보인다 (우리 라벨 없음)', async ({ browser }) => {
     const ctx = await mkCtx(browser, ADA)
     const page = await ctx.newPage()
     await gotoApp(page)
@@ -356,21 +356,13 @@ test.describe('C5-3: 첨부 라벨·편집·Word 리본', () => {
       await postEmbedFile(seg, 'embed-pdf.pptx', 'Rp.docx', docxBytes)
       await postEmbedFile(seg, 'embed-pdf.pptx', LONG_DOCX, docxBytes)
       await openViaWorkspace(page, 'embed-pdf.pptx', seg)
-      for (const name of ['Rp.docx', LONG_DOCX]) {
-        await expect
-          .poll(async () => (await measureLabel(page, name)).found, { timeout: 15000, intervals: [500] })
-          .toBe(true)
-        const lab = await measureLabel(page, name)
-        if (!lab.found) throw new Error(`label vanished: ${name}`)
-        const icon = await iconCenter(page, 'pptx', name)
-        expect(icon.found, `${name} icon exists`).toBe(true)
-        expect(Math.abs(lab.cx! - icon.cx!), `${name} centered`).toBeLessThanOrEqual(2)
-        expect(lab.userSelect, 'select-none').toBe('none')
-        expect(lab.pointerEvents, 'no pointer events').toBe('none')
-        if (name === LONG_DOCX) {
-          expect(lab.ellipsis, 'long name ellipsis').toBe(true)
-        }
+      // C7m: lib 네이티브만 보인다 (hover 파일명·다운로드는 lib 것). 우리 렌더는 0개.
+      for (const re of [/Rp\.docx/i, /very-long-attachment-file-name-for-ellipsis-check-0123456789-abcdefgh\.docx/i]) {
+        const frame = page.locator('[data-element-id*="-frame-"]', { hasText: re }).first()
+        await expect(frame).toBeVisible({ timeout: 60000 })
       }
+      await expect(page.getByTestId('ole-img')).toHaveCount(0, { timeout: 15000 })
+      await expect(page.getByTestId('ole-label')).toHaveCount(0, { timeout: 15000 })
     } finally {
       await ctx.close().catch(() => {})
     }

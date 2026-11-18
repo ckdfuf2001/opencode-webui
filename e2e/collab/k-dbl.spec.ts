@@ -135,28 +135,8 @@ test('K-dbl-pptx: 삽입한 docx 도형 dblclick이 새 탭으로 열린다', as
       .toBe(true)
     await popup.close().catch(() => {})
     await pageB.close().catch(() => {})
-    // 파일명 라벨 dblclick으로도 열린다 (도형 아래 캡션).
-    // lib 호환성 토스트가 캡션을 가리면 먼저 닫는다 (사용자와 같은 순서).
-    await page.getByText('Dismiss all').first().click({ timeout: 15000 }).catch(() => {})
-    const label = page.getByTestId('ole-label').filter({ hasText: /plain\.docx/i }).first()
-    await expect(label).toBeVisible({ timeout: 30000 })
-    // 캡션은 pointer-events:none이라 locator dblclick의 히트 체크에 걸린다.
-    // 실제 클릭과 같은 mouse dblclick을 쓴다 (컨테이너 캡처가 받는다).
-    const lbox0 = await label.boundingBox()
-    expect(lbox0, 'ole label box').not.toBeNull()
-    const [popup2] = await Promise.all([
-      page.waitForEvent('popup', { timeout: 15000 }),
-      page.mouse.dblclick(lbox0!.x + lbox0!.width / 2, lbox0!.y + lbox0!.height / 2),
-    ])
-    await expectEditableAttach(popup2, /plain\.docx/)
-    await popup2.close().catch(() => {})
-    // 캡션 바로 아래(lib 영역) dblclick은 새 탭을 열지 않는다 (히트 영역 확인).
-    // 캡션은 pointer-events:none이라 lib 상호작용(드래그·선택)을 막지 않는다.
-    const lbox2 = await label.boundingBox()
-    expect(lbox2, 'ole label box (recheck)').not.toBeNull()
-    const openedP = page.waitForEvent('popup', { timeout: 3000 }).then(() => 'opened', () => 'none')
-    await page.mouse.dblclick(lbox2!.x + lbox2!.width / 2, lbox2!.y + lbox2!.height + 10)
-    await expect(openedP).resolves.toBe('none')
+    // C7m: 우리 캡션은 없앴다 (lib hover tooltip이 파일명을 보여준다).
+    // lib 프레임 dblclick 경로는 위에서 검증했다.
   } finally {
     await ctx.close().catch(() => {})
   }
