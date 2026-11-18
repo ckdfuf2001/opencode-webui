@@ -164,4 +164,39 @@ describe('moveDocxEmbed', () => {
     expect(miss.found).toBe(false)
     await expect(moveDocxEmbed(zipLoad, once, 'word/embeddings/m.docx', { block: 99 })).rejects.toThrow()
   })
+
+  it('텍스트가 맞으면 텍스트 위치로 옮긴다 (인덱스보다 우선)', async () => {
+    const z0 = new JSZip()
+    z0.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+    )
+    z0.file(
+      '_rels/.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+    )
+    z0.file(
+      'word/document.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>alpha one</w:t></w:r></w:p><w:p><w:r><w:t>beta two target here</w:t></w:r></w:p><w:p><w:r><w:t>gamma three</w:t></w:r></w:p></w:body></w:document>',
+    )
+    z0.file(
+      'word/_rels/document.xml.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    )
+    const host = await z0.generateAsync({ type: 'uint8array' })
+    const attach = await makeAttachDocx('ZZ move docx text')
+    const once = await assembleDocxEmbed(zipLoad, {
+      hostBytes: host, attachBytes: attach, attachName: 'm.docx', attachKind: 'docx',
+    })
+    // 텍스트로 beta 단락 뒤를 지정 (인덱스는 일부러 틀리게).
+    const moved = await moveDocxEmbed(zipLoad, once, 'word/embeddings/m.docx', { block: 0, blockText: 'beta two target here and more words' })
+    expect(moved.found).toBe(true)
+    const doc = (await (await zipLoad(moved.bytes)).files['word/document.xml']!.async('string')) as string
+    const betaIdx = doc.indexOf('beta two target here')
+    const gammaIdx = doc.indexOf('gamma three')
+    const objIdx = doc.indexOf('<w:object')
+    // beta 단락 뒤, gamma 단락 앞에 w:object 문단이 와야 한다.
+    expect(objIdx).toBeGreaterThan(betaIdx)
+    expect(objIdx).toBeLessThan(gammaIdx)
+  })
 })

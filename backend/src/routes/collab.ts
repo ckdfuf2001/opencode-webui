@@ -644,7 +644,7 @@ app.put('/embed/pos', async (c) => {
     const body = await c.req.json().catch(() => ({})) as {
       path?: string; part?: string; roomId?: string; clientId?: number | string;
       baseHash?: string; slide?: number; x?: number; y?: number; w?: number; h?: number;
-      sheet?: number; col?: number; row?: number; block?: number;
+      sheet?: number; col?: number; row?: number; block?: number; blockText?: string;
     }
     const path = typeof body.path === 'string' ? body.path : ''
     const part = typeof body.part === 'string' ? body.part : ''
@@ -679,11 +679,13 @@ app.put('/embed/pos', async (c) => {
     const py = num(body.y)
     const pw = num(body.w)
     const ph = num(body.h)
-    if (px === undefined && py === undefined && pw === undefined && ph === undefined) {
-      return c.json({ error: 'Nothing to move', code: 'bad_pos' }, 400)
-    }
-    if ((px !== undefined && (px < 0 || px > 1)) || (py !== undefined && (py < 0 || py > 1))) {
-      return c.json({ error: 'Bad fractions', code: 'bad_pos' }, 400)
+    if (hostKind === 'pptx') {
+      if (px === undefined && py === undefined && pw === undefined && ph === undefined) {
+        return c.json({ error: 'Nothing to move', code: 'bad_pos' }, 400)
+      }
+      if ((px !== undefined && (px < 0 || px > 1)) || (py !== undefined && (py < 0 || py > 1))) {
+        return c.json({ error: 'Bad fractions', code: 'bad_pos' }, 400)
+      }
     }
     return runParentChained(abs, async () => {
       const disk = room ? await currentDiskHash(roomId) : await hashFile(abs).catch(() => null)
@@ -718,29 +720,24 @@ app.put('/embed/pos', async (c) => {
       }
       if (hostKind === 'docx') {
         const bb = cint(body.block)!
-        const movedD = await moveDocxEmbed(zipLoadJSZip, hostBytes, norm, { block: bb })
+        const movedD = await moveDocxEmbed(zipLoadJSZip, hostBytes, norm, { block: bb, blockText: typeof body.blockText === 'string' && body.blockText.length > 0 ? body.blockText.slice(0, 120) : undefined })
         if (!movedD.found) return c.json({ error: 'Part not found in document', code: 'no_anchor' }, 404)
         await writeFileContent(abs, Buffer.from(movedD.bytes))
         const newHashD = hashBytes(movedD.bytes)
-        let posD: { block: number; text?: string } = { block: bb }
-        let anchorHashD = undefined
-        let textD = undefined
-        try {
-          const movedDoc = new TextDecoder().decode(movedD.bytes)
-          textD = blockTextSnippet(movedDoc, bb)
-          anchorHashD = textD ? anchorHashOf(textD) : undefined
-          if (textD) posD = { ...posD, text: textD }
-        } catch { /* hint 없으면 유지 */ }
+        // 실제 착지 위치를 돌려준다 (클라이언트 낙관 위치가 어긋났을 수 있음).
+        const newIdx = typeof movedD.index === 'number' ? movedD.index : bb
+        const newText = typeof movedD.text === 'string' && movedD.text.length > 0 ? movedD.text : undefined
+        const posD: { block: number; text?: string } = newText ? { block: newIdx, text: newText } : { block: newIdx }
+        const anchorHashD = newText ? anchorHashOf(newText) : undefined
         if (room) {
           room.lastHash = newHashD
           room.externalChanged = false
           const ked = room.knownEmbeds.find((k) => k.norm === norm)
           if (ked) {
-            const np = { ...ked.pos, block: bb }
-            ked.pos = (textD ? { ...np, text: textD } : np) as KnownEmbed['pos']
+            ked.pos = { ...ked.pos, block: newIdx, ...(newText ? { text: newText } : {}) } as KnownEmbed['pos']
             ked.anchorHash = anchorHashD ?? ked.anchorHash
           }
-          broadcast(room, encodePartEmbedded(roomId, { norm, name: norm.split('/').pop() ?? norm, kind: 'docx', pos: (textD ? { block: bb, text: textD } : { block: bb }) as KnownEmbed['pos'], newHash: newHashD }))
+          broadcast(room, encodePartEmbedded(roomId, { norm, name: norm.split('/').pop() ?? norm, kind: 'docx', pos: { ...posD } as KnownEmbed['pos'], newHash: newHashD }))
           logger.warn('[embed] move docx room=' + roomId.slice(0, 8) + ' part=' + norm + ' pos=' + JSON.stringify(posD))
         }
         return c.json({ ok: true, newHash: newHashD, pos: posD })

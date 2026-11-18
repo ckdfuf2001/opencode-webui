@@ -1456,8 +1456,8 @@ export async function moveDocxEmbed(
   zipLoad: (b: Uint8Array) => Promise<ZipLike>,
   hostBytes: Uint8Array,
   embPart: string,
-  pos: { block?: number },
-): Promise<{ bytes: Uint8Array; found: boolean }> {
+  pos: { block?: number; blockText?: string },
+): Promise<{ bytes: Uint8Array; found: boolean; index?: number; text?: string }> {
   const zip = await zipLoad(hostBytes)
   const readText = async (name: string): Promise<string | null> => {
     try {
@@ -1490,19 +1490,43 @@ export async function moveDocxEmbed(
     }
   }
   if (idx < 0) return { bytes: hostBytes, found: false }
-  if (pos.block === undefined || !Number.isInteger(pos.block) || pos.block < 0) {
-    embedError('Bad block', 400, 'bad_pos')
+  // 텍스트 우선: 같은 문단이면 같은 곳 (삽입 때 인덱스가 어긋나도 같은 의미).
+  const normT = (t: string): string => t.replace(/\s+/g, ' ').trim()
+  let target = -1
+  if (typeof pos.blockText === 'string' && normT(pos.blockText).length >= 8) {
+    const nb = normT(pos.blockText)
+    target = blocks.findIndex((b, i) => i !== idx && normT(b.text).length >= 8 && (normT(b.text).includes(nb) || nb.includes(normT(b.text))))
+  }
+  if (target < 0) {
+    if (pos.block === undefined || !Number.isInteger(pos.block) || pos.block < 0 || pos.block >= blocks.length) {
+      embedError('Bad block', 400, 'bad_pos')
+    }
+    if (pos.block === idx) return { bytes: hostBytes, found: true }
+    target = pos.block as number
   }
   const moving = doc.slice(blocks[idx]!.start, blocks[idx]!.end)
   const rest = doc.slice(0, blocks[idx]!.start) + doc.slice(blocks[idx]!.end)
+  const restIdx = target > idx ? target - 1 : target
   const restBlocks = topLevelBlocks(rest)
-  if (pos.block! >= restBlocks.length) embedError('Bad block', 400, 'bad_pos')
-  const at = restBlocks[pos.block!]!
+  if (restIdx < 0 || restIdx >= restBlocks.length) embedError('Bad block', 400, 'bad_pos')
+  const at = restBlocks[restIdx]!
   const next = rest.slice(0, at.end) + moving + rest.slice(at.end)
   checkBalancedXml(next, 'word/document.xml')
   zip!.file('word/document.xml', next)
   const out = await zip.generateAsync({ type: 'uint8array' })
-  return { bytes: out, found: true }
+  // 실제 착지 인덱스와 텍스트를 돌려준다 (클라이언트 재확인 + knownEmbeds 갱신용).
+  const afterBlocks = topLevelBlocks(next.slice(next.indexOf('<w:body'), next.lastIndexOf('</w:body>')))
+  let newIdx = -1
+  for (let i = 0; i < afterBlocks.length; i++) {
+    const seg = next.slice(afterBlocks[i]!.start, afterBlocks[i]!.end)
+    const om = /<o:OLEObject\b[^>]*r:id="([^"]+)"/.exec(seg)
+    if (om && targetOf(om[1]!) === embPart) {
+      newIdx = i
+      break
+    }
+  }
+  const newText = newIdx >= 0 ? normT(afterBlocks[newIdx]!.text).slice(0, 60) : undefined
+  return { bytes: out, found: true, index: newIdx >= 0 ? newIdx : undefined, text: newText || undefined }
 }
 
 
