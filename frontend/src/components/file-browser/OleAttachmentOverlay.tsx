@@ -1235,8 +1235,7 @@ export default function OleAttachmentOverlay({
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
   // dblclick은 컨테이너 캡처가 잡는다: rect 아래쪽 패딩 + 실측 박스.
   // 아래에 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면 캡처가 못 받는다).
-  // onDl이 있으면 파일명 오른쪽에 다운로드 버튼을 둔다 (버튼만 pointer-events:auto).
-  // 컨테이너 캡처 dblclick·선택 해제는 버튼을 제외한다 (button 매칭으로 early-return).
+  // (C7m: pptx 파싱분은 lib-only라 캡션을 그리지 않는다. xlsx/docx 전용으로 남는다.)
   const caption = (entry: OleEmbeddingRef, pos: { x: number; y: number; w: number; h: number; captionAbove?: boolean }): React.ReactNode => {
     const name = displayName(entry)
     const above = !!pos.captionAbove
