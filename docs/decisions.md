@@ -967,3 +967,52 @@
 - 선택지: (권장) 저장마다 epoch 전송, 방 epoch와 다르면 409 stale_client (재시도 금지·다시 불러오기) vs (대안) bases+part 목록 TTL 연장. epoch을 선택한 이유: 미뤄진 리셋 뒤에는 lastHash가 같아도 바이트가 다를 수 있어 base 대조만으로는 부족하다 (P0-2 "epoch 불필요" 판단 정정). epoch은 방 생성 시 1회 발급, 재입장 때만 갱신되므로 전송 비용 없이 방 세대 판정이 된다. TTL 연장은 경계 자체를 못 막는다 (옛 epoch 저장이 새 방에 들어오는 순간을 가릴 수 없음). xlsx/docx도 같은 경로를 탄다 (POST /save → applySave 단일 게이트, epoch 검사는 part 방 제외 모든 부모 방에 적용).
 - 결정: applySave opts에 epoch 추가, 부모 방에서 rooms.get 최신 방과 대조 후 불일치면 409 stale_client (part 방 제외). 라우트는 x-collab-epoch 헤더 + JSON epoch 필드 전달. pptx/xlsx/docx 모두 save()에 epoch 전송, stale 수신 시 재시도 없이 4001과 같은 재입장 경로로 수렴 (pptx: reloadAfterServerReset 공용 콜백, xlsx: reconnectCollab, docx: 세션파괴+joinKey).
 - 검증: 단위 collab-epoch-stale.test.ts 3건 (1 red → fix 후 green). e2e D3 (c6d.spec.ts, pptx 1건): 리셋 경계를 넘긴 옛 저장을 forge로 재현 — pre-fix 200 무음 덮개(red), post-fix 409 stale_client + 디스크 보존 + 재저장 200 (green, 무한 409 루프 없음). item 2 e2e D4 (닫기 중 미룸): 즉시 dispose 증명(늦은 저장 404 fail-closed) + 재입장 후 정상 저장. item 3 단위 1건: 미룸 중 첨부삭제 — rel 없는 파트는 다시 끼우지 않음 (200 + 디스크에 부활 없음).
+
+## D72 C7m pptx 파싱분은 lib 네이티브만 보인다 (2026-11-18)
+- 배경: lib 렌더 + 우리 오버레이가 동시에 보여 중복이었다. 사용자 결정 — lib 기본만 쓴다.
+  lib는 hover 파일명·Download 버튼을 자체 렌더하고, dblclick 열기는 lib이 no-op이라
+  컨테이너 캡처 라우팅으로 연다 (C6b 유지).
+- 결정(1): lib 도형과 짝지어진 파싱분은 우리 img·칩·캡션·다운로드를 그리지 않는다
+  (피어 배지만 유지). extras(106 백그라운드 삽입분, lib 도형 없음)는 PptxImgEntry를 유지한다.
+  파싱분/백그라운드분 구분은 extras 멤버십이 아니라 **lib claim 성공 여부**
+  (`posMap.libClaimed`)다 — 서버가 방 생성 시 디스크에서 knownEmbeds를 seed하고
+  join 때 106으로 재전송하므로, 파싱분도 extras에 들어있어 멤버십 판별은 틀렸다
+  (D25 red로 확정: ole-img 1).
+- 결정(2): claim은 exact 매칭만 시도한다 (폴백이 엉뚱한 도형을 잡는 C7 보호 유지).
+  대신 lib 짧은 자동 이름(WORDDocument.docx) ↔ part 전체 이름
+  (Microsoft_Word_Document.docx) 매칭을 위해 textContainsName을 양방향으로 넓혔다
+  (확장자 포함 전체 파일명이 한쪽에 온전히 들어있을 때만 — report/report-final은
+  어느 쪽도 상대 전체를 포함하지 않아 제외, 단위 가드).
+- 결정(3): 종류별 아이콘(swap)은 유지한다 (lib-only 방향과 일치 — 도형·상호작용 유지,
+  img src만 교체). 9b9abe0의 결함 2건은 가드로 막는다: 실패 표식
+  (`data-ole-swap-failed`, 복원 후에도 유지 — 재swap 금지, 새 요소는 1회 swap),
+  동일값 setState 스킵(mergePosMap, D35). 1-c 실측: xlsx/docx 파싱분 흐름에는
+  24px 이상 img가 없어 swap이 걸리지 않는다 (결함 아님, 기록만).
+- 결정(4): 칩·캡션·커버 3곳의 inner key가 바깥 span key와 중복돼 React가
+  duplicate-key 경고를 냈다 (자식 복제/누락 가능 — 사용자 중복 표시의 한 원인).
+  inner key를 제거한다 (D22 콘솔 단언 31건 red → green).
+- 결정(5): E1 단언과 충돌하면 lib 기준으로 고친다. 캡션을 flex+버튼으로 바꾸자
+  E1-xlsx-pic 말줄임이 깨져서 (flex에선 scrollWidth가 줄지 않음) block+absolute
+  버튼으로 되돌렸다. 사용자 최종 결정으로 pptx 캡션·버튼 자체를 없앴다
+  (우리 렌더 0개: ole-img·ole-label·ole-download 모두 0 단언).
+  E1-pptx·D13·D25·U-open-part-pptx·K-dbl 라벨부는 lib 프레임 단언으로 교체했다.
+- 범위 밖 (사용자 보고 후 판단 대기): (가) xlsx 크래시
+  (`Cannot read properties of null (reading 'useRef')`) — embed-docx/embed-pdf/
+  collab-features/embed-pics2 4종 미리보기 무재현, React 단일 사본 확인.
+  재현 파일+단계(미리보기/편집, dev/exe) 필요, 바이섹트는 재현 후.
+  (나) docx 이동/리사이즈 — lib이 docx OLE 자리를 렌더하지 않음 확인
+  (libOle 0, 오버레이 표시 없음). 지시대로 구현 없이 멈춤, docx 칩 유지.
+- 관련 커밋: 7fa9f766(D25 red) · e171b19c(양방향 red) · 8e3ea9f8(C1 lib-only+매칭) ·
+  e5374c3e(1-a/1-b 가드) · f3db322e(D21 스코프) · 0fd14c59(D22 key 단언 red) ·
+  45a40f45(key 제거) · c72f6486(오타) · a8eaa777(D13/U-open) · 0fb6aaf1(E1 복구) ·
+  b9973eec(캡션 block) · 150045b2(T1) · 5666f1b1(C1 제거) · f296c008(T2) ·
+  9c6e52b9(주석).
+- 회귀: D25/D21/D22/D13/U-open(+shape)/E1-pptx/E1-xlsx-pic green (chromium, msedge는
+  D25·D21·U-open·E1pic green 확인). c6d 나머지 실패는 베이스 동일
+  (D1×3·D3·D6·D8·D9-xlsx·D17·D19) + 풀런 flake 격리 green
+  (D9-pptx·D10·D12·D15·D21 msedge) . k-dbl pptx/docx/nested/nosubtle + c5-3 E1/E2 +
+  c5-4 U-parent + backend relay T2c/T2d·merge 1건은 베이스 동일 실패 (C7m 무관).
+  backend unit 755 passed + 기준선 3 + 베이스 동일 3. eslint 신규 0 (전체 342는
+  C7m 이전 증가분, C7m 파일 4건은 기저 유형), tsc 신규 0, encoding clean.
+- 주의: C7j 미커밋분(lib 숨김)은 lib-only 방향과 반대라 버렸다. C7b 106 late-join
+  재전송과 서버 knownEmbeds 시딩이 extras 판별을 깨뜨린 것이 근본 원인이다.
