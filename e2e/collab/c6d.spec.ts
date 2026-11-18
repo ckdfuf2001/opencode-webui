@@ -1709,18 +1709,19 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         await openEditor(pageA2, t.parentPath)
         await pageA2.locator('[data-testid="pptx-viewer-root"]').first().waitFor({ timeout: 60000 })
         await gotoSlide(pageA2, 2)
-        // 칩이 있고 좌상단 폴백이 아니라 가운데 근처다 (백필 정위치).
+        // C7m: 재생성 후에는 파싱분이라 lib 도형만 보인다 (우리 img 0개, 칩 없음).
+        // lib 프레임 + 캡션 라벨이 정위치(가운데 근처)에 있어야 한다.
         await expect
-          .poll(() => pageA2.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e.getAttribute('aria-label') ?? '').includes('d13-keep.docx'))), { timeout: 60000, intervals: [1000] })
-          .toBe(true)
-        const allc = await pageA2.getByTestId('ole-icon').evaluateAll((els) =>
-          els.map((e) => ({ label: e.getAttribute('aria-label') ?? '?', box: (() => { const r = (e as HTMLElement).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })() })),
-        )
-        console.log(`[c6d] D13 allchips: ${JSON.stringify(allc)}`)
-        const hit = allc.find((c) => c.label === '첨부 d13-keep.docx')
-        expect(hit).toBeTruthy()
-        const box = { x: hit!.box[0], y: hit!.box[1], width: hit!.box[2], height: hit!.box[3] }
-        expect(box.width).toBeGreaterThan(0)
+          .poll(() => pageA2.getByTestId('ole-img').count(), { timeout: 30000, intervals: [1000] })
+          .toBe(0)
+        const frame13 = pageA2.locator('[data-element-id*="-frame-"]', { hasText: /d13-keep\.docx/i }).first()
+        await expect(frame13).toBeVisible({ timeout: 60000 })
+        const label13 = pageA2.getByTestId('ole-label').filter({ hasText: /d13-keep\.docx/i }).first()
+        await expect(label13).toBeVisible({ timeout: 30000 })
+        const lbox = await label13.boundingBox()
+        expect(lbox).not.toBeNull()
+        expect(lbox!.width).toBeGreaterThan(0)
+        const box = { x: lbox!.x, y: lbox!.y, width: lbox!.width, height: lbox!.height }
         const ctr = await pageA2.evaluate(() => {
           const __slide = document.querySelector('[data-testid="pptx-viewer-root"] div.relative.shadow-2xl') as HTMLElement | null
           const __root = document.querySelector('[data-testid="pptx-viewer-root"]') as HTMLElement | null
@@ -1730,12 +1731,12 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
         })
         expect(ctr).not.toBeNull()
         const dist = Math.hypot(box!.x + box!.width / 2 - ctr!.x, box!.y + box!.height / 2 - ctr!.y)
-        console.log(`[c6d] D13 backfilled chip dist from center: ${Math.round(dist)}px`)
+        console.log(`[c6d] D13 backfilled label dist from center: ${Math.round(dist)}px`)
         expect(dist).toBeLessThan(200)
         // 라벨도 있다.
         const labels = await pageA2.getByTestId('ole-label').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim()))
         expect(labels.some((t) => t.includes('d13-keep.docx'))).toBe(true)
-        console.log(`[c6d] D13 backfilled chip positioned after room recreate`)
+        console.log(`[c6d] D13 backfilled lib-only positioned after room recreate`)
       } finally {
         await pageA2.close().catch(() => {})
         await ctxA2.close().catch(() => {})
@@ -1797,9 +1798,11 @@ test.describe('C6c-d: 미뤄진 동안 부모 저장 병합', () => {
       await expect.poll(() => chipBox().then((b) => b !== null), { timeout: 30000, intervals: [500] }).toBe(true)
       const selBox0 = (await chipBox())!
       await t.pageA.mouse.click(selBox0.x + selBox0.width / 2, selBox0.y + selBox0.height / 2)
-      await t.pageA.getByTestId('ole-download').first().waitFor({ timeout: 15000 })
+      // C7m: seed 캡션 버튼이 상시 노출되므로 aria-label으로 스코프한다 (D21과 동일).
+      const dlBtn15 = t.pageA.getByRole('button', { name: '다운로드 d15-move.docx' })
+      await dlBtn15.waitFor({ timeout: 15000 })
       const dlP = t.pageA.waitForEvent('download', { timeout: 15000 }).catch(() => null)
-      await t.pageA.getByTestId('ole-download').first().click()
+      await dlBtn15.click()
       const dl = await dlP
       expect(dl).not.toBeNull()
       console.log(`[c6d] D15 download-button ok: ${dl ? await dl.suggestedFilename() : '?'}`)
