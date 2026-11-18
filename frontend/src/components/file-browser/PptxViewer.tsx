@@ -1356,7 +1356,7 @@ const ok = await persistBytesRef.current(pending, { quiet: true, auto: false, al
   )
   // C7e: 도형 이동/리사이즈 (PUT /embed/pos → 106 방송으로 전파, 리로드 없음).
   const moveEmbed = useCallback(
-    async (part: string, p: { x: number; y: number }) => {
+    async (part: string, p: { x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number }) => {
       if (!savePath) return
       try {
         const c = collabRef.current

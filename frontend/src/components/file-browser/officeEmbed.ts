@@ -219,7 +219,7 @@ export async function saveBeforeEmbed(hostPath: string, editing: boolean): Promi
   return waitSaveDone(hostPath)
 }
 
-/** C7e: 임베딩 이동/리사이즈 (pptx). fractions 기준. */
+/** C7e: 임베딩 이동/리사이즈 (pptx fractions + xlsx 셀 + docx 블록). */
 export async function putEmbedPos(args: {
   hostPath: string;
   part: string;
@@ -230,13 +230,18 @@ export async function putEmbedPos(args: {
   y?: number;
   w?: number;
   h?: number;
-}): Promise<{ ok: boolean; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number }; error?: string; code?: string }> {
+  sheet?: number;
+  col?: number;
+  row?: number;
+  block?: number;
+  blockText?: string;
+}): Promise<{ ok: boolean; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number; text?: string }; error?: string; code?: string }> {
   const res = await fetch(`${API_BASE_URL}/api/collab/embed/pos`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path: args.hostPath, part: args.part, roomId: args.roomId, clientId: args.clientId, baseHash: args.baseHash, x: args.x, y: args.y, w: args.w, h: args.h }),
+    body: JSON.stringify({ path: args.hostPath, part: args.part, roomId: args.roomId, clientId: args.clientId, baseHash: args.baseHash, x: args.x, y: args.y, w: args.w, h: args.h, sheet: args.sheet, col: args.col, row: args.row, block: args.block, blockText: args.blockText }),
   })
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number }; error?: string; code?: string }
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; newHash?: string; pos?: { slide?: number; x?: number; y?: number; w?: number; h?: number; sheet?: number; col?: number; row?: number; block?: number; text?: string }; error?: string; code?: string }
   if (!res.ok || !body.ok) return { ok: false, error: body.error ?? (`이동 실패 (${res.status})`), code: body.code }
   return { ok: true, newHash: body.newHash, pos: body.pos }
 }

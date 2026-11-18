@@ -46,7 +46,7 @@ import { createPortal } from 'react-dom'
 import { useTitlebarSlot } from '@/components/collab/useTitlebarSlot'
 import OleAttachmentOverlay from './OleAttachmentOverlay'
 import { patchUnsupportedAnchors } from '@/lib/xlsxAnchorPatch'
-import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitCollabSeed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
+import { OFFICE_EMBED_DONE, OFFICE_EMBED_FILE, OFFICE_EMBED_REQUEST, OFFICE_RESET_RELOAD, buildOfficeAttachAddIn, putEmbedPos, requestEmbedFile, runOfficeEmbed, saveBeforeEmbed, waitCollabSeed, type EmbedDetail, type EmbedRequestDetail } from './officeEmbed'
 import { ATTACHMENT_OPEN_REQUEST, openAttachmentEditor, type AttachmentOpenRequest, type AttachmentSaver } from './embedEdit'
 import { editUrlForFile, openInNewTab } from '@/lib/editUrls'
 
@@ -1244,13 +1244,18 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
   const [docxEmbedExtras, setDocxEmbedExtras] = useState<
     Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { block?: number; text?: string } }>
   >([])
-  /** C7: 106/삽입응답 적용 — 칩 추가(멱등) + baseHash 갱신. */
+  /** C7: 106/삽입응답 적용 — 칩 추가(멱등) + baseHash 갱신. C7n: 이동 106이면 위치도 갱신. */
   const applyDocxEmbedAdded = useCallback(
     (msg: { part: string; name: string; newHash: string; pos: { block?: number; text?: string } }) => {
       setDocxEmbedExtras((prev) => {
-        if (prev.some((e) => e.part === msg.part)) return prev
-        return [...prev, { part: msg.part, name: msg.name, kind: 'docx' as const, pos: msg.pos }]
-      })
+        const i = prev.findIndex((e) => e.part === msg.part)
+        if (i < 0) return [...prev, { part: msg.part, name: msg.name, kind: 'docx' as const, pos: msg.pos }]
+        const cur = prev[i]!
+        if (cur.pos.block === msg.pos.block) return prev
+        const next = prev.slice()
+        next[i] = { ...cur, pos: { ...cur.pos, block: msg.pos.block, ...(msg.pos.text ? { text: msg.pos.text } : {}) } }
+        return next
+      });
       try {
         const r = collabRef.current
         if (r) r.baseHash = msg.newHash
@@ -1260,6 +1265,22 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
     },
     [],
   )
+  // C7n: docx 첨부 드래그 이동 (PUT /embed/pos block + 106 전파).
+  const moveDocxEmbed = useCallback(async (part: string, dest: { block: number; blockText?: string }): Promise<void> => {
+    try {
+      const c = collabRef.current
+      const r = await putEmbedPos({ hostPath: path, part, roomId: c?.roomId, clientId: sessionRef.current?.clientId ?? 0, baseHash: c?.baseHash ?? undefined, block: dest.block, blockText: dest.blockText })
+      if (!r.ok || !r.newHash) {
+        showToast.error(r.error ?? '이동 실패')
+        return
+      }
+      if (c) c.baseHash = r.newHash
+      const rp = (r.pos ?? {}) as { block?: number; text?: string }
+      applyDocxEmbedAdded({ part, name: part.split('/').pop() ?? part, newHash: r.newHash, pos: { block: rp.block ?? dest.block, ...(rp.text ? { text: rp.text } : {}) } })
+    } catch {
+      showToast.error('이동 실패')
+    }
+  }, [path, applyDocxEmbedAdded])
   // C7f: 첨부 선택 공유 (107 broadcast, 탭 transport용 — awareness 없음). xlsx와 동일 패턴.
   // C7g-2: WS 직접 전송 (conn 키 — 끊김 해제·늦은 참가 resend가 서버에서 된다).
   const docxTabId = useMemo(() => Math.random().toString(36).slice(2), [])
@@ -2151,6 +2172,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
         anchor="docx"
         parentPath={path}
         extras={docxEmbedExtras}
+        onMoveEmbed={(part, pos) => { if (typeof pos.block === 'number') void moveDocxEmbed(part, { block: pos.block, blockText: pos.blockText }) }}
         selectedPart={docxSelected}
         onSelectPart={(p) => publishDocxSelect(p)}
         peerSelections={docxPeerSel}
@@ -2541,12 +2563,24 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   const [embedExtras, setEmbedExtras] = useState<
     Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { sheet?: number; col?: number; row?: number; block?: number; text?: string } }>
   >([])
-  /** C7: 106/삽입응답 적용 — 칩 추가(멱등) + baseHash 갱신. */
+  /** C7: 106/삽입응답 적용 — 칩 추가(멱등) + baseHash 갱신. C7n: 이동 106이면 위치도 갱신. */
   const applyXlsxEmbedAdded = useCallback(
     (msg: { part: string; name: string; newHash: string; pos: { sheet?: number; col?: number; row?: number } }) => {
       setEmbedExtras((prev) => {
-        if (prev.some((e) => e.part === msg.part)) return prev
-        return [...prev, { part: msg.part, name: msg.name, kind: 'xlsx' as const, pos: msg.pos }]
+        const i = prev.findIndex((e) => e.part === msg.part)
+        if (i < 0) return [...prev, { part: msg.part, name: msg.name, kind: 'xlsx' as const, pos: msg.pos }]
+        const cur = prev[i]!
+        if (cur.pos.sheet === msg.pos.sheet && cur.pos.col === msg.pos.col && cur.pos.row === msg.pos.row) return prev
+        const next = prev.slice()
+        next[i] = {
+          ...cur,
+          pos: {
+            sheet: msg.pos.sheet ?? cur.pos.sheet,
+            col: msg.pos.col ?? cur.pos.col,
+            row: msg.pos.row ?? cur.pos.row,
+          },
+        }
+        return next
       })
       try {
         const r = collabRef.current
@@ -2557,6 +2591,23 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     },
     [],
   )
+  // C7n: xlsx 첨부 드래그 이동 (PUT /embed/pos 셀 + 106 전파).
+  const moveXlsxEmbed = useCallback(async (part: string, dest: { sheet?: number; col: number; row: number }): Promise<void> => {
+    try {
+      const c = collabRef.current
+      const r = await putEmbedPos({ hostPath: path, part, roomId: c?.roomId, clientId: selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, baseHash: c?.baseHash ?? etag ?? undefined, sheet: dest.sheet, col: dest.col, row: dest.row })
+      if (!r.ok || !r.newHash) {
+        showToast.error(r.error ?? '이동 실패')
+        return
+      }
+      if (c) c.baseHash = r.newHash
+      setEtag(r.newHash)
+      const rp = (r.pos ?? {}) as { sheet?: number; col?: number; row?: number }
+      applyXlsxEmbedAdded({ part, name: part.split('/').pop() ?? part, newHash: r.newHash, pos: { sheet: rp.sheet ?? dest.sheet, col: rp.col ?? dest.col, row: rp.row ?? dest.row } })
+    } catch {
+      showToast.error('이동 실패')
+    }
+  }, [path, applyXlsxEmbedAdded, etag])
   // C7f: 첨부 선택 공유 (107 broadcast, 탭 transport용 — awareness 없음).
   // C7g-2: WS 직접 전송 (conn 키 — 끊김 해제·늦은 참가 resend가 서버에서 된다).
   const xlsxTabId = useMemo(() => Math.random().toString(36).slice(2), [])
@@ -4840,6 +4891,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         parentPath={path}
         extras={embedExtras}
         getExtraContext={() => ({ sheet: objActiveSheetRef.current })}
+        onMoveEmbed={(part, pos) => { if (typeof pos.col === 'number' && typeof pos.row === 'number') void moveXlsxEmbed(part, { sheet: pos.sheet, col: pos.col, row: pos.row }) }}
         selectedPart={xlsxSelected}
         onSelectPart={(p) => publishXlsxSelect(p)}
         peerSelections={xlsxPeerSel}

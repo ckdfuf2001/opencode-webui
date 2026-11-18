@@ -457,10 +457,9 @@ function resolveExtraPos(
       return { x, y, w, h, cover: false, captionAbove: above(y, h) }
     }
     // docx: 문단 텍스트 힌트 우선, 없으면 블록 인덱스.
-    const ed = container.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
-    const sr = ed?.shadowRoot
-    if (!sr) return null
-    const paras = Array.from((sr as unknown as Element).querySelectorAll('p')) as HTMLElement[]
+    // (C7n: 보이는 문단만 본다 — lib는 rect 0인 측정용 <p>를 섞어 둔다.)
+    const paras = visibleDocxParas(container)
+    if (paras.length === 0) return null
     // innerText에 lib 렌더 잔재가 섞이므로 정규화 후 서로 포함이면 같은 문단.
     const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
     const matches = (a: string, b: string): boolean => {
@@ -478,7 +477,7 @@ function resolveExtraPos(
     }
     if (!target) return null
     const r = target.getBoundingClientRect()
-    if (r.width <= 0 && r.height <= 0) return null
+    if (r.width <= 0 || r.height <= 0) return null
     return {
       x: Math.max(0, Math.round(r.left - c.left)),
       y: Math.max(0, Math.round(r.top - c.top)),
@@ -491,6 +490,117 @@ function resolveExtraPos(
     return null
   }
 }
+/**
+ * C7n: 드롭 지점의 xlsx 셀 계산 (resolveExtraPos xlsx 분기와 같은 메트릭 역산).
+ * 컨테이너 기준 px → {col,row} (0-based). 셀을 못 찾으면 null.
+ */
+export function xlsxCellAt(container: HTMLElement, clientX: number, clientY: number): { col: number; row: number } | null {
+  try {
+    const ed = container.querySelector('xlsx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+    const sr = ed?.shadowRoot
+    if (!sr) return null
+    const cells = (sr as unknown as Element).querySelector('.xg-cells') as unknown as {
+      getBoundingClientRect: () => DOMRect
+      scrollLeft?: number
+      scrollTop?: number
+      querySelector: (s: string) => Element | null
+    } | null
+    if (!cells) return null
+    const gr = cells.getBoundingClientRect()
+    let cellW = 64
+    let cellH = 20
+    try {
+      const sample = cells.querySelector('.xg-c') as unknown as { getBoundingClientRect: () => DOMRect } | null
+      if (sample) {
+        const r = sample.getBoundingClientRect()
+        if (r.width > 4 && r.height > 4) {
+          cellW = r.width
+          cellH = r.height
+        }
+      }
+    } catch {
+      /* 무시 */
+    }
+    const sl = typeof cells.scrollLeft === 'number' ? cells.scrollLeft : 0
+    const st = typeof cells.scrollTop === 'number' ? cells.scrollTop : 0
+    const c = container.getBoundingClientRect()
+    const px = clientX - c.left
+    const py = clientY - c.top
+    const col = Math.floor((px - (gr.left - c.left) + sl) / cellW)
+    const row = Math.floor((py - (gr.top - c.top) + st) / cellH)
+    if (!Number.isFinite(col) || !Number.isFinite(row) || col < 0 || row < 0 || col > 16383 || row > 1048575) return null
+    return { col, row }
+  } catch {
+    return null
+  }
+}
+/**
+ * C7n: 드롭 지점의 docx 블록 인덱스 (resolveExtraPos docx 분기와 같은 문단 목록).
+ * 아래쪽에 떨어지면 마지막 블록을 반환한다. 못 찾으면 null.
+ */
+export function docxBlockAt(container: HTMLElement, clientY: number): { index: number; text: string } | null {
+  try {
+    const paras = visibleDocxParas(container)
+    if (paras.length === 0) return null
+    for (let i = 0; i < paras.length; i++) {
+      try {
+        const r = paras[i]!.getBoundingClientRect()
+        if (clientY <= r.bottom) {
+          return { index: i, text: ((paras[i]!.textContent ?? '').replace(/\s+/g, ' ').trim()).slice(0, 60) }
+        }
+      } catch {
+        /* 무시 */
+      }
+    }
+    const last = paras[paras.length - 1]!
+    return { index: paras.length - 1, text: ((last.textContent ?? '').replace(/\s+/g, ' ').trim()).slice(0, 60) }
+  } catch {
+    return null
+  }
+}
+/**
+ * C7n: 보이는 docx 문단 목록 (lib 렌더는 숨은 측정용 <p>를 섞어 둔다 —
+ * flat query는 rect 0인 것만 잡을 수 있어 deep collect + 가시 필터가 필수).
+ * resolveExtraPos와 드롭 hit-test가 같은 목록을 쓴다 (인덱스 일치).
+ */
+function visibleDocxParas(container: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = []
+  try {
+    const ed = container.querySelector('docx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+    const sr = ed?.shadowRoot
+    if (!sr) return out
+    const walk = (node: Element | ShadowRoot, depth: number): void => {
+      if (!node || depth > 8) return
+      let els: Element[] = []
+      try {
+        els = [...(node as Element).querySelectorAll('*')]
+      } catch {
+        return
+      }
+      for (const el of els) {
+        try {
+          if ((el as HTMLElement).tagName === 'P') {
+            const r = (el as HTMLElement).getBoundingClientRect()
+            if (r.width > 0 && r.height > 0) out.push(el as HTMLElement)
+          }
+        } catch {
+          /* 무시 */
+        }
+        try {
+          const s = (el as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot
+          if (s) walk(s, depth + 1)
+        } catch {
+          /* 무시 */
+        }
+      }
+    }
+    walk(sr, 0)
+  } catch {
+    /* 무시 */
+  }
+  return out
+}
+
 /** C7e: pptx 실제 아이콘 (<img> 오버레이).
  * - 클릭(클립존): 다운로드 / 클릭(그 외): 선택(리사이즈 가능) / 더블클릭: 열기 / 드래그: 이동.
  * - 클립존 = 좌상단 (우리 PNG의 클립 배지 자리, x<0.3 && y<0.45). */
@@ -689,6 +799,129 @@ function PptxImgEntry({
   )
 }
 
+/** C7n: xlsx/docx 첨부 미리보기 아이콘 (ppt PptxImgEntry와 같은 외형).
+ * - 96x48 미리보기 img를 앵커 중앙에 둔다 (lib 자리가 작거나 없어도 동일 크기).
+ * - 드래그 이동: 5px 이상 움직이면 onMove(part, clientX/clientY) (오버레이가 셀/블록으로 변환).
+ * - 한 번 클릭은 선택, 더블클릭은 열기, 선택 시 다운로드 버튼.
+ */
+function XlsxDocxImgEntry({
+  entry,
+  pos,
+  iconUrl,
+  onMove,
+  onDownloadFile,
+  onOpen,
+  selected,
+  onSelect,
+}: {
+  entry: OleEmbeddingRef
+  pos: { x: number; y: number; w: number; h: number }
+  iconUrl: string
+  onMove?: (part: string, to: { clientX: number; clientY: number }) => void
+  onDownloadFile: (entry: OleEmbeddingRef) => void
+  onOpen: (entry: OleEmbeddingRef) => void
+  selected: boolean
+  onSelect: (part: string | null) => void
+}): React.ReactNode {
+  const dragRef = useRef<{ sx: number; sy: number; moved: boolean } | null>(null)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
+  const W = 96
+  const H = 48
+  useEffect(() => {
+    const onUp = (e: PointerEvent): void => {
+      const d = dragRef.current
+      const box = boxRef.current
+      dragRef.current = null
+      setDrag(null)
+      if (!d || !box) return
+      try {
+        const dx = e.clientX - d.sx
+        const dy = e.clientY - d.sy
+        if (Math.hypot(dx, dy) < 5 && !d.moved) {
+          onSelect(entry.partName)
+        } else if (onMove) {
+          onMove(entry.partName, { clientX: e.clientX, clientY: e.clientY })
+        }
+      } catch {
+        /* 무시 */
+      }
+    }
+    const onMoveWin = (e: PointerEvent): void => {
+      if (dragRef.current) {
+        const dx = e.clientX - dragRef.current.sx
+        const dy = e.clientY - dragRef.current.sy
+        if (Math.hypot(dx, dy) >= 5) dragRef.current.moved = true
+        setDrag({ dx, dy })
+      }
+    }
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointermove', onMoveWin)
+    return () => {
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointermove', onMoveWin)
+    }
+  }, [entry, onMove, onSelect])
+  const cx = pos.x + pos.w / 2 + (drag?.dx ?? 0)
+  const cy = pos.y + pos.h / 2 + (drag?.dy ?? 0)
+  return (
+    <div
+      ref={boxRef}
+      data-testid="ole-icon"
+      title={entry.displayName ?? entry.fallbackName}
+      aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
+      style={{ position: 'absolute', left: Math.max(0, cx - W / 2), top: Math.max(0, cy - H / 2), width: W, height: H, zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        e.stopPropagation()
+        dragRef.current = { sx: e.clientX, sy: e.clientY, moved: false }
+      }}
+      onDoubleClick={(e) => {
+        // 한 번 클릭은 선택(무해) 후 열기. 타이머 없음.
+        e.preventDefault()
+        e.stopPropagation()
+        try { onOpen(entry) } catch { /* 무시 */ }
+      }}
+    >
+      <img
+        data-testid="ole-img"
+        src={iconUrl}
+        alt=""
+        draggable={false}
+        style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', userSelect: 'none' }}
+      />
+      {selected && (
+        <button
+          type="button"
+          data-testid="ole-download"
+          title={`다운로드: ${entry.displayName ?? entry.fallbackName}`}
+          aria-label={`다운로드 ${entry.displayName ?? entry.fallbackName}`}
+          style={{ position: 'absolute', left: -6, top: -6, width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: '#fff', border: '1px solid #94a3b8', borderRadius: 4, zIndex: 32 }}
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            try { onDownloadFile(entry) } catch { /* 무시 */ }
+          }}
+          onDoubleClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onDragStart={(e) => {
+            e.preventDefault()
+          }}
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function OleAttachmentOverlay({
   data,
   anchor,
@@ -709,8 +942,8 @@ export default function OleAttachmentOverlay({
   extras?: OleExtraAttachment[]
   /** C7: extras 해석용 현재 위치 (슬라이드/시트). */
   getExtraContext?: () => { slide?: number; sheet?: number }
-  /** C7e: pptx 도형 이동/리사이즈 (fractions). */
-  onMoveEmbed?: (part: string, pos: { x: number; y: number }) => void
+  /** C7e: pptx 도형 이동/리사이즈 (fractions). C7n: xlsx 셀·docx 블록 이동도 같은 prop. */
+  onMoveEmbed?: (part: string, pos: { x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number; blockText?: string }) => void
   onResizeEmbed?: (part: string, size: { w: number; h: number }) => void
   /** C7f: 선택 상태 (PptxViewer 제어; 없으면 내부 상태). */
   selectedPart?: string | null
@@ -1232,6 +1465,32 @@ export default function OleAttachmentOverlay({
   }
   const displayName = (entry: OleEmbeddingRef): string => entry.displayName || entry.fallbackName || entry.partName.split('/').pop() || '첨부파일';
 
+  // C7n: img 드롭 지점을 앵커로 변환한다 (xlsx 셀 / docx 블록). 변환 실패하면
+  // 이동하지 않는다 (추측 이동 금지 — 조용한 어긋남 방지).
+  const handleImgDrop = (part: string, clientX: number, clientY: number): void => {
+    try {
+      const container = rootRef.current?.parentElement as HTMLElement | null
+      if (!container || !onMoveEmbed) return
+      if (anchor === 'xlsx') {
+        const hit = xlsxCellAt(container, clientX, clientY)
+        if (!hit) return
+        let sheet: number | undefined
+        try {
+          sheet = getExtraContext?.()?.sheet
+        } catch {
+          sheet = undefined
+        }
+        onMoveEmbed(part, { sheet, col: hit.col, row: hit.row })
+      } else if (anchor === 'docx') {
+        const hit = docxBlockAt(container, clientY)
+        if (!hit) return
+        onMoveEmbed(part, { block: hit.index, blockText: hit.text || undefined })
+      }
+    } catch {
+      /* 무시 */
+    }
+  };
+
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
   // dblclick은 컨테이너 캡처가 잡는다: rect 아래쪽 패딩 + 실측 박스.
   // 아래에 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면 캡처가 못 받는다).
@@ -1403,12 +1662,26 @@ export default function OleAttachmentOverlay({
             </span>
           )
         }
-        // C7c-1/C7e: xlsx/docx는 lib이 네이티브 렌더하므로 작은 아이콘 칩(클릭·선택용) + 캡션을 둔다.
-        // (pptx는 위 PptxImgEntry 분기에서 처리 — 여기 오지 않음.)
+        // C7n: xlsx/docx도 ppt와 같은 미리보기 아이콘 + 드래그 이동.
+        // (lib 자리가 작거나 없어도 96x48 고정 표시. 커버 플레이스홀더는 칩 유지.)
         const peers = peerSelByPart.get(e.partName) ?? []
+        const iconUrlX = parentPath ? `${API_BASE_URL}/api/collab/embed/icon?path=${encodeURIComponent(parentPath)}&part=${encodeURIComponent(e.partName)}` : ''
         return (
           <span key={e.partName}>
-            {chip(e, true, { x: pos.x, y: pos.y }, { selected: selectedPart === e.partName, onSelect: (p) => setSelectedPart(p) })}
+            {iconUrlX ? (
+              <XlsxDocxImgEntry
+                entry={e}
+                pos={pos}
+                iconUrl={iconUrlX}
+                onMove={onMoveEmbed ? (_part, to) => handleImgDrop(e.partName, to.clientX, to.clientY) : undefined}
+                onDownloadFile={(en) => void download(en)}
+                onOpen={(en) => void openOrDownload(en)}
+                selected={selectedPart === e.partName}
+                onSelect={(p) => setSelectedPart(p)}
+              />
+            ) : (
+              chip(e, true, { x: pos.x, y: pos.y }, { selected: selectedPart === e.partName, onSelect: (p) => setSelectedPart(p) })
+            )}
             {peers.map((p, i) => (
               <span
                 key={`peer-${i}-${p.name}`}
