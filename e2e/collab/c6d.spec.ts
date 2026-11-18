@@ -2587,6 +2587,144 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
+  test('D26-xlsx: 칩 드래그로 앵커 이동 → 디스크 DRAW가 바뀐다', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'xlsx', 'c6dd26xlsx', PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch {}
+        try { ed?.focusGrid?.() } catch {}
+      })
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.xlsx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'dragmove.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'xl/embeddings/dragmove.xlsx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      const anchorFromCol = async (): Promise<number | null> => {
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const rels = await zip.files['xl/worksheets/_rels/sheet1.xml.rels']?.async('string').catch(() => null)
+        if (!rels) return null
+        const sheet = await zip.files['xl/worksheets/sheet1.xml']!.async('string')
+        for (const m of sheet.matchAll(/<oleObject\b[^>]*r:id="([^"]+)"[^>]*>([\s\S]*?)<\/oleObject>/g)) {
+          const rid = m[1]!
+          const tgt = new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] ?? ''
+          if (!tgt.endsWith('xl/embeddings/dragmove.xlsx') && !tgt.endsWith('embeddings/dragmove.xlsx')) continue
+          const a = /<anchor[^>]*>([\s\S]*?)<\/anchor>/.exec(m[2]!)
+          if (!a) return null
+          const nums = [...a[1].matchAll(/<(?:\w+:)?col[^>]*>(\d+)</g)].map((n) => Number(n[1]))
+          return nums.length > 0 ? nums[0]! : null
+        }
+        return null
+      }
+      const before = await expect.poll(anchorFromCol, { timeout: 30000, intervals: [1000] }).not.toBeNull()
+      const partBefore = Buffer.from(await (await JSZip.loadAsync(fs.readFileSync(t.abs))).files['xl/embeddings/dragmove.xlsx']!.async('uint8array'))
+      // 칩을 오른쪽으로 드래그한다 (RED: 현재 드래그 핸들러가 없어 디스크가 안 바뀐다).
+      const center = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      }, 'dragmove.xlsx')
+      expect(center).not.toBeNull()
+      await t.pageA.mouse.move(center![0], center![1])
+      await t.pageA.mouse.down()
+      await t.pageA.mouse.move(center![0] + 130, center![1], { steps: 12 })
+      await t.pageA.mouse.up()
+      await expect
+        .poll(async () => {
+          const c = await anchorFromCol()
+          return c === null ? -1 : c
+        }, { timeout: 30000, intervals: [1000] })
+        .toBeGreaterThan(before as unknown as number)
+      // 임베딩 바이트는 그대로 (앵커만 이동).
+      const partAfter = Buffer.from(await (await JSZip.loadAsync(fs.readFileSync(t.abs))).files['xl/embeddings/dragmove.xlsx']!.async('uint8array'))
+      expect(partAfter.equals(partBefore)).toBe(true)
+      // 화면 칩도 따라갔다.
+      const center2 = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      }, 'dragmove.xlsx')
+      expect(center2).not.toBeNull()
+      expect(Math.abs(center2![0] - center![0])).toBeGreaterThan(50)
+      console.log('[c6d] D26 xlsx drag moved anchor')
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
+  test('D27-docx: 칩 드래그로 문단 이동 → 디스크 w:object가 바뀐다', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'docx', 'c6dd27docx', PARENT_FIX['docx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.docx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'dragmove.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'word/embeddings/dragmove.docx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      const oleBlockIndex = async (): Promise<number> => {
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const doc = await zip.files['word/document.xml']!.async('string')
+        const body = doc.slice(doc.indexOf('<w:body'), doc.lastIndexOf('</w:body>'))
+        const paras = [...body.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/g)].map((m) => m[0]!)
+        const idx = paras.findIndex((p) => p.includes('<w:object'))
+        return idx
+      }
+      const before = await expect.poll(oleBlockIndex, { timeout: 30000, intervals: [1000] }).toBeGreaterThanOrEqual(0)
+      const partBefore = Buffer.from(await (await JSZip.loadAsync(fs.readFileSync(t.abs))).files['word/embeddings/dragmove.docx']!.async('uint8array'))
+      // 칩을 아래로 드래그한다 (RED: 현재 드래그 핸들러가 없어 디스크가 안 바뀐다).
+      const center = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      }, 'dragmove.docx')
+      expect(center).not.toBeNull()
+      await t.pageA.mouse.move(center![0], center![1])
+      await t.pageA.mouse.down()
+      await t.pageA.mouse.move(center![0], center![1] + 120, { steps: 12 })
+      await t.pageA.mouse.up()
+      await expect
+        .poll(oleBlockIndex, { timeout: 30000, intervals: [1000] })
+        .toBeGreaterThan(before as unknown as number)
+      const partAfter = Buffer.from(await (await JSZip.loadAsync(fs.readFileSync(t.abs))).files['word/embeddings/dragmove.docx']!.async('uint8array'))
+      expect(partAfter.equals(partBefore)).toBe(true)
+      console.log('[c6d] D27 docx drag moved block')
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('SHOT-badges: 3종 뱃지 스크린샷', async ({
     browser,
   }, testInfo) => {
