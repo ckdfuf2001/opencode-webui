@@ -648,7 +648,7 @@ app.put('/embed/pos', async (c) => {
     const body = await c.req.json().catch(() => ({})) as {
       path?: string; part?: string; roomId?: string; clientId?: number | string;
       baseHash?: string; slide?: number; x?: number; y?: number; w?: number; h?: number;
-      sheet?: number; col?: number; row?: number; block?: number; blockText?: string;
+      sheet?: number; col?: number; row?: number; toCol?: number; toRow?: number; block?: number; blockText?: string;
     }
     const path = typeof body.path === 'string' ? body.path : ''
     const part = typeof body.part === 'string' ? body.part : ''
@@ -669,10 +669,14 @@ app.put('/embed/pos', async (c) => {
     const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
     const cint = (v: unknown): number | undefined => (typeof v === 'number' && Number.isInteger(v) ? v : undefined)
     if (hostKind === 'xlsx') {
-      const cc = num(body.col)
-      const cr = num(body.row)
+      const cc = body.col === undefined ? undefined : num(body.col)
+      const cr = body.row === undefined ? undefined : num(body.row)
       const sh = body.sheet === undefined ? undefined : cint(body.sheet)
-      if (cc === undefined || cr === undefined || cc < 0 || cc > 16383 || cr < 0 || cr > 1048575 || (sh !== undefined && sh < 0)) {
+      const tc = body.toCol === undefined ? undefined : cint(body.toCol)
+      const tr = body.toRow === undefined ? undefined : cint(body.toRow)
+      const hasMove = cc !== undefined && cr !== undefined
+      const hasSize = tc !== undefined && tr !== undefined
+      if ((!hasMove && !hasSize) || (cc !== undefined && (cc < 0 || cc > 16383)) || (cr !== undefined && (cr < 0 || cr > 1048575)) || (sh !== undefined && sh < 0) || (tc !== undefined && (tc < 0 || tc > 16384)) || (tr !== undefined && (tr < 0 || tr > 1048576))) {
         return c.json({ error: 'Bad cell', code: 'bad_pos' }, 400)
       }
     } else if (hostKind === 'docx') {
@@ -702,22 +706,24 @@ app.put('/embed/pos', async (c) => {
       }
       const hostBytes = new Uint8Array(await getRawFileContent(path))
       if (hostKind === 'xlsx') {
-        const cc = num(body.col)!
-        const cr = num(body.row)!
+        const cc = body.col === undefined ? undefined : num(body.col)
+        const cr = body.row === undefined ? undefined : num(body.row)
         const sh = body.sheet === undefined ? undefined : cint(body.sheet)
-        const movedX = await moveXlsxEmbed(zipLoadJSZip, hostBytes, norm, { sheet: sh, col: cc, row: cr })
-        if (!movedX.found) return c.json({ error: 'Part not anchored on sheet', code: 'no_anchor' }, 404)
+        const tc = body.toCol === undefined ? undefined : cint(body.toCol)
+        const tr = body.toRow === undefined ? undefined : cint(body.toRow)
+        const movedX = await moveXlsxEmbed(zipLoadJSZip, hostBytes, norm, { sheet: sh, col: cc, row: cr, toCol: tc, toRow: tr })
+        if (!movedX.found || !movedX.pos) return c.json({ error: 'Part not anchored on sheet', code: 'no_anchor' }, 404)
         await writeFileContent(abs, Buffer.from(movedX.bytes))
         const newHashX = hashBytes(movedX.bytes)
-        const posX = { sheet: sh, col: cc, row: cr }
+        const posX = { sheet: movedX.pos.sheet, col: movedX.pos.col, row: movedX.pos.row, w: movedX.pos.w, h: movedX.pos.h }
         if (room) {
           room.lastHash = newHashX
           room.externalChanged = false
           const kex = room.knownEmbeds.find((k) => k.norm === norm)
           if (kex) {
-            kex.pos = { ...kex.pos, sheet: sh ?? kex.pos.sheet, col: cc, row: cr } as KnownEmbed['pos']
+            kex.pos = { ...kex.pos, ...posX } as KnownEmbed['pos']
           }
-          broadcast(room, encodePartEmbedded(roomId, { norm, name: norm.split('/').pop() ?? norm, kind: 'xlsx', pos: { sheet: sh, col: cc, row: cr }, newHash: newHashX }))
+          broadcast(room, encodePartEmbedded(roomId, { norm, name: norm.split('/').pop() ?? norm, kind: 'xlsx', pos: { ...posX }, newHash: newHashX }))
           logger.warn('[embed] move xlsx room=' + roomId.slice(0, 8) + ' part=' + norm + ' pos=' + JSON.stringify(posX))
         }
         return c.json({ ok: true, newHash: newHashX, pos: posX })

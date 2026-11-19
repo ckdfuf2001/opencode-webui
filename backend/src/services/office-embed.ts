@@ -1059,8 +1059,8 @@ export async function listEmbedPositions(
       const sheetRels = (await readText(sheetFile.replace(/\/([^/]+)$/, '/_rels/$1.rels'))) ?? ''
       const oleEls = [...sheet.matchAll(/<oleObject[^>]*shapeId="(\d+)"[^>]*r:id="([^"]+)"|<oleObject[^>]*r:id="([^"]+)"[^>]*shapeId="(\d+)"/g)]
       if (oleEls.length === 0) continue
-      // drawing 앵커 (shapeId 일치).
-      let drawingAnchors: Array<{ id: string; col: number; row: number }> = []
+      // drawing 앵커 (shapeId 일치, from/to 포함).
+      let drawingAnchors: Array<{ id: string; col: number; row: number; toCol: number; toRow: number }> = []
       const drTgt = [...sheetRels.matchAll(/<[^>]*?Id="([^"]+)"[^>]*?Target="([^"]*drawing[^"]*)"/g)].map((m) => ({ id: m[1]!, tgt: m[2]! }))
       for (const d of drTgt) {
         const dFile = resolveRel(sheetFile, d.tgt)
@@ -1070,7 +1070,8 @@ export async function listEmbedPositions(
           const a = am[0]
           const idm = /<xdr:cNvPr[^>]*id="(\d+)"/.exec(a)
           const fromm = /<xdr:from><xdr:col>(\d+)<\/xdr:col>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/.exec(a)
-          if (idm && fromm) drawingAnchors.push({ id: idm[1]!, col: Number(fromm[1]), row: Number(fromm[2]) })
+          const tom = /<xdr:to><xdr:col>(\d+)<\/xdr:col>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/.exec(a)
+          if (idm && fromm) drawingAnchors.push({ id: idm[1]!, col: Number(fromm[1]), row: Number(fromm[2]), toCol: tom ? Number(tom[1]) : Number(fromm[1]) + 1, toRow: tom ? Number(tom[2]) : Number(fromm[2]) + 1 })
         }
       }
       for (const om of oleEls) {
@@ -1081,7 +1082,7 @@ export async function listEmbedPositions(
         const embFile = resolveRel(sheetFile, embTgt)
         const anch = drawingAnchors.find((a) => a.id === shapeId)
         if (!anch) continue
-        out.push({ part: embFile, name: embFile.split('/').pop() ?? embFile, pos: { sheet: si, col: anch.col, row: anch.row } })
+        out.push({ part: embFile, name: embFile.split('/').pop() ?? embFile, pos: { sheet: si, col: anch.col, row: anch.row, w: Math.max(1, anch.toCol - anch.col), h: Math.max(1, anch.toRow - anch.row) } })
       }
     }
     return out
