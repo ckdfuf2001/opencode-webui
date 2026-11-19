@@ -2082,8 +2082,10 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
           (el as HTMLElement).style.display = 'none'
         })
       })
-      const cx = chipBox![0] + chipBox![2] / 2
-      const cy = chipBox![1] + chipBox![3] / 2
+      // C7n: 칩이 96x48 미리보기로 커져서 중심이 앵커와 어긋난다.
+      // lib 도형을 잡으려면 앵커 원점(칩 좌상단)에서 시작해야 한다 (구 칩 위치와 동일).
+      const cx = chipBox![0]
+      const cy = chipBox![1]
       await t.pageA.mouse.move(cx, cy)
       await t.pageA.mouse.down()
       await t.pageA.mouse.move(cx + 120, cy + 80, { steps: 12 })
@@ -2486,7 +2488,7 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
-  test('D24-xlsx: 종류별 칩 뱃지 색이 통일된다 (docx 파랑/xlsx 초록/pptx 주황)', async ({
+  test('D24-xlsx: 종류별 미리보기 아이콘이 통일된다 (ppt와 같은 96x48)', async ({
     browser,
   }, testInfo) => {
     testInfo.setTimeout(420000)
@@ -2520,23 +2522,23 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
           }, { timeout: 60000, intervals: [1000] })
           .toBe(true)
       }
-      const expected: Record<string, string> = {
-        'kind-doc.docx': 'rgb(37, 99, 235)',
-        'kind-sheet.xlsx': 'rgb(22, 163, 74)',
-        'kind-deck.pptx': 'rgb(234, 88, 12)',
-      }
-      for (const nm of Object.keys(expected)) {
+      // C7n: 종류별 뱃지 대신 ppt와 같은 미리보기 아이콘 (96x48 고정, 종류별 PNG).
+      for (const nm of ['kind-doc.docx', 'kind-sheet.xlsx', 'kind-deck.pptx']) {
         await expect
           .poll(() => t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
             const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
             if (!hit) return null
-            const badge = hit.querySelector('span[style*="background-color"]') as HTMLElement | null
-            if (!badge) return null
-            return getComputedStyle(badge).backgroundColor
+            const img = hit.querySelector('img[data-testid="ole-img"]') as HTMLImageElement | null
+            if (!img) return null
+            const r = (hit as HTMLElement).getBoundingClientRect()
+            if (Math.round(r.width) !== 96 || Math.round(r.height) !== 48) return null
+            // 종류별 미리보기 PNG가 로드됐는지 (natural 크기 확인).
+            if (!(img.naturalWidth >= 96 && img.naturalHeight >= 48)) return null
+            return `${Math.round(r.width)}x${Math.round(r.height)}:${img.naturalWidth}x${img.naturalHeight}`
           }, nm), { timeout: 30000, intervals: [1000] })
-          .toBe(expected[nm])
+          .not.toBeNull()
       }
-      console.log('[c6d] D24 badge colors unified')
+      console.log('[c6d] D24 preview icons unified (96x48)')
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})

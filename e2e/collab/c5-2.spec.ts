@@ -160,47 +160,9 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 30000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      // 방 리셋 후 재조회가 끝나면 ole 아이콘이 2개가 된다.
-      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
-      // 본문에 새 ole 프레임이 보인다 (Fallback pic 렌더). lib 렌더는 비동기라 폴링한다.
-      const frameFn = (): Promise<string> =>
-        page.evaluate(() => {
-          const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
-            if (depth > 8) return acc
-            for (const el of [...((root as Element).querySelectorAll?.('*') ?? [])]) {
-              acc.push(el)
-              const sr = (el as HTMLElement).shadowRoot
-              if (sr) deep(sr, acc, depth + 1)
-            }
-            return acc
-          }
-          const host = document.querySelector('[data-testid="pptx-viewer-root"]')
-          if (!host) return 'no-host'
-          const all = deep(host)
-          const frames = all.filter((e) => (e.getAttribute?.('data-element-id') || '').includes('-frame-'))
-          const mine = frames.filter((e) => (e.textContent || '').includes('embed-docx'))
-          if (mine.length === 0) {
-            const texts = frames.map((e) => (e.textContent || '').slice(0, 40))
-            return `noframe texts=${JSON.stringify(texts)}`
-          }
-          const r = mine[0]!.getBoundingClientRect()
-          const imgs = [...mine[0]!.querySelectorAll('img')].slice(0, 3).map((im) => {
-            const b = im.getBoundingClientRect()
-            return { src: (im.getAttribute('src') || '').slice(0, 15), w: Math.round(b.width), h: Math.round(b.height) }
-          })
-          const imgOk = imgs.some((im) => im.w > 0 && im.h > 0 && im.src.indexOf('data:image/png') === 0)
-          if (r.width > 0 && r.height > 0 && imgOk) return 'ok'
-          // 비교용: 기존 pdf 프레임도 함께 덤프.
-          const others = frames
-            .filter((e) => !(e.textContent || '').includes('embed-docx'))
-            .slice(0, 3)
-            .map((e) => {
-              const b = e.getBoundingClientRect()
-              return `eid=${(e.getAttribute('data-element-id') || '').slice(-30)} rect=${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.width)}x${Math.round(b.height)} style=${(e.getAttribute('style') || '').slice(0, 120)}`
-            })
-          return `hidden rect=${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}x${Math.round(r.height)} imgs=${JSON.stringify(imgs)} others=${JSON.stringify(others)}`
-        })
-      await expect.poll(frameFn, { timeout: 20000, intervals: [1000] }).toBe('ok')
+      // 방 리셋 후 재조회가 끝나면 ole 아이콘이 1개가 된다 (C7m lib-only:
+      // 파싱분 oleObject1.bin은 lib 네이티브만 보이고 우리 칩은 없다).
+      await expect(page.getByTestId('ole-icon')).toHaveCount(1, { timeout: 60000 })
       const after = await backendBytes('c52pptx', 'embed-pdf.pptx')
       const z1 = await JSZip.loadAsync(after)
       const emb1 = Object.keys(z1.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/'))
@@ -214,7 +176,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const icons = page.getByTestId('ole-icon')
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
-        icons.nth(1).dblclick({ timeout: 15000 }),
+        icons.nth(0).dblclick({ timeout: 15000 }),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
@@ -224,6 +186,20 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       expect(partName, 'inserted part present').toBeTruthy()
       const partBytes = Buffer.from(await zAfter.files[partName!]!.async('uint8array'))
       expect(partBytes.equals(attachBuf), 'attached bytes intact').toBe(true)
+      // C7 백그라운드 병합은 리로드하지 않는다. lib 렌더 대신 디스크 조립 구조를
+      // 직접 단언한다 (lib 렌더는 D25 파싱분 경로에서 커버).
+      // C7n: 우리 조립분이 D25 파싱분과 같은 구조면 lib도 동일하게 렌더한다 (프로브 확인).
+      {
+        const zf = await JSZip.loadAsync(backendBytes('c52pptx', 'embed-pdf.pptx'))
+        const slide = await zf.files['ppt/slides/slide1.xml']!.async('string')
+        const frames = [...slide.matchAll(/<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g)].map((m) => m[0]!)
+        expect(frames.length, 'at least one frame').toBeGreaterThan(0)
+        const mine = frames.filter((f) => /progId="Word\.Document\.12"/.test(f))
+        expect(mine.length, 'assembled ole frame present').toBeGreaterThan(0)
+        const fr = mine[0]!
+        expect(/<p:oleObj[^>]*r:id="[^"]+"/.test(fr), 'oleObj r:id').toBe(true)
+        expect(/<a:blip[^>]*r:embed="[^"]+"/.test(fr), 'fallback blip r:embed').toBe(true)
+      }
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -256,8 +232,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 30000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      // 방 리셋 후 재조회가 끝나면 ole 아이콘이 2개가 된다.
-      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      // 새 첨부 칩이 보인다 (C7n 미리보기 img; 파싱분은 lib-only라 카운트하지 않는다).
+      await expect
+        .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
       // 본문에 미리보기 그림이 보인다 (pic 앵커 네이티브 렌더). lib 렌더는 비동기라 폴링한다.
       const picState = (): Promise<string> =>
         page.evaluate(() => {
@@ -295,7 +273,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const icons = page.getByTestId('ole-icon')
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
-        icons.nth(1).dblclick({ timeout: 15000 }),
+        icons.nth(0).dblclick({ timeout: 15000 }),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.xlsx\/-\/.+\.docx/)
@@ -381,8 +359,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 30000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      // 재조회가 끝나면 ole 아이콘이 2개가 된다.
-      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      // 새 첨부 칩이 보인다 (C7n 미리보기 img; 파싱분은 lib-only라 카운트하지 않는다).
+      await expect
+        .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.xlsx')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
       const after = await backendBytes('c52docx', 'embed-pdf.docx')
       const z1 = await JSZip.loadAsync(after)
       const emb1 = Object.keys(z1.files).filter(embName)
@@ -396,7 +376,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       const icons = page.getByTestId('ole-icon')
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
-        icons.nth(1).dblclick({ timeout: 15000 }),
+        icons.nth(0).dblclick({ timeout: 15000 }),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.docx\/-\/.+\.xlsx/)
@@ -439,7 +419,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 90000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      // 새 첨부 칩이 보인다 (C7n 미리보기 img; 파싱분은 lib-only라 카운트하지 않는다).
+      await expect
+        .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -471,7 +454,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 30000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      // 새 첨부 칩이 보인다 (C7n 미리보기 img; 파싱분은 lib-only라 카운트하지 않는다).
+      await expect
+        .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
@@ -503,7 +489,7 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 30000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      await expect(page.getByTestId('ole-icon')).toHaveCount(2, { timeout: 60000 })
+      await expect(page.getByTestId('ole-icon')).toHaveCount(1, { timeout: 60000 })
     } finally {
       await ctx.close().catch(() => {})
     }

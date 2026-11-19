@@ -865,12 +865,14 @@ function XlsxDocxImgEntry({
   const cx = pos.x + pos.w / 2 + (drag?.dx ?? 0)
   const cy = pos.y + pos.h / 2 + (drag?.dy ?? 0)
   return (
-    <div
-      ref={boxRef}
+    // C7n: 구 칩과 같은 <button> (getByRole 접근성 계약 유지 — divだと AX에서 안 보임).
+    <button
+      type="button"
+      ref={boxRef as unknown as React.Ref<HTMLButtonElement>}
       data-testid="ole-icon"
       title={entry.displayName ?? entry.fallbackName}
       aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
-      style={{ position: 'absolute', left: Math.max(0, cx - W / 2), top: Math.max(0, cy - H / 2), width: W, height: H, zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2 }}
+      style={{ position: 'absolute', left: Math.max(0, cx - W / 2), top: Math.max(0, cy - H / 2), width: W, height: H, zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2, background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit' }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         e.preventDefault()
@@ -918,7 +920,7 @@ function XlsxDocxImgEntry({
           <Download className="h-3.5 w-3.5" />
         </button>
       )}
-    </div>
+    </button>
   )
 }
 
@@ -1112,6 +1114,8 @@ export default function OleAttachmentOverlay({
         // C7l-fix: applies to ALL incl. lib-anchored - real files can have
         // overlapping lib shapes (user screenshot). Singletons never move (n==0),
         // so no lib label drift.
+        // C7n: 큰 미리보기(96x48)는 22px 간격으로 겹쳐 클릭이 엇갈린다 —
+        // 항목 크기에 맞춰 벌린다 (작은 칩은 기존 간격 유지).
         {
           const seenPos = new Map<string, number>()
           for (const key of Object.keys(next)) {
@@ -1121,8 +1125,10 @@ export default function OleAttachmentOverlay({
             const n = seenPos.get(k) ?? 0
             seenPos.set(k, n + 1)
             if (n > 0) {
-              p.x += n * 22
-              p.y += n * 22
+              const stepX = Math.max(22, Math.round(p.w) + 8)
+              const stepY = Math.max(22, Math.round(p.h) + 8)
+              p.x += n * stepX
+              p.y += n * stepY
               p.captionAbove = p.y + p.h + CAPTION_H > c.height && p.y - CAPTION_H >= 0
             }
           }
