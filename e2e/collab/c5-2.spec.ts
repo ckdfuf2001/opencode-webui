@@ -160,9 +160,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 30000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      // 방 리셋 후 재조회가 끝나면 ole 아이콘이 1개가 된다 (C7m lib-only:
-      // 파싱분 oleObject1.bin은 lib 네이티브만 보이고 우리 칩은 없다).
-      await expect(page.getByTestId('ole-icon')).toHaveCount(1, { timeout: 60000 })
+      // 새 첨부 칩이 보인다 (C7n 미리보기 img; 파싱분은 lib-only라 카운트하지 않는다).
+      await expect
+        .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
       const after = await backendBytes('c52pptx', 'embed-pdf.pptx')
       const z1 = await JSZip.loadAsync(after)
       const emb1 = Object.keys(z1.files).filter((n) => n.includes('embeddings/') && !n.endsWith('/'))
@@ -172,14 +173,20 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       expect(/progId="[A-Za-z0-9.]+"/.test(slide), 'progId english').toBe(true)
       // C5-4 flag-day: package 오피스 파트 dblclick → /edit/* 새 탭 (오버레이 폐지).
       // 원본 바이트 보존은 디스크 embeddings와 첨부 파일을 직접 비교한다.
-      const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
-      const icons = page.getByTestId('ole-icon')
-      const [popup] = await Promise.all([
-        page.waitForEvent('popup', { timeout: 15000 }),
-        icons.nth(0).dblclick({ timeout: 15000 }),
-      ])
-      await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
-      expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
+    const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
+    const freshBoxPptx = await page.getByTestId('ole-icon').evaluateAll((els) => {
+      const hit = els.find((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx') as HTMLElement | null
+      if (!hit) return null
+      const r = hit.getBoundingClientRect()
+      return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+    })
+    expect(freshBoxPptx, 'fresh chip box').not.toBeNull()
+    const [popup] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 15000 }),
+      page.mouse.dblclick(freshBoxPptx![0], freshBoxPptx![1]),
+    ])
+    await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
+    expect(popup.url()).toMatch(/\/edit\/.+\.pptx\/-\/.+\.docx/)
       await popup.close().catch(() => {})
       const zAfter = await JSZip.loadAsync(backendBytes('c52pptx', 'embed-pdf.pptx'))
       const partName = Object.keys(zAfter.files).find((n) => n.includes('embeddings/') && n.endsWith('embed-docx.docx'))
@@ -236,7 +243,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       await expect
         .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx')), { timeout: 60000, intervals: [1000] })
         .toBe(true)
-      // 본문에 미리보기 그림이 보인다 (pic 앵커 네이티브 렌더). lib 렌더는 비동기라 폴링한다.
+      // 본문에 미리보기 그림이 보인다 (pic 앵커 네이티브 렌더).
+      // C7 백그라운드 병합은 리로드하지 않으므로 새로고침 뒤에 확인한다.
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+      await page.locator('xlsx-editor [part~="formula-bar"] textarea').first().waitFor({ timeout: 60000 })
       const picState = (): Promise<string> =>
         page.evaluate(() => {
           const deep = (root: ParentNode, acc: Element[] = [], depth = 0): Element[] => {
@@ -260,6 +270,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           return vis ? 'ok' : 'hidden'
         })
       await expect.poll(picState, { timeout: 20000, intervals: [1000] }).toBe('ok')
+      // 새로고침 뒤 칩이 다시 올라올 때까지 기다린다 (106 재전송 + 오버레이 반영).
+      await expect
+        .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
       const after = await backendBytes('c52xlsx', 'embed-pdf.xlsx')
       const z1 = await JSZip.loadAsync(after)
       // 3곳 일치: drawing anchor + oleObjects + VML.
@@ -269,11 +283,18 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       expect(Object.keys(z1.files).some((n) => n.includes('vmlDrawing') && !n.endsWith('/'))).toBe(true)
       // P0-4: xlsx INSERT는 package 조립이라 편집 탭으로 열린다 (다운로드 아님).
       // 새로 붙은 첨부의 바이트 보존은 디스크 embeddings와 직접 비교한다.
+      // (nth(0)이 아니라 방금 붙인 칩을 특정해서 더블클릭 — 커버 등 다른 칩과 겹칠 수 있음).
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.docx'))
-      const icons = page.getByTestId('ole-icon')
+      const freshBox = await page.getByTestId('ole-icon').evaluateAll((els) => {
+        const hit = els.find((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.docx') as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      })
+      expect(freshBox, 'fresh chip box').not.toBeNull()
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
-        icons.nth(0).dblclick({ timeout: 15000 }),
+        page.mouse.dblclick(freshBox![0], freshBox![1]),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.xlsx\/-\/.+\.docx/)
@@ -372,11 +393,18 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
       expect(/ProgID="[A-Za-z0-9.]+"/.test(doc), 'ProgID english').toBe(true)
       // C5-4 flag-day: package 오피스 파트 dblclick → /edit/* 새 탭 (오버레이 폐지).
       // 원본 바이트 보존은 디스크 embeddings와 첨부 파일을 직접 비교한다.
+      // (nth(0)이 아니라 방금 붙인 칩을 특정해서 더블클릭 — 커버 등 다른 칩과 겹칠 수 있음).
       const attachBuf = fs.readFileSync(path.resolve(FIX, 'embed-docx.xlsx'))
-      const icons = page.getByTestId('ole-icon')
+      const freshBoxDocx = await page.getByTestId('ole-icon').evaluateAll((els) => {
+        const hit = els.find((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.xlsx') as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      })
+      expect(freshBoxDocx, 'fresh chip box').not.toBeNull()
       const [popup] = await Promise.all([
         page.waitForEvent('popup', { timeout: 15000 }),
-        icons.nth(0).dblclick({ timeout: 15000 }),
+        page.mouse.dblclick(freshBoxDocx![0], freshBoxDocx![1]),
       ])
       await popup.waitForLoadState('domcontentloaded', { timeout: 30000 })
       expect(popup.url()).toMatch(/\/edit\/.+\.docx\/-\/.+\.xlsx/)
@@ -489,7 +517,10 @@ test.describe('C5-2: INSERT 문서 첨부', () => {
           { timeout: 30000, intervals: [1000] },
         )
         .toBe(emb0 + 1)
-      await expect(page.getByTestId('ole-icon')).toHaveCount(1, { timeout: 60000 })
+      // 새 첨부 칩이 보인다 (C7n 미리보기 img; 파싱분은 lib-only라 카운트하지 않는다).
+      await expect
+        .poll(() => page.getByTestId('ole-icon').evaluateAll((els) => els.some((e) => (e as HTMLElement).getAttribute('aria-label') === '첨부 embed-docx.xlsx')), { timeout: 60000, intervals: [1000] })
+        .toBe(true)
     } finally {
       await ctx.close().catch(() => {})
     }
