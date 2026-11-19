@@ -2816,6 +2816,92 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
+  test('D28-xlsx: 모서리 드래그로 크기 변경 → 디스크 DRAW to가 바뀐다', async ({
+    browser,
+  }, testInfo) => {
+    testInfo.setTimeout(420000)
+    const t = await openDeferPair(browser, 'xlsx', 'c6dd28xlsx', PARENT_FIX['xlsx']!)
+    await t.attach.close().catch(() => {})
+    try {
+      await t.pageA.evaluate(() => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { select?: (r: string) => void; focusGrid?: () => void } | null
+        try { ed?.select?.('C5') } catch {}
+        try { ed?.focusGrid?.() } catch {}
+      })
+      const fxBytes = fs.readFileSync(path.join(FIX, 'embed-docx.xlsx')).toString('base64')
+      await t.pageA.evaluate(
+        ({ b64, hostPath }: { b64: string; hostPath: string }) => {
+          const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const file = new File([bin], 'sizemove.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+          window.dispatchEvent(new CustomEvent('officeEmbedFile', { detail: { file, hostPath } }))
+        },
+        { b64: fxBytes, hostPath: t.parentPath },
+      )
+      await expect
+        .poll(async () => {
+          const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+          return Object.keys(zip.files).some((n) => n === 'xl/embeddings/sizemove.xlsx')
+        }, { timeout: 60000, intervals: [1000] })
+        .toBe(true)
+      const anchorBox = async (): Promise<[number, number, number, number] | null> => {
+        const zip = await JSZip.loadAsync(fs.readFileSync(t.abs))
+        const rels = await zip.files['xl/worksheets/_rels/sheet1.xml.rels']?.async('string').catch(() => null)
+        if (!rels) return null
+        const sheet = await zip.files['xl/worksheets/sheet1.xml']!.async('string')
+        for (const m of sheet.matchAll(/<oleObject\b[^>]*r:id="([^"]+)"[^>]*>([\s\S]*?)<\/oleObject>/g)) {
+          const rid = m[1]!
+          const tgt = new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] ?? ''
+          if (!tgt.endsWith('xl/embeddings/sizemove.xlsx') && !tgt.endsWith('embeddings/sizemove.xlsx')) continue
+          const a = /<anchor[^>]*>([\s\S]*?)<\/anchor>/.exec(m[2]!)
+          if (!a) return null
+          const nums = [...a[1].matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((n) => Number(n[1]))
+          if (nums.length < 8) return null
+          return [nums[0]!, nums[2]!, nums[4]!, nums[6]!]
+        }
+        return null
+      }
+      await expect.poll(anchorBox, { timeout: 30000, intervals: [1000] }).not.toBeNull()
+      const before = (await anchorBox())!
+      // 칩 선택 후 모서리 핸들을 드래그한다 (RED: 현재 리사이즈 핸들이 없어 실패).
+      const chip = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+        if (!hit) return null
+        const h = hit.querySelector('[data-testid="ole-resize"]') as HTMLElement | null
+        if (!h) return null
+        const r = h.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      }, 'sizemove.xlsx')
+      expect(chip, 'resize handle').not.toBeNull()
+      await t.pageA.mouse.move(chip![0], chip![1])
+      await t.pageA.mouse.down()
+      await t.pageA.mouse.move(chip![0] + 150, chip![1] + 100, { steps: 15 })
+      await t.pageA.mouse.up()
+      // to 셀이 오른쪽·아래로 늘어난다.
+      await expect
+        .poll(async () => {
+          const c = await anchorBox()
+          return c === null ? [-1, -1, -1, -1] : c
+        }, { timeout: 30000, intervals: [1000] })
+        .toEqual(expect.arrayContaining([expect.any(Number), expect.any(Number), expect.any(Number), expect.any(Number)]))
+      const after = (await anchorBox())!
+      expect(after[2]).toBeGreaterThan(before[2])
+      expect(after[3]).toBeGreaterThan(before[3])
+      expect([after[0], after[1]]).toEqual([before[0], before[1]])
+      // 화면 칩도 커진다.
+      const boxAfter = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.width), Math.round(r.height)]
+      }, 'sizemove.xlsx')
+      expect(boxAfter).not.toBeNull()
+      console.log('[c6d] D28 xlsx resize changed anchor', JSON.stringify({ before, after, boxAfter }))
+    } finally {
+      await t.ctxA.close().catch(() => {})
+      await t.ctxB.close().catch(() => {})
+    }
+  })
+
   test('SHOT-badges: 3종 뱃지 스크린샷', async ({
     browser,
   }, testInfo) => {
